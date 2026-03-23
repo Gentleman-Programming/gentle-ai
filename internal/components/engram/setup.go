@@ -48,6 +48,8 @@ func SetupAgentSlug(agent model.AgentID) (string, bool) {
 	case model.AgentCodex:
 		// Codex slug registered for future MCP support; ShouldAttemptSetup gates on SupportsMCP().
 		return "codex", true
+	case model.AgentAntigravity:
+		return "antigravity", true
 	default:
 		return "", false
 	}

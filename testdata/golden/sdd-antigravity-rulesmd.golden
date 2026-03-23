@@ -1,6 +1,6 @@
 # Agent Teams Lite — Orchestrator Rule for Antigravity
 
-Add this as a global rule in `~/.gemini/GEMINI.md` or as a workspace rule in `.agent/rules/sdd-orchestrator.md`.
+Add this as a global rule in `~/.gemini/antigravity/rules.md` or as a workspace rule in `.agent/rules/sdd-orchestrator.md`.
 
 ## Agent Teams Orchestrator
 
@@ -154,7 +154,7 @@ Sub-agents retrieve full content via two steps:
 
 ### State and Conventions
 
-Convention files under `.agent/skills/_shared/` (workspace) or the agent's global skills directory (e.g. `~/.claude/skills/_shared/`, `~/.cursor/skills/_shared/`, `~/.copilot/skills/_shared/`): `engram-convention.md`, `persistence-contract.md`, `openspec-convention.md`.
+Convention files under `~/.gemini/antigravity/skills/_shared/` (global) or `.agent/skills/_shared/` (workspace): `engram-convention.md`, `persistence-contract.md`, `openspec-convention.md`.
 
 ### Recovery Rule
 

@@ -43,7 +43,7 @@ func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 	}
 
 	want := model.Selection{
-		Agents:  []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentGeminiCLI, model.AgentCodex, model.AgentCursor, model.AgentVSCodeCopilot},
+		Agents:  []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentGeminiCLI, model.AgentCodex, model.AgentCursor, model.AgentVSCodeCopilot, model.AgentAntigravity},
 		Persona: model.PersonaGentleman,
 		Preset:  model.PresetFullGentleman,
 		Components: []model.ComponentID{
@@ -183,7 +183,7 @@ func TestRunInstallDryRunSkipsExecution(t *testing.T) {
 func makeDetectionWithAgents(present ...string) system.DetectionResult {
 	var configs []system.ConfigState
 	// Full canonical agent set — mirrors knownAgentConfigDirs in config_scan.go.
-	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex"}
+	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity"}
 	presentSet := make(map[string]bool, len(present))
 	for _, p := range present {
 		presentSet[p] = true
@@ -219,11 +219,11 @@ func TestDefaultAgentsFromDetection_CodexIsIncludedWhenPresent(t *testing.T) {
 	}
 }
 
-// TestDefaultAgentsFromDetection_AllSixAgentsMappedCorrectly verifies every
+// TestDefaultAgentsFromDetection_AllAgentsMappedCorrectly verifies every
 // canonical agent string maps to its model.AgentID constant. This prevents
 // silent drops when new agents are added to ScanConfigs without updating the
 // consumer switch.
-func TestDefaultAgentsFromDetection_AllSixAgentsMappedCorrectly(t *testing.T) {
+func TestDefaultAgentsFromDetection_AllAgentsMappedCorrectly(t *testing.T) {
 	tests := []struct {
 		configAgent string
 		wantID      model.AgentID
@@ -234,6 +234,7 @@ func TestDefaultAgentsFromDetection_AllSixAgentsMappedCorrectly(t *testing.T) {
 		{"cursor", model.AgentCursor},
 		{"vscode-copilot", model.AgentVSCodeCopilot},
 		{"codex", model.AgentCodex},
+		{"antigravity", model.AgentAntigravity},
 	}
 
 	for _, tt := range tests {

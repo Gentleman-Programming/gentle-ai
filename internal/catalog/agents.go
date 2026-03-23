@@ -16,6 +16,7 @@ var allAgents = []Agent{
 	{ID: model.AgentCodex, Name: "Codex", Tier: model.TierFull, ConfigPath: "~/.codex"},
 	{ID: model.AgentCursor, Name: "Cursor", Tier: model.TierFull, ConfigPath: "~/.cursor"},
 	{ID: model.AgentVSCodeCopilot, Name: "VS Code Copilot", Tier: model.TierFull, ConfigPath: "~/.github"},
+	{ID: model.AgentAntigravity, Name: "Antigravity", Tier: model.TierFull, ConfigPath: "~/.gemini/antigravity"},
 }
 
 // mvpAgents are the original MVP agents (Claude Code, OpenCode).

@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/cursor"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 )
 
@@ -21,7 +22,8 @@ func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func geminiAdapter() agents.Adapter   { return gemini.NewAdapter() }
 func cursorAdapter() agents.Adapter   { return cursor.NewAdapter() }
 func vscodeAdapter() agents.Adapter   { return vscode.NewAdapter() }
-func codexAdapter() agents.Adapter    { return codex.NewAdapter() }
+func codexAdapter() agents.Adapter        { return codex.NewAdapter() }
+func antigravityAdapter() agents.Adapter  { return antigravity.NewAdapter() }
 
 func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	home := t.TempDir()
@@ -268,6 +270,44 @@ func TestInjectCursorSkipsPermissions(t *testing.T) {
 	}
 	if len(result.Files) != 0 {
 		t.Fatalf("Inject() for Cursor should return no files, got %v", result.Files)
+	}
+}
+
+func TestInjectAntigravityUsesAutoEditMode(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, antigravityAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() changed = false")
+	}
+
+	settingsPath := filepath.Join(home, ".gemini", "antigravity", "settings.json")
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings file: %v", err)
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(content, &settings); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	general, ok := settings["general"].(map[string]any)
+	if !ok {
+		t.Fatalf("general node missing: %#v", settings)
+	}
+
+	mode, ok := general["defaultApprovalMode"].(string)
+	if !ok || mode != "auto_edit" {
+		t.Fatalf("expected defaultApprovalMode=auto_edit, got %q", mode)
+	}
+
+	// Ensure no Claude Code keys leaked.
+	if _, exists := settings["permissions"]; exists {
+		t.Fatal("antigravity settings should not contain 'permissions' key")
 	}
 }
 

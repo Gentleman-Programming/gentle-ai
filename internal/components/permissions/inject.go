@@ -80,7 +80,8 @@ func agentOverlay(id model.AgentID) []byte {
 		return claudeCodeOverlayJSON
 	case model.AgentOpenCode:
 		return openCodeOverlayJSON
-	case model.AgentGeminiCLI:
+	case model.AgentGeminiCLI, model.AgentAntigravity:
+		// Antigravity shares Gemini's settings.json schema (general.defaultApprovalMode).
 		return geminiCLIOverlayJSON
 	case model.AgentVSCodeCopilot:
 		return vscodeCopilotOverlayJSON

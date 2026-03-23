@@ -3,6 +3,7 @@ package agents
 import (
 	"fmt"
 
+	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	cursoradapter "github.com/gentleman-programming/gentle-ai/internal/agents/cursor"
@@ -26,13 +27,15 @@ func NewAdapter(agent model.AgentID) (Adapter, error) {
 		return vscode.NewAdapter(), nil
 	case model.AgentCodex:
 		return codex.NewAdapter(), nil
+	case model.AgentAntigravity:
+		return antigravity.NewAdapter(), nil
 	default:
 		return nil, AgentNotSupportedError{Agent: agent}
 	}
 }
 
 func NewDefaultRegistry() (*Registry, error) {
-	adapters := make([]Adapter, 0, 6)
+	adapters := make([]Adapter, 0, 7)
 
 	for _, agent := range []model.AgentID{
 		model.AgentClaudeCode,
@@ -41,6 +44,7 @@ func NewDefaultRegistry() (*Registry, error) {
 		model.AgentCursor,
 		model.AgentVSCodeCopilot,
 		model.AgentCodex,
+		model.AgentAntigravity,
 	} {
 		adapter, err := NewAdapter(agent)
 		if err != nil {
