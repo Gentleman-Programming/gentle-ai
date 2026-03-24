@@ -69,11 +69,11 @@ func (a *Adapter) GlobalConfigDir(homeDir string) string {
 }
 
 func (a *Adapter) SystemPromptDir(homeDir string) string {
-	return filepath.Join(homeDir, ".gemini", "antigravity")
+	return filepath.Join(homeDir, ".gemini")
 }
 
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(homeDir, ".gemini", "antigravity", "rules.md")
+	return filepath.Join(homeDir, ".gemini", "GEMINI.md")
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {

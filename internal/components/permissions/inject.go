@@ -80,9 +80,12 @@ func agentOverlay(id model.AgentID) []byte {
 		return claudeCodeOverlayJSON
 	case model.AgentOpenCode:
 		return openCodeOverlayJSON
-	case model.AgentGeminiCLI, model.AgentAntigravity:
-		// Antigravity shares Gemini's settings.json schema (general.defaultApprovalMode).
+	case model.AgentGeminiCLI:
 		return geminiCLIOverlayJSON
+	case model.AgentAntigravity:
+		// Antigravity manages permissions via IDE UI (Artifact Review Policy /
+		// Terminal Command Auto Execution). No injectable settings.json schema.
+		return nil
 	case model.AgentVSCodeCopilot:
 		return vscodeCopilotOverlayJSON
 	case model.AgentCursor:

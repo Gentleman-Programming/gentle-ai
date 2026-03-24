@@ -160,9 +160,9 @@ If you see a message about compaction or context reset, or if you see "FIRST ACT
 Do not skip step 1. Without it, everything done before compaction is lost from memory.
 <!-- /gentle-ai:engram-protocol -->
 
-# Agent Teams Lite — Orchestrator Rule for Antigravity
+# Agent Teams Lite — Orchestrator Rule
 
-Add this as a global rule in `~/.gemini/GEMINI.md` or as a workspace rule in `.agent/rules/sdd-orchestrator.md`.
+Add this as a global rule in your agent's global config (e.g. `~/.gemini/GEMINI.md`, `~/.claude/CLAUDE.md`, `~/.config/opencode/AGENTS.md`) or as a workspace rule in `.agent/rules/sdd-orchestrator.md`.
 
 ## Agent Teams Orchestrator
 

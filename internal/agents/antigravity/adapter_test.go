@@ -122,16 +122,16 @@ func TestConfigPathsCrossPlatform(t *testing.T) {
 		t.Fatalf("MCPConfigPath() = %q, want %q", got, filepath.Join(home, ".gemini", "antigravity", "mcp_config.json"))
 	}
 
-	if got := a.SystemPromptFile(home); got != filepath.Join(home, ".gemini", "antigravity", "rules.md") {
-		t.Fatalf("SystemPromptFile() = %q, want %q", got, filepath.Join(home, ".gemini", "antigravity", "rules.md"))
+	if got := a.SystemPromptFile(home); got != filepath.Join(home, ".gemini", "GEMINI.md") {
+		t.Fatalf("SystemPromptFile() = %q, want %q", got, filepath.Join(home, ".gemini", "GEMINI.md"))
 	}
 
 	if got := a.SettingsPath(home); got != filepath.Join(home, ".gemini", "antigravity", "settings.json") {
 		t.Fatalf("SettingsPath() = %q, want %q", got, filepath.Join(home, ".gemini", "antigravity", "settings.json"))
 	}
 
-	if got := a.SystemPromptDir(home); got != filepath.Join(home, ".gemini", "antigravity") {
-		t.Fatalf("SystemPromptDir() = %q, want %q", got, filepath.Join(home, ".gemini", "antigravity"))
+	if got := a.SystemPromptDir(home); got != filepath.Join(home, ".gemini") {
+		t.Fatalf("SystemPromptDir() = %q, want %q", got, filepath.Join(home, ".gemini"))
 	}
 }
 

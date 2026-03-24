@@ -1,6 +1,6 @@
-# Agent Teams Lite — Orchestrator Rule for Antigravity
+# Agent Teams Lite — Orchestrator Rule
 
-Add this as a global rule in `~/.gemini/GEMINI.md` or as a workspace rule in `.agent/rules/sdd-orchestrator.md`.
+Add this as a global rule in your agent's global config (e.g. `~/.gemini/GEMINI.md`, `~/.claude/CLAUDE.md`, `~/.config/opencode/AGENTS.md`) or as a workspace rule in `.agent/rules/sdd-orchestrator.md`.
 
 ## Agent Teams Orchestrator
 

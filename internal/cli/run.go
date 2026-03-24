@@ -809,6 +809,7 @@ func runPostApplyVerification(homeDir string, selection model.Selection, resolve
 	if hasComponent(resolved.OrderedComponents, model.ComponentEngram) {
 		checks = append(checks, engramHealthChecks()...)
 	}
+	checks = append(checks, antigravityCollisionCheck(resolved.Agents)...)
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
 }
@@ -846,6 +847,40 @@ func engramHealthChecks() []verify.Check {
 				}
 				_, err := engram.VerifyVersion()
 				return err
+			},
+		},
+	}
+}
+
+// antigravityCollisionCheck returns a soft verify check that warns the user
+// when both Antigravity and Gemini CLI are selected. Both agents write to
+// ~/.gemini/GEMINI.md — content is merged (not overwritten) but the user
+// should be aware.
+func antigravityCollisionCheck(agents []model.AgentID) []verify.Check {
+	hasAntigravity := false
+	hasGemini := false
+	for _, id := range agents {
+		if id == model.AgentAntigravity {
+			hasAntigravity = true
+		}
+		if id == model.AgentGeminiCLI {
+			hasGemini = true
+		}
+	}
+	if !hasAntigravity || !hasGemini {
+		return nil
+	}
+	return []verify.Check{
+		{
+			ID:          "verify:antigravity:rules-collision",
+			Description: "Antigravity and Gemini CLI share ~/.gemini/GEMINI.md",
+			Soft:        true,
+			Run: func(context.Context) error {
+				return fmt.Errorf(
+					"both Antigravity and Gemini CLI write rules to ~/.gemini/GEMINI.md\n" +
+						"Content is merged, not overwritten — rules from both agents coexist in the same file.\n" +
+						"This is expected behavior. No action required unless you want to separate them manually.",
+				)
 			},
 		},
 	}
