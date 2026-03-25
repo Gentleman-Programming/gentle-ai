@@ -75,6 +75,12 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 	}
 
 	switch profile.PackageManager {
+	case "nix":
+		// R-NIX-005: Use nix profile for flakes, nix-env for legacy
+		if profile.NixFlakes {
+			return CommandSequence{{"nix", "profile", "install", "nixpkgs." + dependency}}, nil
+		}
+		return CommandSequence{{"nix-env", "-iA", "nixpkgs." + dependency}}, nil
 	case "brew":
 		return CommandSequence{{"brew", "install", dependency}}, nil
 	case "apt":
@@ -131,7 +137,9 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 			{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
 			{"brew", "install", "gga"},
 		}, nil
-	case "apt", "pacman", "dnf":
+	case "apt", "pacman", "dnf", "nix":
+		// GGA is a pure Bash project - install via git clone + install script
+		// This works on any Linux with bash available (including NixOS)
 		const tmpDir = "/tmp/gentleman-guardian-angel"
 		return CommandSequence{
 			{"rm", "-rf", tmpDir},
@@ -269,6 +277,13 @@ func resolveEngramInstall(profile system.PlatformProfile) (CommandSequence, erro
 			{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
 			{"brew", "install", "engram"},
 		}, nil
+	case "nix":
+		// R-NIX-006: Install Engram on NixOS via go install
+		// Go must be installed (handled by run.go preflight check)
+		if err := validateGoForModuleInstall(profile); err != nil {
+			return nil, err
+		}
+		return CommandSequence{{"env", "CGO_ENABLED=0", "go", "install", "github.com/Gentleman-Programming/engram/cmd/engram@latest"}}, nil
 	case "apt", "pacman", "dnf":
 		if err := validateGoForModuleInstall(profile); err != nil {
 			return nil, err

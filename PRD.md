@@ -74,6 +74,7 @@ This is NOT an "AI agent installer." Most agents are already easy to install (`n
 | macOS (Intel) | Homebrew | P0 |
 | Linux - Ubuntu/Debian | apt + Homebrew | P0 |
 | Linux - Arch | pacman | P0 |
+| Linux - NixOS | nix | P0 |
 | Linux - Fedora/RHEL | dnf | P1 |
 | WSL 2 (Windows) | apt + Homebrew | P1 |
 | Windows (native) | winget / scoop / choco | P2 |

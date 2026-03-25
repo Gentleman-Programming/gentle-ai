@@ -304,3 +304,166 @@ func TestInstallCommandsFullMatrix(t *testing.T) {
 		}
 	}
 }
+
+// --- Tests for Nix install hints (R-NIX-004) ---
+
+func TestInstallHintGitNixFlakes(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: true}
+	hint := installHintGit(profile)
+	if !strings.Contains(hint, "nix profile install") {
+		t.Fatalf("installHintGit(nix flakes) = %q, want nix profile install", hint)
+	}
+}
+
+func TestInstallHintGitNixLegacy(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: false}
+	hint := installHintGit(profile)
+	if !strings.Contains(hint, "nix-env -iA") {
+		t.Fatalf("installHintGit(nix legacy) = %q, want nix-env -iA", hint)
+	}
+}
+
+func TestInstallHintCurlNixFlakes(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: true}
+	hint := installHintCurl(profile)
+	if !strings.Contains(hint, "nix profile install") {
+		t.Fatalf("installHintCurl(nix flakes) = %q, want nix profile install", hint)
+	}
+}
+
+func TestInstallHintCurlNixLegacy(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: false}
+	hint := installHintCurl(profile)
+	if !strings.Contains(hint, "nix-env -iA") {
+		t.Fatalf("installHintCurl(nix legacy) = %q, want nix-env -iA", hint)
+	}
+}
+
+func TestInstallHintNodeNixFlakes(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: true}
+	hint := installHintNode(profile)
+	if !strings.Contains(hint, "nix profile install") || !strings.Contains(hint, "PATH") {
+		t.Fatalf("installHintNode(nix flakes) = %q, want nix profile install with PATH warning", hint)
+	}
+}
+
+func TestInstallHintNodeNixLegacy(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: false}
+	hint := installHintNode(profile)
+	if !strings.Contains(hint, "nix-env -iA") || !strings.Contains(hint, "PATH") {
+		t.Fatalf("installHintNode(nix legacy) = %q, want nix-env -iA with PATH warning", hint)
+	}
+}
+
+func TestInstallHintGoNixFlakes(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: true}
+	hint := installHintGo(profile)
+	if !strings.Contains(hint, "nix profile install") {
+		t.Fatalf("installHintGo(nix flakes) = %q, want nix profile install", hint)
+	}
+}
+
+func TestInstallHintGoNixLegacy(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: false}
+	hint := installHintGo(profile)
+	if !strings.Contains(hint, "nix-env -iA") {
+		t.Fatalf("installHintGo(nix legacy) = %q, want nix-env -iA", hint)
+	}
+}
+
+func TestInstallHintNix(t *testing.T) {
+	hint := installHintNix()
+	if !strings.Contains(hint, "nixos.org") || !strings.Contains(hint, "curl") {
+		t.Fatalf("installHintNix() = %q, want curl installer from nixos.org", hint)
+	}
+}
+
+// --- Tests for Nix install commands (R-NIX-005) ---
+
+func TestInstallCommandsForDepGitNixFlakes(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: true}
+	cmds := InstallCommandsForDep("git", profile)
+	if len(cmds) != 1 {
+		t.Fatalf("git nix flakes commands = %d, want 1", len(cmds))
+	}
+	if cmds[0][0] != "nix" || cmds[0][1] != "profile" || cmds[0][2] != "install" {
+		t.Fatalf("git nix flakes command = %v, want nix profile install", cmds[0])
+	}
+}
+
+func TestInstallCommandsForDepGitNixLegacy(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: false}
+	cmds := InstallCommandsForDep("git", profile)
+	if len(cmds) != 1 {
+		t.Fatalf("git nix legacy commands = %d, want 1", len(cmds))
+	}
+	if cmds[0][0] != "nix-env" || cmds[0][1] != "-iA" {
+		t.Fatalf("git nix legacy command = %v, want nix-env -iA", cmds[0])
+	}
+}
+
+func TestInstallCommandsForDepCurlNixFlakes(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: true}
+	cmds := InstallCommandsForDep("curl", profile)
+	if len(cmds) != 1 {
+		t.Fatalf("curl nix flakes commands = %d, want 1", len(cmds))
+	}
+	if cmds[0][0] != "nix" || cmds[0][1] != "profile" {
+		t.Fatalf("curl nix flakes command = %v, want nix profile install", cmds[0])
+	}
+}
+
+func TestInstallCommandsForDepNodeNixFlakes(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: true}
+	cmds := InstallCommandsForDep("node", profile)
+	if len(cmds) != 1 {
+		t.Fatalf("node nix flakes commands = %d, want 1", len(cmds))
+	}
+	if cmds[0][0] != "nix" || cmds[0][1] != "profile" {
+		t.Fatalf("node nix flakes command = %v, want nix profile install", cmds[0])
+	}
+}
+
+func TestInstallCommandsForDepNodeNixLegacy(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: false}
+	cmds := InstallCommandsForDep("node", profile)
+	if len(cmds) != 1 {
+		t.Fatalf("node nix legacy commands = %d, want 1", len(cmds))
+	}
+	if cmds[0][0] != "nix-env" || cmds[0][1] != "-iA" {
+		t.Fatalf("node nix legacy command = %v, want nix-env -iA", cmds[0])
+	}
+}
+
+func TestInstallCommandsForDepGoNixFlakes(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: true}
+	cmds := InstallCommandsForDep("go", profile)
+	if len(cmds) != 1 {
+		t.Fatalf("go nix flakes commands = %d, want 1", len(cmds))
+	}
+	if cmds[0][0] != "nix" || cmds[0][1] != "profile" {
+		t.Fatalf("go nix flakes command = %v, want nix profile install", cmds[0])
+	}
+}
+
+func TestInstallCommandsForDepGoNixLegacy(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: false}
+	cmds := InstallCommandsForDep("go", profile)
+	if len(cmds) != 1 {
+		t.Fatalf("go nix legacy commands = %d, want 1", len(cmds))
+	}
+	if cmds[0][0] != "nix-env" || cmds[0][1] != "-iA" {
+		t.Fatalf("go nix legacy command = %v, want nix-env -iA", cmds[0])
+	}
+}
+
+func TestInstallCommandsForDepNix(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "apt"}
+	cmds := InstallCommandsForDep("nix", profile)
+	if len(cmds) != 1 {
+		t.Fatalf("nix install commands = %d, want 1", len(cmds))
+	}
+	if cmds[0][0] != "bash" || !strings.Contains(cmds[0][2], "nixos.org/nix/install") {
+		t.Fatalf("nix install command = %v, want bash curl installer", cmds[0])
+	}
+}

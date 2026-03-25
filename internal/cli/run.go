@@ -144,8 +144,17 @@ func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan) v
 // via `go install` (non-brew platforms) and the Go binary directory is not in
 // the user's PATH. This helps users on Linux/Windows who may not have
 // ~/go/bin (or $GOPATH/bin / $GOBIN) in their PATH.
+// For NixOS (nix package manager), we use binary download to ~/.local/bin.
 func withGoInstallPathNote(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
 	if !hasComponent(resolved.OrderedComponents, model.ComponentEngram) {
+		return report
+	}
+	// For NixOS, binary is installed to ~/.local/bin
+	if resolved.PlatformDecision.PackageManager == "nix" {
+		if isInPATH("~/.local/bin") {
+			return report
+		}
+		report.FinalNote = report.FinalNote + "\n\nThe engram binary was installed to ~/.local/bin.\nAdd it to your PATH: echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.zshrc && source ~/.zshrc"
 		return report
 	}
 	if resolved.PlatformDecision.PackageManager == "brew" {

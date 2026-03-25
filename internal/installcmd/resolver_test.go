@@ -449,6 +449,18 @@ func TestResolveComponentInstall(t *testing.T) {
 			want:      CommandSequence{{"env", "CGO_ENABLED=0", "go", "install", "github.com/Gentleman-Programming/engram/cmd/engram@latest"}},
 		},
 		{
+			name:      "engram on nix uses go install",
+			profile:   system.PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: true},
+			component: model.ComponentEngram,
+			want:      CommandSequence{{"env", "CGO_ENABLED=0", "go", "install", "github.com/Gentleman-Programming/engram/cmd/engram@latest"}},
+		},
+		{
+			name:      "engram on nix legacy uses go install",
+			profile:   system.PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: false},
+			component: model.ComponentEngram,
+			want:      CommandSequence{{"env", "CGO_ENABLED=0", "go", "install", "github.com/Gentleman-Programming/engram/cmd/engram@latest"}},
+		},
+		{
 			name:      "gga on darwin uses brew tap and install",
 			profile:   system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
 			component: model.ComponentGGA,
@@ -477,6 +489,16 @@ func TestResolveComponentInstall(t *testing.T) {
 		{
 			name:      "gga on fedora uses git clone and install.sh",
 			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
+			component: model.ComponentGGA,
+			want: CommandSequence{
+				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
+				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
+			},
+		},
+		{
+			name:      "gga on nix uses git clone and install.sh",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroNixos, PackageManager: "nix", NixFlakes: true},
 			component: model.ComponentGGA,
 			want: CommandSequence{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
@@ -523,5 +545,53 @@ func TestResolveComponentInstall(t *testing.T) {
 				t.Fatalf("ResolveComponentInstall() = %v, want %v", command, tt.want)
 			}
 		})
+	}
+}
+
+// --- Tests for Nix package manager resolution (R-NIX-005) ---
+
+func TestResolveDependencyInstallNixFlakes(t *testing.T) {
+	r := NewResolver()
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: true}
+
+	command, err := r.ResolveDependencyInstall(profile, "git")
+	if err != nil {
+		t.Fatalf("ResolveDependencyInstall() unexpected error = %v", err)
+	}
+	if len(command) != 1 {
+		t.Fatalf("ResolveDependencyInstall(nix) = %d commands, want 1", len(command))
+	}
+	if command[0][0] != "nix" || command[0][1] != "profile" || command[0][2] != "install" {
+		t.Fatalf("ResolveDependencyInstall(nix flakes) = %v, want nix profile install", command[0])
+	}
+}
+
+func TestResolveDependencyInstallNixLegacy(t *testing.T) {
+	r := NewResolver()
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: false}
+
+	command, err := r.ResolveDependencyInstall(profile, "curl")
+	if err != nil {
+		t.Fatalf("ResolveDependencyInstall() unexpected error = %v", err)
+	}
+	if len(command) != 1 {
+		t.Fatalf("ResolveDependencyInstall(nix) = %d commands, want 1", len(command))
+	}
+	if command[0][0] != "nix-env" || command[0][1] != "-iA" {
+		t.Fatalf("ResolveDependencyInstall(nix legacy) = %v, want nix-env -iA", command[0])
+	}
+}
+
+func TestResolveDependencyInstallNixAnyPackage(t *testing.T) {
+	r := NewResolver()
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "nix", NixFlakes: true}
+
+	// Test that any package can be installed via nix
+	command, err := r.ResolveDependencyInstall(profile, "python310")
+	if err != nil {
+		t.Fatalf("ResolveDependencyInstall() unexpected error = %v", err)
+	}
+	if !strings.Contains(command[0][3], "python310") {
+		t.Fatalf("ResolveDependencyInstall(python310) = %v, want nix profile install nixpkgs.python310", command[0])
 	}
 }

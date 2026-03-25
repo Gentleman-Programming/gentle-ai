@@ -21,6 +21,8 @@ type PlatformProfile struct {
 	LinuxDistro    string
 	PackageManager string
 	NpmWritable    bool // true when npm global prefix is user-writable (nvm/fnm/volta)
+	NixVersion     string // "2.x" for flakes, "1.x" for legacy (empty if nix not available)
+	NixFlakes      bool   // true if nix supports flakes
 	Supported      bool
 }
 
@@ -30,6 +32,7 @@ const (
 	LinuxDistroDebian  = "debian"
 	LinuxDistroArch    = "arch"
 	LinuxDistroFedora  = "fedora"
+	LinuxDistroNixos   = "nixos"
 )
 
 type DetectionResult struct {
@@ -49,7 +52,7 @@ func Detect(ctx context.Context) (DetectionResult, error) {
 		return DetectionResult{}, err
 	}
 
-	tools := DetectTools(ctx, []string{"git", "curl", "brew", "node"})
+	tools := DetectTools(ctx, []string{"git", "curl", "brew", "node", "nix"})
 	configs := ScanConfigs(homeDir)
 	osReleaseContent, _ := osReleaseContent(runtime.GOOS)
 
@@ -125,6 +128,15 @@ func resolvePlatformProfile(goos, linuxOSRelease string, tools map[string]ToolSt
 		distro := detectLinuxDistro(linuxOSRelease)
 		profile.LinuxDistro = distro
 
+		// Check for nix first - R-NIX-002: use nix as package manager on any Linux when available
+		if nix, ok := tools["nix"]; ok && nix.Installed {
+			profile.PackageManager = "nix"
+			profile.Supported = true
+			// Detect nix version and flakes support - R-NIX-003
+			profile.NixVersion, profile.NixFlakes = detectNixVersion()
+			return profile
+		}
+
 		// Check if brew is available on Linux
 		if brew, ok := tools["brew"]; ok && brew.Installed {
 			profile.PackageManager = "brew"
@@ -142,6 +154,10 @@ func resolvePlatformProfile(goos, linuxOSRelease string, tools map[string]ToolSt
 		case LinuxDistroFedora:
 			profile.PackageManager = "dnf"
 			profile.Supported = true
+		case LinuxDistroNixos:
+			// NixOS without nix binary - R-NIX-008 fallback
+			profile.PackageManager = ""
+			profile.Supported = false
 		default:
 			profile.PackageManager = ""
 			profile.Supported = false
@@ -182,6 +198,11 @@ func detectLinuxDistro(linuxOSRelease string) string {
 
 	id := fields["ID"]
 	idLike := fields["ID_LIKE"]
+
+	// Check for NixOS first (R-NIX-001)
+	if id == LinuxDistroNixos || containsString(idLike, LinuxDistroNixos) {
+		return LinuxDistroNixos
+	}
 
 	if isUbuntuLike(id, idLike) {
 		if id == LinuxDistroDebian {
@@ -241,4 +262,43 @@ func isFedoraLike(id, idLike string) bool {
 	}
 
 	return false
+}
+
+// containsString checks if a space-separated string contains a specific token.
+func containsString(s, token string) bool {
+	for _, t := range strings.Fields(s) {
+		if t == token {
+			return true
+		}
+	}
+	return false
+}
+
+// detectNixVersion runs "nix --version" and parses the output to determine
+// the nix version and whether flakes are supported (nix 2.x).
+func detectNixVersion() (version string, flakes bool) {
+	out, err := exec.Command("nix", "--version").Output()
+	if err != nil {
+		return "", false
+	}
+
+	output := string(out)
+	// nix --version output format: "nix (NixOS) 2.19.2" or "nix 2.4 (NixOS 22.11)"
+	// We check for "2." to determine flakes support.
+	if strings.Contains(output, "2.") {
+		// Extract version number
+		parts := strings.Fields(output)
+		if len(parts) >= 2 {
+			version = parts[1] // e.g., "2.19.2"
+		}
+		flakes = true
+		return version, flakes
+	}
+
+	// Legacy nix (pre-2.x) - no flakes
+	parts := strings.Fields(output)
+	if len(parts) >= 2 {
+		version = parts[1]
+	}
+	return version, false
 }

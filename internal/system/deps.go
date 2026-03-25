@@ -84,6 +84,16 @@ func defineDependencies(profile PlatformProfile) []Dependency {
 		InstallHint: installHintGo(profile),
 	})
 
+	// nix is optional and only relevant on Linux - R-DEPS-001
+	if profile.OS == "linux" {
+		deps = append(deps, Dependency{
+			Name:        "nix",
+			Required:    false,
+			DetectCmd:   []string{"nix", "--version"},
+			InstallHint: installHintNix(),
+		})
+	}
+
 	return deps
 }
 

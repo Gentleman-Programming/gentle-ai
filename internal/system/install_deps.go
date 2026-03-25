@@ -9,6 +9,11 @@ func installHintGit(profile PlatformProfile) string {
 		return "brew install git"
 	case profile.OS == "windows":
 		return "winget install Git.Git"
+	case profile.PackageManager == "nix":
+		if profile.NixFlakes {
+			return "nix profile install nixpkgs.git"
+		}
+		return "nix-env -iA nixpkgs.git"
 	case profile.PackageManager == "apt":
 		return "sudo apt-get install -y git"
 	case profile.PackageManager == "pacman":
@@ -27,6 +32,11 @@ func installHintCurl(profile PlatformProfile) string {
 		return "brew install curl"
 	case profile.OS == "windows":
 		return "curl is pre-installed on Windows 10+"
+	case profile.PackageManager == "nix":
+		if profile.NixFlakes {
+			return "nix profile install nixpkgs.curl"
+		}
+		return "nix-env -iA nixpkgs.curl"
 	case profile.PackageManager == "apt":
 		return "sudo apt-get install -y curl"
 	case profile.PackageManager == "pacman":
@@ -45,6 +55,12 @@ func installHintNode(profile PlatformProfile) string {
 		return "brew install node"
 	case profile.OS == "windows":
 		return "winget install OpenJS.NodeJS.LTS"
+	case profile.PackageManager == "nix":
+		// R-NIX-007: Warn about npm global PATH issues when node is installed via nix
+		if profile.NixFlakes {
+			return "nix profile install nixpkgs.nodejs (Warning: npm global installs may require PATH configuration)"
+		}
+		return "nix-env -iA nixpkgs.nodejs (Warning: npm global installs may require PATH configuration)"
 	case profile.PackageManager == "apt":
 		return "curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - && sudo apt-get install -y nodejs"
 	case profile.PackageManager == "pacman":
@@ -74,6 +90,11 @@ func installHintGo(profile PlatformProfile) string {
 		return "brew install go"
 	case profile.OS == "windows":
 		return "winget install GoLang.Go"
+	case profile.PackageManager == "nix":
+		if profile.NixFlakes {
+			return "nix profile install nixpkgs.go"
+		}
+		return "nix-env -iA nixpkgs.go"
 	case profile.PackageManager == "apt":
 		return "sudo apt-get install -y golang"
 	case profile.PackageManager == "pacman":
@@ -83,6 +104,11 @@ func installHintGo(profile PlatformProfile) string {
 	default:
 		return "install go from https://go.dev/dl/"
 	}
+}
+
+// installHintNix returns the install hint for nix package manager.
+func installHintNix() string {
+	return "curl -L https://nixos.org/nix/install | sh"
 }
 
 // InstallCommandsForDep returns the command sequence to install a missing dependency.
@@ -102,6 +128,8 @@ func InstallCommandsForDep(name string, profile PlatformProfile) [][]string {
 		return installCommandsBrew(profile)
 	case "go":
 		return installCommandsGo(profile)
+	case "nix":
+		return installCommandsNix(profile)
 	default:
 		return nil
 	}
@@ -113,6 +141,11 @@ func installCommandsGit(profile PlatformProfile) [][]string {
 		return [][]string{{"brew", "install", "git"}}
 	case profile.OS == "windows":
 		return [][]string{{"winget", "install", "--id", "Git.Git", "-e", "--accept-source-agreements", "--accept-package-agreements"}}
+	case profile.PackageManager == "nix":
+		if profile.NixFlakes {
+			return [][]string{{"nix", "profile", "install", "nixpkgs.git"}}
+		}
+		return [][]string{{"nix-env", "-iA", "nixpkgs.git"}}
 	case profile.PackageManager == "apt":
 		return [][]string{{"sudo", "apt-get", "install", "-y", "git"}}
 	case profile.PackageManager == "pacman":
@@ -131,6 +164,11 @@ func installCommandsCurl(profile PlatformProfile) [][]string {
 	case profile.OS == "windows":
 		// curl is pre-installed on Windows 10+, no install command needed.
 		return nil
+	case profile.PackageManager == "nix":
+		if profile.NixFlakes {
+			return [][]string{{"nix", "profile", "install", "nixpkgs.curl"}}
+		}
+		return [][]string{{"nix-env", "-iA", "nixpkgs.curl"}}
 	case profile.PackageManager == "apt":
 		return [][]string{{"sudo", "apt-get", "install", "-y", "curl"}}
 	case profile.PackageManager == "pacman":
@@ -148,6 +186,11 @@ func installCommandsNode(profile PlatformProfile) [][]string {
 		return [][]string{{"brew", "install", "node"}}
 	case profile.OS == "windows":
 		return [][]string{{"winget", "install", "--id", "OpenJS.NodeJS.LTS", "-e", "--accept-source-agreements", "--accept-package-agreements"}}
+	case profile.PackageManager == "nix":
+		if profile.NixFlakes {
+			return [][]string{{"nix", "profile", "install", "nixpkgs.nodejs"}}
+		}
+		return [][]string{{"nix-env", "-iA", "nixpkgs.nodejs"}}
 	case profile.PackageManager == "apt":
 		// NodeSource LTS setup + install.
 		return [][]string{
@@ -182,6 +225,11 @@ func installCommandsGo(profile PlatformProfile) [][]string {
 		return [][]string{{"brew", "install", "go"}}
 	case profile.OS == "windows":
 		return [][]string{{"winget", "install", "--id", "GoLang.Go", "-e", "--accept-source-agreements", "--accept-package-agreements"}}
+	case profile.PackageManager == "nix":
+		if profile.NixFlakes {
+			return [][]string{{"nix", "profile", "install", "nixpkgs.go"}}
+		}
+		return [][]string{{"nix-env", "-iA", "nixpkgs.go"}}
 	case profile.PackageManager == "apt":
 		return [][]string{{"sudo", "apt-get", "install", "-y", "golang"}}
 	case profile.PackageManager == "pacman":
@@ -190,6 +238,13 @@ func installCommandsGo(profile PlatformProfile) [][]string {
 		return [][]string{{"sudo", "dnf", "install", "-y", "golang"}}
 	default:
 		return nil
+	}
+}
+
+func installCommandsNix(profile PlatformProfile) [][]string {
+	// nix installation via the official installer script
+	return [][]string{
+		{"bash", "-c", "curl -L https://nixos.org/nix/install | sh"},
 	}
 }
 

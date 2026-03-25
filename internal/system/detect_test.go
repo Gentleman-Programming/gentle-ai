@@ -357,3 +357,123 @@ func TestDetectFromInputsProfileIsPopulatedInSystem(t *testing.T) {
 		t.Fatalf("System.Supported (%v) != Profile.Supported (%v)", result.System.Supported, result.System.Profile.Supported)
 	}
 }
+
+// --- Tests for NixOS detection (R-NIX-001) ---
+
+func TestDetectLinuxDistroNixosFromID(t *testing.T) {
+	osRelease := "ID=nixos\nVERSION_ID=\"23.11\"\n"
+	got := detectLinuxDistro(osRelease)
+	if got != LinuxDistroNixos {
+		t.Fatalf("detectLinuxDistro(nixos) = %q, want %q", got, LinuxDistroNixos)
+	}
+}
+
+func TestDetectLinuxDistroNixosFromIDLike(t *testing.T) {
+	osRelease := "ID=my-nixos-derivative\nID_LIKE=\"nixos\"\n"
+	got := detectLinuxDistro(osRelease)
+	if got != LinuxDistroNixos {
+		t.Fatalf("detectLinuxDistro(nixos via id_like) = %q, want %q", got, LinuxDistroNixos)
+	}
+}
+
+func TestDetectLinuxDistroNixosWithMultipleIDLike(t *testing.T) {
+	osRelease := "ID=garuda\nID_LIKE=\"archlinux nixos\"\n"
+	got := detectLinuxDistro(osRelease)
+	if got != LinuxDistroNixos {
+		t.Fatalf("detectLinuxDistro(nixos in id_like) = %q, want %q", got, LinuxDistroNixos)
+	}
+}
+
+// --- Tests for nix package manager resolution (R-NIX-002) ---
+
+func TestResolvePlatformProfileNixOnLinux(t *testing.T) {
+	tools := map[string]ToolStatus{
+		"nix": {Name: "nix", Installed: true},
+	}
+	profile := resolvePlatformProfile("linux", "ID=debian\n", tools)
+
+	if profile.PackageManager != "nix" {
+		t.Fatalf("PackageManager = %q, want nix", profile.PackageManager)
+	}
+	if !profile.Supported {
+		t.Fatalf("Supported = false, want true when nix is available")
+	}
+}
+
+func TestResolvePlatformProfileNixTakesPrecedenceOverBrew(t *testing.T) {
+	tools := map[string]ToolStatus{
+		"nix":  {Name: "nix", Installed: true},
+		"brew": {Name: "brew", Installed: true},
+	}
+	profile := resolvePlatformProfile("linux", "ID=debian\n", tools)
+
+	if profile.PackageManager != "nix" {
+		t.Fatalf("PackageManager = %q, want nix (should take precedence over brew)", profile.PackageManager)
+	}
+}
+
+func TestResolvePlatformProfileNixTakesPrecedenceOverNativePM(t *testing.T) {
+	tools := map[string]ToolStatus{
+		"nix": {Name: "nix", Installed: true},
+	}
+	// Should use nix even on ubuntu/debian
+	profile := resolvePlatformProfile("linux", "ID=ubuntu\nID_LIKE=debian\n", tools)
+
+	if profile.PackageManager != "nix" {
+		t.Fatalf("PackageManager = %q, want nix (should take precedence over apt)", profile.PackageManager)
+	}
+}
+
+func TestResolvePlatformProfileNixosWithoutNixBinary(t *testing.T) {
+	// NixOS without nix binary available - should not be supported
+	tools := map[string]ToolStatus{}
+	profile := resolvePlatformProfile("linux", "ID=nixos\n", tools)
+
+	if profile.Supported {
+		t.Fatalf("Supported = true, want false for NixOS without nix binary")
+	}
+}
+
+// --- Tests for nix version detection (R-NIX-003) ---
+
+func TestDetectNixVersionFlakes(t *testing.T) {
+	// Test parsing of nix 2.x output (flakes supported)
+	osRelease := "ID=nixos\n"
+	tools := map[string]ToolStatus{
+		"nix": {Name: "nix", Installed: true},
+	}
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, tools, nil)
+
+	if result.System.Profile.NixVersion == "" {
+		t.Fatalf("NixVersion = %q, want non-empty", result.System.Profile.NixVersion)
+	}
+	if !result.System.Profile.NixFlakes {
+		t.Fatalf("NixFlakes = false, want true for nix 2.x")
+	}
+}
+
+func TestResolvePlatformProfileWithNixFlakes(t *testing.T) {
+	tools := map[string]ToolStatus{
+		"nix": {Name: "nix", Installed: true},
+	}
+	profile := resolvePlatformProfile("linux", "ID=debian\n", tools)
+
+	if profile.NixFlakes != true {
+		t.Fatalf("NixFlakes = %v, want true", profile.NixFlakes)
+	}
+}
+
+func TestDetectFromInputsLinuxWithNixPackageManager(t *testing.T) {
+	osRelease := "ID=debian\n"
+	tools := map[string]ToolStatus{
+		"nix": {Name: "nix", Installed: true},
+	}
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, tools, nil)
+
+	if result.System.Profile.PackageManager != "nix" {
+		t.Fatalf("PackageManager = %q, want nix", result.System.Profile.PackageManager)
+	}
+	if result.System.Profile.LinuxDistro != LinuxDistroDebian {
+		t.Fatalf("LinuxDistro = %q, want debian (should still detect base distro)", result.System.Profile.LinuxDistro)
+	}
+}
