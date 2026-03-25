@@ -41,7 +41,7 @@ func overlayAssetPath(sddMode model.SDDModeID) string {
 	return "opencode/sdd-overlay-single.json"
 }
 
-func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, modelAssignments ...map[string]model.ModelAssignment) (InjectionResult, error) {
+func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, modelAssignments ...model.ModelAssignments) (InjectionResult, error) {
 	if !adapter.SupportsSystemPrompt() {
 		return InjectionResult{}, nil
 	}
@@ -120,7 +120,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, mod
 
 			// Inject model assignments into the overlay before merging.
 			overlayBytes := []byte(overlayContent)
-			var assignments map[string]model.ModelAssignment
+			var assignments model.ModelAssignments
 			if len(modelAssignments) > 0 {
 				assignments = modelAssignments[0]
 			}
@@ -590,9 +590,28 @@ func injectMarkdownSections(homeDir string, adapter agents.Adapter) (InjectionRe
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
 }
 
+// ModelPoolToJSON converts a ModelPool to the JSON array format for opencode.json.
+// The array format is [primary, fallback1, fallback2, ...] where the first element
+// is implicitly the primary model.
+func ModelPoolToJSON(pool model.ModelPool) []string {
+	if pool.Primary == "" {
+		return nil
+	}
+	result := make([]string, 0, 1+len(pool.Fallbacks))
+	result = append(result, string(pool.Primary))
+	for _, f := range pool.Fallbacks {
+		if f != "" {
+			result = append(result, string(f))
+		}
+	}
+	return result
+}
+
 // injectModelAssignments injects "model" fields into sub-agent definitions
 // within the overlay JSON before it is merged into the settings file.
-func injectModelAssignments(overlayBytes []byte, assignments map[string]model.ModelAssignment) ([]byte, error) {
+// For ModelPool, the Primary model is used as the model field (retrocompatibility).
+// Additionally, it injects a top-level "model_pool" field with the full pool configuration.
+func injectModelAssignments(overlayBytes []byte, assignments model.ModelAssignments) ([]byte, error) {
 	var overlay map[string]any
 	if err := json.Unmarshal(overlayBytes, &overlay); err != nil {
 		return nil, fmt.Errorf("unmarshal overlay for model injection: %w", err)
@@ -607,8 +626,11 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 		return overlayBytes, nil
 	}
 
-	for phase, assignment := range assignments {
-		if assignment.ProviderID == "" || assignment.ModelID == "" {
+	// Track which pools have fallbacks for model_pool injection
+	hasFallbacks := false
+
+	for phase, pool := range assignments {
+		if pool.Primary == "" {
 			continue
 		}
 		agentDef, exists := agents[phase]
@@ -619,7 +641,37 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 		if !ok {
 			continue
 		}
-		agentMap["model"] = assignment.FullID()
+		// Retrocompatibility: inject Primary model into agent "model" field
+		agentMap["model"] = string(pool.Primary)
+
+		// Track if any pool has fallbacks
+		if len(pool.Fallbacks) > 0 {
+			hasFallbacks = true
+		}
+	}
+
+	// Inject model_pool at the top level if any assignments have fallbacks
+	// Format: { "model_pool": { "sdd_propose": ["primary", "fallback1", ...] } }
+	// Only pools WITH fallbacks go into model_pool; pools with only primary
+	// use the legacy agent[phase].model field (retrocompatibility).
+	if len(assignments) > 0 && hasFallbacks {
+		modelPool := make(map[string]any)
+		for phase, pool := range assignments {
+			if pool.Primary == "" {
+				continue
+			}
+			// Only include pools that have fallbacks
+			if len(pool.Fallbacks) == 0 {
+				continue
+			}
+			poolArray := ModelPoolToJSON(pool)
+			if len(poolArray) > 1 { // Primary + at least one fallback
+				modelPool[phase] = poolArray
+			}
+		}
+		if len(modelPool) > 0 {
+			overlay["model_pool"] = modelPool
+		}
 	}
 
 	result, err := json.MarshalIndent(overlay, "", "  ")

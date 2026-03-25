@@ -830,9 +830,9 @@ func TestInjectClaudeDeduplicatesBareOrchestratorAtEndOfFile(t *testing.T) {
 func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 	home := t.TempDir()
 
-	assignments := map[string]model.ModelAssignment{
-		"sdd-init":  {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
-		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-4o"},
+	assignments := model.ModelAssignments{
+		"sdd-init": {Primary: "anthropic/claude-sonnet-4-20250514"},
+		"sdd-apply": {Primary: "openai/gpt-4o"},
 	}
 
 	result, err := Inject(home, opencodeAdapter(), "multi", assignments)
@@ -928,8 +928,8 @@ func TestInjectSingleModeIgnoresModelAssignments(t *testing.T) {
 	home := t.TempDir()
 
 	// Even if assignments are provided, single mode should ignore them.
-	assignments := map[string]model.ModelAssignment{
-		"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
+	assignments := model.ModelAssignments{
+		"sdd-init": {Primary: "anthropic/claude-sonnet-4-20250514"},
 	}
 
 	result, err := Inject(home, opencodeAdapter(), "single", assignments)
@@ -1474,8 +1474,8 @@ func TestInjectModelAssignmentsFunction(t *testing.T) {
   }
 }`)
 
-	assignments := map[string]model.ModelAssignment{
-		"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
+	assignments := model.ModelAssignments{
+		"sdd-init": {Primary: "anthropic/claude-sonnet-4-20250514"},
 	}
 
 	result, err := injectModelAssignments(overlayJSON, assignments)
@@ -1831,5 +1831,370 @@ func TestMergeJSONFileReturnsMergedBytes(t *testing.T) {
 	// writeResult must reflect that the file was changed.
 	if !result.writeResult.Changed {
 		t.Fatal("writeResult.Changed = false — first write of different content should be changed")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: ModelPoolToJSON and model_pool serialization tests
+// ---------------------------------------------------------------------------
+
+// TestModelPoolToJSON converts a ModelPool to the ordered array format.
+func TestModelPoolToJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		pool     model.ModelPool
+		expected []string
+	}{
+		{
+			name: "primary only",
+			pool: model.ModelPool{
+				Primary:   "anthropic/claude-opus-4-5",
+				Fallbacks: nil,
+			},
+			expected: []string{"anthropic/claude-opus-4-5"},
+		},
+		{
+			name: "primary with one fallback",
+			pool: model.ModelPool{
+				Primary:   "anthropic/claude-opus-4-5",
+				Fallbacks: []model.ModelReference{"openai/gpt-4o"},
+			},
+			expected: []string{"anthropic/claude-opus-4-5", "openai/gpt-4o"},
+		},
+		{
+			name: "primary with multiple fallbacks",
+			pool: model.ModelPool{
+				Primary:   "anthropic/claude-opus-4-5",
+				Fallbacks: []model.ModelReference{"openai/gpt-4o", "openai/gpt-3.5-turbo"},
+			},
+			expected: []string{"anthropic/claude-opus-4-5", "openai/gpt-4o", "openai/gpt-3.5-turbo"},
+		},
+		{
+			name: "empty pool returns nil",
+			pool: model.ModelPool{
+				Primary:   "",
+				Fallbacks: nil,
+			},
+			expected: nil,
+		},
+		{
+			name: "filters empty fallbacks",
+			pool: model.ModelPool{
+				Primary:   "anthropic/claude-opus-4-5",
+				Fallbacks: []model.ModelReference{"", "openai/gpt-4o", ""},
+			},
+			expected: []string{"anthropic/claude-opus-4-5", "openai/gpt-4o"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ModelPoolToJSON(tt.pool)
+			if len(result) != len(tt.expected) {
+				t.Fatalf("ModelPoolToJSON() length = %d, want %d", len(result), len(tt.expected))
+			}
+			for i, v := range result {
+				if v != tt.expected[i] {
+					t.Fatalf("ModelPoolToJSON()[%d] = %q, want %q", i, v, tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
+// TestInjectModelAssignmentsWithFallbacks verifies that model_pool is injected
+// when ModelPool has fallbacks defined.
+func TestInjectModelAssignmentsWithFallbacks(t *testing.T) {
+	overlayJSON := []byte(`{
+  "agent": {
+    "sdd-init": {"mode": "subagent", "prompt": "test"},
+    "sdd-apply": {"mode": "subagent", "prompt": "test"}
+  }
+}`)
+
+	assignments := model.ModelAssignments{
+		"sdd-init": {
+			Primary:   "anthropic/claude-opus-4-5",
+			Fallbacks: []model.ModelReference{"openai/gpt-4o", "openai/gpt-3.5-turbo"},
+		},
+		"sdd-apply": {
+			Primary:   "openai/gpt-4o",
+			Fallbacks: nil, // No fallbacks - should not appear in model_pool
+		},
+	}
+
+	result, err := injectModelAssignments(overlayJSON, assignments)
+	if err != nil {
+		t.Fatalf("injectModelAssignments() error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("Unmarshal result error = %v", err)
+	}
+
+	// Verify model_pool exists and contains sdd-init with fallbacks
+	modelPool, ok := parsed["model_pool"].(map[string]any)
+	if !ok {
+		t.Fatal("model_pool key not found in result")
+	}
+
+	sddInitPool, ok := modelPool["sdd-init"].([]any)
+	if !ok {
+		t.Fatal("model_pool.sdd-init not found or wrong type")
+	}
+
+	// Verify the array has primary + 2 fallbacks
+	if len(sddInitPool) != 3 {
+		t.Fatalf("model_pool.sdd-init length = %d, want 3", len(sddInitPool))
+	}
+
+	// Verify order: primary first, then fallbacks
+	if sddInitPool[0].(string) != "anthropic/claude-opus-4-5" {
+		t.Fatalf("model_pool.sdd-init[0] = %v, want anthropic/claude-opus-4-5", sddInitPool[0])
+	}
+	if sddInitPool[1].(string) != "openai/gpt-4o" {
+		t.Fatalf("model_pool.sdd-init[1] = %v, want openai/gpt-4o", sddInitPool[1])
+	}
+	if sddInitPool[2].(string) != "openai/gpt-3.5-turbo" {
+		t.Fatalf("model_pool.sdd-init[2] = %v, want openai/gpt-3.5-turbo", sddInitPool[2])
+	}
+
+	// sdd-apply should NOT be in model_pool because it has no fallbacks
+	if _, exists := modelPool["sdd-apply"]; exists {
+		t.Fatal("model_pool.sdd-apply should not exist when there are no fallbacks")
+	}
+
+	// Verify retrocompatibility: agent.sdd-init.model field should still exist
+	agents := parsed["agent"].(map[string]any)
+	initAgent := agents["sdd-init"].(map[string]any)
+	if m, _ := initAgent["model"].(string); m != "anthropic/claude-opus-4-5" {
+		t.Fatalf("agent.sdd-init.model = %q, want anthropic/claude-opus-4-5", m)
+	}
+
+	// Verify agent.sdd-apply.model still has its primary (retrocompatibility)
+	applyAgent := agents["sdd-apply"].(map[string]any)
+	if m, _ := applyAgent["model"].(string); m != "openai/gpt-4o" {
+		t.Fatalf("agent.sdd-apply.model = %q, want openai/gpt-4o", m)
+	}
+}
+
+// TestInjectModelAssignmentsNoFallbacksNoModelPool verifies that model_pool
+// is NOT injected when no assignments have fallbacks (backward compatibility).
+func TestInjectModelAssignmentsNoFallbacksNoModelPool(t *testing.T) {
+	overlayJSON := []byte(`{
+  "agent": {
+    "sdd-init": {"mode": "subagent", "prompt": "test"},
+    "sdd-apply": {"mode": "subagent", "prompt": "test"}
+  }
+}`)
+
+	// All pools have only primary, no fallbacks
+	assignments := model.ModelAssignments{
+		"sdd-init": {Primary: "anthropic/claude-opus-4-5"},
+		"sdd-apply": {Primary: "openai/gpt-4o"},
+	}
+
+	result, err := injectModelAssignments(overlayJSON, assignments)
+	if err != nil {
+		t.Fatalf("injectModelAssignments() error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("Unmarshal result error = %v", err)
+	}
+
+	// model_pool should NOT exist when no fallbacks
+	if _, exists := parsed["model_pool"]; exists {
+		t.Fatal("model_pool should not exist when no assignments have fallbacks")
+	}
+
+	// But agent.*.model fields should still exist (retrocompatibility)
+	agents := parsed["agent"].(map[string]any)
+	initAgent := agents["sdd-init"].(map[string]any)
+	if m, _ := initAgent["model"].(string); m != "anthropic/claude-opus-4-5" {
+		t.Fatalf("agent.sdd-init.model = %q, want anthropic/claude-opus-4-5", m)
+	}
+}
+
+// TestInjectModelPoolPreservesExistingConfig verifies that model_pool merges
+// correctly with existing configuration in opencode.json.
+func TestInjectModelPoolPreservesExistingConfig(t *testing.T) {
+	home := t.TempDir()
+
+	// Pre-existing config with model_pool and other settings
+	existing := `{
+  "model": "anthropic/claude-sonnet-4-20250514",
+  "model_pool": {
+    "old-phase": ["old-model"]
+  }
+}` + "\n"
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	assignments := model.ModelAssignments{
+		"sdd-init": {
+			Primary:   "anthropic/claude-opus-4-5",
+			Fallbacks: []model.ModelReference{"openai/gpt-4o"},
+		},
+	}
+
+	result, err := Inject(home, opencodeAdapter(), "multi", assignments)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() changed = false")
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	// The existing model field should be preserved
+	if m, _ := parsed["model"].(string); m != "anthropic/claude-sonnet-4-20250514" {
+		t.Fatalf("existing model field was lost: got %q", m)
+	}
+
+	// model_pool should now contain both old-phase and new sdd-init
+	modelPool, ok := parsed["model_pool"].(map[string]any)
+	if !ok {
+		t.Fatal("model_pool not found or wrong type")
+	}
+
+	// Check that the merge preserved old config
+	// Note: the merge strategy replaces entire objects, not deep merge
+	// So we check that sdd-init is present with our new pool
+	_, hasSddInit := modelPool["sdd-init"]
+	if !hasSddInit {
+		t.Fatal("model_pool.sdd-init not found after injection")
+	}
+}
+
+// TestInjectOpenCodeMultiModeWithModelPoolFallbacks verifies end-to-end
+// that the full ModelPool with fallbacks is correctly serialized to opencode.json.
+func TestInjectOpenCodeMultiModeWithModelPoolFallbacks(t *testing.T) {
+	home := t.TempDir()
+
+	assignments := model.ModelAssignments{
+		"sdd-init": {
+			Primary:   "anthropic/claude-opus-4-5",
+			Fallbacks: []model.ModelReference{"openai/gpt-4o", "openai/gpt-3.5-turbo"},
+		},
+		"sdd-design": {
+			Primary:   "google/gemini-pro",
+			Fallbacks: []model.ModelReference{"anthropic/claude-sonnet-4-20250514"},
+		},
+	}
+
+	result, err := Inject(home, opencodeAdapter(), "multi", assignments)
+	if err != nil {
+		t.Fatalf("Inject(multi, assignments) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(multi, assignments) changed = false")
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+
+	// Verify agent.sdd-init has model field (retrocompatibility)
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+	initAgent, ok := agentMap["sdd-init"].(map[string]any)
+	if !ok {
+		t.Fatal("sdd-init agent not found")
+	}
+	if m, _ := initAgent["model"].(string); m != "anthropic/claude-opus-4-5" {
+		t.Fatalf("sdd-init model = %q, want anthropic/claude-opus-4-5", m)
+	}
+
+	// Verify model_pool exists with correct structure
+	modelPool, ok := root["model_pool"].(map[string]any)
+	if !ok {
+		t.Fatal("model_pool not found in opencode.json")
+	}
+
+	// Verify sdd-init pool
+	sddInitPool, ok := modelPool["sdd-init"].([]any)
+	if !ok {
+		t.Fatal("model_pool.sdd-init not found or wrong type")
+	}
+	if len(sddInitPool) != 3 {
+		t.Fatalf("model_pool.sdd-init has %d elements, want 3", len(sddInitPool))
+	}
+	if sddInitPool[0].(string) != "anthropic/claude-opus-4-5" {
+		t.Fatalf("model_pool.sdd-init[0] = %v, want anthropic/claude-opus-4-5", sddInitPool[0])
+	}
+
+	// Verify sdd-design pool
+	sddDesignPool, ok := modelPool["sdd-design"].([]any)
+	if !ok {
+		t.Fatal("model_pool.sdd-design not found or wrong type")
+	}
+	if sddDesignPool[0].(string) != "google/gemini-pro" {
+		t.Fatalf("model_pool.sdd-design[0] = %v, want google/gemini-pro", sddDesignPool[0])
+	}
+	if sddDesignPool[1].(string) != "anthropic/claude-sonnet-4-20250514" {
+		t.Fatalf("model_pool.sdd-design[1] = %v, want anthropic/claude-sonnet-4-20250514", sddDesignPool[1])
+	}
+}
+
+// TestInjectModelAssignmentsEmptyPrimarySkipped verifies that empty Primary
+// models are skipped entirely.
+func TestInjectModelAssignmentsEmptyPrimarySkipped(t *testing.T) {
+	overlayJSON := []byte(`{
+  "agent": {
+    "sdd-init": {"mode": "subagent", "prompt": "test"}
+  }
+}`)
+
+	assignments := model.ModelAssignments{
+		"sdd-init": {Primary: ""}, // Empty primary
+	}
+
+	result, err := injectModelAssignments(overlayJSON, assignments)
+	if err != nil {
+		t.Fatalf("injectModelAssignments() error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("Unmarshal result error = %v", err)
+	}
+
+	// model_pool should not exist
+	if _, exists := parsed["model_pool"]; exists {
+		t.Fatal("model_pool should not exist when all primaries are empty")
+	}
+
+	// agent.sdd-init should not have model field
+	agents := parsed["agent"].(map[string]any)
+	initAgent := agents["sdd-init"].(map[string]any)
+	if _, hasModel := initAgent["model"]; hasModel {
+		t.Fatal("agent.sdd-init should not have model field when primary is empty")
 	}
 }

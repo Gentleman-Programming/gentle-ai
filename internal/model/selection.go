@@ -7,7 +7,7 @@ type Selection struct {
 	Persona          PersonaID
 	Preset           PresetID
 	SDDMode          SDDModeID
-	ModelAssignments map[string]ModelAssignment // key = sub-agent name (e.g., "sdd-init")
+	ModelAssignments ModelAssignments // key = sub-agent name (e.g., "sdd-propose")
 }
 
 func (s Selection) HasAgent(agent AgentID) bool {

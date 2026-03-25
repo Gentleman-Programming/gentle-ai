@@ -16,7 +16,7 @@ type ModelPickerMode int
 const (
 	ModePhaseList     ModelPickerMode = iota // Main screen: phase list + Continue/Back
 	ModeProviderSelect                       // Sub-mode: pick a provider
-	ModeModelSelect                          // Sub-mode: pick a model from chosen provider
+	ModeModelSelect                          // Sub-mode: multi-select models from chosen provider
 )
 
 // maxVisibleItems is the maximum number of items shown in scrollable sub-lists.
@@ -29,12 +29,20 @@ type ProviderEntry struct {
 	ModelCount int
 }
 
+// SelectedModel represents a selected model with its selection order.
+type SelectedModel struct {
+	Reference model.ModelReference
+	Order     int // 0 = Primary, 1+ = Fallback order
+}
+
 // ModelPickerState holds the available providers and models for the picker screen,
 // plus navigation state for the two-step sub-selection modes.
+// Multi-select is supported: users can select multiple models per phase.
+// The first selected model becomes Primary, subsequent selections become Fallbacks.
 type ModelPickerState struct {
 	Providers    map[string]opencode.Provider
-	AvailableIDs []string                       // provider IDs with tool_call-capable models
-	SDDModels    map[string][]opencode.Model    // provider ID -> SDD-capable models
+	AvailableIDs []string                    // provider IDs with tool_call-capable models
+	SDDModels    map[string][]opencode.Model // provider ID -> SDD-capable models
 
 	Mode             ModelPickerMode
 	SelectedPhaseIdx int    // which phase row was selected (0 = "Set all")
@@ -44,9 +52,15 @@ type ModelPickerState struct {
 	ProviderScroll int
 	ModelCursor    int
 	ModelScroll    int
+
+	// Multi-select state: tracks selected models per phase.
+	// Key is phase name (e.g., "sdd-propose"), value is ordered list of model references.
+	// The first model in the list is Primary, the rest are Fallbacks.
+	SelectedModels map[string][]model.ModelReference
 }
 
 // NewModelPickerState initializes the picker state from the models cache.
+// SelectedModels is initialized as an empty map to support multi-select.
 func NewModelPickerState(cachePath string) ModelPickerState {
 	providers, err := opencode.LoadModels(cachePath)
 	if err != nil {
@@ -61,10 +75,11 @@ func NewModelPickerState(cachePath string) ModelPickerState {
 	}
 
 	return ModelPickerState{
-		Providers:    providers,
-		AvailableIDs: available,
-		SDDModels:    sddModels,
-		Mode:         ModePhaseList,
+		Providers:      providers,
+		AvailableIDs:   available,
+		SDDModels:      sddModels,
+		Mode:           ModePhaseList,
+		SelectedModels: make(map[string][]model.ModelReference),
 	}
 }
 
@@ -100,10 +115,10 @@ func ProviderEntries(state ModelPickerState) []ProviderEntry {
 func HandleModelPickerNav(
 	key string,
 	state *ModelPickerState,
-	assignments map[string]model.ModelAssignment,
-) (handled bool, updatedAssignments map[string]model.ModelAssignment) {
+	assignments model.ModelAssignments,
+) (handled bool, updatedAssignments model.ModelAssignments) {
 	if assignments == nil {
-		assignments = make(map[string]model.ModelAssignment)
+		assignments = make(model.ModelAssignments)
 	}
 
 	switch state.Mode {
@@ -156,11 +171,24 @@ func handleProviderNav(key string, state *ModelPickerState) bool {
 func handleModelNav(
 	key string,
 	state *ModelPickerState,
-	assignments map[string]model.ModelAssignment,
-) (bool, map[string]model.ModelAssignment) {
+	assignments model.ModelAssignments,
+) (bool, model.ModelAssignments) {
 	models := state.SDDModels[state.SelectedProvider]
 	if len(models) == 0 {
 		return false, assignments
+	}
+
+	// Determine the phase(s) being configured
+	phases := opencode.SDDPhases()
+	var targetPhases []string
+	if state.SelectedPhaseIdx == 0 {
+		// "Set all phases"
+		targetPhases = phases
+	} else {
+		phaseIdx := state.SelectedPhaseIdx - 1
+		if phaseIdx < len(phases) {
+			targetPhases = []string{phases[phaseIdx]}
+		}
 	}
 
 	switch key {
@@ -180,24 +208,59 @@ func handleModelNav(
 			}
 		}
 		return true, assignments
+	case " ":
+		// Toggle selection of the current model for the target phase(s)
+		selectedModel := models[state.ModelCursor]
+		modelRef := model.ModelReference(state.SelectedProvider + "/" + selectedModel.ID)
+
+		for _, phase := range targetPhases {
+			// Initialize the slice if needed
+			if state.SelectedModels == nil {
+				state.SelectedModels = make(map[string][]model.ModelReference)
+			}
+			if state.SelectedModels[phase] == nil {
+				state.SelectedModels[phase] = make([]model.ModelReference, 0)
+			}
+
+			// Check if already selected
+			alreadySelected := false
+			for i, ref := range state.SelectedModels[phase] {
+				if ref == modelRef {
+					// Remove from selection
+					state.SelectedModels[phase] = append(
+						state.SelectedModels[phase][:i],
+						state.SelectedModels[phase][i+1:]...,
+					)
+					alreadySelected = true
+					break
+				}
+			}
+
+			// If not already selected, add to the list
+			if !alreadySelected {
+				state.SelectedModels[phase] = append(state.SelectedModels[phase], modelRef)
+			}
+		}
+		return true, assignments
 	case "enter":
-		selected := models[state.ModelCursor]
-		assignment := model.ModelAssignment{
-			ProviderID: state.SelectedProvider,
-			ModelID:    selected.ID,
+		// Confirm selection: build ModelPool from SelectedModels
+		// First selected = Primary, rest = Fallbacks
+		for _, phase := range targetPhases {
+			selected := state.SelectedModels[phase]
+			if len(selected) > 0 {
+				pool := model.ModelPool{
+					Primary: selected[0],
+				}
+				if len(selected) > 1 {
+					pool.Fallbacks = selected[1:]
+				}
+				assignments[phase] = pool
+			}
 		}
 
-		phases := opencode.SDDPhases()
-		if state.SelectedPhaseIdx == 0 {
-			// "Set all phases"
-			for _, phase := range phases {
-				assignments[phase] = assignment
-			}
-		} else {
-			phaseIdx := state.SelectedPhaseIdx - 1
-			if phaseIdx < len(phases) {
-				assignments[phases[phaseIdx]] = assignment
-			}
+		// Clear selection for these phases after confirming
+		for _, phase := range targetPhases {
+			delete(state.SelectedModels, phase)
 		}
 
 		// Return to phase list
@@ -218,7 +281,7 @@ func handleModelNav(
 
 // RenderModelPicker renders the model picker screen based on the current mode.
 func RenderModelPicker(
-	assignments map[string]model.ModelAssignment,
+	assignments model.ModelAssignments,
 	state ModelPickerState,
 	cursor int,
 ) string {
@@ -233,13 +296,15 @@ func RenderModelPicker(
 }
 
 func renderPhaseList(
-	assignments map[string]model.ModelAssignment,
+	assignments model.ModelAssignments,
 	state ModelPickerState,
 	cursor int,
 ) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Assign Models to SDD Phases"))
+	b.WriteString("\n")
+	b.WriteString(styles.SubtextStyle.Render("First selected = Primary, others = Fallbacks"))
 	b.WriteString("\n\n")
 
 	if len(state.AvailableIDs) == 0 {
@@ -265,19 +330,17 @@ func renderPhaseList(
 		var label string
 		if idx == 0 {
 			// "Set all phases" row — show the assignment of the first phase as representative
-			assignment, ok := assignments[phases[0]]
-			if ok && assignment.ProviderID != "" {
-				provName, modelName := resolveNames(assignment, state)
-				label = fmt.Sprintf("%-20s (%s / %s)", row, provName, modelName)
+			pool, ok := assignments[phases[0]]
+			if ok && pool.Primary != "" {
+				label = formatPoolLabel(row, pool, state)
 			} else {
 				label = fmt.Sprintf("%-20s (not set)", row)
 			}
 		} else {
 			phase := phases[idx-1]
-			assignment, ok := assignments[phase]
-			if ok && assignment.ProviderID != "" {
-				provName, modelName := resolveNames(assignment, state)
-				label = fmt.Sprintf("%-20s %s / %s", row, provName, modelName)
+			pool, ok := assignments[phase]
+			if ok && pool.Primary != "" {
+				label = formatPoolLabel(row, pool, state)
 			} else {
 				label = fmt.Sprintf("%-20s (default)", row)
 			}
@@ -294,9 +357,25 @@ func renderPhaseList(
 	actionIdx := cursor - len(rows)
 	b.WriteString(renderOptions([]string{"Continue", "← Back"}, actionIdx))
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: change model / confirm • esc: back"))
+	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select models • esc: back"))
 
 	return b.String()
+}
+
+// formatPoolLabel formats a phase row label showing Primary and Fallback count.
+// Example: "sdd_propose         Claude (Primary) + 2 fallbacks"
+func formatPoolLabel(phaseName string, pool model.ModelPool, state ModelPickerState) string {
+	provName, modelName := resolvePoolNames(pool, state)
+	if provName == "" || modelName == "" {
+		return fmt.Sprintf("%-20s (default)", phaseName)
+	}
+
+	if len(pool.Fallbacks) == 0 {
+		return fmt.Sprintf("%-20s %s / %s", phaseName, provName, modelName)
+	}
+
+	// Show Primary + N fallbacks
+	return fmt.Sprintf("%-20s %s / %s (+%d fallbacks)", phaseName, provName, modelName, len(pool.Fallbacks))
 }
 
 func renderProviderSelect(state ModelPickerState) string {
@@ -348,7 +427,36 @@ func renderModelSelect(state ModelPickerState) string {
 		provName = p.Name
 	}
 
-	b.WriteString(styles.TitleStyle.Render(fmt.Sprintf("Select model (%s):", provName)))
+	// Determine which phases we're selecting for (to check selection status)
+	phases := opencode.SDDPhases()
+	var targetPhases []string
+	if state.SelectedPhaseIdx == 0 {
+		// "Set all phases" - use first phase for display purposes
+		targetPhases = phases
+	} else {
+		phaseIdx := state.SelectedPhaseIdx - 1
+		if phaseIdx < len(phases) {
+			targetPhases = []string{phases[phaseIdx]}
+		}
+	}
+
+	// Get currently selected models for the first target phase (for display)
+	var currentSelected []model.ModelReference
+	if len(targetPhases) > 0 && state.SelectedModels != nil {
+		currentSelected = state.SelectedModels[targetPhases[0]]
+	}
+
+	// Show phase context in title
+	phaseContext := ""
+	if state.SelectedPhaseIdx == 0 {
+		phaseContext = " (all phases)"
+	} else if state.SelectedPhaseIdx <= len(phases) {
+		phaseContext = fmt.Sprintf(" (%s)", phases[state.SelectedPhaseIdx-1])
+	}
+
+	b.WriteString(styles.TitleStyle.Render(fmt.Sprintf("Select models for %s%s:", provName, phaseContext)))
+	b.WriteString("\n")
+	b.WriteString(styles.SubtextStyle.Render("First selected = Primary, others = Fallbacks"))
 	b.WriteString("\n\n")
 
 	models := state.SDDModels[state.SelectedProvider]
@@ -365,17 +473,43 @@ func renderModelSelect(state ModelPickerState) string {
 
 	for i := state.ModelScroll; i < end; i++ {
 		m := models[i]
+		modelRef := model.ModelReference(state.SelectedProvider + "/" + m.ID)
+
+		// Check if this model is selected
+		isSelected := false
+		for _, ref := range currentSelected {
+			if ref == modelRef {
+				isSelected = true
+				break
+			}
+		}
+
 		label := m.Name
 		if m.Cost.Input > 0 || m.Cost.Output > 0 {
 			label += fmt.Sprintf("  ($%.2f/$%.2f)", m.Cost.Input, m.Cost.Output)
 		}
-		focused := i == state.ModelCursor
 
-		if focused {
-			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+label) + "\n")
-		} else {
-			b.WriteString(styles.UnselectedStyle.Render("  "+label) + "\n")
+		// Show selection order if selected
+		if isSelected {
+			order := 0
+			for idx, ref := range currentSelected {
+				if ref == modelRef {
+					order = idx + 1
+					break
+				}
+			}
+			if order == 1 {
+				label = fmt.Sprintf("[x] %s (Primary)", m.Name)
+			} else {
+				label = fmt.Sprintf("[x] %s (Fallback #%d)", m.Name, order-1)
+			}
+			if m.Cost.Input > 0 || m.Cost.Output > 0 {
+				label += fmt.Sprintf("  ($%.2f/$%.2f)", m.Cost.Input, m.Cost.Output)
+			}
 		}
+
+		focused := i == state.ModelCursor
+		b.WriteString(renderCheckbox(label, isSelected, focused))
 	}
 
 	if end < len(models) {
@@ -384,12 +518,13 @@ func renderModelSelect(state ModelPickerState) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
+	b.WriteString(styles.HelpStyle.Render("j/k: navigate • space: toggle selection • enter: confirm • esc: back"))
 
 	return b.String()
 }
 
 // resolveNames returns the display name for a provider and model from an assignment.
+// Deprecated: Use resolvePoolNames for ModelPool support.
 func resolveNames(assignment model.ModelAssignment, state ModelPickerState) (provName, modelName string) {
 	provName = assignment.ProviderID
 	if p, exists := state.Providers[assignment.ProviderID]; exists && p.Name != "" {
@@ -404,4 +539,38 @@ func resolveNames(assignment model.ModelAssignment, state ModelPickerState) (pro
 	}
 
 	return provName, modelName
+}
+
+// resolvePoolNames returns the display name for a provider and model from a ModelPool.
+// Only the Primary model is displayed (fallbacks are not shown in the picker).
+func resolvePoolNames(pool model.ModelPool, state ModelPickerState) (provName, modelName string) {
+	if pool.Primary == "" {
+		return "", ""
+	}
+
+	// Parse provider/model from the reference
+	ref := string(pool.Primary)
+	for i := len(ref) - 1; i >= 0; i-- {
+		if ref[i] == '/' {
+			providerID := ref[:i]
+			modelID := ref[i+1:]
+
+			provName = providerID
+			if p, exists := state.Providers[providerID]; exists && p.Name != "" {
+				provName = p.Name
+			}
+
+			modelName = modelID
+			if p, exists := state.Providers[providerID]; exists {
+				if m, ok := p.Models[modelID]; ok && m.Name != "" {
+					modelName = m.Name
+				}
+			}
+
+			return provName, modelName
+		}
+	}
+
+	// No slash found - just return the reference as-is
+	return ref, ref
 }
