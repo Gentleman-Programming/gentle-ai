@@ -28,6 +28,12 @@ import (
 
 var update = flag.Bool("update", false, "update golden files")
 
+// setupMockEngramPath delegates to the engram package's exported test helper.
+func setupMockEngramPath(t *testing.T) func() {
+	t.Helper()
+	return engram.SetupMockEngramPath(t)
+}
+
 func claudeAdapter() agents.Adapter      { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter    { return opencode.NewAdapter() }
 func cursorAdapter() agents.Adapter      { return cursor.NewAdapter() }
@@ -458,6 +464,7 @@ func TestGoldenPersona_Windsurf_Gentleman(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGoldenEngram_Claude(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	result, err := engram.Inject(home, claudeAdapter())
@@ -478,6 +485,7 @@ func TestGoldenEngram_Claude(t *testing.T) {
 }
 
 func TestGoldenEngram_OpenCode(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	result, err := engram.Inject(home, opencodeAdapter())
@@ -493,6 +501,7 @@ func TestGoldenEngram_OpenCode(t *testing.T) {
 }
 
 func TestGoldenEngram_Windsurf(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	result, err := engram.Inject(home, windsurfAdapter())
@@ -574,6 +583,7 @@ func TestGoldenSkills_Windsurf(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGoldenCombined_Claude(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	// Inject persona first, then SDD, then Engram — all write sections into CLAUDE.md.
@@ -592,6 +602,7 @@ func TestGoldenCombined_Claude(t *testing.T) {
 }
 
 func TestGoldenCombined_Windsurf(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module test\n"), 0o644); err != nil {
@@ -672,6 +683,7 @@ func TestGoldenPersona_Antigravity_Gentleman(t *testing.T) {
 }
 
 func TestGoldenEngram_Antigravity(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	result, err := engram.Inject(home, antigravityAdapter())

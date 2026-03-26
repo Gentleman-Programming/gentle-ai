@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -19,21 +20,126 @@ type InjectionResult struct {
 	Files   []string
 }
 
-// defaultEngramServerJSON is the MCP server config for separate-file strategy (Claude Code).
-// Uses --tools=agent per engram contract.
-var defaultEngramServerJSON = []byte("{\n  \"command\": \"engram\",\n  \"args\": [\"mcp\", \"--tools=agent\"]\n}\n")
+// execLookPath is a package-level var for testability.
+var execLookPath = exec.LookPath
 
-// defaultEngramOverlayJSON is the settings.json overlay for merge strategy (Gemini, etc.).
-// Uses --tools=agent per engram contract.
-var defaultEngramOverlayJSON = []byte("{\n  \"mcpServers\": {\n    \"engram\": {\n      \"command\": \"engram\",\n      \"args\": [\"mcp\", \"--tools=agent\"]\n    }\n  }\n}\n")
+// resolveEngramPath returns the absolute path to the engram binary.
+// It first tries exec.LookPath (respects $PATH). If that fails, it falls back
+// to common install locations based on the platform.
+// Returns "engram" as last resort if no absolute path can be found.
+func resolveEngramPath() string {
+	// Try finding engram in PATH first.
+	if path, err := execLookPath("engram"); err == nil && filepath.IsAbs(path) {
+		return path
+	}
 
-// openCodeEngramOverlayJSON is the opencode.json overlay using the new MCP format.
-// Uses --tools=agent in the command array per engram contract.
-var openCodeEngramOverlayJSON = []byte("{\n  \"mcp\": {\n    \"engram\": {\n      \"command\": [\"engram\", \"mcp\", \"--tools=agent\"],\n      \"enabled\": true,\n      \"type\": \"local\"\n    }\n  }\n}\n")
+	// Fall back to common install locations.
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "engram" // Can't determine home, use relative as fallback.
+	}
 
-// vsCodeEngramOverlayJSON is the VS Code mcp.json overlay using the "servers" key.
-// Uses --tools=agent per engram contract.
-var vsCodeEngramOverlayJSON = []byte("{\n  \"servers\": {\n    \"engram\": {\n      \"command\": \"engram\",\n      \"args\": [\"mcp\", \"--tools=agent\"]\n    }\n  }\n}\n")
+	candidates := []string{
+		filepath.Join(homeDir, "go", "bin", "engram"),     // Linux/macOS go install default
+		filepath.Join(homeDir, ".local", "bin", "engram"), // Linux user-local install
+		"/usr/local/bin/engram",                           // macOS brew install location
+		"/opt/homebrew/bin/engram",                        // macOS Apple Silicon brew
+	}
+
+	if runtime.GOOS == "windows" {
+		// On Windows, check GOPATH/bin and common locations.
+		gopath := os.Getenv("GOPATH")
+		if gopath == "" {
+			gopath = filepath.Join(homeDir, "go")
+		}
+		candidates = append([]string{
+			filepath.Join(gopath, "bin", "engram.exe"),
+			filepath.Join(homeDir, "go", "bin", "engram.exe"),
+		}, candidates...)
+	}
+
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	// No absolute path found — return relative "engram" as last resort.
+	return "engram"
+}
+
+// buildEngramOverlayJSON generates the MCP overlay JSON for the given strategy,
+// using an absolute path to the engram binary if available.
+func buildEngramOverlayJSON(agent model.AgentID, strategy model.MCPStrategy) []byte {
+	engramPath := resolveEngramPath()
+
+	switch strategy {
+	case model.StrategyMergeIntoSettings:
+		if agent == model.AgentOpenCode {
+			// OpenCode uses command array format.
+			return []byte(fmt.Sprintf(`{
+  "mcp": {
+    "engram": {
+      "command": ["%s", "mcp", "--tools=agent"],
+      "enabled": true,
+      "type": "local"
+    }
+  }
+}
+`, engramPath))
+		}
+		// Default merge strategy (Gemini, etc.).
+		return []byte(fmt.Sprintf(`{
+  "mcpServers": {
+    "engram": {
+      "command": "%s",
+      "args": ["mcp", "--tools=agent"]
+    }
+  }
+}
+`, engramPath))
+
+	case model.StrategyMCPConfigFile:
+		if agent == model.AgentVSCodeCopilot {
+			// VS Code uses "servers" key.
+			return []byte(fmt.Sprintf(`{
+  "servers": {
+    "engram": {
+      "command": "%s",
+      "args": ["mcp", "--tools=agent"]
+    }
+  }
+}
+`, engramPath))
+		}
+		// Default MCP config file strategy (Cursor, Antigravity, Windsurf).
+		return []byte(fmt.Sprintf(`{
+  "mcpServers": {
+    "engram": {
+      "command": "%s",
+      "args": ["mcp", "--tools=agent"]
+    }
+  }
+}
+`, engramPath))
+
+	case model.StrategySeparateMCPFiles:
+		// Separate file strategy (Claude Code) — handled separately in buildSeparateMCPContent.
+		return []byte(fmt.Sprintf(`{
+  "command": "%s",
+  "args": ["mcp", "--tools=agent"]
+}
+`, engramPath))
+
+	default:
+		// Fallback — shouldn't reach here, but provide a safe default.
+		return []byte(fmt.Sprintf(`{
+  "command": "%s",
+  "args": ["mcp", "--tools=agent"]
+}
+`, engramPath))
+	}
+}
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	if !adapter.SupportsMCP() {
@@ -52,7 +158,8 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		// present instead of silently overwriting it with the relative "engram".
 		// See: https://github.com/Gentleman-Programming/gentle-ai/issues (engram absolute path regression)
 		mcpPath := adapter.MCPConfigPath(homeDir, "engram")
-		content := buildSeparateMCPContent(mcpPath, defaultEngramServerJSON)
+		defaultContent := buildEngramOverlayJSON(adapter.Agent(), model.StrategySeparateMCPFiles)
+		content := buildSeparateMCPContent(mcpPath, defaultContent)
 		mcpWrite, err := filemerge.WriteFileAtomic(mcpPath, content, 0o644)
 		if err != nil {
 			return InjectionResult{}, err
@@ -65,10 +172,7 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		if settingsPath == "" {
 			break
 		}
-		overlay := defaultEngramOverlayJSON
-		if adapter.Agent() == model.AgentOpenCode {
-			overlay = openCodeEngramOverlayJSON
-		}
+		overlay := buildEngramOverlayJSON(adapter.Agent(), model.StrategyMergeIntoSettings)
 		settingsWrite, err := mergeJSONFile(settingsPath, overlay)
 		if err != nil {
 			return InjectionResult{}, err
@@ -81,10 +185,7 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		if mcpPath == "" {
 			break
 		}
-		overlay := defaultEngramOverlayJSON
-		if adapter.Agent() == model.AgentVSCodeCopilot {
-			overlay = vsCodeEngramOverlayJSON
-		}
+		overlay := buildEngramOverlayJSON(adapter.Agent(), model.StrategyMCPConfigFile)
 
 		mcpWrite, err := mergeJSONFile(mcpPath, overlay)
 		if err != nil {
@@ -264,6 +365,18 @@ func buildSeparateMCPContent(mcpPath string, defaultContent []byte) []byte {
 	if !ok || !isAbsoluteEngramPath(cmd) {
 		// No command, or not an absolute path — use the default.
 		return defaultContent
+	}
+
+	// Check if args are already correct.
+	args, argsOK := existing["args"].([]any)
+	if argsOK && len(args) == 2 {
+		arg0, _ := args[0].(string)
+		arg1, _ := args[1].(string)
+		if arg0 == "mcp" && arg1 == "--tools=agent" {
+			// Absolute path + correct args already present — return unchanged
+			// to preserve idempotency (avoid reformatting JSON unnecessarily).
+			return raw
+		}
 	}
 
 	// Rebuild with the preserved absolute command and the canonical args.
