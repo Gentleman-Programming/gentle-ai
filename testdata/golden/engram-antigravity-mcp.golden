@@ -5,7 +5,7 @@
         "mcp",
         "--tools=agent"
       ],
-      "command": "engram"
+      "command": "/usr/local/bin/engram"
     }
   }
 }

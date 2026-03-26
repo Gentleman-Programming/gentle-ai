@@ -19,6 +19,11 @@ func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func codexAdapter() agents.Adapter    { return codex.NewAdapter() }
 func geminiAdapter() agents.Adapter   { return gemini.NewAdapter() }
 
+// setupMockEngramPath delegates to the exported SetupMockEngramPath from testing.go.
+func setupMockEngramPath(t *testing.T) func() {
+	return SetupMockEngramPath(t)
+}
+
 // assertArgsHaveToolsAgent is a shared helper that validates a JSON file
 // contains the MCP "engram" entry with --tools=agent in args.
 func assertArgsHaveToolsAgent(t *testing.T, path string) {
@@ -34,6 +39,7 @@ func assertArgsHaveToolsAgent(t *testing.T, path string) {
 }
 
 func TestInjectClaudeWritesMCPConfig(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	result, err := Inject(home, claudeAdapter())
@@ -52,8 +58,12 @@ func TestInjectClaudeWritesMCPConfig(t *testing.T) {
 	}
 
 	text := string(mcpContent)
-	if !strings.Contains(text, `"command": "engram"`) {
+	// After the fix, command should be an absolute path.
+	if !strings.Contains(text, `"command":`) {
 		t.Fatal("engram.json missing command field")
+	}
+	if !strings.Contains(text, "/usr/local/bin/engram") {
+		t.Fatalf("engram.json command should be absolute path; got:\n%s", text)
 	}
 	if !strings.Contains(text, `"args"`) {
 		t.Fatal("engram.json missing args field")
@@ -63,6 +73,7 @@ func TestInjectClaudeWritesMCPConfig(t *testing.T) {
 }
 
 func TestInjectClaudeWritesProtocolSection(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	_, err := Inject(home, claudeAdapter())
@@ -90,6 +101,7 @@ func TestInjectClaudeWritesProtocolSection(t *testing.T) {
 }
 
 func TestInjectClaudeIsIdempotent(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	first, err := Inject(home, claudeAdapter())
@@ -110,6 +122,7 @@ func TestInjectClaudeIsIdempotent(t *testing.T) {
 }
 
 func TestInjectOpenCodeMergesEngramToSettings(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	result, err := Inject(home, opencodeAdapter())
@@ -173,6 +186,7 @@ func TestInjectOpenCodeMergesEngramToSettings(t *testing.T) {
 }
 
 func TestInjectOpenCodeIsIdempotent(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	first, err := Inject(home, opencodeAdapter())
@@ -193,6 +207,7 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 }
 
 func TestInjectCursorMergesEngramToSettings(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	cursorAdapter, err := agents.NewAdapter("cursor")
@@ -212,6 +227,7 @@ func TestInjectCursorMergesEngramToSettings(t *testing.T) {
 }
 
 func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	// Real Windows users may have a ~/.cursor/mcp.json that starts with non-JSON
 	// content (e.g. "allow: all" or just "a"). The installer should recover by
 	// treating the broken file as {} and proceeding with the overlay merge.
@@ -254,6 +270,7 @@ func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
 }
 
 func TestInjectVSCodeMergesEngramToMCPConfigFile(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	adapter := vscode.NewAdapter()
@@ -292,6 +309,7 @@ func TestInjectVSCodeMergesEngramToMCPConfigFile(t *testing.T) {
 // ─── Gemini tests ─────────────────────────────────────────────────────────────
 
 func TestInjectGeminiToolsFlagPresent(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	result, err := Inject(home, geminiAdapter())
@@ -323,6 +341,7 @@ func TestInjectGeminiToolsFlagPresent(t *testing.T) {
 // ─── Codex tests ──────────────────────────────────────────────────────────────
 
 func TestInjectCodexWritesTOMLMCP(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	result, err := Inject(home, codexAdapter())
@@ -342,8 +361,8 @@ func TestInjectCodexWritesTOMLMCP(t *testing.T) {
 	if !strings.Contains(text, "[mcp_servers.engram]") {
 		t.Fatalf("config.toml missing [mcp_servers.engram] block; got:\n%s", text)
 	}
-	if !strings.Contains(text, `command = "engram"`) {
-		t.Fatalf("config.toml missing command = \"engram\"; got:\n%s", text)
+	if !strings.Contains(text, `command = "engram"`) && !strings.Contains(text, "/engram") {
+		t.Fatalf("config.toml missing engram command; got:\n%s", text)
 	}
 	if !strings.Contains(text, `"--tools=agent"`) {
 		t.Fatalf("config.toml missing --tools=agent; got:\n%s", text)
@@ -351,6 +370,7 @@ func TestInjectCodexWritesTOMLMCP(t *testing.T) {
 }
 
 func TestInjectCodexWritesInstructionFiles(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	_, err := Inject(home, codexAdapter())
@@ -378,6 +398,7 @@ func TestInjectCodexWritesInstructionFiles(t *testing.T) {
 }
 
 func TestInjectCodexInjectsTOMLKeys(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	_, err := Inject(home, codexAdapter())
@@ -538,6 +559,7 @@ func TestInjectClaudeAddsToolsAgentWhenSetupWritesBareArgs(t *testing.T) {
 }
 
 func TestInjectCodexIsIdempotent(t *testing.T) {
+	defer setupMockEngramPath(t)()
 	home := t.TempDir()
 
 	first, err := Inject(home, codexAdapter())

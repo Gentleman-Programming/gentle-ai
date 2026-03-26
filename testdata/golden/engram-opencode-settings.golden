@@ -2,7 +2,7 @@
   "mcp": {
     "engram": {
       "command": [
-        "engram",
+        "/usr/local/bin/engram",
         "mcp",
         "--tools=agent"
       ],
