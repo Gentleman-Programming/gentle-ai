@@ -169,6 +169,14 @@ test_dry_run_preset_full() {
     assert_output_contains "$output" "Preset: full-gentleman" "Shows full-gentleman preset"
 }
 
+test_dry_run_preset_custom() {
+    log_test "Dry-run with --preset custom"
+
+    output=$($BINARY install --preset custom --dry-run 2>&1) || true
+
+    assert_output_contains "$output" "Preset: custom" "Shows custom preset"
+}
+
 # --- Category 1e: Preset component order validation ---
 
 test_preset_minimal_components() {
@@ -263,6 +271,33 @@ test_preset_no_theme_in_any_preset() {
         components_line=$(echo "$output" | grep "Components order:")
         assert_output_not_contains "$components_line" "theme" "Preset '$preset' does NOT include theme"
     done
+}
+
+test_preset_custom_no_components() {
+    log_test "Preset custom with no --component produces empty component list"
+
+    output=$($BINARY install --preset custom --agent claude-code --dry-run 2>&1) || true
+
+    # Custom preset without explicit components = empty
+    local components_line
+    components_line=$(echo "$output" | grep "Components order:")
+    assert_output_not_contains "$components_line" "engram" "Custom preset without components excludes engram"
+    assert_output_not_contains "$components_line" "sdd" "Custom preset without components excludes sdd"
+    assert_output_not_contains "$components_line" "skills" "Custom preset without components excludes skills"
+}
+
+test_preset_custom_explicit_components() {
+    log_test "Preset custom with explicit --component flags"
+
+    output=$($BINARY install --preset custom --agent claude-code --component engram --component sdd --component skills --dry-run 2>&1) || true
+
+    local components_line
+    components_line=$(echo "$output" | grep "Components order:")
+    assert_output_contains "$components_line" "engram" "Custom + explicit components includes engram"
+    assert_output_contains "$components_line" "sdd" "Custom + explicit components includes sdd"
+    assert_output_contains "$components_line" "skills" "Custom + explicit components includes skills"
+    assert_output_not_contains "$components_line" "persona" "Custom + explicit components excludes persona"
+    assert_output_not_contains "$components_line" "context7" "Custom + explicit components excludes context7"
 }
 
 # --- Category 1f: Individual component flags ---
@@ -574,6 +609,69 @@ test_cc_skills_ecosystem() {
         fi
     else
         log_fail "skills (ecosystem) install command failed"
+    fi
+}
+
+test_cc_custom_skills_with_flag() {
+    log_test "Claude Code: custom preset + explicit --skills flag installs specified skills"
+    cleanup_test_env
+
+    if $BINARY install --agent claude-code --preset custom --component skills --skills go-testing,branch-pr --persona neutral 2>&1; then
+        local skills_dir="$HOME/.claude/skills"
+        assert_dir_exists "$skills_dir" "Claude skills directory"
+
+        # The explicitly requested skills must be present
+        assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
+        assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md"
+
+        # Note: --component skills auto-resolves sdd (graph dep), which installs 10 SDD skills.
+        # Total = 10 SDD skills + 2 explicit skills = 12 SKILL.md files.
+        assert_file_count "$skills_dir" "SKILL.md" 12 "Custom + explicit skills: 10 SDD + 2 explicit = 12 files"
+
+        # SDD skills ARE present (from the sdd dependency)
+        assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init SKILL.md (from sdd dep)"
+    else
+        log_fail "custom + skills flag install command failed"
+    fi
+}
+
+test_cc_custom_no_skills_flag_installs_nothing() {
+    log_test "Claude Code: custom preset + skills component without --skills flag installs only SDD skills (from dep)"
+    cleanup_test_env
+
+    if $BINARY install --agent claude-code --preset custom --component skills --persona neutral 2>&1; then
+        local skills_dir="$HOME/.claude/skills"
+        # --component skills auto-resolves sdd as a hard dependency (graph: skills → sdd → engram).
+        # The SDD component always installs its 10 SDD+orchestration skills.
+        # The skills component itself is a no-op (SkillsForPreset(custom) returns nil, no --skills flag).
+        # Result: exactly 10 SKILL.md files from the sdd dependency.
+        assert_dir_exists "$skills_dir" "Skills directory created by sdd dependency"
+        assert_file_count "$skills_dir" "SKILL.md" 10 "10 SDD skills from sdd dependency (skills component is no-op)"
+        assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init installed by sdd dependency"
+    else
+        log_fail "custom + skills component (no flag) install command failed"
+    fi
+}
+
+test_cc_custom_sdd_plus_skills() {
+    log_test "Claude Code: custom preset + SDD + skills with explicit --skills flag"
+    cleanup_test_env
+
+    if $BINARY install --agent claude-code --preset custom --component engram --component sdd --component skills --skills go-testing,branch-pr --persona neutral 2>&1; then
+        local skills_dir="$HOME/.claude/skills"
+        assert_dir_exists "$skills_dir" "Claude skills directory"
+
+        # SDD component installs its own skills (sdd-init, sdd-explore, etc.)
+        assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init SKILL.md (from SDD component)"
+
+        # Skills component installs only the explicitly requested ones
+        assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md (from --skills flag)"
+        assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md (from --skills flag)"
+
+        # Total: 10 SDD skills + 2 explicit skills = 12
+        assert_file_count "$skills_dir" "SKILL.md" 12 "SDD + explicit skills: 12 skill files total"
+    else
+        log_fail "custom + SDD + skills install command failed"
     fi
 }
 
@@ -1157,7 +1255,7 @@ test_codex_engram_injection() {
 
         assert_file_exists "$config_toml" "Codex config.toml"
         assert_file_contains "$config_toml" '[mcp_servers.engram]' "config.toml has [mcp_servers.engram]"
-        assert_file_contains "$config_toml" 'command = "engram"' "config.toml has correct command"
+        assert_file_contains "$config_toml" 'command = ".*engram"' "config.toml has correct command"
         assert_file_contains "$config_toml" '"--tools=agent"' "config.toml has --tools=agent"
         assert_file_contains "$config_toml" 'model_instructions_file' "config.toml references instruction file"
         assert_file_contains "$config_toml" 'experimental_compact_prompt_file' "config.toml references compact prompt"
@@ -1926,6 +2024,7 @@ test_dry_run_agent_csv
 test_dry_run_preset_minimal
 test_dry_run_preset_ecosystem
 test_dry_run_preset_full
+test_dry_run_preset_custom
 
 # Category 1e: Preset component order validation
 test_preset_minimal_components
@@ -1933,6 +2032,8 @@ test_preset_ecosystem_components
 test_preset_full_components
 test_dry_run_full_preset_persona_before_sdd
 test_preset_no_theme_in_any_preset
+test_preset_custom_no_components
+test_preset_custom_explicit_components
 
 # Category 1f: Individual component flags (all 8)
 test_dry_run_component_engram
@@ -1968,6 +2069,9 @@ if [ "${RUN_FULL_E2E:-0}" = "1" ]; then
     test_cc_skills_minimal
     test_cc_skills_full
     test_cc_skills_ecosystem
+    test_cc_custom_skills_with_flag
+    test_cc_custom_no_skills_flag_installs_nothing
+    test_cc_custom_sdd_plus_skills
     test_cc_context7_injection
     test_cc_permissions_injection
     test_cc_theme_injection

@@ -85,6 +85,7 @@ const (
 	ScreenClaudeModelPicker
 	ScreenSDDMode
 	ScreenDependencyTree
+	ScreenSkillPicker
 	ScreenReview
 	ScreenInstalling
 	ScreenModelPicker
@@ -112,6 +113,7 @@ type Model struct {
 	Backups           []backup.Manifest
 	ModelPicker       screens.ModelPickerState
 	ClaudeModelPicker screens.ClaudeModelPickerState
+	SkillPicker       []model.SkillID
 	Err               error
 
 	// SelectedBackup holds the manifest chosen on ScreenBackups, used by the
@@ -303,6 +305,8 @@ func (m Model) View() string {
 		return screens.RenderModelPicker(m.Selection.ModelAssignments, m.ModelPicker, m.Cursor)
 	case ScreenDependencyTree:
 		return screens.RenderDependencyTree(m.DependencyPlan, m.Selection, m.Cursor)
+	case ScreenSkillPicker:
+		return screens.RenderSkillPicker(m.SkillPicker, m.Cursor)
 	case ScreenReview:
 		return screens.RenderReview(m.Review, m.Cursor)
 	case ScreenInstalling:
@@ -347,6 +351,16 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.Selection.ClaudeModelAssignments = updated
 				if m.shouldShowSDDModeScreen() {
 					m.setScreen(ScreenSDDMode)
+				} else if m.Selection.Preset == model.PresetCustom {
+					// Custom preset: dependency plan was already built before model picker.
+					// Check skill picker before going to review.
+					if m.shouldShowSkillPickerScreen() {
+						m.initSkillPicker()
+						m.setScreen(ScreenSkillPicker)
+					} else {
+						m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+						m.setScreen(ScreenReview)
+					}
 				} else {
 					m.buildDependencyPlan()
 					m.setScreen(ScreenDependencyTree)
@@ -383,6 +397,8 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.Selection.Preset == model.PresetCustom {
 				m.toggleCurrentComponent()
 			}
+		case ScreenSkillPicker:
+			m.toggleCurrentSkill()
 		}
 		return m, nil
 	case "enter":
@@ -513,6 +529,22 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.toggleCurrentComponent()
 			case m.Cursor == len(allComps):
 				m.buildDependencyPlan()
+				// Show model picker screens if needed (components are now set).
+				if m.shouldShowClaudeModelPickerScreen() {
+					m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
+					m.setScreen(ScreenClaudeModelPicker)
+					return m, nil
+				}
+				if m.shouldShowSDDModeScreen() {
+					m.setScreen(ScreenSDDMode)
+					return m, nil
+				}
+				// Show skill picker if Skills component is selected.
+				if m.shouldShowSkillPickerScreen() {
+					m.initSkillPicker()
+					m.setScreen(ScreenSkillPicker)
+					return m, nil
+				}
 				m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
 				m.setScreen(ScreenReview)
 			default:
@@ -526,6 +558,21 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.setScreen(ScreenPreset)
+	case ScreenSkillPicker:
+		allSkills := screens.AllSkillsOrdered()
+		switch {
+		case m.Cursor < len(allSkills):
+			m.toggleCurrentSkill()
+		case m.Cursor == len(allSkills):
+			// "Continue" — store selected skills into Selection and proceed to review.
+			m.Selection.Skills = make([]model.SkillID, len(m.SkillPicker))
+			copy(m.Selection.Skills, m.SkillPicker)
+			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+			m.setScreen(ScreenReview)
+		default:
+			// "Back" — return to dependency tree.
+			m.setScreen(ScreenDependencyTree)
+		}
 	case ScreenReview:
 		if m.Cursor == 0 {
 			return m.startInstalling()
@@ -654,24 +701,39 @@ func buildProgressLabels(resolved planner.ResolvedPlan) []string {
 }
 
 func (m Model) goBack() Model {
-	// If going back from DependencyTree and the SDDMode screen was shown,
-	// navigate to the correct prior screen based on the selected SDD mode.
-	if m.Screen == ScreenDependencyTree && m.shouldShowSDDModeScreen() {
-		if m.Selection.SDDMode == model.SDDModeMulti {
-			m.setScreen(ScreenModelPicker)
-		} else {
-			m.setScreen(ScreenSDDMode)
-		}
+	// From SkillPicker, go back to DependencyTree.
+	if m.Screen == ScreenSkillPicker {
+		m.setScreen(ScreenDependencyTree)
 		return m
 	}
 
-	if m.Screen == ScreenDependencyTree && m.shouldShowClaudeModelPickerScreen() {
-		m.setScreen(ScreenClaudeModelPicker)
-		return m
+	// If going back from DependencyTree and the SDDMode/ClaudeModelPicker
+	// screens were shown BEFORE it (non-custom presets only), navigate to them.
+	// In custom mode these screens appear AFTER the dependency tree, so
+	// going back should return to the preset screen (handled by linearRoutes).
+	if m.Screen == ScreenDependencyTree && m.Selection.Preset != model.PresetCustom {
+		if m.shouldShowSDDModeScreen() {
+			if m.Selection.SDDMode == model.SDDModeMulti {
+				m.setScreen(ScreenModelPicker)
+			} else {
+				m.setScreen(ScreenSDDMode)
+			}
+			return m
+		}
+		if m.shouldShowClaudeModelPickerScreen() {
+			m.setScreen(ScreenClaudeModelPicker)
+			return m
+		}
 	}
 
 	if m.Screen == ScreenSDDMode && m.shouldShowClaudeModelPickerScreen() {
 		m.setScreen(ScreenClaudeModelPicker)
+		return m
+	}
+
+	// In custom preset, going back from ClaudeModelPicker should return to DependencyTree.
+	if m.Screen == ScreenClaudeModelPicker && m.Selection.Preset == model.PresetCustom {
+		m.setScreen(ScreenDependencyTree)
 		return m
 	}
 
@@ -716,6 +778,8 @@ func (m Model) optionCount() int {
 			return len(screens.AllComponents()) + len(screens.DependencyTreeOptions())
 		}
 		return len(screens.DependencyTreeOptions())
+	case ScreenSkillPicker:
+		return screens.SkillPickerOptionCount()
 	case ScreenReview:
 		return len(screens.ReviewOptions())
 	case ScreenInstalling:
@@ -765,6 +829,37 @@ func (m *Model) toggleCurrentComponent() {
 	}
 
 	m.Selection.Components = append(m.Selection.Components, compID)
+}
+
+func (m *Model) toggleCurrentSkill() {
+	allSkills := screens.AllSkillsOrdered()
+	if m.Cursor >= len(allSkills) {
+		return
+	}
+
+	skillID := allSkills[m.Cursor]
+	for idx, selected := range m.SkillPicker {
+		if selected == skillID {
+			m.SkillPicker = append(m.SkillPicker[:idx], m.SkillPicker[idx+1:]...)
+			return
+		}
+	}
+
+	m.SkillPicker = append(m.SkillPicker, skillID)
+}
+
+// initSkillPicker pre-selects ALL available skills (custom mode default).
+func (m *Model) initSkillPicker() {
+	all := screens.AllSkillsOrdered()
+	m.SkillPicker = make([]model.SkillID, len(all))
+	copy(m.SkillPicker, all)
+}
+
+// shouldShowSkillPickerScreen returns true when the custom preset is active
+// and the Skills component has been selected.
+func (m Model) shouldShowSkillPickerScreen() bool {
+	return m.Selection.Preset == model.PresetCustom &&
+		hasSelectedComponent(m.Selection.Components, model.ComponentSkills)
 }
 
 func (m *Model) buildDependencyPlan() {

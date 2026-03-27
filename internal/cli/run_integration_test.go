@@ -13,6 +13,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/installcmd"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
 
@@ -1450,6 +1451,234 @@ func TestRunInstallUpgradeIdempotency(t *testing.T) {
 	if commandCount != 1 {
 		t.Errorf("engram MCP JSON contains %d occurrences of \"command\", want exactly 1:\n%s",
 			commandCount, engramJSON)
+	}
+}
+
+// --- Custom preset integration tests ---
+
+func TestRunInstallCustomPresetNoComponentsIsNoop(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+
+	result, err := RunInstall(
+		[]string{"--agent", "claude-code", "--preset", "custom"},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	// Custom preset with no components should resolve to zero ordered components.
+	if len(result.Resolved.OrderedComponents) != 0 {
+		t.Fatalf("expected 0 ordered components for custom preset, got %d: %v",
+			len(result.Resolved.OrderedComponents), result.Resolved.OrderedComponents)
+	}
+}
+
+func TestRunInstallCustomPresetExplicitSkillsFlagPopulatesSelection(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+
+	result, err := RunInstall(
+		[]string{
+			"--agent", "claude-code",
+			"--preset", "custom",
+			"--component", "skills",
+			"--skills", "go-testing,branch-pr",
+		},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	// Verify the explicitly requested skills were installed.
+	goTestingPath := filepath.Join(home, ".claude", "skills", "go-testing", "SKILL.md")
+	branchPRPath := filepath.Join(home, ".claude", "skills", "branch-pr", "SKILL.md")
+	if _, err := os.Stat(goTestingPath); err != nil {
+		t.Fatalf("expected go-testing skill file %q: %v", goTestingPath, err)
+	}
+	if _, err := os.Stat(branchPRPath); err != nil {
+		t.Fatalf("expected branch-pr skill file %q: %v", branchPRPath, err)
+	}
+
+	// Note: the graph defines skills → sdd → engram as a hard dependency chain.
+	// Selecting --component skills auto-resolves sdd (and engram) as dependencies.
+	// The SDD component installs its own 10 SDD+orchestration skills during injection,
+	// regardless of the --skills flag. So sdd-init and other SDD skills ARE installed.
+	sddInitPath := filepath.Join(home, ".claude", "skills", "sdd-init", "SKILL.md")
+	if _, err := os.Stat(sddInitPath); err != nil {
+		t.Fatalf("sdd-init skill should be installed (sdd is auto-resolved as dep of skills): %v", err)
+	}
+
+	// The --skills flag controls what the skills COMPONENT adds on top of SDD skills.
+	// Total = 10 SDD skills + 2 explicit skills = 12 SKILL.md files.
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", skillsDir, err)
+	}
+	// Count SKILL.md files across all skill subdirectories.
+	var skillCount int
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		skillMD := filepath.Join(skillsDir, entry.Name(), "SKILL.md")
+		if _, statErr := os.Stat(skillMD); statErr == nil {
+			skillCount++
+		}
+	}
+	// 10 SDD skills (from sdd dep) + 2 explicit skills (go-testing, branch-pr) = 12
+	if skillCount != 12 {
+		t.Fatalf("expected 12 skill files (10 SDD + 2 explicit), got %d", skillCount)
+	}
+}
+
+func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+
+	result, err := RunInstall(
+		[]string{
+			"--agent", "claude-code",
+			"--preset", "custom",
+			"--component", "skills",
+		},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	// The graph defines skills → sdd → engram as hard dependencies.
+	// Selecting --component skills auto-resolves sdd (and engram).
+	// The SDD component ALWAYS installs its 10 SDD+orchestration skills during injection.
+	// Without --skills flag, selectedSkillIDs() returns nil for custom preset,
+	// so the skills COMPONENT is a no-op — but the sdd DEPENDENCY still runs and
+	// installs its 10 skills.
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	// Count SKILL.md files (one per skill, excluding _shared and other non-skill dirs).
+	var skillCount int
+	if entries, readErr := os.ReadDir(skillsDir); readErr == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			skillMD := filepath.Join(skillsDir, entry.Name(), "SKILL.md")
+			if _, statErr := os.Stat(skillMD); statErr == nil {
+				skillCount++
+			}
+		}
+	}
+	// Expect exactly 10 SKILL.md files (from SDD dependency: 9 SDD phases + judgment-day).
+	// The skills component itself adds 0 (no --skills flag, SkillsForPreset(custom) = nil).
+	if skillCount != 10 {
+		t.Fatalf("expected 10 SDD skill files installed by the sdd dependency, got %d", skillCount)
+	}
+}
+
+func TestRunInstallCustomPresetDryRunShowsCustomPreset(t *testing.T) {
+	result, err := RunInstall(
+		[]string{"--agent", "claude-code", "--preset", "custom", "--dry-run"},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if !result.DryRun {
+		t.Fatalf("expected DryRun=true")
+	}
+
+	if result.Selection.Preset != model.PresetCustom {
+		t.Fatalf("preset = %q, want %q", result.Selection.Preset, model.PresetCustom)
+	}
+
+	// Zero components when no --component flags provided.
+	if len(result.Resolved.OrderedComponents) != 0 {
+		t.Fatalf("expected 0 ordered components, got %d", len(result.Resolved.OrderedComponents))
+	}
+
+	output := RenderDryRun(result)
+	if !strings.Contains(output, "custom") {
+		t.Fatalf("dry-run output missing 'custom' preset name:\n%s", output)
+	}
+}
+
+func TestRunInstallCustomPresetExplicitComponentsResolveCorrectly(t *testing.T) {
+	result, err := RunInstall(
+		[]string{
+			"--agent", "claude-code",
+			"--preset", "custom",
+			"--component", "engram",
+			"--component", "sdd",
+			"--component", "permissions",
+			"--dry-run",
+		},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	// Should have exactly the 3 explicit components (sdd depends on engram which is already selected).
+	if len(result.Resolved.OrderedComponents) != 3 {
+		t.Fatalf("expected 3 ordered components, got %d: %v",
+			len(result.Resolved.OrderedComponents), result.Resolved.OrderedComponents)
+	}
+
+	// Verify persona, skills, context7, gga are NOT in the plan.
+	for _, c := range result.Resolved.OrderedComponents {
+		switch c {
+		case model.ComponentPersona, model.ComponentSkills, model.ComponentContext7, model.ComponentGGA:
+			t.Fatalf("unexpected component %q in custom preset plan", c)
+		}
 	}
 }
 
