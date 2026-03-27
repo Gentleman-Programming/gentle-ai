@@ -61,3 +61,44 @@ func TopologicalSort(dependencies map[model.ComponentID][]model.ComponentID) ([]
 
 	return ordered, nil
 }
+
+// applySoftOrdering reorders an already topologically-sorted slice so that the
+// first component in each pair appears before the second WHEN BOTH are already
+// present. It never inserts missing components, so it cannot create new hard
+// dependencies.
+//
+// SAFETY CONTRACT: the `first` element in each pair MUST have no hard
+// dependencies in the plan — otherwise moving it earlier could place it before
+// one of its own transitive requirements, silently breaking topological order.
+// Today all soft pairs use ComponentPersona (which has nil deps) as `first`.
+// If you add a pair where `first` has deps, you must add a topo-validation
+// step after the reorder.
+func applySoftOrdering(ordered []model.ComponentID, pairs [][2]model.ComponentID) []model.ComponentID {
+	result := make([]model.ComponentID, len(ordered))
+	copy(result, ordered)
+
+	indexOf := func(items []model.ComponentID, target model.ComponentID) int {
+		for i, item := range items {
+			if item == target {
+				return i
+			}
+		}
+		return -1
+	}
+
+	for _, pair := range pairs {
+		first, second := pair[0], pair[1]
+		i := indexOf(result, first)
+		j := indexOf(result, second)
+		if i < 0 || j < 0 || i < j {
+			continue
+		}
+
+		// Move first to just before second, preserving relative order of others.
+		item := result[i]
+		copy(result[j+1:i+1], result[j:i])
+		result[j] = item
+	}
+
+	return result
+}

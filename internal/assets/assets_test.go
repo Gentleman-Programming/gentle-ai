@@ -36,6 +36,18 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		// Codex agent files
 		"codex/sdd-orchestrator.md",
 
+		// Cursor agent files
+		"cursor/sdd-orchestrator.md",
+		"cursor/agents/sdd-init.md",
+		"cursor/agents/sdd-explore.md",
+		"cursor/agents/sdd-propose.md",
+		"cursor/agents/sdd-spec.md",
+		"cursor/agents/sdd-design.md",
+		"cursor/agents/sdd-tasks.md",
+		"cursor/agents/sdd-apply.md",
+		"cursor/agents/sdd-verify.md",
+		"cursor/agents/sdd-archive.md",
+
 		// SDD skills
 		"skills/sdd-init/SKILL.md",
 		"skills/sdd-apply/SKILL.md",
@@ -142,9 +154,9 @@ func TestEmbeddedAssetCount(t *testing.T) {
 		}
 	}
 
-	// We expect 13 skill directories (9 SDD + 3 foundation + _shared).
-	if skillDirs != 13 {
-		t.Fatalf("expected 13 skill directories, got %d", skillDirs)
+	// We expect 16 skill directories (9 SDD + judgment-day + 5 foundation + _shared).
+	if skillDirs != 16 {
+		t.Fatalf("expected 16 skill directories, got %d", skillDirs)
 	}
 
 	// Verify each skill directory has a SKILL.md.
@@ -153,7 +165,7 @@ func TestEmbeddedAssetCount(t *testing.T) {
 			continue
 		}
 		if entry.Name() == "_shared" {
-			for _, sharedFile := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md"} {
+			for _, sharedFile := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md", "skill-resolver.md"} {
 				sharedPath := "skills/_shared/" + sharedFile
 				if _, err := Read(sharedPath); err != nil {
 					t.Fatalf("shared directory missing %q: %v", sharedFile, err)
@@ -234,6 +246,7 @@ func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 		"claude/sdd-orchestrator.md",
 		"gemini/sdd-orchestrator.md",
 		"codex/sdd-orchestrator.md",
+		"cursor/sdd-orchestrator.md",
 	} {
 		t.Run(assetPath, func(t *testing.T) {
 			content := MustRead(assetPath)

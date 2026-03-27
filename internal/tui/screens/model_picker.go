@@ -14,9 +14,9 @@ import (
 type ModelPickerMode int
 
 const (
-	ModePhaseList     ModelPickerMode = iota // Main screen: phase list + Continue/Back
-	ModeProviderSelect                       // Sub-mode: pick a provider
-	ModeModelSelect                          // Sub-mode: pick a model from chosen provider
+	ModePhaseList      ModelPickerMode = iota // Main screen: phase list + Continue/Back
+	ModeProviderSelect                        // Sub-mode: pick a provider
+	ModeModelSelect                           // Sub-mode: pick a model from chosen provider
 )
 
 // maxVisibleItems is the maximum number of items shown in scrollable sub-lists.
@@ -33,8 +33,8 @@ type ProviderEntry struct {
 // plus navigation state for the two-step sub-selection modes.
 type ModelPickerState struct {
 	Providers    map[string]opencode.Provider
-	AvailableIDs []string                       // provider IDs with tool_call-capable models
-	SDDModels    map[string][]opencode.Model    // provider ID -> SDD-capable models
+	AvailableIDs []string                    // provider IDs with tool_call-capable models
+	SDDModels    map[string][]opencode.Model // provider ID -> SDD-capable models
 
 	Mode             ModelPickerMode
 	SelectedPhaseIdx int    // which phase row was selected (0 = "Set all")
@@ -68,10 +68,15 @@ func NewModelPickerState(cachePath string) ModelPickerState {
 	}
 }
 
+// SDDOrchestratorPhase is the key used for the sdd-orchestrator model assignment.
+const SDDOrchestratorPhase = "sdd-orchestrator"
+
 // ModelPickerRows returns the row labels for the model picker screen.
-// Row 0 is "Set all phases", rows 1-9 are the SDD phases.
+// Row 0 is "sdd-orchestrator" (coordinator), row 1 is "Set all phases",
+// rows 2-10 are the 9 SDD sub-agent phases.
 func ModelPickerRows() []string {
-	rows := make([]string, 0, 10)
+	rows := make([]string, 0, 11)
+	rows = append(rows, SDDOrchestratorPhase)
 	rows = append(rows, "Set all phases")
 	rows = append(rows, opencode.SDDPhases()...)
 	return rows
@@ -188,13 +193,18 @@ func handleModelNav(
 		}
 
 		phases := opencode.SDDPhases()
-		if state.SelectedPhaseIdx == 0 {
-			// "Set all phases"
+		switch {
+		case state.SelectedPhaseIdx == 0:
+			// "sdd-orchestrator" row — assign only to the orchestrator key
+			assignments[SDDOrchestratorPhase] = assignment
+		case state.SelectedPhaseIdx == 1:
+			// "Set all phases" — sets only the 9 sub-agents, NOT the orchestrator
 			for _, phase := range phases {
 				assignments[phase] = assignment
 			}
-		} else {
-			phaseIdx := state.SelectedPhaseIdx - 1
+		default:
+			// Sub-agent rows start at idx 2; phases[idx-2] is the correct phase
+			phaseIdx := state.SelectedPhaseIdx - 2
 			if phaseIdx < len(phases) {
 				assignments[phases[phaseIdx]] = assignment
 			}
@@ -243,9 +253,11 @@ func renderPhaseList(
 	b.WriteString("\n\n")
 
 	if len(state.AvailableIDs) == 0 {
-		b.WriteString(styles.WarningStyle.Render("No models found."))
+		b.WriteString(styles.WarningStyle.Render("OpenCode has not been run yet — model cache not found."))
 		b.WriteString("\n")
-		b.WriteString(styles.SubtextStyle.Render("Run 'opencode models --refresh' to update the model cache, or switch to single mode."))
+		b.WriteString(styles.SubtextStyle.Render("Run 'opencode' once, then re-run 'gentle-ai sync' to assign models."))
+		b.WriteString("\n")
+		b.WriteString(styles.SubtextStyle.Render("Using default model assignments for now."))
 		b.WriteString("\n\n")
 		b.WriteString(renderOptions([]string{"← Back to SDD mode"}, cursor))
 		b.WriteString("\n")
@@ -263,8 +275,18 @@ func renderPhaseList(
 		focused := idx == cursor
 
 		var label string
-		if idx == 0 {
-			// "Set all phases" row — show the assignment of the first phase as representative
+		switch {
+		case idx == 0:
+			// "sdd-orchestrator" row — coordinator, individual assignment only
+			assignment, ok := assignments[SDDOrchestratorPhase]
+			if ok && assignment.ProviderID != "" {
+				provName, modelName := resolveNames(assignment, state)
+				label = fmt.Sprintf("%-20s %s / %s", row+" (coordinator)", provName, modelName)
+			} else {
+				label = fmt.Sprintf("%-20s (default)", row+" (coordinator)")
+			}
+		case idx == 1:
+			// "Set all phases" row — show the assignment of the first sub-agent as representative
 			assignment, ok := assignments[phases[0]]
 			if ok && assignment.ProviderID != "" {
 				provName, modelName := resolveNames(assignment, state)
@@ -272,8 +294,9 @@ func renderPhaseList(
 			} else {
 				label = fmt.Sprintf("%-20s (not set)", row)
 			}
-		} else {
-			phase := phases[idx-1]
+		default:
+			// Sub-agent rows start at idx 2; phases[idx-2] maps to the correct phase
+			phase := phases[idx-2]
 			assignment, ok := assignments[phase]
 			if ok && assignment.ProviderID != "" {
 				provName, modelName := resolveNames(assignment, state)

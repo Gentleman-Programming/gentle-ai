@@ -10,6 +10,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
@@ -148,7 +149,7 @@ func TestInjectClaudeGentlemanReturnsAllFiles(t *testing.T) {
 	}
 }
 
-func TestInjectClaudeNeutralWritesMinimalContent(t *testing.T) {
+func TestInjectClaudeNeutralWritesFullPersonaWithoutRegionalLanguage(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := Inject(home, claudeAdapter(), model.PersonaNeutral)
@@ -166,12 +167,13 @@ func TestInjectClaudeNeutralWritesMinimalContent(t *testing.T) {
 	}
 
 	text := string(content)
-	if !strings.Contains(text, "helpful") {
-		t.Fatal("Neutral persona should contain 'helpful'")
+	// Neutral persona is the same teacher — should have Senior Architect.
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("Neutral persona should contain 'Senior Architect'")
 	}
-	// Should NOT have gentleman-specific content.
-	if strings.Contains(text, "Senior Architect") {
-		t.Fatal("Neutral persona should not contain gentleman content")
+	// Should NOT have gentleman-specific regional language.
+	if strings.Contains(text, "Rioplatense") {
+		t.Fatal("Neutral persona should not contain Rioplatense language")
 	}
 }
 
@@ -260,6 +262,207 @@ func TestInjectOpenCodeGentlemanWritesAgentsFile(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeNeutralPreservesManagedSections(t *testing.T) {
+	home := t.TempDir()
+
+	// First install gentleman persona + simulate SDD/engram sections
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+
+	// Simulate SDD and engram sections appended by sdd.Inject and engram.Inject
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	withSections := string(existing) + "\n\n<!-- gentle-ai:sdd-orchestrator -->\nSDD orchestrator content here\n<!-- /gentle-ai:sdd-orchestrator -->\n\n<!-- gentle-ai:engram-protocol -->\nEngram protocol content here\n<!-- /gentle-ai:engram-protocol -->\n"
+	if err := os.WriteFile(path, []byte(withSections), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	// Now switch to neutral persona
+	result, err := Inject(home, opencodeAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(neutral) should report changed")
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() after neutral error = %v", err)
+	}
+	text := string(content)
+
+	// Neutral content should be present
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("AGENTS.md missing neutral persona content")
+	}
+	if strings.Contains(text, "Rioplatense") {
+		t.Fatal("AGENTS.md has Rioplatense language in neutral persona — should be neutral tone")
+	}
+
+	// Managed sections MUST be preserved
+	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("AGENTS.md lost SDD orchestrator section after switching to neutral persona")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:engram-protocol -->") {
+		t.Fatal("AGENTS.md lost engram protocol section after switching to neutral persona")
+	}
+
+	// Gentleman-specific language should be gone — neutral has the same personality but no regional language
+	if strings.Contains(text, "Rioplatense") {
+		t.Fatal("AGENTS.md still has Rioplatense language after switching to neutral")
+	}
+}
+
+func TestInjectVSCodeNeutralPreservesManagedSections(t *testing.T) {
+	home := t.TempDir()
+
+	vscodeAdapter, err := agents.NewAdapter("vscode-copilot")
+	if err != nil {
+		t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+	}
+
+	_, err = Inject(home, vscodeAdapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	path := vscodeAdapter.SystemPromptFile(home)
+
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	withSections := string(existing) + "\n\n<!-- gentle-ai:sdd-orchestrator -->\nSDD content\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	if err := os.WriteFile(path, []byte(withSections), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err = Inject(home, vscodeAdapter, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() after neutral error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("instructions file missing neutral persona content")
+	}
+	if strings.Contains(text, "Rioplatense") {
+		t.Fatal("instructions file has Rioplatense language in neutral persona")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("instructions file lost SDD section after switching to neutral persona")
+	}
+	if !strings.Contains(text, "---\nname:") {
+		t.Fatal("instructions file lost YAML frontmatter")
+	}
+}
+
+func TestInjectNeutralPreservesWhenMarkerAtByteZero(t *testing.T) {
+	home := t.TempDir()
+
+	opencodeAdapter, err := agents.NewAdapter("opencode")
+	if err != nil {
+		t.Fatalf("NewAdapter(opencode) error = %v", err)
+	}
+
+	promptPath := opencodeAdapter.SystemPromptFile(home)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// File starts DIRECTLY with a managed marker at byte 0 — no persona preamble.
+	markerOnly := "<!-- gentle-ai:sdd-orchestrator -->\nSDD content\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	if err := os.WriteFile(promptPath, []byte(markerOnly), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err = Inject(home, opencodeAdapter, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) error = %v", err)
+	}
+
+	content, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("missing neutral persona content")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("SDD section destroyed when marker was at byte 0")
+	}
+}
+
+func TestInjectNeutralIdempotentWithManagedSections(t *testing.T) {
+	home := t.TempDir()
+
+	opencodeAdapter, err := agents.NewAdapter("opencode")
+	if err != nil {
+		t.Fatalf("NewAdapter(opencode) error = %v", err)
+	}
+
+	promptPath := opencodeAdapter.SystemPromptFile(home)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Set up: neutral + managed sections
+	// Simulate a file with neutral persona + managed sections.
+	// Use a fingerprint from the real neutral asset so the test is realistic.
+	neutralContent := assets.MustRead("generic/persona-neutral.md")
+	initial := neutralContent + "\n\n<!-- gentle-ai:sdd-orchestrator -->\nSDD content\n<!-- /gentle-ai:sdd-orchestrator -->\n\n<!-- gentle-ai:engram-protocol -->\nEngram content\n<!-- /gentle-ai:engram-protocol -->\n"
+	if err := os.WriteFile(promptPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	// First neutral inject
+	result1, err := Inject(home, opencodeAdapter, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) first error = %v", err)
+	}
+
+	// Second neutral inject — should be idempotent
+	result2, err := Inject(home, opencodeAdapter, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) second error = %v", err)
+	}
+
+	if result2.Changed && !result1.Changed {
+		t.Fatal("second neutral inject should not report changed when first didn't")
+	}
+
+	content, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	// Verify no duplication
+	if strings.Count(text, "<!-- gentle-ai:sdd-orchestrator -->") != 1 {
+		t.Fatal("SDD section duplicated after idempotent neutral inject")
+	}
+	if strings.Count(text, "## Rules") != 1 {
+		t.Fatal("neutral persona duplicated after idempotent inject")
+	}
+	if strings.Count(text, "<!-- gentle-ai:engram-protocol -->") != 1 {
+		t.Fatal("engram section duplicated after idempotent neutral inject")
+	}
+}
+
 func TestInjectClaudeIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 
@@ -297,6 +500,46 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 	if second.Changed {
 		t.Fatalf("Inject() second changed = true")
+	}
+}
+
+func TestInjectWindsurfIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+
+	windsurfAdapter, err := agents.NewAdapter("windsurf")
+	if err != nil {
+		t.Fatalf("NewAdapter(windsurf) error = %v", err)
+	}
+
+	first, err := Inject(home, windsurfAdapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject() first changed = false")
+	}
+
+	promptPath := windsurfAdapter.SystemPromptFile(home)
+	contentAfterFirst, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile() after first inject error = %v", err)
+	}
+
+	second, err := Inject(home, windsurfAdapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject() second changed = true — persona was duplicated in global_rules.md")
+	}
+
+	contentAfterSecond, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile() after second inject error = %v", err)
+	}
+
+	if string(contentAfterFirst) != string(contentAfterSecond) {
+		t.Fatal("global_rules.md content changed on second inject — persona was duplicated")
 	}
 }
 
@@ -640,6 +883,31 @@ func TestInjectVSCodePreservesNonPersonaGitHubFile(t *testing.T) {
 	}
 	if string(remaining) != userContent {
 		t.Fatalf("user file content was modified: got %q", string(remaining))
+	}
+}
+
+func TestNeutralAndGentlemanToneSectionsMatch(t *testing.T) {
+	neutral := assets.MustRead("generic/persona-neutral.md")
+	gentleman := assets.MustRead("generic/persona-gentleman.md")
+
+	extractSection := func(content, section string) string {
+		idx := strings.Index(content, "## "+section)
+		if idx < 0 {
+			return ""
+		}
+		rest := content[idx:]
+		nextIdx := strings.Index(rest[1:], "\n## ")
+		if nextIdx < 0 {
+			return rest
+		}
+		return rest[:nextIdx+1]
+	}
+
+	neutralTone := extractSection(neutral, "Tone")
+	gentlemanTone := extractSection(gentleman, "Tone")
+
+	if neutralTone != gentlemanTone {
+		t.Fatalf("## Tone sections diverged:\nneutral:\n%s\ngentleman:\n%s", neutralTone, gentlemanTone)
 	}
 }
 

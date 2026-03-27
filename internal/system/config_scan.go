@@ -31,6 +31,8 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "cursor", Path: filepath.Join(homeDir, ".cursor")},
 		{Agent: "vscode-copilot", Path: vscodeCopilotGlobalConfigDir(homeDir)},
 		{Agent: "codex", Path: filepath.Join(homeDir, ".codex")},
+		{Agent: "antigravity", Path: filepath.Join(homeDir, ".gemini", "antigravity")},
+		{Agent: "windsurf", Path: filepath.Join(homeDir, ".codeium", "windsurf")},
 	}
 }
 

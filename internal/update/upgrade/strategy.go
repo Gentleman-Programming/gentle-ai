@@ -37,11 +37,22 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 	}
 }
 
-// brewUpgrade runs `brew upgrade <toolName>`.
+// brewUpgrade runs `brew update` (non-fatal) then `brew upgrade <toolName>`.
+//
+// brew update refreshes the local formula cache so that Homebrew is aware of
+// new versions published since the user last ran it. If update fails (e.g. no
+// network), the upgrade is still attempted using the existing cache — a stale
+// cache is better than no upgrade at all.
 func brewUpgrade(ctx context.Context, toolName string) error {
-	cmd := execCommand("brew", "upgrade", toolName)
-	cmd.Stdin = nil
-	if out, err := cmd.CombinedOutput(); err != nil {
+	// Update Homebrew formula cache before upgrading.
+	// Non-fatal: if update fails (e.g. no network), attempt upgrade with existing cache.
+	updateCmd := execCommand("brew", "update")
+	updateCmd.Stdin = nil
+	_ = updateCmd.Run() // ignore error intentionally
+
+	upgradeCmd := execCommand("brew", "upgrade", toolName)
+	upgradeCmd.Stdin = nil
+	if out, err := upgradeCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("brew upgrade %s: %w (output: %s)", toolName, err, string(out))
 	}
 	return nil

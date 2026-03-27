@@ -80,6 +80,7 @@ func TestComponentPathsSDDIncludesSkillsAndSharedConventions(t *testing.T) {
 		"engram-convention.md",
 		"openspec-convention.md",
 		"sdd-phase-common.md",
+		"skill-resolver.md",
 	} {
 		shared := filepath.Join(home, ".gemini", "skills", "_shared", sharedFile)
 		if !containsPath(paths, shared) {

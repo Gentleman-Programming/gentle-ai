@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 )
 
 // ─── Phase 1: ParseSyncFlags ───────────────────────────────────────────────
@@ -990,6 +991,118 @@ func containsAny(s string, subs ...string) bool {
 		}
 	}
 	return false
+}
+
+// ─── State-aware DiscoverAgents ────────────────────────────────────────────
+
+// TestDiscoverAgentsUsesStateFileWhenPresent verifies that DiscoverAgents
+// returns only the agents recorded in state.json when the file exists and is
+// non-empty, ignoring any agent config dirs that happen to be on disk.
+//
+// This covers issue #107: a user who installed only OpenCode should not have
+// VS Code injected just because ~/.config/Code/ exists.
+func TestDiscoverAgentsUsesStateFileWhenPresent(t *testing.T) {
+	home := t.TempDir()
+
+	// Write state recording only opencode — even though we also create the
+	// claude-code config dir to simulate the IDE being installed on disk.
+	if err := state.Write(home, []string{"opencode"}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	// Create the claude-code config dir — FS-discovery would pick this up.
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	discovered := DiscoverAgents(home)
+
+	// Must return exactly the persisted selection: only opencode.
+	want := []model.AgentID{model.AgentOpenCode}
+	if !reflect.DeepEqual(discovered, want) {
+		t.Errorf("DiscoverAgents() with state = %v, want %v", discovered, want)
+	}
+}
+
+// TestDiscoverAgentsFallsBackToFSDiscoveryWhenStateMissing verifies that
+// DiscoverAgents falls back to filesystem discovery when state.json is absent.
+// This is the backward-compat path for users who installed before state
+// persistence was added.
+func TestDiscoverAgentsFallsBackToFSDiscoveryWhenStateMissing(t *testing.T) {
+	home := t.TempDir()
+	// No state.Write — state.json does not exist.
+
+	// Create the claude-code config dir.
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	discovered := DiscoverAgents(home)
+
+	// FS discovery must return claude-code since ~/.claude/ exists.
+	found := false
+	for _, id := range discovered {
+		if id == model.AgentClaudeCode {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("DiscoverAgents() fallback did not return claude-code; got %v", discovered)
+	}
+}
+
+// TestDiscoverAgentsFallsBackToFSDiscoveryWhenStateEmpty verifies that
+// DiscoverAgents falls back to filesystem discovery when state.json exists but
+// contains an empty agent list — treating it the same as absent.
+func TestDiscoverAgentsFallsBackToFSDiscoveryWhenStateEmpty(t *testing.T) {
+	home := t.TempDir()
+
+	// Write state with zero agents.
+	if err := state.Write(home, []string{}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	// Create the claude-code config dir.
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	discovered := DiscoverAgents(home)
+
+	// FS discovery must pick up claude-code from disk.
+	found := false
+	for _, id := range discovered {
+		if id == model.AgentClaudeCode {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("DiscoverAgents() empty-state fallback did not return claude-code; got %v", discovered)
+	}
+}
+
+// TestDiscoverAgentsStateMultipleAgents verifies that multiple agents persisted
+// in state.json are all returned, in order.
+func TestDiscoverAgentsStateMultipleAgents(t *testing.T) {
+	home := t.TempDir()
+
+	agents := []string{"claude-code", "opencode", "gemini-cli"}
+	if err := state.Write(home, agents); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	discovered := DiscoverAgents(home)
+
+	want := []model.AgentID{
+		model.AgentClaudeCode,
+		model.AgentOpenCode,
+		model.AgentGeminiCLI,
+	}
+	if !reflect.DeepEqual(discovered, want) {
+		t.Errorf("DiscoverAgents() multi-state = %v, want %v", discovered, want)
+	}
 }
 
 func TestRunSyncRollsBackOnFailure(t *testing.T) {

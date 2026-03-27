@@ -15,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
@@ -207,7 +208,19 @@ func tuiExecute(
 		pipeline.WithProgressFunc(onProgress),
 	)
 
-	return orchestrator.Execute(stagePlan)
+	execResult := orchestrator.Execute(stagePlan)
+	if execResult.Err == nil {
+		// Persist the user's agent selection so that future `sync` runs target only
+		// the agents the user actually installed, not every IDE config dir on disk.
+		agentIDs := make([]string, 0, len(selection.Agents))
+		for _, a := range selection.Agents {
+			agentIDs = append(agentIDs, string(a))
+		}
+		// Non-fatal: a state write failure must not break an otherwise successful install.
+		_ = state.Write(homeDir, agentIDs)
+	}
+
+	return execResult
 }
 
 // tuiRestore restores a backup from its manifest.

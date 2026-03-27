@@ -77,6 +77,9 @@ func injectMCPConfigFile(homeDir string, adapter agents.Adapter) (InjectionResul
 	if adapter.Agent() == model.AgentVSCodeCopilot {
 		overlay = VSCodeContext7OverlayJSON()
 	}
+	if adapter.Agent() == model.AgentAntigravity {
+		overlay = AntigravityContext7OverlayJSON()
+	}
 
 	// For mcp.json pattern, merge the server config as a named entry.
 	settingsWrite, err := mergeJSONFile(path, overlay)

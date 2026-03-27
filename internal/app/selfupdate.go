@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"runtime"
 	"syscall"
 	"time"
@@ -14,9 +15,12 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
 )
 
+// lookPathFn is a package-level var for testability.
+var lookPathFn = exec.LookPath
+
 // Environment variable names for self-update control.
 const (
-	envNoSelfUpdate  = "GENTLE_AI_NO_SELF_UPDATE"
+	envNoSelfUpdate   = "GENTLE_AI_NO_SELF_UPDATE"
 	envSelfUpdateDone = "GENTLE_AI_SELF_UPDATE_DONE"
 )
 
@@ -106,9 +110,20 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 	}
 
 	// Unix: re-exec with the updated binary.
-	executable, err := os.Executable()
+	//
+	// Use exec.LookPath("gentle-ai") rather than os.Executable() because
+	// on Homebrew, os.Executable() resolves to the versioned Cellar path
+	// (e.g. /opt/homebrew/Cellar/gentle-ai/1.8.5/bin/gentle-ai) which
+	// still points to the OLD binary after upgrade. The PATH symlink
+	// (/opt/homebrew/bin/gentle-ai) is updated by Homebrew to the new
+	// version, so LookPath gives us the correct binary.
+	executable, err := lookPathFn("gentle-ai")
 	if err != nil {
-		return nil // non-fatal
+		// Fallback to os.Executable() if LookPath fails.
+		executable, err = os.Executable()
+		if err != nil {
+			return nil // non-fatal
+		}
 	}
 
 	// Set loop guard env var before re-exec.

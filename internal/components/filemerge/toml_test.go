@@ -8,7 +8,7 @@ import (
 // ─── UpsertCodexEngramBlock ───────────────────────────────────────────────────
 
 func TestUpsertCodexEngramBlock_Empty(t *testing.T) {
-	result := UpsertCodexEngramBlock("")
+	result := UpsertCodexEngramBlock("", "")
 
 	if !strings.Contains(result, "[mcp_servers.engram]") {
 		t.Fatalf("result missing [mcp_servers.engram]; got:\n%s", result)
@@ -35,7 +35,7 @@ args = ["mcp"]
 [another_section]
 foo = "bar"
 `
-	result := UpsertCodexEngramBlock(input)
+	result := UpsertCodexEngramBlock(input, "")
 
 	// Must have exactly one [mcp_servers.engram] block.
 	count := strings.Count(result, "[mcp_servers.engram]")
@@ -63,7 +63,7 @@ func TestUpsertCodexEngramBlock_PreservesOtherSections(t *testing.T) {
 [settings]
 timeout = 30
 `
-	result := UpsertCodexEngramBlock(input)
+	result := UpsertCodexEngramBlock(input, "")
 
 	if !strings.Contains(result, `model = "gpt-4o"`) {
 		t.Fatalf("result missing top-level model key; got:\n%s", result)
@@ -76,12 +76,26 @@ timeout = 30
 	}
 }
 
+func TestUpsertCodexEngramBlock_AbsolutePath(t *testing.T) {
+	result := UpsertCodexEngramBlock("", "/usr/local/bin/engram")
+
+	if !strings.Contains(result, "[mcp_servers.engram]") {
+		t.Fatalf("result missing [mcp_servers.engram]; got:\n%s", result)
+	}
+	if !strings.Contains(result, `command = "/usr/local/bin/engram"`) {
+		t.Fatalf("result missing absolute command path; got:\n%s", result)
+	}
+	if strings.Contains(result, `command = "engram"`) {
+		t.Fatalf("result should NOT have relative command when absolute path given; got:\n%s", result)
+	}
+}
+
 func TestUpsertCodexEngramBlock_Idempotent(t *testing.T) {
 	input := `[other]
 key = "val"
 `
-	first := UpsertCodexEngramBlock(input)
-	second := UpsertCodexEngramBlock(first)
+	first := UpsertCodexEngramBlock(input, "")
+	second := UpsertCodexEngramBlock(first, "")
 
 	if first != second {
 		t.Fatalf("UpsertCodexEngramBlock is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)

@@ -48,6 +48,15 @@ func SetupAgentSlug(agent model.AgentID) (string, bool) {
 	case model.AgentCodex:
 		// Codex slug registered for future MCP support; ShouldAttemptSetup gates on SupportsMCP().
 		return "codex", true
+	case model.AgentAntigravity:
+		return "antigravity", true
+	case model.AgentWindsurf:
+		return "windsurf", true
+	case model.AgentCursor, model.AgentVSCodeCopilot:
+		// Cursor and VS Code Copilot do not use `engram setup` — their MCP
+		// config is injected directly by the engram component. Returning false
+		// here is intentional, not an omission.
+		return "", false
 	default:
 		return "", false
 	}

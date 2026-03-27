@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -20,6 +21,10 @@ import (
 
 // spinnerFrames are the braille characters used for the animated spinner.
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// osStatModelCache is a package-level variable so tests can override it to
+// simulate a missing or present OpenCode model cache file.
+var osStatModelCache = os.Stat
 
 // TickMsg drives the spinner animation on the installing screen.
 type TickMsg time.Time
@@ -451,8 +456,21 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		if m.Cursor < len(options) {
 			m.Selection.SDDMode = options[m.Cursor]
 			if m.Selection.SDDMode == model.SDDModeMulti {
-				m.ModelPicker = screens.NewModelPickerState(opencode.DefaultCachePath())
-				m.setScreen(ScreenModelPicker)
+				cachePath := opencode.DefaultCachePath()
+				if _, err := osStatModelCache(cachePath); err == nil {
+					// Cache exists — OpenCode has been run at least once.
+					// Show the model picker so the user can assign models.
+					m.ModelPicker = screens.NewModelPickerState(cachePath)
+					m.setScreen(ScreenModelPicker)
+					return m, nil
+				}
+				// Cache missing — OpenCode hasn't been run yet on this machine.
+				// Skip the model picker; models will use OpenCode defaults.
+				// The picker empty-state message explains what to do after install.
+				m.ModelPicker = screens.ModelPickerState{}
+				m.Selection.ModelAssignments = nil
+				m.buildDependencyPlan()
+				m.setScreen(ScreenDependencyTree)
 				return m, nil
 			}
 			m.Selection.ModelAssignments = nil
@@ -780,6 +798,10 @@ func preselectedAgents(detection system.DetectionResult) []model.AgentID {
 			selected = append(selected, model.AgentVSCodeCopilot)
 		case string(model.AgentCodex):
 			selected = append(selected, model.AgentCodex)
+		case string(model.AgentAntigravity):
+			selected = append(selected, model.AgentAntigravity)
+		case string(model.AgentWindsurf):
+			selected = append(selected, model.AgentWindsurf)
 		}
 	}
 

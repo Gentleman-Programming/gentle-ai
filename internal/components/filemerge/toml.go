@@ -5,16 +5,21 @@ import (
 	"strings"
 )
 
-const codexEngramBlock = "[mcp_servers.engram]\ncommand = \"engram\"\nargs = [\"mcp\", \"--tools=agent\"]"
-
 // UpsertCodexEngramBlock removes any existing [mcp_servers.engram] block from
 // the given TOML content and appends a fresh block with the canonical engram
 // MCP entry (including --tools=agent). All other sections are preserved.
 //
+// engramCmd is the command string to use (e.g. an absolute path like
+// "/usr/local/bin/engram"). If engramCmd is empty, it falls back to "engram".
+//
 // This is a string-based helper (no TOML parser dependency) ported from
 // engram/internal/setup/setup.go. It handles the limited TOML subset that
 // Codex uses.
-func UpsertCodexEngramBlock(content string) string {
+func UpsertCodexEngramBlock(content, engramCmd string) string {
+	if engramCmd == "" {
+		engramCmd = "engram"
+	}
+	codexEngramBlock := "[mcp_servers.engram]\ncommand = \"" + engramCmd + "\"\nargs = [\"mcp\", \"--tools=agent\"]"
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	lines := strings.Split(content, "\n")
 

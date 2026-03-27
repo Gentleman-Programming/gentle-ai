@@ -299,6 +299,78 @@ func containsAny(s string, subs ...string) bool {
 	return false
 }
 
+// --- TestBrewUpgrade_RunsUpdateBeforeUpgrade ---
+
+// TestBrewUpgrade_RunsUpdateBeforeUpgrade verifies that brewUpgrade calls
+// `brew update` BEFORE `brew upgrade <toolName>`, and that the order is correct.
+func TestBrewUpgrade_RunsUpdateBeforeUpgrade(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	var callOrder []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "brew" && len(args) > 0 {
+			callOrder = append(callOrder, args[0]) // "update" or "upgrade"
+		}
+		return exec.Command("echo", "ok")
+	}
+
+	err := brewUpgrade(context.Background(), "gentle-ai")
+	if err != nil {
+		t.Fatalf("brewUpgrade: unexpected error: %v", err)
+	}
+
+	// Must have called brew update AND brew upgrade — in that order.
+	if len(callOrder) < 2 {
+		t.Fatalf("expected 2 brew calls (update, upgrade), got %d: %v", len(callOrder), callOrder)
+	}
+	if callOrder[0] != "update" {
+		t.Errorf("first brew call = %q, want %q", callOrder[0], "update")
+	}
+	if callOrder[1] != "upgrade" {
+		t.Errorf("second brew call = %q, want %q", callOrder[1], "upgrade")
+	}
+}
+
+// --- TestBrewUpgrade_UpdateFailureIsNonFatal ---
+
+// TestBrewUpgrade_UpdateFailureIsNonFatal verifies that when `brew update` fails
+// but `brew upgrade` succeeds, the overall result is success (non-fatal update failure).
+func TestBrewUpgrade_UpdateFailureIsNonFatal(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	var callArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "brew" && len(args) > 0 {
+			callArgs = append(callArgs, args[0])
+			if args[0] == "update" {
+				// brew update fails (e.g. no network).
+				return exec.Command("false")
+			}
+		}
+		// brew upgrade succeeds.
+		return exec.Command("echo", "Upgraded gentle-ai")
+	}
+
+	err := brewUpgrade(context.Background(), "gentle-ai")
+	// brew update failed but brew upgrade succeeded → overall success.
+	if err != nil {
+		t.Errorf("expected success when brew update fails but brew upgrade succeeds, got: %v", err)
+	}
+
+	// Both brew update and brew upgrade must have been called.
+	if len(callArgs) < 2 {
+		t.Fatalf("expected 2 brew calls, got %d: %v", len(callArgs), callArgs)
+	}
+	if callArgs[0] != "update" {
+		t.Errorf("first brew call = %q, want %q", callArgs[0], "update")
+	}
+	if callArgs[1] != "upgrade" {
+		t.Errorf("second brew call = %q, want %q", callArgs[1], "upgrade")
+	}
+}
+
 // --- verify exec.Cmd.Run() failure is correctly wrapped ---
 func TestRunStrategy_ExecErrorWrapped(t *testing.T) {
 	origExecCommand := execCommand

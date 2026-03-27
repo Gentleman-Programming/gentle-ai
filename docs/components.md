@@ -34,7 +34,7 @@ gga install
 
 ## Skills
 
-11 curated skill files organized by category, injected into your agent's configuration:
+14 curated skill files organized by category, injected into your agent's configuration:
 
 ### SDD (Spec-Driven Development)
 
@@ -56,6 +56,9 @@ gga install
 |-------|-----|-------------|
 | Go Testing | `go-testing` | Go testing patterns including Bubbletea TUI testing |
 | Skill Creator | `skill-creator` | Create new AI agent skills following the Agent Skills spec |
+| Judgment Day | `judgment-day` | Two independent judge agents review the same target in parallel, compare findings, fix confirmed issues, and re-judge until both pass. Trigger: "judgment day", "juzgar", "dual review" |
+| Branch & PR | `branch-pr` | PR creation workflow with conventional commits, branch naming, and issue-first enforcement |
+| Issue Creation | `issue-creation` | Issue filing workflow with bug report and feature request templates |
 
 These foundation skills are installed by default with both `full-gentleman` and `ecosystem-only` presets.
 

@@ -23,6 +23,126 @@ type InjectionResult struct {
 type InjectOptions struct {
 	OpenCodeModelAssignments map[string]model.ModelAssignment
 	ClaudeModelAssignments   map[string]model.ClaudeModelAlias
+
+	// WorkspaceDir is the root of the current workspace (e.g. os.Getwd()).
+	// When non-empty and the adapter implements workflowInjector, native
+	// workflow files are copied to <workspaceDir>/.windsurf/workflows/.
+	WorkspaceDir string
+}
+
+// workflowInjector is an optional adapter capability: if an adapter
+// implements this interface, sdd.Inject will copy the embedded workflow
+// assets into the workspace directory provided via InjectOptions.WorkspaceDir.
+// This intentionally does NOT extend agents.Adapter to avoid requiring all
+// adapters to implement no-op stubs.
+type workflowInjector interface {
+	SupportsWorkflows() bool
+	// WorkflowsDir returns the target filesystem directory where workflow files
+	// should be written (e.g. <workspaceDir>/.windsurf/workflows/).
+	WorkflowsDir(workspaceDir string) string
+	// EmbeddedWorkflowsDir returns the path inside the embedded assets FS where
+	// this adapter's workflow sources live (e.g. "windsurf/workflows").
+	// This removes the hardcoded agent name from the injection step, making
+	// the workflowInjector pattern reusable for future agents.
+	EmbeddedWorkflowsDir() string
+}
+
+// subAgentInjector is an optional adapter capability: if an adapter
+// implements this interface, sdd.Inject will copy the embedded sub-agent
+// markdown files into the user's home directory (e.g. ~/.cursor/agents/).
+// This intentionally does NOT extend agents.Adapter to avoid requiring all
+// adapters to implement no-op stubs.
+type subAgentInjector interface {
+	SupportsSubAgents() bool
+	// SubAgentsDir returns the target filesystem directory where sub-agent
+	// files should be written (e.g. <homeDir>/.cursor/agents/).
+	SubAgentsDir(homeDir string) string
+	// EmbeddedSubAgentsDir returns the path inside the embedded assets FS
+	// where this adapter's sub-agent sources live (e.g. "cursor/agents").
+	EmbeddedSubAgentsDir() string
+}
+
+// monorepoRootMarkers identify files/dirs that ONLY exist at the true root
+// of a multi-package workspace. If any of these is found while walking up,
+// we stop immediately — this is the authoritative project root.
+var monorepoRootMarkers = []string{
+	"pnpm-workspace.yaml",
+	"pnpm-workspace.yml",
+	"nx.json",
+	"turbo.json",
+	"lerna.json",
+	"rush.json",
+}
+
+// strongProjectMarkers are definitive project roots that are not
+// package.json (which can appear at every level in a monorepo).
+var strongProjectMarkers = []string{
+	".git",
+	"go.mod",
+	"Cargo.toml",
+	"pyproject.toml",
+	"pom.xml",
+	"build.gradle",
+}
+
+// maxAncestorDepth is the maximum number of parent directories findProjectRoot
+// will traverse before giving up. This prevents infinite loops on deeply-nested
+// trees and ensures we stop well before reaching the filesystem root.
+const maxAncestorDepth = 20
+
+// findProjectRoot walks upward from dir, looking for the best project root.
+//
+// Priority order:
+//  1. Monorepo root markers (pnpm-workspace.yaml, nx.json, turbo.json, etc.) —
+//     return immediately when found; these are authoritative workspace roots.
+//  2. Strong markers (.git, go.mod, Cargo.toml, etc.) — return immediately;
+//     these are unambiguous project roots.
+//  3. Weak marker (package.json only) — record as candidate but keep walking
+//     upward, since a monorepo marker may exist higher up.
+//
+// Walking upward means users can run gentle-ai from any subdirectory of their
+// project (e.g. repo/packages/app) and still detect the correct workspace root.
+// In a JS/TS monorepo, every package has package.json, so we must not stop at
+// the first one — we keep walking to find the highest ancestor with package.json
+// (or a monorepo root marker above it).
+func findProjectRoot(dir string) (string, bool) {
+	if dir == "" {
+		return "", false
+	}
+	current := filepath.Clean(dir)
+	var bestCandidate string // best weak (package.json-only) match found so far
+
+	for i := 0; i < maxAncestorDepth; i++ {
+		// Check monorepo root markers first — highest priority; return immediately.
+		for _, marker := range monorepoRootMarkers {
+			if _, err := os.Stat(filepath.Join(current, marker)); err == nil {
+				return current, true
+			}
+		}
+		// Check strong project markers — definitive roots; return immediately.
+		for _, marker := range strongProjectMarkers {
+			if _, err := os.Stat(filepath.Join(current, marker)); err == nil {
+				return current, true
+			}
+		}
+		// Weak marker: package.json — record but keep walking. Always update
+		// to the highest ancestor with a package.json, since in a JS project
+		// the root package.json is the authoritative project boundary.
+		if _, err := os.Stat(filepath.Join(current, "package.json")); err == nil {
+			bestCandidate = current
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			// Reached filesystem root ("/" on Unix, "C:\" on Windows).
+			break
+		}
+		current = parent
+	}
+
+	if bestCandidate != "" {
+		return bestCandidate, true
+	}
+	return "", false
 }
 
 var (
@@ -134,6 +254,10 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 
 			// Inject model assignments into the overlay before merging.
+			// Models are ONLY written when the user explicitly chose them via
+			// the TUI model picker (multi-mode). The overlay JSON itself must
+			// NOT contain model fields — otherwise the deep merge overwrites
+			// whatever the user already has in opencode.json.
 			overlayBytes := []byte(overlayContent)
 			overlayBytes, err = inlineOpenCodeSDDPrompts(overlayBytes)
 			if err != nil {
@@ -144,12 +268,21 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				assignments = nil
 			}
 
-			rootModelID, err := readOpenCodeRootModel(settingsPath)
-			if err != nil {
-				return InjectionResult{}, err
+			var rootModelID string
+			var existingAgentKeys map[string]bool
+			if sddMode == model.SDDModeMulti {
+				rootModelID, err = readOpenCodeRootModel(settingsPath)
+				if err != nil {
+					return InjectionResult{}, err
+				}
+				existingAgentKeys, err = readExistingAgentModels(settingsPath)
+				if err != nil {
+					return InjectionResult{}, err
+				}
 			}
-			if rootModelID != "" || len(assignments) > 0 {
-				overlayBytes, err = injectModelAssignments(overlayBytes, assignments, rootModelID)
+
+			if sddMode == model.SDDModeMulti && (len(assignments) > 0 || rootModelID != "") {
+				overlayBytes, err = injectModelAssignments(overlayBytes, assignments, rootModelID, existingAgentKeys)
 				if err != nil {
 					return InjectionResult{}, fmt.Errorf("inject model assignments: %w", err)
 				}
@@ -182,6 +315,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				"engram-convention.md",
 				"openspec-convention.md",
 				"sdd-phase-common.md",
+				"skill-resolver.md",
 			}
 
 			for _, fileName := range sharedFiles {
@@ -207,6 +341,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			sddSkills := []string{
 				"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
 				"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
+				"judgment-day",
 			}
 
 			for _, skill := range sddSkills {
@@ -227,6 +362,82 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 				changed = changed || writeResult.Changed
 				files = append(files, path)
+			}
+		}
+	}
+
+	// 3b. Write native workflow files (Windsurf Hybrid-First, and any future
+	// agent that implements the workflowInjector optional interface).
+	// findProjectRoot walks upward from WorkspaceDir so gentle-ai can be
+	// invoked from any subdirectory (e.g. repo/internal/foo) and still inject
+	// workflows at the real project root. Skips silently if no root is found
+	// (e.g. running from home dir without a project).
+	if wi, ok := adapter.(workflowInjector); ok && wi.SupportsWorkflows() {
+		if projectRoot, found := findProjectRoot(opts.WorkspaceDir); found {
+			workflowsDir := wi.WorkflowsDir(projectRoot)
+			embedDir := wi.EmbeddedWorkflowsDir()
+			entries, readErr := fs.ReadDir(assets.FS, embedDir)
+			if readErr != nil {
+				return InjectionResult{}, fmt.Errorf("read embedded %s: %w", embedDir, readErr)
+			}
+
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				content, readErr := assets.Read(embedDir + "/" + entry.Name())
+				if readErr != nil {
+					return InjectionResult{}, fmt.Errorf("read embedded workflow %q: %w", entry.Name(), readErr)
+				}
+				path := filepath.Join(workflowsDir, entry.Name())
+				writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
+				if err != nil {
+					return InjectionResult{}, fmt.Errorf("write workflow %q: %w", path, err)
+				}
+				changed = changed || writeResult.Changed
+				files = append(files, path)
+			}
+		}
+	}
+
+	// 3c. Write native sub-agent files (Cursor, and any future agent that
+	// implements the subAgentInjector optional interface). Sub-agent files are
+	// written to the user's home directory (e.g. ~/.cursor/agents/), not to the
+	// workspace, so no project-root detection is needed here.
+	var agentsDir string
+	if sai, ok := adapter.(subAgentInjector); ok && sai.SupportsSubAgents() {
+		agentsDir = sai.SubAgentsDir(homeDir)
+		if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+			return InjectionResult{}, fmt.Errorf("create agents dir: %w", err)
+		}
+
+		embeddedDir := sai.EmbeddedSubAgentsDir()
+		entries, err := assets.FS.ReadDir(embeddedDir)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("read embedded agents dir: %w", err)
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+				continue
+			}
+			content := assets.MustRead(embeddedDir + "/" + entry.Name())
+			outPath := filepath.Join(agentsDir, entry.Name())
+			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(content), 0o644)
+			if err != nil {
+				return InjectionResult{}, fmt.Errorf("write agent %s: %w", entry.Name(), err)
+			}
+			changed = changed || writeResult.Changed
+			if writeResult.Changed {
+				files = append(files, outPath)
+			}
+		}
+
+		// Post-check: verify critical agent files exist
+		for _, phase := range []string{"sdd-apply", "sdd-verify"} {
+			checkPath := filepath.Join(agentsDir, phase+".md")
+			if info, err := os.Stat(checkPath); err != nil || info.Size() < 50 {
+				return InjectionResult{}, fmt.Errorf("post-check: cursor agent %q not written correctly", phase)
 			}
 		}
 	}
@@ -489,6 +700,7 @@ var sddOrchestratorMarkers = []string{
 	"## Agent Teams Orchestrator",
 	"## Spec-Driven Development (SDD) Orchestrator",
 	"## Spec-Driven Development (SDD)",
+	"# SDD Orchestrator for Cascade",
 }
 
 func hasSDDOrchestrator(content string) bool {
@@ -508,6 +720,12 @@ func sddOrchestratorAsset(agent model.AgentID) string {
 		return "gemini/sdd-orchestrator.md"
 	case model.AgentCodex:
 		return "codex/sdd-orchestrator.md"
+	case model.AgentAntigravity:
+		return "antigravity/sdd-orchestrator.md"
+	case model.AgentWindsurf:
+		return "windsurf/sdd-orchestrator.md"
+	case model.AgentCursor:
+		return "cursor/sdd-orchestrator.md"
 	default:
 		return "generic/sdd-orchestrator.md"
 	}
@@ -521,12 +739,6 @@ func injectFileAppend(homeDir string, adapter agents.Adapter) (InjectionResult, 
 		return InjectionResult{}, err
 	}
 
-	// If the SDD orchestrator section is already present (e.g., from the
-	// gentleman persona asset which includes it), skip to avoid duplication.
-	if hasSDDOrchestrator(existing) {
-		return InjectionResult{Files: []string{promptPath}}, nil
-	}
-
 	if adapter.SystemPromptStrategy() == model.StrategyInstructionsFile && strings.TrimSpace(existing) == "" {
 		existing = instructionsFrontmatter
 	}
@@ -534,14 +746,13 @@ func injectFileAppend(homeDir string, adapter agents.Adapter) (InjectionResult, 
 	// Use agent-specific SDD orchestrator content when available; fall back to generic.
 	content := assets.MustRead(sddOrchestratorAsset(adapter.Agent()))
 
-	updated := existing
-	if len(updated) > 0 && !strings.HasSuffix(updated, "\n") {
-		updated += "\n"
+	// If there is a bare (un-marked) legacy orchestrator block, strip it first
+	// so InjectMarkdownSection can re-inject the current canonical content.
+	if hasLegacyBareOrchestrator(existing) {
+		existing = stripBareOrchestratorForFilePrompt(existing)
 	}
-	if len(updated) > 0 {
-		updated += "\n"
-	}
-	updated += content
+
+	updated := filemerge.InjectMarkdownSection(existing, "sdd-orchestrator", content)
 
 	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
 	if err != nil {
@@ -549,6 +760,106 @@ func injectFileAppend(homeDir string, adapter agents.Adapter) (InjectionResult, 
 	}
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
+}
+
+func hasLegacyBareOrchestrator(content string) bool {
+	markedIdx := strings.Index(content, "<!-- gentle-ai:sdd-orchestrator -->")
+	if markedIdx >= 0 {
+		prefix := content[:markedIdx]
+		if strings.Contains(prefix, "# Agent Teams Lite — Orchestrator Instructions") {
+			return true
+		}
+	}
+
+	firstHeading := -1
+	for _, marker := range sddOrchestratorMarkers {
+		idx := strings.Index(content, marker)
+		if idx >= 0 && (firstHeading == -1 || idx < firstHeading) {
+			firstHeading = idx
+		}
+	}
+	if firstHeading < 0 {
+		return false
+	}
+
+	if markedIdx < 0 {
+		return true
+	}
+
+	// Legacy bare content exists when an orchestrator heading appears before the
+	// canonical marker-based section.
+	return firstHeading < markedIdx
+}
+
+// stripBareOrchestratorForFilePrompt removes an un-marked SDD orchestrator
+// block from file-replace/append/instructions prompt files.
+//
+// Unlike CLAUDE.md markdown-section files, these prompt files often carry the
+// whole orchestrator as a contiguous block followed by other managed sections
+// (for example engram-protocol markers). The legacy block also contains many
+// "##" headings, so trimming until the next "##" is not enough.
+//
+// Strategy:
+//   - start at the first known orchestrator heading
+//   - end at the next managed marker ("<!-- gentle-ai:") if present, else EOF
+//   - preserve content before/after and normalize surrounding blank lines
+func stripBareOrchestratorForFilePrompt(content string) string {
+	if markedIdx := strings.Index(content, "<!-- gentle-ai:sdd-orchestrator -->"); markedIdx >= 0 {
+		prefix := content[:markedIdx]
+		if start := strings.Index(prefix, "# Agent Teams Lite — Orchestrator Instructions"); start >= 0 {
+			before := strings.TrimRight(content[:start], "\n")
+			after := strings.TrimLeft(content[markedIdx:], "\n")
+			if before == "" {
+				if strings.HasSuffix(after, "\n") {
+					return after
+				}
+				return after + "\n"
+			}
+			result := before + "\n\n" + after
+			if !strings.HasSuffix(result, "\n") {
+				result += "\n"
+			}
+			return result
+		}
+	}
+
+	start := -1
+	for _, marker := range sddOrchestratorMarkers {
+		idx := strings.Index(content, marker)
+		if idx >= 0 && (start == -1 || idx < start) {
+			start = idx
+		}
+	}
+	if start < 0 {
+		return content
+	}
+
+	end := len(content)
+	if rel := strings.Index(content[start:], "<!-- gentle-ai:"); rel >= 0 {
+		end = start + rel
+	}
+
+	before := strings.TrimRight(content[:start], "\n")
+	after := strings.TrimLeft(content[end:], "\n")
+
+	if before == "" && after == "" {
+		return ""
+	}
+	if before == "" {
+		if strings.HasSuffix(after, "\n") {
+			return after
+		}
+		return after + "\n"
+	}
+	if after == "" {
+		return before + "\n"
+	}
+
+	result := before + "\n\n" + after
+	if !strings.HasSuffix(result, "\n") {
+		result += "\n"
+	}
+	return result
 }
 
 const instructionsFrontmatter = "---\n" +
@@ -722,7 +1033,17 @@ func renderClaudeModelAssignmentsSection(assignments map[string]model.ClaudeMode
 
 // injectModelAssignments injects "model" fields into sub-agent definitions
 // within the overlay JSON before it is merged into the settings file.
-func injectModelAssignments(overlayBytes []byte, assignments map[string]model.ModelAssignment, rootModelID string) ([]byte, error) {
+//
+// Decision tree for EACH sub-agent:
+//  1. TUI assignment exists for this agent → use it (always wins)
+//  2. Agent already exists as a key in the user's existing opencode.json
+//     (existingAgentKeys) → skip; let the deep merge preserve whatever the
+//     user already has (including no model at all — that's intentional)
+//  3. Neither of the above AND rootModelID is set → inject rootModelID so the
+//     agent does not silently inherit the orchestrator model at runtime
+//
+// If none of the above conditions apply, nothing is written for that agent.
+func injectModelAssignments(overlayBytes []byte, assignments map[string]model.ModelAssignment, rootModelID string, existingAgentKeys map[string]bool) ([]byte, error) {
 	var overlay map[string]any
 	if err := json.Unmarshal(overlayBytes, &overlay); err != nil {
 		return nil, fmt.Errorf("unmarshal overlay for model injection: %w", err)
@@ -744,11 +1065,33 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 		}
 
 		assignment, hasExplicitAssignment := assignments[phase]
+
 		switch {
 		case hasExplicitAssignment && assignment.ProviderID != "" && assignment.ModelID != "":
+			// 1. TUI choice always wins
 			agentMap["model"] = assignment.FullID()
+		case existingAgentKeys[phase]:
+			// 2. Agent already exists in user's config — let merge preserve whatever they have
+			// (don't touch the overlay for this agent's model)
 		case rootModelID != "":
+			// 3. Fresh install or new agent: use root model as default to break inheritance
 			agentMap["model"] = rootModelID
+		}
+	}
+
+	// Mirror sdd-orchestrator model to gentleman — both are primary conductors in OpenCode.
+	// gentleman is defined by the persona overlay (not the SDD overlay), so we inject
+	// its model field here to prevent silent runtime inheritance.
+	// Guard: only inject if gentleman already exists in opencode.json (persona was installed)
+	// and sdd-orchestrator has an explicit TUI assignment.
+	if orchAssignment, hasOrch := assignments["sdd-orchestrator"]; hasOrch &&
+		orchAssignment.ProviderID != "" && orchAssignment.ModelID != "" &&
+		existingAgentKeys["gentleman"] {
+		if _, exists := agents["gentleman"]; !exists {
+			agents["gentleman"] = map[string]any{}
+		}
+		if gentlemanMap, ok := agents["gentleman"].(map[string]any); ok {
+			gentlemanMap["model"] = orchAssignment.FullID()
 		}
 	}
 
@@ -759,6 +1102,8 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 	return append(result, '\n'), nil
 }
 
+// readOpenCodeRootModel reads the top-level "model" field from the opencode.json
+// at path. Returns empty string if the file does not exist or has no model field.
 func readOpenCodeRootModel(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -775,6 +1120,40 @@ func readOpenCodeRootModel(path string) (string, error) {
 
 	rootModelID, _ := root["model"].(string)
 	return rootModelID, nil
+}
+
+// readExistingAgentModels reads opencode.json at path and returns a set of
+// agent names that already exist as keys under the "agent" map, regardless of
+// whether those agents have a "model" field. Returns an empty map if the file
+// does not exist or has no "agent" key.
+func readExistingAgentModels(path string) (map[string]bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]bool{}, nil
+		}
+		return nil, fmt.Errorf("read existing agent keys from %q: %w", path, err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return map[string]bool{}, nil
+	}
+
+	agentRaw, ok := root["agent"]
+	if !ok {
+		return map[string]bool{}, nil
+	}
+	agentMap, ok := agentRaw.(map[string]any)
+	if !ok {
+		return map[string]bool{}, nil
+	}
+
+	result := make(map[string]bool, len(agentMap))
+	for name := range agentMap {
+		result[name] = true
+	}
+	return result, nil
 }
 
 func readFileOrEmpty(path string) (string, error) {

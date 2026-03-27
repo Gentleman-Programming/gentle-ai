@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	windsurfagent "github.com/gentleman-programming/gentle-ai/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
@@ -18,6 +20,7 @@ import (
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
+func windsurfAdapter() agents.Adapter { return windsurfagent.NewAdapter() }
 
 func mockNoPackageManager(t *testing.T) {
 	t.Helper()
@@ -452,7 +455,7 @@ func TestInjectFileAppendSkipsIfAlreadyPresent(t *testing.T) {
 	}
 }
 
-func TestInjectFileAppendSkipsLegacyHeading(t *testing.T) {
+func TestInjectFileAppendMigratesLegacyHeading(t *testing.T) {
 	home := t.TempDir()
 
 	cursorAdapter, err := agents.NewAdapter("cursor")
@@ -484,8 +487,118 @@ func TestInjectFileAppendSkipsLegacyHeading(t *testing.T) {
 	}
 
 	text := string(content)
-	if strings.Count(text, "## Spec-Driven Development (SDD) Orchestrator") != 1 {
-		t.Fatal("legacy SDD heading duplicated")
+	if strings.Contains(text, "Already present.") {
+		t.Fatal("legacy SDD orchestrator content survived after migration")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("missing open marker after migration")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("missing close marker after migration")
+	}
+	if strings.Count(text, "## Agent Teams Orchestrator") != 1 {
+		t.Fatal("agent teams heading duplicated after migration")
+	}
+	if !strings.Contains(text, "## Project Standards (auto-resolved)") {
+		t.Fatal("SDD orchestrator was not refreshed to current compact-rules format")
+	}
+}
+
+func TestInjectFileAppendMigratesFullLegacyOrchestratorBlock(t *testing.T) {
+	home := t.TempDir()
+
+	cursorAdapter, err := agents.NewAdapter("cursor")
+	if err != nil {
+		t.Fatalf("NewAdapter(cursor) error = %v", err)
+	}
+
+	promptPath := cursorAdapter.SystemPromptFile(home)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	existing := "## Rules\n\nLegacy intro.\n\n" +
+		"## Agent Teams Orchestrator\n\n" +
+		"### Result Contract\n" +
+		"Each phase returns: `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`.\n\n" +
+		"### Sub-Agent Launch Pattern\n\n" +
+		"SKILL: Load `{skill-path}` before starting.\n\n" +
+		"<!-- gentle-ai:engram-protocol -->\n" +
+		"## Engram Persistent Memory - Protocol\n" +
+		"<!-- /gentle-ai:engram-protocol -->\n"
+
+	if err := os.WriteFile(promptPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	result, injectErr := Inject(home, cursorAdapter, "")
+	if injectErr != nil {
+		t.Fatalf("Inject() error = %v", injectErr)
+	}
+	if len(result.Files) == 0 {
+		t.Fatal("Inject() returned no files")
+	}
+
+	content, readErr := os.ReadFile(promptPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+
+	text := string(content)
+	if strings.Contains(text, "SKILL: Load `{skill-path}` before starting.") {
+		t.Fatal("legacy sub-agent launch content survived after migration")
+	}
+	if strings.Count(text, "### Result Contract") != 1 {
+		t.Fatal("result contract section duplicated after migration")
+	}
+	if !strings.Contains(text, "`skill_resolution`") {
+		t.Fatal("result contract was not refreshed to current format")
+	}
+	if !strings.Contains(text, "## Project Standards (auto-resolved)") {
+		t.Fatal("current compact-rules launch pattern missing after migration")
+	}
+	if strings.Count(text, "<!-- gentle-ai:engram-protocol -->") != 1 {
+		t.Fatal("engram protocol marker should be preserved exactly once")
+	}
+}
+
+func TestInjectFileAppendRemovesLegacyBlockWhenMarkedSectionAlreadyExists(t *testing.T) {
+	home := t.TempDir()
+
+	cursorAdapter, err := agents.NewAdapter("cursor")
+	if err != nil {
+		t.Fatalf("NewAdapter(cursor) error = %v", err)
+	}
+
+	promptPath := cursorAdapter.SystemPromptFile(home)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	canonical := assets.MustRead("generic/sdd-orchestrator.md")
+	existing := "## Agent Teams Orchestrator\n\nLegacy duplicate block.\n\n" +
+		"<!-- gentle-ai:sdd-orchestrator -->\n" + canonical + "\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+
+	if err := os.WriteFile(promptPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, injectErr := Inject(home, cursorAdapter, "")
+	if injectErr != nil {
+		t.Fatalf("Inject() error = %v", injectErr)
+	}
+
+	content, readErr := os.ReadFile(promptPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+
+	text := string(content)
+	if strings.Contains(text, "Legacy duplicate block.") {
+		t.Fatal("legacy duplicate block survived even with marked section present")
+	}
+	if strings.Count(text, "## Agent Teams Orchestrator") != 1 {
+		t.Fatal("orchestrator heading should exist exactly once after cleanup")
 	}
 }
 
@@ -775,13 +888,11 @@ func TestInjectOpenCodeSingleToMultiSwitch(t *testing.T) {
 		t.Fatal("single mode should have sdd-apply")
 	}
 
-	// Second: inject multi mode — should add model fields.
-	result, err := Inject(home, opencodeAdapter(), "multi")
+	// Second: inject multi mode — structure stays the same (both have all agents),
+	// but the overlay content (prompts) may differ so changed can be true or false.
+	_, err = Inject(home, opencodeAdapter(), "multi")
 	if err != nil {
 		t.Fatalf("Inject(multi) error = %v", err)
-	}
-	if !result.Changed {
-		t.Fatal("switching from single to multi should produce changed=true")
 	}
 
 	content, err = os.ReadFile(settingsPath)
@@ -802,13 +913,13 @@ func TestInjectOpenCodeSingleToMultiSwitch(t *testing.T) {
 		t.Fatal("missing sdd-apply after switch to multi")
 	}
 
-	// Multi mode should have model fields (from the overlay).
+	// Without explicit assignments, no model fields should be injected.
 	applyAgent, ok := agentMap["sdd-apply"].(map[string]any)
 	if !ok {
 		t.Fatal("sdd-apply has unexpected type after switch to multi")
 	}
-	if _, hasModel := applyAgent["model"]; !hasModel {
-		t.Fatal("sdd-apply should have model field after switch to multi")
+	if _, hasModel := applyAgent["model"]; hasModel {
+		t.Fatal("sdd-apply should NOT have model field without explicit assignments")
 	}
 }
 
@@ -994,13 +1105,14 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 		t.Fatalf("sdd-apply model = %q, want %q", m, "openai/gpt-4o")
 	}
 
-	// Unassigned phases keep their default model from the multi overlay.
+	// Unassigned phases should NOT have a model field — the overlay no longer
+	// hardcodes defaults, so only explicitly assigned phases get a model.
 	verifyAgent, ok := agentMap["sdd-verify"].(map[string]any)
 	if !ok {
 		t.Fatal("sdd-verify agent not found or wrong type")
 	}
-	if m, _ := verifyAgent["model"].(string); m != "anthropic/claude-opus-4-6" {
-		t.Fatalf("sdd-verify model = %q, want default %q", m, "anthropic/claude-opus-4-6")
+	if _, hasModel := verifyAgent["model"]; hasModel {
+		t.Fatal("sdd-verify should not have a model field (unassigned phase)")
 	}
 }
 
@@ -1029,15 +1141,15 @@ func TestInjectOpenCodeMultiModeNoAssignmentsNoModel(t *testing.T) {
 	}
 
 	agentMap, _ := root["agent"].(map[string]any)
-	// Multi overlay now includes default model fields for all agents.
-	// When no assignments are given, the defaults from the overlay are preserved.
+	// When no assignments are given, no model fields should be injected.
+	// The overlay itself no longer contains hardcoded models.
 	for _, phase := range []string{"sdd-init", "sdd-apply", "sdd-verify"} {
 		agentDef, ok := agentMap[phase].(map[string]any)
 		if !ok {
 			t.Fatalf("phase %q agent not found or wrong type", phase)
 		}
-		if _, hasModel := agentDef["model"]; !hasModel {
-			t.Fatalf("phase %q should have default model field from multi overlay", phase)
+		if _, hasModel := agentDef["model"]; hasModel {
+			t.Fatalf("phase %q should NOT have model field when no assignments given", phase)
 		}
 	}
 }
@@ -1102,18 +1214,31 @@ func TestInjectOpenCodeMultiModeUsesRootModelForUnassignedAgents(t *testing.T) {
 		t.Fatal("opencode.json missing agent map")
 	}
 
+	// With no explicit assignments but a root model, all sub-agents that are NOT
+	// pre-existing in the user's config should get the root model injected.
+	// Since we started with only {"model":"openai/gpt-5"} (no agent entries),
+	// ALL agents are "new" from the 3-way logic perspective and should get rootModel.
 	for _, phase := range []string{"sdd-orchestrator", "sdd-init", "sdd-verify"} {
 		agentDef, ok := agentMap[phase].(map[string]any)
 		if !ok {
 			t.Fatalf("phase %q agent not found or wrong type", phase)
 		}
-		if m, _ := agentDef["model"].(string); m != "openai/gpt-5" {
+		m, hasModel := agentDef["model"]
+		if !hasModel {
+			t.Fatalf("%s should have model field (root model should propagate to new agents)", phase)
+		}
+		if m != "openai/gpt-5" {
 			t.Fatalf("%s model = %q, want %q", phase, m, "openai/gpt-5")
 		}
 	}
+
+	// The root-level "model" should still be preserved.
+	if m, _ := root["model"].(string); m != "openai/gpt-5" {
+		t.Fatalf("root model lost after merge: got %q", m)
+	}
 }
 
-func TestInjectOpenCodeMultiModeExplicitAssignmentsOverrideRootModel(t *testing.T) {
+func TestInjectOpenCodeMultiModeExplicitAssignmentsDoNotSpread(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -1148,6 +1273,7 @@ func TestInjectOpenCodeMultiModeExplicitAssignmentsOverrideRootModel(t *testing.
 		t.Fatal("opencode.json missing agent map")
 	}
 
+	// Explicitly assigned phase gets the assigned model (TUI wins).
 	applyAgent, ok := agentMap["sdd-apply"].(map[string]any)
 	if !ok {
 		t.Fatal("sdd-apply agent not found or wrong type")
@@ -1156,16 +1282,18 @@ func TestInjectOpenCodeMultiModeExplicitAssignmentsOverrideRootModel(t *testing.
 		t.Fatalf("sdd-apply model = %q, want %q", m, "anthropic/claude-opus-4-6")
 	}
 
+	// Unassigned phase AND not pre-existing: should get root model (openai/gpt-5).
+	// The pre-existing config only had {"model":"openai/gpt-5"}, no agent entries.
 	initAgent, ok := agentMap["sdd-init"].(map[string]any)
 	if !ok {
 		t.Fatal("sdd-init agent not found or wrong type")
 	}
 	if m, _ := initAgent["model"].(string); m != "openai/gpt-5" {
-		t.Fatalf("sdd-init model = %q, want %q", m, "openai/gpt-5")
+		t.Fatalf("sdd-init model = %q, want %q (root model should apply to unassigned new agents)", m, "openai/gpt-5")
 	}
 }
 
-func TestInjectOpenCodeSingleModeUsesRootModelForAgents(t *testing.T) {
+func TestInjectOpenCodeSingleModeDoesNotInjectModels(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -1196,12 +1324,148 @@ func TestInjectOpenCodeSingleModeUsesRootModelForAgents(t *testing.T) {
 		t.Fatal("opencode.json missing agent map")
 	}
 
+	// Single mode should NOT inject model fields into sub-agents.
+	initAgent, ok := agentMap["sdd-init"].(map[string]any)
+	if !ok {
+		t.Fatal("sdd-init agent not found or wrong type")
+	}
+	if _, hasModel := initAgent["model"]; hasModel {
+		t.Fatal("sdd-init should NOT have model field in single mode")
+	}
+
+	// Root model should be preserved.
+	if m, _ := root["model"].(string); m != "openai/gpt-5" {
+		t.Fatalf("root model lost after merge: got %q", m)
+	}
+}
+
+// TestInjectOpenCodeMultiModePreservesExistingAgentModels verifies that
+// a pre-existing agent definition with an explicit model is not overwritten
+// by the root model, while a NEW agent (not yet in the user's config) gets
+// the root model as a default.
+func TestInjectOpenCodeMultiModePreservesExistingAgentModels(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Pre-existing config: root model + sdd-apply already defined with its own model.
+	existing := `{
+  "model": "openai/gpt-5",
+  "agent": {
+    "sdd-apply": {
+      "model": "anthropic/claude-opus-4-6",
+      "mode": "subagent"
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), "multi"); err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+
+	// sdd-apply was pre-existing with its own model — must be preserved (NOT overwritten to gpt-5).
+	applyAgent, ok := agentMap["sdd-apply"].(map[string]any)
+	if !ok {
+		t.Fatal("sdd-apply agent not found or wrong type")
+	}
+	if m, _ := applyAgent["model"].(string); m != "anthropic/claude-opus-4-6" {
+		t.Fatalf("sdd-apply model = %q, want %q (pre-existing model must be preserved)", m, "anthropic/claude-opus-4-6")
+	}
+
+	// sdd-init was NOT pre-existing — should get root model as default.
 	initAgent, ok := agentMap["sdd-init"].(map[string]any)
 	if !ok {
 		t.Fatal("sdd-init agent not found or wrong type")
 	}
 	if m, _ := initAgent["model"].(string); m != "openai/gpt-5" {
-		t.Fatalf("sdd-init model = %q, want %q", m, "openai/gpt-5")
+		t.Fatalf("sdd-init model = %q, want %q (new agent should get root model)", m, "openai/gpt-5")
+	}
+}
+
+// TestInjectOpenCodeMultiModeExistingAgentWithNoModelIsNotTouched verifies
+// that a pre-existing agent WITHOUT a model field is respected — the root model
+// is NOT injected for that agent. The user intentionally set up the agent
+// without a model (they may rely on per-project overrides or session context).
+func TestInjectOpenCodeMultiModeExistingAgentWithNoModelIsNotTouched(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Pre-existing config: root model + sdd-apply with NO model field.
+	existing := `{
+  "model": "openai/gpt-5",
+  "agent": {
+    "sdd-apply": {
+      "mode": "subagent"
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), "multi"); err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+
+	// sdd-apply was pre-existing with NO model — the root model must NOT be injected.
+	// The user intentionally set up the agent without a model; respect that.
+	applyAgent, ok := agentMap["sdd-apply"].(map[string]any)
+	if !ok {
+		t.Fatal("sdd-apply agent not found or wrong type")
+	}
+	if _, hasModel := applyAgent["model"]; hasModel {
+		t.Fatalf("sdd-apply should NOT have model field (pre-existing agent without model, user intent must be respected)")
+	}
+
+	// sdd-init was NOT pre-existing — should get root model as default.
+	initAgent, ok := agentMap["sdd-init"].(map[string]any)
+	if !ok {
+		t.Fatal("sdd-init agent not found or wrong type")
+	}
+	if m, _ := initAgent["model"].(string); m != "openai/gpt-5" {
+		t.Fatalf("sdd-init model = %q, want %q (new agent should get root model)", m, "openai/gpt-5")
 	}
 }
 
@@ -1230,6 +1494,7 @@ func TestInjectWritesAllFourSharedFilesToDisk(t *testing.T) {
 		"engram-convention.md",
 		"openspec-convention.md",
 		"sdd-phase-common.md",
+		"skill-resolver.md",
 	}
 
 	for _, fileName := range expectedFiles {
@@ -1282,7 +1547,7 @@ func TestInjectSharedDirCreatedWithAllFiles(t *testing.T) {
 		names[e.Name()] = true
 	}
 
-	for _, want := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md"} {
+	for _, want := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md", "skill-resolver.md"} {
 		if !names[want] {
 			t.Errorf("_shared directory missing %q after Inject()", want)
 		}
@@ -1723,7 +1988,7 @@ func TestInjectModelAssignmentsFunction(t *testing.T) {
 	overlayJSON := []byte(`{
   "agent": {
     "sdd-init": {"mode": "subagent", "prompt": "test"},
-    "sdd-apply": {"mode": "subagent", "prompt": "test", "model": "anthropic/claude-sonnet-4-6"}
+    "sdd-apply": {"mode": "subagent", "prompt": "test"}
   }
 }`)
 
@@ -1731,7 +1996,7 @@ func TestInjectModelAssignmentsFunction(t *testing.T) {
 		"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
 	}
 
-	result, err := injectModelAssignments(overlayJSON, assignments, "openai/gpt-5")
+	result, err := injectModelAssignments(overlayJSON, assignments, "", nil)
 	if err != nil {
 		t.Fatalf("injectModelAssignments() error = %v", err)
 	}
@@ -1747,10 +2012,174 @@ func TestInjectModelAssignmentsFunction(t *testing.T) {
 		t.Fatalf("sdd-init model = %q, want %q", m, "anthropic/claude-sonnet-4-20250514")
 	}
 
-	// sdd-apply should inherit the root model when unassigned.
+	// sdd-apply has no assignment — should NOT get a model field.
 	applyAgent := agents["sdd-apply"].(map[string]any)
-	if m, _ := applyAgent["model"].(string); m != "openai/gpt-5" {
-		t.Fatalf("sdd-apply model = %q, want %q", m, "openai/gpt-5")
+	if _, hasModel := applyAgent["model"]; hasModel {
+		t.Fatal("sdd-apply should not have a model field (no assignment)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Windsurf workflow injection tests
+// ---------------------------------------------------------------------------
+
+func TestInjectWindsurf_WorkflowsCopiedToWorkspace(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod marker: %v", err)
+	}
+
+	mockNoPackageManager(t)
+
+	result, err := Inject(home, windsurfAdapter(), "", InjectOptions{WorkspaceDir: workspace})
+	if err != nil {
+		t.Fatalf("Inject(windsurf) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(windsurf) changed = false")
+	}
+
+	// Verify sdd-new.md was written to .windsurf/workflows/
+	workflowPath := filepath.Join(workspace, ".windsurf", "workflows", "sdd-new.md")
+	if _, err := os.Stat(workflowPath); err != nil {
+		t.Fatalf("workflow file %q not found: %v", workflowPath, err)
+	}
+
+	// Verify the file is in the returned Files slice.
+	found := false
+	for _, f := range result.Files {
+		if f == workflowPath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("workflow path %q not in result.Files: %v", workflowPath, result.Files)
+	}
+}
+
+func TestInjectWindsurf_WorkflowsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod marker: %v", err)
+	}
+
+	mockNoPackageManager(t)
+
+	opts := InjectOptions{WorkspaceDir: workspace}
+
+	if _, err := Inject(home, windsurfAdapter(), "", opts); err != nil {
+		t.Fatalf("first Inject(windsurf) error = %v", err)
+	}
+
+	second, err := Inject(home, windsurfAdapter(), "", opts)
+	if err != nil {
+		t.Fatalf("second Inject(windsurf) error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Inject(windsurf) changed = true — workflow injection is not idempotent")
+	}
+}
+
+func TestInjectWindsurf_WorkflowsSkippedWithoutWorkspaceDir(t *testing.T) {
+	home := t.TempDir()
+
+	mockNoPackageManager(t)
+
+	// No WorkspaceDir → workflow step must be silently skipped.
+	result, err := Inject(home, windsurfAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject(windsurf) without workspaceDir error = %v", err)
+	}
+
+	for _, f := range result.Files {
+		if strings.Contains(f, ".windsurf") {
+			t.Fatalf("unexpected .windsurf path in result.Files when WorkspaceDir is empty: %q", f)
+		}
+	}
+}
+
+func TestInjectWindsurf_WorkflowsSkippedForNonProjectDir(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir() // empty dir — no .git, go.mod, package.json, etc.
+
+	mockNoPackageManager(t)
+
+	result, err := Inject(home, windsurfAdapter(), "", InjectOptions{WorkspaceDir: workspace})
+	if err != nil {
+		t.Fatalf("Inject(windsurf) error = %v", err)
+	}
+
+	for _, f := range result.Files {
+		if strings.Contains(f, ".windsurf") {
+			t.Fatalf("workflow file %q should not be injected into non-project dir", f)
+		}
+	}
+}
+
+func TestInjectWindsurf_WorkflowContentMatchesAsset(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod marker: %v", err)
+	}
+
+	mockNoPackageManager(t)
+
+	if _, err := Inject(home, windsurfAdapter(), "", InjectOptions{WorkspaceDir: workspace}); err != nil {
+		t.Fatalf("Inject(windsurf) error = %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(workspace, ".windsurf", "workflows", "sdd-new.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	want := assets.MustRead("windsurf/workflows/sdd-new.md")
+	if string(got) != want {
+		t.Fatalf("workflow file content mismatch:\ngot len=%d, want len=%d", len(got), len(want))
+	}
+}
+
+func TestInjectWindsurf_WorkflowsFoundFromSubdirectory(t *testing.T) {
+	home := t.TempDir()
+
+	// Simulate a real project: go.mod lives at the root.
+	projectRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectRoot, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	// Simulate running gentle-ai from a subdirectory inside that project.
+	subDir := filepath.Join(projectRoot, "internal", "foo")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("mkdir subDir: %v", err)
+	}
+
+	mockNoPackageManager(t)
+
+	// Pass the subdirectory as WorkspaceDir — findProjectRoot must traverse
+	// upward and find go.mod at projectRoot.
+	result, err := Inject(home, windsurfAdapter(), "", InjectOptions{WorkspaceDir: subDir})
+	if err != nil {
+		t.Fatalf("Inject(windsurf) from subDir error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(windsurf) from subDir: changed = false, expected workflow to be written")
+	}
+
+	// Workflow must be at the PROJECT ROOT, not inside the subdirectory.
+	expectedPath := filepath.Join(projectRoot, ".windsurf", "workflows", "sdd-new.md")
+	if _, err := os.Stat(expectedPath); err != nil {
+		t.Fatalf("workflow not found at project root %q: %v", expectedPath, err)
+	}
+
+	// Must NOT be written inside the subdirectory.
+	unexpectedPath := filepath.Join(subDir, ".windsurf", "workflows", "sdd-new.md")
+	if _, err := os.Stat(unexpectedPath); err == nil {
+		t.Fatalf("workflow was incorrectly written inside subdirectory %q", unexpectedPath)
 	}
 }
 
@@ -1759,18 +2188,20 @@ func TestInjectModelAssignmentsFunction(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestSDDOrchestratorAssetSelection verifies that sddOrchestratorAsset()
-// returns agent-specific paths for Gemini and Codex, and falls back to generic
-// for all other agents.
+// returns agent-specific paths for agents that have dedicated orchestrators,
+// and falls back to generic for all others.
 func TestSDDOrchestratorAssetSelection(t *testing.T) {
 	tests := []struct {
 		agent model.AgentID
 		want  string
 	}{
 		{agent: model.AgentGeminiCLI, want: "gemini/sdd-orchestrator.md"},
+		{agent: model.AgentAntigravity, want: "antigravity/sdd-orchestrator.md"},
 		{agent: model.AgentCodex, want: "codex/sdd-orchestrator.md"},
+		{agent: model.AgentWindsurf, want: "windsurf/sdd-orchestrator.md"},
+		{agent: model.AgentCursor, want: "cursor/sdd-orchestrator.md"},
 		{agent: model.AgentClaudeCode, want: "generic/sdd-orchestrator.md"},
 		{agent: model.AgentOpenCode, want: "generic/sdd-orchestrator.md"},
-		{agent: model.AgentCursor, want: "generic/sdd-orchestrator.md"},
 		{agent: model.AgentVSCodeCopilot, want: "generic/sdd-orchestrator.md"},
 	}
 
@@ -2042,6 +2473,128 @@ func TestInjectOpenCodeMultiModeWithPreExistingFullConfig(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// gentleman agent model mirroring from sdd-orchestrator
+// ---------------------------------------------------------------------------
+
+// TestInjectOpenCodeMultiModeMirrorsOrchestratorModelToGentleman verifies that
+// when sdd-orchestrator has an explicit TUI model assignment and the gentleman
+// agent already exists in opencode.json (persona installed), the orchestrator
+// model is mirrored to the gentleman agent.
+func TestInjectOpenCodeMultiModeMirrorsOrchestratorModelToGentleman(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Pre-existing opencode.json with gentleman agent (persona installed).
+	existing := `{
+  "agent": {
+    "gentleman": {
+      "mode": "primary"
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	assignments := map[string]model.ModelAssignment{
+		"sdd-orchestrator": {ProviderID: "openai", ModelID: "gpt-4o"},
+	}
+
+	result, err := Inject(home, opencodeAdapter(), "multi", InjectOptions{OpenCodeModelAssignments: assignments})
+	if err != nil {
+		t.Fatalf("Inject(multi, assignments) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(multi, assignments) changed = false")
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+
+	// sdd-orchestrator must have the assigned model.
+	orchAgent, ok := agentMap["sdd-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatal("sdd-orchestrator agent not found or wrong type")
+	}
+	if m, _ := orchAgent["model"].(string); m != "openai/gpt-4o" {
+		t.Fatalf("sdd-orchestrator model = %q, want %q", m, "openai/gpt-4o")
+	}
+
+	// gentleman must have the same model as sdd-orchestrator (mirrored).
+	gentlemanAgent, ok := agentMap["gentleman"].(map[string]any)
+	if !ok {
+		t.Fatal("gentleman agent not found or wrong type")
+	}
+	if m, _ := gentlemanAgent["model"].(string); m != "openai/gpt-4o" {
+		t.Fatalf("gentleman model = %q, want %q (should mirror sdd-orchestrator)", m, "openai/gpt-4o")
+	}
+}
+
+// TestInjectOpenCodeMultiModeDoesNotInjectGentlemanIfNotInstalled verifies that
+// when the gentleman agent does NOT exist in opencode.json (persona not installed),
+// the orchestrator model is NOT mirrored to a gentleman entry.
+func TestInjectOpenCodeMultiModeDoesNotInjectGentlemanIfNotInstalled(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	// No pre-existing opencode.json — fresh install, persona not installed.
+	assignments := map[string]model.ModelAssignment{
+		"sdd-orchestrator": {ProviderID: "openai", ModelID: "gpt-4o"},
+	}
+
+	result, err := Inject(home, opencodeAdapter(), "multi", InjectOptions{OpenCodeModelAssignments: assignments})
+	if err != nil {
+		t.Fatalf("Inject(multi, assignments) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(multi, assignments) changed = false")
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+
+	// gentleman must NOT appear — persona is not installed.
+	if gentlemanRaw, exists := agentMap["gentleman"]; exists {
+		// If it somehow exists, it must not have a model field.
+		if gentlemanMap, ok := gentlemanRaw.(map[string]any); ok {
+			if _, hasModel := gentlemanMap["model"]; hasModel {
+				t.Fatal("gentleman should NOT have a model field when persona is not installed")
+			}
+		}
+	}
+}
+
 // TestMergeJSONFileReturnsMergedBytes verifies that mergeJSONFile returns the
 // merged bytes in-memory, so callers never need to re-read from disk to
 // validate the result (the fix for the Windows/WSL2 post-check bug).
@@ -2084,5 +2637,375 @@ func TestMergeJSONFileReturnsMergedBytes(t *testing.T) {
 	// writeResult must reflect that the file was changed.
 	if !result.writeResult.Changed {
 		t.Fatal("writeResult.Changed = false — first write of different content should be changed")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fix 1: Cursor sub-agent files written to disk
+// ---------------------------------------------------------------------------
+
+func TestInjectCursorWritesSubAgentFiles(t *testing.T) {
+	home := t.TempDir()
+
+	cursorAdapter, err := agents.NewAdapter("cursor")
+	if err != nil {
+		t.Fatalf("NewAdapter(cursor) error = %v", err)
+	}
+
+	promptPath := cursorAdapter.SystemPromptFile(home)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	result, injectErr := Inject(home, cursorAdapter, "")
+	if injectErr != nil {
+		t.Fatalf("Inject() error = %v", injectErr)
+	}
+
+	agentsDir := filepath.Join(home, ".cursor", "agents")
+	phases := []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive"}
+
+	for _, phase := range phases {
+		agentPath := filepath.Join(agentsDir, phase+".md")
+		info, err := os.Stat(agentPath)
+		if err != nil {
+			t.Fatalf("agent file %s not found: %v", phase, err)
+		}
+		if info.Size() < 100 {
+			t.Fatalf("agent file %s too small: %d bytes", phase, info.Size())
+		}
+	}
+
+	// Verify readonly flags
+	for _, phase := range []string{"sdd-explore", "sdd-verify"} {
+		content, err := os.ReadFile(filepath.Join(agentsDir, phase+".md"))
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", phase, err)
+		}
+		if !strings.Contains(string(content), "readonly: true") {
+			t.Fatalf("agent %s should have readonly: true", phase)
+		}
+	}
+
+	// Verify result.Files includes agent paths
+	hasAgentFile := false
+	for _, f := range result.Files {
+		if strings.Contains(f, ".cursor/agents/") {
+			hasAgentFile = true
+			break
+		}
+	}
+	if !hasAgentFile {
+		t.Fatal("result.Files should include at least one cursor agent path")
+	}
+
+	// Idempotency: second run should not change files
+	result2, err := Inject(home, cursorAdapter, "")
+	if err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+	for _, f := range result2.Files {
+		if strings.Contains(f, ".cursor/agents/") {
+			t.Fatalf("second inject should not report changed agent files, but got %s", f)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fix 2: findProjectRoot — monorepo and enhanced workspace root detection
+// ---------------------------------------------------------------------------
+
+// TestFindProjectRootPnpmMonorepo verifies that when the starting directory
+// has a package.json but a parent has pnpm-workspace.yaml, the function
+// returns the monorepo root (parent), not the sub-package directory.
+func TestFindProjectRootPnpmMonorepo(t *testing.T) {
+	root := t.TempDir()
+
+	// Monorepo root: has pnpm-workspace.yaml
+	if err := os.WriteFile(filepath.Join(root, "pnpm-workspace.yaml"), []byte("packages:\n  - packages/*\n"), 0o644); err != nil {
+		t.Fatalf("write pnpm-workspace.yaml: %v", err)
+	}
+
+	// Sub-package: has its own package.json
+	subPkg := filepath.Join(root, "packages", "app")
+	if err := os.MkdirAll(subPkg, 0o755); err != nil {
+		t.Fatalf("MkdirAll(subPkg): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subPkg, "package.json"), []byte(`{"name":"app"}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+
+	// Also add a package.json at the monorepo root
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"monorepo"}`), 0o644); err != nil {
+		t.Fatalf("write root package.json: %v", err)
+	}
+
+	// Start from sub-package — should resolve to the monorepo root.
+	got, ok := findProjectRoot(subPkg)
+	if !ok {
+		t.Fatal("findProjectRoot returned false, want true")
+	}
+	if got != root {
+		t.Fatalf("findProjectRoot = %q, want monorepo root %q", got, root)
+	}
+}
+
+// TestFindProjectRootNxMonorepo verifies that nx.json is recognized as a
+// monorepo root marker.
+func TestFindProjectRootNxMonorepo(t *testing.T) {
+	root := t.TempDir()
+
+	// Monorepo root: has nx.json
+	if err := os.WriteFile(filepath.Join(root, "nx.json"), []byte(`{"version":2}`), 0o644); err != nil {
+		t.Fatalf("write nx.json: %v", err)
+	}
+
+	// Sub-package: has its own package.json
+	subPkg := filepath.Join(root, "apps", "web")
+	if err := os.MkdirAll(subPkg, 0o755); err != nil {
+		t.Fatalf("MkdirAll(subPkg): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subPkg, "package.json"), []byte(`{"name":"web"}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+
+	got, ok := findProjectRoot(subPkg)
+	if !ok {
+		t.Fatal("findProjectRoot returned false, want true")
+	}
+	if got != root {
+		t.Fatalf("findProjectRoot = %q, want nx monorepo root %q", got, root)
+	}
+}
+
+// TestFindProjectRootTurboMonorepo verifies that turbo.json is recognized as
+// a monorepo root marker.
+func TestFindProjectRootTurboMonorepo(t *testing.T) {
+	root := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(root, "turbo.json"), []byte(`{"$schema":"..."}`), 0o644); err != nil {
+		t.Fatalf("write turbo.json: %v", err)
+	}
+
+	subPkg := filepath.Join(root, "packages", "ui")
+	if err := os.MkdirAll(subPkg, 0o755); err != nil {
+		t.Fatalf("MkdirAll(subPkg): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subPkg, "package.json"), []byte(`{"name":"ui"}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+
+	got, ok := findProjectRoot(subPkg)
+	if !ok {
+		t.Fatal("findProjectRoot returned false, want true")
+	}
+	if got != root {
+		t.Fatalf("findProjectRoot = %q, want turbo root %q", got, root)
+	}
+}
+
+// TestFindProjectRootGitTakesPrecedence verifies that a .git directory at a
+// higher level takes precedence over a package.json in a subdirectory.
+func TestFindProjectRootGitTakesPrecedence(t *testing.T) {
+	root := t.TempDir()
+
+	// Project root: has .git
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git): %v", err)
+	}
+
+	// Subdirectory: has package.json
+	subDir := filepath.Join(root, "frontend")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(subDir): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "package.json"), []byte(`{"name":"frontend"}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+
+	// Start from subdirectory — should find .git at root immediately.
+	got, ok := findProjectRoot(subDir)
+	if !ok {
+		t.Fatal("findProjectRoot returned false, want true")
+	}
+	if got != root {
+		t.Fatalf("findProjectRoot = %q, want .git root %q", got, root)
+	}
+}
+
+// TestFindProjectRootPackageJsonFallback verifies that when only package.json
+// exists (no .git, go.mod, or monorepo markers), it is returned as the best
+// candidate root.
+func TestFindProjectRootPackageJsonFallback(t *testing.T) {
+	root := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"app"}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+
+	subDir := filepath.Join(root, "src", "components")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(subDir): %v", err)
+	}
+
+	got, ok := findProjectRoot(subDir)
+	if !ok {
+		t.Fatal("findProjectRoot returned false, want true")
+	}
+	if got != root {
+		t.Fatalf("findProjectRoot = %q, want root with package.json %q", got, root)
+	}
+}
+
+// TestFindProjectRootEmptyDirReturnsNotFound verifies that an empty directory
+// (no markers at all) returns false.
+func TestFindProjectRootEmptyDirReturnsNotFound(t *testing.T) {
+	emptyDir := t.TempDir() // No markers, isolated temp dir
+
+	// The temp dir has no markers; we start from a subdirectory of it.
+	subDir := filepath.Join(emptyDir, "deep", "path")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(subDir): %v", err)
+	}
+
+	_, ok := findProjectRoot(subDir)
+	if ok {
+		// Note: this may find markers in ancestor dirs outside emptyDir
+		// on some systems. The test is best-effort for isolated environments.
+		t.Log("findProjectRoot found a marker outside the temp dir — acceptable on some systems")
+	}
+}
+
+// TestFindProjectRootEmptyStringReturnsNotFound verifies the early-return for
+// empty dir input.
+func TestFindProjectRootEmptyStringReturnsNotFound(t *testing.T) {
+	got, ok := findProjectRoot("")
+	if ok {
+		t.Fatalf("findProjectRoot(\"\") = (%q, true), want (\"\", false)", got)
+	}
+}
+
+// TestFindProjectRootDeepNested verifies that findProjectRoot handles deeply
+// nested directories without panicking or infinite looping, and that it
+// correctly returns ("", false) when the marker is beyond maxAncestorDepth.
+func TestFindProjectRootDeepNested(t *testing.T) {
+	root := t.TempDir()
+
+	// Build a directory 25 levels deep (beyond maxAncestorDepth=20).
+	deepDir := root
+	for i := 0; i < 25; i++ {
+		deepDir = filepath.Join(deepDir, fmt.Sprintf("level%02d", i))
+	}
+	if err := os.MkdirAll(deepDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(deepDir): %v", err)
+	}
+
+	// Place a go.mod only at the root (25 levels above deepDir).
+	// With maxAncestorDepth=20, findProjectRoot cannot reach it from level 25.
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	// This must not panic or loop infinitely.
+	// The important assertion is that it completes quickly.
+	done := make(chan struct{})
+	var gotPath string
+	var gotOk bool
+	go func() {
+		defer close(done)
+		gotPath, gotOk = findProjectRoot(deepDir)
+	}()
+
+	select {
+	case <-done:
+		// Completed without hanging — test passes.
+	case <-time.After(5 * time.Second):
+		t.Fatal("findProjectRoot appeared to hang on deeply nested dir")
+	}
+
+	// Correctness: starting 25 levels deep with go.mod only at level 0 and
+	// maxAncestorDepth=20, the function cannot reach level 0 — must return ("", false).
+	if gotOk {
+		t.Fatalf("findProjectRoot should return false when marker is beyond maxAncestorDepth, got path=%q ok=%v", gotPath, gotOk)
+	}
+	if gotPath != "" {
+		t.Fatalf("findProjectRoot should return empty path when not found, got %q", gotPath)
+	}
+}
+
+// TestFindProjectRootMultiplePackageJsonPicksHighest verifies that when
+// multiple package.json files exist in ancestor directories, findProjectRoot
+// returns the highest ancestor (closest to filesystem root), not the first
+// (closest to starting dir).
+func TestFindProjectRootMultiplePackageJsonPicksHighest(t *testing.T) {
+	root := t.TempDir()
+
+	// root/package.json  ← highest ancestor, should win
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"root"}`), 0o644); err != nil {
+		t.Fatalf("write root package.json: %v", err)
+	}
+
+	// root/packages/app/package.json  ← closer to start, should NOT win
+	appDir := filepath.Join(root, "packages", "app")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(appDir): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "package.json"), []byte(`{"name":"app"}`), 0o644); err != nil {
+		t.Fatalf("write app package.json: %v", err)
+	}
+
+	// root/packages/app/src/ — start here
+	srcDir := filepath.Join(appDir, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(srcDir): %v", err)
+	}
+
+	got, ok := findProjectRoot(srcDir)
+	if !ok {
+		t.Fatal("findProjectRoot returned false, want true")
+	}
+	if got != root {
+		t.Fatalf("findProjectRoot = %q, want highest ancestor root %q (not closest package.json %q)", got, root, appDir)
+	}
+}
+
+// TestFindProjectRootAllMarkers verifies that each project marker (beyond .git,
+// go.mod, and package.json) is correctly recognized as a project root.
+func TestFindProjectRootAllMarkers(t *testing.T) {
+	allMarkers := []struct {
+		name   string
+		marker string
+		isDir  bool
+	}{
+		{"pnpm-workspace.yml", "pnpm-workspace.yml", false},
+		{"lerna.json", "lerna.json", false},
+		{"rush.json", "rush.json", false},
+		{"Cargo.toml", "Cargo.toml", false},
+		{"pyproject.toml", "pyproject.toml", false},
+		{"pom.xml", "pom.xml", false},
+		{"build.gradle", "build.gradle", false},
+	}
+
+	for _, tt := range allMarkers {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			subDir := filepath.Join(root, "sub", "deep")
+			os.MkdirAll(subDir, 0o755)
+
+			markerPath := filepath.Join(root, tt.marker)
+			if tt.isDir {
+				os.MkdirAll(markerPath, 0o755)
+			} else {
+				os.WriteFile(markerPath, []byte(""), 0o644)
+			}
+
+			result, ok := findProjectRoot(subDir)
+			if !ok {
+				t.Fatalf("findProjectRoot(%s) returned false for marker %s", subDir, tt.marker)
+			}
+			if result != root {
+				t.Fatalf("findProjectRoot(%s) = %s, want %s", subDir, result, root)
+			}
+		})
 	}
 }

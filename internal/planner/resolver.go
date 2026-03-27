@@ -36,6 +36,11 @@ func (r dependencyResolver) Resolve(selection model.Selection) (ResolvedPlan, er
 		return ResolvedPlan{}, err
 	}
 
+	// Apply soft ordering constraints: when BOTH components in a pair are
+	// present, ensure the first appears before the second. This does NOT
+	// add missing components — it only reorders what is already selected.
+	orderedComponents = applySoftOrdering(orderedComponents, SoftOrderingConstraints())
+
 	for _, component := range orderedComponents {
 		if _, selected := selectedSet[component]; !selected {
 			resolved.AddedDependencies = append(resolved.AddedDependencies, component)

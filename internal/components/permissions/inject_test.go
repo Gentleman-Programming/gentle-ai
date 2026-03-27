@@ -8,20 +8,23 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/cursor"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
-func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
-func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
-func geminiAdapter() agents.Adapter   { return gemini.NewAdapter() }
-func cursorAdapter() agents.Adapter   { return cursor.NewAdapter() }
-func vscodeAdapter() agents.Adapter   { return vscode.NewAdapter() }
-func codexAdapter() agents.Adapter    { return codex.NewAdapter() }
+func claudeAdapter() agents.Adapter      { return claude.NewAdapter() }
+func opencodeAdapter() agents.Adapter    { return opencode.NewAdapter() }
+func geminiAdapter() agents.Adapter      { return gemini.NewAdapter() }
+func cursorAdapter() agents.Adapter      { return cursor.NewAdapter() }
+func vscodeAdapter() agents.Adapter      { return vscode.NewAdapter() }
+func codexAdapter() agents.Adapter       { return codex.NewAdapter() }
+func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
 
 func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	home := t.TempDir()
@@ -268,6 +271,13 @@ func TestInjectCursorSkipsPermissions(t *testing.T) {
 	}
 	if len(result.Files) != 0 {
 		t.Fatalf("Inject() for Cursor should return no files, got %v", result.Files)
+	}
+}
+
+func TestInjectAntigravitySkipsPermissions(t *testing.T) {
+	overlay := agentOverlay(model.AgentAntigravity)
+	if overlay != nil {
+		t.Errorf("expected nil overlay for Antigravity, got %s", overlay)
 	}
 }
 

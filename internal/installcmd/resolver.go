@@ -135,7 +135,7 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 	case "brew":
 		return CommandSequence{
 			{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
-			{"brew", "install", "gga"},
+			{"brew", "reinstall", "gga"},
 		}, nil
 	case "apt", "pacman", "dnf", "nix":
 		// GGA is a pure Bash project - install via git clone + install script

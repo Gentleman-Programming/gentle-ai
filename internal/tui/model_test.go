@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"reflect"
 	"testing"
 
@@ -426,6 +427,79 @@ func TestClaudeModelPickerBalancedSelectionStoresAssignments(t *testing.T) {
 	}
 	if got := state.Selection.ClaudeModelAssignments["sdd-archive"]; got != model.ClaudeModelHaiku {
 		t.Fatalf("sdd-archive = %q, want %q", got, model.ClaudeModelHaiku)
+	}
+}
+
+// ─── SDDMode → ModelPicker / DependencyTree transition (issue #106 Bug 2) ──
+
+// sddMultiCursor returns the cursor index for SDDModeMulti in SDDModeOptions.
+func sddMultiCursor(t *testing.T) int {
+	t.Helper()
+	for i, opt := range screens.SDDModeOptions() {
+		if opt == model.SDDModeMulti {
+			return i
+		}
+	}
+	t.Fatal("SDDModeMulti not found in SDDModeOptions()")
+	return -1
+}
+
+// TestSDDModeMultiSkipModelPickerWhenCacheMissing verifies that when SDDModeMulti
+// is selected and the OpenCode model cache does NOT exist on disk, the TUI skips
+// the model picker and goes directly to ScreenDependencyTree.
+// This is the "fresh install" path where OpenCode has not been run yet.
+func TestSDDModeMultiSkipModelPickerWhenCacheMissing(t *testing.T) {
+	origStat := osStatModelCache
+	osStatModelCache = func(name string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist
+	}
+	t.Cleanup(func() { osStatModelCache = origStat })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenSDDMode
+	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+	m.Cursor = sddMultiCursor(t)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenDependencyTree {
+		t.Fatalf("screen = %v, want ScreenDependencyTree (cache missing → skip model picker)", state.Screen)
+	}
+	if len(state.ModelPicker.AvailableIDs) != 0 {
+		t.Fatalf("ModelPicker.AvailableIDs should be empty when cache missing, got: %v", state.ModelPicker.AvailableIDs)
+	}
+}
+
+// TestSDDModeMultiShowsModelPickerWhenCacheExists verifies that when SDDModeMulti
+// is selected and the OpenCode model cache EXISTS on disk, the TUI transitions to
+// ScreenModelPicker so the user can assign models to SDD phases.
+func TestSDDModeMultiShowsModelPickerWhenCacheExists(t *testing.T) {
+	// Write a minimal valid models.json so NewModelPickerState can parse it.
+	tmpDir := t.TempDir()
+	cacheFile := tmpDir + "/models.json"
+	if err := os.WriteFile(cacheFile, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origStat := osStatModelCache
+	osStatModelCache = func(name string) (os.FileInfo, error) {
+		return os.Stat(cacheFile) // stat succeeds → cache present
+	}
+	t.Cleanup(func() { osStatModelCache = origStat })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenSDDMode
+	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+	m.Cursor = sddMultiCursor(t)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelPicker {
+		t.Fatalf("screen = %v, want ScreenModelPicker (cache present → show picker)", state.Screen)
 	}
 }
 

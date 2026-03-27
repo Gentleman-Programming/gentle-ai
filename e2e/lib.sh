@@ -34,13 +34,26 @@ log_info()  { printf "${BLUE}[INFO]${NC}  %s\n" "$1"; }
 # The binary should be built and placed at /usr/local/bin/gentle-ai inside
 # the Docker container. If not found, fall back to $HOME/gentle-ai or the
 # current directory.
+# Resolution priority (highest → lowest):
+#   1. ./gentle-ai in the current repo directory (freshly built local binary)
+#   2. ~/gentle-ai (explicit copy in home)
+#   3. gentle-ai on PATH (system-installed, e.g. Homebrew)
+# This ensures `go build ./cmd/gentle-ai && bash e2e/e2e_test.sh` always
+# tests the locally built binary rather than the installed release version.
 resolve_binary() {
-    if command -v gentle-ai >/dev/null 2>&1; then
-        echo "gentle-ai"
-    elif [ -x "$HOME/gentle-ai" ]; then
-        echo "$HOME/gentle-ai"
+    # Prefer the locally built binary (./gentle-ai) produced by `go build ./cmd/gentle-ai`.
+    # We check both the current directory and the script's parent directory so
+    # the resolver works whether the test is invoked from the repo root or from e2e/.
+    local repo_root
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    if [ -x "$repo_root/gentle-ai" ]; then
+        echo "$repo_root/gentle-ai"
     elif [ -x "./gentle-ai" ]; then
         echo "./gentle-ai"
+    elif [ -x "$HOME/gentle-ai" ]; then
+        echo "$HOME/gentle-ai"
+    elif command -v gentle-ai >/dev/null 2>&1; then
+        echo "gentle-ai"
     else
         echo ""
     fi
@@ -55,10 +68,13 @@ resolve_binary() {
 cleanup_test_env() {
     rm -rf "$HOME/.config/opencode" 2>/dev/null || true
     rm -rf "$HOME/.config/gga" 2>/dev/null || true
+    rm -rf "$HOME/.config/Windsurf" 2>/dev/null || true
     rm -rf "$HOME/.claude" 2>/dev/null || true
     rm -rf "$HOME/.codex" 2>/dev/null || true
     rm -rf "$HOME/.gemini" 2>/dev/null || true
     rm -rf "$HOME/.gentle-ai" 2>/dev/null || true
+    rm -rf "$HOME/.codeium" 2>/dev/null || true
+    rm -rf "$HOME/.cursor" 2>/dev/null || true
     mkdir -p "$HOME/.config"
 }
 

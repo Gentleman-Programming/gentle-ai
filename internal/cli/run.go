@@ -22,6 +22,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/verify"
 )
@@ -129,6 +130,15 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		return result, fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
 
+	// Persist the user's agent selection so that future `sync` runs target only
+	// the agents the user actually installed, not every IDE config dir on disk.
+	agentIDs := make([]string, 0, len(input.Selection.Agents))
+	for _, a := range input.Selection.Agents {
+		agentIDs = append(agentIDs, string(a))
+	}
+	// Non-fatal: a state write failure must not break an otherwise successful install.
+	_ = state.Write(homeDir, agentIDs)
+
 	return result, nil
 }
 
@@ -220,12 +230,13 @@ func buildStagePlan(selection model.Selection, resolved planner.ResolvedPlan) pi
 }
 
 type installRuntime struct {
-	homeDir    string
-	selection  model.Selection
-	resolved   planner.ResolvedPlan
-	profile    system.PlatformProfile
-	backupRoot string
-	state      *runtimeState
+	homeDir      string
+	workspaceDir string
+	selection    model.Selection
+	resolved     planner.ResolvedPlan
+	profile      system.PlatformProfile
+	backupRoot   string
+	state        *runtimeState
 }
 
 type runtimeState struct {
@@ -238,13 +249,16 @@ func newInstallRuntime(homeDir string, selection model.Selection, resolved plann
 		return nil, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
 	}
 
+	workspaceDir, _ := os.Getwd()
+
 	return &installRuntime{
-		homeDir:    homeDir,
-		selection:  selection,
-		resolved:   resolved,
-		profile:    profile,
-		backupRoot: backupRoot,
-		state:      &runtimeState{},
+		homeDir:      homeDir,
+		workspaceDir: workspaceDir,
+		selection:    selection,
+		resolved:     resolved,
+		profile:      profile,
+		backupRoot:   backupRoot,
+		state:        &runtimeState{},
 	}, nil
 }
 
@@ -273,12 +287,13 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 
 	for _, component := range r.resolved.OrderedComponents {
 		apply = append(apply, componentApplyStep{
-			id:        "component:" + string(component),
-			component: component,
-			homeDir:   r.homeDir,
-			agents:    r.resolved.Agents,
-			selection: r.selection,
-			profile:   r.profile,
+			id:           "component:" + string(component),
+			component:    component,
+			homeDir:      r.homeDir,
+			workspaceDir: r.workspaceDir,
+			agents:       r.resolved.Agents,
+			selection:    r.selection,
+			profile:      r.profile,
 		})
 	}
 
@@ -389,12 +404,13 @@ func (s agentInstallStep) Run() error {
 }
 
 type componentApplyStep struct {
-	id        string
-	component model.ComponentID
-	homeDir   string
-	agents    []model.AgentID
-	selection model.Selection
-	profile   system.PlatformProfile
+	id           string
+	component    model.ComponentID
+	homeDir      string
+	workspaceDir string
+	agents       []model.AgentID
+	selection    model.Selection
+	profile      system.PlatformProfile
 }
 
 func (s componentApplyStep) ID() string {
@@ -488,6 +504,7 @@ func (s componentApplyStep) Run() error {
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments: s.selection.ModelAssignments,
 				ClaudeModelAssignments:   s.selection.ClaudeModelAssignments,
+				WorkspaceDir:             s.workspaceDir,
 			}
 			if _, err := sdd.Inject(s.homeDir, adapter, s.selection.SDDMode, opts); err != nil {
 				return fmt.Errorf("inject sdd for %q: %w", adapter.Agent(), err)
@@ -604,6 +621,7 @@ func ResolveInstallProfile(detection system.DetectionResult) system.PlatformProf
 // ggaAvailable reports whether the gga binary is reachable. gga is often
 // installed to ~/.local/bin (the default for install.sh on Linux and macOS)
 // or ~/bin (the default for install.sh on Windows), which may not be on PATH.
+// On macOS with Homebrew, gga may be in /opt/homebrew/bin or /usr/local/bin.
 // We check the filesystem directly to avoid spawning a subprocess and to work
 // regardless of whether the install directory has been added to PATH.
 func ggaAvailable(profile system.PlatformProfile) bool {
@@ -616,6 +634,19 @@ func ggaAvailable(profile system.PlatformProfile) bool {
 	}
 	if _, err := osStat(filepath.Join(homeDir, ".local", "bin", "gga")); err == nil {
 		return true
+	}
+	// Check well-known Homebrew prefixes for macOS (arm64 and x86).
+	// gga may be installed via brew but not yet in the shell PATH
+	// (e.g. new terminal session, Rosetta environment mismatch).
+	if profile.OS == "darwin" || profile.PackageManager == "brew" {
+		for _, brewBin := range []string{
+			"/opt/homebrew/bin/gga",
+			"/usr/local/bin/gga",
+		} {
+			if _, err := osStat(brewBin); err == nil {
+				return true
+			}
+		}
 	}
 	if profile.OS == "windows" {
 		if _, err := osStat(filepath.Join(homeDir, "bin", "gga")); err == nil {
@@ -739,6 +770,7 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 						filepath.Join(skillDir, "_shared", "engram-convention.md"),
 						filepath.Join(skillDir, "_shared", "openspec-convention.md"),
 						filepath.Join(skillDir, "_shared", "sdd-phase-common.md"),
+						filepath.Join(skillDir, "_shared", "skill-resolver.md"),
 						filepath.Join(skillDir, "sdd-init", "SKILL.md"),
 						filepath.Join(skillDir, "sdd-explore", "SKILL.md"),
 						filepath.Join(skillDir, "sdd-propose", "SKILL.md"),
@@ -829,6 +861,7 @@ func runPostApplyVerification(homeDir string, selection model.Selection, resolve
 	if hasComponent(resolved.OrderedComponents, model.ComponentEngram) {
 		checks = append(checks, engramHealthChecks()...)
 	}
+	checks = append(checks, antigravityCollisionCheck(resolved.Agents)...)
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
 }
@@ -866,6 +899,40 @@ func engramHealthChecks() []verify.Check {
 				}
 				_, err := engram.VerifyVersion()
 				return err
+			},
+		},
+	}
+}
+
+// antigravityCollisionCheck returns a soft verify check that warns the user
+// when both Antigravity and Gemini CLI are selected. Both agents write to
+// ~/.gemini/GEMINI.md — content is merged (not overwritten) but the user
+// should be aware.
+func antigravityCollisionCheck(agents []model.AgentID) []verify.Check {
+	hasAntigravity := false
+	hasGemini := false
+	for _, id := range agents {
+		if id == model.AgentAntigravity {
+			hasAntigravity = true
+		}
+		if id == model.AgentGeminiCLI {
+			hasGemini = true
+		}
+	}
+	if !hasAntigravity || !hasGemini {
+		return nil
+	}
+	return []verify.Check{
+		{
+			ID:          "verify:antigravity:rules-collision",
+			Description: "Antigravity and Gemini CLI share ~/.gemini/GEMINI.md",
+			Soft:        true,
+			Run: func(context.Context) error {
+				return fmt.Errorf(
+					"both Antigravity and Gemini CLI write rules to ~/.gemini/GEMINI.md\n" +
+						"Content is merged, not overwritten — rules from both agents coexist in the same file.\n" +
+						"This is expected behavior. No action required unless you want to separate them manually.",
+				)
 			},
 		},
 	}

@@ -60,6 +60,11 @@ func TestProviderForAgents(t *testing.T) {
 			agents: []model.AgentID{model.AgentCodex},
 			want:   "codex",
 		},
+		{
+			name:   "antigravity maps to gemini",
+			agents: []model.AgentID{model.AgentAntigravity},
+			want:   "gemini",
+		},
 	}
 
 	for _, tt := range tests {

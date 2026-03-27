@@ -45,3 +45,23 @@ func MVPGraph() Graph {
 		model.ComponentTheme:      nil,
 	})
 }
+
+// softOrderingPairs defines component pairs where the first MUST execute before
+// the second when BOTH are present in the resolved plan. These are NOT hard
+// dependencies — selecting one does not force-install the other.
+//
+// This exists because StrategyFileReplace agents (OpenCode, Cursor, Gemini,
+// Codex) have Persona write the base file and SDD/Engram append to it. If
+// SDD ran before Persona, Persona would overwrite the SDD sections.
+//
+// INVARIANT: the `first` element in every pair must have nil deps in MVPGraph.
+// See applySoftOrdering() safety contract in order.go.
+var softOrderingPairs = [][2]model.ComponentID{
+	{model.ComponentPersona, model.ComponentEngram},
+	{model.ComponentPersona, model.ComponentSDD},
+}
+
+// SoftOrderingConstraints returns the static soft-ordering pairs.
+func SoftOrderingConstraints() [][2]model.ComponentID {
+	return softOrderingPairs
+}

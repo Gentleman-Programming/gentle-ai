@@ -1452,3 +1452,87 @@ func TestRunInstallUpgradeIdempotency(t *testing.T) {
 			commandCount, engramJSON)
 	}
 }
+
+// TestOpenCodePersonaBeforeSDDPreservesAllSections is the regression test for
+// issue #121: on StrategyFileReplace agents, if Persona ran after SDD it would
+// overwrite the entire AGENTS.md, destroying the SDD orchestrator section.
+//
+// This test exercises the full install pipeline for OpenCode with Persona +
+// Engram + SDD selected together and verifies that the final AGENTS.md
+// contains all three sections with no duplicates.
+func TestOpenCodePersonaBeforeSDDPreservesAllSections(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+
+	_, err := RunInstall(
+		[]string{
+			"--agent", "opencode",
+			"--component", "persona",
+			"--component", "engram",
+			"--component", "sdd",
+			"--persona", "gentleman",
+		},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	agentsMD := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	content, err := os.ReadFile(agentsMD)
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
+	}
+	text := string(content)
+
+	// Persona content must be present
+	if !strings.Contains(text, "Senior Architect") {
+		t.Error("AGENTS.md missing Gentleman persona content (persona not written)")
+	}
+
+	// For OpenCode, the SDD orchestrator goes into opencode.json (agent overlay),
+	// NOT AGENTS.md. AGENTS.md only contains persona and engram sections.
+	// The issue #121 regression was that Persona would overwrite AGENTS.md
+	// AFTER engram had already injected the engram-protocol marker, destroying
+	// the engram section. We verify persona + engram coexist.
+
+	// Engram protocol section must be present
+	if !strings.Contains(text, "<!-- gentle-ai:engram-protocol -->") {
+		t.Error("AGENTS.md missing engram-protocol open marker (issue #121 regression: persona may have overwritten engram section)")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:engram-protocol -->") {
+		t.Error("AGENTS.md missing engram-protocol close marker")
+	}
+
+	// Engram section must not be duplicated
+	marker := "<!-- gentle-ai:engram-protocol -->"
+	if count := strings.Count(text, marker); count != 1 {
+		t.Errorf("AGENTS.md contains %d occurrences of %q, want exactly 1 (no duplicates)", count, marker)
+	}
+
+	// AGENTS.md must NOT have sdd-orchestrator markers — OpenCode uses opencode.json overlay
+	if strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Error("AGENTS.md should NOT have sdd-orchestrator marker — OpenCode uses opencode.json agent overlay")
+	}
+
+	// SDD orchestrator for OpenCode lives in opencode.json agent overlay
+	opencodeJSON := filepath.Join(home, ".config", "opencode", "opencode.json")
+	jsonContent, err := os.ReadFile(opencodeJSON)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	if !strings.Contains(string(jsonContent), "sdd-orchestrator") {
+		t.Error("opencode.json missing sdd-orchestrator agent entry (SDD not injected)")
+	}
+}
