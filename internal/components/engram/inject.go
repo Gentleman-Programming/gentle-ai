@@ -73,72 +73,84 @@ func resolveEngramPath() string {
 func buildEngramOverlayJSON(agent model.AgentID, strategy model.MCPStrategy) []byte {
 	engramPath := resolveEngramPath()
 
+	var overlay map[string]any
+
 	switch strategy {
 	case model.StrategyMergeIntoSettings:
 		if agent == model.AgentOpenCode {
 			// OpenCode uses command array format.
-			return []byte(fmt.Sprintf(`{
-  "mcp": {
-    "engram": {
-      "command": ["%s", "mcp", "--tools=agent"],
-      "enabled": true,
-      "type": "local"
-    }
-  }
-}
-`, engramPath))
+			overlay = map[string]any{
+				"mcp": map[string]any{
+					"engram": map[string]any{
+						"command": []string{engramPath, "mcp", "--tools=agent"},
+						"enabled": true,
+						"type":    "local",
+					},
+				},
+			}
+		} else {
+			// Default merge strategy (Gemini, etc.).
+			overlay = map[string]any{
+				"mcpServers": map[string]any{
+					"engram": map[string]any{
+						"command": engramPath,
+						"args":    []string{"mcp", "--tools=agent"},
+					},
+				},
+			}
 		}
-		// Default merge strategy (Gemini, etc.).
-		return []byte(fmt.Sprintf(`{
-  "mcpServers": {
-    "engram": {
-      "command": "%s",
-      "args": ["mcp", "--tools=agent"]
-    }
-  }
-}
-`, engramPath))
 
 	case model.StrategyMCPConfigFile:
 		if agent == model.AgentVSCodeCopilot {
 			// VS Code uses "servers" key.
-			return []byte(fmt.Sprintf(`{
-  "servers": {
-    "engram": {
-      "command": "%s",
-      "args": ["mcp", "--tools=agent"]
-    }
-  }
-}
-`, engramPath))
+			overlay = map[string]any{
+				"servers": map[string]any{
+					"engram": map[string]any{
+						"command": engramPath,
+						"args":    []string{"mcp", "--tools=agent"},
+					},
+				},
+			}
+		} else {
+			// Default MCP config file strategy (Cursor, Antigravity, Windsurf).
+			overlay = map[string]any{
+				"mcpServers": map[string]any{
+					"engram": map[string]any{
+						"command": engramPath,
+						"args":    []string{"mcp", "--tools=agent"},
+					},
+				},
+			}
 		}
-		// Default MCP config file strategy (Cursor, Antigravity, Windsurf).
-		return []byte(fmt.Sprintf(`{
-  "mcpServers": {
-    "engram": {
-      "command": "%s",
-      "args": ["mcp", "--tools=agent"]
-    }
-  }
-}
-`, engramPath))
 
 	case model.StrategySeparateMCPFiles:
 		// Separate file strategy (Claude Code) — handled separately in buildSeparateMCPContent.
-		return []byte(fmt.Sprintf(`{
-  "command": "%s",
-  "args": ["mcp", "--tools=agent"]
-}
-`, engramPath))
+		overlay = map[string]any{
+			"command": engramPath,
+			"args":    []string{"mcp", "--tools=agent"},
+		}
 
 	default:
 		// Fallback — shouldn't reach here, but provide a safe default.
-		return []byte(fmt.Sprintf(`{
-  "command": "%s",
-  "args": ["mcp", "--tools=agent"]
-}
-`, engramPath))
+		overlay = map[string]any{
+			"command": engramPath,
+			"args":    []string{"mcp", "--tools=agent"},
+		}
 	}
+
+	// Safe JSON marshaling — handles Windows paths correctly.
+	data, err := json.MarshalIndent(overlay, "", "  ")
+	if err != nil {
+		// Should never happen with map[string]any, but fallback gracefully.
+		// Use json.Marshal for error too to avoid same Windows path issue.
+		errPayload := map[string]string{"error": fmt.Sprintf("failed to marshal engram config: %v", err)}
+		if fallback, marshalErr := json.Marshal(errPayload); marshalErr == nil {
+			return fallback
+		}
+		// Absolute worst case — return static error JSON.
+		return []byte(`{"error":"json marshaling failed"}`)
+	}
+	return append(data, '\n')
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {

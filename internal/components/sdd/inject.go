@@ -70,44 +70,51 @@ var projectMarkers = []string{
 	".git",
 	"go.mod",
 	"package.json",
+	"pnpm-workspace.yaml",
+	"yarn.lock",
 	"Cargo.toml",
 	"pyproject.toml",
 	"pom.xml",
 	"build.gradle",
+	"composer.json",
+	"deno.json",
+	"deno.jsonc",
 }
 
 // maxAncestorDepth is the maximum number of parent directories findProjectRoot
 // will traverse before giving up. This prevents infinite loops on deeply-nested
 // trees and ensures we stop well before reaching the filesystem root.
-const maxAncestorDepth = 10
+// Increased to 20 to support deeply-nested monorepos.
+const maxAncestorDepth = 20
 
 // findProjectRoot walks upward from dir, checking each level for a known
 // project marker (.git, go.mod, package.json, …). It returns the first
-// matching directory and true. If no root is found within maxAncestorDepth
-// levels, or dir is empty, it returns ("", false).
+// matching directory, the marker that was found, and nil error. If no root
+// is found within maxAncestorDepth levels, or dir is empty, it returns an error.
 //
 // Walking upward means users can run gentle-ai from any subdirectory of their
 // project (e.g. repo/internal/foo) and still get workflow files written to
 // the correct workspace root.
-func findProjectRoot(dir string) (string, bool) {
+func findProjectRoot(dir string) (string, string, error) {
 	if dir == "" {
-		return "", false
+		return "", "", fmt.Errorf("findProjectRoot: empty directory")
 	}
 	current := filepath.Clean(dir)
 	for i := 0; i < maxAncestorDepth; i++ {
 		for _, marker := range projectMarkers {
-			if _, err := os.Stat(filepath.Join(current, marker)); err == nil {
-				return current, true
+			markerPath := filepath.Join(current, marker)
+			if _, err := os.Stat(markerPath); err == nil {
+				return current, marker, nil
 			}
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
 			// Reached filesystem root ("/" on Unix, "C:\" on Windows).
-			return "", false
+			return "", "", fmt.Errorf("findProjectRoot: reached filesystem root without finding project marker")
 		}
 		current = parent
 	}
-	return "", false
+	return "", "", fmt.Errorf("findProjectRoot: exceeded max depth (%d) without finding project marker", maxAncestorDepth)
 }
 
 var (
@@ -335,10 +342,16 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// agent that implements the workflowInjector optional interface).
 	// findProjectRoot walks upward from WorkspaceDir so gentle-ai can be
 	// invoked from any subdirectory (e.g. repo/internal/foo) and still inject
-	// workflows at the real project root. Skips silently if no root is found
+	// workflows at the real project root. Logs a warning if no root is found
 	// (e.g. running from home dir without a project).
 	if wi, ok := adapter.(workflowInjector); ok && wi.SupportsWorkflows() {
-		if projectRoot, found := findProjectRoot(opts.WorkspaceDir); found {
+		projectRoot, marker, err := findProjectRoot(opts.WorkspaceDir)
+		if err != nil {
+			// Log warning but don't fail — workspace detection is optional.
+			fmt.Fprintf(os.Stderr, "WARNING: SDD workflow injection skipped: %v\n", err)
+		} else {
+			// Log detected project root for debugging.
+			fmt.Fprintf(os.Stderr, "INFO: Found project root at %s (marker: %s)\n", projectRoot, marker)
 			workflowsDir := wi.WorkflowsDir(projectRoot)
 			embedDir := wi.EmbeddedWorkflowsDir()
 			entries, readErr := fs.ReadDir(assets.FS, embedDir)

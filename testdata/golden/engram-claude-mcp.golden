@@ -1,4 +1,7 @@
 {
-  "command": "/usr/local/bin/engram",
-  "args": ["mcp", "--tools=agent"]
+  "args": [
+    "mcp",
+    "--tools=agent"
+  ],
+  "command": "/usr/local/bin/engram"
 }
