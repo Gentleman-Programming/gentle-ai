@@ -2,8 +2,10 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -238,9 +240,15 @@ type Model struct {
 
 	// UpgradeErr holds the error from the last upgrade run (nil on success).
 	UpgradeErr error
+
+	// HomeDir is the user's home directory, resolved once at construction.
+	// Used to locate config files (opencode.json, CLAUDE.md) for pre-loading
+	// model picker assignments (issue #115).
+	HomeDir string
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
+	homeDir, _ := os.UserHomeDir()
 	selection := model.Selection{
 		Agents:     preselectedAgents(detection),
 		Persona:    model.PersonaGentleman,
@@ -253,6 +261,7 @@ func NewModel(detection system.DetectionResult, version string) Model {
 		Version:   version,
 		Selection: selection,
 		Detection: detection,
+		HomeDir:   homeDir,
 		Progress: NewProgressState([]string{
 			"Install dependencies",
 			"Configure selected agents",
@@ -669,12 +678,20 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 0: // Configure Claude models
 			m.ModelConfigMode = true
 			m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
+			if existing := readExistingClaudeModelAssignments(m.HomeDir); existing != nil {
+				m.ClaudeModelPicker.Preset = claudeAssignmentsMatchPreset(existing)
+				m.ClaudeModelPicker.CustomAssignments = existing
+				m.Selection.ClaudeModelAssignments = existing
+			}
 			m.setScreen(ScreenClaudeModelPicker)
 		case 1: // Configure OpenCode models
 			m.ModelConfigMode = true
 			cachePath := opencode.DefaultCachePath()
 			if _, err := osStatModelCache(cachePath); err == nil {
 				m.ModelPicker = screens.NewModelPickerState(cachePath)
+				if existing := readExistingOpenCodeModelAssignments(m.HomeDir); existing != nil {
+					m.Selection.ModelAssignments = existing
+				}
 			} else {
 				m.ModelPicker = screens.ModelPickerState{}
 			}
@@ -714,6 +731,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.Selection.Components = componentsForPreset(options[m.Cursor])
 			if m.shouldShowClaudeModelPickerScreen() {
 				m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
+				if existing := readExistingClaudeModelAssignments(m.HomeDir); existing != nil {
+					m.ClaudeModelPicker.Preset = claudeAssignmentsMatchPreset(existing)
+					m.ClaudeModelPicker.CustomAssignments = existing
+					m.Selection.ClaudeModelAssignments = existing
+				}
 				m.setScreen(ScreenClaudeModelPicker)
 				return m, nil
 			}
@@ -741,6 +763,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					// Cache exists — OpenCode has been run at least once.
 					// Show the model picker so the user can assign models.
 					m.ModelPicker = screens.NewModelPickerState(cachePath)
+					if existing := readExistingOpenCodeModelAssignments(m.HomeDir); existing != nil {
+						m.Selection.ModelAssignments = existing
+					}
 					m.setScreen(ScreenModelPicker)
 					return m, nil
 				}
@@ -812,6 +837,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				// Show model picker screens if needed (components are now set).
 				if m.shouldShowClaudeModelPickerScreen() {
 					m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
+					if existing := readExistingClaudeModelAssignments(m.HomeDir); existing != nil {
+						m.ClaudeModelPicker.Preset = claudeAssignmentsMatchPreset(existing)
+						m.ClaudeModelPicker.CustomAssignments = existing
+						m.Selection.ClaudeModelAssignments = existing
+					}
 					m.setScreen(ScreenClaudeModelPicker)
 					return m, nil
 				}
@@ -1451,4 +1481,162 @@ func hasSelectedComponent(components []model.ComponentID, target model.Component
 		}
 	}
 	return false
+}
+
+// ─── Model picker pre-loading (issue #115) ──────────────────────────────
+
+// readExistingOpenCodeModelAssignments reads ~/.config/opencode/opencode.json
+// and extracts the "model" field from each SDD agent entry under the "agent"
+// map. Returns a map of phase name → ModelAssignment (provider/model-id).
+// Returns nil if the file does not exist or has no agent model assignments.
+func readExistingOpenCodeModelAssignments(homeDir string) map[string]model.ModelAssignment {
+	path := filepath.Join(homeDir, ".config", "opencode", "opencode.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil
+	}
+
+	agentRaw, ok := root["agent"]
+	if !ok {
+		return nil
+	}
+	agentMap, ok := agentRaw.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	assignments := make(map[string]model.ModelAssignment)
+	for name, entryRaw := range agentMap {
+		entry, ok := entryRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		modelVal, ok := entry["model"].(string)
+		if !ok || modelVal == "" {
+			continue
+		}
+		// Split "provider/model-id" into ProviderID and ModelID.
+		parts := strings.SplitN(modelVal, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		assignments[name] = model.ModelAssignment{
+			ProviderID: parts[0],
+			ModelID:    parts[1],
+		}
+	}
+
+	if len(assignments) == 0 {
+		return nil
+	}
+	return assignments
+}
+
+// claudeModelAssignmentMarkers are the HTML comments that delimit the model
+// assignment table inside CLAUDE.md.
+const (
+	claudeModelOpenMarker  = "<!-- gentle-ai:sdd-model-assignments -->"
+	claudeModelCloseMarker = "<!-- /gentle-ai:sdd-model-assignments -->"
+)
+
+// readExistingClaudeModelAssignments reads ~/.claude/CLAUDE.md and extracts
+// the model assignment table between the gentle-ai markers. Returns a map of
+// phase name → ClaudeModelAlias. Returns nil if the file or markers are missing.
+func readExistingClaudeModelAssignments(homeDir string) map[string]model.ClaudeModelAlias {
+	path := filepath.Join(homeDir, ".claude", "CLAUDE.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	content := string(data)
+	start := strings.Index(content, claudeModelOpenMarker)
+	end := strings.Index(content, claudeModelCloseMarker)
+	if start == -1 || end == -1 || end < start {
+		return nil
+	}
+
+	// Extract the section between markers.
+	section := content[start+len(claudeModelOpenMarker) : end]
+
+	assignments := make(map[string]model.ClaudeModelAlias)
+	// Each row looks like: | phase | model | reason |
+	lines := strings.Split(section, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") {
+			continue
+		}
+		// Skip header and separator rows.
+		if strings.Contains(line, "---") || strings.Contains(line, "Phase") {
+			continue
+		}
+		cells := strings.Split(line, "|")
+		if len(cells) < 3 {
+			continue
+		}
+		phase := strings.TrimSpace(cells[1])
+		alias := strings.TrimSpace(cells[2])
+		if phase == "" {
+			continue
+		}
+		a := model.ClaudeModelAlias(alias)
+		if a.Valid() {
+			assignments[phase] = a
+		}
+	}
+
+	if len(assignments) == 0 {
+		return nil
+	}
+	return assignments
+}
+
+// claudeAssignmentsMatchPreset checks whether the given assignments map
+// exactly matches a known preset. Returns the matching preset name, or empty
+// string if no match (meaning custom assignments).
+func claudeAssignmentsMatchPreset(assignments map[string]model.ClaudeModelAlias) screens.ClaudeModelPreset {
+	presets := []struct {
+		name  screens.ClaudeModelPreset
+		build func() map[string]model.ClaudeModelAlias
+	}{
+		{screens.ClaudePresetBalanced, model.ClaudeModelPresetBalanced},
+		{screens.ClaudePresetPerformance, model.ClaudeModelPresetPerformance},
+		{screens.ClaudePresetEconomy, model.ClaudeModelPresetEconomy},
+	}
+
+	for _, p := range presets {
+		candidate := p.build()
+		if mapsEqual(assignments, candidate) {
+			return p.name
+		}
+	}
+	return screens.ClaudePresetCustom
+}
+
+func mapsEqual[K, V comparable](a, b map[K]V) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// opencodeSettingsPath returns the path to the opencode.json settings file.
+func opencodeSettingsPath(homeDir string) string {
+	return filepath.Join(homeDir, ".config", "opencode", "opencode.json")
+}
+
+// claudeSystemPromptPath returns the path to the CLAUDE.md system prompt file.
+func claudeSystemPromptPath(homeDir string) string {
+	return filepath.Join(homeDir, ".claude", "CLAUDE.md")
 }

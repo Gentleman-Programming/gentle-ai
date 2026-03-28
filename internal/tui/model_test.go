@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -1220,6 +1221,160 @@ func TestPreselectedAgents_AllSixAgentsMappedCorrectly(t *testing.T) {
 			if len(selected) != 1 {
 				t.Errorf("preselectedAgents() returned %d agents, want 1 (only %q detected); got %v",
 					len(selected), tt.configAgent, selected)
+			}
+		})
+	}
+}
+
+// ─── Model picker pre-loading tests (issue #115) ────────────────────────
+
+func TestReadExistingOpenCodeModelAssignments(t *testing.T) {
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// No file yet → nil.
+	assignments := readExistingOpenCodeModelAssignments(home)
+	if assignments != nil {
+		t.Fatalf("expected nil when file missing, got %v", assignments)
+	}
+
+	// Write a config with SDD agent model assignments.
+	config := `{
+  "model": "anthropic/claude-sonnet-4-20250514",
+  "agent": {
+    "sdd-orchestrator": {"mode": "primary", "model": "anthropic/claude-opus-4-6"},
+    "sdd-init": {"mode": "subagent", "model": "openai/gpt-4o"},
+    "sdd-apply": {"mode": "subagent", "model": "google/gemini-2.5-pro"},
+    "other-agent": {"mode": "subagent"}
+  }
+}`
+	path := filepath.Join(configDir, "opencode.json")
+	if err := os.WriteFile(path, []byte(config), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	assignments = readExistingOpenCodeModelAssignments(home)
+	if assignments == nil {
+		t.Fatalf("expected non-nil assignments")
+	}
+
+	// sdd-orchestrator → anthropic/claude-opus-4-6
+	if a, ok := assignments["sdd-orchestrator"]; !ok {
+		t.Error("missing sdd-orchestrator")
+	} else if a.ProviderID != "anthropic" || a.ModelID != "claude-opus-4-6" {
+		t.Errorf("sdd-orchestrator = %s/%s, want anthropic/claude-opus-4-6", a.ProviderID, a.ModelID)
+	}
+
+	// sdd-init → openai/gpt-4o
+	if a, ok := assignments["sdd-init"]; !ok {
+		t.Error("missing sdd-init")
+	} else if a.ProviderID != "openai" || a.ModelID != "gpt-4o" {
+		t.Errorf("sdd-init = %s/%s, want openai/gpt-4o", a.ProviderID, a.ModelID)
+	}
+
+	// other-agent has no model field → should be skipped.
+	if _, ok := assignments["other-agent"]; ok {
+		t.Error("other-agent should be skipped (no model field)")
+	}
+}
+
+func TestReadExistingClaudeModelAssignments(t *testing.T) {
+	home := t.TempDir()
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// No file yet → nil.
+	assignments := readExistingClaudeModelAssignments(home)
+	if assignments != nil {
+		t.Fatalf("expected nil when file missing, got %v", assignments)
+	}
+
+	// Write CLAUDE.md with model assignment table (balanced preset).
+	content := `# CLAUDE.md
+
+Some intro text.
+
+<!-- gentle-ai:sdd-model-assignments -->
+## Model Assignments
+
+| Phase | Default Model | Reason |
+|-------|---------------|--------|
+| orchestrator | opus | Coordinates |
+| sdd-explore | sonnet | Reads code |
+| sdd-propose | opus | Architecture |
+| sdd-spec | sonnet | Writing |
+| sdd-design | opus | Architecture |
+| sdd-tasks | sonnet | Breakdown |
+| sdd-apply | sonnet | Implementation |
+| sdd-verify | sonnet | Validation |
+| sdd-archive | haiku | Copy and close |
+| default | sonnet | General delegation |
+
+<!-- /gentle-ai:sdd-model-assignments -->
+`
+	path := filepath.Join(claudeDir, "CLAUDE.md")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	assignments = readExistingClaudeModelAssignments(home)
+	if assignments == nil {
+		t.Fatalf("expected non-nil assignments")
+	}
+
+	// Verify balanced preset values.
+	if assignments["orchestrator"] != model.ClaudeModelOpus {
+		t.Errorf("orchestrator = %q, want opus", assignments["orchestrator"])
+	}
+	if assignments["sdd-explore"] != model.ClaudeModelSonnet {
+		t.Errorf("sdd-explore = %q, want sonnet", assignments["sdd-explore"])
+	}
+	if assignments["sdd-archive"] != model.ClaudeModelHaiku {
+		t.Errorf("sdd-archive = %q, want haiku", assignments["sdd-archive"])
+	}
+	if assignments["default"] != model.ClaudeModelSonnet {
+		t.Errorf("default = %q, want sonnet", assignments["default"])
+	}
+}
+
+func TestClaudeAssignmentsMatchPreset(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  map[string]model.ClaudeModelAlias
+		expect screens.ClaudeModelPreset
+	}{
+		{
+			name:   "balanced matches",
+			input:  model.ClaudeModelPresetBalanced(),
+			expect: screens.ClaudePresetBalanced,
+		},
+		{
+			name:   "performance matches",
+			input:  model.ClaudeModelPresetPerformance(),
+			expect: screens.ClaudePresetPerformance,
+		},
+		{
+			name:   "economy matches",
+			input:  model.ClaudeModelPresetEconomy(),
+			expect: screens.ClaudePresetEconomy,
+		},
+		{
+			name:   "custom does not match any preset",
+			input:  map[string]model.ClaudeModelAlias{"orchestrator": model.ClaudeModelOpus, "sdd-explore": model.ClaudeModelHaiku},
+			expect: screens.ClaudePresetCustom,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := claudeAssignmentsMatchPreset(tt.input)
+			if got != tt.expect {
+				t.Errorf("got %q, want %q", got, tt.expect)
 			}
 		})
 	}
