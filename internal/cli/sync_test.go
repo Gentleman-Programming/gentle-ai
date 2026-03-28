@@ -993,6 +993,175 @@ func containsAny(s string, subs ...string) bool {
 	return false
 }
 
+// ─── T21: RunSyncWithSelection ─────────────────────────────────────────────
+
+// TestRunSyncWithSelection_NoAgentsIsNoOp verifies that providing an empty
+// agent list returns a no-op result without error.
+func TestRunSyncWithSelection_NoAgentsIsNoOp(t *testing.T) {
+	home := t.TempDir()
+
+	sel := model.Selection{
+		Agents:     nil,
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram},
+	}
+
+	result, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() with no agents: error = %v", err)
+	}
+	if !result.NoOp {
+		t.Errorf("RunSyncWithSelection() with no agents: NoOp = false, want true")
+	}
+}
+
+// TestRunSyncWithSelection_WritesExpectedFiles verifies that the function
+// creates managed asset files for the provided agents and components.
+func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
+	home := t.TempDir()
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	sel := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram, model.ComponentContext7, model.ComponentGGA, model.ComponentSkills},
+		SDDMode:    model.SDDModeSingle,
+	}
+
+	result, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	if !result.Verify.Ready {
+		t.Fatalf("Verify.Ready = false, report = %#v", result.Verify)
+	}
+
+	// SDD assets should exist for opencode.
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if _, err := os.Stat(settingsPath); err != nil {
+		t.Errorf("expected SDD inject to create %q: %v", settingsPath, err)
+	}
+}
+
+// TestRunSyncWithSelection_FilesChangedOnFreshHome verifies that syncing a
+// fresh home dir results in FilesChanged > 0.
+func TestRunSyncWithSelection_FilesChangedOnFreshHome(t *testing.T) {
+	home := t.TempDir()
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	sel := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram, model.ComponentContext7, model.ComponentGGA, model.ComponentSkills},
+		SDDMode:    model.SDDModeSingle,
+	}
+
+	result, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	if result.FilesChanged == 0 {
+		t.Errorf("RunSyncWithSelection() on fresh home: FilesChanged = 0, want > 0")
+	}
+}
+
+// TestRunSyncWithSelection_IsIdempotent verifies that running twice produces
+// FilesChanged=0 on the second run (all assets already current).
+func TestRunSyncWithSelection_IsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	sel := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram, model.ComponentContext7, model.ComponentGGA, model.ComponentSkills},
+		SDDMode:    model.SDDModeSingle,
+	}
+
+	// Run 1: files written.
+	result1, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() run1 error = %v", err)
+	}
+	if result1.FilesChanged == 0 {
+		t.Fatalf("run 1: FilesChanged = 0, expected > 0")
+	}
+
+	// Run 2: nothing changed.
+	result2, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() run2 error = %v", err)
+	}
+	if result2.FilesChanged != 0 {
+		t.Errorf("run 2: FilesChanged = %d, want 0 (idempotent)", result2.FilesChanged)
+	}
+	if !result2.NoOp {
+		t.Errorf("run 2: NoOp = false, want true (all assets already current)")
+	}
+}
+
+// TestRunSyncWithSelection_SelectionAgentsForwarded verifies that the agents in
+// the selection are reflected in the result.
+func TestRunSyncWithSelection_SelectionAgentsForwarded(t *testing.T) {
+	home := t.TempDir()
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	sel := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram, model.ComponentContext7, model.ComponentGGA, model.ComponentSkills},
+	}
+
+	result, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	if len(result.Agents) == 0 {
+		t.Errorf("RunSyncWithSelection() result.Agents is empty, want agents forwarded")
+	}
+
+	found := false
+	for _, id := range result.Agents {
+		if id == model.AgentOpenCode {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("RunSyncWithSelection() result.Agents should contain opencode; got %v", result.Agents)
+	}
+}
+
 // ─── State-aware DiscoverAgents ────────────────────────────────────────────
 
 // TestDiscoverAgentsUsesStateFileWhenPresent verifies that DiscoverAgents

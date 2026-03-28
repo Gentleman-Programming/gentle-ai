@@ -22,6 +22,13 @@ var linearRoutes = map[Screen]Route{
 	ScreenBackups:           {Backward: ScreenWelcome},
 	ScreenRestoreConfirm:    {Backward: ScreenBackups},
 	ScreenRestoreResult:     {Backward: ScreenBackups},
+	ScreenDeleteConfirm:     {Backward: ScreenBackups},
+	ScreenDeleteResult:      {Backward: ScreenBackups},
+	ScreenRenameBackup:      {Backward: ScreenBackups},
+	ScreenUpgrade:           {Backward: ScreenWelcome},
+	ScreenSync:              {Backward: ScreenWelcome},
+	ScreenUpgradeSync:       {Backward: ScreenWelcome},
+	ScreenModelConfig:       {Backward: ScreenWelcome},
 }
 
 func NextScreen(screen Screen) (Screen, bool) {

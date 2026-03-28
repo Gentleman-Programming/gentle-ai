@@ -17,10 +17,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
 )
-
-// spinnerFrames are the braille characters used for the animated spinner.
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // osStatModelCache is a package-level variable so tests can override it to
 // simulate a missing or present OpenCode model cache file.
@@ -57,6 +55,33 @@ type UpdateCheckResultMsg struct {
 	Results []update.UpdateResult
 }
 
+// UpgradeDoneMsg is sent when the upgrade operation completes.
+type UpgradeDoneMsg struct {
+	Report upgrade.UpgradeReport
+	Err    error
+}
+
+// SyncDoneMsg is sent when the sync operation completes.
+type SyncDoneMsg struct {
+	FilesChanged int
+	Err          error
+}
+
+// UpgradePhaseCompletedMsg is sent by startUpgradeSync when the upgrade phase
+// finishes (before the sync phase begins). This enables the intermediate "sync
+// running" state to be displayed.
+type UpgradePhaseCompletedMsg struct {
+	Report upgrade.UpgradeReport
+	Err    error
+}
+
+// UpgradeFunc is the signature of the function injected to perform tool upgrades.
+type UpgradeFunc func(ctx context.Context, results []update.UpdateResult) upgrade.UpgradeReport
+
+// SyncFunc is the signature of the function injected to perform config sync.
+// Returns the number of files changed and any error.
+type SyncFunc func() (int, error)
+
 // ExecuteFunc builds and runs the installation pipeline. It receives a ProgressFunc
 // callback to emit step-level progress events, and returns the ExecutionResult.
 type ExecuteFunc func(
@@ -68,6 +93,12 @@ type ExecuteFunc func(
 
 // RestoreFunc restores a backup from a manifest.
 type RestoreFunc func(manifest backup.Manifest) error
+
+// DeleteBackupFunc deletes the entire backup directory.
+type DeleteBackupFunc func(manifest backup.Manifest) error
+
+// RenameBackupFunc updates the backup's Description field in its manifest file.
+type RenameBackupFunc func(manifest backup.Manifest, newDescription string) error
 
 // ListBackupsFn returns the current list of available backups.
 // When nil, the backup list is not refreshed after restore.
@@ -93,6 +124,13 @@ const (
 	ScreenBackups
 	ScreenRestoreConfirm
 	ScreenRestoreResult
+	ScreenDeleteConfirm
+	ScreenDeleteResult
+	ScreenRenameBackup
+	ScreenUpgrade
+	ScreenSync
+	ScreenUpgradeSync
+	ScreenModelConfig
 )
 
 type Model struct {
@@ -124,12 +162,31 @@ type Model struct {
 	// Nil on success, non-nil on failure. Displayed on ScreenRestoreResult.
 	RestoreErr error
 
+	// DeleteErr holds the error from the most recent delete attempt.
+	// Nil on success, non-nil on failure. Displayed on ScreenDeleteResult.
+	DeleteErr error
+
+	// BackupScroll is the scroll offset for the backup list.
+	BackupScroll int
+
+	// BackupRenameText is the text input buffer for rename operations.
+	BackupRenameText string
+
+	// BackupRenamePos is the cursor position within BackupRenameText.
+	BackupRenamePos int
+
 	// ExecuteFn is called to run the real pipeline. When nil, the installing
 	// screen falls back to manual step-through (useful for tests/development).
 	ExecuteFn ExecuteFunc
 
 	// RestoreFn is called to restore a backup. When nil, restore is a no-op.
 	RestoreFn RestoreFunc
+
+	// DeleteBackupFn is called to delete a backup directory.
+	DeleteBackupFn DeleteBackupFunc
+
+	// RenameBackupFn is called to rename (update description of) a backup.
+	RenameBackupFn RenameBackupFunc
 
 	// ListBackupsFn refreshes the backup list (e.g. after a restore).
 	// When nil, the backup list is not refreshed automatically.
@@ -143,6 +200,44 @@ type Model struct {
 
 	// pipelineRunning tracks whether the pipeline goroutine is active.
 	pipelineRunning bool
+
+	// TUI operations — set by startUpgrade / startSync / startUpgradeSync goroutines.
+
+	// UpgradeReport holds the result of the last upgrade run.
+	// nil means the upgrade has not been run yet or is currently running.
+	UpgradeReport *upgrade.UpgradeReport
+
+	// SyncFilesChanged holds the number of files changed during the last sync run.
+	SyncFilesChanged int
+
+	// SyncErr holds the error from the last sync run (nil on success).
+	SyncErr error
+
+	// UpgradeFn is injected at construction time and called to perform upgrades.
+	UpgradeFn UpgradeFunc
+
+	// SyncFn is injected at construction time and called to perform config sync.
+	SyncFn SyncFunc
+
+	// ModelConfigMode is true when the model pickers were reached via the
+	// Model Config shortcut, so they return to ScreenWelcome instead of
+	// continuing the install flow.
+	ModelConfigMode bool
+
+	// OperationRunning is true while an upgrade/sync/upgrade-sync goroutine is
+	// executing. Prevents concurrent operation launches.
+	OperationRunning bool
+
+	// OperationMode records which operation is running or was last run.
+	// Values: "upgrade", "sync", "upgrade-sync".
+	OperationMode string
+
+	// HasSyncRun is true once a sync or upgrade-sync operation has completed.
+	// It distinguishes "sync hasn't run yet" (false) from "sync ran with 0 changes" (true, filesChanged=0).
+	HasSyncRun bool
+
+	// UpgradeErr holds the error from the last upgrade run (nil on success).
+	UpgradeErr error
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -186,7 +281,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case TickMsg:
 		if m.Screen == ScreenInstalling && !m.Progress.Done() {
-			m.SpinnerFrame = (m.SpinnerFrame + 1) % len(spinnerFrames)
+			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
+			return m, tickCmd()
+		}
+		// Keep spinner running for operation screens.
+		if m.OperationRunning || (m.Screen == ScreenUpgrade && !m.UpdateCheckDone) ||
+			(m.Screen == ScreenUpgradeSync && !m.UpdateCheckDone) {
+			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
 			return m, tickCmd()
 		}
 		return m, nil
@@ -200,7 +301,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.UpdateResults = msg.Results
 		m.UpdateCheckDone = true
 		return m, nil
+	case UpgradeDoneMsg:
+		m.OperationRunning = false
+		m.UpgradeErr = msg.Err
+		if msg.Err == nil {
+			report := msg.Report
+			m.UpgradeReport = &report
+		}
+		return m, nil
+	case SyncDoneMsg:
+		m.OperationRunning = false
+		m.SyncFilesChanged = msg.FilesChanged
+		m.SyncErr = msg.Err
+		m.HasSyncRun = true
+		return m, nil
+	case UpgradePhaseCompletedMsg:
+		// Upgrade phase done; sync phase is about to start (OperationRunning stays true).
+		m.UpgradeErr = msg.Err
+		if msg.Err == nil {
+			report := msg.Report
+			m.UpgradeReport = &report
+		}
+		return m, nil
 	case tea.KeyMsg:
+		if m.Screen == ScreenRenameBackup {
+			return m.handleRenameInput(msg)
+		}
 		return m.handleKeyPress(msg)
 	}
 
@@ -288,7 +414,15 @@ func (m Model) View() string {
 		if m.UpdateCheckDone && update.HasUpdates(m.UpdateResults) {
 			banner = "Updates available: " + update.UpdateSummaryLine(m.UpdateResults)
 		}
-		return screens.RenderWelcome(m.Cursor, m.Version, banner)
+		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone)
+	case ScreenUpgrade:
+		return screens.RenderUpgrade(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
+	case ScreenSync:
+		return screens.RenderSync(m.SyncFilesChanged, m.SyncErr, m.OperationRunning, m.HasSyncRun, m.SpinnerFrame)
+	case ScreenModelConfig:
+		return screens.RenderModelConfig(m.Cursor)
+	case ScreenUpgradeSync:
+		return screens.RenderUpgradeSync(m.UpdateResults, m.UpgradeReport, m.SyncFilesChanged, m.UpgradeErr, m.SyncErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenDetection:
 		return screens.RenderDetection(m.Detection, m.Cursor)
 	case ScreenAgents:
@@ -310,7 +444,7 @@ func (m Model) View() string {
 	case ScreenReview:
 		return screens.RenderReview(m.Review, m.Cursor)
 	case ScreenInstalling:
-		return screens.RenderInstalling(m.Progress.ViewModel(), spinnerFrames[m.SpinnerFrame])
+		return screens.RenderInstalling(m.Progress.ViewModel(), screens.SpinnerChar(m.SpinnerFrame))
 	case ScreenComplete:
 		return screens.RenderComplete(screens.CompletePayload{
 			ConfiguredAgents:    len(m.Selection.Agents),
@@ -322,11 +456,17 @@ func (m Model) View() string {
 			AvailableUpdates:    extractAvailableUpdates(m.UpdateResults),
 		})
 	case ScreenBackups:
-		return screens.RenderBackups(m.Backups, m.Cursor)
+		return screens.RenderBackups(m.Backups, m.Cursor, m.BackupScroll)
 	case ScreenRestoreConfirm:
 		return screens.RenderRestoreConfirm(m.SelectedBackup, m.Cursor)
 	case ScreenRestoreResult:
 		return screens.RenderRestoreResult(m.SelectedBackup, m.RestoreErr)
+	case ScreenDeleteConfirm:
+		return screens.RenderDeleteConfirm(m.SelectedBackup, m.Cursor)
+	case ScreenDeleteResult:
+		return screens.RenderDeleteResult(m.SelectedBackup, m.DeleteErr)
+	case ScreenRenameBackup:
+		return screens.RenderRenameBackup(m.SelectedBackup, m.BackupRenameText, m.BackupRenamePos)
 	default:
 		return ""
 	}
@@ -349,13 +489,19 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if handled {
 			if updated != nil {
 				m.Selection.ClaudeModelAssignments = updated
-				if m.shouldShowSDDModeScreen() {
+				// In ModelConfigMode, return to ScreenModelConfig instead of continuing install flow.
+				if m.ModelConfigMode {
+					m.ModelConfigMode = false
+					m.setScreen(ScreenModelConfig)
+				} else if m.shouldShowSDDModeScreen() {
 					m.setScreen(ScreenSDDMode)
 				} else if m.Selection.Preset == model.PresetCustom {
 					// Custom preset: dependency plan was already built before model picker.
 					// Check skill picker before going to review.
 					if m.shouldShowSkillPickerScreen() {
-						m.initSkillPicker()
+						if len(m.SkillPicker) == 0 {
+							m.initSkillPicker()
+						}
 						m.setScreen(ScreenSkillPicker)
 					} else {
 						m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
@@ -377,10 +523,22 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.Cursor > 0 {
 			m.Cursor--
 		}
+		// Adjust scroll for the backup list.
+		if m.Screen == ScreenBackups {
+			if m.Cursor < m.BackupScroll {
+				m.BackupScroll = m.Cursor
+			}
+		}
 		return m, nil
 	case "down", "j":
 		if m.Cursor+1 < m.optionCount() {
 			m.Cursor++
+		}
+		// Adjust scroll for the backup list.
+		if m.Screen == ScreenBackups {
+			if m.Cursor >= m.BackupScroll+screens.BackupMaxVisible {
+				m.BackupScroll = m.Cursor - screens.BackupMaxVisible + 1
+			}
 		}
 		return m, nil
 	case "esc":
@@ -401,6 +559,22 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toggleCurrentSkill()
 		}
 		return m, nil
+	case "r":
+		// Rename: only when on ScreenBackups and cursor is on a backup item (not "Back").
+		if m.Screen == ScreenBackups && m.Cursor < len(m.Backups) {
+			m.SelectedBackup = m.Backups[m.Cursor]
+			m.BackupRenameText = m.SelectedBackup.Description
+			m.BackupRenamePos = len([]rune(m.SelectedBackup.Description))
+			m.setScreen(ScreenRenameBackup)
+			return m, nil
+		}
+	case "d":
+		// Delete: only when on ScreenBackups and cursor is on a backup item (not "Back").
+		if m.Screen == ScreenBackups && m.Cursor < len(m.Backups) {
+			m.SelectedBackup = m.Backups[m.Cursor]
+			m.setScreen(ScreenDeleteConfirm)
+			return m, nil
+		}
 	case "enter":
 		return m.confirmSelection()
 	}
@@ -415,10 +589,102 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 0:
 			m.setScreen(ScreenDetection)
 		case 1:
+			m = m.withResetOperationState()
+			m.setScreen(ScreenUpgrade)
+			// Start spinner for update check waiting state.
+			if !m.UpdateCheckDone {
+				return m, tickCmd()
+			}
+		case 2:
+			m = m.withResetOperationState()
+			m.setScreen(ScreenSync)
+		case 3:
+			m = m.withResetOperationState()
+			m.setScreen(ScreenUpgradeSync)
+			// Start spinner for update check waiting state.
+			if !m.UpdateCheckDone {
+				return m, tickCmd()
+			}
+		case 4:
+			m.setScreen(ScreenModelConfig)
+		case 5:
 			m.setScreen(ScreenBackups)
-		default:
+		case 6:
 			return m, tea.Quit
 		}
+	case ScreenUpgrade:
+		// Guard: don't re-launch while running.
+		if m.OperationRunning {
+			return m, nil
+		}
+		// If showing results (UpgradeReport != nil or UpgradeErr != nil), return to welcome.
+		if m.UpgradeReport != nil || m.UpgradeErr != nil {
+			m = m.withResetOperationState()
+			m.setScreen(ScreenWelcome)
+			return m, nil
+		}
+		// If update check is not done yet, no-op.
+		if !m.UpdateCheckDone {
+			return m, nil
+		}
+		// If no updates available, just return to welcome.
+		if !update.HasUpdates(m.UpdateResults) {
+			m.setScreen(ScreenWelcome)
+			return m, nil
+		}
+		// Start upgrade.
+		m.OperationRunning = true
+		m.OperationMode = "upgrade"
+		return m, tea.Batch(tickCmd(), m.startUpgrade())
+	case ScreenSync:
+		// Guard: don't re-launch while running.
+		if m.OperationRunning {
+			return m, nil
+		}
+		// If sync already ran, return to welcome.
+		if m.HasSyncRun {
+			m = m.withResetOperationState()
+			m.setScreen(ScreenWelcome)
+			return m, nil
+		}
+		// Start sync.
+		m.OperationRunning = true
+		m.OperationMode = "sync"
+		return m, tea.Batch(tickCmd(), m.startSync())
+	case ScreenUpgradeSync:
+		// Guard: don't re-launch while running.
+		if m.OperationRunning {
+			return m, nil
+		}
+		// If operations are done, return to welcome.
+		if m.HasSyncRun || m.UpgradeReport != nil || m.UpgradeErr != nil {
+			m = m.withResetOperationState()
+			m.setScreen(ScreenWelcome)
+			return m, nil
+		}
+		// Start upgrade+sync.
+		m.OperationRunning = true
+		m.OperationMode = "upgrade-sync"
+		return m, tea.Batch(tickCmd(), m.startUpgradeSync())
+	case ScreenModelConfig:
+		switch m.Cursor {
+		case 0: // Configure Claude models
+			m.ModelConfigMode = true
+			m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
+			m.setScreen(ScreenClaudeModelPicker)
+		case 1: // Configure OpenCode models
+			m.ModelConfigMode = true
+			cachePath := opencode.DefaultCachePath()
+			if _, err := osStatModelCache(cachePath); err == nil {
+				m.ModelPicker = screens.NewModelPickerState(cachePath)
+			} else {
+				m.ModelPicker = screens.ModelPickerState{}
+			}
+			m.setScreen(ScreenModelPicker)
+		default: // Back
+			m.setScreen(ScreenWelcome)
+		}
+		return m, nil
 	case ScreenDetection:
 		if m.Cursor == 0 {
 			m.setScreen(ScreenAgents)
@@ -464,7 +730,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		m.setScreen(ScreenPersona)
 	case ScreenClaudeModelPicker:
 		if !m.ClaudeModelPicker.InCustomMode && m.Cursor == screens.ClaudeModelPickerOptionCount(m.ClaudeModelPicker)-1 {
-			m.setScreen(ScreenPreset)
+			if m.Selection.Preset == model.PresetCustom {
+				m.setScreen(ScreenDependencyTree)
+			} else {
+				m.setScreen(ScreenPreset)
+			}
 			return m, nil
 		}
 	case ScreenSDDMode:
@@ -477,6 +747,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					// Cache exists — OpenCode has been run at least once.
 					// Show the model picker so the user can assign models.
 					m.ModelPicker = screens.NewModelPickerState(cachePath)
+					m.Selection.ModelAssignments = nil
 					m.setScreen(ScreenModelPicker)
 					return m, nil
 				}
@@ -484,21 +755,53 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				// Skip the model picker; models will use OpenCode defaults.
 				// The picker empty-state message explains what to do after install.
 				m.ModelPicker = screens.ModelPickerState{}
-				m.Selection.ModelAssignments = nil
+			}
+			// Clear assignments for both single mode and multi-no-cache paths.
+			m.Selection.ModelAssignments = nil
+			if m.Selection.Preset == model.PresetCustom {
+				// Custom preset: dependency plan was already built before SDD mode.
+				// Check skill picker before going to review.
+				if m.shouldShowSkillPickerScreen() {
+					if len(m.SkillPicker) == 0 {
+						m.initSkillPicker()
+					}
+					m.setScreen(ScreenSkillPicker)
+				} else {
+					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+					m.setScreen(ScreenReview)
+				}
+			} else {
 				m.buildDependencyPlan()
 				m.setScreen(ScreenDependencyTree)
-				return m, nil
 			}
-			m.Selection.ModelAssignments = nil
-			m.buildDependencyPlan()
-			m.setScreen(ScreenDependencyTree)
 			return m, nil
 		}
-		m.setScreen(ScreenPreset)
+		// Back — in custom preset, return to ClaudeModelPicker if applicable,
+		// otherwise DependencyTree (component selector).
+		// NOTE: SDDMode back logic is also in goBack() — keep in sync.
+		if m.Selection.Preset == model.PresetCustom {
+			if m.shouldShowClaudeModelPickerScreen() {
+				m.setScreen(ScreenClaudeModelPicker)
+			} else {
+				m.setScreen(ScreenDependencyTree)
+			}
+		} else {
+			// NOTE: Back logic also in goBack() — keep in sync.
+			if m.shouldShowClaudeModelPickerScreen() {
+				m.setScreen(ScreenClaudeModelPicker)
+			} else {
+				m.setScreen(ScreenPreset)
+			}
+		}
 	case ScreenModelPicker:
 		// When no providers are detected the screen only shows a "Back" option
 		// at cursor 0.  Handle that before the normal row logic.
 		if len(m.ModelPicker.AvailableIDs) == 0 {
+			if m.ModelConfigMode {
+				m.ModelConfigMode = false
+				m.setScreen(ScreenModelConfig)
+				return m, nil
+			}
 			// Go back to SDD mode so the user can switch to single mode.
 			m.setScreen(ScreenSDDMode)
 			return m, nil
@@ -514,12 +817,37 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		// After the rows: Continue (cursor == len(rows)), Back (cursor == len(rows)+1).
 		if m.Cursor == len(rows) {
-			// Continue -> proceed to dependency tree.
-			m.buildDependencyPlan()
-			m.setScreen(ScreenDependencyTree)
+			// In ModelConfigMode, return to ScreenModelConfig instead of continuing install flow.
+			if m.ModelConfigMode {
+				m.ModelConfigMode = false
+				m.setScreen(ScreenModelConfig)
+				return m, nil
+			}
+			if m.Selection.Preset == model.PresetCustom {
+				// Custom preset: dependency plan was already built before SDD mode.
+				// Check skill picker before going to review.
+				if m.shouldShowSkillPickerScreen() {
+					if len(m.SkillPicker) == 0 {
+						m.initSkillPicker()
+					}
+					m.setScreen(ScreenSkillPicker)
+				} else {
+					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+					m.setScreen(ScreenReview)
+				}
+			} else {
+				// Continue -> proceed to dependency tree.
+				m.buildDependencyPlan()
+				m.setScreen(ScreenDependencyTree)
+			}
 			return m, nil
 		}
-		// Back -> return to SDD mode screen.
+		// Back -> return to SDD mode screen (or ModelConfig in shortcut mode).
+		if m.ModelConfigMode {
+			m.ModelConfigMode = false
+			m.setScreen(ScreenModelConfig)
+			return m, nil
+		}
 		m.setScreen(ScreenSDDMode)
 	case ScreenDependencyTree:
 		if m.Selection.Preset == model.PresetCustom {
@@ -541,7 +869,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				}
 				// Show skill picker if Skills component is selected.
 				if m.shouldShowSkillPickerScreen() {
-					m.initSkillPicker()
+					if len(m.SkillPicker) == 0 {
+						m.initSkillPicker()
+					}
 					m.setScreen(ScreenSkillPicker)
 					return m, nil
 				}
@@ -557,7 +887,23 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenReview)
 			return m, nil
 		}
-		m.setScreen(ScreenPreset)
+		// NOTE: Back logic also in goBack() — keep in sync.
+		if m.shouldShowSDDModeScreen() {
+			if m.Selection.SDDMode == model.SDDModeMulti {
+				cachePath := opencode.DefaultCachePath()
+				if _, err := osStatModelCache(cachePath); err == nil {
+					m.setScreen(ScreenModelPicker)
+				} else {
+					m.setScreen(ScreenSDDMode)
+				}
+			} else {
+				m.setScreen(ScreenSDDMode)
+			}
+		} else if m.shouldShowClaudeModelPickerScreen() {
+			m.setScreen(ScreenClaudeModelPicker)
+		} else {
+			m.setScreen(ScreenPreset)
+		}
 	case ScreenSkillPicker:
 		allSkills := screens.AllSkillsOrdered()
 		switch {
@@ -570,14 +916,58 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
 			m.setScreen(ScreenReview)
 		default:
-			// "Back" — return to dependency tree.
-			m.setScreen(ScreenDependencyTree)
+			// "Back" — in custom preset, return to the screen that preceded SkillPicker.
+			if m.Selection.Preset == model.PresetCustom {
+				if m.shouldShowSDDModeScreen() {
+					if m.Selection.SDDMode == model.SDDModeMulti {
+						cachePath := opencode.DefaultCachePath()
+						if _, err := osStatModelCache(cachePath); err == nil {
+							m.setScreen(ScreenModelPicker)
+						} else {
+							m.setScreen(ScreenSDDMode)
+						}
+					} else {
+						m.setScreen(ScreenSDDMode)
+					}
+				} else if m.shouldShowClaudeModelPickerScreen() {
+					m.setScreen(ScreenClaudeModelPicker)
+				} else {
+					m.setScreen(ScreenDependencyTree)
+				}
+			} else {
+				m.setScreen(ScreenDependencyTree)
+			}
 		}
 	case ScreenReview:
 		if m.Cursor == 0 {
 			return m.startInstalling()
 		}
-		m.setScreen(ScreenDependencyTree)
+		// Back — in custom preset, walk back through the screens that were shown.
+		if m.Selection.Preset == model.PresetCustom {
+			if m.shouldShowSkillPickerScreen() {
+				if len(m.SkillPicker) == 0 {
+					m.initSkillPicker()
+				}
+				m.setScreen(ScreenSkillPicker)
+			} else if m.shouldShowSDDModeScreen() {
+				if m.Selection.SDDMode == model.SDDModeMulti {
+					cachePath := opencode.DefaultCachePath()
+					if _, err := osStatModelCache(cachePath); err == nil {
+						m.setScreen(ScreenModelPicker)
+					} else {
+						m.setScreen(ScreenSDDMode)
+					}
+				} else {
+					m.setScreen(ScreenSDDMode)
+				}
+			} else if m.shouldShowClaudeModelPickerScreen() {
+				m.setScreen(ScreenClaudeModelPicker)
+			} else {
+				m.setScreen(ScreenDependencyTree)
+			}
+		} else {
+			m.setScreen(ScreenDependencyTree)
+		}
 	case ScreenInstalling:
 		if m.Progress.Done() {
 			m.setScreen(ScreenComplete)
@@ -612,6 +1002,24 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		if m.ListBackupsFn != nil {
 			m.Backups = m.ListBackupsFn()
 		}
+		m.setScreen(ScreenBackups)
+	case ScreenDeleteConfirm:
+		// Cursor 0 = "Delete", Cursor 1 = "Cancel".
+		if m.Cursor == 0 {
+			if m.DeleteBackupFn != nil {
+				m.DeleteErr = m.DeleteBackupFn(m.SelectedBackup)
+			}
+			m.setScreen(ScreenDeleteResult)
+		} else {
+			m.setScreen(ScreenBackups)
+		}
+	case ScreenDeleteResult:
+		// Enter on the result screen returns to backup selection.
+		// Refresh the backup list to reflect any changes from the delete.
+		if m.ListBackupsFn != nil {
+			m.Backups = m.ListBackupsFn()
+		}
+		m.DeleteErr = nil
 		m.setScreen(ScreenBackups)
 	}
 
@@ -666,6 +1074,79 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 	})
 }
 
+// withResetOperationState clears all operation-related state and resets the cursor,
+// returning a new Model with these fields cleared (value-receiver pattern for MVU).
+func (m Model) withResetOperationState() Model {
+	m.UpgradeReport = nil
+	m.UpgradeErr = nil
+	m.SyncFilesChanged = 0
+	m.SyncErr = nil
+	m.HasSyncRun = false
+	m.OperationRunning = false
+	m.OperationMode = ""
+	m.Cursor = 0
+	return m
+}
+
+// startUpgrade launches the upgrade goroutine and returns a tea.Cmd.
+func (m Model) startUpgrade() tea.Cmd {
+	upgradeFn := m.UpgradeFn
+	updateResults := m.UpdateResults
+	return func() tea.Msg {
+		if upgradeFn == nil {
+			return UpgradeDoneMsg{Err: fmt.Errorf("upgrade function not configured")}
+		}
+		ctx := context.Background()
+		report := upgradeFn(ctx, updateResults)
+		return UpgradeDoneMsg{Report: report}
+	}
+}
+
+// startSync launches the sync goroutine and returns a tea.Cmd.
+func (m Model) startSync() tea.Cmd {
+	syncFn := m.SyncFn
+	return func() tea.Msg {
+		if syncFn == nil {
+			return SyncDoneMsg{Err: fmt.Errorf("sync function not configured")}
+		}
+		filesChanged, err := syncFn()
+		return SyncDoneMsg{FilesChanged: filesChanged, Err: err}
+	}
+}
+
+// startUpgradeSync runs upgrade then sync sequentially via tea.Sequence.
+// Design decision: sync runs unconditionally regardless of upgrade outcome.
+// Tool-level upgrade failures are per-tool (in UpgradeReport.Results), not fatal.
+// The user sees both results and can re-run if needed.
+//
+// The first command runs the upgrade and sends UpgradePhaseCompletedMsg
+// (so the UI can show State 2: sync running). The second command runs sync
+// and sends SyncDoneMsg.
+func (m Model) startUpgradeSync() tea.Cmd {
+	upgradeFn := m.UpgradeFn
+	syncFn := m.SyncFn
+	updateResults := m.UpdateResults
+
+	upgradeCmd := func() tea.Msg {
+		if upgradeFn == nil {
+			return UpgradePhaseCompletedMsg{Err: fmt.Errorf("upgrade function not configured")}
+		}
+		ctx := context.Background()
+		report := upgradeFn(ctx, updateResults)
+		return UpgradePhaseCompletedMsg{Report: report}
+	}
+
+	syncCmd := func() tea.Msg {
+		if syncFn == nil {
+			return SyncDoneMsg{Err: fmt.Errorf("sync function not configured")}
+		}
+		filesChanged, err := syncFn()
+		return SyncDoneMsg{FilesChanged: filesChanged, Err: err}
+	}
+
+	return tea.Sequence(upgradeCmd, syncCmd)
+}
+
 // restoreBackup triggers a backup restore in a goroutine.
 func (m Model) restoreBackup(manifest backup.Manifest) (tea.Model, tea.Cmd) {
 	if m.RestoreFn == nil {
@@ -701,9 +1182,41 @@ func buildProgressLabels(resolved planner.ResolvedPlan) []string {
 }
 
 func (m Model) goBack() Model {
-	// From SkillPicker, go back to DependencyTree.
+	// Block navigation while an operation (upgrade/sync) is running.
+	if m.OperationRunning {
+		return m
+	}
+
+	// ModelConfigMode: pickers reached via Model Config shortcut return to ScreenModelConfig.
+	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenModelPicker) {
+		m.ModelConfigMode = false
+		m.setScreen(ScreenModelConfig)
+		return m
+	}
+
+	// From SkillPicker, go back to the preceding screen.
+	// In custom preset: SDDMode/ModelPicker/ClaudeModelPicker precede SkillPicker.
 	if m.Screen == ScreenSkillPicker {
-		m.setScreen(ScreenDependencyTree)
+		if m.Selection.Preset == model.PresetCustom {
+			if m.shouldShowSDDModeScreen() {
+				if m.Selection.SDDMode == model.SDDModeMulti {
+					cachePath := opencode.DefaultCachePath()
+					if _, err := osStatModelCache(cachePath); err == nil {
+						m.setScreen(ScreenModelPicker)
+					} else {
+						m.setScreen(ScreenSDDMode)
+					}
+				} else {
+					m.setScreen(ScreenSDDMode)
+				}
+			} else if m.shouldShowClaudeModelPickerScreen() {
+				m.setScreen(ScreenClaudeModelPicker)
+			} else {
+				m.setScreen(ScreenDependencyTree)
+			}
+		} else {
+			m.setScreen(ScreenDependencyTree)
+		}
 		return m
 	}
 
@@ -711,10 +1224,16 @@ func (m Model) goBack() Model {
 	// screens were shown BEFORE it (non-custom presets only), navigate to them.
 	// In custom mode these screens appear AFTER the dependency tree, so
 	// going back should return to the preset screen (handled by linearRoutes).
+	// NOTE: DependencyTree back logic also in confirmSelection() — keep in sync.
 	if m.Screen == ScreenDependencyTree && m.Selection.Preset != model.PresetCustom {
 		if m.shouldShowSDDModeScreen() {
 			if m.Selection.SDDMode == model.SDDModeMulti {
-				m.setScreen(ScreenModelPicker)
+				cachePath := opencode.DefaultCachePath()
+				if _, err := osStatModelCache(cachePath); err == nil {
+					m.setScreen(ScreenModelPicker)
+				} else {
+					m.setScreen(ScreenSDDMode)
+				}
 			} else {
 				m.setScreen(ScreenSDDMode)
 			}
@@ -726,13 +1245,57 @@ func (m Model) goBack() Model {
 		}
 	}
 
-	if m.Screen == ScreenSDDMode && m.shouldShowClaudeModelPickerScreen() {
-		m.setScreen(ScreenClaudeModelPicker)
-		return m
+	// In custom preset, going back from SDDMode should return to ClaudeModelPicker
+	// if applicable, otherwise DependencyTree (the component selector).
+	// For non-custom, check if ClaudeModelPicker was shown first.
+	// NOTE: SDDMode back logic is also in confirmSelection — keep in sync.
+	if m.Screen == ScreenSDDMode {
+		if m.Selection.Preset == model.PresetCustom {
+			if m.shouldShowClaudeModelPickerScreen() {
+				m.setScreen(ScreenClaudeModelPicker)
+			} else {
+				m.setScreen(ScreenDependencyTree)
+			}
+			return m
+		}
+		if m.shouldShowClaudeModelPickerScreen() {
+			m.setScreen(ScreenClaudeModelPicker)
+			return m
+		}
 	}
 
 	// In custom preset, going back from ClaudeModelPicker should return to DependencyTree.
 	if m.Screen == ScreenClaudeModelPicker && m.Selection.Preset == model.PresetCustom {
+		m.setScreen(ScreenDependencyTree)
+		return m
+	}
+
+	// In custom preset, going back from Review walks through intermediate screens.
+	if m.Screen == ScreenReview && m.Selection.Preset == model.PresetCustom {
+		if m.shouldShowSkillPickerScreen() {
+			if len(m.SkillPicker) == 0 {
+				m.initSkillPicker()
+			}
+			m.setScreen(ScreenSkillPicker)
+			return m
+		}
+		if m.shouldShowSDDModeScreen() {
+			if m.Selection.SDDMode == model.SDDModeMulti {
+				cachePath := opencode.DefaultCachePath()
+				if _, err := osStatModelCache(cachePath); err == nil {
+					m.setScreen(ScreenModelPicker)
+				} else {
+					m.setScreen(ScreenSDDMode)
+				}
+			} else {
+				m.setScreen(ScreenSDDMode)
+			}
+			return m
+		}
+		if m.shouldShowClaudeModelPickerScreen() {
+			m.setScreen(ScreenClaudeModelPicker)
+			return m
+		}
 		m.setScreen(ScreenDependencyTree)
 		return m
 	}
@@ -750,12 +1313,76 @@ func (m *Model) setScreen(next Screen) {
 	m.PreviousScreen = m.Screen
 	m.Screen = next
 	m.Cursor = 0
+	if next == ScreenBackups {
+		m.BackupScroll = 0
+	}
+}
+
+// handleRenameInput processes key events when the rename backup screen is active.
+// It manages text input for the new backup description.
+func (m Model) handleRenameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		// Execute rename and return to backups.
+		if m.RenameBackupFn != nil {
+			_ = m.RenameBackupFn(m.SelectedBackup, m.BackupRenameText)
+		}
+		if m.ListBackupsFn != nil {
+			m.Backups = m.ListBackupsFn()
+		}
+		m.setScreen(ScreenBackups)
+		return m, nil
+	case tea.KeyEsc:
+		m.setScreen(ScreenBackups)
+		return m, nil
+	case tea.KeyBackspace:
+		if m.BackupRenamePos > 0 {
+			runes := []rune(m.BackupRenameText)
+			m.BackupRenameText = string(append(runes[:m.BackupRenamePos-1], runes[m.BackupRenamePos:]...))
+			m.BackupRenamePos--
+		}
+		return m, nil
+	case tea.KeyLeft:
+		if m.BackupRenamePos > 0 {
+			m.BackupRenamePos--
+		}
+		return m, nil
+	case tea.KeyRight:
+		if m.BackupRenamePos < len([]rune(m.BackupRenameText)) {
+			m.BackupRenamePos++
+		}
+		return m, nil
+	case tea.KeyRunes:
+		runes := []rune(m.BackupRenameText)
+		newRunes := make([]rune, 0, len(runes)+len(msg.Runes))
+		newRunes = append(newRunes, runes[:m.BackupRenamePos]...)
+		newRunes = append(newRunes, msg.Runes...)
+		newRunes = append(newRunes, runes[m.BackupRenamePos:]...)
+		m.BackupRenameText = string(newRunes)
+		m.BackupRenamePos += len(msg.Runes)
+		return m, nil
+	}
+	return m, nil
 }
 
 func (m Model) optionCount() int {
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptions())
+		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone))
+	case ScreenUpgrade:
+		if m.UpgradeReport != nil || m.UpgradeErr != nil {
+			return 1 // "return" option in results/error state
+		}
+		if !m.UpdateCheckDone {
+			return 0 // no options while checking
+		}
+		return 1 // "upgrade all" or "return" when up to date
+	case ScreenSync:
+		return 1
+	case ScreenUpgradeSync:
+		return 1
+	case ScreenModelConfig:
+		return len(screens.ModelConfigOptions())
 	case ScreenDetection:
 		return len(screens.DetectionOptions())
 	case ScreenAgents:
@@ -792,6 +1419,12 @@ func (m Model) optionCount() int {
 		return 2 // "Restore" + "Cancel"
 	case ScreenRestoreResult:
 		return 1 // "Done" / continue
+	case ScreenDeleteConfirm:
+		return 2 // "Delete" + "Cancel"
+	case ScreenDeleteResult:
+		return 1 // "Done" / continue
+	case ScreenRenameBackup:
+		return 0 // text input mode — no cursor navigation
 	default:
 		return 0
 	}

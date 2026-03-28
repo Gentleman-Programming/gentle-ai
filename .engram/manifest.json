@@ -8,6 +8,14 @@
       "sessions": 165,
       "memories": 408,
       "prompts": 33
+    },
+    {
+      "id": "fd2ecf8b",
+      "created_by": "alanbuscaglia",
+      "created_at": "2026-03-27T22:09:55Z",
+      "sessions": 0,
+      "memories": 8,
+      "prompts": 1
     }
   ]
 }

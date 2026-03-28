@@ -385,6 +385,106 @@ func TestSnapshotterPopulatesFileCount(t *testing.T) {
 	}
 }
 
+// TestDeleteBackup_Success verifies that DeleteBackup removes the backup directory.
+func TestDeleteBackup_Success(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "backup-01")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// Write a dummy manifest file inside the backup dir.
+	manifestPath := filepath.Join(backupDir, ManifestFilename)
+	m := Manifest{
+		ID:      "backup-01",
+		RootDir: backupDir,
+		Entries: []ManifestEntry{},
+	}
+	if err := WriteManifest(manifestPath, m); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	if err := DeleteBackup(m); err != nil {
+		t.Fatalf("DeleteBackup() error = %v", err)
+	}
+
+	if _, err := os.Stat(backupDir); !os.IsNotExist(err) {
+		t.Errorf("backup directory still exists after DeleteBackup")
+	}
+}
+
+// TestDeleteBackup_EmptyRootDir verifies that DeleteBackup returns an error
+// when the manifest has no RootDir set.
+func TestDeleteBackup_EmptyRootDir(t *testing.T) {
+	m := Manifest{
+		ID:      "no-root",
+		RootDir: "",
+	}
+
+	err := DeleteBackup(m)
+	if err == nil {
+		t.Fatalf("DeleteBackup() should return error for empty RootDir")
+	}
+}
+
+// TestRenameBackup_Success verifies that RenameBackup updates the Description
+// and returns no error.
+func TestRenameBackup_Success(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "backup-02")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	m := Manifest{
+		ID:          "backup-02",
+		RootDir:     backupDir,
+		Description: "original description",
+		Entries:     []ManifestEntry{},
+	}
+	manifestPath := filepath.Join(backupDir, ManifestFilename)
+	if err := WriteManifest(manifestPath, m); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	if err := RenameBackup(m, "new description"); err != nil {
+		t.Fatalf("RenameBackup() error = %v", err)
+	}
+}
+
+// TestRenameBackup_UpdatesManifestFile verifies that RenameBackup actually
+// persists the new description into the manifest file on disk.
+func TestRenameBackup_UpdatesManifestFile(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "backup-03")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	m := Manifest{
+		ID:          "backup-03",
+		RootDir:     backupDir,
+		Description: "before rename",
+		Entries:     []ManifestEntry{},
+	}
+	manifestPath := filepath.Join(backupDir, ManifestFilename)
+	if err := WriteManifest(manifestPath, m); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	if err := RenameBackup(m, "after rename"); err != nil {
+		t.Fatalf("RenameBackup() error = %v", err)
+	}
+
+	// Re-read the manifest and verify the description was updated.
+	updated, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("ReadManifest() error = %v", err)
+	}
+	if updated.Description != "after rename" {
+		t.Errorf("Description = %q, want %q", updated.Description, "after rename")
+	}
+}
+
 func containsStr(s, sub string) bool {
 	if len(sub) == 0 {
 		return true

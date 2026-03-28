@@ -63,13 +63,26 @@ func RunArgs(args []string, stdout io.Writer) error {
 	}
 
 	if len(args) == 0 {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("resolve user home directory: %w", err)
+		}
+
 		m := tui.NewModel(result, Version)
 		m.ExecuteFn = tuiExecute
 		m.RestoreFn = tuiRestore
+		m.DeleteBackupFn = func(manifest backup.Manifest) error {
+			return backup.DeleteBackup(manifest)
+		}
+		m.RenameBackupFn = func(manifest backup.Manifest, newDesc string) error {
+			return backup.RenameBackup(manifest, newDesc)
+		}
 		m.ListBackupsFn = ListBackups
 		m.Backups = ListBackups()
+		m.UpgradeFn = tuiUpgrade(profile, homeDir)
+		m.SyncFn = tuiSync(homeDir)
 		p := tea.NewProgram(m, tea.WithAltScreen())
-		_, err := p.Run()
+		_, err = p.Run()
 		return err
 	}
 
@@ -226,6 +239,31 @@ func tuiExecute(
 // tuiRestore restores a backup from its manifest.
 func tuiRestore(manifest backup.Manifest) error {
 	return backup.RestoreService{}.Restore(manifest)
+}
+
+// tuiUpgrade returns a tui.UpgradeFunc that wraps upgrade.Execute.
+// The profile and homeDir are captured from the call site so the closure
+// is self-contained and requires no extra parameters at call time.
+func tuiUpgrade(profile system.PlatformProfile, homeDir string) tui.UpgradeFunc {
+	return func(ctx context.Context, results []update.UpdateResult) upgrade.UpgradeReport {
+		return upgradeExecute(ctx, results, profile, homeDir, false)
+	}
+}
+
+// tuiSync returns a tui.SyncFunc that performs a full managed-asset sync.
+// It mirrors the RunSync CLI path: discovers installed agents from persisted
+// state (or filesystem fallback), builds the default sync selection, and
+// delegates to RunSyncWithSelection.
+func tuiSync(homeDir string) tui.SyncFunc {
+	return func() (int, error) {
+		agentIDs := cli.DiscoverAgents(homeDir)
+		selection := cli.BuildSyncSelection(cli.SyncFlags{}, agentIDs)
+		result, err := cli.RunSyncWithSelection(homeDir, selection)
+		if err != nil {
+			return 0, err
+		}
+		return result.FilesChanged, nil
+	}
 }
 
 // ListBackups returns all backup manifests from the backup directory.

@@ -112,3 +112,22 @@ func ReadManifest(path string) (Manifest, error) {
 
 	return manifest, nil
 }
+
+// DeleteBackup removes the entire backup directory.
+func DeleteBackup(manifest Manifest) error {
+	if manifest.RootDir == "" {
+		return fmt.Errorf("backup has no root directory")
+	}
+	return os.RemoveAll(manifest.RootDir)
+}
+
+// RenameBackup updates the backup's Description field in the manifest file.
+// This does not rename the directory — it updates the human-readable description.
+func RenameBackup(manifest Manifest, newDescription string) error {
+	if manifest.RootDir == "" {
+		return fmt.Errorf("backup has no root directory")
+	}
+	manifest.Description = newDescription
+	manifestPath := filepath.Join(manifest.RootDir, ManifestFilename)
+	return WriteManifest(manifestPath, manifest)
+}

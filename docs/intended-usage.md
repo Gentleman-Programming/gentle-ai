@@ -77,13 +77,22 @@ You don't need to configure any of this. The installer sets it up, and the orche
 
 ---
 
-## Skills -- They Load Automatically
+## Skills -- Two Layers
 
-The curated skill library (React 19, Angular, TypeScript, testing patterns, etc.) is installed to your agent's skills directory during setup. The agent detects what you're working on and loads the relevant skills automatically.
+gentle-ai installs **SDD skills** and **foundation skills** (workflow, testing patterns) directly into your agent's skills directory. These are embedded in the binary and always up to date.
 
-You don't need to activate, invoke, or even think about them.
+For **coding skills** (React 19, Angular, TypeScript, Tailwind, Zod, Playwright, etc.), the community maintains a separate repository: [Gentleman-Programming/Gentleman-Skills](https://github.com/Gentleman-Programming/Gentleman-Skills). You install those manually by cloning the repo and copying the skills you want:
 
-**One exception: the skill registry.** The skill registry is a catalog of all available skills that the orchestrator reads once per session to know what's available and where. It needs to run **inside each project** you work on, because it also scans for project-level conventions (like `CLAUDE.md`, `agents.md`, `.cursorrules`, etc.).
+```bash
+git clone https://github.com/Gentleman-Programming/Gentleman-Skills.git
+cp -r Gentleman-Skills/curated/react-19 ~/.claude/skills/
+cp -r Gentleman-Skills/curated/typescript ~/.claude/skills/
+# ... or copy the entire curated/ directory
+```
+
+Once installed, your agent detects what you're working on and loads the relevant skills automatically. You don't need to activate or invoke them.
+
+**The skill registry.** The skill registry is a catalog of all available skills that the orchestrator reads once per session to know what's available and where. It needs to run **inside each project** you work on, because it also scans for project-level conventions (like `CLAUDE.md`, `agents.md`, `.cursorrules`, etc.).
 
 How it works:
 

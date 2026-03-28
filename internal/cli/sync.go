@@ -378,33 +378,16 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// RunSync is the top-level sync entry point, parallel to RunInstall.
-func RunSync(args []string) (SyncResult, error) {
-	flags, err := ParseSyncFlags(args)
-	if err != nil {
-		return SyncResult{}, err
-	}
-
-	homeDir, err := osUserHomeDir()
-	if err != nil {
-		return SyncResult{}, fmt.Errorf("resolve user home directory: %w", err)
-	}
-
-	// Resolve agents: explicit flag takes precedence over auto-discovery.
-	var agentIDs []model.AgentID
-	if len(flags.Agents) > 0 {
-		agentIDs = asAgentIDs(flags.Agents)
-	} else {
-		agentIDs = DiscoverAgents(homeDir)
-	}
-	agentIDs = unique(agentIDs)
-
-	selection := BuildSyncSelection(flags, agentIDs)
+// RunSyncWithSelection is the programmatic entry point for sync.
+// It skips flag parsing and agent discovery — the caller provides the homeDir
+// and a fully-built Selection (agents + components + options).
+// This is the function the TUI calls directly to avoid CLI flag parsing.
+func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult, error) {
+	agentIDs := selection.Agents
 
 	result := SyncResult{
 		Agents:    agentIDs,
 		Selection: selection,
-		DryRun:    flags.DryRun,
 	}
 
 	// No-op path: no agents were discovered or provided.
@@ -412,16 +395,6 @@ func RunSync(args []string) (SyncResult, error) {
 	// unrelated files and reports that no managed sync actions were needed."
 	if len(agentIDs) == 0 {
 		result.NoOp = true
-		return result, nil
-	}
-
-	if flags.DryRun {
-		// Build the plan for inspection, skip execution.
-		rt, err := newSyncRuntime(homeDir, selection)
-		if err != nil {
-			return result, err
-		}
-		result.Plan = rt.stagePlan()
 		return result, nil
 	}
 
@@ -456,6 +429,58 @@ func RunSync(args []string) (SyncResult, error) {
 		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
 
+	return result, nil
+}
+
+// RunSync is the top-level sync entry point, parallel to RunInstall.
+// It parses CLI flags, discovers agents, builds the selection, then delegates
+// to RunSyncWithSelection for the actual sync execution.
+func RunSync(args []string) (SyncResult, error) {
+	flags, err := ParseSyncFlags(args)
+	if err != nil {
+		return SyncResult{}, err
+	}
+
+	homeDir, err := osUserHomeDir()
+	if err != nil {
+		return SyncResult{}, fmt.Errorf("resolve user home directory: %w", err)
+	}
+
+	// Resolve agents: explicit flag takes precedence over auto-discovery.
+	var agentIDs []model.AgentID
+	if len(flags.Agents) > 0 {
+		agentIDs = asAgentIDs(flags.Agents)
+	} else {
+		agentIDs = DiscoverAgents(homeDir)
+	}
+	agentIDs = unique(agentIDs)
+
+	selection := BuildSyncSelection(flags, agentIDs)
+
+	if flags.DryRun {
+		// Build the plan for inspection, skip execution.
+		result := SyncResult{
+			Agents:    agentIDs,
+			Selection: selection,
+			DryRun:    true,
+		}
+		if len(agentIDs) == 0 {
+			result.NoOp = true
+			return result, nil
+		}
+		rt, err := newSyncRuntime(homeDir, selection)
+		if err != nil {
+			return result, err
+		}
+		result.Plan = rt.stagePlan()
+		return result, nil
+	}
+
+	result, err := RunSyncWithSelection(homeDir, selection)
+	if err != nil {
+		return result, err
+	}
+	result.DryRun = false
 	return result, nil
 }
 
