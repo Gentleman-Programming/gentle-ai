@@ -72,3 +72,37 @@ func TestWriteFileAtomicCreatesAndIsIdempotent(t *testing.T) {
 		t.Fatalf("file content = %q", string(got))
 	}
 }
+
+func TestWriteFileAtomicRejectsExistingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	path := filepath.Join(dir, "linked.txt")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	_, err := WriteFileAtomic(path, []byte("new\n"), 0o644)
+	if err == nil || err.Error() == "" {
+		t.Fatalf("WriteFileAtomic(symlink) error = %v, want rejection", err)
+	}
+	if got, readErr := os.ReadFile(target); readErr != nil || string(got) != "old\n" {
+		t.Fatalf("target content changed through symlink: got %q err=%v", got, readErr)
+	}
+}
+
+func TestWriteFileAtomicRejectsOversizedExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.txt")
+	data := make([]byte, maxAtomicFileSize+1)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(big) error = %v", err)
+	}
+
+	_, err := WriteFileAtomic(path, []byte("small\n"), 0o644)
+	if err == nil {
+		t.Fatal("WriteFileAtomic(big) error = nil, want max-size rejection")
+	}
+}
