@@ -37,7 +37,7 @@ export type OpencodeClient = ReturnType<typeof createOpencodeClient>
 // INLINED: kdco-primitives/with-timeout
 // ==========================================
 
-export class TimeoutError extends Error {
+class TimeoutError extends Error {
   readonly name = "TimeoutError" as const
   readonly timeoutMs: number
   constructor(message: string, timeoutMs: number) {
@@ -46,7 +46,7 @@ export class TimeoutError extends Error {
   }
 }
 
-export async function withTimeout<T>(
+async function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
   message = "Operation timed out",
@@ -69,7 +69,7 @@ export async function withTimeout<T>(
 // INLINED: kdco-primitives/log-warn
 // ==========================================
 
-export function logWarn(
+function logWarn(
   client: OpencodeClient | undefined,
   service: string,
   message: string,
@@ -448,6 +448,38 @@ async function parseAgentWriteCapability(
 }
 
 /**
+ * Resolve the model configured for a given agent.
+ * Parses the "provider/model-id" format into the shape session.prompt() expects.
+ * Returns undefined when no model is configured (caller falls back to default).
+ */
+async function resolveAgentModel(
+  client: OpencodeClient,
+  agentName: string,
+  log: Logger,
+): Promise<{ providerID: string; modelID: string } | undefined> {
+  try {
+    const config = await client.config.get()
+    const configData = config.data as {
+      agent?: Record<string, { model?: string }>
+    } | undefined
+
+    const modelStr = configData?.agent?.[agentName]?.model
+    if (!modelStr) return undefined
+
+    const slashIndex = modelStr.indexOf("/")
+    if (slashIndex === -1) return undefined
+
+    const providerID = modelStr.substring(0, slashIndex)
+    const modelID = modelStr.substring(slashIndex + 1)
+
+    await log.info(`resolveAgentModel: ${agentName} → ${providerID}/${modelID}`)
+    return { providerID, modelID }
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * DELEGATION MANAGER
  */
 class DelegationManager {
@@ -608,6 +640,9 @@ class DelegationManager {
     // Ensure delegations directory exists (early check)
     await this.ensureDelegationsDir(input.parentSessionID)
 
+    // Resolve the agent's configured model so sub-agents use their own model, not the orchestrator's
+    const agentModel = await resolveAgentModel(this.client, input.agent, this.log)
+
     // Fire the prompt (using prompt() instead of promptAsync() to properly initialize agent loop)
     // Agent param is critical for MCP tools - tells OpenCode which agent's config to use
     // Anti-recursion: disable nested delegations and state-modifying tools via tools config
@@ -616,6 +651,7 @@ class DelegationManager {
         path: { id: delegation.sessionID },
         body: {
           agent: input.agent,
+          ...(agentModel && { model: agentModel }),
           parts: [{ type: "text", text: input.prompt }],
           tools: {
             task: false,
@@ -816,10 +852,7 @@ ${description}
    */
   private async notifyParent(delegation: Delegation): Promise<void> {
     try {
-      // Use generated title/description if available
-      const title = delegation.title || delegation.id
       const statusText = delegation.status === "complete" ? "complete" : delegation.status
-      const result = delegation.result || "(No result)"
 
       // Mark this delegation as complete in the pending tracker
       const pendingSet = this.pendingByParent.get(delegation.parentSessionID)
@@ -835,22 +868,11 @@ ${description}
         this.pendingByParent.delete(delegation.parentSessionID)
       }
 
-      const remainingCount = pendingSet?.size || 0
-
-      // Always send the completed delegation notification first
-      const progressNote =
-        remainingCount > 0
-          ? `
-**${remainingCount} delegation${remainingCount === 1 ? "" : "s"} still in progress.** You WILL be notified when ALL complete.
-❌ Do NOT poll \`delegation_list\` - continue productive work.`
-          : ""
-      const completionNotification = `<task-notification>
-<task-id>${delegation.id}</task-id>
-<status>${statusText}</status>
-<summary>Agent "${title}" ${statusText}</summary>
-<result>${result}</result>
-${delegation.error ? `\n<error>${delegation.error}</error>` : ""}
-</task-notification>${progressNote}`
+      // Always send the completed delegation notification first (compact — full result is on disk)
+      const completionNotification = `[TASK NOTIFICATION]
+ID: ${delegation.id}
+Status: ${statusText}
+Use delegation_read(id) to retrieve the full result.`
 
       await this.client.session.prompt({
         path: { id: delegation.parentSessionID },
@@ -863,10 +885,7 @@ ${delegation.error ? `\n<error>${delegation.error}</error>` : ""}
 
       // If all delegations complete, send a minimal completion notice that triggers response
       if (allComplete) {
-        const allCompleteNotification = `<task-notification>
-<status>completed</status>
-<summary>All delegations complete.</summary>
-</task-notification>`
+        const allCompleteNotification = `[TASK NOTIFICATION] All delegations complete.`
 
         await this.client.session.prompt({
           path: { id: delegation.parentSessionID },
@@ -1121,8 +1140,8 @@ Use this for:
 - Parallel work that can run in background
 - Any task where you want persistent, retrievable output
 
-On completion, a notification will arrive with the ID, title, description, and result.
-Use \`delegation_read\` with the ID to retrieve the result again if it is lost during compaction.`,
+On completion, a compact notification arrives with the ID and status only.
+Use \`delegation_read(id)\` to retrieve the full result. Results are persisted to disk and survive compaction.`,
     args: {
       prompt: tool.schema
         .string()
@@ -1240,8 +1259,8 @@ Any agent can be used with \`delegate\`. Results survive context compaction.
 
 1. Call \`delegate(prompt, agent)\` with a detailed prompt and agent name
 2. Continue productive work while it runs in the background
-3. Receive a \`<task-notification>\` when complete (with full result inline)
-4. If result was lost during compaction, use \`delegation_read(id)\` to retrieve it
+3. Receive a \`<task-notification>\` when complete (compact: ID + status only)
+4. Use \`delegation_read(id)\` to retrieve the full result when needed
 
 ## Critical Constraints
 
@@ -1299,32 +1318,21 @@ function formatDelegationContext(
 
     // Only include reminder when there ARE running delegations
     sections.push(
-      "> **Note:** You WILL be notified via `<task-notification>` when delegations complete.",
+      "> **Note:** You WILL be notified via a **Task Notification** blockquote when delegations complete.",
     )
     sections.push("> Do NOT poll `delegation_list` - continue productive work.")
     sections.push("")
   }
 
-  // Completed delegations (recent)
+  // Completed delegations (recent) — compact: just ID + status, full output is on disk
   if (completed.length > 0) {
     sections.push("## Recent Completed Delegations")
     sections.push("")
     for (const d of completed) {
-      const statusEmoji =
-        d.status === "complete"
-          ? "✅"
-          : d.status === "error"
-            ? "❌"
-            : d.status === "timeout"
-              ? "⏱️"
-              : "🚫"
-      sections.push(`### ${statusEmoji} \`${d.id}\``)
-      sections.push(`**Title:** ${d.title || "(no title)"}`)
-      sections.push(`**Status:** ${d.status}`)
-      sections.push(`**Description:** ${d.description || "(no description)"}`)
-      sections.push("")
+      sections.push(`- \`${d.id}\` [${d.status}]`)
     }
-    sections.push("> Use `delegation_list()` to see all delegations for this session.")
+    sections.push("")
+    sections.push("> Use `delegation_read(id)` to get full output for any completed delegation.")
     sections.push("")
   }
 
@@ -1378,7 +1386,8 @@ export const BackgroundAgents: Plugin = async (ctx) => {
 
     // Inject delegation rules into system prompt
     "experimental.chat.system.transform": async (_input: SystemTransformInput, output) => {
-      output.system.push(DELEGATION_RULES)
+      const combined = [...output.system, DELEGATION_RULES].join("\n\n---\n\n")
+      output.system = [combined]
     },
 
     // Compaction hook - inject delegation context for context recovery

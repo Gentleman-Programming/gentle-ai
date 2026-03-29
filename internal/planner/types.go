@@ -25,6 +25,18 @@ type ReviewPayload struct {
 	Components        []ComponentAction
 	AddedDependencies []model.ComponentID
 	PlatformDecision  PlatformDecision
+
+	// Skills holds the individual skill IDs selected by the user (Issue #145).
+	// Only populated when the Skills component is selected.
+	Skills []model.SkillID
+
+	// StrictTDD reflects the user's Strict TDD Mode choice (Issue #149).
+	// Only meaningful when HasSDD is true.
+	StrictTDD bool
+
+	// HasSDD is true when the SDD component is present in the resolved plan (Issue #149).
+	// Controls whether the Strict TDD row is shown in the review screen.
+	HasSDD bool
 }
 
 type PlatformDecision struct {

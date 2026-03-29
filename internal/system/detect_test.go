@@ -39,16 +39,20 @@ func TestDetectFromInputsMarksSupportedMacOS(t *testing.T) {
 	}
 }
 
-func TestDetectFromInputsMarksUnsupportedLinuxDistro(t *testing.T) {
+func TestDetectFromInputsMarksFedoraSupported(t *testing.T) {
 	osRelease := "ID=fedora\nID_LIKE=rhel fedora\n"
 	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, nil, nil)
 
-	if result.System.Supported {
-		t.Fatalf("expected unsupported system for unsupported linux distro")
+	if !result.System.Supported {
+		t.Fatalf("expected supported system for fedora linux distro")
 	}
 
-	if result.System.Profile.LinuxDistro != LinuxDistroUnknown {
-		t.Fatalf("expected unknown distro, got %q", result.System.Profile.LinuxDistro)
+	if result.System.Profile.LinuxDistro != LinuxDistroFedora {
+		t.Fatalf("expected fedora distro, got %q", result.System.Profile.LinuxDistro)
+	}
+
+	if result.System.Profile.PackageManager != "dnf" {
+		t.Fatalf("expected dnf package manager, got %q", result.System.Profile.PackageManager)
 	}
 }
 
@@ -130,14 +134,39 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			wantDistro: LinuxDistroArch,
 		},
 		{
-			name:       "fedora is unsupported",
+			name:       "fedora",
 			osRelease:  "ID=fedora\nID_LIKE=\"rhel fedora\"\n",
-			wantDistro: LinuxDistroUnknown,
+			wantDistro: LinuxDistroFedora,
 		},
 		{
-			name:       "centos is unsupported",
+			name:       "centos stream derivative of rhel/fedora",
 			osRelease:  "ID=centos\nID_LIKE=\"rhel fedora\"\n",
-			wantDistro: LinuxDistroUnknown,
+			wantDistro: LinuxDistroFedora,
+		},
+		{
+			name:       "rhel",
+			osRelease:  "ID=rhel\nID_LIKE=\"fedora\"\n",
+			wantDistro: LinuxDistroFedora,
+		},
+		{
+			name:       "rocky linux",
+			osRelease:  "ID=rocky\nID_LIKE=\"rhel fedora\"\n",
+			wantDistro: LinuxDistroFedora,
+		},
+		{
+			name:       "alma linux",
+			osRelease:  "ID=almalinux\nID_LIKE=\"rhel fedora\"\n",
+			wantDistro: LinuxDistroFedora,
+		},
+		{
+			name:       "nobara",
+			osRelease:  "ID=nobara\nID_LIKE=\"fedora\"\n",
+			wantDistro: LinuxDistroFedora,
+		},
+		{
+			name:       "nobara via id_like token",
+			osRelease:  "ID=custom-linux\nID_LIKE=\"nobara\"\n",
+			wantDistro: LinuxDistroFedora,
 		},
 		{
 			name:       "empty os-release",
@@ -232,13 +261,13 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			wantSupported: true,
 		},
 		{
-			name:          "unsupported distro profile",
+			name:          "fedora profile",
 			goos:          "linux",
 			osRelease:     "ID=fedora\n",
 			wantOS:        "linux",
-			wantPM:        "",
-			wantDistro:    LinuxDistroUnknown,
-			wantSupported: false,
+			wantPM:        "dnf",
+			wantDistro:    LinuxDistroFedora,
+			wantSupported: true,
 		},
 		{
 			name:          "windows profile",

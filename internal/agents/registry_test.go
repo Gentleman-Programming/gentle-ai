@@ -94,6 +94,8 @@ func TestDefaultRegistryIncludesAllAgents(t *testing.T) {
 		model.AgentGeminiCLI,
 		model.AgentCursor,
 		model.AgentVSCodeCopilot,
+		model.AgentCodex,
+		model.AgentWindsurf,
 	} {
 		if _, ok := registry.Get(agent); !ok {
 			t.Fatalf("registry missing %s adapter", agent)
@@ -102,7 +104,7 @@ func TestDefaultRegistryIncludesAllAgents(t *testing.T) {
 }
 
 func TestFactoryRejectsUnsupportedAgent(t *testing.T) {
-	_, err := NewAdapter(model.AgentID("windsurf"))
+	_, err := NewAdapter(model.AgentID("unknown-agent-xyz"))
 	if err == nil {
 		t.Fatalf("NewAdapter() expected unsupported agent error")
 	}

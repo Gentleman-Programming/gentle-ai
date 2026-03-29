@@ -1,0 +1,65 @@
+# Dockerfile.fedora — E2E test image for gentle-ai on Fedora 43
+# Builds the binary from source and runs the E2E test suite as a non-root user.
+FROM fedora:43
+
+# ---------------------------------------------------------------------------
+# System dependencies (includes npm/node for claude-code tests)
+# ---------------------------------------------------------------------------
+RUN dnf install -y \
+        git \
+        curl \
+        sudo \
+        ca-certificates \
+        @development-tools \
+    && dnf clean all
+
+# ---------------------------------------------------------------------------
+# Install Node.js LTS via NodeSource (Fedora repos may lag behind LTS)
+# ---------------------------------------------------------------------------
+RUN curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash - && \
+    dnf install -y nodejs
+
+# ---------------------------------------------------------------------------
+# Install Go (match go.mod version)
+# ---------------------------------------------------------------------------
+ARG GO_VERSION=1.24.2
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+    | tar -C /usr/local -xz
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+# ---------------------------------------------------------------------------
+# Create non-root test user with passwordless sudo
+# ---------------------------------------------------------------------------
+RUN useradd -m -s /bin/bash testuser && \
+    echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# ---------------------------------------------------------------------------
+# Copy project source and build
+# ---------------------------------------------------------------------------
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -o /usr/local/bin/gentle-ai ./cmd/gentle-ai
+
+# ---------------------------------------------------------------------------
+# Prepare test environment
+# ---------------------------------------------------------------------------
+COPY e2e/lib.sh     /home/testuser/e2e/lib.sh
+COPY e2e/e2e_test.sh /home/testuser/e2e/e2e_test.sh
+RUN chmod +x /home/testuser/e2e/e2e_test.sh /home/testuser/e2e/lib.sh && \
+    chown -R testuser:testuser /home/testuser
+
+USER testuser
+
+# Ensure go install binaries are on PATH for testuser
+ENV GOPATH="/home/testuser/go"
+ENV PATH="${GOPATH}/bin:/usr/local/go/bin:${PATH}"
+
+WORKDIR /home/testuser
+
+# ---------------------------------------------------------------------------
+# Default: run Tier 1 tests only
+# ---------------------------------------------------------------------------
+CMD ["./e2e/e2e_test.sh"]

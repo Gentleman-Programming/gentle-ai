@@ -82,10 +82,17 @@ func agentOverlay(id model.AgentID) []byte {
 		return openCodeOverlayJSON
 	case model.AgentGeminiCLI:
 		return geminiCLIOverlayJSON
+	case model.AgentAntigravity:
+		// Antigravity manages permissions via IDE UI (Artifact Review Policy /
+		// Terminal Command Auto Execution). No injectable settings.json schema.
+		return nil
 	case model.AgentVSCodeCopilot:
 		return vscodeCopilotOverlayJSON
 	case model.AgentCursor:
 		// Cursor manages permissions via cli-config.json, not settings.json.
+		return nil
+	case model.AgentCodex:
+		// Codex has no known settings.json path; permissions are skipped.
 		return nil
 	default:
 		return nil

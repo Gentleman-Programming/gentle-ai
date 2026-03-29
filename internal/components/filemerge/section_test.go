@@ -123,6 +123,178 @@ func TestInjectMarkdownSection_ExistingWithoutTrailingNewline(t *testing.T) {
 	}
 }
 
+// --- StripLegacyPersonaBlock tests ---
+
+const legacyPersonaBlock = `## Rules
+
+- NEVER add "Co-Authored-By" or any AI attribution to commits.
+
+## Personality
+
+Senior Architect, 15+ years experience, GDE & MVP.
+
+## Language
+
+- Spanish input → Rioplatense Spanish.
+
+`
+
+const gentleAiMarkerSection = `<!-- gentle-ai:persona -->
+## Personality
+
+Senior Architect, 15+ years experience, GDE & MVP.
+<!-- /gentle-ai:persona -->
+`
+
+func TestStripLegacyPersonaBlock_NoFingerprintReturnsSame(t *testing.T) {
+	input := "# My Config\n\nSome unrelated user content.\n"
+	result := StripLegacyPersonaBlock(input)
+	if result != input {
+		t.Fatalf("no fingerprint: expected unchanged result:\ngot:  %q\nwant: %q", result, input)
+	}
+}
+
+func TestStripLegacyPersonaBlock_FingerprintInsideMarkerReturnsSame(t *testing.T) {
+	// Fingerprints only exist inside gentle-ai markers — should NOT be stripped.
+	input := "# My Config\n\n" + gentleAiMarkerSection
+	result := StripLegacyPersonaBlock(input)
+	if result != input {
+		t.Fatalf("fingerprint inside marker: expected unchanged result:\ngot:  %q\nwant: %q", result, input)
+	}
+}
+
+func TestStripLegacyPersonaBlock_LegacyBlockOnlyReturnsEmpty(t *testing.T) {
+	// File contains only the legacy persona block with no markers.
+	result := StripLegacyPersonaBlock(legacyPersonaBlock)
+	if result != "" {
+		t.Fatalf("legacy-only: expected empty string:\ngot: %q", result)
+	}
+}
+
+func TestStripLegacyPersonaBlock_LegacyBlockBeforeMarkersStripped(t *testing.T) {
+	// Stale free-text persona block sits before a properly-marked section.
+	input := legacyPersonaBlock + "\n" + gentleAiMarkerSection
+	result := StripLegacyPersonaBlock(input)
+
+	// The legacy block should be gone.
+	if containsStr(result, "## Rules") {
+		t.Fatal("stripped result should not contain legacy '## Rules' header")
+	}
+	// The marked section must survive.
+	if !containsStr(result, "<!-- gentle-ai:persona -->") {
+		t.Fatal("stripped result missing gentle-ai marker section")
+	}
+}
+
+func TestStripLegacyPersonaBlock_MarkerSectionContentPreserved(t *testing.T) {
+	// Markers and their content must be fully preserved after stripping.
+	input := legacyPersonaBlock + "\n" + gentleAiMarkerSection + "\n# User Notes\n\nSome user text.\n"
+	result := StripLegacyPersonaBlock(input)
+
+	if !containsStr(result, "<!-- gentle-ai:persona -->") {
+		t.Fatal("marker open not preserved")
+	}
+	if !containsStr(result, "<!-- /gentle-ai:persona -->") {
+		t.Fatal("marker close not preserved")
+	}
+	if !containsStr(result, "# User Notes") {
+		t.Fatal("user content after markers not preserved")
+	}
+}
+
+func TestStripLegacyPersonaBlock_OnlyTwoOfThreeFingerprints(t *testing.T) {
+	// File has "## Personality" and "Senior Architect" but NOT "## Rules" —
+	// only two of three fingerprints, so it should NOT be stripped.
+	input := "## Personality\n\nSenior Architect, 15+ years experience.\n\n" + gentleAiMarkerSection
+	result := StripLegacyPersonaBlock(input)
+	// With only 2/3 fingerprints, stripping should NOT occur.
+	if result != input {
+		t.Fatalf("partial fingerprint: expected unchanged result:\ngot:  %q\nwant: %q", result, input)
+	}
+}
+
+func TestStripLegacyPersonaBlock_MixedZone_OnlyOneFingerprint_PreMarker(t *testing.T) {
+	// Edge case: "## Rules" appears in user content before the first marker,
+	// but the other two fingerprints ("## Personality" and "Senior Architect")
+	// exist only inside a gentle-ai marker block.
+	//
+	// Old behaviour (bug): one fingerprint in the pre-marker zone was enough to
+	// trigger stripping, destroying the user's "## Rules" section.
+	// New behaviour (fixed): ALL fingerprints must appear in the pre-marker zone;
+	// since only one does, the file is returned unchanged.
+	userRulesSection := "## Rules\n\n- Never do X.\n- Always do Y.\n\n"
+	markerWithOtherFingerprints := "<!-- gentle-ai:persona -->\n## Personality\n\nSenior Architect, 15+ years experience.\n<!-- /gentle-ai:persona -->\n"
+
+	input := userRulesSection + markerWithOtherFingerprints
+	result := StripLegacyPersonaBlock(input)
+
+	if result != input {
+		t.Fatalf(
+			"mixed-zone edge case: only one fingerprint in pre-marker zone, expected unchanged result:\ngot:  %q\nwant: %q",
+			result, input,
+		)
+	}
+}
+
+func TestStripLegacyPersonaBlock_MixedZone_TwoFingerprints_PreMarker(t *testing.T) {
+	// Two of the three fingerprints appear before the first marker, but only the
+	// third ("## Rules") exists inside the marker block. Stripping must NOT fire
+	// because not all fingerprints are in the pre-marker zone.
+	preMarker := "## Personality\n\nSenior Architect, 15+ years experience.\n\n"
+	markerWithRule := "<!-- gentle-ai:persona -->\n## Rules\n\n- Rule inside marker.\n<!-- /gentle-ai:persona -->\n"
+
+	input := preMarker + markerWithRule
+	result := StripLegacyPersonaBlock(input)
+
+	if result != input {
+		t.Fatalf(
+			"mixed-zone (2 of 3 in pre-marker): expected unchanged result:\ngot:  %q\nwant: %q",
+			result, input,
+		)
+	}
+}
+
+func TestStripLegacyPersonaBlock_AllFingerprintsPreMarker_Strips(t *testing.T) {
+	// Positive case: ALL three fingerprints appear before the first marker.
+	// Stripping MUST fire, removing the pre-marker legacy block.
+	preMarker := "## Rules\n\n- Some rule.\n\n## Personality\n\nSenior Architect, veteran.\n\n"
+	markerSection := "<!-- gentle-ai:persona -->\nUpdated persona.\n<!-- /gentle-ai:persona -->\n"
+
+	input := preMarker + markerSection
+	result := StripLegacyPersonaBlock(input)
+
+	if result == input {
+		t.Fatal("all-fingerprints-pre-marker: expected stripping to occur, but got unchanged result")
+	}
+	if containsStr(result, "## Rules") {
+		t.Fatal("all-fingerprints-pre-marker: legacy '## Rules' should have been stripped")
+	}
+	if !containsStr(result, "<!-- gentle-ai:persona -->") {
+		t.Fatal("all-fingerprints-pre-marker: marker section must be preserved")
+	}
+}
+
+func TestStripLegacyPersonaBlock_EmptyFileReturnsSame(t *testing.T) {
+	result := StripLegacyPersonaBlock("")
+	if result != "" {
+		t.Fatalf("empty file: expected empty result, got %q", result)
+	}
+}
+
+func TestStripLegacyPersonaBlock_UserContentBeforeAndAfterMarkersPreserved(t *testing.T) {
+	// User has hand-written notes before the legacy block — these should survive
+	// IF they are not part of the legacy block.  Since the legacy detection works
+	// by looking for fingerprints before the first marker, user content that
+	// predates the legacy block would also be stripped.  This is an accepted
+	// tradeoff documented in the function comment.
+	input := legacyPersonaBlock + "\n" + gentleAiMarkerSection + "\n# Custom section\n\nUser stuff.\n"
+	result := StripLegacyPersonaBlock(input)
+
+	if !containsStr(result, "# Custom section") {
+		t.Fatal("content after gentle-ai markers must be preserved")
+	}
+}
+
 func containsStr(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
 		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))

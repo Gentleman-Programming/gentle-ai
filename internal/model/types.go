@@ -8,6 +8,9 @@ const (
 	AgentGeminiCLI     AgentID = "gemini-cli"
 	AgentCursor        AgentID = "cursor"
 	AgentVSCodeCopilot AgentID = "vscode-copilot"
+	AgentCodex         AgentID = "codex"
+	AgentAntigravity   AgentID = "antigravity"
+	AgentWindsurf      AgentID = "windsurf"
 )
 
 // SupportTier indicates how fully an agent supports the Gentleman AI ecosystem.
@@ -37,27 +40,20 @@ const (
 type SkillID string
 
 const (
-	SkillSDDInit    SkillID = "sdd-init"
-	SkillSDDNew     SkillID = "sdd-new"
-	SkillSDDApply   SkillID = "sdd-apply"
-	SkillSDDVerify  SkillID = "sdd-verify"
-	SkillSDDExplore SkillID = "sdd-explore"
-	SkillSDDPropose SkillID = "sdd-propose"
-	SkillSDDSpec    SkillID = "sdd-spec"
-	SkillSDDDesign  SkillID = "sdd-design"
-	SkillSDDTasks   SkillID = "sdd-tasks"
-	SkillSDDArchive SkillID = "sdd-archive"
-	SkillReact19    SkillID = "react-19"
-	SkillNextJS15   SkillID = "nextjs-15"
-	SkillTailwind4  SkillID = "tailwind-4"
-	SkillZustand5   SkillID = "zustand-5"
-	SkillZod4       SkillID = "zod-4"
-	SkillAISDK5     SkillID = "ai-sdk-5"
-	SkillPlaywright SkillID = "playwright"
-	SkillPytest     SkillID = "pytest"
-	SkillDjangoDRF  SkillID = "django-drf"
-	SkillGoTesting  SkillID = "go-testing"
-	SkillCreator    SkillID = "skill-creator"
+	SkillSDDInit       SkillID = "sdd-init"
+	SkillSDDApply      SkillID = "sdd-apply"
+	SkillSDDVerify     SkillID = "sdd-verify"
+	SkillSDDExplore    SkillID = "sdd-explore"
+	SkillSDDPropose    SkillID = "sdd-propose"
+	SkillSDDSpec       SkillID = "sdd-spec"
+	SkillSDDDesign     SkillID = "sdd-design"
+	SkillSDDTasks      SkillID = "sdd-tasks"
+	SkillSDDArchive    SkillID = "sdd-archive"
+	SkillGoTesting     SkillID = "go-testing"
+	SkillCreator       SkillID = "skill-creator"
+	SkillJudgmentDay   SkillID = "judgment-day"
+	SkillBranchPR      SkillID = "branch-pr"
+	SkillIssueCreation SkillID = "issue-creation"
 )
 
 type PersonaID string
@@ -93,6 +89,8 @@ const (
 	StrategyMergeIntoSettings
 	// StrategyMCPConfigFile writes to a dedicated mcp.json config file (e.g., Cursor ~/.cursor/mcp.json).
 	StrategyMCPConfigFile
+	// StrategyTOMLFile writes MCP config to a TOML file (e.g., Codex ~/.codex/config.toml).
+	StrategyTOMLFile
 )
 
 type PresetID string

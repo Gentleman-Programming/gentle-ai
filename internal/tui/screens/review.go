@@ -38,6 +38,25 @@ func RenderReview(payload planner.ReviewPayload, cursor int) string {
 			}
 			b.WriteString("  " + styles.UnselectedStyle.Render(string(comp.ID)) + " " + badge + "\n")
 		}
+
+		// Issue #145: show individual skill names when the Skills component is selected.
+		if len(payload.Skills) > 0 {
+			b.WriteString(styles.HeadingStyle.Render("  Skills"))
+			b.WriteString("\n")
+			for _, skill := range payload.Skills {
+				b.WriteString("    " + styles.SubtextStyle.Render(string(skill)) + "\n")
+			}
+		}
+
+		// Issue #149: show Strict TDD status when SDD is in the plan.
+		if payload.HasSDD {
+			strictLabel := "Disabled"
+			if payload.StrictTDD {
+				strictLabel = "Enabled"
+			}
+			b.WriteString("  " + styles.HeadingStyle.Render("Strict TDD") + "  " + styles.UnselectedStyle.Render(strictLabel) + "\n")
+		}
+
 		b.WriteString("\n")
 	}
 

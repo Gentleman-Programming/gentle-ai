@@ -9,9 +9,10 @@
 | macOS (Apple Silicon + Intel) | Homebrew | Supported |
 | Linux (Ubuntu/Debian) | apt | Supported |
 | Linux (Arch) | pacman | Supported |
+| Linux (Fedora/RHEL family) | dnf | Supported |
 | Windows 10/11 | winget | Supported |
 
-Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, etc.).
+Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, CentOS Stream, Rocky Linux, AlmaLinux, etc.).
 
 Release binaries are built for `linux`, `darwin`, and `windows` on both `amd64` and `arm64`.
 
@@ -55,3 +56,6 @@ If the hash matches `checksums.txt`, the file is authentic for that release.
 | Gemini CLI | `%USERPROFILE%\.gemini\` |
 | Cursor | `%USERPROFILE%\.cursor\` |
 | VS Code Copilot | `%APPDATA%\Code\User\` (settings, MCP, prompts) + `%USERPROFILE%\.copilot\` (skills) |
+| Codex | `%USERPROFILE%\.codex\` |
+| Windsurf | `%USERPROFILE%\.codeium\windsurf\` (skills, MCP, rules) + `%APPDATA%\Windsurf\User\` (settings) |
+| Antigravity | `%USERPROFILE%\.gemini\antigravity\` |

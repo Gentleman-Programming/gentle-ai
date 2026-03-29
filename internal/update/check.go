@@ -13,10 +13,33 @@ import (
 // currentVersion is the build-time version of gentle-ai (from app.Version).
 // profile determines platform-specific update instructions.
 func CheckAll(ctx context.Context, currentVersion string, profile system.PlatformProfile) []UpdateResult {
-	results := make([]UpdateResult, len(Tools))
+	return CheckFiltered(ctx, currentVersion, profile, nil)
+}
+
+// CheckFiltered runs update checks for a subset of tools identified by name.
+// If toolNames is nil or empty, it behaves identically to CheckAll (all tools).
+// Unknown tool names in toolNames are silently ignored.
+func CheckFiltered(ctx context.Context, currentVersion string, profile system.PlatformProfile, toolNames []string) []UpdateResult {
+	// Build the target slice: all tools when filter is empty, otherwise only matching ones.
+	var targets []ToolInfo
+	if len(toolNames) == 0 {
+		targets = Tools
+	} else {
+		nameSet := make(map[string]struct{}, len(toolNames))
+		for _, n := range toolNames {
+			nameSet[n] = struct{}{}
+		}
+		for _, t := range Tools {
+			if _, ok := nameSet[t.Name]; ok {
+				targets = append(targets, t)
+			}
+		}
+	}
+
+	results := make([]UpdateResult, len(targets))
 
 	var wg sync.WaitGroup
-	for i, tool := range Tools {
+	for i, tool := range targets {
 		wg.Add(1)
 		go func(idx int, t ToolInfo) {
 			defer wg.Done()
@@ -58,11 +81,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 	// Handle fetch failure.
 	if fetchErr != nil {
 		result.Err = fetchErr
-		if localVersion == "" && tool.DetectCmd != nil {
-			result.Status = NotInstalled
-		} else {
-			result.Status = CheckFailed
-		}
+		result.Status = CheckFailed
 		return result
 	}
 
@@ -85,8 +104,14 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 		return result
 	}
 
-	// Check for non-semver local versions (e.g., "dev").
+	// Check for non-semver local versions.
+	// "dev" is a well-known sentinel for source-built binaries — report as DevBuild
+	// so the upgrade executor knows to skip this tool without treating it as an error.
 	normalizedLocal := normalizeVersion(localVersion)
+	if normalizedLocal == "dev" {
+		result.Status = DevBuild
+		return result
+	}
 	if !isSemver(normalizedLocal) {
 		result.Status = VersionUnknown
 		return result

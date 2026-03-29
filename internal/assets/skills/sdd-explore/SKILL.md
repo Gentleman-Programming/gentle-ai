@@ -21,59 +21,25 @@ The orchestrator will give you:
 
 ## Execution and Persistence Contract
 
-- If mode is `engram`:
+> Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/sdd-phase-common.md`.
 
-  **Read context** (optional — load project context if available):
-  1. `mem_search(query: "sdd-init/{project}", project: "{project}")` → get observation ID
-  2. `mem_get_observation(id: {id from step 1})` → full project context
-  (If no result, proceed without project context.)
-
-  **Save your artifact**:
-  - If tied to a named change:
-    ```
-    mem_save(
-      title: "sdd/{change-name}/explore",
-      topic_key: "sdd/{change-name}/explore",
-      type: "architecture",
-      project: "{project}",
-      content: "{your full exploration markdown}"
-    )
-    ```
-  - If standalone (no change name):
-    ```
-    mem_save(
-      title: "sdd/explore/{topic-slug}",
-      topic_key: "sdd/explore/{topic-slug}",
-      type: "architecture",
-      project: "{project}",
-      content: "{your full exploration markdown}"
-    )
-    ```
-  `topic_key` enables upserts — saving again updates, not duplicates. (Read `skills/_shared/sdd-phase-common.md`.)
-
-  (See `skills/_shared/engram-convention.md` for full naming conventions.)
-- If mode is `openspec`: Read and follow `skills/_shared/openspec-convention.md`.
-- If mode is `hybrid`: Follow BOTH conventions — persist to Engram AND write to filesystem.
-- If mode is `none`: Return result only.
+- **engram**: Optionally read `sdd-init/{project}` for project context. Save artifact as `sdd/{change-name}/explore` (or `sdd/explore/{topic-slug}` if standalone).
+- **openspec**: Read and follow `skills/_shared/openspec-convention.md`.
+- **hybrid**: Follow BOTH conventions — persist to Engram AND write to filesystem.
+- **none**: Return result only.
 
 ### Retrieving Context
 
-Before starting, load any existing project context and specs per the active convention:
-- **engram**:
-  1. `mem_search(query: "sdd-init/{project}", project: "{project}")` → get observation ID
-  2. `mem_get_observation(id: {id from step 1})` → full project context
-  3. Optionally `mem_search(query: "sdd/", project: "{project}")` → find existing artifacts
-  (If no results, proceed without prior context.)
+> Follow **Section B** from `skills/_shared/sdd-phase-common.md` for retrieval.
+
+- **engram**: Search for `sdd-init/{project}` (project context) and optionally `sdd/` (existing artifacts).
 - **openspec**: Read `openspec/config.yaml` and `openspec/specs/`.
 - **none**: Use whatever context the orchestrator passed in the prompt.
 
 ## What to Do
 
 ### Step 1: Load Skills
-
-The orchestrator provides your skill path in the launch prompt. Load it now. If no path was provided, proceed without additional skills.
-
-> Read `skills/_shared/sdd-phase-common.md` for the engram upsert note and return envelope format.
+Follow **Section A** from `skills/_shared/sdd-phase-common.md`.
 
 ### Step 2: Understand the Request
 
@@ -111,33 +77,10 @@ If there are multiple approaches, compare them:
 
 **This step is MANDATORY when tied to a named change — do NOT skip it.**
 
-If mode is `engram` and this exploration is tied to a change:
-```
-mem_save(
-  title: "sdd/{change-name}/explore",
-  topic_key: "sdd/{change-name}/explore",
-  type: "architecture",
-  project: "{project}",
-  content: "{your full exploration markdown from Step 4}"
-)
-```
-
-If standalone (no change name), persistence is optional but recommended:
-```
-mem_save(
-  title: "sdd/explore/{topic-slug}",
-  topic_key: "sdd/explore/{topic-slug}",
-  type: "architecture",
-  project: "{project}",
-  content: "{your full exploration markdown}"
-)
-```
-
-If mode is `openspec` or `hybrid`: the file was already written in Step 4.
-
-If mode is `hybrid`: also call `mem_save` as above (write to BOTH backends).
-
-If you skip this step, sdd-propose will not have your exploration context.
+Follow **Section C** from `skills/_shared/sdd-phase-common.md`.
+- artifact: `explore`
+- topic_key: `sdd/{change-name}/explore` (or `sdd/explore/{topic-slug}` if standalone)
+- type: `architecture`
 
 ### Step 6: Return Structured Analysis
 
@@ -183,4 +126,4 @@ Return EXACTLY this format to the orchestrator (and write the same content to `e
 - Keep your analysis CONCISE - the orchestrator needs a summary, not a novel
 - If you can't find enough information, say so clearly
 - If the request is too vague to explore, say what clarification is needed
-- Return a structured envelope with: `status`, `executive_summary`, `detailed_report` (optional), `artifacts`, `next_recommended`, and `risks` (read `skills/_shared/sdd-phase-common.md` for the full envelope spec)
+- Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.

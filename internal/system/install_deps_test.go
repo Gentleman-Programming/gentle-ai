@@ -53,6 +53,14 @@ func TestInstallHintNodeArch(t *testing.T) {
 	}
 }
 
+func TestInstallHintNodeFedora(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "dnf", LinuxDistro: LinuxDistroFedora}
+	hint := installHintNode(profile)
+	if !strings.Contains(hint, "rpm.nodesource.com") || !strings.Contains(hint, "dnf install -y nodejs") {
+		t.Fatalf("installHintNode(fedora) = %q, want NodeSource LTS setup + dnf install", hint)
+	}
+}
+
 func TestInstallHintBrew(t *testing.T) {
 	hint := installHintBrew()
 	if !strings.Contains(hint, "Homebrew") {
@@ -106,6 +114,20 @@ func TestInstallCommandsForDepNodeUbuntuHasTwoSteps(t *testing.T) {
 	}
 }
 
+func TestInstallCommandsForDepNodeFedoraHasTwoSteps(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "dnf", LinuxDistro: LinuxDistroFedora}
+	cmds := InstallCommandsForDep("node", profile)
+	if len(cmds) != 2 {
+		t.Fatalf("node fedora commands = %d, want 2 (nodesource setup + install)", len(cmds))
+	}
+	if cmds[0][0] != "bash" || !strings.Contains(cmds[0][2], "rpm.nodesource.com/setup_lts.x") {
+		t.Fatalf("node fedora step 1 = %v, want nodesource setup", cmds[0])
+	}
+	if cmds[1][0] != "sudo" || cmds[1][1] != "dnf" || cmds[1][4] != "nodejs" {
+		t.Fatalf("node fedora step 2 = %v, want sudo dnf install -y nodejs", cmds[1])
+	}
+}
+
 func TestInstallCommandsForDepNpmReturnsNil(t *testing.T) {
 	profile := PlatformProfile{OS: "darwin", PackageManager: "brew"}
 	cmds := InstallCommandsForDep("npm", profile)
@@ -146,6 +168,17 @@ func TestInstallCommandsForDepGitArchUsesPacman(t *testing.T) {
 	}
 	if cmds[0][0] != "sudo" || cmds[0][1] != "pacman" {
 		t.Fatalf("git arch command = %v, want sudo pacman", cmds[0])
+	}
+}
+
+func TestInstallCommandsForDepGitFedoraUsesDnf(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "dnf", LinuxDistro: LinuxDistroFedora}
+	cmds := InstallCommandsForDep("git", profile)
+	if len(cmds) != 1 {
+		t.Fatalf("git fedora commands = %d, want 1", len(cmds))
+	}
+	if cmds[0][0] != "sudo" || cmds[0][1] != "dnf" {
+		t.Fatalf("git fedora command = %v, want sudo dnf", cmds[0])
 	}
 }
 
@@ -247,6 +280,7 @@ func TestInstallCommandsFullMatrix(t *testing.T) {
 		{OS: "darwin", PackageManager: "brew"},
 		{OS: "linux", PackageManager: "apt", LinuxDistro: "ubuntu"},
 		{OS: "linux", PackageManager: "pacman", LinuxDistro: "arch"},
+		{OS: "linux", PackageManager: "dnf", LinuxDistro: LinuxDistroFedora},
 	}
 
 	deps := []string{"git", "curl", "node", "go"}

@@ -6,7 +6,7 @@ description: >
 license: MIT
 metadata:
   author: gentleman-programming
-  version: "2.0"
+  version: "3.0"
 ---
 
 ## Purpose
@@ -23,50 +23,42 @@ From the orchestrator:
 
 ## Execution and Persistence Contract
 
-- If mode is `engram`:
+> Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/sdd-phase-common.md`.
 
-  **CRITICAL: `mem_search` returns 300-char PREVIEWS, not full content. You MUST call `mem_get_observation(id)` for EVERY artifact. If you skip this, you will verify against incomplete specs and miss issues.**
-
-  **STEP A — SEARCH** (get IDs only — content is truncated):
-  1. `mem_search(query: "sdd/{change-name}/proposal", project: "{project}")` → save ID
-  2. `mem_search(query: "sdd/{change-name}/spec", project: "{project}")` → save ID
-  3. `mem_search(query: "sdd/{change-name}/design", project: "{project}")` → save ID
-  4. `mem_search(query: "sdd/{change-name}/tasks", project: "{project}")` → save ID
-
-  **STEP B — RETRIEVE FULL CONTENT** (mandatory for each):
-  5. `mem_get_observation(id: {proposal_id})` → full proposal
-  6. `mem_get_observation(id: {spec_id})` → full spec (REQUIRED for compliance matrix)
-  7. `mem_get_observation(id: {design_id})` → full design
-  8. `mem_get_observation(id: {tasks_id})` → full tasks
-
-  **DO NOT use search previews as source material.**
-
-  **Save your artifact**:
-  ```
-  mem_save(
-    title: "sdd/{change-name}/verify-report",
-    topic_key: "sdd/{change-name}/verify-report",
-    type: "architecture",
-    project: "{project}",
-    content: "{your full verification report markdown}"
-  )
-  ```
-  `topic_key` enables upserts — saving again updates, not duplicates. (Read `skills/_shared/sdd-phase-common.md`.)
-
-  (See `skills/_shared/engram-convention.md` for full naming conventions.)
-- If mode is `openspec`: Read and follow `skills/_shared/openspec-convention.md`. Save to `openspec/changes/{change-name}/verify-report.md`.
-- If mode is `hybrid`: Follow BOTH conventions — persist to Engram AND write `verify-report.md` to filesystem.
-- If mode is `none`: Return the verification report inline only. Never write files.
+- **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec` (required for compliance matrix), `sdd/{change-name}/design`, `sdd/{change-name}/tasks` (all required). Save as `sdd/{change-name}/verify-report`.
+- **openspec**: Read and follow `skills/_shared/openspec-convention.md`. Save to `openspec/changes/{change-name}/verify-report.md`.
+- **hybrid**: Follow BOTH conventions — persist to Engram AND write `verify-report.md` to filesystem.
+- **none**: Return the verification report inline only. Never write files.
 
 ## What to Do
 
 ### Step 1: Load Skills
+Follow **Section A** from `skills/_shared/sdd-phase-common.md`.
 
-The orchestrator provides your skill path in the launch prompt. Load it now. If no path was provided, proceed without additional skills.
+### Step 2: Read Testing Capabilities and Resolve TDD Mode
 
-> Read `skills/_shared/sdd-phase-common.md` for the engram upsert note and return envelope format.
+Read the cached testing capabilities to determine if Strict TDD verification applies:
 
-### Step 2: Check Completeness
+```
+Read testing capabilities from:
+├── engram: mem_search("sdd/{project}/testing-capabilities") → mem_get_observation(id)
+├── openspec: openspec/config.yaml → strict_tdd + testing section
+└── Fallback: check project files directly
+
+Resolve mode:
+├── IF strict_tdd: true AND test runner exists
+│   └── STRICT TDD VERIFY → Load strict-tdd-verify.md module
+│       (read the file: skills/sdd-verify/strict-tdd-verify.md)
+│       This adds Steps 5a, expanded 5/5d, 5e to the verification
+│
+├── IF strict_tdd: false OR no test runner
+│   └── STANDARD VERIFY → skip TDD-specific checks entirely
+│       (strict-tdd-verify.md is never loaded — zero tokens)
+│
+└── Cache the resolved mode for the report header
+```
+
+### Step 3: Check Completeness
 
 Verify ALL tasks are done:
 
@@ -78,7 +70,7 @@ Read tasks.md
 └── Flag: CRITICAL if core tasks incomplete, WARNING if cleanup tasks incomplete
 ```
 
-### Step 3: Check Correctness (Static Specs Match)
+### Step 4: Check Correctness (Static Specs Match)
 
 For EACH spec requirement and scenario, search the codebase for structural evidence:
 
@@ -93,9 +85,9 @@ FOR EACH REQUIREMENT in specs/:
 └── Flag: CRITICAL if requirement missing, WARNING if scenario partially covered
 ```
 
-Note: This is static analysis only. Behavioral validation with real execution happens in Step 6.
+Note: This is static analysis only. Behavioral validation with real execution happens in Step 7.
 
-### Step 4: Check Coherence (Design Match)
+### Step 5: Check Coherence (Design Match)
 
 Verify design decisions were followed:
 
@@ -107,7 +99,15 @@ FOR EACH DECISION in design.md:
 └── Flag: WARNING if deviation found (may be valid improvement)
 ```
 
-### Step 5: Check Testing (Static)
+### Step 5a: TDD Compliance Check (Strict TDD only)
+
+> **Skip this step entirely if Strict TDD Mode is not active.**
+
+If Strict TDD is active, follow the instructions in `strict-tdd-verify.md` Step 5a.
+
+### Step 6: Check Testing
+
+#### Step 6a: Static Test Analysis
 
 Verify test files exist and cover the right scenarios:
 
@@ -120,13 +120,14 @@ Search for test files related to the change
 └── Flag: WARNING if scenarios lack tests, SUGGESTION if coverage could improve
 ```
 
-### Step 5b: Run Tests (Real Execution)
+#### Step 6b: Run Tests (Real Execution)
 
 Detect the project's test runner and execute the tests:
 
 ```
 Detect test runner from:
-├── openspec/config.yaml → rules.verify.test_command (highest priority)
+├── Cached testing capabilities → test_runner.command (fastest)
+├── openspec/config.yaml → rules.verify.test_command (override)
 ├── package.json → scripts.test
 ├── pyproject.toml / pytest.ini → pytest
 ├── Makefile → make test
@@ -144,13 +145,14 @@ Flag: CRITICAL if exit code != 0 (any test failed)
 Flag: WARNING if skipped tests relate to changed areas
 ```
 
-### Step 5c: Build & Type Check (Real Execution)
+#### Step 6c: Build & Type Check (Real Execution)
 
 Detect and run the build/type-check command:
 
 ```
 Detect build command from:
-├── openspec/config.yaml → rules.verify.build_command (highest priority)
+├── Cached testing capabilities → quality_tools.type_checker (fastest)
+├── openspec/config.yaml → rules.verify.build_command (override)
 ├── package.json → scripts.build → also run tsc --noEmit if tsconfig.json exists
 ├── pyproject.toml → python -m build or equivalent
 ├── Makefile → make build
@@ -166,25 +168,34 @@ Flag: CRITICAL if build fails (exit code != 0)
 Flag: WARNING if there are type errors even with passing build
 ```
 
-### Step 5d: Coverage Validation (Real Execution — if threshold configured)
+#### Step 6d: Coverage Validation (Real Execution — if available)
 
-Run with coverage only if `rules.verify.coverage_threshold` is set in `openspec/config.yaml`:
+Run coverage if the tool is available (from cached capabilities or config):
 
 ```
-IF coverage_threshold is configured:
+IF coverage tool available (from cached capabilities or rules.verify.coverage_threshold set):
 ├── Run: {test_command} --coverage (or equivalent for the test runner)
 ├── Parse coverage report
-├── Compare total coverage % against threshold
-├── Flag: WARNING if below threshold (not CRITICAL — coverage alone doesn't block)
-└── Report per-file coverage for changed files only
+├── IF Strict TDD active → follow expanded Step 5d from strict-tdd-verify.md
+│   (per-file coverage for changed files, uncovered line ranges)
+├── IF Standard mode → report total coverage only
+│   ├── Compare total coverage % against threshold (if configured)
+│   └── Flag: WARNING if below threshold
+└── Report
 
-IF coverage_threshold is NOT configured:
-└── Skip this step, report as "Not configured"
+IF coverage tool NOT available:
+└── Skip this step, report as "Not available"
 ```
 
-### Step 6: Spec Compliance Matrix (Behavioral Validation)
+#### Step 6e: Quality Metrics (Strict TDD only)
 
-This is the most important step. Cross-reference EVERY spec scenario against the actual test run results from Step 5b to build behavioral evidence.
+> **Skip this step entirely if Strict TDD Mode is not active.**
+
+If Strict TDD is active, follow the instructions in `strict-tdd-verify.md` Step 5e.
+
+### Step 7: Spec Compliance Matrix (Behavioral Validation)
+
+This is the most important step. Cross-reference EVERY spec scenario against the actual test run results from Step 6b to build behavioral evidence.
 
 For each scenario from the specs, find which test(s) cover it and what the result was:
 
@@ -192,7 +203,7 @@ For each scenario from the specs, find which test(s) cover it and what the resul
 FOR EACH REQUIREMENT in specs/:
   FOR EACH SCENARIO:
   ├── Find tests that cover this scenario (by name, description, or file path)
-  ├── Look up that test's result from Step 5b output
+  ├── Look up that test's result from Step 6b output
   ├── Assign compliance status:
   │   ├── ✅ COMPLIANT   → test exists AND passed
   │   ├── ❌ FAILING     → test exists BUT failed (CRITICAL)
@@ -203,15 +214,20 @@ FOR EACH REQUIREMENT in specs/:
 
 A spec scenario is only considered COMPLIANT when there is a test that passed proving the behavior at runtime. Code existing in the codebase is NOT sufficient evidence.
 
-### Step 7: Persist Verification Report
+### Step 7a: Test Layer Validation (Strict TDD only)
 
-Persist the report according to the resolved `artifact_store.mode`, following the conventions in `skills/_shared/`:
+> **Skip this step entirely if Strict TDD Mode is not active.**
 
-- **engram**: Use `engram-convention.md` — artifact type `verify-report`
-- **openspec**: Write to `openspec/changes/{change-name}/verify-report.md`
-- **none**: Return the full report inline, do NOT write any files
+If Strict TDD is active, follow the instructions in `strict-tdd-verify.md` (Step 5 Expanded: Test Layer Validation).
 
-### Step 8: Return Summary
+### Step 8: Persist Verification Report
+
+Follow **Section C** from `skills/_shared/sdd-phase-common.md`.
+- artifact: `verify-report`
+- topic_key: `sdd/{change-name}/verify-report`
+- type: `architecture`
+
+### Step 9: Return Summary
 
 Return to the orchestrator the same content you wrote to `verify-report.md`:
 
@@ -220,6 +236,7 @@ Return to the orchestrator the same content you wrote to `verify-report.md`:
 
 **Change**: {change-name}
 **Version**: {spec version or N/A}
+**Mode**: {Strict TDD | Standard}
 
 ---
 
@@ -246,9 +263,14 @@ Return to the orchestrator the same content you wrote to `verify-report.md`:
 {failed test names and errors if any}
 ```
 
-**Coverage**: {N}% / threshold: {N}% → ✅ Above threshold / ⚠️ Below threshold / ➖ Not configured
+**Coverage**: {N}% / threshold: {N}% → ✅ Above threshold / ⚠️ Below threshold / ➖ Not available
 
 ---
+
+{IF Strict TDD Mode → include TDD Compliance table from strict-tdd-verify.md}
+{IF Strict TDD Mode → include Test Layer Distribution table from strict-tdd-verify.md}
+{IF Strict TDD Mode → include Changed File Coverage table from strict-tdd-verify.md}
+{IF Strict TDD Mode → include Quality Metrics from strict-tdd-verify.md}
 
 ### Spec Compliance Matrix
 
@@ -312,4 +334,7 @@ Return to the orchestrator the same content you wrote to `verify-report.md`:
 - DO NOT fix any issues — only report them. The orchestrator decides what to do.
 - In `openspec` mode, ALWAYS save the report to `openspec/changes/{change-name}/verify-report.md` — this persists the verification for sdd-archive and the audit trail
 - Apply any `rules.verify` from `openspec/config.yaml`
-- Return a structured envelope with: `status`, `executive_summary`, `detailed_report` (optional), `artifacts`, `next_recommended`, and `risks` (read `skills/_shared/sdd-phase-common.md` for the full envelope spec)
+- If Strict TDD is active, load `strict-tdd-verify.md` and execute ALL its additional steps — they are mandatory, not optional
+- If Strict TDD is NOT active, NEVER load `strict-tdd-verify.md` — zero tokens wasted on TDD checks
+- Use cached testing capabilities from Engram/config whenever possible — avoid re-detecting
+- Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.

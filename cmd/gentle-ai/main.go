@@ -11,7 +11,7 @@ import (
 var version = "dev"
 
 func main() {
-	app.Version = version
+	app.Version = app.ResolveVersion(version)
 
 	if err := app.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

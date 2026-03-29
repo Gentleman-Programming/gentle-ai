@@ -43,7 +43,7 @@ func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 	}
 
 	want := model.Selection{
-		Agents:  []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentGeminiCLI, model.AgentCursor, model.AgentVSCodeCopilot},
+		Agents:  []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentGeminiCLI, model.AgentCodex, model.AgentCursor, model.AgentVSCodeCopilot, model.AgentAntigravity, model.AgentWindsurf},
 		Persona: model.PersonaGentleman,
 		Preset:  model.PresetFullGentleman,
 		Components: []model.ComponentID{
@@ -173,5 +173,91 @@ func TestRunInstallDryRunSkipsExecution(t *testing.T) {
 
 	if len(result.Execution.Apply.Steps) != 0 || len(result.Execution.Prepare.Steps) != 0 {
 		t.Fatalf("execution should be empty in dry-run")
+	}
+}
+
+// ─── Detection-default consumer regression tests ───────────────────────────
+
+// makeDetectionWithAgents builds a DetectionResult with the specified agents
+// marked as Exists=true. All other agents are absent.
+func makeDetectionWithAgents(present ...string) system.DetectionResult {
+	var configs []system.ConfigState
+	// Full canonical agent set — mirrors knownAgentConfigDirs in config_scan.go.
+	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf"}
+	presentSet := make(map[string]bool, len(present))
+	for _, p := range present {
+		presentSet[p] = true
+	}
+	for _, agent := range known {
+		configs = append(configs, system.ConfigState{
+			Agent:       agent,
+			Path:        "/tmp/fake/" + agent,
+			Exists:      presentSet[agent],
+			IsDirectory: presentSet[agent],
+		})
+	}
+	return system.DetectionResult{Configs: configs}
+}
+
+// TestDefaultAgentsFromDetection_CodexIsIncludedWhenPresent is a regression
+// guard: when the codex config dir exists, defaultAgentsFromDetection must
+// include model.AgentCodex in its result. Previously the switch statement
+// omitted codex, so detection-driven selection silently dropped it.
+func TestDefaultAgentsFromDetection_CodexIsIncludedWhenPresent(t *testing.T) {
+	detection := makeDetectionWithAgents("codex")
+	agents := defaultAgentsFromDetection(detection)
+
+	found := false
+	for _, id := range agents {
+		if id == model.AgentCodex {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("defaultAgentsFromDetection() did not include codex even though config dir is present; got %v", agents)
+	}
+}
+
+// TestDefaultAgentsFromDetection_AllAgentsMappedCorrectly verifies every
+// canonical agent string maps to its model.AgentID constant. This prevents
+// silent drops when new agents are added to ScanConfigs without updating the
+// consumer switch.
+func TestDefaultAgentsFromDetection_AllAgentsMappedCorrectly(t *testing.T) {
+	tests := []struct {
+		configAgent string
+		wantID      model.AgentID
+	}{
+		{"claude-code", model.AgentClaudeCode},
+		{"opencode", model.AgentOpenCode},
+		{"gemini-cli", model.AgentGeminiCLI},
+		{"cursor", model.AgentCursor},
+		{"vscode-copilot", model.AgentVSCodeCopilot},
+		{"codex", model.AgentCodex},
+		{"antigravity", model.AgentAntigravity},
+		{"windsurf", model.AgentWindsurf},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.configAgent, func(t *testing.T) {
+			detection := makeDetectionWithAgents(tt.configAgent)
+			agents := defaultAgentsFromDetection(detection)
+
+			found := false
+			for _, id := range agents {
+				if id == tt.wantID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("defaultAgentsFromDetection() missing %q → %q mapping; got %v",
+					tt.configAgent, tt.wantID, agents)
+			}
+			// Exactly one agent should be in the result (only one dir exists).
+			if len(agents) != 1 {
+				t.Errorf("defaultAgentsFromDetection() returned %d agents, want 1; got %v", len(agents), agents)
+			}
+		})
 	}
 }

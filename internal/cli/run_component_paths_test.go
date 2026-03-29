@@ -56,15 +56,15 @@ func TestComponentPathsSDDMultiIncludesOpenCodePlugin(t *testing.T) {
 	}
 }
 
-func TestComponentPathsSDDSingleExcludesOpenCodePlugin(t *testing.T) {
+func TestComponentPathsSDDSingleIncludesOpenCodePlugin(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode})
 
 	paths := componentPaths(home, model.Selection{SDDMode: model.SDDModeSingle}, adapters, model.ComponentSDD)
 
 	plugin := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
-	if containsPath(paths, plugin) {
-		t.Fatalf("componentPaths(sdd single) unexpectedly included OpenCode plugin path %q\npaths=%v", plugin, paths)
+	if !containsPath(paths, plugin) {
+		t.Fatalf("componentPaths(sdd single) missing OpenCode plugin path %q\npaths=%v", plugin, paths)
 	}
 }
 
@@ -80,6 +80,7 @@ func TestComponentPathsSDDIncludesSkillsAndSharedConventions(t *testing.T) {
 		"engram-convention.md",
 		"openspec-convention.md",
 		"sdd-phase-common.md",
+		"skill-resolver.md",
 	} {
 		shared := filepath.Join(home, ".gemini", "skills", "_shared", sharedFile)
 		if !containsPath(paths, shared) {
@@ -90,6 +91,20 @@ func TestComponentPathsSDDIncludesSkillsAndSharedConventions(t *testing.T) {
 	skill := filepath.Join(home, ".gemini", "skills", "sdd-verify", "SKILL.md")
 	if !containsPath(paths, skill) {
 		t.Fatalf("componentPaths(sdd) missing SDD skill path %q\npaths=%v", skill, paths)
+	}
+}
+
+// TestComponentPathsEngramCodexIncludesConfigTOML verifies that componentPaths
+// for ComponentEngram + Codex reports ~/.codex/config.toml as a backup target.
+func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentCodex})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentEngram)
+
+	want := home + "/.codex/config.toml"
+	if !containsPath(paths, want) {
+		t.Fatalf("componentPaths(engram,codex) missing %q\npaths=%v", want, paths)
 	}
 }
 

@@ -26,6 +26,10 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		return injectMergeIntoSettings(homeDir, adapter)
 	case model.StrategyMCPConfigFile:
 		return injectMCPConfigFile(homeDir, adapter)
+	case model.StrategyTOMLFile:
+		// Context7 injection is not supported for TOML-based agents (Codex).
+		// Codex receives Context7 through its agents.md system prompt, not via MCP config.
+		return InjectionResult{}, nil
 	default:
 		return InjectionResult{}, fmt.Errorf("mcp injector does not support MCP strategy %d for agent %q", adapter.MCPStrategy(), adapter.Agent())
 	}
@@ -72,6 +76,9 @@ func injectMCPConfigFile(homeDir string, adapter agents.Adapter) (InjectionResul
 	overlay := DefaultContext7OverlayJSON()
 	if adapter.Agent() == model.AgentVSCodeCopilot {
 		overlay = VSCodeContext7OverlayJSON()
+	}
+	if adapter.Agent() == model.AgentAntigravity {
+		overlay = AntigravityContext7OverlayJSON()
 	}
 
 	// For mcp.json pattern, merge the server config as a named entry.

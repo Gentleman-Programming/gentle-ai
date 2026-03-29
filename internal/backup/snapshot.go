@@ -37,6 +37,9 @@ func (s Snapshotter) Create(snapshotDir string, paths []string) (Manifest, error
 			return Manifest{}, err
 		}
 		manifest.Entries = append(manifest.Entries, entry)
+		if entry.Existed {
+			manifest.FileCount++
+		}
 	}
 
 	if err := WriteManifest(filepath.Join(snapshotDir, ManifestFilename), manifest); err != nil {

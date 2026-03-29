@@ -139,6 +139,20 @@ func (e AgentNotInstallableError) Error() string {
 	return "agent " + string(e.Agent) + " is a desktop app and cannot be installed via CLI"
 }
 
+// --- Sub-agent support (Cursor native agents in ~/.cursor/agents/) ---
+
+func (a *Adapter) SupportsSubAgents() bool {
+	return true
+}
+
+func (a *Adapter) SubAgentsDir(homeDir string) string {
+	return filepath.Join(homeDir, ".cursor", "agents")
+}
+
+func (a *Adapter) EmbeddedSubAgentsDir() string {
+	return "cursor/agents"
+}
+
 func defaultStat(path string) statResult {
 	info, err := os.Stat(path)
 	if err != nil {

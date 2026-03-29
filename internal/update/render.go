@@ -14,6 +14,7 @@ func RenderCLI(results []UpdateResult) string {
 	b.WriteString("============\n\n")
 
 	updatesAvailable := 0
+	checksFailed := 0
 
 	for _, r := range results {
 		status := statusIcon(r.Status)
@@ -33,6 +34,9 @@ func RenderCLI(results []UpdateResult) string {
 			updatesAvailable++
 		} else if r.Status == UpdateAvailable {
 			updatesAvailable++
+		} else if r.Status == CheckFailed {
+			b.WriteString("  check failed")
+			checksFailed++
 		}
 
 		b.WriteString("\n")
@@ -40,8 +44,12 @@ func RenderCLI(results []UpdateResult) string {
 
 	b.WriteString("\n")
 
-	if updatesAvailable > 0 {
+	if updatesAvailable > 0 && checksFailed > 0 {
+		fmt.Fprintf(&b, "%d update(s) available. %d check(s) failed.\n", updatesAvailable, checksFailed)
+	} else if updatesAvailable > 0 {
 		fmt.Fprintf(&b, "%d update(s) available.\n", updatesAvailable)
+	} else if checksFailed > 0 {
+		fmt.Fprintf(&b, "Update check incomplete: %d tool(s) failed to check.\n", checksFailed)
 	} else {
 		b.WriteString("All tools are up to date!\n")
 	}
@@ -62,6 +70,8 @@ func statusIcon(status UpdateStatus) string {
 		return "[??]"
 	case CheckFailed:
 		return "[!!]"
+	case DevBuild:
+		return "[dev]"
 	default:
 		return "[  ]"
 	}
@@ -88,4 +98,20 @@ func HasUpdates(results []UpdateResult) bool {
 		}
 	}
 	return false
+}
+
+// CheckFailures returns the names of tools whose remote update check failed.
+func CheckFailures(results []UpdateResult) []string {
+	failed := make([]string, 0)
+	for _, r := range results {
+		if r.Status == CheckFailed {
+			failed = append(failed, r.Tool.Name)
+		}
+	}
+	return failed
+}
+
+// HasCheckFailures returns true when any tool update check failed.
+func HasCheckFailures(results []UpdateResult) bool {
+	return len(CheckFailures(results)) > 0
 }

@@ -17,6 +17,15 @@ func DefaultCachePath() string {
 	return filepath.Join(home, ".cache", "opencode", "models.json")
 }
 
+// DefaultSettingsPath returns the default path to the OpenCode settings file.
+func DefaultSettingsPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "opencode", "opencode.json")
+}
+
 // DefaultAuthPath returns the default path to the OpenCode auth credentials file.
 func DefaultAuthPath() string {
 	home, err := os.UserHomeDir()

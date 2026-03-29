@@ -22,6 +22,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/verify"
 )
@@ -44,6 +45,16 @@ var (
 	runCommand          = executeCommand
 	cmdLookPath         = exec.LookPath
 	streamCommandOutput = true
+
+	// engramDownloadFn is the function used to download the engram binary on non-brew platforms.
+	// Package-level var for testability — tests can replace this to avoid real HTTP calls.
+	engramDownloadFn = engram.DownloadLatestBinary
+
+	// AppVersion is the gentle-ai version that will be written into backup manifests.
+	// It is set by app.go before any CLI operation so that every backup created during
+	// an install or sync records which version of gentle-ai made it.
+	// Default "dev" matches the ldflags default in app.Version.
+	AppVersion = "dev"
 )
 
 // SetCommandOutputStreaming toggles whether command stdout/stderr is streamed
@@ -123,6 +134,15 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		return result, fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
 
+	// Persist the user's agent selection so that future `sync` runs target only
+	// the agents the user actually installed, not every IDE config dir on disk.
+	agentIDs := make([]string, 0, len(input.Selection.Agents))
+	for _, a := range input.Selection.Agents {
+		agentIDs = append(agentIDs, string(a))
+	}
+	// Non-fatal: a state write failure must not break an otherwise successful install.
+	_ = state.Write(homeDir, agentIDs)
+
 	return result, nil
 }
 
@@ -135,9 +155,9 @@ func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan) v
 }
 
 // withGoInstallPathNote appends a PATH guidance note when engram was installed
-// via `go install` (non-brew platforms) and the Go binary directory is not in
-// the user's PATH. This helps users on Linux/Windows who may not have
-// ~/go/bin (or $GOPATH/bin / $GOBIN) in their PATH.
+// on a non-brew platform (Linux/Windows). Since engram is now installed via
+// direct binary download to /usr/local/bin or ~/.local/bin, this note helps
+// users who may need to add the install directory to their PATH.
 func withGoInstallPathNote(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
 	if !hasComponent(resolved.OrderedComponents, model.ComponentEngram) {
 		return report
@@ -205,12 +225,13 @@ func buildStagePlan(selection model.Selection, resolved planner.ResolvedPlan) pi
 }
 
 type installRuntime struct {
-	homeDir    string
-	selection  model.Selection
-	resolved   planner.ResolvedPlan
-	profile    system.PlatformProfile
-	backupRoot string
-	state      *runtimeState
+	homeDir      string
+	workspaceDir string
+	selection    model.Selection
+	resolved     planner.ResolvedPlan
+	profile      system.PlatformProfile
+	backupRoot   string
+	state        *runtimeState
 }
 
 type runtimeState struct {
@@ -223,13 +244,16 @@ func newInstallRuntime(homeDir string, selection model.Selection, resolved plann
 		return nil, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
 	}
 
+	workspaceDir, _ := os.Getwd()
+
 	return &installRuntime{
-		homeDir:    homeDir,
-		selection:  selection,
-		resolved:   resolved,
-		profile:    profile,
-		backupRoot: backupRoot,
-		state:      &runtimeState{},
+		homeDir:      homeDir,
+		workspaceDir: workspaceDir,
+		selection:    selection,
+		resolved:     resolved,
+		profile:      profile,
+		backupRoot:   backupRoot,
+		state:        &runtimeState{},
 	}, nil
 }
 
@@ -243,6 +267,9 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			snapshotDir: filepath.Join(r.backupRoot, time.Now().UTC().Format("20060102150405.000000000")),
 			targets:     targets,
 			state:       r.state,
+			source:      backup.BackupSourceInstall,
+			description: "pre-install snapshot",
+			appVersion:  AppVersion,
 		},
 	}
 
@@ -255,12 +282,13 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 
 	for _, component := range r.resolved.OrderedComponents {
 		apply = append(apply, componentApplyStep{
-			id:        "component:" + string(component),
-			component: component,
-			homeDir:   r.homeDir,
-			agents:    r.resolved.Agents,
-			selection: r.selection,
-			profile:   r.profile,
+			id:           "component:" + string(component),
+			component:    component,
+			homeDir:      r.homeDir,
+			workspaceDir: r.workspaceDir,
+			agents:       r.resolved.Agents,
+			selection:    r.selection,
+			profile:      r.profile,
 		})
 	}
 
@@ -273,6 +301,15 @@ type prepareBackupStep struct {
 	snapshotDir string
 	targets     []string
 	state       *runtimeState
+
+	// source and description are optional metadata written into the manifest.
+	// When set, they help users identify what created the backup.
+	source      backup.BackupSource
+	description string
+
+	// appVersion is the gentle-ai version that created this backup.
+	// When set, it is written into the manifest as CreatedByVersion.
+	appVersion string
 }
 
 func (s prepareBackupStep) ID() string {
@@ -283,6 +320,20 @@ func (s prepareBackupStep) Run() error {
 	manifest, err := s.snapshotter.Create(s.snapshotDir, s.targets)
 	if err != nil {
 		return fmt.Errorf("create backup snapshot: %w", err)
+	}
+
+	// Annotate with source metadata and version when provided, then re-write.
+	// FileCount is already populated by Snapshotter.Create.
+	if s.source != "" || s.appVersion != "" {
+		manifest.Source = s.source
+		manifest.Description = s.description
+		manifest.CreatedByVersion = s.appVersion
+		manifestPath := filepath.Join(s.snapshotDir, backup.ManifestFilename)
+		if err := backup.WriteManifest(manifestPath, manifest); err != nil {
+			// Non-fatal: metadata annotation failed but the snapshot is intact.
+			// The backup is still usable — restore will work. We just lose the label.
+			_ = err
+		}
 	}
 
 	s.state.manifest = manifest
@@ -348,12 +399,13 @@ func (s agentInstallStep) Run() error {
 }
 
 type componentApplyStep struct {
-	id        string
-	component model.ComponentID
-	homeDir   string
-	agents    []model.AgentID
-	selection model.Selection
-	profile   system.PlatformProfile
+	id           string
+	component    model.ComponentID
+	homeDir      string
+	workspaceDir string
+	agents       []model.AgentID
+	selection    model.Selection
+	profile      system.PlatformProfile
 }
 
 func (s componentApplyStep) ID() string {
@@ -380,29 +432,21 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentEngram:
 		if _, err := cmdLookPath("engram"); err != nil {
 			// Engram not on PATH — install it.
-			// On non-brew platforms (Linux, Windows), Go is required for `go install`.
-			if s.profile.PackageManager != "brew" {
-				if _, err := cmdLookPath("go"); err != nil {
-					goCommands := system.InstallCommandsForDep("go", s.profile)
-					if goCommands == nil {
-						return fmt.Errorf("go is required to install engram but cannot be auto-installed on this platform")
-					}
-					if err := runCommandSequence(goCommands); err != nil {
-						return fmt.Errorf("install go (required for engram): %w", err)
-					}
-					if s.profile.OS == "windows" {
-						if err := ensureGoAvailableAfterInstall(s.profile); err != nil {
-							return err
-						}
-					}
+			if s.profile.PackageManager == "brew" {
+				// macOS (or Linux with Homebrew): use brew tap + brew install.
+				commands, err := engram.InstallCommand(s.profile)
+				if err != nil {
+					return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
 				}
-			}
-			commands, err := engram.InstallCommand(s.profile)
-			if err != nil {
-				return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
-			}
-			if err := runCommandSequence(commands); err != nil {
-				return err
+				if err := runCommandSequence(commands); err != nil {
+					return err
+				}
+			} else {
+				// Linux / Windows: download the pre-built binary from GitHub Releases.
+				// No Go required — engram ships pre-built binaries.
+				if _, err := engramDownloadFn(s.profile); err != nil {
+					return fmt.Errorf("download engram binary: %w", err)
+				}
 			}
 		}
 		setupMode := engram.ParseSetupMode(os.Getenv(engram.SetupModeEnvVar))
@@ -444,7 +488,13 @@ func (s componentApplyStep) Run() error {
 		return nil
 	case model.ComponentSDD:
 		for _, adapter := range adapters {
-			if _, err := sdd.Inject(s.homeDir, adapter, s.selection.SDDMode, s.selection.ModelAssignments); err != nil {
+			opts := sdd.InjectOptions{
+				OpenCodeModelAssignments: s.selection.ModelAssignments,
+				ClaudeModelAssignments:   s.selection.ClaudeModelAssignments,
+				WorkspaceDir:             s.workspaceDir,
+				StrictTDD:                s.selection.StrictTDD,
+			}
+			if _, err := sdd.Inject(s.homeDir, adapter, s.selection.SDDMode, opts); err != nil {
 				return fmt.Errorf("inject sdd for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -557,11 +607,12 @@ func ResolveInstallProfile(detection system.DetectionResult) system.PlatformProf
 }
 
 // ggaAvailable reports whether the gga binary is reachable. gga is often
-// installed to ~/.local/bin (the default for install.sh on Linux and Git Bash
-// on Windows), which is not always added to the process PATH. We check the
-// filesystem directly to avoid spawning a subprocess and to work regardless
-// of whether ~/.local/bin has been added to PATH.
-func ggaAvailable(_ system.PlatformProfile) bool {
+// installed to ~/.local/bin (the default for install.sh on Linux and macOS)
+// or ~/bin (the default for install.sh on Windows), which may not be on PATH.
+// On macOS with Homebrew, gga may be in /opt/homebrew/bin or /usr/local/bin.
+// We check the filesystem directly to avoid spawning a subprocess and to work
+// regardless of whether the install directory has been added to PATH.
+func ggaAvailable(profile system.PlatformProfile) bool {
 	if _, err := cmdLookPath("gga"); err == nil {
 		return true
 	}
@@ -569,8 +620,28 @@ func ggaAvailable(_ system.PlatformProfile) bool {
 	if err != nil {
 		return false
 	}
-	_, err = osStat(filepath.Join(homeDir, ".local", "bin", "gga"))
-	return err == nil
+	if _, err := osStat(filepath.Join(homeDir, ".local", "bin", "gga")); err == nil {
+		return true
+	}
+	// Check well-known Homebrew prefixes for macOS (arm64 and x86).
+	// gga may be installed via brew but not yet in the shell PATH
+	// (e.g. new terminal session, Rosetta environment mismatch).
+	if profile.OS == "darwin" || profile.PackageManager == "brew" {
+		for _, brewBin := range []string{
+			"/opt/homebrew/bin/gga",
+			"/usr/local/bin/gga",
+		} {
+			if _, err := osStat(brewBin); err == nil {
+				return true
+			}
+		}
+	}
+	if profile.OS == "windows" {
+		if _, err := osStat(filepath.Join(homeDir, "bin", "gga")); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // runCommandSequence runs each command in the sequence one at a time, stopping on first error.
@@ -656,6 +727,10 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 				if p := adapter.MCPConfigPath(homeDir, "engram"); p != "" {
 					paths = append(paths, p)
 				}
+			case model.StrategyTOMLFile:
+				if p := adapter.MCPConfigPath(homeDir, "engram"); p != "" {
+					paths = append(paths, p)
+				}
 			}
 			if adapter.SystemPromptStrategy() == model.StrategyMarkdownSections {
 				paths = append(paths, adapter.SystemPromptFile(homeDir))
@@ -673,9 +748,7 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 				if p := adapter.SettingsPath(homeDir); p != "" {
 					paths = append(paths, p)
 				}
-				if selection.SDDMode == model.SDDModeMulti {
-					paths = append(paths, filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"))
-				}
+				paths = append(paths, filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"))
 			}
 			if adapter.SupportsSkills() {
 				skillDir := adapter.SkillsDir(homeDir)
@@ -685,6 +758,7 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 						filepath.Join(skillDir, "_shared", "engram-convention.md"),
 						filepath.Join(skillDir, "_shared", "openspec-convention.md"),
 						filepath.Join(skillDir, "_shared", "sdd-phase-common.md"),
+						filepath.Join(skillDir, "_shared", "skill-resolver.md"),
 						filepath.Join(skillDir, "sdd-init", "SKILL.md"),
 						filepath.Join(skillDir, "sdd-explore", "SKILL.md"),
 						filepath.Join(skillDir, "sdd-propose", "SKILL.md"),
@@ -716,6 +790,9 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 				if p := adapter.MCPConfigPath(homeDir, "context7"); p != "" {
 					paths = append(paths, p)
 				}
+			case model.StrategyTOMLFile:
+				// Codex uses TOML for Engram but Context7 is not injected via TOML.
+				// No path to report — Context7 injection is skipped for TOML agents.
 			}
 		case model.ComponentPersona:
 			if selection.Persona == model.PersonaCustom {
@@ -772,6 +849,7 @@ func runPostApplyVerification(homeDir string, selection model.Selection, resolve
 	if hasComponent(resolved.OrderedComponents, model.ComponentEngram) {
 		checks = append(checks, engramHealthChecks()...)
 	}
+	checks = append(checks, antigravityCollisionCheck(resolved.Agents)...)
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
 }
@@ -809,6 +887,40 @@ func engramHealthChecks() []verify.Check {
 				}
 				_, err := engram.VerifyVersion()
 				return err
+			},
+		},
+	}
+}
+
+// antigravityCollisionCheck returns a soft verify check that warns the user
+// when both Antigravity and Gemini CLI are selected. Both agents write to
+// ~/.gemini/GEMINI.md — content is merged (not overwritten) but the user
+// should be aware.
+func antigravityCollisionCheck(agents []model.AgentID) []verify.Check {
+	hasAntigravity := false
+	hasGemini := false
+	for _, id := range agents {
+		if id == model.AgentAntigravity {
+			hasAntigravity = true
+		}
+		if id == model.AgentGeminiCLI {
+			hasGemini = true
+		}
+	}
+	if !hasAntigravity || !hasGemini {
+		return nil
+	}
+	return []verify.Check{
+		{
+			ID:          "verify:antigravity:rules-collision",
+			Description: "Antigravity and Gemini CLI share ~/.gemini/GEMINI.md",
+			Soft:        true,
+			Run: func(context.Context) error {
+				return fmt.Errorf(
+					"both Antigravity and Gemini CLI write rules to ~/.gemini/GEMINI.md\n" +
+						"Content is merged, not overwritten — rules from both agents coexist in the same file.\n" +
+						"This is expected behavior. No action required unless you want to separate them manually.",
+				)
 			},
 		},
 	}

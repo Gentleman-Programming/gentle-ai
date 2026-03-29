@@ -8,6 +8,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 )
@@ -125,6 +126,31 @@ func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
 	}
 	if !strings.Contains(text, `"context7"`) {
 		t.Fatalf("mcp.json missing context7 server entry; got:\n%s", text)
+	}
+}
+
+// TestInjectCodexTOMLStrategyIsSkipped verifies that Context7 injection for
+// Codex (StrategyTOMLFile) is a no-op — Codex does not get Context7 via MCP
+// config since there is no JSON-based config path; it receives Context7 via
+// its system prompt (agents.md) instead.
+func TestInjectCodexTOMLStrategyIsSkipped(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, codex.NewAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) error = %v; want nil (TOML strategy must not error)", err)
+	}
+	if result.Changed {
+		t.Fatal("Inject(codex) changed = true; want false (TOML strategy should be a no-op for context7)")
+	}
+	if len(result.Files) != 0 {
+		t.Fatalf("Inject(codex) files = %v; want empty", result.Files)
+	}
+
+	// config.toml must NOT be created by the context7 injector.
+	configTOML := filepath.Join(home, ".codex", "config.toml")
+	if _, err := os.Stat(configTOML); err == nil {
+		t.Fatal("config.toml should NOT be written by the context7 injector")
 	}
 }
 

@@ -31,6 +31,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLATFORMS=(
     "ubuntu:Dockerfile.ubuntu"
     "arch:Dockerfile.arch"
+    "fedora:Dockerfile.fedora"
 )
 
 # Environment variables to forward into containers

@@ -1,11 +1,14 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -13,14 +16,38 @@ import (
 // Package-level var for testability (swap in tests via t.Cleanup).
 var httpClient = &http.Client{Timeout: 5 * time.Second}
 
+// ghLookPath is exec.LookPath for "gh". Package-level for testability.
+var ghLookPath = exec.LookPath
+
 // githubRelease represents the subset of GitHub's release response we need.
 type githubRelease struct {
 	TagName string `json:"tag_name"`
 	HTMLURL string `json:"html_url"`
 }
 
+// resolveGitHubToken returns a GitHub token for API auth, trying in order:
+// 1. GITHUB_TOKEN env var
+// 2. `gh auth token` CLI output (if gh is available)
+// Returns empty string if neither is available.
+func resolveGitHubToken() string {
+	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
+		return token
+	}
+	if ghPath, err := ghLookPath("gh"); err == nil {
+		var out bytes.Buffer
+		cmd := exec.Command(ghPath, "auth", "token")
+		cmd.Stdout = &out
+		if err := cmd.Run(); err == nil {
+			if token := strings.TrimSpace(out.String()); token != "" {
+				return token
+			}
+		}
+	}
+	return ""
+}
+
 // fetchLatestRelease fetches the latest release from a GitHub repository.
-// Supports optional GITHUB_TOKEN env var as Bearer token to avoid rate limits.
+// Supports optional GITHUB_TOKEN env var or `gh auth token` to avoid rate limits.
 func fetchLatestRelease(ctx context.Context, owner, repo string) (githubRelease, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
 
@@ -30,8 +57,9 @@ func fetchLatestRelease(ctx context.Context, owner, repo string) (githubRelease,
 	}
 
 	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "gentle-ai-update-check")
 
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+	if token := resolveGitHubToken(); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 

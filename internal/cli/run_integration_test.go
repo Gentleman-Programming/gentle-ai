@@ -12,15 +12,14 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
 
 // missingBinaryLookPath simulates all installable binaries (engram, gga) as
-// missing while keeping Go available (needed for Linux engram go-install path).
+// missing. Go availability is no longer required for engram installation
+// (pre-built binaries are downloaded directly from GitHub Releases).
 func missingBinaryLookPath(name string) (string, error) {
-	if name == "go" {
-		return "/usr/local/bin/go", nil
-	}
 	return "", exec.ErrNotFound
 }
 
@@ -219,7 +218,7 @@ func TestRunInstallLinuxArchResolvesPacmanCommands(t *testing.T) {
 	}
 }
 
-func TestRunInstallLinuxUbuntuWithEngramResolvesGoInstallCommand(t *testing.T) {
+func TestRunInstallLinuxUbuntuWithEngramUsesDirectDownload(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -234,6 +233,13 @@ func TestRunInstallLinuxUbuntuWithEngramResolvesGoInstallCommand(t *testing.T) {
 	cmdLookPath = missingBinaryLookPath
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
+
+	// Override engramDownloadFn to avoid real HTTP calls.
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return "/tmp/fake-engram", nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
 
 	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
 	result, err := RunInstall(
@@ -248,21 +254,15 @@ func TestRunInstallLinuxUbuntuWithEngramResolvesGoInstallCommand(t *testing.T) {
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	// Verify that at least one command used go install (the engram install command).
-	commands := recorder.get()
-	foundGoInstall := false
-	for _, cmd := range commands {
-		if strings.Contains(cmd, "env CGO_ENABLED=0 go install github.com/Gentleman-Programming/engram/cmd/engram@latest") {
-			foundGoInstall = true
-			break
+	// Must NOT use go install for engram on Linux.
+	for _, cmd := range recorder.get() {
+		if strings.Contains(cmd, "go install") && strings.Contains(cmd, "engram") {
+			t.Fatalf("Linux engram install should NOT use go install, got command: %s", cmd)
 		}
-	}
-	if !foundGoInstall {
-		t.Fatalf("expected go install command for engram, got commands: %v", commands)
 	}
 }
 
-func TestRunInstallLinuxArchWithEngramResolvesGoInstallCommand(t *testing.T) {
+func TestRunInstallLinuxArchWithEngramUsesDirectDownload(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -278,6 +278,12 @@ func TestRunInstallLinuxArchWithEngramResolvesGoInstallCommand(t *testing.T) {
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
 
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return "/tmp/fake-engram", nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
+
 	detection := linuxDetectionResult(system.LinuxDistroArch, "pacman")
 	result, err := RunInstall(
 		[]string{"--agent", "opencode", "--component", "engram"},
@@ -291,16 +297,11 @@ func TestRunInstallLinuxArchWithEngramResolvesGoInstallCommand(t *testing.T) {
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	commands := recorder.get()
-	foundGoInstall := false
-	for _, cmd := range commands {
-		if strings.Contains(cmd, "env CGO_ENABLED=0 go install github.com/Gentleman-Programming/engram/cmd/engram@latest") {
-			foundGoInstall = true
-			break
+	// Must NOT use go install for engram on Arch Linux.
+	for _, cmd := range recorder.get() {
+		if strings.Contains(cmd, "go install") && strings.Contains(cmd, "engram") {
+			t.Fatalf("Arch Linux engram install should NOT use go install, got command: %s", cmd)
 		}
-	}
-	if !foundGoInstall {
-		t.Fatalf("expected go install command for engram, got commands: %v", commands)
 	}
 }
 
@@ -327,14 +328,14 @@ func TestRunInstallLinuxRollsBackOnComponentFailure(t *testing.T) {
 	cmdLookPath = missingBinaryLookPath
 
 	osUserHomeDir = func() (string, error) { return home, nil }
-	runCommand = func(name string, args ...string) error {
-		// Fail the engram install command to trigger rollback.
-		// Command is now: env CGO_ENABLED=0 go install .../engram@latest
-		if name == "env" && strings.Contains(strings.Join(args, " "), "engram") {
-			return os.ErrPermission
-		}
-		return nil
+	runCommand = func(name string, args ...string) error { return nil }
+
+	// Fail the engram download to trigger rollback.
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return "", os.ErrPermission
 	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
 
 	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
 	_, err := RunInstall(
@@ -973,7 +974,9 @@ func TestRunInstallGGALinuxIncludesTempCleanupBeforeClone(t *testing.T) {
 	}
 }
 
-func TestRunInstallEngramAutoInstallsGoWhenMissing(t *testing.T) {
+// TestRunInstallEngramLinuxUsesDirectDownloadNoGoRequired verifies that on Linux,
+// engram is now installed via pre-built binary download — Go is NOT required.
+func TestRunInstallEngramLinuxUsesDirectDownloadNoGoRequired(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -985,13 +988,20 @@ func TestRunInstallEngramAutoInstallsGoWhenMissing(t *testing.T) {
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
-	// Simulate: engram missing, Go missing.
+	// Simulate: engram missing, Go also NOT available — should still succeed.
 	cmdLookPath = func(string) (string, error) {
 		return "", exec.ErrNotFound
 	}
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
 
+	// Override download to succeed without hitting GitHub.
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return "/tmp/fake-engram", nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
+
 	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
 	result, err := RunInstall(
 		[]string{"--agent", "opencode", "--component", "engram"},
@@ -1005,34 +1015,20 @@ func TestRunInstallEngramAutoInstallsGoWhenMissing(t *testing.T) {
 		t.Fatalf("verification ready = false")
 	}
 
-	commands := recorder.get()
-	foundGoInstall := false
-	foundEngramInstall := false
-	goInstallIdx := -1
-	engramInstallIdx := -1
-	for i, cmd := range commands {
+	// Neither "go install" nor "apt-get install golang" should appear.
+	for _, cmd := range recorder.get() {
 		if strings.Contains(cmd, "apt-get install -y golang") {
-			foundGoInstall = true
-			goInstallIdx = i
+			t.Fatalf("Go should NOT be auto-installed (no longer needed for engram), got command: %s", cmd)
 		}
 		if strings.Contains(cmd, "go install") && strings.Contains(cmd, "engram") {
-			foundEngramInstall = true
-			engramInstallIdx = i
+			t.Fatalf("engram should NOT be installed via go install, got command: %s", cmd)
 		}
-	}
-
-	if !foundGoInstall {
-		t.Fatalf("expected Go auto-install command, got commands: %v", commands)
-	}
-	if !foundEngramInstall {
-		t.Fatalf("expected engram install command, got commands: %v", commands)
-	}
-	if goInstallIdx >= engramInstallIdx {
-		t.Fatalf("Go install (idx=%d) should run before engram install (idx=%d)", goInstallIdx, engramInstallIdx)
 	}
 }
 
-func TestRunInstallEngramSkipsGoInstallWhenGoPresent(t *testing.T) {
+// TestRunInstallEngramLinuxNeverInstallsGo verifies that even if Go is present,
+// we never install Go as a prerequisite for engram (direct download path).
+func TestRunInstallEngramLinuxNeverInstallsGo(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -1044,10 +1040,15 @@ func TestRunInstallEngramSkipsGoInstallWhenGoPresent(t *testing.T) {
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
-	// Simulate: engram missing, Go available.
 	cmdLookPath = missingBinaryLookPath
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
+
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return "/tmp/fake-engram", nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
 
 	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
 	result, err := RunInstall(
@@ -1062,10 +1063,10 @@ func TestRunInstallEngramSkipsGoInstallWhenGoPresent(t *testing.T) {
 		t.Fatalf("verification ready = false")
 	}
 
-	// Go install should NOT be in the recorded commands.
+	// No Go installation commands should appear.
 	for _, cmd := range recorder.get() {
-		if strings.Contains(cmd, "apt-get install -y golang") {
-			t.Fatalf("Go should not be installed when already on PATH, got command: %s", cmd)
+		if strings.Contains(cmd, "apt-get install -y golang") || strings.Contains(cmd, "apt-get install -y go") {
+			t.Fatalf("Go should never be installed as engram dependency, got command: %s", cmd)
 		}
 	}
 }
@@ -1082,7 +1083,7 @@ func TestRunInstallEngramBrewSkipsGoCheck(t *testing.T) {
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
-	// Simulate: engram missing, Go missing — but brew platform, so no Go needed.
+	// Simulate: engram missing — brew platform, no Go or download needed.
 	cmdLookPath = func(string) (string, error) {
 		return "", exec.ErrNotFound
 	}
@@ -1107,6 +1108,9 @@ func TestRunInstallEngramBrewSkipsGoCheck(t *testing.T) {
 	for _, cmd := range commands {
 		if strings.Contains(cmd, "golang") || strings.Contains(cmd, "apt-get") {
 			t.Fatalf("brew platform should not install Go, got command: %s", cmd)
+		}
+		if strings.Contains(cmd, "go install") {
+			t.Fatalf("brew platform should not use go install, got command: %s", cmd)
 		}
 	}
 
@@ -1413,5 +1417,317 @@ func TestRunInstallUpgradeIdempotency(t *testing.T) {
 	if commandCount != 1 {
 		t.Errorf("engram MCP JSON contains %d occurrences of \"command\", want exactly 1:\n%s",
 			commandCount, engramJSON)
+	}
+}
+
+// --- Custom preset integration tests ---
+
+func TestRunInstallCustomPresetNoComponentsIsNoop(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+
+	result, err := RunInstall(
+		[]string{"--agent", "claude-code", "--preset", "custom"},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	// Custom preset with no components should resolve to zero ordered components.
+	if len(result.Resolved.OrderedComponents) != 0 {
+		t.Fatalf("expected 0 ordered components for custom preset, got %d: %v",
+			len(result.Resolved.OrderedComponents), result.Resolved.OrderedComponents)
+	}
+}
+
+func TestRunInstallCustomPresetExplicitSkillsFlagPopulatesSelection(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+
+	result, err := RunInstall(
+		[]string{
+			"--agent", "claude-code",
+			"--preset", "custom",
+			"--component", "skills",
+			"--skills", "go-testing,branch-pr",
+		},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	// Verify the explicitly requested skills were installed.
+	goTestingPath := filepath.Join(home, ".claude", "skills", "go-testing", "SKILL.md")
+	branchPRPath := filepath.Join(home, ".claude", "skills", "branch-pr", "SKILL.md")
+	if _, err := os.Stat(goTestingPath); err != nil {
+		t.Fatalf("expected go-testing skill file %q: %v", goTestingPath, err)
+	}
+	if _, err := os.Stat(branchPRPath); err != nil {
+		t.Fatalf("expected branch-pr skill file %q: %v", branchPRPath, err)
+	}
+
+	// Note: the graph defines skills → sdd → engram as a hard dependency chain.
+	// Selecting --component skills auto-resolves sdd (and engram) as dependencies.
+	// The SDD component installs its own 10 SDD+orchestration skills during injection,
+	// regardless of the --skills flag. So sdd-init and other SDD skills ARE installed.
+	sddInitPath := filepath.Join(home, ".claude", "skills", "sdd-init", "SKILL.md")
+	if _, err := os.Stat(sddInitPath); err != nil {
+		t.Fatalf("sdd-init skill should be installed (sdd is auto-resolved as dep of skills): %v", err)
+	}
+
+	// The --skills flag controls what the skills COMPONENT adds on top of SDD skills.
+	// Total = 10 SDD skills + 2 explicit skills = 12 SKILL.md files.
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", skillsDir, err)
+	}
+	// Count SKILL.md files across all skill subdirectories.
+	var skillCount int
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		skillMD := filepath.Join(skillsDir, entry.Name(), "SKILL.md")
+		if _, statErr := os.Stat(skillMD); statErr == nil {
+			skillCount++
+		}
+	}
+	// 10 SDD skills (from sdd dep) + 2 explicit skills (go-testing, branch-pr) = 12
+	if skillCount != 12 {
+		t.Fatalf("expected 12 skill files (10 SDD + 2 explicit), got %d", skillCount)
+	}
+}
+
+func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+
+	result, err := RunInstall(
+		[]string{
+			"--agent", "claude-code",
+			"--preset", "custom",
+			"--component", "skills",
+		},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	// The graph defines skills → sdd → engram as hard dependencies.
+	// Selecting --component skills auto-resolves sdd (and engram).
+	// The SDD component ALWAYS installs its 10 SDD+orchestration skills during injection.
+	// Without --skills flag, selectedSkillIDs() returns nil for custom preset,
+	// so the skills COMPONENT is a no-op — but the sdd DEPENDENCY still runs and
+	// installs its 10 skills.
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	// Count SKILL.md files (one per skill, excluding _shared and other non-skill dirs).
+	var skillCount int
+	if entries, readErr := os.ReadDir(skillsDir); readErr == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			skillMD := filepath.Join(skillsDir, entry.Name(), "SKILL.md")
+			if _, statErr := os.Stat(skillMD); statErr == nil {
+				skillCount++
+			}
+		}
+	}
+	// Expect exactly 10 SKILL.md files (from SDD dependency: 9 SDD phases + judgment-day).
+	// The skills component itself adds 0 (no --skills flag, SkillsForPreset(custom) = nil).
+	if skillCount != 10 {
+		t.Fatalf("expected 10 SDD skill files installed by the sdd dependency, got %d", skillCount)
+	}
+}
+
+func TestRunInstallCustomPresetDryRunShowsCustomPreset(t *testing.T) {
+	result, err := RunInstall(
+		[]string{"--agent", "claude-code", "--preset", "custom", "--dry-run"},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if !result.DryRun {
+		t.Fatalf("expected DryRun=true")
+	}
+
+	if result.Selection.Preset != model.PresetCustom {
+		t.Fatalf("preset = %q, want %q", result.Selection.Preset, model.PresetCustom)
+	}
+
+	// Zero components when no --component flags provided.
+	if len(result.Resolved.OrderedComponents) != 0 {
+		t.Fatalf("expected 0 ordered components, got %d", len(result.Resolved.OrderedComponents))
+	}
+
+	output := RenderDryRun(result)
+	if !strings.Contains(output, "custom") {
+		t.Fatalf("dry-run output missing 'custom' preset name:\n%s", output)
+	}
+}
+
+func TestRunInstallCustomPresetExplicitComponentsResolveCorrectly(t *testing.T) {
+	result, err := RunInstall(
+		[]string{
+			"--agent", "claude-code",
+			"--preset", "custom",
+			"--component", "engram",
+			"--component", "sdd",
+			"--component", "permissions",
+			"--dry-run",
+		},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	// Should have exactly the 3 explicit components (sdd depends on engram which is already selected).
+	if len(result.Resolved.OrderedComponents) != 3 {
+		t.Fatalf("expected 3 ordered components, got %d: %v",
+			len(result.Resolved.OrderedComponents), result.Resolved.OrderedComponents)
+	}
+
+	// Verify persona, skills, context7, gga are NOT in the plan.
+	for _, c := range result.Resolved.OrderedComponents {
+		switch c {
+		case model.ComponentPersona, model.ComponentSkills, model.ComponentContext7, model.ComponentGGA:
+			t.Fatalf("unexpected component %q in custom preset plan", c)
+		}
+	}
+}
+
+// TestOpenCodePersonaBeforeSDDPreservesAllSections is the regression test for
+// issue #121: on StrategyFileReplace agents, if Persona ran after SDD it would
+// overwrite the entire AGENTS.md, destroying the SDD orchestrator section.
+//
+// This test exercises the full install pipeline for OpenCode with Persona +
+// Engram + SDD selected together and verifies that the final AGENTS.md
+// contains all three sections with no duplicates.
+func TestOpenCodePersonaBeforeSDDPreservesAllSections(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+
+	_, err := RunInstall(
+		[]string{
+			"--agent", "opencode",
+			"--component", "persona",
+			"--component", "engram",
+			"--component", "sdd",
+			"--persona", "gentleman",
+		},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	agentsMD := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	content, err := os.ReadFile(agentsMD)
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
+	}
+	text := string(content)
+
+	// Persona content must be present
+	if !strings.Contains(text, "Senior Architect") {
+		t.Error("AGENTS.md missing Gentleman persona content (persona not written)")
+	}
+
+	// For OpenCode, the SDD orchestrator goes into opencode.json (agent overlay),
+	// NOT AGENTS.md. AGENTS.md only contains persona and engram sections.
+	// The issue #121 regression was that Persona would overwrite AGENTS.md
+	// AFTER engram had already injected the engram-protocol marker, destroying
+	// the engram section. We verify persona + engram coexist.
+
+	// Engram protocol section must be present
+	if !strings.Contains(text, "<!-- gentle-ai:engram-protocol -->") {
+		t.Error("AGENTS.md missing engram-protocol open marker (issue #121 regression: persona may have overwritten engram section)")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:engram-protocol -->") {
+		t.Error("AGENTS.md missing engram-protocol close marker")
+	}
+
+	// Engram section must not be duplicated
+	marker := "<!-- gentle-ai:engram-protocol -->"
+	if count := strings.Count(text, marker); count != 1 {
+		t.Errorf("AGENTS.md contains %d occurrences of %q, want exactly 1 (no duplicates)", count, marker)
+	}
+
+	// AGENTS.md must NOT have sdd-orchestrator markers — OpenCode uses opencode.json overlay
+	if strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Error("AGENTS.md should NOT have sdd-orchestrator marker — OpenCode uses opencode.json agent overlay")
+	}
+
+	// SDD orchestrator for OpenCode lives in opencode.json agent overlay
+	opencodeJSON := filepath.Join(home, ".config", "opencode", "opencode.json")
+	jsonContent, err := os.ReadFile(opencodeJSON)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	if !strings.Contains(string(jsonContent), "sdd-orchestrator") {
+		t.Error("opencode.json missing sdd-orchestrator agent entry (SDD not injected)")
 	}
 }

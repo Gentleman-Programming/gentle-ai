@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Informe de Capacitacion IA — Neural Labs</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+  :root {
+    --bg-deep: #0A0A0A;
+    --bg-card: #111111;
+    --bg-card-hover: #161616;
+    --bg-subtle: #1A1A1A;
+    --neon: #FF0080;
+    --neon-soft: rgba(255, 0, 128, 0.15);
+    --neon-glow: rgba(255, 0, 128, 0.4);
+    --text-primary: #F0F0F0;
+    --text-secondary: #999999;
+    --text-muted: #666666;
+    --border: #222222;
+    --border-accent: rgba(255, 0, 128, 0.3);
+    --success: #00E676;
+    --warning: #FFD600;
+    --danger: #FF3D00;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  @page {
+    size: A4;
+    margin: 0;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    line-height: 1.7;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  .page {
+    width: 210mm;
+    min-height: 297mm;
+    margin: 0 auto;
+    padding: 40px 50px;
+    page-break-after: always;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .page::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, var(--neon), transparent);
+  }
+
+  /* Cover Page */
+  .cover {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 297mm;
+    padding: 60px;
+    position: relative;
+  }
+
+  .cover::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, var(--neon), transparent);
+  }
+
+  .cover::after {
+    content: '';
+    position: absolute;
+    top: -200px;
+    right: -200px;
+    width: 600px;
+    height: 600px;
+    border-radius: 50%;
+    background: radial-gradient(circle, var(--neon-soft) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .cover-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--neon);
+    margin-bottom: 30px;
+    padding: 8px 16px;
+    border: 1px solid var(--border-accent);
+    border-radius: 4px;
+    display: inline-block;
+  }
+
+  .cover-title {
+    font-size: 48px;
+    font-weight: 900;
+    line-height: 1.1;
+    letter-spacing: -2px;
+    margin-bottom: 16px;
+    color: var(--text-primary);
+  }
+
+  .cover-title span {
+    color: var(--neon);
+  }
+
+  .cover-subtitle {
+    font-size: 20px;
+    font-weight: 300;
+    color: var(--text-secondary);
+    margin-bottom: 60px;
+    max-width: 500px;
+    line-height: 1.5;
+  }
+
+  .cover-meta {
+    display: flex;
+    gap: 40px;
+    margin-top: auto;
+    padding-top: 40px;
+    border-top: 1px solid var(--border);
+  }
+
+  .cover-meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .cover-meta-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .cover-meta-value {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  /* Section Headers */
+  .section-number {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--neon);
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  h2 {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -1px;
+    margin-bottom: 24px;
+    color: var(--text-primary);
+    line-height: 1.2;
+  }
+
+  h3 {
+    font-size: 18px;
+    font-weight: 700;
+    margin-top: 28px;
+    margin-bottom: 12px;
+    color: var(--text-primary);
+  }
+
+  h4 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-top: 20px;
+    margin-bottom: 8px;
+    color: var(--neon);
+  }
+
+  p {
+    margin-bottom: 14px;
+    color: var(--text-secondary);
+    font-weight: 400;
+  }
+
+  /* Cards */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 16px;
+    position: relative;
+  }
+
+  .card-accent {
+    border-left: 3px solid var(--neon);
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .card-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: var(--neon-soft);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+
+  .card-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .card-role {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+  }
+
+  .card p {
+    font-size: 13px;
+    line-height: 1.6;
+    margin-bottom: 8px;
+  }
+
+  /* Before/After labels */
+  .label-before, .label-after {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 3px;
+    display: inline-block;
+    margin-bottom: 6px;
+  }
+
+  .label-before {
+    color: var(--text-muted);
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+  }
+
+  .label-after {
+    color: var(--neon);
+    background: var(--neon-soft);
+    border: 1px solid var(--border-accent);
+  }
+
+  /* Tables */
+  .table-wrapper {
+    margin: 20px 0;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  thead {
+    background: var(--bg-subtle);
+  }
+
+  th {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--neon);
+    padding: 14px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-secondary);
+    vertical-align: top;
+    line-height: 1.5;
+  }
+
+  tr:last-child td {
+    border-bottom: none;
+  }
+
+  tbody tr:hover {
+    background: var(--bg-card-hover);
+  }
+
+  /* Status indicators */
+  .status {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 4px;
+    display: inline-block;
+    letter-spacing: 0.5px;
+  }
+
+  .status-done {
+    color: var(--success);
+    background: rgba(0, 230, 118, 0.1);
+    border: 1px solid rgba(0, 230, 118, 0.2);
+  }
+
+  .status-partial {
+    color: var(--warning);
+    background: rgba(255, 214, 0, 0.1);
+    border: 1px solid rgba(255, 214, 0, 0.2);
+  }
+
+  .status-pending {
+    color: var(--danger);
+    background: rgba(255, 61, 0, 0.1);
+    border: 1px solid rgba(255, 61, 0, 0.2);
+  }
+
+  /* Lists */
+  ul {
+    list-style: none;
+    padding: 0;
+    margin: 12px 0;
+  }
+
+  ul li {
+    position: relative;
+    padding-left: 20px;
+    margin-bottom: 8px;
+    color: var(--text-secondary);
+    font-size: 13.5px;
+    line-height: 1.6;
+  }
+
+  ul li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 10px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--neon);
+  }
+
+  /* Recommendation cards */
+  .rec-number {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--neon);
+    opacity: 0.3;
+    position: absolute;
+    top: 16px;
+    right: 20px;
+  }
+
+  /* Separator */
+  .separator {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+    margin: 30px 0;
+  }
+
+  /* Quote */
+  .quote {
+    border-left: 3px solid var(--neon);
+    padding: 16px 20px;
+    margin: 24px 0;
+    background: var(--neon-soft);
+    border-radius: 0 8px 8px 0;
+  }
+
+  .quote p {
+    color: var(--text-primary);
+    font-weight: 500;
+    font-style: italic;
+    margin: 0;
+    font-size: 14px;
+  }
+
+  /* Model preference grid */
+  .model-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin: 16px 0;
+  }
+
+  .model-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--neon);
+    background: var(--neon-soft);
+    padding: 2px 8px;
+    border-radius: 3px;
+    display: inline-block;
+  }
+
+  /* Footer */
+  .page-footer {
+    position: absolute;
+    bottom: 30px;
+    left: 50px;
+    right: 50px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  .page-footer span {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text-muted);
+    letter-spacing: 1px;
+  }
+
+  /* Neon divider */
+  .neon-divider {
+    height: 2px;
+    background: linear-gradient(90deg, var(--neon), transparent);
+    margin: 24px 0;
+    border-radius: 1px;
+  }
+
+  /* Print styles */
+  @media print {
+    body { background: var(--bg-deep); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .page { margin: 0; padding: 40px 50px; }
+  }
+
+  /* Compact spacing for dense pages */
+  .compact p { margin-bottom: 10px; }
+  .compact .card { margin-bottom: 12px; padding: 18px; }
+  .compact h3 { margin-top: 20px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<!-- ==================== COVER PAGE ==================== -->
+<div class="page cover">
+  <div class="cover-badge">Informe Confidencial</div>
+  <h1 class="cover-title">
+    Capacitacion <span>IA</span><br>
+    Neural Labs
+  </h1>
+  <p class="cover-subtitle">
+    Sprint de adopcion completado. Diagnostico inicial, resultados obtenidos, impacto por miembro del equipo y recomendaciones para escalar.
+  </p>
+
+  <div class="cover-meta">
+    <div class="cover-meta-item">
+      <span class="cover-meta-label">Preparado por</span>
+      <span class="cover-meta-value">Alan Buscaglia</span>
+    </div>
+    <div class="cover-meta-item">
+      <span class="cover-meta-label">Empresa</span>
+      <span class="cover-meta-value">Neural Labs</span>
+    </div>
+    <div class="cover-meta-item">
+      <span class="cover-meta-label">CTO</span>
+      <span class="cover-meta-value">Damian</span>
+    </div>
+    <div class="cover-meta-item">
+      <span class="cover-meta-label">Stack</span>
+      <span class="cover-meta-value">Angular / .NET / Azure DevOps</span>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE 2: CONTEXTO ==================== -->
+<div class="page">
+  <span class="section-number">01 — Contexto</span>
+  <h2>La empresa antes de empezar</h2>
+
+  <p>Neural Labs es una empresa orientada al cliente donde la prioridad es la entrega. Si el cliente necesita algo, se hace, incluso bugfixing sobre la marcha. El problema estructural mas grande al momento de iniciar la capacitacion era el tiempo de desarrollo: todo se retrasaba.</p>
+
+  <p>Las releases eran semestrales, los conflictos de versiones entre productos y subproductos eran constantes, y el context switching de los desarrolladores agravaba cada demora.</p>
+
+  <div class="quote">
+    <p>Stack principal: Angular, .NET, Azure DevOps. QA manual sin testing automatizado. Documentacion dispersa entre SharePoint y documentos internos sin un estandar claro.</p>
+  </div>
+
+  <h3>Procesos de desarrollo</h3>
+  <ul>
+    <li>Releases grandes y poco frecuentes (una por semestre), lo que generaba acumulacion de cambios, conflictos de versiones y una desorganizacion considerable.</li>
+    <li>No existia testing unitario ni e2e. No habia un lugar donde los tests estuvieran escritos. Platform tenia un documento de funcionalidades, pero no tests ejecutables.</li>
+    <li>La revision de PRs se hacia con Anthropic pero con un prompt muy ligero, sin estructura ni criterio estandarizado.</li>
+    <li>El flujo de trabajo dependia de reuniones semanales para definir tareas y parar la maquina para verificar que todo funcionara. Mucho del proceso era manual y oral.</li>
+  </ul>
+
+  <h3>Documentacion</h3>
+
+  <div class="card card-accent">
+    <p>Server: cobertura 3/10. Documentos tipo "loop" que se perdian.</p>
+    <p>Platform: cobertura 6/10. Se documentaban las partes nuevas y se actualizaba, pero el volumen de informacion hacia imposible tener todo en la cabeza. Se perdia el motivo que originaba cada cambio.</p>
+    <p>No existian reglas documentadas ni convenciones de codigo formalizadas.</p>
+  </div>
+
+  <div class="page-footer">
+    <span>Neural Labs — Informe de Capacitacion IA</span>
+    <span>02</span>
+  </div>
+</div>
+
+<!-- ==================== PAGE 3: USO DE IA PREVIO ==================== -->
+<div class="page compact">
+  <span class="section-number">02 — Diagnostico Inicial</span>
+  <h2>Uso de IA antes de la capacitacion</h2>
+
+  <p>Cada miembro del equipo usaba IA de forma aislada y con resultados dispares. No habia un criterio unificado ni un flujo compartido.</p>
+
+  <div class="card card-accent">
+    <div class="card-header">
+      <div class="card-icon">J</div>
+      <div>
+        <div class="card-title">Jordi</div>
+        <div class="card-role">QA — 8 anos de experiencia — Testing manual funcional exploratorio</div>
+      </div>
+    </div>
+    <p>La usaba para ahorrar tiempo en casos donde no tenia margen, le preguntaba a la IA que haria en su lugar. Le agilizaba la creacion de manuales.</p>
+  </div>
+
+  <div class="card card-accent">
+    <div class="card-header">
+      <div class="card-icon">M</div>
+      <div>
+        <div class="card-title">Miguel Angel</div>
+        <div class="card-role">Server + Platform — 14 anos — Distribucion de tareas + analisis</div>
+      </div>
+    </div>
+    <p>La usaba continuamente pero de forma limitada. Creia que habia que ser analista para exprimirla al 100%. Estimaba que el 80% del codigo lo hacia la IA. Hacia mil cosas a la vez, mucho se podia automatizar.</p>
+  </div>
+
+  <div class="card card-accent">
+    <div class="card-header">
+      <div class="card-icon">D</div>
+      <div>
+        <div class="card-title">Diego</div>
+        <div class="card-role">Orchestrator / Director — Soporte tecnico</div>
+      </div>
+    </div>
+    <p>Su principal frustracion era que la IA olvidaba contexto. Habia que repetirle todo constantemente.</p>
+  </div>
+
+  <div class="page-footer">
+    <span>Neural Labs — Informe de Capacitacion IA</span>
+    <span>03</span>
+  </div>
+</div>
+
+<!-- ==================== PAGE 3b: USO DE IA PREVIO (cont.) ==================== -->
+<div class="page compact">
+  <span class="section-number">02 — Diagnostico Inicial (cont.)</span>
+  <h2>Uso de IA antes de la capacitacion</h2>
+
+  <div class="card card-accent">
+    <div class="card-header">
+      <div class="card-icon">R</div>
+      <div>
+        <div class="card-title">Raul</div>
+        <div class="card-role">Server + Angular — 2 anos</div>
+      </div>
+    </div>
+    <p>Sentia que la IA no respetaba su forma de programar, no generaba codigo como el lo haria. Reconocia que cada vez era mas util pero con desconfianza.</p>
+  </div>
+
+  <div class="card card-accent">
+    <div class="card-header">
+      <div class="card-icon">Q</div>
+      <div>
+        <div class="card-title">Joaquin</div>
+        <div class="card-role">Platform — Angular + .NET — 2 semanas al iniciar</div>
+      </div>
+    </div>
+    <p>Venia con mente fresca, pro IA, buenos conceptos. Sin los vicios ni frustraciones del equipo. Buena fuente de ideas nuevas al no estar ligado a los problemas actuales.</p>
+  </div>
+
+  <div class="card card-accent">
+    <div class="card-header">
+      <div class="card-icon">F</div>
+      <div>
+        <div class="card-title">Francisco</div>
+        <div class="card-role">Server</div>
+      </div>
+    </div>
+    <p>La usaba para buscar errores y analizar problemas. Su posicion era clara: lo mas importante es como preguntarle y revisar lo que devuelve. No confiaba mucho en el desarrollo generado por IA.</p>
+  </div>
+
+  <div class="page-footer">
+    <span>Neural Labs — Informe de Capacitacion IA</span>
+    <span>04</span>
+  </div>
+</div>
+
+<!-- ==================== PAGE 5: QUE SE LOGRO ==================== -->
+<div class="page">
+  <span class="section-number">03 — Resultados</span>
+  <h2>Que se logro durante la capacitacion</h2>
+
+  <h3>Procesos y herramientas implementadas</h3>
+  <ul>
+    <li>Se crearon skills a nivel repositorio: para iniciar repos, creacion de tareas y flujo de las mismas, creacion de release notes, y migracion/optimizacion de codigo existente a versiones mas actualizadas.</li>
+    <li>La IA se integro como mediador de contexto, ayudando a extraer informacion util de forma eficaz. Ejemplo concreto: panel de tareas pendientes asistido por IA.</li>
+    <li>Se empezo a usar la IA para creacion y split de tareas, algo que antes era completamente manual y dependia de reuniones.</li>
+    <li>Se utiliza la IA para busqueda de alternativas y mejor camino a un resultado, no solo para generar codigo.</li>
+    <li>La revision de codigo y PRs ahora tiene mas estructura que el prompt ligero original.</li>
+    <li>Mejoria concreta en la comunicacion entre equipo y definicion de flujos.</li>
+    <li>El equipo reporta ser mas rapido y ordenado a la hora de entregar y documentar.</li>
+  </ul>
+
+  <div class="page-footer">
+    <span>Neural Labs — Informe de Capacitacion IA</span>
+    <span>05</span>
+  </div>
+</div>
+
+<!-- ==================== PAGE 5b: QUE SE LOGRO (cont.) ==================== -->
+<div class="page">
+  <span class="section-number">03 — Resultados (cont.)</span>
+  <h2>Que se logro durante la capacitacion</h2>
+
+  <h3>QA</h3>
+  <p>Jordi esta mucho mas integrado con la IA. Los documentos de QA ahora son asistidos por IA basandose en el code base y alimentados con documentos base. Playwright queda en evaluacion para implementar testing e2e.</p>
+
+  <h3>Web</h3>
+  <p>No se llego a implementar unit testing durante la capacitacion, pero el plan esta definido: primero actualizar y refactorear el codigo, despues meter tests. El equipo tiene claro el orden.</p>
+
+  <h3>Management</h3>
+  <p>Se descubrio que pasarle un PDF a la IA y pedirle que asista en el analisis, optimizando flujos tomando los use cases, ayuda considerablemente. Esto aplica directamente a su proceso de cotizacion y definicion de tareas.</p>
+
+  <h3>Un concepto pendiente: IA no es solo un LLM</h3>
+  <p>El equipo adopto agentes de IA (Claude Code, Codex, etc.) y eso esta muy bien, pero hay un salto conceptual que todavia falta dar. IA no es solo pedirle cosas a un modelo de lenguaje. Hay una capa entera de procesos inteligentes algoritmicos que pueden optimizar flujos sin necesidad de un LLM: automatizacion de CI/CD, analisis estatico, deteccion de patrones en codigo, pipelines de validacion, bots de triaje. Distinguir cuando usar un agente conversacional y cuando usar un proceso algoritmico determinista es la diferencia entre usar IA como herramienta y entender IA como disciplina.</p>
+
+  <div class="quote">
+    <p>El equipo esta motivado, con ganas de aprender y probar cosas nuevas. Hay mentalidad de mejora continua y voluntad real de optimizar procesos y comunicacion. Esto es probablemente el resultado mas valioso: no se impuso una herramienta, se genero un cambio de mentalidad.</p>
+  </div>
+
+  <div class="page-footer">
+    <span>Neural Labs — Informe de Capacitacion IA</span>
+    <span>06</span>
+  </div>
+</div>
+
+<!-- ==================== PAGE 7: IMPACTO POR DEV (1/2) ==================== -->
+<div class="page compact">
+  <span class="section-number">04 — Impacto Individual</span>
+  <h2>Evolucion por miembro del equipo</h2>
+
+  <div class="card card-accent">
+    <div class="card-header">
+      <div class="card-icon">M</div>
+      <div>
+        <div class="card-title">Miguel Angel</div>
+        <div class="card-role">Server + Platform — 14 anos</div>
+      </div>
+    </div>
+    <span class="label-before">Antes</span>
+    <p>Usaba IA de forma limitada. Creia que habia que ser analista para sacarle provecho.</p>
+    <span class="label-after">Ahora</span>
+    <p>Definio sus modelos preferidos segun complejidad: <span class="model-tag">codex / sonnet 4.5</span> para cosas simples, <span class="model-tag">opus 4.6</span> para cosas complejas. Entiende que no todo se resuelve con el mismo modelo y que la seleccion importa. Paso de "la uso pero no se si la exprimo" a tener criterio propio.</p>
+  </div>
+
+  <div class="card card-accent">
+    <div class="card-header">
+      <div class="card-icon">F</div>
+      <div>
+        <div class="card-title">Francisco</div>
+        <div class="card-role">Server</div>
+      </div>
+    </div>
+    <span class="label-before">Antes</span>
+    <p>Desconfianza en el desarrollo generado por IA. La usaba principalmente para buscar errores.</p>
+    <span class="label-after">Ahora</span>
+    <p>Usa <span class="model-tag">codex 5.3</span> para programacion. Mantiene su postura critica (que es sana) pero la canalizo hacia un uso productivo en lugar de evitar la herramienta. Su enfoque de "como preguntarle y revisar lo que devuelve" es exactamente el correcto.</p>
+  </div>
+
+  <div class="card card-accent">
+    <div class="card-header">
+      <div class="card-icon">R</div>
+      <div>
+        <div class="card-title">Raul</div>
+        <div class="card-role">Server + Angular — 2 anos</div>
+      </div>
+    </div>
+    <span class="label-before">Antes</span>
+    <p>Frustracion porque la IA no programaba como el queria.</p>
+    <span class="label-after">Ahora</span>
+    <p>Usa <span class="model-tag">opus 4.6</span> para programacion y documentacion, con <span class="model-tag">codex 5.3</span> como alternativa. Sigue teniendo desconfianza, lo cual es un punto a trabajar. Necesita optimizar sus procesos para que la herramienta se adapte a su forma de trabajar, no al reves.</p>
+  </div>
+
+  <div class="page-footer">
+    <span>Neural Labs — Informe de Capacitacion IA</span>
+    <span>07</span>
+  </div>
+</div>
+
+<!-- ==================== PAGE 8: IMPACTO POR DEV (2/2) ==================== -->
+<div class="page compact">
+  <span class="section-number">04 — Impacto Individual (cont.)</span>
+  <h2>Evolucion por miembro del equipo</h2>
+
+  <div class="card card-accent">
+    <div class="card-header">
+      <div class="card-icon">D</div>
+      <div>
+        <div class="card-title">Diego</div>
+        <div class="card-role">Orchestrator / Director</div>
+      </div>
+    </div>
+    <span class="label-before">Antes</span>
+    <p>Su queja principal era que la IA olvidaba todo.</p>
+    <span class="label-after">Ahora</span>
+    <p>Usa <span class="model-tag">codex 5.3</span> para programacion y <span class="model-tag">opus 4.6</span> para documentacion. Su workflow evoluciono al modelo ideal: piensa como lo quiere, pregunta, analiza, actua. Es el ejemplo de human-in-the-loop bien hecho. El problema del olvido se mitiga con el uso correcto de contexto y memoria persistente.</p>
+  </div>
+
+  <div class="card card-accent">
+    <div class="card-header">
+      <div class="card-icon">Q</div>
+      <div>
+        <div class="card-title">Joaquin</div>
+        <div class="card-role">Platform — 2 semanas al iniciar</div>
+      </div>
+    </div>
+    <span class="label-before">Antes</span>
+    <p>Dos semanas en la empresa, mente fresca, pro IA.</p>
+    <span class="label-after">Ahora</span>
+    <p>Usa <span class="model-tag">codex 5.3</span> para programacion y manejo de tareas con skills. Al no tener los vicios del equipo, adopto las herramientas de forma natural. Es un buen referente para mostrar que el approach funciona cuando no hay resistencia previa.</p>
+  </div>
+
+  <div class="card card-accent">
+    <div class="card-header">
+      <div class="card-icon">J</div>
+      <div>
+        <div class="card-title">Jordi</div>
+        <div class="card-role">QA — 8 anos</div>
+      </div>
+    </div>
+    <span class="label-before">Antes</span>
+    <p>Usaba IA para ahorrar tiempo y crear manuales.</p>
+    <span class="label-after">Ahora</span>
+    <p>Documentos de QA asistidos por IA basados en code base, evaluando Playwright para e2e. Su rol se transformo de "QA manual que a veces usa IA" a "QA que tiene la IA integrada en su flujo de documentacion y analisis".</p>
+  </div>
+
+  <div class="page-footer">
+    <span>Neural Labs — Informe de Capacitacion IA</span>
+    <span>08</span>
+  </div>
+</div>
+
+<!-- ==================== PAGE 9: ANTES VS AHORA ==================== -->
+<div class="page">
+  <span class="section-number">05 — Comparativa</span>
+  <h2>Puntos de dolor: antes vs ahora</h2>
+
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 35%">Punto de dolor original</th>
+          <th style="width: 45%">Estado actual</th>
+          <th style="width: 20%">Estado</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Todo se retrasaba, tiempos de desarrollo largos</td>
+          <td>Tiempos mejorados. Mas rapido y ordenado para entregar y documentar.</td>
+          <td><span class="status status-done">Mejorado</span></td>
+        </tr>
+        <tr>
+          <td>Releases semestrales con conflictos de versiones</td>
+          <td>Se trabaja en release notes automatizadas, pero el ciclo de releases aun no cambio estructuralmente.</td>
+          <td><span class="status status-partial">Parcial</span></td>
+        </tr>
+        <tr>
+          <td>Sin testing unitario ni e2e</td>
+          <td>Web: plan definido (refactor primero, tests despues). QA: evaluando Playwright.</td>
+          <td><span class="status status-pending">Pendiente</span></td>
+        </tr>
+        <tr>
+          <td>Documentacion dispersa y sin estandar</td>
+          <td>Mejoria en documentacion asistida por IA. Skills de repo creados. Falta formalizar el estandar completo.</td>
+          <td><span class="status status-partial">Parcial</span></td>
+        </tr>
+        <tr>
+          <td>IA olvidaba contexto</td>
+          <td>El equipo ya usa Engram (memoria persistente), pero no de manera correcta. Falta estructurar como se guardan decisiones y convenciones para que el contexto realmente persista entre sesiones.</td>
+          <td><span class="status status-partial">Parcial</span></td>
+        </tr>
+        <tr>
+          <td>IA no respeta el estilo del dev</td>
+          <td>Parcialmente resuelto con seleccion de modelos. Se resuelve completamente con skills custom.</td>
+          <td><span class="status status-partial">Parcial</span></td>
+        </tr>
+        <tr>
+          <td>PRs con revision muy ligera</td>
+          <td>Mejorado, con IA integrada en revision de codigo y PRs.</td>
+          <td><span class="status status-done">Mejorado</span></td>
+        </tr>
+        <tr>
+          <td>No hay reglas documentadas de codigo</td>
+          <td>Se crearon skills de repo, pero falta documentar reglas como especificacion formal.</td>
+          <td><span class="status status-partial">Parcial</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Problemas que persisten</h3>
+  <ul>
+    <li>La IA a veces no hace lo que se le dice o "se olvida" del trabajo. El equipo ya tiene Engram instalado pero no lo esta usando de forma efectiva. Falta definir que se guarda, cuando y con que estructura. Combinado con SDD, esto se resuelve de raiz.</li>
+    <li>Desconfianza de parte de algunos miembros (Raul, Francisco). Es sana cuando se canaliza como verificacion, pero puede frenar la adopcion si no se trabaja.</li>
+    <li>El testing automatizado sigue sin implementarse. Es el gap mas grande y mas riesgoso para la calidad.</li>
+  </ul>
+
+  <div class="page-footer">
+    <span>Neural Labs — Informe de Capacitacion IA</span>
+    <span>09</span>
+  </div>
+</div>
+
+<!-- ==================== PAGE 10: RECOMENDACIONES ==================== -->
+<div class="page compact">
+  <span class="section-number">06 — Recomendaciones</span>
+  <h2>Proximos pasos para seguir escalando</h2>
+
+  <div class="card card-accent" style="position: relative;">
+    <span class="rec-number">01</span>
+    <h4>Implementar SDD (Spec-Driven Development)</h4>
+    <p>El flujo estructurado de exploracion, propuesta, especificacion, diseno, tareas, implementacion y verificacion resuelve directamente los problemas de "la IA no hace lo que le digo" y "se olvida". Si la IA trabaja contra una spec, no improvisa.</p>
+  </div>
+
+  <div class="card card-accent" style="position: relative;">
+    <span class="rec-number">02</span>
+    <h4>Usar Engram correctamente</h4>
+    <p>El equipo ya tiene Engram instalado, lo cual es un buen primer paso, pero no lo esta aprovechando. La memoria persistente solo sirve si se define que guardar: decisiones arquitectonicas, convenciones de equipo, contexto de tareas en progreso, patrones de migracion. Sin esa disciplina, es como tener un disco rigido y no guardar nada en el.</p>
+  </div>
+
+  <div class="card card-accent" style="position: relative;">
+    <span class="rec-number">03</span>
+    <h4>Actualizar el stack de herramientas con Gentle AI</h4>
+    <p>El equipo tiene las piezas sueltas (agentes, Engram, skills) pero no un ecosistema unificado. Gentle AI integra todo en un solo comando: SDD, memoria persistente, documentacion on-demand, skills custom y configuracion de agentes. Actualizar a Gentle AI les da un unico punto de gobierno sobre todas las herramientas de IA que ya usan, en lugar de tener cada pieza configurada por separado.</p>
+  </div>
+
+  <div class="card card-accent" style="position: relative;">
+    <span class="rec-number">04</span>
+    <h4>Priorizar testing automatizado</h4>
+    <p>Definir un punto de ruptura claro. Desde este commit en adelante, todo codigo nuevo tiene tests. No intentar cubrir todo el legacy de golpe, eso paraliza. Unit tests primero, e2e con Playwright despues.</p>
+  </div>
+
+  <div class="card card-accent" style="position: relative;">
+    <span class="rec-number">05</span>
+    <h4>Trabajar la desconfianza con evidencia</h4>
+    <p>Raul y Francisco necesitan ver resultados concretos en su propio codigo. No se les convence con charlas, se les convence cuando un skill custom genera codigo que respeta sus patrones y la verificacion les muestra que el resultado es correcto.</p>
+  </div>
+
+  <div class="page-footer">
+    <span>Neural Labs — Informe de Capacitacion IA</span>
+    <span>10</span>
+  </div>
+</div>
+
+<!-- ==================== PAGE 11: RECOMENDACIONES (cont.) ==================== -->
+<div class="page compact">
+  <span class="section-number">06 — Recomendaciones (cont.)</span>
+  <h2>Proximos pasos para seguir escalando</h2>
+
+  <div class="card card-accent" style="position: relative;">
+    <span class="rec-number">06</span>
+    <h4>Evaluar mejor los pasos de implementacion</h4>
+    <p>Antes de asignar una tarea, usar la IA para hacer el split y la estimacion. Esto ya se empezo a hacer pero necesita formalizarse como parte del proceso, no como algo opcional.</p>
+  </div>
+
+  <div class="card card-accent" style="position: relative;">
+    <span class="rec-number">07</span>
+    <h4>Automatizar release notes</h4>
+    <p>Ya se creo un skill para esto. El siguiente paso es integrarlo en el flujo de CI/CD para que no dependa de que alguien se acuerde de ejecutarlo.</p>
+  </div>
+
+  <div class="card card-accent" style="position: relative;">
+    <span class="rec-number">08</span>
+    <h4>Documentar el por que, no solo el que</h4>
+    <p>Cada cambio deberia documentar no solo que se hizo sino por que. Engram cubre esto a nivel de IA, pero tambien necesitan un estandar humano (ADRs o similar) para que el equipo que venga despues entienda las decisiones.</p>
+  </div>
+
+  <div class="card card-accent" style="position: relative;">
+    <span class="rec-number">09</span>
+    <h4>Mejorar la especificacion dentro del codigo</h4>
+    <p>Tienen que situar que hay y que deberia haber. Marcar un punto de ruptura y decir "desde aqui para adelante se hace de la forma esperada". Esto es exactamente lo que SDD formaliza.</p>
+  </div>
+
+  <div class="card card-accent" style="position: relative;">
+    <span class="rec-number">10</span>
+    <h4>Distinguir IA de LLM: incorporar procesos algoritmicos</h4>
+    <p>El equipo aprendio a trabajar con agentes conversacionales y eso es un gran avance. Pero IA no es solo un LLM. Hay procesos inteligentes algoritmicos (automatizacion de CI/CD, analisis estatico, deteccion de patrones, pipelines de validacion, bots de triaje) que resuelven problemas de forma determinista sin necesidad de un modelo de lenguaje. Saber cuando usar un agente y cuando usar un proceso algoritmico es lo que separa a un equipo que usa IA de un equipo que entiende IA.</p>
+  </div>
+
+  <div class="page-footer">
+    <span>Neural Labs — Informe de Capacitacion IA</span>
+    <span>11</span>
+  </div>
+</div>
+
+<!-- ==================== PAGE 12: CONCLUSION ==================== -->
+<div class="page">
+  <span class="section-number">07 — Conclusion</span>
+  <h2>El equipo tiene la motivacion.<br>Ahora necesita el framework.</h2>
+
+  <div class="separator"></div>
+
+  <p style="font-size: 15px; line-height: 1.8; color: var(--text-primary);">El equipo de Neural Labs paso de usar IA de forma aislada y con resultados inconsistentes a tener skills de repositorio, flujos asistidos, documentacion mejorada y una mentalidad de mejora continua. Los tiempos mejoraron y la comunicacion entre equipo tambien.</p>
+
+  <p style="font-size: 15px; line-height: 1.8; color: var(--text-primary);">Lo que falta es estructurar lo que aprendieron. Unificar el stack con Gentle AI para tener un solo punto de gobierno. Usar Engram de forma efectiva, no solo tenerlo instalado. Implementar SDD para que el flujo sea deterministico. Incorporar testing para que la calidad no dependa solo de Jordi. Y dar el salto conceptual de entender que IA no es solo un LLM: hay procesos algoritmicos que resuelven problemas enteros sin necesidad de un modelo conversacional.</p>
+
+  <div class="neon-divider"></div>
+
+  <div style="margin-top: 40px;">
+    <p style="color: var(--text-muted); font-size: 13px;">Para cualquier duda o seguimiento:</p>
+    <div style="margin-top: 16px;">
+      <div class="card" style="display: inline-block; padding: 16px 24px;">
+        <span style="font-weight: 600; color: var(--text-primary);">Alan Buscaglia</span><br>
+        <span style="color: var(--text-muted); font-size: 12px;">GDE &amp; MVP — Founder, Gentleman Programming</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-footer">
+    <span>Neural Labs — Informe de Capacitacion IA</span>
+    <span>12</span>
+  </div>
+</div>
+
+</body>
+</html>

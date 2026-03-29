@@ -283,10 +283,16 @@ function Test-Installation {
     }
 
     # Check common locations
+    $gopath = $null
+    if (Get-Command "go" -ErrorAction SilentlyContinue) {
+        $gopath = & go env GOPATH 2>$null
+    }
     $locations = @(
-        (Join-Path $env:LOCALAPPDATA "gentle-ai\bin\$BINARY_NAME.exe"),
-        (Join-Path (& go env GOPATH 2>$null) "bin\$BINARY_NAME.exe")
+        (Join-Path $env:LOCALAPPDATA "gentle-ai\bin\$BINARY_NAME.exe")
     )
+    if ($gopath) {
+        $locations += (Join-Path $gopath "bin\$BINARY_NAME.exe")
+    }
 
     foreach ($loc in $locations) {
         if ($loc -and (Test-Path $loc)) {

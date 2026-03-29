@@ -24,7 +24,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \
 # ---------------------------------------------------------------------------
 # Install Go (match go.mod version)
 # ---------------------------------------------------------------------------
-ARG GO_VERSION=1.22.5
+ARG GO_VERSION=1.24.2
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
     | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}"

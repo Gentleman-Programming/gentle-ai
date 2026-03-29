@@ -19,19 +19,26 @@ func TestInstallCommandByProfile(t *testing.T) {
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
 			want:    [][]string{{"brew", "tap", "Gentleman-Programming/homebrew-tap"}, {"brew", "install", "engram"}},
 		},
+		// Linux and Windows now use DownloadLatestBinary() — InstallCommand returns an error
+		// to signal that callers must use the direct download path instead.
 		{
-			name:    "ubuntu uses go install with correct module path",
+			name:    "ubuntu returns error (uses DownloadLatestBinary instead of go install)",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
-			want:    [][]string{{"env", "CGO_ENABLED=0", "go", "install", "github.com/Gentleman-Programming/engram/cmd/engram@latest"}},
+			wantErr: true,
 		},
 		{
-			name:    "arch uses go install with correct module path",
+			name:    "arch returns error (uses DownloadLatestBinary instead of go install)",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
-			want:    [][]string{{"env", "CGO_ENABLED=0", "go", "install", "github.com/Gentleman-Programming/engram/cmd/engram@latest"}},
+			wantErr: true,
 		},
 		{
-			name:    "unsupported package manager errors",
-			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "fedora", PackageManager: "dnf"},
+			name:    "fedora returns error (uses DownloadLatestBinary instead of go install)",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
+			wantErr: true,
+		},
+		{
+			name:    "unsupported package manager returns error",
+			profile: system.PlatformProfile{OS: "linux", PackageManager: "zypper"},
 			wantErr: true,
 		},
 	}

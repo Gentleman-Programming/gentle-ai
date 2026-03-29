@@ -2,7 +2,6 @@ package gga
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
@@ -19,15 +18,15 @@ func RuntimePRModePath(homeDir string) string {
 	return filepath.Join(RuntimeLibDir(homeDir), "pr_mode.sh")
 }
 
-// EnsureRuntimeAssets makes sure critical gga runtime files exist.
-// Today this guards against upstream installer drift where pr_mode.sh may be missing.
+// EnsureRuntimeAssets ensures critical gga runtime files are current.
+//
+// Behavior change from "only-if-missing" to "always-write":
+// WriteFileAtomic performs a content-equality check — it is a no-op when the
+// embedded asset matches the file on disk, and an atomic replace when it differs.
+// This guarantees pr_mode.sh stays current after gentle-ai updates without
+// touching the file on every sync when nothing has changed.
 func EnsureRuntimeAssets(homeDir string) error {
 	prModePath := RuntimePRModePath(homeDir)
-	if _, err := os.Stat(prModePath); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat gga runtime file %q: %w", prModePath, err)
-	}
 
 	content, err := assets.Read("gga/pr_mode.sh")
 	if err != nil {

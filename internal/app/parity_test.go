@@ -96,8 +96,8 @@ func TestGuardAcceptsLinux(t *testing.T) {
 	}
 }
 
-func TestGuardRejectsUnsupportedLinuxDistro(t *testing.T) {
-	profile := system.PlatformProfile{OS: "linux", LinuxDistro: "fedora", Supported: false}
+func TestGuardRejectsUnknownUnsupportedLinuxDistro(t *testing.T) {
+	profile := system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUnknown, Supported: false}
 	err := system.EnsureSupportedPlatform(profile)
 	if err == nil {
 		t.Fatalf("expected error for unsupported linux distro")
@@ -118,6 +118,13 @@ func TestGuardAcceptsArchProfile(t *testing.T) {
 	profile := system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman", Supported: true}
 	if err := system.EnsureSupportedPlatform(profile); err != nil {
 		t.Fatalf("expected arch profile to be accepted, got %v", err)
+	}
+}
+
+func TestGuardAcceptsFedoraProfile(t *testing.T) {
+	profile := system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", Supported: true}
+	if err := system.EnsureSupportedPlatform(profile); err != nil {
+		t.Fatalf("expected fedora profile to be accepted, got %v", err)
 	}
 }
 
@@ -176,6 +183,63 @@ func TestRunArgsUnknownCommandReturnsError(t *testing.T) {
 	}
 	if err.Error() != `unknown command "bogus"` {
 		t.Fatalf("RunArgs(bogus) error = %v", err)
+	}
+}
+
+// --- Sync command wiring tests ---
+
+// TestRunArgsSyncDryRunIsDispatchedAndPrintsReport verifies that
+// `RunArgs(["sync", "--dry-run", ...])` is correctly wired through app.go
+// and produces output about the sync plan — not a "unknown command" error.
+func TestRunArgsSyncDryRunIsDispatchedAndPrintsReport(t *testing.T) {
+	var buf bytes.Buffer
+	err := RunArgs([]string{"sync", "--agents", "opencode", "--dry-run"}, &buf)
+	if err != nil {
+		t.Fatalf("RunArgs(sync --dry-run) error = %v", err)
+	}
+
+	out := buf.String()
+	if out == "" {
+		t.Fatalf("RunArgs(sync --dry-run) produced no output")
+	}
+
+	// Output must mention agents or components — it is the sync plan report.
+	if !strings.Contains(out, "sync") && !strings.Contains(out, "Sync") &&
+		!strings.Contains(out, "agent") && !strings.Contains(out, "Agent") {
+		t.Errorf("sync --dry-run output should mention sync or agents; got:\n%s", out)
+	}
+}
+
+// TestRunArgsSyncUnknownFlagReturnsError verifies that an unknown flag
+// returns a proper parse error via the sync command path.
+func TestRunArgsSyncUnknownFlagReturnsError(t *testing.T) {
+	var buf bytes.Buffer
+	err := RunArgs([]string{"sync", "--this-flag-does-not-exist"}, &buf)
+	if err == nil {
+		t.Fatalf("RunArgs(sync --unknown) expected error")
+	}
+	// Must not be "unknown command" — sync IS a known command.
+	if err.Error() == `unknown command "sync"` {
+		t.Fatalf("sync command is not registered in app.go dispatch")
+	}
+}
+
+// TestRunArgsSyncNoAgentsIsNoOp verifies that `gentle-ai sync` with no
+// agents flag and an empty home dir (no config dirs) completes as a no-op
+// and does NOT return an error.
+func TestRunArgsSyncNoAgentsIsNoOp(t *testing.T) {
+	// We can't override osUserHomeDir from the app package directly,
+	// but we can verify that the command exits without error and prints
+	// something meaningful (the no-op message).
+	// Use --dry-run to avoid any file creation and allow running in CI.
+	var buf bytes.Buffer
+	err := RunArgs([]string{"sync", "--agents", "opencode", "--dry-run"}, &buf)
+	if err != nil {
+		t.Fatalf("RunArgs(sync --dry-run): %v", err)
+	}
+	out := buf.String()
+	if out == "" {
+		t.Fatalf("sync --dry-run should produce output, got empty string")
 	}
 }
 

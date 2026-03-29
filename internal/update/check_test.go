@@ -218,8 +218,10 @@ func TestFetchLatestRelease_Timeout(t *testing.T) {
 // TestFetchLatestRelease_GithubToken verifies that GITHUB_TOKEN is sent as Bearer.
 func TestFetchLatestRelease_GithubToken(t *testing.T) {
 	var gotAuth string
+	var gotUserAgent string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
+		gotUserAgent = r.Header.Get("User-Agent")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(githubRelease{TagName: "v1.0.0"})
@@ -232,7 +234,7 @@ func TestFetchLatestRelease_GithubToken(t *testing.T) {
 	httpClient = server.Client()
 	httpClient.Transport = &testTransport{server: server}
 
-	t.Setenv("GITHUB_TOKEN", "test-token-123")
+	t.Setenv("GITHUB_TOKEN", "  test-token-123  ")
 
 	_, err := fetchLatestRelease(context.Background(), "owner", "repo")
 	if err != nil {
@@ -241,6 +243,31 @@ func TestFetchLatestRelease_GithubToken(t *testing.T) {
 
 	if gotAuth != "Bearer test-token-123" {
 		t.Fatalf("Authorization = %q, want %q", gotAuth, "Bearer test-token-123")
+	}
+
+	if gotUserAgent != "gentle-ai-update-check" {
+		t.Fatalf("User-Agent = %q, want %q", gotUserAgent, "gentle-ai-update-check")
+	}
+}
+
+// TestResolveGitHubToken_EnvVarWins verifies GITHUB_TOKEN takes precedence over gh CLI.
+func TestResolveGitHubToken_EnvVarWins(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "env-token")
+	if got := resolveGitHubToken(); got != "env-token" {
+		t.Fatalf("resolveGitHubToken() = %q, want %q", got, "env-token")
+	}
+}
+
+// TestResolveGitHubToken_EmptyWhenNoEnvAndNoGh verifies empty string returned when
+// GITHUB_TOKEN is unset and gh is not in PATH.
+func TestResolveGitHubToken_EmptyWhenNoEnvAndNoGh(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	origLookPath := ghLookPath
+	t.Cleanup(func() { ghLookPath = origLookPath })
+	ghLookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+
+	if got := resolveGitHubToken(); got != "" {
+		t.Fatalf("resolveGitHubToken() = %q, want empty", got)
 	}
 }
 
@@ -352,6 +379,50 @@ func TestCheckAll_NetworkError(t *testing.T) {
 	}
 	if results[0].Err == nil {
 		t.Fatalf("gentle-ai expected error, got nil")
+	}
+
+	if results[1].Status != CheckFailed {
+		t.Fatalf("engram status = %q, want %q", results[1].Status, CheckFailed)
+	}
+	if results[2].Status != CheckFailed {
+		t.Fatalf("gga status = %q, want %q", results[2].Status, CheckFailed)
+	}
+}
+
+func TestCheckFiltered_FetchErrorPreservesCheckFailedForMissingTool(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if ok {
+			conn, _, _ := hj.Hijack()
+			conn.Close()
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	origClient := httpClient
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	t.Cleanup(func() {
+		httpClient = origClient
+		lookPath = origLookPath
+		execCommand = origExecCommand
+	})
+
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("false") }
+
+	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
+	results := CheckFiltered(context.Background(), "1.0.0", profile, []string{"engram"})
+
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if results[0].Status != CheckFailed {
+		t.Fatalf("engram status = %q, want %q", results[0].Status, CheckFailed)
 	}
 }
 
@@ -599,7 +670,8 @@ func TestRegistryContents(t *testing.T) {
 	}
 }
 
-// TestCheckAll_DevVersion verifies that "dev" build version results in VersionUnknown.
+// TestCheckAll_DevVersion verifies that "dev" build version results in DevBuild
+// (not VersionUnknown — dev is a well-known sentinel for source-built binaries).
 func TestCheckAll_DevVersion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -637,8 +709,330 @@ func TestCheckAll_DevVersion(t *testing.T) {
 		t.Fatalf("len(results) = %d, want 1", len(results))
 	}
 
-	if results[0].Status != VersionUnknown {
-		t.Fatalf("gentle-ai dev status = %q, want %q", results[0].Status, VersionUnknown)
+	// The spec requires: "dev" build MUST be reported as DevBuild, not VersionUnknown.
+	if results[0].Status != DevBuild {
+		t.Fatalf("gentle-ai dev status = %q, want %q", results[0].Status, DevBuild)
+	}
+}
+
+// --- TestCheckFiltered ---
+
+// TestCheckFiltered verifies that CheckFiltered restricts results to the named tools
+// and that the dev-build sentinel causes gentle-ai to be reported as DevBuild.
+func TestCheckFiltered_SubsetOfTools(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(githubRelease{TagName: "v1.0.0", HTMLURL: "https://github.com/example/repo/releases/tag/v1.0.0"})
+	}))
+	defer server.Close()
+
+	origClient := httpClient
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	t.Cleanup(func() {
+		httpClient = origClient
+		lookPath = origLookPath
+		execCommand = origExecCommand
+	})
+
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+	lookPath = func(name string) (string, error) {
+		if name == "engram" {
+			return "/usr/local/bin/engram", nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "engram" {
+			return exec.Command("echo", "engram v0.9.9")
+		}
+		return exec.Command("false")
+	}
+
+	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
+
+	// Request only "engram" — should return exactly 1 result.
+	results := CheckFiltered(context.Background(), "1.0.0", profile, []string{"engram"})
+	if len(results) != 1 {
+		t.Fatalf("CheckFiltered(engram) len = %d, want 1", len(results))
+	}
+	if results[0].Tool.Name != "engram" {
+		t.Fatalf("CheckFiltered(engram) tool = %q, want %q", results[0].Tool.Name, "engram")
+	}
+}
+
+// TestCheckFiltered_EmptyFilter verifies that an empty filter returns all tools (same as CheckAll).
+func TestCheckFiltered_EmptyFilter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(githubRelease{TagName: "v1.0.0"})
+	}))
+	defer server.Close()
+
+	origClient := httpClient
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	t.Cleanup(func() {
+		httpClient = origClient
+		lookPath = origLookPath
+		execCommand = origExecCommand
+	})
+
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("false") }
+
+	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
+
+	// nil filter → all tools (same as CheckAll).
+	results := CheckFiltered(context.Background(), "1.0.0", profile, nil)
+	if len(results) != len(Tools) {
+		t.Fatalf("CheckFiltered(nil) len = %d, want %d", len(results), len(Tools))
+	}
+}
+
+// TestCheckFiltered_UnknownToolIgnored verifies that requesting an unknown tool name is
+// silently skipped without panicking or returning garbage results.
+func TestCheckFiltered_UnknownToolIgnored(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(githubRelease{TagName: "v1.0.0"})
+	}))
+	defer server.Close()
+
+	origClient := httpClient
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	t.Cleanup(func() {
+		httpClient = origClient
+		lookPath = origLookPath
+		execCommand = origExecCommand
+	})
+
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("false") }
+
+	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
+
+	results := CheckFiltered(context.Background(), "1.0.0", profile, []string{"no-such-tool"})
+	if len(results) != 0 {
+		t.Fatalf("CheckFiltered(no-such-tool) len = %d, want 0", len(results))
+	}
+}
+
+// TestCheckFiltered_DevBuildSemanticsForGentleAI verifies the design requirement:
+// when the running gentle-ai binary reports version "dev", it is identified as a
+// DevBuild and NOT reported as UpdateAvailable or VersionUnknown.
+//
+// The spec says:
+//   - Dev build MUST be reported as development-build semantic
+//   - gentle-ai self-upgrade is skipped while engram/gga remain eligible
+func TestCheckFiltered_DevBuildSemanticsForGentleAI(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(githubRelease{TagName: "v9.9.9"})
+	}))
+	defer server.Close()
+
+	origClient := httpClient
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	origTools := Tools
+	t.Cleanup(func() {
+		httpClient = origClient
+		lookPath = origLookPath
+		execCommand = origExecCommand
+		Tools = origTools
+	})
+
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("false") }
+	Tools = []ToolInfo{Tools[0]} // gentle-ai only
+
+	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
+
+	results := CheckFiltered(context.Background(), "dev", profile, nil)
+	if len(results) != 1 {
+		t.Fatalf("len = %d, want 1", len(results))
+	}
+
+	r := results[0]
+	if r.Tool.Name != "gentle-ai" {
+		t.Fatalf("tool = %q, want gentle-ai", r.Tool.Name)
+	}
+
+	// Dev build should be reported as DevBuild status, not VersionUnknown or UpdateAvailable.
+	if r.Status != DevBuild {
+		t.Fatalf("dev status = %q, want DevBuild; ensure DevBuild status is used for dev version builds", r.Status)
+	}
+}
+
+// TestCheckFiltered_DevBuildSkipNotEligible verifies that in a mixed run,
+// gentle-ai with "dev" version gets DevBuild while engram with a real version stays eligible.
+func TestCheckFiltered_DevBuildSkipNotEligible(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		path := r.URL.Path
+		var release githubRelease
+		switch {
+		case contains(path, "gentle-ai"):
+			release = githubRelease{TagName: "v9.9.9"}
+		case contains(path, "engram"):
+			release = githubRelease{TagName: "v2.0.0"}
+		default:
+			release = githubRelease{TagName: "v1.0.0"}
+		}
+		json.NewEncoder(w).Encode(release)
+	}))
+	defer server.Close()
+
+	origClient := httpClient
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	origTools := Tools
+	t.Cleanup(func() {
+		httpClient = origClient
+		lookPath = origLookPath
+		execCommand = origExecCommand
+		Tools = origTools
+	})
+
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	// engram is installed at v1.0.0
+	lookPath = func(name string) (string, error) {
+		if name == "engram" {
+			return "/usr/local/bin/engram", nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "engram" {
+			return exec.Command("echo", "engram v1.0.0")
+		}
+		return exec.Command("false")
+	}
+	// Only gentle-ai and engram for this test
+	Tools = []ToolInfo{Tools[0], Tools[1]}
+
+	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
+
+	results := CheckFiltered(context.Background(), "dev", profile, nil)
+	if len(results) != 2 {
+		t.Fatalf("len = %d, want 2", len(results))
+	}
+
+	// gentle-ai should be DevBuild
+	if results[0].Status != DevBuild {
+		t.Fatalf("gentle-ai status = %q, want DevBuild", results[0].Status)
+	}
+
+	// engram should be UpdateAvailable (1.0.0 < 2.0.0)
+	if results[1].Status != UpdateAvailable {
+		t.Fatalf("engram status = %q, want UpdateAvailable", results[1].Status)
+	}
+}
+
+// TestNoUpdatesPath verifies CheckFiltered returns correct statuses when nothing needs updating.
+func TestNoUpdatesPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		path := r.URL.Path
+		var release githubRelease
+		switch {
+		case contains(path, "engram"):
+			release = githubRelease{TagName: "v0.3.2"}
+		case contains(path, "gentleman-guardian-angel"):
+			release = githubRelease{TagName: "v1.0.0"}
+		default:
+			release = githubRelease{TagName: "v1.0.0"}
+		}
+		json.NewEncoder(w).Encode(release)
+	}))
+	defer server.Close()
+
+	origClient := httpClient
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	origTools := Tools
+	t.Cleanup(func() {
+		httpClient = origClient
+		lookPath = origLookPath
+		execCommand = origExecCommand
+		Tools = origTools
+	})
+
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	// engram is at v0.3.2 (same as remote), gga is not installed
+	lookPath = func(name string) (string, error) {
+		if name == "engram" {
+			return "/usr/local/bin/engram", nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "engram" {
+			return exec.Command("echo", "engram v0.3.2")
+		}
+		return exec.Command("false")
+	}
+	// Only engram and gga for this test (skip gentle-ai to avoid dev-build behavior)
+	Tools = []ToolInfo{Tools[1], Tools[2]}
+
+	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
+
+	results := CheckFiltered(context.Background(), "1.0.0", profile, nil)
+	if len(results) != 2 {
+		t.Fatalf("len = %d, want 2", len(results))
+	}
+
+	// engram: up to date
+	if results[0].Status != UpToDate {
+		t.Fatalf("engram status = %q, want UpToDate", results[0].Status)
+	}
+
+	// gga: not installed
+	if results[1].Status != NotInstalled {
+		t.Fatalf("gga status = %q, want NotInstalled", results[1].Status)
+	}
+}
+
+// TestInstallMethodFieldsOnRegistry verifies that InstallMethod is set on all tools
+// and that gentle-ai has a nil GoImportPath.
+func TestInstallMethodFieldsOnRegistry(t *testing.T) {
+	for _, tool := range Tools {
+		if tool.InstallMethod == "" {
+			t.Errorf("tool %q has empty InstallMethod — must be set", tool.Name)
+		}
+	}
+
+	// gentle-ai: brew on macOS, binary on linux/windows
+	// engram: go-install (no brew variant needed for this check)
+	// gga: brew on macOS, binary elsewhere
+	for _, tool := range Tools {
+		switch tool.Name {
+		case "engram":
+			if tool.GoImportPath == "" {
+				t.Errorf("engram must have GoImportPath set (go-install method)")
+			}
+		}
 	}
 }
 

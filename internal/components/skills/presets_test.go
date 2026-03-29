@@ -12,9 +12,15 @@ func TestSkillsForPresetMinimalReturnsSDDOnly(t *testing.T) {
 		t.Fatalf("SkillsForPreset(minimal) returned empty")
 	}
 
+	// Orchestration skills that are always bundled with SDD.
+	orchestrationSkills := map[model.SkillID]bool{
+		model.SkillJudgmentDay: true,
+	}
+
 	for _, skill := range skills {
-		if len(skill) < 4 || skill[:3] != "sdd" {
-			t.Fatalf("minimal preset should only contain SDD skills, got %q", skill)
+		isSDD := len(skill) >= 4 && skill[:3] == "sdd"
+		if !isSDD && !orchestrationSkills[skill] {
+			t.Fatalf("minimal preset should only contain SDD/orchestration skills, got %q", skill)
 		}
 	}
 }
@@ -71,6 +77,7 @@ func TestAllSkillIDsIncludesEveryKnownSkill(t *testing.T) {
 		model.SkillSDDInit,
 		model.SkillGoTesting,
 		model.SkillCreator,
+		model.SkillJudgmentDay,
 	}
 
 	skillSet := make(map[model.SkillID]struct{}, len(all))

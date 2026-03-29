@@ -15,7 +15,7 @@ internal/
   system/                  OS/distro detection, dependency checks, platform guards
   cli/                     Install flags, validation, orchestration, dry-run
   planner/                 Dependency graph, resolution, ordering, review payloads
-  installcmd/              Profile-aware command resolver (brew/apt/pacman/winget/go install)
+  installcmd/              Profile-aware command resolver (brew/apt/pacman/dnf/winget/go install)
   pipeline/                Staged execution + rollback orchestration
   backup/                  Config snapshot + restore
   assets/                  Embedded skill files + persona templates
@@ -23,7 +23,10 @@ internal/
     engram/  sdd/  skills/  mcp/  persona/  theme/  permissions/  gga/
     filemerge/             Marker-based file merging (inject without clobbering)
   agents/                  Agent adapters (config strategy per agent)
-    claude/  opencode/  gemini/  cursor/  vscode/
+    claude/  opencode/  gemini/  cursor/  vscode/  codex/  windsurf/  antigravity/
+  opencode/                OpenCode model/config parsing utilities
+  state/                   Installation state tracking
+  update/                  Self-update + upgrade logic
   verify/                  Post-apply health checks + reporting
   tui/                     Bubbletea TUI (Rose Pine theme)
     styles/  screens/
@@ -57,7 +60,7 @@ Test coverage:
 - **78 E2E test functions** running in Docker containers (Ubuntu + Arch)
 - **17 golden files** for snapshot testing component output
 - Full pipeline tested: detection, planning, execution, backup, restore, verification
-- All 5 agent adapters have unit tests with cross-platform path validation
+- All 8 agent adapters have unit tests with cross-platform path validation
 
 ---
 
@@ -66,7 +69,7 @@ Test coverage:
 | | Gentleman.Dots | AI Gentle Stack |
 |--|---------------|-----------------|
 | **Purpose** | Dev environment (editors, shells, terminals) | AI development layer (agents, memory, skills) |
-| **Installs** | Neovim, Fish/Zsh, Tmux/Zellij, Ghostty | Configures Claude Code, OpenCode, Gemini CLI, Cursor, VS Code Copilot |
+| **Installs** | Neovim, Fish/Zsh, Tmux/Zellij, Ghostty | Configures Claude Code, OpenCode, Gemini CLI, Cursor, VS Code Copilot, Codex, Windsurf, Antigravity |
 | **Overlap** | None — complementary | None — different layer |
 
 Install Gentleman.Dots first for your dev environment, then AI Gentle Stack for the AI layer on top.

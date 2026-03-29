@@ -21,52 +21,17 @@ From the orchestrator:
 
 ## Execution and Persistence Contract
 
-- If mode is `engram`:
+> Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/sdd-phase-common.md`.
 
-  **CRITICAL: `mem_search` returns 300-char PREVIEWS, not full content. You MUST call `mem_get_observation(id)` for EVERY artifact. If you skip this, you will archive with incomplete data.**
-
-  **STEP A — SEARCH** (get IDs only — content is truncated):
-  1. `mem_search(query: "sdd/{change-name}/proposal", project: "{project}")` → save ID
-  2. `mem_search(query: "sdd/{change-name}/spec", project: "{project}")` → save ID
-  3. `mem_search(query: "sdd/{change-name}/design", project: "{project}")` → save ID
-  4. `mem_search(query: "sdd/{change-name}/tasks", project: "{project}")` → save ID
-  5. `mem_search(query: "sdd/{change-name}/verify-report", project: "{project}")` → save ID
-
-  **STEP B — RETRIEVE FULL CONTENT** (mandatory for each):
-  6. `mem_get_observation(id: {proposal_id})` → full proposal
-  7. `mem_get_observation(id: {spec_id})` → full spec
-  8. `mem_get_observation(id: {design_id})` → full design
-  9. `mem_get_observation(id: {tasks_id})` → full tasks
-  10. `mem_get_observation(id: {verify_report_id})` → full verification report
-
-  **DO NOT use search previews as source material.**
-
-  **Record all observation IDs** — include them in the archive report for full traceability.
-
-  **Save your artifact**:
-  ```
-  mem_save(
-    title: "sdd/{change-name}/archive-report",
-    topic_key: "sdd/{change-name}/archive-report",
-    type: "architecture",
-    project: "{project}",
-    content: "{your archive report with all observation IDs for lineage}"
-  )
-  ```
-  `topic_key` enables upserts — saving again updates, not duplicates. (Read `skills/_shared/sdd-phase-common.md`.)
-
-  (See `skills/_shared/engram-convention.md` for full naming conventions.)
-- If mode is `openspec`: Read and follow `skills/_shared/openspec-convention.md`. Perform merge and archive folder moves.
-- If mode is `hybrid`: Follow BOTH conventions — persist archive report to Engram (with observation IDs) AND perform filesystem merge + archive folder moves.
-- If mode is `none`: Return closure summary only. Do not perform archive file operations.
+- **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks`, `sdd/{change-name}/verify-report` (all required). Record all observation IDs in the archive report for traceability. Save as `sdd/{change-name}/archive-report`.
+- **openspec**: Read and follow `skills/_shared/openspec-convention.md`. Perform merge and archive folder moves.
+- **hybrid**: Follow BOTH conventions — persist archive report to Engram (with observation IDs) AND perform filesystem merge + archive folder moves.
+- **none**: Return closure summary only. Do not perform archive file operations.
 
 ## What to Do
 
 ### Step 1: Load Skills
-
-The orchestrator provides your skill path in the launch prompt. Load it now. If no path was provided, proceed without additional skills.
-
-> Read `skills/_shared/sdd-phase-common.md` for the engram upsert note and return envelope format.
+Follow **Section A** from `skills/_shared/sdd-phase-common.md`.
 
 ### Step 2: Sync Delta Specs to Main Specs
 
@@ -133,20 +98,10 @@ Use today's date in ISO format (e.g., `2026-02-16`).
 
 **This step is MANDATORY — do NOT skip it.**
 
-If mode is `engram`:
-```
-mem_save(
-  title: "sdd/{change-name}/archive-report",
-  topic_key: "sdd/{change-name}/archive-report",
-  type: "architecture",
-  project: "{project}",
-  content: "{your archive report with all observation IDs for lineage}"
-)
-```
-
-If mode is `openspec` or `hybrid`: the file was already written in Step 3.
-
-If mode is `hybrid`: also call `mem_save` as above (write to BOTH backends).
+Follow **Section C** from `skills/_shared/sdd-phase-common.md`.
+- artifact: `archive-report`
+- topic_key: `sdd/{change-name}/archive-report`
+- type: `architecture`
 
 ### Step 6: Return Summary
 
@@ -188,4 +143,4 @@ Ready for the next change.
 - The archive is an AUDIT TRAIL — never delete or modify archived changes
 - If `openspec/changes/archive/` doesn't exist, create it
 - Apply any `rules.archive` from `openspec/config.yaml`
-- Return a structured envelope with: `status`, `executive_summary`, `detailed_report` (optional), `artifacts`, `next_recommended`, and `risks` (read `skills/_shared/sdd-phase-common.md` for the full envelope spec)
+- Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.

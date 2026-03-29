@@ -10,6 +10,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
@@ -148,7 +149,7 @@ func TestInjectClaudeGentlemanReturnsAllFiles(t *testing.T) {
 	}
 }
 
-func TestInjectClaudeNeutralWritesMinimalContent(t *testing.T) {
+func TestInjectClaudeNeutralWritesFullPersonaWithoutRegionalLanguage(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := Inject(home, claudeAdapter(), model.PersonaNeutral)
@@ -166,12 +167,13 @@ func TestInjectClaudeNeutralWritesMinimalContent(t *testing.T) {
 	}
 
 	text := string(content)
-	if !strings.Contains(text, "helpful") {
-		t.Fatal("Neutral persona should contain 'helpful'")
+	// Neutral persona is the same teacher — should have Senior Architect.
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("Neutral persona should contain 'Senior Architect'")
 	}
-	// Should NOT have gentleman-specific content.
-	if strings.Contains(text, "Senior Architect") {
-		t.Fatal("Neutral persona should not contain gentleman content")
+	// Should NOT have gentleman-specific regional language.
+	if strings.Contains(text, "Rioplatense") {
+		t.Fatal("Neutral persona should not contain Rioplatense language")
 	}
 }
 
@@ -260,6 +262,207 @@ func TestInjectOpenCodeGentlemanWritesAgentsFile(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeNeutralPreservesManagedSections(t *testing.T) {
+	home := t.TempDir()
+
+	// First install gentleman persona + simulate SDD/engram sections
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+
+	// Simulate SDD and engram sections appended by sdd.Inject and engram.Inject
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	withSections := string(existing) + "\n\n<!-- gentle-ai:sdd-orchestrator -->\nSDD orchestrator content here\n<!-- /gentle-ai:sdd-orchestrator -->\n\n<!-- gentle-ai:engram-protocol -->\nEngram protocol content here\n<!-- /gentle-ai:engram-protocol -->\n"
+	if err := os.WriteFile(path, []byte(withSections), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	// Now switch to neutral persona
+	result, err := Inject(home, opencodeAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(neutral) should report changed")
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() after neutral error = %v", err)
+	}
+	text := string(content)
+
+	// Neutral content should be present
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("AGENTS.md missing neutral persona content")
+	}
+	if strings.Contains(text, "Rioplatense") {
+		t.Fatal("AGENTS.md has Rioplatense language in neutral persona — should be neutral tone")
+	}
+
+	// Managed sections MUST be preserved
+	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("AGENTS.md lost SDD orchestrator section after switching to neutral persona")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:engram-protocol -->") {
+		t.Fatal("AGENTS.md lost engram protocol section after switching to neutral persona")
+	}
+
+	// Gentleman-specific language should be gone — neutral has the same personality but no regional language
+	if strings.Contains(text, "Rioplatense") {
+		t.Fatal("AGENTS.md still has Rioplatense language after switching to neutral")
+	}
+}
+
+func TestInjectVSCodeNeutralPreservesManagedSections(t *testing.T) {
+	home := t.TempDir()
+
+	vscodeAdapter, err := agents.NewAdapter("vscode-copilot")
+	if err != nil {
+		t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+	}
+
+	_, err = Inject(home, vscodeAdapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	path := vscodeAdapter.SystemPromptFile(home)
+
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	withSections := string(existing) + "\n\n<!-- gentle-ai:sdd-orchestrator -->\nSDD content\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	if err := os.WriteFile(path, []byte(withSections), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err = Inject(home, vscodeAdapter, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() after neutral error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("instructions file missing neutral persona content")
+	}
+	if strings.Contains(text, "Rioplatense") {
+		t.Fatal("instructions file has Rioplatense language in neutral persona")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("instructions file lost SDD section after switching to neutral persona")
+	}
+	if !strings.Contains(text, "---\nname:") {
+		t.Fatal("instructions file lost YAML frontmatter")
+	}
+}
+
+func TestInjectNeutralPreservesWhenMarkerAtByteZero(t *testing.T) {
+	home := t.TempDir()
+
+	opencodeAdapter, err := agents.NewAdapter("opencode")
+	if err != nil {
+		t.Fatalf("NewAdapter(opencode) error = %v", err)
+	}
+
+	promptPath := opencodeAdapter.SystemPromptFile(home)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// File starts DIRECTLY with a managed marker at byte 0 — no persona preamble.
+	markerOnly := "<!-- gentle-ai:sdd-orchestrator -->\nSDD content\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	if err := os.WriteFile(promptPath, []byte(markerOnly), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err = Inject(home, opencodeAdapter, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) error = %v", err)
+	}
+
+	content, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("missing neutral persona content")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("SDD section destroyed when marker was at byte 0")
+	}
+}
+
+func TestInjectNeutralIdempotentWithManagedSections(t *testing.T) {
+	home := t.TempDir()
+
+	opencodeAdapter, err := agents.NewAdapter("opencode")
+	if err != nil {
+		t.Fatalf("NewAdapter(opencode) error = %v", err)
+	}
+
+	promptPath := opencodeAdapter.SystemPromptFile(home)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Set up: neutral + managed sections
+	// Simulate a file with neutral persona + managed sections.
+	// Use a fingerprint from the real neutral asset so the test is realistic.
+	neutralContent := assets.MustRead("generic/persona-neutral.md")
+	initial := neutralContent + "\n\n<!-- gentle-ai:sdd-orchestrator -->\nSDD content\n<!-- /gentle-ai:sdd-orchestrator -->\n\n<!-- gentle-ai:engram-protocol -->\nEngram content\n<!-- /gentle-ai:engram-protocol -->\n"
+	if err := os.WriteFile(promptPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	// First neutral inject
+	result1, err := Inject(home, opencodeAdapter, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) first error = %v", err)
+	}
+
+	// Second neutral inject — should be idempotent
+	result2, err := Inject(home, opencodeAdapter, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) second error = %v", err)
+	}
+
+	if result2.Changed && !result1.Changed {
+		t.Fatal("second neutral inject should not report changed when first didn't")
+	}
+
+	content, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	// Verify no duplication
+	if strings.Count(text, "<!-- gentle-ai:sdd-orchestrator -->") != 1 {
+		t.Fatal("SDD section duplicated after idempotent neutral inject")
+	}
+	if strings.Count(text, "## Rules") != 1 {
+		t.Fatal("neutral persona duplicated after idempotent inject")
+	}
+	if strings.Count(text, "<!-- gentle-ai:engram-protocol -->") != 1 {
+		t.Fatal("engram section duplicated after idempotent neutral inject")
+	}
+}
+
 func TestInjectClaudeIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 
@@ -297,6 +500,46 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 	if second.Changed {
 		t.Fatalf("Inject() second changed = true")
+	}
+}
+
+func TestInjectWindsurfIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+
+	windsurfAdapter, err := agents.NewAdapter("windsurf")
+	if err != nil {
+		t.Fatalf("NewAdapter(windsurf) error = %v", err)
+	}
+
+	first, err := Inject(home, windsurfAdapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject() first changed = false")
+	}
+
+	promptPath := windsurfAdapter.SystemPromptFile(home)
+	contentAfterFirst, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile() after first inject error = %v", err)
+	}
+
+	second, err := Inject(home, windsurfAdapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject() second changed = true — persona was duplicated in global_rules.md")
+	}
+
+	contentAfterSecond, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile() after second inject error = %v", err)
+	}
+
+	if string(contentAfterFirst) != string(contentAfterSecond) {
+		t.Fatal("global_rules.md content changed on second inject — persona was duplicated")
 	}
 }
 
@@ -392,5 +635,313 @@ func TestInjectVSCodeGentlemanWritesInstructionsFile(t *testing.T) {
 	}
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("VS Code persona missing 'Senior Architect'")
+	}
+}
+
+// --- Auto-heal tests: Claude Code stale free-text persona ---
+
+// legacyClaudePersonaBlock simulates a Gentleman persona block that was written
+// directly (without markers) by an old installer or manually by the user.
+const legacyClaudePersonaBlock = `## Rules
+
+- NEVER add "Co-Authored-By" or any AI attribution to commits. Use conventional commits format only.
+- Never build after changes.
+
+## Personality
+
+Senior Architect, 15+ years experience, GDE & MVP.
+
+## Language
+
+- Spanish input → Rioplatense Spanish.
+
+## Behavior
+
+- Push back when user asks for code without context.
+
+`
+
+func TestInjectClaudeAutoHealsStaleFreeTextPersona(t *testing.T) {
+	home := t.TempDir()
+
+	// Pre-populate CLAUDE.md with legacy persona content (no markers) followed
+	// by a properly-marked section from a previous installer run.
+	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(claudeMD), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	// Simulate a stale install: free-text persona block at top, then a different
+	// marked section below (e.g., from a previous SDD install).
+	stalePreamble := legacyClaudePersonaBlock + "\n<!-- gentle-ai:sdd -->\nOld SDD content.\n<!-- /gentle-ai:sdd -->\n"
+	if err := os.WriteFile(claudeMD, []byte(stalePreamble), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	result, err := Inject(home, claudeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() should have changed the file to remove the legacy block")
+	}
+
+	content, err := os.ReadFile(claudeMD)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	// The file should now have the persona inside markers, not as free text.
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("CLAUDE.md missing persona marker after heal")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:persona -->") {
+		t.Fatal("CLAUDE.md missing persona close marker after heal")
+	}
+
+	// The existing SDD section must be preserved.
+	if !strings.Contains(text, "<!-- gentle-ai:sdd -->") {
+		t.Fatal("CLAUDE.md lost the sdd section during heal")
+	}
+	if !strings.Contains(text, "Old SDD content.") {
+		t.Fatal("CLAUDE.md lost the sdd section content during heal")
+	}
+
+	// The persona content must NOT appear twice (no duplicate blocks).
+	firstPersonaIdx := strings.Index(text, "Senior Architect")
+	if firstPersonaIdx < 0 {
+		t.Fatal("CLAUDE.md missing 'Senior Architect' persona content")
+	}
+	// Verify there's no second occurrence outside the markers.
+	lastPersonaIdx := strings.LastIndex(text, "Senior Architect")
+	if firstPersonaIdx != lastPersonaIdx {
+		// It's OK if the same string appears inside the single persona marker block
+		// multiple times (e.g., content + newlines), but there must not be a
+		// separate free-text block also containing it.
+		// Check: everything before the open marker should NOT contain "Senior Architect".
+		openMarkerIdx := strings.Index(text, "<!-- gentle-ai:persona -->")
+		if openMarkerIdx >= 0 && strings.Contains(text[:openMarkerIdx], "Senior Architect") {
+			t.Fatal("CLAUDE.md still has 'Senior Architect' before the persona marker — legacy block not fully stripped")
+		}
+	}
+}
+
+func TestInjectClaudeAutoHealStalePersonaOnlyFile(t *testing.T) {
+	home := t.TempDir()
+
+	// CLAUDE.md contains ONLY the legacy persona block (no markers at all).
+	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(claudeMD), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	if err := os.WriteFile(claudeMD, []byte(legacyClaudePersonaBlock), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	result, err := Inject(home, claudeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() should have changed the file")
+	}
+
+	content, err := os.ReadFile(claudeMD)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	// Must have markers now.
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("CLAUDE.md missing persona marker")
+	}
+
+	// Must NOT have the legacy free-text block before markers.
+	openMarkerIdx := strings.Index(text, "<!-- gentle-ai:persona -->")
+	if openMarkerIdx >= 0 {
+		before := text[:openMarkerIdx]
+		if strings.Contains(before, "## Rules") {
+			t.Fatal("legacy '## Rules' block still present before persona marker")
+		}
+	}
+}
+
+func TestInjectClaudeHealDoesNotTouchNonPersonaContent(t *testing.T) {
+	home := t.TempDir()
+
+	// CLAUDE.md has user content that does NOT match persona fingerprints.
+	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(claudeMD), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	userContent := "# My custom config\n\nI like turtles.\n"
+	if err := os.WriteFile(claudeMD, []byte(userContent), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	result, err := Inject(home, claudeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() should write persona section")
+	}
+
+	content, err := os.ReadFile(claudeMD)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	// User content must be preserved.
+	if !strings.Contains(text, "I like turtles.") {
+		t.Fatal("user content was erased — heal was too aggressive")
+	}
+	// Persona section must be appended.
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("persona section not appended")
+	}
+}
+
+// --- Auto-heal tests: VSCode stale legacy path cleanup ---
+
+func TestInjectVSCodeCleansLegacyGitHubPersonaFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	// Plant an old-style Gentleman persona file at the legacy path.
+	legacyPath := filepath.Join(home, ".github", "copilot-instructions.md")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	// Old installer wrote raw persona content without YAML frontmatter.
+	oldContent := "## Personality\n\nSenior Architect, 15+ years experience.\n"
+	if err := os.WriteFile(legacyPath, []byte(oldContent), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	vscodeAdapter, err := agents.NewAdapter("vscode-copilot")
+	if err != nil {
+		t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+	}
+
+	result, injectErr := Inject(home, vscodeAdapter, model.PersonaGentleman)
+	if injectErr != nil {
+		t.Fatalf("Inject(vscode) error = %v", injectErr)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(vscode) should report changed (legacy cleanup + new file write)")
+	}
+
+	// Legacy file must be gone.
+	if _, statErr := os.Stat(legacyPath); !os.IsNotExist(statErr) {
+		t.Fatal("legacy ~/.github/copilot-instructions.md was NOT removed by auto-heal")
+	}
+
+	// New file must exist at the current path.
+	newPath := vscodeAdapter.SystemPromptFile(home)
+	content, readErr := os.ReadFile(newPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile new path %q error = %v", newPath, readErr)
+	}
+	if !strings.Contains(string(content), "applyTo: \"**\"") {
+		t.Fatal("new VSCode instructions file missing YAML frontmatter")
+	}
+}
+
+func TestInjectVSCodePreservesNonPersonaGitHubFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	// Plant a .github/copilot-instructions.md that has user content (not a
+	// Gentleman persona) — it must NOT be deleted.
+	legacyPath := filepath.Join(home, ".github", "copilot-instructions.md")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	userContent := "# My custom Copilot instructions\n\nAlways be concise.\n"
+	if err := os.WriteFile(legacyPath, []byte(userContent), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	vscodeAdapter, err := agents.NewAdapter("vscode-copilot")
+	if err != nil {
+		t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+	}
+
+	_, injectErr := Inject(home, vscodeAdapter, model.PersonaGentleman)
+	if injectErr != nil {
+		t.Fatalf("Inject(vscode) error = %v", injectErr)
+	}
+
+	// User's file must still exist.
+	remaining, readErr := os.ReadFile(legacyPath)
+	if readErr != nil {
+		t.Fatalf("legacy user file was deleted: ReadFile error = %v", readErr)
+	}
+	if string(remaining) != userContent {
+		t.Fatalf("user file content was modified: got %q", string(remaining))
+	}
+}
+
+func TestNeutralAndGentlemanToneSectionsMatch(t *testing.T) {
+	neutral := assets.MustRead("generic/persona-neutral.md")
+	gentleman := assets.MustRead("generic/persona-gentleman.md")
+
+	extractSection := func(content, section string) string {
+		idx := strings.Index(content, "## "+section)
+		if idx < 0 {
+			return ""
+		}
+		rest := content[idx:]
+		nextIdx := strings.Index(rest[1:], "\n## ")
+		if nextIdx < 0 {
+			return rest
+		}
+		return rest[:nextIdx+1]
+	}
+
+	neutralTone := extractSection(neutral, "Tone")
+	gentlemanTone := extractSection(gentleman, "Tone")
+
+	if neutralTone != gentlemanTone {
+		t.Fatalf("## Tone sections diverged:\nneutral:\n%s\ngentleman:\n%s", neutralTone, gentlemanTone)
+	}
+}
+
+func TestInjectVSCodeIdempotentAfterHeal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	// Plant legacy file and run inject twice — second run should be idempotent.
+	legacyPath := filepath.Join(home, ".github", "copilot-instructions.md")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("## Personality\n\nSenior Architect.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	vscodeAdapter, err := agents.NewAdapter("vscode-copilot")
+	if err != nil {
+		t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+	}
+
+	first, err := Inject(home, vscodeAdapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("first inject should have changed")
+	}
+
+	second, err := Inject(home, vscodeAdapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("second inject should be idempotent (changed = false), but changed = true")
 	}
 }

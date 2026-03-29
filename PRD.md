@@ -284,7 +284,7 @@ The full SDD Agent Team skill set (9 skills):
 **Requirements:**
 - R-SDD-01: SDD skills MUST be installed to the correct path for each selected agent (Claude Code: `~/.claude/skills/`, OpenCode: `~/.config/opencode/skills/`, Cursor: `~/.cursor/skills/`)
 - R-SDD-02: The SDD orchestrator configuration MUST be injected into the agent's global config (CLAUDE.md, opencode.json agents, .cursorrules)
-- R-SDD-03: OpenCode slash commands (`/sdd-init`, `/sdd-new`, etc.) MUST be installed when OpenCode is selected
+- R-SDD-03: OpenCode slash commands for SDD phases MUST be installed when OpenCode is selected, enabling the agent to invoke SDD organically when it detects a substantial change
 - R-SDD-04: The installer MUST pull SDD skills from the latest release of `Gentleman-Programming/sdd-agent-team`
 
 ### 6.4 GGA — Gentleman Guardian Angel (AI Code Review)
@@ -515,7 +515,11 @@ curl -sL get.gentleman.ai/ai | sh
      │  Next steps:                     │
      │  1. Set API keys (see below)     │
      │  2. Try: claude "hello"          │
-     │  3. Try: /sdd-new my-feature     │
+     │                                  │
+     │  For larger features, the agent  │
+     │  will automatically offer SDD    │
+     │  (Spec-Driven Development) to    │
+     │  plan and implement step by step.│
      │                                  │
      │  Agents configured: 2            │
      │  Skills installed: 22            │
@@ -899,7 +903,7 @@ sequenceDiagram
     DB-->>Engram: Past decisions about auth
     Engram-->>Agent: "Last time we used JWT with httpOnly cookies"
 
-    Agent->>SDD: /sdd-new auth-feature
+    Agent->>SDD: Detects substantial feature,<br/>initiates SDD workflow
     Note over SDD: explore → propose → spec<br/>→ design → tasks → apply
 
     Agent->>Dev: Implementation + explanation
