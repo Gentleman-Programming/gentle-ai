@@ -13,12 +13,12 @@ on:
 jobs:
   update-aur:
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
     steps:
       - name: Validate branch for workflow_dispatch
-        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && github.ref != 'refs/heads/aur-package'
         run: |
-          echo "Error: workflow_dispatch can only be triggered from the main branch"
+          echo "Error: workflow_dispatch can only be triggered from main or aur-package branches"
           exit 1
 
       - name: Get release info
