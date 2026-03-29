@@ -11,9 +11,6 @@ func TestWriteFileAtomicReadOnlyDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod 555 semantics differ on Windows")
 	}
-	// Simulate a directory that was created with read-only permissions (555),
-	// as may happen when a previous installer version or the AI agent itself
-	// creates the skills directory.
 	base := t.TempDir()
 	skillDir := filepath.Join(base, "sdd-init")
 	if err := os.Mkdir(skillDir, 0o555); err != nil {
@@ -23,20 +20,9 @@ func TestWriteFileAtomicReadOnlyDir(t *testing.T) {
 	path := filepath.Join(skillDir, "SKILL.md")
 	content := []byte("# SDD Init\n")
 
-	result, err := WriteFileAtomic(path, content, 0o644)
-	if err != nil {
-		t.Fatalf("WriteFileAtomic() on read-only dir error = %v", err)
-	}
-	if !result.Changed || !result.Created {
-		t.Fatalf("WriteFileAtomic() result = %+v, want Changed=true Created=true", result)
-	}
-
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	if string(got) != string(content) {
-		t.Fatalf("file content = %q, want %q", got, content)
+	_, err := WriteFileAtomic(path, content, 0o644)
+	if err == nil {
+		t.Fatal("WriteFileAtomic() on read-only dir error = nil, want failure without permission relaxation")
 	}
 }
 
@@ -104,5 +90,23 @@ func TestWriteFileAtomicRejectsOversizedExistingFile(t *testing.T) {
 	_, err := WriteFileAtomic(path, []byte("small\n"), 0o644)
 	if err == nil {
 		t.Fatal("WriteFileAtomic(big) error = nil, want max-size rejection")
+	}
+}
+
+func TestWriteFileAtomicRejectsSymlinkParentDirectory(t *testing.T) {
+	base := t.TempDir()
+	realDir := filepath.Join(base, "real")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatalf("Mkdir(realDir) error = %v", err)
+	}
+	linkDir := filepath.Join(base, "linked")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Fatalf("Symlink(linkDir) error = %v", err)
+	}
+
+	path := filepath.Join(linkDir, "config.txt")
+	_, err := WriteFileAtomic(path, []byte("value\n"), 0o644)
+	if err == nil {
+		t.Fatal("WriteFileAtomic() error = nil, want symlink parent rejection")
 	}
 }

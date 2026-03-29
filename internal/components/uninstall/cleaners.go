@@ -134,7 +134,6 @@ func jsonIsEmptyObject(raw []byte) bool {
 }
 
 func cleanCodexTOML(content string) (string, bool) {
-	eol := detectEOL(content)
 	normalized := strings.ReplaceAll(content, "\r\n", "\n")
 	updated := removeTOMLTable(normalized, "mcp_servers.engram")
 	updated = removeTopLevelTOMLKeys(updated, "model_instructions_file", "experimental_compact_prompt_file")
@@ -142,8 +141,7 @@ func cleanCodexTOML(content string) (string, bool) {
 	if updated != "" {
 		updated += "\n"
 	}
-	updated = restoreEOL(updated, eol)
-	return updated, updated != content
+	return updated, updated != normalized
 }
 
 func removeTOMLTable(content, tableName string) string {
@@ -182,8 +180,18 @@ func removeTopLevelTOMLKeys(content string, keys ...string) string {
 	}
 
 	cleaned := make([]string, 0, len(lines))
+	inTable := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inTable = true
+			cleaned = append(cleaned, line)
+			continue
+		}
+		if inTable {
+			cleaned = append(cleaned, line)
+			continue
+		}
 		remove := false
 		for key := range keySet {
 			if strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=") {

@@ -241,6 +241,51 @@ func TestReadManagedFile_RejectsOversizedFile(t *testing.T) {
 	}
 }
 
+func TestCleanCodexTOML_DoesNotDoubleRestoreCRLF(t *testing.T) {
+	input := strings.Join([]string{
+		"model_instructions_file = \"/tmp/managed.md\"",
+		"custom_top = \"keep\"",
+		"",
+		"[other]",
+		"value = \"keep\"",
+	}, "\r\n") + "\r\n"
+
+	updated, changed := cleanCodexTOML(input)
+	if !changed {
+		t.Fatal("cleanCodexTOML() changed = false, want true")
+	}
+	if strings.Contains(updated, "\r\r\n") {
+		t.Fatalf("cleanCodexTOML() produced doubled CRLF: %q", updated)
+	}
+	if strings.Contains(updated, "\r\n") {
+		t.Fatalf("cleanCodexTOML() should return normalized LF content, got: %q", updated)
+	}
+	if !strings.Contains(updated, "custom_top = \"keep\"") {
+		t.Fatalf("top-level user content lost: %q", updated)
+	}
+	if !strings.Contains(updated, "[other]\nvalue = \"keep\"") {
+		t.Fatalf("table content lost: %q", updated)
+	}
+}
+
+func TestRemoveTopLevelTOMLKeys_PreservesNestedKeys(t *testing.T) {
+	input := strings.Join([]string{
+		"custom_top = \"keep\"",
+		"model_instructions_file = \"/tmp/managed.md\"",
+		"",
+		"[nested]",
+		"model_instructions_file = \"user-value\"",
+	}, "\n") + "\n"
+
+	updated := removeTopLevelTOMLKeys(input, "model_instructions_file")
+	if strings.Contains(updated, "model_instructions_file = \"/tmp/managed.md\"") {
+		t.Fatalf("top-level managed key was not removed: %q", updated)
+	}
+	if !strings.Contains(updated, "model_instructions_file = \"user-value\"") {
+		t.Fatalf("nested key should be preserved: %q", updated)
+	}
+}
+
 func TestCleanCodexTOML_RemovesOnlyManagedEntries(t *testing.T) {
 	input := strings.Join([]string{
 		"model_instructions_file = \"/home/me/.codex/engram-instructions.md\"",

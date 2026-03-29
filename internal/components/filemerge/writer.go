@@ -34,15 +34,8 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return WriteResult{}, fmt.Errorf("create parent directories for %q: %w", path, err)
-	}
-	// Ensure the directory is writable — it may have been created with
-	// restricted permissions (e.g. 555) by a previous installer version or
-	// the target agent itself. MkdirAll succeeds on existing dirs but does
-	// not fix their permissions, causing os.CreateTemp to fail below.
-	if err := os.Chmod(dir, 0o755); err != nil {
-		return WriteResult{}, fmt.Errorf("set write permission on directory for %q: %w", path, err)
+	if err := ensureAtomicParentDir(dir, path); err != nil {
+		return WriteResult{}, err
 	}
 
 	tmp, err := os.CreateTemp(dir, ".gentle-ai-*.tmp")
@@ -120,4 +113,24 @@ func readComparableFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("file %q exceeds max atomic compare size %d bytes", path, maxAtomicFileSize)
 	}
 	return data, nil
+}
+
+func ensureAtomicParentDir(dir, path string) error {
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create parent directories for %q: %w", path, err)
+		}
+		info, err = os.Lstat(dir)
+	}
+	if err != nil {
+		return fmt.Errorf("stat parent directory for %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing symlink parent directory %q for %q", dir, path)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("parent path %q for %q is not a directory", dir, path)
+	}
+	return nil
 }
