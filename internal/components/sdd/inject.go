@@ -193,7 +193,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// rely on prompt files. OpenCode is handled differently: its orchestrator
 	// instructions must be scoped to the sdd-orchestrator agent only, otherwise
 	// the SDD phase sub-agents inherit coordinator-only delegation rules.
-	if adapter.Agent() != model.AgentOpenCode {
+	if adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
 		switch adapter.SystemPromptStrategy() {
 		case model.StrategyMarkdownSections:
 			result, err := injectMarkdownSections(homeDir, adapter, opts.ClaudeModelAssignments)
@@ -220,7 +220,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 	// 1b. If StrictTDD is enabled, inject the strict-tdd-mode marker section
 	// into the system prompt file so agents know Strict TDD is active.
-	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode {
+	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
 		promptPath := adapter.SystemPromptFile(homeDir)
 		strictTDDContent := "Strict TDD Mode: enabled"
 		existing, readErr := readFileOrEmpty(promptPath)
@@ -283,7 +283,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// os.ReadFile call due to VFS/NTFS metadata caching, which caused the spurious
 	// "post-check: .../opencode.json missing sdd-apply sub-agent" error.
 	var mergedSettingsBytes []byte
-	if adapter.Agent() == model.AgentOpenCode {
+	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
 			overlayContent, err := assets.Read(overlayAssetPath(sddMode))

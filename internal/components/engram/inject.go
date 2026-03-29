@@ -76,7 +76,7 @@ func engramServerJSON() []byte {
 func engramOverlayJSON(agentID model.AgentID) []byte {
 	cmd, _ := resolveEngramCommand()
 	var cfg map[string]any
-	if agentID == model.AgentOpenCode {
+	if agentID == model.AgentOpenCode || agentID == model.AgentKilocode {
 		// OpenCode 1.3.3+ requires command as an array for type:local servers.
 		// The separate "args" field is not accepted; all args must be in the
 		// command array itself.

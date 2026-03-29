@@ -176,8 +176,8 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 		files = append(files, promptPath)
 	}
 
-	// 2. OpenCode agent definitions — Tab-switchable agents in opencode.json.
-	if adapter.Agent() == model.AgentOpenCode && persona != model.PersonaCustom {
+	// 2. OpenCode/Kilocode agent definitions — Tab-switchable agents in settings.
+	if (adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode) && persona != model.PersonaCustom {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
 			agentResult, err := mergeJSONFile(settingsPath, openCodeAgentOverlayJSON)
@@ -231,7 +231,7 @@ func personaContent(agent model.AgentID, persona model.PersonaID) string {
 		switch agent {
 		case model.AgentClaudeCode:
 			return assets.MustRead("claude/persona-gentleman.md")
-		case model.AgentOpenCode:
+		case model.AgentOpenCode, model.AgentKilocode:
 			return assets.MustRead("opencode/persona-gentleman.md")
 		default:
 			// Generic persona includes Gentleman personality + skills table + SDD orchestrator.

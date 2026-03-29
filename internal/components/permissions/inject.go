@@ -78,7 +78,7 @@ func agentOverlay(id model.AgentID) []byte {
 	switch id {
 	case model.AgentClaudeCode:
 		return claudeCodeOverlayJSON
-	case model.AgentOpenCode:
+	case model.AgentOpenCode, model.AgentKilocode:
 		return openCodeOverlayJSON
 	case model.AgentGeminiCLI:
 		return geminiCLIOverlayJSON

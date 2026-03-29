@@ -43,6 +43,8 @@ func (profileResolver) ResolveAgentInstall(profile system.PlatformProfile, agent
 		return resolveClaudeCodeInstall(profile), nil
 	case model.AgentOpenCode:
 		return resolveOpenCodeInstall(profile)
+	case model.AgentKilocode:
+		return resolveKilocodeInstall(profile), nil
 	default:
 		return nil, fmt.Errorf("install command is not supported for agent %q", agent)
 	}
@@ -56,6 +58,16 @@ func resolveClaudeCodeInstall(profile system.PlatformProfile) CommandSequence {
 		return CommandSequence{{"sudo", "npm", "install", "-g", "@anthropic-ai/claude-code"}}
 	}
 	return CommandSequence{{"npm", "install", "-g", "@anthropic-ai/claude-code"}}
+}
+
+// resolveKilocodeInstall returns the npm install command sequence for Kilocode.
+// On Linux with system npm, sudo is required. With nvm/fnm/volta, it is not.
+// On Windows and macOS, sudo is never needed.
+func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
+	if profile.OS == "linux" && !profile.NpmWritable {
+		return CommandSequence{{"sudo", "npm", "install", "-g", "@kilocode/cli"}}
+	}
+	return CommandSequence{{"npm", "install", "-g", "@kilocode/cli"}}
 }
 
 func (profileResolver) ResolveComponentInstall(profile system.PlatformProfile, component model.ComponentID) (CommandSequence, error) {
