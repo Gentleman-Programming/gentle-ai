@@ -183,7 +183,7 @@ func TestRunInstallDryRunSkipsExecution(t *testing.T) {
 func makeDetectionWithAgents(present ...string) system.DetectionResult {
 	var configs []system.ConfigState
 	// Full canonical agent set — mirrors knownAgentConfigDirs in config_scan.go.
-	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf"}
+	known := []string{"claude-code", "opencode", "kilocode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf"}
 	presentSet := make(map[string]bool, len(present))
 	for _, p := range present {
 		presentSet[p] = true
@@ -230,6 +230,7 @@ func TestDefaultAgentsFromDetection_AllAgentsMappedCorrectly(t *testing.T) {
 	}{
 		{"claude-code", model.AgentClaudeCode},
 		{"opencode", model.AgentOpenCode},
+		{"kilocode", model.AgentKilocode},
 		{"gemini-cli", model.AgentGeminiCLI},
 		{"cursor", model.AgentCursor},
 		{"vscode-copilot", model.AgentVSCodeCopilot},
