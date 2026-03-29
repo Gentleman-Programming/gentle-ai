@@ -16,6 +16,7 @@ var mvpComponents = []Component{
 	{ID: model.ComponentPersona, Name: "Persona", Description: "Gentleman, neutral or custom behavior"},
 	{ID: model.ComponentPermission, Name: "Permissions", Description: "Security-first defaults and guardrails"},
 	{ID: model.ComponentGGA, Name: "GGA", Description: "Gentleman Guardian Angel — AI provider switcher"},
+	{ID: model.ComponentRTK, Name: "RTK", Description: "Rust Token Killer — CLI proxy that reduces LLM token consumption by 60-90%"},
 	{ID: model.ComponentTheme, Name: "Theme", Description: "Gentleman Kanagawa theme overlay (future)"},
 }
 

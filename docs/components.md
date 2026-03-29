@@ -15,7 +15,20 @@
 | Persona | `persona` | Gentleman, neutral, or custom behavior mode |
 | Permissions | `permissions` | Security-first defaults and guardrails |
 | GGA | `gga` | Gentleman Guardian Angel — AI provider switcher |
+| RTK | `rtk` | Rust Token Killer — CLI proxy that reduces LLM token consumption by 60-90% on common shell commands |
 | Theme | `theme` | Gentleman Kanagawa theme overlay |
+
+## RTK Behavior
+
+`gentle-ai --component rtk` installs the RTK binary and configures hooks for all selected agents.
+
+RTK transparently intercepts shell commands (git status, ls, cat, test runners) and compresses their output before it reaches the LLM — reducing token consumption by 60-90% with <10ms overhead.
+
+**Supported agents:** Claude Code, OpenCode, Cursor, Gemini CLI, Codex, Windsurf, VS Code Copilot
+
+**Not supported:** Antigravity (no hook API available)
+
+After install, RTK hooks work automatically — no per-project setup needed.
 
 ## GGA Behavior
 

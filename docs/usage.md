@@ -113,7 +113,7 @@ gentle-ai -v
 | Flag | Description |
 |------|-------------|
 | `--agent`, `--agents` | Agents to sync (defaults to all installed agents) |
-| `--component` | Sync a specific component only: `sdd`, `engram`, `context7`, `skills`, `gga`, `permissions`, `theme` |
+| `--component` | Sync a specific component only: `sdd`, `engram`, `context7`, `skills`, `gga`, `rtk`, `permissions`, `theme` |
 | `--include-permissions` | Include permissions sync (opt-in) |
 | `--include-theme` | Include theme sync (opt-in) |
 

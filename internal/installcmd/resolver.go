@@ -64,6 +64,8 @@ func (profileResolver) ResolveComponentInstall(profile system.PlatformProfile, c
 		return resolveEngramInstall(profile)
 	case model.ComponentGGA:
 		return resolveGGAInstall(profile)
+	case model.ComponentRTK:
+		return resolveRTKInstall(profile)
 	default:
 		return nil, fmt.Errorf("install command is not supported for component %q", component)
 	}
@@ -154,6 +156,35 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 	default:
 		return nil, fmt.Errorf(
 			"unsupported platform for gga: os=%q distro=%q pm=%q",
+			profile.OS, profile.LinuxDistro, profile.PackageManager,
+		)
+	}
+}
+
+// resolveRTKInstall returns the correct install command sequence for RTK per platform.
+// RTK is a single Rust binary with zero dependencies.
+// - darwin/linux (brew): brew install rtk
+// - linux (apt/pacman/dnf): download binary from GitHub Releases
+// - windows: download binary from GitHub Releases
+func resolveRTKInstall(profile system.PlatformProfile) (CommandSequence, error) {
+	switch profile.PackageManager {
+	case "brew":
+		return CommandSequence{
+			{"brew", "install", "rtk"},
+		}, nil
+	case "apt", "pacman", "dnf":
+		// RTK provides pre-built binaries for Linux — download latest release
+		return CommandSequence{
+			{"sh", "-c", "curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh"},
+		}, nil
+	case "winget":
+		// On Windows, use the PowerShell-based download from GitHub Releases
+		return CommandSequence{
+			{"powershell", "-NoProfile", "-Command", "irm https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | iex"},
+		}, nil
+	default:
+		return nil, fmt.Errorf(
+			"unsupported platform for rtk: os=%q distro=%q pm=%q",
 			profile.OS, profile.LinuxDistro, profile.PackageManager,
 		)
 	}

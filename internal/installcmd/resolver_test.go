@@ -483,10 +483,47 @@ func TestResolveComponentInstall(t *testing.T) {
 				{gitBashPath(), bashScriptPath(system.PlatformProfile{OS: "windows"}, filepath.Join(os.TempDir(), "gentleman-guardian-angel", "install.sh"))},
 			},
 		},
+		// RTK (Rust Token Killer) component tests
+		{
+			name:      "rtk on darwin uses brew install",
+			profile:   system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
+			component: model.ComponentRTK,
+			want:      CommandSequence{{"brew", "install", "rtk"}},
+		},
+		{
+			name:      "rtk on ubuntu uses curl install script",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
+			component: model.ComponentRTK,
+			want:      CommandSequence{{"sh", "-c", "curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh"}},
+		},
+		{
+			name:      "rtk on arch uses curl install script",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
+			component: model.ComponentRTK,
+			want:      CommandSequence{{"sh", "-c", "curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh"}},
+		},
+		{
+			name:      "rtk on fedora uses curl install script",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
+			component: model.ComponentRTK,
+			want:      CommandSequence{{"sh", "-c", "curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh"}},
+		},
+		{
+			name:      "rtk on windows uses powershell install",
+			profile:   system.PlatformProfile{OS: "windows", PackageManager: "winget"},
+			component: model.ComponentRTK,
+			want:      CommandSequence{{"powershell", "-NoProfile", "-Command", "irm https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | iex"}},
+		},
 		{
 			name:      "unsupported component returns error",
 			profile:   system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
 			component: "unsupported",
+			wantErr:   true,
+		},
+		{
+			name:      "rtk on unsupported platform returns error",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: "unknown", PackageManager: "unknown-pm"},
+			component: model.ComponentRTK,
 			wantErr:   true,
 		},
 	}
