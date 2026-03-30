@@ -261,6 +261,14 @@ func RenderUninstallResult(result componentuninstall.Result, err error) string {
 			b.WriteString("\n")
 			b.WriteString(styles.UnselectedStyle.Render("Updated state.json: " + strings.Join(uninstallAgentLabels(result.AgentsRemovedFromState), ", ")))
 		}
+		if len(result.ManualActions) > 0 {
+			b.WriteString("\n\n")
+			b.WriteString(styles.WarningStyle.Render("Manual cleanup required:"))
+			for _, item := range result.ManualActions {
+				b.WriteString("\n")
+				b.WriteString(styles.UnselectedStyle.Render("  • " + item))
+			}
+		}
 	}
 
 	b.WriteString("\n\n")

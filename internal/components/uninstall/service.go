@@ -33,6 +33,7 @@ type Result struct {
 	ChangedFiles           []string
 	RemovedFiles           []string
 	RemovedDirectories     []string
+	ManualActions          []string
 	AgentsRemovedFromState []model.AgentID
 }
 
@@ -270,6 +271,11 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		if err != nil {
 			return result, err
 		}
+		if op.typeID == opRemoveIfEmpty && !removed {
+			if note, ok := manualActionForNonEmptyDirectory(op.path); ok {
+				result.ManualActions = append(result.ManualActions, note)
+			}
+		}
 		if !changed {
 			continue
 		}
@@ -292,7 +298,31 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		return result, err
 	}
 	result.AgentsRemovedFromState = removed
+	result.ManualActions = dedupeSortedStrings(result.ManualActions)
 	return result, nil
+}
+
+func manualActionForNonEmptyDirectory(path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return "", false
+	}
+	if len(entries) == 0 {
+		return "", false
+	}
+	return fmt.Sprintf("Remove manually if no longer needed: %s (directory still contains non-managed files)", path), true
+}
+
+func dedupeSortedStrings(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	cloned := slices.Clone(items)
+	slices.Sort(cloned)
+	return slices.Compact(cloned)
 }
 
 func (s *Service) componentOperations(adapter agents.Adapter, componentID model.ComponentID) ([]operation, []string, error) {
