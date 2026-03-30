@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/components/mcp"
 	"github.com/gentleman-programming/gentle-ai/internal/components/permissions"
 	"github.com/gentleman-programming/gentle-ai/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/internal/components/rtk"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/internal/components/theme"
@@ -573,6 +574,31 @@ func (s componentApplyStep) Run() error {
 			}
 		}
 		return nil
+	case model.ComponentRTK:
+		if !rtkAvailable(s.profile) {
+			// RTK not found on PATH — install it.
+			commands, err := rtk.InstallCommand(s.profile)
+			if err != nil {
+				return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
+			}
+			if err := runCommandSequence(commands); err != nil {
+				if rtkAvailable(s.profile) {
+					// Binary is available despite error — continue with warning.
+					fmt.Fprintf(os.Stderr, "WARNING: rtk install command reported an error but rtk is available — continuing. Error was: %v\n", err)
+				} else {
+					return err
+				}
+			}
+		}
+		// Configure hooks for each selected agent.
+		results := rtk.ConfigureAllHooks(s.agents)
+		for _, r := range results {
+			if r.Err != nil && rtk.SupportsHook(r.AgentID) {
+				// Non-fatal: log warning but continue with remaining agents.
+				fmt.Fprintf(os.Stderr, "WARNING: rtk hook for %s failed: %v\n", r.AgentID, r.Err)
+			}
+		}
+		return nil
 	default:
 		return fmt.Errorf("component %q is not supported in install runtime", s.component)
 	}
@@ -682,6 +708,14 @@ func ggaAvailable(profile system.PlatformProfile) bool {
 		if _, err := osStat(filepath.Join(homeDir, "bin", "gga")); err == nil {
 			return true
 		}
+	}
+	return false
+}
+
+// rtkAvailable checks if the RTK binary is available in PATH.
+func rtkAvailable(_ system.PlatformProfile) bool {
+	if _, err := cmdLookPath("rtk"); err == nil {
+		return true
 	}
 	return false
 }
