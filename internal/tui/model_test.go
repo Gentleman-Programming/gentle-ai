@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
@@ -854,6 +855,135 @@ func TestWelcomeMenu_OptionCount(t *testing.T) {
 	}
 }
 
+func TestUninstallModeScreen_PartialNavigatesToAgentSelection(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallMode
+	m.Cursor = 0 // Partial Uninstall option
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstall {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstall)
+	}
+	if state.UninstallMode != model.UninstallModePartial {
+		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModePartial)
+	}
+}
+
+func TestUninstallModeScreen_FullNavigatesToConfirm(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallMode
+	m.Cursor = 1 // Full Uninstall option
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallConfirm {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+	if state.UninstallMode != model.UninstallModeFull {
+		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModeFull)
+	}
+	// Verify all agents and components were populated
+	if len(state.UninstallAgents) == 0 {
+		t.Fatal("UninstallAgents should be populated for Full mode")
+	}
+	if len(state.UninstallComponents) == 0 {
+		t.Fatal("UninstallComponents should be populated for Full mode")
+	}
+}
+
+func TestUninstallScreen_ContinueNavigatesToComponents(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstall
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.Cursor = len(screens.UninstallAgentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallComponents {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallComponents)
+	}
+}
+
+func TestUninstallComponents_ContinueNavigatesToConfirm(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallComponents
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
+	m.Cursor = len(screens.UninstallComponentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallConfirm {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+}
+
+func TestUninstallConfirm_EnterExecutesAndNavigatesToResult(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallConfirm
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD, model.ComponentPersona}
+	m.Cursor = 0
+	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		if len(agentIDs) != 1 || agentIDs[0] != model.AgentOpenCode {
+			t.Fatalf("agentIDs = %v, want [%s]", agentIDs, model.AgentOpenCode)
+		}
+		if len(componentIDs) != 2 || componentIDs[0] != model.ComponentSDD || componentIDs[1] != model.ComponentPersona {
+			t.Fatalf("componentIDs = %v, want [%s %s]", componentIDs, model.ComponentSDD, model.ComponentPersona)
+		}
+		return componentuninstall.Result{RemovedFiles: []string{"/tmp/file"}}, nil
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if !state.OperationRunning {
+		t.Fatalf("OperationRunning = false, want true after starting uninstall")
+	}
+	if cmd == nil {
+		t.Fatal("expected uninstall command to be returned")
+	}
+
+	uninstallMsg := findUninstallDoneMsgInBatch(t, cmd)
+	if uninstallMsg == nil {
+		t.Fatal("expected UninstallDoneMsg from batch cmd, got nil")
+	}
+	updated, _ = state.Update(*uninstallMsg)
+	state = updated.(Model)
+
+	if state.Screen != ScreenUninstallResult {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallResult)
+	}
+	if state.UninstallErr != nil {
+		t.Fatalf("unexpected UninstallErr: %v", state.UninstallErr)
+	}
+	if len(state.UninstallResult.RemovedFiles) != 1 {
+		t.Fatalf("RemovedFiles len = %d, want 1", len(state.UninstallResult.RemovedFiles))
+	}
+}
+
+func TestUninstallResult_EnterReturnsToWelcome(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallResult
+	m.UninstallErr = nil
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenWelcome {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenWelcome)
+	}
+	if state.UninstallErr != nil {
+		t.Fatalf("UninstallErr should be reset to nil: %v", state.UninstallErr)
+	}
+}
+
 // ─── T19: Model config navigation ─────────────────────────────────────────
 
 // TestModelConfig_ClaudePickerNavigation verifies that selecting cursor 0 from
@@ -1488,6 +1618,35 @@ func TestModelConfig_SyncPassesOverridesToSyncFn(t *testing.T) {
 	if final.OperationRunning {
 		t.Errorf("OperationRunning should be false after SyncDoneMsg")
 	}
+}
+
+// findUninstallDoneMsgInBatch executes all commands in a tea.Cmd (including BatchMsg)
+// and returns the first UninstallDoneMsg found, or nil if none is produced.
+func findUninstallDoneMsgInBatch(t *testing.T, cmd tea.Cmd) *UninstallDoneMsg {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+
+	msg := cmd()
+
+	if uninstallMsg, ok := msg.(UninstallDoneMsg); ok {
+		return &uninstallMsg
+	}
+
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, innerCmd := range batch {
+			if innerCmd == nil {
+				continue
+			}
+			innerMsg := innerCmd()
+			if uninstallMsg, ok := innerMsg.(UninstallDoneMsg); ok {
+				return &uninstallMsg
+			}
+		}
+	}
+
+	return nil
 }
 
 // findSyncDoneMsgInBatch executes all commands in a tea.Cmd (including BatchMsg)

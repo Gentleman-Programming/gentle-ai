@@ -40,6 +40,14 @@ const (
 	ComponentTheme      ComponentID = "theme"
 )
 
+type UninstallMode string
+
+const (
+	UninstallModePartial    UninstallMode = "partial"
+	UninstallModeFull       UninstallMode = "full"
+	UninstallModeFullRemove UninstallMode = "full-remove"
+)
+
 type SkillID string
 
 const (

@@ -42,6 +42,11 @@ var linearRoutes = map[Screen]Route{
 	ScreenAgentBuilderPreview:    {Backward: ScreenAgentBuilderPrompt},
 	ScreenAgentBuilderInstalling: {Forward: ScreenAgentBuilderComplete},
 	ScreenAgentBuilderComplete:   {Backward: ScreenWelcome},
+	ScreenUninstallMode:          {Backward: ScreenWelcome},
+	ScreenUninstall:              {Backward: ScreenUninstallMode},
+	ScreenUninstallComponents:    {Backward: ScreenUninstall},
+	ScreenUninstallConfirm:       {Backward: ScreenUninstallMode},
+	ScreenUninstallResult:        {Backward: ScreenWelcome},
 }
 
 func NextScreen(screen Screen) (Screen, bool) {
