@@ -182,7 +182,13 @@ func (s *Service) CompleteUninstall() (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return s.executePlan(plan, allAgents)
+	result, err := s.executePlan(plan, allAgents)
+	if err != nil {
+		return result, err
+	}
+
+	result.ManualActions = append(result.ManualActions, "To completely remove gentle-ai from your system, delete the executable (e.g., rm -f $(which gentle-ai))")
+	return result, nil
 }
 
 type plan struct {
