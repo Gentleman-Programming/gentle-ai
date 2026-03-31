@@ -73,6 +73,40 @@ func TestDetectFromInputsMarksUbuntuSupported(t *testing.T) {
 	}
 }
 
+func TestDetectFromInputsMarksDeepinSupported(t *testing.T) {
+	osRelease := "ID=deepin\n"
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, nil, nil)
+
+	if !result.System.Supported {
+		t.Fatalf("expected deepin linux to be supported")
+	}
+
+	if result.System.Profile.LinuxDistro != LinuxDistroDebian {
+		t.Fatalf("expected debian distro for deepin, got %q", result.System.Profile.LinuxDistro)
+	}
+
+	if result.System.Profile.PackageManager != "apt" {
+		t.Fatalf("expected apt package manager for deepin, got %q", result.System.Profile.PackageManager)
+	}
+}
+
+func TestDetectFromInputsMarksUosSupported(t *testing.T) {
+	osRelease := "ID=uos\n"
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, nil, nil)
+
+	if !result.System.Supported {
+		t.Fatalf("expected uos linux to be supported")
+	}
+
+	if result.System.Profile.LinuxDistro != LinuxDistroDebian {
+		t.Fatalf("expected debian distro for uos, got %q", result.System.Profile.LinuxDistro)
+	}
+
+	if result.System.Profile.PackageManager != "apt" {
+		t.Fatalf("expected apt package manager for uos, got %q", result.System.Profile.PackageManager)
+	}
+}
+
 func TestDetectFromInputsMarksArchSupported(t *testing.T) {
 	osRelease := "ID=arch\nID_LIKE=archlinux\n"
 	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, nil, nil)
@@ -117,6 +151,16 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			name:       "pop os derivative of ubuntu",
 			osRelease:  "ID=pop\nID_LIKE=\"ubuntu debian\"\n",
 			wantDistro: LinuxDistroUbuntu,
+		},
+		{
+			name:       "deepin derivative of debian",
+			osRelease:  "ID=deepin\n",
+			wantDistro: LinuxDistroDebian,
+		},
+		{
+			name:       "uos derivative of debian",
+			osRelease:  "ID=uos\n",
+			wantDistro: LinuxDistroDebian,
 		},
 		{
 			name:       "arch linux",
@@ -200,6 +244,59 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			got := detectLinuxDistro(tc.osRelease)
 			if got != tc.wantDistro {
 				t.Fatalf("detectLinuxDistro() = %q, want %q", got, tc.wantDistro)
+			}
+		})
+	}
+}
+
+func TestIsDebianLike(t *testing.T) {
+	tests := []struct {
+		name   string
+		id     string
+		idLike string
+		want   bool
+	}{
+		{name: "debian itself", id: "debian", idLike: "", want: true},
+		{name: "deepin directly", id: "deepin", idLike: "", want: true},
+		{name: "uos directly", id: "uos", idLike: "", want: true},
+		{name: "ubuntu not debian-like", id: "ubuntu", idLike: "", want: false},
+		{name: "linuxmint not debian-like", id: "linuxmint", idLike: "", want: false},
+		{name: "arch not debian-like", id: "arch", idLike: "", want: false},
+		{name: "unknown unknown", id: "unknown", idLike: "", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isDebianLike(tc.id, tc.idLike)
+			if got != tc.want {
+				t.Fatalf("isDebianLike(%q, %q) = %v, want %v", tc.id, tc.idLike, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsUbuntuLike(t *testing.T) {
+	tests := []struct {
+		name   string
+		id     string
+		idLike string
+		want   bool
+	}{
+		{name: "ubuntu itself", id: "ubuntu", idLike: "", want: true},
+		{name: "linuxmint directly", id: "linuxmint", idLike: "", want: true},
+		{name: "pop directly", id: "pop", idLike: "", want: true},
+		{name: "debian not ubuntu-like", id: "debian", idLike: "", want: false},
+		{name: "deepin not ubuntu-like", id: "deepin", idLike: "", want: false},
+		{name: "arch not ubuntu-like", id: "arch", idLike: "", want: false},
+		{name: "via id_like ubuntu", id: "custom", idLike: "ubuntu", want: true},
+		{name: "unknown unknown", id: "unknown", idLike: "", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isUbuntuLike(tc.id, tc.idLike)
+			if got != tc.want {
+				t.Fatalf("isUbuntuLike(%q, %q) = %v, want %v", tc.id, tc.idLike, got, tc.want)
 			}
 		})
 	}
