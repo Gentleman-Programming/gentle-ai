@@ -215,7 +215,14 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 				}
 			}
 			for _, op := range ops {
-				operationsByKey[operationKey(op)] = op
+				key := operationKey(op)
+				if existing, ok := operationsByKey[key]; ok && op.typeID == opRewriteFile {
+					// Merge rewrite operations on the same file so both
+					// mutations apply (e.g. persona + engram on system prompt).
+					operationsByKey[key] = mergeRewriteOps(existing, op)
+				} else {
+					operationsByKey[key] = op
+				}
 			}
 		}
 	}
@@ -497,6 +504,8 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			ops = append(ops, removeFile(path))
 		}
 		ops = append(ops, removeDirIfEmpty(filepath.Dir(gga.ConfigPath(homeDir))))
+	default:
+		return nil, nil, fmt.Errorf("unsupported component ID %q", componentID)
 	}
 
 	return ops, targets, nil
@@ -806,13 +815,39 @@ func expandBackupTarget(path string) ([]string, error) {
 		return nil, err
 	}
 	if len(files) == 0 {
-		return []string{path}, nil
+		// Directory exists but contains no files; return no backup targets.
+		// The snapshotter expects file paths, not empty directories.
+		return []string{}, nil
 	}
 	return files, nil
 }
 
 func operationKey(op operation) string {
 	return fmt.Sprintf("%d:%s", op.typeID, op.path)
+}
+
+// mergeRewriteOps composes two rewrite operations on the same file path.
+// Both apply functions run sequentially: 'a' writes first, then 'b' reads
+// the updated file from disk and applies its own mutation. This works because
+// rewriteMarkdownFile and rewriteJSONFile always read fresh from disk.
+func mergeRewriteOps(a, b operation) operation {
+	return operation{
+		typeID: opRewriteFile,
+		path:   a.path,
+		apply: func(path string) (bool, bool, error) {
+			changed1, removed1, err1 := a.apply(path)
+			if err1 != nil {
+				return changed1, removed1, err1
+			}
+			// If the first op removed the file entirely, the second op
+			// has nothing left to rewrite.
+			if removed1 {
+				return changed1, removed1, nil
+			}
+			changed2, removed2, err2 := b.apply(path)
+			return changed1 || changed2, removed2, err2
+		},
+	}
 }
 
 func compareOperations(a, b operation) int {

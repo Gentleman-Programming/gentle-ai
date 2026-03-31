@@ -62,7 +62,7 @@ func RenderUninstallMode(cursor int) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(renderOptions([]string{"Continue", "Back"}, cursor-len(options)))
+	b.WriteString(renderOptions([]string{"Back"}, cursor-len(options)))
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
 
@@ -99,7 +99,19 @@ func RenderUninstall(selected []model.AgentID, cursor int) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(renderOptions([]string{"Continue", "Back"}, cursor-len(UninstallAgentOptions())))
+	agentCount := len(UninstallAgentOptions())
+	relCursor := cursor - agentCount
+	if len(selected) == 0 {
+		// Render Continue as dimmed with an inline hint when nothing is selected.
+		if relCursor == 0 {
+			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+styles.SubtextStyle.Render("Continue")+" "+styles.HelpStyle.Render("(select at least one agent)")) + "\n")
+		} else {
+			b.WriteString(styles.SubtextStyle.Render("  Continue") + "\n")
+		}
+		b.WriteString(renderOptions([]string{"Back"}, relCursor-1))
+	} else {
+		b.WriteString(renderOptions([]string{"Continue", "Back"}, relCursor))
+	}
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("space: toggle • enter: confirm • esc: back"))
 
@@ -129,7 +141,19 @@ func RenderUninstallComponents(selected []model.ComponentID, cursor int) string 
 	}
 
 	b.WriteString("\n")
-	b.WriteString(renderOptions([]string{"Continue", "Back"}, cursor-len(UninstallComponentOptions())))
+	compCount := len(UninstallComponentOptions())
+	relCursor := cursor - compCount
+	if len(selected) == 0 {
+		// Render Continue as dimmed with an inline hint when nothing is selected.
+		if relCursor == 0 {
+			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+styles.SubtextStyle.Render("Continue")+" "+styles.HelpStyle.Render("(select at least one component)")) + "\n")
+		} else {
+			b.WriteString(styles.SubtextStyle.Render("  Continue") + "\n")
+		}
+		b.WriteString(renderOptions([]string{"Back"}, relCursor-1))
+	} else {
+		b.WriteString(renderOptions([]string{"Continue", "Back"}, relCursor))
+	}
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("space: toggle • enter: continue • esc: back"))
 

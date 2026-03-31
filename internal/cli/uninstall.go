@@ -42,10 +42,10 @@ func ParseUninstallFlags(args []string) (UninstallFlags, error) {
 		return UninstallFlags{}, fmt.Errorf("unexpected uninstall argument %q", fs.Arg(0))
 	}
 	if opts.All && (len(opts.Agents) > 0 || len(opts.Components) > 0) {
-		return UninstallFlags{}, fmt.Errorf("--all cannot be combined with --agents or --components")
+		return UninstallFlags{}, fmt.Errorf("--all cannot be combined with --agent/--agents or --component/--components")
 	}
 	if !opts.All && len(opts.Agents) == 0 {
-		return UninstallFlags{}, fmt.Errorf("partial uninstall requires at least one --agent or use --all")
+		return UninstallFlags{}, fmt.Errorf("partial uninstall requires at least one --agent/--agents or use --all")
 	}
 
 	return opts, nil

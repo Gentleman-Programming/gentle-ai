@@ -45,7 +45,6 @@ var linearRoutes = map[Screen]Route{
 	ScreenUninstallMode:          {Backward: ScreenWelcome},
 	ScreenUninstall:              {Backward: ScreenUninstallMode},
 	ScreenUninstallComponents:    {Backward: ScreenUninstall},
-	ScreenUninstallConfirm:       {Backward: ScreenUninstallMode},
 	ScreenUninstallResult:        {Backward: ScreenWelcome},
 }
 

@@ -321,7 +321,7 @@ type Model struct {
 	OperationRunning bool
 
 	// OperationMode records which operation is running or was last run.
-	// Values: "upgrade", "sync", "upgrade-sync".
+	// Values: "upgrade", "sync", "upgrade-sync", "uninstall".
 	OperationMode string
 
 	// HasSyncRun is true once a sync or upgrade-sync operation has completed.
@@ -1085,8 +1085,6 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenUninstallConfirm)
 			}
 		case m.Cursor == len(options):
-			// Continue (no-op for now, could be used for custom logic)
-		case m.Cursor == len(options)+1:
 			m.setScreen(ScreenWelcome)
 		}
 		return m, nil
@@ -1121,7 +1119,15 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.OperationMode = "uninstall"
 			return m, tea.Batch(tickCmd(), m.startUninstall())
 		}
-		m.setScreen(ScreenUninstallComponents)
+		// Route cancel/back based on uninstall mode:
+		// - partial: go back to components selection
+		// - full/full-remove: go back to uninstall mode selection
+		switch m.UninstallMode {
+		case model.UninstallModePartial:
+			m.setScreen(ScreenUninstallComponents)
+		default:
+			m.setScreen(ScreenUninstallMode)
+		}
 		return m, nil
 	case ScreenUninstallResult:
 		m = m.withResetUninstallState()
@@ -2004,7 +2010,7 @@ func buildProgressLabels(resolved planner.ResolvedPlan) []string {
 }
 
 func (m Model) goBack() Model {
-	// Block navigation while an operation (upgrade/sync) is running.
+	// Block navigation while an operation (upgrade/sync/uninstall) is running.
 	if m.OperationRunning {
 		return m
 	}
@@ -2037,6 +2043,18 @@ func (m Model) goBack() Model {
 			m.AgentBuilder.Generating = false
 			m.setScreen(ScreenAgentBuilderPrompt)
 			return m
+		}
+	}
+
+	// ScreenUninstallConfirm: dynamic back navigation based on uninstall mode.
+	// - partial: go back to component selection (ScreenUninstallComponents)
+	// - full/full-remove: go back to mode selection (ScreenUninstallMode)
+	if m.Screen == ScreenUninstallConfirm {
+		switch m.UninstallMode {
+		case model.UninstallModePartial:
+			m.setScreen(ScreenUninstallComponents)
+		default:
+			m.setScreen(ScreenUninstallMode)
 		}
 		return m
 	}
