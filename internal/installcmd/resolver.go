@@ -43,6 +43,8 @@ func (profileResolver) ResolveAgentInstall(profile system.PlatformProfile, agent
 		return resolveClaudeCodeInstall(profile), nil
 	case model.AgentOpenCode:
 		return resolveOpenCodeInstall(profile)
+	case model.AgentAntigravity:
+		return nil, nil // Antigravity is an environmental agent, no install command.
 	default:
 		return nil, fmt.Errorf("install command is not supported for agent %q", agent)
 	}
