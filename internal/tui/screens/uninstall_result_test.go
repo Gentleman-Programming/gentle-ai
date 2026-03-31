@@ -13,7 +13,7 @@ func TestRenderUninstallResultIncludesManualCleanup(t *testing.T) {
 		ManualActions: []string{
 			"Remove manually if no longer needed: /tmp/skills (directory still contains non-managed files)",
 		},
-	}, nil)
+	}, nil, "", 0, nil)
 
 	if !strings.Contains(out, "Manual cleanup required") {
 		t.Fatalf("RenderUninstallResult() should include manual cleanup heading; got:\n%s", out)

@@ -33,6 +33,11 @@ func UninstallModeOptions() []UninstallModeOption {
 			Label:       "Full Uninstall & Remove Binary",
 			Description: "Remove all configuration AND delete the gentle-ai binary itself",
 		},
+		{
+			Mode:        model.UninstallModeCleanInstall,
+			Label:       "Full Uninstall + Clean Install",
+			Description: "Remove all configuration, then re-sync all managed assets from scratch",
+		},
 	}
 }
 
@@ -211,6 +216,15 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 		b.WriteString("\n\n")
 		b.WriteString(styles.ErrorStyle.Render("⚠ WARNING: This action cannot be undone without reinstalling!"))
 		b.WriteString("\n")
+	case model.UninstallModeCleanInstall:
+		b.WriteString(styles.SuccessStyle.Render("Mode: Full Uninstall + Clean Install"))
+		b.WriteString("\n\n")
+		b.WriteString(styles.UnselectedStyle.Render("This will remove all gentle-ai managed configuration from all agents"))
+		b.WriteString("\n")
+		b.WriteString(styles.SuccessStyle.Render("and immediately re-sync all managed assets from scratch."))
+		b.WriteString("\n\n")
+		b.WriteString(styles.SubtextStyle.Render("Use this to fix broken configurations or reset to a clean state."))
+		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
@@ -247,7 +261,7 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 	return b.String()
 }
 
-func RenderUninstallResult(result componentuninstall.Result, err error) string {
+func RenderUninstallResult(result componentuninstall.Result, err error, mode model.UninstallMode, syncFilesChanged int, syncErr error) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Uninstall Result"))
@@ -291,6 +305,22 @@ func RenderUninstallResult(result componentuninstall.Result, err error) string {
 			for _, item := range result.ManualActions {
 				b.WriteString("\n")
 				b.WriteString(styles.UnselectedStyle.Render("  • " + item))
+			}
+		}
+
+		// Clean install: show sync results after uninstall stats.
+		if mode == model.UninstallModeCleanInstall {
+			b.WriteString("\n\n")
+			if syncErr != nil {
+				b.WriteString(styles.ErrorStyle.Render("✗ Clean install sync failed"))
+				b.WriteString("\n")
+				b.WriteString(styles.ErrorStyle.Render("  " + syncErr.Error()))
+				b.WriteString("\n\n")
+				b.WriteString(styles.WarningStyle.Render("You can run 'gentle-ai sync' manually to retry."))
+			} else {
+				b.WriteString(styles.SuccessStyle.Render("✓ Clean install sync complete"))
+				b.WriteString("\n")
+				b.WriteString(styles.UnselectedStyle.Render(fmt.Sprintf("Synced files: %d", syncFilesChanged)))
 			}
 		}
 	}

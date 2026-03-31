@@ -43,9 +43,10 @@ const (
 type UninstallMode string
 
 const (
-	UninstallModePartial    UninstallMode = "partial"
-	UninstallModeFull       UninstallMode = "full"
-	UninstallModeFullRemove UninstallMode = "full-remove"
+	UninstallModePartial      UninstallMode = "partial"
+	UninstallModeFull         UninstallMode = "full"
+	UninstallModeFullRemove   UninstallMode = "full-remove"
+	UninstallModeCleanInstall UninstallMode = "clean-install"
 )
 
 type SkillID string

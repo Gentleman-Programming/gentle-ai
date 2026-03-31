@@ -88,8 +88,10 @@ type SyncDoneMsg struct {
 
 // UninstallDoneMsg is sent when the uninstall operation completes.
 type UninstallDoneMsg struct {
-	Result componentuninstall.Result
-	Err    error
+	Result           componentuninstall.Result
+	Err              error
+	SyncFilesChanged int   // only set for CleanInstall mode
+	SyncErr          error // only set for CleanInstall mode
 }
 
 // UpgradePhaseCompletedMsg is sent by startUpgradeSync when the upgrade phase
@@ -356,6 +358,12 @@ type Model struct {
 	// UninstallErr holds the error from the last uninstall execution.
 	UninstallErr error
 
+	// SyncCleanInstallFilesChanged holds the sync files changed count after a clean install.
+	SyncCleanInstallFilesChanged int
+
+	// SyncCleanInstallErr holds the sync error from a clean install.
+	SyncCleanInstallErr error
+
 	// UninstallFn performs the managed uninstall operation.
 	UninstallFn UninstallFunc
 
@@ -501,6 +509,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.OperationRunning = false
 		m.UninstallResult = msg.Result
 		m.UninstallErr = msg.Err
+		m.SyncCleanInstallFilesChanged = msg.SyncFilesChanged
+		m.SyncCleanInstallErr = msg.SyncErr
 		m.setScreen(ScreenUninstallResult)
 		return m, nil
 	case UpgradePhaseCompletedMsg:
@@ -659,7 +669,7 @@ func (m Model) View() string {
 	case ScreenUninstallConfirm:
 		return screens.RenderUninstallConfirm(m.UninstallMode, m.UninstallAgents, m.UninstallComponents, m.Cursor, m.OperationRunning, m.SpinnerFrame)
 	case ScreenUninstallResult:
-		return screens.RenderUninstallResult(m.UninstallResult, m.UninstallErr)
+		return screens.RenderUninstallResult(m.UninstallResult, m.UninstallErr, m.UninstallMode, m.SyncCleanInstallFilesChanged, m.SyncCleanInstallErr)
 	case ScreenDetection:
 		return screens.RenderDetection(m.Detection, m.Cursor)
 	case ScreenAgents:
@@ -1070,7 +1080,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			switch m.UninstallMode {
 			case model.UninstallModePartial:
 				m.setScreen(ScreenUninstall)
-			case model.UninstallModeFull, model.UninstallModeFullRemove:
+			case model.UninstallModeFull, model.UninstallModeFullRemove, model.UninstallModeCleanInstall:
 				// Populate all agents and all components for full uninstall
 				allAgents := screens.UninstallAgentOptions()
 				m.UninstallAgents = make([]model.AgentID, 0, len(allAgents))
@@ -1878,10 +1888,10 @@ func (m Model) withResetUninstallState() Model {
 	m.UninstallComponents = defaultUninstallComponents()
 	m.UninstallResult = componentuninstall.Result{}
 	m.UninstallErr = nil
+	m.SyncCleanInstallFilesChanged = 0
+	m.SyncCleanInstallErr = nil
 	m.OperationRunning = false
-	if m.OperationMode == "uninstall" {
-		m.OperationMode = ""
-	}
+	m.OperationMode = ""
 	m.Cursor = 0
 	return m
 }
@@ -1914,6 +1924,7 @@ func (m Model) startSync(overrides *model.SyncOverrides) tea.Cmd {
 }
 func (m Model) startUninstall() tea.Cmd {
 	uninstallFn := m.UninstallFn
+	syncFn := m.SyncFn
 	agentIDs := append([]model.AgentID(nil), m.UninstallAgents...)
 	componentIDs := append([]model.ComponentID(nil), m.UninstallComponents...)
 	mode := m.UninstallMode
@@ -1934,6 +1945,19 @@ func (m Model) startUninstall() tea.Cmd {
 			if removeErr := os.Remove(execPath); removeErr != nil {
 				return UninstallDoneMsg{Result: result, Err: fmt.Errorf("uninstall succeeded but failed to remove binary at %q: %w", execPath, removeErr)}
 			}
+		}
+		// If CleanInstall mode, run sync to re-create all managed assets.
+		// Sync errors are non-fatal — we still show the uninstall result.
+		if mode == model.UninstallModeCleanInstall {
+			msg := UninstallDoneMsg{Result: result}
+			if syncFn == nil {
+				msg.SyncErr = fmt.Errorf("sync function not configured")
+				return msg
+			}
+			filesChanged, syncErr := syncFn(nil)
+			msg.SyncFilesChanged = filesChanged
+			msg.SyncErr = syncErr
+			return msg
 		}
 		return UninstallDoneMsg{Result: result, Err: err}
 	}
