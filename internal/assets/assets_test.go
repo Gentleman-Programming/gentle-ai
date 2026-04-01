@@ -27,6 +27,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"opencode/commands/sdd-ff.md",
 		"opencode/commands/sdd-init.md",
 		"opencode/commands/sdd-new.md",
+		"opencode/commands/sdd-onboard.md",
 		"opencode/commands/sdd-verify.md",
 		"opencode/plugins/background-agents.ts",
 
@@ -47,9 +48,11 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"cursor/agents/sdd-apply.md",
 		"cursor/agents/sdd-verify.md",
 		"cursor/agents/sdd-archive.md",
+		"cursor/agents/sdd-onboard.md",
 
 		// SDD skills
 		"skills/sdd-init/SKILL.md",
+		"skills/sdd-onboard/SKILL.md",
 		"skills/sdd-apply/SKILL.md",
 		"skills/sdd-archive/SKILL.md",
 		"skills/sdd-design/SKILL.md",
@@ -109,8 +112,8 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/commands) error = %v", err)
 	}
-	if len(commandEntries) != 8 {
-		t.Fatalf("opencode commands count = %d, want 8", len(commandEntries))
+	if len(commandEntries) != 9 {
+		t.Fatalf("opencode commands count = %d, want 9", len(commandEntries))
 	}
 
 	pluginEntries, err := FS.ReadDir("opencode/plugins")
@@ -224,7 +227,7 @@ func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 				t.Fatalf("%q missing agent map", assetPath)
 			}
 
-			for _, phase := range []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive"} {
+			for _, phase := range []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"} {
 				agentDef, ok := agents[phase].(map[string]any)
 				if !ok {
 					t.Fatalf("%q missing %s agent", assetPath, phase)

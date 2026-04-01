@@ -753,9 +753,9 @@ test_oc_sdd_injection() {
         local commands_dir="$HOME/.config/opencode/commands"
         local skill_dir="$HOME/.config/opencode/skills"
 
-        # Command files (8 SDD commands from embedded assets)
+        # Command files (9 SDD commands from embedded assets)
         assert_dir_exists "$commands_dir" "OpenCode commands directory"
-        assert_file_count_min "$commands_dir" "*.md" 7 "At least 7 SDD command files"
+        assert_file_count_min "$commands_dir" "*.md" 8 "At least 8 SDD command files"
 
         # Validate command file content
         assert_file_exists "$commands_dir/sdd-init.md" "sdd-init command file"
@@ -951,7 +951,7 @@ test_full_preset_opencode() {
         assert_file_not_contains "$agents_md" "<!-- gentle-ai:sdd-orchestrator -->" "AGENTS.md has no SDD section marker (opencode uses json agent)"
 
         # SDD commands
-        assert_file_count_min "$HOME/.config/opencode/commands" "*.md" 7 "SDD command files"
+        assert_file_count_min "$HOME/.config/opencode/commands" "*.md" 8 "SDD command files"
 
         # Skills
         assert_file_count_min "$HOME/.config/opencode/skills" "SKILL.md" 11 "At least 11 skill files"
@@ -1027,7 +1027,7 @@ test_ecosystem_both_agents() {
         assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 11 "Claude skills"
 
         # OpenCode
-        assert_file_count_min "$HOME/.config/opencode/commands" "*.md" 7 "OpenCode SDD commands"
+        assert_file_count_min "$HOME/.config/opencode/commands" "*.md" 8 "OpenCode SDD commands"
         assert_file_count_min "$HOME/.config/opencode/skills" "SKILL.md" 11 "OpenCode skills"
         assert_file_contains "$HOME/.config/opencode/opencode.json" '"context7"' "OpenCode context7"
         assert_valid_json "$HOME/.config/opencode/opencode.json" "OpenCode opencode.json valid JSON"
@@ -1516,7 +1516,7 @@ test_gga_reinstall_is_idempotent() {
 # --- Category 10: Cursor agent files ---
 
 test_cursor_sdd_subagents() {
-    log_test "Cursor: SDD install writes 9 agent files to ~/.cursor/agents/"
+    log_test "Cursor: SDD install writes 10 agent files to ~/.cursor/agents/"
     cleanup_test_env
 
     # Cursor is a desktop app — create the config dir to signal it's "installed"
@@ -1528,7 +1528,7 @@ test_cursor_sdd_subagents() {
         # Directory must exist
         assert_dir_exists "$agents_dir" "~/.cursor/agents/ directory"
 
-        # All 9 SDD agent files must exist
+        # All 10 SDD agent files must exist
         assert_file_exists "$agents_dir/sdd-init.md" "sdd-init.md agent file"
         assert_file_exists "$agents_dir/sdd-explore.md" "sdd-explore.md agent file"
         assert_file_exists "$agents_dir/sdd-propose.md" "sdd-propose.md agent file"
@@ -1538,6 +1538,7 @@ test_cursor_sdd_subagents() {
         assert_file_exists "$agents_dir/sdd-apply.md" "sdd-apply.md agent file"
         assert_file_exists "$agents_dir/sdd-verify.md" "sdd-verify.md agent file"
         assert_file_exists "$agents_dir/sdd-archive.md" "sdd-archive.md agent file"
+        assert_file_exists "$agents_dir/sdd-onboard.md" "sdd-onboard.md agent file"
 
         # readonly flags: explore and verify are readonly: false (issue #156 — readonly: true
         # blocks MCP tools and terminal in Cursor, not just file writes)
@@ -1548,7 +1549,7 @@ test_cursor_sdd_subagents() {
         assert_file_not_contains "$agents_dir/sdd-apply.md" "readonly: true" "sdd-apply is NOT readonly"
 
         # All agent files must have substantial content
-        for phase in sdd-init sdd-explore sdd-propose sdd-spec sdd-design sdd-tasks sdd-apply sdd-verify sdd-archive; do
+        for phase in sdd-init sdd-explore sdd-propose sdd-spec sdd-design sdd-tasks sdd-apply sdd-verify sdd-archive sdd-onboard; do
             assert_file_size_min "$agents_dir/$phase.md" 200 "$phase agent has real content"
         done
     else
