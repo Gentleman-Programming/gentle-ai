@@ -13,6 +13,7 @@ var sddSkills = []model.SkillID{
 	model.SkillSDDApply,
 	model.SkillSDDVerify,
 	model.SkillSDDArchive,
+	model.SkillSDDOnboard,
 	model.SkillJudgmentDay,
 }
 

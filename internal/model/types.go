@@ -49,6 +49,7 @@ const (
 	SkillSDDDesign     SkillID = "sdd-design"
 	SkillSDDTasks      SkillID = "sdd-tasks"
 	SkillSDDArchive    SkillID = "sdd-archive"
+	SkillSDDOnboard    SkillID = "sdd-onboard"
 	SkillGoTesting     SkillID = "go-testing"
 	SkillCreator       SkillID = "skill-creator"
 	SkillJudgmentDay   SkillID = "judgment-day"

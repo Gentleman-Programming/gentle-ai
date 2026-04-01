@@ -19,6 +19,7 @@ var sddSkillIDs = []model.SkillID{
 	model.SkillSDDApply,
 	model.SkillSDDVerify,
 	model.SkillSDDArchive,
+	model.SkillSDDOnboard,
 	model.SkillJudgmentDay,
 }
 
@@ -41,6 +42,7 @@ var skillLabels = map[model.SkillID]string{
 	model.SkillSDDApply:      "SDD Apply",
 	model.SkillSDDVerify:     "SDD Verify",
 	model.SkillSDDArchive:    "SDD Archive",
+	model.SkillSDDOnboard:    "SDD Onboard",
 	model.SkillJudgmentDay:   "Judgment Day",
 	model.SkillGoTesting:     "Go Testing",
 	model.SkillCreator:       "Skill Creator",
