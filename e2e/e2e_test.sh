@@ -760,6 +760,8 @@ test_oc_sdd_injection() {
         # Validate command file content
         assert_file_exists "$commands_dir/sdd-init.md" "sdd-init command file"
         assert_file_contains "$commands_dir/sdd-init.md" "sdd" "sdd-init command has SDD content"
+        assert_file_exists "$commands_dir/sdd-onboard.md" "sdd-onboard command file"
+        assert_file_contains "$commands_dir/sdd-onboard.md" "sdd-onboard" "sdd-onboard command has onboard content"
 
         # SDD + orchestration skill files (11)
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
