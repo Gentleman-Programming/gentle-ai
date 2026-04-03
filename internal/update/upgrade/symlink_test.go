@@ -49,7 +49,7 @@ func TestEnumerateFilesInDir_SkipsSymlinks(t *testing.T) {
 	}
 
 	// enumerateFilesInDir must not return the symlink itself or files from inside the symlink target.
-	files, err := enumerateFilesInDir(home)
+	files, err := enumerateFilesInDir(home, nil)
 	if err != nil {
 		t.Fatalf("enumerateFilesInDir() with symlink returned error: %v — must not fail on symlinks", err)
 	}
@@ -116,7 +116,7 @@ func TestEnumerateFilesInDir_SymlinkInSubdirDoesNotBreakBackup(t *testing.T) {
 	}
 
 	// enumerateFilesInDir on .claude must not error.
-	files, err := enumerateFilesInDir(claudeDir)
+	files, err := enumerateFilesInDir(claudeDir, nil)
 	if err != nil {
 		t.Fatalf("enumerateFilesInDir(%q) returned error with symlink inside: %v", claudeDir, err)
 	}

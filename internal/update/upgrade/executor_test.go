@@ -857,6 +857,207 @@ func TestConfigPathsForBackup_GGAExtrasAreIncluded(t *testing.T) {
 	}
 }
 
+// --- TestEnumerateFilesInDir_ExcludesSubdirs ---
+
+// TestEnumerateFilesInDir_ExcludesSubdirs verifies that enumerateFilesInDir skips
+// subdirectories whose base name appears in the excludeSubdirs set. Only
+// immediate children of the root dir are excluded — nested dirs with the same
+// name inside allowed subtrees must NOT be excluded.
+func TestEnumerateFilesInDir_ExcludesSubdirs(t *testing.T) {
+	root := t.TempDir()
+
+	// Config file at root level — must be included.
+	rootFile := filepath.Join(root, "settings.json")
+	if err := os.WriteFile(rootFile, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Allowed subdir with a config file — must be included.
+	allowedFile := filepath.Join(root, "mcp", "server.json")
+	if err := os.MkdirAll(filepath.Dir(allowedFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(allowedFile, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Excluded subdir with a large file — must be skipped.
+	excludedFile := filepath.Join(root, "projects", "data.json")
+	if err := os.MkdirAll(filepath.Dir(excludedFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(excludedFile, []byte(`big data`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Another excluded subdir.
+	sessionsFile := filepath.Join(root, "sessions", "session1.json")
+	if err := os.MkdirAll(filepath.Dir(sessionsFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(sessionsFile, []byte(`session`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Nested dir with same name as excluded — inside allowed subtree, must NOT be excluded.
+	nestedProjectsFile := filepath.Join(root, "mcp", "projects", "nested.json")
+	if err := os.MkdirAll(filepath.Dir(nestedProjectsFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(nestedProjectsFile, []byte(`nested`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	excludes := map[string]bool{
+		"projects": true,
+		"sessions": true,
+	}
+
+	files, err := enumerateFilesInDir(root, excludes)
+	if err != nil {
+		t.Fatalf("enumerateFilesInDir error: %v", err)
+	}
+
+	pathSet := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		pathSet[f] = struct{}{}
+	}
+
+	// Root-level config file must be present.
+	if _, ok := pathSet[rootFile]; !ok {
+		t.Errorf("missing root-level file %q", rootFile)
+	}
+
+	// Allowed subdir file must be present.
+	if _, ok := pathSet[allowedFile]; !ok {
+		t.Errorf("missing allowed subdir file %q", allowedFile)
+	}
+
+	// Excluded subdir files must NOT be present.
+	if _, ok := pathSet[excludedFile]; ok {
+		t.Errorf("excluded subdir file %q should not be in results", excludedFile)
+	}
+	if _, ok := pathSet[sessionsFile]; ok {
+		t.Errorf("excluded subdir file %q should not be in results", sessionsFile)
+	}
+
+	// Nested dir with same name inside allowed subtree must be present.
+	if _, ok := pathSet[nestedProjectsFile]; !ok {
+		t.Errorf("nested 'projects' inside allowed subtree should NOT be excluded; missing %q", nestedProjectsFile)
+	}
+}
+
+// TestEnumerateFilesInDir_NilExcludesWalksEverything verifies that passing nil
+// for excludeSubdirs results in a full walk with no exclusions.
+func TestEnumerateFilesInDir_NilExcludesWalksEverything(t *testing.T) {
+	root := t.TempDir()
+
+	file1 := filepath.Join(root, "a.txt")
+	file2 := filepath.Join(root, "projects", "b.txt")
+	for _, f := range []string{file1, file2} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	files, err := enumerateFilesInDir(root, nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("expected 2 files with nil excludes, got %d: %v", len(files), files)
+	}
+}
+
+// TestConfigPathsForBackup_ExcludesRuntimeDirs verifies that the production
+// backupExcludeSubdirs list prevents configPathsForBackup from walking into
+// large runtime directories across ALL agents: Claude, Gemini, OpenCode.
+func TestConfigPathsForBackup_ExcludesRuntimeDirs(t *testing.T) {
+	homeDir := t.TempDir()
+
+	// --- Claude: config file (keep) + runtime dirs (exclude) ---
+	claudeConfig := filepath.Join(homeDir, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(claudeConfig), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(claudeConfig, []byte("# Claude"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	claudeExcludes := []string{"projects", "sessions", "plugins", "cache", "backups"}
+
+	// --- Gemini: config file (keep) + runtime dirs (exclude) ---
+	geminiConfig := filepath.Join(homeDir, ".gemini", "GEMINI.md")
+	if err := os.MkdirAll(filepath.Dir(geminiConfig), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(geminiConfig, []byte("# Gemini"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	geminiExcludes := []string{"browser_recordings", "brain", "conversations"}
+
+	// --- OpenCode: config file (keep) + node_modules (exclude) ---
+	openCodeConfig := filepath.Join(homeDir, ".config", "opencode", "config.json")
+	if err := os.MkdirAll(filepath.Dir(openCodeConfig), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(openCodeConfig, []byte(`{"model":"free"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	openCodeExcludes := []string{"node_modules"}
+
+	// Create excluded dirs with files for all agents.
+	type agentExclude struct {
+		base     string
+		excludes []string
+	}
+	agents := []agentExclude{
+		{filepath.Join(homeDir, ".claude"), claudeExcludes},
+		{filepath.Join(homeDir, ".gemini"), geminiExcludes},
+		{filepath.Join(homeDir, ".config", "opencode"), openCodeExcludes},
+	}
+
+	var excludedFiles []string
+	for _, agent := range agents {
+		for _, dir := range agent.excludes {
+			f := filepath.Join(agent.base, dir, "data.json")
+			if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+				t.Fatalf("MkdirAll %s: %v", dir, err)
+			}
+			if err := os.WriteFile(f, []byte("runtime data"), 0o644); err != nil {
+				t.Fatalf("WriteFile %s: %v", dir, err)
+			}
+			excludedFiles = append(excludedFiles, f)
+		}
+	}
+
+	paths := configPathsForBackup(homeDir)
+	pathSet := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		pathSet[p] = struct{}{}
+	}
+
+	// Config files must be present.
+	for _, cfg := range []string{claudeConfig, geminiConfig, openCodeConfig} {
+		if _, ok := pathSet[cfg]; !ok {
+			t.Errorf("configPathsForBackup missing config file %q", cfg)
+		}
+	}
+
+	// Runtime files must NOT be present.
+	for _, f := range excludedFiles {
+		if _, ok := pathSet[f]; ok {
+			t.Errorf("configPathsForBackup should exclude runtime file %q", f)
+		}
+	}
+}
+
 // --- TestExecute_SkippedUpgradeDoesNotRenderFailureMarker ---
 
 // TestExecute_SkippedUpgradeDoesNotRenderFailureMarker verifies that when a tool

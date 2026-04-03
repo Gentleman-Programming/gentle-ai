@@ -42,6 +42,44 @@ var snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest,
 // Default "dev" matches the ldflags default in app.Version.
 var AppVersion = "dev"
 
+// backupExcludeSubdirs lists subdirectory base names that should be skipped
+// when walking agent config root directories for backup. These directories
+// contain runtime state, caches, or session data that is not configuration
+// and can be extremely large (e.g. ~/.claude/projects/ can exceed 1 GB).
+//
+// Only the base name is matched — e.g. "projects" skips any directory named
+// "projects" directly under the config root being walked.
+var backupExcludeSubdirs = map[string]bool{
+	// === Shared across agents ===
+	"backups":         true, // backup snapshots themselves — never recurse into backups
+	"cache":           true, // cached data
+	"debug":           true, // debug logs
+	"downloads":       true, // downloaded files
+	"plugins":         true, // MCP plugin binaries (can be 60+ MB)
+	"sessions":        true, // conversation session data
+	"tasks":           true, // task tracking state
+	"telemetry":       true, // telemetry data
+	"node_modules":    true, // npm dependencies (OpenCode, any Node-based agent)
+
+	// === Claude Code (~/.claude/) ===
+	"file-history":    true, // file change tracking
+	"ide":             true, // IDE integration state
+	"paste-cache":     true, // clipboard cache
+	"plans":           true, // conversation plans
+	"projects":        true, // per-project conversation state (can be 1+ GB)
+	"session-env":     true, // session environment snapshots
+	"shell-snapshots": true, // shell state snapshots
+	"troubleshooting": true, // troubleshooting artifacts
+
+	// === Gemini CLI / Antigravity (~/.gemini/, ~/.gemini/antigravity/) ===
+	"browser_recordings":        true, // Antigravity browser recordings (can be 3+ GB)
+	"antigravity-browser-profile": true, // Chromium profile data (250+ MB)
+	"brain":                     true, // Antigravity memory/brain data (300+ MB)
+	"conversations":             true, // Gemini conversation history
+	"context_state":             true, // Gemini context state
+	"html_artifacts":            true, // generated HTML artifacts
+}
+
 // configPathsForBackup returns the agent config file paths that the backup
 // snapshot must include before any upgrade execution.
 //
@@ -55,6 +93,8 @@ var AppVersion = "dev"
 //
 // Only files (not directories) are included — Snapshotter.Create rejects dirs.
 // Non-existent directories are silently skipped.
+// Runtime/cache subdirectories listed in backupExcludeSubdirs are skipped to
+// prevent the backup from walking gigabytes of non-config data.
 func configPathsForBackup(homeDir string) []string {
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
@@ -74,10 +114,10 @@ func configPathsForBackup(homeDir string) []string {
 	ggaLibDir := gga.RuntimeLibDir(homeDir)
 	configDirs = append(configDirs, ggaConfigDir, ggaLibDir)
 
-	// Enumerate all regular files under each root dir.
+	// Enumerate all regular files under each root dir, skipping non-config subdirs.
 	paths := make([]string, 0)
 	for _, dir := range configDirs {
-		files, err := enumerateFilesInDir(dir)
+		files, err := enumerateFilesInDir(dir, backupExcludeSubdirs)
 		if err != nil {
 			// Directory doesn't exist or can't be read — silently skip.
 			continue
@@ -91,6 +131,10 @@ func configPathsForBackup(homeDir string) []string {
 // enumerateFilesInDir returns the paths of all regular files (recursively) in dir.
 // Returns an error if dir cannot be read (e.g. it doesn't exist).
 //
+// excludeSubdirs is a set of directory base names to skip entirely when they
+// appear as immediate children of the root dir. This prevents the backup walk
+// from descending into large runtime/cache directories (e.g. ~/.claude/projects/).
+//
 // Symlinks and Windows junctions (reparse points) are skipped — they are not
 // included in the returned paths and their targets are not traversed. This
 // prevents backup failures when agent config directories contain junctioned skill
@@ -98,8 +142,9 @@ func configPathsForBackup(homeDir string) []string {
 //
 // On Unix, symlinks to directories appear with d.Type()&os.ModeSymlink != 0.
 // On Windows, junctions appear similarly. Both are excluded by this check.
-func enumerateFilesInDir(dir string) ([]string, error) {
+func enumerateFilesInDir(dir string, excludeSubdirs map[string]bool) ([]string, error) {
 	var files []string
+	cleanDir := filepath.Clean(dir)
 
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -112,6 +157,15 @@ func enumerateFilesInDir(dir string) ([]string, error) {
 		// errors when snapshotPath attempts to copy them as files.
 		if d.Type()&os.ModeSymlink != 0 {
 			return nil
+		}
+		// Skip excluded subdirectories that are immediate children of the root.
+		// Only first-level children are checked — nested dirs with the same name
+		// inside allowed subtrees are NOT excluded.
+		if d.IsDir() && path != cleanDir {
+			parent := filepath.Dir(path)
+			if filepath.Clean(parent) == cleanDir && excludeSubdirs[d.Name()] {
+				return filepath.SkipDir
+			}
 		}
 		if !d.IsDir() {
 			files = append(files, path)

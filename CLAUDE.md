@@ -49,4 +49,4 @@ See `AGENTS.md` for skill routing (issue-creation, branch-pr).
 |--------|----------|-------|
 | TOML backslash on Windows | HIGH | Must escape, known fix in recent commits |
 | GGA upgrade uses git clone | MEDIUM | Changed from go install to git clone |
-| Backup skip directories | MEDIUM | Pre-upgrade snapshot skips dirs now |
+| Backup skip directories | HIGH | Pre-upgrade snapshot MUST exclude runtime dirs (projects/, sessions/, plugins/, cache/) via `backupExcludeSubdirs` in executor.go — without this, backup walks 1+ GB of non-config data and hangs |
