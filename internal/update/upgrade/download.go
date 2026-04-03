@@ -114,7 +114,9 @@ func extractBinaryFromTarGz(r io.Reader, binaryName string, outPath string) erro
 		}
 
 		// Match by base name (handles subdirectory layouts like tool_1.0_os_arch/tool).
-		if filepath.Base(hdr.Name) == binaryName && hdr.Typeflag != tar.TypeDir {
+		// Only accept regular files — skip symlinks, hardlinks, and special files.
+		if filepath.Base(hdr.Name) == binaryName &&
+			(hdr.Typeflag == tar.TypeReg || hdr.Typeflag == tar.TypeRegA) {
 			if err := writeExecutable(tr, outPath); err != nil {
 				return err
 			}

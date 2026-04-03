@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -128,10 +129,56 @@ func ReadManifest(path string) (Manifest, error) {
 	return manifest, nil
 }
 
+// backupRoot returns the expected parent directory for all backups.
+func backupRoot() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
+	return filepath.Join(home, ".gentle-ai", "backups"), nil
+}
+
+// isRootDirUnderBackupRoot validates that dir is a direct or indirect subdirectory
+// of the expected backup root (~/.gentle-ai/backups/). This prevents a tampered
+// manifest with root_dir set to "/" or another sensitive path from deleting arbitrary files.
+//
+// Symlink note: if the path already exists on disk, EvalSymlinks is used to
+// resolve the real path and re-check against the backup root, preventing symlink escapes.
+// If the path does not exist yet, only filepath.Clean is used — this limitation is accepted
+// and documented here, consistent with isPathUnderHome.
+func isRootDirUnderBackupRoot(dir string) (bool, error) {
+	root, err := backupRoot()
+	if err != nil {
+		return false, err
+	}
+	clean := filepath.Clean(dir)
+	rootClean := filepath.Clean(root)
+	if !strings.HasPrefix(clean, rootClean+string(filepath.Separator)) {
+		return false, nil
+	}
+	// If the path exists, resolve symlinks and re-check to prevent symlink escapes.
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		resolvedRoot, err := filepath.EvalSymlinks(rootClean)
+		if err != nil {
+			resolvedRoot = rootClean
+		}
+		return strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator)), nil
+	}
+	// Path does not exist yet — accept Clean-only check.
+	return true, nil
+}
+
 // DeleteBackup removes the entire backup directory.
 func DeleteBackup(manifest Manifest) error {
 	if manifest.RootDir == "" {
 		return fmt.Errorf("backup has no root directory")
+	}
+	ok, err := isRootDirUnderBackupRoot(manifest.RootDir)
+	if err != nil {
+		return fmt.Errorf("validate backup root dir: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("backup RootDir %q is outside the expected backup directory — refusing to delete", manifest.RootDir)
 	}
 	return os.RemoveAll(manifest.RootDir)
 }

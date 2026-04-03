@@ -39,14 +39,25 @@ func AddToUserPath(dir string) error {
 	// 2. Persist via PowerShell: modifies the user-scoped PATH in the registry.
 	//    This change survives terminal restarts and applies to all future processes
 	//    for this user without requiring admin privileges.
+	//
+	//    escapePowerShellString replaces ' with '' (PowerShell's escape for single quotes
+	//    within single-quoted strings) to prevent injection via path names like C:\O'Brien.
+	safeDir := escapePowerShellString(dir)
 	script := fmt.Sprintf(
 		`$current = [Environment]::GetEnvironmentVariable('PATH', 'User'); `+
 			`if ($current -notlike '*%s*') { `+
 			`[Environment]::SetEnvironmentVariable('PATH', '%s;' + $current, 'User') }`,
-		dir, dir,
+		safeDir, safeDir,
 	)
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 	return cmd.Run()
+}
+
+// escapePowerShellString escapes a string for safe use inside a PowerShell
+// single-quoted string literal by replacing each ' with '' (PowerShell's escape
+// sequence for a literal single quote within single-quoted strings).
+func escapePowerShellString(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
 }
 
 // addToProcessPath prepends dir to the current process PATH if it is not already

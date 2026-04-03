@@ -26,6 +26,12 @@ var engramDownloadFn = engram.DownloadLatestBinary
 // Package-level var for testability.
 var scriptHTTPClient = &http.Client{Timeout: 2 * time.Minute}
 
+// maxScriptSize is the maximum number of bytes read from a downloaded install.sh.
+// This prevents unbounded memory use if the server returns an unexpectedly large body.
+// Note: HTTPS provides transport security but NOT content integrity — a compromised
+// server or CDN could still serve a malicious script within this size limit.
+const maxScriptSize = 1 * 1024 * 1024 // 1 MB
+
 // runStrategy executes the upgrade for a single tool using the appropriate strategy
 // for the given platform profile.
 //
@@ -204,9 +210,12 @@ func scriptUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 		return fmt.Errorf("download install.sh: HTTP %d from %s", resp.StatusCode, url)
 	}
 
-	scriptBody, err := io.ReadAll(resp.Body)
+	scriptBody, err := io.ReadAll(io.LimitReader(resp.Body, maxScriptSize+1))
 	if err != nil {
 		return fmt.Errorf("download install.sh: read body: %w", err)
+	}
+	if int64(len(scriptBody)) > maxScriptSize {
+		return fmt.Errorf("download install.sh: response body exceeds %d bytes limit", maxScriptSize)
 	}
 
 	// Execute install.sh with bash. Stdin is nil to ensure non-interactive mode.

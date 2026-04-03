@@ -244,7 +244,8 @@ func extractBinaryFromTarGz(r io.Reader, binaryName, outPath string) error {
 			return fmt.Errorf("read tar: %w", err)
 		}
 
-		if filepath.Base(hdr.Name) == binaryName && hdr.Typeflag != tar.TypeDir {
+		if filepath.Base(hdr.Name) == binaryName &&
+			(hdr.Typeflag == tar.TypeReg || hdr.Typeflag == tar.TypeRegA) {
 			return writeExecutable(tr, outPath)
 		}
 	}
