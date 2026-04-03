@@ -1100,6 +1100,141 @@ func TestExecute_SkippedUpgradeDoesNotRenderFailureMarker(t *testing.T) {
 	}
 }
 
+// TestEnumerateFilesInDir_ExcludesNestedSameNameDir documents the intentional
+// behavior change: directories matching an excluded name are pruned at ANY depth,
+// not just directly under the walked root. For example, mcp/cache/data.json is
+// excluded because "cache" matches the exclude list even at depth 2. This is the
+// accepted tradeoff — we skip all dirs named "cache" regardless of nesting to
+// ensure heavy runtime dirs like ~/.gemini/antigravity/browser_recordings/ are
+// always excluded without requiring path-specific rules.
+func TestEnumerateFilesInDir_ExcludesNestedSameNameDir(t *testing.T) {
+	root := t.TempDir()
+
+	// Create mcp/cache/data.json — "cache" is an excluded name, so this file
+	// must NOT appear in results even though it's nested under "mcp".
+	nestedCacheFile := filepath.Join(root, "mcp", "cache", "data.json")
+	if err := os.MkdirAll(filepath.Dir(nestedCacheFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(nestedCacheFile, []byte(`{"cached":true}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// A sibling file under mcp (not in an excluded dir) — must be included.
+	mcpConfig := filepath.Join(root, "mcp", "server.json")
+	if err := os.WriteFile(mcpConfig, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	excludes := map[string]bool{
+		"cache": true,
+	}
+
+	files, err := enumerateFilesInDir(root, excludes)
+	if err != nil {
+		t.Fatalf("enumerateFilesInDir error: %v", err)
+	}
+
+	pathSet := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		pathSet[f] = struct{}{}
+	}
+
+	// mcp/cache/data.json must be excluded — "cache" matches at depth 2.
+	if _, ok := pathSet[nestedCacheFile]; ok {
+		t.Errorf("nested excluded dir file %q must NOT be in results — exclude applies at any depth", nestedCacheFile)
+	}
+
+	// mcp/server.json must be present — "mcp" is not excluded.
+	if _, ok := pathSet[mcpConfig]; !ok {
+		t.Errorf("non-excluded file %q must be present", mcpConfig)
+	}
+}
+
+// TestEnumerateFilesInDir_EmptyExcludesWalksEverything verifies that passing an
+// empty (non-nil) map for excludeSubdirs results in a full walk with no exclusions,
+// same as nil.
+func TestEnumerateFilesInDir_EmptyExcludesWalksEverything(t *testing.T) {
+	root := t.TempDir()
+
+	file1 := filepath.Join(root, "a.txt")
+	file2 := filepath.Join(root, "projects", "b.txt")
+	for _, f := range []string{file1, file2} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	files, err := enumerateFilesInDir(root, map[string]bool{})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("expected 2 files with empty excludes map, got %d: %v", len(files), files)
+	}
+}
+
+// TestEnumerateFilesInDir_CaseInsensitiveExclude verifies that directory names
+// with mixed casing (e.g. "Projects", "CACHE") are excluded on case-insensitive
+// filesystems like Windows NTFS. The exclude map keys are lowercase; the
+// strings.ToLower normalization in enumerateFilesInDir handles the mismatch.
+func TestEnumerateFilesInDir_CaseInsensitiveExclude(t *testing.T) {
+	root := t.TempDir()
+
+	// Config file at root — must be included.
+	configFile := filepath.Join(root, "settings.json")
+	if err := os.WriteFile(configFile, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Directory with uppercase name matching a lowercase exclude key.
+	upperDir := filepath.Join(root, "Projects", "data.json")
+	if err := os.MkdirAll(filepath.Dir(upperDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(upperDir, []byte("big"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Mixed case directory.
+	mixedDir := filepath.Join(root, "Cache", "temp.dat")
+	if err := os.MkdirAll(filepath.Dir(mixedDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(mixedDir, []byte("cached"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	excludes := map[string]bool{
+		"projects": true,
+		"cache":    true,
+	}
+
+	files, err := enumerateFilesInDir(root, excludes)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	pathSet := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		pathSet[f] = struct{}{}
+	}
+
+	if _, ok := pathSet[configFile]; !ok {
+		t.Errorf("config file should be present: %q", configFile)
+	}
+	if _, ok := pathSet[upperDir]; ok {
+		t.Errorf("uppercase 'Projects' dir should be excluded by lowercase 'projects' key: %q", upperDir)
+	}
+	if _, ok := pathSet[mixedDir]; ok {
+		t.Errorf("mixed-case 'Cache' dir should be excluded by lowercase 'cache' key: %q", mixedDir)
+	}
+}
+
 // containsSubstring checks whether s contains sub.
 func containsSubstring(s, sub string) bool {
 	for i := 0; i <= len(s)-len(sub); i++ {

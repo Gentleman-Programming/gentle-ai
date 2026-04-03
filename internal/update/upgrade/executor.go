@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
@@ -48,7 +49,10 @@ var AppVersion = "dev"
 // and can be extremely large (e.g. ~/.claude/projects/ can exceed 1 GB).
 //
 // Only the base name is matched — e.g. "projects" skips any directory named
-// "projects" directly under the config root being walked.
+// "projects" at any depth within the walked tree.
+//
+// Must not be mutated after init. Tests must not modify this map; use a local
+// copy or pass a separate map to enumerateFilesInDir instead.
 var backupExcludeSubdirs = map[string]bool{
 	// === Shared across agents ===
 	"backups":         true, // backup snapshots themselves — never recurse into backups
@@ -162,7 +166,7 @@ func enumerateFilesInDir(dir string, excludeDirNames map[string]bool) ([]string,
 		}
 		// Skip excluded directories at any depth. The root dir itself is never
 		// excluded (it's the dir we were asked to walk).
-		if d.IsDir() && path != cleanDir && excludeDirNames[d.Name()] {
+		if d.IsDir() && path != cleanDir && d.Name() != "" && excludeDirNames[strings.ToLower(d.Name())] {
 			return filepath.SkipDir
 		}
 		if !d.IsDir() {
