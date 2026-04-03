@@ -860,9 +860,9 @@ func TestConfigPathsForBackup_GGAExtrasAreIncluded(t *testing.T) {
 // --- TestEnumerateFilesInDir_ExcludesSubdirs ---
 
 // TestEnumerateFilesInDir_ExcludesSubdirs verifies that enumerateFilesInDir skips
-// subdirectories whose base name appears in the excludeSubdirs set. Only
-// immediate children of the root dir are excluded — nested dirs with the same
-// name inside allowed subtrees must NOT be excluded.
+// directories whose base name appears in the excludeDirNames set at ANY depth.
+// This is critical for agents like Gemini where heavy runtime dirs
+// (browser_recordings/) are nested 2+ levels deep (e.g. ~/.gemini/antigravity/browser_recordings/).
 func TestEnumerateFilesInDir_ExcludesSubdirs(t *testing.T) {
 	root := t.TempDir()
 
@@ -881,7 +881,7 @@ func TestEnumerateFilesInDir_ExcludesSubdirs(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Excluded subdir with a large file — must be skipped.
+	// Excluded subdir at depth 1 — must be skipped.
 	excludedFile := filepath.Join(root, "projects", "data.json")
 	if err := os.MkdirAll(filepath.Dir(excludedFile), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -890,27 +890,25 @@ func TestEnumerateFilesInDir_ExcludesSubdirs(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Another excluded subdir.
-	sessionsFile := filepath.Join(root, "sessions", "session1.json")
-	if err := os.MkdirAll(filepath.Dir(sessionsFile), 0o755); err != nil {
+	// Excluded subdir at depth 2 — simulates ~/.gemini/antigravity/browser_recordings/.
+	// Must also be skipped.
+	nestedExcludedFile := filepath.Join(root, "antigravity", "browser_recordings", "video.dat")
+	if err := os.MkdirAll(filepath.Dir(nestedExcludedFile), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(sessionsFile, []byte(`session`), 0o644); err != nil {
+	if err := os.WriteFile(nestedExcludedFile, []byte(`3.6GB of video`), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Nested dir with same name as excluded — inside allowed subtree, must NOT be excluded.
-	nestedProjectsFile := filepath.Join(root, "mcp", "projects", "nested.json")
-	if err := os.MkdirAll(filepath.Dir(nestedProjectsFile), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(nestedProjectsFile, []byte(`nested`), 0o644); err != nil {
+	// Config file NEXT TO excluded dir inside antigravity — must be included.
+	nestedConfigFile := filepath.Join(root, "antigravity", "config.toml")
+	if err := os.WriteFile(nestedConfigFile, []byte(`[settings]`), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
 	excludes := map[string]bool{
-		"projects": true,
-		"sessions": true,
+		"projects":           true,
+		"browser_recordings": true,
 	}
 
 	files, err := enumerateFilesInDir(root, excludes)
@@ -933,17 +931,19 @@ func TestEnumerateFilesInDir_ExcludesSubdirs(t *testing.T) {
 		t.Errorf("missing allowed subdir file %q", allowedFile)
 	}
 
-	// Excluded subdir files must NOT be present.
+	// Depth-1 excluded subdir files must NOT be present.
 	if _, ok := pathSet[excludedFile]; ok {
 		t.Errorf("excluded subdir file %q should not be in results", excludedFile)
 	}
-	if _, ok := pathSet[sessionsFile]; ok {
-		t.Errorf("excluded subdir file %q should not be in results", sessionsFile)
+
+	// Depth-2 excluded subdir files must NOT be present.
+	if _, ok := pathSet[nestedExcludedFile]; ok {
+		t.Errorf("nested excluded dir file %q should not be in results — exclude must work at any depth", nestedExcludedFile)
 	}
 
-	// Nested dir with same name inside allowed subtree must be present.
-	if _, ok := pathSet[nestedProjectsFile]; !ok {
-		t.Errorf("nested 'projects' inside allowed subtree should NOT be excluded; missing %q", nestedProjectsFile)
+	// Config file next to excluded dir must still be present.
+	if _, ok := pathSet[nestedConfigFile]; !ok {
+		t.Errorf("config file next to excluded dir should be present; missing %q", nestedConfigFile)
 	}
 }
 

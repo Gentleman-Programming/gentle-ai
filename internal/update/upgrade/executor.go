@@ -131,9 +131,11 @@ func configPathsForBackup(homeDir string) []string {
 // enumerateFilesInDir returns the paths of all regular files (recursively) in dir.
 // Returns an error if dir cannot be read (e.g. it doesn't exist).
 //
-// excludeSubdirs is a set of directory base names to skip entirely when they
-// appear as immediate children of the root dir. This prevents the backup walk
-// from descending into large runtime/cache directories (e.g. ~/.claude/projects/).
+// excludeDirNames is a set of directory base names to skip entirely at ANY depth.
+// When a directory's base name matches, the entire subtree is pruned via
+// filepath.SkipDir. The names in this set are chosen to be unambiguously
+// runtime/cache directories (e.g. "projects", "browser_recordings", "node_modules")
+// that would never be confused with legitimate config directories.
 //
 // Symlinks and Windows junctions (reparse points) are skipped — they are not
 // included in the returned paths and their targets are not traversed. This
@@ -142,7 +144,7 @@ func configPathsForBackup(homeDir string) []string {
 //
 // On Unix, symlinks to directories appear with d.Type()&os.ModeSymlink != 0.
 // On Windows, junctions appear similarly. Both are excluded by this check.
-func enumerateFilesInDir(dir string, excludeSubdirs map[string]bool) ([]string, error) {
+func enumerateFilesInDir(dir string, excludeDirNames map[string]bool) ([]string, error) {
 	var files []string
 	cleanDir := filepath.Clean(dir)
 
@@ -158,14 +160,10 @@ func enumerateFilesInDir(dir string, excludeSubdirs map[string]bool) ([]string, 
 		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
-		// Skip excluded subdirectories that are immediate children of the root.
-		// Only first-level children are checked — nested dirs with the same name
-		// inside allowed subtrees are NOT excluded.
-		if d.IsDir() && path != cleanDir {
-			parent := filepath.Dir(path)
-			if filepath.Clean(parent) == cleanDir && excludeSubdirs[d.Name()] {
-				return filepath.SkipDir
-			}
+		// Skip excluded directories at any depth. The root dir itself is never
+		// excluded (it's the dir we were asked to walk).
+		if d.IsDir() && path != cleanDir && excludeDirNames[d.Name()] {
+			return filepath.SkipDir
 		}
 		if !d.IsDir() {
 			files = append(files, path)
