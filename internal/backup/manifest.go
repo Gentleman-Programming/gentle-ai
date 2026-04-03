@@ -138,6 +138,11 @@ func backupRoot() (string, error) {
 	return filepath.Join(home, ".gentle-ai", "backups"), nil
 }
 
+// BackupRootFn is the function used to resolve the backup root directory.
+// Package-level var for testability — swapped in tests to use a temp directory.
+// Exported so tests in other packages (e.g. internal/update/upgrade) can override it.
+var BackupRootFn = backupRoot
+
 // isRootDirUnderBackupRoot validates that dir is a direct or indirect subdirectory
 // of the expected backup root (~/.gentle-ai/backups/). This prevents a tampered
 // manifest with root_dir set to "/" or another sensitive path from deleting arbitrary files.
@@ -147,7 +152,7 @@ func backupRoot() (string, error) {
 // If the path does not exist yet, only filepath.Clean is used — this limitation is accepted
 // and documented here, consistent with isPathUnderHome.
 func isRootDirUnderBackupRoot(dir string) (bool, error) {
-	root, err := backupRoot()
+	root, err := BackupRootFn()
 	if err != nil {
 		return false, err
 	}

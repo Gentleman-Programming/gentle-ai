@@ -419,6 +419,11 @@ func TestSnapshotterSkipsDirectories(t *testing.T) {
 // TestDeleteBackup_Success verifies that DeleteBackup removes the backup directory.
 func TestDeleteBackup_Success(t *testing.T) {
 	dir := t.TempDir()
+	// Override backupRootFn so validation accepts paths under t.TempDir().
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() { BackupRootFn = origBackupRootFn })
+	BackupRootFn = func() (string, error) { return dir, nil }
+
 	backupDir := filepath.Join(dir, "backup-01")
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)

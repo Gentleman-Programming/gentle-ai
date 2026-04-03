@@ -555,7 +555,12 @@ func TestRunStrategy_ScriptUpgradeWindowsManualFallback(t *testing.T) {
 // — not `bash -c <script-content>` like the generic scriptUpgrade.
 func TestGGAScriptUpgradeUsesGitClone(t *testing.T) {
 	origExecCommand := execCommand
-	t.Cleanup(func() { execCommand = origExecCommand })
+	origDetectOS := detectOS
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		detectOS = origDetectOS
+	})
+	detectOS = func() string { return "linux" }
 
 	type call struct {
 		name string
@@ -669,7 +674,12 @@ func TestGGAScriptUpgradeWindowsManualFallback(t *testing.T) {
 // rather than the generic scriptUpgrade (bash -c <content>).
 func TestRunStrategy_GGAUsesGitClone(t *testing.T) {
 	origExecCommand := execCommand
-	t.Cleanup(func() { execCommand = origExecCommand })
+	origDetectOS := detectOS
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		detectOS = origDetectOS
+	})
+	detectOS = func() string { return "linux" }
 
 	type call struct {
 		name string

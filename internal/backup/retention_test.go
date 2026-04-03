@@ -330,6 +330,9 @@ func makeBackupAt(t *testing.T, backupDir, id string, createdAt time.Time, pinne
 // backups than the retention count, the oldest ones are deleted.
 func TestPrune_DeletesOldestUnpinned(t *testing.T) {
 	backupDir := t.TempDir()
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() { BackupRootFn = origBackupRootFn })
+	BackupRootFn = func() (string, error) { return backupDir, nil }
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := 1; i <= 6; i++ {
@@ -363,6 +366,9 @@ func TestPrune_DeletesOldestUnpinned(t *testing.T) {
 // even when total unpinned count exceeds the limit.
 func TestPrune_SkipsPinnedBackups(t *testing.T) {
 	backupDir := t.TempDir()
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() { BackupRootFn = origBackupRootFn })
+	BackupRootFn = func() (string, error) { return backupDir, nil }
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	// 4 unpinned + 2 pinned = 6 backups, retentionCount = 3.
@@ -461,6 +467,9 @@ func TestPrune_AllPinned(t *testing.T) {
 // IDs (backup directory names) of all deleted backups in order.
 func TestPrune_ReturnsDeletedIDs(t *testing.T) {
 	backupDir := t.TempDir()
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() { BackupRootFn = origBackupRootFn })
+	BackupRootFn = func() (string, error) { return backupDir, nil }
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	// Create 5 unpinned, keep 3 → expect 2 deleted (oldest: backup-01, backup-02).

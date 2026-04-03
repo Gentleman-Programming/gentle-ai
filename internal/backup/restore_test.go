@@ -9,6 +9,15 @@ import (
 
 func TestRestoreRestoresExistingAndRemovesCreated(t *testing.T) {
 	home := t.TempDir()
+	// Override fns so validation accepts paths under t.TempDir().
+	origUserHomeDirFn := userHomeDirFn
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() {
+		userHomeDirFn = origUserHomeDirFn
+		BackupRootFn = origBackupRootFn
+	})
+	userHomeDirFn = func() (string, error) { return home, nil }
+	BackupRootFn = func() (string, error) { return home, nil }
 
 	originalPath := filepath.Join(home, "config", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(originalPath), 0o755); err != nil {
@@ -57,10 +66,21 @@ func TestRestoreRestoresExistingAndRemovesCreated(t *testing.T) {
 }
 
 func TestRestoreFailsWhenSnapshotMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Override fns so validation accepts paths under t.TempDir().
+	origUserHomeDirFn := userHomeDirFn
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() {
+		userHomeDirFn = origUserHomeDirFn
+		BackupRootFn = origBackupRootFn
+	})
+	userHomeDirFn = func() (string, error) { return tmpDir, nil }
+	BackupRootFn = func() (string, error) { return tmpDir, nil }
+
 	service := RestoreService{}
 	err := service.Restore(Manifest{Entries: []ManifestEntry{{
-		OriginalPath: filepath.Join(t.TempDir(), "out.json"),
-		SnapshotPath: filepath.Join(t.TempDir(), "missing.json"),
+		OriginalPath: filepath.Join(tmpDir, "out.json"),
+		SnapshotPath: filepath.Join(tmpDir, "missing.json"),
 		Existed:      true,
 		Mode:         0o644,
 	}}})
@@ -74,6 +94,11 @@ func TestRestoreFailsWhenSnapshotMissing(t *testing.T) {
 // from a tar.gz archive when manifest.Compressed == true (BKUP-T31).
 func TestRestoreCompressedBackup(t *testing.T) {
 	home := t.TempDir()
+	// Override fns so validation accepts paths under t.TempDir().
+	origUserHomeDirFn := userHomeDirFn
+	t.Cleanup(func() { userHomeDirFn = origUserHomeDirFn })
+	userHomeDirFn = func() (string, error) { return home, nil }
+
 	backupDir := filepath.Join(home, "backup")
 
 	// Create a source file to snapshot.
@@ -119,6 +144,15 @@ func TestRestoreCompressedBackup(t *testing.T) {
 // with Compressed==false (plain files on disk) still restore correctly (BKUP-T30).
 func TestRestoreUncompressedBackup(t *testing.T) {
 	home := t.TempDir()
+	// Override fns so validation accepts paths under t.TempDir().
+	origUserHomeDirFn := userHomeDirFn
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() {
+		userHomeDirFn = origUserHomeDirFn
+		BackupRootFn = origBackupRootFn
+	})
+	userHomeDirFn = func() (string, error) { return home, nil }
+	BackupRootFn = func() (string, error) { return home, nil }
 
 	originalPath := filepath.Join(home, "config", "app.json")
 	if err := os.MkdirAll(filepath.Dir(originalPath), 0o755); err != nil {
@@ -162,6 +196,11 @@ func TestRestoreUncompressedBackup(t *testing.T) {
 // with more than one file, ensuring the loop resolves all relative paths correctly.
 func TestRestoreCompressedMultipleFiles(t *testing.T) {
 	home := t.TempDir()
+	// Override userHomeDirFn so validation accepts paths under t.TempDir().
+	origUserHomeDirFn := userHomeDirFn
+	t.Cleanup(func() { userHomeDirFn = origUserHomeDirFn })
+	userHomeDirFn = func() (string, error) { return home, nil }
+
 	backupDir := filepath.Join(home, "backup")
 
 	fileA := filepath.Join(home, "config", "a.json")
@@ -246,6 +285,11 @@ func TestRestoreCompressed_MissingArchive(t *testing.T) {
 // in a compressed backup cause the file at OriginalPath to be deleted (BKUP-T32).
 func TestRestoreCompressedRemovesCreatedFiles(t *testing.T) {
 	home := t.TempDir()
+	// Override userHomeDirFn so validation accepts paths under t.TempDir().
+	origUserHomeDirFn := userHomeDirFn
+	t.Cleanup(func() { userHomeDirFn = origUserHomeDirFn })
+	userHomeDirFn = func() (string, error) { return home, nil }
+
 	backupDir := filepath.Join(home, "backup")
 
 	// Create a real file to snapshot (so the archive is valid).

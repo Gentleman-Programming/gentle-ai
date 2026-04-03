@@ -45,7 +45,7 @@ func AddToUserPath(dir string) error {
 	safeDir := escapePowerShellString(dir)
 	script := fmt.Sprintf(
 		`$current = [Environment]::GetEnvironmentVariable('PATH', 'User'); `+
-			`if ($current -notlike '*%s*') { `+
+			`if (($current.Split(';')) -notcontains '%s') { `+
 			`[Environment]::SetEnvironmentVariable('PATH', '%s;' + $current, 'User') }`,
 		safeDir, safeDir,
 	)

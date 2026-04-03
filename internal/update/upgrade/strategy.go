@@ -230,9 +230,11 @@ func scriptUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 	return nil
 }
 
-// ggaTmpDir is the directory used for GGA git clone during upgrades.
-// Package-level var for testability.
-var ggaTmpDir = "/tmp/gentleman-guardian-angel"
+// ggaMkdirTemp is the function used to create a temporary directory for GGA git clone.
+// Package-level var for testability — swapped in tests to control the temp dir path.
+var ggaMkdirTemp = func() (string, error) {
+	return os.MkdirTemp("", "gentle-ai-gga-*")
+}
 
 // ggaScriptUpgrade upgrades GGA by cloning its repository and running install.sh
 // from within the cloned repo — the same approach used by the initial install resolver.
@@ -265,10 +267,12 @@ func ggaScriptUpgradeForOS(ctx context.Context, r update.UpdateResult, osName st
 		}
 	}
 
-	tmpDir := ggaTmpDir
-
-	// Clean up any previous clone to ensure a fresh state.
-	os.RemoveAll(tmpDir)
+	// Use an unpredictable temp directory to avoid TOCTOU races on the fixed path.
+	tmpDir, err := ggaMkdirTemp()
+	if err != nil {
+		return fmt.Errorf("create temp dir for gga clone: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
 
 	// Clone the full repository — install.sh needs the entire repo context.
 	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", r.Tool.Owner, r.Tool.Repo)
@@ -286,7 +290,5 @@ func ggaScriptUpgradeForOS(ctx context.Context, r update.UpdateResult, osName st
 		return fmt.Errorf("install.sh failed for %q: %w\nOutput: %s", r.Tool.Name, err, strings.TrimSpace(string(out)))
 	}
 
-	// Clean up the temporary clone.
-	os.RemoveAll(tmpDir)
 	return nil
 }
