@@ -53,14 +53,25 @@ type ModelPickerState struct {
 	AllPhasesModel model.ModelAssignment
 }
 
-// NewModelPickerState initializes the picker state from the models cache.
-func NewModelPickerState(cachePath string) ModelPickerState {
+// NewModelPickerState initializes the picker state from the models cache,
+// merging any custom providers defined in the OpenCode settings file.
+func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState {
 	providers, err := opencode.LoadModels(cachePath)
 	if err != nil {
 		return ModelPickerState{}
 	}
 
-	available := opencode.DetectAvailableProviders(providers)
+	configProviders := opencode.LoadConfigProviders(settingsPath)
+	if len(configProviders) > 0 {
+		providers = opencode.MergeCustomProviders(providers, configProviders)
+	}
+
+	customIDs := make([]string, 0, len(configProviders))
+	for id := range configProviders {
+		customIDs = append(customIDs, id)
+	}
+
+	available := opencode.DetectAvailableProviders(providers, customIDs...)
 
 	sddModels := make(map[string][]opencode.Model, len(available))
 	for _, id := range available {

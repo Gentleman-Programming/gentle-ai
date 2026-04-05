@@ -333,3 +333,240 @@ func TestLoadAuthProvidersMissingFile(t *testing.T) {
 		t.Fatalf("expected nil for missing file, got %v", result)
 	}
 }
+
+// ─── LoadConfigProviders ──────────────────────────────────────────────────────
+
+func writeConfigFixture(t *testing.T, content string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "opencode.json")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config fixture: %v", err)
+	}
+	return path
+}
+
+func TestLoadConfigProviders(t *testing.T) {
+	path := writeConfigFixture(t, `{
+		"provider": {
+			"lmstudio": {
+				"npm": "@ai-sdk/openai-compatible",
+				"name": "LM Studio (local)",
+				"options": {"baseURL": "http://localhost:1234/v1"},
+				"models": {
+					"qwen/qwen3.5-35b-a3b": {"name": "qwen3.5-35b-a3b"}
+				}
+			}
+		}
+	}`)
+
+	config := LoadConfigProviders(path)
+	if len(config) != 1 {
+		t.Fatalf("config provider count = %d, want 1", len(config))
+	}
+
+	lm, ok := config["lmstudio"]
+	if !ok {
+		t.Fatal("missing lmstudio provider")
+	}
+	if lm.Name != "LM Studio (local)" {
+		t.Fatalf("lmstudio name = %q, want %q", lm.Name, "LM Studio (local)")
+	}
+	if len(lm.Models) != 1 {
+		t.Fatalf("lmstudio model count = %d, want 1", len(lm.Models))
+	}
+	if _, ok := lm.Models["qwen/qwen3.5-35b-a3b"]; !ok {
+		t.Fatal("missing model qwen/qwen3.5-35b-a3b")
+	}
+}
+
+func TestLoadConfigProvidersMissingFile(t *testing.T) {
+	config := LoadConfigProviders("/nonexistent/opencode.json")
+	if len(config) != 0 {
+		t.Fatalf("expected empty map for missing file, got %v", config)
+	}
+}
+
+func TestLoadConfigProvidersNoProviderKey(t *testing.T) {
+	path := writeConfigFixture(t, `{"agent": {"foo": {}}}`)
+	config := LoadConfigProviders(path)
+	if len(config) != 0 {
+		t.Fatalf("expected empty map when no provider key, got %v", config)
+	}
+}
+
+// ─── MergeCustomProviders ────────────────────────────────────────────���────────
+
+func TestMergeCustomProvidersNewProvider(t *testing.T) {
+	providers := map[string]Provider{
+		"openai": {ID: "openai", Name: "OpenAI", Models: map[string]Model{
+			"gpt-4o": {ID: "gpt-4o", Name: "GPT-4o", ToolCall: true},
+		}},
+	}
+	config := map[string]ConfigProvider{
+		"lmstudio": {Name: "LM Studio", Models: map[string]ConfigModel{
+			"qwen/qwen3.5": {Name: "Qwen 3.5"},
+		}},
+	}
+
+	merged := MergeCustomProviders(providers, config)
+
+	if len(merged) != 2 {
+		t.Fatalf("merged count = %d, want 2", len(merged))
+	}
+	lm, ok := merged["lmstudio"]
+	if !ok {
+		t.Fatal("missing lmstudio in merged")
+	}
+	if lm.Name != "LM Studio" {
+		t.Fatalf("lmstudio name = %q", lm.Name)
+	}
+	m, ok := lm.Models["qwen/qwen3.5"]
+	if !ok {
+		t.Fatal("missing model qwen/qwen3.5")
+	}
+	if !m.ToolCall {
+		t.Fatal("custom model should have ToolCall=true")
+	}
+	if m.Name != "Qwen 3.5" {
+		t.Fatalf("model name = %q, want %q", m.Name, "Qwen 3.5")
+	}
+}
+
+func TestMergeCustomProvidersExistingProviderNewModel(t *testing.T) {
+	providers := map[string]Provider{
+		"lmstudio": {ID: "lmstudio", Name: "LMStudio", Env: []string{"LMSTUDIO_API_KEY"}, Models: map[string]Model{
+			"gpt-oss-20b": {ID: "gpt-oss-20b", Name: "GPT OSS 20B", ToolCall: true, Cost: ModelCost{Input: 1.0}},
+		}},
+	}
+	config := map[string]ConfigProvider{
+		"lmstudio": {Name: "LM Studio (local)", Models: map[string]ConfigModel{
+			"qwen/qwen3.5": {Name: "Qwen 3.5"},
+		}},
+	}
+
+	merged := MergeCustomProviders(providers, config)
+	lm := merged["lmstudio"]
+
+	if len(lm.Models) != 2 {
+		t.Fatalf("model count = %d, want 2", len(lm.Models))
+	}
+	// Cache model preserved
+	if lm.Models["gpt-oss-20b"].Cost.Input != 1.0 {
+		t.Fatal("cache model metadata should be preserved")
+	}
+	// New model added with ToolCall=true
+	if !lm.Models["qwen/qwen3.5"].ToolCall {
+		t.Fatal("new custom model should have ToolCall=true")
+	}
+}
+
+func TestMergeCustomProvidersModelCollisionCacheWins(t *testing.T) {
+	providers := map[string]Provider{
+		"lmstudio": {ID: "lmstudio", Name: "LMStudio", Models: map[string]Model{
+			"shared-model": {ID: "shared-model", Name: "Cache Name", ToolCall: true, Cost: ModelCost{Input: 5.0}},
+		}},
+	}
+	config := map[string]ConfigProvider{
+		"lmstudio": {Models: map[string]ConfigModel{
+			"shared-model": {Name: "Config Name"},
+		}},
+	}
+
+	merged := MergeCustomProviders(providers, config)
+	m := merged["lmstudio"].Models["shared-model"]
+	if m.Name != "Cache Name" {
+		t.Fatalf("model name = %q, want %q (cache should win)", m.Name, "Cache Name")
+	}
+	if m.Cost.Input != 5.0 {
+		t.Fatal("cache cost metadata should be preserved on collision")
+	}
+}
+
+func TestMergeCustomProvidersEmptyConfig(t *testing.T) {
+	providers := map[string]Provider{
+		"openai": {ID: "openai", Name: "OpenAI", Models: map[string]Model{}},
+	}
+
+	merged := MergeCustomProviders(providers, nil)
+	if len(merged) != 1 {
+		t.Fatalf("expected unchanged providers, got %d", len(merged))
+	}
+}
+
+func TestMergeCustomProvidersDoesNotMutateInput(t *testing.T) {
+	providers := map[string]Provider{
+		"openai": {ID: "openai", Name: "OpenAI", Models: map[string]Model{
+			"gpt-4o": {ID: "gpt-4o", ToolCall: true},
+		}},
+	}
+	config := map[string]ConfigProvider{
+		"lmstudio": {Name: "LM Studio", Models: map[string]ConfigModel{
+			"local-model": {Name: "Local"},
+		}},
+	}
+
+	_ = MergeCustomProviders(providers, config)
+
+	if _, ok := providers["lmstudio"]; ok {
+		t.Fatal("MergeCustomProviders mutated the input map")
+	}
+}
+
+// ─── DetectAvailableProviders with custom IDs ─────────────────────────────────
+
+func TestDetectAvailableProvidersWithCustomIDs(t *testing.T) {
+	path := writeFixture(t)
+	providers, err := LoadModels(path)
+	if err != nil {
+		t.Fatalf("LoadModels() error = %v", err)
+	}
+
+	cleanup := withNoAuth(t)
+	defer cleanup()
+
+	original := envLookup
+	defer func() { envLookup = original }()
+	envLookup = func(string) string { return "" }
+
+	// Pass "anthropic" as custom — should be available without auth/env
+	available := DetectAvailableProviders(providers, "anthropic")
+
+	found := make(map[string]bool)
+	for _, id := range available {
+		found[id] = true
+	}
+	if !found["anthropic"] {
+		t.Fatal("expected anthropic (custom provider ID)")
+	}
+	if !found["opencode"] {
+		t.Fatal("expected opencode (always included)")
+	}
+	if found["openai"] {
+		t.Fatal("openai should NOT be available (not custom, no auth, no env)")
+	}
+}
+
+func TestDetectAvailableProvidersCustomStillNeedsToolCall(t *testing.T) {
+	path := writeFixture(t)
+	providers, err := LoadModels(path)
+	if err != nil {
+		t.Fatalf("LoadModels() error = %v", err)
+	}
+
+	cleanup := withNoAuth(t)
+	defer cleanup()
+
+	original := envLookup
+	defer func() { envLookup = original }()
+	envLookup = func(string) string { return "" }
+
+	// "notools" has no tool_call models — custom ID should not bypass that check
+	available := DetectAvailableProviders(providers, "notools")
+
+	for _, id := range available {
+		if id == "notools" {
+			t.Fatal("notools should NOT be available even as custom (no tool_call models)")
+		}
+	}
+}

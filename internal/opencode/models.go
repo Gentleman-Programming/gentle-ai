@@ -124,12 +124,23 @@ var authPath = DefaultAuthPath
 //  3. The "opencode" provider is always included if present (built-in subscription)
 //
 // Results are sorted alphabetically.
-func DetectAvailableProviders(providers map[string]Provider) []string {
+func DetectAvailableProviders(providers map[string]Provider, customProviderIDs ...string) []string {
 	authProviders := loadAuthProviders(authPath())
+
+	customSet := make(map[string]bool, len(customProviderIDs))
+	for _, id := range customProviderIDs {
+		customSet[id] = true
+	}
 
 	var available []string
 	for id, provider := range providers {
 		if !hasToolCallModel(provider) {
+			continue
+		}
+
+		// Check: explicitly configured custom provider (always available).
+		if customSet[id] {
+			available = append(available, id)
 			continue
 		}
 
@@ -189,6 +200,73 @@ func FilterModelsForSDD(provider Provider) []Model {
 	})
 
 	return models
+}
+
+// ConfigModel represents a model entry in the opencode.json provider section.
+type ConfigModel struct {
+	Name string `json:"name"`
+}
+
+// ConfigProvider represents a custom provider defined in opencode.json.
+type ConfigProvider struct {
+	Name   string                 `json:"name"`
+	Models map[string]ConfigModel `json:"models"`
+}
+
+// LoadConfigProviders reads the provider section from an opencode.json settings file.
+// Returns an empty map if the file is missing or has no provider key.
+func LoadConfigProviders(path string) map[string]ConfigProvider {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return map[string]ConfigProvider{}
+	}
+
+	var raw struct {
+		Provider map[string]ConfigProvider `json:"provider"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return map[string]ConfigProvider{}
+	}
+	if raw.Provider == nil {
+		return map[string]ConfigProvider{}
+	}
+	return raw.Provider
+}
+
+// MergeCustomProviders merges custom providers from opencode.json into the cache-loaded
+// providers map. Custom models default to ToolCall=true. Cache models win on ID collision.
+// Returns a new map without mutating the input.
+func MergeCustomProviders(providers map[string]Provider, config map[string]ConfigProvider) map[string]Provider {
+	if len(config) == 0 {
+		return providers
+	}
+
+	merged := make(map[string]Provider, len(providers)+len(config))
+	for id, p := range providers {
+		clone := Provider{ID: p.ID, Name: p.Name, Env: p.Env, Models: make(map[string]Model, len(p.Models))}
+		for mid, m := range p.Models {
+			clone.Models[mid] = m
+		}
+		merged[id] = clone
+	}
+
+	for id, cp := range config {
+		existing, ok := merged[id]
+		if !ok {
+			existing = Provider{ID: id, Name: cp.Name, Models: make(map[string]Model, len(cp.Models))}
+		}
+		if existing.Models == nil {
+			existing.Models = make(map[string]Model, len(cp.Models))
+		}
+		for mid, cm := range cp.Models {
+			if _, exists := existing.Models[mid]; !exists {
+				existing.Models[mid] = Model{ID: mid, Name: cm.Name, ToolCall: true}
+			}
+		}
+		merged[id] = existing
+	}
+
+	return merged
 }
 
 // SDDPhases returns the ordered list of SDD phase sub-agent names.
