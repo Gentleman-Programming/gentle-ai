@@ -65,8 +65,8 @@ telegram-bot/
 ├── go.mod           # Module definition
 ├── .env.example     # Environment variable template
 ├── .gitignore       # Excludes .env and compiled binaries
-├── start-stack.bat  # Windows: start OpenCode + bot in two terminals
-├── add-startup.ps1  # Windows: add bridge to system startup
+├── start-stack.bat  # Windows: start OpenCode + bot with health check loop
+├── add-startup.ps1  # Windows: create startup shortcut (run once)
 └── INSTALL.md       # Full installation and configuration guide
 ```
 
@@ -329,11 +329,26 @@ Two helper scripts are included for Windows users:
 1. `opencode serve` (OpenCode backend)
 2. `./telegram-bot.exe` (the bridge)
 
+**Key reliability features:**
+- **Health check loop** — waits for OpenCode to respond on port 4096 before starting the bot
+- **Automatic retry** — loops until `/health` endpoint is ready (prevents timeout errors)
+- **5-second startup delay** — ensures OpenCode has enough time to initialize
+- **Working directory fix** — spawned terminals use correct paths
+
 **`add-startup.ps1`** — creates a Windows startup shortcut so the stack launches automatically on login.
 
+**Usage:**
 ```powershell
+# Run once to enable auto-start
 powershell -ExecutionPolicy Bypass -File add-startup.ps1
 ```
+
+This creates a shortcut in:
+```
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\
+```
+
+The stack will launch automatically when Windows starts — no manual intervention needed.
 
 ---
 
