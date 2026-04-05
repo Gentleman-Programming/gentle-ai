@@ -559,16 +559,22 @@ func (b *TelegramBot) handleMessage(msg *tg.Message) {
 	// Forward to OpenCode
 	b.sendChatAction(chatID, tg.ChatTyping)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
+	// CRITICAL: Use separate contexts for session creation and prompt sending
+	// Session creation is fast (10s timeout)
+	sessionCtx, sessionCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer sessionCancel()
 
-	sessionID, err := b.Client.GetOrCreateSession(ctx, chatID, b.Config.ProjectDir)
+	sessionID, err := b.Client.GetOrCreateSession(sessionCtx, chatID, b.Config.ProjectDir)
 	if err != nil {
 		b.sendMessage(chatID, fmt.Sprintf("❌ Error creating session: %v", err), false)
 		return
 	}
 
-	response, err := b.Client.SendPrompt(ctx, sessionID, text)
+	// Prompt sending can be slow (300s = 5 minutes for complex requests)
+	promptCtx, promptCancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer promptCancel()
+
+	response, err := b.Client.SendPrompt(promptCtx, sessionID, text)
 	if err != nil {
 		b.sendMessage(chatID, fmt.Sprintf("❌ Error: %v", err), false)
 		return
@@ -1083,10 +1089,14 @@ The bridge interacts with these OpenCode endpoints:
 
 When generating code from this skill, the AI MUST follow these rules:
 
-### 1. Context Handling
+### 1. Context Handling (CRITICAL FOR PREVENTING TIMEOUTS)
 - NEVER pass `nil` as context
 - ALWAYS use `context.WithTimeout` for HTTP calls
-- Default timeout: 120 seconds for prompts, 10 seconds for health checks
+- **Use SEPARATE contexts for session creation and prompt sending**
+  - Session creation: 10 seconds (fast operation)
+  - Prompt sending: 300 seconds (5 minutes for complex AI requests)
+  - Health checks: 10 seconds
+- **DO NOT reuse the same context for both operations** — this causes "context deadline exceeded" errors on long prompts
 
 ### 2. Thread Safety
 - Use `sync.Map` for session storage (not regular map)
@@ -1151,6 +1161,24 @@ client.HealthCheck(nil)
 ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 defer cancel()
 client.HealthCheck(ctx)
+```
+
+### ❌ DON'T: Reuse context for session creation AND prompt sending
+```go
+// WRONG - causes "context deadline exceeded" on long prompts
+ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+defer cancel()
+sessionID, _ := client.GetOrCreateSession(ctx, chatID, dir)
+response, _ := client.SendPrompt(ctx, sessionID, text) // Timeout already started!
+
+// CORRECT - separate contexts with appropriate timeouts
+sessionCtx, sessionCancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer sessionCancel()
+sessionID, _ := client.GetOrCreateSession(sessionCtx, chatID, dir)
+
+promptCtx, promptCancel := context.WithTimeout(context.Background(), 300*time.Second)
+defer promptCancel()
+response, _ := client.SendPrompt(promptCtx, sessionID, text) // Fresh 5-minute timeout
 ```
 
 ### ❌ DON'T: Send markdown without escaping
