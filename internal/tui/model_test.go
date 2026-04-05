@@ -839,19 +839,47 @@ func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
 	}
 }
 
-// TestWelcomeMenu_OptionCount verifies the welcome menu has 8 items without OpenCode
-// and 9 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
+func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 7
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallMode {
+		t.Fatalf("cursor=7 (Managed uninstall): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+	}
+}
+
+func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
+	m := NewModel(system.DetectionResult{
+		Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}},
+	}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 8
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallMode {
+		t.Fatalf("cursor=8 (Managed uninstall with profiles): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+	}
+}
+
+// TestWelcomeMenu_OptionCount verifies the welcome menu has 9 items without OpenCode
+// and 10 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	// Without OpenCode detected: 8 options (includes "Create your own Agent").
+	// Without OpenCode detected: 9 options (includes "Managed uninstall").
 	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
-	if len(opts) != 8 {
-		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 8; got %v", len(opts), opts)
+	if len(opts) != 9 {
+		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 9; got %v", len(opts), opts)
 	}
-	// With OpenCode detected: 9 options (adds "OpenCode SDD Profiles").
+	// With OpenCode detected: 10 options (adds "OpenCode SDD Profiles").
 	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 0, true)
-	if len(optsWithProfiles) != 9 {
-		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 9; got %v", len(optsWithProfiles), optsWithProfiles)
+	if len(optsWithProfiles) != 10 {
+		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 10; got %v", len(optsWithProfiles), optsWithProfiles)
 	}
 }
 

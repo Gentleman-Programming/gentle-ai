@@ -92,9 +92,11 @@ func TestComponentOperationsSDD_RemovesBaseAndProfileAgentsFromSettings(t *testi
 	  "agent": {
 	    "sdd-orchestrator": {"mode": "primary", "model": "anthropic:claude-sonnet-4"},
 	    "sdd-apply": {"mode": "subagent", "model": "anthropic:claude-sonnet-4"},
+	    "sdd-onboard": {"mode": "subagent", "model": "anthropic:claude-sonnet-4"},
 	    "sdd-verify": {"mode": "subagent", "model": "anthropic:claude-sonnet-4"},
 	    "sdd-orchestrator-fast": {"mode": "primary", "model": "openai:gpt-4.1-mini"},
 	    "sdd-apply-fast": {"mode": "subagent", "model": "openai:gpt-4.1-mini"},
+	    "sdd-onboard-fast": {"mode": "subagent", "model": "openai:gpt-4.1-mini"},
 	    "sdd-verify-fast": {"mode": "subagent", "model": "openai:gpt-4.1-mini"},
 	    "my-custom-agent": {"mode": "subagent", "model": "custom:model"}
 	  },
@@ -142,9 +144,11 @@ func TestComponentOperationsSDD_RemovesBaseAndProfileAgentsFromSettings(t *testi
 	for _, removedKey := range []string{
 		"sdd-orchestrator",
 		"sdd-apply",
+		"sdd-onboard",
 		"sdd-verify",
 		"sdd-orchestrator-fast",
 		"sdd-apply-fast",
+		"sdd-onboard-fast",
 		"sdd-verify-fast",
 	} {
 		if _, exists := agentMap[removedKey]; exists {

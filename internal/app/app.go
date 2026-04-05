@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
@@ -100,6 +101,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.Backups = ListBackups()
 		m.UpgradeFn = tuiUpgrade(profile, homeDir)
 		m.SyncFn = tuiSync(homeDir)
+		m.UninstallFn = tuiUninstall(homeDir)
 		p := tea.NewProgram(m, tea.WithAltScreen())
 		_, err = p.Run()
 		return err
@@ -313,6 +315,18 @@ func tuiSync(homeDir string) tui.SyncFunc {
 		persistAssignments(homeDir, selection)
 
 		return result.FilesChanged, nil
+	}
+}
+
+// tuiUninstall returns a tui.UninstallFunc that mirrors the CLI uninstall path
+// for selected agents/components, but without interactive flag parsing.
+func tuiUninstall(homeDir string) tui.UninstallFunc {
+	return func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		workspaceDir, err := os.Getwd()
+		if err != nil {
+			return componentuninstall.Result{}, fmt.Errorf("resolve workspace directory: %w", err)
+		}
+		return cli.RunUninstallWithSelection(homeDir, workspaceDir, agentIDs, componentIDs)
 	}
 }
 

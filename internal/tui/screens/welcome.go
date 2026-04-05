@@ -45,6 +45,7 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 	}
 
 	opts = append(opts, "Manage backups")
+	opts = append(opts, "Managed uninstall")
 	opts = append(opts, "Quit")
 
 	return opts

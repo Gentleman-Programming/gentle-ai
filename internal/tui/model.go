@@ -1052,25 +1052,31 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			ta.SetHeight(5)
 			m.AgentBuilder.Textarea = ta
 			m.setScreen(ScreenAgentBuilderEngine)
-		case 6:
+		default:
+			next := 6
 			if m.hasDetectedOpenCode() {
-				// "OpenCode SDD Profiles" (only shown when OpenCode is detected)
-				m.setScreen(ScreenProfiles)
-			} else {
-				// "Manage backups"
-				m.setScreen(ScreenBackups)
+				if m.Cursor == next {
+					m.setScreen(ScreenProfiles)
+					return m, nil
+				}
+				next++
 			}
-		case 7:
-			if m.hasDetectedOpenCode() {
-				// "Manage backups"
+
+			if m.Cursor == next {
 				m.setScreen(ScreenBackups)
-			} else {
-				// "Quit"
+				return m, nil
+			}
+			next++
+
+			if m.Cursor == next {
+				m.setScreen(ScreenUninstallMode)
+				return m, nil
+			}
+			next++
+
+			if m.Cursor == next {
 				return m, tea.Quit
 			}
-		case 8:
-			// "Quit" (only reachable when showProfiles is true, so OpenCode is detected)
-			return m, tea.Quit
 		}
 	case ScreenUninstallMode:
 		options := screens.UninstallModeOptions()

@@ -100,6 +100,7 @@ var (
 		"sdd-apply",
 		"sdd-verify",
 		"sdd-archive",
+		"sdd-onboard",
 	}
 )
 
@@ -887,6 +888,7 @@ func sddSkillIDs() []string {
 		"sdd-apply",
 		"sdd-verify",
 		"sdd-archive",
+		"sdd-onboard",
 		"judgment-day",
 	}
 }
