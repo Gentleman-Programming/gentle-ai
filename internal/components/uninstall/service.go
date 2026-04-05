@@ -14,6 +14,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 )
@@ -450,6 +451,18 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			for _, agentKey := range sddPhaseAgents {
 				paths = append(paths, jsonPath{"agent", agentKey})
 			}
+
+			// Also remove any named SDD profile agents (suffixed keys such as
+			// sdd-orchestrator-fast, sdd-apply-fast, etc.). Ignore detection errors
+			// and still clean base SDD agent keys.
+			if profiles, err := sdd.DetectProfiles(path); err == nil {
+				for _, profile := range profiles {
+					for _, agentKey := range sdd.ProfileAgentKeys(profile.Name) {
+						paths = append(paths, jsonPath{"agent", agentKey})
+					}
+				}
+			}
+
 			ops = append(ops, rewriteJSONFile(path, paths...))
 
 			pluginPath := filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts")

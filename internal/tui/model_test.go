@@ -894,6 +894,50 @@ func TestUninstallModeScreen_FullNavigatesToConfirm(t *testing.T) {
 	}
 }
 
+func TestUninstallModeScreen_FullRemoveNavigatesToConfirm(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallMode
+	m.Cursor = 2 // Full Uninstall & Remove Binary option
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallConfirm {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+	if state.UninstallMode != model.UninstallModeFullRemove {
+		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModeFullRemove)
+	}
+	if len(state.UninstallAgents) == 0 {
+		t.Fatal("UninstallAgents should be populated for FullRemove mode")
+	}
+	if len(state.UninstallComponents) == 0 {
+		t.Fatal("UninstallComponents should be populated for FullRemove mode")
+	}
+}
+
+func TestUninstallModeScreen_CleanInstallNavigatesToConfirm(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallMode
+	m.Cursor = 3 // Full Uninstall + Clean Install option
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallConfirm {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+	if state.UninstallMode != model.UninstallModeCleanInstall {
+		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModeCleanInstall)
+	}
+	if len(state.UninstallAgents) == 0 {
+		t.Fatal("UninstallAgents should be populated for CleanInstall mode")
+	}
+	if len(state.UninstallComponents) == 0 {
+		t.Fatal("UninstallComponents should be populated for CleanInstall mode")
+	}
+}
+
 func TestUninstallScreen_ContinueNavigatesToComponents(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstall
@@ -965,6 +1009,82 @@ func TestUninstallConfirm_EnterExecutesAndNavigatesToResult(t *testing.T) {
 	}
 	if len(state.UninstallResult.RemovedFiles) != 1 {
 		t.Fatalf("RemovedFiles len = %d, want 1", len(state.UninstallResult.RemovedFiles))
+	}
+}
+
+func TestUninstallConfirm_CancelCleanInstallReturnsToModeSelection(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallConfirm
+	m.UninstallMode = model.UninstallModeCleanInstall
+	m.Cursor = 1 // Cancel
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallMode {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallMode)
+	}
+}
+
+func TestUninstallConfirm_CleanInstallRunsSyncAfterUninstall(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallConfirm
+	m.UninstallMode = model.UninstallModeCleanInstall
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
+	m.Cursor = 0
+
+	uninstallCalled := false
+	syncCalled := false
+
+	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		uninstallCalled = true
+		return componentuninstall.Result{RemovedFiles: []string{"/tmp/managed-file"}}, nil
+	}
+	m.SyncFn = func(overrides *model.SyncOverrides) (int, error) {
+		syncCalled = true
+		if overrides != nil {
+			t.Fatalf("clean-install sync overrides = %+v, want nil", overrides)
+		}
+		return 7, nil
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if !state.OperationRunning {
+		t.Fatalf("OperationRunning = false, want true after starting clean-install")
+	}
+	if cmd == nil {
+		t.Fatal("expected uninstall command to be returned")
+	}
+
+	uninstallMsg := findUninstallDoneMsgInBatch(t, cmd)
+	if uninstallMsg == nil {
+		t.Fatal("expected UninstallDoneMsg from batch cmd, got nil")
+	}
+	if !uninstallCalled {
+		t.Fatal("UninstallFn was not called")
+	}
+	if !syncCalled {
+		t.Fatal("SyncFn was not called for clean-install mode")
+	}
+	if uninstallMsg.SyncErr != nil {
+		t.Fatalf("unexpected clean-install sync error: %v", uninstallMsg.SyncErr)
+	}
+	if uninstallMsg.SyncFilesChanged != 7 {
+		t.Fatalf("SyncFilesChanged = %d, want 7", uninstallMsg.SyncFilesChanged)
+	}
+
+	updated, _ = state.Update(*uninstallMsg)
+	state = updated.(Model)
+	if state.Screen != ScreenUninstallResult {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallResult)
+	}
+	if state.SyncCleanInstallFilesChanged != 7 {
+		t.Fatalf("SyncCleanInstallFilesChanged = %d, want 7", state.SyncCleanInstallFilesChanged)
+	}
+	if state.SyncCleanInstallErr != nil {
+		t.Fatalf("unexpected SyncCleanInstallErr: %v", state.SyncCleanInstallErr)
 	}
 }
 
