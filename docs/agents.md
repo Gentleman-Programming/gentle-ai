@@ -76,6 +76,7 @@ Antigravity is an agent-first platform with built-in sub-agents (Browser, Termin
 - Slash commands for SDD phases (`/sdd-new`, `/sdd-explore`, etc.)
 - Background-agents plugin for parallel execution
 - The TUI model picker includes providers and models discovered from the local `opencode.json`, including custom providers
+- Custom models from `opencode.json` must set `tool_call: true` explicitly to appear as selectable SDD-capable options in the model picker
 - Multi-mode prerequisite: connect your AI providers first, then run `opencode models --refresh`
 
 ### Gemini CLI
