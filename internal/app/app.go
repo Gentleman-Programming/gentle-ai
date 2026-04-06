@@ -68,11 +68,22 @@ func RunArgs(args []string, stdout io.Writer) error {
 		return system.EnsureSupportedPlatform(result.System.Profile)
 	}
 
+	var (
+		profile         system.PlatformProfile
+		profileResolved bool
+	)
+	resolveProfile := func() system.PlatformProfile {
+		if !profileResolved {
+			profile = cli.ResolveInstallProfile(result)
+			profileResolved = true
+		}
+		return profile
+	}
+
 	// Self-update: check for a newer gentle-ai release and apply it before
 	// CLI/TUI dispatch. Errors are non-fatal — logged and swallowed.
-	profile := cli.ResolveInstallProfile(result)
 	if !isExplicitUpdateFlow(args) {
-		if err := selfUpdateRun(context.Background(), Version, profile, stdout); err != nil {
+		if err := selfUpdateRun(context.Background(), Version, resolveProfile(), stdout); err != nil {
 			_, _ = fmt.Fprintf(stdout, "Warning: self-update failed: %v\n", err)
 		}
 	}
@@ -97,7 +108,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 		}
 		m.ListBackupsFn = ListBackups
 		m.Backups = ListBackups()
-		m.UpgradeFn = tuiUpgrade(profile, homeDir)
+		m.UpgradeFn = tuiUpgrade(resolveProfile(), homeDir)
 		m.SyncFn = tuiSync(homeDir)
 		p := tea.NewProgram(m, tea.WithAltScreen())
 		_, err = p.Run()
@@ -106,8 +117,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 
 	switch args[0] {
 	case "update":
-		profile := cli.ResolveInstallProfile(result)
-		return runUpdate(context.Background(), Version, profile, stdout)
+		return runUpdate(context.Background(), Version, resolveProfile(), stdout)
 	case "upgrade":
 		return runUpgrade(context.Background(), args[1:], result, stdout)
 	case "install":
