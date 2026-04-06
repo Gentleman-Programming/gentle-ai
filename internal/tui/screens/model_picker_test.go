@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -191,6 +192,13 @@ func TestHandleModelNav_SubAgentRow_AssignsCorrectPhase(t *testing.T) {
 func TestSDDOrchestratorPhaseConstant(t *testing.T) {
 	if SDDOrchestratorPhase != "sdd-orchestrator" {
 		t.Fatalf("SDDOrchestratorPhase = %q, want %q", SDDOrchestratorPhase, "sdd-orchestrator")
+	}
+}
+
+func TestRenderModelPickerShowsConfigWarning(t *testing.T) {
+	output := RenderModelPicker(nil, ModelPickerState{ConfigWarning: "invalid opencode.json"}, 0)
+	if !strings.Contains(output, "invalid opencode.json") {
+		t.Fatalf("RenderModelPicker() missing config warning; got:\n%s", output)
 	}
 }
 

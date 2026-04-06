@@ -360,7 +360,10 @@ func TestLoadConfigProviders(t *testing.T) {
 		}
 	}`)
 
-	config := LoadConfigProviders(path)
+	config, err := LoadConfigProviders(path)
+	if err != nil {
+		t.Fatalf("LoadConfigProviders() error = %v", err)
+	}
 	if len(config) != 1 {
 		t.Fatalf("config provider count = %d, want 1", len(config))
 	}
@@ -384,7 +387,10 @@ func TestLoadConfigProviders(t *testing.T) {
 }
 
 func TestLoadConfigProvidersMissingFile(t *testing.T) {
-	config := LoadConfigProviders("/nonexistent/opencode.json")
+	config, err := LoadConfigProviders("/nonexistent/opencode.json")
+	if err != nil {
+		t.Fatalf("LoadConfigProviders() error = %v", err)
+	}
 	if len(config) != 0 {
 		t.Fatalf("expected empty map for missing file, got %v", config)
 	}
@@ -392,9 +398,23 @@ func TestLoadConfigProvidersMissingFile(t *testing.T) {
 
 func TestLoadConfigProvidersNoProviderKey(t *testing.T) {
 	path := writeConfigFixture(t, `{"agent": {"foo": {}}}`)
-	config := LoadConfigProviders(path)
+	config, err := LoadConfigProviders(path)
+	if err != nil {
+		t.Fatalf("LoadConfigProviders() error = %v", err)
+	}
 	if len(config) != 0 {
 		t.Fatalf("expected empty map when no provider key, got %v", config)
+	}
+}
+
+func TestLoadConfigProvidersInvalidJSON(t *testing.T) {
+	path := writeConfigFixture(t, `{"provider":`)
+	config, err := LoadConfigProviders(path)
+	if err == nil {
+		t.Fatal("expected parse error for invalid JSON")
+	}
+	if len(config) != 0 {
+		t.Fatalf("expected empty map on parse error, got %v", config)
 	}
 }
 

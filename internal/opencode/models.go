@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -215,23 +216,26 @@ type ConfigProvider struct {
 }
 
 // LoadConfigProviders reads the provider section from an opencode.json settings file.
-// Returns an empty map if the file is missing or has no provider key.
-func LoadConfigProviders(path string) map[string]ConfigProvider {
+// Returns an empty map with nil error if the file is missing or has no provider key.
+func LoadConfigProviders(path string) (map[string]ConfigProvider, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return map[string]ConfigProvider{}
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]ConfigProvider{}, nil
+		}
+		return map[string]ConfigProvider{}, err
 	}
 
 	var raw struct {
 		Provider map[string]ConfigProvider `json:"provider"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return map[string]ConfigProvider{}
+		return map[string]ConfigProvider{}, fmt.Errorf("parse opencode settings: %w", err)
 	}
 	if raw.Provider == nil {
-		return map[string]ConfigProvider{}
+		return map[string]ConfigProvider{}, nil
 	}
-	return raw.Provider
+	return raw.Provider, nil
 }
 
 // MergeCustomProviders merges custom providers from opencode.json into the cache-loaded
