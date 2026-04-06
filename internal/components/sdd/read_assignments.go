@@ -3,7 +3,6 @@ package sdd
 import (
 	"encoding/json"
 	"os"
-	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
@@ -77,11 +76,15 @@ func ReadCurrentModelAssignments(settingsPath string) (map[string]model.ModelAss
 		if !ok || modelStr == "" {
 			continue
 		}
-		// Try colon first (standard: "anthropic:claude-sonnet-4"), then slash
-		// ("zai-coding-plan/glm-5-turbo") for custom providers (issue #152).
-		idx := strings.Index(modelStr, ":")
-		if idx <= 0 {
-			idx = strings.Index(modelStr, "/")
+		// Find the FIRST occurrence of either '/' or ':' (whichever comes first).
+		// This correctly handles OpenRouter free models like "openrouter/qwen/qwen3.6-plus:free"
+		// where the provider is "openrouter" and the model is "qwen/qwen3.6-plus:free".
+		idx := -1
+		for i, c := range modelStr {
+			if c == '/' || c == ':' {
+				idx = i
+				break
+			}
 		}
 		if idx <= 0 {
 			// No separator or separator is the first character — skip malformed value.

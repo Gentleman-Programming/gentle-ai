@@ -167,10 +167,15 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 		return model.ModelAssignment{}
 	}
 
-	// Try colon separator first (standard: "anthropic:claude-sonnet-4"), then slash.
-	idx := strings.Index(modelStr, ":")
-	if idx <= 0 {
-		idx = strings.Index(modelStr, "/")
+	// Find the FIRST occurrence of either '/' or ':' (whichever comes first).
+	// This correctly handles OpenRouter free models like "openrouter/qwen/qwen3.6-plus:free"
+	// where the provider is "openrouter" and the model is "qwen/qwen3.6-plus:free".
+	idx := -1
+	for i, c := range modelStr {
+		if c == '/' || c == ':' {
+			idx = i
+			break
+		}
 	}
 	if idx <= 0 {
 		return model.ModelAssignment{}
