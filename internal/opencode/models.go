@@ -230,7 +230,7 @@ func LoadConfigProviders(path string) (map[string]ConfigProvider, error) {
 		Provider map[string]ConfigProvider `json:"provider"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return map[string]ConfigProvider{}, fmt.Errorf("parse opencode settings: %w", err)
+		return map[string]ConfigProvider{}, fmt.Errorf("parse opencode settings %q: %w", path, err)
 	}
 	if raw.Provider == nil {
 		return map[string]ConfigProvider{}, nil
@@ -249,7 +249,7 @@ func MergeCustomProviders(providers map[string]Provider, config map[string]Confi
 
 	merged := make(map[string]Provider, len(providers)+len(config))
 	for id, p := range providers {
-		clone := Provider{ID: p.ID, Name: p.Name, Env: p.Env, Models: make(map[string]Model, len(p.Models))}
+		clone := Provider{ID: p.ID, Name: p.Name, Env: append([]string(nil), p.Env...), Models: make(map[string]Model, len(p.Models))}
 		for mid, m := range p.Models {
 			clone.Models[mid] = m
 		}
@@ -266,7 +266,11 @@ func MergeCustomProviders(providers map[string]Provider, config map[string]Confi
 		}
 		for mid, cm := range cp.Models {
 			if _, exists := existing.Models[mid]; !exists {
-				existing.Models[mid] = Model{ID: mid, Name: cm.Name, ToolCall: cm.ToolCall}
+				name := cm.Name
+				if name == "" {
+					name = mid
+				}
+				existing.Models[mid] = Model{ID: mid, Name: name, ToolCall: cm.ToolCall}
 			}
 		}
 		merged[id] = existing

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -413,6 +414,9 @@ func TestLoadConfigProvidersInvalidJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected parse error for invalid JSON")
 	}
+	if !strings.Contains(err.Error(), filepath.Base(path)) {
+		t.Fatalf("expected parse error to include file name %q, got %v", filepath.Base(path), err)
+	}
 	if len(config) != 0 {
 		t.Fatalf("expected empty map on parse error, got %v", config)
 	}
@@ -547,6 +551,31 @@ func TestMergeCustomProvidersDoesNotMutateInput(t *testing.T) {
 
 	if _, ok := providers["lmstudio"]; ok {
 		t.Fatal("MergeCustomProviders mutated the input map")
+	}
+}
+
+func TestMergeCustomProvidersDoesNotAliasEnvSlice(t *testing.T) {
+	providers := map[string]Provider{
+		"openai": {ID: "openai", Name: "OpenAI", Env: []string{"OPENAI_API_KEY"}, Models: map[string]Model{}},
+	}
+
+	merged := MergeCustomProviders(providers, map[string]ConfigProvider{"lmstudio": {Name: "LM Studio", Models: map[string]ConfigModel{}}})
+	merged["openai"].Env[0] = "CHANGED"
+
+	if providers["openai"].Env[0] != "OPENAI_API_KEY" {
+		t.Fatal("MergeCustomProviders aliased the input Env slice")
+	}
+}
+
+func TestMergeCustomProvidersDefaultsEmptyModelNameToID(t *testing.T) {
+	merged := MergeCustomProviders(map[string]Provider{}, map[string]ConfigProvider{
+		"lmstudio": {Name: "LM Studio", Models: map[string]ConfigModel{
+			"qwen/qwen3.5": {ToolCall: true},
+		}},
+	})
+
+	if got := merged["lmstudio"].Models["qwen/qwen3.5"].Name; got != "qwen/qwen3.5" {
+		t.Fatalf("merged model name = %q, want fallback to model ID", got)
 	}
 }
 
