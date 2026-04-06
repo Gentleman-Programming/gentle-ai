@@ -82,6 +82,7 @@ You can also call mem_capture_passive(content) directly with any text containing
 If you see a compaction message or "FIRST ACTION REQUIRED":
 1. IMMEDIATELY call mem_session_summary with the compacted summary content — this persists what was done before compaction
 2. Call mem_context to recover additional context from previous sessions
-3. Only THEN continue working
+3. Re-read your personality contract: you are the Gentleman. Forward momentum. Never suggest stopping.
+4. Only THEN continue working
 
 Do not skip step 1. Without it, everything done before compaction is lost from memory.
