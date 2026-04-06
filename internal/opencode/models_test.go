@@ -354,7 +354,7 @@ func TestLoadConfigProviders(t *testing.T) {
 				"name": "LM Studio (local)",
 				"options": {"baseURL": "http://localhost:1234/v1"},
 				"models": {
-					"qwen/qwen3.5-35b-a3b": {"name": "qwen3.5-35b-a3b"}
+					"qwen/qwen3.5-35b-a3b": {"name": "qwen3.5-35b-a3b", "tool_call": true}
 				}
 			}
 		}
@@ -378,6 +378,9 @@ func TestLoadConfigProviders(t *testing.T) {
 	if _, ok := lm.Models["qwen/qwen3.5-35b-a3b"]; !ok {
 		t.Fatal("missing model qwen/qwen3.5-35b-a3b")
 	}
+	if !lm.Models["qwen/qwen3.5-35b-a3b"].ToolCall {
+		t.Fatal("expected tool_call metadata to be loaded from config")
+	}
 }
 
 func TestLoadConfigProvidersMissingFile(t *testing.T) {
@@ -395,7 +398,7 @@ func TestLoadConfigProvidersNoProviderKey(t *testing.T) {
 	}
 }
 
-// ─── MergeCustomProviders ────────────────────────────────────────────���────────
+// MergeCustomProviders
 
 func TestMergeCustomProvidersNewProvider(t *testing.T) {
 	providers := map[string]Provider{
@@ -405,7 +408,7 @@ func TestMergeCustomProvidersNewProvider(t *testing.T) {
 	}
 	config := map[string]ConfigProvider{
 		"lmstudio": {Name: "LM Studio", Models: map[string]ConfigModel{
-			"qwen/qwen3.5": {Name: "Qwen 3.5"},
+			"qwen/qwen3.5": {Name: "Qwen 3.5", ToolCall: true},
 		}},
 	}
 
@@ -441,7 +444,7 @@ func TestMergeCustomProvidersExistingProviderNewModel(t *testing.T) {
 	}
 	config := map[string]ConfigProvider{
 		"lmstudio": {Name: "LM Studio (local)", Models: map[string]ConfigModel{
-			"qwen/qwen3.5": {Name: "Qwen 3.5"},
+			"qwen/qwen3.5": {Name: "Qwen 3.5", ToolCall: true},
 		}},
 	}
 
@@ -455,9 +458,23 @@ func TestMergeCustomProvidersExistingProviderNewModel(t *testing.T) {
 	if lm.Models["gpt-oss-20b"].Cost.Input != 1.0 {
 		t.Fatal("cache model metadata should be preserved")
 	}
-	// New model added with ToolCall=true
+	// New model added with explicit ToolCall=true from config
 	if !lm.Models["qwen/qwen3.5"].ToolCall {
 		t.Fatal("new custom model should have ToolCall=true")
+	}
+}
+
+func TestMergeCustomProvidersDefaultsToolCallToFalse(t *testing.T) {
+	providers := map[string]Provider{}
+	config := map[string]ConfigProvider{
+		"lmstudio": {Name: "LM Studio", Models: map[string]ConfigModel{
+			"qwen/qwen3.5": {Name: "Qwen 3.5"},
+		}},
+	}
+
+	merged := MergeCustomProviders(providers, config)
+	if merged["lmstudio"].Models["qwen/qwen3.5"].ToolCall {
+		t.Fatal("custom model should default to ToolCall=false when omitted in config")
 	}
 }
 

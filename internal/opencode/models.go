@@ -204,7 +204,8 @@ func FilterModelsForSDD(provider Provider) []Model {
 
 // ConfigModel represents a model entry in the opencode.json provider section.
 type ConfigModel struct {
-	Name string `json:"name"`
+	Name     string `json:"name"`
+	ToolCall bool   `json:"tool_call"`
 }
 
 // ConfigProvider represents a custom provider defined in opencode.json.
@@ -234,8 +235,9 @@ func LoadConfigProviders(path string) map[string]ConfigProvider {
 }
 
 // MergeCustomProviders merges custom providers from opencode.json into the cache-loaded
-// providers map. Custom models default to ToolCall=true. Cache models win on ID collision.
-// Returns a new map without mutating the input.
+// providers map. Custom models use the tool_call value from opencode.json, defaulting to false
+// when omitted. Cache models win on ID collision. Returns the original providers map unchanged
+// when config is empty; otherwise returns a merged copy without mutating the input.
 func MergeCustomProviders(providers map[string]Provider, config map[string]ConfigProvider) map[string]Provider {
 	if len(config) == 0 {
 		return providers
@@ -260,7 +262,7 @@ func MergeCustomProviders(providers map[string]Provider, config map[string]Confi
 		}
 		for mid, cm := range cp.Models {
 			if _, exists := existing.Models[mid]; !exists {
-				existing.Models[mid] = Model{ID: mid, Name: cm.Name, ToolCall: true}
+				existing.Models[mid] = Model{ID: mid, Name: cm.Name, ToolCall: cm.ToolCall}
 			}
 		}
 		merged[id] = existing
