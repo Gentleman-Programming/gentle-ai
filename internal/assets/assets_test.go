@@ -136,8 +136,8 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/commands) error = %v", err)
 	}
-	if len(commandEntries) != 9 {
-		t.Fatalf("opencode commands count = %d, want 9", len(commandEntries))
+	if len(commandEntries) != 10 {
+		t.Fatalf("opencode commands count = %d, want 10", len(commandEntries))
 	}
 
 	pluginEntries, err := FS.ReadDir("opencode/plugins")
