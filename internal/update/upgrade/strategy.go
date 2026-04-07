@@ -62,6 +62,8 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 		return goInstallUpgrade(ctx, r.Tool, r.LatestVersion)
 	case update.InstallBinary:
 		return binaryUpgrade(ctx, r, profile)
+	case update.InstallInstaller:
+		return installerUpgrade(ctx, r.Tool, r.ReleaseURL)
 	case update.InstallScript:
 		// GGA's install.sh expects to run from within a cloned repo — it references
 		// $SCRIPT_DIR/bin/gga and $SCRIPT_DIR/lib/*.sh. The generic scriptUpgrade
@@ -359,6 +361,48 @@ func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 	// For Linux/macOS binary installs: delegate to the download package.
 	return downloadAndReplace(ctx, r, profile)
 }
+
+// installerUpgrade launches the PowerShell installer (install.ps1) for gentle-ai on Windows.
+// This is used for the Windows self-replace workaround — the running process
+// exits immediately after launching the installer, which then replaces the binary.
+func installerUpgrade(ctx context.Context, tool update.ToolInfo, releaseURL string) error {
+	if runtime.GOOS != "windows" {
+		return fmt.Errorf("installer upgrade is only supported on Windows")
+	}
+
+	scriptURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/scripts/install.ps1", tool.Owner, tool.Repo)
+
+	cmd := execCommand(
+		"cmd",
+		"/C",
+		"start",
+		"",
+		"powershell",
+		"-NoProfile",
+		"-ExecutionPolicy", "Bypass",
+		"-Command",
+		fmt.Sprintf("irm '%s' | iex", scriptURL),
+	)
+
+	cmd.Stdin = nil
+
+	fmt.Printf("\nLaunching installer for %s...\n", tool.Name)
+	fmt.Println("gentle-ai will now exit so the installer can replace the binary.")
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start installer: %w", err)
+	}
+
+	// Mark that we need to exit after the spinner is handled by the caller.
+	// This allows the executor to call sp.Finish(true) before we actually exit.
+	NeedsExitAfterSuccess = true
+	return nil
+}
+
+// NeedsExitAfterSuccess is set by installerUpgrade when the upgrade succeeded
+// but requires the process to exit immediately (Windows self-replace pattern).
+// The executor should call sp.Finish(true) and then os.Exit(0) when this is true.
+var NeedsExitAfterSuccess = false
 
 // engramBinaryUpgrade downloads the latest engram binary using its dedicated
 // cross-platform downloader and adds the install directory to PATH.

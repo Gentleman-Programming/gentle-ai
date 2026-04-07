@@ -3,6 +3,7 @@ package upgrade
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,10 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 )
+
+var testWriter io.Writer = io.Discard
 
 // --- TestRunStrategy_BrewUpgrade ---
 
@@ -179,39 +181,85 @@ func TestRunStrategy_GoInstallFailure(t *testing.T) {
 	}
 }
 
-// --- TestRunStrategy_BinaryWindowsSelfUpdateSkipped ---
+// --- TestEffectiveMethod_GentleAIOnWindowsUsesInstaller ---
 
-// TestRunStrategy_BinaryWindowsSelfUpdateSkipped verifies that the Windows binary
-// self-replace for gentle-ai is NOT attempted in Phase 1 — it must return a
-// manual hint error, not execute.
-func TestRunStrategy_BinaryWindowsSelfUpdateSkipped(t *testing.T) {
-	origExecCommand := execCommand
-	t.Cleanup(func() { execCommand = origExecCommand })
-
-	execCalled := false
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		execCalled = true
-		return mockCmd("echo", "should not run")
-	}
-
-	r := update.UpdateResult{
-		Tool: update.ToolInfo{
-			Name:          "gentle-ai",
-			InstallMethod: update.InstallBinary,
+// TestEffectiveMethod_GentleAIOnWindowsUsesInstaller verifies that gentle-ai
+// on Windows uses InstallInstaller (auto-upgrade via PowerShell)
+func TestEffectiveMethod_GentleAIOnWindowsUsesInstaller(t *testing.T) {
+	tests := []struct {
+		name string
+		tool update.ToolInfo
+		want update.InstallMethod
+	}{
+		{
+			name: "binary becomes installer",
+			tool: update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
+			want: update.InstallInstaller,
 		},
-		LatestVersion: "1.5.0",
-		ReleaseURL:    "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.5.0",
+		{
+			name: "script becomes installer",
+			tool: update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallScript},
+			want: update.InstallInstaller,
+		},
+		{
+			name: "go-install becomes installer",
+			tool: update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallGoInstall},
+			want: update.InstallInstaller,
+		},
+		{
+			name: "installer stays installer",
+			tool: update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallInstaller},
+			want: update.InstallInstaller,
+		},
 	}
-	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
 
-	err := runStrategy(context.Background(), r, profile)
-	// Windows binary self-replace must return an error (manual hint) in Phase 1.
-	if err == nil {
-		t.Errorf("expected manual fallback error for Windows binary self-replace, got nil")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
+			method := effectiveMethod(tc.tool, profile)
+			if method != tc.want {
+				t.Errorf("effectiveMethod(%q) = %q, want %q", tc.tool.Name, method, tc.want)
+			}
+		})
+	}
+}
+
+// --- TestEffectiveMethod_NonGentleAIToolsOnWindowsUseBinary ---
+
+// TestEffectiveMethod_NonGentleAIToolsOnWindowsUseBinary verifies that tools
+// OTHER than gentle-ai on Windows still use their declared install method
+// (binary, script, etc.) - they don't get InstallInstaller.
+func TestEffectiveMethod_NonGentleAIToolsOnWindowsUseBinary(t *testing.T) {
+	tests := []struct {
+		name string
+		tool update.ToolInfo
+		want update.InstallMethod
+	}{
+		{
+			name: "engram uses binary",
+			tool: update.ToolInfo{Name: "engram", InstallMethod: update.InstallBinary},
+			want: update.InstallBinary,
+		},
+		{
+			name: "gga uses script",
+			tool: update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
+			want: update.InstallScript,
+		},
+		{
+			name: "unknown tool uses binary",
+			tool: update.ToolInfo{Name: "other", InstallMethod: update.InstallBinary},
+			want: update.InstallBinary,
+		},
 	}
 
-	if execCalled {
-		t.Errorf("exec should NOT be called for Windows binary self-replace in Phase 1")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
+			method := effectiveMethod(tc.tool, profile)
+			if method != tc.want {
+				t.Errorf("effectiveMethod(%q) = %q, want %q", tc.tool.Name, method, tc.want)
+			}
+		})
 	}
 }
 
