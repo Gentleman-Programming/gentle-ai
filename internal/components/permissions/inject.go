@@ -66,6 +66,14 @@ var geminiCLIOverlayJSON = []byte(`{
 }
 `)
 
+// qwenCodeOverlayJSON sets Qwen Code to "auto_edit" mode (auto-approve edits, manual approval for shell commands).
+var qwenCodeOverlayJSON = []byte(`{
+  "permissions": {
+    "defaultMode": "auto_edit"
+  }
+}
+`)
+
 // vscodeCopilotOverlayJSON enables auto-approve for VS Code Copilot chat tools.
 var vscodeCopilotOverlayJSON = []byte(`{
   "chat.tools.autoApprove": true
@@ -82,6 +90,8 @@ func agentOverlay(id model.AgentID) []byte {
 		return openCodeOverlayJSON
 	case model.AgentGeminiCLI:
 		return geminiCLIOverlayJSON
+	case model.AgentQwenCode:
+		return qwenCodeOverlayJSON
 	case model.AgentAntigravity:
 		// Antigravity manages permissions via IDE UI (Artifact Review Policy /
 		// Terminal Command Auto Execution). No injectable settings.json schema.

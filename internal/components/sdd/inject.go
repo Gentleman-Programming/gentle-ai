@@ -868,6 +868,8 @@ func sddOrchestratorAsset(agent model.AgentID) string {
 		return "windsurf/sdd-orchestrator.md"
 	case model.AgentCursor:
 		return "cursor/sdd-orchestrator.md"
+	case model.AgentQwenCode:
+		return "qwen/sdd-orchestrator.md"
 	default:
 		return "generic/sdd-orchestrator.md"
 	}

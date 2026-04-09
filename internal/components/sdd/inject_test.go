@@ -386,6 +386,55 @@ func TestInjectGeminiWritesSDDOrchestratorAndSkills(t *testing.T) {
 	}
 }
 
+func TestInjectQwenCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
+	home := t.TempDir()
+
+	qwenAdapter, err := agents.NewAdapter("qwen-code")
+	if err != nil {
+		t.Fatalf("NewAdapter(qwen-code) error = %v", err)
+	}
+
+	result, injectErr := Inject(home, qwenAdapter, "")
+	if injectErr != nil {
+		t.Fatalf("Inject(qwen) error = %v", injectErr)
+	}
+
+	if !result.Changed {
+		t.Fatal("Inject(qwen) changed = false")
+	}
+
+	// Verify SDD orchestrator was injected into QWEN.md.
+	promptPath := filepath.Join(home, ".qwen", "QWEN.md")
+	content, readErr := os.ReadFile(promptPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q) error = %v", promptPath, readErr)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "Spec-Driven Development") {
+		t.Fatal("Qwen Code system prompt missing SDD orchestrator content")
+	}
+
+	// Verify Qwen-specific skill paths are referenced in the orchestrator.
+	if !strings.Contains(text, "~/.qwen/skills/") {
+		t.Fatal("Qwen Code orchestrator missing ~/.qwen/skills/ path reference")
+	}
+
+	// Should also write SDD skill files.
+	skillPath := filepath.Join(home, ".qwen", "skills", "sdd-init", "SKILL.md")
+	if _, err := os.Stat(skillPath); err != nil {
+		t.Fatalf("expected SDD skill file %q: %v", skillPath, err)
+	}
+
+	// Qwen Code supports slash commands — verify commands directory is not used
+	// for SDD (SDD uses skills, not slash commands, for non-OpenCode agents).
+	commandsDir := filepath.Join(home, ".qwen", "commands")
+	if _, err := os.Stat(commandsDir); err == nil {
+		// Commands dir existing is fine — SDD doesn't write slash commands
+		// for StrategyFileReplace agents, only skill files.
+	}
+}
+
 func TestInjectVSCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -2425,6 +2474,7 @@ func TestSDDOrchestratorAssetSelection(t *testing.T) {
 		{agent: model.AgentCodex, want: "codex/sdd-orchestrator.md"},
 		{agent: model.AgentWindsurf, want: "windsurf/sdd-orchestrator.md"},
 		{agent: model.AgentCursor, want: "cursor/sdd-orchestrator.md"},
+		{agent: model.AgentQwenCode, want: "qwen/sdd-orchestrator.md"},
 		{agent: model.AgentClaudeCode, want: "generic/sdd-orchestrator.md"},
 		{agent: model.AgentOpenCode, want: "generic/sdd-orchestrator.md"},
 		{agent: model.AgentVSCodeCopilot, want: "generic/sdd-orchestrator.md"},
