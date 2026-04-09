@@ -1771,3 +1771,159 @@ func TestBuildSyncSelectionProfilesForwarded(t *testing.T) {
 		t.Errorf("Selection.Profiles[0].Name = %q, want %q", sel.Profiles[0].Name, "cheap")
 	}
 }
+
+// ─── Persist model assignments across sync runs ─────────────────────────────
+
+// TestRunSyncLoadsPersistedModelAssignments verifies that when state.json
+// contains model assignments and no CLI flags override them, RunSync populates
+// the selection with the persisted assignments rather than falling back to the
+// "balanced" preset defaults.
+func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	// Pre-seed state.json with model assignments from a previous install.
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"opencode"},
+		ClaudeModelAssignments: map[string]string{
+			"orchestrator": "opus",
+			"sdd-apply":    "sonnet",
+		},
+		ModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	// Run sync WITHOUT --claude-model or --model flags — assignments should
+	// come from persisted state.
+	result, err := RunSync([]string{"--agents", "opencode", "--sdd-mode", "single"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+
+	// Claude assignments must be loaded.
+	if got := result.Selection.ClaudeModelAssignments["orchestrator"]; got != "opus" {
+		t.Errorf("ClaudeModelAssignments[orchestrator] = %q, want %q", got, "opus")
+	}
+	if got := result.Selection.ClaudeModelAssignments["sdd-apply"]; got != "sonnet" {
+		t.Errorf("ClaudeModelAssignments[sdd-apply] = %q, want %q", got, "sonnet")
+	}
+
+	// OpenCode assignments must be loaded.
+	ma := result.Selection.ModelAssignments["sdd-init"]
+	if ma.ProviderID != "anthropic" || ma.ModelID != "claude-sonnet-4" {
+		t.Errorf("ModelAssignments[sdd-init] = %+v, want anthropic/claude-sonnet-4", ma)
+	}
+}
+
+// TestRunSyncDoesNotOverridePersistedAssignmentsOnSecondSync verifies the
+// full cycle: sync1 loads persisted assignments → sync2 still has them.
+// This is the core promise of the fix.
+func TestRunSyncDoesNotOverridePersistedAssignmentsOnSecondSync(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	// Seed state with assignments.
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"opencode"},
+		ClaudeModelAssignments: map[string]string{
+			"orchestrator": "opus",
+		},
+		ModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	// First sync — loads from state.
+	_, err = RunSync([]string{"--agents", "opencode", "--sdd-mode", "single"})
+	if err != nil {
+		t.Fatalf("RunSync(1) error = %v", err)
+	}
+
+	// Second sync — should still have the assignments.
+	result, err := RunSync([]string{"--agents", "opencode", "--sdd-mode", "single"})
+	if err != nil {
+		t.Fatalf("RunSync(2) error = %v", err)
+	}
+
+	if got := result.Selection.ClaudeModelAssignments["orchestrator"]; got != "opus" {
+		t.Errorf("After second sync: ClaudeModelAssignments[orchestrator] = %q, want %q", got, "opus")
+	}
+	ma := result.Selection.ModelAssignments["sdd-init"]
+	if ma.ProviderID != "anthropic" || ma.ModelID != "claude-sonnet-4" {
+		t.Errorf("After second sync: ModelAssignments[sdd-init] = %+v, want anthropic/claude-sonnet-4", ma)
+	}
+}
+
+// TestRunSyncWithNoPersistedAssignmentsDoesNotPanic verifies graceful behavior
+// when state.json has no model assignments (backward compat with old state).
+func TestRunSyncWithNoPersistedAssignmentsDoesNotPanic(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	// State with agents but NO model assignments (pre-feature state files).
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"opencode"},
+	})
+	if err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	result, err := RunSync([]string{"--agents", "opencode", "--sdd-mode", "single"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+
+	// Should work fine — empty maps, no panic.
+	if len(result.Selection.ClaudeModelAssignments) != 0 {
+		t.Errorf("expected empty ClaudeModelAssignments, got %v", result.Selection.ClaudeModelAssignments)
+	}
+}
