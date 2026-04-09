@@ -140,14 +140,18 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		return result, fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
 
-	// Persist the user's agent selection so that future `sync` runs target only
-	// the agents the user actually installed, not every IDE config dir on disk.
+	// Persist the user's agent selection and model assignments so that future
+	// `sync` runs target only the installed agents and preserve model choices.
 	agentIDs := make([]string, 0, len(input.Selection.Agents))
 	for _, a := range input.Selection.Agents {
 		agentIDs = append(agentIDs, string(a))
 	}
 	// Non-fatal: a state write failure must not break an otherwise successful install.
-	_ = state.Write(homeDir, agentIDs)
+	_ = state.Write(homeDir, state.InstallState{
+		InstalledAgents:        agentIDs,
+		ClaudeModelAssignments: claudeAliasesToStrings(input.Selection.ClaudeModelAssignments),
+		ModelAssignments:       modelAssignmentsToState(input.Selection.ModelAssignments),
+	})
 
 	return result, nil
 }
@@ -1055,4 +1059,30 @@ func (s noopStep) ID() string {
 
 func (s noopStep) Run() error {
 	return nil
+}
+
+// claudeAliasesToStrings converts a typed ClaudeModelAlias map to plain strings
+// for JSON serialisation in state.json.
+func claudeAliasesToStrings(m map[string]model.ClaudeModelAlias) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = string(v)
+	}
+	return out
+}
+
+// modelAssignmentsToState converts model.ModelAssignment maps to the
+// state-serialisable form.
+func modelAssignmentsToState(m map[string]model.ModelAssignment) map[string]state.ModelAssignmentState {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]state.ModelAssignmentState, len(m))
+	for k, v := range m {
+		out[k] = state.ModelAssignmentState{ProviderID: v.ProviderID, ModelID: v.ModelID}
+	}
+	return out
 }

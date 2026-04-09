@@ -12,7 +12,7 @@ func TestWriteAndRead(t *testing.T) {
 	home := t.TempDir()
 	agents := []string{"claude-code", "opencode"}
 
-	if err := Write(home, agents); err != nil {
+	if err := Write(home, InstallState{InstalledAgents: agents}); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -31,7 +31,7 @@ func TestWriteAndRead(t *testing.T) {
 func TestWriteCreatesStateDir(t *testing.T) {
 	home := t.TempDir()
 
-	if err := Write(home, []string{"opencode"}); err != nil {
+	if err := Write(home, InstallState{InstalledAgents: []string{"opencode"}}); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -87,11 +87,11 @@ func TestReadCorrupt(t *testing.T) {
 func TestWriteOverwrite(t *testing.T) {
 	home := t.TempDir()
 
-	if err := Write(home, []string{"claude-code"}); err != nil {
+	if err := Write(home, InstallState{InstalledAgents: []string{"claude-code"}}); err != nil {
 		t.Fatalf("Write() first error = %v", err)
 	}
 
-	if err := Write(home, []string{"opencode", "gemini-cli"}); err != nil {
+	if err := Write(home, InstallState{InstalledAgents: []string{"opencode", "gemini-cli"}}); err != nil {
 		t.Fatalf("Write() second error = %v", err)
 	}
 
@@ -110,7 +110,7 @@ func TestWriteOverwrite(t *testing.T) {
 func TestWriteEmptyAgents(t *testing.T) {
 	home := t.TempDir()
 
-	if err := Write(home, []string{}); err != nil {
+	if err := Write(home, InstallState{InstalledAgents: []string{}}); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -122,5 +122,68 @@ func TestWriteEmptyAgents(t *testing.T) {
 	// An empty slice round-trips as an empty slice (not nil).
 	if len(s.InstalledAgents) != 0 {
 		t.Errorf("InstalledAgents = %v, want empty", s.InstalledAgents)
+	}
+}
+
+// TestModelAssignmentsRoundTrip verifies that model assignments survive a write/read cycle.
+func TestModelAssignmentsRoundTrip(t *testing.T) {
+	home := t.TempDir()
+
+	want := InstallState{
+		InstalledAgents: []string{"claude-code"},
+		ClaudeModelAssignments: map[string]string{
+			"orchestrator": "opus",
+			"sdd-explore":  "sonnet",
+			"sdd-archive":  "haiku",
+		},
+		ModelAssignments: map[string]ModelAssignmentState{
+			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		},
+	}
+
+	if err := Write(home, want); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(got.ClaudeModelAssignments, want.ClaudeModelAssignments) {
+		t.Errorf("ClaudeModelAssignments = %v, want %v", got.ClaudeModelAssignments, want.ClaudeModelAssignments)
+	}
+	if !reflect.DeepEqual(got.ModelAssignments, want.ModelAssignments) {
+		t.Errorf("ModelAssignments = %v, want %v", got.ModelAssignments, want.ModelAssignments)
+	}
+}
+
+// TestBackwardCompatNoAssignments verifies that a state.json written before
+// model assignment support was added still reads correctly (fields are nil).
+func TestBackwardCompatNoAssignments(t *testing.T) {
+	home := t.TempDir()
+
+	// Simulate a legacy state file with only installed_agents.
+	if err := os.MkdirAll(filepath.Join(home, stateDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacy := []byte(`{"installed_agents":["claude-code"]}` + "\n")
+	if err := os.WriteFile(Path(home), legacy, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	s, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(s.InstalledAgents, []string{"claude-code"}) {
+		t.Errorf("InstalledAgents = %v, want [claude-code]", s.InstalledAgents)
+	}
+	if s.ClaudeModelAssignments != nil {
+		t.Errorf("ClaudeModelAssignments = %v, want nil", s.ClaudeModelAssignments)
+	}
+	if s.ModelAssignments != nil {
+		t.Errorf("ModelAssignments = %v, want nil", s.ModelAssignments)
 	}
 }

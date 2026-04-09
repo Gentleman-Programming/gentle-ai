@@ -1412,7 +1412,7 @@ func TestDiscoverAgentsUsesStateFileWhenPresent(t *testing.T) {
 
 	// Write state recording only opencode — even though we also create the
 	// claude-code config dir to simulate the IDE being installed on disk.
-	if err := state.Write(home, []string{"opencode"}); err != nil {
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}}); err != nil {
 		t.Fatalf("state.Write() error = %v", err)
 	}
 
@@ -1465,7 +1465,7 @@ func TestDiscoverAgentsFallsBackToFSDiscoveryWhenStateEmpty(t *testing.T) {
 	home := t.TempDir()
 
 	// Write state with zero agents.
-	if err := state.Write(home, []string{}); err != nil {
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{}}); err != nil {
 		t.Fatalf("state.Write() error = %v", err)
 	}
 
@@ -1495,7 +1495,7 @@ func TestDiscoverAgentsStateMultipleAgents(t *testing.T) {
 	home := t.TempDir()
 
 	agents := []string{"claude-code", "opencode", "gemini-cli"}
-	if err := state.Write(home, agents); err != nil {
+	if err := state.Write(home, state.InstallState{InstalledAgents: agents}); err != nil {
 		t.Fatalf("state.Write() error = %v", err)
 	}
 
