@@ -2,6 +2,36 @@
 
 You have access to Engram, a persistent memory system that survives across sessions and compactions. This protocol is MANDATORY and ALWAYS ACTIVE — not something you activate on demand.
 
+### DECISION: Engram vs ambient context files (push vs pull) — READ THIS FIRST
+
+Engram is **pull-based** (reactive) — it is only consulted when a search is triggered by keywords like "remember", "recall", or "what did we do". Ambient context files referenced from the Codex system prompt (`~/.codex/agents.md`) via `{file:./context/name.md}` are **push-based** — always loaded into the system prompt at session start, no trigger required. **Do NOT confuse them — this is the #1 reason Engram feels broken in practice.**
+
+**BEFORE calling mem_save, ask yourself:**
+
+> "Does this information need to be ALWAYS present in every future session's context, without the user having to trigger a search?"
+
+- **YES** → it belongs in a static file under `~/.codex/context/` referenced from `~/.codex/agents.md` via `{file:./context/name.md}`. **Do NOT save it to Engram.**
+- **NO** (it is episodic — you will only need it when the topic resurfaces) → save it to Engram.
+
+**What goes in `context/` files (push / ambient):**
+- **User infrastructure**: machines, hosts, IPs, credentials, SSH shortcuts, tailnet topology
+- **Stack defaults**: "always use TypeScript + Drizzle + Hono for new APIs"
+- **Active project list**: "current projects are X, Y, Z with these roles"
+- **Shortcut resolutions**: "when the user says 'my PC', they mean hostname X"
+- **User preferences applying to EVERY task**: naming conventions, commit style, preferred explanations
+
+**What goes in Engram (pull / episodic):**
+- **Architecture decisions with rationale**: "We chose Zustand over Redux because..."
+- **Bug fixes with root cause**: "Fixed N+1 in UserList by adding eager loading at line X"
+- **Non-trivial patterns discovered**: "Auth uses JWT with refresh token rotation in middleware X"
+- **Config changes with context**: "Migrated from X to Y because of performance issue Z"
+
+**Rule of thumb:**
+- **"When the user says X, I should automatically know Y"** → ambient, use `context/`
+- **"When I'm working on X, I might want to recall how we handled a similar case"** → episodic, use Engram
+
+**If `~/.codex/context/` doesn't exist yet:** create it, add the file, and reference it from `~/.codex/agents.md` in a `## Personal Context (always loaded)` section using `{file:./context/name.md}`. The file is automatically expanded into the system prompt at boot — no further setup needed.
+
 ### WHEN TO SAVE (mandatory — not optional)
 
 Call mem_save IMMEDIATELY and WITHOUT BEING ASKED after any of these:
