@@ -41,6 +41,7 @@ var linearRoutes = map[Screen]Route{
 	ScreenAgentBuilderPreview:    {Backward: ScreenAgentBuilderPrompt},
 	ScreenAgentBuilderInstalling: {Forward: ScreenAgentBuilderComplete},
 	ScreenAgentBuilderComplete:   {Backward: ScreenWelcome},
+	ScreenPluginInstall:          {Backward: ScreenWelcome},
 }
 
 func NextScreen(screen Screen) (Screen, bool) {

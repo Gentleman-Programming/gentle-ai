@@ -105,6 +105,11 @@ type AgentBuilderInstallDoneMsg struct {
 	Err     error
 }
 
+// PluginInstallDoneMsg is sent when the plugin installation goroutine completes.
+type PluginInstallDoneMsg struct {
+	Payload screens.PluginInstallPayload
+}
+
 // AgentBuilderState holds all transient state for the agent-builder TUI flow.
 type AgentBuilderState struct {
 	AvailableEngines []model.AgentID
@@ -192,6 +197,7 @@ const (
 	ScreenAgentBuilderPreview
 	ScreenAgentBuilderInstalling
 	ScreenAgentBuilderComplete
+	ScreenPluginInstall
 )
 
 type Model struct {
@@ -328,6 +334,9 @@ type Model struct {
 
 	// AgentBuilder holds the transient state for the agent-builder TUI flow.
 	AgentBuilder AgentBuilderState
+
+	// PluginInstallPayload holds the result of the last "Install OpenCode Plugin" run.
+	PluginInstallPayload screens.PluginInstallPayload
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -420,6 +429,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.AgentBuilder.InstallErr = nil
 			m.setScreen(ScreenAgentBuilderComplete)
 		}
+		return m, nil
+	case PluginInstallDoneMsg:
+		m.PluginInstallPayload = msg.Payload
+		m.setScreen(ScreenPluginInstall)
 		return m, nil
 	case StepProgressMsg:
 		return m.handleStepProgress(msg)
@@ -674,6 +687,8 @@ func (m Model) View() string {
 		return screens.RenderABInstalling(engineName, m.SpinnerFrame, m.AgentBuilder.InstallErr)
 	case ScreenAgentBuilderComplete:
 		return screens.RenderABComplete(m.AgentBuilder.Generated, m.AgentBuilder.InstallResults)
+	case ScreenPluginInstall:
+		return screens.RenderPluginInstall(m.PluginInstallPayload)
 	default:
 		return ""
 	}
@@ -942,6 +957,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.AgentBuilder.Textarea = ta
 			m.setScreen(ScreenAgentBuilderEngine)
 		case 6:
+			// "Install OpenCode Plugin" — always visible.
+			return m, m.startPluginInstall()
+		case 7:
 			if m.hasDetectedOpenCode() {
 				// "OpenCode SDD Profiles" (only shown when OpenCode is detected)
 				m.setScreen(ScreenProfiles)
@@ -949,7 +967,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				// "Manage backups"
 				m.setScreen(ScreenBackups)
 			}
-		case 7:
+		case 8:
 			if m.hasDetectedOpenCode() {
 				// "Manage backups"
 				m.setScreen(ScreenBackups)
@@ -957,7 +975,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				// "Quit"
 				return m, tea.Quit
 			}
-		case 8:
+		case 9:
 			// "Quit" (only reachable when showProfiles is true, so OpenCode is detected)
 			return m, tea.Quit
 		}
@@ -1593,6 +1611,8 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 	case ScreenAgentBuilderComplete:
 		m.setScreen(ScreenWelcome)
+	case ScreenPluginInstall:
+		m.setScreen(ScreenWelcome)
 	}
 
 	return m, nil
@@ -1699,6 +1719,28 @@ func (m Model) startSync(overrides *model.SyncOverrides) tea.Cmd {
 		}
 		filesChanged, err := syncFn(overrides)
 		return SyncDoneMsg{FilesChanged: filesChanged, Err: err}
+	}
+}
+
+// startPluginInstall runs the plugin-sdd-opencode installation in a goroutine
+// and sends PluginInstallDoneMsg when it completes.
+func (m Model) startPluginInstall() tea.Cmd {
+	return func() tea.Msg {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return PluginInstallDoneMsg{Payload: screens.PluginInstallPayload{
+				Err: fmt.Errorf("resolve home directory: %w", err),
+			}}
+		}
+		result, err := sdd.InstallSddPlugin(homeDir)
+		if err != nil {
+			return PluginInstallDoneMsg{Payload: screens.PluginInstallPayload{Err: err}}
+		}
+		return PluginInstallDoneMsg{Payload: screens.PluginInstallPayload{
+			FilesChanged:     result.FilesChanged,
+			AlreadyInstalled: result.AlreadyInstalled,
+			PackageWarning:   result.PackageWarning,
+		}}
 	}
 }
 

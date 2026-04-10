@@ -66,25 +66,25 @@ func TestWelcomeOptions_WithProfiles_CountOne(t *testing.T) {
 	}
 }
 
-// TestWelcomeOptions_OptionCount_WithoutProfiles verifies 8 options when showProfiles=false
+// TestWelcomeOptions_OptionCount_WithoutProfiles verifies 9 options when showProfiles=false
 // and hasEngines=true (agent option visible).
 func TestWelcomeOptions_OptionCount_WithoutProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, false, 0, true)
 	// Expected: Start installation, Upgrade tools, Sync configs, Upgrade + Sync,
-	// Configure models, Create your own Agent, Manage backups, Quit = 8
-	want := 8
+	// Configure models, Create your own Agent, Install OpenCode Plugin, Manage backups, Quit = 9
+	want := 9
 	if len(opts) != want {
 		t.Errorf("WelcomeOptions(showProfiles=false, hasEngines=true) = %d options, want %d; opts: %v", len(opts), want, opts)
 	}
 }
 
-// TestWelcomeOptions_OptionCount_WithProfiles verifies 9 options when showProfiles=true
+// TestWelcomeOptions_OptionCount_WithProfiles verifies 10 options when showProfiles=true
 // and hasEngines=true.
 func TestWelcomeOptions_OptionCount_WithProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true, 2, true)
 	// Expected: Start installation, Upgrade tools, Sync configs, Upgrade + Sync,
-	// Configure models, Create your own Agent, OpenCode SDD Profiles (2), Manage backups, Quit = 9
-	want := 9
+	// Configure models, Create your own Agent, Install OpenCode Plugin, OpenCode SDD Profiles (2), Manage backups, Quit = 10
+	want := 10
 	if len(opts) != want {
 		t.Errorf("WelcomeOptions(showProfiles=true, hasEngines=true) = %d options, want %d; opts: %v", len(opts), want, opts)
 	}
@@ -105,17 +105,22 @@ func TestWelcomeOptions_NoEngines_ShowsDisabledLabel(t *testing.T) {
 	}
 }
 
-// TestWelcomeOptions_ProfilesInsertedBeforeManageBackups verifies the ordering:
-// profiles option sits between "Create your own Agent" and "Manage backups".
-func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
+// TestWelcomeOptions_PluginAndProfilesOrdering verifies the ordering:
+// install plugin sits after "Create your own Agent", profiles after that,
+// and then "Manage backups".
+func TestWelcomeOptions_PluginAndProfilesOrdering(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true, 1, true)
 
 	agentIdx := -1
+	pluginIdx := -1
 	profilesIdx := -1
 	manageBackupsIdx := -1
 	for i, opt := range opts {
 		if strings.HasPrefix(opt, "Create your own Agent") {
 			agentIdx = i
+		}
+		if opt == "Install OpenCode Plugin" {
+			pluginIdx = i
 		}
 		if strings.HasPrefix(opt, "OpenCode SDD Profiles") {
 			profilesIdx = i
@@ -128,6 +133,9 @@ func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 	if agentIdx < 0 {
 		t.Fatal("option 'Create your own Agent' not found")
 	}
+	if pluginIdx < 0 {
+		t.Fatal("option 'Install OpenCode Plugin' not found")
+	}
 	if profilesIdx < 0 {
 		t.Fatal("option 'OpenCode SDD Profiles' not found")
 	}
@@ -135,9 +143,13 @@ func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 		t.Fatal("option 'Manage backups' not found")
 	}
 
-	if profilesIdx != agentIdx+1 {
-		t.Errorf("profiles option at index %d, expected %d (right after 'Create your own Agent' at %d)",
-			profilesIdx, agentIdx+1, agentIdx)
+	if pluginIdx != agentIdx+1 {
+		t.Errorf("plugin option at index %d, expected %d (right after 'Create your own Agent' at %d)",
+			pluginIdx, agentIdx+1, agentIdx)
+	}
+	if profilesIdx != pluginIdx+1 {
+		t.Errorf("profiles option at index %d, expected %d (right after plugin at %d)",
+			profilesIdx, pluginIdx+1, pluginIdx)
 	}
 	if manageBackupsIdx != profilesIdx+1 {
 		t.Errorf("'Manage backups' at index %d, expected %d (right after profiles at %d)",
