@@ -46,6 +46,9 @@ func (r *TermuxResolver) Resolve(path string) string {
 	if strings.HasPrefix(path, "/etc") {
 		return filepath.Join(r.Prefix, "etc", strings.TrimPrefix(path, "/etc"))
 	}
+	if strings.HasPrefix(path, "/tmp") {
+		return filepath.Join(r.Prefix, "tmp", strings.TrimPrefix(path, "/tmp"))
+	}
 
 	return path
 }
