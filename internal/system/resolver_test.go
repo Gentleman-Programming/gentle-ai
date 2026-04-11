@@ -55,6 +55,11 @@ func TestTermuxResolver_Resolve(t *testing.T) {
 			want: "/data/data/com.termux/files/usr/etc/os-release",
 		},
 		{
+			name: "resolves /tmp path to prefix",
+			path: "/tmp/some-file",
+			want: "/data/data/com.termux/files/usr/tmp/some-file",
+		},
+		{
 			name: "leaves non-standard paths alone",
 			path: "/home/user/test.txt",
 			want: "/home/user/test.txt",

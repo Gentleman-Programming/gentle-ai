@@ -11,6 +11,8 @@ func TestIsSupportedOS(t *testing.T) {
 		{name: "darwin is supported", goos: "darwin", want: true},
 		{name: "linux is supported", goos: "linux", want: true},
 		{name: "windows is supported", goos: "windows", want: true},
+		{name: "android is supported", goos: "android", want: true},
+		{name: "freebsd is not supported", goos: "freebsd", want: false},
 	}
 
 	for _, tc := range tests {
@@ -70,6 +72,22 @@ func TestDetectFromInputsMarksUbuntuSupported(t *testing.T) {
 
 	if result.System.Profile.PackageManager != "apt" {
 		t.Fatalf("expected apt package manager, got %q", result.System.Profile.PackageManager)
+	}
+}
+
+func TestDetectFromInputsMarksAndroidSupported(t *testing.T) {
+	result := detectFromInputs("android", "arm64", "/bin/bash", "", nil, nil)
+
+	if !result.System.Supported {
+		t.Fatalf("expected android to be supported")
+	}
+
+	if result.System.Profile.LinuxDistro != LinuxDistroTermux {
+		t.Fatalf("expected termux distro, got %q", result.System.Profile.LinuxDistro)
+	}
+
+	if result.System.Profile.PackageManager != "apt" {
+		t.Fatalf("expected apt package manager for android, got %q", result.System.Profile.PackageManager)
 	}
 }
 
