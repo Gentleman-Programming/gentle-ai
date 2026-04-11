@@ -169,6 +169,11 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			wantDistro: LinuxDistroFedora,
 		},
 		{
+			name:       "termux",
+			osRelease:  "ID=termux\n",
+			wantDistro: LinuxDistroTermux,
+		},
+		{
 			name:       "empty os-release",
 			osRelease:  "",
 			wantDistro: LinuxDistroUnknown,

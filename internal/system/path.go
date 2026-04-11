@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+var pathGOOS = runtime.GOOS
+
 // AddToUserPath adds a directory to the Windows user PATH persistently.
 // Uses PowerShell to modify the user-scoped environment variable in the registry,
 // which survives terminal restarts without requiring admin privileges.
@@ -17,9 +19,18 @@ import (
 // to the current process PATH). This is safe to call on all platforms since the
 // binary is cross-compiled — build tags are NOT used.
 func AddToUserPath(dir string) error {
-	if runtime.GOOS != "windows" {
+	if pathGOOS != "windows" {
 		// Still add to the current process PATH on non-Windows (harmless for callers).
-		return addToProcessPath(dir)
+		if err := addToProcessPath(dir); err != nil {
+			return err
+		}
+
+		// Handle Termux persistence
+		if isTermux() {
+			return persistPathTermux(dir)
+		}
+
+		return nil
 	}
 
 	// Check whether dir is already present in PATH (case-insensitive on Windows).
@@ -76,4 +87,39 @@ func addToProcessPath(dir string) error {
 		return os.Setenv("PATH", dir)
 	}
 	return os.Setenv("PATH", dir+string(os.PathListSeparator)+currentPath)
+}
+
+func isTermux() bool {
+	return os.Getenv("TERMUX_VERSION") != ""
+}
+
+func persistPathTermux(dir string) error {
+	home := os.Getenv("HOME")
+	if home == "" {
+		return fmt.Errorf("HOME environment variable not set")
+	}
+
+	shell := os.Getenv("SHELL")
+	var rcFile string
+	if strings.Contains(shell, "zsh") {
+		rcFile = filepath.Join(home, ".zshrc")
+	} else {
+		rcFile = filepath.Join(home, ".bashrc")
+	}
+
+	// Check if already present in file
+	content, _ := os.ReadFile(rcFile)
+	exportCmd := fmt.Sprintf("\nexport PATH=\"%s:$PATH\"\n", dir)
+	if strings.Contains(string(content), dir) {
+		return nil
+	}
+
+	f, err := os.OpenFile(rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = f.WriteString(exportCmd)
+	return err
 }

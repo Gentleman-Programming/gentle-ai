@@ -51,7 +51,7 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 	case update.InstallBrew:
 		return brewUpgrade(ctx, r.Tool.Name)
 	case update.InstallGoInstall:
-		return goInstallUpgrade(ctx, r.Tool, r.LatestVersion)
+		return goInstallUpgrade(ctx, r.Tool, r.LatestVersion, profile)
 	case update.InstallBinary:
 		return binaryUpgrade(ctx, r, profile)
 	case update.InstallScript:
@@ -94,14 +94,24 @@ func brewUpgrade(ctx context.Context, toolName string) error {
 }
 
 // goInstallUpgrade runs `go install <importPath>@v<version>`.
-func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion string) error {
+func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion string, profile system.PlatformProfile) error {
 	if tool.GoImportPath == "" {
 		return fmt.Errorf("upgrade %q: GoImportPath is empty — cannot run go install", tool.Name)
 	}
 
 	// Pin to the exact release version.
 	target := fmt.Sprintf("%s@v%s", tool.GoImportPath, latestVersion)
-	cmd := execCommand("go", "install", target)
+	
+	args := []string{"install"}
+	// Android requires Position Independent Executables (PIE).
+	// Detect via profile.LinuxDistro == "termux" or GOOS=android.
+	// Since PlatformProfile.OS is "linux" for Termux, we check LinuxDistro.
+	if profile.LinuxDistro == system.LinuxDistroTermux || runtime.GOOS == "android" {
+		args = append(args, "-ldflags=-extldflags=-pie")
+	}
+	args = append(args, target)
+
+	cmd := execCommand("go", args...)
 	cmd.Stdin = nil
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, string(out))

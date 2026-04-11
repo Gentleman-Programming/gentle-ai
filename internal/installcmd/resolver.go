@@ -74,15 +74,32 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 		return nil, fmt.Errorf("dependency name is required")
 	}
 
+	sudo := "sudo"
+	if profile.LinuxDistro == system.LinuxDistroTermux {
+		sudo = ""
+	}
+
 	switch profile.PackageManager {
 	case "brew":
 		return CommandSequence{{"brew", "install", dependency}}, nil
 	case "apt":
-		return CommandSequence{{"sudo", "apt-get", "install", "-y", dependency}}, nil
+		cmd := []string{"apt-get", "install", "-y", dependency}
+		if sudo != "" {
+			cmd = append([]string{sudo}, cmd...)
+		}
+		return CommandSequence{cmd}, nil
 	case "pacman":
-		return CommandSequence{{"sudo", "pacman", "-S", "--noconfirm", dependency}}, nil
+		cmd := []string{"pacman", "-S", "--noconfirm", dependency}
+		if sudo != "" {
+			cmd = append([]string{sudo}, cmd...)
+		}
+		return CommandSequence{cmd}, nil
 	case "dnf":
-		return CommandSequence{{"sudo", "dnf", "install", "-y", dependency}}, nil
+		cmd := []string{"dnf", "install", "-y", dependency}
+		if sudo != "" {
+			cmd = append([]string{sudo}, cmd...)
+		}
+		return CommandSequence{cmd}, nil
 	case "winget":
 		return CommandSequence{{"winget", "install", "--id", dependency, "-e", "--accept-source-agreements", "--accept-package-agreements"}}, nil
 	default:
@@ -125,6 +142,8 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 // - darwin: brew tap + brew install (via Gentleman-Programming/homebrew-tap)
 // - linux: git clone + install.sh (GGA is a pure Bash project, NOT a Go module)
 func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) {
+	resolver := system.NewResolverForDistro(profile.LinuxDistro)
+
 	switch profile.PackageManager {
 	case "brew":
 		return CommandSequence{
@@ -132,7 +151,7 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 			{"brew", "reinstall", "gga"},
 		}, nil
 	case "apt", "pacman", "dnf":
-		const tmpDir = "/tmp/gentleman-guardian-angel"
+		tmpDir := resolver.Resolve("/tmp/gentleman-guardian-angel")
 		return CommandSequence{
 			{"rm", "-rf", tmpDir},
 			{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tmpDir},

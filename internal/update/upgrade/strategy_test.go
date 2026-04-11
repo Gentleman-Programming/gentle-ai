@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -84,6 +85,48 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 	wantArg0, wantArg1 := "install", "github.com/Gentleman-Programming/engram/cmd/engram@v0.4.0"
 	if len(gotArgs) < 2 || gotArgs[0] != wantArg0 || gotArgs[1] != wantArg1 {
 		t.Errorf("exec args = %v, want [%s %s]", gotArgs, wantArg0, wantArg1)
+	}
+}
+
+func TestRunStrategy_GoInstallAndroidPIE(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	var gotArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "go" {
+			gotArgs = args
+		}
+		// Use "go version" as a fast, valid command that exists in test environments.
+		return exec.Command("go", "version")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "engram",
+			InstallMethod: update.InstallGoInstall,
+			GoImportPath:  "github.com/Gentleman-Programming/engram/cmd/engram",
+		},
+		LatestVersion: "0.4.0",
+	}
+	// Simulate Android/Termux environment
+	profile := system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroTermux}
+
+	err := runStrategy(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("runStrategy: %v", err)
+	}
+
+	// RED: Should contain -ldflags="-extldflags=-pie"
+	foundPIE := false
+	for _, arg := range gotArgs {
+		if strings.Contains(arg, "-extldflags=-pie") {
+			foundPIE = true
+			break
+		}
+	}
+	if !foundPIE {
+		t.Errorf("expected PIE flags in go install args for Android, got: %v", gotArgs)
 	}
 }
 
@@ -326,7 +369,7 @@ func TestBrewUpgrade_RunsUpdateBeforeUpgrade(t *testing.T) {
 		if name == "brew" && len(args) > 0 {
 			callOrder = append(callOrder, args[0]) // "update" or "upgrade"
 		}
-		return exec.Command("echo", "ok")
+		return exec.Command("go", "version")
 	}
 
 	err := brewUpgrade(context.Background(), "gentle-ai")
@@ -453,7 +496,7 @@ func TestRunStrategy_ScriptUpgradeSuccess(t *testing.T) {
 		if name == "bash" && len(args) >= 2 && args[0] == "-c" {
 			gotScriptContent = args[1]
 		}
-		return exec.Command("echo", "ok")
+		return exec.Command("go", "version")
 	}
 
 	r := update.UpdateResult{
@@ -570,7 +613,7 @@ func TestGGAScriptUpgradeUsesGitClone(t *testing.T) {
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		calls = append(calls, call{name: name, args: args})
-		return exec.Command("echo", "ok")
+		return exec.Command("go", "version")
 	}
 
 	r := update.UpdateResult{
@@ -689,7 +732,7 @@ func TestRunStrategy_GGAUsesGitClone(t *testing.T) {
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		calls = append(calls, call{name: name, args: args})
-		return exec.Command("echo", "ok")
+		return exec.Command("go", "version")
 	}
 
 	r := update.UpdateResult{

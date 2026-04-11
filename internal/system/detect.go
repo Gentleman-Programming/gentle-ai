@@ -30,6 +30,7 @@ const (
 	LinuxDistroDebian  = "debian"
 	LinuxDistroArch    = "arch"
 	LinuxDistroFedora  = "fedora"
+	LinuxDistroTermux  = "termux"
 )
 
 type DetectionResult struct {
@@ -133,7 +134,7 @@ func resolvePlatformProfile(goos, linuxOSRelease string, tools map[string]ToolSt
 		}
 
 		switch distro {
-		case LinuxDistroUbuntu, LinuxDistroDebian:
+		case LinuxDistroUbuntu, LinuxDistroDebian, LinuxDistroTermux:
 			profile.PackageManager = "apt"
 			profile.Supported = true
 		case LinuxDistroArch:
@@ -196,6 +197,10 @@ func detectLinuxDistro(linuxOSRelease string) string {
 
 	if isFedoraLike(id, idLike) {
 		return LinuxDistroFedora
+	}
+
+	if id == LinuxDistroTermux {
+		return LinuxDistroTermux
 	}
 
 	return LinuxDistroUnknown
