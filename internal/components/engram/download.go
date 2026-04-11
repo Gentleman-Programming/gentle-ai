@@ -84,7 +84,8 @@ func DownloadLatestBinary(profile system.PlatformProfile) (string, error) {
 func installViaGo(profile system.PlatformProfile) (string, error) {
 	// Use go install to compile from source.
 	// We use @latest to get the latest version as a compatible fallback.
-	cmd := exec.Command("go", "install", "github.com/Gentleman-Programming/engram/cmd/engram@latest")
+	// Android (Bionic libc) requires Position Independent Executables (PIE).
+	cmd := exec.Command("go", "install", "-ldflags=-extldflags=-pie", "github.com/Gentleman-Programming/engram/cmd/engram@latest")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("go install engram failed: %w (output: %s)", err, string(out))
 	}
