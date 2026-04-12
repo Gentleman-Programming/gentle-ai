@@ -9,11 +9,11 @@ import (
 
 // PluginInstallPayload holds everything the plugin install result screen needs.
 type PluginInstallPayload struct {
-	// FilesChanged is the number of files written during installation.
+	// FilesChanged is the number of files written or removed during installation sync.
 	FilesChanged int
 	// AlreadyInstalled is true when the plugin was already present and up to date.
 	AlreadyInstalled bool
-	// PackageWarning is non-empty when package.json is missing required deps.
+	// PackageWarning is non-empty only for exceptional package.json read/write/validation issues.
 	PackageWarning string
 	// Err is non-nil when the installation failed.
 	Err error

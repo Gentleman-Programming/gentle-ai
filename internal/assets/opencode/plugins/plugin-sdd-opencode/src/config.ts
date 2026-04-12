@@ -14,7 +14,6 @@ export type Paths = {
   configRoot: string;
   profilesDir: string;
   configPath: string;
-  backupPath: string;
 };
 
 export function resolvePaths(): Paths {
@@ -26,7 +25,6 @@ export function resolvePaths(): Paths {
     configRoot,
     profilesDir: path.join(configRoot, "profiles"),
     configPath: path.join(configRoot, "opencode.json"),
-    backupPath: path.join(configRoot, "opencode.json.bak"),
   };
 }
 

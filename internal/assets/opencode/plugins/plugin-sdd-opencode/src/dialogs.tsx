@@ -248,7 +248,7 @@ export function showProfileList(api: any) {
   if (files.length === 0) {
     api.ui.toast({
       title: "No Profiles",
-      message: "No profiles starting with 'sdd-' found.",
+      message: "No .json profiles found in ~/.config/opencode/profiles.",
       variant: "warning",
     });
     showProfilesMenuFn(api);

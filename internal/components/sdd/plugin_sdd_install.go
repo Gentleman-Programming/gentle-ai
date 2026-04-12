@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
@@ -25,8 +26,7 @@ const tuiJSONSchema = "https://opencode.ai/tui.json"
 // opencodePackageRequirements lists the dependencies that must be present in
 // ~/.config/opencode/package.json for the plugin to load correctly.
 var opencodePackageRequirements = map[string]string{
-	"@opencode-ai/plugin":    "1.4.2",
-	"unique-names-generator": "^4.7.1",
+	"@opencode-ai/plugin": "1.4.2",
 }
 
 // opencodePluginMinVersion is the minimum supported version for the runtime
@@ -35,14 +35,15 @@ const opencodePluginMinVersion = "1.4.2"
 
 // PluginInstallResult holds the outcome of InstallSddPlugin.
 type PluginInstallResult struct {
-	// FilesChanged is the number of files that were created or updated.
+	// FilesChanged is the number of files that were created, updated, or removed.
 	FilesChanged int
 	// AlreadyInstalled is true when the plugin was already present and
 	// tui.json already registered it — nothing was written.
 	AlreadyInstalled bool
 	// PackageWarning is non-empty when ~/.config/opencode/package.json is
-	// missing a required dependency. The plugin is still installed but the
-	// user should run `bun install` (or npm install) in that directory.
+	// not readable/writable or cannot be validated.
+	// In the normal path this remains empty because OpenCode resolves plugin
+	// dependency installation automatically.
 	PackageWarning string
 }
 
@@ -73,10 +74,11 @@ func InstallSddPlugin(homeDir string) (PluginInstallResult, error) {
 		filesChanged++
 	}
 
-	// 3. Ensure package.json has required deps — non-fatal, produces a warning only.
+	// 3. Ensure package.json has required deps — non-fatal, warning only on
+	// exceptional read/write/parse failures.
 	warning := ensureOpencodePackageJSON(opencodeDir)
 
-	alreadyInstalled := filesChanged == 0 && !tuiChanged
+	alreadyInstalled := filesChanged == 0
 	return PluginInstallResult{
 		FilesChanged:     filesChanged,
 		AlreadyInstalled: alreadyInstalled,
@@ -84,20 +86,14 @@ func InstallSddPlugin(homeDir string) (PluginInstallResult, error) {
 	}, nil
 }
 
-// copyEmbeddedPlugin removes any existing plugin directory at destDir and
-// copies all files from the embedded asset tree fresh. This ensures stale
-// files from a previous version are never left behind.
-// Returns the number of files written.
+// copyEmbeddedPlugin synchronizes embedded plugin files into destDir.
+// It is idempotent: unchanged files are not rewritten.
+// Stale files from previous plugin versions are removed after sync.
+// Returns the number of filesystem changes (writes + stale file removals).
 func copyEmbeddedPlugin(destDir string) (int, error) {
-	// Remove existing directory so stale files from older versions are cleaned up.
-	if _, err := os.Stat(destDir); err == nil {
-		if err := os.RemoveAll(destDir); err != nil {
-			return 0, fmt.Errorf("remove existing plugin directory %q: %w", destDir, err)
-		}
-	}
-
 	assetRoot := "opencode/plugins/" + pluginSddDirName
 	changed := 0
+	expected := map[string]struct{}{}
 
 	err := fs.WalkDir(assets.FS, assetRoot, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -112,6 +108,7 @@ func copyEmbeddedPlugin(destDir string) (int, error) {
 		if err != nil {
 			return fmt.Errorf("resolve relative path %q: %w", path, err)
 		}
+		expected[filepath.ToSlash(filepath.Clean(rel))] = struct{}{}
 
 		content, err := assets.Read(path)
 		if err != nil {
@@ -130,6 +127,51 @@ func copyEmbeddedPlugin(destDir string) (int, error) {
 	})
 	if err != nil {
 		return 0, err
+	}
+
+	// Remove stale files that are no longer part of embedded assets.
+	if _, err := os.Stat(destDir); err == nil {
+		dirs := []string{}
+		err = filepath.WalkDir(destDir, func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+
+			if d.IsDir() {
+				dirs = append(dirs, path)
+				return nil
+			}
+
+			rel, err := filepath.Rel(destDir, path)
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(filepath.Clean(rel))
+
+			if _, ok := expected[rel]; ok {
+				return nil
+			}
+
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("remove stale plugin file %q: %w", path, err)
+			}
+			changed++
+			return nil
+		})
+		if err != nil {
+			return 0, err
+		}
+
+		// Try to remove now-empty stale directories bottom-up.
+		sort.Slice(dirs, func(i, j int) bool {
+			return len(dirs[i]) > len(dirs[j])
+		})
+		for _, dir := range dirs {
+			if filepath.Clean(dir) == filepath.Clean(destDir) {
+				continue
+			}
+			_ = os.Remove(dir)
+		}
 	}
 
 	return changed, nil
@@ -228,7 +270,7 @@ type opencodePackageJSON struct {
 // If the file does not exist it is created with the required deps.
 // Existing entries with equal or newer versions are left untouched.
 // Returns a non-empty warning string only when the file could not be written
-// and the caller should inform the user to run `bun install` manually.
+// or validated; the normal successful path returns empty warning.
 func ensureOpencodePackageJSON(opencodeDir string) string {
 	pkgPath := filepath.Join(opencodeDir, "package.json")
 
@@ -289,38 +331,15 @@ func ensureOpencodePackageJSON(opencodeDir string) string {
 	if err != nil {
 		return fmt.Sprintf(
 			"Could not write ~/.config/opencode/package.json: %v\n"+
-				"Run manually: cd %s && bun add %s",
-			err, opencodeDir, joinDeps(added),
+				"OpenCode usually installs plugin dependencies automatically. "+
+				"If the plugin fails to load, run `bun install` (or `npm install`) in %s.",
+			err, opencodeDir,
 		)
 	}
 
-	if result.Changed {
-		actions := []string{}
-		if len(added) > 0 {
-			actions = append(actions, "added missing deps: "+joinDeps(added))
-		}
-		if len(updated) > 0 {
-			actions = append(actions, "updated deps to minimum supported version: "+joinDeps(updated))
-		}
-		return fmt.Sprintf(
-			"Updated package.json (%s)\n"+
-				"Run: cd %s && bun install",
-			joinDeps(actions), opencodeDir,
-		)
-	}
+	_ = result
 
 	return ""
-}
-
-func joinDeps(deps []string) string {
-	result := ""
-	for i, d := range deps {
-		if i > 0 {
-			result += " "
-		}
-		result += d
-	}
-	return result
 }
 
 func isVersionBelowMinimum(current, minimum string) bool {

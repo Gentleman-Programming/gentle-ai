@@ -91,7 +91,7 @@ The user selects **"Create New SDD Profile"** and enters a name. The plugin read
 }
 ```
 
-A backup of the current `opencode.json` is written to `opencode.json.bak` before any activation operation.
+No backup file is generated during profile activation. The plugin applies model changes via OpenCode runtime API and avoids direct `opencode.json` rewrites from plugin code.
 
 ---
 
@@ -152,10 +152,10 @@ The flow:
 2. Fetch the current global config via `api.client.global.config.get`
 3. Merge the profile models into the config (only the `agent[name].model` fields are touched — all other agent config is preserved)
 4. Push the updated config via `api.client.global.config.update`
-5. Persist the result to `opencode.json` on disk
+5. Let OpenCode runtime persistence handle storage (no plugin-side `opencode.json` rewrite)
 6. Update the in-plugin state so the status badge reflects the new active model immediately
 
-If the API call fails, the user receives an error toast and the disk file is not modified.
+If the API call fails, the user receives an error toast and no plugin-side file mutation is attempted.
 
 ---
 
@@ -267,9 +267,9 @@ Minimal additions to existing files:
 InstallSddPlugin(homeDir)
   │
   ├── 1. copyEmbeddedPlugin
-  │       └── os.RemoveAll(destDir)           — clean stale files from previous versions
-  │       └── fs.WalkDir(assets.FS, ...)      — copy from embed.FS recursively
+  │       └── fs.WalkDir(assets.FS, ...)      — sync from embed.FS recursively
   │       └── filemerge.WriteFileAtomic(...)  — atomic write per file
+  │       └── remove stale files              — cleanup entries not present in embedded assets
   │
   ├── 2. writeTUIJSON
   │       └── os.ReadFile(tui.json)           — read existing if present
@@ -311,15 +311,16 @@ An early version treated `plugin` as `[]string` and destroyed tuple entries on r
   - missing → added with the required version
   - existing and `@opencode-ai/plugin < 1.4.2` → upgraded to `1.4.2`
   - existing and `≥ 1.4.2` or non-semver (e.g. `latest`) → left untouched
-- `unique-names-generator`: added if missing, never upgraded (patch-range versions are user-managed)
+
+No additional plugin package dependencies are injected beyond `@opencode-ai/plugin`.
 
 **Semver comparison:** Implemented via `parseSemverPrefix` — strips `^`, `~`, `v`, `>`, `<`, `=` prefixes and compares major.minor.patch numerically. Non-semver values (e.g. `latest`, workspace aliases) return `false` for `isVersionBelowMinimum` and are preserved as-is.
 
-#### Plugin directory — always reinstall clean
+#### Plugin directory — idempotent sync with stale-file cleanup
 
-**Why:** If the user runs "Install OpenCode Plugin" again after a `gga` update, the plugin may have new or renamed files. Leaving the old directory would result in stale files that could conflict.
+**Why:** The installer must be idempotent. Re-running it should not rewrite unchanged files, but still needs to clean stale files from older plugin versions.
 
-**Fix:** `os.RemoveAll(destDir)` is called before copying, guaranteeing a clean state on every install.
+**Fix:** Embedded files are synchronized with atomic writes (only changed files are rewritten), and stale files not present in embedded assets are removed after sync.
 
 #### opencode.json — not touched
 
@@ -331,15 +332,15 @@ The installer does **not** modify `~/.config/opencode/opencode.json`. That file 
 |-----------|----------------|
 | Only `sdd-*` agents managed by plugin | `isManagedSddAgent(name)` checks `name.startsWith("sdd-")` |
 | Profile files isolated | Profiles live in `~/.config/opencode/profiles/`, separate from `opencode.json` |
-| Activation never silently fails | API errors surface as error toasts; disk write only after successful API call |
+| Activation never silently fails | API errors surface as error toasts |
 | Memory operations are project-scoped | SQLite query always filters by resolved project name |
 | Soft delete is safe | Memory ID validated as positive integer; `UPDATE` only touches `deleted_at` and `updated_at` |
-| Backup before any write | `opencode.json.bak` written before profile activation |
+| No plugin-side backup/rewrite | Activation does not create `opencode.json.bak` and does not rewrite `opencode.json` |
 | tui.json entries never duplicated | `pluginEntryExists` checks string and tuple-style entries |
 | tui.json unrelated fields preserved | Parsed as `map[string]json.RawMessage`, only `plugin` and `$schema` are updated |
 | package.json unrelated fields preserved | Parsed as `map[string]json.RawMessage`, only `dependencies` is touched |
 | Plugin API version enforced | `@opencode-ai/plugin < 1.4.2` is upgraded; newer versions preserved |
-| Plugin dir always clean on reinstall | `os.RemoveAll(destDir)` before copy |
+| Plugin dir stays clean on reinstall | Idempotent sync + stale-file cleanup |
 | opencode.json never modified | Installer does not read or write opencode.json |
 | Cross-OS compatibility | `os.UserHomeDir()` + `filepath.Join()` — no OS-specific paths |
 
@@ -364,7 +365,6 @@ The installer does **not** modify `~/.config/opencode/opencode.json`. That file 
 | `~/.config/opencode/tui.json` | Plugin registry (OpenCode reads this on startup) |
 | `~/.config/opencode/package.json` | Runtime Node dependencies for all plugins |
 | `~/.config/opencode/opencode.json` | Global config — **not touched by installer** |
-| `~/.config/opencode/opencode.json.bak` | Pre-activation backup (written by plugin at runtime) |
 | `~/.config/opencode/profiles/*.json` | Named profile files |
 | `~/.engram/engram.db` | Engram SQLite database |
 
@@ -378,18 +378,18 @@ The integration is fully implemented. The installer exposes a new **"Install Ope
 
 ### What the installer does
 
-1. **Copies the plugin** — `internal/assets/opencode/plugins/plugin-sdd-opencode/` (embedded via `//go:embed all:opencode`) is extracted to `~/.config/opencode/plugins/plugin-sdd-opencode/`. If the directory already exists it is removed first (clean reinstall).
+1. **Copies the plugin** — `internal/assets/opencode/plugins/plugin-sdd-opencode/` (embedded via `//go:embed all:opencode`) is synchronized to `~/.config/opencode/plugins/plugin-sdd-opencode/` idempotently (unchanged files are preserved, stale files are removed).
 
 2. **Registers in `tui.json`** — adds `"./plugins/plugin-sdd-opencode/"` to the `plugin` array. Existing entries (including complex tuple-style entries) are preserved. The entry is not duplicated if already present.
 
-3. **Ensures `package.json` deps** — adds `@opencode-ai/plugin` and `unique-names-generator` if missing. Upgrades `@opencode-ai/plugin` to `1.4.2` if the installed version is older. All other fields and dependencies are left untouched.
+3. **Ensures `package.json` deps** — ensures `@opencode-ai/plugin` is present, upgrading to `1.4.2` only if installed version is older. All other fields and dependencies are left untouched.
 
-4. **Shows result screen** — success, already-installed, or error, with a reminder to run `bun install` if `package.json` was modified.
+4. **Shows result screen** — success, already-installed, or error. In normal flow no manual install step is required because OpenCode resolves plugin dependencies automatically. If `package.json` cannot be read/written, installer shows an exceptional warning with fallback guidance.
 
 ### Prerequisites
 
 - `sqlite3` must be available on the system (present by default on macOS; on Linux it may need to be installed)
-- `bun` or `npm` must be available to install Node dependencies after the plugin is copied
+- `bun`/`npm` are only needed as fallback for exceptional cases where dependency resolution fails outside the normal OpenCode-managed flow
 
 ---
 
@@ -398,7 +398,7 @@ The integration is fully implemented. The installer exposes a new **"Install Ope
 ### In Scope
 
 - Plugin installation from `gga` welcome menu
-- Plugin directory clean reinstall (removes stale files)
+- Idempotent plugin directory sync (preserves unchanged files and removes stale files)
 - `tui.json` registration with full preservation of existing entries
 - `package.json` dependency enforcement with semver minimum check
 - Profile creation from current config
@@ -426,7 +426,7 @@ The integration is fully implemented. The installer exposes a new **"Install Ope
 | Criterion | Target | Status |
 |-----------|--------|--------|
 | Plugin installation from gga menu | ✅ Always | ✅ Verified |
-| Clean reinstall removes stale files | ✅ Always | ✅ Verified |
+| Idempotent sync preserves unchanged files and removes stale files | ✅ Always | ✅ Verified |
 | tui.json preserves existing entries | ✅ String and tuple-style | ✅ Verified |
 | tui.json no duplicate plugin entries | ✅ Always | ✅ Verified |
 | package.json preserves unrelated fields | ✅ Always | ✅ Verified |

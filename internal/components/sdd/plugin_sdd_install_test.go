@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestInstallSddPlugin_ReinstallsAndUpdatesConfig(t *testing.T) {
+func TestInstallSddPlugin_IdempotentAndUpdatesConfig(t *testing.T) {
 	home := t.TempDir()
 	opencodeDir := filepath.Join(home, ".config", "opencode")
 	pluginDir := filepath.Join(opencodeDir, "plugins", pluginSddDirName)
@@ -117,6 +117,12 @@ func TestInstallSddPlugin_ReinstallsAndUpdatesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second InstallSddPlugin(): %v", err)
 	}
+	if result2.FilesChanged != 0 {
+		t.Fatalf("second install FilesChanged = %d, want 0", result2.FilesChanged)
+	}
+	if !result2.AlreadyInstalled {
+		t.Fatal("second install AlreadyInstalled = false, want true")
+	}
 	if result2.PackageWarning != "" {
 		t.Fatalf("second install PackageWarning = %q, want empty", result2.PackageWarning)
 	}
@@ -157,14 +163,14 @@ func TestInstallSddPlugin_ReinstallsAndUpdatesConfig(t *testing.T) {
 	if got := deps["@opencode-ai/plugin"]; got != "9.9.9" {
 		t.Fatalf("@opencode-ai/plugin version = %v, want preserved existing version 9.9.9", got)
 	}
-	if got := deps["unique-names-generator"]; got != "^4.7.1" {
-		t.Fatalf("unique-names-generator version = %v, want ^4.7.1", got)
+	if _, exists := deps["unique-names-generator"]; exists {
+		t.Fatal("dependencies should not include unique-names-generator")
 	}
 	if _, ok := pkg["scripts"]; !ok {
 		t.Fatal("package.json scripts field was lost during rewrite")
 	}
-	if result.PackageWarning == "" {
-		t.Fatal("PackageWarning = empty, want bun install warning after adding missing deps")
+	if result.PackageWarning != "" {
+		t.Fatalf("PackageWarning = %q, want empty in normal successful flow", result.PackageWarning)
 	}
 
 }
@@ -177,8 +183,8 @@ func TestEnsureOpencodePackageJSON_CreatesFileWhenMissing(t *testing.T) {
 	}
 
 	warning := ensureOpencodePackageJSON(opencodeDir)
-	if warning == "" {
-		t.Fatal("ensureOpencodePackageJSON() warning = empty, want bun install hint")
+	if warning != "" {
+		t.Fatalf("ensureOpencodePackageJSON() warning = %q, want empty in successful flow", warning)
 	}
 
 	pkgBytes, err := os.ReadFile(filepath.Join(opencodeDir, "package.json"))
@@ -192,8 +198,8 @@ func TestEnsureOpencodePackageJSON_CreatesFileWhenMissing(t *testing.T) {
 	if got := pkg.Dependencies["@opencode-ai/plugin"]; got != "1.4.2" {
 		t.Fatalf("@opencode-ai/plugin = %q, want %q", got, "1.4.2")
 	}
-	if got := pkg.Dependencies["unique-names-generator"]; got != "^4.7.1" {
-		t.Fatalf("unique-names-generator = %q, want %q", got, "^4.7.1")
+	if _, exists := pkg.Dependencies["unique-names-generator"]; exists {
+		t.Fatal("dependencies should not include unique-names-generator")
 	}
 }
 
@@ -216,8 +222,8 @@ func TestEnsureOpencodePackageJSON_UpdatesPluginToMinimumWhenTooOld(t *testing.T
 	}
 
 	warning := ensureOpencodePackageJSON(opencodeDir)
-	if warning == "" {
-		t.Fatal("ensureOpencodePackageJSON() warning = empty, want install hint")
+	if warning != "" {
+		t.Fatalf("ensureOpencodePackageJSON() warning = %q, want empty in successful flow", warning)
 	}
 
 	pkgBytes, err := os.ReadFile(filepath.Join(opencodeDir, "package.json"))
@@ -242,8 +248,7 @@ func TestEnsureOpencodePackageJSON_PreservesNewerPluginVersion(t *testing.T) {
 
 	initialPackage := map[string]any{
 		"dependencies": map[string]string{
-			"@opencode-ai/plugin":    "1.9.0",
-			"unique-names-generator": "^4.7.1",
+			"@opencode-ai/plugin": "1.9.0",
 		},
 	}
 	initialPackageBytes, _ := json.MarshalIndent(initialPackage, "", "  ")
@@ -299,8 +304,8 @@ func TestEnsureOpencodePackageJSON_PreservesUnrelatedFields(t *testing.T) {
 	}
 
 	warning := ensureOpencodePackageJSON(opencodeDir)
-	if warning == "" {
-		t.Fatal("ensureOpencodePackageJSON() warning = empty, want install hint after adding missing dep")
+	if warning != "" {
+		t.Fatalf("ensureOpencodePackageJSON() warning = %q, want empty in successful flow", warning)
 	}
 
 	pkgBytes, err := os.ReadFile(filepath.Join(opencodeDir, "package.json"))
@@ -339,8 +344,8 @@ func TestEnsureOpencodePackageJSON_PreservesUnrelatedFields(t *testing.T) {
 	if got := deps["@opencode-ai/plugin"]; got != "1.4.2" {
 		t.Fatalf("dependencies[@opencode-ai/plugin] = %v, want %q", got, "1.4.2")
 	}
-	if got := deps["unique-names-generator"]; got != "^4.7.1" {
-		t.Fatalf("dependencies[unique-names-generator] = %v, want %q", got, "^4.7.1")
+	if _, exists := deps["unique-names-generator"]; exists {
+		t.Fatal("dependencies should not include unique-names-generator")
 	}
 }
 
