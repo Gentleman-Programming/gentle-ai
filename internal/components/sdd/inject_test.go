@@ -425,14 +425,6 @@ func TestInjectQwenCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
 	if _, err := os.Stat(skillPath); err != nil {
 		t.Fatalf("expected SDD skill file %q: %v", skillPath, err)
 	}
-
-	// Qwen Code supports slash commands — verify commands directory is not used
-	// for SDD (SDD uses skills, not slash commands, for non-OpenCode agents).
-	commandsDir := filepath.Join(home, ".qwen", "commands")
-	if _, err := os.Stat(commandsDir); err == nil {
-		// Commands dir existing is fine — SDD doesn't write slash commands
-		// for StrategyFileReplace agents, only skill files.
-	}
 }
 
 func TestInjectVSCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
