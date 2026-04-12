@@ -852,6 +852,46 @@ test_oc_context7_injection() {
     fi
 }
 
+# --- Category 4: Qwen Code injection ---
+
+test_qwen_engram_injection() {
+    log_test "Qwen: engram injection (settings.json)"
+    cleanup_test_env
+
+    if $BINARY install --agent qwen --component engram --persona neutral 2>&1; then
+        local settings="$HOME/.config/Antigravity/User/settings.json"
+        assert_file_exists "$settings" "Qwen settings.json"
+        assert_file_contains "$settings" '"mcp"' "Has mcp key"
+        assert_file_contains "$settings" '"engram"' "Has engram MCP entry"
+        assert_file_contains "$settings" '"command"' "Has command key"
+        assert_valid_json "$settings" "settings.json is valid JSON"
+    else
+        log_fail "Qwen engram install command failed"
+    fi
+}
+
+test_qwen_engram_idempotency() {
+    log_test "Qwen: engram injection is idempotent"
+    cleanup_test_env
+
+    # First run
+    $BINARY install --agent qwen --component engram --persona neutral > /dev/null 2>&1
+    local settings="$HOME/.config/Antigravity/User/settings.json"
+    local checksum1
+    checksum1=$(md5sum "$settings" | cut -d' ' -f1)
+
+    # Second run
+    $BINARY install --agent qwen --component engram --persona neutral > /dev/null 2>&1
+    local checksum2
+    checksum2=$(md5sum "$settings" | cut -d' ' -f1)
+
+    if [ "$checksum1" = "$checksum2" ]; then
+        log_pass "Qwen settings.json is idempotent"
+    else
+        log_fail "Qwen settings.json changed between runs"
+    fi
+}
+
 test_oc_permissions_injection() {
     log_test "OpenCode: permissions injection"
     cleanup_test_env
@@ -2162,6 +2202,10 @@ if [ "${RUN_FULL_E2E:-0}" = "1" ]; then
 
     # Category 12: Codex context7 by-design skip
     test_codex_context7_not_in_toml
+
+    # Category 13: Qwen integration
+    test_qwen_engram_injection
+    test_qwen_engram_idempotency
 else
     log_skip "Tier 2 tests (set RUN_FULL_E2E=1 to enable)"
 fi
