@@ -1339,25 +1339,30 @@ test_idempotent_full_claude() {
     $BINARY install --agent claude-code --component sdd --component persona --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1 || true
     local first_md_hash
     first_md_hash=$(md5sum "$HOME/.claude/CLAUDE.md" 2>/dev/null | cut -d' ' -f1)
-    local first_settings_hash
-    first_settings_hash=$(md5sum "$HOME/.claude/settings.json" 2>/dev/null | cut -d' ' -f1)
+    # Snapshot settings.json for semantic comparison (engram setup may reorder
+    # top-level keys on re-run — see engram binary's non-deterministic map
+    # serialization). Byte-exact hashing would false-fail on harmless reorder.
+    cp "$HOME/.claude/settings.json" /tmp/gai_settings_run1.json 2>/dev/null || true
 
     $BINARY install --agent claude-code --component sdd --component persona --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1 || true
     local second_md_hash
     second_md_hash=$(md5sum "$HOME/.claude/CLAUDE.md" 2>/dev/null | cut -d' ' -f1)
-    local second_settings_hash
-    second_settings_hash=$(md5sum "$HOME/.claude/settings.json" 2>/dev/null | cut -d' ' -f1)
 
     if [ "$first_md_hash" = "$second_md_hash" ] && [ -n "$first_md_hash" ]; then
         log_pass "Idempotent: CLAUDE.md identical after 2 runs"
     else
         log_fail "CLAUDE.md changed between runs"
     fi
-    if [ "$first_settings_hash" = "$second_settings_hash" ] && [ -n "$first_settings_hash" ]; then
-        log_pass "Idempotent: settings.json identical after 2 runs"
+    if [ -f /tmp/gai_settings_run1.json ] && [ -f "$HOME/.claude/settings.json" ]; then
+        if json_files_equal /tmp/gai_settings_run1.json "$HOME/.claude/settings.json"; then
+            log_pass "Idempotent: settings.json identical after 2 runs"
+        else
+            log_fail "settings.json changed between runs"
+        fi
     else
-        log_fail "settings.json changed between runs"
+        log_fail "settings.json missing after install"
     fi
+    rm -f /tmp/gai_settings_run1.json
 }
 
 # --- Category 8: Edge cases ---

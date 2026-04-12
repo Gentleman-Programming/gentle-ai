@@ -227,6 +227,25 @@ assert_valid_json() {
     fi
 }
 
+# json_files_equal FILE1 FILE2
+# Returns 0 if both files contain semantically equal JSON (key order ignored).
+# Uses python3 for comparison (available in CI and most dev machines).
+json_files_equal() {
+    local file1="$1"
+    local file2="$2"
+    if ! command -v python3 >/dev/null 2>&1; then
+        # Fallback: byte comparison (may false-fail on key reorder)
+        [ "$(md5sum "$file1" | cut -d' ' -f1)" = "$(md5sum "$file2" | cut -d' ' -f1)" ]
+        return $?
+    fi
+    python3 -c "
+import json, sys
+a = json.load(open(sys.argv[1]))
+b = json.load(open(sys.argv[2]))
+sys.exit(0 if a == b else 1)
+" "$file1" "$file2"
+}
+
 # assert_file_count DIR PATTERN EXPECTED LABEL
 # Checks that the number of files matching glob PATTERN in DIR equals EXPECTED.
 assert_file_count() {
