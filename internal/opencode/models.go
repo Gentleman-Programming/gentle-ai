@@ -257,6 +257,9 @@ func MergeCustomProviders(providers map[string]Provider, config map[string]Confi
 	}
 
 	for id, cp := range config {
+		// Provider-level collision: when a provider ID already exists in the cache,
+		// we keep the cache's Name/Env and only merge in the config's models below.
+		// The config's provider Name is silently ignored in that case.
 		existing, ok := merged[id]
 		if !ok {
 			existing = Provider{ID: id, Name: cp.Name, Models: make(map[string]Model, len(cp.Models))}

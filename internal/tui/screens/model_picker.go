@@ -79,17 +79,17 @@ func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState
 		sddModels[id] = opencode.FilterModelsForSDD(providers[id])
 	}
 
+	var configWarning string
+	if configErr != nil {
+		configWarning = fmt.Sprintf("Could not load custom providers from opencode.json: %v", configErr)
+	}
+
 	return ModelPickerState{
-		Providers:    providers,
-		AvailableIDs: available,
-		SDDModels:    sddModels,
-		ConfigWarning: func() string {
-			if configErr != nil {
-				return fmt.Sprintf("Could not load custom providers from opencode.json: %v", configErr)
-			}
-			return ""
-		}(),
-		Mode: ModePhaseList,
+		Providers:     providers,
+		AvailableIDs:  available,
+		SDDModels:     sddModels,
+		ConfigWarning: configWarning,
+		Mode:          ModePhaseList,
 	}
 }
 
