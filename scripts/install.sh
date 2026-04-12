@@ -96,8 +96,9 @@ detect_platform() {
             if [ "$(uname -o 2>/dev/null)" = "Android" ] || [ -n "${TERMUX_VERSION:-}" ]; then
                 OS="android"
                 OS_LABEL="Android (Termux)"
-                # Note: 'android' is the canonical GOOS for Termux environments.
-                GORELEASER_OS="android"
+                # No GoReleaser assets exist for android — compilation from
+                # source via 'go install' is the only supported method.
+                GORELEASER_OS=""
             else
                 OS="linux"
                 OS_LABEL="Linux"
@@ -168,6 +169,12 @@ detect_install_method() {
             brew|go|binary) INSTALL_METHOD="$FORCE_METHOD" ;;
             *) fatal "Unknown install method: $FORCE_METHOD. Use: brew, go, or binary" ;;
         esac
+
+        # Android has no pre-built release assets — binary download is invalid.
+        if [ "${OS:-}" = "android" ] && [ "$INSTALL_METHOD" = "binary" ]; then
+            fatal "Binary download is not supported on Android (Termux). Pre-built glibc binaries are incompatible with Bionic libc. Use: --method go"
+        fi
+
         info "Using forced method: $INSTALL_METHOD"
         return
     fi
@@ -180,16 +187,18 @@ detect_install_method() {
     # go install is last resort because the Go module proxy can lag
     # behind new tags for up to 30 minutes, causing @latest to install
     # a stale version.
-    # Auto-detection priority:
-    # 1. Homebrew (macOS/Linux)
-    # 2. Go install (Mandatory for Android/Termux to ensure PIE compatibility)
-    # 3. Binary download (standard pre-built assets)
+    #
+    # Exception: on Android/Termux, go install is mandatory (no release
+    # assets exist and glibc binaries are incompatible with Bionic libc).
     if command -v brew &>/dev/null; then
         INSTALL_METHOD="brew"
         success "Homebrew found — will install via brew tap"
-    elif [ "${OS:-}" = "android" ] && command -v go &>/dev/null; then
-        # Android (Bionic libc) requires Position Independent Executables (PIE).
-        # We prefer 'go install' here to compile locally with correct flags.
+    elif [ "${OS:-}" = "android" ]; then
+        # Android (Bionic libc) requires Position Independent Executables.
+        # No pre-built release assets exist — source compilation is mandatory.
+        if ! command -v go &>/dev/null; then
+            fatal "Go is required to install on Android (Termux). Install it with: pkg install golang"
+        fi
         INSTALL_METHOD="go"
         success "Android (Termux) + Go detected — using 'go install' for PIE compatibility"
     else
@@ -300,6 +309,12 @@ get_latest_version() {
 
 install_binary() {
     step "Installing pre-built binary"
+
+    # Safety net: binary download requires a known GoReleaser OS target.
+    # Android has no release assets — this should never be reached, but guard anyway.
+    if [ -z "${GORELEASER_OS:-}" ]; then
+        fatal "No pre-built binary available for ${OS_LABEL}. Use 'go install' instead (--method go)."
+    fi
 
     get_latest_version
 
