@@ -30,7 +30,7 @@ var (
 	updateCheckAll      = update.CheckAll
 	updateCheckFiltered = update.CheckFiltered
 	upgradeExecute      = upgrade.Execute
-	selfUpdateRun       = selfUpdate
+	selfUpdateFn        = selfUpdate
 )
 
 func Run() error {
@@ -83,7 +83,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 	// Self-update: check for a newer gentle-ai release and apply it before
 	// CLI/TUI dispatch. Errors are non-fatal — logged and swallowed.
 	if !isExplicitUpdateFlow(args) {
-		if err := selfUpdateRun(context.Background(), Version, resolveProfile(), stdout); err != nil {
+		if err := selfUpdateFn(context.Background(), Version, resolveProfile(), stdout); err != nil {
 			_, _ = fmt.Fprintf(stdout, "Warning: self-update failed: %v\n", err)
 		}
 	}

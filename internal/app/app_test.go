@@ -474,15 +474,15 @@ func TestUnknownCommandSuggestsHelp(t *testing.T) {
 }
 
 func TestRunArgs_UpdateSkipsSelfUpdate(t *testing.T) {
-	origSelfUpdate := selfUpdateRun
+	origSelfUpdate := selfUpdateFn
 	origCheckAll := updateCheckAll
 	t.Cleanup(func() {
-		selfUpdateRun = origSelfUpdate
+		selfUpdateFn = origSelfUpdate
 		updateCheckAll = origCheckAll
 	})
 
 	selfUpdateCalled := 0
-	selfUpdateRun = func(context.Context, string, system.PlatformProfile, io.Writer) error {
+	selfUpdateFn = func(context.Context, string, system.PlatformProfile, io.Writer) error {
 		selfUpdateCalled++
 		return nil
 	}
@@ -509,17 +509,17 @@ func TestRunArgs_UpdateSkipsSelfUpdate(t *testing.T) {
 }
 
 func TestRunArgs_UpgradeSkipsSelfUpdate(t *testing.T) {
-	origSelfUpdate := selfUpdateRun
+	origSelfUpdate := selfUpdateFn
 	origCheckFiltered := updateCheckFiltered
 	origUpgradeExecute := upgradeExecute
 	t.Cleanup(func() {
-		selfUpdateRun = origSelfUpdate
+		selfUpdateFn = origSelfUpdate
 		updateCheckFiltered = origCheckFiltered
 		upgradeExecute = origUpgradeExecute
 	})
 
 	selfUpdateCalled := 0
-	selfUpdateRun = func(context.Context, string, system.PlatformProfile, io.Writer) error {
+	selfUpdateFn = func(context.Context, string, system.PlatformProfile, io.Writer) error {
 		selfUpdateCalled++
 		return nil
 	}
