@@ -90,7 +90,7 @@ function applyProfileModelsToConfig(currentConfig: any, profileModels: ProfileMo
 }
 
 export async function activateProfileFile(api: any, profilePath: string, profileName: string): Promise<any | null> {
-  const { configPath, backupPath } = resolvePaths();
+  const { configPath } = resolvePaths();
   try {
     const profileModels = readProfileModels(profilePath);
 
@@ -103,10 +103,17 @@ export async function activateProfileFile(api: any, profilePath: string, profile
       return;
     }
 
-    if (fs.existsSync(configPath)) fs.writeFileSync(backupPath, fs.readFileSync(configPath, "utf-8"));
-
-    const globalConfigResult = await api.client.global.config.get();
-    const currentConfig = globalConfigResult?.data || JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    // IMPORTANT:
+    // Use on-disk config as source-of-truth to preserve declarative links like
+    // {file:...}. Runtime `global.config.get()` may return resolved content,
+    // and sending that back can materialize/inline file contents.
+    let currentConfig: any;
+    if (fs.existsSync(configPath)) {
+      currentConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    } else {
+      const globalConfigResult = await api.client.global.config.get();
+      currentConfig = globalConfigResult?.data || {};
+    }
     const nextConfig = applyProfileModelsToConfig(currentConfig, profileModels);
 
     const result = await api.client.global.config.update({
@@ -115,9 +122,12 @@ export async function activateProfileFile(api: any, profilePath: string, profile
 
     if (result?.error) throw new Error(result.error.message || "No se pudo actualizar la config global runtime");
 
-    const updatedConfig = result?.data || nextConfig;
-    fs.writeFileSync(configPath, JSON.stringify(updatedConfig, null, 2));
-    return updatedConfig;
+    // IMPORTANT:
+    // Do NOT rewrite opencode.json from plugin-side after profile switch.
+    // The runtime config API is the source of truth for persistence/format.
+    // Rewriting here causes full-file churn (indent/style drift) and can
+    // materialize resolved/default fields that were not explicitly set.
+    return result?.data || nextConfig;
   } catch (err: any) {
     api.ui.toast({ title: "Activation Failed", message: err.message, variant: "error" });
     return null;
