@@ -68,6 +68,36 @@ func TestTermuxResolver_Resolve(t *testing.T) {
 			path: "local/bin/myapp",
 			want: "local/bin/myapp",
 		},
+		{
+			name: "does not rewrite /usrbin (no boundary)",
+			path: "/usrbin/tool",
+			want: "/usrbin/tool",
+		},
+		{
+			name: "does not rewrite /binary (no boundary)",
+			path: "/binary/file",
+			want: "/binary/file",
+		},
+		{
+			name: "does not rewrite /etcetera",
+			path: "/etcetera/conf",
+			want: "/etcetera/conf",
+		},
+		{
+			name: "does not rewrite /tmpfile",
+			path: "/tmpfile/data",
+			want: "/tmpfile/data",
+		},
+		{
+			name: "resolves exact /usr",
+			path: "/usr",
+			want: "/data/data/com.termux/files/usr",
+		},
+		{
+			name: "resolves exact /bin",
+			path: "/bin",
+			want: "/data/data/com.termux/files/usr/bin",
+		},
 	}
 
 	for _, tc := range tests {

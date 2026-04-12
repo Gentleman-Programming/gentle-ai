@@ -114,7 +114,7 @@ func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion s
 	cmd := execCommand("go", args...)
 	cmd.Stdin = nil
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("go install %s: %w (output: %s)", target, err, string(out))
+		return fmt.Errorf("go install %v: %w (output: %s)", args[1:], err, string(out))
 	}
 	return nil
 }

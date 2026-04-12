@@ -203,6 +203,8 @@ func engramAssetURL(baseURL, version, goos, goarch string) string {
 // for the given OS.
 //   - Linux/macOS: /usr/local/bin (fallback: ~/.local/bin if not writable)
 //   - Windows: %LOCALAPPDATA%\engram\bin
+//   - Android: ~/.local/bin (defensive — currently unused because installViaGo
+//     writes to GOBIN/GOPATH, but kept for future install-path unification).
 func engramInstallDir(goos string) string {
 	if goos == "windows" {
 		localAppData := os.Getenv("LOCALAPPDATA")

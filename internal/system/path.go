@@ -96,6 +96,12 @@ func isTermux() bool {
 }
 
 func persistPathTermux(dir string) error {
+	// Reject shell-unsafe characters to prevent rc file corruption.
+	// Only checks for characters that could cause injection in a POSIX shell context.
+	if strings.ContainsAny(dir, "`\"'$\n") {
+		return fmt.Errorf("refusing to write unsafe dir %q to rc file", dir)
+	}
+
 	home := os.Getenv("HOME")
 	if home == "" {
 		return fmt.Errorf("HOME environment variable not set")

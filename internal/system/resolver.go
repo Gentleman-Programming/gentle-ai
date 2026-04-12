@@ -36,17 +36,19 @@ func (r *TermuxResolver) Resolve(path string) string {
 		return path
 	}
 
-	// Handle /usr, /bin, /etc prefixes for Termux layout.
-	if strings.HasPrefix(path, "/usr") {
+	// Handle /usr, /bin, /etc, /tmp prefixes for Termux layout.
+	// Match exact directory boundaries to avoid rewriting unrelated paths
+	// like "/usrbin" or "/etcetera" (requires trailing slash or exact match).
+	if path == "/usr" || strings.HasPrefix(path, "/usr/") {
 		return filepath.Join(r.Prefix, strings.TrimPrefix(path, "/usr"))
 	}
-	if strings.HasPrefix(path, "/bin") {
+	if path == "/bin" || strings.HasPrefix(path, "/bin/") {
 		return filepath.Join(r.Prefix, "bin", strings.TrimPrefix(path, "/bin"))
 	}
-	if strings.HasPrefix(path, "/etc") {
+	if path == "/etc" || strings.HasPrefix(path, "/etc/") {
 		return filepath.Join(r.Prefix, "etc", strings.TrimPrefix(path, "/etc"))
 	}
-	if strings.HasPrefix(path, "/tmp") {
+	if path == "/tmp" || strings.HasPrefix(path, "/tmp/") {
 		return filepath.Join(r.Prefix, "tmp", strings.TrimPrefix(path, "/tmp"))
 	}
 

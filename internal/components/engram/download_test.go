@@ -198,6 +198,11 @@ func TestEngramInstallDir(t *testing.T) {
 			goos:       "darwin",
 			wantSubstr: "bin",
 		},
+		{
+			name:       "android returns ~/.local/bin",
+			goos:       "android",
+			wantSubstr: filepath.Join(".local", "bin"),
+		},
 	}
 
 	for _, tt := range tests {
