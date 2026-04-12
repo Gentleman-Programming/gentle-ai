@@ -53,18 +53,22 @@ The agent handles all the phases internally. You just review and approve at key 
 
 ---
 
-## Multi-mode SDD -- OpenCode Only
+## Multi-mode SDD (OpenCode SDD Profiles)
 
-Multi-mode lets you assign different AI models to different SDD phases -- for example, a powerful model for design and a faster one for implementation. This is an OpenCode-exclusive feature.
+Multi-mode lets you assign different AI models to different SDD phases -- for example, a powerful model for design and a faster one for implementation. This is an OpenCode-exclusive feature, managed through **SDD Profiles**.
 
 For **all other agents** (Claude Code, Cursor, Gemini CLI, VS Code Copilot), SDD runs in single-mode automatically. One model handles everything, and that works perfectly fine.
 
 If you want multi-mode in OpenCode:
 
 1. Connect your AI providers in OpenCode first
-2. Run the gentle-ai installer and select "multi" when prompted
+2. Create a profile via gentle-ai TUI ("OpenCode SDD Profiles") or CLI (`--profile` flag)
+3. The profile generates a custom orchestrator + sub-agents, each assigned to your chosen model
+4. In OpenCode, press **Tab** to switch between your default orchestrator and custom profiles
 
-If no providers are connected, you will only see single-mode as an option.
+You can create multiple profiles (e.g., "cheap" for experimentation, "premium" for production) and switch between them freely.
+
+**Full step-by-step guide**: [OpenCode SDD Profiles](opencode-profiles.md)
 
 ---
 

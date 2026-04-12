@@ -74,24 +74,31 @@ These are **not required** for basic usage. The SDD orchestrator runs `/sdd-init
 
 ## Install
 
-### Homebrew (macOS / Linux)
+### Recommended
 
 ```bash
+# macOS / Linux
 brew tap Gentleman-Programming/homebrew-tap
 brew install gentle-ai
+
+# Windows
+scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
+scoop install gentle-ai
 ```
 
-### Go install (any platform with Go 1.24+)
+<details>
+<summary><strong>Other install methods</strong> (Go install, PowerShell script, binary download)</summary>
+
+#### Go install (any platform with Go 1.24+)
 
 ```bash
 go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest
 ```
 
-### Scoop (Windows)
+#### Windows (PowerShell script)
 
 ```powershell
-scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
-scoop install gentle-ai
+irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
 ```
 
 **Migrating from PowerShell installer to Scoop?** Remove the old binary first:
@@ -101,19 +108,11 @@ Remove-Item "$env:LOCALAPPDATA\gentle-ai" -Recurse -Force
 # Then install via Scoop as shown above
 ```
 
-### Windows (PowerShell — alternative)
-
-```powershell
-# Option 1: PowerShell installer (downloads binary from GitHub Releases)
-irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
-
-# Option 2: Go install (requires Go 1.24+)
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest
-```
-
-### From releases
+#### From releases
 
 Download the binary for your platform from [GitHub Releases](https://github.com/Gentleman-Programming/gentle-ai/releases).
+
+</details>
 
 ---
 
@@ -125,11 +124,46 @@ See [Backup & Rollback Guide](docs/rollback.md) for details.
 
 ---
 
+## Key Features You Should Know About
+
+### OpenCode SDD Profiles
+
+Assign different AI models to different SDD phases -- a powerful model for design, a fast one for implementation, a cheap one for exploration. Create multiple profiles and switch between them with Tab in OpenCode.
+
+```bash
+# Via CLI
+gentle-ai sync --profile cheap:openrouter/qwen/qwen3-30b-a3b:free
+gentle-ai sync --profile-phase cheap:sdd-design:anthropic/claude-sonnet-4-20250514
+
+# Or via TUI: gentle-ai → "OpenCode SDD Profiles" → Create
+```
+
+After creating a profile, open OpenCode and press **Tab** to switch between `sdd-orchestrator` (default) and your custom profiles.
+
+**Full guide**: [OpenCode SDD Profiles](docs/opencode-profiles.md)
+
+### Engram (Persistent Memory)
+
+Your AI agent automatically remembers decisions, bugs, and context across sessions. You don't need to do anything -- but when you do:
+
+```bash
+engram projects list          # See all projects with memory counts
+engram projects consolidate   # Fix name drift ("my-app" vs "My-App")
+engram search "auth bug"      # Find a past decision from the terminal
+engram tui                    # Visual memory browser
+```
+
+**Full reference**: [Engram Commands](docs/engram.md)
+
+---
+
 ## Documentation
 
 | Topic | Description |
 |-------|-------------|
 | [Intended Usage](docs/intended-usage.md) | How gentle-ai is meant to be used — the mental model |
+| [OpenCode SDD Profiles](docs/opencode-profiles.md) | Create and manage per-phase model profiles for OpenCode |
+| [Engram Commands](docs/engram.md) | CLI commands, MCP tools, project management, team sharing |
 | [Agents](docs/agents.md) | Supported agents, feature matrix, config paths, and per-agent notes |
 | [Components, Skills & Presets](docs/components.md) | All components, GGA behavior, skill catalog, and preset definitions |
 | [Usage](docs/usage.md) | Persona modes, interactive TUI, CLI flags, and dependency management |
@@ -146,6 +180,15 @@ This project exists because of the community. See [CONTRIBUTORS.md](CONTRIBUTORS
 <a href="https://github.com/Gentleman-Programming/gentle-ai/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=Gentleman-Programming/gentle-ai" />
 </a>
+
+---
+
+## Next Steps
+
+- **Just installed?** Read [Intended Usage](docs/intended-usage.md) -- the one page that explains the mental model.
+- **Using OpenCode?** Set up [SDD Profiles](docs/opencode-profiles.md) to assign different models per phase.
+- **Want to share memory across machines?** Learn `engram sync` in the [Engram reference](docs/engram.md).
+- **Ready to contribute?** Check [CONTRIBUTING.md](CONTRIBUTING.md) and the [open issues](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3A%22status%3Aapproved%22).
 
 ---
 
