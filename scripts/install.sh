@@ -87,10 +87,24 @@ detect_platform() {
     uname_os="$(uname -s)"
     uname_arch="$(uname -m)"
 
+    # Distinguish between Standard Linux and Android/Termux.
+    # Termux provides a Unix-like environment on Android, but requires
+    # specific handling (PIE binaries, different path prefixes, no sudo).
     case "$uname_os" in
         Darwin) OS="darwin"; OS_LABEL="macOS"; GORELEASER_OS="darwin" ;;
-        Linux)  OS="linux";  OS_LABEL="Linux"; GORELEASER_OS="linux" ;;
-        *)      fatal "Unsupported OS: $uname_os. Only macOS and Linux are supported." ;;
+        Linux)
+            if [ "$(uname -o 2>/dev/null)" = "Android" ] || [ -n "${TERMUX_VERSION:-}" ]; then
+                OS="android"
+                OS_LABEL="Android (Termux)"
+                # Note: 'android' is the canonical GOOS for Termux environments.
+                GORELEASER_OS="android"
+            else
+                OS="linux"
+                OS_LABEL="Linux"
+                GORELEASER_OS="linux"
+            fi
+            ;;
+        *)      fatal "Unsupported OS: $uname_os. Supported: macOS, Linux, Android (Termux)." ;;
     esac
 
     case "$uname_arch" in
@@ -166,9 +180,18 @@ detect_install_method() {
     # go install is last resort because the Go module proxy can lag
     # behind new tags for up to 30 minutes, causing @latest to install
     # a stale version.
+    # Auto-detection priority:
+    # 1. Homebrew (macOS/Linux)
+    # 2. Go install (Mandatory for Android/Termux to ensure PIE compatibility)
+    # 3. Binary download (standard pre-built assets)
     if command -v brew &>/dev/null; then
         INSTALL_METHOD="brew"
         success "Homebrew found — will install via brew tap"
+    elif [ "${OS:-}" = "android" ] && command -v go &>/dev/null; then
+        # Android (Bionic libc) requires Position Independent Executables (PIE).
+        # We prefer 'go install' here to compile locally with correct flags.
+        INSTALL_METHOD="go"
+        success "Android (Termux) + Go detected — using 'go install' for PIE compatibility"
     else
         INSTALL_METHOD="binary"
         info "Will download pre-built binary from GitHub Releases"
@@ -216,8 +239,14 @@ install_go() {
 
     local go_package="github.com/${GITHUB_OWNER,,}/${GITHUB_REPO}/cmd/${BINARY_NAME}@latest"
 
-    info "Running: go install ${go_package}"
-    if ! go install "$go_package"; then
+    # Android (Bionic libc) requires Position Independent Executables (PIE).
+    local go_flags=()
+    if [ "${OS:-}" = "android" ]; then
+        go_flags=("-ldflags=-extldflags=-pie")
+    fi
+
+    info "Running: go install ${go_flags[*]} ${go_package}"
+    if ! go install "${go_flags[@]}" "$go_package"; then
         fatal "Failed to install via go install. Make sure Go is properly configured."
     fi
 
