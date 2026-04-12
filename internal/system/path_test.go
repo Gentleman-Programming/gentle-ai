@@ -107,7 +107,7 @@ func TestAddToUserPathInTermux(t *testing.T) {
 	
 	targetDir := filepath.Join(home, ".gentle-ai", "bin")
 	
-	// RED: This will currently do nothing or fail to persist in Termux
+	// Verify the Termux configuration is persisted for future shells.
 	err := AddToUserPath(targetDir)
 	if err != nil {
 		t.Fatalf("AddToUserPath returned unexpected error: %v", err)

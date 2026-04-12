@@ -11,13 +11,15 @@ import (
 
 var pathGOOS = runtime.GOOS
 
-// AddToUserPath adds a directory to the Windows user PATH persistently.
-// Uses PowerShell to modify the user-scoped environment variable in the registry,
-// which survives terminal restarts without requiring admin privileges.
+// AddToUserPath adds a directory to the user PATH persistently.
 //
-// On non-Windows platforms this is a no-op (returns nil immediately after adding
-// to the current process PATH). This is safe to call on all platforms since the
-// binary is cross-compiled — build tags are NOT used.
+// On Windows, it modifies the user-scoped PATH in the registry via PowerShell,
+// surviving terminal restarts without admin privileges.
+//
+// On non-Windows platforms, the directory is added to the current process PATH.
+// On Termux (Android), it is also persisted to ~/.bashrc or ~/.zshrc.
+//
+// This is safe to call on all platforms — build tags are NOT used.
 func AddToUserPath(dir string) error {
 	if pathGOOS != "windows" {
 		// Still add to the current process PATH on non-Windows (harmless for callers).
@@ -108,7 +110,10 @@ func persistPathTermux(dir string) error {
 	}
 
 	// Check if already present in file
-	content, _ := os.ReadFile(rcFile)
+	content, err := os.ReadFile(rcFile)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	exportCmd := fmt.Sprintf("\nexport PATH=\"%s:$PATH\"\n", dir)
 	if strings.Contains(string(content), dir) {
 		return nil

@@ -192,7 +192,9 @@ func engramAssetURL(baseURL, version, goos, goarch string) string {
 	if goos == "windows" {
 		ext = ".zip"
 	}
-	// On Android (Termux), use the Linux binary as it is compatible.
+	// On Android, map to "linux" for asset name resolution only.
+	// Note: glibc Linux binaries are NOT compatible with Android's Bionic libc.
+	// This mapping exists for URL construction; Android installs use installViaGo() instead.
 	if goos == "android" {
 		goos = "linux"
 	}
@@ -216,8 +218,13 @@ func engramInstallDir(goos string) string {
 	}
 
 	if goos == "android" {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, ".local", "bin")
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return filepath.Join(home, ".local", "bin")
+		}
+		if home := os.Getenv("HOME"); home != "" {
+			return filepath.Join(home, ".local", "bin")
+		}
+		return "/data/data/com.termux/files/home/.local/bin"
 	}
 
 	// Linux/macOS: try /usr/local/bin first.

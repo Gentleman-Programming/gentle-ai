@@ -117,7 +117,7 @@ func TestRunStrategy_GoInstallAndroidPIE(t *testing.T) {
 		t.Fatalf("runStrategy: %v", err)
 	}
 
-	// RED: Should contain -ldflags="-extldflags=-pie"
+	// Should contain -ldflags="-extldflags=-pie"
 	foundPIE := false
 	for _, arg := range gotArgs {
 		if strings.Contains(arg, "-extldflags=-pie") {

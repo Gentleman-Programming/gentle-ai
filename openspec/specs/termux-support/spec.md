@@ -9,7 +9,7 @@ Define the requirements for `gentle-ai` to operate correctly within the Termux e
 The system MUST identify when it is running inside Termux to apply the correct environment overrides.
 
 #### Scenario: Detect Termux environment
-- GIVEN the environment variable `TERMUX_VERSION` is set
+- GIVEN the target OS input `GOOS` is `android`
 - WHEN the system runs `detectFromInputs`
 - THEN the `PlatformProfile.LinuxDistro` SHALL be `termux`
 - AND `PlatformProfile.Supported` SHALL be `true`

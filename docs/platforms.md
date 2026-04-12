@@ -15,7 +15,7 @@
 
 Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, CentOS Stream, Rocky Linux, AlmaLinux, etc.). Termux is detected via the `TERMUX_VERSION` environment variable.
 
-Release binaries are built for `linux`, `darwin`, `android`, and `windows` on both `amd64` and `arm64`.
+Release binaries are built for `linux`, `darwin`, and `windows` on both `amd64` and `arm64`. Android (Termux) is supported via source compilation (`go install`) since pre-built glibc binaries are incompatible with Android's Bionic libc.
 
 ---
 

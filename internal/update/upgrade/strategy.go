@@ -104,8 +104,8 @@ func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion s
 	
 	args := []string{"install"}
 	// Android requires Position Independent Executables (PIE).
-	// Detect via profile.LinuxDistro == "termux" or GOOS=android.
-	// Since PlatformProfile.OS is "linux" for Termux, we check LinuxDistro.
+	// Detect via profile.LinuxDistro == "termux" (for linux + ID=termux) or
+	// GOOS == "android" (for native Android detection).
 	if profile.LinuxDistro == system.LinuxDistroTermux || runtime.GOOS == "android" {
 		args = append(args, "-ldflags=-extldflags=-pie")
 	}

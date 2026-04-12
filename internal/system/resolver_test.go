@@ -2,7 +2,6 @@ package system
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 )
@@ -82,12 +81,8 @@ func TestTermuxResolver_Resolve(t *testing.T) {
 }
 
 func TestNewResolverForDistro(t *testing.T) {
-	// Mock environment for Termux
-	oldPrefix := os.Getenv("PREFIX")
-	defer os.Setenv("PREFIX", oldPrefix)
-	
 	prefix := "/data/data/com.termux/files/usr"
-	os.Setenv("PREFIX", prefix)
+	t.Setenv("PREFIX", prefix)
 	
 	tests := []struct {
 		name   string
