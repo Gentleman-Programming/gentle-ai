@@ -192,12 +192,8 @@ func engramAssetURL(baseURL, version, goos, goarch string) string {
 	if goos == "windows" {
 		ext = ".zip"
 	}
-	// On Android, map to "linux" for asset name resolution only.
-	// Note: glibc Linux binaries are NOT compatible with Android's Bionic libc.
-	// This mapping exists for URL construction; Android installs use installViaGo() instead.
-	if goos == "android" {
-		goos = "linux"
-	}
+	// Note: Android (Termux) never reaches this function — DownloadLatestBinary
+	// returns early via installViaGo(). Only linux/darwin/windows are valid here.
 	filename := fmt.Sprintf("%s_%s_%s_%s%s", engramRepo, version, goos, goarch, ext)
 	return fmt.Sprintf("%s/%s/%s/releases/download/v%s/%s",
 		baseURL, engramOwner, engramRepo, version, filename)

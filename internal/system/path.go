@@ -114,10 +114,16 @@ func persistPathTermux(dir string) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	exportCmd := fmt.Sprintf("\nexport PATH=\"%s:$PATH\"\n", dir)
 	if strings.Contains(string(content), dir) {
 		return nil
 	}
+
+	// Avoid leading blank line when writing to a new (empty) rc file.
+	prefix := "\n"
+	if len(content) == 0 {
+		prefix = ""
+	}
+	exportCmd := fmt.Sprintf("%sexport PATH=\"%s:$PATH\"\n", prefix, dir)
 
 	f, err := os.OpenFile(rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {

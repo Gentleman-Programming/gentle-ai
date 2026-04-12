@@ -69,37 +69,29 @@ func (profileResolver) ResolveComponentInstall(profile system.PlatformProfile, c
 	}
 }
 
+// withSudo prepends "sudo" to a command unless the profile indicates a
+// rootless environment (e.g. Termux on Android, where sudo does not exist).
+func withSudo(profile system.PlatformProfile, cmd []string) []string {
+	if profile.LinuxDistro == system.LinuxDistroTermux {
+		return cmd
+	}
+	return append([]string{"sudo"}, cmd...)
+}
+
 func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, dependency string) (CommandSequence, error) {
 	if dependency == "" {
 		return nil, fmt.Errorf("dependency name is required")
-	}
-
-	sudo := "sudo"
-	if profile.LinuxDistro == system.LinuxDistroTermux {
-		sudo = ""
 	}
 
 	switch profile.PackageManager {
 	case "brew":
 		return CommandSequence{{"brew", "install", dependency}}, nil
 	case "apt":
-		cmd := []string{"apt-get", "install", "-y", dependency}
-		if sudo != "" {
-			cmd = append([]string{sudo}, cmd...)
-		}
-		return CommandSequence{cmd}, nil
+		return CommandSequence{withSudo(profile, []string{"apt-get", "install", "-y", dependency})}, nil
 	case "pacman":
-		cmd := []string{"pacman", "-S", "--noconfirm", dependency}
-		if sudo != "" {
-			cmd = append([]string{sudo}, cmd...)
-		}
-		return CommandSequence{cmd}, nil
+		return CommandSequence{withSudo(profile, []string{"pacman", "-S", "--noconfirm", dependency})}, nil
 	case "dnf":
-		cmd := []string{"dnf", "install", "-y", dependency}
-		if sudo != "" {
-			cmd = append([]string{sudo}, cmd...)
-		}
-		return CommandSequence{cmd}, nil
+		return CommandSequence{withSudo(profile, []string{"dnf", "install", "-y", dependency})}, nil
 	case "winget":
 		return CommandSequence{{"winget", "install", "--id", dependency, "-e", "--accept-source-agreements", "--accept-package-agreements"}}, nil
 	default:

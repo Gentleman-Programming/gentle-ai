@@ -139,7 +139,7 @@ func resolvePlatformProfile(goos, linuxOSRelease string, tools map[string]ToolSt
 		}
 
 		switch distro {
-		case LinuxDistroUbuntu, LinuxDistroDebian, LinuxDistroTermux:
+		case LinuxDistroUbuntu, LinuxDistroDebian:
 			profile.PackageManager = "apt"
 			profile.Supported = true
 		case LinuxDistroArch:
@@ -204,9 +204,8 @@ func detectLinuxDistro(linuxOSRelease string) string {
 		return LinuxDistroFedora
 	}
 
-	if id == LinuxDistroTermux {
-		return LinuxDistroTermux
-	}
+	// Note: Termux is NOT detected via os-release ID. GOOS=android handles
+	// Termux detection exclusively via the "android" case in resolvePlatformProfile.
 
 	return LinuxDistroUnknown
 }

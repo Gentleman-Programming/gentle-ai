@@ -109,8 +109,8 @@ func TestRunStrategy_GoInstallAndroidPIE(t *testing.T) {
 		},
 		LatestVersion: "0.4.0",
 	}
-	// Simulate Android/Termux environment
-	profile := system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroTermux}
+	// Simulate Android/Termux environment — GOOS=android is the canonical path.
+	profile := system.PlatformProfile{OS: "android", LinuxDistro: system.LinuxDistroTermux}
 
 	err := runStrategy(context.Background(), r, profile)
 	if err != nil {
