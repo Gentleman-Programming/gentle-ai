@@ -43,7 +43,11 @@ subcommand instead:
   gentle-ai upgrade          Apply updates to managed tools
   gentle-ai install [flags]  Configure AI coding agents
   gentle-ai sync             Re-apply configuration to current version
-  gentle-ai restore [id]     Restore a config backup
+  gentle-ai restore --list   List available config backups
+  gentle-ai restore <id> --yes  Restore a backup non-interactively —
+                               the --yes flag is required, otherwise
+                               'restore' will prompt for confirmation
+                               on stdin and hang in a non-TTY session
 
 `, version)
 }

@@ -200,6 +200,8 @@ func TestRunArgsNoTTYReturnsGuidance(t *testing.T) {
 		"gentle-ai --version",
 		"gentle-ai --help",
 		"gentle-ai install",
+		"gentle-ai restore --list",
+		"--yes",
 	}
 	for _, frag := range wantFragments {
 		if !strings.Contains(out, frag) {
