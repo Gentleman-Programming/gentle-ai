@@ -859,7 +859,7 @@ test_qwen_engram_injection() {
     cleanup_test_env
 
     if $BINARY install --agent qwen --component engram --persona neutral 2>&1; then
-        local settings="$HOME/.config/Antigravity/User/settings.json"
+        local settings="$HOME/.qwen/settings.json"
         assert_file_exists "$settings" "Qwen settings.json"
         assert_file_contains "$settings" '"mcp"' "Has mcp key"
         assert_file_contains "$settings" '"engram"' "Has engram MCP entry"
@@ -876,7 +876,7 @@ test_qwen_engram_idempotency() {
 
     # First run
     $BINARY install --agent qwen --component engram --persona neutral > /dev/null 2>&1
-    local settings="$HOME/.config/Antigravity/User/settings.json"
+    local settings="$HOME/.qwen/settings.json"
     local checksum1
     checksum1=$(md5sum "$settings" | cut -d' ' -f1)
 
