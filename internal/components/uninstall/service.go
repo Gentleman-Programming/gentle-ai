@@ -52,6 +52,10 @@ type Service struct {
 	// (legacy behavior). When true, only profileNamesToRemove are removed.
 	profileNamesToRemove   []string
 	profileSelectionScoped bool
+
+	// engramUninstallScope controls whether Engram cleanup removes global
+	// integration files/config (global) or project-local .engram data only.
+	engramUninstallScope model.EngramUninstallScope
 }
 
 type workflowCapability interface {
@@ -129,13 +133,14 @@ func NewService(homeDir, workspaceDir, appVersion string) (*Service, error) {
 	}
 
 	return &Service{
-		homeDir:      homeDir,
-		workspaceDir: workspaceDir,
-		backupRoot:   backupRoot,
-		appVersion:   appVersion,
-		snapshotter:  backup.NewSnapshotter(),
-		registry:     registry,
-		now:          time.Now,
+		homeDir:              homeDir,
+		workspaceDir:         workspaceDir,
+		backupRoot:           backupRoot,
+		appVersion:           appVersion,
+		snapshotter:          backup.NewSnapshotter(),
+		registry:             registry,
+		now:                  time.Now,
+		engramUninstallScope: model.EngramUninstallScopeGlobal,
 	}, nil
 }
 
@@ -158,7 +163,7 @@ func PartialUninstall(homeDir, workspaceDir, appVersion string, agentIDs []strin
 	return svc.PartialUninstall(agentsTyped, componentsTyped)
 }
 
-func PartialUninstallWithProfileSelection(homeDir, workspaceDir, appVersion string, agentIDs []string, componentIDs []string, profileNames []string) (Result, error) {
+func PartialUninstallWithProfileSelection(homeDir, workspaceDir, appVersion string, agentIDs []string, componentIDs []string, profileNames []string, engramScope model.EngramUninstallScope) (Result, error) {
 	svc, err := NewService(homeDir, workspaceDir, appVersion)
 	if err != nil {
 		return Result{}, err
@@ -174,7 +179,7 @@ func PartialUninstallWithProfileSelection(homeDir, workspaceDir, appVersion stri
 		componentsTyped = append(componentsTyped, model.ComponentID(componentID))
 	}
 
-	return svc.PartialUninstallWithProfiles(agentsTyped, componentsTyped, profileNames)
+	return svc.PartialUninstallWithProfiles(agentsTyped, componentsTyped, profileNames, engramScope)
 }
 
 func CompleteUninstall(homeDir, workspaceDir, appVersion string) (Result, error) {
@@ -188,6 +193,7 @@ func CompleteUninstall(homeDir, workspaceDir, appVersion string) (Result, error)
 func (s *Service) PartialUninstall(agentIDs []model.AgentID, componentIDs []model.ComponentID) (Result, error) {
 	s.profileNamesToRemove = nil
 	s.profileSelectionScoped = false
+	s.engramUninstallScope = model.EngramUninstallScopeGlobal
 
 	if len(agentIDs) == 0 {
 		return Result{}, fmt.Errorf("partial uninstall requires at least one agent")
@@ -207,11 +213,13 @@ func (s *Service) PartialUninstall(agentIDs []model.AgentID, componentIDs []mode
 	return s.executePlan(plan, stateRemovals)
 }
 
-func (s *Service) PartialUninstallWithProfiles(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string) (Result, error) {
+func (s *Service) PartialUninstallWithProfiles(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (Result, error) {
 	s.SetProfileNamesToRemove(profileNames)
+	s.SetEngramUninstallScope(engramScope)
 	defer func() {
 		s.profileNamesToRemove = nil
 		s.profileSelectionScoped = false
+		s.engramUninstallScope = model.EngramUninstallScopeGlobal
 	}()
 
 	if len(agentIDs) == 0 {
@@ -237,9 +245,18 @@ func (s *Service) SetProfileNamesToRemove(profileNames []string) {
 	s.profileSelectionScoped = true
 }
 
+func (s *Service) SetEngramUninstallScope(scope model.EngramUninstallScope) {
+	if scope == model.EngramUninstallScopeProject {
+		s.engramUninstallScope = model.EngramUninstallScopeProject
+		return
+	}
+	s.engramUninstallScope = model.EngramUninstallScopeGlobal
+}
+
 func (s *Service) CompleteUninstall() (Result, error) {
 	s.profileNamesToRemove = nil
 	s.profileSelectionScoped = false
+	s.engramUninstallScope = model.EngramUninstallScopeGlobal
 
 	allAgents := s.registry.SupportedAgents()
 	plan, err := s.buildPlan(allAgents, allManagedComponents)
@@ -436,6 +453,15 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		targets = append(targets, context7Targets(adapter, homeDir)...)
 		ops = append(ops, context7Operations(adapter, homeDir)...)
 	case model.ComponentEngram:
+		if s.engramUninstallScope == model.EngramUninstallScopeProject {
+			projectDataPath := filepath.Join(s.workspaceDir, ".engram")
+			if strings.TrimSpace(s.workspaceDir) != "" {
+				targets = append(targets, projectDataPath)
+				ops = append(ops, removeTree(projectDataPath))
+			}
+			break
+		}
+
 		targets = append(targets, engramTargets(adapter, homeDir)...)
 		ops = append(ops, engramOperations(adapter, homeDir)...)
 		if adapter.SupportsSystemPrompt() {

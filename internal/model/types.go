@@ -49,6 +49,13 @@ const (
 	UninstallModeCleanInstall UninstallMode = "clean-install"
 )
 
+type EngramUninstallScope string
+
+const (
+	EngramUninstallScopeGlobal  EngramUninstallScope = "global"
+	EngramUninstallScopeProject EngramUninstallScope = "project"
+)
+
 type SkillID string
 
 const (

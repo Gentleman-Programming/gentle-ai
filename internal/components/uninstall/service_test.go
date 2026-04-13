@@ -237,3 +237,118 @@ func TestComponentOperationsSDD_RemovesOnlySelectedProfilesFromSettings(t *testi
 		t.Fatalf("unselected profile sub-agent should be preserved, got: %#v", agentMap)
 	}
 }
+
+func TestComponentOperationsEngram_ProjectScopeRemovesWorkspaceDataOnly(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("openCode adapter not found in registry")
+	}
+
+	settingsPath := adapter.SettingsPath(homeDir)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"mcp":{"engram":{"command":["engram"]}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	projectDataDir := filepath.Join(workspaceDir, ".engram")
+	if err := os.MkdirAll(projectDataDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(projectDataDir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDataDir, "memory.db"), []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile(memory.db) error = %v", err)
+	}
+
+	svc.SetEngramUninstallScope(model.EngramUninstallScopeProject)
+
+	ops, _, err := svc.componentOperations(adapter, model.ComponentEngram)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("op.apply(%q) error = %v", op.path, err)
+		}
+	}
+
+	if _, err := os.Stat(projectDataDir); !os.IsNotExist(err) {
+		t.Fatalf("project .engram dir should be removed; err = %v", err)
+	}
+
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings) error = %v", err)
+	}
+	if !strings.Contains(string(raw), `"engram"`) {
+		t.Fatalf("global engram config should be preserved in project scope, got: %s", string(raw))
+	}
+}
+
+func TestComponentOperationsEngram_GlobalScopeKeepsWorkspaceProjectData(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("openCode adapter not found in registry")
+	}
+
+	settingsPath := adapter.SettingsPath(homeDir)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"mcp":{"engram":{"command":["engram"]}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	projectDataDir := filepath.Join(workspaceDir, ".engram")
+	if err := os.MkdirAll(projectDataDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(projectDataDir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDataDir, "memory.db"), []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile(memory.db) error = %v", err)
+	}
+
+	svc.SetEngramUninstallScope(model.EngramUninstallScopeGlobal)
+
+	ops, _, err := svc.componentOperations(adapter, model.ComponentEngram)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("op.apply(%q) error = %v", op.path, err)
+		}
+	}
+
+	if _, err := os.Stat(projectDataDir); err != nil {
+		t.Fatalf("project .engram dir should be preserved in global scope, err = %v", err)
+	}
+
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			t.Fatalf("ReadFile(settings) error = %v", err)
+		}
+		return
+	}
+	if strings.Contains(string(raw), `"engram"`) {
+		t.Fatalf("global engram config should be removed in global scope, got: %s", string(raw))
+	}
+}

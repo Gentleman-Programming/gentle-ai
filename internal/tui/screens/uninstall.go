@@ -16,6 +16,12 @@ type UninstallModeOption struct {
 	Description string
 }
 
+type UninstallEngramScopeOption struct {
+	Scope       model.EngramUninstallScope
+	Label       string
+	Description string
+}
+
 func UninstallModeOptions() []UninstallModeOption {
 	return []UninstallModeOption{
 		{
@@ -165,15 +171,35 @@ func RenderUninstallComponents(selected []model.ComponentID, cursor int) string 
 	return b.String()
 }
 
-func RenderUninstallProfiles(available []string, selected []string, cursor int) string {
+func uninstallEngramScopeOptions(projectScopeAvailable bool) []UninstallEngramScopeOption {
+	options := make([]UninstallEngramScopeOption, 0, 2)
+	if projectScopeAvailable {
+		options = append(options, UninstallEngramScopeOption{
+			Scope:       model.EngramUninstallScopeProject,
+			Label:       "Project-only cleanup",
+			Description: "Delete only .engram/ in the current project",
+		})
+	}
+	options = append(options, UninstallEngramScopeOption{
+		Scope:       model.EngramUninstallScopeGlobal,
+		Label:       "Global cleanup",
+		Description: "Remove global Engram MCP/system prompt integration",
+	})
+	return options
+}
+
+func RenderUninstallProfiles(available []string, selected []string, engramProjectScopeAvailable bool, selectedEngramScope model.EngramUninstallScope, cursor int) string {
 	var b strings.Builder
 
-	b.WriteString(styles.TitleStyle.Render("Uninstall SDD Profiles"))
+	b.WriteString(styles.TitleStyle.Render("Uninstall Scope Selection"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.HelpStyle.Render("Use j/k to move, space to toggle, enter to continue."))
+	b.WriteString(styles.HelpStyle.Render("Use j/k to move, space to toggle/select, enter to continue."))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose which OpenCode SDD profiles should be removed from opencode.json."))
-	b.WriteString("\n\n")
+
+	if len(available) > 0 {
+		b.WriteString(styles.SubtextStyle.Render("Choose which OpenCode SDD profiles should be removed from opencode.json."))
+		b.WriteString("\n\n")
+	}
 
 	selectedSet := make(map[string]struct{}, len(selected))
 	for _, profile := range selected {
@@ -186,17 +212,34 @@ func RenderUninstallProfiles(available []string, selected []string, cursor int) 
 		b.WriteString(renderCheckbox(profileName, checked, focused))
 	}
 
+	engramScopeOptions := uninstallEngramScopeOptions(engramProjectScopeAvailable)
+	engramScopeDisplayed := 0
+	if len(engramScopeOptions) > 1 {
+		engramScopeDisplayed = len(engramScopeOptions)
+		if len(available) > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(styles.SubtextStyle.Render("Select Engram cleanup scope:"))
+		b.WriteString("\n")
+		for idx, option := range engramScopeOptions {
+			focused := len(available)+idx == cursor
+			checked := selectedEngramScope == option.Scope
+			b.WriteString(renderCheckbox(option.Label, checked, focused))
+			b.WriteString(styles.SubtextStyle.Render("    " + option.Description))
+			b.WriteString("\n")
+		}
+	}
+
 	b.WriteString("\n")
-	profileCount := len(available)
-	relCursor := cursor - profileCount
+	relCursor := cursor - (len(available) + engramScopeDisplayed)
 	b.WriteString(renderOptions([]string{"Continue", "Back"}, relCursor))
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("space: toggle • enter: continue • esc: back"))
+	b.WriteString(styles.HelpStyle.Render("space: toggle/select • enter: continue • esc: back"))
 
 	return b.String()
 }
 
-func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, components []model.ComponentID, profilesToRemove []string, cursor int, operationRunning bool, spinnerFrame int) string {
+func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, components []model.ComponentID, profilesToRemove []string, engramScope model.EngramUninstallScope, engramProjectScopeAvailable bool, cursor int, operationRunning bool, spinnerFrame int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Confirm Uninstall"))
@@ -268,6 +311,22 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 		}
 	}
 
+	if hasSelectedComponent(components, model.ComponentEngram) {
+		b.WriteString("\n")
+		b.WriteString(styles.SubtextStyle.Render("Engram cleanup scope:"))
+		b.WriteString("\n")
+		scopeLabel := "Global"
+		detail := "  • Removes global Engram MCP/system prompt configuration"
+		if engramScope == model.EngramUninstallScopeProject && engramProjectScopeAvailable {
+			scopeLabel = "Project-only"
+			detail = "  • Deletes .engram/ in the current project only"
+		}
+		b.WriteString(styles.UnselectedStyle.Render("  • " + scopeLabel))
+		b.WriteString("\n")
+		b.WriteString(styles.SubtextStyle.Render(detail))
+		b.WriteString("\n")
+	}
+
 	b.WriteString("\n")
 
 	// Workspace-scoped assets warning
@@ -302,7 +361,7 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 	return b.String()
 }
 
-func RenderUninstallResult(result componentuninstall.Result, err error, mode model.UninstallMode, selectedProfiles []string, syncFilesChanged int, syncErr error) string {
+func RenderUninstallResult(result componentuninstall.Result, err error, mode model.UninstallMode, selectedProfiles []string, engramScope model.EngramUninstallScope, engramProjectScopeAvailable bool, syncFilesChanged int, syncErr error) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Uninstall Result"))
@@ -354,6 +413,15 @@ func RenderUninstallResult(result componentuninstall.Result, err error, mode mod
 			b.WriteString(styles.UnselectedStyle.Render("Profiles removed: " + strings.Join(selectedProfiles, ", ")))
 		}
 
+		if hasEngramArtifacts(result) {
+			b.WriteString("\n\n")
+			if engramScope == model.EngramUninstallScopeProject && engramProjectScopeAvailable {
+				b.WriteString(styles.UnselectedStyle.Render("Engram scope: Project-only (.engram/ removed from current workspace)"))
+			} else {
+				b.WriteString(styles.UnselectedStyle.Render("Engram scope: Global (MCP/system prompt integration removed)"))
+			}
+		}
+
 		// Clean install: show sync results after uninstall stats.
 		if mode == model.UninstallModeCleanInstall {
 			b.WriteString("\n\n")
@@ -374,6 +442,25 @@ func RenderUninstallResult(result componentuninstall.Result, err error, mode mod
 	b.WriteString("\n\n")
 	b.WriteString(styles.HelpStyle.Render("enter: return • esc: back • q: quit"))
 	return b.String()
+}
+
+func hasEngramArtifacts(result componentuninstall.Result) bool {
+	for _, path := range result.ChangedFiles {
+		if strings.Contains(path, "engram") {
+			return true
+		}
+	}
+	for _, path := range result.RemovedFiles {
+		if strings.Contains(path, "engram") {
+			return true
+		}
+	}
+	for _, path := range result.RemovedDirectories {
+		if strings.Contains(path, ".engram") {
+			return true
+		}
+	}
+	return false
 }
 
 func uninstallAgentLabels(agentIDs []model.AgentID) []string {
@@ -408,4 +495,13 @@ func uninstallComponentLabel(componentID model.ComponentID) string {
 		}
 	}
 	return string(componentID)
+}
+
+func hasSelectedComponent(components []model.ComponentID, target model.ComponentID) bool {
+	for _, component := range components {
+		if component == target {
+			return true
+		}
+	}
+	return false
 }

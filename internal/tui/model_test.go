@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -1247,12 +1248,16 @@ func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
 	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
 	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
 	m.UninstallProfilesToRemove = []string{"cheap"}
+	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
 
 	called := false
-	m.UninstallWithProfilesFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string) (componentuninstall.Result, error) {
+	m.UninstallWithProfilesFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
 		called = true
 		if !reflect.DeepEqual(profileNames, []string{"cheap"}) {
 			t.Fatalf("profileNames = %v, want [cheap]", profileNames)
+		}
+		if engramScope != model.EngramUninstallScopeGlobal {
+			t.Fatalf("engramScope = %q, want %q", engramScope, model.EngramUninstallScopeGlobal)
 		}
 		return componentuninstall.Result{}, nil
 	}
@@ -1267,6 +1272,35 @@ func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("UninstallWithProfilesFn was not called")
+	}
+}
+
+func TestUninstallComponents_ContinueWithEngramProjectScopeNavigatesToSubSelection(t *testing.T) {
+	tempWorkspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tempWorkspace, ".engram"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.engram) error = %v", err)
+	}
+	restoreGetwd := setOSGetwdForTest(tempWorkspace, nil)
+	defer restoreGetwd()
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallComponents
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.Cursor = len(screens.UninstallComponentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallProfiles {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
+	}
+	if !state.UninstallEngramProjectScopeAvailable {
+		t.Fatal("UninstallEngramProjectScopeAvailable = false, want true")
+	}
+	if state.UninstallEngramScope != model.EngramUninstallScopeGlobal {
+		t.Fatalf("UninstallEngramScope = %q, want %q", state.UninstallEngramScope, model.EngramUninstallScopeGlobal)
 	}
 }
 
