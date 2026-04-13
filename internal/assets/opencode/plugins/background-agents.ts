@@ -398,6 +398,14 @@ async function parseAgentMode(
  */
 type PermissionEntry = "ask" | "allow" | "deny" | Record<string, "ask" | "allow" | "deny">
 
+type AgentConfigMap = Record<
+  string,
+  {
+    permission?: Record<string, PermissionEntry>
+    model?: string
+  }
+>
+
 /**
  * Check if a permission entry denies access (Law 4: Fail Fast).
  * Handles both simple values ("deny") and pattern objects ({ "*": "deny" }).
@@ -407,6 +415,80 @@ function isPermissionDenied(entry: PermissionEntry | undefined): boolean {
   if (entry === "deny") return true
   if (typeof entry === "object" && entry["*"] === "deny") return true
   return false
+}
+
+function matchesPermissionPattern(pattern: string, value: string): boolean {
+  const escaped = pattern.replace(/[|\\{}()[\]^$+?.]/g, "\\$&").replace(/\*/g, ".*")
+  return new RegExp(`^${escaped}$`).test(value)
+}
+
+function resolvePermissionDecision(
+  entry: PermissionEntry | undefined,
+  target: string,
+): "ask" | "allow" | "deny" | undefined {
+  if (entry === undefined) return undefined
+  if (typeof entry === "string") return entry
+
+  if (target in entry) return entry[target]
+
+  const patternEntries = Object.entries(entry).filter(([pattern]) => pattern !== "*")
+  for (const [pattern, decision] of patternEntries) {
+    if (matchesPermissionPattern(pattern, target)) {
+      return decision
+    }
+  }
+
+  return entry["*"]
+}
+
+function getSuggestedAgentName(
+  taskPermission: PermissionEntry | undefined,
+  targetAgent: string,
+): string | undefined {
+  if (!taskPermission || typeof taskPermission === "string") return undefined
+
+  const baseName = targetAgent.replace(/-(free|ocgo)$/u, "")
+  const allowedAgents = Object.entries(taskPermission)
+    .filter(([agentName, decision]) => agentName !== "*" && decision === "allow")
+    .map(([agentName]) => agentName)
+
+  return allowedAgents.find((agentName) => agentName === baseName || agentName.startsWith(`${baseName}-`))
+}
+
+async function getAgentConfigs(client: OpencodeClient): Promise<AgentConfigMap> {
+  const config = await client.config.get()
+  const configData = config.data as {
+    agent?: AgentConfigMap
+  } | undefined
+
+  return configData?.agent ?? {}
+}
+
+async function assertDelegationAllowed(
+  client: OpencodeClient,
+  parentAgent: string | undefined,
+  targetAgent: string,
+): Promise<void> {
+  if (!parentAgent) return
+
+  const agentConfigs = await getAgentConfigs(client)
+  const permission = agentConfigs[parentAgent]?.permission
+  const taskDecision = resolvePermissionDecision(permission?.task, targetAgent)
+  const suggestedAgent = getSuggestedAgentName(permission?.task, targetAgent)
+  const suggestionSuffix =
+    suggestedAgent && suggestedAgent !== targetAgent ? ` Try "${suggestedAgent}" instead.` : ""
+
+  if (taskDecision === "deny") {
+    throw new Error(
+      `Agent "${parentAgent}" cannot delegate to "${targetAgent}" because its task permission explicitly denies it.${suggestionSuffix}`,
+    )
+  }
+
+  if (permission?.task && taskDecision !== "allow") {
+    throw new Error(
+      `Agent "${parentAgent}" cannot delegate to "${targetAgent}" because it is outside the allowed task routing policy.${suggestionSuffix}`,
+    )
+  }
 }
 
 /**
@@ -422,16 +504,7 @@ async function parseAgentWriteCapability(
   log: Logger,
 ): Promise<{ isReadOnly: boolean }> {
   try {
-    const config = await client.config.get()
-    const configData = config.data as {
-      agent?: Record<
-        string,
-        {
-          permission?: Record<string, PermissionEntry>
-        }
-      >
-    }
-    const permission = configData?.agent?.[agentName]?.permission ?? {}
+    const permission = (await getAgentConfigs(client))[agentName]?.permission ?? {}
 
     const editDenied = isPermissionDenied(permission.edit)
     const writeDenied = isPermissionDenied(permission.write)
@@ -459,12 +532,7 @@ async function resolveAgentModel(
   log: Logger,
 ): Promise<{ providerID: string; modelID: string } | undefined> {
   try {
-    const config = await client.config.get()
-    const configData = config.data as {
-      agent?: Record<string, { model?: string }>
-    } | undefined
-
-    const modelStr = configData?.agent?.[agentName]?.model
+    const modelStr = (await getAgentConfigs(client))[agentName]?.model
     if (!modelStr) return undefined
 
     const slashIndex = modelStr.indexOf("/")
@@ -577,6 +645,8 @@ class DelegationManager {
         `Agent "${input.agent}" not found.\n\nAvailable agents:\n${available || "(none)"}`,
       )
     }
+
+    await assertDelegationAllowed(this.client, input.parentAgent, input.agent)
 
     // NOTE: Read-only restriction removed — any sub-agent can use delegate.
     // Background delegations run in isolated sessions outside OpenCode's session tree.
@@ -1452,6 +1522,13 @@ export const BackgroundAgents: Plugin = async (ctx) => {
       }
     },
   }
+}
+
+export const __testables = {
+  assertDelegationAllowed,
+  getSuggestedAgentName,
+  matchesPermissionPattern,
+  resolvePermissionDecision,
 }
 
 export default BackgroundAgents
