@@ -55,7 +55,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 			printHelp(stdout, Version)
 			return nil
 		case "uninstall":
-			return cli.RunUninstall(args[1:], stdout)
+			_, err := cli.RunUninstall(args[1:], stdout)
+			return err
 		}
 	}
 

@@ -1027,7 +1027,9 @@ func updateStateAfterUninstall(homeDir string, toRemove []model.AgentID) ([]mode
 		return nil, nil
 	}
 
-	if err := state.Write(homeDir, kept); err != nil {
+	updated := current
+	updated.InstalledAgents = kept
+	if err := state.Write(homeDir, updated); err != nil {
 		return nil, fmt.Errorf("write install state: %w", err)
 	}
 	return removed, nil
