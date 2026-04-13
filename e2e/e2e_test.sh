@@ -850,6 +850,46 @@ test_oc_context7_injection() {
     fi
 }
 
+# --- Category 4: Qwen Code injection ---
+
+test_qwen_engram_injection() {
+    log_test "Qwen: engram injection (settings.json)"
+    cleanup_test_env
+
+    if $BINARY install --agent qwen-code --component engram --persona neutral 2>&1; then
+        local settings="$HOME/.qwen/settings.json"
+        assert_file_exists "$settings" "Qwen settings.json"
+        assert_file_contains "$settings" '"mcp"' "Has mcp key"
+        assert_file_contains "$settings" '"engram"' "Has engram MCP entry"
+        assert_file_contains "$settings" '"command"' "Has command key"
+        assert_valid_json "$settings" "settings.json is valid JSON"
+    else
+        log_fail "Qwen engram install command failed"
+    fi
+}
+
+test_qwen_engram_idempotency() {
+    log_test "Qwen: engram injection is idempotent"
+    cleanup_test_env
+
+    # First run
+    $BINARY install --agent qwen --component engram --persona neutral > /dev/null 2>&1
+    local settings="$HOME/.qwen/settings.json"
+    local checksum1
+    checksum1=$(md5sum "$settings" | cut -d' ' -f1)
+
+    # Second run
+    $BINARY install --agent qwen --component engram --persona neutral > /dev/null 2>&1
+    local checksum2
+    checksum2=$(md5sum "$settings" | cut -d' ' -f1)
+
+    if [ "$checksum1" = "$checksum2" ]; then
+        log_pass "Qwen settings.json is idempotent"
+    else
+        log_fail "Qwen settings.json changed between runs"
+    fi
+}
+
 test_oc_permissions_injection() {
     log_test "OpenCode: permissions injection"
     cleanup_test_env
@@ -1337,25 +1377,30 @@ test_idempotent_full_claude() {
     $BINARY install --agent claude-code --component sdd --component persona --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1 || true
     local first_md_hash
     first_md_hash=$(md5sum "$HOME/.claude/CLAUDE.md" 2>/dev/null | cut -d' ' -f1)
-    local first_settings_hash
-    first_settings_hash=$(md5sum "$HOME/.claude/settings.json" 2>/dev/null | cut -d' ' -f1)
+    # Snapshot settings.json for semantic comparison (engram setup may reorder
+    # top-level keys on re-run — see engram binary's non-deterministic map
+    # serialization). Byte-exact hashing would false-fail on harmless reorder.
+    cp "$HOME/.claude/settings.json" /tmp/gai_settings_run1.json 2>/dev/null || true
 
     $BINARY install --agent claude-code --component sdd --component persona --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1 || true
     local second_md_hash
     second_md_hash=$(md5sum "$HOME/.claude/CLAUDE.md" 2>/dev/null | cut -d' ' -f1)
-    local second_settings_hash
-    second_settings_hash=$(md5sum "$HOME/.claude/settings.json" 2>/dev/null | cut -d' ' -f1)
 
     if [ "$first_md_hash" = "$second_md_hash" ] && [ -n "$first_md_hash" ]; then
         log_pass "Idempotent: CLAUDE.md identical after 2 runs"
     else
         log_fail "CLAUDE.md changed between runs"
     fi
-    if [ "$first_settings_hash" = "$second_settings_hash" ] && [ -n "$first_settings_hash" ]; then
-        log_pass "Idempotent: settings.json identical after 2 runs"
+    if [ -f /tmp/gai_settings_run1.json ] && [ -f "$HOME/.claude/settings.json" ]; then
+        if json_files_equal /tmp/gai_settings_run1.json "$HOME/.claude/settings.json"; then
+            log_pass "Idempotent: settings.json identical after 2 runs"
+        else
+            log_fail "settings.json changed between runs"
+        fi
     else
-        log_fail "settings.json changed between runs"
+        log_fail "settings.json missing after install"
     fi
+    rm -f /tmp/gai_settings_run1.json
 }
 
 # --- Category 8: Edge cases ---

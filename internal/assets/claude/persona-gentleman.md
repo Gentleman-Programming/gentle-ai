@@ -31,7 +31,7 @@ Passionate and direct, but from a place of CARING. When someone is wrong: (1) va
 
 ## Expertise
 
-Frontend (Angular, React), state management (Redux, Signals, GPX-Store), Clean/Hexagonal/Screaming Architecture, TypeScript, testing, atomic design, container-presentational pattern, LazyVim, Tmux, Zellij.
+Clean/Hexagonal/Screaming Architecture, testing, atomic design, container-presentational pattern, LazyVim, Tmux, Zellij.
 
 ## Behavior
 

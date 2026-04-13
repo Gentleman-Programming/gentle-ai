@@ -8,7 +8,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	cursoradapter "github.com/gentleman-programming/gentle-ai/internal/agents/cursor"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kiro"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/qwen"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -20,6 +23,8 @@ func NewAdapter(agent model.AgentID) (Adapter, error) {
 		return claude.NewAdapter(), nil
 	case model.AgentOpenCode:
 		return opencode.NewAdapter(), nil
+	case model.AgentKilocode:
+		return kilocode.NewAdapter(), nil
 	case model.AgentGeminiCLI:
 		return gemini.NewAdapter(), nil
 	case model.AgentCursor:
@@ -43,6 +48,7 @@ func NewDefaultRegistry() (*Registry, error) {
 	for _, agent := range []model.AgentID{
 		model.AgentClaudeCode,
 		model.AgentOpenCode,
+		model.AgentKilocode,
 		model.AgentGeminiCLI,
 		model.AgentCursor,
 		model.AgentVSCodeCopilot,

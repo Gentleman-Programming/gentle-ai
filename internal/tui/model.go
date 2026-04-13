@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
@@ -265,10 +267,13 @@ func NewModel(detection system.DetectionResult, version string) Model {
 	}
 
 	return Model{
-		Screen:    ScreenWelcome,
-		Version:   version,
-		Selection: selection,
-		Detection: detection,
+		Screen:               ScreenWelcome,
+		Version:              version,
+		Selection:            selection,
+		Detection:            detection,
+		UninstallAgents:      preselectedAgents(detection),
+		UninstallComponents:  defaultUninstallComponents(),
+		UninstallEngramScope: model.EngramUninstallScopeGlobal,
 		Progress: NewProgressState([]string{
 			"Install dependencies",
 			"Configure selected agents",
@@ -305,6 +310,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			(m.Screen == ScreenUpgradeSync && !m.UpdateCheckDone) {
 			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
 			return m, tickCmd()
+		}
+		// Keep spinner running for operation screens.
+		if m.OperationRunning || (m.Screen == ScreenUpgrade && !m.UpdateCheckDone) ||
+			(m.Screen == ScreenUpgradeSync && !m.UpdateCheckDone) {
+			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
+			return m, tickCmd()
+		}
+		// Keep spinner running for agent builder generating/installing screens.
+		if m.AgentBuilder.Generating || m.AgentBuilder.Installing {
+			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
+			return m, tickCmd()
+		}
+		return m, nil
+	case AgentBuilderGeneratedMsg:
+		// If generation was cancelled (Esc while generating), ignore the result.
+		if !m.AgentBuilder.Generating {
+			return m, nil
+		}
+		m.AgentBuilder.Generating = false
+		if msg.Err != nil {
+			m.AgentBuilder.GenerationErr = msg.Err
+			// Stay on generating screen to show error.
+		} else {
+			m.AgentBuilder.Generated = msg.Agent
+			m.AgentBuilder.GenerationErr = nil
+			// Check for builtin conflict and set warning before showing preview.
+			if msg.Agent != nil && agentbuilder.HasConflictWithBuiltin(msg.Agent.Name) {
+				m.AgentBuilder.ConflictWarning = fmt.Sprintf(
+					"Warning: '%s' conflicts with a built-in skill. It will be installed as '%s-custom'.",
+					msg.Agent.Name, msg.Agent.Name,
+				)
+			} else {
+				m.AgentBuilder.ConflictWarning = ""
+			}
+			m.setScreen(ScreenAgentBuilderPreview)
+		}
+		return m, nil
+	case AgentBuilderInstallDoneMsg:
+		m.AgentBuilder.Installing = false
+		if msg.Err != nil {
+			m.AgentBuilder.InstallErr = msg.Err
+			m.setScreen(ScreenAgentBuilderPreview)
+		} else {
+			m.AgentBuilder.InstallResults = msg.Results
+			m.AgentBuilder.InstallErr = nil
+			m.setScreen(ScreenAgentBuilderComplete)
 		}
 		return m, nil
 	case StepProgressMsg:
@@ -593,6 +644,16 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch m.Screen {
 		case ScreenAgents:
 			m.toggleCurrentAgent()
+		case ScreenUninstall:
+			m.toggleCurrentUninstallAgent()
+		case ScreenUninstallComponents:
+			m.toggleCurrentUninstallComponent()
+		case ScreenUninstallProfiles:
+			if m.Cursor < len(m.UninstallProfilesAvailable) {
+				m.toggleCurrentUninstallProfile()
+			} else {
+				m.toggleCurrentUninstallEngramScope()
+			}
 		case ScreenDependencyTree:
 			if m.Selection.Preset == model.PresetCustom {
 				m.toggleCurrentComponent()
@@ -1615,6 +1676,38 @@ func (m Model) optionCount() int {
 	default:
 		return 0
 	}
+}
+
+func isHomebrewManagedBinary(execPath string) bool {
+	path := filepath.Clean(execPath)
+	if strings.Contains(path, "/Cellar/") {
+		return true
+	}
+	return strings.HasPrefix(path, "/opt/homebrew/") ||
+		strings.HasPrefix(path, "/usr/local/Homebrew/") ||
+		strings.HasPrefix(path, "/home/linuxbrew/.linuxbrew/")
+}
+
+func setOSExecutableForTest(path string, err error) func() {
+	original := osExecutableFn
+	osExecutableFn = func() (string, error) {
+		return path, err
+	}
+	return func() { osExecutableFn = original }
+}
+
+func setOSGetwdForTest(path string, err error) func() {
+	original := osGetwdFn
+	osGetwdFn = func() (string, error) {
+		return path, err
+	}
+	return func() { osGetwdFn = original }
+}
+
+func setOSRemoveForTest(fn func(path string) error) func() {
+	original := osRemoveFn
+	osRemoveFn = fn
+	return func() { osRemoveFn = original }
 }
 
 func (m *Model) toggleCurrentAgent() {

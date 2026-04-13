@@ -1,0 +1,80 @@
+# openspec/config.yaml
+schema: spec-driven
+
+context: |
+  Tech stack: Go 1.24, Bubbletea TUI (charmbracelet/bubbletea v1.3.4), lipgloss v1.0.0
+  Architecture: cmd/ entrypoints, internal/ packages (agents, tui, model, pipeline, catalog, system, planner, verify, update, opencode, installcmd, cli, app, components, state, backup, assets)
+  Feature branch: feature/agent-builder — TUI flow for creating custom AI sub-agents from the installer
+  Agents: multi-agent support (claude, opencode, cursor, codex, gemini, vscode, windsurf, antigravity)
+  Skills catalog: internal/catalog/skills.go — known skill registry
+  Build: goreleaser (.goreleaser.yaml), CI: GitHub Actions (ci.yml, pr-check.yml, release.yml)
+  Style: gofmt (standard), go vet, no golangci-lint config found
+
+strict_tdd: true
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Identify affected internal/ packages
+  specs:
+    - Use Given/When/Then format for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex TUI flows
+    - Document architecture decisions with rationale
+  tasks:
+    - Group tasks by phase (infrastructure, implementation, testing)
+    - Use hierarchical numbering (1.1, 1.2, etc.)
+    - Keep tasks small enough to complete in one session
+  apply:
+    - Load gentleman-bubbletea skill for TUI work (internal/tui/)
+    - Load gentleman-installer skill for installation steps
+    - Load gentleman-system skill for OS/system detection
+    - Load go-testing skill when writing tests
+    - Follow existing code patterns in internal/ packages
+  verify:
+    - Run: go test ./...
+    - Run: go vet ./...
+    - Compare implementation against every spec scenario
+  archive:
+    - Warn before merging destructive deltas (large removals)
+
+testing:
+  strict_tdd: true
+  detected: "2026-04-03"
+
+  runner:
+    command: "go test ./..."
+    framework: "Go standard testing"
+
+  layers:
+    unit:
+      available: true
+      tool: "go test"
+      note: "97 test files across internal/ packages"
+    integration:
+      available: true
+      tool: "net/http/httptest (built-in)"
+    e2e:
+      available: true
+      tool: "Docker-based E2E (e2e/docker-test.sh)"
+      note: "Dockerfile.ubuntu, Dockerfile.fedora, Dockerfile.arch — triggered by RUN_FULL_E2E=1"
+    tui:
+      available: true
+      tool: "bubbletea tea.KeyMsg simulation (no teatest — direct model.Update() testing)"
+      note: "TUI tests use direct Bubbletea model updates, not teatest library"
+
+  coverage:
+    available: true
+    command: "go test -cover ./..."
+
+  quality:
+    linter:
+      available: false
+      note: "No golangci-lint config found; go vet is available"
+    type_checker:
+      available: true
+      command: "go vet ./..."
+    formatter:
+      available: true
+      command: "gofmt"

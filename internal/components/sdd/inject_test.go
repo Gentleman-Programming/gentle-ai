@@ -386,6 +386,47 @@ func TestInjectGeminiWritesSDDOrchestratorAndSkills(t *testing.T) {
 	}
 }
 
+func TestInjectQwenCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
+	home := t.TempDir()
+
+	qwenAdapter, err := agents.NewAdapter("qwen-code")
+	if err != nil {
+		t.Fatalf("NewAdapter(qwen-code) error = %v", err)
+	}
+
+	result, injectErr := Inject(home, qwenAdapter, "")
+	if injectErr != nil {
+		t.Fatalf("Inject(qwen) error = %v", injectErr)
+	}
+
+	if !result.Changed {
+		t.Fatal("Inject(qwen) changed = false")
+	}
+
+	// Verify SDD orchestrator was injected into QWEN.md.
+	promptPath := filepath.Join(home, ".qwen", "QWEN.md")
+	content, readErr := os.ReadFile(promptPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q) error = %v", promptPath, readErr)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "Spec-Driven Development") {
+		t.Fatal("Qwen Code system prompt missing SDD orchestrator content")
+	}
+
+	// Verify Qwen-specific skill paths are referenced in the orchestrator.
+	if !strings.Contains(text, "~/.qwen/skills/") {
+		t.Fatal("Qwen Code orchestrator missing ~/.qwen/skills/ path reference")
+	}
+
+	// Should also write SDD skill files.
+	skillPath := filepath.Join(home, ".qwen", "skills", "sdd-init", "SKILL.md")
+	if _, err := os.Stat(skillPath); err != nil {
+		t.Fatalf("expected SDD skill file %q: %v", skillPath, err)
+	}
+}
+
 func TestInjectVSCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))

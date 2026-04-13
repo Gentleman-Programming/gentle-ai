@@ -344,6 +344,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		skillDir := adapter.SkillsDir(homeDir)
 		if skillDir != "" {
 			sharedFiles := []string{
+				"SKILL.md",
 				"persistence-contract.md",
 				"engram-convention.md",
 				"openspec-convention.md",

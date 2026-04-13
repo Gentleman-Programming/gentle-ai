@@ -141,6 +141,31 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 		changed = changed || writeResult.Changed
 		files = append(files, promptPath)
 
+	case model.StrategySteeringFile:
+		promptPath := adapter.SystemPromptFile(homeDir)
+
+		existing, readErr := readFileOrEmpty(promptPath)
+		if readErr != nil {
+			return InjectionResult{}, readErr
+		}
+
+		var steeringContent string
+		if preserved, ok := preserveManagedSections(existing, wrapSteeringFile(content), persona); ok {
+			steeringContent = preserved
+		} else {
+			steeringContent = wrapSteeringFile(content)
+		}
+
+		if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+			return InjectionResult{}, err
+		}
+		writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(steeringContent), 0o644)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		changed = changed || writeResult.Changed
+		files = append(files, promptPath)
+
 	case model.StrategyAppendToFile:
 		promptPath := adapter.SystemPromptFile(homeDir)
 
@@ -173,8 +198,8 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 		files = append(files, promptPath)
 	}
 
-	// 2. OpenCode agent definitions — Tab-switchable agents in opencode.json.
-	if adapter.Agent() == model.AgentOpenCode && persona != model.PersonaCustom {
+	// 2. OpenCode/Kilocode agent definitions — Tab-switchable agents in settings.
+	if (adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode) && persona != model.PersonaCustom {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
 			agentResult, err := mergeJSONFile(settingsPath, openCodeAgentOverlayJSON)
@@ -216,6 +241,40 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 	return InjectionResult{Changed: changed, Files: files}, nil
 }
 
+// shouldStripManagedLegacyPersona returns true ONLY when the existing file
+// already contains a <!-- gentle-ai:persona --> section. That is the strongest
+// evidence that the pre-marker persona content is stale legacy text written by
+// an older installer, not user-authored content that happens to share headings.
+//
+// We intentionally do NOT trigger on ATL markers, engram markers, sdd markers,
+// or any other managed marker — their presence does not prove that the
+// pre-marker content is installer-owned.
+// isExactLegacyPersonaAsset returns true when the file content is an exact
+// match of one of the known persona assets (gentleman or neutral). This handles
+// the case where an old installer wrote the asset as the entire file with no
+// markers — we can safely replace it because there is zero user content.
+func isExactLegacyPersonaAsset(existing string) bool {
+	trimmed := strings.TrimSpace(existing)
+	if trimmed == "" {
+		return false
+	}
+	for _, assetPath := range []string{
+		"opencode/persona-gentleman.md",
+		"generic/persona-gentleman.md",
+		"generic/persona-neutral.md",
+	} {
+		asset := strings.TrimSpace(assets.MustRead(assetPath))
+		if trimmed == asset {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldStripManagedLegacyPersona(existing string) bool {
+	return strings.Contains(existing, "<!-- gentle-ai:persona -->")
+}
+
 func personaContent(agent model.AgentID, persona model.PersonaID) string {
 	switch persona {
 	case model.PersonaNeutral:
@@ -228,8 +287,12 @@ func personaContent(agent model.AgentID, persona model.PersonaID) string {
 		switch agent {
 		case model.AgentClaudeCode:
 			return assets.MustRead("claude/persona-gentleman.md")
-		case model.AgentOpenCode:
+		case model.AgentOpenCode, model.AgentKilocode:
 			return assets.MustRead("opencode/persona-gentleman.md")
+		case model.AgentKiroIDE:
+			// Kiro uses a steering-file based persona. The asset is identical to
+			// generic today but kept separate so it can diverge independently.
+			return assets.MustRead("kiro/persona-gentleman.md")
 		default:
 			// Generic persona includes Gentleman personality + skills table + SDD orchestrator.
 			// Used by Gemini CLI, Cursor, VS Code Copilot, and any future agents.

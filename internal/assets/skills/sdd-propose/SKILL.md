@@ -75,6 +75,24 @@ Be specific about the user need or technical debt being addressed.}
 - {What we're explicitly NOT doing}
 - {Future work that's related but deferred}
 
+## Capabilities
+
+> This section is the CONTRACT between proposal and specs phases.
+> The sdd-spec agent reads this to know exactly which spec files to create or update.
+> Research `openspec/specs/` before filling this in.
+
+### New Capabilities
+<!-- Capabilities being introduced. Each becomes a new `openspec/specs/<name>/spec.md`.
+     Use kebab-case names (e.g., user-auth, data-export, api-rate-limiting).
+     Leave empty if no new capabilities. -->
+- `<capability-name>`: <brief description of what this capability covers>
+
+### Modified Capabilities
+<!-- Existing capabilities whose REQUIREMENTS are changing (not just implementation).
+     Only list here if spec-level behavior changes. Each needs a delta spec.
+     Use existing spec names from openspec/specs/. Leave empty if none. -->
+- `<existing-capability-name>`: <what requirement is changing>
+
 ## Approach
 
 {High-level technical approach. How will we solve this?

@@ -15,5 +15,6 @@ func OpenCodeCommands() []OpenCodeCommand {
 		{Name: "sdd-apply", Description: "Implement tasks", Body: "/sdd-apply ${change-name}"},
 		{Name: "sdd-verify", Description: "Verify implementation", Body: "/sdd-verify ${change-name}"},
 		{Name: "sdd-archive", Description: "Archive completed change", Body: "/sdd-archive ${change-name}"},
+		{Name: "sdd-onboard", Description: "Guided SDD walkthrough", Body: "/sdd-onboard"},
 	}
 }

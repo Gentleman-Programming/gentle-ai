@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
@@ -46,7 +47,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 		return err
 	}
 
-	result, err := system.Detect(context.Background())
+	result, err := detectSystem(context.Background())
 	if err != nil {
 		return fmt.Errorf("detect system: %w", err)
 	}
@@ -119,7 +120,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 	case "restore":
 		return cli.RunRestore(args[1:], stdout)
 	default:
-		return fmt.Errorf("unknown command %q", args[0])
+		return fmt.Errorf("unknown command %q — run 'gentle-ai help' for available commands", args[0])
 	}
 }
 

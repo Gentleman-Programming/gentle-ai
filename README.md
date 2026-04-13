@@ -62,14 +62,22 @@ This downloads the latest release for your platform and launches the interactive
 
 ## Install
 
-### Homebrew (macOS / Linux)
+### Recommended
 
 ```bash
+# macOS / Linux
 brew tap Gentleman-Programming/homebrew-tap
 brew install gentle-ai
+
+# Windows
+scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
+scoop install gentle-ai
 ```
 
-### Go install (any platform with Go 1.24+)
+<details>
+<summary><strong>Other install methods</strong> (Go install, PowerShell script, binary download)</summary>
+
+#### Go install (any platform with Go 1.24+)
 
 ```bash
 go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest

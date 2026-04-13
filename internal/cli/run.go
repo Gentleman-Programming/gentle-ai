@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -322,6 +323,21 @@ func (s prepareBackupStep) ID() string {
 }
 
 func (s prepareBackupStep) Run() error {
+	// Deduplication: skip snapshot creation when content is identical to the
+	// most recent backup. Only active when backupRoot is set.
+	if s.backupRoot != "" {
+		checksum, err := backup.ComputeChecksum(s.targets)
+		if err == nil && checksum != "" {
+			if dup, dupErr := backup.IsDuplicate(s.backupRoot, checksum); dupErr != nil {
+				log.Printf("backup: check duplicate: %v", dupErr)
+			} else if dup {
+				// Content is identical to the most recent backup — skip creation.
+				// state.manifest is left at its zero value; rollback is a no-op.
+				return nil
+			}
+		}
+	}
+
 	manifest, err := s.snapshotter.Create(s.snapshotDir, s.targets)
 	if err != nil {
 		return fmt.Errorf("create backup snapshot: %w", err)
@@ -342,6 +358,15 @@ func (s prepareBackupStep) Run() error {
 	}
 
 	s.state.manifest = manifest
+
+	// Retention pruning: remove oldest unpinned backups beyond the limit.
+	// Non-fatal: a prune failure must not prevent the install/sync from succeeding.
+	if s.backupRoot != "" {
+		if _, pruneErr := backup.Prune(s.backupRoot, backup.DefaultRetentionCount); pruneErr != nil {
+			log.Printf("backup: prune: %v", pruneErr)
+		}
+	}
+
 	return nil
 }
 
@@ -1007,4 +1032,30 @@ func (s noopStep) ID() string {
 
 func (s noopStep) Run() error {
 	return nil
+}
+
+// claudeAliasesToStrings converts a typed ClaudeModelAlias map to plain strings
+// for JSON serialisation in state.json.
+func claudeAliasesToStrings(m map[string]model.ClaudeModelAlias) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = string(v)
+	}
+	return out
+}
+
+// modelAssignmentsToState converts model.ModelAssignment maps to the
+// state-serialisable form.
+func modelAssignmentsToState(m map[string]model.ModelAssignment) map[string]state.ModelAssignmentState {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]state.ModelAssignmentState, len(m))
+	for k, v := range m {
+		out[k] = state.ModelAssignmentState{ProviderID: v.ProviderID, ModelID: v.ModelID}
+	}
+	return out
 }

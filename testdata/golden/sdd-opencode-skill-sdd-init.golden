@@ -287,6 +287,14 @@ Project context persisted to Engram.
 
 No project files created.
 
+### ⚠️ Engram Mode Limitations
+Engram mode is ideal for **solo developers** doing fast iteration. Be aware:
+- **No iteration history**: re-running a phase (e.g., `sdd-spec`) overwrites the previous version. Only the latest artifact is retained.
+- **Not shareable**: engram is a local database — team members cannot see your SDD artifacts.
+- **Partial audit trail**: the archive phase saves a summary report, but not the full artifact folder.
+
+For **team projects** or work that needs a full audit trail, consider switching to `openspec` (file-based, git-friendly) or `hybrid` (files + engram recovery).
+
 ### Next Steps
 Ready for /sdd-explore <topic> or /sdd-new <change-name>.
 ```

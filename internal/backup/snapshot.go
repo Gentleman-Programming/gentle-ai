@@ -1,8 +1,9 @@
 package backup
 
 import (
+	"crypto/sha256"
 	"fmt"
-	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,13 @@ import (
 )
 
 const ManifestFilename = "manifest.json"
+
+// ArchiveFilename is the name of the compressed archive inside a backup directory.
+const ArchiveFilename = "snapshot.tar.gz"
+
+// emptyFilesChecksum is the sentinel checksum used when no files exist.
+// This allows consecutive zero-file backups to be correctly deduplicated.
+var emptyFilesChecksum = fmt.Sprintf("%x", sha256.Sum256(nil))
 
 type Snapshotter struct {
 	now func() time.Time
@@ -25,14 +33,19 @@ func (s Snapshotter) Create(snapshotDir string, paths []string) (Manifest, error
 	}
 
 	manifest := Manifest{
-		ID:        filepath.Base(snapshotDir),
-		CreatedAt: s.now().UTC(),
-		RootDir:   snapshotDir,
-		Entries:   make([]ManifestEntry, 0, len(paths)),
+		ID:         filepath.Base(snapshotDir),
+		CreatedAt:  s.now().UTC(),
+		RootDir:    snapshotDir,
+		Entries:    make([]ManifestEntry, 0, len(paths)),
+		Compressed: true,
 	}
 
+	// Collect archive entries and build manifest entries in one pass.
+	var archiveEntries []ArchiveEntry
+	var existingPaths []string
+
 	for _, path := range paths {
-		entry, err := s.snapshotPath(snapshotDir, path)
+		entry, archiveEntry, err := s.buildEntry(path)
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -42,6 +55,35 @@ func (s Snapshotter) Create(snapshotDir string, paths []string) (Manifest, error
 		}
 	}
 
+	// Create the tar.gz archive with all existing files.
+	// Skip archive creation when there are no files to back up.
+	if len(archiveEntries) == 0 {
+		manifest.Compressed = false
+	} else {
+		archivePath := filepath.Join(snapshotDir, ArchiveFilename)
+		if err := CreateArchive(archivePath, archiveEntries); err != nil {
+			return Manifest{}, fmt.Errorf("create archive %q: %w", archivePath, err)
+		}
+	}
+
+	// Compute checksum from the source files for deduplication.
+	// When there are no files, use the SHA-256 of the empty string as a stable
+	// sentinel so consecutive zero-file backups are correctly detected as duplicates.
+	var checksum string
+	if len(existingPaths) == 0 {
+		checksum = emptyFilesChecksum
+	} else {
+		var csErr error
+		checksum, csErr = ComputeChecksum(existingPaths)
+		if csErr != nil {
+			// Non-fatal: skip checksum rather than failing the entire backup.
+			log.Printf("backup: compute checksum: %v", csErr)
+			checksum = ""
+		}
+	}
+	manifest.Checksum = checksum
+
+	// Write manifest.json outside the archive.
 	if err := WriteManifest(filepath.Join(snapshotDir, ManifestFilename), manifest); err != nil {
 		return Manifest{}, err
 	}
@@ -49,20 +91,23 @@ func (s Snapshotter) Create(snapshotDir string, paths []string) (Manifest, error
 	return manifest, nil
 }
 
-func (s Snapshotter) snapshotPath(snapshotDir string, sourcePath string) (ManifestEntry, error) {
+// buildEntry inspects a single source path and returns the ManifestEntry and
+// (when the file exists) the ArchiveEntry to include in the archive.
+func (s Snapshotter) buildEntry(sourcePath string) (ManifestEntry, ArchiveEntry, error) {
 	cleanSource := filepath.Clean(sourcePath)
 	entry := ManifestEntry{OriginalPath: cleanSource}
 
 	info, err := os.Stat(cleanSource)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return entry, nil
+			return entry, ArchiveEntry{}, nil
 		}
-		return ManifestEntry{}, fmt.Errorf("stat source path %q: %w", cleanSource, err)
+		return ManifestEntry{}, ArchiveEntry{}, fmt.Errorf("stat source path %q: %w", cleanSource, err)
 	}
 
 	if info.IsDir() {
-		return ManifestEntry{}, fmt.Errorf("backup source path %q is a directory", cleanSource)
+		// Skip directories — callers should enumerate files first.
+		return entry, ArchiveEntry{}, nil
 	}
 
 	// Strip volume name (e.g. "C:") on Windows so the remaining path
@@ -73,41 +118,17 @@ func (s Snapshotter) snapshotPath(snapshotDir string, sourcePath string) (Manife
 		relative = "root"
 	}
 
-	destination := filepath.Join(snapshotDir, "files", relative)
-	if err := copyFile(cleanSource, destination, info.Mode()); err != nil {
-		return ManifestEntry{}, err
+	relPath := filepath.ToSlash(filepath.Join("files", relative))
+
+	archiveEntry := ArchiveEntry{
+		RelPath:    relPath,
+		SourcePath: cleanSource,
+		Mode:       info.Mode(),
 	}
 
-	entry.SnapshotPath = destination
+	entry.SnapshotPath = relPath
 	entry.Existed = true
 	entry.Mode = uint32(info.Mode())
-	return entry, nil
-}
 
-func copyFile(source string, destination string, mode os.FileMode) error {
-	input, err := os.Open(source)
-	if err != nil {
-		return fmt.Errorf("open source file %q: %w", source, err)
-	}
-	defer input.Close()
-
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-		return fmt.Errorf("create backup directory for %q: %w", destination, err)
-	}
-
-	output, err := os.OpenFile(destination, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
-	if err != nil {
-		return fmt.Errorf("create snapshot file %q: %w", destination, err)
-	}
-
-	if _, err := io.Copy(output, input); err != nil {
-		_ = output.Close()
-		return fmt.Errorf("copy %q to %q: %w", source, destination, err)
-	}
-
-	if err := output.Close(); err != nil {
-		return fmt.Errorf("close snapshot file %q: %w", destination, err)
-	}
-
-	return nil
+	return entry, archiveEntry, nil
 }

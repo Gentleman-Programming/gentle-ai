@@ -52,3 +52,14 @@ brews:
     description: "AI Gentle Stack — One command to configure any AI coding agent on any OS."
     license: "MIT"
     commit_msg_template: "chore: update gentle-ai formula to {{ .Tag }}"
+
+scoops:
+  - repository:
+      owner: Gentleman-Programming
+      name: scoop-bucket
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    name: gentle-ai
+    homepage: "https://github.com/Gentleman-Programming/gentle-ai"
+    description: "AI Gentle Stack — One command to configure any AI coding agent on any OS."
+    license: MIT
+    commit_msg_template: "chore: update gentle-ai to {{ .Tag }}"
