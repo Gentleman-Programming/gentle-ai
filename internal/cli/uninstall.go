@@ -152,10 +152,11 @@ func appendPathSection(b *strings.Builder, title string, paths []string) {
 
 	sorted := append([]string(nil), paths...)
 	sort.Strings(sorted)
+	cwd, cwdErr := os.Getwd()
 	_, _ = fmt.Fprintf(b, "\n%s:\n", title)
 	for _, path := range sorted {
 		rel := path
-		if cwd, err := os.Getwd(); err == nil {
+		if cwdErr == nil {
 			if r, relErr := filepath.Rel(cwd, path); relErr == nil && !strings.HasPrefix(r, "..") {
 				rel = r
 			}

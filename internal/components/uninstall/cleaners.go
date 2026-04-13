@@ -228,7 +228,16 @@ func unmarshalJSONObject(raw []byte) (map[string]any, error) {
 func decodeJSONObject(raw []byte, target *map[string]any) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
-	return dec.Decode(target)
+	if err := dec.Decode(target); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("unexpected trailing JSON payload")
+		}
+		return err
+	}
+	return nil
 }
 
 func detectEOL(content string) string {

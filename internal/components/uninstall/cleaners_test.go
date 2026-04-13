@@ -8,6 +8,24 @@ import (
 	"testing"
 )
 
+func FuzzNormalizeJSON_NoPanic(f *testing.F) {
+	seeds := [][]byte{
+		[]byte(`{"mcpServers":{"engram":{"command":"engram"}}}`),
+		[]byte("{\n  // comment\n  \"mcpServers\": {\n    \"engram\": {\n      \"command\": \"engram\",\n    },\n  },\n}\n"),
+		[]byte(`{"url":"https://example.com/x//y","arr":[1,2,],}`),
+		[]byte(`{"quote":"escaped \" // not a comment"}`),
+		[]byte(`{"unterminated": /* comment`),
+	}
+	for _, seed := range seeds {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, input []byte) {
+		normalized := normalizeJSON(input)
+		_, _ = unmarshalJSONObject(normalized)
+	})
+}
+
 func TestRemoveMarkdownSections_RemovesOnlyManagedBlock(t *testing.T) {
 	input := strings.Join([]string{
 		"# User Intro",
@@ -192,6 +210,13 @@ func TestUnmarshalJSONObject_PreservesLargeIntegersAsJSONNumber(t *testing.T) {
 	}
 	if string(number) != "9223372036854775807" {
 		t.Fatalf("json.Number = %q, want exact integer", number)
+	}
+}
+
+func TestUnmarshalJSONObject_RejectsTrailingJSONPayload(t *testing.T) {
+	_, err := unmarshalJSONObject([]byte(`{"one":1}{"two":2}`))
+	if err == nil {
+		t.Fatal("unmarshalJSONObject() error = nil, want rejection for trailing JSON payload")
 	}
 }
 

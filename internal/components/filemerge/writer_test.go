@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestWriteFileAtomicReadOnlyDir(t *testing.T) {
+func TestWriteFileAtomicReadOnlyDirRelaxesOwnerWritePermission(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod 555 semantics differ on Windows")
 	}
@@ -21,8 +21,16 @@ func TestWriteFileAtomicReadOnlyDir(t *testing.T) {
 	content := []byte("# SDD Init\n")
 
 	_, err := WriteFileAtomic(path, content, 0o644)
-	if err == nil {
-		t.Fatal("WriteFileAtomic() on read-only dir error = nil, want failure without permission relaxation")
+	if err != nil {
+		t.Fatalf("WriteFileAtomic() error = %v, want successful write with permission relaxation", err)
+	}
+
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("file content = %q, want %q", string(got), string(content))
 	}
 }
 

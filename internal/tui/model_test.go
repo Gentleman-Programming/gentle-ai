@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -1113,6 +1114,79 @@ func TestUninstallConfirm_CleanInstallRunsSyncAfterUninstall(t *testing.T) {
 	}
 	if state.SyncCleanInstallErr != nil {
 		t.Fatalf("unexpected SyncCleanInstallErr: %v", state.SyncCleanInstallErr)
+	}
+}
+
+func TestStartUninstall_FullRemoveHomebrewManagedBinaryAddsManualAction(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallMode = model.UninstallModeFullRemove
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
+	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		return componentuninstall.Result{}, nil
+	}
+
+	restoreExec := setOSExecutableForTest("/opt/homebrew/bin/gentle-ai", nil)
+	defer restoreExec()
+
+	removeCalled := false
+	restoreRemove := setOSRemoveForTest(func(path string) error {
+		removeCalled = true
+		return nil
+	})
+	defer restoreRemove()
+
+	msg := m.startUninstall()().(UninstallDoneMsg)
+	if msg.Err != nil {
+		t.Fatalf("UninstallDoneMsg.Err = %v, want nil", msg.Err)
+	}
+	if removeCalled {
+		t.Fatal("os.Remove should not be called for Homebrew-managed install path")
+	}
+	if len(msg.Result.ManualActions) == 0 {
+		t.Fatal("ManualActions should include Homebrew uninstall guidance")
+	}
+	if !strings.Contains(msg.Result.ManualActions[0], "brew uninstall gentle-ai") {
+		t.Fatalf("manual action = %q, want brew uninstall guidance", msg.Result.ManualActions[0])
+	}
+}
+
+func TestStartUninstall_FullRemoveNonBrewRemovesBinary(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallMode = model.UninstallModeFullRemove
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
+	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		return componentuninstall.Result{}, nil
+	}
+
+	restoreExec := setOSExecutableForTest("/tmp/gentle-ai", nil)
+	defer restoreExec()
+
+	removedPath := ""
+	restoreRemove := setOSRemoveForTest(func(path string) error {
+		removedPath = path
+		return nil
+	})
+	defer restoreRemove()
+
+	msg := m.startUninstall()().(UninstallDoneMsg)
+	if msg.Err != nil {
+		t.Fatalf("UninstallDoneMsg.Err = %v, want nil", msg.Err)
+	}
+	if removedPath != "/tmp/gentle-ai" {
+		t.Fatalf("os.Remove path = %q, want %q", removedPath, "/tmp/gentle-ai")
+	}
+}
+
+func TestOptionCount_UninstallModeMatchesRenderedOptions(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallMode
+
+	got := m.optionCount()
+	want := len(screens.UninstallModeOptions()) + 1
+	if got != want {
+		t.Fatalf("optionCount() = %d, want %d", got, want)
 	}
 }
 

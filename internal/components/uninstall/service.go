@@ -102,6 +102,7 @@ var (
 		"sdd-archive",
 		"sdd-onboard",
 	}
+	sddSkillPhaseIDs = sddPhaseAgents[1:]
 )
 
 type operation struct {
@@ -479,7 +480,7 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			sharedDir := filepath.Join(skillDir, "_shared")
 			targets = append(targets, sharedDir)
 			ops = append(ops, removeTree(sharedDir))
-			for _, skillID := range sddSkillIDs() {
+			for _, skillID := range managedSDDSkillIDs() {
 				dirPath := filepath.Join(skillDir, skillID)
 				targets = append(targets, dirPath)
 				ops = append(ops, removeTree(dirPath))
@@ -877,20 +878,9 @@ func compareOperations(a, b operation) int {
 	return strings.Compare(a.path, b.path)
 }
 
-func sddSkillIDs() []string {
-	return []string{
-		"sdd-init",
-		"sdd-explore",
-		"sdd-propose",
-		"sdd-spec",
-		"sdd-design",
-		"sdd-tasks",
-		"sdd-apply",
-		"sdd-verify",
-		"sdd-archive",
-		"sdd-onboard",
-		"judgment-day",
-	}
+func managedSDDSkillIDs() []string {
+	ids := append([]string(nil), sddSkillPhaseIDs...)
+	return append(ids, "judgment-day")
 }
 
 func globalBackupTargets(homeDir string) []string {

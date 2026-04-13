@@ -28,6 +28,8 @@ import (
 // osStatModelCache is a package-level variable so tests can override it to
 // simulate a missing or present OpenCode model cache file.
 var osStatModelCache = os.Stat
+var osExecutableFn = os.Executable
+var osRemoveFn = os.Remove
 
 // readCurrentAssignmentsFn is a package-level variable so tests can override
 // how current model assignments are read from opencode.json. It wraps
@@ -1944,11 +1946,14 @@ func (m Model) startUninstall() tea.Cmd {
 		}
 		// If FullRemove mode, attempt to delete the binary itself
 		if mode == model.UninstallModeFullRemove {
-			execPath, execErr := os.Executable()
+			execPath, execErr := osExecutableFn()
 			if execErr != nil {
 				return UninstallDoneMsg{Result: result, Err: fmt.Errorf("uninstall succeeded but failed to locate binary: %w", execErr)}
 			}
-			if removeErr := os.Remove(execPath); removeErr != nil {
+			if isHomebrewManagedBinary(execPath) {
+				result.ManualActions = append(result.ManualActions,
+					"Homebrew-managed install detected. Run 'brew uninstall gentle-ai' to remove the executable cleanly.")
+			} else if removeErr := osRemoveFn(execPath); removeErr != nil {
 				return UninstallDoneMsg{Result: result, Err: fmt.Errorf("uninstall succeeded but failed to remove binary at %q: %w", execPath, removeErr)}
 			}
 		}
@@ -2373,7 +2378,7 @@ func (m Model) optionCount() int {
 	case ScreenModelConfig:
 		return len(screens.ModelConfigOptions())
 	case ScreenUninstallMode:
-		return len(screens.UninstallModeOptions()) + 2
+		return len(screens.UninstallModeOptions()) + 1
 	case ScreenUninstall:
 		return len(screens.UninstallAgentOptions()) + 2
 	case ScreenUninstallComponents:
@@ -2456,6 +2461,30 @@ func (m Model) optionCount() int {
 	default:
 		return 0
 	}
+}
+
+func isHomebrewManagedBinary(execPath string) bool {
+	path := filepath.Clean(execPath)
+	if strings.Contains(path, "/Cellar/") {
+		return true
+	}
+	return strings.HasPrefix(path, "/opt/homebrew/") ||
+		strings.HasPrefix(path, "/usr/local/Homebrew/") ||
+		strings.HasPrefix(path, "/home/linuxbrew/.linuxbrew/")
+}
+
+func setOSExecutableForTest(path string, err error) func() {
+	original := osExecutableFn
+	osExecutableFn = func() (string, error) {
+		return path, err
+	}
+	return func() { osExecutableFn = original }
+}
+
+func setOSRemoveForTest(fn func(path string) error) func() {
+	original := osRemoveFn
+	osRemoveFn = fn
+	return func() { osRemoveFn = original }
 }
 
 func (m *Model) toggleCurrentAgent() {
