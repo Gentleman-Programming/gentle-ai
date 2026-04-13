@@ -63,6 +63,12 @@ func resolveEngramCommand() (string, bool) {
 // path to the engram binary if it can be resolved via PATH.
 func engramServerJSON() []byte {
 	cmd, _ := resolveEngramCommand()
+	return engramServerJSONWithCmd(cmd)
+}
+
+// engramServerJSONWithCmd returns the MCP server config bytes for a specific
+// command.
+func engramServerJSONWithCmd(cmd string) []byte {
 	cfg := map[string]any{
 		"command": cmd,
 		"args":    []string{"mcp", "--tools=agent"},
@@ -143,7 +149,8 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		// present instead of silently overwriting it with the relative "engram".
 		// See: https://github.com/Gentleman-Programming/gentle-ai/issues (engram absolute path regression)
 		mcpPath := adapter.MCPConfigPath(homeDir, "engram")
-		content := buildSeparateMCPContent(mcpPath, engramServerJSON())
+		cmd := stableEngramCommandForMergedConfig(mcpPath, adapter.Agent())
+		content := buildSeparateMCPContent(mcpPath, engramServerJSONWithCmd(cmd))
 		mcpWrite, err := filemerge.WriteFileAtomic(mcpPath, content, 0o644)
 		if err != nil {
 			return InjectionResult{}, err
@@ -406,7 +413,7 @@ func executableFromCommandValue(command any) (string, bool) {
 
 func isStandardAgent(id model.AgentID) bool {
 	switch id {
-	case model.AgentOpenCode, model.AgentQwenCode, model.AgentCodex:
+	case model.AgentOpenCode, model.AgentQwenCode, model.AgentCodex, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentClaudeCode:
 		return true
 	default:
 		return false

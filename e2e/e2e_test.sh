@@ -858,7 +858,7 @@ test_qwen_engram_injection() {
     log_test "Qwen: engram injection (settings.json)"
     cleanup_test_env
 
-    if $BINARY install --agent qwen --component engram --persona neutral 2>&1; then
+    if $BINARY install --agent qwen-code --component engram --persona neutral 2>&1; then
         local settings="$HOME/.qwen/settings.json"
         assert_file_exists "$settings" "Qwen settings.json"
         assert_file_contains "$settings" '"mcp"' "Has mcp key"
