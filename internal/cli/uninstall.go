@@ -67,6 +67,18 @@ func RunUninstallWithSelection(homeDir, workspaceDir string, agentIDs []model.Ag
 	return componentuninstall.PartialUninstall(homeDir, workspaceDir, AppVersion, agents, components)
 }
 
+func RunUninstallWithSelectionAndProfiles(homeDir, workspaceDir string, agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string) (componentuninstall.Result, error) {
+	agents := make([]string, 0, len(agentIDs))
+	for _, agentID := range agentIDs {
+		agents = append(agents, string(agentID))
+	}
+	components := make([]string, 0, len(componentIDs))
+	for _, componentID := range componentIDs {
+		components = append(components, string(componentID))
+	}
+	return componentuninstall.PartialUninstallWithProfileSelection(homeDir, workspaceDir, AppVersion, agents, components, profileNames)
+}
+
 func RenderUninstallReport(result componentuninstall.Result) string {
 	var b strings.Builder
 

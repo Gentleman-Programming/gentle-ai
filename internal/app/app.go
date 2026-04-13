@@ -102,6 +102,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.UpgradeFn = tuiUpgrade(profile, homeDir)
 		m.SyncFn = tuiSync(homeDir)
 		m.UninstallFn = tuiUninstall(homeDir)
+		m.UninstallWithProfilesFn = tuiUninstallWithProfiles(homeDir)
 		p := tea.NewProgram(m, tea.WithAltScreen())
 		_, err = p.Run()
 		return err
@@ -327,6 +328,16 @@ func tuiUninstall(homeDir string) tui.UninstallFunc {
 			return componentuninstall.Result{}, fmt.Errorf("resolve workspace directory: %w", err)
 		}
 		return cli.RunUninstallWithSelection(homeDir, workspaceDir, agentIDs, componentIDs)
+	}
+}
+
+func tuiUninstallWithProfiles(homeDir string) tui.UninstallWithProfilesFunc {
+	return func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string) (componentuninstall.Result, error) {
+		workspaceDir, err := os.Getwd()
+		if err != nil {
+			return componentuninstall.Result{}, fmt.Errorf("resolve workspace directory: %w", err)
+		}
+		return cli.RunUninstallWithSelectionAndProfiles(homeDir, workspaceDir, agentIDs, componentIDs, profileNames)
 	}
 }
 

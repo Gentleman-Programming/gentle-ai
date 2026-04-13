@@ -967,6 +967,28 @@ func TestUninstallModeScreen_CleanInstallNavigatesToConfirm(t *testing.T) {
 	}
 }
 
+func TestUninstallModeScreen_FullWithProfilesNavigatesToProfileSelection(t *testing.T) {
+	orig := readProfilesFn
+	readProfilesFn = func(_ string) ([]model.Profile, error) {
+		return []model.Profile{{Name: "cheap"}, {Name: "fast"}}, nil
+	}
+	t.Cleanup(func() { readProfilesFn = orig })
+
+	m := NewModel(system.DetectionResult{Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}}}, "dev")
+	m.Screen = ScreenUninstallMode
+	m.Cursor = 1 // Full Uninstall option
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallProfiles {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
+	}
+	if !reflect.DeepEqual(state.UninstallProfilesToRemove, []string{"cheap", "fast"}) {
+		t.Fatalf("UninstallProfilesToRemove = %v, want [cheap fast]", state.UninstallProfilesToRemove)
+	}
+}
+
 func TestUninstallScreen_ContinueNavigatesToComponents(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstall
@@ -988,6 +1010,46 @@ func TestUninstallComponents_ContinueNavigatesToConfirm(t *testing.T) {
 	m.UninstallMode = model.UninstallModePartial
 	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
 	m.Cursor = len(screens.UninstallComponentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallConfirm {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+}
+
+func TestUninstallComponents_ContinueWithProfilesNavigatesToProfileSelection(t *testing.T) {
+	orig := readProfilesFn
+	readProfilesFn = func(_ string) ([]model.Profile, error) {
+		return []model.Profile{{Name: "cheap"}}, nil
+	}
+	t.Cleanup(func() { readProfilesFn = orig })
+
+	m := NewModel(system.DetectionResult{Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}}}, "dev")
+	m.Screen = ScreenUninstallComponents
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
+	m.Cursor = len(screens.UninstallComponentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallProfiles {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
+	}
+	if !reflect.DeepEqual(state.UninstallProfilesToRemove, []string{"cheap"}) {
+		t.Fatalf("UninstallProfilesToRemove = %v, want [cheap]", state.UninstallProfilesToRemove)
+	}
+}
+
+func TestUninstallProfiles_ContinueNavigatesToConfirm(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallProfiles
+	m.UninstallProfilesAvailable = []string{"cheap"}
+	m.UninstallProfilesToRemove = []string{"cheap"}
+	m.Cursor = len(m.UninstallProfilesAvailable)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
@@ -1176,6 +1238,35 @@ func TestStartUninstall_FullRemoveNonBrewRemovesBinary(t *testing.T) {
 	}
 	if removedPath != "/tmp/gentle-ai" {
 		t.Fatalf("os.Remove path = %q, want %q", removedPath, "/tmp/gentle-ai")
+	}
+}
+
+func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
+	m.UninstallProfilesToRemove = []string{"cheap"}
+
+	called := false
+	m.UninstallWithProfilesFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string) (componentuninstall.Result, error) {
+		called = true
+		if !reflect.DeepEqual(profileNames, []string{"cheap"}) {
+			t.Fatalf("profileNames = %v, want [cheap]", profileNames)
+		}
+		return componentuninstall.Result{}, nil
+	}
+	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		t.Fatalf("UninstallFn should not be called when UninstallWithProfilesFn is configured")
+		return componentuninstall.Result{}, nil
+	}
+
+	msg := m.startUninstall()().(UninstallDoneMsg)
+	if msg.Err != nil {
+		t.Fatalf("UninstallDoneMsg.Err = %v, want nil", msg.Err)
+	}
+	if !called {
+		t.Fatal("UninstallWithProfilesFn was not called")
 	}
 }
 

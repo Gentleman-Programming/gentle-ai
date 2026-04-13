@@ -163,3 +163,77 @@ func TestComponentOperationsSDD_RemovesBaseAndProfileAgentsFromSettings(t *testi
 		t.Fatalf("theme should be preserved, got %#v", root["theme"])
 	}
 }
+
+func TestComponentOperationsSDD_RemovesOnlySelectedProfilesFromSettings(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("openCode adapter not found in registry")
+	}
+
+	settingsPath := adapter.SettingsPath(homeDir)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+
+	initial := []byte(`{
+	  "agent": {
+	    "sdd-orchestrator": {"mode": "primary", "model": "anthropic:claude-sonnet-4"},
+	    "sdd-apply": {"mode": "subagent", "model": "anthropic:claude-sonnet-4"},
+	    "sdd-orchestrator-cheap": {"mode": "primary", "model": "openai:gpt-4.1-mini"},
+	    "sdd-apply-cheap": {"mode": "subagent", "model": "openai:gpt-4.1-mini"},
+	    "sdd-orchestrator-gemini": {"mode": "primary", "model": "google:gemini-2.5-pro"},
+	    "sdd-apply-gemini": {"mode": "subagent", "model": "google:gemini-2.5-pro"}
+	  }
+	}`)
+	if err := os.WriteFile(settingsPath, initial, 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	svc.SetProfileNamesToRemove([]string{"cheap"})
+
+	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+
+	for _, op := range ops {
+		if op.typeID == opRewriteFile && op.path == settingsPath {
+			if _, _, err := op.apply(op.path); err != nil {
+				t.Fatalf("settings rewrite op.apply() error = %v", err)
+			}
+		}
+	}
+
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings) error = %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatalf("json.Unmarshal(settings) error = %v", err)
+	}
+
+	agentMap := root["agent"].(map[string]any)
+
+	if _, exists := agentMap["sdd-orchestrator-cheap"]; exists {
+		t.Fatalf("selected profile orchestrator should be removed, got: %#v", agentMap)
+	}
+	if _, exists := agentMap["sdd-apply-cheap"]; exists {
+		t.Fatalf("selected profile sub-agent should be removed, got: %#v", agentMap)
+	}
+	if _, exists := agentMap["sdd-orchestrator-gemini"]; !exists {
+		t.Fatalf("unselected profile should be preserved, got: %#v", agentMap)
+	}
+	if _, exists := agentMap["sdd-apply-gemini"]; !exists {
+		t.Fatalf("unselected profile sub-agent should be preserved, got: %#v", agentMap)
+	}
+}

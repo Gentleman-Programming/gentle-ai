@@ -145,6 +145,10 @@ type SyncFunc func(overrides *model.SyncOverrides) (int, error)
 // UninstallFunc is the signature of the function injected to perform managed uninstall.
 type UninstallFunc func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error)
 
+// UninstallWithProfilesFunc is an uninstall function variant that accepts an
+// explicit profile selection for OpenCode SDD profile cleanup.
+type UninstallWithProfilesFunc func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string) (componentuninstall.Result, error)
+
 // ExecuteFunc builds and runs the installation pipeline. It receives a ProgressFunc
 // callback to emit step-level progress events, and returns the ExecutionResult.
 type ExecuteFunc func(
@@ -199,6 +203,7 @@ const (
 	ScreenUninstallMode
 	ScreenUninstall
 	ScreenUninstallComponents
+	ScreenUninstallProfiles
 	ScreenUninstallConfirm
 	ScreenUninstallResult
 	ScreenProfiles
@@ -351,8 +356,11 @@ type Model struct {
 	UninstallMode model.UninstallMode
 
 	// UninstallAgents holds the current TUI selection for the uninstall flow.
-	UninstallAgents     []model.AgentID
-	UninstallComponents []model.ComponentID
+	UninstallAgents            []model.AgentID
+	UninstallComponents        []model.ComponentID
+	UninstallProfilesAvailable []string
+	UninstallProfilesToRemove  []string
+	UninstallProfileSelection  bool
 
 	// UninstallResult holds the last uninstall execution result.
 	UninstallResult componentuninstall.Result
@@ -368,6 +376,10 @@ type Model struct {
 
 	// UninstallFn performs the managed uninstall operation.
 	UninstallFn UninstallFunc
+
+	// UninstallWithProfilesFn performs managed uninstall with explicit profile
+	// cleanup selection when the current flow requires it.
+	UninstallWithProfilesFn UninstallWithProfilesFunc
 
 	// AgentBuilder holds the transient state for the agent-builder TUI flow.
 	AgentBuilder AgentBuilderState
@@ -668,10 +680,12 @@ func (m Model) View() string {
 		return screens.RenderUninstall(m.UninstallAgents, m.Cursor)
 	case ScreenUninstallComponents:
 		return screens.RenderUninstallComponents(m.UninstallComponents, m.Cursor)
+	case ScreenUninstallProfiles:
+		return screens.RenderUninstallProfiles(m.UninstallProfilesAvailable, m.UninstallProfilesToRemove, m.Cursor)
 	case ScreenUninstallConfirm:
-		return screens.RenderUninstallConfirm(m.UninstallMode, m.UninstallAgents, m.UninstallComponents, m.Cursor, m.OperationRunning, m.SpinnerFrame)
+		return screens.RenderUninstallConfirm(m.UninstallMode, m.UninstallAgents, m.UninstallComponents, m.UninstallProfilesToRemove, m.Cursor, m.OperationRunning, m.SpinnerFrame)
 	case ScreenUninstallResult:
-		return screens.RenderUninstallResult(m.UninstallResult, m.UninstallErr, m.UninstallMode, m.SyncCleanInstallFilesChanged, m.SyncCleanInstallErr)
+		return screens.RenderUninstallResult(m.UninstallResult, m.UninstallErr, m.UninstallMode, m.UninstallProfilesToRemove, m.SyncCleanInstallFilesChanged, m.SyncCleanInstallErr)
 	case ScreenDetection:
 		return screens.RenderDetection(m.Detection, m.Cursor)
 	case ScreenAgents:
@@ -948,6 +962,8 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toggleCurrentUninstallAgent()
 		case ScreenUninstallComponents:
 			m.toggleCurrentUninstallComponent()
+		case ScreenUninstallProfiles:
+			m.toggleCurrentUninstallProfile()
 		case ScreenDependencyTree:
 			if m.Selection.Preset == model.PresetCustom {
 				m.toggleCurrentComponent()
@@ -1081,6 +1097,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 		}
 	case ScreenUninstallMode:
+		m.refreshUninstallProfiles()
 		options := screens.UninstallModeOptions()
 		switch {
 		case m.Cursor < len(options):
@@ -1100,7 +1117,14 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				for _, component := range allComponents {
 					m.UninstallComponents = append(m.UninstallComponents, component.ID)
 				}
-				m.setScreen(ScreenUninstallConfirm)
+				if m.shouldShowUninstallProfilesSelection() {
+					m.selectAllUninstallProfiles()
+					m.UninstallProfileSelection = true
+					m.setScreen(ScreenUninstallProfiles)
+				} else {
+					m.UninstallProfileSelection = false
+					m.setScreen(ScreenUninstallConfirm)
+				}
 			}
 		case m.Cursor == len(options):
 			m.setScreen(ScreenWelcome)
@@ -1123,9 +1147,33 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case m.Cursor < componentCount:
 			m.toggleCurrentUninstallComponent()
 		case m.Cursor == componentCount && len(m.UninstallComponents) > 0:
-			m.setScreen(ScreenUninstallConfirm)
+			m.refreshUninstallProfiles()
+			if m.shouldShowUninstallProfilesSelection() {
+				m.selectAllUninstallProfiles()
+				m.UninstallProfileSelection = true
+				m.setScreen(ScreenUninstallProfiles)
+			} else {
+				m.UninstallProfileSelection = false
+				m.setScreen(ScreenUninstallConfirm)
+			}
 		case m.Cursor == componentCount+1:
 			m.setScreen(ScreenUninstall)
+		}
+		return m, nil
+	case ScreenUninstallProfiles:
+		profileCount := len(m.UninstallProfilesAvailable)
+		switch {
+		case m.Cursor < profileCount:
+			m.toggleCurrentUninstallProfile()
+		case m.Cursor == profileCount:
+			m.UninstallProfileSelection = true
+			m.setScreen(ScreenUninstallConfirm)
+		case m.Cursor == profileCount+1:
+			if m.UninstallMode == model.UninstallModePartial {
+				m.setScreen(ScreenUninstallComponents)
+			} else {
+				m.setScreen(ScreenUninstallMode)
+			}
 		}
 		return m, nil
 	case ScreenUninstallConfirm:
@@ -1140,11 +1188,15 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Route cancel/back based on uninstall mode:
 		// - partial: go back to components selection
 		// - full/full-remove: go back to uninstall mode selection
-		switch m.UninstallMode {
-		case model.UninstallModePartial:
-			m.setScreen(ScreenUninstallComponents)
-		default:
-			m.setScreen(ScreenUninstallMode)
+		if m.UninstallProfileSelection {
+			m.setScreen(ScreenUninstallProfiles)
+		} else {
+			switch m.UninstallMode {
+			case model.UninstallModePartial:
+				m.setScreen(ScreenUninstallComponents)
+			default:
+				m.setScreen(ScreenUninstallMode)
+			}
 		}
 		return m, nil
 	case ScreenUninstallResult:
@@ -1894,6 +1946,9 @@ func (m Model) withResetUninstallState() Model {
 	m.UninstallMode = model.UninstallModePartial
 	m.UninstallAgents = preselectedAgents(m.Detection)
 	m.UninstallComponents = defaultUninstallComponents()
+	m.UninstallProfilesAvailable = nil
+	m.UninstallProfilesToRemove = nil
+	m.UninstallProfileSelection = false
 	m.UninstallResult = componentuninstall.Result{}
 	m.UninstallErr = nil
 	m.SyncCleanInstallFilesChanged = 0
@@ -1932,15 +1987,27 @@ func (m Model) startSync(overrides *model.SyncOverrides) tea.Cmd {
 }
 func (m Model) startUninstall() tea.Cmd {
 	uninstallFn := m.UninstallFn
+	uninstallWithProfilesFn := m.UninstallWithProfilesFn
 	syncFn := m.SyncFn
 	agentIDs := append([]model.AgentID(nil), m.UninstallAgents...)
 	componentIDs := append([]model.ComponentID(nil), m.UninstallComponents...)
+	profileNamesToRemove := append([]string(nil), m.UninstallProfilesToRemove...)
+	profileSelectionUsed := m.UninstallProfileSelection || len(profileNamesToRemove) > 0
 	mode := m.UninstallMode
 	return func() tea.Msg {
-		if uninstallFn == nil {
+		if uninstallFn == nil && uninstallWithProfilesFn == nil {
 			return UninstallDoneMsg{Err: fmt.Errorf("uninstall function not configured")}
 		}
-		result, err := uninstallFn(agentIDs, componentIDs)
+
+		var (
+			result componentuninstall.Result
+			err    error
+		)
+		if uninstallWithProfilesFn != nil && profileSelectionUsed {
+			result, err = uninstallWithProfilesFn(agentIDs, componentIDs, profileNamesToRemove)
+		} else {
+			result, err = uninstallFn(agentIDs, componentIDs)
+		}
 		if err != nil {
 			return UninstallDoneMsg{Result: result, Err: err}
 		}
@@ -1972,6 +2039,24 @@ func (m Model) startUninstall() tea.Cmd {
 		}
 		return UninstallDoneMsg{Result: result, Err: err}
 	}
+}
+
+func (m *Model) refreshUninstallProfiles() {
+	if !m.hasDetectedOpenCode() {
+		m.UninstallProfilesAvailable = nil
+		m.UninstallProfilesToRemove = nil
+		m.UninstallProfileSelection = false
+		return
+	}
+
+	profiles, err := readProfilesFn(opencode.DefaultSettingsPath())
+	if err != nil {
+		m.UninstallProfilesAvailable = nil
+		m.UninstallProfilesToRemove = nil
+		m.UninstallProfileSelection = false
+		return
+	}
+	m.UninstallProfilesAvailable = profileNames(profiles)
 }
 
 // startUpgradeSync runs upgrade then sync sequentially via tea.Sequence.
@@ -2082,13 +2167,27 @@ func (m Model) goBack() Model {
 	}
 
 	// ScreenUninstallConfirm: dynamic back navigation based on uninstall mode.
+	// - with profile selection: go back to profile selection screen
 	// - partial: go back to component selection (ScreenUninstallComponents)
 	// - full/full-remove: go back to mode selection (ScreenUninstallMode)
 	if m.Screen == ScreenUninstallConfirm {
-		switch m.UninstallMode {
-		case model.UninstallModePartial:
+		if m.UninstallProfileSelection {
+			m.setScreen(ScreenUninstallProfiles)
+		} else {
+			switch m.UninstallMode {
+			case model.UninstallModePartial:
+				m.setScreen(ScreenUninstallComponents)
+			default:
+				m.setScreen(ScreenUninstallMode)
+			}
+		}
+		return m
+	}
+
+	if m.Screen == ScreenUninstallProfiles {
+		if m.UninstallMode == model.UninstallModePartial {
 			m.setScreen(ScreenUninstallComponents)
-		default:
+		} else {
 			m.setScreen(ScreenUninstallMode)
 		}
 		return m
@@ -2310,6 +2409,11 @@ func (m *Model) setScreen(next Screen) {
 			m.Cursor = 0
 		}
 	}
+	if next == ScreenUninstallMode {
+		m.refreshUninstallProfiles()
+		m.UninstallProfilesToRemove = nil
+		m.UninstallProfileSelection = false
+	}
 }
 
 // handleRenameInput processes key events when the rename backup screen is active.
@@ -2383,6 +2487,8 @@ func (m Model) optionCount() int {
 		return len(screens.UninstallAgentOptions()) + 2
 	case ScreenUninstallComponents:
 		return len(screens.UninstallComponentOptions()) + 2
+	case ScreenUninstallProfiles:
+		return len(m.UninstallProfilesAvailable) + 2
 	case ScreenUninstallConfirm:
 		return 2
 	case ScreenUninstallResult:
@@ -2553,6 +2659,22 @@ func (m *Model) toggleCurrentUninstallComponent() {
 	}
 
 	m.UninstallComponents = append(m.UninstallComponents, componentID)
+}
+
+func (m *Model) toggleCurrentUninstallProfile() {
+	if m.Cursor >= len(m.UninstallProfilesAvailable) {
+		return
+	}
+
+	profileName := m.UninstallProfilesAvailable[m.Cursor]
+	for idx, selected := range m.UninstallProfilesToRemove {
+		if selected == profileName {
+			m.UninstallProfilesToRemove = append(m.UninstallProfilesToRemove[:idx], m.UninstallProfilesToRemove[idx+1:]...)
+			return
+		}
+	}
+
+	m.UninstallProfilesToRemove = append(m.UninstallProfilesToRemove, profileName)
 }
 
 func (m *Model) toggleCurrentSkill() {
@@ -2755,6 +2877,43 @@ func hasSelectedComponent(components []model.ComponentID, target model.Component
 		}
 	}
 	return false
+}
+
+func hasSelectedAgent(agents []model.AgentID, target model.AgentID) bool {
+	for _, agent := range agents {
+		if agent == target {
+			return true
+		}
+	}
+	return false
+}
+
+func profileNames(profiles []model.Profile) []string {
+	names := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		if strings.TrimSpace(profile.Name) == "" {
+			continue
+		}
+		names = append(names, profile.Name)
+	}
+	return names
+}
+
+func (m Model) shouldShowUninstallProfilesSelection() bool {
+	if len(m.UninstallProfilesAvailable) == 0 {
+		return false
+	}
+	if !hasSelectedAgent(m.UninstallAgents, model.AgentOpenCode) {
+		return false
+	}
+	if !hasSelectedComponent(m.UninstallComponents, model.ComponentSDD) {
+		return false
+	}
+	return true
+}
+
+func (m *Model) selectAllUninstallProfiles() {
+	m.UninstallProfilesToRemove = append([]string(nil), m.UninstallProfilesAvailable...)
 }
 
 // isScrollableScreen returns true for screens that use scroll-based navigation

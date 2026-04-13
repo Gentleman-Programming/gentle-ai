@@ -46,6 +46,12 @@ type Service struct {
 	snapshotter  Snapshotter
 	registry     *agents.Registry
 	now          func() time.Time
+
+	// profileNamesToRemove scopes SDD profile cleanup for this uninstall run.
+	// When profileSelectionScoped=false, SDD cleanup removes all detected profiles
+	// (legacy behavior). When true, only profileNamesToRemove are removed.
+	profileNamesToRemove   []string
+	profileSelectionScoped bool
 }
 
 type workflowCapability interface {
@@ -152,6 +158,25 @@ func PartialUninstall(homeDir, workspaceDir, appVersion string, agentIDs []strin
 	return svc.PartialUninstall(agentsTyped, componentsTyped)
 }
 
+func PartialUninstallWithProfileSelection(homeDir, workspaceDir, appVersion string, agentIDs []string, componentIDs []string, profileNames []string) (Result, error) {
+	svc, err := NewService(homeDir, workspaceDir, appVersion)
+	if err != nil {
+		return Result{}, err
+	}
+
+	agentsTyped := make([]model.AgentID, 0, len(agentIDs))
+	for _, agentID := range agentIDs {
+		agentsTyped = append(agentsTyped, model.AgentID(agentID))
+	}
+
+	componentsTyped := make([]model.ComponentID, 0, len(componentIDs))
+	for _, componentID := range componentIDs {
+		componentsTyped = append(componentsTyped, model.ComponentID(componentID))
+	}
+
+	return svc.PartialUninstallWithProfiles(agentsTyped, componentsTyped, profileNames)
+}
+
 func CompleteUninstall(homeDir, workspaceDir, appVersion string) (Result, error) {
 	svc, err := NewService(homeDir, workspaceDir, appVersion)
 	if err != nil {
@@ -161,6 +186,9 @@ func CompleteUninstall(homeDir, workspaceDir, appVersion string) (Result, error)
 }
 
 func (s *Service) PartialUninstall(agentIDs []model.AgentID, componentIDs []model.ComponentID) (Result, error) {
+	s.profileNamesToRemove = nil
+	s.profileSelectionScoped = false
+
 	if len(agentIDs) == 0 {
 		return Result{}, fmt.Errorf("partial uninstall requires at least one agent")
 	}
@@ -179,7 +207,40 @@ func (s *Service) PartialUninstall(agentIDs []model.AgentID, componentIDs []mode
 	return s.executePlan(plan, stateRemovals)
 }
 
+func (s *Service) PartialUninstallWithProfiles(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string) (Result, error) {
+	s.SetProfileNamesToRemove(profileNames)
+	defer func() {
+		s.profileNamesToRemove = nil
+		s.profileSelectionScoped = false
+	}()
+
+	if len(agentIDs) == 0 {
+		return Result{}, fmt.Errorf("partial uninstall requires at least one agent")
+	}
+
+	components := componentIDs
+	if len(components) == 0 {
+		components = slices.Clone(allManagedComponents)
+	}
+
+	plan, err := s.buildPlan(agentIDs, components)
+	if err != nil {
+		return Result{}, err
+	}
+
+	stateRemovals := stateAgentsToRemove(agentIDs, components)
+	return s.executePlan(plan, stateRemovals)
+}
+
+func (s *Service) SetProfileNamesToRemove(profileNames []string) {
+	s.profileNamesToRemove = dedupeSortedStrings(profileNames)
+	s.profileSelectionScoped = true
+}
+
 func (s *Service) CompleteUninstall() (Result, error) {
+	s.profileNamesToRemove = nil
+	s.profileSelectionScoped = false
+
 	allAgents := s.registry.SupportedAgents()
 	plan, err := s.buildPlan(allAgents, allManagedComponents)
 	if err != nil {
@@ -454,10 +515,16 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 				paths = append(paths, jsonPath{"agent", agentKey})
 			}
 
-			// Also remove any named SDD profile agents (suffixed keys such as
-			// sdd-orchestrator-fast, sdd-apply-fast, etc.). Ignore detection errors
-			// and still clean base SDD agent keys.
-			if profiles, err := sdd.DetectProfiles(path); err == nil {
+			// Remove named SDD profile agents (suffixed keys). If a profile subset was
+			// selected in the uninstall flow, remove only those profiles; otherwise,
+			// preserve legacy behavior and remove all detected profiles.
+			if s.profileSelectionScoped {
+				for _, profileName := range s.profileNamesToRemove {
+					for _, agentKey := range sdd.ProfileAgentKeys(profileName) {
+						paths = append(paths, jsonPath{"agent", agentKey})
+					}
+				}
+			} else if profiles, err := sdd.DetectProfiles(path); err == nil {
 				for _, profile := range profiles {
 					for _, agentKey := range sdd.ProfileAgentKeys(profile.Name) {
 						paths = append(paths, jsonPath{"agent", agentKey})

@@ -165,7 +165,38 @@ func RenderUninstallComponents(selected []model.ComponentID, cursor int) string 
 	return b.String()
 }
 
-func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, components []model.ComponentID, cursor int, operationRunning bool, spinnerFrame int) string {
+func RenderUninstallProfiles(available []string, selected []string, cursor int) string {
+	var b strings.Builder
+
+	b.WriteString(styles.TitleStyle.Render("Uninstall SDD Profiles"))
+	b.WriteString("\n\n")
+	b.WriteString(styles.HelpStyle.Render("Use j/k to move, space to toggle, enter to continue."))
+	b.WriteString("\n\n")
+	b.WriteString(styles.SubtextStyle.Render("Choose which OpenCode SDD profiles should be removed from opencode.json."))
+	b.WriteString("\n\n")
+
+	selectedSet := make(map[string]struct{}, len(selected))
+	for _, profile := range selected {
+		selectedSet[profile] = struct{}{}
+	}
+
+	for idx, profileName := range available {
+		_, checked := selectedSet[profileName]
+		focused := idx == cursor
+		b.WriteString(renderCheckbox(profileName, checked, focused))
+	}
+
+	b.WriteString("\n")
+	profileCount := len(available)
+	relCursor := cursor - profileCount
+	b.WriteString(renderOptions([]string{"Continue", "Back"}, relCursor))
+	b.WriteString("\n")
+	b.WriteString(styles.HelpStyle.Render("space: toggle • enter: continue • esc: back"))
+
+	return b.String()
+}
+
+func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, components []model.ComponentID, profilesToRemove []string, cursor int, operationRunning bool, spinnerFrame int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Confirm Uninstall"))
@@ -227,6 +258,16 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 		b.WriteString("\n")
 	}
 
+	if len(profilesToRemove) > 0 {
+		b.WriteString("\n")
+		b.WriteString(styles.SubtextStyle.Render("Profiles to remove:"))
+		b.WriteString("\n")
+		for _, profile := range profilesToRemove {
+			b.WriteString(styles.UnselectedStyle.Render("  • " + profile))
+			b.WriteString("\n")
+		}
+	}
+
 	b.WriteString("\n")
 
 	// Workspace-scoped assets warning
@@ -261,7 +302,7 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 	return b.String()
 }
 
-func RenderUninstallResult(result componentuninstall.Result, err error, mode model.UninstallMode, syncFilesChanged int, syncErr error) string {
+func RenderUninstallResult(result componentuninstall.Result, err error, mode model.UninstallMode, selectedProfiles []string, syncFilesChanged int, syncErr error) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Uninstall Result"))
@@ -306,6 +347,11 @@ func RenderUninstallResult(result componentuninstall.Result, err error, mode mod
 				b.WriteString("\n")
 				b.WriteString(styles.UnselectedStyle.Render("  • " + item))
 			}
+		}
+
+		if len(selectedProfiles) > 0 {
+			b.WriteString("\n\n")
+			b.WriteString(styles.UnselectedStyle.Render("Profiles removed: " + strings.Join(selectedProfiles, ", ")))
 		}
 
 		// Clean install: show sync results after uninstall stats.
