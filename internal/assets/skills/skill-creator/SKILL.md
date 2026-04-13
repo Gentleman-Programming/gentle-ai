@@ -49,7 +49,7 @@ description: >
   Trigger: {When the AI should load this skill}.
 license: Apache-2.0
 metadata:
-  author: gentleman-programming
+  author: "{your-github-username}"
   version: "1.0"
 ---
 
@@ -111,7 +111,7 @@ Link to external guides?    → references/ (with local path)
 | `name` | Yes | Skill identifier (lowercase, hyphens) |
 | `description` | Yes | What + Trigger in one block |
 | `license` | Yes | Always `Apache-2.0` |
-| `metadata.author` | Yes | `gentleman-programming` |
+| `metadata.author` | Yes | Author's GitHub username — infer from `git config user.name` or ask the user. Do NOT hardcode. |
 | `metadata.version` | Yes | Semantic version as string |
 
 ---
