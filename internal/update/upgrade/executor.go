@@ -524,15 +524,17 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 
 		// Check if the upgrade succeeded but requires immediate exit (Windows self-replace).
 		// This must be handled BEFORE calling sp.Finish() so the spinner can terminate properly.
-		if toolResult.Status == UpgradeSucceeded && NeedsExitAfterSuccess {
+		if toolResult.Status == UpgradeSucceeded && toolResult.ExitRequested {
 			// Finish the spinner with success before exiting.
 			sp.Finish(true)
-			// Reset the flag.
-			NeedsExitAfterSuccess = false
-			// Exit immediately to release file locks so the installer can replace the binary.
-			os.Exit(0)
-			// Unreachable, but return to satisfy the compiler.
-			return UpgradeReport{}
+			toolResults = append(toolResults, toolResult)
+			return UpgradeReport{
+				BackupID:      backupID,
+				BackupWarning: backupWarning,
+				Results:       toolResults,
+				DryRun:        dryRun,
+				ExitRequested: true,
+			}
 		}
 
 		switch toolResult.Status {
@@ -578,7 +580,7 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 		return base
 	}
 
-	err := runStrategy(ctx, r, profile)
+	exitReq, err := runStrategy(ctx, r, profile)
 	if err != nil {
 		// Distinguish manual fallback (informational skip) from real failures.
 		if hint, ok := AsManualFallback(err); ok {
@@ -591,6 +593,7 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 		}
 	} else {
 		base.Status = UpgradeSucceeded
+		base.ExitRequested = exitReq
 	}
 
 	return base

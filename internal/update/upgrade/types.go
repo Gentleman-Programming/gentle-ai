@@ -47,6 +47,10 @@ type ToolUpgradeResult struct {
 	// ManualHint is set when the tool requires manual intervention instead of
 	// automated upgrade (e.g. Windows self-replace, unsupported binary path).
 	ManualHint string
+
+	// ExitRequested is set to true if the upgrade strategy requires the parent process
+	// to exit immediately after success (e.g. Windows self-replace via installer).
+	ExitRequested bool
 }
 
 // UpgradeReport is the top-level result returned by Execute.
@@ -62,4 +66,8 @@ type UpgradeReport struct {
 
 	Results []ToolUpgradeResult
 	DryRun  bool
+
+	// ExitRequested is true if any executed tool requested an immediate exit
+	// (e.g. Windows self-replace). The caller is responsible for exiting.
+	ExitRequested bool
 }
