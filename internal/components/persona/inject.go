@@ -1,6 +1,8 @@
 package persona
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -216,7 +218,72 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 		}
 	}
 
+	// 4. Non-Gentleman personas: strip any stale "outputStyle": "Gentleman"
+	// entry left behind by a previous Gentleman install. The key is only
+	// removed when its value is exactly "Gentleman" — a user-configured
+	// custom style (e.g. "MyStyle") is preserved untouched.
+	if persona == model.PersonaNeutral && adapter.SupportsOutputStyles() {
+		settingsPath := adapter.SettingsPath(homeDir)
+		if settingsPath != "" {
+			removeResult, err := removeGentlemanOutputStyle(settingsPath)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			if removeResult.Changed {
+				changed = true
+				files = append(files, settingsPath)
+			}
+		}
+	}
+
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+// removeGentlemanOutputStyle strips the "outputStyle": "Gentleman" entry from
+// a settings.json file written by a prior Gentleman install. The key is only
+// removed when its value is exactly "Gentleman"; any user-configured custom
+// value is left in place. Missing files, empty files, and malformed JSON are
+// treated as no-ops.
+//
+// Parsing goes through filemerge.UnmarshalJSONTolerant so JSONC-style line
+// comments and trailing commas are accepted — matching the tolerance that
+// MergeJSONObjects uses on the write side. Without this, users who
+// hand-edited their settings.json with comments would silently fall into the
+// malformed-JSON no-op branch and the stale key would never be cleaned up.
+func removeGentlemanOutputStyle(path string) (filemerge.WriteResult, error) {
+	baseJSON, err := osReadFile(path)
+	if err != nil {
+		return filemerge.WriteResult{}, err
+	}
+	if len(bytes.TrimSpace(baseJSON)) == 0 {
+		return filemerge.WriteResult{}, nil
+	}
+
+	obj, err := filemerge.UnmarshalJSONTolerant(baseJSON)
+	if err != nil {
+		// Malformed settings.json — same policy as MergeJSONObjects:
+		// leave the user's file alone rather than aborting the install.
+		return filemerge.WriteResult{}, nil
+	}
+
+	value, present := obj["outputStyle"]
+	if !present {
+		return filemerge.WriteResult{}, nil
+	}
+	str, isStr := value.(string)
+	if !isStr || str != "Gentleman" {
+		// User has a custom output style — preserve it.
+		return filemerge.WriteResult{}, nil
+	}
+
+	delete(obj, "outputStyle")
+	encoded, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		return filemerge.WriteResult{}, fmt.Errorf("marshal settings json: %w", err)
+	}
+	encoded = append(encoded, '\n')
+
+	return filemerge.WriteFileAtomic(path, encoded, 0o644)
 }
 
 func personaContent(agent model.AgentID, persona model.PersonaID) string {

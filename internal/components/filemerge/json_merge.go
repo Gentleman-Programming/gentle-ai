@@ -30,6 +30,16 @@ func MergeJSONObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 	return append(encoded, '\n'), nil
 }
 
+// UnmarshalJSONTolerant parses a JSON object while tolerating JSONC-style
+// features that frequent user-edited config files carry: line/block comments
+// and trailing commas. Callers that only need a plain map[string]any — with
+// the same parsing rules used by MergeJSONObjects — should use this helper
+// instead of json.Unmarshal directly so JSONC inputs are not silently
+// rejected.
+func UnmarshalJSONTolerant(raw []byte) (map[string]any, error) {
+	return unmarshalJSONObject(raw)
+}
+
 func unmarshalJSONObject(raw []byte) (map[string]any, error) {
 	object := map[string]any{}
 	if len(bytes.TrimSpace(raw)) == 0 {
