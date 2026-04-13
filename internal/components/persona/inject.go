@@ -244,6 +244,12 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 // removed when its value is exactly "Gentleman"; any user-configured custom
 // value is left in place. Missing files, empty files, and malformed JSON are
 // treated as no-ops.
+//
+// Parsing goes through filemerge.UnmarshalJSONTolerant so JSONC-style line
+// comments and trailing commas are accepted — matching the tolerance that
+// MergeJSONObjects uses on the write side. Without this, users who
+// hand-edited their settings.json with comments would silently fall into the
+// malformed-JSON no-op branch and the stale key would never be cleaned up.
 func removeGentlemanOutputStyle(path string) (filemerge.WriteResult, error) {
 	baseJSON, err := osReadFile(path)
 	if err != nil {
@@ -253,8 +259,8 @@ func removeGentlemanOutputStyle(path string) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, nil
 	}
 
-	var obj map[string]any
-	if err := json.Unmarshal(baseJSON, &obj); err != nil {
+	obj, err := filemerge.UnmarshalJSONTolerant(baseJSON)
+	if err != nil {
 		// Malformed settings.json — same policy as MergeJSONObjects:
 		// leave the user's file alone rather than aborting the install.
 		return filemerge.WriteResult{}, nil

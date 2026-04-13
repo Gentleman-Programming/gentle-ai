@@ -269,6 +269,92 @@ func TestInjectClaudeNeutralPreservesUserCustomOutputStyle(t *testing.T) {
 	}
 }
 
+func TestInjectClaudeNeutralRemovesGentlemanOutputStyleFromJSONCSettings(t *testing.T) {
+	// Hand-edited Claude Code settings.json files frequently carry VS Code-style
+	// line comments and trailing commas. The cleanup path must tolerate that
+	// — a plain json.Unmarshal would silently reject the file and leave the
+	// stale "Gentleman" key in place.
+	home := t.TempDir()
+
+	settingsDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	existing := `{
+  // style set by gentle-ai
+  "outputStyle": "Gentleman",
+  "permissions": {"allow": ["Read"]},
+}`
+	settingsPath := filepath.Join(settingsDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := Inject(home, claudeAdapter(), model.PersonaNeutral); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("rewritten settings is not valid JSON: %v\ncontent: %s", err, data)
+	}
+	if _, present := parsed["outputStyle"]; present {
+		t.Fatalf("Neutral persona left outputStyle in JSONC settings.json: %s", data)
+	}
+	if _, ok := parsed["permissions"]; !ok {
+		t.Fatalf("Neutral persona dropped unrelated 'permissions' key: %s", data)
+	}
+}
+
+func TestInjectClaudeNeutralRemovesGentlemanOutputStyleIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+
+	settingsDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	existing := `{"outputStyle": "Gentleman", "permissions": {"allow": ["Read"]}}`
+	settingsPath := filepath.Join(settingsDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	// First call removes the stale key.
+	firstResult, err := Inject(home, claudeAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("first Inject() error = %v", err)
+	}
+	if !firstResult.Changed {
+		t.Fatalf("first Inject() should report Changed=true")
+	}
+	firstBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile after first Inject: %v", err)
+	}
+
+	// Second call must be a no-op on settings.json — the key is already gone.
+	secondResult, err := Inject(home, claudeAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+	secondBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile after second Inject: %v", err)
+	}
+	if string(firstBytes) != string(secondBytes) {
+		t.Fatalf("settings.json diverged on second Inject\nfirst:\n%s\nsecond:\n%s", firstBytes, secondBytes)
+	}
+	for _, f := range secondResult.Files {
+		if f == settingsPath {
+			t.Fatalf("second Inject should not list settings.json as changed, got Files=%v", secondResult.Files)
+		}
+	}
+}
+
 func TestInjectCustomClaudeDoesNothing(t *testing.T) {
 	home := t.TempDir()
 
