@@ -3,11 +3,14 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
@@ -838,19 +841,493 @@ func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
 	}
 }
 
-// TestWelcomeMenu_OptionCount verifies the welcome menu has 8 items without OpenCode
-// and 9 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
+func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 7
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallMode {
+		t.Fatalf("cursor=7 (Managed uninstall): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+	}
+}
+
+func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
+	m := NewModel(system.DetectionResult{
+		Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}},
+	}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 8
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallMode {
+		t.Fatalf("cursor=8 (Managed uninstall with profiles): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+	}
+}
+
+// TestWelcomeMenu_OptionCount verifies the welcome menu has 9 items without OpenCode
+// and 10 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	// Without OpenCode detected: 8 options (includes "Create your own Agent").
+	// Without OpenCode detected: 9 options (includes "Managed uninstall").
 	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
-	if len(opts) != 8 {
-		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 8; got %v", len(opts), opts)
+	if len(opts) != 9 {
+		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 9; got %v", len(opts), opts)
 	}
-	// With OpenCode detected: 9 options (adds "OpenCode SDD Profiles").
+	// With OpenCode detected: 10 options (adds "OpenCode SDD Profiles").
 	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 0, true)
-	if len(optsWithProfiles) != 9 {
-		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 9; got %v", len(optsWithProfiles), optsWithProfiles)
+	if len(optsWithProfiles) != 10 {
+		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 10; got %v", len(optsWithProfiles), optsWithProfiles)
+	}
+}
+
+func TestUninstallModeScreen_PartialNavigatesToAgentSelection(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallMode
+	m.Cursor = 0 // Partial Uninstall option
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstall {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstall)
+	}
+	if state.UninstallMode != model.UninstallModePartial {
+		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModePartial)
+	}
+}
+
+func TestUninstallModeScreen_FullNavigatesToConfirm(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallMode
+	m.Cursor = 1 // Full Uninstall option
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallConfirm {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+	if state.UninstallMode != model.UninstallModeFull {
+		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModeFull)
+	}
+	// Verify all agents and components were populated
+	if len(state.UninstallAgents) == 0 {
+		t.Fatal("UninstallAgents should be populated for Full mode")
+	}
+	if len(state.UninstallComponents) == 0 {
+		t.Fatal("UninstallComponents should be populated for Full mode")
+	}
+}
+
+func TestUninstallModeScreen_FullRemoveNavigatesToConfirm(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallMode
+	m.Cursor = 2 // Full Uninstall & Remove Binary option
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallConfirm {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+	if state.UninstallMode != model.UninstallModeFullRemove {
+		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModeFullRemove)
+	}
+	if len(state.UninstallAgents) == 0 {
+		t.Fatal("UninstallAgents should be populated for FullRemove mode")
+	}
+	if len(state.UninstallComponents) == 0 {
+		t.Fatal("UninstallComponents should be populated for FullRemove mode")
+	}
+}
+
+func TestUninstallModeScreen_CleanInstallNavigatesToConfirm(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallMode
+	m.Cursor = 3 // Full Uninstall + Clean Install option
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallConfirm {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+	if state.UninstallMode != model.UninstallModeCleanInstall {
+		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModeCleanInstall)
+	}
+	if len(state.UninstallAgents) == 0 {
+		t.Fatal("UninstallAgents should be populated for CleanInstall mode")
+	}
+	if len(state.UninstallComponents) == 0 {
+		t.Fatal("UninstallComponents should be populated for CleanInstall mode")
+	}
+}
+
+func TestUninstallModeScreen_FullWithProfilesNavigatesToProfileSelection(t *testing.T) {
+	orig := readProfilesFn
+	readProfilesFn = func(_ string) ([]model.Profile, error) {
+		return []model.Profile{{Name: "cheap"}, {Name: "fast"}}, nil
+	}
+	t.Cleanup(func() { readProfilesFn = orig })
+
+	m := NewModel(system.DetectionResult{Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}}}, "dev")
+	m.Screen = ScreenUninstallMode
+	m.Cursor = 1 // Full Uninstall option
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallProfiles {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
+	}
+	if !reflect.DeepEqual(state.UninstallProfilesToRemove, []string{"cheap", "fast"}) {
+		t.Fatalf("UninstallProfilesToRemove = %v, want [cheap fast]", state.UninstallProfilesToRemove)
+	}
+}
+
+func TestUninstallScreen_ContinueNavigatesToComponents(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstall
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.Cursor = len(screens.UninstallAgentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallComponents {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallComponents)
+	}
+}
+
+func TestUninstallComponents_ContinueNavigatesToConfirm(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallComponents
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
+	m.Cursor = len(screens.UninstallComponentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallConfirm {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+}
+
+func TestUninstallComponents_ContinueWithProfilesNavigatesToProfileSelection(t *testing.T) {
+	orig := readProfilesFn
+	readProfilesFn = func(_ string) ([]model.Profile, error) {
+		return []model.Profile{{Name: "cheap"}}, nil
+	}
+	t.Cleanup(func() { readProfilesFn = orig })
+
+	m := NewModel(system.DetectionResult{Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}}}, "dev")
+	m.Screen = ScreenUninstallComponents
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
+	m.Cursor = len(screens.UninstallComponentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallProfiles {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
+	}
+	if !reflect.DeepEqual(state.UninstallProfilesToRemove, []string{"cheap"}) {
+		t.Fatalf("UninstallProfilesToRemove = %v, want [cheap]", state.UninstallProfilesToRemove)
+	}
+}
+
+func TestUninstallProfiles_ContinueNavigatesToConfirm(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallProfiles
+	m.UninstallProfilesAvailable = []string{"cheap"}
+	m.UninstallProfilesToRemove = []string{"cheap"}
+	m.Cursor = len(m.UninstallProfilesAvailable)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallConfirm {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+}
+
+func TestUninstallConfirm_EnterExecutesAndNavigatesToResult(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallConfirm
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD, model.ComponentPersona}
+	m.Cursor = 0
+	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		if len(agentIDs) != 1 || agentIDs[0] != model.AgentOpenCode {
+			t.Fatalf("agentIDs = %v, want [%s]", agentIDs, model.AgentOpenCode)
+		}
+		if len(componentIDs) != 2 || componentIDs[0] != model.ComponentSDD || componentIDs[1] != model.ComponentPersona {
+			t.Fatalf("componentIDs = %v, want [%s %s]", componentIDs, model.ComponentSDD, model.ComponentPersona)
+		}
+		return componentuninstall.Result{RemovedFiles: []string{"/tmp/file"}}, nil
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if !state.OperationRunning {
+		t.Fatalf("OperationRunning = false, want true after starting uninstall")
+	}
+	if cmd == nil {
+		t.Fatal("expected uninstall command to be returned")
+	}
+
+	uninstallMsg := findUninstallDoneMsgInBatch(t, cmd)
+	if uninstallMsg == nil {
+		t.Fatal("expected UninstallDoneMsg from batch cmd, got nil")
+	}
+	updated, _ = state.Update(*uninstallMsg)
+	state = updated.(Model)
+
+	if state.Screen != ScreenUninstallResult {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallResult)
+	}
+	if state.UninstallErr != nil {
+		t.Fatalf("unexpected UninstallErr: %v", state.UninstallErr)
+	}
+	if len(state.UninstallResult.RemovedFiles) != 1 {
+		t.Fatalf("RemovedFiles len = %d, want 1", len(state.UninstallResult.RemovedFiles))
+	}
+}
+
+func TestUninstallConfirm_CancelCleanInstallReturnsToModeSelection(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallConfirm
+	m.UninstallMode = model.UninstallModeCleanInstall
+	m.Cursor = 1 // Cancel
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallMode {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallMode)
+	}
+}
+
+func TestUninstallConfirm_CleanInstallRunsSyncAfterUninstall(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallConfirm
+	m.UninstallMode = model.UninstallModeCleanInstall
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
+	m.Cursor = 0
+
+	uninstallCalled := false
+	syncCalled := false
+
+	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		uninstallCalled = true
+		return componentuninstall.Result{RemovedFiles: []string{"/tmp/managed-file"}}, nil
+	}
+	m.SyncFn = func(overrides *model.SyncOverrides) (int, error) {
+		syncCalled = true
+		if overrides != nil {
+			t.Fatalf("clean-install sync overrides = %+v, want nil", overrides)
+		}
+		return 7, nil
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if !state.OperationRunning {
+		t.Fatalf("OperationRunning = false, want true after starting clean-install")
+	}
+	if cmd == nil {
+		t.Fatal("expected uninstall command to be returned")
+	}
+
+	uninstallMsg := findUninstallDoneMsgInBatch(t, cmd)
+	if uninstallMsg == nil {
+		t.Fatal("expected UninstallDoneMsg from batch cmd, got nil")
+	}
+	if !uninstallCalled {
+		t.Fatal("UninstallFn was not called")
+	}
+	if !syncCalled {
+		t.Fatal("SyncFn was not called for clean-install mode")
+	}
+	if uninstallMsg.SyncErr != nil {
+		t.Fatalf("unexpected clean-install sync error: %v", uninstallMsg.SyncErr)
+	}
+	if uninstallMsg.SyncFilesChanged != 7 {
+		t.Fatalf("SyncFilesChanged = %d, want 7", uninstallMsg.SyncFilesChanged)
+	}
+
+	updated, _ = state.Update(*uninstallMsg)
+	state = updated.(Model)
+	if state.Screen != ScreenUninstallResult {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallResult)
+	}
+	if state.SyncCleanInstallFilesChanged != 7 {
+		t.Fatalf("SyncCleanInstallFilesChanged = %d, want 7", state.SyncCleanInstallFilesChanged)
+	}
+	if state.SyncCleanInstallErr != nil {
+		t.Fatalf("unexpected SyncCleanInstallErr: %v", state.SyncCleanInstallErr)
+	}
+}
+
+func TestStartUninstall_FullRemoveHomebrewManagedBinaryAddsManualAction(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallMode = model.UninstallModeFullRemove
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
+	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		return componentuninstall.Result{}, nil
+	}
+
+	restoreExec := setOSExecutableForTest("/opt/homebrew/bin/gentle-ai", nil)
+	defer restoreExec()
+
+	removeCalled := false
+	restoreRemove := setOSRemoveForTest(func(path string) error {
+		removeCalled = true
+		return nil
+	})
+	defer restoreRemove()
+
+	msg := m.startUninstall()().(UninstallDoneMsg)
+	if msg.Err != nil {
+		t.Fatalf("UninstallDoneMsg.Err = %v, want nil", msg.Err)
+	}
+	if removeCalled {
+		t.Fatal("os.Remove should not be called for Homebrew-managed install path")
+	}
+	if len(msg.Result.ManualActions) == 0 {
+		t.Fatal("ManualActions should include Homebrew uninstall guidance")
+	}
+	if !strings.Contains(msg.Result.ManualActions[0], "brew uninstall gentle-ai") {
+		t.Fatalf("manual action = %q, want brew uninstall guidance", msg.Result.ManualActions[0])
+	}
+}
+
+func TestStartUninstall_FullRemoveNonBrewRemovesBinary(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallMode = model.UninstallModeFullRemove
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
+	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		return componentuninstall.Result{}, nil
+	}
+
+	restoreExec := setOSExecutableForTest("/tmp/gentle-ai", nil)
+	defer restoreExec()
+
+	removedPath := ""
+	restoreRemove := setOSRemoveForTest(func(path string) error {
+		removedPath = path
+		return nil
+	})
+	defer restoreRemove()
+
+	msg := m.startUninstall()().(UninstallDoneMsg)
+	if msg.Err != nil {
+		t.Fatalf("UninstallDoneMsg.Err = %v, want nil", msg.Err)
+	}
+	if removedPath != "/tmp/gentle-ai" {
+		t.Fatalf("os.Remove path = %q, want %q", removedPath, "/tmp/gentle-ai")
+	}
+}
+
+func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
+	m.UninstallProfilesToRemove = []string{"cheap"}
+	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+
+	called := false
+	m.UninstallWithProfilesFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
+		called = true
+		if !reflect.DeepEqual(profileNames, []string{"cheap"}) {
+			t.Fatalf("profileNames = %v, want [cheap]", profileNames)
+		}
+		if engramScope != model.EngramUninstallScopeGlobal {
+			t.Fatalf("engramScope = %q, want %q", engramScope, model.EngramUninstallScopeGlobal)
+		}
+		return componentuninstall.Result{}, nil
+	}
+	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		t.Fatalf("UninstallFn should not be called when UninstallWithProfilesFn is configured")
+		return componentuninstall.Result{}, nil
+	}
+
+	msg := m.startUninstall()().(UninstallDoneMsg)
+	if msg.Err != nil {
+		t.Fatalf("UninstallDoneMsg.Err = %v, want nil", msg.Err)
+	}
+	if !called {
+		t.Fatal("UninstallWithProfilesFn was not called")
+	}
+}
+
+func TestUninstallComponents_ContinueWithEngramProjectScopeNavigatesToSubSelection(t *testing.T) {
+	tempWorkspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tempWorkspace, ".engram"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.engram) error = %v", err)
+	}
+	restoreGetwd := setOSGetwdForTest(tempWorkspace, nil)
+	defer restoreGetwd()
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallComponents
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.Cursor = len(screens.UninstallComponentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallProfiles {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
+	}
+	if !state.UninstallEngramProjectScopeAvailable {
+		t.Fatal("UninstallEngramProjectScopeAvailable = false, want true")
+	}
+	if state.UninstallEngramScope != model.EngramUninstallScopeGlobal {
+		t.Fatalf("UninstallEngramScope = %q, want %q", state.UninstallEngramScope, model.EngramUninstallScopeGlobal)
+	}
+}
+
+func TestOptionCount_UninstallModeMatchesRenderedOptions(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallMode
+
+	got := m.optionCount()
+	want := len(screens.UninstallModeOptions()) + 1
+	if got != want {
+		t.Fatalf("optionCount() = %d, want %d", got, want)
+	}
+}
+
+func TestUninstallResult_EnterReturnsToWelcome(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallResult
+	m.UninstallErr = nil
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenWelcome {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenWelcome)
+	}
+	if state.UninstallErr != nil {
+		t.Fatalf("UninstallErr should be reset to nil: %v", state.UninstallErr)
 	}
 }
 
@@ -874,6 +1351,24 @@ func TestModelConfig_ClaudePickerNavigation(t *testing.T) {
 	}
 }
 
+// TestModelConfig_KiroPickerNavigation verifies that selecting cursor 2
+// from ScreenModelConfig transitions to ScreenKiroModelPicker with ModelConfigMode set.
+func TestModelConfig_KiroPickerNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Cursor = 2
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenKiroModelPicker {
+		t.Fatalf("ModelConfig cursor=2 (Kiro): screen = %v, want %v", state.Screen, ScreenKiroModelPicker)
+	}
+	if !state.ModelConfigMode {
+		t.Fatalf("ModelConfigMode should be true after entering Kiro picker from ModelConfig")
+	}
+}
+
 // TestModelConfig_OpenCodePickerNavigation verifies that selecting cursor 1
 // from ScreenModelConfig transitions to ScreenModelPicker with ModelConfigMode set.
 func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
@@ -892,18 +1387,18 @@ func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
 	}
 }
 
-// TestModelConfig_BackNavigation verifies that selecting cursor 2 (Back) from
+// TestModelConfig_BackNavigation verifies that selecting cursor 3 (Back) from
 // ScreenModelConfig returns to ScreenWelcome.
 func TestModelConfig_BackNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelConfig
-	m.Cursor = 2
+	m.Cursor = 3
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenWelcome {
-		t.Fatalf("ModelConfig cursor=2 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
+		t.Fatalf("ModelConfig cursor=3 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
 	}
 }
 
@@ -938,6 +1433,66 @@ func TestModelConfig_ClaudePickerBackReturnsToModelConfig(t *testing.T) {
 	}
 }
 
+// TestModelConfig_KiroPickerBackReturnsToModelConfig verifies that pressing
+// Esc from ScreenKiroModelPicker when in ModelConfigMode returns to ScreenModelConfig.
+func TestModelConfig_KiroPickerBackReturnsToModelConfig(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenKiroModelPicker
+	m.ModelConfigMode = true
+	m.KiroModelPicker = screens.NewKiroModelPickerState()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelConfig {
+		t.Fatalf("KiroModelPicker esc (ModelConfigMode): screen = %v, want %v", state.Screen, ScreenModelConfig)
+	}
+}
+
+// TestKiroPickerEscNonCustomWithClaudeGoesToClaudePicker verifies that Esc from
+// ScreenKiroModelPicker in a non-custom preset returns to ScreenClaudeModelPicker
+// when Claude is in the flow — keeping Esc consistent with Enter on "← Back".
+func TestKiroPickerEscNonCustomWithClaudeGoesToClaudePicker(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenKiroModelPicker
+	m.ModelConfigMode = false
+	m.Selection.Preset = model.PresetFullGentleman // non-custom
+	// Simulate both Kiro and Claude being selected.
+	m.Selection.Agents = []model.AgentID{model.AgentKiroIDE, model.AgentClaudeCode}
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+	m.KiroModelPicker = screens.NewKiroModelPickerState()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenClaudeModelPicker {
+		t.Fatalf("KiroModelPicker esc (non-custom, Claude in flow): screen = %v, want %v",
+			state.Screen, ScreenClaudeModelPicker)
+	}
+}
+
+// TestKiroPickerEscNonCustomWithoutClaudeGoesToPreset verifies that Esc from
+// ScreenKiroModelPicker in a non-custom preset returns to ScreenPreset when
+// Claude is NOT in the flow.
+func TestKiroPickerEscNonCustomWithoutClaudeGoesToPreset(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenKiroModelPicker
+	m.ModelConfigMode = false
+	m.Selection.Preset = model.PresetFullGentleman
+	// Only Kiro — no Claude.
+	m.Selection.Agents = []model.AgentID{model.AgentKiroIDE}
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+	m.KiroModelPicker = screens.NewKiroModelPickerState()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenPreset {
+		t.Fatalf("KiroModelPicker esc (non-custom, no Claude): screen = %v, want %v",
+			state.Screen, ScreenPreset)
+	}
+}
+
 // TestModelConfig_OpenCodePickerBackReturnsToModelConfig verifies that pressing
 // Esc from ScreenModelPicker when in ModelConfigMode returns to ScreenModelConfig.
 func TestModelConfig_OpenCodePickerBackReturnsToModelConfig(t *testing.T) {
@@ -958,7 +1513,7 @@ func TestModelConfig_OpenCodePickerBackReturnsToModelConfig(t *testing.T) {
 // makeDetectionWithAgents builds a DetectionResult with the specified agents
 // marked as Exists=true. All other agents are absent.
 func makeDetectionWithAgents(present ...string) system.DetectionResult {
-	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex"}
+	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "qwen-code"}
 	presentSet := make(map[string]bool, len(present))
 	for _, p := range present {
 		presentSet[p] = true
@@ -1410,6 +1965,35 @@ func TestModelConfig_SyncPassesOverridesToSyncFn(t *testing.T) {
 	if final.OperationRunning {
 		t.Errorf("OperationRunning should be false after SyncDoneMsg")
 	}
+}
+
+// findUninstallDoneMsgInBatch executes all commands in a tea.Cmd (including BatchMsg)
+// and returns the first UninstallDoneMsg found, or nil if none is produced.
+func findUninstallDoneMsgInBatch(t *testing.T, cmd tea.Cmd) *UninstallDoneMsg {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+
+	msg := cmd()
+
+	if uninstallMsg, ok := msg.(UninstallDoneMsg); ok {
+		return &uninstallMsg
+	}
+
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, innerCmd := range batch {
+			if innerCmd == nil {
+				continue
+			}
+			innerMsg := innerCmd()
+			if uninstallMsg, ok := innerMsg.(UninstallDoneMsg); ok {
+				return &uninstallMsg
+			}
+		}
+	}
+
+	return nil
 }
 
 // findSyncDoneMsgInBatch executes all commands in a tea.Cmd (including BatchMsg)

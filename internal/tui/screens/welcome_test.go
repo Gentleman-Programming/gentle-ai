@@ -66,25 +66,25 @@ func TestWelcomeOptions_WithProfiles_CountOne(t *testing.T) {
 	}
 }
 
-// TestWelcomeOptions_OptionCount_WithoutProfiles verifies 8 options when showProfiles=false
+// TestWelcomeOptions_OptionCount_WithoutProfiles verifies 9 options when showProfiles=false
 // and hasEngines=true (agent option visible).
 func TestWelcomeOptions_OptionCount_WithoutProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, false, 0, true)
 	// Expected: Start installation, Upgrade tools, Sync configs, Upgrade + Sync,
-	// Configure models, Create your own Agent, Manage backups, Quit = 8
-	want := 8
+	// Configure models, Create your own Agent, Manage backups, Managed uninstall, Quit = 9
+	want := 9
 	if len(opts) != want {
 		t.Errorf("WelcomeOptions(showProfiles=false, hasEngines=true) = %d options, want %d; opts: %v", len(opts), want, opts)
 	}
 }
 
-// TestWelcomeOptions_OptionCount_WithProfiles verifies 9 options when showProfiles=true
+// TestWelcomeOptions_OptionCount_WithProfiles verifies 10 options when showProfiles=true
 // and hasEngines=true.
 func TestWelcomeOptions_OptionCount_WithProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true, 2, true)
 	// Expected: Start installation, Upgrade tools, Sync configs, Upgrade + Sync,
-	// Configure models, Create your own Agent, OpenCode SDD Profiles (2), Manage backups, Quit = 9
-	want := 9
+	// Configure models, Create your own Agent, OpenCode SDD Profiles (2), Manage backups, Managed uninstall, Quit = 10
+	want := 10
 	if len(opts) != want {
 		t.Errorf("WelcomeOptions(showProfiles=true, hasEngines=true) = %d options, want %d; opts: %v", len(opts), want, opts)
 	}
@@ -142,6 +142,22 @@ func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 	if manageBackupsIdx != profilesIdx+1 {
 		t.Errorf("'Manage backups' at index %d, expected %d (right after profiles at %d)",
 			manageBackupsIdx, profilesIdx+1, profilesIdx)
+	}
+}
+
+func TestWelcomeOptions_IncludesManagedUninstall(t *testing.T) {
+	opts := screens.WelcomeOptions(nil, true, false, 0, true)
+
+	found := false
+	for _, opt := range opts {
+		if opt == "Managed uninstall" {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Fatalf("expected 'Managed uninstall' option; got: %v", opts)
 	}
 }
 

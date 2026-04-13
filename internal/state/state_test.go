@@ -136,6 +136,11 @@ func TestModelAssignmentsRoundTrip(t *testing.T) {
 			"sdd-explore":  "sonnet",
 			"sdd-archive":  "haiku",
 		},
+		KiroModelAssignments: map[string]string{
+			"sdd-design":  "opus",
+			"sdd-archive": "haiku",
+			"default":     "sonnet",
+		},
 		ModelAssignments: map[string]ModelAssignmentState{
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		},
@@ -152,6 +157,9 @@ func TestModelAssignmentsRoundTrip(t *testing.T) {
 
 	if !reflect.DeepEqual(got.ClaudeModelAssignments, want.ClaudeModelAssignments) {
 		t.Errorf("ClaudeModelAssignments = %v, want %v", got.ClaudeModelAssignments, want.ClaudeModelAssignments)
+	}
+	if !reflect.DeepEqual(got.KiroModelAssignments, want.KiroModelAssignments) {
+		t.Errorf("KiroModelAssignments = %v, want %v", got.KiroModelAssignments, want.KiroModelAssignments)
 	}
 	if !reflect.DeepEqual(got.ModelAssignments, want.ModelAssignments) {
 		t.Errorf("ModelAssignments = %v, want %v", got.ModelAssignments, want.ModelAssignments)

@@ -313,20 +313,50 @@ func (b *byteReaderAt) ReadAt(p []byte, off int64) (int, error) {
 }
 
 // writeExecutable writes the content from r to outPath with executable permissions.
+// writeExecutable writes a binary to outPath using an atomic rename to avoid
+// ETXTBSY ("text file busy") errors on Linux when the target binary is
+// currently running (e.g. engram as an MCP server). The rename trick works
+// because os.Rename replaces the directory entry — the running process keeps
+// its open file descriptor to the old inode, while new executions pick up
+// the new binary.
 func writeExecutable(r io.Reader, outPath string) error {
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+	dir := filepath.Dir(outPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
 
-	f, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	// Write to a temp file in the same directory so Rename is always
+	// same-filesystem (atomic on POSIX).
+	tmp, err := os.CreateTemp(dir, ".engram-upgrade-*.tmp")
 	if err != nil {
-		return fmt.Errorf("create %s: %w", outPath, err)
+		return fmt.Errorf("create temp file: %w", err)
 	}
-	defer f.Close()
+	tmpPath := tmp.Name()
 
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("write %s: %w", outPath, err)
+	// Clean up on any failure path.
+	defer func() {
+		if tmpPath != "" {
+			os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := io.Copy(tmp, r); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
 	}
 
+	if err := os.Chmod(tmpPath, 0o755); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, outPath); err != nil {
+		return fmt.Errorf("rename %s -> %s: %w", tmpPath, outPath, err)
+	}
+
+	// Rename succeeded — disarm the deferred cleanup.
+	tmpPath = ""
 	return nil
 }

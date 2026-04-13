@@ -20,6 +20,8 @@ const (
 	BackupSourceSync BackupSource = "sync"
 	// BackupSourceUpgrade indicates the backup was created before an upgrade run.
 	BackupSourceUpgrade BackupSource = "upgrade"
+	// BackupSourceUninstall indicates the backup was created before an uninstall run.
+	BackupSourceUninstall BackupSource = "uninstall"
 )
 
 // Label returns a human-readable string for the BackupSource.
@@ -32,6 +34,8 @@ func (s BackupSource) Label() string {
 		return "sync"
 	case BackupSourceUpgrade:
 		return "upgrade"
+	case BackupSourceUninstall:
+		return "uninstall"
 	default:
 		return "unknown source"
 	}

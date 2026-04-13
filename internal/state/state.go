@@ -27,6 +27,11 @@ type InstallState struct {
 	// back to the "balanced" preset every time.
 	ClaudeModelAssignments map[string]string `json:"claude_model_assignments,omitempty"`
 
+	// KiroModelAssignments maps SDD phase names to a Claude model alias for
+	// Kiro IDE specifically. Persisted independently from ClaudeModelAssignments
+	// so Kiro and Claude Code model choices survive across sync runs.
+	KiroModelAssignments map[string]string `json:"kiro_model_assignments,omitempty"`
+
 	// ModelAssignments maps sub-agent names to provider/model pairs (OpenCode).
 	ModelAssignments map[string]ModelAssignmentState `json:"model_assignments,omitempty"`
 }

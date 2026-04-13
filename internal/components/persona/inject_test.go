@@ -260,6 +260,180 @@ func TestInjectOpenCodeGentlemanWritesAgentsFile(t *testing.T) {
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("AGENTS.md missing real persona content")
 	}
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing persona marker")
+	}
+}
+
+func TestInjectOpenCodePreservesUserContentInsteadOfOverwriting(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	userContent := "# My custom rules\n\nDo not overwrite this file.\n"
+	if err := os.WriteFile(path, []byte(userContent), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "Do not overwrite this file.") {
+		t.Fatal("AGENTS.md user content was overwritten")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing managed persona section after inject")
+	}
+}
+
+func TestInjectOpenCodeDoesNotStripLookalikeUserContent(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	lookalike := "## Rules\n\n- Team rules.\n\n## Personality\n\nSenior Architect for my org.\n\nDo not delete this custom preface.\n"
+	if err := os.WriteFile(path, []byte(lookalike), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "Do not delete this custom preface.") {
+		t.Fatal("OpenCode AGENTS.md lookalike user content was stripped")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing managed persona section after inject")
+	}
+}
+
+func TestInjectOpenCodePreservesUserPrefaceAboveATLBlock(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// User has custom content with fingerprint-like headings ABOVE an old ATL block.
+	// ATL markers must NOT trigger persona legacy stripping.
+	existing := "## Rules\n\n- My team's custom rules.\n\n## Personality\n\nSenior Architect in my org.\n\n" +
+		"<!-- BEGIN:agent-teams-lite -->\nOld ATL content.\n<!-- END:agent-teams-lite -->\n"
+	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "My team's custom rules.") {
+		t.Fatal("user preface above ATL block was stripped — ATL should not enable persona stripping")
+	}
+	if strings.Contains(text, "BEGIN:agent-teams-lite") {
+		t.Fatal("ATL block should have been stripped by StripLegacyATLBlock")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing managed persona section")
+	}
+}
+
+func TestInjectOpenCodeReplacesExactLegacyAssetWithoutDuplication(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Write the exact legacy asset (no markers) — simulates old installer output.
+	legacyContent := assets.MustRead("opencode/persona-gentleman.md")
+	if err := os.WriteFile(path, []byte(legacyContent), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	text := string(content)
+	// Must have exactly ONE persona marker — no duplication.
+	if strings.Count(text, "<!-- gentle-ai:persona -->") != 1 {
+		t.Fatalf("expected exactly 1 persona marker, got %d — legacy asset was not replaced cleanly",
+			strings.Count(text, "<!-- gentle-ai:persona -->"))
+	}
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("persona content missing after replacing legacy asset")
+	}
+}
+
+func TestInjectOpenCodePreservesUserPrefaceAboveManagedMarkers(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Simulate: user has custom content with fingerprint-like headings ABOVE
+	// existing managed markers. This is the exact scenario where aggressive
+	// legacy stripping would destroy user content.
+	existing := "## Rules\n\n- My team's custom rules.\n\n## Personality\n\nSenior Architect in my org.\n\n" +
+		"<!-- gentle-ai:engram-protocol -->\nEngram protocol here.\n<!-- /gentle-ai:engram-protocol -->\n"
+	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "My team's custom rules.") {
+		t.Fatal("user preface above managed markers was stripped — should be preserved")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing managed persona section after inject")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:engram-protocol -->") {
+		t.Fatal("existing engram section was lost")
+	}
 }
 
 func TestInjectOpenCodeNeutralPreservesManagedSections(t *testing.T) {

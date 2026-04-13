@@ -10,6 +10,7 @@ type Selection struct {
 	StrictTDD              bool
 	ModelAssignments       map[string]ModelAssignment  // key = sub-agent name (e.g., "sdd-init")
 	ClaudeModelAssignments map[string]ClaudeModelAlias // key = phase name; value = opus|sonnet|haiku
+	KiroModelAssignments   map[string]ClaudeModelAlias // key = phase name; value = opus|sonnet|haiku (Kiro-only)
 	Profiles               []Profile                   // named SDD profiles to generate/update during sync
 }
 
@@ -42,6 +43,7 @@ func (s Selection) HasComponent(component ComponentID) bool {
 type SyncOverrides struct {
 	ModelAssignments       map[string]ModelAssignment  // nil = no override; empty map = reset to defaults
 	ClaudeModelAssignments map[string]ClaudeModelAlias // nil = no override; empty map = reset to defaults
+	KiroModelAssignments   map[string]ClaudeModelAlias // nil = no override; empty map = reset to defaults
 	SDDMode                SDDModeID                   // "" = no override; when non-empty, overrides the sync's default SDD mode
 	StrictTDD              *bool                       // nil = no override; non-nil = override strict TDD mode
 	Profiles               []Profile                   // NEW: profile creation/updates during sync

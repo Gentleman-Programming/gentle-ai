@@ -106,6 +106,51 @@ func TestExecute_DevBuildOnlyNoBackupCreated(t *testing.T) {
 	}
 }
 
+func TestExecute_VersionUnknownIsSurfacedAsSkipped(t *testing.T) {
+	results := []update.UpdateResult{
+		makeResult("engram", update.VersionUnknown, "", "1.2.0", update.InstallBinary),
+	}
+	results[0].Tool.DetectCmd = []string{"engram", "version"}
+
+	report := Execute(context.Background(), results, linuxProfile(), t.TempDir(), false)
+
+	if len(report.Results) != 1 {
+		t.Fatalf("len(Results) = %d, want 1", len(report.Results))
+	}
+	if report.Results[0].Status != UpgradeSkipped {
+		t.Fatalf("status = %q, want %q", report.Results[0].Status, UpgradeSkipped)
+	}
+	if report.Results[0].ManualHint == "" {
+		t.Fatal("ManualHint must be populated for version-unknown tools")
+	}
+	if !strings.Contains(report.Results[0].ManualHint, "`engram version`") {
+		t.Fatalf("ManualHint = %q, want detect command hint", report.Results[0].ManualHint)
+	}
+	if report.BackupID != "" {
+		t.Fatalf("BackupID = %q, want empty when nothing is executed", report.BackupID)
+	}
+}
+
+// --- TestRenderUpgradeReport_DryRunManualHintNotCountedAsPending ---
+
+func TestRenderUpgradeReport_DryRunManualHintNotCountedAsPending(t *testing.T) {
+	report := UpgradeReport{
+		DryRun: true,
+		Results: []ToolUpgradeResult{
+			{ToolName: "engram", Status: UpgradeSkipped, ManualHint: "source build — upgrade manually"},
+		},
+	}
+
+	output := RenderUpgradeReport(report)
+
+	if strings.Contains(output, "upgrade(s) pending") {
+		t.Fatalf("manual-hint skips must NOT be counted as pending upgrades in dry-run:\n%s", output)
+	}
+	if !strings.Contains(output, "manual") {
+		t.Fatalf("dry-run output should mention manual attention:\n%s", output)
+	}
+}
+
 // --- TestExecute_BackupBeforeExecution ---
 
 // TestExecute_BackupBeforeExecution verifies the architectural invariant:

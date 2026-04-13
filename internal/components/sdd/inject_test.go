@@ -386,6 +386,47 @@ func TestInjectGeminiWritesSDDOrchestratorAndSkills(t *testing.T) {
 	}
 }
 
+func TestInjectQwenCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
+	home := t.TempDir()
+
+	qwenAdapter, err := agents.NewAdapter("qwen-code")
+	if err != nil {
+		t.Fatalf("NewAdapter(qwen-code) error = %v", err)
+	}
+
+	result, injectErr := Inject(home, qwenAdapter, "")
+	if injectErr != nil {
+		t.Fatalf("Inject(qwen) error = %v", injectErr)
+	}
+
+	if !result.Changed {
+		t.Fatal("Inject(qwen) changed = false")
+	}
+
+	// Verify SDD orchestrator was injected into QWEN.md.
+	promptPath := filepath.Join(home, ".qwen", "QWEN.md")
+	content, readErr := os.ReadFile(promptPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q) error = %v", promptPath, readErr)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "Spec-Driven Development") {
+		t.Fatal("Qwen Code system prompt missing SDD orchestrator content")
+	}
+
+	// Verify Qwen-specific skill paths are referenced in the orchestrator.
+	if !strings.Contains(text, "~/.qwen/skills/") {
+		t.Fatal("Qwen Code orchestrator missing ~/.qwen/skills/ path reference")
+	}
+
+	// Should also write SDD skill files.
+	skillPath := filepath.Join(home, ".qwen", "skills", "sdd-init", "SKILL.md")
+	if _, err := os.Stat(skillPath); err != nil {
+		t.Fatalf("expected SDD skill file %q: %v", skillPath, err)
+	}
+}
+
 func TestInjectVSCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -2425,6 +2466,7 @@ func TestSDDOrchestratorAssetSelection(t *testing.T) {
 		{agent: model.AgentCodex, want: "codex/sdd-orchestrator.md"},
 		{agent: model.AgentWindsurf, want: "windsurf/sdd-orchestrator.md"},
 		{agent: model.AgentCursor, want: "cursor/sdd-orchestrator.md"},
+		{agent: model.AgentQwenCode, want: "qwen/sdd-orchestrator.md"},
 		{agent: model.AgentClaudeCode, want: "generic/sdd-orchestrator.md"},
 		{agent: model.AgentOpenCode, want: "generic/sdd-orchestrator.md"},
 		{agent: model.AgentVSCodeCopilot, want: "generic/sdd-orchestrator.md"},
@@ -2934,6 +2976,150 @@ func TestInjectCursorWritesSubAgentFiles(t *testing.T) {
 		if strings.Contains(f, ".cursor/agents/") {
 			t.Fatalf("second inject should not report changed agent files, but got %s", f)
 		}
+	}
+}
+
+// TestInjectKiroFallsBackToClaudeModelAssignmentsWhenKiroMapUnset verifies that
+// when KiroModelAssignments is nil, the injector falls back to ClaudeModelAssignments
+// for Kiro phase model resolution (legacy backward-compatible path).
+func TestInjectKiroFallsBackToClaudeModelAssignmentsWhenKiroMapUnset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+
+	adapter, err := agents.NewAdapter(model.AgentKiroIDE)
+	if err != nil {
+		t.Fatalf("NewAdapter(kiro-ide) error = %v", err)
+	}
+
+	assignments := map[string]model.ClaudeModelAlias{
+		// Non-default overrides we need to prove at runtime.
+		"sdd-design":  model.ClaudeModelOpus,
+		"sdd-archive": model.ClaudeModelHaiku,
+		// Default fallback for unspecified phases.
+		"default": model.ClaudeModelSonnet,
+	}
+
+	result, err := Inject(home, adapter, "", InjectOptions{ClaudeModelAssignments: assignments})
+	if err != nil {
+		t.Fatalf("Inject(kiro, custom assignments) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(kiro, custom assignments) changed = false")
+	}
+
+	tests := []struct {
+		phase string
+		want  string
+	}{
+		{phase: "sdd-design", want: "model: claude-opus-4.6"},
+		{phase: "sdd-archive", want: "model: claude-haiku-4.5"},
+		// Unspecified phase should use default sonnet.
+		{phase: "sdd-spec", want: "model: claude-sonnet-4.6"},
+	}
+
+	for _, tt := range tests {
+		path := filepath.Join(home, ".kiro", "agents", tt.phase+".md")
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("ReadFile(%s) error = %v", tt.phase, readErr)
+		}
+		text := string(content)
+		if strings.Contains(text, "{{KIRO_MODEL}}") {
+			t.Fatalf("agent %s still contains unresolved {{KIRO_MODEL}} placeholder", tt.phase)
+		}
+		if !strings.Contains(text, tt.want) {
+			t.Fatalf("agent %s missing %q", tt.phase, tt.want)
+		}
+	}
+}
+
+func TestInjectKiroBalancedPresetAssignmentsEndToEnd(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+
+	adapter, err := agents.NewAdapter(model.AgentKiroIDE)
+	if err != nil {
+		t.Fatalf("NewAdapter(kiro-ide) error = %v", err)
+	}
+
+	// This mirrors the map emitted by the Claude model picker (balanced preset).
+	balance := model.ClaudeModelPresetBalanced()
+
+	result, err := Inject(home, adapter, "", InjectOptions{ClaudeModelAssignments: balance})
+	if err != nil {
+		t.Fatalf("Inject(kiro, balanced preset) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(kiro, balanced preset) changed = false")
+	}
+
+	// Validate every generated Kiro phase file gets the expected model ID.
+	for _, phase := range []string{
+		"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design",
+		"sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
+	} {
+		alias, ok := balance[phase]
+		if !ok {
+			alias = balance["default"]
+		}
+		wantModelLine := "model: " + model.KiroModelID(alias)
+
+		path := filepath.Join(home, ".kiro", "agents", phase+".md")
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("ReadFile(%s) error = %v", phase, readErr)
+		}
+		if !strings.Contains(string(content), wantModelLine) {
+			t.Fatalf("agent %s model line mismatch: want %q", phase, wantModelLine)
+		}
+	}
+}
+
+// TestInjectKiroModelAssignmentsTakePrecedenceOverClaude verifies that when
+// both KiroModelAssignments and ClaudeModelAssignments are provided,
+// KiroModelAssignments wins for Kiro subagent file generation.
+func TestInjectKiroModelAssignmentsTakePrecedenceOverClaude(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+
+	adapter, err := agents.NewAdapter(model.AgentKiroIDE)
+	if err != nil {
+		t.Fatalf("NewAdapter(kiro-ide) error = %v", err)
+	}
+
+	// Conflicting values: Kiro says opus for sdd-design, Claude says haiku.
+	// Kiro-specific assignments MUST take precedence.
+	opts := InjectOptions{
+		KiroModelAssignments: map[string]model.ClaudeModelAlias{
+			"sdd-design": model.ClaudeModelOpus,
+		},
+		ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
+			"sdd-design": model.ClaudeModelHaiku,
+		},
+	}
+
+	_, err = Inject(home, adapter, "", opts)
+	if err != nil {
+		t.Fatalf("Inject error = %v", err)
+	}
+
+	path := filepath.Join(home, ".kiro", "agents", "sdd-design.md")
+	content, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("ReadFile(sdd-design) error = %v", readErr)
+	}
+
+	wantKiro := "model: " + model.KiroModelID(model.ClaudeModelOpus)
+	wantClaude := "model: " + model.KiroModelID(model.ClaudeModelHaiku)
+
+	if !strings.Contains(string(content), wantKiro) {
+		t.Fatalf("expected KiroModelAssignments to take precedence: want %q not found in file", wantKiro)
+	}
+	if strings.Contains(string(content), wantClaude) {
+		t.Fatalf("ClaudeModelAssignments must NOT be used when KiroModelAssignments is set: found %q", wantClaude)
 	}
 }
 

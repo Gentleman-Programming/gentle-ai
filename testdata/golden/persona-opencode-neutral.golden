@@ -1,3 +1,4 @@
+<!-- gentle-ai:persona -->
 ## Rules
 
 - Never add "Co-Authored-By" or AI attribution to commits. Use conventional commits only.
@@ -49,3 +50,4 @@ When you detect any of these contexts, IMMEDIATELY load the corresponding skill 
 | Creating new AI skills | skill-creator |
 
 Load skills BEFORE writing code. Apply ALL patterns. Multiple skills can apply simultaneously.
+<!-- /gentle-ai:persona -->

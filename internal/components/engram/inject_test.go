@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/qwen"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 )
 
@@ -20,6 +21,7 @@ func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func codexAdapter() agents.Adapter    { return codex.NewAdapter() }
 func geminiAdapter() agents.Adapter   { return gemini.NewAdapter() }
+func qwenAdapter() agents.Adapter     { return qwen.NewAdapter() }
 
 // assertArgsHaveToolsAgent is a shared helper that validates a JSON file
 // contains the MCP "engram" entry with --tools=agent in args.
@@ -810,15 +812,17 @@ func TestEngramInjectAbsolutePathForOpenCodeMergeStrategy(t *testing.T) {
 	}
 
 	text := string(content)
-	if !strings.Contains(text, absPath) {
-		t.Fatalf("OpenCode settings missing absolute engram path, got: %s", text)
+	// For standard agents (OpenCode), we now prioritize a stable relative path
+	// "engram" instead of a dynamic absolute path to ensure idempotency.
+	if !strings.Contains(text, `"engram"`) {
+		t.Fatalf("OpenCode settings missing stable relative engram path, got: %s", text)
 	}
 	// OpenCode 1.3.3+: command must be an array, no separate "args" field.
 	if strings.Contains(text, `"args"`) {
 		t.Fatalf("OpenCode settings must NOT have a separate args field; got: %s", text)
 	}
 
-	// Structurally verify command is a []any containing the absolute path.
+	// Structurally verify command is a []any containing the stable path "engram".
 	var parsed map[string]any
 	if err := json.Unmarshal(content, &parsed); err != nil {
 		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
@@ -851,8 +855,8 @@ func TestEngramInjectAbsolutePathForOpenCodeMergeStrategy(t *testing.T) {
 		t.Fatalf("mcp.engram.command array is empty; got:\n%s", text)
 	}
 	firstElem, ok := cmdArr[0].(string)
-	if !ok || firstElem != absPath {
-		t.Fatalf("mcp.engram.command[0] = %v, want %q; got:\n%s", cmdArr[0], absPath, text)
+	if !ok || firstElem != "engram" {
+		t.Fatalf("mcp.engram.command[0] = %v, want stable relative 'engram'; got:\n%s", cmdArr[0], text)
 	}
 }
 
@@ -880,7 +884,56 @@ func TestEngramInjectAbsolutePathForGeminiMergeStrategy(t *testing.T) {
 	}
 
 	text := string(content)
-	if !strings.Contains(text, absPath) {
-		t.Fatalf("settings.json missing absolute path %q; got:\n%s", absPath, text)
+	// For standard agents (Gemini), we now prioritize a stable relative path
+	// "engram" instead of a dynamic absolute path to ensure idempotency.
+	if !strings.Contains(text, `"engram"`) {
+		t.Fatalf("settings.json missing stable relative path 'engram'; got:\n%s", text)
+	}
+}
+
+func TestQwenEngramIdempotency(t *testing.T) {
+	orig := EngramLookPath
+	t.Cleanup(func() { EngramLookPath = orig })
+
+	homeDir := t.TempDir()
+	adapter := qwenAdapter()
+	settingsPath := adapter.SettingsPath(homeDir)
+
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	EngramLookPath = func(string) (string, error) {
+		return "", os.ErrNotExist
+	}
+
+	_, err := Inject(homeDir, adapter)
+	if err != nil {
+		t.Fatalf("First injection failed: %v", err)
+	}
+
+	content1, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate engram being found later (e.g. after go install or manual install)
+	absPath := "/usr/local/bin/engram"
+	EngramLookPath = func(string) (string, error) {
+		return absPath, nil
+	}
+
+	_, err = Inject(homeDir, adapter)
+	if err != nil {
+		t.Fatalf("Second injection failed: %v", err)
+	}
+
+	content2, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(content1) != string(content2) {
+		t.Errorf("Idempotency failure! Settings changed between runs despite engram command being stable-relative.\nRun 1:\n%s\nRun 2:\n%s", string(content1), string(content2))
 	}
 }

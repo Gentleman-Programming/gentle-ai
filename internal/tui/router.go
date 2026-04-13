@@ -12,6 +12,7 @@ var linearRoutes = map[Screen]Route{
 	ScreenPersona:                {Forward: ScreenPreset, Backward: ScreenAgents},
 	ScreenPreset:                 {Forward: ScreenDependencyTree, Backward: ScreenPersona},
 	ScreenClaudeModelPicker:      {Forward: ScreenDependencyTree, Backward: ScreenPreset},
+	ScreenKiroModelPicker:        {Forward: ScreenDependencyTree, Backward: ScreenPreset},
 	ScreenSDDMode:                {Forward: ScreenStrictTDD, Backward: ScreenPreset},
 	ScreenStrictTDD:              {Forward: ScreenDependencyTree, Backward: ScreenSDDMode},
 	ScreenModelPicker:            {Forward: ScreenStrictTDD, Backward: ScreenSDDMode},
@@ -41,6 +42,11 @@ var linearRoutes = map[Screen]Route{
 	ScreenAgentBuilderPreview:    {Backward: ScreenAgentBuilderPrompt},
 	ScreenAgentBuilderInstalling: {Forward: ScreenAgentBuilderComplete},
 	ScreenAgentBuilderComplete:   {Backward: ScreenWelcome},
+	ScreenUninstallMode:          {Backward: ScreenWelcome},
+	ScreenUninstall:              {Backward: ScreenUninstallMode},
+	ScreenUninstallComponents:    {Backward: ScreenUninstall},
+	ScreenUninstallProfiles:      {Backward: ScreenUninstallComponents},
+	ScreenUninstallResult:        {Backward: ScreenWelcome},
 }
 
 func NextScreen(screen Screen) (Screen, bool) {

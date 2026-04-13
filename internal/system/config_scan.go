@@ -15,10 +15,14 @@ type ConfigState struct {
 	IsDirectory bool
 }
 
-// knownAgentConfigDirs enumerates every agent's GlobalConfigDir as a
-// (agentID, path) pair for the given homeDir. This is a compatibility shim
+// knownAgentConfigDirs enumerates the per-agent config roots used by ScanConfigs
+// for presence scanning as (agentID, path) pairs. This is a compatibility shim
 // that mirrors the adapter registry's full set without importing the agents
 // package (which would create an import cycle: system ← agents ← system).
+//
+// Most entries mirror Adapter.GlobalConfigDir(). Kiro is an intentional
+// exception: we scan `~/.kiro` (managed artifacts root) instead of
+// `%APPDATA%/kiro/User` (settings root) due to Kiro's split-root layout.
 //
 // When a new agent is added to the registry, its entry must also be added here
 // until the import cycle is resolved and ScanConfigs can delegate directly to
@@ -27,12 +31,15 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 	return []ConfigState{
 		{Agent: "claude-code", Path: filepath.Join(homeDir, ".claude")},
 		{Agent: "opencode", Path: filepath.Join(homeDir, ".config", "opencode")},
+		{Agent: "kilocode", Path: filepath.Join(homeDir, ".config", "kilo")},
 		{Agent: "gemini-cli", Path: filepath.Join(homeDir, ".gemini")},
 		{Agent: "cursor", Path: filepath.Join(homeDir, ".cursor")},
 		{Agent: "vscode-copilot", Path: vscodeCopilotGlobalConfigDir(homeDir)},
 		{Agent: "codex", Path: filepath.Join(homeDir, ".codex")},
 		{Agent: "antigravity", Path: filepath.Join(homeDir, ".gemini", "antigravity")},
 		{Agent: "windsurf", Path: filepath.Join(homeDir, ".codeium", "windsurf")},
+		{Agent: "qwen-code", Path: filepath.Join(homeDir, ".qwen")},
+		{Agent: "kiro-ide", Path: filepath.Join(homeDir, ".kiro")},
 	}
 }
 

@@ -16,6 +16,7 @@
 | Codex | `codex` | Yes | Yes | Solo-agent | No | No | `~/.codex` |
 | Windsurf | `windsurf` | Yes (native) | Yes | Solo-agent | No | No | `~/.codeium/windsurf` |
 | Antigravity | `antigravity` | Yes (native) | Yes | Solo-agent + Mission Control | No | No | `~/.gemini/antigravity` |
+| Kiro IDE | `kiro-ide` | Yes | Yes | Full (native subagents) | No | No | `~/.kiro` |
 
 All agents receive the **full SDD orchestrator** injected into their system prompt, plus skill files written to their skills directory. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
 
@@ -30,7 +31,7 @@ All agents receive the **full SDD orchestrator** injected into their system prom
 
 ### Cursor Native Subagents
 
-Cursor uses its built-in `.cursor/agents/` system. `gentle-ai` writes 9 agent files to `~/.cursor/agents/sdd-{phase}.md` — one per SDD phase. Cursor's Agent auto-delegates to the correct subagent based on the `description` field in each file's YAML frontmatter.
+Cursor uses its built-in `.cursor/agents/` system. `gentle-ai` writes 10 agent files to `~/.cursor/agents/sdd-{phase}.md` — one per SDD phase. Cursor's Agent auto-delegates to the correct subagent based on the `description` field in each file's YAML frontmatter.
 
 - `sdd-explore` and `sdd-verify` run with `readonly: true`
 - Each subagent gets its own context window (fresh context, no pollution)
@@ -49,17 +50,27 @@ Windsurf runs as a solo-agent (no custom sub-agents). The orchestrator leverages
 
 Antigravity is an agent-first platform with built-in sub-agents (Browser, Terminal) managed by Mission Control. However, custom sub-agent creation is not yet available. SDD phases run inline, with Mission Control handling automatic delegation to built-in sub-agents when specialized tooling is needed (e.g., Browser for research during `sdd-explore`).
 
+### Kiro Native Subagents
+
+Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase agents (`sdd-init` through `sdd-onboard`) and resolves the `model:` field during injection from Claude alias assignments (`opus|sonnet|haiku`) to Kiro-native model IDs.
+
+- Frontmatter includes `includeMcpJson: true` for all phase agents
+- Phase-specific tools are preserved (`sdd-explore` and `sdd-verify` use read/shell/context7 as required)
+- Orchestrator remains in steering (`~/.kiro/steering/gentle-ai.md`) and delegates execution to native subagents
+
 ---
 
 ## SDD Mode Support
 
-| Feature | Claude Code | OpenCode | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity |
-|---------|:-----------:|:--------:|:----------:|:------:|:---------------:|:-----:|:--------:|:-----------:|
-| SDD orchestrator | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Single-mode SDD | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Multi-mode SDD | — | Yes | — | — | — | — | — | — |
+| Feature | Claude Code | OpenCode | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE |
+|---------|:-----------:|:--------:|:----------:|:------:|:---------------:|:-----:|:--------:|:-----------:|:--------:|
+| SDD orchestrator | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Single-mode SDD | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Multi-mode SDD | — | Yes | — | — | — | — | — | — | Yes* |
 
-**Multi-mode** (assigning different AI models to each SDD phase) is an **OpenCode-only** feature because it requires OpenCode's provider system to route phases to specific models. All other agents run in **single-mode** — the orchestrator manages everything using whatever model the agent is already running.
+**Multi-mode** (assigning different AI models to each SDD phase) is natively supported by **OpenCode** (via its provider system) and **Kiro IDE** (via native subagent `model:` frontmatter — each phase agent runs with its own model ID). All other agents run in **single-mode** — the orchestrator manages everything using whatever model the agent is already running.
+
+> \* **Kiro multi-mode** assigns models per phase through `KiroModelAssignments` (configured via *Configure Models → Configure Kiro models* in the TUI). The selected alias (`opus|sonnet|haiku`) is resolved to a Kiro-native model ID and stamped into each `~/.kiro/agents/sdd-{phase}.md` at sync time.
 
 ---
 
@@ -82,7 +93,7 @@ Antigravity is an agent-first platform with built-in sub-agents (Browser, Termin
 - Custom sub-agents defined as markdown files in `~/.gemini/agents/`
 
 ### Cursor
-- Native subagents via `~/.cursor/agents/sdd-{phase}.md` (9 files installed by gentle-ai)
+- Native subagents via `~/.cursor/agents/sdd-{phase}.md` (10 files installed by gentle-ai)
 - Skills at `~/.cursor/skills/`
 - System prompt in `~/.cursor/rules/gentle-ai.mdc`
 - MCP config in `~/.cursor/mcp.json`
@@ -111,3 +122,13 @@ Antigravity is an agent-first platform with built-in sub-agents (Browser, Termin
 - System prompt appended to `~/.gemini/GEMINI.md` (shared with Gemini CLI — collision check warns if both are installed)
 - Mission Control handles built-in sub-agent delegation (Browser, Terminal) automatically
 - Settings managed via the IDE's Agent settings UI, not via `settings.json`
+
+### Kiro IDE
+- **Detection**: gentle-ai detects Kiro from its config root (`~/.kiro`) during install/TUI discovery — `~/.kiro` must exist (created on first Kiro launch). `kiro` on `PATH` is also checked for sync/upgrade flows but is not required for install auto-detection
+- **Steering file** (all platforms): `~/.kiro/steering/gentle-ai.md` with frontmatter `inclusion: always`
+- Native subagents at `~/.kiro/agents/sdd-{phase}.md` (10 files)
+- Skills (all platforms) at `~/.kiro/skills/`
+- **MCP config at a separate root** — always `~/.kiro/settings/mcp.json` (macOS/Linux) or `%USERPROFILE%\.kiro\settings\mcp.json` (Windows), regardless of GlobalConfigDir
+- Native Kiro specs workflow: `.kiro/specs/<feature>/requirements.md`, `design.md`, `tasks.md` — with approval gates before apply and archive phases
+- Manual install only — download from [kiro.dev/downloads](https://kiro.dev/downloads)
+- See [docs/kiro.md](kiro.md) for full path reference and SDD behavior details

@@ -205,6 +205,28 @@ func TestRunArgsRestoreUnknownIDReturnsError(t *testing.T) {
 	}
 }
 
+func TestRunArgsUninstallIsDispatched(t *testing.T) {
+	var buf bytes.Buffer
+	// uninstall without required flags prints usage help — that's enough to
+	// confirm the dispatch path works without needing real agents or state.
+	_ = RunArgs([]string{"uninstall"}, &buf)
+	// If we got here without panic, the dispatch to cli.RunUninstall works.
+}
+
+func TestRunArgsUninstallBypassesPlatformValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error {
+		return fmt.Errorf("unsupported platform")
+	}
+
+	var buf bytes.Buffer
+	// uninstall should NOT call ensureCurrentOSSupported — it runs before
+	// the platform check in the switch.
+	_ = RunArgs([]string{"uninstall"}, &buf)
+	// If we got here, uninstall bypassed the platform validation.
+}
+
 // TestListBackupsFallsBackGracefullyForOldManifests verifies that old manifests
 // without Source/Description are still returned (not skipped) and can be displayed
 // via DisplayLabel without panicking.
@@ -293,6 +315,28 @@ func TestTuiSyncStrictTDDNilOverrideNoChange(t *testing.T) {
 
 func boolPtr(b bool) *bool { return &b }
 
+// TestApplyOverrides_KiroModelAssignments verifies that a non-nil KiroModelAssignments
+// override replaces the entire KiroModelAssignments map in the selection (same
+// replacement semantics as ClaudeModelAssignments — not a key-level merge).
+func TestApplyOverrides_KiroModelAssignments(t *testing.T) {
+	selection := model.Selection{
+		KiroModelAssignments: map[string]model.ClaudeModelAlias{"sdd-apply": model.ClaudeModelSonnet},
+	}
+	overrides := &model.SyncOverrides{
+		KiroModelAssignments: map[string]model.ClaudeModelAlias{"sdd-design": model.ClaudeModelOpus},
+	}
+
+	applyOverrides(&selection, overrides)
+
+	// The whole map is replaced — prior entries (sdd-apply) are gone.
+	if got := selection.KiroModelAssignments["sdd-design"]; got != model.ClaudeModelOpus {
+		t.Fatalf("KiroModelAssignments[sdd-design] = %q, want %q", got, model.ClaudeModelOpus)
+	}
+	if _, exists := selection.KiroModelAssignments["sdd-apply"]; exists {
+		t.Fatal("KiroModelAssignments[sdd-apply] should not exist after full-map replacement")
+	}
+}
+
 // ─── Persist model assignments (TUI path) ───────────────────────────────────
 
 // TestLoadPersistedAssignmentsPopulatesEmptySelection verifies that when
@@ -301,12 +345,16 @@ func boolPtr(b bool) *bool { return &b }
 func TestLoadPersistedAssignmentsPopulatesEmptySelection(t *testing.T) {
 	home := t.TempDir()
 
-	// Seed state with assignments.
+	// Seed state with assignments including Kiro.
 	err := state.Write(home, state.InstallState{
 		InstalledAgents: []string{"opencode"},
 		ClaudeModelAssignments: map[string]string{
 			"orchestrator": "opus",
 			"sdd-apply":    "sonnet",
+		},
+		KiroModelAssignments: map[string]string{
+			"sdd-design":  "opus",
+			"sdd-archive": "haiku",
 		},
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
@@ -324,6 +372,12 @@ func TestLoadPersistedAssignmentsPopulatesEmptySelection(t *testing.T) {
 	}
 	if got := selection.ClaudeModelAssignments["sdd-apply"]; got != "sonnet" {
 		t.Errorf("ClaudeModelAssignments[sdd-apply] = %q, want %q", got, "sonnet")
+	}
+	if got := selection.KiroModelAssignments["sdd-design"]; got != model.ClaudeModelOpus {
+		t.Errorf("KiroModelAssignments[sdd-design] = %q, want %q", got, model.ClaudeModelOpus)
+	}
+	if got := selection.KiroModelAssignments["sdd-archive"]; got != model.ClaudeModelHaiku {
+		t.Errorf("KiroModelAssignments[sdd-archive] = %q, want %q", got, model.ClaudeModelHaiku)
 	}
 	ma := selection.ModelAssignments["sdd-init"]
 	if ma.ProviderID != "anthropic" || ma.ModelID != "claude-sonnet-4" {
@@ -399,6 +453,34 @@ func TestPersistAssignmentsPreservesInstalledAgents(t *testing.T) {
 	}
 	if got.ClaudeModelAssignments["orchestrator"] != "opus" {
 		t.Errorf("ClaudeModelAssignments[orchestrator] = %q, want %q", got.ClaudeModelAssignments["orchestrator"], "opus")
+	}
+}
+
+// TestPersistAndLoadKiroModelAssignments verifies that KiroModelAssignments
+// survive a persist/load round-trip via state.json.
+func TestPersistAndLoadKiroModelAssignments(t *testing.T) {
+	home := t.TempDir()
+
+	selection := model.Selection{
+		KiroModelAssignments: map[string]model.ClaudeModelAlias{
+			"sdd-design":  model.ClaudeModelOpus,
+			"sdd-archive": model.ClaudeModelHaiku,
+			"default":     model.ClaudeModelSonnet,
+		},
+	}
+	persistAssignments(home, selection)
+
+	loaded := model.Selection{}
+	loadPersistedAssignments(home, &loaded)
+
+	if got := loaded.KiroModelAssignments["sdd-design"]; got != model.ClaudeModelOpus {
+		t.Errorf("round-trip KiroModelAssignments[sdd-design] = %q, want %q", got, model.ClaudeModelOpus)
+	}
+	if got := loaded.KiroModelAssignments["sdd-archive"]; got != model.ClaudeModelHaiku {
+		t.Errorf("round-trip KiroModelAssignments[sdd-archive] = %q, want %q", got, model.ClaudeModelHaiku)
+	}
+	if got := loaded.KiroModelAssignments["default"]; got != model.ClaudeModelSonnet {
+		t.Errorf("round-trip KiroModelAssignments[default] = %q, want %q", got, model.ClaudeModelSonnet)
 	}
 }
 

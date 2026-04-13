@@ -41,6 +41,8 @@ func SetupAgentSlug(agent model.AgentID) (string, bool) {
 	switch agent {
 	case model.AgentOpenCode:
 		return "opencode", true
+	case model.AgentKilocode:
+		return "kilocode", true
 	case model.AgentClaudeCode:
 		return "claude-code", true
 	case model.AgentGeminiCLI:
@@ -52,6 +54,8 @@ func SetupAgentSlug(agent model.AgentID) (string, bool) {
 		return "antigravity", true
 	case model.AgentWindsurf:
 		return "windsurf", true
+	case model.AgentQwenCode:
+		return "qwen-code", true
 	case model.AgentCursor, model.AgentVSCodeCopilot:
 		// Cursor and VS Code Copilot do not use `engram setup` — their MCP
 		// config is injected directly by the engram component. Returning false

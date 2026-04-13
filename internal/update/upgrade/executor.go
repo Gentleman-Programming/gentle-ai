@@ -205,7 +205,8 @@ func enumerateFilesInDir(dir string, excludeDirNames map[string]bool) ([]string,
 // Reporting rules:
 //   - Status UpdateAvailable → attempt upgrade; report Succeeded/Failed/Skipped(manual)
 //   - Status DevBuild → report as UpgradeSkipped with ManualHint (dev/source build)
-//   - Status UpToDate, NotInstalled, CheckFailed, VersionUnknown → omitted from report
+//   - Status VersionUnknown → report as UpgradeSkipped with ManualHint (manual attention required)
+//   - Status UpToDate, NotInstalled, CheckFailed → omitted from report
 //   - dryRun=true → no exec; eligible tools reported as UpgradeSkipped
 //
 // The backup snapshot is created before any exec call — this is the architectural
@@ -216,22 +217,26 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 	if len(progress) > 0 && progress[0] != nil {
 		pw = progress[0]
 	}
-	// Separate tools into executable (UpdateAvailable) and dev-build (DevBuild).
-	// DevBuild tools are included in the report as UpgradeSkipped with a clear hint.
+	// Separate tools into executable (UpdateAvailable), dev-build (DevBuild), and
+	// version-unknown tools. Non-actionable but user-visible states are included in
+	// the report as UpgradeSkipped so the upgrade flow never fails silently.
 	var executable []update.UpdateResult
 	var devBuilds []update.UpdateResult
+	var versionUnknowns []update.UpdateResult
 	for _, r := range results {
 		switch r.Status {
 		case update.UpdateAvailable:
 			executable = append(executable, r)
 		case update.DevBuild:
 			devBuilds = append(devBuilds, r)
-			// UpToDate, NotInstalled, CheckFailed, VersionUnknown → omit from report
+		case update.VersionUnknown:
+			versionUnknowns = append(versionUnknowns, r)
+			// UpToDate, NotInstalled, CheckFailed → omit from report
 		}
 	}
 
-	// If nothing is executable or dev-built, return empty report.
-	if len(executable) == 0 && len(devBuilds) == 0 {
+	// If nothing is executable, dev-built, or version-unknown, return empty report.
+	if len(executable) == 0 && len(devBuilds) == 0 && len(versionUnknowns) == 0 {
 		return UpgradeReport{DryRun: dryRun}
 	}
 
@@ -263,7 +268,7 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 	}
 
 	// Build results slice: dev-build skips first (no exec), then executable tools.
-	toolResults := make([]ToolUpgradeResult, 0, len(executable)+len(devBuilds))
+	toolResults := make([]ToolUpgradeResult, 0, len(executable)+len(devBuilds)+len(versionUnknowns))
 
 	// Dev-build tools: always UpgradeSkipped with a source-build hint.
 	for _, r := range devBuilds {
@@ -274,6 +279,19 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 			Method:     effectiveMethod(r.Tool, profile),
 			Status:     UpgradeSkipped,
 			ManualHint: fmt.Sprintf("source build — upgrade manually or install a release binary from https://github.com/Gentleman-Programming/%s/releases", r.Tool.Repo),
+		})
+	}
+
+	// VersionUnknown tools: surface them as skipped so the user gets a clear hint
+	// instead of a silent omission from the upgrade report.
+	for _, r := range versionUnknowns {
+		toolResults = append(toolResults, ToolUpgradeResult{
+			ToolName:   r.Tool.Name,
+			OldVersion: r.InstalledVersion,
+			NewVersion: r.LatestVersion,
+			Method:     effectiveMethod(r.Tool, profile),
+			Status:     UpgradeSkipped,
+			ManualHint: fmt.Sprintf("installed binary was found but its version could not be determined — check `%s` and reinstall if it is a stale source/dev build", detectCommandHint(r.Tool)),
 		})
 	}
 
@@ -302,6 +320,14 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 		Results:       toolResults,
 		DryRun:        dryRun,
 	}
+}
+
+func detectCommandHint(tool update.ToolInfo) string {
+	if len(tool.DetectCmd) == 0 {
+		return tool.Name
+	}
+
+	return strings.Join(tool.DetectCmd, " ")
 }
 
 // executeOne runs the upgrade for a single tool.

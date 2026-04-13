@@ -5,12 +5,15 @@ type AgentID string
 const (
 	AgentClaudeCode    AgentID = "claude-code"
 	AgentOpenCode      AgentID = "opencode"
+	AgentKilocode      AgentID = "kilocode"
 	AgentGeminiCLI     AgentID = "gemini-cli"
 	AgentCursor        AgentID = "cursor"
 	AgentVSCodeCopilot AgentID = "vscode-copilot"
 	AgentCodex         AgentID = "codex"
 	AgentAntigravity   AgentID = "antigravity"
 	AgentWindsurf      AgentID = "windsurf"
+	AgentQwenCode      AgentID = "qwen-code"
+	AgentKiroIDE       AgentID = "kiro-ide"
 )
 
 // SupportTier indicates how fully an agent supports the Gentleman AI ecosystem.
@@ -35,6 +38,22 @@ const (
 	ComponentPermission ComponentID = "permissions"
 	ComponentGGA        ComponentID = "gga"
 	ComponentTheme      ComponentID = "theme"
+)
+
+type UninstallMode string
+
+const (
+	UninstallModePartial      UninstallMode = "partial"
+	UninstallModeFull         UninstallMode = "full"
+	UninstallModeFullRemove   UninstallMode = "full-remove"
+	UninstallModeCleanInstall UninstallMode = "clean-install"
+)
+
+type EngramUninstallScope string
+
+const (
+	EngramUninstallScopeGlobal  EngramUninstallScope = "global"
+	EngramUninstallScopeProject EngramUninstallScope = "project"
 )
 
 type SkillID string

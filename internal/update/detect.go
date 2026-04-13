@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Package-level vars for testability (swap in tests via t.Cleanup).
@@ -16,6 +17,10 @@ var (
 // versionRegexp extracts a semver-like version from command output.
 // Same pattern as internal/system/deps.go for consistency.
 var versionRegexp = regexp.MustCompile(`(\d+\.\d+(?:\.\d+)?)`)
+
+// devVersionRegexp matches common unversioned source-build output like
+// "engram dev" or "version: dev".
+var devVersionRegexp = regexp.MustCompile(`(?i)(?:^|\s)dev(?:$|\s)`)
 
 // detectInstalledVersion determines the installed version of a tool.
 // For tools with nil DetectCmd (gentle-ai), returns currentBuildVersion.
@@ -34,10 +39,30 @@ func detectInstalledVersion(ctx context.Context, tool ToolInfo, currentBuildVers
 		return "" // binary not found
 	}
 
+	// Apply a bounded timeout so a hanging binary (e.g. engram stuck on DB
+	// lock) cannot block update/upgrade flows forever.
+	detectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
 	cmd := execCommand(tool.DetectCmd[0], tool.DetectCmd[1:]...)
+
+	// Kill the subprocess when the context fires. We use a goroutine because
+	// the testable execCommand var returns a plain *exec.Cmd (not CommandContext).
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-detectCtx.Done():
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+		case <-done:
+		}
+	}()
+
 	out, err := cmd.Output()
+	close(done)
 	if err != nil {
-		return "" // command failed — binary exists but version unknown
+		return "" // command failed or timed out — binary exists but version unknown
 	}
 
 	return parseVersionFromOutput(strings.TrimSpace(string(out)))
@@ -47,6 +72,10 @@ func detectInstalledVersion(ctx context.Context, tool ToolInfo, currentBuildVers
 func parseVersionFromOutput(output string) string {
 	if output == "" {
 		return ""
+	}
+
+	if devVersionRegexp.MatchString(output) {
+		return "dev"
 	}
 
 	match := versionRegexp.FindStringSubmatch(output)

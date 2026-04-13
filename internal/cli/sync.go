@@ -492,6 +492,7 @@ func (s componentSyncStep) Run() error {
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments: s.selection.ModelAssignments,
 				ClaudeModelAssignments:   s.selection.ClaudeModelAssignments,
+				KiroModelAssignments:     s.selection.KiroModelAssignments,
 				WorkspaceDir:             s.workspaceDir,
 				StrictTDD:                s.selection.StrictTDD,
 				Profiles:                 profiles,

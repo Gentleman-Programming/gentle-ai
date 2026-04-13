@@ -23,6 +23,7 @@ type InjectionResult struct {
 type InjectOptions struct {
 	OpenCodeModelAssignments map[string]model.ModelAssignment
 	ClaudeModelAssignments   map[string]model.ClaudeModelAlias
+	KiroModelAssignments     map[string]model.ClaudeModelAlias
 
 	// WorkspaceDir is the root of the current workspace (e.g. os.Getwd()).
 	// When non-empty and the adapter implements workflowInjector, native
@@ -70,6 +71,14 @@ type subAgentInjector interface {
 	// EmbeddedSubAgentsDir returns the path inside the embedded assets FS
 	// where this adapter's sub-agent sources live (e.g. "cursor/agents").
 	EmbeddedSubAgentsDir() string
+}
+
+// kiroModelResolver is an optional adapter capability. When implemented,
+// the subagent copy loop resolves ClaudeModelAlias values to native model IDs
+// and stamps them into the agent frontmatter sentinel {{KIRO_MODEL}}.
+// Adapters that do not implement this interface are unaffected.
+type kiroModelResolver interface {
+	KiroModelID(alias model.ClaudeModelAlias) string
 }
 
 // monorepoRootMarkers identify files/dirs that ONLY exist at the true root
@@ -190,10 +199,10 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	changed := false
 
 	// 1. Inject SDD orchestrator into the global system prompt for agents that
-	// rely on prompt files. OpenCode is handled differently: its orchestrator
-	// instructions must be scoped to the sdd-orchestrator agent only, otherwise
-	// the SDD phase sub-agents inherit coordinator-only delegation rules.
-	if adapter.Agent() != model.AgentOpenCode {
+	// rely on prompt files. OpenCode and Kilocode are handled differently: their
+	// orchestrator instructions must be scoped to the sdd-orchestrator agent only,
+	// otherwise the SDD phase sub-agents inherit coordinator-only delegation rules.
+	if adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
 		switch adapter.SystemPromptStrategy() {
 		case model.StrategyMarkdownSections:
 			result, err := injectMarkdownSections(homeDir, adapter, opts.ClaudeModelAssignments)
@@ -203,7 +212,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			changed = changed || result.Changed
 			files = append(files, result.Files...)
 
-		case model.StrategyFileReplace, model.StrategyAppendToFile, model.StrategyInstructionsFile:
+		case model.StrategyFileReplace, model.StrategyAppendToFile, model.StrategyInstructionsFile, model.StrategySteeringFile:
 			// For FileReplace/AppendToFile agents, the SDD orchestrator is included
 			// in the generic persona asset. However, if the user chose neutral or
 			// custom persona, the SDD content must still be injected. We append the
@@ -220,7 +229,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 	// 1b. If StrictTDD is enabled, inject the strict-tdd-mode marker section
 	// into the system prompt file so agents know Strict TDD is active.
-	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode {
+	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
 		promptPath := adapter.SystemPromptFile(homeDir)
 		strictTDDContent := "Strict TDD Mode: enabled"
 		existing, readErr := readFileOrEmpty(promptPath)
@@ -283,7 +292,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// os.ReadFile call due to VFS/NTFS metadata caching, which caused the spurious
 	// "post-check: .../opencode.json missing sdd-apply sub-agent" error.
 	var mergedSettingsBytes []byte
-	if adapter.Agent() == model.AgentOpenCode {
+	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
 			overlayContent, err := assets.Read(overlayAssetPath(sddMode))
@@ -344,7 +353,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			mergedSettingsBytes = agentResult.merged
 
 			// Install OpenCode plugins (all SDD modes).
-			pluginResult, err := installOpenCodePlugins(homeDir)
+			pluginResult, err := installOpenCodePlugins(homeDir, adapter)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -378,6 +387,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		skillDir := adapter.SkillsDir(homeDir)
 		if skillDir != "" {
 			sharedFiles := []string{
+				"SKILL.md",
 				"persistence-contract.md",
 				"engram-convention.md",
 				"openspec-convention.md",
@@ -502,9 +512,32 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 				continue
 			}
-			content := assets.MustRead(embeddedDir + "/" + entry.Name())
+			contentStr := string(assets.MustRead(embeddedDir + "/" + entry.Name()))
+
+			// Resolve {{KIRO_MODEL}} placeholder for adapters that support it (e.g. Kiro).
+			// Non-Kiro adapters (Cursor, etc.) don't implement kiroModelResolver and are unaffected.
+			if kmr, ok := adapter.(kiroModelResolver); ok {
+				phase := strings.TrimSuffix(entry.Name(), ".md")
+				alias := model.ClaudeModelSonnet // safe default
+				if opts.KiroModelAssignments != nil {
+					if a, hasAlias := opts.KiroModelAssignments[phase]; hasAlias {
+						alias = a
+					} else if d, hasDefault := opts.KiroModelAssignments["default"]; hasDefault {
+						alias = d
+					}
+				} else if opts.ClaudeModelAssignments != nil {
+					// Backward-compatible fallback when Kiro-specific assignments are not provided.
+					if a, hasAlias := opts.ClaudeModelAssignments[phase]; hasAlias {
+						alias = a
+					} else if d, hasDefault := opts.ClaudeModelAssignments["default"]; hasDefault {
+						alias = d
+					}
+				}
+				contentStr = strings.ReplaceAll(contentStr, "{{KIRO_MODEL}}", kmr.KiroModelID(alias))
+			}
+
 			outPath := filepath.Join(agentsDir, entry.Name())
-			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(content), 0o644)
+			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
 			if err != nil {
 				return InjectionResult{}, fmt.Errorf("write agent %s: %w", entry.Name(), err)
 			}
@@ -518,7 +551,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		for _, phase := range []string{"sdd-apply", "sdd-verify"} {
 			checkPath := filepath.Join(agentsDir, phase+".md")
 			if info, err := os.Stat(checkPath); err != nil || info.Size() < 50 {
-				return InjectionResult{}, fmt.Errorf("post-check: cursor agent %q not written correctly", phase)
+				return InjectionResult{}, fmt.Errorf("post-check: sub-agent %q not written correctly", phase)
 			}
 		}
 	}
@@ -654,11 +687,11 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir string) ([]byte, erro
 }
 
 // installOpenCodePlugins copies the background-agents plugin and installs its
-// npm/bun dependency into ~/.config/opencode/. Returns an error with an
-// actionable message if the package manager is present but the install fails.
-// If no package manager is available, the install is skipped (soft failure).
-func installOpenCodePlugins(homeDir string) (InjectionResult, error) {
-	opencodeDir := filepath.Join(homeDir, ".config", "opencode")
+// npm/bun dependency into the agent's global config directory. Returns an error
+// with an actionable message if the package manager is present but the install
+// fails. If no package manager is available, the install is skipped (soft failure).
+func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	opencodeDir := adapter.GlobalConfigDir(homeDir)
 	pluginsDir := filepath.Join(opencodeDir, "plugins")
 
 	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
@@ -868,6 +901,10 @@ func sddOrchestratorAsset(agent model.AgentID) string {
 		return "windsurf/sdd-orchestrator.md"
 	case model.AgentCursor:
 		return "cursor/sdd-orchestrator.md"
+	case model.AgentQwenCode:
+		return "qwen/sdd-orchestrator.md"
+	case model.AgentKiroIDE:
+		return "kiro/sdd-orchestrator.md"
 	default:
 		return "generic/sdd-orchestrator.md"
 	}
@@ -883,6 +920,10 @@ func injectFileAppend(homeDir string, adapter agents.Adapter) (InjectionResult, 
 
 	if adapter.SystemPromptStrategy() == model.StrategyInstructionsFile && strings.TrimSpace(existing) == "" {
 		existing = instructionsFrontmatter
+	}
+
+	if adapter.SystemPromptStrategy() == model.StrategySteeringFile && strings.TrimSpace(existing) == "" {
+		existing = steeringFrontmatter
 	}
 
 	// Use agent-specific SDD orchestrator content when available; fall back to generic.
@@ -1008,6 +1049,10 @@ const instructionsFrontmatter = "---\n" +
 	"name: Gentle AI Persona\n" +
 	"description: Gentleman persona with SDD orchestration and Engram protocol\n" +
 	"applyTo: \"**\"\n" +
+	"---\n"
+
+const steeringFrontmatter = "---\n" +
+	"inclusion: always\n" +
 	"---\n"
 
 // stripBareOrchestratorSection removes an un-marked "## Agent Teams Orchestrator"

@@ -14,6 +14,7 @@ USAGE
 
 COMMANDS
   install      Configure AI coding agents on this machine
+  uninstall    Remove Gentle AI managed files from this machine
   sync         Sync agent configs and skills to current version
   update       Check for available updates
   upgrade      Apply updates to managed tools
