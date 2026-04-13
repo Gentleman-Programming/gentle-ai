@@ -164,14 +164,69 @@ func TestRunArgsNoCommandLaunchesTUI(t *testing.T) {
 	var buf bytes.Buffer
 	err := RunArgs(nil, &buf)
 	// With no args, RunArgs now launches the TUI via Bubbletea.
-	// In a headless/test environment without a TTY, this returns an error
-	// about opening /dev/tty. That's expected — the TUI requires a terminal.
+	// In a headless/test environment without a TTY, RunArgs short-circuits
+	// with errNoInteractiveTerminal and prints guidance on stdout instead of
+	// letting Bubbletea panic. Either outcome is acceptable here.
 	if err == nil {
 		// If no error, we're somehow in a TTY — that's fine too.
 		return
 	}
-	if !strings.Contains(err.Error(), "TTY") && !strings.Contains(err.Error(), "tty") {
+	if !errors.Is(err, errNoInteractiveTerminal) &&
+		!strings.Contains(err.Error(), "TTY") &&
+		!strings.Contains(err.Error(), "tty") {
 		t.Fatalf("RunArgs(nil) unexpected error = %v; want TTY-related error or nil", err)
+	}
+}
+
+// TestRunArgsNoTTYReturnsGuidance verifies the no-TTY short-circuit: when
+// stdin is not a terminal and no subcommand is given, RunArgs must print
+// user-facing guidance on stdout and return errNoInteractiveTerminal without
+// attempting to launch Bubbletea.
+func TestRunArgsNoTTYReturnsGuidance(t *testing.T) {
+	original := stdinIsTTY
+	t.Cleanup(func() { stdinIsTTY = original })
+	stdinIsTTY = func() bool { return false }
+
+	var buf bytes.Buffer
+	err := RunArgs(nil, &buf)
+	if !errors.Is(err, errNoInteractiveTerminal) {
+		t.Fatalf("RunArgs(nil) without TTY returned err = %v; want errNoInteractiveTerminal", err)
+	}
+
+	out := buf.String()
+	wantFragments := []string{
+		"no interactive terminal detected",
+		"non-interactive",
+		"gentle-ai --version",
+		"gentle-ai --help",
+		"gentle-ai install",
+	}
+	for _, frag := range wantFragments {
+		if !strings.Contains(out, frag) {
+			t.Errorf("guidance output missing %q\ngot:\n%s", frag, out)
+		}
+	}
+}
+
+// TestRunArgsInfoCommandsBypassTTYCheck ensures that --version and --help keep
+// working even when stdin is not a terminal. These paths never touch the TUI
+// and must remain usable from scripts and CI.
+func TestRunArgsInfoCommandsBypassTTYCheck(t *testing.T) {
+	original := stdinIsTTY
+	t.Cleanup(func() { stdinIsTTY = original })
+	stdinIsTTY = func() bool { return false }
+
+	for _, arg := range []string{"--version", "-v", "version", "--help", "-h", "help"} {
+		arg := arg
+		t.Run(arg, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := RunArgs([]string{arg}, &buf); err != nil {
+				t.Fatalf("RunArgs(%q) error = %v; want nil", arg, err)
+			}
+			if buf.Len() == 0 {
+				t.Fatalf("RunArgs(%q) produced no output", arg)
+			}
+		})
 	}
 }
 

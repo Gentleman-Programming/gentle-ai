@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-isatty"
+
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -32,6 +34,21 @@ var (
 	upgradeExecute      = upgrade.Execute
 )
 
+// stdinIsTTY reports whether the process stdin is attached to a real
+// terminal. It is defined as a package-level variable so tests can stub the
+// TTY detection without having to redirect real file descriptors. Cygwin
+// terminals are treated as TTYs on Windows.
+var stdinIsTTY = func() bool {
+	fd := os.Stdin.Fd()
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+}
+
+// errNoInteractiveTerminal is returned when `gentle-ai` is launched without
+// arguments in an environment that has no TTY on stdin (CI, scripts,
+// non-interactive SSH). Callers receive a clean, documented error instead of
+// the opaque Bubbletea panic ("could not open a new TTY").
+var errNoInteractiveTerminal = errors.New("gentle-ai requires a TTY on stdin to launch the interactive TUI")
+
 func Run() error {
 	return RunArgs(os.Args[1:], os.Stdout)
 }
@@ -52,6 +69,15 @@ func RunArgs(args []string, stdout io.Writer) error {
 			printHelp(stdout, Version)
 			return nil
 		}
+	}
+
+	// No-TTY guard: the interactive TUI cannot start without a terminal on
+	// stdin. Detect that case up front and print a helpful message pointing
+	// users at the non-interactive subcommands instead of letting Bubbletea
+	// panic with "could not open a new TTY".
+	if len(args) == 0 && !stdinIsTTY() {
+		printNoTTYGuidance(stdout, Version)
+		return errNoInteractiveTerminal
 	}
 
 	if err := system.EnsureCurrentOSSupported(); err != nil {
