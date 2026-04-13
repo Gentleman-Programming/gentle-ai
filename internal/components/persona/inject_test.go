@@ -197,6 +197,78 @@ func TestInjectClaudeNeutralDoesNotWriteOutputStyle(t *testing.T) {
 	}
 }
 
+func TestInjectClaudeNeutralRemovesGentlemanOutputStyleFromSettings(t *testing.T) {
+	home := t.TempDir()
+
+	// Simulate a previous Gentleman install: settings.json already contains
+	// "outputStyle": "Gentleman" alongside unrelated user keys.
+	settingsDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	existing := `{"outputStyle": "Gentleman", "permissions": {"allow": ["Read"]}}`
+	settingsPath := filepath.Join(settingsDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := Inject(home, claudeAdapter(), model.PersonaNeutral); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Unmarshal() error = %v\ncontent: %s", err, data)
+	}
+	if _, present := parsed["outputStyle"]; present {
+		t.Fatalf("Neutral persona left outputStyle key in settings.json: %s", data)
+	}
+	// Unrelated keys must be preserved.
+	if _, ok := parsed["permissions"]; !ok {
+		t.Fatalf("Neutral persona dropped unrelated 'permissions' key: %s", data)
+	}
+}
+
+func TestInjectClaudeNeutralPreservesUserCustomOutputStyle(t *testing.T) {
+	home := t.TempDir()
+
+	// User has configured a non-Gentleman output style. The installer must
+	// not clobber it when switching to the Neutral persona.
+	settingsDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	existing := `{"outputStyle": "MyCustomStyle"}`
+	settingsPath := filepath.Join(settingsDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := Inject(home, claudeAdapter(), model.PersonaNeutral); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Unmarshal() error = %v\ncontent: %s", err, data)
+	}
+	value, ok := parsed["outputStyle"]
+	if !ok {
+		t.Fatalf("Neutral persona removed user's custom outputStyle: %s", data)
+	}
+	if value != "MyCustomStyle" {
+		t.Fatalf("Neutral persona mutated user's outputStyle: got %v, want MyCustomStyle", value)
+	}
+}
+
 func TestInjectCustomClaudeDoesNothing(t *testing.T) {
 	home := t.TempDir()
 
