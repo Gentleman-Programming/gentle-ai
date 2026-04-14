@@ -30,9 +30,31 @@ type WriteResult struct {
 	Created bool
 }
 
+// readComparableFile reads the file at path for content comparison.
+// When path is a symlink, the target is resolved first so the real file
+// content is returned rather than an error.
+func readComparableFile(path string) ([]byte, error) {
+	p := path
+	if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			p = resolved
+		}
+	}
+	return os.ReadFile(p)
+}
+
 func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult, error) {
 	if perm == 0 {
 		perm = 0o644
+	}
+
+	// Resolve symlinks so we write to the real file rather than replacing
+	// the symlink. This supports dotfile managers (stow, chezmoi, bare git)
+	// where config files are symlinks into a dotfiles repository.
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			path = resolved
+		}
 	}
 
 	created := false

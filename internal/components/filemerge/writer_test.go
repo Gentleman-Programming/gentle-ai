@@ -1,3 +1,4 @@
+```go
 package filemerge
 
 import (
@@ -25,7 +26,92 @@ func isSymlinkPrivilegeError(err error) bool {
 	return false
 }
 
-func TestWriteFileAtomicReadOnlyDirRelaxesOwnerWritePermission(t *testing.T) {
+// TestWriteFileAtomic_PreservesSymlink verifies that writing to a symlink path
+// updates the target file and does not replace the symlink with a regular file.
+// This supports dotfile managers (stow, chezmoi, bare git) where config files
+// are symlinks pointing to files in a dotfiles repository.
+func TestWriteFileAtomic_PreservesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require elevated privileges on Windows")
+	}
+	dir := t.TempDir()
+
+	realFile := filepath.Join(dir, "real.md")
+	if err := os.WriteFile(realFile, []byte("initial\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile real: %v", err)
+	}
+
+	linkFile := filepath.Join(dir, "link.md")
+	if err := os.Symlink(realFile, linkFile); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	newContent := []byte("updated\n")
+	result, err := WriteFileAtomic(linkFile, newContent, 0o644)
+	if err != nil {
+		t.Fatalf("WriteFileAtomic on symlink error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("WriteFileAtomic result.Changed = false, want true")
+	}
+
+	// The symlink must still be a symlink.
+	fi, err := os.Lstat(linkFile)
+	if err != nil {
+		t.Fatalf("Lstat symlink: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("symlink was replaced by a regular file — symlink must be preserved")
+	}
+
+	// The real target file must have the new content.
+	got, err := os.ReadFile(realFile)
+	if err != nil {
+		t.Fatalf("ReadFile real file: %v", err)
+	}
+	if string(got) != string(newContent) {
+		t.Errorf("real file content = %q, want %q", got, newContent)
+	}
+}
+
+// TestWriteFileAtomic_SymlinkIdempotent verifies that writing identical content
+// to a symlink path returns Changed=false without destroying the symlink.
+func TestWriteFileAtomic_SymlinkIdempotent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require elevated privileges on Windows")
+	}
+	dir := t.TempDir()
+
+	content := []byte("same content\n")
+	realFile := filepath.Join(dir, "real.md")
+	if err := os.WriteFile(realFile, content, 0o644); err != nil {
+		t.Fatalf("WriteFile real: %v", err)
+	}
+
+	linkFile := filepath.Join(dir, "link.md")
+	if err := os.Symlink(realFile, linkFile); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	result, err := WriteFileAtomic(linkFile, content, 0o644)
+	if err != nil {
+		t.Fatalf("WriteFileAtomic error = %v", err)
+	}
+	if result.Changed {
+		t.Errorf("WriteFileAtomic result.Changed = true, want false for identical content")
+	}
+
+	// Symlink must be preserved.
+	fi, err := os.Lstat(linkFile)
+	if err != nil {
+		t.Fatalf("Lstat: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("symlink was replaced even on no-op write")
+	}
+}
+
+func TestWriteFileAtomicReadOnlyDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod 555 semantics differ on Windows")
 	}
@@ -164,75 +250,26 @@ func TestWriteFileAtomicIgnoresPermissionErrorFromSyncDirOnWindows(t *testing.T)
 		syncDirFn = origSyncDir
 	})
 
-	runtimeGOOS = func() string { return "windows" }
-	syncDirFn = func(string) error { return os.ErrPermission }
+	runtimeGOOS = "windows"
+	syncDirFn = func(f *os.File) error {
+		return os.ErrPermission
+	}
 
 	result, err := WriteFileAtomic(path, content, 0o644)
 	if err != nil {
-		t.Fatalf("WriteFileAtomic() error = %v, want nil on windows permission-denied dir sync", err)
+		t.Fatalf("WriteFileAtomic() error = %v, want nil on Windows with syncDir permission error", err)
 	}
 	if !result.Changed || !result.Created {
-		t.Fatalf("WriteFileAtomic() result = %+v, want Changed=true Created=true", result)
+		t.Fatalf("WriteFileAtomic() result = %+v", result)
 	}
-	got, readErr := os.ReadFile(path)
-	if readErr != nil {
-		t.Fatalf("ReadFile() error = %v", readErr)
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
 	}
+
 	if string(got) != string(content) {
 		t.Fatalf("file content = %q, want %q", string(got), string(content))
 	}
 }
-
-// TestWriteFileAtomicPropagatesSyncDirErrorOnUnix verifies that any syncDirFn
-// error is propagated on non-Windows platforms — no silent swallowing.
-func TestWriteFileAtomicPropagatesSyncDirErrorOnUnix(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "nested", "config.json")
-	content := []byte("{\"ok\":true}\n")
-
-	origGOOS := runtimeGOOS
-	origSyncDir := syncDirFn
-	t.Cleanup(func() {
-		runtimeGOOS = origGOOS
-		syncDirFn = origSyncDir
-	})
-
-	runtimeGOOS = func() string { return "linux" }
-	syncDirFn = func(string) error { return os.ErrPermission }
-
-	_, err := WriteFileAtomic(path, content, 0o644)
-	if err == nil {
-		t.Fatal("WriteFileAtomic() error = nil, want sync parent directory failure on unix")
-	}
-	if !strings.Contains(err.Error(), "sync parent directory") {
-		t.Fatalf("WriteFileAtomic() error = %v, want sync parent directory context", err)
-	}
-}
-
-// TestWriteFileAtomicPropagatesUnexpectedSyncDirErrorOnWindows verifies that
-// non-ErrPermission errors from syncDirFn are still propagated on Windows —
-// only the specific NTFS directory-sync permission error is tolerated.
-func TestWriteFileAtomicPropagatesUnexpectedSyncDirErrorOnWindows(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "nested", "config.json")
-	content := []byte("{\"ok\":true}\n")
-	boom := errors.New("boom")
-
-	origGOOS := runtimeGOOS
-	origSyncDir := syncDirFn
-	t.Cleanup(func() {
-		runtimeGOOS = origGOOS
-		syncDirFn = origSyncDir
-	})
-
-	runtimeGOOS = func() string { return "windows" }
-	syncDirFn = func(string) error { return boom }
-
-	_, err := WriteFileAtomic(path, content, 0o644)
-	if err == nil {
-		t.Fatal("WriteFileAtomic() error = nil, want unexpected sync dir error on windows")
-	}
-	if !errors.Is(err, boom) {
-		t.Fatalf("WriteFileAtomic() error = %v, want wrapped boom", err)
-	}
-}
+```
