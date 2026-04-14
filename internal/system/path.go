@@ -54,7 +54,7 @@ func AddToUserPath(dir string) error {
 }
 
 // escapePowerShellString escapes a string for safe use inside a PowerShell
-// single-quoted string literal by replacing each ' with ” (PowerShell's escape
+// single-quoted string literal by replacing each ' with '' (PowerShell's escape
 // sequence for a literal single quote within single-quoted strings).
 func escapePowerShellString(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
@@ -78,6 +78,16 @@ func addToProcessPath(dir string) error {
 	return os.Setenv("PATH", dir+string(os.PathListSeparator)+currentPath)
 }
 
+// FindAllBinaryCopies walks every directory in PATH and returns all absolute
+// paths where a binary named name exists. Unlike exec.LookPath, which stops
+// at the first match, this iterates the entire PATH to detect shadowed binaries.
+//
+// Results are ordered by PATH precedence (first entry = highest priority).
+// Symlinks are resolved for deduplication: if two PATH entries point to the
+// same real file, only the first is returned. On Windows, common executable
+// extensions (.exe, .cmd, .bat) are checked automatically.
+//
+// Returns nil when PATH is empty or the binary is not found.
 func FindAllBinaryCopies(name string) []string {
 	pathEnv := os.Getenv("PATH")
 	if pathEnv == "" {
