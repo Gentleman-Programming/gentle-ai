@@ -32,8 +32,10 @@ var scriptHTTPClient = &http.Client{Timeout: 2 * time.Minute}
 // server or CDN could still serve a malicious script within this size limit.
 const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 
-// runStrategy executes the upgrade for a single tool using the appropriate strategy
-// for the given platform profile.
+// runStrategy executes the upgrade for a single tool using the provided
+// pre-resolved install method. The method must be computed by the caller
+// (via resolveMethod in Execute) and passed here directly — this function
+// MUST NOT re-evaluate the effective method to avoid redundant brew probes.
 //
 // Strategy routing:
 //   - brew profile → brewUpgrade (regardless of tool's declared method)
@@ -44,9 +46,7 @@ const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 //   - script method + linux/darwin + other → scriptUpgrade (curl | bash install.sh)
 //   - script method + windows → manualFallback
 //   - unknown method → manualFallback with explicit message
-func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
-	method := effectiveMethod(r.Tool, profile)
-
+func runStrategy(ctx context.Context, r update.UpdateResult, method update.InstallMethod, profile system.PlatformProfile) error {
 	switch method {
 	case update.InstallBrew:
 		return brewUpgrade(ctx, r.Tool.Name)

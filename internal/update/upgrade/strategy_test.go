@@ -35,7 +35,7 @@ func TestRunStrategy_BrewUpgrade(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew"}
 
-	err := runStrategy(context.Background(), r, profile)
+	err := runStrategy(context.Background(), r, update.InstallBrew, profile)
 	if err != nil {
 		t.Fatalf("runStrategy brew: unexpected error: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
 
-	err := runStrategy(context.Background(), r, profile)
+	err := runStrategy(context.Background(), r, update.InstallGoInstall, profile)
 	if err != nil {
 		t.Fatalf("runStrategy go-install: unexpected error: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestRunStrategy_GoInstallMissingImportPath(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
 
-	err := runStrategy(context.Background(), r, profile)
+	err := runStrategy(context.Background(), r, update.InstallGoInstall, profile)
 	if err == nil {
 		t.Errorf("expected error when GoImportPath is empty, got nil")
 	}
@@ -118,7 +118,7 @@ func TestRunStrategy_UnsupportedMethodManualFallback(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
 
-	err := runStrategy(context.Background(), r, profile)
+	err := runStrategy(context.Background(), r, update.InstallMethod("unsupported-method"), profile)
 	// Unsupported method → manual fallback error.
 	if err == nil {
 		t.Errorf("expected error for unsupported install method, got nil")
@@ -144,7 +144,7 @@ func TestRunStrategy_BrewUpgradeFailure(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew"}
 
-	err := runStrategy(context.Background(), r, profile)
+	err := runStrategy(context.Background(), r, update.InstallBrew, profile)
 	if err == nil {
 		t.Errorf("expected error when brew upgrade fails, got nil")
 	}
@@ -170,7 +170,7 @@ func TestRunStrategy_GoInstallFailure(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
 
-	err := runStrategy(context.Background(), r, profile)
+	err := runStrategy(context.Background(), r, update.InstallGoInstall, profile)
 	if err == nil {
 		t.Errorf("expected error when go install fails, got nil")
 	}
@@ -201,7 +201,7 @@ func TestRunStrategy_BinaryWindowsSelfUpdateSkipped(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
 
-	err := runStrategy(context.Background(), r, profile)
+	err := runStrategy(context.Background(), r, update.InstallBinary, profile)
 	// Windows binary self-replace must return an error (manual hint) in Phase 1.
 	if err == nil {
 		t.Errorf("expected manual fallback error for Windows binary self-replace, got nil")
@@ -215,57 +215,61 @@ func TestRunStrategy_BinaryWindowsSelfUpdateSkipped(t *testing.T) {
 // --- TestEffectiveMethod ---
 
 func TestEffectiveMethod(t *testing.T) {
-	origIsBrewManaged := isBrewManagedFn
-	t.Cleanup(func() { isBrewManagedFn = origIsBrewManaged })
-
 	tests := []struct {
-		name         string
-		tool         update.ToolInfo
-		profile      system.PlatformProfile
-		brewManaged  bool // mock return value for isBrewManagedFn
-		want         update.InstallMethod
+		name       string
+		tool       update.ToolInfo
+		profile    system.PlatformProfile
+		brewResult brewCheckResult // explicit 3-state result
+		want       update.InstallMethod
 	}{
 		{
-			name:        "brew profile + brew-managed tool overrides go-install",
-			tool:        update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
-			profile:     system.PlatformProfile{PackageManager: "brew"},
-			brewManaged: true,
-			want:        update.InstallBrew,
+			name:       "brew profile + brewManaged overrides go-install",
+			tool:       update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
+			profile:    system.PlatformProfile{PackageManager: "brew"},
+			brewResult: brewManaged,
+			want:       update.InstallBrew,
 		},
 		{
-			name:        "brew profile + brew-managed tool overrides binary",
-			tool:        update.ToolInfo{Name: "gga", InstallMethod: update.InstallBinary},
-			profile:     system.PlatformProfile{PackageManager: "brew"},
-			brewManaged: true,
-			want:        update.InstallBrew,
+			name:       "brew profile + brewManaged overrides binary",
+			tool:       update.ToolInfo{Name: "gga", InstallMethod: update.InstallBinary},
+			profile:    system.PlatformProfile{PackageManager: "brew"},
+			brewResult: brewManaged,
+			want:       update.InstallBrew,
 		},
 		{
-			name:        "brew profile + brew-managed tool overrides script",
-			tool:        update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
-			profile:     system.PlatformProfile{PackageManager: "brew"},
-			brewManaged: true,
-			want:        update.InstallBrew,
+			name:       "brew profile + brewManaged overrides script",
+			tool:       update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
+			profile:    system.PlatformProfile{PackageManager: "brew"},
+			brewResult: brewManaged,
+			want:       update.InstallBrew,
 		},
 		{
-			name:        "brew profile + non-brew tool falls back to declared binary",
-			tool:        update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
-			profile:     system.PlatformProfile{PackageManager: "brew"},
-			brewManaged: false,
-			want:        update.InstallBinary,
+			name:       "brew profile + brewNotManaged falls back to declared binary",
+			tool:       update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
+			profile:    system.PlatformProfile{PackageManager: "brew"},
+			brewResult: brewNotManaged,
+			want:       update.InstallBinary,
 		},
 		{
-			name:        "brew profile + non-brew tool falls back to declared script",
-			tool:        update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
-			profile:     system.PlatformProfile{PackageManager: "brew"},
-			brewManaged: false,
-			want:        update.InstallScript,
+			name:       "brew profile + brewNotManaged falls back to declared script",
+			tool:       update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
+			profile:    system.PlatformProfile{PackageManager: "brew"},
+			brewResult: brewNotManaged,
+			want:       update.InstallScript,
 		},
 		{
-			name:        "brew profile + non-brew tool falls back to declared go-install",
-			tool:        update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
-			profile:     system.PlatformProfile{PackageManager: "brew"},
-			brewManaged: false,
-			want:        update.InstallGoInstall,
+			name:       "brew profile + brewNotManaged falls back to declared go-install",
+			tool:       update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
+			profile:    system.PlatformProfile{PackageManager: "brew"},
+			brewResult: brewNotManaged,
+			want:       update.InstallGoInstall,
+		},
+		{
+			name:       "brew profile + brewError keeps InstallBrew (no silent fallback)",
+			tool:       update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
+			profile:    system.PlatformProfile{PackageManager: "brew"},
+			brewResult: brewError,
+			want:       update.InstallBrew,
 		},
 		{
 			name:    "apt profile respects declared method (go-install)",
@@ -289,8 +293,7 @@ func TestEffectiveMethod(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			isBrewManagedFn = func(string) bool { return tc.brewManaged }
-			got := effectiveMethod(tc.tool, tc.profile)
+			got := effectiveMethod(tc.tool, tc.profile, tc.brewResult)
 			if got != tc.want {
 				t.Errorf("effectiveMethod = %q, want %q", got, tc.want)
 			}
@@ -313,7 +316,7 @@ func TestManualFallbackHint(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
 
-	err := runStrategy(context.Background(), r, profile)
+	err := runStrategy(context.Background(), r, update.InstallBinary, profile)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -432,7 +435,7 @@ func TestRunStrategy_ExecErrorWrapped(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew"}
 
-	err := runStrategy(context.Background(), r, profile)
+	err := runStrategy(context.Background(), r, update.InstallBrew, profile)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -732,7 +735,7 @@ func TestRunStrategy_GGAUsesGitClone(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
 
-	err := runStrategy(context.Background(), r, profile)
+	err := runStrategy(context.Background(), r, update.InstallScript, profile)
 	if err != nil {
 		t.Fatalf("runStrategy GGA: unexpected error: %v", err)
 	}
@@ -791,7 +794,7 @@ func TestEngramUpgradeUsesDownloadNotGoInstall(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
 
-	err := runStrategy(context.Background(), r, profile)
+	err := runStrategy(context.Background(), r, update.InstallBinary, profile)
 	if err != nil {
 		t.Fatalf("runStrategy engram windows: unexpected error: %v", err)
 	}
@@ -840,7 +843,7 @@ func TestEngramUpgradeLinuxUsesDownload(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
 
-	err := runStrategy(context.Background(), r, profile)
+	err := runStrategy(context.Background(), r, update.InstallBinary, profile)
 	if err != nil {
 		t.Fatalf("runStrategy engram linux: unexpected error: %v", err)
 	}

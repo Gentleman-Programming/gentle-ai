@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -420,9 +421,9 @@ func TestExecute_DevBuildSurfacedAsSkipped(t *testing.T) {
 // must be populated from the error message so RenderUpgradeReport can display it.
 func TestExecute_ManualFallbackSurfacedAsSkippedNotFailed(t *testing.T) {
 	origExecCommand := execCommand
-	origIsBrewManaged := isBrewManagedFn
+	origCheckBrewManaged := checkBrewManagedFn
 	t.Cleanup(func() { execCommand = origExecCommand })
-	t.Cleanup(func() { isBrewManagedFn = origIsBrewManaged })
+	t.Cleanup(func() { checkBrewManagedFn = origCheckBrewManaged })
 
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
@@ -472,11 +473,11 @@ func TestExecute_ManualFallbackSurfacedAsSkippedNotFailed(t *testing.T) {
 // method instead of forcing `brew upgrade <tool>`.
 func TestExecute_BrewProfileNonBrewToolFallsBackToDeclaredMethod(t *testing.T) {
 	origExecCommand := execCommand
-	origIsBrewManaged := isBrewManagedFn
+	origCheckBrewManaged := checkBrewManagedFn
 	t.Cleanup(func() { execCommand = origExecCommand })
-	t.Cleanup(func() { isBrewManagedFn = origIsBrewManaged })
+	t.Cleanup(func() { checkBrewManagedFn = origCheckBrewManaged })
 
-	isBrewManagedFn = func(string) bool { return false }
+	checkBrewManagedFn = func(string) brewCheckResult { return brewNotManaged }
 
 	var calls [][]string
 	execCommand = func(name string, args ...string) *exec.Cmd {
@@ -1261,5 +1262,267 @@ func TestEnumerateFilesInDir_CaseInsensitiveExclude(t *testing.T) {
 	}
 	if _, ok := pathSet[mixedDir]; ok {
 		t.Errorf("mixed-case 'Cache' dir should be excluded by lowercase 'cache' key: %q", mixedDir)
+	}
+}
+
+// =============================================================================
+// Task 1.1 — checkBrewManaged helper: three-state coverage
+// =============================================================================
+
+// TestCheckBrewManaged is the entry point for the helper-process tests below.
+// It uses the standard Go helper process pattern to control both the exit code
+// and the combined output of the stubbed exec.Command.
+//
+// The test re-executes itself as a subprocess with the environment variable
+// BREW_CHECK_TEST_MODE set so that TestMain can detect it and run the helper
+// instead of the normal test suite.
+
+// fakeBrewCmd returns a *exec.Cmd that re-invokes the test binary as a
+// subprocess. The subprocess detects the helper flag via the environment
+// variable BREW_CHECK_HELPER and behaves according to MODE:
+//   - "managed"      → exits 0 (no output needed; CombinedOutput success → brewManaged)
+//   - "not-managed"  → prints nothing and exits 1 (empty output → brewNotManaged)
+//   - "error"        → prints "Error: brew damaged" and exits 1 (non-empty → brewError)
+func fakeBrewCmd(t *testing.T, mode string) func(name string, args ...string) *exec.Cmd {
+	t.Helper()
+	return func(name string, args ...string) *exec.Cmd {
+		// Only intercept "brew list --versions <tool>" calls.
+		if name == "brew" {
+			cmd := exec.Command(os.Args[0], "-test.run=TestBrewCheckHelperProcess")
+			cmd.Env = append(os.Environ(),
+				"BREW_CHECK_HELPER=1",
+				fmt.Sprintf("BREW_CHECK_MODE=%s", mode),
+			)
+			return cmd
+		}
+		// Any other command (e.g. brew update in brewUpgrade): succeed silently.
+		return exec.Command("echo", "ok")
+	}
+}
+
+// TestBrewCheckHelperProcess is the subprocess entry point for the helper
+// process pattern. It is ONLY run when BREW_CHECK_HELPER=1 is set in the
+// environment; under normal test execution this function returns immediately.
+func TestBrewCheckHelperProcess(t *testing.T) {
+	if os.Getenv("BREW_CHECK_HELPER") != "1" {
+		return
+	}
+	mode := os.Getenv("BREW_CHECK_MODE")
+	switch mode {
+	case "managed":
+		// Exit 0 — brew list --versions succeeded; tool is in Cellar.
+		fmt.Println("engram 0.4.0")
+		os.Exit(0)
+	case "not-managed":
+		// Exit 1, no output — tool not in Cellar (clean not-found).
+		os.Exit(1)
+	case "error":
+		// Exit 1 with error text — operational brew failure (e.g. Homebrew damaged).
+		fmt.Fprintln(os.Stderr, "Error: Homebrew damaged: /usr/local/Cellar is not writable")
+		os.Exit(1)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown BREW_CHECK_MODE: %q\n", mode)
+		os.Exit(2)
+	}
+}
+
+// TestCheckBrewManaged_Managed verifies that when `brew list --versions` exits 0
+// (tool IS in the Cellar), checkBrewManaged returns brewManaged.
+func TestCheckBrewManaged_Managed(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+	execCommand = fakeBrewCmd(t, "managed")
+
+	got := checkBrewManaged("engram")
+	if got != brewManaged {
+		t.Errorf("checkBrewManaged = %v, want brewManaged", got)
+	}
+}
+
+// TestCheckBrewManaged_NotManaged verifies that when `brew list --versions` exits
+// non-zero with EMPTY output (tool simply not in Cellar), checkBrewManaged returns
+// brewNotManaged — the "clean miss" case, NOT a brew error.
+func TestCheckBrewManaged_NotManaged(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+	execCommand = fakeBrewCmd(t, "not-managed")
+
+	got := checkBrewManaged("engram")
+	if got != brewNotManaged {
+		t.Errorf("checkBrewManaged = %v, want brewNotManaged", got)
+	}
+}
+
+// TestCheckBrewManaged_BrewError verifies that when `brew list --versions` exits
+// non-zero AND produces non-empty output (operational brew failure, e.g. Homebrew
+// damaged), checkBrewManaged returns brewError — NOT brewNotManaged. This is the
+// key semantic distinction that prevents silent fallback to another installer.
+func TestCheckBrewManaged_BrewError(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+	execCommand = fakeBrewCmd(t, "error")
+
+	got := checkBrewManaged("engram")
+	if got != brewError {
+		t.Errorf("checkBrewManaged = %v, want brewError", got)
+	}
+}
+
+// =============================================================================
+// Task 1.2 — Execute: brew detection runs exactly once per tool
+// =============================================================================
+
+// TestExecute_BrewDetectionRunsOncePerTool verifies that on a brew platform
+// profile, Execute calls the brew ownership probe EXACTLY ONCE per executable
+// tool — not once per call site (pre-refactor issue that was fixed).
+//
+// With two tools (engram + gga), the probe must be called exactly twice total.
+func TestExecute_BrewDetectionRunsOncePerTool(t *testing.T) {
+	origExecCommand := execCommand
+	origCheckBrewManaged := checkBrewManagedFn
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		checkBrewManagedFn = origCheckBrewManaged
+	})
+
+	// Count how many times the brew ownership probe is invoked.
+	probeCount := 0
+	checkBrewManagedFn = func(toolName string) brewCheckResult {
+		probeCount++
+		return brewManaged // both tools are brew-managed for simplicity
+	}
+
+	// Stub exec so that brew upgrade succeeds silently.
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("echo", "ok")
+	}
+
+	brewMacProfile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
+
+	// Two executable tools on a brew platform.
+	results := []update.UpdateResult{
+		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
+		makeResult("gga", update.UpdateAvailable, "2.7.0", "2.8.0", update.InstallScript),
+	}
+	results[0].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
+	results[1].Tool.Owner = "Gentleman-Programming"
+	results[1].Tool.Repo = "gentleman-guardian-angel"
+
+	Execute(context.Background(), results, brewMacProfile, t.TempDir(), false)
+
+	// Probe must be called exactly once per tool (2 tools → exactly 2 calls).
+	if probeCount != 2 {
+		t.Errorf("brew ownership probe called %d times, want exactly 2 (once per tool)", probeCount)
+	}
+}
+
+// TestExecute_BrewDetectionNotCalledOnNonBrewPlatform verifies that on a
+// non-brew platform (e.g. apt on Linux), the brew ownership probe is NEVER
+// called — resolveMethod short-circuits it for non-brew profiles.
+func TestExecute_BrewDetectionNotCalledOnNonBrewPlatform(t *testing.T) {
+	origExecCommand := execCommand
+	origCheckBrewManaged := checkBrewManagedFn
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		checkBrewManagedFn = origCheckBrewManaged
+	})
+
+	probeCount := 0
+	checkBrewManagedFn = func(toolName string) brewCheckResult {
+		probeCount++
+		return brewManaged
+	}
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("echo", "ok")
+	}
+
+	results := []update.UpdateResult{
+		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
+	}
+	results[0].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
+
+	Execute(context.Background(), results, linuxProfile(), t.TempDir(), false)
+
+	if probeCount != 0 {
+		t.Errorf("brew ownership probe called %d times on non-brew platform, want 0", probeCount)
+	}
+}
+
+// =============================================================================
+// Task 1.3 — Execute: brew operational errors produce UpgradeFailed (no fallback)
+// =============================================================================
+
+// TestExecute_BrewOperationalErrorProducesUpgradeFailed verifies the core
+// semantic fix: when the brew ownership probe returns brewError (operational
+// brew failure), Execute must NOT silently fall back to the tool's declared
+// method. Instead, it must attempt brew upgrade (keeping InstallBrew as the
+// resolved method) and — because brew itself fails — surface the result as
+// UpgradeFailed with a non-nil Err.
+//
+// Before this fix, brewError was treated the same as brewNotManaged, causing
+// a silent fallback to go-install/binary/script. After the fix, brewError
+// maps to InstallBrew, which then fails explicitly through the normal error path.
+func TestExecute_BrewErrorProducesUpgradeFailedNotFallback(t *testing.T) {
+	origExecCommand := execCommand
+	origCheckBrewManaged := checkBrewManagedFn
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		checkBrewManagedFn = origCheckBrewManaged
+	})
+
+	// Simulate an operational brew error (e.g. Homebrew damaged / not writable).
+	checkBrewManagedFn = func(string) brewCheckResult { return brewError }
+
+	// Track which commands are actually called.
+	var calledCommands []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		calledCommands = append(calledCommands, name)
+		// brew update succeeds (non-fatal), brew upgrade fails.
+		if name == "brew" && len(args) > 0 && args[0] == "upgrade" {
+			return exec.Command("false") // brew upgrade fails
+		}
+		// brew update: succeed silently.
+		return exec.Command("echo", "ok")
+	}
+
+	brewMacProfile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
+
+	// Tool declared as go-install — must NOT fall back to go install on brew error.
+	results := []update.UpdateResult{
+		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
+	}
+	results[0].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
+
+	report := Execute(context.Background(), results, brewMacProfile, t.TempDir(), false)
+
+	if len(report.Results) != 1 {
+		t.Fatalf("len(Results) = %d, want 1", len(report.Results))
+	}
+
+	r := report.Results[0]
+
+	// Must be UpgradeFailed — the brew path failed and there was no silent fallback.
+	if r.Status != UpgradeFailed {
+		t.Errorf("brew operational error: Status = %q, want UpgradeFailed (must not silently fall back to declared method)", r.Status)
+	}
+
+	// Err must be non-nil — the failure must surface through the error field.
+	if r.Err == nil {
+		t.Errorf("brew operational error: Err is nil, want non-nil (failure must surface)")
+	}
+
+	// Method must be InstallBrew — the resolved method must NOT be go-install
+	// (which would mean effectiveMethod silently fell back on brewError).
+	if r.Method != update.InstallBrew {
+		t.Errorf("brew operational error: Method = %q, want InstallBrew (no silent fallback)", r.Method)
+	}
+
+	// Must NOT have called "go" (which would indicate fallback to go-install).
+	for _, cmd := range calledCommands {
+		if cmd == "go" {
+			t.Errorf("brew error triggered go-install fallback — calledCommands: %v; expected only brew calls", calledCommands)
+			break
+		}
 	}
 }

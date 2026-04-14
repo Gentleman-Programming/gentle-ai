@@ -267,6 +267,16 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 		}
 	}
 
+	// Resolve the effective upgrade method for every tool exactly once.
+	// This avoids redundant `brew list --versions` calls (one per tool per call
+	// site) and ensures the same resolved value is used for both reporting and
+	// execution. The resolved method is stored by tool name.
+	allTools := append(append(executable, devBuilds...), versionUnknowns...)
+	resolvedMethods := make(map[string]update.InstallMethod, len(allTools))
+	for _, r := range allTools {
+		resolvedMethods[r.Tool.Name] = resolveMethod(r.Tool, profile)
+	}
+
 	// Build results slice: dev-build skips first (no exec), then executable tools.
 	toolResults := make([]ToolUpgradeResult, 0, len(executable)+len(devBuilds)+len(versionUnknowns))
 
@@ -276,7 +286,7 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 			ToolName:   r.Tool.Name,
 			OldVersion: r.InstalledVersion,
 			NewVersion: r.LatestVersion,
-			Method:     effectiveMethod(r.Tool, profile),
+			Method:     resolvedMethods[r.Tool.Name],
 			Status:     UpgradeSkipped,
 			ManualHint: fmt.Sprintf("source build — upgrade manually or install a release binary from https://github.com/Gentleman-Programming/%s/releases", r.Tool.Repo),
 		})
@@ -285,22 +295,26 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 	// VersionUnknown tools: surface them as skipped so the user gets a clear hint
 	// instead of a silent omission from the upgrade report.
 	for _, r := range versionUnknowns {
+		detectHint := r.Tool.Name
+		if len(r.Tool.DetectCmd) > 0 {
+			detectHint = strings.Join(r.Tool.DetectCmd, " ")
+		}
 		toolResults = append(toolResults, ToolUpgradeResult{
 			ToolName:   r.Tool.Name,
 			OldVersion: r.InstalledVersion,
 			NewVersion: r.LatestVersion,
-			Method:     effectiveMethod(r.Tool, profile),
+			Method:     resolvedMethods[r.Tool.Name],
 			Status:     UpgradeSkipped,
-			ManualHint: fmt.Sprintf("installed binary was found but its version could not be determined — check `%s` and reinstall if it is a stale source/dev build", detectCommandHint(r.Tool)),
+			ManualHint: fmt.Sprintf("installed binary was found but its version could not be determined — check `%s` and reinstall if it is a stale source/dev build", detectHint),
 		})
 	}
 
 	// Executable tools: run upgrade strategy.
 	for _, r := range executable {
-		method := effectiveMethod(r.Tool, profile)
+		method := resolvedMethods[r.Tool.Name]
 		msg := fmt.Sprintf("Upgrading %s via %s (%s → %s)", r.Tool.Name, method, r.InstalledVersion, r.LatestVersion)
 		sp := NewSpinner(pw, msg)
-		toolResult := executeOne(ctx, r, profile, dryRun)
+		toolResult := executeOne(ctx, r, method, profile, dryRun)
 		switch toolResult.Status {
 		case UpgradeSucceeded:
 			sp.Finish(true)
@@ -322,21 +336,17 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 	}
 }
 
-func detectCommandHint(tool update.ToolInfo) string {
-	if len(tool.DetectCmd) == 0 {
-		return tool.Name
-	}
-
-	return strings.Join(tool.DetectCmd, " ")
-}
-
-// executeOne runs the upgrade for a single tool.
-func executeOne(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, dryRun bool) ToolUpgradeResult {
+// executeOne runs the upgrade for a single tool using an already-resolved method.
+// The method parameter is the effective install method computed once by Execute
+// via resolveMethod — it must not be recomputed here.
+// profile is forwarded to runStrategy for OS-specific routing within binary/script
+// strategies (e.g. Windows manual fallback detection).
+func executeOne(ctx context.Context, r update.UpdateResult, method update.InstallMethod, profile system.PlatformProfile, dryRun bool) ToolUpgradeResult {
 	base := ToolUpgradeResult{
 		ToolName:   r.Tool.Name,
 		OldVersion: r.InstalledVersion,
 		NewVersion: r.LatestVersion,
-		Method:     effectiveMethod(r.Tool, profile),
+		Method:     method,
 	}
 
 	if dryRun {
@@ -344,7 +354,7 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 		return base
 	}
 
-	err := runStrategy(ctx, r, profile)
+	err := runStrategy(ctx, r, method, profile)
 	if err != nil {
 		// Distinguish manual fallback (informational skip) from real failures.
 		if hint, ok := AsManualFallback(err); ok {
@@ -362,24 +372,84 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 	return base
 }
 
-// isBrewManagedFn checks whether a tool is actually installed via Homebrew.
-// Package-level var for testability — swapped in tests to avoid real brew calls.
-var isBrewManagedFn = isBrewManaged
+// brewCheckResult is a three-state result for Homebrew ownership detection.
+// It distinguishes between a tool that is not installed via brew, a tool that
+// IS installed via brew, and an operational brew failure (e.g. brew unavailable,
+// permission error, unexpected stderr output). The third state prevents silently
+// treating brew failures as "not managed" and falling back to another installer.
+type brewCheckResult int
 
-// isBrewManaged returns true if `brew list --versions <toolName>` succeeds,
-// meaning the tool was installed via Homebrew (present in the Cellar).
-func isBrewManaged(toolName string) bool {
-	return execCommand("brew", "list", "--versions", toolName).Run() == nil
+const (
+	// brewNotManaged means the tool is not in the Homebrew Cellar.
+	brewNotManaged brewCheckResult = iota
+	// brewManaged means the tool is present in the Homebrew Cellar.
+	brewManaged
+	// brewError means `brew list --versions` exited non-zero AND produced
+	// non-empty output — indicating an operational brew failure rather than
+	// a simple "not found" result.
+	brewError
+)
+
+// checkBrewManagedFn checks whether a tool is actually installed via Homebrew.
+// Package-level var for testability — swapped in tests to avoid real brew calls.
+var checkBrewManagedFn = checkBrewManaged
+
+// checkBrewManaged probes `brew list --versions <toolName>` and returns a
+// three-state brewCheckResult:
+//   - brewManaged      — command succeeded (exit 0), tool is in the Cellar.
+//   - brewNotManaged   — command failed (exit non-zero) with empty/whitespace output,
+//     meaning brew is functional but the tool is not installed via it.
+//   - brewError        — command failed AND produced non-empty stderr/stdout,
+//     indicating an operational failure (brew broken, permissions, timeout, etc.).
+//
+// Using CombinedOutput() captures both stdout and stderr in one call so we can
+// distinguish an empty "not found" result from a real error message.
+func checkBrewManaged(toolName string) brewCheckResult {
+	out, err := execCommand("brew", "list", "--versions", toolName).CombinedOutput()
+	if err == nil {
+		return brewManaged
+	}
+	if len(strings.TrimSpace(string(out))) == 0 {
+		return brewNotManaged
+	}
+	return brewError
 }
 
-// effectiveMethod resolves the actual upgrade strategy for a tool on a given platform.
-// On brew-managed platforms, brew takes precedence — but only if the tool is actually
-// installed via brew. On Linux it is common to have Linuxbrew for some packages while
-// other tools are installed via binary download or go install. Blindly forcing brew
-// would cause "No available formula" errors for those tools.
-func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
-	if profile.PackageManager == "brew" && isBrewManagedFn(tool.Name) {
-		return update.InstallBrew
+// effectiveMethod resolves the actual upgrade strategy for a tool given a
+// pre-computed brew ownership result. This function is the single policy
+// point for method selection:
+//   - Non-brew platform profiles: always return the tool's declared method.
+//   - Brew platform + brewManaged:   return InstallBrew.
+//   - Brew platform + brewNotManaged: return declared method (Linuxbrew regression fix).
+//   - Brew platform + brewError:     return InstallBrew so the brew path is
+//     attempted and the error surfaces honestly (no silent fallback).
+//
+// The caller is responsible for computing brewResult exactly once per tool via
+// resolveMethod and passing it here.
+func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile, brewResult brewCheckResult) update.InstallMethod {
+	if profile.PackageManager != "brew" {
+		return tool.InstallMethod
 	}
-	return tool.InstallMethod
+	switch brewResult {
+	case brewManaged:
+		return update.InstallBrew
+	case brewError:
+		// Keep brew as the method so the error surfaces through the normal
+		// brew upgrade path instead of silently falling back to another method.
+		return update.InstallBrew
+	default: // brewNotManaged
+		return tool.InstallMethod
+	}
+}
+
+// resolveMethod computes the effective upgrade method for a tool, calling the
+// brew ownership probe at most once. On non-brew platforms the probe is skipped
+// entirely. This is the entry point that Execute uses so each tool's method is
+// resolved exactly once.
+func resolveMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
+	var result brewCheckResult
+	if profile.PackageManager == "brew" {
+		result = checkBrewManagedFn(tool.Name)
+	}
+	return effectiveMethod(tool, profile, result)
 }
