@@ -72,10 +72,15 @@ func TestScanConfigs_AgentFieldMatchesModelAgentID(t *testing.T) {
 	knownAgents := map[string]bool{
 		"claude-code":    false,
 		"opencode":       false,
+		"kilocode":       false,
 		"gemini-cli":     false,
 		"cursor":         false,
 		"vscode-copilot": false,
 		"codex":          false,
+		"kiro-ide":       false,
+		"qwen-code":      false,
+		"antigravity":    false,
+		"windsurf":       false,
 	}
 
 	for _, c := range configs {
@@ -88,6 +93,22 @@ func TestScanConfigs_AgentFieldMatchesModelAgentID(t *testing.T) {
 	for agent, seen := range knownAgents {
 		if !seen {
 			t.Errorf("ScanConfigs() missing agent %q — TUI switch statements require it; got agents: %v", agent, agentNames(configs))
+		}
+	}
+}
+
+func TestScanConfigs_IncludesKiroAndQwen(t *testing.T) {
+	home := t.TempDir()
+	configs := ScanConfigs(home)
+
+	seen := map[string]bool{}
+	for _, c := range configs {
+		seen[c.Agent] = true
+	}
+
+	for _, agent := range []string{"kiro-ide", "qwen-code"} {
+		if !seen[agent] {
+			t.Fatalf("ScanConfigs() missing %q; got agents: %v", agent, agentNames(configs))
 		}
 	}
 }

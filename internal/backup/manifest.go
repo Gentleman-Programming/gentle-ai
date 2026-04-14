@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -42,6 +41,17 @@ type Manifest struct {
 	CreatedAt time.Time       `json:"created_at"`
 	RootDir   string          `json:"root_dir"`
 	Entries   []ManifestEntry `json:"entries"`
+
+	// Compressed indicates whether snapshot files are stored in snapshot.tar.gz
+	// (true) or as plain files on disk (false, legacy format).
+	Compressed bool `json:"compressed,omitempty"`
+
+	// Checksum is a composite content checksum used for backup deduplication.
+	// Optional for backward-compatibility with old manifests.
+	Checksum string `json:"checksum,omitempty"`
+
+	// Pinned marks backups protected from retention pruning.
+	Pinned bool `json:"pinned,omitempty"`
 
 	// Source identifies what operation created this backup.
 	// Optional: omitted for backward-compatibility with old manifests.
@@ -114,10 +124,47 @@ func ReadManifest(path string) (Manifest, error) {
 	return manifest, nil
 }
 
+func validateManifestRootDir(rootDir string) error {
+	if rootDir == "" {
+		return fmt.Errorf("backup has no root directory")
+	}
+
+	ok, err := isRootDirUnderBackupRoot(rootDir)
+	if err != nil {
+		return fmt.Errorf("validate backup root %q: %w", rootDir, err)
+	}
+	if !ok {
+		return fmt.Errorf("backup root %q is outside the configured backup root directory", rootDir)
+	}
+
+	backupRoot, err := BackupRootFn()
+	if err != nil {
+		return fmt.Errorf("resolve configured backup root: %w", err)
+	}
+
+	cleanRootDir := filepath.Clean(rootDir)
+	cleanBackupRoot := filepath.Clean(backupRoot)
+
+	resolvedRootDir, err := filepath.EvalSymlinks(cleanRootDir)
+	if err != nil {
+		return fmt.Errorf("resolve backup root %q: %w", rootDir, err)
+	}
+	resolvedBackupRoot, err := filepath.EvalSymlinks(cleanBackupRoot)
+	if err != nil {
+		resolvedBackupRoot = cleanBackupRoot
+	}
+
+	if resolvedRootDir == resolvedBackupRoot {
+		return fmt.Errorf("backup root %q must be a strict descendant of the configured backup root directory", rootDir)
+	}
+
+	return nil
+}
+
 // DeleteBackup removes the entire backup directory.
 func DeleteBackup(manifest Manifest) error {
-	if manifest.RootDir == "" {
-		return fmt.Errorf("backup has no root directory")
+	if err := validateManifestRootDir(manifest.RootDir); err != nil {
+		return err
 	}
 	return os.RemoveAll(manifest.RootDir)
 }
@@ -125,8 +172,8 @@ func DeleteBackup(manifest Manifest) error {
 // RenameBackup updates the backup's Description field in the manifest file.
 // This does not rename the directory — it updates the human-readable description.
 func RenameBackup(manifest Manifest, newDescription string) error {
-	if manifest.RootDir == "" {
-		return fmt.Errorf("backup has no root directory")
+	if err := validateManifestRootDir(manifest.RootDir); err != nil {
+		return err
 	}
 	manifest.Description = newDescription
 	manifestPath := filepath.Join(manifest.RootDir, ManifestFilename)

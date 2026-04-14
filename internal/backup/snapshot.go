@@ -51,6 +51,8 @@ func (s Snapshotter) Create(snapshotDir string, paths []string) (Manifest, error
 		}
 		manifest.Entries = append(manifest.Entries, entry)
 		if entry.Existed {
+			archiveEntries = append(archiveEntries, archiveEntry)
+			existingPaths = append(existingPaths, path)
 			manifest.FileCount++
 		}
 	}

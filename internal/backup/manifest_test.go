@@ -388,6 +388,10 @@ func TestSnapshotterPopulatesFileCount(t *testing.T) {
 // TestDeleteBackup_Success verifies that DeleteBackup removes the backup directory.
 func TestDeleteBackup_Success(t *testing.T) {
 	dir := t.TempDir()
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() { BackupRootFn = origBackupRootFn })
+	BackupRootFn = func() (string, error) { return dir, nil }
+
 	backupDir := filepath.Join(dir, "backup-01")
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -430,6 +434,10 @@ func TestDeleteBackup_EmptyRootDir(t *testing.T) {
 // and returns no error.
 func TestRenameBackup_Success(t *testing.T) {
 	dir := t.TempDir()
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() { BackupRootFn = origBackupRootFn })
+	BackupRootFn = func() (string, error) { return dir, nil }
+
 	backupDir := filepath.Join(dir, "backup-02")
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -455,6 +463,10 @@ func TestRenameBackup_Success(t *testing.T) {
 // persists the new description into the manifest file on disk.
 func TestRenameBackup_UpdatesManifestFile(t *testing.T) {
 	dir := t.TempDir()
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() { BackupRootFn = origBackupRootFn })
+	BackupRootFn = func() (string, error) { return dir, nil }
+
 	backupDir := filepath.Join(dir, "backup-03")
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -482,6 +494,134 @@ func TestRenameBackup_UpdatesManifestFile(t *testing.T) {
 	}
 	if updated.Description != "after rename" {
 		t.Errorf("Description = %q, want %q", updated.Description, "after rename")
+	}
+}
+
+func TestDeleteBackup_RejectsRootDirOutsideBackupRoot(t *testing.T) {
+	home := t.TempDir()
+	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
+	victimDir := filepath.Join(t.TempDir(), "victim")
+
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() { BackupRootFn = origBackupRootFn })
+	BackupRootFn = func() (string, error) { return backupRoot, nil }
+
+	if err := os.MkdirAll(victimDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() victim dir error = %v", err)
+	}
+	victimFile := filepath.Join(victimDir, "keep.txt")
+	if err := os.WriteFile(victimFile, []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() victim file error = %v", err)
+	}
+
+	err := DeleteBackup(Manifest{RootDir: victimDir})
+	if err == nil {
+		t.Fatal("DeleteBackup() expected error for RootDir outside backup root")
+	}
+
+	if _, statErr := os.Stat(victimFile); statErr != nil {
+		t.Fatalf("victim file should remain after rejected delete, stat error = %v", statErr)
+	}
+}
+
+func TestDeleteBackup_RejectsBackupRootItself(t *testing.T) {
+	home := t.TempDir()
+	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
+
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() { BackupRootFn = origBackupRootFn })
+	BackupRootFn = func() (string, error) { return backupRoot, nil }
+
+	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() backup root error = %v", err)
+	}
+	marker := filepath.Join(backupRoot, "keep.txt")
+	if err := os.WriteFile(marker, []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() marker error = %v", err)
+	}
+
+	err := DeleteBackup(Manifest{RootDir: backupRoot})
+	if err == nil {
+		t.Fatal("DeleteBackup() expected error when RootDir equals configured backup root")
+	}
+
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("backup root content should remain after rejected delete, stat error = %v", statErr)
+	}
+}
+
+func TestRenameBackup_RejectsRootDirOutsideBackupRoot(t *testing.T) {
+	home := t.TempDir()
+	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
+	victimDir := filepath.Join(t.TempDir(), "victim")
+
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() { BackupRootFn = origBackupRootFn })
+	BackupRootFn = func() (string, error) { return backupRoot, nil }
+
+	if err := os.MkdirAll(victimDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() victim dir error = %v", err)
+	}
+
+	manifestPath := filepath.Join(victimDir, ManifestFilename)
+	manifest := Manifest{
+		ID:          "victim",
+		RootDir:     victimDir,
+		Description: "before",
+		Entries:     []ManifestEntry{},
+	}
+	if err := WriteManifest(manifestPath, manifest); err != nil {
+		t.Fatalf("WriteManifest() error = %v", err)
+	}
+
+	err := RenameBackup(manifest, "after")
+	if err == nil {
+		t.Fatal("RenameBackup() expected error for RootDir outside backup root")
+	}
+
+	stored, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("ReadManifest() error = %v", err)
+	}
+	if stored.Description != "before" {
+		t.Fatalf("description changed = %q, want %q", stored.Description, "before")
+	}
+}
+
+func TestRenameBackup_RejectsBackupRootItself(t *testing.T) {
+	home := t.TempDir()
+	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
+
+	origBackupRootFn := BackupRootFn
+	t.Cleanup(func() { BackupRootFn = origBackupRootFn })
+	BackupRootFn = func() (string, error) { return backupRoot, nil }
+
+	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() backup root error = %v", err)
+	}
+
+	manifestPath := filepath.Join(backupRoot, ManifestFilename)
+	manifest := Manifest{
+		ID:          "root",
+		RootDir:     backupRoot,
+		Description: "before",
+		Entries:     []ManifestEntry{},
+	}
+	if err := WriteManifest(manifestPath, manifest); err != nil {
+		t.Fatalf("WriteManifest() error = %v", err)
+	}
+
+	err := RenameBackup(manifest, "after")
+	if err == nil {
+		t.Fatal("RenameBackup() expected error when RootDir equals configured backup root")
+	}
+
+	stored, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("ReadManifest() error = %v", err)
+	}
+	if stored.Description != "before" {
+		t.Fatalf("description changed = %q, want %q", stored.Description, "before")
 	}
 }
 

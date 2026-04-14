@@ -25,6 +25,8 @@ func NewAdapter(agent model.AgentID) (Adapter, error) {
 		return opencode.NewAdapter(), nil
 	case model.AgentKilocode:
 		return kilocode.NewAdapter(), nil
+	case model.AgentKiroIDE:
+		return kiro.NewAdapter(), nil
 	case model.AgentGeminiCLI:
 		return gemini.NewAdapter(), nil
 	case model.AgentCursor:
@@ -33,6 +35,8 @@ func NewAdapter(agent model.AgentID) (Adapter, error) {
 		return vscode.NewAdapter(), nil
 	case model.AgentCodex:
 		return codex.NewAdapter(), nil
+	case model.AgentQwenCode:
+		return qwen.NewAdapter(), nil
 	case model.AgentAntigravity:
 		return antigravity.NewAdapter(), nil
 	case model.AgentWindsurf:
@@ -43,16 +47,18 @@ func NewAdapter(agent model.AgentID) (Adapter, error) {
 }
 
 func NewDefaultRegistry() (*Registry, error) {
-	adapters := make([]Adapter, 0, 8)
+	adapters := make([]Adapter, 0, 11)
 
 	for _, agent := range []model.AgentID{
 		model.AgentClaudeCode,
 		model.AgentOpenCode,
 		model.AgentKilocode,
+		model.AgentKiroIDE,
 		model.AgentGeminiCLI,
 		model.AgentCursor,
 		model.AgentVSCodeCopilot,
 		model.AgentCodex,
+		model.AgentQwenCode,
 		model.AgentAntigravity,
 		model.AgentWindsurf,
 	} {

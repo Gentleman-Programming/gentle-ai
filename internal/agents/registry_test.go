@@ -92,10 +92,14 @@ func TestDefaultRegistryIncludesAllAgents(t *testing.T) {
 	for _, agent := range []model.AgentID{
 		model.AgentClaudeCode,
 		model.AgentOpenCode,
+		model.AgentKilocode,
+		model.AgentKiroIDE,
 		model.AgentGeminiCLI,
 		model.AgentCursor,
 		model.AgentVSCodeCopilot,
 		model.AgentCodex,
+		model.AgentQwenCode,
+		model.AgentAntigravity,
 		model.AgentWindsurf,
 	} {
 		if _, ok := registry.Get(agent); !ok {

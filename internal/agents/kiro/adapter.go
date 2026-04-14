@@ -34,6 +34,10 @@ func (a *Adapter) Tier() model.SupportTier {
 	return model.TierFull
 }
 
+func (a *Adapter) DelegationModel() model.DelegationModel {
+	return model.DelegationMultiAgent
+}
+
 // --- Detection ---
 
 func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, string, bool, error) {

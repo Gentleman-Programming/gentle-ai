@@ -14,10 +14,13 @@ func TestDelegationModels(t *testing.T) {
 	}{
 		{model.AgentClaudeCode, model.DelegationMultiAgent},
 		{model.AgentOpenCode, model.DelegationMultiAgent},
+		{model.AgentKilocode, model.DelegationMultiAgent},
+		{model.AgentKiroIDE, model.DelegationMultiAgent},
 		{model.AgentGeminiCLI, model.DelegationMultiAgent},
 		{model.AgentCursor, model.DelegationMultiAgent},
 		{model.AgentVSCodeCopilot, model.DelegationMultiAgent},
 		{model.AgentCodex, model.DelegationSingleAgent},
+		{model.AgentQwenCode, model.DelegationSingleAgent},
 		{model.AgentAntigravity, model.DelegationSingleAgent},
 		{model.AgentWindsurf, model.DelegationSingleAgent},
 	}

@@ -6,10 +6,12 @@ const (
 	AgentClaudeCode    AgentID = "claude-code"
 	AgentOpenCode      AgentID = "opencode"
 	AgentKilocode      AgentID = "kilocode"
+	AgentKiroIDE       AgentID = "kiro-ide"
 	AgentGeminiCLI     AgentID = "gemini-cli"
 	AgentCursor        AgentID = "cursor"
 	AgentVSCodeCopilot AgentID = "vscode-copilot"
 	AgentCodex         AgentID = "codex"
+	AgentQwenCode      AgentID = "qwen-code"
 	AgentAntigravity   AgentID = "antigravity"
 	AgentWindsurf      AgentID = "windsurf"
 )
