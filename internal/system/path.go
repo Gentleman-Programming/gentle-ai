@@ -54,7 +54,7 @@ func AddToUserPath(dir string) error {
 }
 
 // escapePowerShellString escapes a string for safe use inside a PowerShell
-// single-quoted string literal by replacing each ' with '' (PowerShell's escape
+// single-quoted string literal by replacing each ' with ” (PowerShell's escape
 // sequence for a literal single quote within single-quoted strings).
 func escapePowerShellString(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
@@ -76,4 +76,59 @@ func addToProcessPath(dir string) error {
 		return os.Setenv("PATH", dir)
 	}
 	return os.Setenv("PATH", dir+string(os.PathListSeparator)+currentPath)
+}
+
+func FindAllBinaryCopies(name string) []string {
+	pathEnv := os.Getenv("PATH")
+	if pathEnv == "" {
+		return nil
+	}
+
+	dirs := filepath.SplitList(pathEnv)
+	seen := make(map[string]bool)
+	var results []string
+
+	candidates := []string{name}
+	if runtime.GOOS == "windows" && filepath.Ext(name) == "" {
+		candidates = append(candidates, name+".exe", name+".cmd", name+".bat")
+	}
+
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		for _, candidate := range candidates {
+			fullPath := filepath.Join(dir, candidate)
+
+			// Resolve symlinks for deduplication.
+			resolved, err := filepath.EvalSymlinks(fullPath)
+			if err != nil {
+				continue // file doesn't exist or broken symlink
+			}
+
+			info, err := os.Stat(resolved)
+			if err != nil || info.IsDir() {
+				continue
+			}
+
+			// On Unix, the file must be executable.
+			if runtime.GOOS != "windows" && info.Mode()&0111 == 0 {
+				continue
+			}
+
+			// Deduplicate by resolved path (case-insensitive on Windows).
+			key := resolved
+			if runtime.GOOS == "windows" {
+				key = strings.ToLower(resolved)
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			results = append(results, fullPath)
+		}
+	}
+
+	return results
 }
