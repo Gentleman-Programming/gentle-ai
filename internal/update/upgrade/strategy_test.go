@@ -215,29 +215,57 @@ func TestRunStrategy_BinaryWindowsSelfUpdateSkipped(t *testing.T) {
 // --- TestEffectiveMethod ---
 
 func TestEffectiveMethod(t *testing.T) {
+	origIsBrewManaged := isBrewManagedFn
+	t.Cleanup(func() { isBrewManagedFn = origIsBrewManaged })
+
 	tests := []struct {
-		name    string
-		tool    update.ToolInfo
-		profile system.PlatformProfile
-		want    update.InstallMethod
+		name         string
+		tool         update.ToolInfo
+		profile      system.PlatformProfile
+		brewManaged  bool // mock return value for isBrewManagedFn
+		want         update.InstallMethod
 	}{
 		{
-			name:    "brew profile overrides go-install",
-			tool:    update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallBrew,
+			name:        "brew profile + brew-managed tool overrides go-install",
+			tool:        update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
+			profile:     system.PlatformProfile{PackageManager: "brew"},
+			brewManaged: true,
+			want:        update.InstallBrew,
 		},
 		{
-			name:    "brew profile overrides binary",
-			tool:    update.ToolInfo{Name: "gga", InstallMethod: update.InstallBinary},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallBrew,
+			name:        "brew profile + brew-managed tool overrides binary",
+			tool:        update.ToolInfo{Name: "gga", InstallMethod: update.InstallBinary},
+			profile:     system.PlatformProfile{PackageManager: "brew"},
+			brewManaged: true,
+			want:        update.InstallBrew,
 		},
 		{
-			name:    "brew profile overrides script",
-			tool:    update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallBrew,
+			name:        "brew profile + brew-managed tool overrides script",
+			tool:        update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
+			profile:     system.PlatformProfile{PackageManager: "brew"},
+			brewManaged: true,
+			want:        update.InstallBrew,
+		},
+		{
+			name:        "brew profile + non-brew tool falls back to declared binary",
+			tool:        update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
+			profile:     system.PlatformProfile{PackageManager: "brew"},
+			brewManaged: false,
+			want:        update.InstallBinary,
+		},
+		{
+			name:        "brew profile + non-brew tool falls back to declared script",
+			tool:        update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
+			profile:     system.PlatformProfile{PackageManager: "brew"},
+			brewManaged: false,
+			want:        update.InstallScript,
+		},
+		{
+			name:        "brew profile + non-brew tool falls back to declared go-install",
+			tool:        update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
+			profile:     system.PlatformProfile{PackageManager: "brew"},
+			brewManaged: false,
+			want:        update.InstallGoInstall,
 		},
 		{
 			name:    "apt profile respects declared method (go-install)",
@@ -261,6 +289,7 @@ func TestEffectiveMethod(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			isBrewManagedFn = func(string) bool { return tc.brewManaged }
 			got := effectiveMethod(tc.tool, tc.profile)
 			if got != tc.want {
 				t.Errorf("effectiveMethod = %q, want %q", got, tc.want)

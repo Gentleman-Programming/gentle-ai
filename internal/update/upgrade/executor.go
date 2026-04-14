@@ -362,10 +362,23 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 	return base
 }
 
+// isBrewManagedFn checks whether a tool is actually installed via Homebrew.
+// Package-level var for testability — swapped in tests to avoid real brew calls.
+var isBrewManagedFn = isBrewManaged
+
+// isBrewManaged returns true if `brew list --versions <toolName>` succeeds,
+// meaning the tool was installed via Homebrew (present in the Cellar).
+func isBrewManaged(toolName string) bool {
+	return execCommand("brew", "list", "--versions", toolName).Run() == nil
+}
+
 // effectiveMethod resolves the actual upgrade strategy for a tool on a given platform.
-// On brew-managed platforms, brew takes precedence over the tool's declared method.
+// On brew-managed platforms, brew takes precedence — but only if the tool is actually
+// installed via brew. On Linux it is common to have Linuxbrew for some packages while
+// other tools are installed via binary download or go install. Blindly forcing brew
+// would cause "No available formula" errors for those tools.
 func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
-	if profile.PackageManager == "brew" {
+	if profile.PackageManager == "brew" && isBrewManagedFn(tool.Name) {
 		return update.InstallBrew
 	}
 	return tool.InstallMethod
