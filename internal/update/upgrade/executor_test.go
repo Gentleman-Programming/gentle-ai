@@ -420,7 +420,9 @@ func TestExecute_DevBuildSurfacedAsSkipped(t *testing.T) {
 // must be populated from the error message so RenderUpgradeReport can display it.
 func TestExecute_ManualFallbackSurfacedAsSkippedNotFailed(t *testing.T) {
 	origExecCommand := execCommand
+	origIsBrewManaged := isBrewManagedFn
 	t.Cleanup(func() { execCommand = origExecCommand })
+	t.Cleanup(func() { isBrewManagedFn = origIsBrewManaged })
 
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
@@ -461,6 +463,50 @@ func TestExecute_ManualFallbackSurfacedAsSkippedNotFailed(t *testing.T) {
 	// Err should be nil for a manual skip (it is not a failure).
 	if r.Err != nil {
 		t.Errorf("Windows binary fallback Err = %v, want nil (manual skips are not errors)", r.Err)
+	}
+}
+
+// TestExecute_BrewProfileNonBrewToolFallsBackToDeclaredMethod verifies the full
+// executor path for the Linuxbrew regression: even when the platform profile uses
+// brew, a tool that is not actually brew-managed must execute its declared install
+// method instead of forcing `brew upgrade <tool>`.
+func TestExecute_BrewProfileNonBrewToolFallsBackToDeclaredMethod(t *testing.T) {
+	origExecCommand := execCommand
+	origIsBrewManaged := isBrewManagedFn
+	t.Cleanup(func() { execCommand = origExecCommand })
+	t.Cleanup(func() { isBrewManagedFn = origIsBrewManaged })
+
+	isBrewManagedFn = func(string) bool { return false }
+
+	var calls [][]string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
+		return exec.Command("echo", "ok")
+	}
+
+	linuxBrewProfile := system.PlatformProfile{OS: "linux", PackageManager: "brew", Supported: true}
+	results := []update.UpdateResult{
+		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
+	}
+	results[0].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
+
+	report := Execute(context.Background(), results, linuxBrewProfile, t.TempDir(), false)
+
+	if len(report.Results) != 1 {
+		t.Fatalf("len(Results) = %d, want 1", len(report.Results))
+	}
+	if report.Results[0].Status != UpgradeSucceeded {
+		t.Fatalf("status = %q, want UpgradeSucceeded", report.Results[0].Status)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("execCommand call count = %d, want 1", len(calls))
+	}
+	if calls[0][0] != "go" {
+		t.Fatalf("first exec command = %q, want %q (declared go-install fallback, not brew)", calls[0][0], "go")
+	}
+	if len(calls[0]) < 3 || calls[0][1] != "install" {
+		t.Fatalf("exec args = %v, want go install invocation", calls[0])
 	}
 }
 
