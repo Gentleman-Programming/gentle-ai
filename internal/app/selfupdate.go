@@ -24,8 +24,26 @@ const (
 	envSelfUpdateDone = "GENTLE_AI_SELF_UPDATE_DONE"
 )
 
-// selfUpdateTimeout is the maximum time allowed for the update check + upgrade.
-const selfUpdateTimeout = 7 * time.Second
+// Self-update timeouts are split into two phases with distinct SLAs:
+//
+//   - Check phase (API round-trip): must be fast to avoid delaying CLI startup.
+//     5 seconds is generous for a single HTTPS GET to api.github.com — if the
+//     network is unreachable, the TCP handshake fails well before this.
+//
+//   - Execution phase (backup + binary download): needs real time for I/O.
+//     The gentle-ai tarball is ~9 MB. At 1 Mbps (a slow mobile connection),
+//     that takes ~72 seconds. 60 seconds covers most real-world connections
+//     while still bounding the worst case.
+//
+// Previously a single 7-second timeout covered both phases, which caused the
+// download to be cancelled mid-stream on slower connections. The binary was
+// sometimes partially or fully written to disk before the context fired,
+// resulting in a successful upgrade that was falsely reported as failed.
+// See: https://github.com/Gentleman-Programming/gentle-ai/issues/230
+const (
+	selfUpdateCheckTimeout = 5 * time.Second
+	selfUpdateExecTimeout  = 60 * time.Second
+)
 
 // reExec is swappable for testing — prevents actual syscall.Exec in tests.
 var reExec = func(argv0 string, argv []string, envv []string) error {
@@ -59,12 +77,13 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 		return nil
 	}
 
-	// Apply timeout to the entire check+upgrade cycle.
-	ctx, cancel := context.WithTimeout(ctx, selfUpdateTimeout)
-	defer cancel()
+	// Phase 1: Check for updates (only gentle-ai).
+	// Short timeout — fail fast if the network is unreachable so CLI startup
+	// is not delayed for users who are offline or behind a slow proxy.
+	checkCtx, checkCancel := context.WithTimeout(ctx, selfUpdateCheckTimeout)
+	defer checkCancel()
 
-	// Check for updates (only gentle-ai).
-	results := updateCheckFiltered(ctx, version, profile, []string{"gentle-ai"})
+	results := updateCheckFiltered(checkCtx, version, profile, []string{"gentle-ai"})
 
 	// Find the gentle-ai result.
 	var target *update.UpdateResult
@@ -80,14 +99,20 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 		return nil
 	}
 
-	// Run upgrade (backup + strategy execution).
+	// Phase 2: Run upgrade (backup + strategy execution).
+	// Independent context with a generous timeout — binary downloads need real
+	// time on slower connections. This context is derived from the original
+	// parent (not from checkCtx) so the check timeout does not bleed into it.
+	execCtx, execCancel := context.WithTimeout(ctx, selfUpdateExecTimeout)
+	defer execCancel()
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		_, _ = fmt.Fprintf(stdout, "self-update: cannot resolve home directory: %v\n", err)
 		return nil // non-fatal
 	}
 
-	report := upgradeExecute(ctx, results, profile, homeDir, false, stdout)
+	report := upgradeExecute(execCtx, results, profile, homeDir, false, stdout)
 
 	// Check if upgrade succeeded.
 	var succeeded bool
