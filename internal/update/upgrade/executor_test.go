@@ -1269,24 +1269,29 @@ func TestEnumerateFilesInDir_CaseInsensitiveExclude(t *testing.T) {
 // Task 1.1 — checkBrewManaged helper: three-state coverage
 // =============================================================================
 
-// TestCheckBrewManaged is the entry point for the helper-process tests below.
-// It uses the standard Go helper process pattern to control both the exit code
-// and the combined output of the stubbed exec.Command.
+// Helper process pattern for checkBrewManaged tests.
 //
-// The test re-executes itself as a subprocess with the environment variable
-// BREW_CHECK_TEST_MODE set so that TestMain can detect it and run the helper
-// instead of the normal test suite.
+// fakeBrewCmd and TestBrewCheckHelperProcess together implement the standard Go
+// helper-process pattern: the test binary re-invokes itself as a subprocess with
+// BREW_CHECK_HELPER=1 set. TestBrewCheckHelperProcess detects this env var and
+// acts as the fake brew binary, exiting with the behavior specified by
+// BREW_CHECK_MODE instead of running the normal test suite.
 
-// fakeBrewCmd returns a *exec.Cmd that re-invokes the test binary as a
-// subprocess. The subprocess detects the helper flag via the environment
-// variable BREW_CHECK_HELPER and behaves according to MODE:
-//   - "managed"      → exits 0 (no output needed; CombinedOutput success → brewManaged)
-//   - "not-managed"  → prints nothing and exits 1 (empty output → brewNotManaged)
-//   - "error"        → prints "Error: brew damaged" and exits 1 (non-empty → brewError)
+// fakeBrewCmd returns an execCommand stub that intercepts all "brew" invocations
+// by re-executing the test binary as a subprocess. The subprocess runs
+// TestBrewCheckHelperProcess (detected via BREW_CHECK_HELPER=1) and exits
+// according to MODE:
+//
+//   - "managed"      → exits 0 (brew list success → brewManaged)
+//   - "not-managed"  → exits 1 with no output (empty output → brewNotManaged)
+//   - "error"        → exits 1 with error text on stderr (non-empty → brewError)
+//
+// Non-brew commands (e.g. "go", "echo") pass through to a real no-op command.
 func fakeBrewCmd(t *testing.T, mode string) func(name string, args ...string) *exec.Cmd {
 	t.Helper()
 	return func(name string, args ...string) *exec.Cmd {
-		// Only intercept "brew list --versions <tool>" calls.
+		// Intercept all "brew" invocations (including brew update, brew upgrade,
+		// and brew list) by running the helper subprocess.
 		if name == "brew" {
 			cmd := exec.Command(os.Args[0], "-test.run=TestBrewCheckHelperProcess")
 			cmd.Env = append(os.Environ(),
@@ -1295,7 +1300,7 @@ func fakeBrewCmd(t *testing.T, mode string) func(name string, args ...string) *e
 			)
 			return cmd
 		}
-		// Any other command (e.g. brew update in brewUpgrade): succeed silently.
+		// Non-brew commands succeed silently.
 		return exec.Command("echo", "ok")
 	}
 }
@@ -1365,6 +1370,34 @@ func TestCheckBrewManaged_BrewError(t *testing.T) {
 	got := checkBrewManaged("engram")
 	if got != brewError {
 		t.Errorf("checkBrewManaged = %v, want brewError", got)
+	}
+}
+
+// TestCheckBrewManaged_StartFailure verifies that when brew itself cannot be
+// started — e.g. the brew binary is not found (exec.ErrNotFound) or fails to
+// launch for any reason — checkBrewManaged returns brewError, NOT brewNotManaged.
+//
+// This is the PR review blocker: before the fix, a command launch error produced
+// empty output with a non-ExitError, which the empty-output branch misclassified
+// as brewNotManaged (silent "not found" result). The correct classification is
+// brewError so the caller does NOT silently fall back to another install method.
+func TestCheckBrewManaged_StartFailure(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	// Return a command pointing to a non-existent binary so cmd.Start() fails
+	// with *os.PathError (NOT *exec.ExitError). CombinedOutput() returns empty
+	// output and a non-ExitError — this is the "startup/lookup failure" path.
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "brew" {
+			return exec.Command("/nonexistent-binary-brew-start-failure-test")
+		}
+		return exec.Command("echo", "ok")
+	}
+
+	got := checkBrewManaged("engram")
+	if got != brewError {
+		t.Errorf("checkBrewManaged with start failure = %v, want brewError — startup/lookup failures must not be classified as brewNotManaged", got)
 	}
 }
 

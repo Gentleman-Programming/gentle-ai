@@ -10,6 +10,7 @@ package upgrade
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -400,15 +401,27 @@ var checkBrewManagedFn = checkBrewManaged
 //   - brewNotManaged   — command failed (exit non-zero) with empty/whitespace output,
 //     meaning brew is functional but the tool is not installed via it.
 //   - brewError        — command failed AND produced non-empty stderr/stdout,
-//     indicating an operational failure (brew broken, permissions, timeout, etc.).
+//     indicating an operational failure (brew broken, permissions, timeout, etc.);
+//     OR the command could not be started at all (e.g. brew not found / exec.ErrNotFound).
 //
 // Using CombinedOutput() captures both stdout and stderr in one call so we can
 // distinguish an empty "not found" result from a real error message.
+// Startup failures (non-ExitError from CombinedOutput) are classified as brewError
+// so callers never mistake "brew binary not found" for "tool not brew-managed".
 func checkBrewManaged(toolName string) brewCheckResult {
 	out, err := execCommand("brew", "list", "--versions", toolName).CombinedOutput()
 	if err == nil {
 		return brewManaged
 	}
+	// If the error is NOT an ExitError, the command failed to start (e.g. brew
+	// binary not found, permission denied, PATH misconfiguration). Treat as an
+	// operational error — do NOT misclassify as "tool not brew-managed".
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return brewError
+	}
+	// ExitError: the process ran and exited non-zero.
+	// Empty output → tool not in Cellar (clean not-found). Non-empty → operational error.
 	if len(strings.TrimSpace(string(out))) == 0 {
 		return brewNotManaged
 	}
