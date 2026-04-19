@@ -91,13 +91,17 @@ func TestDefaultRegistryIncludesAllAgents(t *testing.T) {
 	for _, agent := range []model.AgentID{
 		model.AgentClaudeCode,
 		model.AgentOpenCode,
+		model.AgentKilocode,
 		model.AgentGeminiCLI,
 		model.AgentCursor,
 		model.AgentVSCodeCopilot,
 		model.AgentCodex,
 		model.AgentAntigravity,
 		model.AgentWindsurf,
+		model.AgentKimi,
 		model.AgentQwenCode,
+		model.AgentKiroIDE,
+		model.AgentPi,
 	} {
 		if _, ok := registry.Get(agent); !ok {
 			t.Fatalf("registry missing %s adapter", agent)
@@ -113,5 +117,27 @@ func TestFactoryRejectsUnsupportedAgent(t *testing.T) {
 
 	if !errors.Is(err, ErrAgentNotSupported) {
 		t.Fatalf("NewAdapter() error = %v, want ErrAgentNotSupported", err)
+	}
+}
+
+func TestPiAdapterImplementsExtendedResourceAdapter(t *testing.T) {
+	adapter, err := NewAdapter(model.AgentPi)
+	if err != nil {
+		t.Fatalf("NewAdapter(pi) error = %v", err)
+	}
+
+	ext, ok := adapter.(ExtendedResourceAdapter)
+	if !ok {
+		t.Fatalf("pi adapter does not implement ExtendedResourceAdapter")
+	}
+
+	if !ext.SupportsExtensions() {
+		t.Fatalf("pi SupportsExtensions() = false, want true")
+	}
+	if !ext.SupportsPromptTemplates() {
+		t.Fatalf("pi SupportsPromptTemplates() = false, want true")
+	}
+	if !ext.SupportsThemes() {
+		t.Fatalf("pi SupportsThemes() = false, want true")
 	}
 }

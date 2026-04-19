@@ -54,3 +54,29 @@ type Adapter interface {
 	SupportsSystemPrompt() bool
 	SupportsMCP() bool
 }
+
+// ExtendedResourceAdapter is an optional capability for agents that expose
+// additional first-class resource directories beyond the baseline Adapter
+// contract (extensions, prompt templates, themes, package metadata).
+//
+// Callers must feature-detect with a type assertion:
+//
+//	ext, ok := adapter.(agents.ExtendedResourceAdapter)
+//
+// and only use these paths when ok==true.
+//
+// This keeps the core Adapter stable while enabling incremental support for
+// resource-native runtimes such as pi.
+type ExtendedResourceAdapter interface {
+	SupportsExtensions() bool
+	ExtensionsDir(homeDir string) string
+
+	SupportsPromptTemplates() bool
+	PromptsDir(homeDir string) string
+
+	SupportsThemes() bool
+	ThemesDir(homeDir string) string
+
+	SupportsPackages() bool
+	PackagesStatePath(homeDir string) string
+}

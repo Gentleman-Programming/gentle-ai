@@ -2799,6 +2799,8 @@ func preselectedAgents(detection system.DetectionResult) []model.AgentID {
 			selected = append(selected, model.AgentClaudeCode)
 		case string(model.AgentOpenCode):
 			selected = append(selected, model.AgentOpenCode)
+		case string(model.AgentKilocode):
+			selected = append(selected, model.AgentKilocode)
 		case string(model.AgentGeminiCLI):
 			selected = append(selected, model.AgentGeminiCLI)
 		case string(model.AgentCursor):
@@ -2811,8 +2813,14 @@ func preselectedAgents(detection system.DetectionResult) []model.AgentID {
 			selected = append(selected, model.AgentAntigravity)
 		case string(model.AgentWindsurf):
 			selected = append(selected, model.AgentWindsurf)
+		case string(model.AgentKimi):
+			selected = append(selected, model.AgentKimi)
 		case string(model.AgentQwenCode):
 			selected = append(selected, model.AgentQwenCode)
+		case string(model.AgentKiroIDE):
+			selected = append(selected, model.AgentKiroIDE)
+		case string(model.AgentPi):
+			selected = append(selected, model.AgentPi)
 		}
 	}
 

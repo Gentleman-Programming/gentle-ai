@@ -193,6 +193,8 @@ func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentI
 			agents = append(agents, model.AgentQwenCode)
 		case string(model.AgentKiroIDE):
 			agents = append(agents, model.AgentKiroIDE)
+		case string(model.AgentPi):
+			agents = append(agents, model.AgentPi)
 		}
 	}
 
