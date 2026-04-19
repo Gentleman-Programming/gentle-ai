@@ -143,6 +143,37 @@ func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
 	}
 }
 
+func TestComponentPathsPiIncludesPiNativeResources(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentPi})
+
+	sddPaths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
+	for _, want := range []string{
+		filepath.Join(home, ".pi", "agent", "prompts", "sdd-new.md"),
+		filepath.Join(home, ".pi", "agent", "prompts", "sdd-continue.md"),
+		filepath.Join(home, ".pi", "agent", "settings.json"),
+	} {
+		if !containsPath(sddPaths, want) {
+			t.Fatalf("componentPaths(sdd,pi) missing %q\npaths=%v", want, sddPaths)
+		}
+	}
+
+	engramPaths := componentPaths(home, model.Selection{}, adapters, model.ComponentEngram)
+	if want := filepath.Join(home, ".pi", "agent", "extensions", "engram-tools.ts"); !containsPath(engramPaths, want) {
+		t.Fatalf("componentPaths(engram,pi) missing %q\npaths=%v", want, engramPaths)
+	}
+
+	context7Paths := componentPaths(home, model.Selection{}, adapters, model.ComponentContext7)
+	if want := filepath.Join(home, ".pi", "agent", "extensions", "context7-tools.ts"); !containsPath(context7Paths, want) {
+		t.Fatalf("componentPaths(context7,pi) missing %q\npaths=%v", want, context7Paths)
+	}
+
+	themePaths := componentPaths(home, model.Selection{}, adapters, model.ComponentTheme)
+	if want := filepath.Join(home, ".pi", "agent", "themes", "gentleman-kanagawa.json"); !containsPath(themePaths, want) {
+		t.Fatalf("componentPaths(theme,pi) missing %q\npaths=%v", want, themePaths)
+	}
+}
+
 func containsPath(paths []string, want string) bool {
 	for _, p := range paths {
 		if p == want {

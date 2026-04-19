@@ -1,0 +1,10 @@
+{
+  "$schema": "https://pi.dev/theme.schema.json",
+  "name": "gentleman-kanagawa",
+  "extends": "kanagawa",
+  "tokens": {
+    "accent": "#7E9CD8",
+    "success": "#98BB6C",
+    "warning": "#FFA066"
+  }
+}

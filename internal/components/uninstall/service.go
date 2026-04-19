@@ -14,6 +14,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/internal/components/piresources"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
@@ -452,6 +453,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 	case model.ComponentContext7:
 		targets = append(targets, context7Targets(adapter, homeDir)...)
 		ops = append(ops, context7Operations(adapter, homeDir)...)
+		piOps, piTargets := piResourceComponentOperations(adapter, homeDir, model.ComponentContext7)
+		targets = append(targets, piTargets...)
+		ops = append(ops, piOps...)
 	case model.ComponentEngram:
 		if s.engramUninstallScope == model.EngramUninstallScopeProject {
 			projectDataPath := filepath.Join(s.workspaceDir, ".engram")
@@ -459,6 +463,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 				targets = append(targets, projectDataPath)
 				ops = append(ops, removeTree(projectDataPath))
 			}
+			piOps, piTargets := piResourceComponentOperations(adapter, homeDir, model.ComponentEngram)
+			targets = append(targets, piTargets...)
+			ops = append(ops, piOps...)
 			break
 		}
 
@@ -471,6 +478,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 				return removeMarkdownSections(content, "engram-protocol")
 			}))
 		}
+		piOps, piTargets := piResourceComponentOperations(adapter, homeDir, model.ComponentEngram)
+		targets = append(targets, piTargets...)
+		ops = append(ops, piOps...)
 	case model.ComponentPermission:
 		if path := adapter.SettingsPath(homeDir); path != "" {
 			targets = append(targets, path)
@@ -490,6 +500,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			targets = append(targets, path)
 			ops = append(ops, rewriteJSONFile(path, jsonPath{"theme"}))
 		}
+		piOps, piTargets := piResourceComponentOperations(adapter, homeDir, model.ComponentTheme)
+		targets = append(targets, piTargets...)
+		ops = append(ops, piOps...)
 	case model.ComponentSkills:
 		if !adapter.SupportsSkills() {
 			break
@@ -612,6 +625,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			}
 			ops = append(ops, removeDirIfEmpty(agentsDir))
 		}
+		piOps, piTargets := piResourceComponentOperations(adapter, homeDir, model.ComponentSDD)
+		targets = append(targets, piTargets...)
+		ops = append(ops, piOps...)
 	case model.ComponentGGA:
 		for _, path := range globalBackupTargets(homeDir) {
 			targets = append(targets, path)
@@ -623,6 +639,28 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 	}
 
 	return ops, targets, nil
+}
+
+func piResourceComponentOperations(adapter agents.Adapter, homeDir string, component model.ComponentID) ([]operation, []string) {
+	paths := piresources.PathsForComponent(homeDir, adapter, component)
+	if len(paths) == 0 {
+		return nil, nil
+	}
+
+	targets := make([]string, 0, len(paths))
+	ops := make([]operation, 0, len(paths)*2)
+	settingsPath := adapter.SettingsPath(homeDir)
+
+	for _, path := range paths {
+		targets = append(targets, path)
+		if path == settingsPath && component == model.ComponentSDD {
+			ops = append(ops, rewriteJSONFile(path, jsonPath{"gentleAI", "managedPackages", "pi-gentle-ai"}))
+			continue
+		}
+		ops = append(ops, removeFile(path), removeDirIfEmpty(filepath.Dir(path)))
+	}
+
+	return ops, targets
 }
 
 func context7Targets(adapter agents.Adapter, homeDir string) []string {

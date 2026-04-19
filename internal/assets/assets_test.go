@@ -75,6 +75,26 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"kimi/agents/sdd-archive.md",
 		"kimi/agents/sdd-onboard.md",
 
+		// pi agent files
+		"pi/persona-gentleman.md",
+		"pi/sdd-orchestrator.md",
+		"pi/extensions/engram-tools.ts",
+		"pi/extensions/context7-tools.ts",
+		"pi/prompts/sdd-new.md",
+		"pi/prompts/sdd-continue.md",
+		"pi/prompts/sdd-ff.md",
+		"pi/prompts/sdd-init.md",
+		"pi/prompts/sdd-explore.md",
+		"pi/prompts/sdd-propose.md",
+		"pi/prompts/sdd-spec.md",
+		"pi/prompts/sdd-design.md",
+		"pi/prompts/sdd-tasks.md",
+		"pi/prompts/sdd-apply.md",
+		"pi/prompts/sdd-verify.md",
+		"pi/prompts/sdd-archive.md",
+		"pi/prompts/sdd-onboard.md",
+		"pi/themes/gentleman-kanagawa.json",
+
 		// SDD skills
 		"skills/sdd-init/SKILL.md",
 		"skills/sdd-apply/SKILL.md",

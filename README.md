@@ -25,7 +25,7 @@ This is NOT an AI agent installer. Most agents are easy to install. This is an *
 
 **After**: Your agent now has memory, skills, workflow, MCP tools, and a persona that actually teaches you.
 
-### 10 Supported Agents
+### 11 Supported Agents
 
 | Agent | Delegation Model | Key Feature |
 |-------|:---:|---|
@@ -39,6 +39,7 @@ This is NOT an AI agent installer. Most agents are easy to install. This is an *
 | **Antigravity** | Solo-agent + Mission Control | Built-in Browser/Terminal sub-agents |
 | **Kiro IDE** | Full (native subagents) | Native `~/.kiro/agents/` + steering orchestration |
 | **Qwen Code** | Full (native sub-agents) | Slash commands, `~/.qwen/commands/`, `auto_edit` mode |
+| **pi** | Solo-agent | Native `~/.pi/agent` resources (AGENTS + skills) |
 
 > **Note**: This project supersedes [Agent Teams Lite](https://github.com/Gentleman-Programming/agent-teams-lite) (now archived). Everything ATL provided is included here with better installation, automatic updates, and persistent memory.
 

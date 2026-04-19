@@ -352,3 +352,97 @@ func TestComponentOperationsEngram_GlobalScopeKeepsWorkspaceProjectData(t *testi
 		t.Fatalf("global engram config should be removed in global scope, got: %s", string(raw))
 	}
 }
+
+func TestComponentOperationsSDD_PiRemovesPromptsAndManagedPackageState(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentPi)
+	if !ok {
+		t.Fatal("pi adapter not found in registry")
+	}
+
+	promptDir := filepath.Join(homeDir, ".pi", "agent", "prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(promptDir) error = %v", err)
+	}
+	promptPath := filepath.Join(promptDir, "sdd-new.md")
+	if err := os.WriteFile(promptPath, []byte("prompt"), 0o644); err != nil {
+		t.Fatalf("WriteFile(prompt) error = %v", err)
+	}
+
+	settingsPath := filepath.Join(homeDir, ".pi", "agent", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"gentleAI":{"managedPackages":{"pi-gentle-ai":{"managedBy":"gentle-ai"}}},"user":"keep"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("op.apply(%q) error = %v", op.path, err)
+		}
+	}
+
+	if _, err := os.Stat(promptPath); !os.IsNotExist(err) {
+		t.Fatalf("pi sdd prompt should be removed; err=%v", err)
+	}
+
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings) error = %v", err)
+	}
+	if strings.Contains(string(raw), `"pi-gentle-ai"`) {
+		t.Fatalf("managed package state should be removed, got: %s", string(raw))
+	}
+	if !strings.Contains(string(raw), `"user"`) {
+		t.Fatalf("unrelated user settings should be preserved, got: %s", string(raw))
+	}
+}
+
+func TestComponentOperationsContext7_PiRemovesManagedExtensionFile(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentPi)
+	if !ok {
+		t.Fatal("pi adapter not found in registry")
+	}
+
+	extPath := filepath.Join(homeDir, ".pi", "agent", "extensions", "context7-tools.ts")
+	if err := os.MkdirAll(filepath.Dir(extPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(extension dir) error = %v", err)
+	}
+	if err := os.WriteFile(extPath, []byte("export default {}"), 0o644); err != nil {
+		t.Fatalf("WriteFile(extension) error = %v", err)
+	}
+
+	ops, _, err := svc.componentOperations(adapter, model.ComponentContext7)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("op.apply(%q) error = %v", op.path, err)
+		}
+	}
+
+	if _, err := os.Stat(extPath); !os.IsNotExist(err) {
+		t.Fatalf("pi context7 extension should be removed; err=%v", err)
+	}
+}

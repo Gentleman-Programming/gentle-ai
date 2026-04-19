@@ -20,6 +20,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/components/mcp"
 	"github.com/gentleman-programming/gentle-ai/internal/components/permissions"
 	"github.com/gentleman-programming/gentle-ai/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/internal/components/piresources"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/internal/components/theme"
@@ -548,12 +549,18 @@ func (s componentApplyStep) Run() error {
 			if _, err := engram.Inject(s.homeDir, adapter); err != nil {
 				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
 			}
+			if _, err := piresources.Inject(s.homeDir, adapter, model.ComponentEngram); err != nil {
+				return fmt.Errorf("inject pi engram resources for %q: %w", adapter.Agent(), err)
+			}
 		}
 		return nil
 	case model.ComponentContext7:
 		for _, adapter := range adapters {
 			if _, err := mcp.Inject(s.homeDir, adapter); err != nil {
 				return fmt.Errorf("inject context7 for %q: %w", adapter.Agent(), err)
+			}
+			if _, err := piresources.Inject(s.homeDir, adapter, model.ComponentContext7); err != nil {
+				return fmt.Errorf("inject pi context7 resources for %q: %w", adapter.Agent(), err)
 			}
 		}
 		return nil
@@ -582,6 +589,9 @@ func (s componentApplyStep) Run() error {
 			}
 			if _, err := sdd.Inject(s.homeDir, adapter, s.selection.SDDMode, opts); err != nil {
 				return fmt.Errorf("inject sdd for %q: %w", adapter.Agent(), err)
+			}
+			if _, err := piresources.Inject(s.homeDir, adapter, model.ComponentSDD); err != nil {
+				return fmt.Errorf("inject pi sdd resources for %q: %w", adapter.Agent(), err)
 			}
 		}
 		return nil
@@ -642,6 +652,9 @@ func (s componentApplyStep) Run() error {
 		for _, adapter := range adapters {
 			if _, err := theme.Inject(s.homeDir, adapter); err != nil {
 				return fmt.Errorf("inject theme for %q: %w", adapter.Agent(), err)
+			}
+			if _, err := piresources.Inject(s.homeDir, adapter, model.ComponentTheme); err != nil {
+				return fmt.Errorf("inject pi theme resources for %q: %w", adapter.Agent(), err)
 			}
 		}
 		return nil
@@ -828,6 +841,7 @@ func backupTargets(homeDir string, selection model.Selection, resolved planner.R
 func componentPaths(homeDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	paths := []string{}
 	for _, adapter := range adapters {
+		paths = append(paths, piresources.PathsForComponent(homeDir, adapter, component)...)
 		switch component {
 		case model.ComponentEngram:
 			switch adapter.MCPStrategy() {

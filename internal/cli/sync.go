@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/internal/components/mcp"
 	"github.com/gentleman-programming/gentle-ai/internal/components/permissions"
+	"github.com/gentleman-programming/gentle-ai/internal/components/piresources"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/internal/components/theme"
@@ -467,6 +468,12 @@ func (s componentSyncStep) Run() error {
 				return fmt.Errorf("sync engram for %q: %w", adapter.Agent(), err)
 			}
 			s.countChanged(boolToInt(res.Changed))
+
+			piRes, err := piresources.Inject(s.homeDir, adapter, model.ComponentEngram)
+			if err != nil {
+				return fmt.Errorf("sync pi engram resources for %q: %w", adapter.Agent(), err)
+			}
+			s.countChanged(boolToInt(piRes.Changed))
 		}
 		return nil
 
@@ -477,6 +484,12 @@ func (s componentSyncStep) Run() error {
 				return fmt.Errorf("sync context7 for %q: %w", adapter.Agent(), err)
 			}
 			s.countChanged(boolToInt(res.Changed))
+
+			piRes, err := piresources.Inject(s.homeDir, adapter, model.ComponentContext7)
+			if err != nil {
+				return fmt.Errorf("sync pi context7 resources for %q: %w", adapter.Agent(), err)
+			}
+			s.countChanged(boolToInt(piRes.Changed))
 		}
 		return nil
 
@@ -530,6 +543,12 @@ func (s componentSyncStep) Run() error {
 				return fmt.Errorf("sync sdd for %q: %w", adapter.Agent(), err)
 			}
 			s.countChanged(boolToInt(res.Changed))
+
+			piRes, err := piresources.Inject(s.homeDir, adapter, model.ComponentSDD)
+			if err != nil {
+				return fmt.Errorf("sync pi sdd resources for %q: %w", adapter.Agent(), err)
+			}
+			s.countChanged(boolToInt(piRes.Changed))
 		}
 		return nil
 
@@ -585,6 +604,12 @@ func (s componentSyncStep) Run() error {
 				return fmt.Errorf("sync theme for %q: %w", adapter.Agent(), err)
 			}
 			s.countChanged(boolToInt(res.Changed))
+
+			piRes, err := piresources.Inject(s.homeDir, adapter, model.ComponentTheme)
+			if err != nil {
+				return fmt.Errorf("sync pi theme resources for %q: %w", adapter.Agent(), err)
+			}
+			s.countChanged(boolToInt(piRes.Changed))
 		}
 		return nil
 
