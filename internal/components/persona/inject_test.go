@@ -1167,3 +1167,33 @@ func TestInjectVSCodeIdempotentAfterHeal(t *testing.T) {
 		t.Fatalf("second inject should be idempotent (changed = false), but changed = true")
 	}
 }
+
+func TestInjectPiUsesPiSpecificPersonaAsset(t *testing.T) {
+	home := t.TempDir()
+
+	piAdapter, err := agents.NewAdapter("pi")
+	if err != nil {
+		t.Fatalf("NewAdapter(pi) error = %v", err)
+	}
+
+	result, err := Inject(home, piAdapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(pi) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(pi) changed = false, want true")
+	}
+
+	path := filepath.Join(home, ".pi", "agent", "AGENTS.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "# Gentleman Persona for pi") {
+		t.Fatalf("pi AGENTS.md missing pi-specific persona heading; content:\n%s", text)
+	}
+	if !strings.Contains(text, "pi-native workflow") {
+		t.Fatalf("pi AGENTS.md missing pi-native workflow section; content:\n%s", text)
+	}
+}

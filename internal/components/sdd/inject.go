@@ -1012,6 +1012,8 @@ func sddOrchestratorAsset(agent model.AgentID) string {
 		return "qwen/sdd-orchestrator.md"
 	case model.AgentKiroIDE:
 		return "kiro/sdd-orchestrator.md"
+	case model.AgentPi:
+		return "pi/sdd-orchestrator.md"
 	default:
 		return "generic/sdd-orchestrator.md"
 	}
