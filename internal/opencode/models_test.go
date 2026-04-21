@@ -308,6 +308,55 @@ func TestFilterModelsForSDD(t *testing.T) {
 	}
 }
 
+func TestEnrichProvidersWithRuntimeModels_MergesMissingCustomModels(t *testing.T) {
+	path := writeFixture(t)
+	providers, err := LoadModels(path)
+	if err != nil {
+		t.Fatalf("LoadModels() error = %v", err)
+	}
+
+	original := listModelsForProvider
+	defer func() { listModelsForProvider = original }()
+
+	listModelsForProvider = func(providerID string) ([]string, error) {
+		switch providerID {
+		case "google":
+			return []string{
+				"gemini-2.5-pro",
+				"antigravity-claude-opus-4-6-thinking",
+				"antigravity-claude-sonnet-4-6",
+			}, nil
+		default:
+			return nil, nil
+		}
+	}
+
+	EnrichProvidersWithRuntimeModels(providers, []string{"google"})
+
+	google, ok := providers["google"]
+	if !ok {
+		t.Fatal("missing google provider after enrichment")
+	}
+
+	for _, modelID := range []string{"gemini-2.5-pro", "antigravity-claude-opus-4-6-thinking", "antigravity-claude-sonnet-4-6"} {
+		model, ok := google.Models[modelID]
+		if !ok {
+			t.Fatalf("google model %q missing after enrichment", modelID)
+		}
+		if !model.ToolCall {
+			t.Fatalf("google model %q ToolCall = false, want true", modelID)
+		}
+	}
+
+	filtered := FilterModelsForSDD(google)
+	if len(filtered) != 3 {
+		t.Fatalf("FilterModelsForSDD(google) len = %d, want 3", len(filtered))
+	}
+	if filtered[0].ID != "antigravity-claude-opus-4-6-thinking" {
+		t.Fatalf("first filtered model = %q, want antigravity-claude-opus-4-6-thinking", filtered[0].ID)
+	}
+}
+
 func TestLoadAuthProviders(t *testing.T) {
 	authPath := writeAuthFixture(t, map[string]bool{
 		"anthropic":      true,

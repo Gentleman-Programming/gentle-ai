@@ -61,6 +61,7 @@ func NewModelPickerState(cachePath string) ModelPickerState {
 	}
 
 	available := opencode.DetectAvailableProviders(providers)
+	opencode.EnrichProvidersWithRuntimeModels(providers, available)
 
 	sddModels := make(map[string][]opencode.Model, len(available))
 	for _, id := range available {

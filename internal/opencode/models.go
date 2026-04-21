@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // DefaultCachePath returns the default path to the OpenCode models cache file.
@@ -117,6 +119,32 @@ var envLookup = os.Getenv
 // authPath is a package-level variable for testing.
 var authPath = DefaultAuthPath
 
+// listModelsForProvider returns runtime-visible model IDs for a provider using
+// the installed `opencode` binary. The CLI is the source of truth for custom
+// models that may not appear in ~/.cache/opencode/models.json yet.
+var listModelsForProvider = func(providerID string) ([]string, error) {
+	cmd := exec.Command("opencode", "models", providerID)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var models []string
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "/", 2)
+		if len(parts) != 2 || parts[0] != providerID || parts[1] == "" {
+			continue
+		}
+		models = append(models, parts[1])
+	}
+
+	return models, nil
+}
+
 // DetectAvailableProviders returns provider IDs that the user has access to and
 // that have at least one model with tool_call support. Detection sources:
 //  1. OAuth credentials in ~/.local/share/opencode/auth.json
@@ -189,6 +217,39 @@ func FilterModelsForSDD(provider Provider) []Model {
 	})
 
 	return models
+}
+
+// EnrichProvidersWithRuntimeModels merges the runtime-visible `opencode models`
+// output into the cached provider catalog. This preserves cache metadata where
+// present while making custom models selectable in the TUI.
+func EnrichProvidersWithRuntimeModels(providers map[string]Provider, providerIDs []string) {
+	for _, providerID := range providerIDs {
+		runtimeIDs, err := listModelsForProvider(providerID)
+		if err != nil || len(runtimeIDs) == 0 {
+			continue
+		}
+
+		provider, ok := providers[providerID]
+		if !ok {
+			provider = Provider{ID: providerID, Name: providerID, Models: map[string]Model{}}
+		}
+		if provider.Models == nil {
+			provider.Models = make(map[string]Model)
+		}
+
+		for _, modelID := range runtimeIDs {
+			if _, exists := provider.Models[modelID]; exists {
+				continue
+			}
+			provider.Models[modelID] = Model{
+				ID:       modelID,
+				Name:     modelID,
+				ToolCall: true,
+			}
+		}
+
+		providers[providerID] = provider
+	}
 }
 
 // SDDPhases returns the ordered list of SDD phase sub-agent names.
