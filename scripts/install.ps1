@@ -26,7 +26,11 @@ param(
     [ValidateSet("auto", "go", "binary")]
     [string]$Method = "auto",
 
-    [string]$InstallDir = ""
+    [string]$InstallDir = "",
+
+    [string]$EngramDataDir = "",
+
+    [switch]$MigrateExistingEngramData
 )
 
 $ErrorActionPreference = "Stop"
@@ -310,6 +314,69 @@ function Test-Installation {
 # Next steps
 # ============================================================================
 
+function Get-DefaultEngramDataDir {
+    if ($env:ENGRAM_DATA_DIR) {
+        return $env:ENGRAM_DATA_DIR
+    }
+    return Join-Path $env:USERPROFILE ".engram"
+}
+
+function Get-HardDefaultEngramDataDir {
+    # Returns the canonical default Engram data directory, ignoring any
+    # already-set ENGRAM_DATA_DIR environment variable. This is used as the
+    # migration source so that we never self-copy when the user has already
+    # configured a custom directory.
+    return Join-Path $env:USERPROFILE ".engram"
+}
+
+function Test-ExistingEngramData {
+    param([string]$Dir)
+    return Test-Path (Join-Path $Dir "engram.db")
+}
+
+function Move-EngramData {
+    param([string]$Source, [string]$Target)
+
+    if (-not (Test-Path $Target)) {
+        New-Item -ItemType Directory -Path $Target -Force | Out-Null
+    }
+
+    $files = @("engram.db", "engram.db-wal", "engram.db-shm")
+    $toRemove = @()
+
+    # Phase 1: Copy all files and verify sizes.
+    foreach ($f in $files) {
+        $src = Join-Path $Source $f
+        $dst = Join-Path $Target $f
+        if (Test-Path $src) {
+            Copy-Item -Path $src -Destination $dst -Force
+            $srcSize = (Get-Item $src).Length
+            $dstSize = (Get-Item $dst).Length
+            if ($srcSize -ne $dstSize) {
+                Stop-WithError "Verification failed for $f"
+            }
+            $toRemove += $src
+        }
+    }
+
+    # Phase 2: Only delete sources after all copies verified.
+    foreach ($src in $toRemove) {
+        Remove-Item -Path $src -Force
+    }
+}
+
+function Persist-EngramEnv {
+    param([string]$Dir)
+    try {
+        [Environment]::SetEnvironmentVariable("ENGRAM_DATA_DIR", $Dir, "User")
+        $env:ENGRAM_DATA_DIR = $Dir
+        Write-Info "Persisted ENGRAM_DATA_DIR to user environment"
+    } catch {
+        Write-Warn "Could not persist ENGRAM_DATA_DIR to registry. Set it manually:"
+        Write-Host "  [Environment]::SetEnvironmentVariable('ENGRAM_DATA_DIR', '$Dir', 'User')" -ForegroundColor DarkGray
+    }
+}
+
 function Show-NextSteps {
     Write-Host ""
     Write-Host "Installation complete!" -ForegroundColor Green
@@ -342,6 +409,30 @@ function Main {
     }
 
     Test-Installation
+
+    # Engram data directory configuration
+    $engramDataDir = if ($EngramDataDir) { $EngramDataDir } else { Get-DefaultEngramDataDir }
+
+    if (-not (Test-Path $engramDataDir)) {
+        New-Item -ItemType Directory -Path $engramDataDir -Force | Out-Null
+    }
+
+    $existingDir = Get-HardDefaultEngramDataDir
+    if (Test-ExistingEngramData -Dir $existingDir) {
+        if ($MigrateExistingEngramData) {
+            Write-Step "Migrating Engram data"
+            Move-EngramData -Source $existingDir -Target $engramDataDir
+            Write-Success "Engram data migrated to $engramDataDir"
+        }
+    }
+
+    # Only persist to registry when the directory differs from default.
+    $hardDefault = Get-HardDefaultEngramDataDir
+    if ($engramDataDir -ne $hardDefault) {
+        Persist-EngramEnv -Dir $engramDataDir
+    }
+    Write-Info "Engram data directory: $engramDataDir"
+
     Show-NextSteps
 }
 

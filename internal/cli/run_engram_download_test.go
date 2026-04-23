@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -210,5 +211,133 @@ func TestRunInstallMacOSEngramStillUsesBrew(t *testing.T) {
 	}
 }
 
+// TestWithEngramEnv_SetsAndRestoresEnv verifies that withEngramEnv sets
+// ENGRAM_DATA_DIR for the duration of fn and restores the previous value after.
+func TestWithEngramEnv_SetsAndRestoresEnv(t *testing.T) {
+	orig := os.Getenv(engram.DataDirEnvVar)
+	defer os.Setenv(engram.DataDirEnvVar, orig)
+
+	if orig != "" {
+		os.Unsetenv(engram.DataDirEnvVar)
+	}
+
+	called := false
+	err := withEngramEnv("/custom/engram", func() error {
+		called = true
+		if got := os.Getenv(engram.DataDirEnvVar); got != "/custom/engram" {
+			t.Fatalf("expected ENGRAM_DATA_DIR=/custom/engram during fn, got %q", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("fn was not called")
+	}
+	if got := os.Getenv(engram.DataDirEnvVar); got != "" {
+		t.Fatalf("expected ENGRAM_DATA_DIR unset after fn, got %q", got)
+	}
+}
+
+// TestWithEngramEnv_RestoresPreviousValue verifies that an existing env value
+// is restored after fn returns.
+func TestWithEngramEnv_RestoresPreviousValue(t *testing.T) {
+	orig := os.Getenv(engram.DataDirEnvVar)
+	defer os.Setenv(engram.DataDirEnvVar, orig)
+
+	os.Setenv(engram.DataDirEnvVar, "/previous/dir")
+
+	err := withEngramEnv("/new/dir", func() error {
+		if got := os.Getenv(engram.DataDirEnvVar); got != "/new/dir" {
+			t.Fatalf("expected ENGRAM_DATA_DIR=/new/dir during fn, got %q", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := os.Getenv(engram.DataDirEnvVar); got != "/previous/dir" {
+		t.Fatalf("expected ENGRAM_DATA_DIR=/previous/dir after fn, got %q", got)
+	}
+}
+
+// TestWithEngramEnv_EmptyDataDirIsNoOp verifies that an empty dataDir does not
+// mutate the environment.
+func TestWithEngramEnv_EmptyDataDirIsNoOp(t *testing.T) {
+	orig := os.Getenv(engram.DataDirEnvVar)
+	defer os.Setenv(engram.DataDirEnvVar, orig)
+
+	os.Setenv(engram.DataDirEnvVar, "/existing/dir")
+
+	err := withEngramEnv("", func() error {
+		if got := os.Getenv(engram.DataDirEnvVar); got != "/existing/dir" {
+			t.Fatalf("expected ENGRAM_DATA_DIR unchanged during fn, got %q", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := os.Getenv(engram.DataDirEnvVar); got != "/existing/dir" {
+		t.Fatalf("expected ENGRAM_DATA_DIR=/existing/dir after fn, got %q", got)
+	}
+}
+
+// TestWithEngramEnv_RestoresOnError verifies the env is restored even when fn
+// returns an error.
+func TestWithEngramEnv_RestoresOnError(t *testing.T) {
+	orig := os.Getenv(engram.DataDirEnvVar)
+	defer os.Setenv(engram.DataDirEnvVar, orig)
+
+	os.Setenv(engram.DataDirEnvVar, "/original")
+
+	err := withEngramEnv("/changed", func() error {
+		return fmt.Errorf("intentional failure")
+	})
+	if err == nil {
+		t.Fatal("expected error from fn")
+	}
+	if got := os.Getenv(engram.DataDirEnvVar); got != "/original" {
+		t.Fatalf("expected ENGRAM_DATA_DIR=/original after error, got %q", got)
+	}
+}
+
 // Make sure the engram package's DownloadLatestBinary is accessible.
 var _ = engram.DownloadLatestBinary
+
+// TestWithEngramEnv_NestedCallsRestoreCorrectly verifies that nested
+// withEngramEnv calls each restore their own outer value, not the original.
+func TestWithEngramEnv_NestedCallsRestoreCorrectly(t *testing.T) {
+	orig := os.Getenv(engram.DataDirEnvVar)
+	defer os.Setenv(engram.DataDirEnvVar, orig)
+
+	os.Setenv(engram.DataDirEnvVar, "/original")
+
+	err := withEngramEnv("/outer", func() error {
+		if got := os.Getenv(engram.DataDirEnvVar); got != "/outer" {
+			t.Fatalf("outer: expected ENGRAM_DATA_DIR=/outer, got %q", got)
+		}
+		innerErr := withEngramEnv("/inner", func() error {
+			if got := os.Getenv(engram.DataDirEnvVar); got != "/inner" {
+				t.Fatalf("inner: expected ENGRAM_DATA_DIR=/inner, got %q", got)
+			}
+			return nil
+		})
+		if innerErr != nil {
+			t.Fatalf("inner call failed: %v", innerErr)
+		}
+		// After inner call returns, outer value should be restored.
+		if got := os.Getenv(engram.DataDirEnvVar); got != "/outer" {
+			t.Fatalf("after inner: expected ENGRAM_DATA_DIR=/outer, got %q", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("outer call failed: %v", err)
+	}
+	// After outer call returns, original value should be restored.
+	if got := os.Getenv(engram.DataDirEnvVar); got != "/original" {
+		t.Fatalf("after outer: expected ENGRAM_DATA_DIR=/original, got %q", got)
+	}
+}

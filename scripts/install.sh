@@ -60,9 +60,11 @@ ${BOLD}gentle-ai installer${NC}
 Usage: install.sh [OPTIONS]
 
 Options:
-  --method METHOD   Force install method: brew, go, binary (default: auto-detect)
-  --dir DIR         Custom install directory for binary method
-  -h, --help        Show this help
+  --method METHOD                Force install method: brew, go, binary (default: auto-detect)
+  --dir DIR                      Custom install directory for binary method
+  --engram-data-dir DIR          Custom Engram data directory
+  --migrate-existing-engram-data Migrate existing Engram data to the new directory
+  -h, --help                     Show this help
 
 Install methods (auto-detected in priority order):
   1. brew    — Homebrew tap (recommended)
@@ -73,6 +75,8 @@ Examples:
   curl -sL https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/main/scripts/install.sh | bash
   ./install.sh --method binary
   ./install.sh --method binary --dir \$HOME/.local/bin
+  ./install.sh --method binary --engram-data-dir \$HOME/.local/share/engram
+  ./install.sh --method binary --engram-data-dir /Volumes/Data/Engram --migrate-existing-engram-data
 
 EOF
 }
@@ -351,7 +355,7 @@ install_binary() {
     fi
 
     # Create install dir if needed
-    mkdir -p "$install_dir"
+    mkdir -p "$install_dir" || fatal "Cannot create install directory: ${install_dir}"
 
     # Install binary
     info "Installing to ${install_dir}/${BINARY_NAME}..."
@@ -447,6 +451,104 @@ print_next_steps() {
 }
 
 # ============================================================================
+# Engram data directory helpers
+# ============================================================================
+
+get_default_engram_data_dir() {
+    if [ -n "${ENGRAM_DATA_DIR:-}" ]; then
+        echo "$ENGRAM_DATA_DIR"
+    else
+        echo "${HOME}/.engram"
+    fi
+}
+
+get_hard_default_engram_data_dir() {
+    # Returns the canonical default Engram data directory, ignoring any
+    # already-set ENGRAM_DATA_DIR environment variable.
+    echo "${HOME}/.engram"
+}
+
+detect_existing_engram_data() {
+    local dir="$1"
+    [ -f "${dir}/engram.db" ]
+}
+
+migrate_engram_data() {
+    local source="$1"
+    local target="$2"
+
+    mkdir -p "$target" || fatal "Cannot create target directory: ${target}"
+
+    local files=("engram.db" "engram.db-wal" "engram.db-shm")
+    for f in "${files[@]}"; do
+        local src="${source}/${f}"
+        local dst="${target}/${f}"
+        if [ -f "$src" ]; then
+            cp "$src" "$dst" || fatal "Failed to copy ${f}"
+            local src_size dst_size
+            src_size="$(stat -c%s "$src" 2>/dev/null || stat -f%z "$src" 2>/dev/null)"
+            dst_size="$(stat -c%s "$dst" 2>/dev/null || stat -f%z "$dst" 2>/dev/null)"
+            if [ "$src_size" != "$dst_size" ]; then
+                fatal "Verification failed for ${f}"
+            fi
+            rm "$src" || fatal "Failed to remove source ${f}"
+        fi
+    done
+}
+
+persist_engram_env() {
+    local dir="$1"
+    local line="export ENGRAM_DATA_DIR=\"${dir}\""
+
+    # Try to detect shell and update appropriate profile
+    local shell_name=""
+    if [ -n "${SHELL:-}" ]; then
+        shell_name="$(basename "$SHELL")"
+    fi
+
+    local profiles=()
+    case "$shell_name" in
+        bash)
+            profiles=("${HOME}/.bashrc" "${HOME}/.bash_profile")
+            ;;
+        zsh)
+            profiles=("${HOME}/.zshrc")
+            ;;
+        fish)
+            profiles=("${HOME}/.config/fish/config.fish")
+            line="set -gx ENGRAM_DATA_DIR \"${dir}\""
+            ;;
+        *)
+            profiles=("${HOME}/.bashrc" "${HOME}/.zshrc")
+            ;;
+    esac
+
+    for profile in "${profiles[@]}"; do
+        if [ -f "$profile" ]; then
+            local tmpfile
+            tmpfile="$(mktemp)"
+            # Remove any existing ENGRAM_DATA_DIR line, then append the new one.
+            grep -v "^export ENGRAM_DATA_DIR=" "$profile" 2>/dev/null | \
+                grep -v "^set -gx ENGRAM_DATA_DIR" > "$tmpfile" || cat "$profile" > "$tmpfile"
+            echo "" >> "$tmpfile"
+            echo "# Engram data directory (set by gentle-ai installer)" >> "$tmpfile"
+            echo "$line" >> "$tmpfile"
+            mv "$tmpfile" "$profile"
+            info "Updated ${profile}"
+            return
+        fi
+    done
+
+    # Fallback: write to the first profile even if it doesn't exist yet
+    local fallback="${profiles[0]:-${HOME}/.bashrc}"
+    mkdir -p "$(dirname "$fallback")" || fatal "Cannot create profile directory: $(dirname "$fallback")"
+    echo "" >> "$fallback"
+    echo "# Engram data directory (set by gentle-ai installer)" >> "$fallback"
+    echo "$line" >> "$fallback"
+    info "Created ${fallback}"
+}
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -466,6 +568,13 @@ main() {
             --dir)
                 [ $# -lt 2 ] && fatal "--dir requires an argument"
                 INSTALL_DIR="$2"; shift 2
+                ;;
+            --engram-data-dir)
+                [ $# -lt 2 ] && fatal "--engram-data-dir requires an argument"
+                ENGRAM_DATA_DIR_ARG="$2"; shift 2
+                ;;
+            --migrate-existing-engram-data)
+                MIGRATE_ENGRAM="true"; shift 1
                 ;;
             -h|--help)
                 setup_colors
@@ -493,6 +602,34 @@ main() {
     esac
 
     verify_installation
+
+    # Engram data directory configuration
+    local engram_data_dir
+    engram_data_dir="${ENGRAM_DATA_DIR:-$(get_default_engram_data_dir)}"
+    if [ -n "${ENGRAM_DATA_DIR_ARG:-}" ]; then
+        engram_data_dir="$ENGRAM_DATA_DIR_ARG"
+    fi
+
+    mkdir -p "$engram_data_dir" || fatal "Cannot create Engram data directory: ${engram_data_dir}"
+
+    local existing_dir
+    existing_dir="$(get_default_engram_data_dir)"
+    if detect_existing_engram_data "$existing_dir"; then
+        if [ "${MIGRATE_ENGRAM:-}" = "true" ]; then
+            step "Migrating Engram data"
+            migrate_engram_data "$existing_dir" "$engram_data_dir"
+            success "Engram data migrated to ${engram_data_dir}"
+        fi
+    fi
+
+    # Only persist to profile when the directory differs from default.
+    # This prevents profile clutter and avoids stale-profile bugs during
+    # future TUI reconfiguration.
+    if [ "$engram_data_dir" != "$(get_hard_default_engram_data_dir)" ]; then
+        persist_engram_env "$engram_data_dir"
+    fi
+    info "Engram data directory: ${engram_data_dir}"
+
     print_next_steps
 }
 

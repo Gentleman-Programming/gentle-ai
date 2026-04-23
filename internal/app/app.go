@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
@@ -89,6 +90,17 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m := tui.NewModel(result, Version)
 		m.ExecuteFn = tuiExecute
 		m.RestoreFn = tuiRestore
+
+		// Load persisted state (model assignments, Engram data dir, etc.) so the
+		// TUI pre-populates the user's previous choices.
+		loadPersistedAssignments(homeDir, &m.Selection)
+
+		// If a custom Engram data directory was persisted but the env var is not
+		// yet set (e.g. user hasn't restarted their shell), set it now so the
+		// TUI and downstream engram binary invocations see the correct path.
+		if m.Selection.EngramDataDir != "" && os.Getenv(engram.DataDirEnvVar) == "" {
+			_ = os.Setenv(engram.DataDirEnvVar, m.Selection.EngramDataDir)
+		}
 		m.DeleteBackupFn = func(manifest backup.Manifest) error {
 			return backup.DeleteBackup(manifest)
 		}
@@ -264,10 +276,19 @@ func tuiExecute(
 			agentIDs = append(agentIDs, string(a))
 		}
 		// Non-fatal: a state write failure must not break an otherwise successful install.
+		// Preserve an existing custom EngramDataDir if the current selection did not
+		// explicitly specify one (e.g. user chose "Keep current" during install).
+		engramDataDir := selection.EngramDataDir
+		if engramDataDir == "" {
+			if existing, err := state.Read(homeDir); err == nil {
+				engramDataDir = existing.EngramDataDir
+			}
+		}
 		_ = state.Write(homeDir, state.InstallState{
 			InstalledAgents:        agentIDs,
 			ClaudeModelAssignments: claudeAliasesToStrings(selection.ClaudeModelAssignments),
 			ModelAssignments:       modelAssignmentsToState(selection.ModelAssignments),
+			EngramDataDir:          engramDataDir,
 		})
 	}
 
@@ -404,6 +425,33 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 		}
 		selection.ModelAssignments = m
 	}
+	if selection.EngramDataDir == "" && s.EngramDataDir != "" {
+		if valid := validateEngramDataDir(s.EngramDataDir); valid {
+			selection.EngramDataDir = s.EngramDataDir
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "Warning: persisted Engram data directory %q is invalid (missing or not writable). Clearing.\n", s.EngramDataDir)
+			// Clear invalid persisted path so it doesn't keep warning on every startup.
+			s.EngramDataDir = ""
+			_ = state.Write(homeDir, s)
+		}
+	}
+}
+
+// validateEngramDataDir checks that the path exists, is a directory, and is writable.
+func validateEngramDataDir(dir string) bool {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	// Best-effort writability check.
+	tmp := filepath.Join(dir, ".gentle-ai-write-test")
+	f, err := os.Create(tmp)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	_ = os.Remove(tmp)
+	return true
 }
 
 // persistAssignments writes the model assignments from selection back to

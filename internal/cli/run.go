@@ -502,6 +502,25 @@ func (s componentApplyStep) Run() error {
 
 	switch s.component {
 	case model.ComponentEngram:
+		// Resolve the effective Engram data directory.
+		dataDir := s.selection.EngramDataDir
+		if dataDir == "" {
+			dataDir = engram.DefaultDataDir()
+		}
+
+		// Migrate existing data when explicitly requested.
+		if s.selection.EngramMigrateData && s.selection.EngramDataDir != "" {
+			defaultDir := engram.DefaultDataDir()
+			if filepath.Clean(defaultDir) != filepath.Clean(s.selection.EngramDataDir) && engram.DetectExistingData(defaultDir) {
+				if locked, _ := engram.DetectLockedData(defaultDir); locked {
+					return fmt.Errorf("migrate engram data: engram data appears to be in use. Close any running engram processes and try again")
+				}
+				if err := engram.MigrateData(defaultDir, s.selection.EngramDataDir); err != nil {
+					return fmt.Errorf("migrate engram data: %w", err)
+				}
+			}
+		}
+
 		if _, err := cmdLookPath("engram"); err != nil {
 			// Engram not on PATH — install it.
 			if s.profile.PackageManager == "brew" {
@@ -533,21 +552,29 @@ func (s componentApplyStep) Run() error {
 		setupMode := engram.ParseSetupMode(os.Getenv(engram.SetupModeEnvVar))
 		setupStrict := engram.ParseSetupStrict(os.Getenv(engram.SetupStrictEnvVar))
 		attemptedSlugs := make(map[string]struct{}, len(adapters))
-		for _, adapter := range adapters {
-			if engram.ShouldAttemptSetup(setupMode, adapter.Agent()) {
-				slug, _ := engram.SetupAgentSlug(adapter.Agent())
-				if _, seen := attemptedSlugs[slug]; !seen {
-					if err := runCommand("engram", "setup", slug); err != nil {
-						if setupStrict {
-							return fmt.Errorf("engram setup for %q: %w", adapter.Agent(), err)
+
+		// Wrap engram binary invocations so ENGRAM_DATA_DIR is scoped to this
+		// component step only, avoiding global process side effects.
+		if err := withEngramEnv(dataDir, func() error {
+			for _, adapter := range adapters {
+				if engram.ShouldAttemptSetup(setupMode, adapter.Agent()) {
+					slug, _ := engram.SetupAgentSlug(adapter.Agent())
+					if _, seen := attemptedSlugs[slug]; !seen {
+						if err := runCommand("engram", "setup", slug); err != nil {
+							if setupStrict {
+								return fmt.Errorf("engram setup for %q: %w", adapter.Agent(), err)
+							}
 						}
+						attemptedSlugs[slug] = struct{}{}
 					}
-					attemptedSlugs[slug] = struct{}{}
+				}
+				if _, err := engram.Inject(s.homeDir, adapter); err != nil {
+					return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
 				}
 			}
-			if _, err := engram.Inject(s.homeDir, adapter); err != nil {
-				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
-			}
+			return nil
+		}); err != nil {
+			return err
 		}
 		return nil
 	case model.ComponentContext7:
@@ -795,6 +822,28 @@ func executeCommand(name string, args ...string) error {
 	}
 
 	return nil
+}
+
+// withEngramEnv temporarily sets ENGRAM_DATA_DIR for the duration of fn,
+// restoring the previous value afterward. This avoids leaking the env var
+// into the global process state, making the pipeline re-entrant and safe
+// for parallel tests.
+func withEngramEnv(dataDir string, fn func() error) error {
+	if dataDir == "" {
+		return fn()
+	}
+	oldDir := os.Getenv(engram.DataDirEnvVar)
+	if err := os.Setenv(engram.DataDirEnvVar, dataDir); err != nil {
+		return fmt.Errorf("set %s: %w", engram.DataDirEnvVar, err)
+	}
+	defer func() {
+		if oldDir == "" {
+			_ = os.Unsetenv(engram.DataDirEnvVar)
+		} else {
+			_ = os.Setenv(engram.DataDirEnvVar, oldDir)
+		}
+	}()
+	return fn()
 }
 
 // selectedSkillIDs returns the skill IDs to install. If the selection

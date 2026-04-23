@@ -13,12 +13,15 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/internal/platform"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
@@ -32,6 +35,7 @@ var osStatPathFn = os.Stat
 var osGetwdFn = os.Getwd
 var osExecutableFn = os.Executable
 var osRemoveFn = os.Remove
+var osUserHomeDirFn = os.UserHomeDir
 
 // readCurrentAssignmentsFn is a package-level variable so tests can override
 // how current model assignments are read from opencode.json. It wraps
@@ -187,6 +191,7 @@ const (
 	ScreenSDDMode
 	ScreenStrictTDD
 	ScreenDependencyTree
+	ScreenEngramDataDir
 	ScreenSkillPicker
 	ScreenReview
 	ScreenInstalling
@@ -321,6 +326,11 @@ type Model struct {
 	// continuing the install flow.
 	ModelConfigMode bool
 
+	// EngramConfigMode is true when the Engram data directory screen was reached
+	// via the Welcome menu shortcut, so it returns to ScreenWelcome instead of
+	// continuing the install flow.
+	EngramConfigMode bool
+
 	// PendingSyncOverrides holds model assignments selected via the
 	// "Configure Models" shortcut. When non-nil, the next sync run merges
 	// these into the sync selection so the choices are persisted to disk.
@@ -390,6 +400,13 @@ type Model struct {
 
 	// AgentBuilder holds the transient state for the agent-builder TUI flow.
 	AgentBuilder AgentBuilderState
+
+	// EngramDataDir screen state
+	EngramDataDirHasExistingData bool
+	EngramDataDirChoice          int    // 0=keep, 1=start-fresh, 2=migrate
+	EngramDataDirInput           string // text buffer for custom path
+	EngramDataDirPos             int    // cursor position in runes
+	EngramDataDirErr             string // validation error
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -551,6 +568,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 0 && !m.ProfileEditMode {
 			return m.handleProfileNameInput(msg)
+		}
+		if m.Screen == ScreenEngramDataDir {
+			return m.handleEngramDataDirKey(msg)
 		}
 		// Delegate to textarea when on the agent builder prompt screen,
 		// unless the user pressed Esc (to go back) or Tab (to continue).
@@ -714,6 +734,16 @@ func (m Model) View() string {
 		return screens.RenderModelPicker(m.Selection.ModelAssignments, m.ModelPicker, m.Cursor)
 	case ScreenDependencyTree:
 		return screens.RenderDependencyTree(m.DependencyPlan, m.Selection, m.Cursor)
+	case ScreenEngramDataDir:
+		return screens.RenderEngramDataDir(screens.EngramDataDirRenderArgs{
+			CurrentDir:      engram.DefaultDataDir(),
+			HasExistingData: m.EngramDataDirHasExistingData,
+			Choice:          m.EngramDataDirChoice,
+			CustomPath:      m.EngramDataDirInput,
+			Cursor:          m.Cursor,
+			InputPos:        m.EngramDataDirPos,
+			ErrMsg:          m.EngramDataDirErr,
+		})
 	case ScreenSkillPicker:
 		return screens.RenderSkillPicker(m.SkillPicker, m.Cursor)
 	case ScreenReview:
@@ -729,6 +759,7 @@ func (m Model) View() string {
 			RollbackPerformed:   len(m.Execution.Rollback.Steps) > 0,
 			MissingDeps:         extractMissingDeps(m.Detection),
 			AvailableUpdates:    extractAvailableUpdates(m.UpdateResults),
+			EngramDataDir:       m.Selection.EngramDataDir,
 		})
 	case ScreenBackups:
 		return screens.RenderBackups(m.Backups, m.Cursor, m.BackupScroll, m.PinErr)
@@ -970,6 +1001,8 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toggleCurrentUninstallAgent()
 		case ScreenUninstallComponents:
 			m.toggleCurrentUninstallComponent()
+		case ScreenEngramDataDir:
+			m.toggleEngramDataDirChoice()
 		case ScreenUninstallProfiles:
 			if m.Cursor < len(m.UninstallProfilesAvailable) {
 				m.toggleCurrentUninstallProfile()
@@ -1069,6 +1102,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 4:
 			m.setScreen(ScreenModelConfig)
 		case 5:
+			m.EngramConfigMode = true
+			m.setScreen(ScreenEngramDataDir)
+		case 6:
 			// "Create your own Agent" — blocked when no engines are available.
 			if !m.hasAgentBuilderEngines() {
 				return m, nil
@@ -1083,7 +1119,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.AgentBuilder.Textarea = ta
 			m.setScreen(ScreenAgentBuilderEngine)
 		default:
-			next := 6
+			next := 7
 			if m.hasDetectedOpenCode() {
 				if m.Cursor == next {
 					m.setScreen(ScreenProfiles)
@@ -1657,6 +1693,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.setScreen(ScreenSkillPicker)
 					return m, nil
 				}
+				if hasSelectedComponent(m.Selection.Components, model.ComponentEngram) {
+					m.setScreen(ScreenEngramDataDir)
+					return m, nil
+				}
 				m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
 				m.setScreen(ScreenReview)
 			default:
@@ -1665,6 +1705,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.Cursor == 0 {
+			if hasSelectedComponent(m.Selection.Components, model.ComponentEngram) {
+				m.setScreen(ScreenEngramDataDir)
+				return m, nil
+			}
 			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
 			m.setScreen(ScreenReview)
 			return m, nil
@@ -1689,6 +1733,108 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		} else {
 			m.setScreen(ScreenPreset)
 		}
+	case ScreenEngramDataDir:
+		continueRow := screens.EngramDataDirContinueRow(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
+
+		maxRadioRow := 1 // keep, start-fresh
+		if m.EngramDataDirHasExistingData {
+			maxRadioRow = 2 // keep, start-fresh, migrate
+		}
+		if m.Cursor <= maxRadioRow {
+			// Radio row: set choice
+			m.EngramDataDirChoice = m.Cursor
+			if m.Cursor == screens.EngramChoiceKeep {
+				m.Selection.EngramDataDir = ""
+				m.Selection.EngramMigrateData = false
+			}
+			return m, nil
+		}
+
+		if m.Cursor == continueRow {
+			// Validate and proceed
+			if m.EngramDataDirChoice == screens.EngramChoiceKeep {
+				m.Selection.EngramDataDir = ""
+				m.Selection.EngramMigrateData = false
+			} else {
+				path, err := engram.ExpandDataDir(m.EngramDataDirInput)
+				if err != nil {
+					m.EngramDataDirErr = "Invalid path: " + err.Error()
+					return m, nil
+				}
+				// Best-effort writability check: try creating a temp file.
+				tmpFile := filepath.Join(path, ".gentle-ai-write-test")
+				if err := os.MkdirAll(path, 0o755); err != nil {
+					m.EngramDataDirErr = "Cannot create directory: " + err.Error()
+					return m, nil
+				}
+				if f, err := os.Create(tmpFile); err == nil {
+					_ = f.Close()
+					_ = os.Remove(tmpFile)
+				} else {
+					m.EngramDataDirErr = "Directory is not writable: " + path
+					return m, nil
+				}
+				if m.EngramDataDirChoice == screens.EngramChoiceStartFresh {
+					m.Selection.EngramDataDir = path
+					m.Selection.EngramMigrateData = false
+				} else {
+					m.Selection.EngramDataDir = path
+					m.Selection.EngramMigrateData = true
+				}
+			}
+			m.EngramDataDirErr = ""
+
+			// When reached via the Welcome menu shortcut, save the setting and return.
+			if m.EngramConfigMode {
+				if m.EngramDataDirChoice != screens.EngramChoiceKeep {
+					path := m.Selection.EngramDataDir
+					if m.Selection.EngramMigrateData {
+						if locked, _ := engram.DetectLockedData(engram.DefaultDataDir()); locked {
+							m.EngramDataDirErr = "Engram data appears to be in use. Close any running engram processes and try again."
+							return m, nil
+						}
+						if err := engram.MigrateData(engram.DefaultDataDir(), path); err != nil {
+							m.EngramDataDirErr = "Migration failed: " + err.Error()
+							return m, nil
+						}
+					}
+					homeDir, _ := osUserHomeDirFn()
+					if s, err := state.Read(homeDir); err == nil {
+						s.EngramDataDir = path
+						_ = state.Write(homeDir, s)
+					} else {
+						_ = state.Write(homeDir, state.InstallState{EngramDataDir: path})
+					}
+					_ = os.Setenv(engram.DataDirEnvVar, path)
+					_ = platform.PersistEngramEnv(path)
+				} else {
+					// User chose "Keep current" — clear any previously persisted custom dir.
+					homeDir, _ := osUserHomeDirFn()
+					if s, err := state.Read(homeDir); err == nil {
+						s.EngramDataDir = ""
+						_ = state.Write(homeDir, s)
+					}
+					_ = os.Unsetenv(engram.DataDirEnvVar)
+					_ = platform.RemoveEngramEnv()
+				}
+				m.EngramConfigMode = false
+				m.setScreen(ScreenWelcome)
+				return m, nil
+			}
+
+			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+			m.setScreen(ScreenReview)
+			return m, nil
+		}
+
+		// Back
+		if m.EngramConfigMode {
+			m.EngramConfigMode = false
+			m.setScreen(ScreenWelcome)
+		} else {
+			m.setScreen(ScreenDependencyTree)
+		}
+		return m, nil
 	case ScreenSkillPicker:
 		allSkills := screens.AllSkillsOrdered()
 		switch {
@@ -1755,7 +1901,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenDependencyTree)
 			}
 		} else {
-			m.setScreen(ScreenDependencyTree)
+			if hasSelectedComponent(m.Selection.Components, model.ComponentEngram) {
+				m.setScreen(ScreenEngramDataDir)
+			} else {
+				m.setScreen(ScreenDependencyTree)
+			}
 		}
 	case ScreenInstalling:
 		if m.Progress.Done() {
@@ -2375,8 +2525,12 @@ func (m Model) goBack() Model {
 	}
 
 	// In custom preset, going back from Review walks through intermediate screens.
-	// Order (reverse of forward): SkillPicker → StrictTDD → SDDMode/ModelPicker → ClaudeModelPicker → DependencyTree.
+	// Order (reverse of forward): EngramDataDir → SkillPicker → StrictTDD → SDDMode/ModelPicker → ClaudeModelPicker → DependencyTree.
 	if m.Screen == ScreenReview && m.Selection.Preset == model.PresetCustom {
+		if hasSelectedComponent(m.Selection.Components, model.ComponentEngram) {
+			m.setScreen(ScreenEngramDataDir)
+			return m
+		}
 		if m.shouldShowSkillPickerScreen() {
 			if len(m.SkillPicker) == 0 {
 				m.initSkillPicker()
@@ -2406,6 +2560,21 @@ func (m Model) goBack() Model {
 			return m
 		}
 		m.setScreen(ScreenDependencyTree)
+		return m
+	}
+
+	// Non-custom preset: going back from Review to EngramDataDir when applicable.
+	if m.Screen == ScreenReview && m.Selection.Preset != model.PresetCustom {
+		if hasSelectedComponent(m.Selection.Components, model.ComponentEngram) {
+			m.setScreen(ScreenEngramDataDir)
+			return m
+		}
+	}
+
+	// EngramConfigMode: Engram data dir screen reached via Welcome menu returns to Welcome.
+	if m.Screen == ScreenEngramDataDir && m.EngramConfigMode {
+		m.EngramConfigMode = false
+		m.setScreen(ScreenWelcome)
 		return m
 	}
 
@@ -2454,6 +2623,23 @@ func (m *Model) setScreen(next Screen) {
 		m.UninstallProfilesToRemove = nil
 		m.UninstallProfileSelection = false
 		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	}
+	if next == ScreenEngramDataDir {
+		m.EngramDataDirHasExistingData = engram.DetectExistingData(engram.DefaultDataDir())
+		m.EngramDataDirChoice = 0
+		m.EngramDataDirErr = ""
+		if m.Selection.EngramDataDir != "" {
+			m.EngramDataDirInput = m.Selection.EngramDataDir
+			m.EngramDataDirPos = len([]rune(m.EngramDataDirInput))
+			if m.Selection.EngramMigrateData {
+				m.EngramDataDirChoice = 2
+			} else {
+				m.EngramDataDirChoice = 1
+			}
+		} else {
+			m.EngramDataDirInput = ""
+			m.EngramDataDirPos = 0
+		}
 	}
 }
 
@@ -2564,6 +2750,8 @@ func (m Model) optionCount() int {
 			return len(screens.AllComponents()) + len(screens.DependencyTreeOptions())
 		}
 		return len(screens.DependencyTreeOptions())
+	case ScreenEngramDataDir:
+		return screens.EngramDataDirOptionCount(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
 	case ScreenSkillPicker:
 		return screens.SkillPickerOptionCount()
 	case ScreenReview:
@@ -2760,6 +2948,71 @@ func (m *Model) toggleCurrentSkill() {
 	}
 
 	m.SkillPicker = append(m.SkillPicker, skillID)
+}
+
+func (m *Model) toggleEngramDataDirChoice() {
+	maxRadioRow := 1
+	if m.EngramDataDirHasExistingData {
+		maxRadioRow = 2
+	}
+	if m.Cursor > maxRadioRow {
+		return
+	}
+	m.EngramDataDirChoice = m.Cursor
+	if m.Cursor == screens.EngramChoiceKeep {
+		m.Selection.EngramDataDir = ""
+		m.Selection.EngramMigrateData = false
+	}
+}
+
+func (m Model) handleEngramDataDirKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	textRow := screens.EngramDataDirTextRow(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
+
+	if m.Cursor == textRow && textRow >= 0 {
+		switch msg.Type {
+		case tea.KeyRunes:
+			runes := []rune(m.EngramDataDirInput)
+			newRunes := make([]rune, 0, len(runes)+len(msg.Runes))
+			newRunes = append(newRunes, runes[:m.EngramDataDirPos]...)
+			newRunes = append(newRunes, msg.Runes...)
+			newRunes = append(newRunes, runes[m.EngramDataDirPos:]...)
+			m.EngramDataDirInput = string(newRunes)
+			m.EngramDataDirPos += len(msg.Runes)
+			// Real-time preview: expand ~ so the user sees the absolute path.
+			if strings.HasPrefix(m.EngramDataDirInput, "~") {
+				if expanded, err := engram.ExpandDataDir(m.EngramDataDirInput); err == nil {
+					m.EngramDataDirInput = expanded
+					m.EngramDataDirPos = len([]rune(m.EngramDataDirInput))
+				}
+			}
+			return m, nil
+		case tea.KeyBackspace:
+			if m.EngramDataDirPos > 0 {
+				runes := []rune(m.EngramDataDirInput)
+				m.EngramDataDirInput = string(append(runes[:m.EngramDataDirPos-1], runes[m.EngramDataDirPos:]...))
+				m.EngramDataDirPos--
+			}
+			return m, nil
+		case tea.KeyLeft:
+			if m.EngramDataDirPos > 0 {
+				m.EngramDataDirPos--
+			}
+			return m, nil
+		case tea.KeyRight:
+			if m.EngramDataDirPos < len([]rune(m.EngramDataDirInput)) {
+				m.EngramDataDirPos++
+			}
+			return m, nil
+		case tea.KeyEnter:
+			m.Cursor = screens.EngramDataDirContinueRow(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
+			return m, nil
+		case tea.KeyEsc:
+			// Fall through to handleKeyPress so Esc navigates back consistently
+			// with every other screen in the app.
+		}
+	}
+
+	return m.handleKeyPress(msg)
 }
 
 // initSkillPicker pre-selects ALL available skills (custom mode default).

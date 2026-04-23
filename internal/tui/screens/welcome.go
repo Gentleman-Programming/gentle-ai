@@ -33,6 +33,7 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 		"Sync configs",
 		"Upgrade + Sync",
 		"Configure models",
+		"Configure Engram directory",
 		agentLabel,
 	}
 

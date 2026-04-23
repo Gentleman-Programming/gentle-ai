@@ -11,7 +11,9 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
+	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
 
 // TestListBackupsNewestFirst verifies that ListBackups returns manifests sorted
@@ -479,6 +481,54 @@ func TestPersistAndLoadKiroModelAssignments(t *testing.T) {
 	}
 }
 
+// TestLoadPersistedAssignments_LoadsEngramDataDir verifies that EngramDataDir is
+// loaded from persisted state when the selection field is empty.
+func TestLoadPersistedAssignments_LoadsEngramDataDir(t *testing.T) {
+	home := t.TempDir()
+	customDir := filepath.Join(home, "custom-engram")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	err := state.Write(home, state.InstallState{
+		EngramDataDir: customDir,
+	})
+	if err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	selection := model.Selection{}
+	loadPersistedAssignments(home, &selection)
+
+	if selection.EngramDataDir != customDir {
+		t.Errorf("EngramDataDir = %q, want %q", selection.EngramDataDir, customDir)
+	}
+}
+
+// TestLoadPersistedAssignments_EngramDataDirDoesNotOverrideExisting verifies that
+// persisted EngramDataDir is NOT clobbered when the selection already has a value.
+func TestLoadPersistedAssignments_EngramDataDirDoesNotOverrideExisting(t *testing.T) {
+	home := t.TempDir()
+	stateDir := filepath.Join(home, "state-engram")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	err := state.Write(home, state.InstallState{
+		EngramDataDir: stateDir,
+	})
+	if err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	selection := model.Selection{EngramDataDir: "/from-tui"}
+	loadPersistedAssignments(home, &selection)
+
+	if selection.EngramDataDir != "/from-tui" {
+		t.Errorf("EngramDataDir = %q, want %q (should not be overwritten)", selection.EngramDataDir, "/from-tui")
+	}
+}
+
 // TestPersistAssignmentsNoOpWhenEmpty verifies that persistAssignments does
 // not write to state.json when the selection has no assignments.
 func TestPersistAssignmentsNoOpWhenEmpty(t *testing.T) {
@@ -549,3 +599,116 @@ func TestUnknownCommandSuggestsHelp(t *testing.T) {
 		t.Error("unknown command error should suggest 'gentle-ai help'")
 	}
 }
+
+// TestTuiExecute_PreservesExistingEngramDataDir verifies that when tuiExecute
+// succeeds and selection.EngramDataDir is empty, the previously persisted custom
+// EngramDataDir is preserved in state (not overwritten with an empty string).
+func TestTuiExecute_PreservesExistingEngramDataDir(t *testing.T) {
+	home := t.TempDir()
+	origHome := os.Getenv("HOME")
+	origUserProfile := os.Getenv("USERPROFILE")
+	t.Cleanup(func() {
+		os.Setenv("HOME", origHome)
+		os.Setenv("USERPROFILE", origUserProfile)
+	})
+	os.Setenv("HOME", home)
+	os.Setenv("USERPROFILE", home)
+
+	// Pre-populate state with a custom EngramDataDir.
+	err := state.Write(home, state.InstallState{
+		EngramDataDir: "/custom/engram",
+	})
+	if err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	selection := model.Selection{
+		Agents: []model.AgentID{},
+	}
+	resolved := planner.ResolvedPlan{}
+	detection := system.DetectionResult{}
+
+	result := tuiExecute(selection, resolved, detection, nil)
+	if result.Err != nil {
+		t.Skipf("pipeline execution failed in test environment: %v", result.Err)
+	}
+
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if s.EngramDataDir != "/custom/engram" {
+		t.Errorf("EngramDataDir = %q, want %q (should be preserved)", s.EngramDataDir, "/custom/engram")
+	}
+}
+
+// TestTuiExecute_OverwritesEngramDataDirWhenExplicit verifies that when
+// selection.EngramDataDir is non-empty, it overwrites the persisted value.
+func TestTuiExecute_OverwritesEngramDataDirWhenExplicit(t *testing.T) {
+	home := t.TempDir()
+	origHome := os.Getenv("HOME")
+	origUserProfile := os.Getenv("USERPROFILE")
+	t.Cleanup(func() {
+		os.Setenv("HOME", origHome)
+		os.Setenv("USERPROFILE", origUserProfile)
+	})
+	os.Setenv("HOME", home)
+	os.Setenv("USERPROFILE", home)
+
+	// Pre-populate state with an old custom EngramDataDir.
+	err := state.Write(home, state.InstallState{
+		EngramDataDir: "/old/engram",
+	})
+	if err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	selection := model.Selection{
+		Agents:        []model.AgentID{},
+		EngramDataDir: "/new/engram",
+	}
+	resolved := planner.ResolvedPlan{}
+	detection := system.DetectionResult{}
+
+	result := tuiExecute(selection, resolved, detection, nil)
+	if result.Err != nil {
+		t.Skipf("pipeline execution failed in test environment: %v", result.Err)
+	}
+
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if s.EngramDataDir != "/new/engram" {
+		t.Errorf("EngramDataDir = %q, want %q (should be overwritten)", s.EngramDataDir, "/new/engram")
+	}
+}
+
+// TestLoadPersistedAssignments_InvalidPathCleared verifies that an invalid
+// persisted EngramDataDir is cleared from state instead of being loaded.
+func TestLoadPersistedAssignments_InvalidPathCleared(t *testing.T) {
+	home := t.TempDir()
+
+	err := state.Write(home, state.InstallState{
+		EngramDataDir: "/does/not/exist",
+	})
+	if err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	selection := model.Selection{}
+	loadPersistedAssignments(home, &selection)
+
+	if selection.EngramDataDir != "" {
+		t.Errorf("EngramDataDir = %q, want empty (invalid path should be cleared)", selection.EngramDataDir)
+	}
+
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if s.EngramDataDir != "" {
+		t.Errorf("persisted EngramDataDir = %q, want empty (should have been cleared)", s.EngramDataDir)
+	}
+}
+

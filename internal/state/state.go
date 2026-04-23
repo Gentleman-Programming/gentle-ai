@@ -34,6 +34,10 @@ type InstallState struct {
 
 	// ModelAssignments maps sub-agent names to provider/model pairs (OpenCode).
 	ModelAssignments map[string]ModelAssignmentState `json:"model_assignments,omitempty"`
+
+	// EngramDataDir is the user-selected Engram data directory. Empty means
+	// "use the default location" (~/.engram or whatever ENGRAM_DATA_DIR points to).
+	EngramDataDir string `json:"engram_data_dir,omitempty"`
 }
 
 // Path returns the absolute path to the state file for the given home directory.

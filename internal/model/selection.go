@@ -13,6 +13,8 @@ type Selection struct {
 	ClaudeModelAssignments map[string]ClaudeModelAlias // key = phase name; value = opus|sonnet|haiku
 	KiroModelAssignments   map[string]ClaudeModelAlias // key = phase name; value = opus|sonnet|haiku (Kiro-only)
 	Profiles               []Profile                   // named SDD profiles to generate/update during sync
+	EngramDataDir          string                      // absolute path; empty means "use default"
+	EngramMigrateData      bool                        // true if user chose to migrate existing data
 }
 
 func (s Selection) HasAgent(agent AgentID) bool {
@@ -49,4 +51,5 @@ type SyncOverrides struct {
 	SDDProfileStrategy     SDDProfileStrategyID        // "" = auto; otherwise explicit sync profile strategy
 	StrictTDD              *bool                       // nil = no override; non-nil = override strict TDD mode
 	Profiles               []Profile                   // NEW: profile creation/updates during sync
+	EngramDataDir          string                      // empty = no override
 }

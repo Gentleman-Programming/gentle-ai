@@ -5,6 +5,9 @@ type Route struct {
 	Backward Screen
 }
 
+// linearRoutes defines the default forward/backward navigation for each screen.
+// NOTE: goBack() in model.go overrides several of these dynamically (especially
+// ScreenReview backward routing when Engram is selected), so keep them in sync.
 var linearRoutes = map[Screen]Route{
 	ScreenWelcome:                {Forward: ScreenDetection},
 	ScreenDetection:              {Forward: ScreenAgents, Backward: ScreenWelcome},
@@ -17,6 +20,7 @@ var linearRoutes = map[Screen]Route{
 	ScreenStrictTDD:              {Forward: ScreenDependencyTree, Backward: ScreenSDDMode},
 	ScreenModelPicker:            {Forward: ScreenStrictTDD, Backward: ScreenSDDMode},
 	ScreenDependencyTree:         {Forward: ScreenReview, Backward: ScreenPreset},
+	ScreenEngramDataDir:          {Forward: ScreenReview, Backward: ScreenDependencyTree},
 	ScreenSkillPicker:            {Forward: ScreenReview, Backward: ScreenDependencyTree},
 	ScreenReview:                 {Forward: ScreenInstalling, Backward: ScreenDependencyTree},
 	ScreenInstalling:             {Forward: ScreenComplete, Backward: ScreenReview},

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 )
@@ -152,6 +153,15 @@ func engramBinaryUpgrade(profile system.PlatformProfile) error {
 	if err := system.AddToUserPath(binDir); err != nil {
 		// Non-fatal: the binary was downloaded successfully. Warn and continue.
 		fmt.Fprintf(os.Stderr, "WARNING: could not add %s to PATH: %v\n", binDir, err)
+	}
+	// Ensure ENGRAM_DATA_DIR is set so the upgraded binary uses the same data location.
+	if dir := os.Getenv(engram.DataDirEnvVar); dir == "" {
+		homeDir, _ := os.UserHomeDir()
+		if homeDir != "" {
+			if s, err := state.Read(homeDir); err == nil && s.EngramDataDir != "" {
+				_ = os.Setenv(engram.DataDirEnvVar, s.EngramDataDir)
+			}
+		}
 	}
 	return nil
 }

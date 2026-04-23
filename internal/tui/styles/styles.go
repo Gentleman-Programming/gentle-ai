@@ -78,4 +78,24 @@ var (
 	PercentStyle = lipgloss.NewStyle().
 			Foreground(ColorPeach).
 			Bold(true)
+
+	OptionStyle = lipgloss.NewStyle().
+			Foreground(ColorText)
+
+	SelectedOptionStyle = lipgloss.NewStyle().
+			Foreground(ColorLavender).
+			Bold(true)
+
+	DimStyle = lipgloss.NewStyle().
+			Foreground(ColorOverlay)
+
+	CursorStyle = lipgloss.NewStyle().
+			Background(ColorOverlay).
+			Foreground(ColorText)
+
+	LabelStyle = lipgloss.NewStyle().
+			Foreground(ColorSubtext)
+
+	ValueStyle = lipgloss.NewStyle().
+			Foreground(ColorText)
 )

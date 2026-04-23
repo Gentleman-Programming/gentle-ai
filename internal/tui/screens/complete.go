@@ -35,6 +35,7 @@ type CompletePayload struct {
 	RollbackPerformed   bool
 	MissingDeps         []MissingDep
 	AvailableUpdates    []UpdateInfo
+	EngramDataDir       string // empty if not configured / keep default
 }
 
 func RenderComplete(data CompletePayload) string {
@@ -56,6 +57,12 @@ func renderCompleteSuccess(data CompletePayload) string {
 
 	renderMissingDeps(&b, data.MissingDeps)
 	renderAvailableUpdates(&b, data.AvailableUpdates)
+
+	if data.EngramDataDir != "" {
+		b.WriteString("  " + styles.HeadingStyle.Render("Engram data directory") + "  " + styles.ValueStyle.Render(data.EngramDataDir) + "\n")
+		b.WriteString("  " + styles.SubtextStyle.Render("Verify with: engram stats") + "\n")
+		b.WriteString("\n")
+	}
 
 	b.WriteString(styles.HeadingStyle.Render("Next steps"))
 	b.WriteString("\n")
