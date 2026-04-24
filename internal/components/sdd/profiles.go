@@ -247,14 +247,20 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 	agentMap := make(map[string]any, 11)
 
 	// Orchestrator entry
+	taskPerms := map[string]any{
+		"*": "deny",
+	}
+	for _, phase := range profilePhaseOrder {
+		taskPerms[phase+suffix] = "allow"
+	}
+
 	orchEntry := map[string]any{
 		"mode":        "primary",
 		"description": "SDD Orchestrator (" + profile.Name + " profile) - coordinates sub-agents, never does work inline",
 		"prompt":      orchestratorPrompt,
 		"permission": map[string]any{
 			"task": map[string]any{
-				"*":              "deny",
-				"sdd-*" + suffix: "allow",
+				"__replace__": taskPerms,
 			},
 		},
 		"tools": map[string]any{

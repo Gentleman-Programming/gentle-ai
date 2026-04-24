@@ -50,6 +50,10 @@ type Adapter interface {
 	SupportsSlashCommands() bool
 	CommandsDir(homeDir string) string
 
+	SupportsSubAgents() bool
+	SubAgentsDir(homeDir string) string
+	EmbeddedSubAgentsDir() string
+
 	SupportsSkills() bool
 	SupportsSystemPrompt() bool
 	SupportsMCP() bool

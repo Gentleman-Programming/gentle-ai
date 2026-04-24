@@ -137,6 +137,18 @@ func (a *Adapter) CommandsDir(homeDir string) string {
 	return filepath.Join(homeDir, ".qwen", "commands")
 }
 
+func (a *Adapter) SupportsSubAgents() bool {
+	return false
+}
+
+func (a *Adapter) SubAgentsDir(_ string) string {
+	return ""
+}
+
+func (a *Adapter) EmbeddedSubAgentsDir() string {
+	return ""
+}
+
 func (a *Adapter) SupportsSkills() bool {
 	return true
 }

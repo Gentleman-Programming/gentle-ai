@@ -64,12 +64,6 @@ type workflowCapability interface {
 	EmbeddedWorkflowsDir() string
 }
 
-type subAgentCapability interface {
-	SupportsSubAgents() bool
-	SubAgentsDir(homeDir string) string
-	EmbeddedSubAgentsDir() string
-}
-
 type opType int
 
 const (
@@ -597,9 +591,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			}
 			ops = append(ops, removeDirIfEmpty(workflowsDir), removeDirIfEmpty(filepath.Dir(workflowsDir)))
 		}
-		if cap, ok := adapter.(subAgentCapability); ok && cap.SupportsSubAgents() {
-			agentsDir := cap.SubAgentsDir(homeDir)
-			entries, err := fs.ReadDir(assets.FS, cap.EmbeddedSubAgentsDir())
+		if adapter.SupportsSubAgents() {
+			agentsDir := adapter.SubAgentsDir(homeDir)
+			entries, err := fs.ReadDir(assets.FS, adapter.EmbeddedSubAgentsDir())
 			if err != nil {
 				return nil, nil, fmt.Errorf("read embedded sub-agents: %w", err)
 			}

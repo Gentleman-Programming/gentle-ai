@@ -91,7 +91,9 @@ func TestGoldenConfigs(t *testing.T) {
 func TestGoldenSDD_Claude(t *testing.T) {
 	home := t.TempDir()
 
-	result, err := sdd.Inject(home, claudeAdapter(), "")
+	adapter := claudeAdapter()
+
+	result, err := sdd.Inject(home, adapter, "")
 	if err != nil {
 		t.Fatalf("sdd.Inject(claude) error = %v", err)
 	}
@@ -108,6 +110,15 @@ func TestGoldenSDD_Claude(t *testing.T) {
 	} {
 		content := readTestFile(t, filepath.Join(home, ".claude", "commands", name+".md"))
 		assertGolden(t, "sdd-claude-cmd-"+name+".golden", content)
+	}
+
+	agentsDir := adapter.SubAgentsDir(home)
+	for _, name := range []string{
+		"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design",
+		"sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
+	} {
+		agentContent := readTestFile(t, filepath.Join(agentsDir, name+".md"))
+		assertGolden(t, "sdd-claude-agent-"+name+".golden", agentContent)
 	}
 }
 

@@ -64,27 +64,22 @@ type workflowInjector interface {
 	EmbeddedWorkflowsDir() string
 }
 
-// subAgentInjector is an optional adapter capability: if an adapter
-// implements this interface, sdd.Inject will copy the embedded sub-agent
-// markdown files into the user's home directory (e.g. ~/.cursor/agents/).
-// This intentionally does NOT extend agents.Adapter to avoid requiring all
-// adapters to implement no-op stubs.
-type subAgentInjector interface {
-	SupportsSubAgents() bool
-	// SubAgentsDir returns the target filesystem directory where sub-agent
-	// files should be written (e.g. <homeDir>/.cursor/agents/).
-	SubAgentsDir(homeDir string) string
-	// EmbeddedSubAgentsDir returns the path inside the embedded assets FS
-	// where this adapter's sub-agent sources live (e.g. "cursor/agents").
-	EmbeddedSubAgentsDir() string
-}
-
 // kiroModelResolver is an optional adapter capability. When implemented,
 // the subagent copy loop resolves ClaudeModelAlias values to native model IDs
 // and stamps them into the agent frontmatter sentinel {{KIRO_MODEL}}.
 // Adapters that do not implement this interface are unaffected.
 type kiroModelResolver interface {
 	KiroModelID(alias model.ClaudeModelAlias) string
+}
+
+// claudeModelResolver is an optional adapter capability. When implemented,
+// the subagent copy loop stamps the resolved ClaudeModelAlias into the agent
+// frontmatter sentinel {{CLAUDE_MODEL}}. Claude Code accepts "opus", "sonnet",
+// and "haiku" directly as model values, so the resolver is effectively an
+// identity function on the alias string — but the interface keeps the opt-in
+// shape consistent with kiroModelResolver.
+type claudeModelResolver interface {
+	ClaudeModelID(alias model.ClaudeModelAlias) string
 }
 
 // monorepoRootMarkers identify files/dirs that ONLY exist at the true root
@@ -539,18 +534,17 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 	}
 
-	// 3c. Write native sub-agent files (Cursor, and any future agent that
-	// implements the subAgentInjector optional interface). Sub-agent files are
+	// 3c. Write native sub-agent files for adapters that support them. Sub-agent files are
 	// written to the user's home directory (e.g. ~/.cursor/agents/), not to the
 	// workspace, so no project-root detection is needed here.
 	var agentsDir string
-	if sai, ok := adapter.(subAgentInjector); ok && sai.SupportsSubAgents() {
-		agentsDir = sai.SubAgentsDir(homeDir)
+	if adapter.SupportsSubAgents() {
+		agentsDir = adapter.SubAgentsDir(homeDir)
 		if err := os.MkdirAll(agentsDir, 0o755); err != nil {
 			return InjectionResult{}, fmt.Errorf("create agents dir: %w", err)
 		}
 
-		embeddedDir := sai.EmbeddedSubAgentsDir()
+		embeddedDir := adapter.EmbeddedSubAgentsDir()
 		entries, err := assets.FS.ReadDir(embeddedDir)
 		if err != nil {
 			return InjectionResult{}, fmt.Errorf("read embedded agents dir: %w", err)
@@ -583,6 +577,14 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					}
 				}
 				contentStr = strings.ReplaceAll(contentStr, "{{KIRO_MODEL}}", kmr.KiroModelID(alias))
+			}
+
+			// Resolve {{CLAUDE_MODEL}} placeholder for adapters that support it (e.g. Claude Code).
+			// Non-Claude adapters don't implement claudeModelResolver and are unaffected.
+			if cmr, ok := adapter.(claudeModelResolver); ok {
+				phase := strings.TrimSuffix(entry.Name(), ".md")
+				alias := resolveClaudeModelAlias(opts.ClaudeModelAssignments, phase)
+				contentStr = strings.ReplaceAll(contentStr, "{{CLAUDE_MODEL}}", cmr.ClaudeModelID(alias))
 			}
 			outPath := filepath.Join(agentsDir, entry.Name())
 			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
@@ -1312,6 +1314,23 @@ func injectClaudeModelAssignments(content string, assignments map[string]model.C
 	replacement := renderClaudeModelAssignmentsSection(merged)
 	start += len(openMarker)
 	return content[:start] + "\n" + replacement + content[end:], nil
+}
+
+func resolveClaudeModelAlias(assignments map[string]model.ClaudeModelAlias, phase string) model.ClaudeModelAlias {
+	merged := model.ClaudeModelPresetBalanced()
+	for key, alias := range assignments {
+		if alias.Valid() {
+			merged[key] = alias
+		}
+	}
+
+	if alias, ok := merged[phase]; ok && alias.Valid() {
+		return alias
+	}
+	if alias, ok := merged["default"]; ok && alias.Valid() {
+		return alias
+	}
+	return model.ClaudeModelSonnet
 }
 
 func renderClaudeModelAssignmentsSection(assignments map[string]model.ClaudeModelAlias) string {

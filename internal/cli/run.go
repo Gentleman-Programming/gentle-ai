@@ -1018,19 +1018,12 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 	return paths
 }
 
-type sddSubAgentAdapter interface {
-	SupportsSubAgents() bool
-	SubAgentsDir(homeDir string) string
-	EmbeddedSubAgentsDir() string
-}
-
 func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
-	sai, ok := adapter.(sddSubAgentAdapter)
-	if !ok || !sai.SupportsSubAgents() {
+	if !adapter.SupportsSubAgents() {
 		return nil
 	}
 
-	entries, err := assets.FS.ReadDir(sai.EmbeddedSubAgentsDir())
+	entries, err := assets.FS.ReadDir(adapter.EmbeddedSubAgentsDir())
 	if err != nil {
 		return nil
 	}
@@ -1040,7 +1033,7 @@ func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
 		if entry.IsDir() {
 			continue
 		}
-		paths = append(paths, filepath.Join(sai.SubAgentsDir(homeDir), entry.Name()))
+		paths = append(paths, filepath.Join(adapter.SubAgentsDir(homeDir), entry.Name()))
 	}
 
 	return paths
