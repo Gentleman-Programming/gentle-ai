@@ -12,8 +12,8 @@ WORKFLOW:
 4. Present the proposal summary and ask the user if they want to continue with specs and design
 
 CONTEXT:
-- Working directory: !`echo -n "$(pwd)"`
-- Current project: !`echo -n "$(basename $(pwd))"`
+- Working directory: $PWD
+- Current project: $PWD
 - Change name: $ARGUMENTS
 - Artifact store mode: engram
 

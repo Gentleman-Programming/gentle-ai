@@ -13,8 +13,8 @@ WORKFLOW:
 4. Present the result and ask the user to proceed
 
 CONTEXT:
-- Working directory: !`echo -n "$(pwd)"`
-- Current project: !`echo -n "$(basename $(pwd))"`
+- Working directory: $PWD
+- Current project: $PWD
 - Change name: $ARGUMENTS
 - Artifact store mode: engram
 
