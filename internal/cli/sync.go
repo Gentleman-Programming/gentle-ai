@@ -248,22 +248,9 @@ func parseProfilePhaseFlag(raw string) (name, phase string, assignment model.Mod
 // parseModelSpec parses a "provider/model" or "provider:model" string into a
 // ModelAssignment. Returns an error if the spec is empty or has no separator.
 func parseModelSpec(spec string) (model.ModelAssignment, error) {
-	// Try slash separator first (common CLI format: anthropic/claude-haiku-3-5),
-	// then colon (opencode internal format: anthropic:claude-haiku-3-5).
-	sep := -1
-	for i, c := range spec {
-		if c == '/' || c == ':' {
-			sep = i
-			break
-		}
-	}
-	if sep <= 0 {
+	providerID, modelID, ok := model.SplitProviderModel(spec)
+	if !ok {
 		return model.ModelAssignment{}, fmt.Errorf("invalid model spec %q: expected provider/model or provider:model", spec)
-	}
-	providerID := spec[:sep]
-	modelID := spec[sep+1:]
-	if providerID == "" || modelID == "" {
-		return model.ModelAssignment{}, fmt.Errorf("invalid model spec %q: provider and model must both be non-empty", spec)
 	}
 	return model.ModelAssignment{ProviderID: providerID, ModelID: modelID}, nil
 }

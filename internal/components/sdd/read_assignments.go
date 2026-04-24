@@ -78,23 +78,8 @@ func ReadCurrentModelAssignments(settingsPath string) (map[string]model.ModelAss
 		if !ok || modelStr == "" {
 			continue
 		}
-		// Find the FIRST occurrence of either '/' or ':' (whichever comes first).
-		// This correctly handles OpenRouter free models like "openrouter/qwen/qwen3.6-plus:free"
-		// where the provider is "openrouter" and the model is "qwen/qwen3.6-plus:free".
-		idx := -1
-		for i, c := range modelStr {
-			if c == '/' || c == ':' {
-				idx = i
-				break
-			}
-		}
-		if idx <= 0 {
-			// No separator or separator is the first character — skip malformed value.
-			continue
-		}
-		providerID := modelStr[:idx]
-		modelID := modelStr[idx+1:]
-		if modelID == "" {
+		providerID, modelID, ok := model.SplitProviderModel(modelStr)
+		if !ok {
 			continue
 		}
 		assignmentKey := name

@@ -215,23 +215,8 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 	if modelStr == "" {
 		return model.ModelAssignment{}
 	}
-
-	// Find the FIRST occurrence of either '/' or ':' (whichever comes first).
-	// This correctly handles OpenRouter free models like "openrouter/qwen/qwen3.6-plus:free"
-	// where the provider is "openrouter" and the model is "qwen/qwen3.6-plus:free".
-	idx := -1
-	for i, c := range modelStr {
-		if c == '/' || c == ':' {
-			idx = i
-			break
-		}
-	}
-	if idx <= 0 {
-		return model.ModelAssignment{}
-	}
-	providerID := modelStr[:idx]
-	modelID := modelStr[idx+1:]
-	if modelID == "" {
+	providerID, modelID, ok := model.SplitProviderModel(modelStr)
+	if !ok {
 		return model.ModelAssignment{}
 	}
 	effort, _ := agentMap["variant"].(string)
