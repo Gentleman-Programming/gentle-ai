@@ -961,9 +961,9 @@ func TestEngramConfigMode_EscFromTextInputGoesBack(t *testing.T) {
 	}
 }
 
-// TestEngramConfigMode_KeepCurrentClearsState verifies that choosing "Keep current"
+// TestEngramConfigMode_DefaultClearsState verifies that choosing "Use default location"
 // in EngramConfigMode clears the persisted EngramDataDir from state.
-func TestEngramConfigMode_KeepCurrentClearsState(t *testing.T) {
+func TestEngramConfigMode_DefaultClearsState(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDirFn
 	osUserHomeDirFn = func() (string, error) { return home, nil }
@@ -976,8 +976,8 @@ func TestEngramConfigMode_KeepCurrentClearsState(t *testing.T) {
 	m.Screen = ScreenEngramDataDir
 	m.EngramConfigMode = true
 	m.EngramDataDirHasExistingData = false
-	m.EngramDataDirChoice = screens.EngramChoiceKeep
-	m.Cursor = screens.EngramDataDirContinueRow(false, screens.EngramChoiceKeep)
+	m.EngramDataDirChoice = screens.EngramChoiceDefault
+	m.Cursor = screens.EngramDataDirContinueRow(false, screens.EngramChoiceDefault)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM := updated.(Model)

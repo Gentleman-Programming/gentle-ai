@@ -7,21 +7,21 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
 )
 
-// EngramChoiceKeep means keep the current Engram data location.
-const EngramChoiceKeep = 0
+// EngramChoiceDefault means use the default Engram data location (~/.engram).
+const EngramChoiceDefault = 0
+
+// EngramChoiceMigrate means move existing data to a new location.
+const EngramChoiceMigrate = 1
 
 // EngramChoiceStartFresh means use a new location without migrating.
-const EngramChoiceStartFresh = 1
-
-// EngramChoiceMigrate means move existing data to the new location.
-const EngramChoiceMigrate = 2
+const EngramChoiceStartFresh = 2
 
 // EngramDataDirRenderArgs holds all the state needed to render the Engram data
 // directory configuration screen.
 type EngramDataDirRenderArgs struct {
 	CurrentDir       string
 	HasExistingData  bool
-	Choice           int // 0=keep, 1=start-fresh, 2=migrate
+	Choice           int // 0=default, 1=migrate, 2=start-fresh
 	CustomPath       string
 	Cursor           int
 	InputPos         int
@@ -31,11 +31,11 @@ type EngramDataDirRenderArgs struct {
 // EngramDataDirOptionCount returns the number of selectable rows on the Engram
 // data directory screen, including the text-input row, Continue, and Back.
 func EngramDataDirOptionCount(hasExistingData bool, choice int) int {
-	count := 3 // keep, start-fresh, continue
+	count := 3 // default, start-fresh, continue
 	if hasExistingData {
 		count++ // migrate
 	}
-	if choice != EngramChoiceKeep {
+	if choice != EngramChoiceDefault {
 		count++ // path-input
 	}
 	count++ // back
@@ -43,29 +43,59 @@ func EngramDataDirOptionCount(hasExistingData bool, choice int) int {
 }
 
 // EngramDataDirTextRow returns the row index of the text input field,
-// or -1 when the text input is hidden (Choice == Keep).
+// or -1 when the text input is hidden (Choice == Default).
 func EngramDataDirTextRow(hasExistingData bool, choice int) int {
-	if choice == EngramChoiceKeep {
+	if choice == EngramChoiceDefault {
 		return -1
 	}
 	if hasExistingData {
-		return 3 // keep, start-fresh, migrate, path-input
+		return 3 // default, migrate, start-fresh, path-input
 	}
-	return 2 // keep, start-fresh, path-input
+	return 2 // default, start-fresh, path-input
 }
 
 // EngramDataDirContinueRow returns the row index of the Continue button.
 func EngramDataDirContinueRow(hasExistingData bool, choice int) int {
-	if choice == EngramChoiceKeep {
+	if choice == EngramChoiceDefault {
 		if hasExistingData {
-			return 3 // keep, start-fresh, migrate, continue
+			return 3 // default, migrate, start-fresh, continue
 		}
-		return 2 // keep, start-fresh, continue
+		return 2 // default, start-fresh, continue
 	}
 	if hasExistingData {
 		return 4
 	}
 	return 3
+}
+
+// EngramDataDirChoiceFromCursor maps a cursor position to a choice constant,
+// accounting for whether the Migrate option is present.
+func EngramDataDirChoiceFromCursor(hasExistingData bool, cursor int) int {
+	if cursor == 0 {
+		return EngramChoiceDefault
+	}
+	if hasExistingData {
+		if cursor == 1 {
+			return EngramChoiceMigrate
+		}
+		return EngramChoiceStartFresh
+	}
+	return EngramChoiceStartFresh
+}
+
+// EngramDataDirCursorFromChoice maps a choice constant to the cursor position
+// that selects it, accounting for whether the Migrate option is present.
+func EngramDataDirCursorFromChoice(hasExistingData bool, choice int) int {
+	if choice == EngramChoiceDefault {
+		return 0
+	}
+	if hasExistingData {
+		if choice == EngramChoiceMigrate {
+			return 1
+		}
+		return 2
+	}
+	return 1
 }
 
 // RenderEngramDataDir renders the Engram data directory selection screen.
@@ -119,31 +149,31 @@ type engramRow struct {
 func buildEngramDataDirRows(args EngramDataDirRenderArgs) []engramRow {
 	var rows []engramRow
 
-	// Row 0: Keep current
+	// Row 0: Use default location
 	rows = append(rows, engramRow{
-		Label:      "Keep current location",
+		Label:      "Use default location (~/.engram)",
 		IsRadio:    true,
-		IsSelected: args.Choice == 0,
+		IsSelected: args.Choice == EngramChoiceDefault,
 	})
 
-	// Row 1: Start fresh
-	rows = append(rows, engramRow{
-		Label:      "Start fresh at a new location",
-		IsRadio:    true,
-		IsSelected: args.Choice == 1,
-	})
-
-	// Row 2: Migrate (conditional)
+	// Row 1: Migrate (conditional)
 	if args.HasExistingData {
 		rows = append(rows, engramRow{
 			Label:      "Migrate existing data to a new location",
 			IsRadio:    true,
-			IsSelected: args.Choice == 2,
+			IsSelected: args.Choice == EngramChoiceMigrate,
 		})
 	}
 
+	// Row 1 or 2: Start fresh
+	rows = append(rows, engramRow{
+		Label:      "Start fresh at a new location",
+		IsRadio:    true,
+		IsSelected: args.Choice == EngramChoiceStartFresh,
+	})
+
 	// Text input row (only shown when a custom location is chosen).
-	if args.Choice != EngramChoiceKeep {
+	if args.Choice != EngramChoiceDefault {
 		path := args.CustomPath
 		if path == "" {
 			path = " "

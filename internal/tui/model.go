@@ -22,6 +22,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/platform"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
+	"github.com/gentleman-programming/gentle-ai/internal/storage"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
@@ -1736,14 +1737,14 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 	case ScreenEngramDataDir:
 		continueRow := screens.EngramDataDirContinueRow(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
 
-		maxRadioRow := 1 // keep, start-fresh
+		maxRadioRow := 1 // default, start-fresh
 		if m.EngramDataDirHasExistingData {
-			maxRadioRow = 2 // keep, start-fresh, migrate
+			maxRadioRow = 2 // default, migrate, start-fresh
 		}
 		if m.Cursor <= maxRadioRow {
 			// Radio row: set choice
-			m.EngramDataDirChoice = m.Cursor
-			if m.Cursor == screens.EngramChoiceKeep {
+			m.EngramDataDirChoice = screens.EngramDataDirChoiceFromCursor(m.EngramDataDirHasExistingData, m.Cursor)
+			if m.EngramDataDirChoice == screens.EngramChoiceDefault {
 				m.Selection.EngramDataDir = ""
 				m.Selection.EngramMigrateData = false
 			}
@@ -1752,7 +1753,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 
 		if m.Cursor == continueRow {
 			// Validate and proceed
-			if m.EngramDataDirChoice == screens.EngramChoiceKeep {
+			if m.EngramDataDirChoice == screens.EngramChoiceDefault {
 				m.Selection.EngramDataDir = ""
 				m.Selection.EngramMigrateData = false
 			} else {
@@ -1780,20 +1781,26 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				} else {
 					m.Selection.EngramDataDir = path
 					m.Selection.EngramMigrateData = true
+					// Pre-flight: verify there's enough space for migration.
+					if err := storage.RequireFreeSpace(path, estimateExistingDataSize()); err != nil {
+						m.EngramDataDirErr = err.Error()
+						return m, nil
+					}
 				}
 			}
 			m.EngramDataDirErr = ""
 
 			// When reached via the Welcome menu shortcut, save the setting and return.
 			if m.EngramConfigMode {
-				if m.EngramDataDirChoice != screens.EngramChoiceKeep {
+				if m.EngramDataDirChoice != screens.EngramChoiceDefault {
 					path := m.Selection.EngramDataDir
 					if m.Selection.EngramMigrateData {
-						if locked, _ := engram.DetectLockedData(engram.DefaultDataDir()); locked {
+						src := engram.HardDefaultDataDir()
+						if locked, _ := engram.DetectLockedData(src); locked {
 							m.EngramDataDirErr = "Engram data appears to be in use. Close any running engram processes and try again."
 							return m, nil
 						}
-						if err := engram.MigrateData(engram.DefaultDataDir(), path); err != nil {
+						if err := engram.MigrateData(src, path); err != nil {
 							m.EngramDataDirErr = "Migration failed: " + err.Error()
 							return m, nil
 						}
@@ -1808,7 +1815,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					_ = os.Setenv(engram.DataDirEnvVar, path)
 					_ = platform.PersistEngramEnv(path)
 				} else {
-					// User chose "Keep current" — clear any previously persisted custom dir.
+					// User chose "Use default location" — clear any previously persisted custom dir.
 					homeDir, _ := osUserHomeDirFn()
 					if s, err := state.Read(homeDir); err == nil {
 						s.EngramDataDir = ""
@@ -2625,16 +2632,16 @@ func (m *Model) setScreen(next Screen) {
 		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
 	}
 	if next == ScreenEngramDataDir {
-		m.EngramDataDirHasExistingData = engram.DetectExistingData(engram.DefaultDataDir())
-		m.EngramDataDirChoice = 0
+		m.EngramDataDirHasExistingData = engram.DetectExistingData(engram.HardDefaultDataDir())
+		m.EngramDataDirChoice = screens.EngramChoiceDefault
 		m.EngramDataDirErr = ""
 		if m.Selection.EngramDataDir != "" {
 			m.EngramDataDirInput = m.Selection.EngramDataDir
 			m.EngramDataDirPos = len([]rune(m.EngramDataDirInput))
 			if m.Selection.EngramMigrateData {
-				m.EngramDataDirChoice = 2
+				m.EngramDataDirChoice = screens.EngramChoiceMigrate
 			} else {
-				m.EngramDataDirChoice = 1
+				m.EngramDataDirChoice = screens.EngramChoiceStartFresh
 			}
 		} else {
 			m.EngramDataDirInput = ""
@@ -2958,8 +2965,8 @@ func (m *Model) toggleEngramDataDirChoice() {
 	if m.Cursor > maxRadioRow {
 		return
 	}
-	m.EngramDataDirChoice = m.Cursor
-	if m.Cursor == screens.EngramChoiceKeep {
+	m.EngramDataDirChoice = screens.EngramDataDirChoiceFromCursor(m.EngramDataDirHasExistingData, m.Cursor)
+	if m.EngramDataDirChoice == screens.EngramChoiceDefault {
 		m.Selection.EngramDataDir = ""
 		m.Selection.EngramMigrateData = false
 	}
@@ -3690,4 +3697,25 @@ func agentBuilderSystemPromptPath(agentID model.AgentID) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// estimateExistingDataSize calculates the total size of Engram SQLite files at
+// the hard-coded default location (~/.engram). Returns 0 if no existing data
+// is found (the migration would be a no-op in that case, so any amount of free
+// space is fine).
+//
+// Uses HardDefaultDataDir() instead of DefaultDataDir() because the latter
+// respects the ENGRAM_DATA_DIR env var, which may already point to a
+// previously migrated location.
+func estimateExistingDataSize() uint64 {
+	dir := engram.HardDefaultDataDir()
+	var total uint64
+	for _, name := range []string{"engram.db", "engram.db-wal", "engram.db-shm"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		total += uint64(info.Size())
+	}
+	return total
 }
