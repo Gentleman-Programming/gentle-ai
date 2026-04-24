@@ -89,14 +89,15 @@ func persistUnix(dir string) error {
 	if err != nil {
 		return fmt.Errorf("create temp profile: %w", err)
 	}
-	defer os.Remove(tmp.Name())
 
 	content := strings.Join(filtered, "\n") + "\n"
 	if _, err := tmp.WriteString(content); err != nil {
 		tmp.Close()
+		os.Remove(tmp.Name())
 		return fmt.Errorf("write temp profile: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
 		return fmt.Errorf("close temp profile: %w", err)
 	}
 
@@ -106,6 +107,7 @@ func persistUnix(dir string) error {
 	}
 
 	if err := os.Rename(tmp.Name(), target); err != nil {
+		os.Remove(tmp.Name())
 		// Attempt to restore backup.
 		_ = os.Rename(target+".bak", target)
 		return fmt.Errorf("replace profile: %w", err)
@@ -116,6 +118,7 @@ func persistUnix(dir string) error {
 
 func removeUnix() error {
 	profiles := unixProfilePaths()
+	var firstErr error
 	for _, target := range profiles {
 		if _, err := os.Stat(target); err != nil {
 			continue
@@ -143,7 +146,6 @@ func removeUnix() error {
 			if err != nil {
 				return fmt.Errorf("create temp profile: %w", err)
 			}
-			defer os.Remove(tmp.Name())
 
 			content := strings.Join(filtered, "\n")
 			if !strings.HasSuffix(content, "\n") {
@@ -151,19 +153,24 @@ func removeUnix() error {
 			}
 			if _, err := tmp.WriteString(content); err != nil {
 				tmp.Close()
+				os.Remove(tmp.Name())
 				return fmt.Errorf("write temp profile: %w", err)
 			}
 			if err := tmp.Close(); err != nil {
+				os.Remove(tmp.Name())
 				return fmt.Errorf("close temp profile: %w", err)
 			}
 
 			if err := os.Rename(tmp.Name(), target); err != nil {
-				return fmt.Errorf("replace profile: %w", err)
+				os.Remove(tmp.Name())
+				if firstErr == nil {
+					firstErr = fmt.Errorf("replace profile %q: %w", target, err)
+				}
+				continue
 			}
 		}
-		return nil
 	}
-	return nil
+	return firstErr
 }
 
 func detectShell() string {

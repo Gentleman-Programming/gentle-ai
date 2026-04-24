@@ -23,6 +23,13 @@ const (
 	engramName  = "engram"
 )
 
+// EngramInstallDir returns the directory where the engram binary would be
+// installed for the given platform. Exported so callers can check disk space
+// before downloading.
+func EngramInstallDir(profile system.PlatformProfile) string {
+	return engramInstallDirFn(profile.OS)
+}
+
 // Package-level vars for testability.
 var (
 	engramHTTPClient    = &http.Client{Timeout: 5 * time.Minute}

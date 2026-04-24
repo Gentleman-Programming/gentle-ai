@@ -7,7 +7,17 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/internal/storage"
 )
+
+// requireFreeSpace is a test hook for disk-space validation in MigrateData.
+var requireFreeSpace = storage.RequireFreeSpace
+
+// userHomeDir is a test hook for DefaultDataDir and HardDefaultDataDir.
+// Tests can replace this to control the home directory without modifying
+// the real filesystem.
+var userHomeDir = os.UserHomeDir
 
 // DataDirEnvVar is the environment variable that controls where Engram stores
 // its persistent SQLite database and related files.
@@ -24,9 +34,22 @@ func DefaultDataDir() string {
 		}
 		return dir
 	}
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		// Fallback: use current working directory + .engram as absolute path.
+		cwd, _ := os.Getwd()
+		return filepath.Join(cwd, ".engram")
+	}
+	return filepath.Join(home, ".engram")
+}
+
+// HardDefaultDataDir returns the canonical default Engram data directory
+// (~/.engram) ignoring any ENGRAM_DATA_DIR environment variable. This is
+// used as the migration source so that re-running install after a previous
+// migration does not self-copy from the already-migrated location.
+func HardDefaultDataDir() string {
+	home, err := userHomeDir()
+	if err != nil {
 		cwd, _ := os.Getwd()
 		return filepath.Join(cwd, ".engram")
 	}
@@ -63,6 +86,26 @@ func MigrateData(source, target string) error {
 
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return fmt.Errorf("create target directory %q: %w", target, err)
+	}
+
+	// Calculate total size of source files to verify target has enough space.
+	var totalSize uint64
+	for _, f := range files {
+		srcPath := filepath.Join(source, f)
+		info, err := os.Stat(srcPath)
+		if err != nil {
+			continue // file doesn't exist, skip
+		}
+		if info.IsDir() {
+			continue
+		}
+		totalSize += uint64(info.Size())
+	}
+
+	if totalSize > 0 {
+		if err := requireFreeSpace(target, totalSize); err != nil {
+			return err
+		}
 	}
 
 	// Phase 1: copy all files (do NOT remove sources yet).

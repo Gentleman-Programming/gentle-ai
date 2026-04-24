@@ -303,6 +303,55 @@ func TestWithEngramEnv_RestoresOnError(t *testing.T) {
 	}
 }
 
+// TestRunInstallEngramDownloadFailsWhenDiskSpaceInsufficient verifies that the
+// component apply step checks disk space BEFORE calling the download function.
+func TestRunInstallEngramDownloadFailsWhenDiskSpaceInsufficient(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	restoreRequireFreeSpace := requireFreeSpace
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		requireFreeSpace = restoreRequireFreeSpace
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = missingBinaryLookPath
+	runCommand = func(name string, args ...string) error { return nil }
+
+	// Mock the space checker to always fail.
+	requireFreeSpace = func(path string, minBytes uint64) error {
+		return fmt.Errorf("insufficient disk space at \"%s\": need 100 MB, have 0 B", path)
+	}
+
+	// Download function should NEVER be called when space check fails.
+	downloadCalled := false
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		downloadCalled = true
+		return "", nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
+
+	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
+	_, err := RunInstall(
+		[]string{"--agent", "opencode", "--component", "engram"},
+		detection,
+	)
+	if err == nil {
+		t.Fatal("expected error for insufficient disk space, got nil")
+	}
+	if !strings.Contains(err.Error(), "download engram binary") {
+		t.Errorf("error = %q, want substring 'download engram binary'", err.Error())
+	}
+	if downloadCalled {
+		t.Error("engram download was called despite insufficient disk space")
+	}
+}
+
 // Make sure the engram package's DownloadLatestBinary is accessible.
 var _ = engram.DownloadLatestBinary
 

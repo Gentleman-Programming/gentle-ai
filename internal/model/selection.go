@@ -51,5 +51,4 @@ type SyncOverrides struct {
 	SDDProfileStrategy     SDDProfileStrategyID        // "" = auto; otherwise explicit sync profile strategy
 	StrictTDD              *bool                       // nil = no override; non-nil = override strict TDD mode
 	Profiles               []Profile                   // NEW: profile creation/updates during sync
-	EngramDataDir          string                      // empty = no override
 }

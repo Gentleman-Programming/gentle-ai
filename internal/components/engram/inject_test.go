@@ -559,6 +559,12 @@ func TestInjectCodexWritesInstructionFiles(t *testing.T) {
 func TestInjectCodexInjectsTOMLKeys(t *testing.T) {
 	home := t.TempDir()
 
+	// Clean up any leaked ENGRAM_DATA_DIR from other tests — this test verifies
+	// the default (no custom dir) TOML output.
+	origEnv := os.Getenv(DataDirEnvVar)
+	os.Unsetenv(DataDirEnvVar)
+	defer os.Setenv(DataDirEnvVar, origEnv)
+
 	_, err := Inject(home, codexAdapter())
 	if err != nil {
 		t.Fatalf("Inject(codex) error = %v", err)

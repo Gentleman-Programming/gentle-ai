@@ -276,6 +276,9 @@ get_latest_version() {
 install_binary() {
     step "Installing pre-built binary"
 
+    # ~100 MB covers the archive download + binary extraction.
+    check_disk_space "${INSTALL_DIR:-${HOME}/.local/bin}" 104857600
+
     get_latest_version
 
     local archive_name
@@ -451,6 +454,67 @@ print_next_steps() {
 }
 
 # ============================================================================
+# Path helpers
+# ============================================================================
+
+# expand_tilde PATH — replaces a leading ~ with $HOME. No-op if PATH does not
+# start with ~ or if $HOME is unset.
+expand_tilde() {
+    local path="$1"
+    case "$path" in
+        '~'|'~/'*)
+            path="${HOME}${path#\~}"
+            ;;
+        '~'*)
+            # ~user/path — unsupported, leave as-is
+            ;;
+    esac
+    echo "$path"
+}
+
+# ============================================================================
+# Disk space helpers
+# ============================================================================
+
+# check_disk_space DIR MIN_BYTES — exits if DIR has less than MIN_BYTES free.
+# Works on macOS (stat -f%z) and Linux (stat -c%s) and MSYS/Git Bash.
+check_disk_space() {
+    local dir="$1"
+    local min_bytes="$2"
+
+    # Create dir if it doesn't exist so df has something to resolve.
+    mkdir -p "$dir" 2>/dev/null || true
+
+    local available
+    available="$(df -P "$dir" 2>/dev/null | awk 'NR==2 {print $4}')"
+    if [ -z "$available" ]; then
+        warn "Could not determine free disk space at ${dir} — skipping check"
+        return 0
+    fi
+
+    if [ "$available" -lt "$min_bytes" ]; then
+        local min_human avail_human
+        min_human="$(bytes_to_human "$min_bytes")"
+        avail_human="$(bytes_to_human "$available")"
+        fatal "Insufficient disk space at ${dir}: need ${min_human}, have ${avail_human}"
+    fi
+}
+
+# bytes_to_human BYTES — converts a byte count to a human-readable string.
+bytes_to_human() {
+    local bytes="$1"
+    if [ "$bytes" -ge 1073741824 ]; then
+        echo "$(echo "scale=1; $bytes / 1073741824" | bc) GB"
+    elif [ "$bytes" -ge 1048576 ]; then
+        echo "$(echo "scale=1; $bytes / 1048576" | bc) MB"
+    elif [ "$bytes" -ge 1024 ]; then
+        echo "$(echo "scale=1; $bytes / 1024" | bc) KB"
+    else
+        echo "${bytes} B"
+    fi
+}
+
+# ============================================================================
 # Engram data directory helpers
 # ============================================================================
 
@@ -480,19 +544,27 @@ migrate_engram_data() {
     mkdir -p "$target" || fatal "Cannot create target directory: ${target}"
 
     local files=("engram.db" "engram.db-wal" "engram.db-shm")
+    local to_remove=()
+
+    # Phase 1: Copy all files and verify sizes (do NOT remove sources yet).
     for f in "${files[@]}"; do
         local src="${source}/${f}"
         local dst="${target}/${f}"
         if [ -f "$src" ]; then
-            cp "$src" "$dst" || fatal "Failed to copy ${f}"
+            cp "$src" "$dst" || fatal "Failed to copy ${f} (${src} → ${dst})"
             local src_size dst_size
             src_size="$(stat -c%s "$src" 2>/dev/null || stat -f%z "$src" 2>/dev/null)"
             dst_size="$(stat -c%s "$dst" 2>/dev/null || stat -f%z "$dst" 2>/dev/null)"
             if [ "$src_size" != "$dst_size" ]; then
-                fatal "Verification failed for ${f}"
+                fatal "Verification failed for ${f}: source=$(bytes_to_human "$src_size"), target=$(bytes_to_human "$dst_size")"
             fi
-            rm "$src" || fatal "Failed to remove source ${f}"
+            to_remove+=("$src")
         fi
+    done
+
+    # Phase 2: Only remove sources after all copies verified.
+    for src in "${to_remove[@]}"; do
+        rm "$src" || fatal "Failed to remove source $(basename "$src")"
     done
 }
 
@@ -607,7 +679,7 @@ main() {
     local engram_data_dir
     engram_data_dir="${ENGRAM_DATA_DIR:-$(get_default_engram_data_dir)}"
     if [ -n "${ENGRAM_DATA_DIR_ARG:-}" ]; then
-        engram_data_dir="$ENGRAM_DATA_DIR_ARG"
+        engram_data_dir="$(expand_tilde "$ENGRAM_DATA_DIR_ARG")"
     fi
 
     mkdir -p "$engram_data_dir" || fatal "Cannot create Engram data directory: ${engram_data_dir}"
@@ -616,9 +688,22 @@ main() {
     existing_dir="$(get_default_engram_data_dir)"
     if detect_existing_engram_data "$existing_dir"; then
         if [ "${MIGRATE_ENGRAM:-}" = "true" ]; then
+            # Check that the target has enough space for the existing data files.
+            local migrate_size=0
+            for f in engram.db engram.db-wal engram.db-shm; do
+                if [ -f "${existing_dir}/${f}" ]; then
+                    local fsize
+                    fsize="$(stat -c%s "${existing_dir}/${f}" 2>/dev/null || stat -f%z "${existing_dir}/${f}" 2>/dev/null || echo 0)"
+                    migrate_size=$((migrate_size + fsize))
+                fi
+            done
+            if [ "$migrate_size" -gt 0 ]; then
+                check_disk_space "$engram_data_dir" "$migrate_size"
+            fi
             step "Migrating Engram data"
             migrate_engram_data "$existing_dir" "$engram_data_dir"
             success "Engram data migrated to ${engram_data_dir}"
+            info "Verify the migration: engram stats"
         fi
     fi
 

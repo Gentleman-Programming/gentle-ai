@@ -12,17 +12,32 @@ import (
 // engramCmd is the command string to use (e.g. an absolute path like
 // "/usr/local/bin/engram"). If engramCmd is empty, it falls back to "engram".
 //
+// env is an optional map of environment variables to include in the TOML block.
+// When non-nil, each key=value pair is written as `key = "value"` after the
+// standard command/args lines.
+//
 // This is a string-based helper (no TOML parser dependency) ported from
 // engram/internal/setup/setup.go. It handles the limited TOML subset that
 // Codex uses.
-func UpsertCodexEngramBlock(content, engramCmd string) string {
+func UpsertCodexEngramBlock(content, engramCmd string, env map[string]string) string {
 	if engramCmd == "" {
 		engramCmd = "engram"
 	}
 	// Escape backslashes for TOML double-quoted strings (Windows paths).
 	// e.g. C:\Users\foo → C:\\Users\\foo — prevents TOML unicode escape errors (\U).
 	escapedCmd := strings.ReplaceAll(engramCmd, `\`, `\\`)
-	codexEngramBlock := "[mcp_servers.engram]\ncommand = \"" + escapedCmd + "\"\nargs = [\"mcp\", \"--tools=agent\"]"
+
+	var b strings.Builder
+	b.WriteString("[mcp_servers.engram]\n")
+	b.WriteString("command = \"" + escapedCmd + "\"\n")
+	b.WriteString("args = [\"mcp\", \"--tools=agent\"]\n")
+	for k, v := range env {
+		escapedV := strings.ReplaceAll(v, `\`, `\\`)
+		b.WriteString(k + " = \"" + escapedV + "\"\n")
+	}
+	// Remove trailing newline — the caller adds it.
+	codexEngramBlock := strings.TrimSuffix(b.String(), "\n")
+
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	lines := strings.Split(content, "\n")
 

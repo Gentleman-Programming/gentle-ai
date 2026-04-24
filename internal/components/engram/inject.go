@@ -73,12 +73,33 @@ func engramServerJSON() []byte {
 	return engramServerJSONWithCmd(cmd)
 }
 
+// engramEnvMap returns a map with ENGRAM_DATA_DIR if a custom directory is
+// configured. This ensures GUI-launched agents (VS Code, Cursor from Dock on
+// macOS) use the correct data directory even though they don't inherit shell
+// profile environment variables.
+func engramEnvMap() map[string]any {
+	dataDir := os.Getenv(DataDirEnvVar)
+	if dataDir == "" {
+		return nil
+	}
+	// Compare against the canonical default (~/.engram), not DefaultDataDir(),
+	// because DefaultDataDir() reads the env var first and would always match.
+	home, err := os.UserHomeDir()
+	if err == nil && dataDir == filepath.Join(home, ".engram") {
+		return nil
+	}
+	return map[string]any{"ENGRAM_DATA_DIR": dataDir}
+}
+
 // engramServerJSONWithCmd returns the MCP server config bytes for a specific
 // command.
 func engramServerJSONWithCmd(cmd string) []byte {
 	cfg := map[string]any{
 		"command": cmd,
 		"args":    []string{"mcp", "--tools=agent"},
+	}
+	if env := engramEnvMap(); env != nil {
+		cfg["env"] = env
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	return append(b, '\n')
@@ -88,6 +109,7 @@ func engramServerJSONWithCmd(cmd string) []byte {
 // and MCPConfigFile strategies), with the resolved engram command.
 func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 	var cfg map[string]any
+	engramCfg := map[string]any{}
 	if agentID == model.AgentOpenCode || agentID == model.AgentKilocode {
 		// OpenCode 1.3.3+ requires command as an array for type:local servers.
 		// The separate "args" field is not accepted; all args must be in the
@@ -98,23 +120,32 @@ func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 		// Without this, users upgrading from v1.11.3 (which had a separate
 		// "args" key) would end up with both "args" and the new array "command"
 		// in their config, which is invalid for OpenCode 1.3.3.
+		engramCfg = map[string]any{
+			"command": []string{cmd, "mcp", "--tools=agent"},
+			"type":    "local",
+		}
+	} else {
+		engramCfg = map[string]any{
+			"command": cmd,
+			"args":    []string{"mcp", "--tools=agent"},
+		}
+	}
+	if env := engramEnvMap(); env != nil {
+		engramCfg["env"] = env
+	}
+
+	if agentID == model.AgentOpenCode || agentID == model.AgentKilocode {
 		cfg = map[string]any{
 			"mcp": map[string]any{
 				"engram": map[string]any{
-					"__replace__": map[string]any{
-						"command": []string{cmd, "mcp", "--tools=agent"},
-						"type":    "local",
-					},
+					"__replace__": engramCfg,
 				},
 			},
 		}
 	} else {
 		cfg = map[string]any{
 			"mcpServers": map[string]any{
-				"engram": map[string]any{
-					"command": cmd,
-					"args":    []string{"mcp", "--tools=agent"},
-				},
+				"engram": engramCfg,
 			},
 		}
 	}
@@ -127,12 +158,16 @@ func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 // VS Code uses a fixed "servers" key structure rather than mcpServers, so it
 // is kept as a separate helper.
 func vsCodeEngramOverlayJSON(cmd string) []byte {
+	engramCfg := map[string]any{
+		"command": cmd,
+		"args":    []string{"mcp", "--tools=agent"},
+	}
+	if env := engramEnvMap(); env != nil {
+		engramCfg["env"] = env
+	}
 	cfg := map[string]any{
 		"servers": map[string]any{
-			"engram": map[string]any{
-				"command": cmd,
-				"args":    []string{"mcp", "--tools=agent"},
-			},
+			"engram": engramCfg,
 		},
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
@@ -230,7 +265,14 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 			return InjectionResult{}, err
 		}
 		engramCmd := stableEngramCommandForMergedConfig(configPath, adapter.Agent())
-		withMCP := filemerge.UpsertCodexEngramBlock(existing, engramCmd)
+		// Convert env map to map[string]string for TOML.
+		tomlEnv := make(map[string]string)
+		if env := engramEnvMap(); env != nil {
+			for k, v := range env {
+				tomlEnv[k] = v.(string)
+			}
+		}
+		withMCP := filemerge.UpsertCodexEngramBlock(existing, engramCmd, tomlEnv)
 		withInstr := filemerge.UpsertTopLevelTOMLString(withMCP, "model_instructions_file", instructionsPath)
 		withCompact := filemerge.UpsertTopLevelTOMLString(withInstr, "experimental_compact_prompt_file", compactPath)
 
@@ -531,6 +573,9 @@ func buildSeparateMCPContent(mcpPath string, defaultContent []byte) []byte {
 	rebuilt := map[string]any{
 		"command": cmd,
 		"args":    []string{"mcp", "--tools=agent"},
+	}
+	if env := engramEnvMap(); env != nil {
+		rebuilt["env"] = env
 	}
 	encoded, err := json.MarshalIndent(rebuilt, "", "  ")
 	if err != nil {

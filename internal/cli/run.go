@@ -28,9 +28,16 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
+	"github.com/gentleman-programming/gentle-ai/internal/storage"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/verify"
 )
+
+// EngramBinaryMinSpaceBytes is the minimum free disk space required before
+// downloading the engram binary. The ~30 MB binary plus tar.gz overhead and
+// temp extraction can peak at roughly 100 MB, so we require 100 MB as a safe
+// buffer that works even on space-constrained systems.
+const EngramBinaryMinSpaceBytes = 100 * 1024 * 1024
 
 type InstallResult struct {
 	Selection    model.Selection
@@ -58,6 +65,9 @@ var (
 	// engramDownloadFn is the function used to download the engram binary on non-brew platforms.
 	// Package-level var for testability — tests can replace this to avoid real HTTP calls.
 	engramDownloadFn = engram.DownloadLatestBinary
+
+	// requireFreeSpace is a test hook for disk-space validation.
+	requireFreeSpace = storage.RequireFreeSpace
 
 	// AppVersion is the gentle-ai version that will be written into backup manifests.
 	// It is set by app.go before any CLI operation so that every backup created during
@@ -149,11 +159,21 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	for _, a := range input.Selection.Agents {
 		agentIDs = append(agentIDs, string(a))
 	}
+	// Preserve an existing custom EngramDataDir if the current selection did not
+	// explicitly specify one (e.g. user chose "Keep current" during install).
+	engramDataDir := input.Selection.EngramDataDir
+	if engramDataDir == "" {
+		if existing, err := state.Read(homeDir); err == nil {
+			engramDataDir = existing.EngramDataDir
+		}
+	}
+
 	// Non-fatal: a state write failure must not break an otherwise successful install.
 	_ = state.Write(homeDir, state.InstallState{
 		InstalledAgents:        agentIDs,
 		ClaudeModelAssignments: claudeAliasesToStrings(input.Selection.ClaudeModelAssignments),
 		ModelAssignments:       modelAssignmentsToState(input.Selection.ModelAssignments),
+		EngramDataDir:          engramDataDir,
 	})
 
 	return result, nil
@@ -510,12 +530,12 @@ func (s componentApplyStep) Run() error {
 
 		// Migrate existing data when explicitly requested.
 		if s.selection.EngramMigrateData && s.selection.EngramDataDir != "" {
-			defaultDir := engram.DefaultDataDir()
-			if filepath.Clean(defaultDir) != filepath.Clean(s.selection.EngramDataDir) && engram.DetectExistingData(defaultDir) {
-				if locked, _ := engram.DetectLockedData(defaultDir); locked {
+			srcDir := engram.HardDefaultDataDir()
+			if filepath.Clean(srcDir) != filepath.Clean(s.selection.EngramDataDir) && engram.DetectExistingData(srcDir) {
+				if locked, _ := engram.DetectLockedData(srcDir); locked {
 					return fmt.Errorf("migrate engram data: engram data appears to be in use. Close any running engram processes and try again")
 				}
-				if err := engram.MigrateData(defaultDir, s.selection.EngramDataDir); err != nil {
+				if err := engram.MigrateData(srcDir, s.selection.EngramDataDir); err != nil {
 					return fmt.Errorf("migrate engram data: %w", err)
 				}
 			}
@@ -535,6 +555,15 @@ func (s componentApplyStep) Run() error {
 			} else {
 				// Linux / Windows: download the pre-built binary from GitHub Releases.
 				// No Go required — engram ships pre-built binaries.
+				// Verify disk space at the install directory (where the binary will land),
+				// not the data directory. The install dir is typically /usr/local/bin,
+				// ~/.local/bin, or %LOCALAPPDATA%\engram\bin — which may be on a
+				// different volume than the Engram data directory.
+				installDir := engram.EngramInstallDir(s.profile)
+				// 100 MB covers the binary (~30 MB) plus tar.gz overhead and temp extraction.
+				if err := requireFreeSpace(installDir, EngramBinaryMinSpaceBytes); err != nil {
+					return fmt.Errorf("download engram binary: %w", err)
+				}
 				binaryPath, err := engramDownloadFn(s.profile)
 				if err != nil {
 					return fmt.Errorf("download engram binary: %w", err)

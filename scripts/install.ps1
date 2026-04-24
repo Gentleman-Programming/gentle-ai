@@ -185,6 +185,10 @@ function Install-ViaBinary {
 
     Write-Step "Installing pre-built binary"
 
+    # ~100 MB covers the archive download + binary extraction.
+    $binDir = if ($InstallDir) { $InstallDir } else { Join-Path $env:LOCALAPPDATA "gentle-ai\bin" }
+    Test-DiskSpace -Path $binDir -MinBytes 104857600
+
     $version = Get-LatestVersion
     $versionNumber = $version.TrimStart("v")
 
@@ -314,6 +318,14 @@ function Test-Installation {
 # Next steps
 # ============================================================================
 
+function Expand-Tilde {
+    param([string]$Path)
+    if ($Path -eq "~" -or $Path -like "~\*") {
+        return $Path -replace "^~", $env:USERPROFILE
+    }
+    return $Path
+}
+
 function Get-DefaultEngramDataDir {
     if ($env:ENGRAM_DATA_DIR) {
         return $env:ENGRAM_DATA_DIR
@@ -353,7 +365,7 @@ function Move-EngramData {
             $srcSize = (Get-Item $src).Length
             $dstSize = (Get-Item $dst).Length
             if ($srcSize -ne $dstSize) {
-                Stop-WithError "Verification failed for $f"
+                Stop-WithError "Verification failed for $f`: source=$(Format-ByteSize $srcSize), target=$(Format-ByteSize $dstSize)"
             }
             $toRemove += $src
         }
@@ -362,6 +374,30 @@ function Move-EngramData {
     # Phase 2: Only delete sources after all copies verified.
     foreach ($src in $toRemove) {
         Remove-Item -Path $src -Force
+    }
+}
+
+function Format-ByteSize {
+    param([long]$Bytes)
+    if ($Bytes -ge 1GB) { return "{0:N1} GB" -f ($Bytes / 1GB) }
+    if ($Bytes -ge 1MB) { return "{0:N1} MB" -f ($Bytes / 1MB) }
+    if ($Bytes -ge 1KB) { return "{0:N1} KB" -f ($Bytes / 1KB) }
+    return "$Bytes B"
+}
+
+function Test-DiskSpace {
+    param([string]$Path, [long]$MinBytes)
+    $errorAction = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    $drive = if ($Path -match "^([A-Za-z]:)") { $Matches[1] + "\" } else { $env:SYSTEMDRIVE + "\" }
+    $ErrorActionPreference = $errorAction
+    $free = (Get-PSDrive -Name $drive.Substring(0,1) -ErrorAction SilentlyContinue).Free
+    if ($null -eq $free) {
+        Write-Warn "Could not determine free disk space at ${Path} — skipping check"
+        return
+    }
+    if ($free -lt $MinBytes) {
+        Stop-WithError "Insufficient disk space at ${Path}: need $(Format-ByteSize $MinBytes), have $(Format-ByteSize $free)"
     }
 }
 
@@ -411,7 +447,7 @@ function Main {
     Test-Installation
 
     # Engram data directory configuration
-    $engramDataDir = if ($EngramDataDir) { $EngramDataDir } else { Get-DefaultEngramDataDir }
+    $engramDataDir = if ($EngramDataDir) { Expand-Tilde $EngramDataDir } else { Get-DefaultEngramDataDir }
 
     if (-not (Test-Path $engramDataDir)) {
         New-Item -ItemType Directory -Path $engramDataDir -Force | Out-Null
@@ -420,9 +456,21 @@ function Main {
     $existingDir = Get-HardDefaultEngramDataDir
     if (Test-ExistingEngramData -Dir $existingDir) {
         if ($MigrateExistingEngramData) {
+            # Check that the target has enough space for the existing data files.
+            $migrateSize = 0
+            foreach ($f in @("engram.db", "engram.db-wal", "engram.db-shm")) {
+                $src = Join-Path $existingDir $f
+                if (Test-Path $src) {
+                    $migrateSize += (Get-Item $src).Length
+                }
+            }
+            if ($migrateSize -gt 0) {
+                Test-DiskSpace -Path $engramDataDir -MinBytes $migrateSize
+            }
             Write-Step "Migrating Engram data"
             Move-EngramData -Source $existingDir -Target $engramDataDir
             Write-Success "Engram data migrated to $engramDataDir"
+            Write-Info "Verify the migration: engram stats"
         }
     }
 

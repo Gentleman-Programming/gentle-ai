@@ -1,12 +1,66 @@
 package engram
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestMigrateData_InsufficientSpaceDoesNotCopyFiles(t *testing.T) {
+	source := t.TempDir()
+	target := t.TempDir()
+
+	// Create a source file.
+	if err := os.WriteFile(filepath.Join(source, "engram.db"), []byte("sqlite data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mock the space checker to always fail.
+	orig := requireFreeSpace
+	requireFreeSpace = func(path string, minBytes uint64) error {
+		return fmt.Errorf("insufficient disk space at \"%s\": need 100 B, have 0 B", path)
+	}
+	defer func() { requireFreeSpace = orig }()
+
+	err := MigrateData(source, target)
+	if err == nil {
+		t.Fatal("expected error for insufficient disk space, got nil")
+	}
+	want := "insufficient disk space"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want substring %q", err.Error(), want)
+	}
+
+	// Target should NOT have the file (copy was blocked).
+	if _, err := os.Stat(filepath.Join(target, "engram.db")); !os.IsNotExist(err) {
+		t.Error("target should not have engram.db when space check fails")
+	}
+
+	// Source should still have the file.
+	if _, err := os.Stat(filepath.Join(source, "engram.db")); err != nil {
+		t.Error("source file was removed despite migration failure")
+	}
+}
+
+func TestHardDefaultDataDir_IgnoresEnvVar(t *testing.T) {
+	orig := os.Getenv(DataDirEnvVar)
+	defer os.Setenv(DataDirEnvVar, orig)
+
+	os.Setenv(DataDirEnvVar, "/custom/engram")
+	got := HardDefaultDataDir()
+	// Should NOT be /custom/engram — should be ~/.engram
+	if strings.HasSuffix(got, "/custom/engram") || strings.HasSuffix(got, `\custom\engram`) {
+		t.Errorf("HardDefaultDataDir() = %q, should ignore ENGRAM_DATA_DIR env var", got)
+	}
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, ".engram")
+	if got != want {
+		t.Errorf("HardDefaultDataDir() = %q, want %q", got, want)
+	}
+}
 
 func TestDefaultDataDir_RespectsEnvVar(t *testing.T) {
 	orig := os.Getenv(DataDirEnvVar)

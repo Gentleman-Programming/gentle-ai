@@ -8,7 +8,7 @@ import (
 // ─── UpsertCodexEngramBlock ───────────────────────────────────────────────────
 
 func TestUpsertCodexEngramBlock_Empty(t *testing.T) {
-	result := UpsertCodexEngramBlock("", "")
+	result := UpsertCodexEngramBlock("", "", nil)
 
 	if !strings.Contains(result, "[mcp_servers.engram]") {
 		t.Fatalf("result missing [mcp_servers.engram]; got:\n%s", result)
@@ -35,7 +35,7 @@ args = ["mcp"]
 [another_section]
 foo = "bar"
 `
-	result := UpsertCodexEngramBlock(input, "")
+	result := UpsertCodexEngramBlock(input, "", nil)
 
 	// Must have exactly one [mcp_servers.engram] block.
 	count := strings.Count(result, "[mcp_servers.engram]")
@@ -63,7 +63,7 @@ func TestUpsertCodexEngramBlock_PreservesOtherSections(t *testing.T) {
 [settings]
 timeout = 30
 `
-	result := UpsertCodexEngramBlock(input, "")
+	result := UpsertCodexEngramBlock(input, "", nil)
 
 	if !strings.Contains(result, `model = "gpt-4o"`) {
 		t.Fatalf("result missing top-level model key; got:\n%s", result)
@@ -77,7 +77,7 @@ timeout = 30
 }
 
 func TestUpsertCodexEngramBlock_AbsolutePath(t *testing.T) {
-	result := UpsertCodexEngramBlock("", "/usr/local/bin/engram")
+	result := UpsertCodexEngramBlock("", "/usr/local/bin/engram", nil)
 
 	if !strings.Contains(result, "[mcp_servers.engram]") {
 		t.Fatalf("result missing [mcp_servers.engram]; got:\n%s", result)
@@ -94,8 +94,8 @@ func TestUpsertCodexEngramBlock_Idempotent(t *testing.T) {
 	input := `[other]
 key = "val"
 `
-	first := UpsertCodexEngramBlock(input, "")
-	second := UpsertCodexEngramBlock(first, "")
+	first := UpsertCodexEngramBlock(input, "", nil)
+	second := UpsertCodexEngramBlock(first, "", nil)
 
 	if first != second {
 		t.Fatalf("UpsertCodexEngramBlock is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
@@ -111,12 +111,37 @@ func TestUpsertCodexEngramBlockWindowsPath(t *testing.T) {
 	// Windows paths contain backslashes which must be escaped in TOML double-quoted strings.
 	// \U would be interpreted as a Unicode escape sequence → parse error.
 	windowsCmd := `C:\Users\PERC\AppData\Local\engram\bin\engram.exe`
-	result := UpsertCodexEngramBlock("", windowsCmd)
+	result := UpsertCodexEngramBlock("", windowsCmd, nil)
 
 	// TOML double-quoted string must have double backslashes.
 	want := `command = "C:\\Users\\PERC\\AppData\\Local\\engram\\bin\\engram.exe"`
 	if !strings.Contains(result, want) {
 		t.Fatalf("result missing properly escaped Windows path;\nwant substring: %s\ngot:\n%s", want, result)
+	}
+}
+
+func TestUpsertCodexEngramBlock_WithEnv(t *testing.T) {
+	env := map[string]string{"ENGRAM_DATA_DIR": "/mnt/data/Engram"}
+	result := UpsertCodexEngramBlock("", "", env)
+
+	if !strings.Contains(result, `ENGRAM_DATA_DIR = "/mnt/data/Engram"`) {
+		t.Fatalf("result missing ENGRAM_DATA_DIR env var; got:\n%s", result)
+	}
+	if !strings.Contains(result, `[mcp_servers.engram]`) {
+		t.Fatalf("result missing [mcp_servers.engram]; got:\n%s", result)
+	}
+}
+
+func TestUpsertCodexEngramBlock_EnvIdempotent(t *testing.T) {
+	env := map[string]string{"ENGRAM_DATA_DIR": "/mnt/data/Engram"}
+	input := `[other]
+key = "val"
+`
+	first := UpsertCodexEngramBlock(input, "", env)
+	second := UpsertCodexEngramBlock(first, "", env)
+
+	if first != second {
+		t.Fatalf("UpsertCodexEngramBlock with env is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
 	}
 }
 
