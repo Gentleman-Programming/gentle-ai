@@ -9,12 +9,12 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
-// sddPhaseSet is the set of valid base SDD agent names that may appear in
-// opencode.json. It includes the sub-agent phases plus the gentle-orchestrator coordinator.
-var sddPhaseSet = buildSDDPhaseSet()
+// sddPhaseSet is the set of valid agent names that may appear in
+// opencode.json. It includes SDD phases, JD agents, and the gentle-orchestrator coordinator.
+var sddPhaseSet = buildConfigurableAgentSet()
 
-func buildSDDPhaseSet() map[string]bool {
-	phases := opencode.SDDPhases()
+func buildConfigurableAgentSet() map[string]bool {
+	phases := opencode.ConfigurableAgentPhases() // SDD + JD phases
 	set := make(map[string]bool, len(phases)+1)
 	for _, p := range phases {
 		set[p] = true

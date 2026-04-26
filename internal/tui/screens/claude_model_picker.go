@@ -44,20 +44,27 @@ var claudePhases = []string{
 	"sdd-apply",
 	"sdd-verify",
 	"sdd-archive",
+	"jd-judge-a",
+	"jd-judge-b",
+	"jd-fix-agent",
 	"default",
 }
 
 // claudePhaseLabels are the human-readable labels for each SDD phase.
 var claudePhaseLabels = map[string]string{
-	"sdd-explore": "Explore",
-	"sdd-propose": "Propose",
-	"sdd-spec":    "Spec",
-	"sdd-design":  "Design",
-	"sdd-tasks":   "Tasks",
-	"sdd-apply":   "Apply",
-	"sdd-verify":  "Verify",
-	"sdd-archive": "Archive",
-	"default":     "General delegation",
+	"orchestrator": "Orchestrator",
+	"sdd-explore":  "Explore",
+	"sdd-propose":  "Propose",
+	"sdd-spec":     "Spec",
+	"sdd-design":   "Design",
+	"sdd-tasks":    "Tasks",
+	"sdd-apply":    "Apply",
+	"sdd-verify":   "Verify",
+	"sdd-archive":  "Archive",
+	"jd-judge-a":   "JD Judge A",
+	"jd-judge-b":   "JD Judge B",
+	"jd-fix-agent": "JD Fix Agent",
+	"default":      "General delegation",
 }
 
 // claudeAliasOrder defines the cycling order when pressing Enter on a phase row.

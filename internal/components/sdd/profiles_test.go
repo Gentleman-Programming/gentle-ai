@@ -473,10 +473,10 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 	tests := []struct {
 		name      string
 		assetPath string
-		multi     bool
+		includeJD bool // multi overlay includes JD agents; single does not
 	}{
-		{name: "single", assetPath: "opencode/sdd-overlay-single.json", multi: false},
-		{name: "multi", assetPath: "opencode/sdd-overlay-multi.json", multi: true},
+		{name: "single", assetPath: "opencode/sdd-overlay-single.json", includeJD: false},
+		{name: "multi", assetPath: "opencode/sdd-overlay-multi.json", includeJD: true},
 	}
 
 	for _, tt := range tests {
@@ -497,9 +497,10 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 			}
 
 			expected := expectedTaskPermissions("")
-			if tt.multi {
-				for _, phase := range opencode.JDPhases() {
-					expected[phase] = "allow"
+			if !tt.includeJD {
+				// Single overlay does not include JD agent permissions.
+				for _, jd := range opencode.JDPhases() {
+					delete(expected, jd)
 				}
 			}
 			assertExactTaskPermissions(t, taskMap, expected)
@@ -749,6 +750,10 @@ func expectedTaskPermissions(suffix string) map[string]any {
 	}
 	for _, phase := range profilePhaseOrder {
 		permissions[phase+suffix] = "allow"
+	}
+	// JD agents are global (not profile-scoped) — always unsuffixed.
+	for _, jd := range opencode.JDPhases() {
+		permissions[jd] = "allow"
 	}
 	return permissions
 }
