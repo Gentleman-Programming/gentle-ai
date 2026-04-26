@@ -9,9 +9,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
-// sddPhaseSet is the set of valid agent names that may appear in
+// configurableAgentSet is the set of valid agent names that may appear in
 // opencode.json. It includes SDD phases, JD agents, and the gentle-orchestrator coordinator.
-var sddPhaseSet = buildConfigurableAgentSet()
+var configurableAgentSet = buildConfigurableAgentSet()
 
 func buildConfigurableAgentSet() map[string]bool {
 	phases := opencode.ConfigurableAgentPhases() // SDD + JD phases
@@ -68,7 +68,7 @@ func ReadCurrentModelAssignments(settingsPath string) (map[string]model.ModelAss
 
 	result := make(map[string]model.ModelAssignment)
 	for name, defRaw := range agentMap {
-		if !sddPhaseSet[name] {
+		if !configurableAgentSet[name] {
 			continue
 		}
 		defMap, ok := defRaw.(map[string]any)

@@ -302,3 +302,122 @@ func TestIndividualPhaseSelectionDoesNotSetAllPhasesModel(t *testing.T) {
 		})
 	}
 }
+
+// ─── Separator row (non-selectable) ────────────────────────────────────────
+
+func TestSeparatorRowIdx_Value(t *testing.T) {
+	got := SeparatorRowIdx()
+	want := 2 + len(opencode.SDDPhases()) // after orchestrator + "Set all" + 9 SDD phases
+	if got != want {
+		t.Fatalf("SeparatorRowIdx() = %d, want %d", got, want)
+	}
+}
+
+func TestHandleModelNav_SeparatorRow_NoAssignment(t *testing.T) {
+	sepIdx := SeparatorRowIdx()
+	state := makeTestState(sepIdx)
+	assignments := make(map[string]model.ModelAssignment)
+
+	handled, updated := handleModelNav("enter", state, assignments)
+
+	if !handled {
+		t.Fatal("handleModelNav should return handled=true on enter for separator")
+	}
+
+	// Separator should produce NO assignments at all.
+	if len(updated) != 0 {
+		t.Fatalf("separator row should produce no assignments; got: %v", updated)
+	}
+
+	// State should return to phase list.
+	if state.Mode != ModePhaseList {
+		t.Fatalf("expected ModePhaseList after separator enter, got %d", state.Mode)
+	}
+}
+
+// ─── JD agent rows ─────────────────────────────────────────────────────────
+
+func TestHandleModelNav_JDAgentRows_AssignCorrectly(t *testing.T) {
+	jdPhases := opencode.JDPhases()
+	sepIdx := SeparatorRowIdx()
+
+	for i, expectedPhase := range jdPhases {
+		t.Run(expectedPhase, func(t *testing.T) {
+			state := makeTestState(sepIdx + 1 + i) // JD rows start after separator
+			assignments := make(map[string]model.ModelAssignment)
+
+			handled, updated := handleModelNav("enter", state, assignments)
+
+			if !handled {
+				t.Fatal("handleModelNav should return handled=true on enter")
+			}
+
+			// The target JD phase must be assigned.
+			a, ok := updated[expectedPhase]
+			if !ok || a.ProviderID == "" {
+				t.Errorf("JD phase %q should be assigned; assignments: %v", expectedPhase, updated)
+			}
+			if a.ProviderID != "test-provider" {
+				t.Errorf("JD phase %q ProviderID = %q, want %q", expectedPhase, a.ProviderID, "test-provider")
+			}
+			if a.ModelID != "model-alpha" {
+				t.Errorf("JD phase %q ModelID = %q, want %q", expectedPhase, a.ModelID, "model-alpha")
+			}
+
+			// No other JD phase must be assigned.
+			for _, other := range jdPhases {
+				if other == expectedPhase {
+					continue
+				}
+				if _, exists := updated[other]; exists {
+					t.Errorf("unrelated JD phase %q should not be assigned; assignments: %v", other, updated)
+				}
+			}
+
+			// No SDD phase or orchestrator must be assigned.
+			for _, sdd := range opencode.SDDPhases() {
+				if _, exists := updated[sdd]; exists {
+					t.Errorf("SDD phase %q should not be assigned by JD row; assignments: %v", sdd, updated)
+				}
+			}
+			if _, exists := updated[SDDOrchestratorPhase]; exists {
+				t.Errorf("orchestrator should not be assigned by JD row; assignments: %v", updated)
+			}
+		})
+	}
+}
+
+func TestHandleModelNav_JDFirstRow(t *testing.T) {
+	// Verify the FIRST JD row (right after separator) maps to jd-judge-a.
+	jdPhases := opencode.JDPhases()
+	if len(jdPhases) == 0 {
+		t.Skip("no JD phases defined")
+	}
+	sepIdx := SeparatorRowIdx()
+	state := makeTestState(sepIdx + 1)
+	assignments := make(map[string]model.ModelAssignment)
+
+	_, updated := handleModelNav("enter", state, assignments)
+
+	if _, ok := updated[jdPhases[0]]; !ok {
+		t.Fatalf("first JD row should assign %q; got: %v", jdPhases[0], updated)
+	}
+}
+
+func TestHandleModelNav_JDLastRow(t *testing.T) {
+	// Verify the LAST JD row maps to the last JD phase.
+	jdPhases := opencode.JDPhases()
+	if len(jdPhases) == 0 {
+		t.Skip("no JD phases defined")
+	}
+	sepIdx := SeparatorRowIdx()
+	state := makeTestState(sepIdx + len(jdPhases))
+	assignments := make(map[string]model.ModelAssignment)
+
+	_, updated := handleModelNav("enter", state, assignments)
+
+	lastPhase := jdPhases[len(jdPhases)-1]
+	if _, ok := updated[lastPhase]; !ok {
+		t.Fatalf("last JD row should assign %q; got: %v", lastPhase, updated)
+	}
+}
