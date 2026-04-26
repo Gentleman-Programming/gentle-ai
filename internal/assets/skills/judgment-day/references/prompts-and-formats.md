@@ -69,6 +69,28 @@ End with: `Skill Resolution: {paths-injected|fallback-registry|fallback-path|non
 
 Approved criteria after Round 1: zero confirmed CRITICALs and zero confirmed real WARNINGs. Theoretical warnings and suggestions may remain.
 
+## Delegation Patterns
+
+When JD agents are configured as named sub-agents (e.g., OpenCode multi-mode overlay), use named delegation:
+
+```
+Judge A:   delegate(agent="jd-judge-a", prompt="...")
+Judge B:   delegate(agent="jd-judge-b", prompt="...")
+Fix Agent: delegate(agent="jd-fix-agent", prompt="...")
+```
+
+Each named agent uses its configured model from the Model Assignments table.
+
+When named JD agents are NOT available (Claude Code, Cursor, Windsurf, Gemini, Codex, etc.):
+
+```
+Judge A:   delegate(prompt="...")   // generic async delegate
+Judge B:   delegate(prompt="...")   // generic async delegate
+Fix Agent: delegate(prompt="...")   // generic async delegate
+```
+
+The model is controlled by the agent's native model switching mechanism. Pass the model alias from the Model Assignments table if the agent supports per-call model parameters.
+
 ## Language Snippets
 
 - Spanish: “Juicio iniciado”, “Los jueces trabajan en paralelo”, “Los jueces coinciden”, “Juicio terminado — Aprobado”, “Escalado — necesita revisión humana”.
