@@ -3408,6 +3408,7 @@ func (m Model) handleProfileNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.ModelPicker = screens.ModelPickerState{}
 		}
+		m.ModelPicker.ForProfile = true
 		m.Cursor = 0
 		return m, nil
 	case tea.KeyEsc:
@@ -3465,13 +3466,15 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 			} else {
 				m.ModelPicker = screens.ModelPickerState{}
 			}
+			m.ModelPicker.ForProfile = true
 			m.Cursor = 0
 		}
 		return m, nil
 	case 1:
 		// Model assignment picker: orchestrator + all sub-agent phases in one screen.
 		// Reuse the same enter-on-row logic as ScreenModelPicker.
-		rows := screens.ModelPickerRows()
+		// Profile creation uses filtered rows (no JD agents).
+		rows := screens.ModelPickerRowsForProfile()
 		if m.Cursor < len(rows) {
 			// Enter sub-selection: pick provider then model.
 			m.ModelPicker.SelectedPhaseIdx = m.Cursor
