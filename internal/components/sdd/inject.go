@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
 type InjectionResult struct {
@@ -1550,6 +1551,18 @@ func renderClaudeModelAssignmentsSection(assignments map[string]model.ClaudeMode
 	return b.String()
 }
 
+// isJDAgent reports whether the agent name is a judgment-day workflow agent.
+// JD agents are excluded from root model fallback to preserve independent
+// model configuration for diversity of perspective between judges.
+func isJDAgent(name string) bool {
+	for _, jd := range opencode.JDPhases() {
+		if name == jd {
+			return true
+		}
+	}
+	return false
+}
+
 // injectModelAssignments injects "model" fields into sub-agent definitions
 // within the overlay JSON before it is merged into the settings file.
 //
@@ -1595,8 +1608,12 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 			// 2. Agent already exists in user's config — let merge preserve whatever they have
 			// (don't touch the overlay for this agent's model)
 		case rootModelID != "":
-			// 3. Fresh install or new agent: use root model as default to break inheritance
-			agentMap["model"] = rootModelID
+			// 3. Fresh install or new agent: use root model as default to break inheritance.
+			// Exception: JD agents are excluded from root model propagation to support
+			// independent model configuration and diversity of perspective between judges.
+			if !isJDAgent(phase) {
+				agentMap["model"] = rootModelID
+			}
 		}
 	}
 
