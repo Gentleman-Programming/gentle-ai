@@ -1690,19 +1690,26 @@ var claudeModelAssignmentRowOrder = []string{
 	"sdd-apply",
 	"sdd-verify",
 	"sdd-archive",
+	"jd-judge-a",
+	"jd-judge-b",
+	"jd-fix-agent",
 	"default",
 }
 
 var claudeModelAssignmentReasons = map[string]string{
-	"sdd-explore": "Reads code, structural - not architectural",
-	"sdd-propose": "Architectural decisions",
-	"sdd-spec":    "Structured writing",
-	"sdd-design":  "Architecture decisions",
-	"sdd-tasks":   "Mechanical breakdown",
-	"sdd-apply":   "Implementation",
-	"sdd-verify":  "Validation against spec",
-	"sdd-archive": "Copy and close",
-	"default":     "Non-SDD general delegation",
+	"orchestrator": "Coordinates, makes decisions",
+	"sdd-explore":  "Reads code, structural - not architectural",
+	"sdd-propose":  "Architectural decisions",
+	"sdd-spec":     "Structured writing",
+	"sdd-design":   "Architecture decisions",
+	"sdd-tasks":    "Mechanical breakdown",
+	"sdd-apply":    "Implementation",
+	"sdd-verify":   "Validation against spec",
+	"sdd-archive":  "Copy and close",
+	"jd-judge-a":   "Adversarial review — blind judge A",
+	"jd-judge-b":   "Adversarial review — blind judge B",
+	"jd-fix-agent": "Surgical fixes from confirmed issues",
+	"default":      "Non-SDD general delegation",
 }
 
 func injectClaudeModelAssignments(content string, assignments map[string]model.ClaudeModelAlias) (string, error) {

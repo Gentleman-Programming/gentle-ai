@@ -40,15 +40,19 @@ func (a ClaudeModelAlias) Valid() bool {
 // implementation and validation use sonnet; archiving uses haiku.
 func ClaudeModelPresetBalanced() map[string]ClaudeModelAlias {
 	return map[string]ClaudeModelAlias{
-		"sdd-explore": ClaudeModelSonnet,
-		"sdd-propose": ClaudeModelOpus,
-		"sdd-spec":    ClaudeModelSonnet,
-		"sdd-design":  ClaudeModelOpus,
-		"sdd-tasks":   ClaudeModelSonnet,
-		"sdd-apply":   ClaudeModelSonnet,
-		"sdd-verify":  ClaudeModelSonnet,
-		"sdd-archive": ClaudeModelHaiku,
-		"default":     ClaudeModelSonnet,
+		"orchestrator": ClaudeModelOpus,
+		"sdd-explore":  ClaudeModelSonnet,
+		"sdd-propose":  ClaudeModelOpus,
+		"sdd-spec":     ClaudeModelSonnet,
+		"sdd-design":   ClaudeModelOpus,
+		"sdd-tasks":    ClaudeModelSonnet,
+		"sdd-apply":    ClaudeModelSonnet,
+		"sdd-verify":   ClaudeModelSonnet,
+		"sdd-archive":  ClaudeModelHaiku,
+		"jd-judge-a":   ClaudeModelSonnet,
+		"jd-judge-b":   ClaudeModelSonnet,
+		"jd-fix-agent": ClaudeModelSonnet,
+		"default":      ClaudeModelSonnet,
 	}
 }
 
@@ -56,30 +60,50 @@ func ClaudeModelPresetBalanced() map[string]ClaudeModelAlias {
 // output quality. Architecture, planning, and verification phases all use opus.
 func ClaudeModelPresetPerformance() map[string]ClaudeModelAlias {
 	return map[string]ClaudeModelAlias{
-		"sdd-explore": ClaudeModelSonnet,
-		"sdd-propose": ClaudeModelOpus,
-		"sdd-spec":    ClaudeModelSonnet,
-		"sdd-design":  ClaudeModelOpus,
-		"sdd-tasks":   ClaudeModelSonnet,
-		"sdd-apply":   ClaudeModelSonnet,
-		"sdd-verify":  ClaudeModelOpus,
-		"sdd-archive": ClaudeModelHaiku,
-		"default":     ClaudeModelSonnet,
+		"orchestrator": ClaudeModelOpus,
+		"sdd-explore":  ClaudeModelSonnet,
+		"sdd-propose":  ClaudeModelOpus,
+		"sdd-spec":     ClaudeModelSonnet,
+		"sdd-design":   ClaudeModelOpus,
+		"sdd-tasks":    ClaudeModelSonnet,
+		"sdd-apply":    ClaudeModelSonnet,
+		"sdd-verify":   ClaudeModelOpus,
+		"sdd-archive":  ClaudeModelHaiku,
+		"jd-judge-a":   ClaudeModelOpus,
+		"jd-judge-b":   ClaudeModelOpus,
+		"jd-fix-agent": ClaudeModelOpus,
+		"default":      ClaudeModelSonnet,
 	}
 }
 
 // ClaudeModelPresetEconomy returns a model assignment table optimised for cost.
-// Every phase uses sonnet except archive, which uses haiku.
+// SDD phases use sonnet except archive; JD agents use haiku for maximum savings.
 func ClaudeModelPresetEconomy() map[string]ClaudeModelAlias {
 	return map[string]ClaudeModelAlias{
-		"sdd-explore": ClaudeModelSonnet,
-		"sdd-propose": ClaudeModelSonnet,
-		"sdd-spec":    ClaudeModelSonnet,
-		"sdd-design":  ClaudeModelSonnet,
-		"sdd-tasks":   ClaudeModelSonnet,
-		"sdd-apply":   ClaudeModelSonnet,
-		"sdd-verify":  ClaudeModelSonnet,
-		"sdd-archive": ClaudeModelHaiku,
-		"default":     ClaudeModelSonnet,
+		"orchestrator": ClaudeModelSonnet,
+		"sdd-explore":  ClaudeModelSonnet,
+		"sdd-propose":  ClaudeModelSonnet,
+		"sdd-spec":     ClaudeModelSonnet,
+		"sdd-design":   ClaudeModelSonnet,
+		"sdd-tasks":    ClaudeModelSonnet,
+		"sdd-apply":    ClaudeModelSonnet,
+		"sdd-verify":   ClaudeModelSonnet,
+		"sdd-archive":  ClaudeModelHaiku,
+		"jd-judge-a":   ClaudeModelHaiku,
+		"jd-judge-b":   ClaudeModelHaiku,
+		"jd-fix-agent": ClaudeModelHaiku,
+		"default":      ClaudeModelSonnet,
 	}
+}
+
+// ClaudeModelPresetDiversity returns a model assignment table optimised for
+// perspective diversity in judgment-day reviews. Judge A uses opus for deep
+// architectural reasoning, Judge B uses haiku for fast pattern matching,
+// and the fix agent uses sonnet for balanced implementation.
+func ClaudeModelPresetDiversity() map[string]ClaudeModelAlias {
+	base := ClaudeModelPresetBalanced()
+	base["jd-judge-a"] = ClaudeModelOpus
+	base["jd-judge-b"] = ClaudeModelHaiku
+	base["jd-fix-agent"] = ClaudeModelSonnet
+	return base
 }
