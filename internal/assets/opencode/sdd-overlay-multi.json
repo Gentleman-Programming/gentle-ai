@@ -159,14 +159,14 @@
       "hidden": true,
       "description": "Adversarial code reviewer — blind judge A for judgment-day protocol",
       "prompt": "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the delegate prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
-      "tools": { "read": true, "bash": true }
+      "tools": { "read": true, "glob": true, "grep": true, "bash": true }
     },
     "jd-judge-b": {
       "mode": "subagent",
       "hidden": true,
       "description": "Adversarial code reviewer — blind judge B for judgment-day protocol",
       "prompt": "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the delegate prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
-      "tools": { "read": true, "bash": true }
+      "tools": { "read": true, "glob": true, "grep": true, "bash": true }
     },
     "jd-fix-agent": {
       "mode": "subagent",
