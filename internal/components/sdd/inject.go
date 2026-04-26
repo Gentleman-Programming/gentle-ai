@@ -1472,6 +1472,9 @@ var claudeModelAssignmentRowOrder = []string{
 	"sdd-apply",
 	"sdd-verify",
 	"sdd-archive",
+	"jd-judge-a",
+	"jd-judge-b",
+	"jd-fix-agent",
 	"default",
 }
 
@@ -1485,6 +1488,9 @@ var claudeModelAssignmentReasons = map[string]string{
 	"sdd-apply":    "Implementation",
 	"sdd-verify":   "Validation against spec",
 	"sdd-archive":  "Copy and close",
+	"jd-judge-a":   "Adversarial review — blind judge A",
+	"jd-judge-b":   "Adversarial review — blind judge B",
+	"jd-fix-agent": "Surgical fixes from confirmed issues",
 	"default":      "Non-SDD general delegation",
 }
 

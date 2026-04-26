@@ -49,6 +49,9 @@ func ClaudeModelPresetBalanced() map[string]ClaudeModelAlias {
 		"sdd-apply":    ClaudeModelSonnet,
 		"sdd-verify":   ClaudeModelSonnet,
 		"sdd-archive":  ClaudeModelHaiku,
+		"jd-judge-a":   ClaudeModelSonnet,
+		"jd-judge-b":   ClaudeModelSonnet,
+		"jd-fix-agent": ClaudeModelSonnet,
 		"default":      ClaudeModelSonnet,
 	}
 }
@@ -66,6 +69,9 @@ func ClaudeModelPresetPerformance() map[string]ClaudeModelAlias {
 		"sdd-apply":    ClaudeModelSonnet,
 		"sdd-verify":   ClaudeModelOpus,
 		"sdd-archive":  ClaudeModelHaiku,
+		"jd-judge-a":   ClaudeModelOpus,
+		"jd-judge-b":   ClaudeModelOpus,
+		"jd-fix-agent": ClaudeModelOpus,
 		"default":      ClaudeModelSonnet,
 	}
 }
@@ -83,6 +89,21 @@ func ClaudeModelPresetEconomy() map[string]ClaudeModelAlias {
 		"sdd-apply":    ClaudeModelSonnet,
 		"sdd-verify":   ClaudeModelSonnet,
 		"sdd-archive":  ClaudeModelHaiku,
+		"jd-judge-a":   ClaudeModelHaiku,
+		"jd-judge-b":   ClaudeModelHaiku,
+		"jd-fix-agent": ClaudeModelHaiku,
 		"default":      ClaudeModelSonnet,
 	}
+}
+
+// ClaudeModelPresetDiversity returns a model assignment table optimised for
+// perspective diversity in judgment-day reviews. Judge A uses opus for deep
+// architectural reasoning, Judge B uses haiku for fast pattern matching,
+// and the fix agent uses sonnet for balanced implementation.
+func ClaudeModelPresetDiversity() map[string]ClaudeModelAlias {
+	base := ClaudeModelPresetBalanced()
+	base["jd-judge-a"] = ClaudeModelOpus
+	base["jd-judge-b"] = ClaudeModelHaiku
+	base["jd-fix-agent"] = ClaudeModelSonnet
+	return base
 }
