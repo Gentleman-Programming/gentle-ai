@@ -12,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
 // profileNameRegex matches valid profile name slugs: lowercase alphanumeric + hyphens,
@@ -252,6 +253,11 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 	}
 	for _, phase := range profilePhaseOrder {
 		taskPerms[phase+suffix] = "allow"
+	}
+	// Add JD agent permissions (global, not profile-scoped).
+	// JD agents are workflow-level and shared across profiles.
+	for _, jd := range opencode.JDPhases() {
+		taskPerms[jd] = "allow"
 	}
 
 	orchEntry := map[string]any{

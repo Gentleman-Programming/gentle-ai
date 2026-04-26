@@ -80,12 +80,14 @@ const SDDOrchestratorPhase = "gentle-orchestrator"
 
 // ModelPickerRows returns the row labels for the model picker screen.
 // Row 0 is "gentle-orchestrator" (coordinator), row 1 is "Set all phases",
-// rows 2-10 are the 9 SDD sub-agent phases.
+// rows 2-10 are the 9 SDD sub-agent phases, then a separator and JD agents.
 func ModelPickerRows() []string {
-	rows := make([]string, 0, 11)
+	rows := make([]string, 0, 15)
 	rows = append(rows, SDDOrchestratorPhase)
 	rows = append(rows, "Set all phases")
 	rows = append(rows, opencode.SDDPhases()...)
+	rows = append(rows, "--- Judgment Day ---")
+	rows = append(rows, opencode.JDPhases()...)
 	return rows
 }
 
@@ -200,6 +202,9 @@ func handleModelNav(
 		}
 
 		phases := opencode.SDDPhases()
+		jdPhases := opencode.JDPhases()
+		// separatorIdx is the index of the "--- Judgment Day ---" row.
+		separatorIdx := 2 + len(phases)
 		switch {
 		case state.SelectedPhaseIdx == 0:
 			// "gentle-orchestrator" row — assign only to the base orchestrator key
@@ -212,8 +217,16 @@ func handleModelNav(
 				assignments[phase] = assignment
 			}
 			state.AllPhasesModel = assignment
+		case state.SelectedPhaseIdx == separatorIdx:
+			// Separator row ("--- Judgment Day ---") — no action, skip.
+		case state.SelectedPhaseIdx > separatorIdx:
+			// JD agent rows: map to JDPhases() after separator.
+			jdIdx := state.SelectedPhaseIdx - separatorIdx - 1
+			if jdIdx < len(jdPhases) {
+				assignments[jdPhases[jdIdx]] = assignment
+			}
 		default:
-			// Sub-agent rows start at idx 2; phases[idx-2] is the correct phase.
+			// SDD sub-agent rows start at idx 2; phases[idx-2] is the correct phase.
 			// Individual selection intentionally does NOT update AllPhasesModel (Issue #146).
 			phaseIdx := state.SelectedPhaseIdx - 2
 			if phaseIdx < len(phases) {
@@ -281,6 +294,8 @@ func renderPhaseList(
 
 	rows := ModelPickerRows()
 	phases := opencode.SDDPhases()
+	jdPhases := opencode.JDPhases()
+	separatorIdx := 2 + len(phases)
 
 	for idx, row := range rows {
 		focused := idx == cursor
@@ -306,8 +321,25 @@ func renderPhaseList(
 			} else {
 				label = fmt.Sprintf("%-20s (not set)", row)
 			}
+		case idx == separatorIdx:
+			// Separator row — render as a visual divider, not selectable but shown.
+			b.WriteString(styles.SubtextStyle.Render("  " + row) + "\n")
+			continue
+		case idx > separatorIdx:
+			// JD agent rows
+			jdIdx := idx - separatorIdx - 1
+			if jdIdx < len(jdPhases) {
+				phase := jdPhases[jdIdx]
+				assignment, ok := assignments[phase]
+				if ok && assignment.ProviderID != "" {
+					provName, modelName := resolveNames(assignment, state)
+					label = fmt.Sprintf("%-20s %s / %s", row, provName, modelName)
+				} else {
+					label = fmt.Sprintf("%-20s (default)", row)
+				}
+			}
 		default:
-			// Sub-agent rows start at idx 2; phases[idx-2] maps to the correct phase
+			// SDD sub-agent rows start at idx 2; phases[idx-2] maps to the correct phase
 			phase := phases[idx-2]
 			assignment, ok := assignments[phase]
 			if ok && assignment.ProviderID != "" {

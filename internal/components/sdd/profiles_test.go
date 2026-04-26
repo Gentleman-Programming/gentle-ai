@@ -10,6 +10,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
 func TestResolveProfileStrategy_ExplicitWins(t *testing.T) {
@@ -471,9 +472,10 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 	tests := []struct {
 		name      string
 		assetPath string
+		includeJD bool // multi overlay includes JD agents; single does not
 	}{
-		{name: "single", assetPath: "opencode/sdd-overlay-single.json"},
-		{name: "multi", assetPath: "opencode/sdd-overlay-multi.json"},
+		{name: "single", assetPath: "opencode/sdd-overlay-single.json", includeJD: false},
+		{name: "multi", assetPath: "opencode/sdd-overlay-multi.json", includeJD: true},
 	}
 
 	for _, tt := range tests {
@@ -493,7 +495,14 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 				t.Fatal("task block must use __replace__ sentinel to discard stale wildcards on sync")
 			}
 
-			assertExactTaskPermissions(t, taskMap, expectedTaskPermissions(""))
+			expected := expectedTaskPermissions("")
+			if !tt.includeJD {
+				// Single overlay does not include JD agent permissions.
+				for _, jd := range opencode.JDPhases() {
+					delete(expected, jd)
+				}
+			}
+			assertExactTaskPermissions(t, taskMap, expected)
 		})
 	}
 }
@@ -740,6 +749,10 @@ func expectedTaskPermissions(suffix string) map[string]any {
 	}
 	for _, phase := range profilePhaseOrder {
 		permissions[phase+suffix] = "allow"
+	}
+	// JD agents are global (not profile-scoped) — always unsuffixed.
+	for _, jd := range opencode.JDPhases() {
+		permissions[jd] = "allow"
 	}
 	return permissions
 }

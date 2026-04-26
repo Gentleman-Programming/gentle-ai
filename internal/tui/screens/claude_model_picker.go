@@ -45,6 +45,9 @@ var claudePhases = []string{
 	"sdd-apply",
 	"sdd-verify",
 	"sdd-archive",
+	"jd-judge-a",
+	"jd-judge-b",
+	"jd-fix-agent",
 	"default",
 }
 
@@ -59,6 +62,9 @@ var claudePhaseLabels = map[string]string{
 	"sdd-apply":    "Apply",
 	"sdd-verify":   "Verify",
 	"sdd-archive":  "Archive",
+	"jd-judge-a":   "JD Judge A",
+	"jd-judge-b":   "JD Judge B",
+	"jd-fix-agent": "JD Fix Agent",
 	"default":      "General delegation",
 }
 

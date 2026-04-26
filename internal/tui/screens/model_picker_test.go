@@ -28,8 +28,8 @@ func makeTestState(phaseIdx int) *ModelPickerState {
 
 func TestModelPickerRows_Count(t *testing.T) {
 	rows := ModelPickerRows()
-	// 1 orchestrator + 1 "Set all" + 9 sub-agents = 11
-	want := 11
+	// 1 orchestrator + 1 "Set all" + 9 sub-agents + 1 separator + 3 JD agents = 15
+	want := 15
 	if len(rows) != want {
 		t.Fatalf("ModelPickerRows() len = %d, want %d; rows = %v", len(rows), want, rows)
 	}
