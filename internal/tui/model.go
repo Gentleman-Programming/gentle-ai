@@ -1002,6 +1002,10 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.BackupScroll = m.Cursor
 			}
 		}
+		// Skip separator row in model picker — it is not selectable.
+		if m.Screen == ScreenModelPicker && !m.ModelPicker.ForProfile && m.Cursor == screens.SeparatorRowIdx() && m.Cursor > 0 {
+			m.Cursor--
+		}
 		return m, nil
 	case "down":
 		// On the preview screen, down arrow scrolls content down.
@@ -1022,6 +1026,12 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.BackupScroll = m.Cursor - screens.BackupMaxVisible + 1
 			}
 		}
+		// Skip separator row in model picker — it is not selectable.
+		if m.Screen == ScreenModelPicker && !m.ModelPicker.ForProfile && m.Cursor == screens.SeparatorRowIdx() {
+			if m.Cursor+1 < count {
+				m.Cursor++
+			}
+		}
 		return m, nil
 	case "k":
 		count := m.optionCount()
@@ -1039,6 +1049,10 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.BackupScroll = m.Cursor
 			}
 		}
+		// Skip separator row in model picker — it is not selectable.
+		if m.Screen == ScreenModelPicker && !m.ModelPicker.ForProfile && m.Cursor == screens.SeparatorRowIdx() && m.Cursor > 0 {
+			m.Cursor--
+		}
 		return m, nil
 	case "j":
 		count := m.optionCount()
@@ -1052,6 +1066,12 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.Screen == ScreenBackups {
 			if m.Cursor >= m.BackupScroll+screens.BackupMaxVisible {
 				m.BackupScroll = m.Cursor - screens.BackupMaxVisible + 1
+			}
+		}
+		// Skip separator row in model picker — it is not selectable.
+		if m.Screen == ScreenModelPicker && !m.ModelPicker.ForProfile && m.Cursor == screens.SeparatorRowIdx() {
+			if m.Cursor+1 < count {
+				m.Cursor++
 			}
 		}
 		return m, nil
@@ -1668,6 +1688,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		rows := screens.ModelPickerRows()
 		if m.Cursor < len(rows) {
+			// Skip separator row — it is not actionable.
+			if !m.ModelPicker.ForProfile && m.Cursor == screens.SeparatorRowIdx() {
+				return m, nil
+			}
 			// Enter sub-selection: pick provider then model.
 			m.ModelPicker.SelectedPhaseIdx = m.Cursor
 			m.ModelPicker.Mode = screens.ModeProviderSelect

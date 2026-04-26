@@ -25,7 +25,7 @@ var claudePresetDescriptions = map[ClaudeModelPreset]string{
 	ClaudePresetPerformance: "Maximum quality: opus for architecture, planning & verification phases",
 	ClaudePresetEconomy:     "Cost-optimised: sonnet for all phases, haiku for archiving",
 	ClaudePresetDiversity:   "Diversity: Opus for Judge A, Haiku for Judge B, Sonnet for fixes",
-	ClaudePresetCustom:      "Pick the model alias for each SDD phase individually",
+	ClaudePresetCustom:      "Pick the model alias for each SDD phase, JD agent, and general delegation entry individually",
 }
 
 // claudePresetOrder is the display order for presets.

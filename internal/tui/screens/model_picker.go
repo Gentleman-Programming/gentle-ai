@@ -125,7 +125,7 @@ const SDDOrchestratorPhase = "gentle-orchestrator"
 // Row 0 is "gentle-orchestrator" (coordinator), row 1 is "Set all phases",
 // rows 2-10 are the 9 SDD sub-agent phases, then a separator and JD agents.
 func ModelPickerRows() []string {
-	rows := make([]string, 0, 15)
+	rows := make([]string, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases()))
 	rows = append(rows, SDDOrchestratorPhase)
 	rows = append(rows, "Set all phases")
 	rows = append(rows, opencode.SDDPhases()...)
@@ -137,11 +137,23 @@ func ModelPickerRows() []string {
 // ModelPickerRowsForProfile returns model picker rows for profile creation.
 // JD agents are excluded because they are global (not profile-scoped).
 func ModelPickerRowsForProfile() []string {
-	rows := make([]string, 0, 11)
+	rows := make([]string, 0, 2+len(opencode.SDDPhases()))
 	rows = append(rows, SDDOrchestratorPhase)
 	rows = append(rows, "Set all phases")
 	rows = append(rows, opencode.SDDPhases()...)
 	return rows
+}
+
+// SeparatorRowIdx returns the index of the "--- Judgment Day ---" separator
+// row in ModelPickerRows(). Returns -1 if there are no JD phases (and thus
+// no separator). This is used by the TUI to skip the separator during
+// cursor navigation and model selection.
+func SeparatorRowIdx() int {
+	jd := opencode.JDPhases()
+	if len(jd) == 0 {
+		return -1
+	}
+	return 2 + len(opencode.SDDPhases())
 }
 
 // ProviderEntries returns sorted provider entries with display names and model counts.

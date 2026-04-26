@@ -20,13 +20,18 @@ import (
 var profileNameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 // reservedProfileNames are names that may not be used as profile names.
-var reservedProfileNames = map[string]bool{
-	"default":          true,
-	"sdd-orchestrator": true,
-	"jd-judge-a":      true,
-	"jd-judge-b":      true,
-	"jd-fix-agent":    true,
-}
+// JD agent names are derived from opencode.JDPhases() to avoid drift
+// when agents are renamed or added.
+var reservedProfileNames = func() map[string]bool {
+	names := map[string]bool{
+		"default":          true,
+		"sdd-orchestrator": true,
+	}
+	for _, name := range opencode.JDPhases() {
+		names[name] = true
+	}
+	return names
+}()
 
 // ValidateProfileName returns an error if the profile name is not a valid
 // slug (lowercase alphanumeric + hyphens, no underscores, no spaces, non-empty,
