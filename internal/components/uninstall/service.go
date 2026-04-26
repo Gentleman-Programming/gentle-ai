@@ -110,6 +110,9 @@ var (
 		"sdd-verify",
 		"sdd-archive",
 		"sdd-onboard",
+		"jd-judge-a",
+		"jd-judge-b",
+		"jd-fix-agent",
 	}
 	sddSkillPhaseIDs = sddPhaseAgents[1:]
 )
