@@ -51,6 +51,11 @@ type ModelPickerState struct {
 	// label from changing when the user picks a model for a single phase.
 	// Issue #146.
 	AllPhasesModel model.ModelAssignment
+
+	// ForProfile is true when the picker is used for profile creation/editing.
+	// When true, JD agents and the separator are excluded from the row list
+	// because JD agents are global (not profile-scoped).
+	ForProfile bool
 }
 
 // NewModelPickerState initializes the picker state from the models cache.
@@ -88,6 +93,16 @@ func ModelPickerRows() []string {
 	rows = append(rows, opencode.SDDPhases()...)
 	rows = append(rows, "--- Judgment Day ---")
 	rows = append(rows, opencode.JDPhases()...)
+	return rows
+}
+
+// ModelPickerRowsForProfile returns model picker rows for profile creation.
+// JD agents are excluded because they are global (not profile-scoped).
+func ModelPickerRowsForProfile() []string {
+	rows := make([]string, 0, 11)
+	rows = append(rows, SDDOrchestratorPhase)
+	rows = append(rows, "Set all phases")
+	rows = append(rows, opencode.SDDPhases()...)
 	return rows
 }
 
@@ -292,7 +307,12 @@ func renderPhaseList(
 	b.WriteString(styles.SubtextStyle.Render("Current assignments:"))
 	b.WriteString("\n\n")
 
-	rows := ModelPickerRows()
+	var rows []string
+	if state.ForProfile {
+		rows = ModelPickerRowsForProfile()
+	} else {
+		rows = ModelPickerRows()
+	}
 	phases := opencode.SDDPhases()
 	jdPhases := opencode.JDPhases()
 	separatorIdx := 2 + len(phases)
@@ -322,8 +342,12 @@ func renderPhaseList(
 				label = fmt.Sprintf("%-20s (not set)", row)
 			}
 		case idx == separatorIdx:
-			// Separator row — render as a visual divider, not selectable but shown.
-			b.WriteString(styles.SubtextStyle.Render("  " + row) + "\n")
+			// Separator row — render as a visual divider with subtle indicator when focused.
+			if focused {
+				b.WriteString(styles.SubtextStyle.Render("▸ " + row) + "\n")
+			} else {
+				b.WriteString(styles.SubtextStyle.Render("  " + row) + "\n")
+			}
 			continue
 		case idx > separatorIdx:
 			// JD agent rows

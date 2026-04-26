@@ -23,6 +23,9 @@ var profileNameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 var reservedProfileNames = map[string]bool{
 	"default":          true,
 	"sdd-orchestrator": true,
+	"jd-judge-a":      true,
+	"jd-judge-b":      true,
+	"jd-fix-agent":    true,
 }
 
 // ValidateProfileName returns an error if the profile name is not a valid

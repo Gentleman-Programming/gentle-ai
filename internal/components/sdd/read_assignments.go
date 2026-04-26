@@ -33,12 +33,11 @@ func ReadCurrentProfiles(settingsPath string) ([]model.Profile, error) {
 }
 
 // ReadCurrentModelAssignments reads the agent definitions from opencode.json
-// at settingsPath and extracts the "model" field for each SDD phase agent.
+// at settingsPath and extracts the "model" field for each configurable agent.
 //
-// Only agents whose names match an SDD phase (from opencode.SDDPhases()) or
-// "gentle-orchestrator" are included. Legacy "sdd-orchestrator" entries are read as
-// "gentle-orchestrator" until the next sync migrates the config. Agents without a "model" field, or with a
-// malformed model value (not in "provider:model-id" format), are silently
+// Only agents whose names match a configurable agent phase (SDD phases, JD agents
+// via opencode.ConfigurableAgentPhases()) or "gentle-orchestrator" are included.
+// Agents without a "model" field, or with a malformed model value, are silently
 // skipped.
 //
 // Returns an empty map (no error) when the file does not exist, contains no

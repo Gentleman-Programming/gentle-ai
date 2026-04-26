@@ -15,6 +15,7 @@ const (
 	ClaudePresetBalanced    ClaudeModelPreset = "balanced"
 	ClaudePresetPerformance ClaudeModelPreset = "performance"
 	ClaudePresetEconomy     ClaudeModelPreset = "economy"
+	ClaudePresetDiversity   ClaudeModelPreset = "diversity"
 	ClaudePresetCustom      ClaudeModelPreset = "custom"
 )
 
@@ -23,6 +24,7 @@ var claudePresetDescriptions = map[ClaudeModelPreset]string{
 	ClaudePresetBalanced:    "Smart defaults: opus for architecture, sonnet for most phases, haiku for archiving",
 	ClaudePresetPerformance: "Maximum quality: opus for architecture, planning & verification phases",
 	ClaudePresetEconomy:     "Cost-optimised: sonnet for all phases, haiku for archiving",
+	ClaudePresetDiversity:   "Diversity: Opus for Judge A, Haiku for Judge B, Sonnet for fixes",
 	ClaudePresetCustom:      "Pick the model alias for each SDD phase individually",
 }
 
@@ -31,6 +33,7 @@ var claudePresetOrder = []ClaudeModelPreset{
 	ClaudePresetBalanced,
 	ClaudePresetPerformance,
 	ClaudePresetEconomy,
+	ClaudePresetDiversity,
 	ClaudePresetCustom,
 }
 
@@ -103,6 +106,7 @@ var presetConstructors = map[ClaudeModelPreset]func() map[string]model.ClaudeMod
 	ClaudePresetBalanced:    model.ClaudeModelPresetBalanced,
 	ClaudePresetPerformance: model.ClaudeModelPresetPerformance,
 	ClaudePresetEconomy:     model.ClaudeModelPresetEconomy,
+	ClaudePresetDiversity:   model.ClaudeModelPresetDiversity,
 }
 
 // HandleClaudeModelPickerNav processes a key press on the Claude model picker screen.
