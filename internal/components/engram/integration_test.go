@@ -14,13 +14,14 @@ import (
 // 4. engramEnvMap() returns the custom path for MCP configs
 // 5. Re-running doesn't self-copy from already-migrated location
 func TestLitmus_MigrateFlow(t *testing.T) {
+	backend := NewLocalDataBackend()
 	home := t.TempDir()
 	// Override home dir so HardDefaultDataDir() returns our test dir.
 	origHomeFn := userHomeDir
 	userHomeDir = func() (string, error) { return home, nil }
 	defer func() { userHomeDir = origHomeFn }()
 
-	src := HardDefaultDataDir() // = filepath.Join(home, ".engram")
+	src := backend.HardDefaultDataDir() // = filepath.Join(home, ".engram")
 	dst := filepath.Join(home, "custom-engram")
 
 	// Simulate existing data at the hard default.
@@ -32,8 +33,15 @@ func TestLitmus_MigrateFlow(t *testing.T) {
 	}
 
 	// 1. Migrate should succeed.
-	if err := MigrateData(src, dst); err != nil {
+	result, err := backend.MigrateData(src, dst)
+	if err != nil {
 		t.Fatalf("MigrateData() error: %v", err)
+	}
+	if result.FilesMoved != 2 {
+		t.Errorf("MigrateData() files = %d, want 2", result.FilesMoved)
+	}
+	if result.BytesMoved == 0 {
+		t.Error("MigrateData() bytes = 0, want > 0")
 	}
 
 	// 2. Destination should have the files.
@@ -65,23 +73,23 @@ func TestLitmus_MigrateFlow(t *testing.T) {
 	}
 
 	// 6. DefaultDataDir() now returns the custom dir (for reading).
-	if got := DefaultDataDir(); got != dst {
+	if got := backend.DefaultDataDir(); got != dst {
 		t.Errorf("DefaultDataDir() = %q, want %q", got, dst)
 	}
 
 	// 7. HardDefaultDataDir() still returns the ORIGINAL location.
 	// This is the critical safety valve — re-running install won't
 	// try to migrate from the already-migrated location.
-	if got := HardDefaultDataDir(); got == dst {
+	if got := backend.HardDefaultDataDir(); got == dst {
 		t.Errorf("HardDefaultDataDir() = %q, should NOT match migrated dir %q", got, dst)
 	}
-	if got := HardDefaultDataDir(); got != src {
+	if got := backend.HardDefaultDataDir(); got != src {
 		t.Errorf("HardDefaultDataDir() = %q, want %q", got, src)
 	}
 
 	// 8. DetectExistingData on HardDefaultDataDir should be FALSE
 	// because the source was cleaned up after migration.
-	if DetectExistingData(HardDefaultDataDir()) {
+	if backend.DetectExistingData(backend.HardDefaultDataDir()) {
 		t.Error("DetectExistingData(HardDefaultDataDir()) = true after migration; source should be empty")
 	}
 }
@@ -91,18 +99,19 @@ func TestLitmus_MigrateFlow(t *testing.T) {
 // location. This was a real bug where DefaultDataDir() (which respects
 // ENGRAM_DATA_DIR) was used as the migration source.
 func TestLitmus_ReMigrationSafety(t *testing.T) {
+	backend := NewLocalDataBackend()
 	home := t.TempDir()
 	origHomeFn := userHomeDir
 	userHomeDir = func() (string, error) { return home, nil }
 	defer func() { userHomeDir = origHomeFn }()
 
-	src := HardDefaultDataDir()
+	src := backend.HardDefaultDataDir()
 	dst := filepath.Join(home, "migrated-engram")
 
 	// First migration: ~/.engram → ~/migrated-engram
 	os.MkdirAll(src, 0o755)
 	os.WriteFile(filepath.Join(src, "engram.db"), []byte("data"), 0o644)
-	if err := MigrateData(src, dst); err != nil {
+	if _, err := backend.MigrateData(src, dst); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,14 +125,14 @@ func TestLitmus_ReMigrationSafety(t *testing.T) {
 	// If it used DefaultDataDir(), it would copy from dst to dst2.
 	// Since src is now empty, DetectExistingData(src) is false →
 	// the Migrate option should NOT be shown.
-	if DetectExistingData(HardDefaultDataDir()) {
+	if backend.DetectExistingData(backend.HardDefaultDataDir()) {
 		t.Error("Migrate option should NOT be shown after first migration (source is empty)")
 	}
 
 	// Even if somehow Migrate was triggered, the source is empty
 	// so MigrateData would be a no-op (no files to copy).
 	dst2 := filepath.Join(home, "another-location")
-	if err := MigrateData(HardDefaultDataDir(), dst2); err != nil {
+	if _, err := backend.MigrateData(backend.HardDefaultDataDir(), dst2); err != nil {
 		t.Fatalf("re-migration error: %v", err)
 	}
 	// dst2 should NOT have engram.db because source was empty.
@@ -195,6 +204,7 @@ func TestLitmus_EngramServerJSONNoEnvForDefault(t *testing.T) {
 // TestLitmus_DiskSpaceBlocksMigration verifies that when disk space
 // check fails, no files are copied and source remains intact.
 func TestLitmus_DiskSpaceBlocksMigration(t *testing.T) {
+	backend := NewLocalDataBackend()
 	src := t.TempDir()
 	dst := t.TempDir()
 
@@ -208,7 +218,7 @@ func TestLitmus_DiskSpaceBlocksMigration(t *testing.T) {
 	}
 	defer func() { requireFreeSpace = orig }()
 
-	err := MigrateData(src, dst)
+	_, err := backend.MigrateData(src, dst)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

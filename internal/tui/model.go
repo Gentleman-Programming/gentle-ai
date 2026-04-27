@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,9 +20,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/internal/platform"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/storage"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
@@ -404,10 +403,17 @@ type Model struct {
 
 	// EngramDataDir screen state
 	EngramDataDirHasExistingData bool
-	EngramDataDirChoice          int    // 0=keep, 1=start-fresh, 2=migrate
+	EngramDataDirChoice          int    // 0=default, 1=migrate, 2=start-fresh, 3=clean
 	EngramDataDirInput           string // text buffer for custom path
 	EngramDataDirPos             int    // cursor position in runes
 	EngramDataDirErr             string // validation error
+
+	// EngramDataDir confirmation/feedback phases
+	EngramDataDirPhase        int    // 0=choose, 1=confirm, 2=feedback
+	EngramDataDirPendingPath  string // path for pending action
+	EngramDataDirFeedbackMsg  string // message shown after action completes
+	EngramDataDirFilesMoved   int    // files migrated (for feedback)
+	EngramDataDirBytesMoved   uint64 // bytes migrated (for feedback)
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -736,15 +742,42 @@ func (m Model) View() string {
 	case ScreenDependencyTree:
 		return screens.RenderDependencyTree(m.DependencyPlan, m.Selection, m.Cursor)
 	case ScreenEngramDataDir:
-		return screens.RenderEngramDataDir(screens.EngramDataDirRenderArgs{
-			CurrentDir:      engram.DefaultDataDir(),
-			HasExistingData: m.EngramDataDirHasExistingData,
-			Choice:          m.EngramDataDirChoice,
-			CustomPath:      m.EngramDataDirInput,
-			Cursor:          m.Cursor,
-			InputPos:        m.EngramDataDirPos,
-			ErrMsg:          m.EngramDataDirErr,
-		})
+		backend := engram.NewLocalDataBackend()
+		action := m.engramAction()
+		preview, _ := m.engramPreview(backend, action)
+		switch m.EngramDataDirPhase {
+		case 1: // confirm
+			return screens.RenderEngramConfirm(screens.EngramConfirmRenderArgs{
+				Title:          engram.ConfirmTitle(action),
+				Message:        engram.ConfirmMessage(action, backend.HardDefaultDataDir(), m.EngramDataDirPendingPath),
+				Warning:        engram.ConfirmWarning(action),
+				Cursor:         m.Cursor,
+				FilesToMove:    engram.PreviewFileNames(preview.Files),
+				TotalBytes:     preview.TotalBytes,
+				TargetSpace:    preview.AvailableSpace,
+				TargetSpaceErr: preview.SpaceErr,
+			})
+		case 2: // feedback
+			return screens.RenderEngramFeedback(screens.EngramFeedbackRenderArgs{
+				Title:   engram.FeedbackTitle(action),
+				Message: m.EngramDataDirFeedbackMsg,
+				Details: engram.FeedbackDetails(action, m.EngramDataDirFilesMoved, m.EngramDataDirBytesMoved),
+			})
+		default: // 0 = choose
+			return screens.RenderEngramDataDir(screens.EngramDataDirRenderArgs{
+				CurrentDir:      backend.DefaultDataDir(),
+				HasExistingData: m.EngramDataDirHasExistingData,
+				Choice:          m.EngramDataDirChoice,
+				CustomPath:      m.EngramDataDirInput,
+				Cursor:          m.Cursor,
+				InputPos:        m.EngramDataDirPos,
+				ErrMsg:          m.EngramDataDirErr,
+				FilesToMove:     engram.PreviewFileNames(preview.Files),
+				TotalBytes:      preview.TotalBytes,
+				TargetSpace:     preview.AvailableSpace,
+				TargetSpaceErr:  preview.SpaceErr,
+			})
+		}
 	case ScreenSkillPicker:
 		return screens.RenderSkillPicker(m.SkillPicker, m.Cursor)
 	case ScreenReview:
@@ -1735,113 +1768,108 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenPreset)
 		}
 	case ScreenEngramDataDir:
-		continueRow := screens.EngramDataDirContinueRow(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
-
-		maxRadioRow := 1 // default, start-fresh
-		if m.EngramDataDirHasExistingData {
-			maxRadioRow = 2 // default, migrate, start-fresh
-		}
-		if m.Cursor <= maxRadioRow {
-			// Radio row: set choice
-			m.EngramDataDirChoice = screens.EngramDataDirChoiceFromCursor(m.EngramDataDirHasExistingData, m.Cursor)
-			if m.EngramDataDirChoice == screens.EngramChoiceDefault {
-				m.Selection.EngramDataDir = ""
-				m.Selection.EngramMigrateData = false
+		switch m.EngramDataDirPhase {
+		case 1: // confirm
+			if m.Cursor == 0 {
+				// Confirm: execute the action
+				return m.handleEngramConfirm()
 			}
+			// Cancel: go back to choice
+			m.EngramDataDirPhase = 0
+			m.Cursor = screens.EngramDataDirCursorFromChoice(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
 			return m, nil
-		}
-
-		if m.Cursor == continueRow {
-			// Validate and proceed
-			if m.EngramDataDirChoice == screens.EngramChoiceDefault {
-				m.Selection.EngramDataDir = ""
-				m.Selection.EngramMigrateData = false
-			} else {
-				path, err := engram.ExpandDataDir(m.EngramDataDirInput)
-				if err != nil {
-					m.EngramDataDirErr = "Invalid path: " + err.Error()
-					return m, nil
-				}
-				// Best-effort writability check: try creating a temp file.
-				tmpFile := filepath.Join(path, ".gentle-ai-write-test")
-				if err := os.MkdirAll(path, 0o755); err != nil {
-					m.EngramDataDirErr = "Cannot create directory: " + err.Error()
-					return m, nil
-				}
-				if f, err := os.Create(tmpFile); err == nil {
-					_ = f.Close()
-					_ = os.Remove(tmpFile)
-				} else {
-					m.EngramDataDirErr = "Directory is not writable: " + path
-					return m, nil
-				}
-				if m.EngramDataDirChoice == screens.EngramChoiceStartFresh {
-					m.Selection.EngramDataDir = path
-					m.Selection.EngramMigrateData = false
-				} else {
-					m.Selection.EngramDataDir = path
-					m.Selection.EngramMigrateData = true
-					// Pre-flight: verify there's enough space for migration.
-					if err := storage.RequireFreeSpace(path, estimateExistingDataSize()); err != nil {
-						m.EngramDataDirErr = err.Error()
-						return m, nil
-					}
-				}
-			}
-			m.EngramDataDirErr = ""
-
-			// When reached via the Welcome menu shortcut, save the setting and return.
+		case 2: // feedback
+			// Continue: go to final destination
 			if m.EngramConfigMode {
-				if m.EngramDataDirChoice != screens.EngramChoiceDefault {
-					path := m.Selection.EngramDataDir
-					if m.Selection.EngramMigrateData {
-						src := engram.HardDefaultDataDir()
-						if locked, _ := engram.DetectLockedData(src); locked {
-							m.EngramDataDirErr = "Engram data appears to be in use. Close any running engram processes and try again."
-							return m, nil
-						}
-						if err := engram.MigrateData(src, path); err != nil {
-							m.EngramDataDirErr = "Migration failed: " + err.Error()
-							return m, nil
-						}
-					}
-					homeDir, _ := osUserHomeDirFn()
-					if s, err := state.Read(homeDir); err == nil {
-						s.EngramDataDir = path
-						_ = state.Write(homeDir, s)
-					} else {
-						_ = state.Write(homeDir, state.InstallState{EngramDataDir: path})
-					}
-					_ = os.Setenv(engram.DataDirEnvVar, path)
-					_ = platform.PersistEngramEnv(path)
-				} else {
-					// User chose "Use default location" — clear any previously persisted custom dir.
-					homeDir, _ := osUserHomeDirFn()
-					if s, err := state.Read(homeDir); err == nil {
-						s.EngramDataDir = ""
-						_ = state.Write(homeDir, s)
-					}
-					_ = os.Unsetenv(engram.DataDirEnvVar)
-					_ = platform.RemoveEngramEnv()
-				}
 				m.EngramConfigMode = false
 				m.setScreen(ScreenWelcome)
+			} else {
+				m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+				m.setScreen(ScreenReview)
+			}
+			return m, nil
+		default: // 0 = choose
+			continueRow := screens.EngramDataDirContinueRow(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
+
+			maxRadioRow := screens.EngramDataDirCursorFromChoice(m.EngramDataDirHasExistingData, screens.EngramChoiceClean)
+			if !m.EngramDataDirHasExistingData {
+				maxRadioRow = 1 // default, custom
+			}
+			if m.Cursor <= maxRadioRow {
+				// Radio row: set choice
+				m.EngramDataDirChoice = screens.EngramDataDirChoiceFromCursor(m.EngramDataDirHasExistingData, m.Cursor)
+				if m.EngramDataDirChoice == screens.EngramChoiceDefault || m.EngramDataDirChoice == screens.EngramChoiceClean {
+					m.Selection.EngramDataDir = ""
+					m.Selection.EngramMigrateData = false
+				}
 				return m, nil
 			}
 
-			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-			m.setScreen(ScreenReview)
+			if m.Cursor == continueRow {
+				// Validate and proceed to confirmation (if destructive) or done
+				switch m.EngramDataDirChoice {
+				case screens.EngramChoiceDefault:
+					m.Selection.EngramDataDir = ""
+					m.Selection.EngramMigrateData = false
+					return m.handleEngramDone()
+				case screens.EngramChoiceClean:
+					m.Selection.EngramDataDir = ""
+					m.Selection.EngramMigrateData = false
+					// Destructive: show confirmation
+					m.EngramDataDirPhase = 1
+					m.EngramDataDirPendingPath = ""
+					m.Cursor = 1 // default to Cancel for safety
+					return m, nil
+				case screens.EngramChoiceMigrate, screens.EngramChoiceStartFresh:
+					backend := engram.NewLocalDataBackend()
+					path, err := backend.ExpandPath(m.EngramDataDirInput)
+					if err != nil {
+						m.EngramDataDirErr = "Invalid path: " + err.Error()
+						return m, nil
+					}
+					// Best-effort writability check: try creating a temp file.
+					tmpFile := filepath.Join(path, ".gentle-ai-write-test")
+					if err := os.MkdirAll(path, 0o755); err != nil {
+						m.EngramDataDirErr = "Cannot create directory: " + err.Error()
+						return m, nil
+					}
+					if f, err := os.Create(tmpFile); err == nil {
+						_ = f.Close()
+						_ = os.Remove(tmpFile)
+					} else {
+						m.EngramDataDirErr = "Directory is not writable: " + path
+						return m, nil
+					}
+					if m.EngramDataDirChoice == screens.EngramChoiceStartFresh {
+						m.Selection.EngramDataDir = path
+						m.Selection.EngramMigrateData = false
+					} else {
+						m.Selection.EngramDataDir = path
+						m.Selection.EngramMigrateData = true
+						// Pre-flight: verify there's enough space for migration.
+						if err := storage.RequireFreeSpace(path, estimateExistingDataSize()); err != nil {
+							m.EngramDataDirErr = err.Error()
+							return m, nil
+						}
+					}
+					m.EngramDataDirErr = ""
+					// Destructive: show confirmation
+					m.EngramDataDirPhase = 1
+					m.EngramDataDirPendingPath = path
+					m.Cursor = 1 // default to Cancel for safety
+					return m, nil
+				}
+			}
+
+			// Back
+			if m.EngramConfigMode {
+				m.EngramConfigMode = false
+				m.setScreen(ScreenWelcome)
+			} else {
+				m.setScreen(ScreenDependencyTree)
+			}
 			return m, nil
 		}
-
-		// Back
-		if m.EngramConfigMode {
-			m.EngramConfigMode = false
-			m.setScreen(ScreenWelcome)
-		} else {
-			m.setScreen(ScreenDependencyTree)
-		}
-		return m, nil
 	case ScreenSkillPicker:
 		allSkills := screens.AllSkillsOrdered()
 		switch {
@@ -2632,9 +2660,15 @@ func (m *Model) setScreen(next Screen) {
 		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
 	}
 	if next == ScreenEngramDataDir {
-		m.EngramDataDirHasExistingData = engram.DetectExistingData(engram.HardDefaultDataDir())
+		backend := engram.NewLocalDataBackend()
+		m.EngramDataDirHasExistingData = backend.DetectExistingData(backend.HardDefaultDataDir())
 		m.EngramDataDirChoice = screens.EngramChoiceDefault
+		m.EngramDataDirPhase = 0
 		m.EngramDataDirErr = ""
+		m.EngramDataDirPendingPath = ""
+		m.EngramDataDirFeedbackMsg = ""
+		m.EngramDataDirFilesMoved = 0
+		m.EngramDataDirBytesMoved = 0
 		if m.Selection.EngramDataDir != "" {
 			m.EngramDataDirInput = m.Selection.EngramDataDir
 			m.EngramDataDirPos = len([]rune(m.EngramDataDirInput))
@@ -2758,7 +2792,14 @@ func (m Model) optionCount() int {
 		}
 		return len(screens.DependencyTreeOptions())
 	case ScreenEngramDataDir:
-		return screens.EngramDataDirOptionCount(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
+		switch m.EngramDataDirPhase {
+		case 1: // confirm
+			return screens.EngramConfirmOptionCount()
+		case 2: // feedback
+			return screens.EngramFeedbackOptionCount()
+		default: // 0 = choose
+			return screens.EngramDataDirOptionCount(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
+		}
 	case ScreenSkillPicker:
 		return screens.SkillPickerOptionCount()
 	case ScreenReview:
@@ -2957,22 +2998,124 @@ func (m *Model) toggleCurrentSkill() {
 	m.SkillPicker = append(m.SkillPicker, skillID)
 }
 
+// engramAction maps the screen choice constant to the service action.
+func (m Model) engramAction() engram.Action {
+	switch m.EngramDataDirChoice {
+	case screens.EngramChoiceMigrate:
+		return engram.ActionMigrate
+	case screens.EngramChoiceStartFresh:
+		return engram.ActionStartFresh
+	case screens.EngramChoiceClean:
+		return engram.ActionClean
+	}
+	return engram.ActionKeepDefault
+}
+
+// engramPreview returns a preview for the current action and input path.
+func (m Model) engramPreview(backend engram.DataBackend, action engram.Action) (engram.Preview, error) {
+	service := engram.NewDataDirService(backend, nil) // persister not needed for preview
+	return service.Preview(action, m.EngramDataDirInput)
+}
+
+// handleEngramDone completes the Engram data dir screen for non-destructive actions.
+func (m Model) handleEngramDone() (tea.Model, tea.Cmd) {
+	if m.EngramConfigMode {
+		homeDir, _ := osUserHomeDirFn()
+		backend := engram.NewLocalDataBackend()
+		persister := engram.NewLocalConfigPersister(homeDir)
+		service := engram.NewDataDirService(backend, persister)
+		_, _ = service.Execute(engram.ActionKeepDefault, "")
+		m.EngramConfigMode = false
+		m.setScreen(ScreenWelcome)
+		return m, nil
+	}
+	m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+	m.setScreen(ScreenReview)
+	return m, nil
+}
+
+// handleEngramConfirm executes the confirmed destructive action and shows feedback.
+func (m Model) handleEngramConfirm() (tea.Model, tea.Cmd) {
+	action := m.engramAction()
+	path := m.EngramDataDirPendingPath
+
+	homeDir, _ := osUserHomeDirFn()
+	backend := engram.NewLocalDataBackend()
+	persister := engram.NewLocalConfigPersister(homeDir)
+	service := engram.NewDataDirService(backend, persister)
+
+	result, err := service.Execute(action, path)
+	if err != nil {
+		m.EngramDataDirErr = engram.ErrorMessage(err)
+		if errors.Is(err, engram.ErrLocked) {
+			m.EngramDataDirErr = "Engram data appears to be in use. Close any running engram processes and try again."
+		}
+		m.EngramDataDirPhase = 0
+		m.Cursor = screens.EngramDataDirCursorFromChoice(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
+		return m, nil
+	}
+
+	m.EngramDataDirFeedbackMsg = result.Message
+	m.EngramDataDirFilesMoved = result.FilesMoved
+	m.EngramDataDirBytesMoved = result.BytesMoved
+
+	if action == engram.ActionMigrate || action == engram.ActionStartFresh {
+		m.Selection.EngramDataDir = path
+		m.Selection.EngramMigrateData = (action == engram.ActionMigrate)
+	}
+
+	m.EngramDataDirPhase = 2
+	m.Cursor = 0
+	return m, nil
+}
+
 func (m *Model) toggleEngramDataDirChoice() {
 	maxRadioRow := 1
 	if m.EngramDataDirHasExistingData {
-		maxRadioRow = 2
+		maxRadioRow = 3 // default, migrate, start-fresh, clean
 	}
 	if m.Cursor > maxRadioRow {
 		return
 	}
 	m.EngramDataDirChoice = screens.EngramDataDirChoiceFromCursor(m.EngramDataDirHasExistingData, m.Cursor)
-	if m.EngramDataDirChoice == screens.EngramChoiceDefault {
+	if m.EngramDataDirChoice == screens.EngramChoiceDefault || m.EngramDataDirChoice == screens.EngramChoiceClean {
 		m.Selection.EngramDataDir = ""
 		m.Selection.EngramMigrateData = false
 	}
 }
 
 func (m Model) handleEngramDataDirKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Phase 1 (confirm): only Enter/Esc matter.
+	if m.EngramDataDirPhase == 1 {
+		switch msg.Type {
+		case tea.KeyEsc:
+			// Cancel: go back to choice
+			m.EngramDataDirPhase = 0
+			m.Cursor = screens.EngramDataDirCursorFromChoice(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
+			return m, nil
+		case tea.KeyEnter:
+			return m.handleEngramConfirm()
+		}
+		return m, nil
+	}
+
+	// Phase 2 (feedback): only Enter matters.
+	if m.EngramDataDirPhase == 2 {
+		switch msg.Type {
+		case tea.KeyEnter:
+			if m.EngramConfigMode {
+				m.EngramConfigMode = false
+				m.setScreen(ScreenWelcome)
+			} else {
+				m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+				m.setScreen(ScreenReview)
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// Phase 0 (choose): normal text input handling.
 	textRow := screens.EngramDataDirTextRow(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
 
 	if m.Cursor == textRow && textRow >= 0 {
@@ -2987,7 +3130,8 @@ func (m Model) handleEngramDataDirKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.EngramDataDirPos += len(msg.Runes)
 			// Real-time preview: expand ~ so the user sees the absolute path.
 			if strings.HasPrefix(m.EngramDataDirInput, "~") {
-				if expanded, err := engram.ExpandDataDir(m.EngramDataDirInput); err == nil {
+				backend := engram.NewLocalDataBackend()
+				if expanded, err := backend.ExpandPath(m.EngramDataDirInput); err == nil {
 					m.EngramDataDirInput = expanded
 					m.EngramDataDirPos = len([]rune(m.EngramDataDirInput))
 				}
@@ -3708,14 +3852,7 @@ func agentBuilderSystemPromptPath(agentID model.AgentID) (string, bool) {
 // respects the ENGRAM_DATA_DIR env var, which may already point to a
 // previously migrated location.
 func estimateExistingDataSize() uint64 {
-	dir := engram.HardDefaultDataDir()
-	var total uint64
-	for _, name := range []string{"engram.db", "engram.db-wal", "engram.db-shm"} {
-		info, err := os.Stat(filepath.Join(dir, name))
-		if err != nil {
-			continue
-		}
-		total += uint64(info.Size())
-	}
+	backend := engram.NewLocalDataBackend()
+	_, total, _ := backend.EstimateMigration(backend.HardDefaultDataDir())
 	return total
 }

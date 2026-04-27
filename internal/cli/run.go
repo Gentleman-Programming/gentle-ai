@@ -522,20 +522,22 @@ func (s componentApplyStep) Run() error {
 
 	switch s.component {
 	case model.ComponentEngram:
+		backend := engram.NewLocalDataBackend()
+
 		// Resolve the effective Engram data directory.
 		dataDir := s.selection.EngramDataDir
 		if dataDir == "" {
-			dataDir = engram.DefaultDataDir()
+			dataDir = backend.DefaultDataDir()
 		}
 
 		// Migrate existing data when explicitly requested.
 		if s.selection.EngramMigrateData && s.selection.EngramDataDir != "" {
-			srcDir := engram.HardDefaultDataDir()
-			if filepath.Clean(srcDir) != filepath.Clean(s.selection.EngramDataDir) && engram.DetectExistingData(srcDir) {
-				if locked, _ := engram.DetectLockedData(srcDir); locked {
+			srcDir := backend.HardDefaultDataDir()
+			if filepath.Clean(srcDir) != filepath.Clean(s.selection.EngramDataDir) && backend.DetectExistingData(srcDir) {
+				if locked, _ := backend.DetectLockedData(srcDir); locked {
 					return fmt.Errorf("migrate engram data: engram data appears to be in use. Close any running engram processes and try again")
 				}
-				if err := engram.MigrateData(srcDir, s.selection.EngramDataDir); err != nil {
+				if _, err := backend.MigrateData(srcDir, s.selection.EngramDataDir); err != nil {
 					return fmt.Errorf("migrate engram data: %w", err)
 				}
 			}

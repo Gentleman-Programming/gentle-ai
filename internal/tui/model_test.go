@@ -997,11 +997,16 @@ func TestEngramConfigMode_DefaultClearsState(t *testing.T) {
 
 // TestEngramConfigMode_CustomPathSavesState verifies that choosing a custom path
 // in EngramConfigMode persists the new directory to state and sets the env var.
+// The flow is: choose → confirm → feedback → welcome.
 func TestEngramConfigMode_CustomPathSavesState(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDirFn
 	osUserHomeDirFn = func() (string, error) { return home, nil }
 	defer func() { osUserHomeDirFn = restoreHome }()
+
+	// Also mock engram's userHomeDir so HardDefaultDataDir() uses our temp dir.
+	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreEngramHome()
 
 	origEnv := os.Getenv(engram.DataDirEnvVar)
 	defer os.Setenv(engram.DataDirEnvVar, origEnv)
@@ -1014,9 +1019,24 @@ func TestEngramConfigMode_CustomPathSavesState(t *testing.T) {
 	m.EngramDataDirInput = home + string(os.PathSeparator) + "custom-engram"
 	m.Cursor = screens.EngramDataDirContinueRow(false, screens.EngramChoiceStartFresh)
 
+	// Step 1: Continue → confirmation
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM := updated.(Model)
+	if stateM.EngramDataDirPhase != 1 {
+		t.Fatalf("expected phase=1 (confirm), got %d", stateM.EngramDataDirPhase)
+	}
 
+	// Step 2: Confirm (cursor defaults to Cancel=1, so move to Confirm=0)
+	stateM.Cursor = 0
+	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM = updated.(Model)
+	if stateM.EngramDataDirPhase != 2 {
+		t.Fatalf("expected phase=2 (feedback), got %d", stateM.EngramDataDirPhase)
+	}
+
+	// Step 3: Continue on feedback → Welcome
+	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM = updated.(Model)
 	if stateM.Screen != ScreenWelcome {
 		t.Fatalf("screen = %v, want ScreenWelcome", stateM.Screen)
 	}
@@ -1036,8 +1056,13 @@ func TestEngramConfigMode_CustomPathSavesState(t *testing.T) {
 // TestEngramConfigMode_StateDoesNotLeak verifies that after returning from
 // EngramConfigMode to Welcome, the Engram screen state is fully reset so the
 // next install flow starts clean.
+// The flow is: choose → confirm → feedback → welcome.
 func TestEngramConfigMode_StateDoesNotLeak(t *testing.T) {
 	tmp := t.TempDir()
+	// Mock engram's userHomeDir so HardDefaultDataDir() uses our temp dir.
+	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return tmp, nil })
+	defer restoreEngramHome()
+
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenEngramDataDir
 	m.EngramConfigMode = true
@@ -1048,9 +1073,24 @@ func TestEngramConfigMode_StateDoesNotLeak(t *testing.T) {
 	m.EngramDataDirErr = "some old error"
 	m.Cursor = screens.EngramDataDirContinueRow(false, screens.EngramChoiceStartFresh)
 
+	// Step 1: Continue → confirmation
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM := updated.(Model)
+	if stateM.EngramDataDirPhase != 1 {
+		t.Fatalf("expected phase=1 (confirm), got %d", stateM.EngramDataDirPhase)
+	}
 
+	// Step 2: Confirm
+	stateM.Cursor = 0
+	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM = updated.(Model)
+	if stateM.EngramDataDirPhase != 2 {
+		t.Fatalf("expected phase=2 (feedback), got %d", stateM.EngramDataDirPhase)
+	}
+
+	// Step 3: Continue on feedback → Welcome
+	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM = updated.(Model)
 	if stateM.Screen != ScreenWelcome {
 		t.Fatalf("screen = %v, want ScreenWelcome", stateM.Screen)
 	}
