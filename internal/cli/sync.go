@@ -462,7 +462,7 @@ func (s componentSyncStep) Run() error {
 		// Sync: inject MCP config + system prompt protocol only.
 		// NO binary install. NO engram setup.
 		for _, adapter := range adapters {
-			res, err := engram.Inject(s.homeDir, adapter)
+			res, err := engram.Inject(s.homeDir, adapter, engram.InjectOptions{WorkspaceDir: s.workspaceDir})
 			if err != nil {
 				return fmt.Errorf("sync engram for %q: %w", adapter.Agent(), err)
 			}

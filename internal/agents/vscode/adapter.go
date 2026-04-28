@@ -95,6 +95,10 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 	return filepath.Join(a.vscodeUserDir(homeDir), "mcp.json")
 }
 
+func (a *Adapter) WorkspaceMCPConfigPath(workspaceDir string, _ string) string {
+	return filepath.Join(workspaceDir, ".vscode", "mcp.json")
+}
+
 func (a *Adapter) vscodeUserDir(homeDir string) string {
 	switch runtime.GOOS {
 	case "darwin":

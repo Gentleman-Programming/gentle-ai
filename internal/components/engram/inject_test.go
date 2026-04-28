@@ -41,6 +41,15 @@ func assertArgsHaveToolsAgent(t *testing.T, path string) {
 	}
 }
 
+func containsPath(paths []string, want string) bool {
+	for _, path := range paths {
+		if path == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestInjectClaudeWritesMCPConfig(t *testing.T) {
 	home := t.TempDir()
 
@@ -386,6 +395,90 @@ func TestInjectVSCodeMergesEngramToMCPConfigFile(t *testing.T) {
 	}
 	// RED: VS Code overlay must include --tools=agent
 	assertArgsHaveToolsAgent(t, mcpPath)
+
+	settingsPath := adapter.SettingsPath(home)
+	settingsContent, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings.json) error = %v", err)
+	}
+	if !strings.Contains(string(settingsContent), `"chat.mcp.autostart": true`) {
+		t.Fatalf("settings.json missing chat.mcp.autostart=true; got:\n%s", string(settingsContent))
+	}
+}
+
+func TestInjectVSCodeAlsoWritesWorkspaceLocalMCPConfigWhenWorkspaceDirProvided(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	adapter := vscode.NewAdapter()
+
+	result, err := Inject(home, adapter, InjectOptions{WorkspaceDir: workspace})
+	if err != nil {
+		t.Fatalf("Inject(vscode, workspace) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject(vscode, workspace) changed = false")
+	}
+
+	globalPath := adapter.MCPConfigPath(home, "engram")
+	workspacePath := adapter.WorkspaceMCPConfigPath(workspace, "engram")
+	settingsPath := adapter.SettingsPath(home)
+
+	globalContent, err := os.ReadFile(globalPath)
+	if err != nil {
+		t.Fatalf("ReadFile(global mcp.json) error = %v", err)
+	}
+	workspaceContent, err := os.ReadFile(workspacePath)
+	if err != nil {
+		t.Fatalf("ReadFile(workspace mcp.json) error = %v", err)
+	}
+	settingsContent, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings.json) error = %v", err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		path    string
+		content string
+	}{
+		{name: "global", path: globalPath, content: string(globalContent)},
+		{name: "workspace", path: workspacePath, content: string(workspaceContent)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(tc.content, `"servers"`) {
+				t.Fatalf("%s mcp.json missing servers key", tc.name)
+			}
+			if !strings.Contains(tc.content, `"engram"`) {
+				t.Fatalf("%s mcp.json missing engram server", tc.name)
+			}
+			assertArgsHaveToolsAgent(t, tc.path)
+		})
+	}
+
+	if len(result.Files) < 3 {
+		t.Fatalf("Inject(vscode, workspace) files = %v, want at least 3 entries including global + workspace MCP files", result.Files)
+	}
+	if !containsPath(result.Files, globalPath) {
+		t.Fatalf("Inject(vscode, workspace) files missing global mcp path %q: %v", globalPath, result.Files)
+	}
+	if !containsPath(result.Files, workspacePath) {
+		t.Fatalf("Inject(vscode, workspace) files missing workspace mcp path %q: %v", workspacePath, result.Files)
+	}
+	if !containsPath(result.Files, settingsPath) {
+		t.Fatalf("Inject(vscode, workspace) files missing settings path %q: %v", settingsPath, result.Files)
+	}
+	if !strings.Contains(string(settingsContent), `"chat.mcp.autostart": true`) {
+		t.Fatalf("settings.json missing chat.mcp.autostart=true; got:\n%s", string(settingsContent))
+	}
+
+	second, err := Inject(home, adapter, InjectOptions{WorkspaceDir: workspace})
+	if err != nil {
+		t.Fatalf("Inject(vscode, workspace) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(vscode, workspace) second changed = true")
+	}
 }
 
 // ─── Gemini tests ─────────────────────────────────────────────────────────────

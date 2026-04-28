@@ -196,6 +196,7 @@ func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
 		"kiro/persona-gentleman.md",
 		"kimi/persona-gentleman.md",
 		"opencode/persona-gentleman.md",
+		"vscode/persona-gentleman.md",
 	}
 
 	for _, path := range personaPaths {

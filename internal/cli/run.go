@@ -565,7 +565,7 @@ func (s componentApplyStep) Run() error {
 					attemptedSlugs[slug] = struct{}{}
 				}
 			}
-			if _, err := engram.Inject(s.homeDir, adapter); err != nil {
+			if _, err := engram.Inject(s.homeDir, adapter, engram.InjectOptions{WorkspaceDir: s.workspaceDir}); err != nil {
 				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
 			}
 		}

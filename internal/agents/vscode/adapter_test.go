@@ -91,3 +91,14 @@ func TestMCPConfigPathUsesVSCodeUserProfile(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspaceMCPConfigPathUsesVSCodeWorkspaceFolder(t *testing.T) {
+	a := NewAdapter()
+	workspace := "/tmp/workspace"
+
+	path := a.WorkspaceMCPConfigPath(workspace, "engram")
+	want := filepath.Join(workspace, ".vscode", "mcp.json")
+	if path != want {
+		t.Fatalf("WorkspaceMCPConfigPath() = %q, want %q", path, want)
+	}
+}

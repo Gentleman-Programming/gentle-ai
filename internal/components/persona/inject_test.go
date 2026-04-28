@@ -924,6 +924,9 @@ func TestInjectVSCodeGentlemanWritesInstructionsFile(t *testing.T) {
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("VS Code persona missing 'Senior Architect'")
 	}
+	if !strings.Contains(text, "On brand-new sessions only, you MUST perform one lightweight Engram availability check before starting substantive work.") {
+		t.Fatal("VS Code persona missing Engram session-start instruction")
+	}
 }
 
 // --- Auto-heal tests: Claude Code stale free-text persona ---

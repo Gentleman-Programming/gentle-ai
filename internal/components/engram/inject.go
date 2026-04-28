@@ -20,11 +20,19 @@ type InjectionResult struct {
 	Files   []string
 }
 
+type InjectOptions struct {
+	WorkspaceDir string
+}
+
 // bootstrapper is an optional adapter capability: if an adapter implements
 // this interface, any injector that writes Jinja modules will first ensure
 // the base template (entry point) exists.
 type bootstrapper interface {
 	BootstrapTemplate(homeDir string) error
+}
+
+type workspaceMCPConfigProvider interface {
+	WorkspaceMCPConfigPath(workspaceDir string, serverName string) string
 }
 
 // EngramLookPath is the function used to resolve the engram binary path.
@@ -139,9 +147,16 @@ func vsCodeEngramOverlayJSON(cmd string) []byte {
 	return append(b, '\n')
 }
 
-func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+var vsCodeMCPAutostartOverlayJSON = []byte("{\n  \"chat.mcp.autostart\": true\n}\n")
+
+func Inject(homeDir string, adapter agents.Adapter, opts ...InjectOptions) (InjectionResult, error) {
 	if !adapter.SupportsMCP() {
 		return InjectionResult{}, nil
+	}
+
+	var options InjectOptions
+	if len(opts) > 0 {
+		options = opts[0]
 	}
 
 	files := make([]string, 0, 2)
@@ -196,6 +211,32 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		}
 		changed = changed || mcpWrite.Changed
 		files = append(files, mcpPath)
+
+		if adapter.Agent() == model.AgentVSCodeCopilot {
+			settingsPath := adapter.SettingsPath(homeDir)
+			if settingsPath != "" {
+				settingsWrite, err := mergeJSONFile(settingsPath, vsCodeMCPAutostartOverlayJSON)
+				if err != nil {
+					return InjectionResult{}, err
+				}
+				changed = changed || settingsWrite.Changed
+				files = append(files, settingsPath)
+			}
+		}
+
+		if adapter.Agent() == model.AgentVSCodeCopilot && strings.TrimSpace(options.WorkspaceDir) != "" {
+			if workspaceAdapter, ok := adapter.(workspaceMCPConfigProvider); ok {
+				workspaceMCPPath := workspaceAdapter.WorkspaceMCPConfigPath(options.WorkspaceDir, "engram")
+				if workspaceMCPPath != "" {
+					workspaceWrite, err := mergeJSONFile(workspaceMCPPath, overlay)
+					if err != nil {
+						return InjectionResult{}, err
+					}
+					changed = changed || workspaceWrite.Changed
+					files = append(files, workspaceMCPPath)
+				}
+			}
+		}
 
 		if adapter.Agent() == model.AgentAntigravity {
 			settingsWrite, err := ensureAntigravitySettings(homeDir, adapter)
