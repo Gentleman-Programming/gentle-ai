@@ -29,6 +29,16 @@ Anti-patterns — these ALWAYS inflate context without need:
 - Running tests or builds inline → delegate
 - Reading files as preparation for edits, then editing → delegate the whole thing together
 
+### Empty Sub-Agent Response Recovery
+
+When a sub-agent returns empty, minimal, or tool-result-only output (e.g., "Observation saved", a raw tool response, or blank):
+
+1. Do NOT launch a new sub-agent — this wastes the completed work and full context.
+2. RESUME the same task using the existing `task_id`, adding a prompt: "Your work completed but I received no text response. Please provide your findings/summary as text now."
+3. If the second attempt also returns empty, THEN report the issue to the user with the task ID and last output received.
+
+**Why**: Sub-agents sometimes end with a tool call (e.g., `mem_save`) as their last action, causing the orchestrator to receive only the tool result instead of the analysis. Resuming preserves the sub-agent's full context; re-launching discards all work done.
+
 ## SDD Workflow (Spec-Driven Development)
 
 SDD is the structured planning layer for substantial changes.

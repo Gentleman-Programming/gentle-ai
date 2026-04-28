@@ -131,6 +131,14 @@ After completing your work, you MUST call:
 If you return without calling mem_save, the next phase CANNOT find your artifact and the pipeline BREAKS.
 ```
 
+## Sub-Agent Response Ordering
+
+When a sub-agent persists artifacts (via `mem_save` or file writes), the persistence call MUST happen BEFORE the final text response. The sub-agent's absolute last output must be text, never a tool call.
+
+**Why**: The parent agent only receives the sub-agent's final output. If the last action is a tool call (e.g., `mem_save`), the parent sees the tool result ("Observation saved") instead of the sub-agent's actual analysis and findings.
+
+Order: do work → persist artifact (`mem_save`) → return text summary as final action.
+
 ## Skill Registry
 
 The orchestrator pre-resolves compact rules from the skill registry and injects them as `## Project Standards (auto-resolved)` in your launch prompt. Sub-agents do NOT read the registry or individual SKILL.md files — rules arrive pre-digested.
