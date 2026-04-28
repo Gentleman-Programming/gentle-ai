@@ -283,6 +283,22 @@ func (b *LocalDataBackend) EnsureDir(dir string) error {
 	return os.MkdirAll(dir, 0o755)
 }
 
+// DetectPartialMigration checks if there's existing data in both source and target,
+// indicating an interrupted migration. It returns a warning message if detected.
+func (b *LocalDataBackend) DetectPartialMigration(source, target string) string {
+	srcFiles := b.ExistingFiles(source)
+	dstFiles := b.ExistingFiles(target)
+
+	srcHasData := len(srcFiles) > 0
+	dstHasData := len(dstFiles) > 0
+
+	if srcHasData && dstHasData {
+		return fmt.Sprintf("Found data in both locations. Using %s. To recover old data, set ENGRAM_DATA_DIR manually.", target)
+	}
+
+	return ""
+}
+
 // copyFileBuffered copies src to dst using a fixed-size buffer so that large
 // files (e.g. multi-GB SQLite databases) don't OOM the process.
 func copyFileBuffered(src, dst string, perm os.FileMode) error {

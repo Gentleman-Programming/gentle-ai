@@ -414,6 +414,7 @@ type Model struct {
 	EngramDataDirFilesMoved   int    // files migrated (for feedback)
 	EngramDataDirBytesMoved   uint64 // bytes migrated (for feedback)
 	EngramDataDirPreview      engram.Preview // cached preview to avoid syscalls in View()
+	EngramDataDirPartialWarning string // warning if partial migration detected
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -777,6 +778,7 @@ func (m Model) View() string {
 				TotalBytes:      preview.TotalBytes,
 				TargetSpace:     preview.AvailableSpace,
 				TargetSpaceErr:  preview.SpaceErr,
+				PartialWarning: m.EngramDataDirPartialWarning,
 			})
 		}
 	case ScreenSkillPicker:
@@ -3028,6 +3030,18 @@ func (m *Model) refreshEngramPreview() {
 	action := m.engramAction()
 	preview, _ := m.engramPreview(backend, action)
 	m.EngramDataDirPreview = preview
+
+	// Check for partial migration edge case: if user has existing data at
+	// both source (~/.engram) AND has set a custom path, there might be
+	// an interrupted migration. Warn them.
+	if action == engram.ActionMigrate && m.EngramDataDirInput != "" {
+		m.EngramDataDirPartialWarning = backend.DetectPartialMigration(
+			backend.HardDefaultDataDir(),
+			m.EngramDataDirInput,
+		)
+	} else {
+		m.EngramDataDirPartialWarning = ""
+	}
 }
 
 // handleEngramDone completes the Engram data dir screen for non-destructive actions.

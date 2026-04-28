@@ -36,6 +36,9 @@ type EngramDataDirRenderArgs struct {
 	TotalBytes       uint64   // total size of files
 	TargetSpace      uint64   // available space at target path (0 = unknown)
 	TargetSpaceErr   string   // error getting target space ("" = ok)
+
+	// PartialWarning is shown if an interrupted migration is detected.
+	PartialWarning string
 }
 
 // EngramDataDirOptionCount returns the number of selectable rows on the Engram
@@ -166,6 +169,11 @@ func RenderEngramDataDir(args EngramDataDirRenderArgs) string {
 
 	if args.HasExistingData {
 		b.WriteString(styles.WarningStyle.Render("Existing Engram data detected at this location."))
+		b.WriteString("\n")
+	}
+
+	if args.PartialWarning != "" {
+		b.WriteString(styles.WarningStyle.Render(args.PartialWarning))
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
