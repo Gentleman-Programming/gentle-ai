@@ -288,3 +288,56 @@ func TestDataDirService_Migrate_SuccessDeletesSource(t *testing.T) {
 		t.Error("source still has data after successful migration")
 	}
 }
+
+// TestPreview_PartialMigrationWarning verifies that when both source and target
+// have existing data, the preview includes a warning about interrupted migration.
+func TestPreview_PartialMigrationWarning(t *testing.T) {
+	backend := NewLocalDataBackend()
+	service := NewDataDirService(backend, nil)
+
+	home := t.TempDir()
+	origHomeFn := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	defer func() { userHomeDir = origHomeFn }()
+
+	src := backend.HardDefaultDataDir()
+	dst := filepath.Join(home, "custom")
+
+	// Put data in BOTH source and target.
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "engram.db"), []byte("source data"), 0o644)
+	os.MkdirAll(dst, 0o755)
+	os.WriteFile(filepath.Join(dst, "engram.db"), []byte("target data"), 0o644)
+
+	preview, err := service.Preview(ActionMigrate, dst)
+	if err != nil {
+		t.Fatalf("Preview() error = %v", err)
+	}
+	if preview.PartialMigrationWarning == "" {
+		t.Error("PartialMigrationWarning is empty, want non-empty warning")
+	}
+}
+
+// TestPreview_NoPartialMigrationWarning verifies that when only source has
+// data, no warning is emitted.
+func TestPreview_NoPartialMigrationWarning(t *testing.T) {
+	backend := NewLocalDataBackend()
+	service := NewDataDirService(backend, nil)
+
+	home := t.TempDir()
+	origHomeFn := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	defer func() { userHomeDir = origHomeFn }()
+
+	src := backend.HardDefaultDataDir()
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "engram.db"), []byte("data"), 0o644)
+
+	preview, err := service.Preview(ActionMigrate, filepath.Join(home, "empty-target"))
+	if err != nil {
+		t.Fatalf("Preview() error = %v", err)
+	}
+	if preview.PartialMigrationWarning != "" {
+		t.Errorf("PartialMigrationWarning = %q, want empty", preview.PartialMigrationWarning)
+	}
+}

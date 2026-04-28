@@ -414,7 +414,6 @@ type Model struct {
 	EngramDataDirFilesMoved   int    // files migrated (for feedback)
 	EngramDataDirBytesMoved   uint64 // bytes migrated (for feedback)
 	EngramDataDirPreview      engram.Preview // cached preview to avoid syscalls in View()
-	EngramDataDirPartialWarning string // warning if partial migration detected
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -756,7 +755,7 @@ func (m Model) View() string {
 				FilesToMove:    engram.PreviewFileNames(preview.Files),
 				TotalBytes:     preview.TotalBytes,
 				TargetSpace:    preview.AvailableSpace,
-				TargetSpaceErr: preview.SpaceErr,
+				TargetSpaceErr: errString(preview.SpaceErr),
 			})
 		case 2: // feedback
 			return screens.RenderEngramFeedback(screens.EngramFeedbackRenderArgs{
@@ -777,8 +776,8 @@ func (m Model) View() string {
 				FilesToMove:     engram.PreviewFileNames(preview.Files),
 				TotalBytes:      preview.TotalBytes,
 				TargetSpace:     preview.AvailableSpace,
-				TargetSpaceErr:  preview.SpaceErr,
-				PartialWarning: m.EngramDataDirPartialWarning,
+				TargetSpaceErr:  errString(preview.SpaceErr),
+				PartialWarning:  preview.PartialMigrationWarning,
 			})
 		}
 	case ScreenSkillPicker:
@@ -3003,6 +3002,15 @@ func (m *Model) toggleCurrentSkill() {
 	m.SkillPicker = append(m.SkillPicker, skillID)
 }
 
+// errString returns the error message or "" for nil. It bridges the domain
+// layer (which uses error) with the presentation layer (which uses string).
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 // engramAction maps the screen choice constant to the service action.
 func (m Model) engramAction() engram.Action {
 	switch m.EngramDataDirChoice {
@@ -3030,18 +3038,6 @@ func (m *Model) refreshEngramPreview() {
 	action := m.engramAction()
 	preview, _ := m.engramPreview(backend, action)
 	m.EngramDataDirPreview = preview
-
-	// Check for partial migration edge case: if user has existing data at
-	// both source (~/.engram) AND has set a custom path, there might be
-	// an interrupted migration. Warn them.
-	if action == engram.ActionMigrate && m.EngramDataDirInput != "" {
-		m.EngramDataDirPartialWarning = backend.DetectPartialMigration(
-			backend.HardDefaultDataDir(),
-			m.EngramDataDirInput,
-		)
-	} else {
-		m.EngramDataDirPartialWarning = ""
-	}
 }
 
 // handleEngramDone completes the Engram data dir screen for non-destructive actions.

@@ -208,6 +208,34 @@ func TestLocalDataBackend_MigrateData_PartialFailureLeavesSource(t *testing.T) {
 	}
 }
 
+// TestLocalDataBackend_MigrateData_CleanupOnFailure verifies that when a
+// copy fails part-way through, any files already copied to the target are
+// removed so the target is not left in a partial state.
+func TestLocalDataBackend_MigrateData_CleanupOnFailure(t *testing.T) {
+	backend := NewLocalDataBackend()
+	source := t.TempDir()
+	target := t.TempDir()
+
+	// Create two source files.
+	os.WriteFile(filepath.Join(source, "engram.db"), []byte("main"), 0o644)
+	os.WriteFile(filepath.Join(source, "engram.db-wal"), []byte("wal"), 0o644)
+
+	// Create a directory with the same name as the second destination file.
+	// This causes copyFileBuffered to fail on the second file (cannot open
+	// a directory for writing), triggering the cleanup path.
+	os.MkdirAll(filepath.Join(target, "engram.db-wal"), 0o755)
+
+	_, err := backend.MigrateData(source, target)
+	if err == nil {
+		t.Fatal("expected error when destination is a directory, got nil")
+	}
+
+	// The first file that copied before the failure should have been cleaned up.
+	if _, err := os.Stat(filepath.Join(target, "engram.db")); !os.IsNotExist(err) {
+		t.Error("target should not have engram.db after cleanup; partial state detected")
+	}
+}
+
 func TestLocalDataBackend_DetectLockedData_NoFiles(t *testing.T) {
 	backend := NewLocalDataBackend()
 	dir := t.TempDir()
@@ -402,9 +430,11 @@ func TestLocalDataBackend_CleanData_PreservesOtherFiles(t *testing.T) {
 
 func TestLocalDataBackend_CleanData_NonExistentDir(t *testing.T) {
 	backend := NewLocalDataBackend()
+	// CleanData on a non-existent directory is a no-op, not an error.
+	// The directory is already "clean".
 	err := backend.CleanData(filepath.Join(t.TempDir(), "does-not-exist"))
-	if err == nil {
-		t.Fatal("CleanData() on non-existent dir = nil, want error")
+	if err != nil {
+		t.Fatalf("CleanData() on non-existent dir = %v, want nil", err)
 	}
 }
 

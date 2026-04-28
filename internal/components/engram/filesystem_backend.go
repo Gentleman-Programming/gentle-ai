@@ -12,6 +12,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/storage"
 )
 
+// engramSQLiteFiles lists the SQLite database files managed by Engram.
+// Changing this slice requires updating all methods that reference it.
+var engramSQLiteFiles = []string{"engram.db", "engram.db-wal", "engram.db-shm"}
+
 // requireFreeSpace is a test hook for disk-space validation in MigrateData.
 var requireFreeSpace = storage.RequireFreeSpace
 
@@ -104,9 +108,8 @@ func (b *LocalDataBackend) DetectExistingData(dir string) bool {
 // ExistingFiles returns the list of Engram SQLite files that exist in
 // the given directory.
 func (b *LocalDataBackend) ExistingFiles(dir string) []string {
-	files := []string{"engram.db", "engram.db-wal", "engram.db-shm"}
 	var found []string
-	for _, f := range files {
+	for _, f := range engramSQLiteFiles {
 		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
 			found = append(found, f)
 		}
@@ -115,14 +118,13 @@ func (b *LocalDataBackend) ExistingFiles(dir string) []string {
 }
 
 // CleanData deletes all Engram SQLite files in the given directory.
-// It returns an error if the directory does not exist or if any file cannot be removed.
+// It is a no-op when the directory does not exist.
 func (b *LocalDataBackend) CleanData(dir string) error {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return fmt.Errorf("directory %q does not exist", dir)
+		return nil
 	}
 
-	files := []string{"engram.db", "engram.db-wal", "engram.db-shm"}
-	for _, f := range files {
+	for _, f := range engramSQLiteFiles {
 		path := filepath.Join(dir, f)
 		if _, err := os.Stat(path); err == nil {
 			if err := os.Remove(path); err != nil {
@@ -136,10 +138,9 @@ func (b *LocalDataBackend) CleanData(dir string) error {
 // EstimateMigration returns the list of files that would be migrated and their
 // total size, without actually copying anything.
 func (b *LocalDataBackend) EstimateMigration(source string) ([]FileInfo, uint64, error) {
-	files := []string{"engram.db", "engram.db-wal", "engram.db-shm"}
 	var infos []FileInfo
 	var total uint64
-	for _, f := range files {
+	for _, f := range engramSQLiteFiles {
 		srcPath := filepath.Join(source, f)
 		info, err := os.Stat(srcPath)
 		if err != nil {
@@ -164,15 +165,13 @@ func (b *LocalDataBackend) EstimateMigration(source string) ([]FileInfo, uint64,
 // It uses read/write instead of os.Rename so that cross-device moves work
 // (e.g. C:\ → D:\ on Windows or /home → /mnt/data on Linux).
 func (b *LocalDataBackend) MigrateData(source, target string) (Result, error) {
-	files := []string{"engram.db", "engram.db-wal", "engram.db-shm"}
-
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return Result{}, fmt.Errorf("create target directory %q: %w", target, err)
 	}
 
 	// Calculate total size of source files to verify target has enough space.
 	var totalSize uint64
-	for _, f := range files {
+	for _, f := range engramSQLiteFiles {
 		srcPath := filepath.Join(source, f)
 		info, err := os.Stat(srcPath)
 		if err != nil {
@@ -192,7 +191,7 @@ func (b *LocalDataBackend) MigrateData(source, target string) (Result, error) {
 
 	var copied []string
 	var result Result
-	for _, f := range files {
+	for _, f := range engramSQLiteFiles {
 		srcPath := filepath.Join(source, f)
 		dstPath := filepath.Join(target, f)
 
@@ -283,22 +282,6 @@ func (b *LocalDataBackend) EnsureDir(dir string) error {
 	return os.MkdirAll(dir, 0o755)
 }
 
-// DetectPartialMigration checks if there's existing data in both source and target,
-// indicating an interrupted migration. It returns a warning message if detected.
-func (b *LocalDataBackend) DetectPartialMigration(source, target string) string {
-	srcFiles := b.ExistingFiles(source)
-	dstFiles := b.ExistingFiles(target)
-
-	srcHasData := len(srcFiles) > 0
-	dstHasData := len(dstFiles) > 0
-
-	if srcHasData && dstHasData {
-		return fmt.Sprintf("Found data in both locations. Using %s. To recover old data, set ENGRAM_DATA_DIR manually.", target)
-	}
-
-	return ""
-}
-
 // copyFileBuffered copies src to dst using a fixed-size buffer so that large
 // files (e.g. multi-GB SQLite databases) don't OOM the process.
 func copyFileBuffered(src, dst string, perm os.FileMode) error {
@@ -312,12 +295,10 @@ func copyFileBuffered(src, dst string, perm os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	// Use a deferred close with error capture so that a delayed write error
-	// (e.g. disk full) is not silently swallowed.
-	closeOut := func() error {
-		return out.Close()
-	}
-	defer func() { _ = closeOut() }()
+	// Deferred close frees the fd if we return early (e.g. copy error).
+	// The explicit close at the end captures delayed write errors
+	// (e.g. disk full) that deferred close would swallow.
+	defer out.Close()
 
 	const bufSize = 64 * 1024 // 64 KiB
 	buf := make([]byte, bufSize)
@@ -325,5 +306,5 @@ func copyFileBuffered(src, dst string, perm os.FileMode) error {
 		return err
 	}
 
-	return closeOut()
+	return out.Close()
 }

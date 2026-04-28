@@ -1,3 +1,7 @@
+// Package engram handles Engram data directory configuration, migration,
+// and management. It provides a DataBackend abstraction for filesystem
+// operations and a DataDirService that orchestrates the user flow with
+// transactional safety guarantees.
 package engram
 
 import (
@@ -34,11 +38,12 @@ type FileInfo struct {
 
 // Preview holds the information shown to the user before a destructive action.
 type Preview struct {
-	Files          []FileInfo
-	TotalBytes     uint64
-	AvailableSpace uint64
-	SpaceErr       string
-	ExpandedPath   string // absolute path with ~ expanded
+	Files                   []FileInfo
+	TotalBytes              uint64
+	AvailableSpace          uint64
+	SpaceErr                error // nil when space check succeeded
+	ExpandedPath            string // absolute path with ~ expanded
+	PartialMigrationWarning string // set when data exists in both source and target
 }
 
 // HasEnoughSpace reports whether the target has enough space for the operation.
@@ -129,9 +134,23 @@ func (s *DataDirService) Preview(action Action, inputPath string) (Preview, erro
 
 		space, err := s.backend.AvailableSpace(expanded)
 		if err != nil {
-			p.SpaceErr = err.Error()
+			p.SpaceErr = err
 		} else {
 			p.AvailableSpace = space
+		}
+
+		// Check for interrupted migration: if both source and target have data,
+		// warn the user that they might be in an inconsistent state.
+		if action == ActionMigrate {
+			src := s.backend.HardDefaultDataDir()
+			srcFiles := s.backend.ExistingFiles(src)
+			dstFiles := s.backend.ExistingFiles(expanded)
+			if len(srcFiles) > 0 && len(dstFiles) > 0 {
+				p.PartialMigrationWarning = fmt.Sprintf(
+					"Found data in both locations. Using %s. To recover old data, set ENGRAM_DATA_DIR manually.",
+					expanded,
+				)
+			}
 		}
 	case ActionClean:
 		src := s.backend.HardDefaultDataDir()
@@ -226,6 +245,12 @@ func (p *LocalConfigPersister) Read() (string, error) {
 }
 
 // Write persists the data directory to state, env var, and shell profile.
+//
+// NOTE: This method performs a read-modify-write on the state file and is
+// NOT safe for concurrent use. If multiple processes call Write simultaneously,
+// the last writer wins and earlier writes may be lost. In practice this is
+// acceptable because the Engram data directory is configured once during
+// installation and not modified concurrently.
 func (p *LocalConfigPersister) Write(dir string) error {
 	if s, err := state.Read(p.homeDir); err == nil {
 		s.EngramDataDir = dir
