@@ -137,14 +137,18 @@ func TestLocalDataBackend_MigrateData(t *testing.T) {
 		t.Fatalf("MigrateData() error = %v", err)
 	}
 
+	// Target should have the copied files.
 	for _, f := range []string{"engram.db", "engram.db-wal"} {
 		if _, err := os.Stat(filepath.Join(target, f)); err != nil {
 			t.Errorf("target missing %s: %v", f, err)
 		}
 	}
+	// Source should STILL have the files — MigrateData no longer deletes.
+	// Deletion is the responsibility of DataDirService.Execute after config
+	// persistence succeeds.
 	for _, f := range []string{"engram.db", "engram.db-wal"} {
-		if _, err := os.Stat(filepath.Join(source, f)); !os.IsNotExist(err) {
-			t.Errorf("source still has %s", f)
+		if _, err := os.Stat(filepath.Join(source, f)); err != nil {
+			t.Errorf("source missing %s after copy-only migration", f)
 		}
 	}
 }

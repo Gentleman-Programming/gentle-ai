@@ -173,7 +173,11 @@ func (s *DataDirService) Execute(action Action, path string) (Result, error) {
 			return Result{}, err
 		}
 		if err := s.persister.Write(path); err != nil {
-			return Result{}, fmt.Errorf("data moved to %s but config could not be saved: %w", path, err)
+			return Result{}, fmt.Errorf("data copied to %s but config could not be saved: %w", path, err)
+		}
+		// Config is persisted — now it is safe to remove the source.
+		if err := s.backend.CleanData(src); err != nil {
+			return Result{}, fmt.Errorf("config saved but could not remove old data from %s: %w", src, err)
 		}
 		result.Message = "Engram data has been moved successfully."
 		return result, nil

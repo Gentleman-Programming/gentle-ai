@@ -32,16 +32,18 @@ func TestLitmus_MigrateFlow(t *testing.T) {
 		}
 	}
 
-	// 1. Migrate should succeed.
-	result, err := backend.MigrateData(src, dst)
+	// 1. Execute the full service flow (copy → persist → clean source).
+	persister := NewLocalConfigPersister(home)
+	service := NewDataDirService(backend, persister)
+	result, err := service.Execute(ActionMigrate, dst)
 	if err != nil {
-		t.Fatalf("MigrateData() error: %v", err)
+		t.Fatalf("Execute(Migrate) error: %v", err)
 	}
 	if result.FilesMoved != 2 {
-		t.Errorf("MigrateData() files = %d, want 2", result.FilesMoved)
+		t.Errorf("FilesMoved = %d, want 2", result.FilesMoved)
 	}
 	if result.BytesMoved == 0 {
-		t.Error("MigrateData() bytes = 0, want > 0")
+		t.Error("BytesMoved = 0, want > 0")
 	}
 
 	// 2. Destination should have the files.
@@ -51,7 +53,7 @@ func TestLitmus_MigrateFlow(t *testing.T) {
 		}
 	}
 
-	// 3. Source should NOT have the files (two-phase deletion worked).
+	// 3. Source should NOT have the files (source cleaned only after config persisted).
 	for _, f := range []string{"engram.db", "engram.db-wal"} {
 		if _, err := os.Stat(filepath.Join(src, f)); !os.IsNotExist(err) {
 			t.Errorf("source still has %s after migration", f)
@@ -111,7 +113,9 @@ func TestLitmus_ReMigrationSafety(t *testing.T) {
 	// First migration: ~/.engram → ~/migrated-engram
 	os.MkdirAll(src, 0o755)
 	os.WriteFile(filepath.Join(src, "engram.db"), []byte("data"), 0o644)
-	if _, err := backend.MigrateData(src, dst); err != nil {
+	persister := NewLocalConfigPersister(home)
+	service := NewDataDirService(backend, persister)
+	if _, err := service.Execute(ActionMigrate, dst); err != nil {
 		t.Fatal(err)
 	}
 

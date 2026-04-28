@@ -154,8 +154,12 @@ func (b *LocalDataBackend) EstimateMigration(source string) ([]FileInfo, uint64,
 	return infos, total, nil
 }
 
-// MigrateData copies Engram SQLite files from source to target and removes the
-// source files only after successful verification.
+// MigrateData copies Engram SQLite files from source to target.
+// It does NOT remove source files — the caller (DataDirService) is responsible
+// for deleting the source only after the configuration has been persisted.
+//
+// This ordering guarantees that if config persistence fails, the user's data
+// is still intact in the original location.
 //
 // It uses read/write instead of os.Rename so that cross-device moves work
 // (e.g. C:\ → D:\ on Windows or /home → /mnt/data on Linux).
@@ -186,8 +190,7 @@ func (b *LocalDataBackend) MigrateData(source, target string) (Result, error) {
 		}
 	}
 
-	// Phase 1: copy all files (do NOT remove sources yet).
-	var toRemove []string
+	var copied []string
 	var result Result
 	for _, f := range files {
 		srcPath := filepath.Join(source, f)
@@ -202,25 +205,27 @@ func (b *LocalDataBackend) MigrateData(source, target string) (Result, error) {
 		}
 
 		if err := copyFileBuffered(srcPath, dstPath, info.Mode()); err != nil {
+			// Best-effort cleanup: remove any files we already copied so the
+			// target is not left in a partial state.
+			for _, cp := range copied {
+				_ = os.Remove(cp)
+			}
 			return Result{}, fmt.Errorf("copy %s: %w", f, err)
 		}
 
-		// Verify copy succeeded before scheduling removal
+		// Verify copy succeeded
 		dstInfo, err := os.Stat(dstPath)
 		if err != nil || dstInfo.Size() != info.Size() {
+			for _, cp := range copied {
+				_ = os.Remove(cp)
+			}
+			_ = os.Remove(dstPath)
 			return Result{}, fmt.Errorf("verify %s failed after copy", f)
 		}
 
 		result.FilesMoved++
 		result.BytesMoved += uint64(info.Size())
-		toRemove = append(toRemove, srcPath)
-	}
-
-	// Phase 2: only remove sources after all copies verified.
-	for _, srcPath := range toRemove {
-		if err := os.Remove(srcPath); err != nil {
-			return result, fmt.Errorf("remove source %s: %w", filepath.Base(srcPath), err)
-		}
+		copied = append(copied, dstPath)
 	}
 
 	return result, nil

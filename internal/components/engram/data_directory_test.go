@@ -222,3 +222,69 @@ func TestErrorMessage(t *testing.T) {
 		t.Errorf("ErrorMessage(ErrLocked) = %q, want containing 'in use'", got)
 	}
 }
+
+// failPersister always fails on Write for testing transactional rollback.
+type failPersister struct{}
+
+func (f *failPersister) Read() (string, error)  { return "", nil }
+func (f *failPersister) Write(dir string) error { return errors.New("persist failed") }
+func (f *failPersister) Clear() error           { return nil }
+
+// TestDataDirService_Migrate_ConfigFailureKeepsSource verifies that when
+// persister.Write fails after a successful copy, the original source data
+// is NOT deleted. The user can recover by setting ENGRAM_DATA_DIR manually.
+func TestDataDirService_Migrate_ConfigFailureKeepsSource(t *testing.T) {
+	backend := NewLocalDataBackend()
+	home := t.TempDir()
+	origHomeFn := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	defer func() { userHomeDir = origHomeFn }()
+
+	src := backend.HardDefaultDataDir()
+	dst := filepath.Join(home, "custom")
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "engram.db"), []byte("precious data"), 0o644)
+
+	service := NewDataDirService(backend, &failPersister{})
+	_, err := service.Execute(ActionMigrate, dst)
+	if err == nil {
+		t.Fatal("expected error when persister fails, got nil")
+	}
+
+	// Source MUST still have the data — this is the safety guarantee.
+	if _, err := os.Stat(filepath.Join(src, "engram.db")); err != nil {
+		t.Errorf("source data was deleted despite config failure: %v", err)
+	}
+
+	// Target should have the copy — user can manually point ENGRAM_DATA_DIR here.
+	if _, err := os.Stat(filepath.Join(dst, "engram.db")); err != nil {
+		t.Errorf("target copy missing: %v", err)
+	}
+}
+
+// TestDataDirService_Migrate_SuccessDeletesSource verifies that when the
+// full flow succeeds (copy + persist), the source is cleaned up.
+func TestDataDirService_Migrate_SuccessDeletesSource(t *testing.T) {
+	backend := NewLocalDataBackend()
+	home := t.TempDir()
+	origHomeFn := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	defer func() { userHomeDir = origHomeFn }()
+
+	src := backend.HardDefaultDataDir()
+	dst := filepath.Join(home, "custom")
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "engram.db"), []byte("data"), 0o644)
+
+	persister := NewLocalConfigPersister(home)
+	service := NewDataDirService(backend, persister)
+	_, err := service.Execute(ActionMigrate, dst)
+	if err != nil {
+		t.Fatalf("Execute(Migrate) error: %v", err)
+	}
+
+	// Source should be empty after successful migration.
+	if backend.DetectExistingData(src) {
+		t.Error("source still has data after successful migration")
+	}
+}
