@@ -282,6 +282,22 @@ func (b *LocalDataBackend) EnsureDir(dir string) error {
 	return os.MkdirAll(dir, 0o755)
 }
 
+// CheckWritable verifies that dir can be created (if missing) and written to.
+// It creates a temporary file and immediately removes it.
+func (b *LocalDataBackend) CheckWritable(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("%w: cannot create directory: %v", ErrPathNotWritable, err)
+	}
+	tmp := filepath.Join(dir, ".gentle-ai-write-test")
+	f, err := os.Create(tmp)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrPathNotWritable, err)
+	}
+	_ = f.Close()
+	_ = os.Remove(tmp)
+	return nil
+}
+
 // copyFileBuffered copies src to dst using a fixed-size buffer so that large
 // files (e.g. multi-GB SQLite databases) don't OOM the process.
 func copyFileBuffered(src, dst string, perm os.FileMode) error {

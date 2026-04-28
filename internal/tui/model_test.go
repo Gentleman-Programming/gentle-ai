@@ -1018,6 +1018,7 @@ func TestEngramConfigMode_CustomPathSavesState(t *testing.T) {
 	m.EngramDataDirChoice = screens.EngramChoiceStartFresh
 	m.EngramDataDirInput = home + string(os.PathSeparator) + "custom-engram"
 	m.Cursor = screens.EngramDataDirContinueRow(false, screens.EngramChoiceStartFresh)
+	m.refreshEngramPreview()
 
 	// Step 1: Continue → confirmation
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1072,6 +1073,7 @@ func TestEngramConfigMode_StateDoesNotLeak(t *testing.T) {
 	m.EngramDataDirPos = 5
 	m.EngramDataDirErr = "some old error"
 	m.Cursor = screens.EngramDataDirContinueRow(false, screens.EngramChoiceStartFresh)
+	m.refreshEngramPreview()
 
 	// Step 1: Continue → confirmation
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})

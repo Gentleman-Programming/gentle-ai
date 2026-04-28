@@ -489,3 +489,37 @@ func TestLocalDataBackend_EstimateMigration_EmptySource(t *testing.T) {
 		t.Errorf("total = %d, want 0", total)
 	}
 }
+
+// TestLocalDataBackend_CheckWritable verifies that CheckWritable succeeds on
+// a writable directory and fails on a read-only one.
+func TestLocalDataBackend_CheckWritable(t *testing.T) {
+	backend := NewLocalDataBackend()
+
+	// Writable directory.
+	writable := t.TempDir()
+	if err := backend.CheckWritable(writable); err != nil {
+		t.Errorf("CheckWritable(writable) error = %v", err)
+	}
+
+	// Read-only parent → should fail.
+	if runtime.GOOS == "windows" {
+		t.Skip("read-only directory test is unreliable on Windows")
+	}
+	readOnly := filepath.Join(t.TempDir(), "readonly")
+	os.MkdirAll(readOnly, 0o755)
+	os.Chmod(readOnly, 0o555)
+	defer os.Chmod(readOnly, 0o755)
+
+	if err := backend.CheckWritable(readOnly); err == nil {
+		t.Error("CheckWritable(readOnly) = nil, want error")
+	}
+}
+
+// TestLocalDataBackend_MigrateData_VerifyCopyFails is intentionally omitted.
+//
+// The size verification in MigrateData is a safety net for race conditions
+// (e.g., the destination file being modified or removed during copy). In
+// normal operation, copyFileBuffered uses O_TRUNC so the destination size
+// always matches the source after a successful copy. Testing the failure
+// path would require monkey-patching copyFileBuffered, which is not worth
+// the complexity for a defensive check that exists to catch filesystem races.

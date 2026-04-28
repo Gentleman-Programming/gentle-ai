@@ -2,8 +2,10 @@ package engram
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -339,5 +341,263 @@ func TestPreview_NoPartialMigrationWarning(t *testing.T) {
 	}
 	if preview.PartialMigrationWarning != "" {
 		t.Errorf("PartialMigrationWarning = %q, want empty", preview.PartialMigrationWarning)
+	}
+}
+
+// TestDataDirService_Preview_StartFresh verifies that Preview works for the
+// StartFresh action (path expansion, file listing, space check).
+func TestDataDirService_Preview_StartFresh(t *testing.T) {
+	backend := NewLocalDataBackend()
+	service := NewDataDirService(backend, nil)
+
+	home := t.TempDir()
+	origHomeFn := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	defer func() { userHomeDir = origHomeFn }()
+
+	src := backend.HardDefaultDataDir()
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "engram.db"), []byte("data"), 0o644)
+
+	preview, err := service.Preview(ActionStartFresh, "~/fresh")
+	if err != nil {
+		t.Fatalf("Preview() error = %v", err)
+	}
+	if len(preview.Files) != 1 {
+		t.Errorf("len(Files) = %d, want 1", len(preview.Files))
+	}
+	if preview.ExpandedPath == "" {
+		t.Error("ExpandedPath is empty")
+	}
+}
+
+// TestDataDirService_Preview_SpaceError verifies that when AvailableSpace
+// fails, the error is stored in Preview.SpaceErr and HasEnoughSpace still
+// returns true (zero-total fallback).
+func TestDataDirService_Preview_SpaceError(t *testing.T) {
+	// Use a mock backend that always fails AvailableSpace and reports no files.
+	backend := &mockSpaceErrorBackend{}
+	service := NewDataDirService(backend, nil)
+
+	preview, err := service.Preview(ActionMigrate, "~/any")
+	if err != nil {
+		t.Fatalf("Preview() error = %v", err)
+	}
+	if preview.SpaceErr == nil {
+		t.Error("Preview.SpaceErr is nil, want non-nil")
+	}
+	if !preview.HasEnoughSpace() {
+		t.Error("HasEnoughSpace() = false, want true when TotalBytes == 0")
+	}
+}
+
+// mockSpaceErrorBackend implements just enough of DataBackend to test the
+// SpaceErr path. It reports no existing data and always fails AvailableSpace.
+type mockSpaceErrorBackend struct{}
+
+func (m *mockSpaceErrorBackend) DefaultDataDir() string                 { return "" }
+func (m *mockSpaceErrorBackend) HardDefaultDataDir() string             { return "" }
+func (m *mockSpaceErrorBackend) ExpandPath(path string) (string, error) { return "/expanded/" + path, nil }
+func (m *mockSpaceErrorBackend) DetectExistingData(dir string) bool     { return false }
+func (m *mockSpaceErrorBackend) ExistingFiles(dir string) []string      { return nil }
+func (m *mockSpaceErrorBackend) DetectLockedData(dir string) (bool, error) { return false, nil }
+func (m *mockSpaceErrorBackend) EstimateMigration(source string) ([]FileInfo, uint64, error) {
+	return nil, 0, nil
+}
+func (m *mockSpaceErrorBackend) MigrateData(source, target string) (Result, error) { return Result{}, nil }
+func (m *mockSpaceErrorBackend) CleanData(dir string) error                       { return nil }
+func (m *mockSpaceErrorBackend) EnsureDir(dir string) error                       { return nil }
+func (m *mockSpaceErrorBackend) AvailableSpace(dir string) (uint64, error) {
+	return 0, fmt.Errorf("simulated space check failure")
+}
+func (m *mockSpaceErrorBackend) CheckWritable(dir string) error { return nil }
+
+// TestDataDirService_Execute_StartFresh verifies that StartFresh cleans the
+// source, creates the target, and persists the config.
+func TestDataDirService_Execute_StartFresh(t *testing.T) {
+	backend := NewLocalDataBackend()
+	home := t.TempDir()
+	origHomeFn := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	defer func() { userHomeDir = origHomeFn }()
+
+	src := backend.HardDefaultDataDir()
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "engram.db"), []byte("old"), 0o644)
+
+	dst := filepath.Join(home, "fresh")
+	persister := NewLocalConfigPersister(home)
+	service := NewDataDirService(backend, persister)
+
+	result, err := service.Execute(ActionStartFresh, dst)
+	if err != nil {
+		t.Fatalf("Execute(StartFresh) error = %v", err)
+	}
+	if result.Message == "" {
+		t.Error("result.Message is empty")
+	}
+	if backend.DetectExistingData(src) {
+		t.Error("source data should have been deleted")
+	}
+	if _, err := os.Stat(dst); err != nil {
+		t.Errorf("target dir missing: %v", err)
+	}
+}
+
+// TestDataDirService_Execute_Migrate_LockedData verifies that migration is
+// rejected when the source data appears to be locked.
+func TestDataDirService_Execute_Migrate_LockedData(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("lock detection uses lsof on Unix; skip on Windows")
+	}
+
+	backend := NewLocalDataBackend()
+	home := t.TempDir()
+	origHomeFn := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	defer func() { userHomeDir = origHomeFn }()
+
+	src := backend.HardDefaultDataDir()
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "engram.db"), []byte("data"), 0o644)
+
+	// Open the file to hold a lock.
+	f, err := os.Open(filepath.Join(src, "engram.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	persister := NewLocalConfigPersister(home)
+	service := NewDataDirService(backend, persister)
+	_, err = service.Execute(ActionMigrate, filepath.Join(home, "dst"))
+	if err == nil {
+		t.Fatal("expected error for locked data, got nil")
+	}
+	if !errors.Is(err, ErrLocked) {
+		t.Errorf("error = %v, want ErrLocked", err)
+	}
+}
+
+// TestConfirmMessage verifies that ConfirmMessage returns the correct text
+// for each action.
+func TestConfirmMessage(t *testing.T) {
+	if got := ConfirmMessage(ActionClean, "/src", "/dst"); !strings.Contains(got, "delete") {
+		t.Errorf("ConfirmMessage(Clean) = %q, want containing 'delete'", got)
+	}
+	if got := ConfirmMessage(ActionMigrate, "/src", "/dst"); !strings.Contains(got, "/src") {
+		t.Errorf("ConfirmMessage(Migrate) = %q, want containing '/src'", got)
+	}
+	if got := ConfirmMessage(ActionStartFresh, "/src", "/dst"); !strings.Contains(got, "/dst") {
+		t.Errorf("ConfirmMessage(StartFresh) = %q, want containing '/dst'", got)
+	}
+}
+
+// TestConfirmWarning verifies that ConfirmWarning returns non-empty warnings
+// for destructive actions.
+func TestConfirmWarning(t *testing.T) {
+	for _, action := range []Action{ActionClean, ActionMigrate, ActionStartFresh} {
+		if got := ConfirmWarning(action); got == "" {
+			t.Errorf("ConfirmWarning(%v) is empty, want non-empty", action)
+		}
+	}
+}
+
+// TestPreviewMessage verifies that PreviewMessage returns text for Migrate and
+// StartFresh.
+func TestPreviewMessage(t *testing.T) {
+	if got := PreviewMessage(ActionMigrate); got == "" {
+		t.Error("PreviewMessage(Migrate) is empty")
+	}
+	if got := PreviewMessage(ActionStartFresh); got == "" {
+		t.Error("PreviewMessage(StartFresh) is empty")
+	}
+	if got := PreviewMessage(ActionClean); got != "" {
+		t.Errorf("PreviewMessage(Clean) = %q, want empty", got)
+	}
+}
+
+// TestWarningMessage verifies that WarningMessage returns warnings for
+// destructive choices.
+func TestWarningMessage(t *testing.T) {
+	if got := WarningMessage(ActionStartFresh); !strings.Contains(got, "deleted") {
+		t.Errorf("WarningMessage(StartFresh) = %q, want containing 'deleted'", got)
+	}
+	if got := WarningMessage(ActionClean); !strings.Contains(got, "deleted") {
+		t.Errorf("WarningMessage(Clean) = %q, want containing 'deleted'", got)
+	}
+	if got := WarningMessage(ActionMigrate); got != "" {
+		t.Errorf("WarningMessage(Migrate) = %q, want empty", got)
+	}
+}
+
+// TestLocalConfigPersister_Read verifies reading from state file.
+func TestLocalConfigPersister_Read(t *testing.T) {
+	// Isolate from any env var set by previous tests in this process.
+	t.Setenv(DataDirEnvVar, "")
+
+	home := t.TempDir()
+	p := NewLocalConfigPersister(home)
+
+	// Empty state file → empty result.
+	got, err := p.Read()
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got != "" {
+		t.Errorf("Read() = %q, want empty", got)
+	}
+
+	// Write then read back.
+	if err := p.Write("/custom/engram"); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	got, err = p.Read()
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got != "/custom/engram" {
+		t.Errorf("Read() = %q, want /custom/engram", got)
+	}
+}
+
+// TestLocalConfigPersister_Write verifies atomic write and read-back.
+func TestLocalConfigPersister_Write(t *testing.T) {
+	home := t.TempDir()
+	p := NewLocalConfigPersister(home)
+
+	if err := p.Write("/first"); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := p.Write("/second"); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := p.Read()
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got != "/second" {
+		t.Errorf("Read() = %q, want /second", got)
+	}
+}
+
+// TestLocalConfigPersister_Clear verifies that Clear removes the config.
+func TestLocalConfigPersister_Clear(t *testing.T) {
+	home := t.TempDir()
+	p := NewLocalConfigPersister(home)
+
+	if err := p.Write("/custom/engram"); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := p.Clear(); err != nil {
+		t.Fatalf("Clear() error = %v", err)
+	}
+	got, err := p.Read()
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got != "" {
+		t.Errorf("Read() after Clear = %q, want empty", got)
 	}
 }

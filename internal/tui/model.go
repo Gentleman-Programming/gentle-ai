@@ -20,7 +20,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/internal/storage"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
@@ -1823,44 +1822,35 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.EngramDataDirPendingPath = ""
 					m.Cursor = 1 // default to Cancel for safety
 					return m, nil
-				case screens.EngramChoiceMigrate, screens.EngramChoiceStartFresh:
-					backend := engram.NewLocalDataBackend()
-					path, err := backend.ExpandPath(m.EngramDataDirInput)
-					if err != nil {
-						m.EngramDataDirErr = "Invalid path: " + err.Error()
-						return m, nil
-					}
-					// Best-effort writability check: try creating a temp file.
-					tmpFile := filepath.Join(path, ".gentle-ai-write-test")
-					if err := os.MkdirAll(path, 0o755); err != nil {
-						m.EngramDataDirErr = "Cannot create directory: " + err.Error()
-						return m, nil
-					}
-					if f, err := os.Create(tmpFile); err == nil {
-						_ = f.Close()
-						_ = os.Remove(tmpFile)
-					} else {
-						m.EngramDataDirErr = "Directory is not writable: " + path
-						return m, nil
-					}
-					if m.EngramDataDirChoice == screens.EngramChoiceStartFresh {
-						m.Selection.EngramDataDir = path
-						m.Selection.EngramMigrateData = false
-					} else {
-						m.Selection.EngramDataDir = path
-						m.Selection.EngramMigrateData = true
-						// Pre-flight: verify there's enough space for migration.
-						if err := storage.RequireFreeSpace(path, estimateExistingDataSize()); err != nil {
-							m.EngramDataDirErr = err.Error()
-							return m, nil
-						}
-					}
-					m.EngramDataDirErr = ""
-					// Destructive: show confirmation
-					m.EngramDataDirPhase = 1
-					m.EngramDataDirPendingPath = path
-					m.Cursor = 1 // default to Cancel for safety
+			case screens.EngramChoiceMigrate, screens.EngramChoiceStartFresh:
+				preview := m.EngramDataDirPreview
+				if preview.SpaceErr != nil {
+					m.EngramDataDirErr = engram.ErrorMessage(preview.SpaceErr)
 					return m, nil
+				}
+				if !preview.HasEnoughSpace() {
+					m.EngramDataDirErr = "Insufficient disk space at the target location."
+					return m, nil
+				}
+				path := preview.ExpandedPath
+				backend := engram.NewLocalDataBackend()
+				if err := backend.CheckWritable(path); err != nil {
+					m.EngramDataDirErr = engram.ErrorMessage(err)
+					return m, nil
+				}
+				if m.EngramDataDirChoice == screens.EngramChoiceStartFresh {
+					m.Selection.EngramDataDir = path
+					m.Selection.EngramMigrateData = false
+				} else {
+					m.Selection.EngramDataDir = path
+					m.Selection.EngramMigrateData = true
+				}
+				m.EngramDataDirErr = ""
+				// Destructive: show confirmation
+				m.EngramDataDirPhase = 1
+				m.EngramDataDirPendingPath = path
+				m.Cursor = 1 // default to Cancel for safety
+				return m, nil
 				}
 			}
 
@@ -3872,15 +3862,4 @@ func agentBuilderSystemPromptPath(agentID model.AgentID) (string, bool) {
 }
 
 // estimateExistingDataSize calculates the total size of Engram SQLite files at
-// the hard-coded default location (~/.engram). Returns 0 if no existing data
-// is found (the migration would be a no-op in that case, so any amount of free
-// space is fine).
-//
-// Uses HardDefaultDataDir() instead of DefaultDataDir() because the latter
-// respects the ENGRAM_DATA_DIR env var, which may already point to a
-// previously migrated location.
-func estimateExistingDataSize() uint64 {
-	backend := engram.NewLocalDataBackend()
-	_, total, _ := backend.EstimateMigration(backend.HardDefaultDataDir())
-	return total
-}
+

@@ -123,6 +123,10 @@ func ErrorMessage(err error) string {
 		return "Engram data appears to be in use. Close any running engram processes and try again."
 	case errors.Is(err, ErrInsufficientSpace):
 		return err.Error()
+	case errors.Is(err, ErrInvalidPath):
+		return "The path you entered is invalid. Please check the path and try again."
+	case errors.Is(err, ErrPathNotWritable):
+		return "The selected directory is not writable. Please choose a different location or fix permissions."
 	default:
 		return err.Error()
 	}

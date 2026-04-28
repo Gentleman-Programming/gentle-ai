@@ -5,8 +5,11 @@
 package engram
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/internal/platform"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
@@ -84,6 +87,9 @@ type DataBackend interface {
 
 	// Space checking
 	AvailableSpace(dir string) (uint64, error)
+
+	// Validation
+	CheckWritable(dir string) error
 }
 
 // ConfigPersister handles where the ENGRAM_DATA_DIR configuration is stored.
@@ -246,25 +252,46 @@ func (p *LocalConfigPersister) Read() (string, error) {
 
 // Write persists the data directory to state, env var, and shell profile.
 //
-// NOTE: This method performs a read-modify-write on the state file and is
-// NOT safe for concurrent use. If multiple processes call Write simultaneously,
-// the last writer wins and earlier writes may be lost. In practice this is
-// acceptable because the Engram data directory is configured once during
-// installation and not modified concurrently.
+// The state file write is atomic: it writes to a temporary file and renames
+// it into place. This prevents corruption if the process crashes mid-write.
+// However, the read-modify-write sequence is still NOT safe for concurrent
+// use across multiple processes. In practice this is acceptable because the
+// Engram data directory is configured once during installation and not
+// modified concurrently.
 func (p *LocalConfigPersister) Write(dir string) error {
-	if s, err := state.Read(p.homeDir); err == nil {
-		s.EngramDataDir = dir
-		if err := state.Write(p.homeDir, s); err != nil {
-			return err
-		}
-	} else {
-		if err := state.Write(p.homeDir, state.InstallState{EngramDataDir: dir}); err != nil {
-			return err
-		}
+	var s state.InstallState
+	if existing, err := state.Read(p.homeDir); err == nil {
+		s = existing
 	}
+	s.EngramDataDir = dir
+
+	if err := p.atomicStateWrite(s); err != nil {
+		return err
+	}
+
 	_ = setDataDirEnv(dir)
 	_ = platform.PersistEngramEnv(dir)
 	return nil
+}
+
+// atomicStateWrite writes the state atomically using a temp file + rename.
+func (p *LocalConfigPersister) atomicStateWrite(s state.InstallState) error {
+	statePath := state.Path(p.homeDir)
+	tmpPath := statePath + ".tmp"
+
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, statePath)
 }
 
 // Clear removes the custom data directory configuration.

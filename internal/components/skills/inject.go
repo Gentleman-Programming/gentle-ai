@@ -10,6 +10,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/undo"
 )
 
 // isSDDSkill reports whether a skill ID belongs to the SDD orchestrator suite.
@@ -38,6 +39,13 @@ type InjectionResult struct {
 // Individual skill failures (e.g., missing embedded asset) are logged
 // and skipped rather than aborting the entire operation.
 func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (InjectionResult, error) {
+	return InjectWithRecorder(homeDir, adapter, skillIDs, nil)
+}
+
+// InjectWithRecorder is identical to Inject but accepts an optional undo
+// Recorder. When rec is non-nil, each file write is recorded so the step
+// can be rolled back granularly without restoring the entire backup snapshot.
+func InjectWithRecorder(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID, rec *undo.Recorder) (InjectionResult, error) {
 	if !adapter.SupportsSkills() {
 		return InjectionResult{Skipped: skillIDs}, nil
 	}
@@ -69,7 +77,7 @@ func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (I
 		}
 
 		path := filepath.Join(skillDir, string(id), "SKILL.md")
-		writeResult, writeErr := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
+		writeResult, writeErr := filemerge.WriteFileAtomicWithRecorder(path, []byte(content), 0o644, rec)
 		if writeErr != nil {
 			return InjectionResult{}, fmt.Errorf("skill %q: write failed: %w", id, writeErr)
 		}
