@@ -117,16 +117,15 @@ func (s *DataDirService) Preview(action Action, inputPath string) (Preview, erro
 		}
 		p.ExpandedPath = expanded
 
-		// For migrate, estimate files from hard default source
-		if action == ActionMigrate {
-			src := s.backend.HardDefaultDataDir()
-			files, total, err := s.backend.EstimateMigration(src)
-			if err != nil {
-				return p, err
-			}
-			p.Files = files
-			p.TotalBytes = total
+		// Show existing files from hard default so the user knows what they
+		// stand to lose (migrate moves them, start-fresh deletes them).
+		src := s.backend.HardDefaultDataDir()
+		files, total, err := s.backend.EstimateMigration(src)
+		if err != nil {
+			return p, err
 		}
+		p.Files = files
+		p.TotalBytes = total
 
 		space, err := s.backend.AvailableSpace(expanded)
 		if err != nil {
@@ -174,7 +173,7 @@ func (s *DataDirService) Execute(action Action, path string) (Result, error) {
 			return Result{}, err
 		}
 		if err := s.persister.Write(path); err != nil {
-			return Result{}, err
+			return Result{}, fmt.Errorf("data moved to %s but config could not be saved: %w", path, err)
 		}
 		result.Message = "Engram data has been moved successfully."
 		return result, nil
@@ -192,7 +191,7 @@ func (s *DataDirService) Execute(action Action, path string) (Result, error) {
 			return Result{}, err
 		}
 		if err := s.persister.Write(path); err != nil {
-			return Result{}, err
+			return Result{}, fmt.Errorf("new database directory ready at %s but config could not be saved: %w", path, err)
 		}
 		return Result{Message: "A new empty database will be created at the selected location."}, nil
 	default:

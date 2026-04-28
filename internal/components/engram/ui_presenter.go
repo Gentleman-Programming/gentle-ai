@@ -1,8 +1,8 @@
 package engram
 
 import (
+	"errors"
 	"fmt"
-	"strings"
 )
 
 // FormatBytes renders a byte count as a human-readable string (e.g. "1.2 MB").
@@ -119,9 +119,9 @@ func ErrorMessage(err error) string {
 		return ""
 	}
 	switch {
-	case strings.Contains(err.Error(), "locked"):
+	case errors.Is(err, ErrLocked):
 		return "Engram data appears to be in use. Close any running engram processes and try again."
-	case strings.Contains(err.Error(), "insufficient disk space"):
+	case errors.Is(err, ErrInsufficientSpace):
 		return err.Error()
 	default:
 		return err.Error()

@@ -218,7 +218,7 @@ func TestErrorMessage(t *testing.T) {
 	if got := ErrorMessage(nil); got != "" {
 		t.Errorf("ErrorMessage(nil) = %q, want empty", got)
 	}
-	if got := ErrorMessage(errors.New("some file locked by process")); !strings.Contains(got, "in use") {
-		t.Errorf("ErrorMessage(locked) = %q, want containing 'in use'", got)
+	if got := ErrorMessage(ErrLocked); !strings.Contains(got, "in use") {
+		t.Errorf("ErrorMessage(ErrLocked) = %q, want containing 'in use'", got)
 	}
 }

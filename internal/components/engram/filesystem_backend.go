@@ -2,6 +2,7 @@ package engram
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -200,13 +201,8 @@ func (b *LocalDataBackend) MigrateData(source, target string) (Result, error) {
 			continue
 		}
 
-		data, err := os.ReadFile(srcPath)
-		if err != nil {
-			return Result{}, fmt.Errorf("read %s: %w", f, err)
-		}
-
-		if err := os.WriteFile(dstPath, data, info.Mode()); err != nil {
-			return Result{}, fmt.Errorf("write %s: %w", f, err)
+		if err := copyFileBuffered(srcPath, dstPath, info.Mode()); err != nil {
+			return Result{}, fmt.Errorf("copy %s: %w", f, err)
 		}
 
 		// Verify copy succeeded before scheduling removal
@@ -280,4 +276,33 @@ func (b *LocalDataBackend) AvailableSpace(dir string) (uint64, error) {
 // EnsureDir creates the directory and any parents if they don't exist.
 func (b *LocalDataBackend) EnsureDir(dir string) error {
 	return os.MkdirAll(dir, 0o755)
+}
+
+// copyFileBuffered copies src to dst using a fixed-size buffer so that large
+// files (e.g. multi-GB SQLite databases) don't OOM the process.
+func copyFileBuffered(src, dst string, perm os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	// Use a deferred close with error capture so that a delayed write error
+	// (e.g. disk full) is not silently swallowed.
+	closeOut := func() error {
+		return out.Close()
+	}
+	defer func() { _ = closeOut() }()
+
+	const bufSize = 64 * 1024 // 64 KiB
+	buf := make([]byte, bufSize)
+	if _, err := io.CopyBuffer(out, in, buf); err != nil {
+		return err
+	}
+
+	return closeOut()
 }

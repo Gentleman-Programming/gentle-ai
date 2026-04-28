@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -414,6 +413,7 @@ type Model struct {
 	EngramDataDirFeedbackMsg  string // message shown after action completes
 	EngramDataDirFilesMoved   int    // files migrated (for feedback)
 	EngramDataDirBytesMoved   uint64 // bytes migrated (for feedback)
+	EngramDataDirPreview      engram.Preview // cached preview to avoid syscalls in View()
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -742,11 +742,11 @@ func (m Model) View() string {
 	case ScreenDependencyTree:
 		return screens.RenderDependencyTree(m.DependencyPlan, m.Selection, m.Cursor)
 	case ScreenEngramDataDir:
-		backend := engram.NewLocalDataBackend()
 		action := m.engramAction()
-		preview, _ := m.engramPreview(backend, action)
+		preview := m.EngramDataDirPreview
 		switch m.EngramDataDirPhase {
 		case 1: // confirm
+			backend := engram.NewLocalDataBackend()
 			return screens.RenderEngramConfirm(screens.EngramConfirmRenderArgs{
 				Title:          engram.ConfirmTitle(action),
 				Message:        engram.ConfirmMessage(action, backend.HardDefaultDataDir(), m.EngramDataDirPendingPath),
@@ -764,6 +764,7 @@ func (m Model) View() string {
 				Details: engram.FeedbackDetails(action, m.EngramDataDirFilesMoved, m.EngramDataDirBytesMoved),
 			})
 		default: // 0 = choose
+			backend := engram.NewLocalDataBackend()
 			return screens.RenderEngramDataDir(screens.EngramDataDirRenderArgs{
 				CurrentDir:      backend.DefaultDataDir(),
 				HasExistingData: m.EngramDataDirHasExistingData,
@@ -1802,6 +1803,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.Selection.EngramDataDir = ""
 					m.Selection.EngramMigrateData = false
 				}
+				m.refreshEngramPreview()
 				return m, nil
 			}
 
@@ -2681,6 +2683,7 @@ func (m *Model) setScreen(next Screen) {
 			m.EngramDataDirInput = ""
 			m.EngramDataDirPos = 0
 		}
+		m.refreshEngramPreview()
 	}
 }
 
@@ -3017,6 +3020,16 @@ func (m Model) engramPreview(backend engram.DataBackend, action engram.Action) (
 	return service.Preview(action, m.EngramDataDirInput)
 }
 
+// refreshEngramPreview recomputes and caches the preview based on current
+// choice and input. It should be called whenever choice or input changes,
+// never from View() which must remain free of syscalls.
+func (m *Model) refreshEngramPreview() {
+	backend := engram.NewLocalDataBackend()
+	action := m.engramAction()
+	preview, _ := m.engramPreview(backend, action)
+	m.EngramDataDirPreview = preview
+}
+
 // handleEngramDone completes the Engram data dir screen for non-destructive actions.
 func (m Model) handleEngramDone() (tea.Model, tea.Cmd) {
 	if m.EngramConfigMode {
@@ -3024,7 +3037,12 @@ func (m Model) handleEngramDone() (tea.Model, tea.Cmd) {
 		backend := engram.NewLocalDataBackend()
 		persister := engram.NewLocalConfigPersister(homeDir)
 		service := engram.NewDataDirService(backend, persister)
-		_, _ = service.Execute(engram.ActionKeepDefault, "")
+		if _, err := service.Execute(engram.ActionKeepDefault, ""); err != nil {
+			// Non-fatal: keep default is a no-op data-wise, but config clear
+			// may fail. Show the error and stay on screen so the user can retry.
+			m.EngramDataDirErr = engram.ErrorMessage(err)
+			return m, nil
+		}
 		m.EngramConfigMode = false
 		m.setScreen(ScreenWelcome)
 		return m, nil
@@ -3047,9 +3065,6 @@ func (m Model) handleEngramConfirm() (tea.Model, tea.Cmd) {
 	result, err := service.Execute(action, path)
 	if err != nil {
 		m.EngramDataDirErr = engram.ErrorMessage(err)
-		if errors.Is(err, engram.ErrLocked) {
-			m.EngramDataDirErr = "Engram data appears to be in use. Close any running engram processes and try again."
-		}
 		m.EngramDataDirPhase = 0
 		m.Cursor = screens.EngramDataDirCursorFromChoice(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
 		return m, nil
@@ -3082,6 +3097,7 @@ func (m *Model) toggleEngramDataDirChoice() {
 		m.Selection.EngramDataDir = ""
 		m.Selection.EngramMigrateData = false
 	}
+	m.refreshEngramPreview()
 }
 
 func (m Model) handleEngramDataDirKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -3136,6 +3152,7 @@ func (m Model) handleEngramDataDirKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.EngramDataDirPos = len([]rune(m.EngramDataDirInput))
 				}
 			}
+			m.refreshEngramPreview()
 			return m, nil
 		case tea.KeyBackspace:
 			if m.EngramDataDirPos > 0 {
@@ -3143,6 +3160,7 @@ func (m Model) handleEngramDataDirKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.EngramDataDirInput = string(append(runes[:m.EngramDataDirPos-1], runes[m.EngramDataDirPos:]...))
 				m.EngramDataDirPos--
 			}
+			m.refreshEngramPreview()
 			return m, nil
 		case tea.KeyLeft:
 			if m.EngramDataDirPos > 0 {
