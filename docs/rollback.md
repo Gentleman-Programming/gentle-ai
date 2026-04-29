@@ -66,5 +66,5 @@ Pinned backups are never automatically deleted, even when the retention limit is
 
 ## What rollback does NOT cover
 
-- Packages installed via `brew install`, `apt-get install`, or `pacman -S` are not uninstalled during rollback. The snapshot system handles configuration files only.
-- If you need to undo a package install, use your platform's package manager directly (e.g., `brew uninstall`, `sudo apt-get remove`, `sudo pacman -R`).
+- Packages installed via `brew install`, `apt-get install`, `pacman -S`, `dnf install`, or `zypper install` are not uninstalled during rollback. The snapshot system handles configuration files only.
+- If you need to undo a package install, use your platform's package manager directly (e.g., `brew uninstall`, `sudo apt-get remove`, `sudo pacman -R`, `sudo dnf remove`, `sudo zypper remove`).

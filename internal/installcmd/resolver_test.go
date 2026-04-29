@@ -177,6 +177,12 @@ func TestResolveDependencyInstall(t *testing.T) {
 			want:    CommandSequence{{"sudo", "dnf", "install", "-y", "somepkg"}},
 		},
 		{
+			name:    "opensuse resolves zypper command",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper"},
+			dep:     "somepkg",
+			want:    CommandSequence{{"sudo", "zypper", "--non-interactive", "install", "somepkg"}},
+		},
+		{
 			name:    "windows resolves winget command",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			dep:     "somepkg",
@@ -184,7 +190,7 @@ func TestResolveDependencyInstall(t *testing.T) {
 		},
 		{
 			name:    "unsupported package manager returns error",
-			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "zypper"},
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "unknownpm"},
 			dep:     "somepkg",
 			wantErr: true,
 		},
@@ -358,6 +364,12 @@ func TestResolveAgentInstall(t *testing.T) {
 			want:    CommandSequence{{"npm", "install", "-g", "opencode-ai"}},
 		},
 		{
+			name:    "opencode on opensuse system npm uses sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper"},
+			agent:   model.AgentOpenCode,
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "opencode-ai"}},
+		},
+		{
 			name:    "claude-code on windows uses npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", NpmWritable: true},
 			agent:   model.AgentClaudeCode,
@@ -445,6 +457,19 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "brew install uv",
+		},
+		{
+			name:    "kimi missing uv on opensuse returns zypper remediation",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper", Supported: true},
+			agent:   model.AgentKimi,
+			lookPath: func(file string) (string, error) {
+				if file == "uv" {
+					return "", fmt.Errorf("not found")
+				}
+				return "/usr/bin/" + file, nil
+			},
+			wantErr:     true,
+			errContains: "sudo zypper --non-interactive install uv",
 		},
 		{
 			name:    "kimi with uv present passes preflight",
@@ -540,6 +565,12 @@ func TestResolveComponentInstall(t *testing.T) {
 			wantErr:   true,
 		},
 		{
+			name:      "engram on opensuse returns error (uses DownloadLatestBinary instead)",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper"},
+			component: model.ComponentEngram,
+			wantErr:   true,
+		},
+		{
 			name:      "gga on darwin uses brew tap and reinstall",
 			profile:   system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
 			component: model.ComponentGGA,
@@ -568,6 +599,16 @@ func TestResolveComponentInstall(t *testing.T) {
 		{
 			name:      "gga on fedora uses git clone and install.sh",
 			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
+			component: model.ComponentGGA,
+			want: CommandSequence{
+				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
+				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
+			},
+		},
+		{
+			name:      "gga on opensuse uses git clone and install.sh",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper"},
 			component: model.ComponentGGA,
 			want: CommandSequence{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},

@@ -15,6 +15,8 @@ func installHintGit(profile PlatformProfile) string {
 		return "sudo pacman -S --noconfirm git"
 	case profile.PackageManager == "dnf":
 		return "sudo dnf install -y git"
+	case profile.PackageManager == "zypper":
+		return "sudo zypper --non-interactive install git"
 	default:
 		return "install git from https://git-scm.com/"
 	}
@@ -33,6 +35,8 @@ func installHintCurl(profile PlatformProfile) string {
 		return "sudo pacman -S --noconfirm curl"
 	case profile.PackageManager == "dnf":
 		return "sudo dnf install -y curl"
+	case profile.PackageManager == "zypper":
+		return "sudo zypper --non-interactive install curl"
 	default:
 		return "install curl from https://curl.se/"
 	}
@@ -51,6 +55,8 @@ func installHintNode(profile PlatformProfile) string {
 		return "sudo pacman -S --noconfirm nodejs npm"
 	case profile.PackageManager == "dnf":
 		return "curl -fsSL https://rpm.nodesource.com/setup_lts.x | sudo bash - && sudo dnf install -y nodejs"
+	case profile.PackageManager == "zypper":
+		return "sudo zypper --non-interactive install nodejs npm"
 	default:
 		return "install node from https://nodejs.org/"
 	}
@@ -80,6 +86,8 @@ func installHintGo(profile PlatformProfile) string {
 		return "sudo pacman -S --noconfirm go"
 	case profile.PackageManager == "dnf":
 		return "sudo dnf install -y golang"
+	case profile.PackageManager == "zypper":
+		return "sudo zypper --non-interactive install go"
 	default:
 		return "install go from https://go.dev/dl/"
 	}
@@ -119,6 +127,8 @@ func installCommandsGit(profile PlatformProfile) [][]string {
 		return [][]string{{"sudo", "pacman", "-S", "--noconfirm", "git"}}
 	case profile.PackageManager == "dnf":
 		return [][]string{{"sudo", "dnf", "install", "-y", "git"}}
+	case profile.PackageManager == "zypper":
+		return [][]string{{"sudo", "zypper", "--non-interactive", "install", "git"}}
 	default:
 		return nil
 	}
@@ -137,6 +147,8 @@ func installCommandsCurl(profile PlatformProfile) [][]string {
 		return [][]string{{"sudo", "pacman", "-S", "--noconfirm", "curl"}}
 	case profile.PackageManager == "dnf":
 		return [][]string{{"sudo", "dnf", "install", "-y", "curl"}}
+	case profile.PackageManager == "zypper":
+		return [][]string{{"sudo", "zypper", "--non-interactive", "install", "curl"}}
 	default:
 		return nil
 	}
@@ -162,6 +174,8 @@ func installCommandsNode(profile PlatformProfile) [][]string {
 			{"bash", "-c", "curl -fsSL https://rpm.nodesource.com/setup_lts.x | sudo bash -"},
 			{"sudo", "dnf", "install", "-y", "nodejs"},
 		}
+	case profile.PackageManager == "zypper":
+		return [][]string{{"sudo", "zypper", "--non-interactive", "install", "nodejs", "npm"}}
 	default:
 		return nil
 	}
@@ -188,6 +202,8 @@ func installCommandsGo(profile PlatformProfile) [][]string {
 		return [][]string{{"sudo", "pacman", "-S", "--noconfirm", "go"}}
 	case profile.PackageManager == "dnf":
 		return [][]string{{"sudo", "dnf", "install", "-y", "golang"}}
+	case profile.PackageManager == "zypper":
+		return [][]string{{"sudo", "zypper", "--non-interactive", "install", "go"}}
 	default:
 		return nil
 	}

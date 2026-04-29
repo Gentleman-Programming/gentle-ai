@@ -10,9 +10,10 @@
 | Linux (Ubuntu/Debian) | apt | Supported |
 | Linux (Arch) | pacman | Supported |
 | Linux (Fedora/RHEL family) | dnf | Supported |
+| Linux (openSUSE family) | zypper | Supported |
 | Windows 10/11 | winget | Supported |
 
-Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, CentOS Stream, Rocky Linux, AlmaLinux, etc.).
+Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, CentOS Stream, Rocky Linux, AlmaLinux, openSUSE Tumbleweed, openSUSE Leap, etc.).
 
 Release binaries are built for `linux`, `darwin`, and `windows` on both `amd64` and `arm64`.
 

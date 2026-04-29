@@ -15,7 +15,7 @@ internal/
   system/                  OS/distro detection, dependency checks, platform guards
   cli/                     Install flags, validation, orchestration, dry-run
   planner/                 Dependency graph, resolution, ordering, review payloads
-  installcmd/              Profile-aware command resolver (brew/apt/pacman/dnf/winget/go install)
+  installcmd/              Profile-aware command resolver (brew/apt/pacman/dnf/zypper/winget/go install)
   pipeline/                Staged execution + rollback orchestration
   backup/                  Config snapshot + restore
   assets/                  Embedded skill files + persona templates
@@ -31,7 +31,7 @@ internal/
   tui/                     Bubbletea TUI (Rose Pine theme)
     styles/  screens/
 scripts/                   Installer scripts (bash + PowerShell)
-e2e/                       Docker-based E2E tests (Ubuntu + Arch)
+e2e/                       Docker-based E2E tests (Ubuntu + Arch + Fedora + openSUSE)
 testdata/                  Golden test fixtures
 ```
 
@@ -43,7 +43,7 @@ testdata/                  Golden test fixtures
 # Unit tests
 go test ./...
 
-# Docker E2E (Ubuntu + Arch, requires Docker)
+# Docker E2E (Ubuntu + Arch + Fedora + openSUSE, requires Docker)
 RUN_FULL_E2E=1 RUN_BACKUP_TESTS=1 ./e2e/docker-test.sh
 
 # Dry-run smoke test (macOS/Linux)
@@ -57,7 +57,7 @@ Test coverage:
 
 - **26 test packages** across the codebase
 - **260+ test functions** covering all agent adapters, components, and system detection
-- **78 E2E test functions** running in Docker containers (Ubuntu + Arch)
+- **78 E2E test functions** running in Docker containers (Ubuntu + Arch + Fedora + openSUSE)
 - **17 golden files** for snapshot testing component output
 - Full pipeline tested: detection, planning, execution, backup, restore, verification
 - All 8 agent adapters have unit tests with cross-platform path validation

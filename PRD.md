@@ -75,6 +75,7 @@ This is NOT an "AI agent installer." Most agents are already easy to install (`n
 | Linux - Ubuntu/Debian | apt + Homebrew | P0 |
 | Linux - Arch | pacman | P0 |
 | Linux - Fedora/RHEL | dnf | P1 |
+| Linux - openSUSE | zypper | P1 |
 | WSL 2 (Windows) | apt + Homebrew | P1 |
 | Windows (native) | winget / scoop / choco | P2 |
 | Termux (Android) | pkg | P2 |
@@ -130,7 +131,7 @@ These are the base tools the installer itself and the ecosystem need.
 | Dependency | Min Version | Why | Install Method |
 |-----------|-------------|-----|----------------|
 | `bash` | 3.2+ | GGA, install scripts, Engram plugin hooks | Pre-installed on all targets |
-| `git` | 2.x | GGA (diff/staging), Engram (git sync), skills clone, agent integrations | `brew`/`apt`/`pacman`/`dnf`/`pkg` |
+| `git` | 2.x | GGA (diff/staging), Engram (git sync), skills clone, agent integrations | `brew`/`apt`/`pacman`/`dnf`/`zypper`/`pkg` |
 | `curl` | Any | Binary downloads, GGA providers (lmstudio, github), installer script | Pre-installed on most systems |
 
 #### Conditionally Required (based on user's selections)
@@ -140,7 +141,7 @@ These are the base tools the installer itself and the ecosystem need.
 | **Homebrew** | Any | macOS (primary pkg manager), Linux (recommended for Engram, agents) | Official install script |
 | **Node.js** | 20+ | Claude Code (needs 18+), Gemini CLI (needs 20+) — installer picks the highest required version | `brew install node` / `nvm` / `fnm` / distro package |
 | **npm** | Comes with Node.js | Installing Claude Code, Gemini CLI, Codex | Bundled with Node.js |
-| **Go** | 1.25+ | ONLY if building Engram from source (NOT needed for binary/Homebrew install) | `brew install go` / distro package |
+| **Go** | 1.25+ | ONLY for local development/source builds (NOT needed for release-binary/Homebrew installs) | `brew install go` / distro package |
 | **python3** | 3.x | GGA with Ollama API mode or LM Studio provider (has fallback without it) | Pre-installed on macOS, `apt`/`pacman`/`dnf` on Linux |
 | **gh** (GitHub CLI) | Any | GGA with `github:<model>` provider | `brew install gh` / distro package |
 
@@ -152,6 +153,7 @@ These are the base tools the installer itself and the ecosystem need.
 | **Ubuntu/Debian** | bash, curl, git, sha256sum | Homebrew (optional), Node.js (apt version is often outdated → use NodeSource or fnm) | Node.js from apt is often v12/v16 — MUST use NodeSource repo or version manager for v20+ |
 | **Arch** | bash, curl, git, python3, sha256sum | Node.js (`pacman -S nodejs npm`) | Arch packages are usually current — `pacman` versions are fine |
 | **Fedora/RHEL** | bash, curl, git, sha256sum | Node.js (`dnf install nodejs`) | May need `dnf module enable nodejs:20` for correct version |
+| **openSUSE** | bash, curl, git, sha256sum | Node.js (`zypper install nodejs npm`) | Tumbleweed packages are usually current; Leap may require a newer Node.js source if distro packages lag |
 | **WSL 2** | Same as host Linux distro | Same as Linux + note about Windows-side agents (Cursor, VSCode) | Windows-side agents use Windows paths; WSL agents use Linux paths |
 | **Windows native** | None guaranteed | Everything: git (Git for Windows), Node.js (winget/scoop), bash (Git Bash) | GGA needs bash — Git for Windows includes Git Bash |
 | **Termux** | bash, curl, git | Node.js (`pkg install nodejs`), python (`pkg install python`) | No sudo, no Homebrew. Commands run directly, not via `sh -c`. Go cross-compile has limitations on Android. |
@@ -174,7 +176,7 @@ Node.js is the most critical dependency — multiple agents depend on it, and di
 - R-DEP-02: The installer MUST show the complete dependency tree to the user and get confirmation before installing anything
 - R-DEP-03: The installer MUST install missing dependencies automatically (with user consent) using the platform's preferred package manager
 - R-DEP-04: The installer MUST handle Node.js version requirements intelligently — Claude Code needs 18+, Gemini CLI needs 20+, so install 20+ to satisfy both
-- R-DEP-05: The installer MUST NOT install Go unless the user explicitly chooses to build Engram from source (pre-compiled binaries are the default)
+- R-DEP-05: The installer MUST NOT install Go unless the user explicitly chooses a source-build/development workflow (pre-compiled binaries are the default)
 - R-DEP-06: On Linux, the installer MUST NOT use distro-default Node.js if it's below v20 — use NodeSource, fnm, or Homebrew instead
 - R-DEP-07: The installer MUST handle platform-specific differences transparently (BSD sed vs GNU sed, sha256sum vs shasum, Xcode CLT on macOS)
 - R-DEP-08: The installer MUST detect existing version managers (fnm, nvm, n) and use them instead of installing Node.js system-wide
@@ -252,7 +254,7 @@ The installer supports configuring the Gentleman ecosystem into ANY AI coding ag
 
 | Component | Method | Notes |
 |-----------|--------|-------|
-| Engram binary | Go install / Homebrew / direct download | Single binary, no deps |
+| Engram binary | Homebrew / direct download | Single binary, no deps |
 | Engram plugin for Claude Code | `claude plugin marketplace add` | Automatic |
 | Engram plugin for OpenCode | Copy `engram.ts` to plugins dir | Automatic |
 | Engram config for Gemini CLI | Write `~/.gemini/settings.json` + `system.md` | Automatic |

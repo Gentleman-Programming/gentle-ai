@@ -231,13 +231,15 @@ func TestRenderDependencyReportMissing(t *testing.T) {
 		Dependencies: []Dependency{
 			{Name: "git", Required: true, Installed: true, Version: "2.43.0"},
 			{Name: "node", Required: true, Installed: false, InstallHint: "brew install node"},
+			{Name: "go", Required: false, Installed: false, InstallHint: "brew install go"},
 		},
 		AllPresent:      false,
 		MissingRequired: []string{"node"},
+		MissingOptional: []string{"go"},
 	}
 
 	output := RenderDependencyReport(report)
-	if !containsAll(output, "node", "x NOT FOUND", "Missing required: node") {
+	if !containsAll(output, "node", "x NOT FOUND", "Missing required: node", "Missing optional: go (only needed for local development/source builds)") {
 		t.Fatalf("output missing expected content:\n%s", output)
 	}
 }
