@@ -33,7 +33,12 @@ type InstallState struct {
 	KiroModelAssignments map[string]string `json:"kiro_model_assignments,omitempty"`
 
 	// ModelAssignments maps sub-agent names to provider/model pairs (OpenCode).
-	ModelAssignments map[string]ModelAssignmentState `json:"model_assignments,omitempty"`
+	ModelAssignments map[string]ModelAssignmentState `json:"model_assignments"`
+
+	// PIModelAssignments maps sub-agent names to provider/model pairs used for
+	// PI-generated .pi/agents artifacts. Persisted independently so PI choices do
+	// not overwrite OpenCode assignments and vice versa.
+	PIModelAssignments map[string]ModelAssignmentState `json:"pi_model_assignments"`
 }
 
 // Path returns the absolute path to the state file for the given home directory.

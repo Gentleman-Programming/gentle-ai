@@ -98,12 +98,59 @@ const fixtureJSON = `{
   }
 }`
 
+const wrappedFixtureJSON = `{
+  "providers": {
+    "anthropic": {
+      "id": "anthropic",
+      "env": ["ANTHROPIC_API_KEY"],
+      "name": "Anthropic",
+      "models": {
+        "claude-sonnet-4-20250514": {
+          "id": "claude-sonnet-4-20250514",
+          "name": "Claude Sonnet 4",
+          "family": "claude",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": {"input": 3.0, "output": 15.0},
+          "limit": {"context": 200000, "output": 8192}
+        }
+      }
+    },
+    "openai": {
+      "id": "openai",
+      "env": ["OPENAI_API_KEY"],
+      "name": "OpenAI",
+      "models": {
+        "gpt-4o": {
+          "id": "gpt-4o",
+          "name": "GPT-4o",
+          "family": "gpt",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": {"input": 2.5, "output": 10.0},
+          "limit": {"context": 128000, "output": 4096}
+        }
+      }
+    }
+  }
+}`
+
 func writeFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "models.json")
 	if err := os.WriteFile(path, []byte(fixtureJSON), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
+	}
+	return path
+}
+
+func writeWrappedFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.json")
+	if err := os.WriteFile(path, []byte(wrappedFixtureJSON), 0o644); err != nil {
+		t.Fatalf("write wrapped fixture: %v", err)
 	}
 	return path
 }
@@ -147,6 +194,26 @@ func TestLoadModels(t *testing.T) {
 	}
 	if len(anthropic.Env) != 1 || anthropic.Env[0] != "ANTHROPIC_API_KEY" {
 		t.Fatalf("anthropic env = %v", anthropic.Env)
+	}
+}
+
+func TestLoadModelsWrappedProvidersCatalog(t *testing.T) {
+	path := writeWrappedFixture(t)
+
+	providers, err := LoadModels(path)
+	if err != nil {
+		t.Fatalf("LoadModels() error = %v", err)
+	}
+
+	if len(providers) != 2 {
+		t.Fatalf("provider count = %d, want 2", len(providers))
+	}
+
+	if _, ok := providers["anthropic"]; !ok {
+		t.Fatal("missing anthropic provider")
+	}
+	if _, ok := providers["openai"]; !ok {
+		t.Fatal("missing openai provider")
 	}
 }
 

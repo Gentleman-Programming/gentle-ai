@@ -641,6 +641,9 @@ func context7Operations(adapter agents.Adapter, homeDir string) []operation {
 		if adapter.Agent() == model.AgentOpenCode {
 			return []operation{rewriteJSONFile(path, jsonPath{"mcp", "context7"})}
 		}
+		if adapter.Agent() == model.AgentPiCodingAgent {
+			return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "context7"})}
+		}
 		return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "context7"})}
 	case model.StrategyMCPConfigFile:
 		path := adapter.MCPConfigPath(homeDir, "context7")
@@ -685,6 +688,9 @@ func engramOperations(adapter agents.Adapter, homeDir string) []operation {
 		path := adapter.SettingsPath(homeDir)
 		if adapter.Agent() == model.AgentOpenCode {
 			return []operation{rewriteJSONFile(path, jsonPath{"mcp", "engram"})}
+		}
+		if adapter.Agent() == model.AgentPiCodingAgent {
+			return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "engram"})}
 		}
 		return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "engram"})}
 	case model.StrategyMCPConfigFile:

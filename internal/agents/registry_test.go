@@ -94,6 +94,7 @@ func TestDefaultRegistryIncludesAllAgents(t *testing.T) {
 	for _, agent := range []model.AgentID{
 		model.AgentClaudeCode,
 		model.AgentOpenCode,
+		model.AgentPiCodingAgent,
 		model.AgentGeminiCLI,
 		model.AgentCursor,
 		model.AgentVSCodeCopilot,
@@ -105,6 +106,17 @@ func TestDefaultRegistryIncludesAllAgents(t *testing.T) {
 		if _, ok := registry.Get(agent); !ok {
 			t.Fatalf("registry missing %s adapter", agent)
 		}
+	}
+}
+
+func TestFactoryReturnsPiAdapter(t *testing.T) {
+	adapter, err := NewAdapter(model.AgentPiCodingAgent)
+	if err != nil {
+		t.Fatalf("NewAdapter() returned error: %v", err)
+	}
+
+	if got := adapter.Agent(); got != model.AgentPiCodingAgent {
+		t.Fatalf("adapter.Agent() = %q, want %q", got, model.AgentPiCodingAgent)
 	}
 }
 

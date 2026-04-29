@@ -387,6 +387,12 @@ func TestResolveAgentInstall(t *testing.T) {
 			agent:   model.AgentKimi,
 			wantErr: true,
 		},
+		{
+			name:    "pi coding agent returns deterministic not installable error",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", Supported: true},
+			agent:   model.AgentPiCodingAgent,
+			wantErr: true,
+		},
 
 		{
 			name:    "unsupported agent returns error",
@@ -404,6 +410,9 @@ func TestResolveAgentInstall(t *testing.T) {
 			}
 
 			if tt.wantErr {
+				if tt.agent == model.AgentPiCodingAgent && !strings.Contains(err.Error(), "auto-install is disabled until PI install contracts are validated") {
+					t.Fatalf("ResolveAgentInstall() PI error = %q, want compatibility-gate message", err.Error())
+				}
 				return
 			}
 
@@ -467,6 +476,16 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name:    "pi preflight returns compatibility gate error without uv lookup",
+			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true},
+			agent:   model.AgentPiCodingAgent,
+			lookPath: func(file string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantErr:     true,
+			errContains: "auto-install is disabled until PI install contracts are validated",
+		},
 	}
 
 	for _, tt := range tests {
@@ -498,6 +517,9 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 
 			if tt.name == "kimi on unsupported platform returns unsupported error before uv lookup" && calls != 0 {
 				t.Fatalf("ValidateAgentInstallPreflight() called uv lookup %d times on unsupported platform, want 0", calls)
+			}
+			if tt.name == "pi preflight returns compatibility gate error without uv lookup" && calls != 0 {
+				t.Fatalf("ValidateAgentInstallPreflight() called lookup %d times for PI compatibility gate, want 0", calls)
 			}
 		})
 	}

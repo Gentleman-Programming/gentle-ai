@@ -25,9 +25,9 @@ func TestScanConfigs_ReturnsAllKnownAgentsWithExistsFlag(t *testing.T) {
 	configs := ScanConfigs(home)
 
 	// Must return at least as many entries as the registry has adapters with
-	// a non-empty GlobalConfigDir. Currently 12 agents are supported.
-	if len(configs) < 12 {
-		t.Fatalf("ScanConfigs() returned %d entries, want >= 12; got %v", len(configs), configs)
+	// a non-empty GlobalConfigDir. PI support adds a 13th managed agent.
+	if len(configs) < 13 {
+		t.Fatalf("ScanConfigs() returned %d entries, want >= 13; got %v", len(configs), configs)
 	}
 
 
@@ -82,6 +82,7 @@ func TestScanConfigs_AgentFieldMatchesModelAgentID(t *testing.T) {
 		"kimi":           false,
 		"qwen-code":      false,
 		"kiro-ide":       false,
+		"pi-coding-agent": false,
 	}
 
 
@@ -132,8 +133,8 @@ func TestScanConfigs_ExistsFalseWhenDirAbsent(t *testing.T) {
 func TestScanConfigs_IsDirectorySetForExistingDirs(t *testing.T) {
 	home := t.TempDir()
 
-	// Create two agent dirs.
-	for _, rel := range []string{".claude", ".config/opencode"} {
+	// Create three agent dirs.
+	for _, rel := range []string{".claude", ".config/opencode", ".pi/agent"} {
 		if err := os.MkdirAll(filepath.Join(home, rel), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%q): %v", rel, err)
 		}
@@ -141,7 +142,7 @@ func TestScanConfigs_IsDirectorySetForExistingDirs(t *testing.T) {
 
 	configs := ScanConfigs(home)
 
-	claudeFound, opencodeFound := false, false
+	claudeFound, opencodeFound, piFound := false, false, false
 	for _, c := range configs {
 		switch c.Agent {
 		case "claude-code":
@@ -154,6 +155,11 @@ func TestScanConfigs_IsDirectorySetForExistingDirs(t *testing.T) {
 			if !c.Exists || !c.IsDirectory {
 				t.Errorf("opencode: Exists=%v IsDirectory=%v, want both true", c.Exists, c.IsDirectory)
 			}
+		case "pi-coding-agent":
+			piFound = true
+			if !c.Exists || !c.IsDirectory {
+				t.Errorf("pi-coding-agent: Exists=%v IsDirectory=%v, want both true", c.Exists, c.IsDirectory)
+			}
 		}
 	}
 
@@ -163,6 +169,37 @@ func TestScanConfigs_IsDirectorySetForExistingDirs(t *testing.T) {
 	if !opencodeFound {
 		t.Error("ScanConfigs() missing opencode entry")
 	}
+	if !piFound {
+		t.Error("ScanConfigs() missing pi-coding-agent entry")
+	}
+}
+
+func TestScanConfigs_PILegacyPathMarksCurrentEntryAsPresent(t *testing.T) {
+	home := t.TempDir()
+	legacyPath := filepath.Join(home, ".config", "pi-coding-agent")
+	if err := os.MkdirAll(legacyPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", legacyPath, err)
+	}
+
+	configs := ScanConfigs(home)
+
+	for _, c := range configs {
+		if c.Agent != "pi-coding-agent" {
+			continue
+		}
+
+		if c.Path != filepath.Join(home, ".pi", "agent") {
+			t.Fatalf("pi-coding-agent path = %q, want %q", c.Path, filepath.Join(home, ".pi", "agent"))
+		}
+
+		if !c.Exists || !c.IsDirectory {
+			t.Fatalf("pi-coding-agent legacy compatibility not honored: Exists=%v IsDirectory=%v", c.Exists, c.IsDirectory)
+		}
+
+		return
+	}
+
+	t.Fatal("ScanConfigs() missing pi-coding-agent entry")
 }
 
 // agentNames extracts agent name strings for error messages.

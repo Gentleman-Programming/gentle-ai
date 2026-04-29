@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -125,6 +126,50 @@ func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 	return append(b, '\n')
 }
 
+func piEngramOverlayConfig(cmd string, status pi.EngramExtensionStatus) map[string]any {
+	extension := map[string]any{
+		"path":         status.ExtensionPath,
+		"enabled":      true,
+		"validated_by": "gentle-ai",
+		"command":      cmd,
+	}
+
+	if status.Source != "" {
+		extension["source"] = status.Source
+	}
+	if status.PackageName != "" {
+		extension["package_name"] = status.PackageName
+	}
+
+	return map[string]any{
+		"engram": map[string]any{
+			"extension": extension,
+		},
+	}
+}
+
+func piEngramOverlayJSON(homeDir string, cmd string) ([]byte, error) {
+	status, err := pi.ValidateEngramExtension(pi.ResolvePaths(homeDir, os.Getenv))
+	if err != nil {
+		return nil, err
+	}
+
+	overlayBytes, err := json.MarshalIndent(piEngramOverlayConfig(cmd, status), "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal PI Engram extension overlay: %w", err)
+	}
+
+	return append(overlayBytes, '\n'), nil
+}
+
+func engramSettingsOverlayJSON(homeDir string, agentID model.AgentID, cmd string) ([]byte, error) {
+	if agentID == model.AgentPiCodingAgent {
+		return piEngramOverlayJSON(homeDir, cmd)
+	}
+
+	return engramOverlayJSON(agentID, cmd), nil
+}
+
 // vsCodeEngramOverlayJSON is the VS Code mcp.json overlay using the "servers" key.
 // Uses --tools=agent per engram contract.
 // VS Code uses a fixed "servers" key structure rather than mcpServers, so it
@@ -173,7 +218,11 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		if settingsPath == "" {
 			break
 		}
-		overlay := engramOverlayJSON(adapter.Agent(), stableEngramCommandForMergedConfig(settingsPath, adapter.Agent()))
+		engramCmd := stableEngramCommandForMergedConfig(settingsPath, adapter.Agent())
+		overlay, err := engramSettingsOverlayJSON(homeDir, adapter.Agent(), engramCmd)
+		if err != nil {
+			return InjectionResult{}, err
+		}
 		settingsWrite, err := mergeJSONFile(settingsPath, overlay)
 		if err != nil {
 			return InjectionResult{}, err

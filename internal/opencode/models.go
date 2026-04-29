@@ -73,6 +73,20 @@ func LoadModels(cachePath string) (map[string]Provider, error) {
 		return nil, fmt.Errorf("read models cache %q: %w", cachePath, err)
 	}
 
+	// Newer OpenCode catalogs wrap providers under a top-level "providers" key.
+	// Keep backward compatibility with the legacy flat map format.
+	var wrapped struct {
+		Providers map[string]Provider `json:"providers"`
+	}
+	if err := json.Unmarshal(data, &wrapped); err == nil && len(wrapped.Providers) > 0 {
+		providers := make(map[string]Provider, len(wrapped.Providers))
+		for id, p := range wrapped.Providers {
+			p.ID = id
+			providers[id] = p
+		}
+		return providers, nil
+	}
+
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parse models cache: %w", err)

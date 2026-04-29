@@ -11,6 +11,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 )
 
@@ -26,6 +27,7 @@ func cursorAdapter(t *testing.T) agents.Adapter {
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
+func piAdapter() agents.Adapter       { return pi.NewAdapter() }
 
 func TestInjectOpenCodeMergesContext7AndIsIdempotent(t *testing.T) {
 	home := t.TempDir()
@@ -232,5 +234,25 @@ func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
 	}
 	if !strings.Contains(text, `"url": "https://mcp.context7.com/mcp"`) {
 		t.Fatal("kimi mcp.json should use the documented remote MCP URL for context7")
+	}
+}
+
+func TestInjectPISkipsContext7AsOutOfScope(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject(pi) error = %v", err)
+	}
+	if result.Changed {
+		t.Fatal("Inject(pi) changed = true, want false")
+	}
+	if len(result.Files) != 0 {
+		t.Fatalf("Inject(pi) files = %v, want none", result.Files)
+	}
+
+	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+		t.Fatalf("expected PI settings to remain untouched by MCP injector, stat error = %v", err)
 	}
 }

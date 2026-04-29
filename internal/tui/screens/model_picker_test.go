@@ -1,9 +1,11 @@
 package screens
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/modelcatalog"
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
@@ -11,7 +13,7 @@ import (
 // so that handleModelNav can reach the "enter" branch.
 func makeTestState(phaseIdx int) *ModelPickerState {
 	const providerID = "test-provider"
-	testModels := []opencode.Model{
+	testModels := []modelcatalog.Model{
 		{ID: "model-alpha", Name: "Alpha Model"},
 		{ID: "model-beta", Name: "Beta Model"},
 	}
@@ -19,7 +21,7 @@ func makeTestState(phaseIdx int) *ModelPickerState {
 		Mode:             ModeModelSelect,
 		SelectedPhaseIdx: phaseIdx,
 		SelectedProvider: providerID,
-		SDDModels:        map[string][]opencode.Model{providerID: testModels},
+		SDDModels:        map[string][]modelcatalog.Model{providerID: testModels},
 		ModelCursor:      0, // always pick the first model for simplicity
 	}
 }
@@ -205,7 +207,7 @@ func TestSDDOrchestratorPhaseConstant(t *testing.T) {
 // Closes #146.
 func TestSetAllPhasesLabelSeparateFromIndividualPhases(t *testing.T) {
 	const providerID = "test-provider"
-	testModels := []opencode.Model{
+	testModels := []modelcatalog.Model{
 		{ID: "model-alpha", Name: "Alpha"},
 		{ID: "model-beta", Name: "Beta"},
 	}
@@ -215,7 +217,7 @@ func TestSetAllPhasesLabelSeparateFromIndividualPhases(t *testing.T) {
 		Mode:             ModeModelSelect,
 		SelectedPhaseIdx: 1, // "Set all phases" row
 		SelectedProvider: providerID,
-		SDDModels:        map[string][]opencode.Model{providerID: testModels},
+		SDDModels:        map[string][]modelcatalog.Model{providerID: testModels},
 		ModelCursor:      0, // alpha
 	}
 	assignments := make(map[string]model.ModelAssignment)
@@ -232,7 +234,7 @@ func TestSetAllPhasesLabelSeparateFromIndividualPhases(t *testing.T) {
 		Mode:             ModeModelSelect,
 		SelectedPhaseIdx: 2, // sub-agent row idx 2 → phases[0]
 		SelectedProvider: providerID,
-		SDDModels:        map[string][]opencode.Model{providerID: testModels},
+		SDDModels:        map[string][]modelcatalog.Model{providerID: testModels},
 		ModelCursor:      1, // beta — different from what "Set all" used
 	}
 	_, assignments = handleModelNav("enter", individualState, assignments)
@@ -250,7 +252,7 @@ func TestSetAllPhasesLabelSeparateFromIndividualPhases(t *testing.T) {
 // Closes #146.
 func TestSetAllPhasesSetsAllPhasesModelField(t *testing.T) {
 	const providerID = "test-provider"
-	testModels := []opencode.Model{
+	testModels := []modelcatalog.Model{
 		{ID: "model-alpha", Name: "Alpha"},
 	}
 
@@ -258,7 +260,7 @@ func TestSetAllPhasesSetsAllPhasesModelField(t *testing.T) {
 		Mode:             ModeModelSelect,
 		SelectedPhaseIdx: 1, // "Set all phases"
 		SelectedProvider: providerID,
-		SDDModels:        map[string][]opencode.Model{providerID: testModels},
+		SDDModels:        map[string][]modelcatalog.Model{providerID: testModels},
 		ModelCursor:      0,
 	}
 	assignments := make(map[string]model.ModelAssignment)
@@ -278,7 +280,7 @@ func TestSetAllPhasesSetsAllPhasesModelField(t *testing.T) {
 // Closes #146.
 func TestIndividualPhaseSelectionDoesNotSetAllPhasesModel(t *testing.T) {
 	const providerID = "test-provider"
-	testModels := []opencode.Model{
+	testModels := []modelcatalog.Model{
 		{ID: "model-alpha", Name: "Alpha"},
 	}
 	phases := opencode.SDDPhases()
@@ -289,7 +291,7 @@ func TestIndividualPhaseSelectionDoesNotSetAllPhasesModel(t *testing.T) {
 				Mode:             ModeModelSelect,
 				SelectedPhaseIdx: i + 2, // sub-agent rows start at idx 2
 				SelectedProvider: providerID,
-				SDDModels:        map[string][]opencode.Model{providerID: testModels},
+				SDDModels:        map[string][]modelcatalog.Model{providerID: testModels},
 				ModelCursor:      0,
 			}
 			assignments := make(map[string]model.ModelAssignment)
@@ -300,5 +302,106 @@ func TestIndividualPhaseSelectionDoesNotSetAllPhasesModel(t *testing.T) {
 					phase, state.AllPhasesModel)
 			}
 		})
+	}
+}
+
+func TestProviderEntries_SortsByDisplayName(t *testing.T) {
+	state := ModelPickerState{
+		AvailableIDs: []string{"z", "a"},
+		Providers: map[string]modelcatalog.Provider{
+			"z": {ID: "z", Name: "Zulu", Models: map[string]modelcatalog.Model{"m1": {ID: "m1"}}},
+			"a": {ID: "a", Name: "Alpha", Models: map[string]modelcatalog.Model{"m2": {ID: "m2"}, "m3": {ID: "m3"}}},
+		},
+		SDDModels: map[string][]modelcatalog.Model{
+			"z": {{ID: "m1"}},
+			"a": {{ID: "m2"}, {ID: "m3"}},
+		},
+	}
+
+	entries := ProviderEntries(state)
+	if len(entries) != 2 {
+		t.Fatalf("ProviderEntries() len = %d, want 2", len(entries))
+	}
+	if entries[0].Name != "Alpha" || entries[1].Name != "Zulu" {
+		t.Fatalf("ProviderEntries() names = [%s, %s], want [Alpha, Zulu]", entries[0].Name, entries[1].Name)
+	}
+	if entries[0].ModelCount != 2 {
+		t.Fatalf("ProviderEntries()[0].ModelCount = %d, want 2", entries[0].ModelCount)
+	}
+}
+
+func TestHandleProviderNav_TransitionsBetweenModes(t *testing.T) {
+	state := &ModelPickerState{
+		Mode:         ModeProviderSelect,
+		AvailableIDs: []string{"openai"},
+		Providers: map[string]modelcatalog.Provider{
+			"openai": {ID: "openai", Name: "OpenAI"},
+		},
+		SDDModels: map[string][]modelcatalog.Model{"openai": {{ID: "gpt-5", Name: "GPT-5"}}},
+	}
+
+	handled, _ := HandleModelPickerNav("enter", state, nil)
+	if !handled {
+		t.Fatal("HandleModelPickerNav(enter) should be handled in provider mode")
+	}
+	if state.Mode != ModeModelSelect || state.SelectedProvider != "openai" {
+		t.Fatalf("provider enter should switch to model mode with selected provider, got mode=%v provider=%q", state.Mode, state.SelectedProvider)
+	}
+
+	handled, _ = HandleModelPickerNav("esc", state, nil)
+	if !handled {
+		t.Fatal("HandleModelPickerNav(esc) should be handled in model mode")
+	}
+	if state.Mode != ModeProviderSelect {
+		t.Fatalf("model esc should return to provider mode, got %v", state.Mode)
+	}
+}
+
+func TestRenderProviderAndModelSelect_ShowsListContent(t *testing.T) {
+	state := ModelPickerState{
+		Mode:             ModeProviderSelect,
+		AvailableIDs:     []string{"openai"},
+		ProviderCursor:   0,
+		SelectedProvider: "openai",
+		Providers: map[string]modelcatalog.Provider{
+			"openai": {
+				ID:   "openai",
+				Name: "OpenAI",
+				Models: map[string]modelcatalog.Model{
+					"gpt-5": {ID: "gpt-5", Name: "GPT-5"},
+				},
+			},
+		},
+		SDDModels: map[string][]modelcatalog.Model{"openai": {{ID: "gpt-5", Name: "GPT-5"}}},
+	}
+
+	providerOut := RenderModelPicker(nil, state, 0)
+	if !strings.Contains(providerOut, "Select provider:") || !strings.Contains(providerOut, "OpenAI") {
+		t.Fatalf("provider render missing expected content:\n%s", providerOut)
+	}
+
+	state.Mode = ModeModelSelect
+	modelOut := RenderModelPicker(nil, state, 0)
+	if !strings.Contains(modelOut, "Select model (OpenAI):") || !strings.Contains(modelOut, "GPT-5") {
+		t.Fatalf("model render missing expected content:\n%s", modelOut)
+	}
+}
+
+func TestResolveNames_UsesDisplayNamesWhenAvailable(t *testing.T) {
+	state := ModelPickerState{
+		Providers: map[string]modelcatalog.Provider{
+			"openai": {
+				ID:   "openai",
+				Name: "OpenAI",
+				Models: map[string]modelcatalog.Model{
+					"gpt-5": {ID: "gpt-5", Name: "GPT-5"},
+				},
+			},
+		},
+	}
+
+	provName, modelName := resolveNames(model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5"}, state)
+	if provName != "OpenAI" || modelName != "GPT-5" {
+		t.Fatalf("resolveNames() = (%q, %q), want (%q, %q)", provName, modelName, "OpenAI", "GPT-5")
 	}
 }

@@ -3,6 +3,7 @@ package system
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ConfigState records the filesystem presence of an agent's global config directory.
@@ -31,6 +32,7 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 	return []ConfigState{
 		{Agent: "claude-code", Path: filepath.Join(homeDir, ".claude")},
 		{Agent: "opencode", Path: filepath.Join(homeDir, ".config", "opencode")},
+		piConfigState(homeDir),
 		{Agent: "kilocode", Path: filepath.Join(homeDir, ".config", "kilo")},
 		{Agent: "gemini-cli", Path: filepath.Join(homeDir, ".gemini")},
 		{Agent: "cursor", Path: filepath.Join(homeDir, ".cursor")},
@@ -42,6 +44,34 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "qwen-code", Path: filepath.Join(homeDir, ".qwen")},
 		{Agent: "kiro-ide", Path: filepath.Join(homeDir, ".kiro")},
 	}
+}
+
+func piConfigState(homeDir string) ConfigState {
+	piRoot, piLegacy := resolvePiPaths(homeDir)
+	state := ConfigState{Agent: "pi-coding-agent", Path: piRoot}
+
+	for _, candidate := range []string{piRoot, piLegacy} {
+		info, err := os.Stat(candidate)
+		if err != nil {
+			continue
+		}
+
+		state.Exists = true
+		state.IsDirectory = info.IsDir()
+		return state
+	}
+
+	return state
+}
+
+func resolvePiPaths(homeDir string) (root string, legacy string) {
+	root = strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR"))
+	if root == "" {
+		root = filepath.Join(homeDir, ".pi", "agent")
+	}
+
+	legacy = filepath.Join(homeDir, ".config", "pi-coding-agent")
+	return root, legacy
 }
 
 // vscodeCopilotGlobalConfigDir returns ~/.copilot, the GlobalConfigDir used by
@@ -60,6 +90,10 @@ func ScanConfigs(homeDir string) []ConfigState {
 	states := knownAgentConfigDirs(homeDir)
 
 	for idx := range states {
+		if states[idx].Agent == "pi-coding-agent" && states[idx].Exists {
+			continue
+		}
+
 		info, err := os.Stat(states[idx].Path)
 		if err != nil {
 			continue

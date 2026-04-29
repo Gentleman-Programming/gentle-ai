@@ -1,0 +1,17 @@
+{
+  "_meta": {
+    "source": "phase-0-spike",
+    "status": "unknown",
+    "note": "candidate schema only; do not treat as GA contract"
+  },
+  "agent": {
+    "name": "pi-coding-agent",
+    "model": "gpt-5",
+    "temperature": 0.2
+  },
+  "features": {
+    "profiles": false,
+    "modelPicker": false,
+    "generatedMulti": false
+  }
+}

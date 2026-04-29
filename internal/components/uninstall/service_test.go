@@ -405,3 +405,65 @@ func TestComponentOperationsEngram_GlobalScopeKeepsWorkspaceProjectData(t *testi
 		t.Fatalf("global engram config should be removed in global scope, got: %s", string(raw))
 	}
 }
+
+func TestComponentOperationsEngram_PIOnlyCleanupDoesNotTouchOpenCodeState(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	piAdapter, ok := svc.registry.Get(model.AgentPiCodingAgent)
+	if !ok {
+		t.Fatal("pi adapter not found in registry")
+	}
+	opencodeAdapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("openCode adapter not found in registry")
+	}
+
+	piSettingsPath := piAdapter.SettingsPath(homeDir)
+	if err := os.MkdirAll(filepath.Dir(piSettingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(pi settings dir) error = %v", err)
+	}
+	if err := os.WriteFile(piSettingsPath, []byte(`{"mcpServers":{"engram":{"command":"engram","args":["mcp","--tools=agent"]}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(pi settings) error = %v", err)
+	}
+
+	opencodeSettingsPath := opencodeAdapter.SettingsPath(homeDir)
+	if err := os.MkdirAll(filepath.Dir(opencodeSettingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(opencode settings dir) error = %v", err)
+	}
+	if err := os.WriteFile(opencodeSettingsPath, []byte(`{"mcp":{"engram":{"command":["engram","mcp","--tools=agent"],"type":"local"}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode settings) error = %v", err)
+	}
+
+	ops, _, err := svc.componentOperations(piAdapter, model.ComponentEngram)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("op.apply(%q) error = %v", op.path, err)
+		}
+	}
+
+	piRaw, err := os.ReadFile(piSettingsPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			t.Fatalf("ReadFile(pi settings) error = %v", err)
+		}
+	} else if strings.Contains(string(piRaw), `"engram"`) {
+		t.Fatalf("PI settings should remove engram entry, got: %s", string(piRaw))
+	}
+
+	opencodeRaw, err := os.ReadFile(opencodeSettingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode settings) error = %v", err)
+	}
+	if !strings.Contains(string(opencodeRaw), `"engram"`) {
+		t.Fatalf("OpenCode settings must be untouched during PI engram cleanup, got: %s", string(opencodeRaw))
+	}
+}

@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
@@ -17,7 +18,7 @@ func AgentOptions() []model.AgentID {
 	return ids
 }
 
-func RenderAgents(selected []model.AgentID, cursor int) string {
+func RenderAgents(selected []model.AgentID, cursor int, warnings []string) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Select AI Agents"))
@@ -31,10 +32,31 @@ func RenderAgents(selected []model.AgentID, cursor int) string {
 	}
 
 	agents := AgentOptions()
+	agentMeta := make(map[model.AgentID]catalog.Agent, len(catalog.AllAgents()))
+	for _, info := range catalog.AllAgents() {
+		agentMeta[info.ID] = info
+	}
+
 	for idx, agent := range agents {
 		_, checked := selectedSet[agent]
 		focused := idx == cursor
-		b.WriteString(renderCheckbox(string(agent), checked, focused))
+		label := string(agent)
+		if info, ok := agentMeta[agent]; ok {
+			label = info.Name
+			if len(info.CapabilityLabels) > 0 {
+				label = fmt.Sprintf("%s [%s]", label, strings.Join(info.CapabilityLabels, ", "))
+			}
+		}
+		b.WriteString(renderCheckbox(label, checked, focused))
+	}
+
+	for _, warning := range warnings {
+		if strings.TrimSpace(warning) == "" {
+			continue
+		}
+		b.WriteString("\n")
+		b.WriteString(styles.WarningStyle.Render(warning))
+		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")

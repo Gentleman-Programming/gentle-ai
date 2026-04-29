@@ -2,15 +2,19 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/capabilities"
+	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
@@ -53,6 +57,8 @@ type SyncResult struct {
 	Execution pipeline.ExecutionResult
 	Verify    verify.Report
 	DryRun    bool
+	// PlannedFiles are rendered for dry-run visibility.
+	PlannedFiles []string
 	// NoOp is true when no managed asset changes were needed:
 	// either no agents were discovered/provided, or all managed assets
 	// were already current (idempotent re-sync).
@@ -60,6 +66,96 @@ type SyncResult struct {
 	// FilesChanged is the number of managed files actually written or updated
 	// during this sync. Zero means all assets were already current.
 	FilesChanged int
+}
+
+const piSubagentsInstallCommand = "pi install npm:pi-subagents"
+
+var osGetwdSync = os.Getwd
+
+func piSubagentsInstallMessage() string {
+	return fmt.Sprintf("%s Install it with: %s", capabilities.PiMultiModelRequiresPiSubagentsMessage, piSubagentsInstallCommand)
+}
+
+func validatePiMultiModelPreflight(homeDir, workspaceDir string, selection model.Selection) error {
+	if !requiresPiMultiModelPreflight(selection) {
+		return nil
+	}
+
+	resolved, err := capabilities.NewResolver(nil).Resolve(homeDir, workspaceDir, model.AgentPiCodingAgent)
+	if err != nil || !resolved.SupportsSDDMultiMode {
+		return errors.New(piSubagentsInstallMessage())
+	}
+
+	return nil
+}
+
+func requiresPiMultiModelPreflight(selection model.Selection) bool {
+	return syncPIArtifactsEnabled(selection)
+}
+
+func syncPIArtifactsEnabled(selection model.Selection) bool {
+	if !selection.HasAgent(model.AgentPiCodingAgent) || !selection.HasComponent(model.ComponentSDD) {
+		return false
+	}
+	if selection.SDDMode == model.SDDModeMulti {
+		return true
+	}
+	return selection.SDDProfileStrategy == model.SDDProfileStrategyGeneratedMulti
+}
+
+func syncPIArtifactsDir(workspaceDir string) string {
+	if projectRoot, ok := sdd.ResolvePIArtifactsProjectRoot(workspaceDir); ok {
+		return filepath.Join(projectRoot, ".pi", "agents")
+	}
+	return filepath.Join(workspaceDir, ".pi", "agents")
+}
+
+func plannedSyncPaths(homeDir, workspaceDir string, selection model.Selection) ([]string, error) {
+	if err := validatePiMultiModelPreflight(homeDir, workspaceDir, selection); err != nil {
+		return nil, err
+	}
+
+	adapters := resolveAdapters(selection.Agents)
+	paths := make([]string, 0)
+
+	for _, component := range selection.Components {
+		paths = append(paths, componentPaths(homeDir, selection, adapters, component)...)
+	}
+
+	if syncPIArtifactsEnabled(selection) {
+		entries, err := assets.FS.ReadDir("pi/agents")
+		if err != nil {
+			return nil, fmt.Errorf("read embedded pi agents: %w", err)
+		}
+		piAgentsDir := syncPIArtifactsDir(workspaceDir)
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			paths = append(paths, filepath.Join(piAgentsDir, entry.Name()))
+		}
+	}
+
+	paths = uniqueStrings(paths)
+	slices.Sort(paths)
+	return paths, nil
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 // ParseSyncFlags parses the CLI arguments for the sync subcommand.
@@ -420,9 +516,25 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 // before sync executes. Uses the same componentPaths logic as install.
 func syncBackupTargets(homeDir string, selection model.Selection, adapters []agents.Adapter) []string {
 	paths := map[string]struct{}{}
+	workspaceDir, err := osGetwdSync()
+	if err != nil {
+		return nil
+	}
 	for _, component := range selection.Components {
 		for _, path := range componentPaths(homeDir, selection, adapters, component) {
 			paths[path] = struct{}{}
+		}
+	}
+	if syncPIArtifactsEnabled(selection) {
+		entries, err := assets.FS.ReadDir("pi/agents")
+		if err == nil {
+			piAgentsDir := syncPIArtifactsDir(workspaceDir)
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				paths[filepath.Join(piAgentsDir, entry.Name())] = struct{}{}
+			}
 		}
 	}
 
@@ -518,6 +630,7 @@ func (s componentSyncStep) Run() error {
 		for _, adapter := range adapters {
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments:           s.selection.ModelAssignments,
+				PIModelAssignments:                 s.selection.PIModelAssignments,
 				ClaudeModelAssignments:             s.selection.ClaudeModelAssignments,
 				KiroModelAssignments:               s.selection.KiroModelAssignments,
 				WorkspaceDir:                       s.workspaceDir,
@@ -629,6 +742,14 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 		return result, nil
 	}
 
+	workspaceDir, err := os.Getwd()
+	if err != nil {
+		return result, fmt.Errorf("resolve workspace directory: %w", err)
+	}
+	if err := validatePiMultiModelPreflight(homeDir, workspaceDir, selection); err != nil {
+		return result, err
+	}
+
 	rt, err := newSyncRuntime(homeDir, selection)
 	if err != nil {
 		return result, err
@@ -687,36 +808,34 @@ func RunSync(args []string) (SyncResult, error) {
 	agentIDs = unique(agentIDs)
 
 	selection := BuildSyncSelection(flags, agentIDs)
+	workspaceDir, err := os.Getwd()
+	if err != nil {
+		return SyncResult{}, fmt.Errorf("resolve workspace directory: %w", err)
+	}
 
 	// Load persisted model assignments from state when not provided via flags.
 	// This is the key fix: without this, every CLI sync falls back to the
 	// "balanced" preset and silently overwrites the user's model choices.
-	if len(selection.ClaudeModelAssignments) == 0 || len(selection.ModelAssignments) == 0 {
+	piAssignmentsInScope := selection.HasAgent(model.AgentPiCodingAgent) && selection.HasComponent(model.ComponentSDD)
+	if len(selection.ClaudeModelAssignments) == 0 || len(selection.KiroModelAssignments) == 0 || len(selection.ModelAssignments) == 0 || (piAssignmentsInScope && len(selection.PIModelAssignments) == 0) {
 		s, readErr := state.Read(homeDir)
 		if readErr == nil {
-			if len(selection.ClaudeModelAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
-				m := make(map[string]model.ClaudeModelAlias, len(s.ClaudeModelAssignments))
-				for k, v := range s.ClaudeModelAssignments {
-					m[k] = model.ClaudeModelAlias(v)
-				}
-				selection.ClaudeModelAssignments = m
-			}
-			if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
-				m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
-				for k, v := range s.ModelAssignments {
-					m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID}
-				}
-				selection.ModelAssignments = m
-			}
+			state.HydrateSelectionAssignments(&selection, s, piAssignmentsInScope)
 		}
 	}
 
 	if flags.DryRun {
+		plannedFiles, err := plannedSyncPaths(homeDir, workspaceDir, selection)
+		if err != nil {
+			return SyncResult{}, err
+		}
+
 		// Build the plan for inspection, skip execution.
 		result := SyncResult{
-			Agents:    agentIDs,
-			Selection: selection,
-			DryRun:    true,
+			Agents:       agentIDs,
+			Selection:    selection,
+			DryRun:       true,
+			PlannedFiles: plannedFiles,
 		}
 		if len(agentIDs) == 0 {
 			result.NoOp = true
@@ -774,6 +893,12 @@ func RenderSyncReport(result SyncResult) string {
 		}
 		fmt.Fprintf(&b, "Prepare steps: %d\n", len(result.Plan.Prepare))
 		fmt.Fprintf(&b, "Apply steps: %d\n", len(result.Plan.Apply))
+		if len(result.PlannedFiles) > 0 {
+			fmt.Fprintln(&b, "Planned paths:")
+			for _, path := range result.PlannedFiles {
+				fmt.Fprintf(&b, "- %s\n", path)
+			}
+		}
 		return strings.TrimRight(b.String(), "\n")
 	}
 
@@ -806,6 +931,15 @@ func RenderSyncReport(result SyncResult) string {
 func runPostSyncVerification(homeDir string, selection model.Selection) verify.Report {
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(selection.Agents)
+	workspaceDir, err := osGetwdSync()
+	if err != nil {
+		return verify.BuildReport([]verify.CheckResult{{
+			ID:          "verify:sync:workspace",
+			Description: "resolve workspace directory",
+			Status:      verify.CheckStatusFailed,
+			Error:       err.Error(),
+		}})
+	}
 
 	for _, component := range selection.Components {
 		for _, path := range componentPaths(homeDir, selection, adapters, component) {
@@ -820,6 +954,27 @@ func runPostSyncVerification(homeDir string, selection model.Selection) verify.R
 					return nil
 				},
 			})
+		}
+	}
+
+	if syncPIArtifactsEnabled(selection) {
+		if entries, err := assets.FS.ReadDir("pi/agents"); err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				currentPath := filepath.Join(syncPIArtifactsDir(workspaceDir), entry.Name())
+				checks = append(checks, verify.Check{
+					ID:          "verify:sync:file:" + currentPath,
+					Description: "synced file exists",
+					Run: func(context.Context) error {
+						if _, err := os.Stat(currentPath); err != nil {
+							return err
+						}
+						return nil
+					},
+				})
+			}
 		}
 	}
 

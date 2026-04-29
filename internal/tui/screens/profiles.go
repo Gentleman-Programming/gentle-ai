@@ -17,6 +17,8 @@ func RenderProfiles(profiles []model.Profile, cursor int, deleteErr error) strin
 	b.WriteString(styles.TitleStyle.Render("OpenCode SDD Profiles"))
 	b.WriteString("\n\n")
 	b.WriteString(styles.SubtextStyle.Render("Your SDD model profiles for OpenCode. Each profile creates its own orchestrator (visible with Tab)."))
+	b.WriteString("\n")
+	b.WriteString(styles.WarningStyle.Render("OpenCode-only: PI profile parity is not validated yet."))
 	b.WriteString("\n\n")
 
 	if deleteErr != nil {

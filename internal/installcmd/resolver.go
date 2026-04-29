@@ -45,6 +45,8 @@ func (profileResolver) ResolveAgentInstall(profile system.PlatformProfile, agent
 		return resolveOpenCodeInstall(profile)
 	case model.AgentKilocode:
 		return resolveKilocodeInstall(profile), nil
+	case model.AgentPiCodingAgent:
+		return nil, piInstallCompatibilityGateError()
 	case model.AgentKimi:
 		return resolveKimiInstall(profile)
 	default:
@@ -90,11 +92,17 @@ func resolveKimiInstall(profile system.PlatformProfile) (CommandSequence, error)
 // exist before running installation commands.
 func ValidateAgentInstallPreflight(profile system.PlatformProfile, agent model.AgentID) error {
 	switch agent {
+	case model.AgentPiCodingAgent:
+		return piInstallCompatibilityGateError()
 	case model.AgentKimi:
 		return validateKimiInstallPreflight(profile)
 	default:
 		return nil
 	}
+}
+
+func piInstallCompatibilityGateError() error {
+	return fmt.Errorf("agent %q auto-install is disabled until PI install contracts are validated", model.AgentPiCodingAgent)
 }
 
 func validateKimiInstallPreflight(profile system.PlatformProfile) error {

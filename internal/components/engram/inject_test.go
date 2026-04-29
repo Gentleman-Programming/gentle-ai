@@ -14,8 +14,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/qwen"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/internal/testutil"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
@@ -23,6 +25,7 @@ func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func codexAdapter() agents.Adapter    { return codex.NewAdapter() }
 func geminiAdapter() agents.Adapter   { return gemini.NewAdapter() }
 func qwenAdapter() agents.Adapter     { return qwen.NewAdapter() }
+func piAdapter() agents.Adapter       { return pi.NewAdapter() }
 func antigravityAdapter() agents.Adapter {
 	return antigravity.NewAdapter()
 }
@@ -212,6 +215,215 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 	if second.Changed {
 		t.Fatalf("Inject() second changed = true")
+	}
+}
+
+func TestInjectPIWritesEngramOverlayGolden(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "", "not found")
+	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings) error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"engram":{"extension":{"path":"/opt/pi/extensions/pi-engram","enabled":true}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	result, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject(pi) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(pi) changed = false, want true")
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings.json) error = %v", err)
+	}
+
+	goldenPath := filepath.Join("testdata", "pi_engram_overlay.golden.json")
+	testutil.AssertJSONGolden(t, content, goldenPath)
+}
+
+func TestInjectPIFailsWhenEngramExtensionContractMissing(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "", "not found")
+
+	_, err := Inject(home, piAdapter())
+	if err == nil {
+		t.Fatal("Inject(pi) error = nil, want missing extension contract error")
+	}
+	if !strings.Contains(err.Error(), "missing PI→Engram extension contract") {
+		t.Fatalf("Inject(pi) error = %q, want missing contract message", err.Error())
+	}
+}
+
+func TestInjectPIFailsWhenEngramExtensionContractMalformed(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "", "not found")
+	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings) error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"engram":{"extension":{"path":7}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	_, err := Inject(home, piAdapter())
+	if err == nil {
+		t.Fatal("Inject(pi) error = nil, want malformed extension contract error")
+	}
+	if !strings.Contains(err.Error(), "malformed PI→Engram extension contract") {
+		t.Fatalf("Inject(pi) error = %q, want malformed contract message", err.Error())
+	}
+}
+
+func TestInjectPIAcceptsLocalPackageContractAndNormalizesPath(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "", "not found")
+	paths := pi.ResolvePaths(home, func(string) string { return "" })
+	localPkg := filepath.Clean(filepath.Join(paths.Root, "../../Documents/repos/pi-engram"))
+	if err := os.MkdirAll(localPkg, 0o755); err != nil {
+		t.Fatalf("MkdirAll(local package fixture) error = %v", err)
+	}
+	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings) error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"packages":["../../Documents/repos/pi-engram"]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	if _, err := Inject(home, piAdapter()); err != nil {
+		t.Fatalf("Inject(pi) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings) error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("Unmarshal(settings) error = %v", err)
+	}
+
+	engramCfg, _ := parsed["engram"].(map[string]any)
+	extensionCfg, _ := engramCfg["extension"].(map[string]any)
+	pathValue, _ := extensionCfg["path"].(string)
+	if pathValue == "" {
+		t.Fatal("settings engram.extension.path = empty, want normalized local package path")
+	}
+	if !strings.HasSuffix(filepath.Clean(pathValue), filepath.Join("Documents", "repos", "pi-engram")) {
+		t.Fatalf("settings engram.extension.path = %q, want suffix %q", pathValue, filepath.Join("Documents", "repos", "pi-engram"))
+	}
+	if src, _ := extensionCfg["source"].(string); src != "package-local" {
+		t.Fatalf("settings engram.extension.source = %q, want %q", src, "package-local")
+	}
+}
+
+func TestInjectPIAcceptsNpmPackageContractAndPreservesPackageName(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "", "not found")
+	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings) error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"packages":["npm:@gentleman-programming/pi-engram"]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	if _, err := Inject(home, piAdapter()); err != nil {
+		t.Fatalf("Inject(pi) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings) error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("Unmarshal(settings) error = %v", err)
+	}
+
+	engramCfg, _ := parsed["engram"].(map[string]any)
+	extensionCfg, _ := engramCfg["extension"].(map[string]any)
+	if got, _ := extensionCfg["path"].(string); got != "npm:@gentleman-programming/pi-engram" {
+		t.Fatalf("settings engram.extension.path = %q, want %q", got, "npm:@gentleman-programming/pi-engram")
+	}
+	if src, _ := extensionCfg["source"].(string); src != "package-npm" {
+		t.Fatalf("settings engram.extension.source = %q, want %q", src, "package-npm")
+	}
+	if pkg, _ := extensionCfg["package_name"].(string); pkg != "@gentleman-programming/pi-engram" {
+		t.Fatalf("settings engram.extension.package_name = %q, want %q", pkg, "@gentleman-programming/pi-engram")
+	}
+}
+
+func TestInjectPIEngramCommandCompatibility_MergedHomebrewInputs(t *testing.T) {
+	tests := []struct {
+		name        string
+		lookPath    string
+		lookPathErr string
+		wantCommand string
+	}{
+		{
+			name:        "versioned cellar command normalizes to relative stable command",
+			lookPath:    "/opt/homebrew/Cellar/engram/1.14.1/bin/engram",
+			wantCommand: "engram",
+		},
+		{
+			name:        "stable homebrew symlink remains stable absolute command",
+			lookPath:    "/opt/homebrew/bin/engram",
+			wantCommand: "/opt/homebrew/bin/engram",
+		},
+		{
+			name:        "relative fallback when engram is not discoverable",
+			lookPathErr: "not found",
+			wantCommand: "engram",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			mockEngramLookPath(t, tt.lookPath, tt.lookPathErr)
+			settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatalf("MkdirAll(settings) error = %v", err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(`{"engram":{"extension":{"path":"/opt/pi/extensions/pi-engram","enabled":true}}}`), 0o644); err != nil {
+				t.Fatalf("WriteFile(settings) error = %v", err)
+			}
+
+			if _, err := Inject(home, piAdapter()); err != nil {
+				t.Fatalf("Inject(pi) error = %v", err)
+			}
+
+			content, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(settings) error = %v", err)
+			}
+
+			var parsed map[string]any
+			if err := json.Unmarshal(content, &parsed); err != nil {
+				t.Fatalf("Unmarshal(settings) error = %v", err)
+			}
+
+			engramCfg, _ := parsed["engram"].(map[string]any)
+			extensionCfg, _ := engramCfg["extension"].(map[string]any)
+			gotCommand, _ := extensionCfg["command"].(string)
+			if gotCommand != tt.wantCommand {
+				t.Fatalf("engram.extension.command = %q, want %q", gotCommand, tt.wantCommand)
+			}
+			if validatedBy, _ := extensionCfg["validated_by"].(string); validatedBy != "gentle-ai" {
+				t.Fatalf("engram.extension.validated_by = %q, want %q", validatedBy, "gentle-ai")
+			}
+			if enabled, _ := extensionCfg["enabled"].(bool); !enabled {
+				t.Fatal("engram.extension.enabled = false, want true")
+			}
+		})
 	}
 }
 

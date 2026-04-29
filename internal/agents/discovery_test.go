@@ -284,6 +284,36 @@ func TestDiscoverInstalled_WithDefaultRegistryAndRealFS(t *testing.T) {
 	}
 }
 
+// TestDiscoverInstalled_WithDefaultRegistryFindsPiConfig verifies PI appears in
+// discovery when its config root exists, proving default registry wiring.
+func TestDiscoverInstalled_WithDefaultRegistryFindsPiConfig(t *testing.T) {
+	home := t.TempDir()
+
+	piDir := filepath.Join(home, ".pi", "agent")
+	if err := os.MkdirAll(piDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	reg, err := NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("NewDefaultRegistry: %v", err)
+	}
+
+	got := DiscoverInstalled(reg, home)
+
+	if len(got) != 1 {
+		t.Fatalf("DiscoverInstalled() returned %d agents, want 1; got %v", len(got), got)
+	}
+
+	if got[0].ID != model.AgentPiCodingAgent {
+		t.Fatalf("DiscoverInstalled() agent = %q, want %q", got[0].ID, model.AgentPiCodingAgent)
+	}
+
+	if got[0].ConfigDir != piDir {
+		t.Fatalf("DiscoverInstalled() ConfigDir = %q, want %q", got[0].ConfigDir, piDir)
+	}
+}
+
 // TestConfigRootsForBackup_WithDefaultRegistryCoversCreatedDirs verifies that
 // ConfigRootsForBackup returns exactly the dirs created on disk.
 func TestConfigRootsForBackup_WithDefaultRegistryCoversCreatedDirs(t *testing.T) {

@@ -7,8 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/capabilities"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
+	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/internal/tui"
 )
 
 // ─── Phase 1: ParseSyncFlags ───────────────────────────────────────────────
@@ -732,6 +738,188 @@ func TestRunSyncDryRunDoesNotWriteFiles(t *testing.T) {
 	}
 }
 
+func TestRunSyncRejectsPiMultiModeWhenPiSubagentsMissing(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(home, ".config", "pi-coding-agent"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	restoreHome := osUserHomeDir
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+
+	t.Chdir(workspace)
+
+	_, err := RunSync([]string{"--agents", "pi-coding-agent", "--sdd-mode", "multi"})
+	if err == nil {
+		t.Fatal("RunSync() expected error when PI multi-mode is requested without pi-subagents")
+	}
+
+	if !strings.Contains(err.Error(), "PI multi-model requires installing the `pi-subagents` extension.") {
+		t.Fatalf("RunSync() error = %q, expected canonical PI requirement message", err.Error())
+	}
+
+	if !strings.Contains(err.Error(), "pi install npm:pi-subagents") {
+		t.Fatalf("RunSync() error = %q, expected install command guidance", err.Error())
+	}
+}
+
+func TestRequiresPiMultiModelPreflight(t *testing.T) {
+	tests := []struct {
+		name      string
+		selection model.Selection
+		want      bool
+	}{
+		{
+			name: "pi + sdd + multi requires preflight",
+			selection: model.Selection{
+				Agents:     []model.AgentID{model.AgentPiCodingAgent},
+				Components: []model.ComponentID{model.ComponentSDD},
+				SDDMode:    model.SDDModeMulti,
+			},
+			want: true,
+		},
+		{
+			name: "pi + sdd + single does not require preflight",
+			selection: model.Selection{
+				Agents:     []model.AgentID{model.AgentPiCodingAgent},
+				Components: []model.ComponentID{model.ComponentSDD},
+				SDDMode:    model.SDDModeSingle,
+			},
+			want: false,
+		},
+		{
+			name: "pi + non-sdd + multi does not require preflight",
+			selection: model.Selection{
+				Agents:     []model.AgentID{model.AgentPiCodingAgent},
+				Components: []model.ComponentID{model.ComponentEngram},
+				SDDMode:    model.SDDModeMulti,
+			},
+			want: false,
+		},
+		{
+			name: "non-pi + sdd + multi does not require preflight",
+			selection: model.Selection{
+				Agents:     []model.AgentID{model.AgentOpenCode},
+				Components: []model.ComponentID{model.ComponentSDD},
+				SDDMode:    model.SDDModeMulti,
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := requiresPiMultiModelPreflight(tt.selection)
+			if got != tt.want {
+				t.Fatalf("requiresPiMultiModelPreflight() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPiCapabilityContractAcrossResolverTUIAndSyncInject(t *testing.T) {
+	tests := []struct {
+		name                 string
+		installPiSubagents   bool
+		wantResolverEnabled  bool
+		wantTUIScreen        tui.Screen
+		wantPreflightErr     bool
+		wantInjectPiArtifacts bool
+	}{
+		{
+			name:                 "pi-subagents absent fails closed across all surfaces",
+			installPiSubagents:   false,
+			wantResolverEnabled:  false,
+			wantTUIScreen:        tui.ScreenStrictTDD,
+			wantPreflightErr:     true,
+			wantInjectPiArtifacts: false,
+		},
+		{
+			name:                 "pi-subagents present enables multi-model across all surfaces",
+			installPiSubagents:   true,
+			wantResolverEnabled:  true,
+			wantTUIScreen:        tui.ScreenSDDMode,
+			wantPreflightErr:     false,
+			wantInjectPiArtifacts: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			workspace := t.TempDir()
+
+			if tt.installPiSubagents {
+				if err := os.MkdirAll(filepath.Join(workspace, ".pi", "extensions", "pi-subagents"), 0o755); err != nil {
+					t.Fatalf("MkdirAll(pi-subagents) error = %v", err)
+				}
+			}
+
+			resolver := capabilities.NewResolver(nil)
+			resolved, err := resolver.Resolve(home, workspace, model.AgentPiCodingAgent)
+			if err != nil {
+				t.Fatalf("resolver.Resolve() error = %v", err)
+			}
+			if resolved.SupportsSDDMultiMode != tt.wantResolverEnabled {
+				t.Fatalf("resolver.SupportsSDDMultiMode = %v, want %v", resolved.SupportsSDDMultiMode, tt.wantResolverEnabled)
+			}
+
+			selection := model.Selection{
+				Agents:     []model.AgentID{model.AgentPiCodingAgent},
+				Components: []model.ComponentID{model.ComponentSDD},
+				SDDMode:    model.SDDModeMulti,
+			}
+
+			preflightErr := validatePiMultiModelPreflight(home, workspace, selection)
+			if (preflightErr != nil) != tt.wantPreflightErr {
+				t.Fatalf("validatePiMultiModelPreflight() err = %v, wantErr %v", preflightErr, tt.wantPreflightErr)
+			}
+
+			t.Setenv("HOME", home)
+			prevWD, err := os.Getwd()
+			if err != nil {
+				t.Fatalf("Getwd() error = %v", err)
+			}
+			if chdirErr := os.Chdir(workspace); chdirErr != nil {
+				t.Fatalf("Chdir(workspace) error = %v", chdirErr)
+			}
+			t.Cleanup(func() {
+				_ = os.Chdir(prevWD)
+			})
+
+			m := tui.NewModel(system.DetectionResult{}, "dev")
+			m.Screen = tui.ScreenPreset
+			m.Selection.Agents = []model.AgentID{model.AgentPiCodingAgent}
+			m.Cursor = 0
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			state := updated.(tui.Model)
+			if state.Screen != tt.wantTUIScreen {
+				t.Fatalf("TUI screen after preset Enter = %v, want %v", state.Screen, tt.wantTUIScreen)
+			}
+
+			injectResult, injectErr := sdd.Inject(home, pi.NewAdapter(), model.SDDModeMulti, sdd.InjectOptions{WorkspaceDir: workspace})
+			if injectErr != nil {
+				t.Fatalf("sdd.Inject() error = %v", injectErr)
+			}
+			gotPiArtifacts := false
+			for _, path := range injectResult.Files {
+				if strings.Contains(path, string(filepath.Separator)+".pi"+string(filepath.Separator)+"agents"+string(filepath.Separator)) {
+					gotPiArtifacts = true
+					break
+				}
+			}
+			if gotPiArtifacts != tt.wantInjectPiArtifacts {
+				t.Fatalf("PI artifact generation = %v, want %v", gotPiArtifacts, tt.wantInjectPiArtifacts)
+			}
+		})
+	}
+}
+
 func TestRunSyncIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
@@ -978,6 +1166,213 @@ func TestRunSyncNoOpWhenAssetsAlreadyCurrent(t *testing.T) {
 	report := RenderSyncReport(result2)
 	if !containsAny(report, "no managed", "no sync", "nothing to sync", "0 actions", "already current", "up to date") {
 		t.Errorf("RenderSyncReport() should indicate no changes on second run; got:\n%s", report)
+	}
+}
+
+func TestRunSyncPIAliasStaleSharedSkillIsManagedSyncAction(t *testing.T) {
+	home := t.TempDir()
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+
+	stalePath := filepath.Join(home, ".pi", "agent", "skills", "_shared", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(stalePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(stalePath, []byte("stale invalid shared skill"), 0o644); err != nil {
+		t.Fatalf("WriteFile(stalePath) error = %v", err)
+	}
+
+	sel := model.Selection{
+		Agents:     []model.AgentID{model.AgentPiCodingAgent},
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentSkills},
+		SDDMode:    model.SDDModeSingle,
+	}
+
+	result, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	if result.NoOp {
+		t.Fatalf("SyncResult.NoOp = true, want false when stale PI _shared/SKILL.md exists")
+	}
+	if result.FilesChanged == 0 {
+		t.Fatalf("FilesChanged = 0, want > 0 when stale PI _shared/SKILL.md is removed")
+	}
+	if _, statErr := os.Stat(stalePath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected stale PI shared skill %q to be removed, stat err = %v", stalePath, statErr)
+	}
+}
+
+func TestRunSyncPIAliasRemainsNoOpWhenAlreadyCurrentAndNoStaleSharedSkill(t *testing.T) {
+	home := t.TempDir()
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+
+	sel := model.Selection{
+		Agents:     []model.AgentID{model.AgentPiCodingAgent},
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentSkills},
+		SDDMode:    model.SDDModeSingle,
+	}
+
+	first, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() first error = %v", err)
+	}
+	if first.NoOp {
+		t.Fatalf("first sync NoOp = true, want false for initial managed PI sync")
+	}
+
+	second, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() second error = %v", err)
+	}
+	if !second.NoOp {
+		t.Fatalf("second sync NoOp = false, want true when assets are already current and stale file is absent")
+	}
+	if second.FilesChanged != 0 {
+		t.Fatalf("second sync FilesChanged = %d, want 0", second.FilesChanged)
+	}
+}
+
+func TestAsAgentIDsNormalizesPIAlias(t *testing.T) {
+	tests := []struct {
+		name  string
+		in    []string
+		want  []model.AgentID
+	}{
+		{
+			name: "pi alias maps to canonical id",
+			in:   []string{"pi"},
+			want: []model.AgentID{model.AgentPiCodingAgent},
+		},
+		{
+			name: "pi alias maps case-insensitively",
+			in:   []string{"PI", "Pi"},
+			want: []model.AgentID{model.AgentPiCodingAgent, model.AgentPiCodingAgent},
+		},
+		{
+			name: "canonical id remains unchanged",
+			in:   []string{"pi-coding-agent"},
+			want: []model.AgentID{model.AgentPiCodingAgent},
+		},
+		{
+			name: "non-pi ids are trimmed and preserved",
+			in:   []string{" opencode "},
+			want: []model.AgentID{model.AgentOpenCode},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := asAgentIDs(tt.in)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("asAgentIDs(%v) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunPostSyncVerificationIncludesPiProjectArtifacts(t *testing.T) {
+	home := t.TempDir()
+	projectRoot := t.TempDir()
+	workspace := filepath.Join(projectRoot, "apps", "api")
+
+	if err := os.MkdirAll(filepath.Join(home, ".config", "pi-coding-agent"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".pi", "extensions", "pi-subagents"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(pi-subagents) error = %v", err)
+	}
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) error = %v", err)
+	}
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentPiCodingAgent},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeMulti,
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir(workspace) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+
+	result, err := RunSyncWithSelection(home, selection)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("expected initial sync verification to be ready, got report=%+v", result.Verify)
+	}
+
+	missing := filepath.Join(projectRoot, ".pi", "agents", "sdd-apply.md")
+	if err := os.Remove(missing); err != nil {
+		t.Fatalf("Remove(%q) error = %v", missing, err)
+	}
+
+	report := runPostSyncVerification(home, selection)
+	if report.Ready {
+		t.Fatalf("runPostSyncVerification() Ready = true, want false when %q is missing", missing)
+	}
+}
+
+func TestSyncBackupTargetsReturnsEmptyOnGetwdError(t *testing.T) {
+	origGetwd := osGetwdSync
+	osGetwdSync = func() (string, error) { return "", os.ErrPermission }
+	t.Cleanup(func() { osGetwdSync = origGetwd })
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentPiCodingAgent},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeMulti,
+	}
+
+	targets := syncBackupTargets(t.TempDir(), selection, resolveAdapters(selection.Agents))
+	if len(targets) != 0 {
+		t.Fatalf("syncBackupTargets() = %v, want empty when getwd fails", targets)
+	}
+}
+
+func TestRunPostSyncVerificationFailsClosedOnGetwdError(t *testing.T) {
+	origGetwd := osGetwdSync
+	osGetwdSync = func() (string, error) { return "", os.ErrPermission }
+	t.Cleanup(func() { osGetwdSync = origGetwd })
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentPiCodingAgent},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeMulti,
+	}
+
+	report := runPostSyncVerification(t.TempDir(), selection)
+	if report.Ready {
+		t.Fatal("runPostSyncVerification() Ready = true, want false when getwd fails")
+	}
+	if len(report.Checks) == 0 || report.Checks[0].Error == "" {
+		t.Fatalf("runPostSyncVerification() expected getwd error in report, got %#v", report.Checks)
 	}
 }
 
@@ -1932,8 +2327,14 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 			"orchestrator": "opus",
 			"sdd-apply":    "sonnet",
 		},
+		KiroModelAssignments: map[string]string{
+			"sdd-design": "haiku",
+		},
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		},
+		PIModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5"},
 		},
 	})
 	if err != nil {
@@ -1954,11 +2355,18 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 	if got := result.Selection.ClaudeModelAssignments["sdd-apply"]; got != "sonnet" {
 		t.Errorf("ClaudeModelAssignments[sdd-apply] = %q, want %q", got, "sonnet")
 	}
+	if got := result.Selection.KiroModelAssignments["sdd-design"]; got != model.ClaudeModelHaiku {
+		t.Errorf("KiroModelAssignments[sdd-design] = %q, want %q", got, model.ClaudeModelHaiku)
+	}
 
 	// OpenCode assignments must be loaded.
 	ma := result.Selection.ModelAssignments["sdd-init"]
 	if ma.ProviderID != "anthropic" || ma.ModelID != "claude-sonnet-4" {
 		t.Errorf("ModelAssignments[sdd-init] = %+v, want anthropic/claude-sonnet-4", ma)
+	}
+
+	if len(result.Selection.PIModelAssignments) != 0 {
+		t.Errorf("PIModelAssignments should not hydrate when PI is not selected, got: %v", result.Selection.PIModelAssignments)
 	}
 }
 
@@ -1992,6 +2400,9 @@ func TestRunSyncDoesNotOverridePersistedAssignmentsOnSecondSync(t *testing.T) {
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		},
+		PIModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5-mini"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("state.Write: %v", err)
@@ -2015,6 +2426,48 @@ func TestRunSyncDoesNotOverridePersistedAssignmentsOnSecondSync(t *testing.T) {
 	ma := result.Selection.ModelAssignments["sdd-init"]
 	if ma.ProviderID != "anthropic" || ma.ModelID != "claude-sonnet-4" {
 		t.Errorf("After second sync: ModelAssignments[sdd-init] = %+v, want anthropic/claude-sonnet-4", ma)
+	}
+	if len(result.Selection.PIModelAssignments) != 0 {
+		t.Errorf("PIModelAssignments should not hydrate when PI is not selected, got: %v", result.Selection.PIModelAssignments)
+	}
+}
+
+func TestRunSyncLoadsPersistedPIAssignmentsWhenPISelected(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"pi-coding-agent"},
+		PIModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5-mini"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	result, err := RunSync([]string{"--agents", "pi-coding-agent", "--sdd-mode", "single", "--dry-run"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+
+	pi := result.Selection.PIModelAssignments["sdd-apply"]
+	if pi.ProviderID != "openai" || pi.ModelID != "gpt-5-mini" {
+		t.Errorf("PIModelAssignments[sdd-apply] = %+v, want openai/gpt-5-mini", pi)
 	}
 }
 

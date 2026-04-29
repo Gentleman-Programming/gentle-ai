@@ -6,22 +6,28 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/capabilities"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/modelcatalog"
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
@@ -33,15 +39,60 @@ import (
 var osStatModelCache = os.Stat
 var osStatPathFn = os.Stat
 var osGetwdFn = os.Getwd
+var osUserHomeDirFn = os.UserHomeDir
 var osExecutableFn = os.Executable
 var osRemoveFn = os.Remove
+var resolveAgentCapabilitiesFn = func(homeDir string, workspaceDir string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+	return capabilities.NewResolver(nil).Resolve(homeDir, workspaceDir, agentID)
+}
 var execCommandFn = exec.Command
+var loadPIModelCatalogFn = func(ctx context.Context) (modelcatalog.Catalog, error) {
+	return pi.LoadModelCatalogRPC(ctx, nil)
+}
+
+type cachedAgentCapabilities struct {
+	homeDir      string
+	workspaceDir string
+	resolverPtr  uintptr
+	resolved     capabilities.ResolvedCapabilities
+}
+
+var agentCapabilitiesCache = map[model.AgentID]cachedAgentCapabilities{}
+var agentCapabilitiesCacheMu sync.Mutex
+
+func clearAgentCapabilitiesCache() {
+	agentCapabilitiesCacheMu.Lock()
+	defer agentCapabilitiesCacheMu.Unlock()
+	agentCapabilitiesCache = map[model.AgentID]cachedAgentCapabilities{}
+}
 
 // readCurrentAssignmentsFn is a package-level variable so tests can override
 // how current model assignments are read from opencode.json. It wraps
 // sdd.ReadCurrentModelAssignments and is only called during ModelConfigMode.
 var readCurrentAssignmentsFn = func(settingsPath string) (map[string]model.ModelAssignment, error) {
 	return sdd.ReadCurrentModelAssignments(settingsPath)
+}
+
+// readPersistedPIAssignmentsFn is a package-level variable so tests can
+// override how persisted PI model assignments are read from state.json.
+var readPersistedPIAssignmentsFn = func(homeDir string) (map[string]model.ModelAssignment, error) {
+	s, err := state.Read(homeDir)
+	if err != nil {
+		return nil, err
+	}
+	if len(s.PIModelAssignments) == 0 {
+		return nil, nil
+	}
+
+	assignments := make(map[string]model.ModelAssignment, len(s.PIModelAssignments))
+	for phase, assignment := range s.PIModelAssignments {
+		assignments[phase] = model.ModelAssignment{
+			ProviderID: assignment.ProviderID,
+			ModelID:    assignment.ModelID,
+		}
+	}
+
+	return assignments, nil
 }
 
 // readProfilesFn is a package-level variable so tests can override how profiles
@@ -688,7 +739,7 @@ func (m Model) View() string {
 	case ScreenSync:
 		return screens.RenderSync(m.SyncFilesChanged, m.SyncErr, m.OperationRunning, m.HasSyncRun, m.SpinnerFrame)
 	case ScreenModelConfig:
-		return screens.RenderModelConfig(m.Cursor)
+		return screens.RenderModelConfigWithCapabilities(m.Cursor, m.shouldShowPIModelConfigOption(), m.modelConfigCapabilityWarning())
 	case ScreenProfiles:
 		return screens.RenderProfiles(m.ProfileList, m.Cursor, m.ProfileDeleteErr)
 	case ScreenProfileCreate:
@@ -722,7 +773,7 @@ func (m Model) View() string {
 	case ScreenDetection:
 		return screens.RenderDetection(m.Detection, m.Cursor)
 	case ScreenAgents:
-		return screens.RenderAgents(m.Selection.Agents, m.Cursor)
+		return screens.RenderAgents(m.Selection.Agents, m.Cursor, m.agentSelectionWarnings())
 	case ScreenPersona:
 		return screens.RenderPersona(m.Selection.Persona, m.Cursor)
 	case ScreenPreset:
@@ -740,7 +791,7 @@ func (m Model) View() string {
 	case ScreenOpenCodePluginResult:
 		return screens.RenderOpenCodePluginResult(m.OpenCodePluginRegistrationResults, m.OpenCodePluginRegistrationErr)
 	case ScreenModelPicker:
-		return screens.RenderModelPicker(m.Selection.ModelAssignments, m.ModelPicker, m.Cursor)
+		return screens.RenderModelPicker(m.modelPickerAssignments(), m.ModelPicker, m.Cursor)
 	case ScreenDependencyTree:
 		return screens.RenderDependencyTree(m.DependencyPlan, m.Selection, m.Cursor)
 	case ScreenSkillPicker:
@@ -800,9 +851,9 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// When the model picker is in a sub-mode, delegate navigation there first.
 	if m.Screen == ScreenModelPicker && m.ModelPicker.Mode != screens.ModePhaseList {
-		handled, updated := screens.HandleModelPickerNav(keyStr, &m.ModelPicker, m.Selection.ModelAssignments)
+		handled, updated := screens.HandleModelPickerNav(keyStr, &m.ModelPicker, m.modelPickerAssignments())
 		if handled {
-			m.Selection.ModelAssignments = updated
+			m.setModelPickerAssignments(updated)
 			return m, nil
 		}
 	}
@@ -1378,19 +1429,20 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case ScreenModelConfig:
-		switch m.Cursor {
-		case 0: // Configure Claude models
+		options := screens.ModelConfigOptionsForCapabilities(m.shouldShowPIModelConfigOption())
+		if m.Cursor >= len(options)-1 {
+			m.setScreen(ScreenWelcome)
+			return m, nil
+		}
+
+		switch options[m.Cursor] {
+		case screens.ModelConfigOptionClaude:
 			m.ModelConfigMode = true
 			m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
 			m.setScreen(ScreenClaudeModelPicker)
-		case 1: // Configure OpenCode models
+		case screens.ModelConfigOptionOpenCode:
 			m.ModelConfigMode = true
-			cachePath := opencode.DefaultCachePath()
-			if _, err := osStatModelCache(cachePath); err == nil {
-				m.ModelPicker = screens.NewModelPickerState(cachePath)
-			} else {
-				m.ModelPicker = screens.ModelPickerState{}
-			}
+			m.initOpenCodeModelPicker()
 			// Pre-populate with existing assignments from opencode.json.
 			// Only when there are no in-session assignments yet — the nil guard
 			// ensures we don't overwrite changes the user already made this session.
@@ -1401,11 +1453,19 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				}
 			}
 			m.setScreen(ScreenModelPicker)
-		case 2: // Configure Kiro models
+		case screens.ModelConfigOptionKiro:
 			m.ModelConfigMode = true
 			m.KiroModelPicker = screens.NewKiroModelPickerState()
 			m.setScreen(ScreenKiroModelPicker)
-		default: // Back
+		case screens.ModelConfigOptionPI:
+			m.ModelConfigMode = true
+			if m.piSupportsModelPicker() {
+				m.initPIModelPicker()
+			} else {
+				m.setBlockedPIModelPicker(capabilities.PiMultiModelRequiresPiSubagentsMessage)
+			}
+			m.setScreen(ScreenModelPicker)
+		default:
 			m.setScreen(ScreenWelcome)
 		}
 		return m, nil
@@ -1502,22 +1562,16 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		if m.Cursor < len(options) {
 			m.Selection.SDDMode = options[m.Cursor]
 			if m.Selection.SDDMode == model.SDDModeMulti {
-				cachePath := opencode.DefaultCachePath()
-				if _, err := osStatModelCache(cachePath); err == nil {
-					// Cache exists — OpenCode has been run at least once.
-					// Show the model picker so the user can assign models.
-					m.ModelPicker = screens.NewModelPickerState(cachePath)
+				if m.initSDDModelPicker() {
 					m.Selection.ModelAssignments = nil
+					m.Selection.PIModelAssignments = nil
 					m.setScreen(ScreenModelPicker)
 					return m, nil
 				}
-				// Cache missing — OpenCode hasn't been run yet on this machine.
-				// Skip the model picker; models will use OpenCode defaults.
-				// The picker empty-state message explains what to do after install.
-				m.ModelPicker = screens.ModelPickerState{}
 			}
 			// Clear assignments for both single mode and multi-no-cache paths.
 			m.Selection.ModelAssignments = nil
+			m.Selection.PIModelAssignments = nil
 			// Show StrictTDD screen when OpenCode + SDD are selected.
 			// This is the next step before the dependency tree.
 			if m.shouldShowSDDModeScreen() {
@@ -1586,12 +1640,21 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			// In ModelConfigMode, persist model assignments via sync.
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
-				m.PendingSyncOverrides = &model.SyncOverrides{
-					ModelAssignments: m.Selection.ModelAssignments,
-					SDDMode:          model.SDDModeMulti,
+				overrides := &model.SyncOverrides{SDDMode: model.SDDModeMulti}
+				if m.ModelPicker.Source == "pi" {
+					overrides.PIModelAssignments = m.Selection.PIModelAssignments
+				} else {
+					overrides.ModelAssignments = m.Selection.ModelAssignments
 				}
+				m.PendingSyncOverrides = overrides
 				m = m.withResetSyncState()
 				m.setScreen(ScreenSync)
+				return m, nil
+			}
+			if m.shouldRunPIModelPickerAfterOpenCode() {
+				m.initPIModelPicker()
+				m.Cursor = 0
+				m.ModelPicker.Mode = screens.ModePhaseList
 				return m, nil
 			}
 			if m.Selection.Preset == model.PresetCustom {
@@ -1658,12 +1721,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Back — depends on which flow brought us here.
 		if m.shouldShowSDDModeScreen() {
 			// OpenCode path: ModelPicker (if multi + cache) or SDDMode.
-			if m.Selection.SDDMode == model.SDDModeMulti {
-				cachePath := opencode.DefaultCachePath()
-				if _, err := osStatModelCache(cachePath); err == nil {
-					m.setScreen(ScreenModelPicker)
-					return m, nil
-				}
+			if m.canNavigateBackToModelPicker() {
+				m.setScreen(ScreenModelPicker)
+				return m, nil
 			}
 			m.setScreen(ScreenSDDMode)
 		} else if m.shouldShowClaudeModelPickerScreen() {
@@ -1734,13 +1794,8 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			// StrictTDD screen is between ModelPicker/SDDMode and DependencyTree.
 			m.setScreen(ScreenStrictTDD)
 		} else if m.shouldShowSDDModeScreen() {
-			if m.Selection.SDDMode == model.SDDModeMulti {
-				cachePath := opencode.DefaultCachePath()
-				if _, err := osStatModelCache(cachePath); err == nil {
-					m.setScreen(ScreenModelPicker)
-				} else {
-					m.setScreen(ScreenSDDMode)
-				}
+			if m.canNavigateBackToModelPicker() {
+				m.setScreen(ScreenModelPicker)
 			} else {
 				m.setScreen(ScreenSDDMode)
 			}
@@ -1766,13 +1821,8 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				if m.shouldShowStrictTDDScreen() {
 					m.setScreen(ScreenStrictTDD)
 				} else if m.shouldShowSDDModeScreen() {
-					if m.Selection.SDDMode == model.SDDModeMulti {
-						cachePath := opencode.DefaultCachePath()
-						if _, err := osStatModelCache(cachePath); err == nil {
-							m.setScreen(ScreenModelPicker)
-						} else {
-							m.setScreen(ScreenSDDMode)
-						}
+					if m.canNavigateBackToModelPicker() {
+						m.setScreen(ScreenModelPicker)
 					} else {
 						m.setScreen(ScreenSDDMode)
 					}
@@ -1799,13 +1849,8 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			} else if m.shouldShowStrictTDDScreen() {
 				m.setScreen(ScreenStrictTDD)
 			} else if m.shouldShowSDDModeScreen() {
-				if m.Selection.SDDMode == model.SDDModeMulti {
-					cachePath := opencode.DefaultCachePath()
-					if _, err := osStatModelCache(cachePath); err == nil {
-						m.setScreen(ScreenModelPicker)
-					} else {
-						m.setScreen(ScreenSDDMode)
-					}
+				if m.canNavigateBackToModelPicker() {
+					m.setScreen(ScreenModelPicker)
 				} else {
 					m.setScreen(ScreenSDDMode)
 				}
@@ -2333,13 +2378,8 @@ func (m Model) goBack() Model {
 			if m.shouldShowStrictTDDScreen() {
 				m.setScreen(ScreenStrictTDD)
 			} else if m.shouldShowSDDModeScreen() {
-				if m.Selection.SDDMode == model.SDDModeMulti {
-					cachePath := opencode.DefaultCachePath()
-					if _, err := osStatModelCache(cachePath); err == nil {
-						m.setScreen(ScreenModelPicker)
-					} else {
-						m.setScreen(ScreenSDDMode)
-					}
+				if m.canNavigateBackToModelPicker() {
+					m.setScreen(ScreenModelPicker)
 				} else {
 					m.setScreen(ScreenSDDMode)
 				}
@@ -2385,12 +2425,9 @@ func (m Model) goBack() Model {
 	if m.Screen == ScreenStrictTDD {
 		if m.shouldShowSDDModeScreen() {
 			// OpenCode path: ModelPicker (if multi + cache) or SDDMode.
-			if m.Selection.SDDMode == model.SDDModeMulti {
-				cachePath := opencode.DefaultCachePath()
-				if _, err := osStatModelCache(cachePath); err == nil {
-					m.setScreen(ScreenModelPicker)
-					return m
-				}
+			if m.canNavigateBackToModelPicker() {
+				m.setScreen(ScreenModelPicker)
+				return m
 			}
 			m.setScreen(ScreenSDDMode)
 			return m
@@ -2483,13 +2520,8 @@ func (m Model) goBack() Model {
 			return m
 		}
 		if m.shouldShowSDDModeScreen() {
-			if m.Selection.SDDMode == model.SDDModeMulti {
-				cachePath := opencode.DefaultCachePath()
-				if _, err := osStatModelCache(cachePath); err == nil {
-					m.setScreen(ScreenModelPicker)
-				} else {
-					m.setScreen(ScreenSDDMode)
-				}
+			if m.canNavigateBackToModelPicker() {
+				m.setScreen(ScreenModelPicker)
 			} else {
 				m.setScreen(ScreenSDDMode)
 			}
@@ -2615,7 +2647,7 @@ func (m Model) optionCount() int {
 	case ScreenUpgradeSync:
 		return 1
 	case ScreenModelConfig:
-		return len(screens.ModelConfigOptions())
+		return len(screens.ModelConfigOptionsForCapabilities(m.shouldShowPIModelConfigOption()))
 	case ScreenUninstallMode:
 		return len(screens.UninstallModeOptions()) + 1
 	case ScreenUninstall:
@@ -3023,6 +3055,8 @@ func preselectedAgents(detection system.DetectionResult) []model.AgentID {
 			selected = append(selected, model.AgentVSCodeCopilot)
 		case string(model.AgentCodex):
 			selected = append(selected, model.AgentCodex)
+		case string(model.AgentPiCodingAgent):
+			selected = append(selected, model.AgentPiCodingAgent)
 		case string(model.AgentAntigravity):
 			selected = append(selected, model.AgentAntigravity)
 		case string(model.AgentWindsurf):
@@ -3111,9 +3145,235 @@ func (m Model) hasDetectedOpenCode() bool {
 	return false
 }
 
+func (m Model) agentSelectionWarnings() []string {
+	if m.Selection.HasAgent(model.AgentPiCodingAgent) {
+		return []string{"PI is experimental and non-parity: multi-model is enabled only when `pi-subagents` is installed."}
+	}
+	return nil
+}
+
 func (m Model) shouldShowSDDModeScreen() bool {
-	return m.Selection.HasAgent(model.AgentOpenCode) &&
-		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
+	if !hasSelectedComponent(m.Selection.Components, model.ComponentSDD) {
+		return false
+	}
+
+	for _, agentID := range m.Selection.Agents {
+		caps := m.resolveAgentCapabilities(agentID)
+		if caps.SupportsSDDMultiMode {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (m Model) resolveAgentCapabilities(agentID model.AgentID) capabilities.ResolvedCapabilities {
+	resolverPtr := reflect.ValueOf(resolveAgentCapabilitiesFn).Pointer()
+
+	homeDir, err := osUserHomeDirFn()
+	if err != nil {
+		homeDir = ""
+	}
+
+	workspaceDir, err := osGetwdFn()
+	if err != nil {
+		workspaceDir = ""
+	}
+
+	agentCapabilitiesCacheMu.Lock()
+	if cached, ok := agentCapabilitiesCache[agentID]; ok && cached.homeDir == homeDir && cached.workspaceDir == workspaceDir && cached.resolverPtr == resolverPtr {
+		agentCapabilitiesCacheMu.Unlock()
+		return cached.resolved
+	}
+	agentCapabilitiesCacheMu.Unlock()
+
+	resolved, err := resolveAgentCapabilitiesFn(homeDir, workspaceDir, agentID)
+	if err != nil {
+		return capabilities.ResolvedCapabilities{}
+	}
+
+	agentCapabilitiesCacheMu.Lock()
+	agentCapabilitiesCache[agentID] = cachedAgentCapabilities{
+		homeDir:      homeDir,
+		workspaceDir: workspaceDir,
+		resolverPtr:  resolverPtr,
+		resolved:     resolved,
+	}
+	agentCapabilitiesCacheMu.Unlock()
+
+	return resolved
+}
+
+func (m Model) piSupportsMultiModel() bool {
+	state := m.piModelConfigState()
+	return state.selectedOrDetected && state.supportsMultiModel
+}
+
+func (m Model) piSupportsModelPicker() bool {
+	return m.piModelConfigState().supportsModelPicker
+}
+
+func (m Model) hasDetectedAgent(agentID model.AgentID) bool {
+	for _, cfg := range m.Detection.Configs {
+		if cfg.Agent == string(agentID) && cfg.Exists {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (m Model) shouldShowPIModelConfigOption() bool {
+	state := m.piModelConfigState()
+	return state.selectedOrDetected || state.supportsMultiModel || state.supportsModelPicker
+}
+
+func (m Model) modelConfigCapabilityWarning() string {
+	state := m.piModelConfigState()
+	if !state.selectedOrDetected && !state.supportsMultiModel && !state.supportsModelPicker {
+		return ""
+	}
+
+	if state.supportsMultiModel || state.supportsModelPicker {
+		return ""
+	}
+
+	return capabilities.PiMultiModelRequiresPiSubagentsMessage
+}
+
+type piModelConfigState struct {
+	selectedOrDetected  bool
+	supportsMultiModel  bool
+	supportsModelPicker bool
+}
+
+func (m Model) piModelConfigState() piModelConfigState {
+	resolved := m.resolveAgentCapabilities(model.AgentPiCodingAgent)
+	selectedForInstall := m.Selection.HasAgent(model.AgentPiCodingAgent) || m.planHasAgent(model.AgentPiCodingAgent)
+	return piModelConfigState{
+		selectedOrDetected:  selectedForInstall || m.hasDetectedAgent(model.AgentPiCodingAgent),
+		supportsMultiModel:  resolved.SupportsSDDMultiMode,
+		supportsModelPicker: resolved.SupportsModelPicker,
+	}
+}
+
+func (m Model) planHasAgent(agentID model.AgentID) bool {
+	for _, planned := range m.DependencyPlan.Agents {
+		if planned == agentID {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (m *Model) setBlockedPIModelPicker(message string) {
+	m.ModelPicker = screens.ModelPickerState{
+		Source:            "pi",
+		CapabilityBlocked: true,
+		CapabilityMessage: message,
+	}
+}
+
+func (m *Model) initOpenCodeModelPicker() bool {
+	cachePath := opencode.DefaultCachePath()
+	if _, err := osStatModelCache(cachePath); err == nil {
+		m.ModelPicker = screens.NewModelPickerState(cachePath)
+		m.ModelPicker.Source = "opencode"
+		m.ModelPicker.EmptyStateHint = "For OpenCode, run 'opencode' once, then re-run 'gentle-ai sync' to assign models."
+		return true
+	}
+
+	m.ModelPicker = screens.ModelPickerState{
+		Source:         "opencode",
+		EmptyStateHint: "For OpenCode, run 'opencode' once, then re-run 'gentle-ai sync' to assign models.",
+	}
+	return false
+}
+
+func (m *Model) initPIModelPicker() {
+	catalog, err := loadPIModelCatalogFn(context.Background())
+	if err != nil {
+		m.setBlockedPIModelPicker(pi.UserFacingRPCModelLoadError(err))
+		return
+	}
+
+	m.ModelPicker = screens.NewModelPickerStateFromCatalog(catalog)
+	m.ModelPicker.Source = "pi"
+	m.ModelPicker.EmptyStateHint = "PI returned no available models via RPC. Verify PI auth/runtime providers, then retry."
+
+	if m.Selection.PIModelAssignments == nil {
+		homeDir, err := osUserHomeDirFn()
+		if err == nil {
+			if current, err := readPersistedPIAssignmentsFn(homeDir); err == nil && len(current) > 0 {
+				m.Selection.PIModelAssignments = current
+			}
+		}
+	}
+}
+
+func (m *Model) initSDDModelPicker() bool {
+	if m.shouldUsePIModelPicker() {
+		m.initPIModelPicker()
+		return true
+	}
+
+	return m.initOpenCodeModelPicker()
+}
+
+func (m Model) modelPickerAssignments() map[string]model.ModelAssignment {
+	if m.ModelPicker.Source == "pi" {
+		return m.Selection.PIModelAssignments
+	}
+
+	return m.Selection.ModelAssignments
+}
+
+func (m *Model) setModelPickerAssignments(assignments map[string]model.ModelAssignment) {
+	if m.ModelPicker.Source == "pi" {
+		m.Selection.PIModelAssignments = assignments
+		return
+	}
+
+	m.Selection.ModelAssignments = assignments
+}
+
+func (m Model) shouldRunPIModelPickerAfterOpenCode() bool {
+	if m.ModelPicker.Source != "opencode" {
+		return false
+	}
+
+	if !m.Selection.HasAgent(model.AgentOpenCode) || !m.Selection.HasAgent(model.AgentPiCodingAgent) {
+		return false
+	}
+
+	if !m.piSupportsModelPicker() {
+		return false
+	}
+
+	return m.Selection.SDDMode == model.SDDModeMulti
+}
+
+func (m Model) shouldUsePIModelPicker() bool {
+	if !m.Selection.HasAgent(model.AgentPiCodingAgent) || m.Selection.HasAgent(model.AgentOpenCode) {
+		return false
+	}
+
+	return m.piSupportsModelPicker()
+}
+
+func (m Model) canNavigateBackToModelPicker() bool {
+	if m.Selection.SDDMode != model.SDDModeMulti {
+		return false
+	}
+
+	if m.ModelPicker.Source == "pi" {
+		return true
+	}
+
+	cachePath := opencode.DefaultCachePath()
+	_, err := osStatModelCache(cachePath)
+	return err == nil
 }
 
 // shouldShowStrictTDDScreen reports whether the Strict TDD Mode screen should
@@ -3249,12 +3509,7 @@ func (m Model) handleProfileNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.ProfileDraft.Name = name
 		m.ProfileCreateStep = 1
 		// Initialize model picker for orchestrator step.
-		cachePath := opencode.DefaultCachePath()
-		if _, err := osStatModelCache(cachePath); err == nil {
-			m.ModelPicker = screens.NewModelPickerState(cachePath)
-		} else {
-			m.ModelPicker = screens.ModelPickerState{}
-		}
+		m.initOpenCodeModelPicker()
 		m.Cursor = 0
 		return m, nil
 	case tea.KeyEsc:
@@ -3306,12 +3561,7 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 		// Edit mode: step 0 shows read-only name, enter advances to step 1.
 		if m.ProfileEditMode {
 			m.ProfileCreateStep = 1
-			cachePath := opencode.DefaultCachePath()
-			if _, err := osStatModelCache(cachePath); err == nil {
-				m.ModelPicker = screens.NewModelPickerState(cachePath)
-			} else {
-				m.ModelPicker = screens.ModelPickerState{}
-			}
+			m.initOpenCodeModelPicker()
 			m.Cursor = 0
 		}
 		return m, nil

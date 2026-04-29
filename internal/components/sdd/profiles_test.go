@@ -55,6 +55,23 @@ func TestResolveProfileStrategy_DefaultsGeneratedMultiWithoutExternalProfiles(t 
 	}
 }
 
+func TestRenderPiChainModelsOmitsUnassignedPhases(t *testing.T) {
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4-6"},
+	}
+
+	chainModels := renderPiChainModels(assignments)
+	if strings.Contains(chainModels, "openai/gpt-5") {
+		t.Fatalf("renderPiChainModels() fabricated fallback model\n%s", chainModels)
+	}
+	if !strings.Contains(chainModels, "sdd-apply: anthropic/claude-opus-4-6") {
+		t.Fatalf("renderPiChainModels() missing explicit assignment\n%s", chainModels)
+	}
+	if strings.Contains(chainModels, "sdd-spec:") {
+		t.Fatalf("renderPiChainModels() should omit unassigned phase entries\n%s", chainModels)
+	}
+}
+
 // ─── ValidateProfileName ───────────────────────────────────────────────────
 
 func TestValidateProfileName_Valid(t *testing.T) {

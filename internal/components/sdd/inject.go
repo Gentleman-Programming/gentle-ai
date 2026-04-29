@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/capabilities"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -22,6 +23,7 @@ type InjectionResult struct {
 
 type InjectOptions struct {
 	OpenCodeModelAssignments map[string]model.ModelAssignment
+	PIModelAssignments       map[string]model.ModelAssignment
 	ClaudeModelAssignments   map[string]model.ClaudeModelAlias
 	KiroModelAssignments     map[string]model.ClaudeModelAlias
 
@@ -172,6 +174,17 @@ func findProjectRoot(dir string) (string, bool) {
 	return "", false
 }
 
+// ResolvePIArtifactsProjectRoot resolves the canonical project root used for
+// PI .pi/agents artifact placement across planning, backup/verify, and writes.
+// Returns (cleaned workspaceDir, false) when no root markers are found.
+func ResolvePIArtifactsProjectRoot(workspaceDir string) (string, bool) {
+	projectRoot, found := findProjectRoot(workspaceDir)
+	if found {
+		return projectRoot, true
+	}
+	return filepath.Clean(workspaceDir), false
+}
+
 var (
 	npmLookPath = exec.LookPath
 	npmRun      = func(dir string, args ...string) ([]byte, error) {
@@ -180,6 +193,9 @@ var (
 		// CombinedOutput captures stdout+stderr so we can surface actionable
 		// error messages on failure. Do not set Stdout/Stderr separately.
 		return cmd.CombinedOutput()
+	}
+	resolveSDDCapabilitiesFn = func(homeDir string, workspaceDir string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		return capabilities.NewResolver(nil).Resolve(homeDir, workspaceDir, agentID)
 	}
 )
 
@@ -191,6 +207,176 @@ func overlayAssetPath(sddMode model.SDDModeID) string {
 		return "opencode/sdd-overlay-multi.json"
 	}
 	return "opencode/sdd-overlay-single.json"
+}
+
+func piSDDOverlayJSON(resolved capabilities.ResolvedCapabilities) []byte {
+	requirementMessage := ""
+	if len(resolved.Requires) > 0 {
+		requirementMessage = resolved.Requires[0].Message
+	}
+
+	overlay := map[string]any{
+		"features": map[string]any{
+			"profiles":       resolved.SupportsSDDMultiMode,
+			"modelPicker":    resolved.SupportsModelPicker,
+			"generatedMulti": resolved.SupportsGeneratedMulti,
+		},
+		"sdd": map[string]any{
+			"capabilities": []string{"experimental", "non-parity"},
+			"multiModel": map[string]any{
+				"enabled":             resolved.SupportsGeneratedMulti,
+				"requirement_message": requirementMessage,
+			},
+		},
+	}
+
+	b, _ := json.MarshalIndent(overlay, "", "  ")
+	return append(b, '\n')
+}
+
+func piSubagentsRequirementForOverlay() capabilities.RuntimeRequirement {
+	return capabilities.RuntimeRequirement{
+		ID:      capabilities.RequirementPiSubagentsInstalled,
+		Message: capabilities.PiMultiModelRequiresPiSubagentsMessage,
+	}
+}
+
+func piModelForPhase(assignments map[string]model.ModelAssignment, phase string) (string, bool) {
+	for _, key := range phaseModelLookupKeys(phase) {
+		if assignment, ok := assignments[key]; ok && assignment.ProviderID != "" && assignment.ModelID != "" {
+			return assignment.FullID(), true
+		}
+	}
+	return "", false
+}
+
+func phaseModelLookupKeys(phase string) []string {
+	return []string{phase, "default", "sdd-orchestrator"}
+}
+
+func renderPiChainModels(assignments map[string]model.ModelAssignment) string {
+	var b strings.Builder
+	for _, phase := range ProfilePhaseOrder() {
+		phaseModel, ok := piModelForPhase(assignments, phase)
+		if !ok {
+			continue
+		}
+		b.WriteString("- ")
+		b.WriteString(phase)
+		b.WriteString(": ")
+		b.WriteString(phaseModel)
+		b.WriteString("\n")
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+func renderPiChainContent(content string, assignments map[string]model.ModelAssignment) string {
+	for _, phase := range ProfilePhaseOrder() {
+		placeholder := "{{MODEL_LINE_" + phase + "}}"
+		phaseModel, ok := piModelForPhase(assignments, phase)
+		if !ok {
+			content = strings.ReplaceAll(content, placeholder, "")
+			continue
+		}
+		content = strings.ReplaceAll(content, placeholder, "model: "+phaseModel)
+	}
+
+	chainModels := renderPiChainModels(assignments)
+	if strings.TrimSpace(chainModels) == "" {
+		chainModels = "- none (agent defaults apply)"
+	}
+
+	return strings.ReplaceAll(content, "{{CHAIN_MODELS}}", chainModels)
+}
+
+func renderPiSubagentContent(fileName string, assignments map[string]model.ModelAssignment) string {
+	content := assets.MustRead("pi/agents/" + fileName)
+	if strings.HasSuffix(fileName, ".chain.md") {
+		return renderPiChainContent(content, assignments)
+	}
+
+	phase := strings.TrimSuffix(fileName, ".md")
+	phaseModel, ok := piModelForPhase(assignments, phase)
+	if ok {
+		return strings.ReplaceAll(content, "model: {{MODEL}}", "model: "+phaseModel)
+	}
+
+	content = strings.ReplaceAll(content, "model: {{MODEL}}\n", "")
+	return strings.ReplaceAll(content, "model: {{MODEL}}", "")
+}
+
+func writePiSubagentArtifacts(workspaceDir string, assignments map[string]model.ModelAssignment) (InjectionResult, error) {
+	if strings.TrimSpace(workspaceDir) == "" {
+		return InjectionResult{}, nil
+	}
+
+	projectRoot, _ := ResolvePIArtifactsProjectRoot(workspaceDir)
+
+	agentsDir := filepath.Join(projectRoot, ".pi", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		return InjectionResult{}, fmt.Errorf("create PI agents dir: %w", err)
+	}
+
+	entries, err := fs.ReadDir(assets.FS, "pi/agents")
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("read embedded pi agents: %w", err)
+	}
+
+	changed := false
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		content := renderPiSubagentContent(entry.Name(), assignments)
+
+		path := filepath.Join(agentsDir, entry.Name())
+		writeResult, writeErr := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
+		if writeErr != nil {
+			return InjectionResult{}, fmt.Errorf("write PI agent %q: %w", entry.Name(), writeErr)
+		}
+
+		changed = changed || writeResult.Changed
+		files = append(files, path)
+	}
+
+	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+func injectPiSDD(homeDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, []byte, error) {
+	settingsPath := adapter.SettingsPath(homeDir)
+	if settingsPath == "" {
+		return InjectionResult{}, nil, nil
+	}
+
+	resolvedCapabilities, capErr := resolveSDDCapabilitiesFn(homeDir, opts.WorkspaceDir, adapter.Agent())
+	if capErr != nil {
+		resolvedCapabilities = capabilities.ResolvedCapabilities{
+			Requires: []capabilities.RuntimeRequirement{piSubagentsRequirementForOverlay()},
+		}
+	}
+
+	mergeResult, err := mergeJSONFile(settingsPath, piSDDOverlayJSON(resolvedCapabilities))
+	if err != nil {
+		return InjectionResult{}, nil, fmt.Errorf("merge PI SDD capability overlay: %w", err)
+	}
+
+	result := InjectionResult{Changed: mergeResult.writeResult.Changed, Files: []string{settingsPath}}
+	if !resolvedCapabilities.SupportsGeneratedMulti {
+		return result, mergeResult.merged, nil
+	}
+
+	assignments := opts.PIModelAssignments
+
+	artifactsResult, err := writePiSubagentArtifacts(opts.WorkspaceDir, assignments)
+	if err != nil {
+		return InjectionResult{}, nil, err
+	}
+
+	result.Changed = result.Changed || artifactsResult.Changed
+	result.Files = append(result.Files, artifactsResult.Files...)
+	return result, mergeResult.merged, nil
 }
 
 func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, options ...InjectOptions) (InjectionResult, error) {
@@ -226,7 +412,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// custom persona, the SDD content must still be injected. We append the
 			// SDD orchestrator section to the existing system prompt file so it is
 			// always present regardless of persona choice.
-			result, err := injectFileAppend(homeDir, adapter)
+			result, err := injectFileAppend(homeDir, adapter, opts.OpenCodeModelAssignments)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -425,17 +611,30 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 	}
 
+	if adapter.Agent() == model.AgentPiCodingAgent {
+		piResult, merged, err := injectPiSDD(homeDir, adapter, opts)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		changed = changed || piResult.Changed
+		mergedSettingsBytes = merged
+		files = append(files, piResult.Files...)
+	}
+
 	// 3. Write SDD skill files (if the agent supports skills).
 	if adapter.SupportsSkills() {
 		skillDir := adapter.SkillsDir(homeDir)
 		if skillDir != "" {
+			isPI := adapter.Agent() == model.AgentPiCodingAgent
 			sharedFiles := []string{
-				"SKILL.md",
 				"persistence-contract.md",
 				"engram-convention.md",
 				"openspec-convention.md",
 				"sdd-phase-common.md",
 				"skill-resolver.md",
+			}
+			if !isPI {
+				sharedFiles = append([]string{"SKILL.md"}, sharedFiles...)
 			}
 
 			for _, fileName := range sharedFiles {
@@ -456,6 +655,15 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 				changed = changed || writeResult.Changed
 				files = append(files, path)
+			}
+
+			if isPI {
+				staleSharedSkillPath := filepath.Join(skillDir, "_shared", "SKILL.md")
+				if err := os.Remove(staleSharedSkillPath); err != nil && !os.IsNotExist(err) {
+					return InjectionResult{}, err
+				} else if err == nil {
+					changed = true
+				}
 			}
 
 			sddSkills := []string{
@@ -1022,7 +1230,7 @@ func sddOrchestratorAsset(agent model.AgentID) string {
 	}
 }
 
-func injectFileAppend(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+func injectFileAppend(homeDir string, adapter agents.Adapter, assignments map[string]model.ModelAssignment) (InjectionResult, error) {
 	promptPath := adapter.SystemPromptFile(homeDir)
 
 	existing, err := readFileOrEmpty(promptPath)
@@ -1040,6 +1248,13 @@ func injectFileAppend(homeDir string, adapter agents.Adapter) (InjectionResult, 
 
 	// Use agent-specific SDD orchestrator content when available; fall back to generic.
 	content := assets.MustRead(sddOrchestratorAsset(adapter.Agent()))
+	if adapter.Agent() == model.AgentPiCodingAgent {
+		var err error
+		content, err = injectConcreteModelAssignments(content, assignments)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+	}
 
 	// If there is a bare (un-marked) legacy orchestrator block, strip it first
 	// so InjectMarkdownSection can re-inject the current canonical content.
@@ -1292,6 +1507,50 @@ var claudeModelAssignmentReasons = map[string]string{
 	"sdd-verify":   "Validation against spec",
 	"sdd-archive":  "Copy and close",
 	"default":      "Non-SDD general delegation",
+}
+
+func concreteModelForPhase(assignments map[string]model.ModelAssignment, phase string) string {
+	if len(assignments) == 0 {
+		return ""
+	}
+	key := phase
+	if phase == "orchestrator" {
+		key = "sdd-orchestrator"
+	}
+	for _, lookupKey := range phaseModelLookupKeys(key) {
+		if assignment, ok := assignments[lookupKey]; ok && assignment.ProviderID != "" && assignment.ModelID != "" {
+			return assignment.FullID()
+		}
+	}
+	return ""
+}
+
+func injectConcreteModelAssignments(content string, assignments map[string]model.ModelAssignment) (string, error) {
+	const openMarker = "<!-- gentle-ai:sdd-model-assignments -->"
+	const closeMarker = "<!-- /gentle-ai:sdd-model-assignments -->"
+
+	start := strings.Index(content, openMarker)
+	end := strings.Index(content, closeMarker)
+	if start == -1 || end == -1 || end < start {
+		return "", fmt.Errorf("sdd orchestrator asset missing model assignment markers")
+	}
+
+	var b strings.Builder
+	b.WriteString("## Model Assignments\n\n")
+	b.WriteString("Read this table at session start (or before first delegation), cache it for the session, and pass the mapped model ID in every Agent tool call via the `model` parameter. If a phase is missing, use the `default` row. If a configured model is unavailable in your PI environment, substitute a compatible model ID and continue.\n\n")
+	b.WriteString("| Phase | Default Model | Reason |\n")
+	b.WriteString("|-------|---------------|--------|\n")
+	for _, key := range claudeModelAssignmentRowOrder {
+		modelID := concreteModelForPhase(assignments, key)
+		if modelID == "" {
+			modelID = "anthropic/claude-sonnet-4-20250514"
+		}
+		b.WriteString(fmt.Sprintf("| %s | %s | %s |\n", key, modelID, claudeModelAssignmentReasons[key]))
+	}
+	b.WriteString("\n")
+
+	start += len(openMarker)
+	return content[:start] + "\n" + b.String() + content[end:], nil
 }
 
 func injectClaudeModelAssignments(content string, assignments map[string]model.ClaudeModelAlias) (string, error) {

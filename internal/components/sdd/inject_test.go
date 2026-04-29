@@ -10,18 +10,22 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/capabilities"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 	windsurfagent "github.com/gentleman-programming/gentle-ai/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/testutil"
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
+func piAdapter() agents.Adapter       { return pi.NewAdapter() }
 func windsurfAdapter() agents.Adapter { return windsurfagent.NewAdapter() }
 
 func mockNoPackageManager(t *testing.T) {
@@ -298,6 +302,512 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 	if second.Changed {
 		t.Fatalf("Inject() second changed = true")
+	}
+}
+
+func TestInjectPIWritesCapabilityOverlayWithoutTouchingOpenCode(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, piAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject(pi) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(pi) changed = false, want true")
+	}
+
+	piSettings := piAdapter().SettingsPath(home)
+	piRaw, err := os.ReadFile(piSettings)
+	if err != nil {
+		t.Fatalf("ReadFile(pi settings) error = %v", err)
+	}
+	testutil.AssertJSONGolden(t, piRaw, filepath.Join("testdata", "pi_sdd_overlay.golden.json"))
+
+	openCodeSettings := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if _, statErr := os.Stat(openCodeSettings); !os.IsNotExist(statErr) {
+		t.Fatalf("expected OpenCode settings to remain untouched for PI inject, stat err = %v", statErr)
+	}
+}
+
+func TestInjectPISharedSupportFilesExcludeSharedSkillDefinition(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, piAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject(pi) error = %v", err)
+	}
+
+	sharedDir := filepath.Join(home, ".pi", "agent", "skills", "_shared")
+	for _, sharedFile := range []string{
+		"persistence-contract.md",
+		"engram-convention.md",
+		"openspec-convention.md",
+		"sdd-phase-common.md",
+		"skill-resolver.md",
+	} {
+		path := filepath.Join(sharedDir, sharedFile)
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("expected PI shared support file %q: %v", path, statErr)
+		}
+	}
+
+	staleSkillPath := filepath.Join(sharedDir, "SKILL.md")
+	if _, statErr := os.Stat(staleSkillPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected PI injection to omit invalid %q, stat err = %v", staleSkillPath, statErr)
+	}
+
+	for _, f := range result.Files {
+		if f == staleSkillPath {
+			t.Fatalf("result.Files should not include %q", staleSkillPath)
+		}
+	}
+}
+
+func TestInjectPICleansStaleSharedSkillDefinition(t *testing.T) {
+	home := t.TempDir()
+	sharedDir := filepath.Join(home, ".pi", "agent", "skills", "_shared")
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(sharedDir) error = %v", err)
+	}
+
+	staleSkillPath := filepath.Join(sharedDir, "SKILL.md")
+	if err := os.WriteFile(staleSkillPath, []byte("stale invalid shared skill"), 0o644); err != nil {
+		t.Fatalf("WriteFile(stale SKILL.md) error = %v", err)
+	}
+
+	if _, err := Inject(home, piAdapter(), ""); err != nil {
+		t.Fatalf("Inject(pi) first error = %v", err)
+	}
+
+	if _, statErr := os.Stat(staleSkillPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected stale %q to be removed after first inject, stat err = %v", staleSkillPath, statErr)
+	}
+
+	second, err := Inject(home, piAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject(pi) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("Inject(pi) second changed = true, want false (stale cleanup must be idempotent)")
+	}
+}
+
+func TestInjectPIWithoutSubagentsStaysFailClosedAndSkipsPIArtifacts(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	result, err := Inject(home, piAdapter(), model.SDDModeMulti, InjectOptions{WorkspaceDir: workspace})
+	if err != nil {
+		t.Fatalf("Inject(pi, multi) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(pi, multi) changed = false, want true")
+	}
+
+	piSettings := piAdapter().SettingsPath(home)
+	piRaw, err := os.ReadFile(piSettings)
+	if err != nil {
+		t.Fatalf("ReadFile(pi settings) error = %v", err)
+	}
+	testutil.AssertJSONGolden(t, piRaw, filepath.Join("testdata", "pi_sdd_overlay_absent.golden.json"))
+
+	agentsDir := filepath.Join(workspace, ".pi", "agents")
+	if _, statErr := os.Stat(agentsDir); !os.IsNotExist(statErr) {
+		t.Fatalf("expected %q to be absent when pi-subagents is unavailable, stat err = %v", agentsDir, statErr)
+	}
+}
+
+func TestInjectPIWithSubagentsWritesPIArtifactsAndEnabledOverlay(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	extensionDir := filepath.Join(piAdapter().GlobalConfigDir(home), "extensions", "pi-subagents")
+	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(extensionDir) error = %v", err)
+	}
+
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5"},
+		"default":   {ProviderID: "anthropic", ModelID: "claude-sonnet-4-5"},
+	}
+
+	result, err := Inject(home, piAdapter(), model.SDDModeMulti, InjectOptions{
+		WorkspaceDir:       workspace,
+		PIModelAssignments: assignments,
+	})
+	if err != nil {
+		t.Fatalf("Inject(pi, multi) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(pi, multi) changed = false, want true")
+	}
+
+	piSettings := piAdapter().SettingsPath(home)
+	piRaw, err := os.ReadFile(piSettings)
+	if err != nil {
+		t.Fatalf("ReadFile(pi settings) error = %v", err)
+	}
+	testutil.AssertJSONGolden(t, piRaw, filepath.Join("testdata", "pi_sdd_overlay_present.golden.json"))
+
+	applyAgentPath := filepath.Join(workspace, ".pi", "agents", "sdd-apply.md")
+	applyAgentRaw, err := os.ReadFile(applyAgentPath)
+	if err != nil {
+		t.Fatalf("ReadFile(sdd-apply.md) error = %v", err)
+	}
+	testutil.AssertTextGolden(t, string(applyAgentRaw), filepath.Join("testdata", "pi_sdd_apply_agent.golden.md"))
+
+	chainPath := filepath.Join(workspace, ".pi", "agents", "sdd.chain.md")
+	chainRaw, err := os.ReadFile(chainPath)
+	if err != nil {
+		t.Fatalf("ReadFile(sdd.chain.md) error = %v", err)
+	}
+	testutil.AssertTextGolden(t, string(chainRaw), filepath.Join("testdata", "pi_sdd_chain.golden.md"))
+
+	openCodeSettings := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if _, statErr := os.Stat(openCodeSettings); !os.IsNotExist(statErr) {
+		t.Fatalf("expected OpenCode settings untouched for PI inject, stat err = %v", statErr)
+	}
+}
+
+func TestInjectPIWithoutSubagentsUsesCanonicalRequirementMessage(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	result, err := Inject(home, piAdapter(), model.SDDModeMulti, InjectOptions{WorkspaceDir: workspace})
+	if err != nil {
+		t.Fatalf("Inject(pi, multi) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(pi, multi) changed = false, want true")
+	}
+
+	piSettings := piAdapter().SettingsPath(home)
+	raw, err := os.ReadFile(piSettings)
+	if err != nil {
+		t.Fatalf("ReadFile(pi settings) error = %v", err)
+	}
+
+	if !strings.Contains(string(raw), capabilities.PiMultiModelRequiresPiSubagentsMessage) {
+		t.Fatalf("pi settings missing canonical requirement message %q\n%s", capabilities.PiMultiModelRequiresPiSubagentsMessage, string(raw))
+	}
+}
+
+func TestInjectPIResolverErrorFallsBackToCanonicalRequirementAndSkipsArtifacts(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	origResolver := resolveSDDCapabilitiesFn
+	t.Cleanup(func() { resolveSDDCapabilitiesFn = origResolver })
+	resolveSDDCapabilitiesFn = func(_, _ string, _ model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		return capabilities.ResolvedCapabilities{}, fmt.Errorf("resolver failed")
+	}
+
+	result, err := Inject(home, piAdapter(), model.SDDModeMulti, InjectOptions{WorkspaceDir: workspace})
+	if err != nil {
+		t.Fatalf("Inject(pi, multi) error = %v", err)
+	}
+
+	for _, path := range result.Files {
+		if strings.Contains(path, string(filepath.Separator)+".pi"+string(filepath.Separator)+"agents"+string(filepath.Separator)) {
+			t.Fatalf("Inject(pi, multi) should skip PI artifacts on resolver error, got file %q", path)
+		}
+	}
+
+	piSettings := piAdapter().SettingsPath(home)
+	raw, err := os.ReadFile(piSettings)
+	if err != nil {
+		t.Fatalf("ReadFile(pi settings) error = %v", err)
+	}
+
+	if !strings.Contains(string(raw), capabilities.PiMultiModelRequiresPiSubagentsMessage) {
+		t.Fatalf("pi settings missing canonical requirement message after resolver error %q\n%s", capabilities.PiMultiModelRequiresPiSubagentsMessage, string(raw))
+	}
+}
+
+func TestInjectPIChainContainsOrderedExecutablePhases(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	extensionDir := filepath.Join(piAdapter().GlobalConfigDir(home), "extensions", "pi-subagents")
+	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(extensionDir) error = %v", err)
+	}
+
+	if _, err := Inject(home, piAdapter(), model.SDDModeMulti, InjectOptions{WorkspaceDir: workspace}); err != nil {
+		t.Fatalf("Inject(pi, multi) error = %v", err)
+	}
+
+	chainPath := filepath.Join(workspace, ".pi", "agents", "sdd.chain.md")
+	chainRaw, err := os.ReadFile(chainPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", chainPath, err)
+	}
+
+	chain := string(chainRaw)
+	assertOrderedContains(t, chain, []string{
+		"## sdd-init",
+		"## sdd-explore",
+		"## sdd-propose",
+		"## sdd-spec",
+		"## sdd-design",
+		"## sdd-tasks",
+		"## sdd-apply",
+		"## sdd-verify",
+		"## sdd-archive",
+	})
+
+	for _, stepHeading := range []string{
+		"## sdd-init", "## sdd-explore", "## sdd-propose", "## sdd-spec", "## sdd-design",
+		"## sdd-tasks", "## sdd-apply", "## sdd-verify", "## sdd-archive",
+	} {
+		if strings.Count(chain, stepHeading) != 1 {
+			t.Fatalf("chain should contain heading %q exactly once\n%s", stepHeading, chain)
+		}
+	}
+
+	for _, invalidHeading := range []string{"## Steps", "## Phase Models"} {
+		if strings.Contains(chain, invalidHeading) {
+			t.Fatalf("chain should not contain non-agent heading %q because pi-subagents parses every ## heading as a step\n%s", invalidHeading, chain)
+		}
+	}
+
+	if !strings.Contains(chain, "name: sdd") || !strings.Contains(chain, "description:") {
+		t.Fatalf("chain missing required frontmatter fields\n%s", chain)
+	}
+}
+
+func TestInjectPIPreservesUserSubagentsSettingsDuringOverlayMerge(t *testing.T) {
+	home := t.TempDir()
+
+	settingsPath := piAdapter().SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+
+	original := `{
+	  "subagents": {
+	    "agentOverrides": {
+	      "reviewer": {
+	        "model": "anthropic/claude-sonnet-4"
+	      }
+	    }
+	  }
+	}`
+	if err := os.WriteFile(settingsPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	if _, err := Inject(home, piAdapter(), model.SDDModeMulti); err != nil {
+		t.Fatalf("Inject(pi, multi) error = %v", err)
+	}
+
+	mergedRaw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings) error = %v", err)
+	}
+
+	if !strings.Contains(string(mergedRaw), `"subagents"`) {
+		t.Fatalf("merged settings should preserve existing subagents key\n%s", string(mergedRaw))
+	}
+	if !strings.Contains(string(mergedRaw), `"agentOverrides"`) {
+		t.Fatalf("merged settings should preserve existing subagents.agentOverrides key\n%s", string(mergedRaw))
+	}
+	if !strings.Contains(string(mergedRaw), `"reviewer"`) {
+		t.Fatalf("merged settings should preserve existing subagents reviewer override\n%s", string(mergedRaw))
+	}
+}
+
+func TestPIPhaseAssetsContainContextSkillsPromptAndResultContract(t *testing.T) {
+	phases := []string{
+		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply",
+		"sdd-verify", "sdd-archive", "sdd-explore", "sdd-init", "sdd-onboard",
+	}
+
+	for _, phase := range phases {
+		t.Run(phase, func(t *testing.T) {
+			content := assets.MustRead(filepath.Join("pi", "agents", phase+".md"))
+
+			mustContain := []string{
+				"## Project Context Inheritance",
+				"## Skills Inheritance Rule",
+				"## Phase Prompt",
+				"## Result Contract",
+				"status",
+				"executive_summary",
+				"artifacts",
+				"next_recommended",
+				"risks",
+				"skill_resolution",
+			}
+
+			for _, token := range mustContain {
+				if !strings.Contains(content, token) {
+					t.Fatalf("%s asset missing %q\n%s", phase, token, content)
+				}
+			}
+		})
+	}
+}
+
+func TestInjectPIArtifactsOmitModelWhenUnassigned(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	extensionDir := filepath.Join(piAdapter().GlobalConfigDir(home), "extensions", "pi-subagents")
+	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(extensionDir) error = %v", err)
+	}
+
+	if _, err := Inject(home, piAdapter(), model.SDDModeMulti, InjectOptions{WorkspaceDir: workspace}); err != nil {
+		t.Fatalf("Inject(pi, multi) error = %v", err)
+	}
+
+	for _, phase := range []string{"sdd-apply", "sdd-spec"} {
+		path := filepath.Join(workspace, ".pi", "agents", phase+".md")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error = %v", path, err)
+		}
+		if strings.Contains(string(raw), "model:") {
+			t.Fatalf("%s should omit model when unassigned\n%s", phase, string(raw))
+		}
+		if strings.Contains(string(raw), "openai/gpt-5") {
+			t.Fatalf("%s contains fabricated openai/gpt-5 model\n%s", phase, string(raw))
+		}
+	}
+}
+
+func TestInjectPIArtifactsKeepExplicitModelAssignmentUnchanged(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	extensionDir := filepath.Join(piAdapter().GlobalConfigDir(home), "extensions", "pi-subagents")
+	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(extensionDir) error = %v", err)
+	}
+
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4-6"},
+	}
+
+	if _, err := Inject(home, piAdapter(), model.SDDModeMulti, InjectOptions{WorkspaceDir: workspace, PIModelAssignments: assignments}); err != nil {
+		t.Fatalf("Inject(pi, multi) error = %v", err)
+	}
+
+	applyPath := filepath.Join(workspace, ".pi", "agents", "sdd-apply.md")
+	applyRaw, err := os.ReadFile(applyPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", applyPath, err)
+	}
+	if !strings.Contains(string(applyRaw), "model: anthropic/claude-opus-4-6") {
+		t.Fatalf("sdd-apply missing explicit model assignment\n%s", string(applyRaw))
+	}
+}
+
+func TestInjectUsesSeparateAssignmentsForOpenCodeAndPIArtifacts(t *testing.T) {
+	tests := []struct {
+		name                    string
+		openCodeAssignments     map[string]model.ModelAssignment
+		piAssignments           map[string]model.ModelAssignment
+		wantOpenCodeApplyModel  string
+		wantPIApplyModel        string
+	}{
+		{
+			name: "mixed OpenCode + PI uses source-specific maps",
+			openCodeAssignments: map[string]model.ModelAssignment{
+				"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
+			},
+			piAssignments: map[string]model.ModelAssignment{
+				"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5"},
+			},
+			wantOpenCodeApplyModel: "anthropic/claude-sonnet-4-20250514",
+			wantPIApplyModel:       "openai/gpt-5",
+		},
+		{
+			name:                "pi-only uses pi assignments for pi artifacts",
+			openCodeAssignments: nil,
+			piAssignments: map[string]model.ModelAssignment{
+				"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5-mini"},
+			},
+			wantOpenCodeApplyModel: "",
+			wantPIApplyModel:       "openai/gpt-5-mini",
+		},
+		{
+			name: "openCode-only remains unchanged",
+			openCodeAssignments: map[string]model.ModelAssignment{
+				"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4-1"},
+			},
+			piAssignments:          nil,
+			wantOpenCodeApplyModel: "anthropic/claude-opus-4-1",
+			wantPIApplyModel:       "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			workspace := t.TempDir()
+
+			extensionDir := filepath.Join(piAdapter().GlobalConfigDir(home), "extensions", "pi-subagents")
+			if err := os.MkdirAll(extensionDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll(extensionDir) error = %v", err)
+			}
+
+			opts := InjectOptions{
+				WorkspaceDir:             workspace,
+				OpenCodeModelAssignments: tt.openCodeAssignments,
+				PIModelAssignments:       tt.piAssignments,
+			}
+
+			if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, opts); err != nil {
+				t.Fatalf("Inject(opencode, multi) error = %v", err)
+			}
+			if _, err := Inject(home, piAdapter(), model.SDDModeMulti, opts); err != nil {
+				t.Fatalf("Inject(pi, multi) error = %v", err)
+			}
+
+			opencodePath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			opencodeRaw, err := os.ReadFile(opencodePath)
+			if err != nil {
+				t.Fatalf("ReadFile(opencode.json) error = %v", err)
+			}
+			opencodeText := string(opencodeRaw)
+
+			if tt.wantOpenCodeApplyModel == "" {
+				if strings.Contains(opencodeText, `"sdd-apply": {"mode": "subagent", "model":`) {
+					t.Fatalf("OpenCode overlay unexpectedly contains explicit sdd-apply model\n%s", opencodeText)
+				}
+			} else if !strings.Contains(opencodeText, tt.wantOpenCodeApplyModel) {
+				t.Fatalf("OpenCode overlay missing model %q\n%s", tt.wantOpenCodeApplyModel, opencodeText)
+			}
+
+			piApplyPath := filepath.Join(workspace, ".pi", "agents", "sdd-apply.md")
+			piApplyRaw, err := os.ReadFile(piApplyPath)
+			if err != nil {
+				t.Fatalf("ReadFile(sdd-apply.md) error = %v", err)
+			}
+			piApplyText := string(piApplyRaw)
+			if tt.wantPIApplyModel == "" {
+				if strings.Contains(piApplyText, "model:") {
+					t.Fatalf("PI artifact should not contain an explicit model when PI assignments are absent\n%s", piApplyText)
+				}
+			} else if !strings.Contains(piApplyText, "model: "+tt.wantPIApplyModel) {
+				t.Fatalf("PI artifact missing model %q\n%s", tt.wantPIApplyModel, piApplyText)
+			}
+		})
+	}
+}
+
+func assertOrderedContains(t *testing.T, text string, ordered []string) {
+	t.Helper()
+
+	pos := 0
+	for _, token := range ordered {
+		idx := strings.Index(text[pos:], token)
+		if idx < 0 {
+			t.Fatalf("text does not contain ordered token %q after index %d\n%s", token, pos, text)
+		}
+		pos += idx + len(token)
 	}
 }
 

@@ -53,9 +53,9 @@ func injectMergeIntoSettings(homeDir string, adapter agents.Adapter) (InjectionR
 		return InjectionResult{}, nil
 	}
 
-	overlay := DefaultContext7OverlayJSON()
-	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
-		overlay = OpenCodeContext7OverlayJSON()
+	overlay := context7OverlayForAgent(adapter.Agent())
+	if len(overlay) == 0 {
+		return InjectionResult{}, nil
 	}
 
 	settingsWrite, err := mergeJSONFile(settingsPath, overlay)
@@ -64,6 +64,17 @@ func injectMergeIntoSettings(homeDir string, adapter agents.Adapter) (InjectionR
 	}
 
 	return InjectionResult{Changed: settingsWrite.Changed, Files: []string{settingsPath}}, nil
+}
+
+func context7OverlayForAgent(agentID model.AgentID) []byte {
+	switch agentID {
+	case model.AgentOpenCode, model.AgentKilocode:
+		return OpenCodeContext7OverlayJSON()
+	case model.AgentPiCodingAgent:
+		return nil
+	default:
+		return DefaultContext7OverlayJSON()
+	}
 }
 
 // injectMCPConfigFile writes to a dedicated mcp.json config file (Cursor pattern).

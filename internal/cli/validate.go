@@ -193,6 +193,8 @@ func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentI
 			agents = append(agents, model.AgentQwenCode)
 		case string(model.AgentKiroIDE):
 			agents = append(agents, model.AgentKiroIDE)
+		case string(model.AgentPiCodingAgent):
+			agents = append(agents, model.AgentPiCodingAgent)
 		}
 	}
 
@@ -212,7 +214,13 @@ func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentI
 func asAgentIDs(values []string) []model.AgentID {
 	agents := make([]model.AgentID, 0, len(values))
 	for _, value := range values {
-		agents = append(agents, model.AgentID(value))
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		switch normalized {
+		case "pi":
+			agents = append(agents, model.AgentPiCodingAgent)
+		default:
+			agents = append(agents, model.AgentID(strings.TrimSpace(value)))
+		}
 	}
 
 	return agents

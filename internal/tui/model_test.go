@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,9 +10,11 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/capabilities"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/modelcatalog"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -296,6 +299,19 @@ func TestBackupRestoreMsgHandledGracefully(t *testing.T) {
 }
 
 func TestShouldShowSDDModeScreen(t *testing.T) {
+	origResolver := resolveAgentCapabilitiesFn
+	clearAgentCapabilitiesCache()
+	resolveAgentCapabilitiesFn = func(_ string, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		if agentID == model.AgentOpenCode {
+			return capabilities.ResolvedCapabilities{SupportsSDDMultiMode: true}, nil
+		}
+		return capabilities.ResolvedCapabilities{}, nil
+	}
+	t.Cleanup(func() {
+		resolveAgentCapabilitiesFn = origResolver
+		clearAgentCapabilitiesCache()
+	})
+
 	tests := []struct {
 		name       string
 		agents     []model.AgentID
@@ -311,6 +327,12 @@ func TestShouldShowSDDModeScreen(t *testing.T) {
 		{
 			name:       "Claude only + SDD = false",
 			agents:     []model.AgentID{model.AgentClaudeCode},
+			components: []model.ComponentID{model.ComponentEngram, model.ComponentSDD},
+			want:       false,
+		},
+		{
+			name:       "PI only + SDD = false (OpenCode-only screen)",
+			agents:     []model.AgentID{model.AgentPiCodingAgent},
 			components: []model.ComponentID{model.ComponentEngram, model.ComponentSDD},
 			want:       false,
 		},
@@ -349,6 +371,210 @@ func TestShouldShowSDDModeScreen(t *testing.T) {
 			got := m.shouldShowSDDModeScreen()
 			if got != tt.want {
 				t.Fatalf("shouldShowSDDModeScreen() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPresetFlowWithPIAgentSkipsOpenCodeScreens(t *testing.T) {
+	origResolver := resolveAgentCapabilitiesFn
+	clearAgentCapabilitiesCache()
+	resolveAgentCapabilitiesFn = func(_, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		if agentID == model.AgentPiCodingAgent {
+			return capabilities.ResolvedCapabilities{SupportsSDDMultiMode: false}, nil
+		}
+		return capabilities.ResolvedCapabilities{}, nil
+	}
+	t.Cleanup(func() {
+		resolveAgentCapabilitiesFn = origResolver
+		clearAgentCapabilitiesCache()
+	})
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPreset
+	m.Selection.Agents = []model.AgentID{model.AgentPiCodingAgent}
+	m.Cursor = 0 // PresetFullGentleman includes SDD
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenStrictTDD {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenStrictTDD)
+	}
+}
+
+func TestPresetFlow_PIExtensionCapabilityGatesSDDModeScreen(t *testing.T) {
+	tests := []struct {
+		name               string
+		resolvedCaps       capabilities.ResolvedCapabilities
+		wantScreenAfterSDD Screen
+	}{
+		{
+			name: "pi without pi-subagents skips SDD mode and goes strict tdd",
+			resolvedCaps: capabilities.ResolvedCapabilities{
+				SupportsSDDMultiMode: false,
+			},
+			wantScreenAfterSDD: ScreenStrictTDD,
+		},
+		{
+			name: "pi with pi-subagents enters sdd mode screen",
+			resolvedCaps: capabilities.ResolvedCapabilities{
+				SupportsSDDMultiMode: true,
+			},
+			wantScreenAfterSDD: ScreenSDDMode,
+		},
+	}
+
+	origResolver := resolveAgentCapabilitiesFn
+	clearAgentCapabilitiesCache()
+	t.Cleanup(func() {
+		resolveAgentCapabilitiesFn = origResolver
+		clearAgentCapabilitiesCache()
+	})
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearAgentCapabilitiesCache()
+			resolveAgentCapabilitiesFn = func(_ string, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+				if agentID == model.AgentPiCodingAgent {
+					return tt.resolvedCaps, nil
+				}
+				if agentID == model.AgentOpenCode {
+					return capabilities.ResolvedCapabilities{SupportsSDDMultiMode: true}, nil
+				}
+				return capabilities.ResolvedCapabilities{}, nil
+			}
+
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenPreset
+			m.Selection.Agents = []model.AgentID{model.AgentPiCodingAgent}
+			m.Cursor = 0 // PresetFullGentleman includes SDD
+
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			state := updated.(Model)
+
+			if state.Screen != tt.wantScreenAfterSDD {
+				t.Fatalf("screen = %v, want %v", state.Screen, tt.wantScreenAfterSDD)
+			}
+		})
+	}
+}
+
+func TestPresetFlow_PISettingsPackageDetectionEntersSDDMode(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	settingsPath := filepath.Join(homeDir, ".pi", "agent", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(settingsPath), err)
+	}
+
+	if err := os.WriteFile(settingsPath, []byte(`{"packages":["npm:pi-subagents"]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", settingsPath, err)
+	}
+
+	origHome := osUserHomeDirFn
+	origGetwd := osGetwdFn
+	origResolver := resolveAgentCapabilitiesFn
+	t.Cleanup(func() {
+		osUserHomeDirFn = origHome
+		osGetwdFn = origGetwd
+		resolveAgentCapabilitiesFn = origResolver
+	})
+
+	osUserHomeDirFn = func() (string, error) { return homeDir, nil }
+	osGetwdFn = func() (string, error) { return workspaceDir, nil }
+	resolveAgentCapabilitiesFn = func(homeDir string, workspaceDir string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		return capabilities.NewResolver(nil).Resolve(homeDir, workspaceDir, agentID)
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPreset
+	m.Selection.Agents = []model.AgentID{model.AgentPiCodingAgent}
+	m.Cursor = 0 // PresetFullGentleman includes SDD
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenSDDMode {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenSDDMode)
+	}
+}
+
+func TestAgentsViewWithPISelectionShowsCapabilityWarning(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgents
+	m.Selection.Agents = []model.AgentID{model.AgentPiCodingAgent}
+
+	view := m.View()
+	if !strings.Contains(view, "multi-model is enabled only when `pi-subagents` is installed") {
+		t.Fatalf("expected PI capability warning in agents screen view")
+	}
+}
+
+func TestModelConfigCapabilityWarning_WiresPIResolverState(t *testing.T) {
+	origResolver := resolveAgentCapabilitiesFn
+	clearAgentCapabilitiesCache()
+	t.Cleanup(func() {
+		resolveAgentCapabilitiesFn = origResolver
+		clearAgentCapabilitiesCache()
+	})
+
+	tests := []struct {
+		name       string
+		agents     []model.AgentID
+		caps       capabilities.ResolvedCapabilities
+		resolveErr error
+		want       string
+	}{
+		{
+			name:   "no pi selected returns no warning",
+			agents: []model.AgentID{model.AgentOpenCode},
+			want:   "",
+		},
+		{
+			name:   "pi selected without capability shows canonical warning",
+			agents: []model.AgentID{model.AgentPiCodingAgent},
+			caps: capabilities.ResolvedCapabilities{
+				SupportsSDDMultiMode: false,
+			},
+			want: capabilities.PiMultiModelRequiresPiSubagentsMessage,
+		},
+		{
+			name:   "pi selected with capability shows no warning",
+			agents: []model.AgentID{model.AgentPiCodingAgent},
+			caps: capabilities.ResolvedCapabilities{
+				SupportsSDDMultiMode: true,
+			},
+			want: "",
+		},
+		{
+			name:       "resolver error fails closed with canonical warning",
+			agents:     []model.AgentID{model.AgentPiCodingAgent},
+			resolveErr: fmt.Errorf("resolver unavailable"),
+			want:       capabilities.PiMultiModelRequiresPiSubagentsMessage,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearAgentCapabilitiesCache()
+			resolveAgentCapabilitiesFn = func(_, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+				if agentID != model.AgentPiCodingAgent {
+					return capabilities.ResolvedCapabilities{}, nil
+				}
+				if tt.resolveErr != nil {
+					return capabilities.ResolvedCapabilities{}, tt.resolveErr
+				}
+				return tt.caps, nil
+			}
+
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Selection.Agents = tt.agents
+
+			got := m.modelConfigCapabilityWarning()
+			if got != tt.want {
+				t.Fatalf("modelConfigCapabilityWarning() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -466,6 +692,12 @@ func TestSDDModeMultiSkipModelPickerWhenCacheMissing(t *testing.T) {
 	m.Screen = ScreenSDDMode
 	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
 	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+	}
+	m.Selection.PIModelAssignments = map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5"},
+	}
 	m.Cursor = sddMultiCursor(t)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -477,6 +709,12 @@ func TestSDDModeMultiSkipModelPickerWhenCacheMissing(t *testing.T) {
 	}
 	if len(state.ModelPicker.AvailableIDs) != 0 {
 		t.Fatalf("ModelPicker.AvailableIDs should be empty when cache missing, got: %v", state.ModelPicker.AvailableIDs)
+	}
+	if state.Selection.ModelAssignments != nil {
+		t.Fatalf("ModelAssignments should be cleared when skipping picker, got: %v", state.Selection.ModelAssignments)
+	}
+	if state.Selection.PIModelAssignments != nil {
+		t.Fatalf("PIModelAssignments should be cleared when skipping picker, got: %v", state.Selection.PIModelAssignments)
 	}
 }
 
@@ -509,6 +747,116 @@ func TestSDDModeMultiShowsModelPickerWhenCacheExists(t *testing.T) {
 	if state.Screen != ScreenModelPicker {
 		t.Fatalf("screen = %v, want ScreenModelPicker (cache present → show picker)", state.Screen)
 	}
+}
+
+func TestStrictTDDForwardNavigation_OpenCodePluginVisibilityMatrix(t *testing.T) {
+	origResolver := resolveAgentCapabilitiesFn
+	clearAgentCapabilitiesCache()
+	resolveAgentCapabilitiesFn = func(_, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		if agentID == model.AgentPiCodingAgent {
+			return capabilities.ResolvedCapabilities{SupportsSDDMultiMode: true, SupportsModelPicker: true}, nil
+		}
+		if agentID == model.AgentOpenCode {
+			return capabilities.ResolvedCapabilities{SupportsSDDMultiMode: true, SupportsModelPicker: true}, nil
+		}
+		return capabilities.ResolvedCapabilities{}, nil
+	}
+	t.Cleanup(func() {
+		resolveAgentCapabilitiesFn = origResolver
+		clearAgentCapabilitiesCache()
+	})
+
+	tests := []struct {
+		name       string
+		agents     []model.AgentID
+		wantScreen Screen
+	}{
+		{name: "pi-only skips plugin screen", agents: []model.AgentID{model.AgentPiCodingAgent}, wantScreen: ScreenDependencyTree},
+		{name: "opencode-only shows plugin screen", agents: []model.AgentID{model.AgentOpenCode}, wantScreen: ScreenOpenCodePlugins},
+		{name: "opencode+pi mixed shows plugin screen", agents: []model.AgentID{model.AgentOpenCode, model.AgentPiCodingAgent}, wantScreen: ScreenOpenCodePlugins},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenStrictTDD
+			m.Selection.Preset = model.PresetFullGentleman
+			m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+			m.Selection.Agents = tt.agents
+			m.Cursor = screens.StrictTDDOptionEnable
+
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			state := updated.(Model)
+
+			if state.Screen != tt.wantScreen {
+				t.Fatalf("screen = %v, want %v", state.Screen, tt.wantScreen)
+			}
+		})
+	}
+}
+
+func TestBackNavigation_PIMergeStackIntegrity(t *testing.T) {
+	origResolver := resolveAgentCapabilitiesFn
+	clearAgentCapabilitiesCache()
+	resolveAgentCapabilitiesFn = func(_, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		if agentID == model.AgentPiCodingAgent {
+			return capabilities.ResolvedCapabilities{SupportsSDDMultiMode: true, SupportsModelPicker: true}, nil
+		}
+		if agentID == model.AgentOpenCode {
+			return capabilities.ResolvedCapabilities{SupportsSDDMultiMode: true, SupportsModelPicker: true}, nil
+		}
+		return capabilities.ResolvedCapabilities{}, nil
+	}
+	t.Cleanup(func() {
+		resolveAgentCapabilitiesFn = origResolver
+		clearAgentCapabilitiesCache()
+	})
+
+	t.Run("pi-only back from strict tdd returns to sdd mode without plugin insertion", func(t *testing.T) {
+		m := NewModel(system.DetectionResult{}, "dev")
+		m.Screen = ScreenStrictTDD
+		m.Selection.Preset = model.PresetFullGentleman
+		m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+		m.Selection.Agents = []model.AgentID{model.AgentPiCodingAgent}
+		m.Selection.SDDMode = model.SDDModeSingle
+
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		state := updated.(Model)
+		if state.Screen != ScreenSDDMode {
+			t.Fatalf("screen = %v, want %v", state.Screen, ScreenSDDMode)
+		}
+	})
+
+	t.Run("mixed opencode+pi multi-agent back stack preserves plugin->strict->picker order", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cacheFile := tmpDir + "/models.json"
+		if err := os.WriteFile(cacheFile, []byte(`{}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		origStat := osStatModelCache
+		osStatModelCache = func(string) (os.FileInfo, error) { return os.Stat(cacheFile) }
+		t.Cleanup(func() { osStatModelCache = origStat })
+
+		m := NewModel(system.DetectionResult{}, "dev")
+		m.Screen = ScreenOpenCodePlugins
+		m.Selection.Preset = model.PresetFullGentleman
+		m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+		m.Selection.Agents = []model.AgentID{model.AgentOpenCode, model.AgentPiCodingAgent}
+		m.Selection.SDDMode = model.SDDModeMulti
+		m.ModelPicker.Source = "opencode"
+
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		state := updated.(Model)
+		if state.Screen != ScreenStrictTDD {
+			t.Fatalf("first back screen = %v, want %v", state.Screen, ScreenStrictTDD)
+		}
+
+		updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		state = updated.(Model)
+		if state.Screen != ScreenModelPicker {
+			t.Fatalf("second back screen = %v, want %v", state.Screen, ScreenModelPicker)
+		}
+	})
 }
 
 func screensAgentOptions() []model.AgentID {
@@ -1473,18 +1821,27 @@ func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
 	}
 }
 
-// TestModelConfig_BackNavigation verifies that selecting cursor 3 (Back) from
+// TestModelConfig_BackNavigation verifies that selecting Back from
 // ScreenModelConfig returns to ScreenWelcome.
 func TestModelConfig_BackNavigation(t *testing.T) {
+	origResolver := resolveAgentCapabilitiesFn
+	resolveAgentCapabilitiesFn = func(_, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		if agentID == model.AgentPiCodingAgent {
+			return capabilities.ResolvedCapabilities{SupportsSDDMultiMode: false}, nil
+		}
+		return capabilities.ResolvedCapabilities{}, nil
+	}
+	t.Cleanup(func() { resolveAgentCapabilitiesFn = origResolver })
+
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelConfig
-	m.Cursor = 3
+	m.Cursor = len(screens.ModelConfigOptionsForCapabilities(m.shouldShowPIModelConfigOption())) - 1
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenWelcome {
-		t.Fatalf("ModelConfig cursor=3 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
+		t.Fatalf("ModelConfig Back: screen = %v, want %v", state.Screen, ScreenWelcome)
 	}
 }
 
@@ -1500,6 +1857,93 @@ func TestModelConfig_EscReturnsToWelcome(t *testing.T) {
 	if state.Screen != ScreenWelcome {
 		t.Fatalf("ModelConfig esc: screen = %v, want %v", state.Screen, ScreenWelcome)
 	}
+}
+
+func TestModelConfig_PIOptionVisibility_InstallSelectionPaths(t *testing.T) {
+	origResolve := resolveAgentCapabilitiesFn
+	clearAgentCapabilitiesCache()
+	resolveAgentCapabilitiesFn = func(_, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		if agentID == model.AgentPiCodingAgent {
+			// Regression target: PI option must be visible even when unsupported.
+			return capabilities.ResolvedCapabilities{}, nil
+		}
+		return capabilities.ResolvedCapabilities{}, nil
+	}
+	t.Cleanup(func() {
+		resolveAgentCapabilitiesFn = origResolve
+		clearAgentCapabilitiesCache()
+	})
+
+	t.Run("direct model config with PI in selection shows PI option", func(t *testing.T) {
+		m := NewModel(system.DetectionResult{}, "dev")
+		m.Selection.Agents = []model.AgentID{model.AgentPiCodingAgent}
+		m.Screen = ScreenModelConfig
+
+		if !m.shouldShowPIModelConfigOption() {
+			t.Fatal("expected PI model config option to be visible when PI is selected")
+		}
+
+		view := m.View()
+		if !strings.Contains(view, screens.ModelConfigOptionPI) {
+			t.Fatalf("expected model config view to contain %q; got: %s", screens.ModelConfigOptionPI, view)
+		}
+	})
+
+	t.Run("agent selection flow toggle PI then navigate to model config still shows PI option", func(t *testing.T) {
+		m := NewModel(system.DetectionResult{}, "dev")
+		m.Screen = ScreenAgents
+		m.Selection.Agents = nil
+
+		agentOptions := screens.AgentOptions()
+		piCursor := -1
+		for i, agent := range agentOptions {
+			if agent == model.AgentPiCodingAgent {
+				piCursor = i
+				break
+			}
+		}
+		if piCursor == -1 {
+			t.Fatal("pi agent not found in agent options")
+		}
+
+		// Toggle PI in install flow.
+		m.Cursor = piCursor
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		state := updated.(Model)
+
+		if !state.Selection.HasAgent(model.AgentPiCodingAgent) {
+			t.Fatal("expected PI to remain selected after toggling in agent selection")
+		}
+
+		// Navigate back to welcome (agents -> detection -> welcome), then open model config.
+		updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		state = updated.(Model)
+		if state.Screen != ScreenDetection {
+			t.Fatalf("screen after esc from agents = %v, want %v", state.Screen, ScreenDetection)
+		}
+
+		updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		state = updated.(Model)
+		if state.Screen != ScreenWelcome {
+			t.Fatalf("screen after esc from detection = %v, want %v", state.Screen, ScreenWelcome)
+		}
+
+		state.Cursor = 4 // Configure Models
+		updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		state = updated.(Model)
+		if state.Screen != ScreenModelConfig {
+			t.Fatalf("screen = %v, want %v", state.Screen, ScreenModelConfig)
+		}
+
+		if !state.shouldShowPIModelConfigOption() {
+			t.Fatal("expected PI model config option to remain visible after install-flow navigation")
+		}
+
+		view := state.View()
+		if !strings.Contains(view, screens.ModelConfigOptionPI) {
+			t.Fatalf("expected model config view to contain %q after install-flow navigation", screens.ModelConfigOptionPI)
+		}
+	})
 }
 
 // TestModelConfig_ClaudePickerBackReturnsToModelConfig verifies that pressing
@@ -1599,7 +2043,7 @@ func TestModelConfig_OpenCodePickerBackReturnsToModelConfig(t *testing.T) {
 // makeDetectionWithAgents builds a DetectionResult with the specified agents
 // marked as Exists=true. All other agents are absent.
 func makeDetectionWithAgents(present ...string) system.DetectionResult {
-	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "qwen-code"}
+	known := []string{"claude-code", "opencode", "pi-coding-agent", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "qwen-code"}
 	presentSet := make(map[string]bool, len(present))
 	for _, p := range present {
 		presentSet[p] = true
@@ -1983,6 +2427,54 @@ func TestModelConfig_OpenCodePickerContinueTriggersSyncScreen(t *testing.T) {
 	}
 }
 
+// TestModelConfig_PIModelPickerContinueTriggersSyncScreen verifies that pressing
+// "Continue" from ScreenModelPicker while in ModelConfigMode and PI source
+// routes to ScreenSync with PIModelAssignments overrides (not OpenCode ones).
+func TestModelConfig_PIModelPickerContinueTriggersSyncScreen(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelPicker
+	m.ModelConfigMode = true
+
+	// Populate AvailableIDs so ModelPicker shows rows (not just "Back").
+	m.ModelPicker = screens.ModelPickerState{
+		Source:       "pi",
+		AvailableIDs: []string{"openai"},
+	}
+
+	m.Selection.PIModelAssignments = map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5"},
+	}
+	// Keep OpenCode assignments present to ensure PI flow does not write there.
+	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+	}
+
+	continueIdx := len(screens.ModelPickerRows())
+	m.Cursor = continueIdx
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenSync {
+		t.Fatalf("screen = %v, want ScreenSync (ModelConfigMode Continue should redirect to sync)", state.Screen)
+	}
+	if state.PendingSyncOverrides == nil {
+		t.Fatal("PendingSyncOverrides should be non-nil after PI model selection")
+	}
+	if got := state.PendingSyncOverrides.SDDMode; got != model.SDDModeMulti {
+		t.Errorf("PendingSyncOverrides.SDDMode = %q, want %q", got, model.SDDModeMulti)
+	}
+	if len(state.PendingSyncOverrides.PIModelAssignments) == 0 {
+		t.Fatalf("PendingSyncOverrides.PIModelAssignments should be non-empty, got: %v", state.PendingSyncOverrides.PIModelAssignments)
+	}
+	if got := state.PendingSyncOverrides.PIModelAssignments["sdd-apply"]; got.ProviderID != "openai" {
+		t.Errorf("PIModelAssignments[sdd-apply].ProviderID = %q, want %q", got.ProviderID, "openai")
+	}
+	if state.PendingSyncOverrides.ModelAssignments != nil {
+		t.Fatalf("PendingSyncOverrides.ModelAssignments should remain nil for PI source, got: %v", state.PendingSyncOverrides.ModelAssignments)
+	}
+}
+
 // TestModelConfig_SyncPassesOverridesToSyncFn verifies that when ScreenSync is
 // entered with PendingSyncOverrides set, pressing enter launches the sync and the
 // SyncFn receives the pending overrides (not nil).
@@ -2293,17 +2785,18 @@ func TestModelConfig_EscFromPickersReturnsToModelConfig(t *testing.T) {
 	}
 }
 
-// TestPreselectedAgents_AllSixAgentsMappedCorrectly verifies every canonical
+// TestPreselectedAgents_AllMappedAgents verifies every canonical
 // agent string maps to its model.AgentID constant in preselectedAgents.
 // This prevents silent drops when new agents are added to ScanConfigs without
 // updating the TUI switch statement.
-func TestPreselectedAgents_AllSixAgentsMappedCorrectly(t *testing.T) {
+func TestPreselectedAgents_AllMappedAgents(t *testing.T) {
 	tests := []struct {
 		configAgent string
 		wantID      model.AgentID
 	}{
 		{"claude-code", model.AgentClaudeCode},
 		{"opencode", model.AgentOpenCode},
+		{"pi-coding-agent", model.AgentPiCodingAgent},
 		{"gemini-cli", model.AgentGeminiCLI},
 		{"cursor", model.AgentCursor},
 		{"vscode-copilot", model.AgentVSCodeCopilot},
@@ -2330,6 +2823,124 @@ func TestPreselectedAgents_AllSixAgentsMappedCorrectly(t *testing.T) {
 			if len(selected) != 1 {
 				t.Errorf("preselectedAgents() returned %d agents, want 1 (only %q detected); got %v",
 					len(selected), tt.configAgent, selected)
+			}
+		})
+	}
+}
+
+func TestModelConfigOptionCount_ShowsPIWhenDetectedEvenIfUnselected(t *testing.T) {
+	origResolve := resolveAgentCapabilitiesFn
+	resolveAgentCapabilitiesFn = func(_, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		if agentID == model.AgentPiCodingAgent {
+			return capabilities.ResolvedCapabilities{}, nil
+		}
+		return capabilities.ResolvedCapabilities{}, nil
+	}
+	t.Cleanup(func() { resolveAgentCapabilitiesFn = origResolve })
+
+	m := NewModel(system.DetectionResult{
+		Configs: []system.ConfigState{{Agent: string(model.AgentPiCodingAgent), Exists: true, IsDirectory: true}},
+	}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Selection.Agents = nil
+
+	want := len(screens.ModelConfigOptionsForCapabilities(true))
+	if got := m.optionCount(); got != want {
+		t.Fatalf("optionCount() = %d, want %d (ModelConfigOptionsForCapabilities(true))", got, want)
+	}
+}
+
+func TestPIModelConfigVisibilityAndWarningMatrix(t *testing.T) {
+	tests := []struct {
+		name             string
+		selectedPI       bool
+		detectedPI       bool
+		plannedPI        bool
+		supportsMulti    bool
+		supportsPicker   bool
+		wantShowOption   bool
+		wantWarningShown bool
+	}{
+		{
+			name:             "no selected/detected/capability keeps PI option hidden",
+			wantShowOption:   false,
+			wantWarningShown: false,
+		},
+		{
+			name:             "selected PI shows option and warning when unsupported",
+			selectedPI:       true,
+			wantShowOption:   true,
+			wantWarningShown: true,
+		},
+		{
+			name:             "detected PI shows option and warning when unsupported",
+			detectedPI:       true,
+			wantShowOption:   true,
+			wantWarningShown: true,
+		},
+		{
+			name:             "planned install PI shows option and warning when unsupported",
+			plannedPI:        true,
+			wantShowOption:   true,
+			wantWarningShown: true,
+		},
+		{
+			name:             "capability alone can expose PI option without warning",
+			supportsPicker:   true,
+			wantShowOption:   true,
+			wantWarningShown: false,
+		},
+		{
+			name:             "selected PI with supported multi-model suppresses warning",
+			selectedPI:       true,
+			supportsMulti:    true,
+			wantShowOption:   true,
+			wantWarningShown: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			origResolve := resolveAgentCapabilitiesFn
+			clearAgentCapabilitiesCache()
+			resolveAgentCapabilitiesFn = func(_, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+				if agentID != model.AgentPiCodingAgent {
+					return capabilities.ResolvedCapabilities{}, nil
+				}
+				return capabilities.ResolvedCapabilities{
+					SupportsSDDMultiMode: tt.supportsMulti,
+					SupportsModelPicker:  tt.supportsPicker,
+				}, nil
+			}
+			t.Cleanup(func() {
+				resolveAgentCapabilitiesFn = origResolve
+				clearAgentCapabilitiesCache()
+			})
+
+			detection := system.DetectionResult{}
+			if tt.detectedPI {
+				detection.Configs = []system.ConfigState{{Agent: string(model.AgentPiCodingAgent), Exists: true, IsDirectory: true}}
+			}
+
+			m := NewModel(detection, "dev")
+			m.Selection.Agents = nil
+			if tt.selectedPI {
+				m.Selection.Agents = []model.AgentID{model.AgentPiCodingAgent}
+			}
+			if tt.plannedPI {
+				m.DependencyPlan = planner.ResolvedPlan{Agents: []model.AgentID{model.AgentPiCodingAgent}}
+			}
+
+			if got := m.shouldShowPIModelConfigOption(); got != tt.wantShowOption {
+				t.Fatalf("shouldShowPIModelConfigOption() = %v, want %v", got, tt.wantShowOption)
+			}
+
+			warning := m.modelConfigCapabilityWarning()
+			if got := warning != ""; got != tt.wantWarningShown {
+				t.Fatalf("warning shown = %v (warning=%q), want %v", got, warning, tt.wantWarningShown)
+			}
+			if tt.wantWarningShown && warning != capabilities.PiMultiModelRequiresPiSubagentsMessage {
+				t.Fatalf("warning = %q, want %q", warning, capabilities.PiMultiModelRequiresPiSubagentsMessage)
 			}
 		})
 	}
@@ -3245,6 +3856,277 @@ func TestModelConfigOpenCodeNoPrePopulationWhenFileEmpty(t *testing.T) {
 	}
 }
 
+func TestModelConfigOpenCodeWrappedCacheShowsProvidersAndModels(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cacheDir := filepath.Join(home, ".cache", "opencode")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(cacheDir) error = %v", err)
+	}
+
+	cacheJSON := `{
+		"providers": {
+			"opencode": {
+				"name": "OpenCode",
+				"models": {
+					"gpt-5-codex": {"id": "gpt-5-codex", "name": "GPT-5 Codex", "tool_call": true}
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(cacheDir, "models.json"), []byte(cacheJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(models.json) error = %v", err)
+	}
+
+	origRead := readCurrentAssignmentsFn
+	readCurrentAssignmentsFn = func(string) (map[string]model.ModelAssignment, error) {
+		return nil, nil
+	}
+	t.Cleanup(func() { readCurrentAssignmentsFn = origRead })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Cursor = 1 // Configure OpenCode models
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelPicker {
+		t.Fatalf("screen = %v, want ScreenModelPicker", state.Screen)
+	}
+	if state.ModelPicker.Source != "opencode" {
+		t.Fatalf("ModelPicker.Source = %q, want opencode", state.ModelPicker.Source)
+	}
+	if len(state.ModelPicker.AvailableIDs) != 1 || state.ModelPicker.AvailableIDs[0] != "opencode" {
+		t.Fatalf("ModelPicker.AvailableIDs = %v, want [opencode]", state.ModelPicker.AvailableIDs)
+	}
+
+	state.Cursor = 0 // sdd-orchestrator row
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.ModelPicker.Mode != screens.ModeProviderSelect {
+		t.Fatalf("ModelPicker.Mode = %v, want ModeProviderSelect", state.ModelPicker.Mode)
+	}
+
+	providerView := screens.RenderModelPicker(state.Selection.ModelAssignments, state.ModelPicker, state.Cursor)
+	if !strings.Contains(providerView, "OpenCode") {
+		t.Fatalf("provider picker should render OpenCode provider, got:\n%s", providerView)
+	}
+}
+
+func TestModelConfigPIPrePopulatesAssignmentsFromPersistedState(t *testing.T) {
+	origResolve := resolveAgentCapabilitiesFn
+	resolveAgentCapabilitiesFn = func(_, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		if agentID == model.AgentPiCodingAgent {
+			return capabilities.ResolvedCapabilities{SupportsSDDMultiMode: true, SupportsModelPicker: true}, nil
+		}
+		return capabilities.ResolvedCapabilities{}, nil
+	}
+	t.Cleanup(func() { resolveAgentCapabilitiesFn = origResolve })
+
+	origLoader := loadPIModelCatalogFn
+	loadPIModelCatalogFn = func(context.Context) (modelcatalog.Catalog, error) {
+		return modelcatalog.Catalog{
+			Providers: map[string]modelcatalog.Provider{"openai": {ID: "openai", Name: "OpenAI"}},
+			AvailableProviderIDs: []string{"openai"},
+			SDDModels:            map[string][]modelcatalog.Model{"openai": {{ID: "gpt-5", Name: "GPT-5"}}},
+		}, nil
+	}
+	t.Cleanup(func() { loadPIModelCatalogFn = origLoader })
+
+	persisted := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5"},
+	}
+	origReadPersisted := readPersistedPIAssignmentsFn
+	readPersistedPIAssignmentsFn = func(string) (map[string]model.ModelAssignment, error) {
+		return persisted, nil
+	}
+	t.Cleanup(func() { readPersistedPIAssignmentsFn = origReadPersisted })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Selection.Agents = []model.AgentID{model.AgentPiCodingAgent}
+	m.Screen = ScreenModelConfig
+	m.Cursor = modelConfigOptionCursor(t, screens.ModelConfigOptionsForCapabilities(true), screens.ModelConfigOptionPI)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelPicker {
+		t.Fatalf("screen = %v, want ScreenModelPicker", state.Screen)
+	}
+	if state.ModelPicker.Source != "pi" {
+		t.Fatalf("ModelPicker.Source = %q, want pi", state.ModelPicker.Source)
+	}
+	if got := state.Selection.PIModelAssignments["sdd-apply"]; got.FullID() != "openai/gpt-5" {
+		t.Fatalf("PIModelAssignments[sdd-apply] = %q, want %q", got.FullID(), "openai/gpt-5")
+	}
+
+	view := state.View()
+	if !strings.Contains(view, "sdd-apply") || !strings.Contains(view, "OpenAI / gpt-5") {
+		t.Fatalf("PI picker view should show persisted sdd-apply selection; got:\n%s", view)
+	}
+}
+
+func TestModelConfigMixedOpenCodeAndPIPrePopulationRemainSeparated(t *testing.T) {
+	origResolve := resolveAgentCapabilitiesFn
+	resolveAgentCapabilitiesFn = func(_, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		if agentID == model.AgentPiCodingAgent {
+			return capabilities.ResolvedCapabilities{SupportsSDDMultiMode: true, SupportsModelPicker: true}, nil
+		}
+		if agentID == model.AgentOpenCode {
+			return capabilities.ResolvedCapabilities{SupportsSDDMultiMode: true, SupportsModelPicker: true}, nil
+		}
+		return capabilities.ResolvedCapabilities{}, nil
+	}
+	t.Cleanup(func() { resolveAgentCapabilitiesFn = origResolve })
+
+	origStat := osStatModelCache
+	osStatModelCache = func(string) (os.FileInfo, error) { return nil, nil }
+	t.Cleanup(func() { osStatModelCache = origStat })
+
+	origReadOpenCode := readCurrentAssignmentsFn
+	readCurrentAssignmentsFn = func(string) (map[string]model.ModelAssignment, error) {
+		return map[string]model.ModelAssignment{
+			"sdd-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		}, nil
+	}
+	t.Cleanup(func() { readCurrentAssignmentsFn = origReadOpenCode })
+
+	origLoader := loadPIModelCatalogFn
+	loadPIModelCatalogFn = func(context.Context) (modelcatalog.Catalog, error) {
+		return modelcatalog.Catalog{
+			Providers: map[string]modelcatalog.Provider{"openai": {ID: "openai", Name: "OpenAI"}},
+			AvailableProviderIDs: []string{"openai"},
+			SDDModels:            map[string][]modelcatalog.Model{"openai": {{ID: "gpt-5-mini", Name: "GPT-5 Mini"}}},
+		}, nil
+	}
+	t.Cleanup(func() { loadPIModelCatalogFn = origLoader })
+
+	origReadPersisted := readPersistedPIAssignmentsFn
+	readPersistedPIAssignmentsFn = func(string) (map[string]model.ModelAssignment, error) {
+		return map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5-mini"},
+		}, nil
+	}
+	t.Cleanup(func() { readPersistedPIAssignmentsFn = origReadPersisted })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Selection.Agents = []model.AgentID{model.AgentOpenCode, model.AgentPiCodingAgent}
+	m.Screen = ScreenModelConfig
+
+	m.Cursor = modelConfigOptionCursor(t, screens.ModelConfigOptionsForCapabilities(true), screens.ModelConfigOptionOpenCode)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if got := state.Selection.ModelAssignments["sdd-orchestrator"]; got.FullID() != "anthropic/claude-sonnet-4" {
+		t.Fatalf("ModelAssignments[sdd-orchestrator] = %q, want %q", got.FullID(), "anthropic/claude-sonnet-4")
+	}
+	if state.Selection.PIModelAssignments != nil {
+		t.Fatalf("PIModelAssignments should still be nil before PI picker, got %v", state.Selection.PIModelAssignments)
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state = updated.(Model)
+	if state.Screen != ScreenModelConfig {
+		t.Fatalf("screen after esc = %v, want ScreenModelConfig", state.Screen)
+	}
+
+	state.Cursor = modelConfigOptionCursor(t, screens.ModelConfigOptionsForCapabilities(true), screens.ModelConfigOptionPI)
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+
+	if got := state.Selection.ModelAssignments["sdd-orchestrator"]; got.FullID() != "anthropic/claude-sonnet-4" {
+		t.Fatalf("ModelAssignments changed after PI picker init: got %q", got.FullID())
+	}
+	if got := state.Selection.PIModelAssignments["sdd-apply"]; got.FullID() != "openai/gpt-5-mini" {
+		t.Fatalf("PIModelAssignments[sdd-apply] = %q, want %q", got.FullID(), "openai/gpt-5-mini")
+	}
+
+	view := state.View()
+	if !strings.Contains(view, "sdd-orchestrator") || !strings.Contains(view, "(default)") {
+		t.Fatalf("PI picker view should not render OpenCode assignment rows as non-default; got:\n%s", view)
+	}
+	if !strings.Contains(view, "sdd-apply") || !strings.Contains(view, "OpenAI / gpt-5-mini") {
+		t.Fatalf("PI picker view should render persisted PI sdd-apply selection; got:\n%s", view)
+	}
+}
+
+func TestModelConfig_PIOptionUnsupportedCapabilityShowsBlockedPickerFromInstallSelection(t *testing.T) {
+	origResolve := resolveAgentCapabilitiesFn
+	clearAgentCapabilitiesCache()
+	resolveAgentCapabilitiesFn = func(_, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		if agentID == model.AgentPiCodingAgent {
+			return capabilities.ResolvedCapabilities{}, nil
+		}
+		return capabilities.ResolvedCapabilities{}, nil
+	}
+	t.Cleanup(func() {
+		resolveAgentCapabilitiesFn = origResolve
+		clearAgentCapabilitiesCache()
+	})
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Selection.Agents = []model.AgentID{model.AgentPiCodingAgent}
+	m.Screen = ScreenModelConfig
+
+	view := m.View()
+	if !strings.Contains(view, screens.ModelConfigOptionPI) {
+		t.Fatalf("model config should render %q for PI-selected install flow", screens.ModelConfigOptionPI)
+	}
+
+	m.Cursor = modelConfigOptionCursor(t, screens.ModelConfigOptionsForCapabilities(true), screens.ModelConfigOptionPI)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelPicker || !state.ModelPicker.CapabilityBlocked {
+		t.Fatalf("PI option should open blocked PI picker, got screen=%v blocked=%v", state.Screen, state.ModelPicker.CapabilityBlocked)
+	}
+	if state.ModelPicker.CapabilityMessage != capabilities.PiMultiModelRequiresPiSubagentsMessage {
+		t.Fatalf("CapabilityMessage = %q, want canonical warning %q", state.ModelPicker.CapabilityMessage, capabilities.PiMultiModelRequiresPiSubagentsMessage)
+	}
+
+	blockedView := state.View()
+	if !strings.Contains(blockedView, capabilities.PiMultiModelRequiresPiSubagentsMessage) {
+		t.Fatalf("blocked PI picker view missing canonical warning; got:\n%s", blockedView)
+	}
+}
+
+func TestModelConfig_PIRPCDeadlineExceededShowsActionableBlockedMessage(t *testing.T) {
+	origResolve := resolveAgentCapabilitiesFn
+	resolveAgentCapabilitiesFn = func(_, _ string, agentID model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		if agentID == model.AgentPiCodingAgent {
+			return capabilities.ResolvedCapabilities{SupportsSDDMultiMode: true, SupportsModelPicker: true}, nil
+		}
+		return capabilities.ResolvedCapabilities{}, nil
+	}
+	t.Cleanup(func() { resolveAgentCapabilitiesFn = origResolve })
+
+	origLoader := loadPIModelCatalogFn
+	loadPIModelCatalogFn = func(context.Context) (modelcatalog.Catalog, error) {
+		return modelcatalog.Catalog{}, context.DeadlineExceeded
+	}
+	t.Cleanup(func() { loadPIModelCatalogFn = origLoader })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Selection.Agents = []model.AgentID{model.AgentPiCodingAgent}
+	m.Screen = ScreenModelConfig
+	m.Cursor = modelConfigOptionCursor(t, screens.ModelConfigOptionsForCapabilities(true), screens.ModelConfigOptionPI)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if !state.ModelPicker.CapabilityBlocked {
+		t.Fatal("expected PI picker to be blocked on deadline exceeded")
+	}
+	if strings.Contains(state.ModelPicker.CapabilityMessage, fmt.Sprint(context.DeadlineExceeded)) {
+		t.Fatalf("blocked message should be actionable and hide raw deadline error, got %q", state.ModelPicker.CapabilityMessage)
+	}
+	if !strings.Contains(state.ModelPicker.CapabilityMessage, "terminated before it returned models") {
+		t.Fatalf("blocked message should explain timeout/termination cause, got %q", state.ModelPicker.CapabilityMessage)
+	}
+}
+
 // TestCustomSkillPickerBackGoesToStrictTDD verifies that in the custom preset,
 // with OpenCode + SDD + Skills, pressing Back on ScreenSkillPicker goes to ScreenStrictTDD
 // and NOT directly to ScreenSDDMode. StrictTDD must come before SDDMode in the back chain.
@@ -3434,5 +4316,56 @@ func TestPinErrClearedOnScreenReentry(t *testing.T) {
 	// PinErr must be cleared on re-entry.
 	if afterReturn.PinErr != nil {
 		t.Fatalf("PinErr should be nil after returning to ScreenBackups, got: %v", afterReturn.PinErr)
+	}
+}
+
+func TestResolveAgentCapabilitiesCachesAndInvalidatesByWorkspaceAndAgent(t *testing.T) {
+	origHome := osUserHomeDirFn
+	origGetwd := osGetwdFn
+	origResolve := resolveAgentCapabilitiesFn
+	clearAgentCapabilitiesCache()
+	t.Cleanup(func() {
+		osUserHomeDirFn = origHome
+		osGetwdFn = origGetwd
+		resolveAgentCapabilitiesFn = origResolve
+		clearAgentCapabilitiesCache()
+	})
+
+	home := t.TempDir()
+	workspace := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) error = %v", err)
+	}
+
+	osUserHomeDirFn = func() (string, error) { return home, nil }
+	currentWorkspace := workspace
+	osGetwdFn = func() (string, error) { return currentWorkspace, nil }
+
+	resolveCalls := 0
+	resolveAgentCapabilitiesFn = func(_, _ string, _ model.AgentID) (capabilities.ResolvedCapabilities, error) {
+		resolveCalls++
+		return capabilities.ResolvedCapabilities{SupportsSDDMultiMode: true}, nil
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+
+	_ = m.resolveAgentCapabilities(model.AgentPiCodingAgent)
+	_ = m.resolveAgentCapabilities(model.AgentPiCodingAgent)
+	if resolveCalls != 1 {
+		t.Fatalf("resolver calls for repeated same-agent same-workspace = %d, want 1", resolveCalls)
+	}
+
+	_ = m.resolveAgentCapabilities(model.AgentOpenCode)
+	if resolveCalls != 2 {
+		t.Fatalf("resolver calls after agent change = %d, want 2", resolveCalls)
+	}
+
+	currentWorkspace = filepath.Join(home, "other-workspace")
+	if err := os.MkdirAll(currentWorkspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(other-workspace) error = %v", err)
+	}
+	_ = m.resolveAgentCapabilities(model.AgentPiCodingAgent)
+	if resolveCalls != 3 {
+		t.Fatalf("resolver calls after workspace change = %d, want 3", resolveCalls)
 	}
 }

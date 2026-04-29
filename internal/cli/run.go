@@ -155,6 +155,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		InstalledAgents:        agentIDs,
 		ClaudeModelAssignments: claudeAliasesToStrings(input.Selection.ClaudeModelAssignments),
 		ModelAssignments:       modelAssignmentsToState(input.Selection.ModelAssignments),
+		PIModelAssignments:     modelAssignmentsToState(input.Selection.PIModelAssignments),
 	})
 
 	return result, nil
@@ -595,6 +596,7 @@ func (s componentApplyStep) Run() error {
 		for _, adapter := range adapters {
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments: s.selection.ModelAssignments,
+				PIModelAssignments:       s.selection.PIModelAssignments,
 				ClaudeModelAssignments:   s.selection.ClaudeModelAssignments,
 				KiroModelAssignments:     s.selection.KiroModelAssignments,
 				WorkspaceDir:             s.workspaceDir,

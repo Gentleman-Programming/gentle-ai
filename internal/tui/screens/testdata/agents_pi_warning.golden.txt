@@ -1,0 +1,1 @@
+PI is experimental and non-parity: multi-model is enabled only when `pi-subagents` is installed.

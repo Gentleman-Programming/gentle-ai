@@ -61,3 +61,10 @@ If the hash matches `checksums.txt`, the file is authentic for that release.
 | Kimi | `%USERPROFILE%\.kimi\` (includes `config.toml`, system prompt, agents, MCP) |
 | Antigravity | `%USERPROFILE%\.gemini\antigravity\` |
 | Kiro IDE | `%USERPROFILE%\.kiro\steering\` (prompts) + `%USERPROFILE%\.kiro\skills\` (skills) + `%USERPROFILE%\.kiro\agents\` (SDD agents) + `%APPDATA%\kiro\User\settings.json` (settings) + `%USERPROFILE%\.kiro\settings\mcp.json` (MCP) |
+
+## PI Notes
+
+- PI root path precedence: `PI_CODING_AGENT_DIR` → `~/.pi/agent`.
+- PI support integrates through the existing **PI→Engram extension** contract.
+- PI contract validation accepts explicit `engram.extension.path` and package-based installs in `packages[]` (for example `../../Documents/repos/pi-engram` or `npm:pi-engram`).
+- MCP/Context7 out of scope for this iteration (non-blocking for PI support).

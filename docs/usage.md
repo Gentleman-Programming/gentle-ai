@@ -32,6 +32,32 @@ The uninstall flow is also available from the TUI menu. It lets you:
 
 Before any managed file is modified, `gentle-ai` creates a backup snapshot so the configuration can be restored later if needed.
 
+### PI Support Guardrails (current)
+
+PI (`pi-coding-agent`) is **base-supported with conditional multi-model**.
+
+- Capability source: [PI Compatibility](pi-compatibility.md)
+- Base PI (no extension): single-mode + fail-closed guardrails
+  - `profiles=false`
+  - `modelPicker=false`
+  - `generatedMulti=false`
+- PI multi-model prerequisite/remediation: `pi install npm:pi-subagents`
+- PI multi-model assignments must be explicit `provider/model` values (do not use Claude alias defaults for PI base config).
+
+#### Regression pass criteria for PI-related changes
+
+When touching PI adapter, injection, or TUI gating, OpenCode behavior must remain unchanged and green:
+
+```bash
+# OpenCode regression suites (must pass)
+go test ./internal/components/sdd ./internal/components/mcp ./internal/components/engram ./internal/tui
+
+# Full project safety check under strict TDD runner
+go test ./...
+```
+
+Additionally, existing OpenCode fixtures/goldens used by those suites must not be rewritten as part of PI-only changes unless explicitly scoped as an OpenCode change.
+
 ---
 
 ## CLI Commands

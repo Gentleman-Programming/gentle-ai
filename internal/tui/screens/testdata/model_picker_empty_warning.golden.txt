@@ -1,0 +1,2 @@
+Model picker availability is capability-gated per agent.
+For OpenCode, run 'opencode' once, then re-run 'gentle-ai sync' to assign models.

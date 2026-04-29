@@ -380,6 +380,54 @@ func TestLoadPersistedAssignmentsPopulatesEmptySelection(t *testing.T) {
 	}
 }
 
+func TestLoadPersistedAssignmentsPIAssignmentsScopeGating(t *testing.T) {
+	tests := []struct {
+		name          string
+		agents        []model.AgentID
+		components    []model.ComponentID
+		wantPIHydrate bool
+	}{
+		{
+			name:          "does not hydrate PI assignments when PI agent not selected",
+			agents:        []model.AgentID{model.AgentOpenCode},
+			components:    []model.ComponentID{model.ComponentSDD},
+			wantPIHydrate: false,
+		},
+		{
+			name:          "hydrates PI assignments when PI agent and SDD are in scope",
+			agents:        []model.AgentID{model.AgentPiCodingAgent},
+			components:    []model.ComponentID{model.ComponentSDD},
+			wantPIHydrate: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+
+			err := state.Write(home, state.InstallState{
+				PIModelAssignments: map[string]state.ModelAssignmentState{
+					"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5-mini"},
+				},
+			})
+			if err != nil {
+				t.Fatalf("state.Write: %v", err)
+			}
+
+			selection := model.Selection{
+				Agents:     tt.agents,
+				Components: tt.components,
+			}
+			loadPersistedAssignments(home, &selection)
+
+			_, gotPIAssignment := selection.PIModelAssignments["sdd-apply"]
+			if gotPIAssignment != tt.wantPIHydrate {
+				t.Fatalf("PIModelAssignments hydrated = %v, want %v", gotPIAssignment, tt.wantPIHydrate)
+			}
+		})
+	}
+}
+
 // TestLoadPersistedAssignmentsDoesNotOverrideExisting verifies that when the
 // selection already has assignments (e.g. from TUI overrides), persisted
 // state does NOT clobber them.
@@ -501,6 +549,75 @@ func TestPersistAssignmentsNoOpWhenEmpty(t *testing.T) {
 	infoAfter, _ := os.Stat(statePath)
 	if infoAfter.ModTime() != infoBefore.ModTime() {
 		t.Errorf("persistAssignments() modified state.json when selection had no assignments")
+	}
+}
+
+// TestPersistAssignmentsPersistsExplicitEmptyModelMaps verifies that non-nil
+// empty maps are treated as explicit clears (per SyncOverrides docs) and are
+// written to state.json instead of being ignored.
+func TestPersistAssignmentsPersistsExplicitEmptyModelMaps(t *testing.T) {
+	home := t.TempDir()
+
+	err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"opencode", "pi-coding-agent"},
+		ModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		},
+		PIModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	selection := model.Selection{
+		ModelAssignments:   map[string]model.ModelAssignment{},
+		PIModelAssignments: map[string]model.ModelAssignment{},
+	}
+	persistAssignments(home, selection)
+
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if got.ModelAssignments == nil || len(got.ModelAssignments) != 0 {
+		t.Fatalf("ModelAssignments should persist as explicit empty map, got: %v", got.ModelAssignments)
+	}
+	if got.PIModelAssignments == nil || len(got.PIModelAssignments) != 0 {
+		t.Fatalf("PIModelAssignments should persist as explicit empty map, got: %v", got.PIModelAssignments)
+	}
+}
+
+// TestInstallStateFromSelectionPersistsOpenCodeAndPISeparately verifies that
+// install-time state payload includes both maps without cross-over.
+func TestInstallStateFromSelectionPersistsOpenCodeAndPISeparately(t *testing.T) {
+	selection := model.Selection{
+		Agents: []model.AgentID{model.AgentOpenCode, model.AgentPiCodingAgent},
+		ModelAssignments: map[string]model.ModelAssignment{
+			"sdd-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		},
+		PIModelAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5"},
+		},
+	}
+
+	got := installStateFromSelection(selection)
+
+	if len(got.InstalledAgents) != 2 {
+		t.Fatalf("InstalledAgents len = %d, want 2", len(got.InstalledAgents))
+	}
+	if got.ModelAssignments["sdd-orchestrator"].ProviderID != "anthropic" {
+		t.Fatalf("ModelAssignments[sdd-orchestrator].ProviderID = %q, want %q", got.ModelAssignments["sdd-orchestrator"].ProviderID, "anthropic")
+	}
+	if got.PIModelAssignments["sdd-apply"].ProviderID != "openai" {
+		t.Fatalf("PIModelAssignments[sdd-apply].ProviderID = %q, want %q", got.PIModelAssignments["sdd-apply"].ProviderID, "openai")
+	}
+	if _, exists := got.PIModelAssignments["sdd-orchestrator"]; exists {
+		t.Fatal("PIModelAssignments should not contain OpenCode assignment keys")
+	}
+	if _, exists := got.ModelAssignments["sdd-apply"]; exists {
+		t.Fatal("ModelAssignments should not contain PI assignment keys")
 	}
 }
 

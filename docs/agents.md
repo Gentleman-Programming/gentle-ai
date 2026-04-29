@@ -10,6 +10,7 @@
 | --------------- | ---------------- | ------------ | --- | ---------------------------- | ------------- | -------------- | ----------------------------------- |
 | Claude Code     | `claude-code`    | Yes          | Yes | Full (Task tool)             | Yes           | No             | `~/.claude`                         |
 | OpenCode        | `opencode`       | Yes          | Yes | Full (multi-mode overlay)    | No            | Yes            | `~/.config/opencode`                |
+| PI Coding Agent | `pi-coding-agent`| Yes          | Yes*| Base support + conditional multi-mode | No            | No             | `~/.config/pi-coding-agent`         |
 | Gemini CLI      | `gemini-cli`     | Yes          | Yes | Full (experimental)          | No            | No             | `~/.gemini`                         |
 | Cursor          | `cursor`         | Yes          | Yes | Full (native subagents)      | No            | No             | `~/.cursor`                         |
 | VS Code Copilot | `vscode-copilot` | Yes          | Yes | Full (runSubagent)           | No            | No             | `~/.copilot` + VS Code User profile |
@@ -21,6 +22,8 @@
 | Kiro IDE        | `kiro-ide`       | Yes          | Yes | Full (native subagents)      | No            | No             | `~/.kiro`                           |
 
 All agents receive the **full SDD orchestrator** injected into their system prompt, plus skill files written to their skills directory. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
+
+\* PI support is base single-mode by default. Multi-model is unlocked only when `pi-subagents` is installed.
 
 ---
 
@@ -64,15 +67,25 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 
 ## SDD Mode Support
 
-| Feature | Claude Code | OpenCode | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE | Qwen Code |
-|---------|:-----------:|:--------:|:----------:|:------:|:---------------:|:-----:|:--------:|:-----------:|:--------:|:---------:|
-| SDD orchestrator | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Single-mode SDD | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Multi-mode SDD | — | Yes | — | — | — | — | — | — | Yes* | — |
+| Feature | Claude Code | OpenCode | PI Coding Agent | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE | Qwen Code |
+|---------|:-----------:|:--------:|:---------------:|:----------:|:------:|:---------------:|:-----:|:--------:|:-----------:|:--------:|:---------:|
+| SDD orchestrator | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Single-mode SDD | Yes | Yes | Yes (base) | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Multi-mode SDD | — | Yes | Yes** | — | — | — | — | — | — | Yes* | — |
 
 **Multi-mode** (assigning different AI models to each SDD phase) is natively supported by **OpenCode** (via its provider system) and **Kiro IDE** (via native subagent `model:` frontmatter — each phase agent runs with its own model ID). All other agents run in **single-mode** — the orchestrator manages everything using whatever model the agent is already running.
 
+For **PI Coding Agent**, support is conditional by runtime capability:
+
+- Without `pi-subagents` installed: PI remains single-mode and fail-closed (`profiles=false`, `modelPicker=false`, `generatedMulti=false`).
+- With `pi-subagents` installed: PI multi-model SDD is enabled and `.pi/agents/*.md` + `.pi/agents/sdd.chain.md` artifacts are generated.
+- Install/remediation command: `pi install npm:pi-subagents`
+
+PI conditional capability evidence and verify checklist are tracked in [docs/pi-compatibility.md](pi-compatibility.md).
+
 > \* **Kiro multi-mode** assigns models per phase through `KiroModelAssignments` (configured via *Configure Models → Configure Kiro models* in the TUI). The selected alias (`opus|sonnet|haiku`) is resolved to a Kiro-native model ID and stamped into each `~/.kiro/agents/sdd-{phase}.md` at sync time.
+>
+> \** **PI multi-mode** requires `pi-subagents`. PI base mode does not infer Claude aliases (`opus|sonnet|haiku`) as PI base model configuration; PI multi-model assignments must be explicit `provider/model` values.
 
 ---
 
@@ -91,6 +104,17 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 - Slash commands for SDD phases (`/sdd-new`, `/sdd-explore`, etc.)
 - Background-agents plugin for parallel execution
 - Multi-mode prerequisite: connect your AI providers first, then run `opencode models --refresh`
+
+### PI Coding Agent
+
+- Config root: `~/.config/pi-coding-agent`
+- Current support tier: **base support + conditional multi-model**
+- Base path (no extension): PI remains single-mode with guardrails:
+  - `profiles=false`
+  - `modelPicker=false`
+  - `generatedMulti=false`
+- Multi-model prerequisite: install `pi-subagents` with `pi install npm:pi-subagents`
+- PI multi-model model assignments use explicit `provider/model` values (no Claude alias fallback for PI base config).
 
 ### Gemini CLI
 

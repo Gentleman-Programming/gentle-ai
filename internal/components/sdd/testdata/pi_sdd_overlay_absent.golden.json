@@ -1,0 +1,17 @@
+{
+  "features": {
+    "profiles": false,
+    "modelPicker": false,
+    "generatedMulti": false
+  },
+  "sdd": {
+    "capabilities": [
+      "experimental",
+      "non-parity"
+    ],
+    "multiModel": {
+      "enabled": false,
+      "requirement_message": "PI multi-model requires installing the `pi-subagents` extension."
+    }
+  }
+}

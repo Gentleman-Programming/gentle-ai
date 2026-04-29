@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -144,6 +145,9 @@ func TestModelAssignmentsRoundTrip(t *testing.T) {
 		ModelAssignments: map[string]ModelAssignmentState{
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		},
+		PIModelAssignments: map[string]ModelAssignmentState{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5"},
+		},
 	}
 
 	if err := Write(home, want); err != nil {
@@ -163,6 +167,59 @@ func TestModelAssignmentsRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.ModelAssignments, want.ModelAssignments) {
 		t.Errorf("ModelAssignments = %v, want %v", got.ModelAssignments, want.ModelAssignments)
+	}
+	if !reflect.DeepEqual(got.PIModelAssignments, want.PIModelAssignments) {
+		t.Errorf("PIModelAssignments = %v, want %v", got.PIModelAssignments, want.PIModelAssignments)
+	}
+}
+
+func TestStateJSONPersistsPIAssignmentsUnderCanonicalKey(t *testing.T) {
+	home := t.TempDir()
+
+	st := InstallState{
+		InstalledAgents: []string{"pi-coding-agent"},
+		PIModelAssignments: map[string]ModelAssignmentState{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5"},
+		},
+	}
+
+	if err := Write(home, st); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	raw, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile(state.json) error = %v", err)
+	}
+
+	if !bytes.Contains(raw, []byte(`"pi_model_assignments"`)) {
+		t.Fatalf("state.json should persist PI assignments under \"pi_model_assignments\", got:\n%s", string(raw))
+	}
+}
+
+func TestStateJSONPersistsExplicitEmptyAssignmentMaps(t *testing.T) {
+	home := t.TempDir()
+
+	st := InstallState{
+		InstalledAgents:     []string{"opencode"},
+		ModelAssignments:    map[string]ModelAssignmentState{},
+		PIModelAssignments:  map[string]ModelAssignmentState{},
+	}
+
+	if err := Write(home, st); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	raw, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile(state.json) error = %v", err)
+	}
+
+	if !bytes.Contains(raw, []byte(`"model_assignments": {}`)) {
+		t.Fatalf("state.json should persist explicit empty model_assignments map, got:\n%s", string(raw))
+	}
+	if !bytes.Contains(raw, []byte(`"pi_model_assignments": {}`)) {
+		t.Fatalf("state.json should persist explicit empty pi_model_assignments map, got:\n%s", string(raw))
 	}
 }
 

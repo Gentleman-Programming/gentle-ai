@@ -25,12 +25,13 @@ This is NOT an AI agent installer. Most agents are easy to install. This is an *
 
 **After**: Your agent now has memory, skills, workflow, MCP tools, and a persona that actually teaches you.
 
-### 10 Supported Agents
+### 11 Supported Agents
 
 | Agent | Delegation Model | Key Feature |
 |-------|:---:|---|
 | **Claude Code** | Full (Task tool) | Sub-agents, output styles |
 | **OpenCode** | Full (multi-mode overlay) | Per-phase model routing |
+| **PI Coding Agent** | Base support (non-parity) | Experimental adapter boundary (no OpenCode parity claims) |
 | **Gemini CLI** | Full (experimental) | Custom agents in `~/.gemini/agents/` |
 | **Cursor** | Full (native subagents) | 9 SDD agents in `~/.cursor/agents/` |
 | **VS Code Copilot** | Full (runSubagent) | Parallel execution |
@@ -41,6 +42,8 @@ This is NOT an AI agent installer. Most agents are easy to install. This is an *
 | **Qwen Code** | Full (native sub-agents) | Slash commands, `~/.qwen/commands/`, `auto_edit` mode |
 
 > **Note**: This project supersedes [Agent Teams Lite](https://github.com/Gentleman-Programming/agent-teams-lite) (now archived). Everything ATL provided is included here with better installation, automatic updates, and persistent memory.
+
+> **PI support status**: PI is **base-supported, conditional multi-model**. Root path precedence is `PI_CODING_AGENT_DIR` → `~/.pi/agent`, with legacy `~/.config/pi-coding-agent` used only for compatibility detection. PI uses the existing **PI→Engram extension** contract as baseline integration, accepting either explicit `engram.extension.path` or package-based installs in `packages[]` (for example `../../Documents/repos/pi-engram` or `npm:pi-engram`). MCP/Context7 out of scope for this iteration (non-blocking). PI multi-model is enabled only when `pi-subagents` is installed (`pi install npm:pi-subagents`). See capability details: [docs/pi-compatibility.md](docs/pi-compatibility.md).
 
 ---
 

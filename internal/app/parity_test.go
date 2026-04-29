@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -161,17 +162,33 @@ func TestGuardFlowLinuxDryRunPropagatesDecision(t *testing.T) {
 }
 
 func TestRunArgsNoCommandLaunchesTUI(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origRunTUIProgram := runTUIProgram
+	t.Cleanup(func() {
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		runTUIProgram = origRunTUIProgram
+	})
+
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(_ context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
+
+	called := false
+	runTUIProgram = func(_ tui.Model) error {
+		called = true
+		return nil
+	}
+
 	var buf bytes.Buffer
 	err := RunArgs(nil, &buf)
-	// With no args, RunArgs now launches the TUI via Bubbletea.
-	// In a headless/test environment without a TTY, this returns an error
-	// about opening /dev/tty. That's expected — the TUI requires a terminal.
-	if err == nil {
-		// If no error, we're somehow in a TTY — that's fine too.
-		return
+	if err != nil {
+		t.Fatalf("RunArgs(nil) unexpected error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "TTY") && !strings.Contains(err.Error(), "tty") {
-		t.Fatalf("RunArgs(nil) unexpected error = %v; want TTY-related error or nil", err)
+	if !called {
+		t.Fatal("RunArgs(nil) did not invoke runTUIProgram")
 	}
 }
 

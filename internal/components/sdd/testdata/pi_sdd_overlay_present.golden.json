@@ -1,0 +1,17 @@
+{
+  "features": {
+    "profiles": true,
+    "modelPicker": true,
+    "generatedMulti": true
+  },
+  "sdd": {
+    "capabilities": [
+      "experimental",
+      "non-parity"
+    ],
+    "multiModel": {
+      "enabled": true,
+      "requirement_message": ""
+    }
+  }
+}

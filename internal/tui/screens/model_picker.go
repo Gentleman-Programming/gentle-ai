@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/modelcatalog"
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
 )
@@ -32,9 +33,13 @@ type ProviderEntry struct {
 // ModelPickerState holds the available providers and models for the picker screen,
 // plus navigation state for the two-step sub-selection modes.
 type ModelPickerState struct {
-	Providers    map[string]opencode.Provider
-	AvailableIDs []string                    // provider IDs with tool_call-capable models
-	SDDModels    map[string][]opencode.Model // provider ID -> SDD-capable models
+	Providers         map[string]modelcatalog.Provider
+	AvailableIDs      []string                        // provider IDs with tool_call-capable models
+	SDDModels         map[string][]modelcatalog.Model // provider ID -> SDD-capable models
+	Source            string
+	EmptyStateHint    string
+	CapabilityBlocked bool
+	CapabilityMessage string
 
 	Mode             ModelPickerMode
 	SelectedPhaseIdx int    // which phase row was selected (0 = "Set all")
@@ -55,22 +60,22 @@ type ModelPickerState struct {
 
 // NewModelPickerState initializes the picker state from the models cache.
 func NewModelPickerState(cachePath string) ModelPickerState {
-	providers, err := opencode.LoadModels(cachePath)
+	catalog, err := opencode.LoadCatalog(cachePath)
 	if err != nil {
 		return ModelPickerState{}
 	}
+	state := NewModelPickerStateFromCatalog(catalog)
+	state.Source = "opencode"
+	state.EmptyStateHint = "For OpenCode, run 'opencode' once, then re-run 'gentle-ai sync' to assign models."
+	return state
+}
 
-	available := opencode.DetectAvailableProviders(providers)
-
-	sddModels := make(map[string][]opencode.Model, len(available))
-	for _, id := range available {
-		sddModels[id] = opencode.FilterModelsForSDD(providers[id])
-	}
-
+// NewModelPickerStateFromCatalog initializes picker state from a normalized catalog.
+func NewModelPickerStateFromCatalog(catalog modelcatalog.Catalog) ModelPickerState {
 	return ModelPickerState{
-		Providers:    providers,
-		AvailableIDs: available,
-		SDDModels:    sddModels,
+		Providers:    catalog.Providers,
+		AvailableIDs: catalog.AvailableProviderIDs,
+		SDDModels:    catalog.SDDModels,
 		Mode:         ModePhaseList,
 	}
 }
@@ -262,11 +267,31 @@ func renderPhaseList(
 
 	b.WriteString(styles.TitleStyle.Render("Assign Models to SDD Phases"))
 	b.WriteString("\n\n")
+	b.WriteString(styles.WarningStyle.Render("Model picker availability is capability-gated per agent."))
+	b.WriteString("\n\n")
+
+	if state.CapabilityBlocked {
+		message := state.CapabilityMessage
+		if message == "" {
+			message = "Multi-model picker is unavailable for this agent setup."
+		}
+
+		b.WriteString(styles.WarningStyle.Render(message))
+		b.WriteString("\n\n")
+		b.WriteString(renderOptions([]string{"← Back to SDD mode"}, cursor))
+		b.WriteString("\n")
+		b.WriteString(styles.HelpStyle.Render("enter/esc: go back"))
+		return b.String()
+	}
 
 	if len(state.AvailableIDs) == 0 {
-		b.WriteString(styles.WarningStyle.Render("OpenCode has not been run yet — model cache not found."))
+		b.WriteString(styles.WarningStyle.Render("No compatible provider/model cache was detected for this agent."))
 		b.WriteString("\n")
-		b.WriteString(styles.SubtextStyle.Render("Run 'opencode' once, then re-run 'gentle-ai sync' to assign models."))
+		hint := state.EmptyStateHint
+		if hint == "" {
+			hint = "For OpenCode, run 'opencode' once, then re-run 'gentle-ai sync' to assign models."
+		}
+		b.WriteString(styles.SubtextStyle.Render(hint))
 		b.WriteString("\n")
 		b.WriteString(styles.SubtextStyle.Render("Using default model assignments for now."))
 		b.WriteString("\n\n")

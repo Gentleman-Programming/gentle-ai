@@ -33,6 +33,11 @@ var (
 	upgradeExecute           = upgrade.Execute
 	ensureCurrentOSSupported = system.EnsureCurrentOSSupported
 	detectSystem             = system.Detect
+	runTUIProgram            = func(m tui.Model) error {
+		p := tea.NewProgram(m, tea.WithAltScreen())
+		_, err := p.Run()
+		return err
+	}
 )
 
 func Run() error {
@@ -104,9 +109,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.SyncFn = tuiSync(homeDir)
 		m.UninstallFn = tuiUninstall(homeDir)
 		m.UninstallWithProfilesFn = tuiUninstallWithProfiles(homeDir)
-		p := tea.NewProgram(m, tea.WithAltScreen())
-		_, err = p.Run()
-		return err
+		return runTUIProgram(m)
 	}
 
 	switch args[0] {
@@ -259,19 +262,28 @@ func tuiExecute(
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
-		agentIDs := make([]string, 0, len(selection.Agents))
-		for _, a := range selection.Agents {
-			agentIDs = append(agentIDs, string(a))
-		}
 		// Non-fatal: a state write failure must not break an otherwise successful install.
-		_ = state.Write(homeDir, state.InstallState{
-			InstalledAgents:        agentIDs,
-			ClaudeModelAssignments: claudeAliasesToStrings(selection.ClaudeModelAssignments),
-			ModelAssignments:       modelAssignmentsToState(selection.ModelAssignments),
-		})
+		_ = state.Write(homeDir, installStateFromSelection(selection))
 	}
 
 	return execResult
+}
+
+// installStateFromSelection converts a TUI install Selection into the persisted
+// InstallState payload written to ~/.gentle-ai/state.json.
+func installStateFromSelection(selection model.Selection) state.InstallState {
+	agentIDs := make([]string, 0, len(selection.Agents))
+	for _, a := range selection.Agents {
+		agentIDs = append(agentIDs, string(a))
+	}
+
+	return state.InstallState{
+		InstalledAgents:        agentIDs,
+		ClaudeModelAssignments: claudeAliasesToStrings(selection.ClaudeModelAssignments),
+		KiroModelAssignments:   claudeAliasesToStrings(selection.KiroModelAssignments),
+		ModelAssignments:       modelAssignmentsToState(selection.ModelAssignments),
+		PIModelAssignments:     modelAssignmentsToState(selection.PIModelAssignments),
+	}
 }
 
 // tuiRestore restores a backup from its manifest.
@@ -351,6 +363,9 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.ModelAssignments != nil {
 		selection.ModelAssignments = overrides.ModelAssignments
 	}
+	if overrides.PIModelAssignments != nil {
+		selection.PIModelAssignments = overrides.PIModelAssignments
+	}
 	if overrides.ClaudeModelAssignments != nil {
 		selection.ClaudeModelAssignments = overrides.ClaudeModelAssignments
 	}
@@ -383,34 +398,15 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	if err != nil {
 		return
 	}
-	if len(selection.ClaudeModelAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
-		m := make(map[string]model.ClaudeModelAlias, len(s.ClaudeModelAssignments))
-		for k, v := range s.ClaudeModelAssignments {
-			m[k] = model.ClaudeModelAlias(v)
-		}
-		selection.ClaudeModelAssignments = m
-	}
-	if len(selection.KiroModelAssignments) == 0 && len(s.KiroModelAssignments) > 0 {
-		m := make(map[string]model.ClaudeModelAlias, len(s.KiroModelAssignments))
-		for k, v := range s.KiroModelAssignments {
-			m[k] = model.ClaudeModelAlias(v)
-		}
-		selection.KiroModelAssignments = m
-	}
-	if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
-		m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
-		for k, v := range s.ModelAssignments {
-			m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID}
-		}
-		selection.ModelAssignments = m
-	}
+	piAssignmentsInScope := selection.HasAgent(model.AgentPiCodingAgent) && selection.HasComponent(model.ComponentSDD)
+	state.HydrateSelectionAssignments(selection, s, piAssignmentsInScope)
 }
 
 // persistAssignments writes the model assignments from selection back to
 // state.json using a read-merge-write pattern so that other fields
 // (InstalledAgents) are not lost.
 func persistAssignments(homeDir string, selection model.Selection) {
-	if len(selection.ClaudeModelAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 {
+	if selection.ClaudeModelAssignments == nil && selection.KiroModelAssignments == nil && selection.ModelAssignments == nil && selection.PIModelAssignments == nil {
 		return
 	}
 	current, err := state.Read(homeDir)
@@ -418,14 +414,17 @@ func persistAssignments(homeDir string, selection model.Selection) {
 		// State file may not exist yet (e.g. pre-state users).
 		current = state.InstallState{}
 	}
-	if len(selection.ClaudeModelAssignments) > 0 {
+	if selection.ClaudeModelAssignments != nil {
 		current.ClaudeModelAssignments = claudeAliasesToStrings(selection.ClaudeModelAssignments)
 	}
-	if len(selection.KiroModelAssignments) > 0 {
+	if selection.KiroModelAssignments != nil {
 		current.KiroModelAssignments = claudeAliasesToStrings(selection.KiroModelAssignments)
 	}
-	if len(selection.ModelAssignments) > 0 {
+	if selection.ModelAssignments != nil {
 		current.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+	}
+	if selection.PIModelAssignments != nil {
+		current.PIModelAssignments = modelAssignmentsToState(selection.PIModelAssignments)
 	}
 	_ = state.Write(homeDir, current)
 }
@@ -433,7 +432,7 @@ func persistAssignments(homeDir string, selection model.Selection) {
 // claudeAliasesToStrings converts a typed ClaudeModelAlias map to plain strings
 // for JSON serialisation in state.json.
 func claudeAliasesToStrings(m map[string]model.ClaudeModelAlias) map[string]string {
-	if len(m) == 0 {
+	if m == nil {
 		return nil
 	}
 	out := make(map[string]string, len(m))
@@ -446,7 +445,7 @@ func claudeAliasesToStrings(m map[string]model.ClaudeModelAlias) map[string]stri
 // modelAssignmentsToState converts model.ModelAssignment maps to the
 // state-serialisable form.
 func modelAssignmentsToState(m map[string]model.ModelAssignment) map[string]state.ModelAssignmentState {
-	if len(m) == 0 {
+	if m == nil {
 		return nil
 	}
 	out := make(map[string]state.ModelAssignmentState, len(m))

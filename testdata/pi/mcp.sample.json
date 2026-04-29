@@ -1,0 +1,13 @@
+{
+  "_meta": {
+    "source": "phase-0-spike",
+    "status": "unknown",
+    "note": "mcpServers envelope is hypothesis until runtime validation"
+  },
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    }
+  }
+}

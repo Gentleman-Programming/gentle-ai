@@ -26,6 +26,9 @@ func TestEngramPathGuidanceZsh(t *testing.T) {
 }
 
 func TestEngramPathGuidanceDefault(t *testing.T) {
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", "")
+
 	msg := engramPathGuidance("")
 	if want := "go/bin"; !strings.Contains(msg, want) {
 		t.Fatalf("engramPathGuidance(default) missing %q: %s", want, msg)

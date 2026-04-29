@@ -1,0 +1,11 @@
+{
+  "engram": {
+    "extension": {
+      "path": "/opt/pi/extensions/pi-engram",
+      "enabled": true,
+      "validated_by": "gentle-ai",
+      "command": "engram",
+      "source": "explicit"
+    }
+  }
+}

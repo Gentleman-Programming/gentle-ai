@@ -237,3 +237,21 @@ func TestReadCurrentModelAssignmentsMixedSeparators(t *testing.T) {
 		}
 	}
 }
+
+func TestReadCurrentModelAssignmentsDoesNotFabricateFromRootModel(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.json")
+
+	content := `{"model":"openai/gpt-5","agent":{"gentleman":{"model":"openai/gpt-5"}}}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	got, err := ReadCurrentModelAssignments(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadCurrentModelAssignments() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ReadCurrentModelAssignments() fabricated SDD assignments from root model: %v", got)
+	}
+}

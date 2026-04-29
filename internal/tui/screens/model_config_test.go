@@ -86,6 +86,37 @@ func TestRenderModelConfig_ContainsNavigationHint(t *testing.T) {
 	}
 }
 
+func TestModelConfigOptionsForCapabilities_PIUnsupportedHidesMultiModelOption(t *testing.T) {
+	opts := ModelConfigOptionsForCapabilities(false)
+	for _, opt := range opts {
+		if strings.Contains(opt, "PI") {
+			t.Fatalf("unexpected PI model option when PI multi-model is unsupported: %v", opts)
+		}
+	}
+}
+
+func TestModelConfigOptionsForCapabilities_PISupportedShowsMultiModelOption(t *testing.T) {
+	opts := ModelConfigOptionsForCapabilities(true)
+	found := false
+	for _, opt := range opts {
+		if strings.Contains(opt, "PI") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected PI model option when PI multi-model is supported; got: %v", opts)
+	}
+}
+
+func TestRenderModelConfigWithCapabilities_ShowsCanonicalPIRequirementWarning(t *testing.T) {
+	warning := "PI multi-model requires installing the `pi-subagents` extension."
+	out := RenderModelConfigWithCapabilities(0, false, warning)
+	if !strings.Contains(out, warning) {
+		t.Fatalf("expected canonical PI requirement warning in model config render")
+	}
+}
+
 // stripStyleArtifacts returns a simplified plain-text version of a string for
 // comparison when style codes may wrap the content. We check for key words
 // contained in the original string.
