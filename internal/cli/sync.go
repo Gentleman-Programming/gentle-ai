@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -515,6 +517,7 @@ func (s componentSyncStep) Run() error {
 			sddMode = model.SDDModeMulti
 		}
 
+		var sddErrs []error
 		for _, adapter := range adapters {
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments:           s.selection.ModelAssignments,
@@ -527,25 +530,28 @@ func (s componentSyncStep) Run() error {
 			}
 			res, err := sdd.Inject(s.homeDir, adapter, sddMode, opts)
 			if err != nil {
-				return fmt.Errorf("sync sdd for %q: %w", adapter.Agent(), err)
+				sddErrs = append(sddErrs, fmt.Errorf("sync sdd for %q: %w", adapter.Agent(), err))
+				continue
 			}
 			s.countChanged(boolToInt(res.Changed))
 		}
-		return nil
+		return reportPerAgentErrors(sddErrs, len(adapters))
 
 	case model.ComponentSkills:
 		skillIDs := selectedSkillIDs(s.selection)
 		if len(skillIDs) == 0 {
 			return nil
 		}
+		var skillErrs []error
 		for _, adapter := range adapters {
 			res, err := skills.Inject(s.homeDir, adapter, skillIDs)
 			if err != nil {
-				return fmt.Errorf("sync skills for %q: %w", adapter.Agent(), err)
+				skillErrs = append(skillErrs, fmt.Errorf("sync skills for %q: %w", adapter.Agent(), err))
+				continue
 			}
 			s.countChanged(boolToInt(res.Changed))
 		}
-		return nil
+		return reportPerAgentErrors(skillErrs, len(adapters))
 
 	case model.ComponentGGA:
 		// Sync: ensure runtime assets are current and inject config.
@@ -568,25 +574,29 @@ func (s componentSyncStep) Run() error {
 
 	case model.ComponentPermission:
 		// Opt-in only — reached when --include-permissions is set.
+		var permErrs []error
 		for _, adapter := range adapters {
 			res, err := permissions.Inject(s.homeDir, adapter)
 			if err != nil {
-				return fmt.Errorf("sync permissions for %q: %w", adapter.Agent(), err)
+				permErrs = append(permErrs, fmt.Errorf("sync permissions for %q: %w", adapter.Agent(), err))
+				continue
 			}
 			s.countChanged(boolToInt(res.Changed))
 		}
-		return nil
+		return reportPerAgentErrors(permErrs, len(adapters))
 
 	case model.ComponentTheme:
 		// Opt-in only — reached when --include-theme is set.
+		var themeErrs []error
 		for _, adapter := range adapters {
 			res, err := theme.Inject(s.homeDir, adapter)
 			if err != nil {
-				return fmt.Errorf("sync theme for %q: %w", adapter.Agent(), err)
+				themeErrs = append(themeErrs, fmt.Errorf("sync theme for %q: %w", adapter.Agent(), err))
+				continue
 			}
 			s.countChanged(boolToInt(res.Changed))
 		}
-		return nil
+		return reportPerAgentErrors(themeErrs, len(adapters))
 
 	default:
 		// Persona and any unknown components are out of sync scope.
@@ -607,6 +617,34 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// reportPerAgentErrors decides whether per-agent failures collected during
+// a component's sync iteration should abort the pipeline.
+//
+// Behavior:
+//   - No errors             → returns nil.
+//   - Some errors but not all → emits each as a non-fatal warning via log
+//     and returns nil so the pipeline keeps running for the remaining
+//     components and the agents that did succeed.
+//   - Every agent failed    → joins the errors and returns them so the
+//     orchestrator can surface a real failure (and roll back when the
+//     policy demands it). This preserves "all-or-nothing" semantics only
+//     when truly nothing worked.
+//
+// totalAgents is the size of the adapter slice the caller iterated over;
+// when it is zero the function trivially returns nil.
+func reportPerAgentErrors(errs []error, totalAgents int) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	for _, e := range errs {
+		log.Printf("sync: warning: %v", e)
+	}
+	if totalAgents > 0 && len(errs) >= totalAgents {
+		return errors.Join(errs...)
+	}
+	return nil
 }
 
 // RunSyncWithSelection is the programmatic entry point for sync.
