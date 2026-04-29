@@ -122,8 +122,13 @@ func TestInstallCommand(t *testing.T) {
 			want:    [][]string{{"npm", "install", "-g", "opencode-ai"}},
 		},
 		{
+			name:    "opensuse resolves npm install",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper"},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "opencode-ai"}},
+		},
+		{
 			name:    "unsupported package manager returns error",
-			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "zypper"},
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "unknownpm"},
 			wantErr: true,
 		},
 	}

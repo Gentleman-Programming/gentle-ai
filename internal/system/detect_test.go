@@ -56,6 +56,23 @@ func TestDetectFromInputsMarksFedoraSupported(t *testing.T) {
 	}
 }
 
+func TestDetectFromInputsMarksOpenSUSESupported(t *testing.T) {
+	osRelease := "ID=opensuse-tumbleweed\nID_LIKE=\"opensuse suse\"\n"
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, nil, nil)
+
+	if !result.System.Supported {
+		t.Fatalf("expected openSUSE linux distro to be supported")
+	}
+
+	if result.System.Profile.LinuxDistro != LinuxDistroOpenSUSE {
+		t.Fatalf("expected opensuse distro, got %q", result.System.Profile.LinuxDistro)
+	}
+
+	if result.System.Profile.PackageManager != "zypper" {
+		t.Fatalf("expected zypper package manager, got %q", result.System.Profile.PackageManager)
+	}
+}
+
 func TestDetectFromInputsMarksUbuntuSupported(t *testing.T) {
 	osRelease := "ID=ubuntu\nID_LIKE=debian\n"
 	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, nil, nil)
@@ -169,6 +186,21 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			wantDistro: LinuxDistroFedora,
 		},
 		{
+			name:       "opensuse tumbleweed",
+			osRelease:  "ID=opensuse-tumbleweed\nID_LIKE=\"opensuse suse\"\nVERSION_ID=\"20260426\"\n",
+			wantDistro: LinuxDistroOpenSUSE,
+		},
+		{
+			name:       "opensuse leap",
+			osRelease:  "ID=opensuse-leap\nID_LIKE=\"suse opensuse\"\n",
+			wantDistro: LinuxDistroOpenSUSE,
+		},
+		{
+			name:       "opensuse via id_like token",
+			osRelease:  "ID=custom-linux\nID_LIKE=\"opensuse\"\n",
+			wantDistro: LinuxDistroOpenSUSE,
+		},
+		{
 			name:       "empty os-release",
 			osRelease:  "",
 			wantDistro: LinuxDistroUnknown,
@@ -267,6 +299,15 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			wantOS:        "linux",
 			wantPM:        "dnf",
 			wantDistro:    LinuxDistroFedora,
+			wantSupported: true,
+		},
+		{
+			name:          "opensuse profile",
+			goos:          "linux",
+			osRelease:     "ID=opensuse-tumbleweed\nID_LIKE=\"opensuse suse\"\n",
+			wantOS:        "linux",
+			wantPM:        "zypper",
+			wantDistro:    LinuxDistroOpenSUSE,
 			wantSupported: true,
 		},
 		{

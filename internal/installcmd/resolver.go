@@ -124,6 +124,8 @@ func uvInstallHint(profile system.PlatformProfile) string {
 		return "sudo pacman -S --noconfirm uv"
 	case "dnf":
 		return "sudo dnf install -y uv"
+	case "zypper":
+		return "sudo zypper --non-interactive install uv"
 	case "winget":
 		return "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements"
 	default:
@@ -156,6 +158,8 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 		return CommandSequence{{"sudo", "pacman", "-S", "--noconfirm", dependency}}, nil
 	case "dnf":
 		return CommandSequence{{"sudo", "dnf", "install", "-y", dependency}}, nil
+	case "zypper":
+		return CommandSequence{{"sudo", "zypper", "--non-interactive", "install", dependency}}, nil
 	case "winget":
 		return CommandSequence{{"winget", "install", "--id", dependency, "-e", "--accept-source-agreements", "--accept-package-agreements"}}, nil
 	default:
@@ -178,7 +182,7 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 		return CommandSequence{
 			{"brew", "install", "anomalyco/tap/opencode"},
 		}, nil
-	case "apt", "pacman", "dnf":
+	case "apt", "pacman", "dnf", "zypper":
 		if profile.NpmWritable {
 			return CommandSequence{{"npm", "install", "-g", "opencode-ai"}}, nil
 		}
@@ -204,7 +208,7 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 			{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
 			{"brew", "reinstall", "gga"},
 		}, nil
-	case "apt", "pacman", "dnf":
+	case "apt", "pacman", "dnf", "zypper":
 		const tmpDir = "/tmp/gentleman-guardian-angel"
 		return CommandSequence{
 			{"rm", "-rf", tmpDir},
@@ -287,20 +291,20 @@ func gitBashPath() string {
 	return "bash"
 }
 
-// validateGoForModuleInstall checks that Go ≥1.24 is installed and GO111MODULE is not
-// disabled before attempting `go install`. Returns an actionable error if any check fails.
+// validateGoForModuleInstall checks that Go >=1.24 is installed and GO111MODULE is not
+// disabled before attempting a source module install. Returns an actionable error if any check fails.
 // MUST NOT be called for brew-based installs (brew manages Go transitively).
 func validateGoForModuleInstall(profile system.PlatformProfile) error {
 	if _, err := cmdLookPath("go"); err != nil {
 		return fmt.Errorf(
-			"Go 1.24+ is required to install Engram but was not found in PATH.\n" +
+			"Go 1.24+ is required for source module installs but was not found in PATH.\n" +
 				"Please install Go from https://go.dev/dl/ and restart your terminal.")
 	}
 
 	out, err := cmdGoVersion()
 	if err != nil {
 		return fmt.Errorf(
-			"Go 1.24+ is required but could not verify the installed version.\n" +
+			"Go 1.24+ is required for source module installs but could not verify the installed version.\n" +
 				"Please ensure Go is properly installed: https://go.dev/dl/")
 	}
 
@@ -314,7 +318,7 @@ func validateGoForModuleInstall(profile system.PlatformProfile) error {
 			minor, _ := strconv.Atoi(versionParts[1])
 			if major < 1 || (major == 1 && minor < 24) {
 				return fmt.Errorf(
-					"Go 1.24+ is required to install Engram, but found go%s.\n"+
+					"Go 1.24+ is required for source module installs, but found go%s.\n"+
 						"Please update Go: https://go.dev/dl/", versionStr)
 			}
 		}

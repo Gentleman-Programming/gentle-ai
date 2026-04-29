@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,9 +25,9 @@ func TestWithPostInstallNotesAddsGGANextSteps(t *testing.T) {
 }
 
 func TestWithPostInstallNotesDoesNotChangeNonGGA(t *testing.T) {
-	// Set GOBIN to a directory already in PATH so that withGoInstallPathNote
-	// does not append a PATH guidance note for the Engram component.
-	t.Setenv("GOBIN", "/usr/local/bin")
+	// Put both direct-download locations in PATH so the Engram guidance note is skipped.
+	home, _ := os.UserHomeDir()
+	t.Setenv("PATH", "/usr/bin"+string(os.PathListSeparator)+"/usr/local/bin"+string(os.PathListSeparator)+filepath.Join(home, ".local", "bin"))
 
 	report := verify.Report{Ready: true, FinalNote: "You're ready."}
 	resolved := planner.ResolvedPlan{OrderedComponents: []model.ComponentID{model.ComponentEngram}}

@@ -76,7 +76,8 @@ func defineDependencies(profile PlatformProfile) []Dependency {
 		})
 	}
 
-	// go is optional (needed for Engram on Linux via go install).
+	// go is optional. It is only needed for local development and source builds;
+	// normal installs use released binaries and do not require Go.
 	deps = append(deps, Dependency{
 		Name:        "go",
 		Required:    false,
@@ -245,8 +246,20 @@ func RenderDependencyReport(report DependencyReport) string {
 	}
 
 	if len(report.MissingOptional) > 0 {
-		b.WriteString(fmt.Sprintf("Missing optional: %s\n", strings.Join(report.MissingOptional, ", ")))
+		b.WriteString(fmt.Sprintf("Missing optional: %s\n", formatMissingOptional(report.MissingOptional)))
 	}
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatMissingOptional(missing []string) string {
+	formatted := make([]string, 0, len(missing))
+	for _, dep := range missing {
+		if dep == "go" {
+			formatted = append(formatted, "go (only needed for local development/source builds)")
+			continue
+		}
+		formatted = append(formatted, dep)
+	}
+	return strings.Join(formatted, ", ")
 }

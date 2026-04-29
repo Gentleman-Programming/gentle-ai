@@ -37,8 +37,8 @@ func TestInstallCommandByProfile(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "unsupported package manager returns error",
-			profile: system.PlatformProfile{OS: "linux", PackageManager: "zypper"},
+			name:    "opensuse returns error (uses DownloadLatestBinary instead of go install)",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper"},
 			wantErr: true,
 		},
 	}

@@ -27,6 +27,7 @@ The installer detects the platform automatically at runtime — there is no flag
 | Ubuntu/Debian | `apt` | `sudo npm install -g opencode-ai` |
 | Arch | `pacman` | `sudo npm install -g opencode-ai` |
 | Fedora/RHEL family | `dnf` | `sudo npm install -g opencode-ai` |
+| openSUSE family | `zypper` | `sudo npm install -g opencode-ai` |
 
 The `--dry-run` output includes a `Platform decision` line showing `os`, `distro`, `package-manager`, and `status`.
 

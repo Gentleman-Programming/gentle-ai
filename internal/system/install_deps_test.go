@@ -61,6 +61,14 @@ func TestInstallHintNodeFedora(t *testing.T) {
 	}
 }
 
+func TestInstallHintNodeOpenSUSE(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "zypper", LinuxDistro: LinuxDistroOpenSUSE}
+	hint := installHintNode(profile)
+	if !strings.Contains(hint, "zypper") || !strings.Contains(hint, "nodejs npm") {
+		t.Fatalf("installHintNode(opensuse) = %q, want zypper nodejs npm install", hint)
+	}
+}
+
 func TestInstallHintBrew(t *testing.T) {
 	hint := installHintBrew()
 	if !strings.Contains(hint, "Homebrew") {
@@ -81,6 +89,14 @@ func TestInstallHintGoUbuntu(t *testing.T) {
 	hint := installHintGo(profile)
 	if !strings.Contains(hint, "apt-get install") {
 		t.Fatalf("installHintGo(ubuntu) = %q", hint)
+	}
+}
+
+func TestInstallHintGoOpenSUSE(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "zypper", LinuxDistro: LinuxDistroOpenSUSE}
+	hint := installHintGo(profile)
+	if !strings.Contains(hint, "zypper") || !strings.Contains(hint, "install go") {
+		t.Fatalf("installHintGo(opensuse) = %q", hint)
 	}
 }
 
@@ -179,6 +195,28 @@ func TestInstallCommandsForDepGitFedoraUsesDnf(t *testing.T) {
 	}
 	if cmds[0][0] != "sudo" || cmds[0][1] != "dnf" {
 		t.Fatalf("git fedora command = %v, want sudo dnf", cmds[0])
+	}
+}
+
+func TestInstallCommandsForDepGitOpenSUSEUsesZypper(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "zypper", LinuxDistro: LinuxDistroOpenSUSE}
+	cmds := InstallCommandsForDep("git", profile)
+	if len(cmds) != 1 {
+		t.Fatalf("git opensuse commands = %d, want 1", len(cmds))
+	}
+	if cmds[0][0] != "sudo" || cmds[0][1] != "zypper" || cmds[0][2] != "--non-interactive" {
+		t.Fatalf("git opensuse command = %v, want sudo zypper --non-interactive", cmds[0])
+	}
+}
+
+func TestInstallCommandsForDepNodeOpenSUSEUsesZypper(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "zypper", LinuxDistro: LinuxDistroOpenSUSE}
+	cmds := InstallCommandsForDep("node", profile)
+	if len(cmds) != 1 {
+		t.Fatalf("node opensuse commands = %d, want 1", len(cmds))
+	}
+	if cmds[0][0] != "sudo" || cmds[0][1] != "zypper" || cmds[0][4] != "nodejs" || cmds[0][5] != "npm" {
+		t.Fatalf("node opensuse command = %v, want sudo zypper --non-interactive install nodejs npm", cmds[0])
 	}
 }
 
@@ -281,6 +319,7 @@ func TestInstallCommandsFullMatrix(t *testing.T) {
 		{OS: "linux", PackageManager: "apt", LinuxDistro: "ubuntu"},
 		{OS: "linux", PackageManager: "pacman", LinuxDistro: "arch"},
 		{OS: "linux", PackageManager: "dnf", LinuxDistro: LinuxDistroFedora},
+		{OS: "linux", PackageManager: "zypper", LinuxDistro: LinuxDistroOpenSUSE},
 	}
 
 	deps := []string{"git", "curl", "node", "go"}

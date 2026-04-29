@@ -164,46 +164,38 @@ func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan) v
 	if hasComponent(resolved.OrderedComponents, model.ComponentGGA) && report.Ready {
 		report.FinalNote = report.FinalNote + "\n\nGGA is now installed globally. To enable project hooks, run in each repo:\n- gga init\n- gga install"
 	}
-	report = withGoInstallPathNote(report, resolved)
+	report = withEngramPathNote(report, resolved)
 	return report
 }
 
-// withGoInstallPathNote appends a PATH guidance note when engram was installed
-// on a non-brew platform (Linux/Windows). Since engram is now installed via
-// direct binary download to /usr/local/bin or ~/.local/bin, this note helps
-// users who may need to add the install directory to their PATH.
-func withGoInstallPathNote(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
+// withEngramPathNote appends PATH guidance for non-brew engram installs.
+// Engram is installed via a pre-built binary on Linux/Windows, not via Go.
+func withEngramPathNote(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
 	if !hasComponent(resolved.OrderedComponents, model.ComponentEngram) {
 		return report
 	}
 	if resolved.PlatformDecision.PackageManager == "brew" {
 		return report
 	}
-	binDir := goInstallBinDir()
-	if isInPATH(binDir) {
+	binDirs := engramDownloadBinDirs()
+	if allInPATH(binDirs) {
 		return report
 	}
+	binDir := binDirs[len(binDirs)-1]
 	report.FinalNote = report.FinalNote + fmt.Sprintf(
-		"\n\nThe engram binary was installed to %s via `go install`.\nAdd it to your PATH: %s",
+		"\n\nEngram is installed as a pre-built binary on non-brew platforms.\nIf future shells cannot find `engram`, add its install directory to PATH (usually %s): %s",
 		binDir,
-		engramPathGuidance(os.Getenv("SHELL")),
+		engramPathGuidance(os.Getenv("SHELL"), binDir),
 	)
 	return report
 }
 
-// goInstallBinDir returns the directory where `go install` places binaries.
-// Resolution order: $GOBIN > $GOPATH/bin > $HOME/go/bin.
-func goInstallBinDir() string {
-	if gobin := os.Getenv("GOBIN"); gobin != "" {
-		return gobin
-	}
-	if gopath := os.Getenv("GOPATH"); gopath != "" {
-		return filepath.Join(gopath, "bin")
-	}
+func engramDownloadBinDirs() []string {
+	dirs := []string{"/usr/local/bin"}
 	if home, err := osUserHomeDir(); err == nil {
-		return filepath.Join(home, "go", "bin")
+		dirs = append(dirs, filepath.Join(home, ".local", "bin"))
 	}
-	return filepath.Join("~", "go", "bin")
+	return dirs
 }
 
 // isInPATH reports whether dir is present in the current PATH.
@@ -214,6 +206,15 @@ func isInPATH(dir string) bool {
 		}
 	}
 	return false
+}
+
+func allInPATH(dirs []string) bool {
+	for _, dir := range dirs {
+		if !isInPATH(dir) {
+			return false
+		}
+	}
+	return true
 }
 
 func buildStagePlan(selection model.Selection, resolved planner.ResolvedPlan) pipeline.StagePlan {
@@ -1077,7 +1078,9 @@ func engramHealthChecks() []verify.Check {
 			Soft:        true,
 			Run: func(context.Context) error {
 				if err := engram.VerifyInstalled(); err != nil {
-					return fmt.Errorf("%w\nIf engram was installed via `go install`, add it to PATH:\n  %s", err, engramPathGuidance(os.Getenv("SHELL")))
+					binDirs := engramDownloadBinDirs()
+					binDir := binDirs[len(binDirs)-1]
+					return fmt.Errorf("%w\nIf engram was installed as a downloaded binary, add its install directory to PATH:\n  %s", err, engramPathGuidance(os.Getenv("SHELL"), binDir))
 				}
 				return nil
 			},
@@ -1132,8 +1135,7 @@ func antigravityCollisionCheck(agents []model.AgentID) []verify.Check {
 	}
 }
 
-func engramPathGuidance(shellPath string) string {
-	binDir := goInstallBinDir()
+func engramPathGuidance(shellPath, binDir string) string {
 	if strings.Contains(shellPath, "fish") {
 		return fmt.Sprintf("set -Ux fish_user_paths %s $fish_user_paths", binDir)
 	}

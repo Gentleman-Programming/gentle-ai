@@ -32,6 +32,7 @@ PLATFORMS=(
     "ubuntu:Dockerfile.ubuntu"
     "arch:Dockerfile.arch"
     "fedora:Dockerfile.fedora"
+    "opensuse:Dockerfile.opensuse"
 )
 
 # Environment variables to forward into containers
