@@ -7,7 +7,12 @@ license: MIT
 metadata:
   author: gentleman-programming
   version: "1.0"
+  delegate_only: false
 ---
+
+> **ORCHESTRATOR NOTE**: This skill is designed to be executed INLINE by the
+> orchestrator. It is an interactive walkthrough — no sub-agent delegation
+> needed.
 
 ## Purpose
 
