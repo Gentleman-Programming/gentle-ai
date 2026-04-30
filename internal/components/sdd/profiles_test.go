@@ -8,8 +8,52 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
+
+func TestResolveProfileStrategy_ExplicitWins(t *testing.T) {
+	home := t.TempDir()
+
+	profilesDir := filepath.Join(home, ".config", "opencode", "profiles")
+	if err := os.MkdirAll(profilesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(profiles): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profilesDir, "active.json"), []byte(`{"name":"external"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(active.json): %v", err)
+	}
+
+	got := ResolveProfileStrategy(home, model.SDDProfileStrategyGeneratedMulti)
+	if got != model.SDDProfileStrategyGeneratedMulti {
+		t.Fatalf("ResolveProfileStrategy(explicit) = %q, want %q", got, model.SDDProfileStrategyGeneratedMulti)
+	}
+}
+
+func TestResolveProfileStrategy_AutoDetectsExternalProfiles(t *testing.T) {
+	home := t.TempDir()
+
+	profilesDir := filepath.Join(home, ".config", "opencode", "profiles")
+	if err := os.MkdirAll(profilesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(profiles): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profilesDir, "cheap.json"), []byte(`{"name":"cheap"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(cheap.json): %v", err)
+	}
+
+	got := ResolveProfileStrategy(home, "")
+	if got != model.SDDProfileStrategyExternalSingleActive {
+		t.Fatalf("ResolveProfileStrategy(auto) = %q, want %q", got, model.SDDProfileStrategyExternalSingleActive)
+	}
+}
+
+func TestResolveProfileStrategy_DefaultsGeneratedMultiWithoutExternalProfiles(t *testing.T) {
+	home := t.TempDir()
+
+	got := ResolveProfileStrategy(home, "")
+	if got != model.SDDProfileStrategyGeneratedMulti {
+		t.Fatalf("ResolveProfileStrategy(no external profiles) = %q, want %q", got, model.SDDProfileStrategyGeneratedMulti)
+	}
+}
 
 // ─── ValidateProfileName ───────────────────────────────────────────────────
 
@@ -410,22 +454,85 @@ func TestGenerateProfileOverlay_PermissionScoped(t *testing.T) {
 	if !ok {
 		t.Fatal("permission missing 'task'")
 	}
-	taskMap, ok := taskRaw.(map[string]any)
+	taskWrapper, ok := taskRaw.(map[string]any)
 	if !ok {
 		t.Fatal("permission.task is not an object")
 	}
+	taskMap, hasSentinel := taskWrapper["__replace__"].(map[string]any)
+	if !hasSentinel {
+		t.Fatal("task block must use __replace__ sentinel to discard stale wildcards on sync")
+	}
 
-	// Must allow sdd-*-cheap scoped agents
-	found := false
-	for k, v := range taskMap {
-		if strings.Contains(k, "cheap") || strings.Contains(k, "sdd-*") {
-			if v == "allow" {
-				found = true
+	expected := expectedTaskPermissions("-cheap")
+	assertExactTaskPermissions(t, taskMap, expected)
+}
+
+func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
+	tests := []struct {
+		name      string
+		assetPath string
+	}{
+		{name: "single", assetPath: "opencode/sdd-overlay-single.json"},
+		{name: "multi", assetPath: "opencode/sdd-overlay-multi.json"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var root map[string]any
+			if err := json.Unmarshal([]byte(assets.MustRead(tt.assetPath)), &root); err != nil {
+				t.Fatalf("unmarshal %s: %v", tt.assetPath, err)
 			}
+
+			agentMap := root["agent"].(map[string]any)
+			orch := agentMap["sdd-orchestrator"].(map[string]any)
+			permission := orch["permission"].(map[string]any)
+			taskWrapper := permission["task"].(map[string]any)
+
+			taskMap, hasSentinel := taskWrapper["__replace__"].(map[string]any)
+			if !hasSentinel {
+				t.Fatal("task block must use __replace__ sentinel to discard stale wildcards on sync")
+			}
+
+			assertExactTaskPermissions(t, taskMap, expectedTaskPermissions(""))
+		})
+	}
+}
+
+func TestGenerateProfileOverlay_TaskPermissionsBlockCrossProfileDelegation(t *testing.T) {
+	home := t.TempDir()
+
+	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home)
+	if err != nil {
+		t.Fatalf("GenerateProfileOverlay() error = %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(overlay, &root); err != nil {
+		t.Fatalf("overlay is not valid JSON: %v", err)
+	}
+
+	agentMap := root["agent"].(map[string]any)
+	orch := agentMap["sdd-orchestrator-cheap"].(map[string]any)
+	permission := orch["permission"].(map[string]any)
+	taskWrapper := permission["task"].(map[string]any)
+
+	// The overlay wraps the task block in __replace__ so that deep merge
+	// discards old wildcard permissions from existing installations.
+	taskMap, hasSentinel := taskWrapper["__replace__"].(map[string]any)
+	if !hasSentinel {
+		t.Fatal("task block must use __replace__ sentinel to discard stale wildcards on sync")
+	}
+
+	for _, phase := range profilePhaseOrder {
+		if got := taskMap[phase+"-premium"]; got != nil {
+			t.Errorf("unexpected cross-profile permission for %q: %v", phase+"-premium", got)
 		}
 	}
-	if !found {
-		t.Errorf("permission.task does not allow cheap profile agents; got: %v", taskMap)
+	if got := taskMap["sdd-*"]; got != nil {
+		t.Errorf("unexpected wildcard permission sdd-*: %v", got)
+	}
+	if got := taskMap["sdd-*-cheap"]; got != nil {
+		t.Errorf("unexpected wildcard permission sdd-*-cheap: %v", got)
 	}
 }
 
@@ -475,6 +582,26 @@ func TestGenerateProfileOverlay_OrchestratorPromptSuffixed(t *testing.T) {
 	// The orchestrator prompt should reference suffixed sub-agents
 	if !strings.Contains(prompt, "sdd-init-cheap") && !strings.Contains(prompt, "-cheap") {
 		t.Errorf("orchestrator prompt doesn't contain suffixed sub-agent references; snippet: %q", prompt[:min(200, len(prompt))])
+	}
+
+	for _, unwanted := range []string{
+		"Agent Teams Lite",
+		"| orchestrator | opus |",
+		"| sdd-explore | sonnet |",
+		"| sdd-archive | haiku |",
+	} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("profile orchestrator prompt contains legacy content %q", unwanted)
+		}
+	}
+
+	for _, wanted := range []string{
+		"Gentle AI",
+		"| orchestrator | anthropic/claude-haiku-3-5 |",
+	} {
+		if !strings.Contains(prompt, wanted) {
+			t.Fatalf("profile orchestrator prompt missing %q", wanted)
+		}
 	}
 }
 
@@ -605,4 +732,36 @@ func keysOf(m map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func expectedTaskPermissions(suffix string) map[string]any {
+	permissions := map[string]any{
+		"*": "deny",
+	}
+	for _, phase := range profilePhaseOrder {
+		permissions[phase+suffix] = "allow"
+	}
+	return permissions
+}
+
+func assertExactTaskPermissions(t *testing.T, got, want map[string]any) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("permission.task length = %d, want %d; got keys: %v", len(got), len(want), keysOf(got))
+	}
+
+	for key, wantValue := range want {
+		if gotValue, ok := got[key]; !ok {
+			t.Errorf("permission.task missing key %q", key)
+		} else if gotValue != wantValue {
+			t.Errorf("permission.task[%q] = %v, want %v", key, gotValue, wantValue)
+		}
+	}
+
+	for key := range got {
+		if _, ok := want[key]; !ok {
+			t.Errorf("permission.task has unexpected key %q", key)
+		}
+	}
 }

@@ -1,0 +1,7 @@
+version: "1"
+agent:
+  name: sdd-onboard
+  extend: default
+  system_prompt_path: ./sdd-onboard.md
+  exclude_tools:
+    - "kimi_cli.tools.multiagent:Task"

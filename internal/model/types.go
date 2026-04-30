@@ -5,12 +5,16 @@ type AgentID string
 const (
 	AgentClaudeCode    AgentID = "claude-code"
 	AgentOpenCode      AgentID = "opencode"
+	AgentKilocode      AgentID = "kilocode"
 	AgentGeminiCLI     AgentID = "gemini-cli"
 	AgentCursor        AgentID = "cursor"
 	AgentVSCodeCopilot AgentID = "vscode-copilot"
 	AgentCodex         AgentID = "codex"
 	AgentAntigravity   AgentID = "antigravity"
 	AgentWindsurf      AgentID = "windsurf"
+	AgentKimi          AgentID = "kimi"
+	AgentQwenCode      AgentID = "qwen-code"
+	AgentKiroIDE       AgentID = "kiro-ide"
 )
 
 // SupportTier indicates how fully an agent supports the Gentleman AI ecosystem.
@@ -35,6 +39,22 @@ const (
 	ComponentPermission ComponentID = "permissions"
 	ComponentGGA        ComponentID = "gga"
 	ComponentTheme      ComponentID = "theme"
+)
+
+type UninstallMode string
+
+const (
+	UninstallModePartial      UninstallMode = "partial"
+	UninstallModeFull         UninstallMode = "full"
+	UninstallModeFullRemove   UninstallMode = "full-remove"
+	UninstallModeCleanInstall UninstallMode = "clean-install"
+)
+
+type EngramUninstallScope string
+
+const (
+	EngramUninstallScopeGlobal  EngramUninstallScope = "global"
+	EngramUninstallScopeProject EngramUninstallScope = "project"
 )
 
 type SkillID string
@@ -77,6 +97,13 @@ const (
 	StrategyFileReplace
 	// StrategyAppendToFile appends content to an existing system prompt file.
 	StrategyAppendToFile
+	// StrategyInstructionsFile writes a dedicated instructions file (e.g. .instructions.md).
+	StrategyInstructionsFile
+	// StrategyJinjaModules writes separate module files that are included into a
+	// thin Jinja2 template (e.g. Kimi's KIMI.md).
+	StrategyJinjaModules
+	// StrategySteeringFile writes a Kiro steering file with inclusion: always frontmatter.
+	StrategySteeringFile
 )
 
 // MCPStrategy defines how MCP server configs are written for an agent.
@@ -109,6 +136,27 @@ type SDDModeID string
 const (
 	SDDModeSingle SDDModeID = "single"
 	SDDModeMulti  SDDModeID = "multi"
+)
+
+// SDDProfileStrategyID defines how sync handles OpenCode SDD profiles.
+type SDDProfileStrategyID string
+
+const (
+	// SDDProfileStrategyGeneratedMulti is the default/backward-compatible mode:
+	// named profiles coexist in opencode.json as suffixed agents and are detected
+	// from sdd-orchestrator-{name} keys during regular sync.
+	SDDProfileStrategyGeneratedMulti SDDProfileStrategyID = "generated-multi"
+	// SDDProfileStrategyExternalSingleActive supports external profile managers
+	// that keep profile state outside opencode.json and activate one runtime
+	// profile without requiring a restart.
+	SDDProfileStrategyExternalSingleActive SDDProfileStrategyID = "external-single-active"
+)
+
+type OpenCodeCommunityPluginID string
+
+const (
+	OpenCodePluginSubAgentStatusline OpenCodeCommunityPluginID = "sub-agent-statusline"
+	OpenCodePluginSDDEngramManage    OpenCodeCommunityPluginID = "sdd-engram-plugin"
 )
 
 // Profile represents a named SDD orchestrator configuration with model assignments.

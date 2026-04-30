@@ -14,6 +14,7 @@ import (
 	codexagent "github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/cursor"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kiro"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/windsurf"
@@ -36,6 +37,7 @@ func vscodeAdapter() agents.Adapter      { return vscode.NewAdapter() }
 func codexAdapter() agents.Adapter       { return codexagent.NewAdapter() }
 func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
 func windsurfAdapter() agents.Adapter    { return windsurf.NewAdapter() }
+func kiroAdapter() agents.Adapter        { return kiro.NewAdapter() }
 
 // ---------------------------------------------------------------------------
 // Existing golden tests (context7, presets, SDD command)
@@ -89,7 +91,9 @@ func TestGoldenConfigs(t *testing.T) {
 func TestGoldenSDD_Claude(t *testing.T) {
 	home := t.TempDir()
 
-	result, err := sdd.Inject(home, claudeAdapter(), "")
+	adapter := claudeAdapter()
+
+	result, err := sdd.Inject(home, adapter, "")
 	if err != nil {
 		t.Fatalf("sdd.Inject(claude) error = %v", err)
 	}
@@ -99,6 +103,23 @@ func TestGoldenSDD_Claude(t *testing.T) {
 
 	claudeMD := readTestFile(t, filepath.Join(home, ".claude", "CLAUDE.md"))
 	assertGolden(t, "sdd-claude-claudemd.golden", claudeMD)
+
+	for _, name := range []string{
+		"sdd-apply", "sdd-archive", "sdd-continue", "sdd-explore",
+		"sdd-ff", "sdd-init", "sdd-new", "sdd-onboard", "sdd-verify",
+	} {
+		content := readTestFile(t, filepath.Join(home, ".claude", "commands", name+".md"))
+		assertGolden(t, "sdd-claude-cmd-"+name+".golden", content)
+	}
+
+	agentsDir := adapter.SubAgentsDir(home)
+	for _, name := range []string{
+		"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design",
+		"sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
+	} {
+		agentContent := readTestFile(t, filepath.Join(agentsDir, name+".md"))
+		assertGolden(t, "sdd-claude-agent-"+name+".golden", agentContent)
+	}
 }
 
 func TestGoldenSDD_OpenCode(t *testing.T) {
@@ -123,7 +144,7 @@ func TestGoldenSDD_OpenCode(t *testing.T) {
 	// Verify ALL expected command files exist.
 	expectedCommands := []string{
 		"sdd-init.md", "sdd-apply.md", "sdd-archive.md", "sdd-continue.md",
-		"sdd-explore.md", "sdd-ff.md", "sdd-new.md", "sdd-verify.md",
+		"sdd-explore.md", "sdd-ff.md", "sdd-new.md", "sdd-onboard.md", "sdd-verify.md",
 	}
 	commandsDir := filepath.Join(home, ".config", "opencode", "commands")
 	for _, name := range expectedCommands {
@@ -340,6 +361,69 @@ func TestGoldenSDD_Windsurf(t *testing.T) {
 	assertGolden(t, "sdd-windsurf-workflow-sdd-new.golden", workflowContent)
 }
 
+func TestGoldenSDD_Kiro(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+
+	adapter := kiroAdapter()
+
+	result, err := sdd.Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("sdd.Inject(kiro) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("sdd.Inject(kiro) changed = false")
+	}
+
+	// Kiro writes SDD orchestrator to ~/.kiro/steering/gentle-ai.md
+	// (StrategySteeringFile). Use the adapter to resolve the platform-specific path.
+	promptPath := adapter.SystemPromptFile(home)
+	instructionsFile := readTestFile(t, promptPath)
+	assertGolden(t, "sdd-kiro-instructions.golden", instructionsFile)
+
+	// Golden-check a representative SDD skill file.
+	skillsDir := adapter.SkillsDir(home)
+	skillInit := readTestFile(t, filepath.Join(skillsDir, "sdd-init", "SKILL.md"))
+	assertGolden(t, "sdd-kiro-skill-sdd-init.golden", skillInit)
+
+	// Verify all SDD skill files written by the SDD injector exist.
+	expectedSkills := []string{
+		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
+		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-onboard", "judgment-day",
+	}
+	for _, name := range expectedSkills {
+		path := filepath.Join(skillsDir, name, "SKILL.md")
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("expected SDD skill file %q not found: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(skillsDir, "_shared", "SKILL.md")); err != nil {
+		t.Errorf("expected SDD shared marker %q not found: %v", filepath.Join("_shared", "SKILL.md"), err)
+	}
+
+	// Verify all 10 Kiro native SDD phase agent files with golden snapshots.
+	// Type-assert to the concrete Kiro adapter so SubAgentsDir(home) drives
+	// the path — the test stays correct if the adapter path ever changes.
+	type subAgentDirProvider interface {
+		SubAgentsDir(homeDir string) string
+	}
+	kiro, ok := adapter.(subAgentDirProvider)
+	if !ok {
+		t.Fatal("adapter does not implement SubAgentsDir — Kiro subagent test cannot run")
+	}
+	agentsDir := kiro.SubAgentsDir(home)
+	for _, name := range []string{
+		"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
+		"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify",
+		"sdd-archive", "sdd-onboard",
+	} {
+		agentContent := readTestFile(t, filepath.Join(agentsDir, name+".md"))
+		assertGolden(t, "sdd-kiro-agent-"+name+".golden", agentContent)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Persona Injector golden tests
 // ---------------------------------------------------------------------------
@@ -457,6 +541,25 @@ func TestGoldenPersona_Windsurf_Gentleman(t *testing.T) {
 	assertGolden(t, "persona-windsurf-gentleman.golden", globalRules)
 }
 
+func TestGoldenPersona_Kiro_Gentleman(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+
+	adapter := kiroAdapter()
+	result, err := persona.Inject(home, adapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("persona.Inject(kiro, gentleman) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("persona.Inject(kiro, gentleman) changed = false")
+	}
+
+	promptPath := adapter.SystemPromptFile(home)
+	instructionsFile := readTestFile(t, promptPath)
+	assertGolden(t, "persona-kiro-gentleman.golden", instructionsFile)
+}
+
 // ---------------------------------------------------------------------------
 // Engram Injector golden tests
 // ---------------------------------------------------------------------------
@@ -519,6 +622,26 @@ func TestGoldenEngram_Windsurf(t *testing.T) {
 	assertGolden(t, "engram-windsurf-mcp.golden", mcpJSON)
 }
 
+func TestGoldenEngram_Kiro(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+
+	engram.SetLookPathForTest(t, "/opt/homebrew/bin/engram", "")
+
+	result, err := engram.Inject(home, kiroAdapter())
+	if err != nil {
+		t.Fatalf("engram.Inject(kiro) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("engram.Inject(kiro) changed = false")
+	}
+
+	// Kiro reads MCP from ~/.kiro/settings/mcp.json (not from the app config dir)
+	mcpJSON := readTestFile(t, filepath.Join(home, ".kiro", "settings", "mcp.json"))
+	assertGolden(t, "engram-kiro-mcp.golden", mcpJSON)
+}
+
 // ---------------------------------------------------------------------------
 // Skills Injector golden tests
 // ---------------------------------------------------------------------------
@@ -579,6 +702,29 @@ func TestGoldenSkills_Windsurf(t *testing.T) {
 
 	skillCreator := readTestFile(t, filepath.Join(skillsDir, "skill-creator", "SKILL.md"))
 	assertGolden(t, "skills-windsurf-skill-creator.golden", skillCreator)
+}
+
+func TestGoldenSkills_Kiro(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+
+	adapter := kiroAdapter()
+	skillIDs := []model.SkillID{model.SkillGoTesting, model.SkillCreator}
+	result, err := skills.Inject(home, adapter, skillIDs)
+	if err != nil {
+		t.Fatalf("skills.Inject(kiro) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("skills.Inject(kiro) changed = false")
+	}
+
+	skillsDir := adapter.SkillsDir(home)
+	goTestingSkill := readTestFile(t, filepath.Join(skillsDir, "go-testing", "SKILL.md"))
+	assertGolden(t, "skills-kiro-go-testing.golden", goTestingSkill)
+
+	skillCreatorFile := readTestFile(t, filepath.Join(skillsDir, "skill-creator", "SKILL.md"))
+	assertGolden(t, "skills-kiro-skill-creator.golden", skillCreatorFile)
 }
 
 // ---------------------------------------------------------------------------

@@ -89,6 +89,24 @@ func TestDetect(t *testing.T) {
 	}
 }
 
+func TestAdapter_SubAgentCapability(t *testing.T) {
+	a := NewAdapter()
+
+	if got := a.SupportsSubAgents(); got != true {
+		t.Errorf("SupportsSubAgents() = %v, want true", got)
+	}
+
+	homeDir := "/home/test"
+	wantDir := filepath.Join(homeDir, ".claude", "agents")
+	if got := a.SubAgentsDir(homeDir); got != wantDir {
+		t.Errorf("SubAgentsDir(%q) = %q, want %q", homeDir, got, wantDir)
+	}
+
+	if got := a.EmbeddedSubAgentsDir(); got != "claude/agents" {
+		t.Errorf("EmbeddedSubAgentsDir() = %q, want %q", got, "claude/agents")
+	}
+}
+
 func TestInstallCommand(t *testing.T) {
 	a := NewAdapter()
 
@@ -125,5 +143,19 @@ func TestInstallCommand(t *testing.T) {
 				t.Fatalf("InstallCommand() = %v, want %v", command, tt.want)
 			}
 		})
+	}
+}
+
+func TestSlashCommands(t *testing.T) {
+	a := NewAdapter()
+
+	if !a.SupportsSlashCommands() {
+		t.Fatal("SupportsSlashCommands() = false, want true")
+	}
+
+	got := a.CommandsDir("/home/u")
+	want := filepath.Join("/home/u", ".claude", "commands")
+	if got != want {
+		t.Fatalf("CommandsDir() = %q, want %q", got, want)
 	}
 }

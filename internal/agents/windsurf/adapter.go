@@ -141,6 +141,9 @@ func (a *Adapter) SupportsOutputStyles() bool     { return false }
 func (a *Adapter) OutputStyleDir(_ string) string { return "" }
 func (a *Adapter) SupportsSlashCommands() bool    { return false }
 func (a *Adapter) CommandsDir(_ string) string    { return "" }
+func (a *Adapter) SupportsSubAgents() bool        { return false }
+func (a *Adapter) SubAgentsDir(_ string) string   { return "" }
+func (a *Adapter) EmbeddedSubAgentsDir() string   { return "" }
 func (a *Adapter) SupportsSkills() bool           { return true }
 func (a *Adapter) SupportsSystemPrompt() bool     { return true }
 func (a *Adapter) SupportsMCP() bool              { return true }

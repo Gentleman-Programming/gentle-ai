@@ -9,10 +9,12 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/qwen"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 )
 
@@ -20,6 +22,10 @@ func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func codexAdapter() agents.Adapter    { return codex.NewAdapter() }
 func geminiAdapter() agents.Adapter   { return gemini.NewAdapter() }
+func qwenAdapter() agents.Adapter     { return qwen.NewAdapter() }
+func antigravityAdapter() agents.Adapter {
+	return antigravity.NewAdapter()
+}
 
 // assertArgsHaveToolsAgent is a shared helper that validates a JSON file
 // contains the MCP "engram" entry with --tools=agent in args.
@@ -285,6 +291,52 @@ func TestInjectOpenCodeMigratesFromOldFormat(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeMigratesCellarEngramCommandToStablePath(t *testing.T) {
+	home := t.TempDir()
+
+	mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+
+	adapter := opencodeAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	oldFormat := `{"mcp": {"engram": {"command": ["/opt/homebrew/Cellar/engram/1.14.1/bin/engram", "mcp", "--tools=agent"], "type": "local"}}}`
+	if err := os.WriteFile(configPath, []byte(oldFormat), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	result, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject() changed = false; expected Cellar command migration")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	text := string(content)
+	if strings.Contains(text, "/Cellar/") {
+		t.Fatalf("opencode.json still contains versioned Homebrew Cellar path; got:\n%s", text)
+	}
+	if !strings.Contains(text, "/opt/homebrew/bin/engram") {
+		t.Fatalf("opencode.json did not migrate to stable Homebrew symlink; got:\n%s", text)
+	}
+
+	second, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject() second changed = true; expected idempotent Cellar migration")
+	}
+}
+
 func TestInjectCursorMergesEngramToSettings(t *testing.T) {
 	home := t.TempDir()
 
@@ -410,6 +462,67 @@ func TestInjectGeminiToolsFlagPresent(t *testing.T) {
 	// RED: Gemini overlay must use --tools=agent
 	if !strings.Contains(text, `"--tools=agent"`) {
 		t.Fatal("settings.json missing --tools=agent in args")
+	}
+}
+
+func TestInjectAntigravityCopiesGeminiSettingsAfterEngramSetup(t *testing.T) {
+	home := t.TempDir()
+	sourcePath := filepath.Join(home, ".gemini", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(sourcePath), err)
+	}
+	want := []byte("{\"theme\":\"dark\"}\n")
+	if err := os.WriteFile(sourcePath, want, 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", sourcePath, err)
+	}
+
+	result, err := Inject(home, antigravityAdapter())
+	if err != nil {
+		t.Fatalf("Inject(antigravity) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject(antigravity) changed = false")
+	}
+
+	settingsPath := filepath.Join(home, ".gemini", "antigravity", "settings.json")
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("antigravity settings = %q, want %q", got, want)
+	}
+
+	mcpPath := filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")
+	assertArgsHaveToolsAgent(t, mcpPath)
+}
+
+func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T) {
+	home := t.TempDir()
+
+	first, err := Inject(home, antigravityAdapter())
+	if err != nil {
+		t.Fatalf("Inject(antigravity) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(antigravity) first changed = false")
+	}
+
+	settingsPath := filepath.Join(home, ".gemini", "antigravity", "settings.json")
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+	}
+	if strings.TrimSpace(string(got)) != "{}" {
+		t.Fatalf("antigravity settings = %q, want empty JSON object", got)
+	}
+
+	second, err := Inject(home, antigravityAdapter())
+	if err != nil {
+		t.Fatalf("Inject(antigravity) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(antigravity) second changed = true; want false")
 	}
 }
 
@@ -649,6 +762,46 @@ func TestInjectClaudeAddsToolsAgentWhenSetupWritesBareArgs(t *testing.T) {
 	assertArgsHaveToolsAgent(t, mcpPath)
 }
 
+func TestInjectClaudeMigratesCellarCommandToStablePath(t *testing.T) {
+	home := t.TempDir()
+
+	mockEngramLookPath(t, "/usr/local/bin/engram", "")
+
+	mcpPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	setupContent := []byte(`{
+  "command": "/usr/local/Cellar/engram/1.14.1/bin/engram",
+  "args": ["mcp", "--tools=agent"]
+}
+`)
+	if err := os.WriteFile(mcpPath, setupContent, 0o644); err != nil {
+		t.Fatalf("WriteFile(engram.json) error = %v", err)
+	}
+
+	result, err := Inject(home, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject() changed = false; expected Cellar command migration")
+	}
+
+	content, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(engram.json) error = %v", err)
+	}
+	text := string(content)
+	if strings.Contains(text, "/Cellar/") {
+		t.Fatalf("engram.json still contains versioned Homebrew Cellar path; got:\n%s", text)
+	}
+	if !strings.Contains(text, "/usr/local/bin/engram") {
+		t.Fatalf("engram.json did not migrate to stable Homebrew symlink; got:\n%s", text)
+	}
+	assertArgsHaveToolsAgent(t, mcpPath)
+}
+
 func TestInjectCodexIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 
@@ -810,15 +963,17 @@ func TestEngramInjectAbsolutePathForOpenCodeMergeStrategy(t *testing.T) {
 	}
 
 	text := string(content)
-	if !strings.Contains(text, absPath) {
-		t.Fatalf("OpenCode settings missing absolute engram path, got: %s", text)
+	// For standard agents (OpenCode), prefer the stable Homebrew symlink when
+	// available instead of a versioned Cellar path.
+	if !strings.Contains(text, `"engram"`) {
+		t.Fatalf("OpenCode settings missing stable engram command, got: %s", text)
 	}
 	// OpenCode 1.3.3+: command must be an array, no separate "args" field.
 	if strings.Contains(text, `"args"`) {
 		t.Fatalf("OpenCode settings must NOT have a separate args field; got: %s", text)
 	}
 
-	// Structurally verify command is a []any containing the absolute path.
+	// Structurally verify command is a []any containing the stable path "engram".
 	var parsed map[string]any
 	if err := json.Unmarshal(content, &parsed); err != nil {
 		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
@@ -852,7 +1007,7 @@ func TestEngramInjectAbsolutePathForOpenCodeMergeStrategy(t *testing.T) {
 	}
 	firstElem, ok := cmdArr[0].(string)
 	if !ok || firstElem != absPath {
-		t.Fatalf("mcp.engram.command[0] = %v, want %q; got:\n%s", cmdArr[0], absPath, text)
+		t.Fatalf("mcp.engram.command[0] = %v, want stable Homebrew symlink %q; got:\n%s", cmdArr[0], absPath, text)
 	}
 }
 
@@ -880,7 +1035,56 @@ func TestEngramInjectAbsolutePathForGeminiMergeStrategy(t *testing.T) {
 	}
 
 	text := string(content)
-	if !strings.Contains(text, absPath) {
-		t.Fatalf("settings.json missing absolute path %q; got:\n%s", absPath, text)
+	// For standard agents (Gemini), we now prioritize a stable relative path
+	// "engram" instead of a dynamic absolute path to ensure idempotency.
+	if !strings.Contains(text, `"engram"`) {
+		t.Fatalf("settings.json missing stable relative path 'engram'; got:\n%s", text)
+	}
+}
+
+func TestQwenEngramIdempotency(t *testing.T) {
+	orig := EngramLookPath
+	t.Cleanup(func() { EngramLookPath = orig })
+
+	homeDir := t.TempDir()
+	adapter := qwenAdapter()
+	settingsPath := adapter.SettingsPath(homeDir)
+
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	EngramLookPath = func(string) (string, error) {
+		return "", os.ErrNotExist
+	}
+
+	_, err := Inject(homeDir, adapter)
+	if err != nil {
+		t.Fatalf("First injection failed: %v", err)
+	}
+
+	content1, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate engram being found later (e.g. after go install or manual install)
+	absPath := "/usr/local/bin/engram"
+	EngramLookPath = func(string) (string, error) {
+		return absPath, nil
+	}
+
+	_, err = Inject(homeDir, adapter)
+	if err != nil {
+		t.Fatalf("Second injection failed: %v", err)
+	}
+
+	content2, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(content1) != string(content2) {
+		t.Errorf("Idempotency failure! Settings changed between runs despite engram command being stable-relative.\nRun 1:\n%s\nRun 2:\n%s", string(content1), string(content2))
 	}
 }

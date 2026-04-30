@@ -2,12 +2,23 @@
   "agent": {
     "sdd-orchestrator": {
       "mode": "primary",
-      "description": "Agent Teams Orchestrator - coordinates sub-agents, never does work inline",
+      "description": "SDD Orchestrator - coordinates sub-agents, never does work inline",
       "prompt": "{file:./AGENTS.md}",
       "permission": {
         "task": {
-          "*": "deny",
-          "sdd-*": "allow"
+          "__replace__": {
+            "*": "deny",
+            "sdd-init": "allow",
+            "sdd-explore": "allow",
+            "sdd-propose": "allow",
+            "sdd-spec": "allow",
+            "sdd-design": "allow",
+            "sdd-tasks": "allow",
+            "sdd-apply": "allow",
+            "sdd-verify": "allow",
+            "sdd-archive": "allow",
+            "sdd-onboard": "allow"
+          }
         }
       },
       "tools": {

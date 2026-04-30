@@ -12,7 +12,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +43,15 @@ var snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest,
 // Default "dev" matches the ldflags default in app.Version.
 var AppVersion = "dev"
 
+// ExecuteOptions controls optional upgrade executor output streams.
+// Progress is for user-visible spinner/status output. BackupDiagnostics is for
+// verbose backup walk diagnostics; nil keeps backup enumeration silent, which
+// prevents background TUI jobs from writing over the Bubble Tea screen.
+type ExecuteOptions struct {
+	Progress          io.Writer
+	BackupDiagnostics io.Writer
+}
+
 // backupExcludeSubdirs lists subdirectory base names that should be skipped
 // when walking agent config root directories for backup. These directories
 // contain runtime state, caches, or session data that is not configuration
@@ -56,7 +64,8 @@ var AppVersion = "dev"
 // "plans") and could theoretically match legitimate config subdirectories in
 // future agent versions. This is an accepted tradeoff — the risk of hanging
 // the upgrade on multi-GB runtime dirs outweighs the risk of missing a
-// niche config subdir. Skipped directories are logged at debug level.
+// niche config subdir. Skipped directories can be written to an injected
+// diagnostic writer for auditability.
 //
 // Must not be mutated after init. Tests must not modify this map; use a local
 // copy or pass a separate map to enumerateFilesInDir instead.
@@ -89,6 +98,7 @@ var backupExcludeSubdirs = map[string]bool{
 	"conversations":               true, // Gemini conversation history
 	"context_state":               true, // Gemini context state
 	"html_artifacts":              true, // generated HTML artifacts
+	"tmp":                         true, // Antigravity temporary runtime artifacts
 }
 
 // configPathsForBackup returns the agent config file paths that the backup
@@ -106,7 +116,8 @@ var backupExcludeSubdirs = map[string]bool{
 // Non-existent directories are silently skipped.
 // Runtime/cache subdirectories listed in backupExcludeSubdirs are skipped to
 // prevent the backup from walking gigabytes of non-config data.
-func configPathsForBackup(homeDir string) []string {
+func configPathsForBackup(homeDir string, diagnostics ...io.Writer) []string {
+	dw := firstWriter(diagnostics...)
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
 		// Programming error — registry construction failed. Fall back gracefully.
@@ -128,7 +139,7 @@ func configPathsForBackup(homeDir string) []string {
 	// Enumerate all regular files under each root dir, skipping non-config subdirs.
 	paths := make([]string, 0)
 	for _, dir := range configDirs {
-		files, err := enumerateFilesInDir(dir, backupExcludeSubdirs)
+		files, err := enumerateFilesInDir(dir, backupExcludeSubdirs, dw)
 		if err != nil {
 			// Directory doesn't exist or can't be read — silently skip.
 			continue
@@ -147,7 +158,8 @@ func configPathsForBackup(homeDir string) []string {
 // filepath.SkipDir. The names in this set are chosen to be unambiguously
 // runtime/cache directories (e.g. "projects", "browser_recordings", "node_modules")
 // that would never be confused with legitimate config directories.
-// Skipped directories are logged at debug level for auditability.
+// Skipped directories can be written to an injected diagnostic writer for
+// auditability. By default, enumeration is silent so TUI callers are safe.
 //
 // Symlink handling:
 //   - Symlinks to directories (including Windows junctions/reparse points) are
@@ -157,15 +169,16 @@ func configPathsForBackup(homeDir string) []string {
 //   - Symlinks to regular files ARE included — this supports dotfile managers
 //     (stow, chezmoi, bare git) where config files like CLAUDE.md may be symlinks
 //     to files in a dotfiles repository.
-func enumerateFilesInDir(dir string, excludeDirNames map[string]bool) ([]string, error) {
+func enumerateFilesInDir(dir string, excludeDirNames map[string]bool, diagnostics ...io.Writer) ([]string, error) {
 	var files []string
 	cleanDir := filepath.Clean(dir)
+	dw := firstWriter(diagnostics...)
 
 	err := filepath.WalkDir(cleanDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			// Log unreadable entries but don't abort the walk — partial backup
 			// is better than no backup.
-			log.Printf("backup: skipping unreadable path %s: %v", path, err)
+			writeBackupDiagnostic(dw, "backup: skipping unreadable path %s: %v", path, err)
 			return nil
 		}
 		// Symlink handling: skip directory symlinks, include file symlinks.
@@ -187,7 +200,7 @@ func enumerateFilesInDir(dir string, excludeDirNames map[string]bool) ([]string,
 		// Skip excluded directories at any depth. The root dir itself is never
 		// excluded (path == cleanDir on the first callback invocation).
 		if d.IsDir() && path != cleanDir && excludeDirNames[strings.ToLower(d.Name())] {
-			log.Printf("backup: excluding directory %s (matched exclude list)", path)
+			writeBackupDiagnostic(dw, "backup: excluding directory %s (matched exclude list)", path)
 			return filepath.SkipDir
 		}
 		if !d.IsDir() {
@@ -199,39 +212,68 @@ func enumerateFilesInDir(dir string, excludeDirNames map[string]bool) ([]string,
 	return files, err
 }
 
+func firstWriter(writers ...io.Writer) io.Writer {
+	for _, w := range writers {
+		if w != nil {
+			return w
+		}
+	}
+	return io.Discard
+}
+
+func writeBackupDiagnostic(w io.Writer, format string, args ...any) {
+	if w == nil || w == io.Discard {
+		return
+	}
+	_, _ = fmt.Fprintf(w, format+"\n", args...)
+}
+
 // Execute evaluates UpdateResults, snapshots config before execution, then runs
 // the appropriate upgrade strategy for each eligible tool.
 //
 // Reporting rules:
 //   - Status UpdateAvailable → attempt upgrade; report Succeeded/Failed/Skipped(manual)
 //   - Status DevBuild → report as UpgradeSkipped with ManualHint (dev/source build)
-//   - Status UpToDate, NotInstalled, CheckFailed, VersionUnknown → omitted from report
+//   - Status VersionUnknown → report as UpgradeSkipped with ManualHint (manual attention required)
+//   - Status RegisteredNotMaterialized → attempt OpenCode npm dependency installation/update
+//   - Status UpToDate, NotInstalled, CheckFailed → omitted from report
 //   - dryRun=true → no exec; eligible tools reported as UpgradeSkipped
 //
 // The backup snapshot is created before any exec call — this is the architectural
 // guarantee that config is safe even if an upgrade fails mid-way.
 func Execute(ctx context.Context, results []update.UpdateResult, profile system.PlatformProfile, homeDir string, dryRun bool, progress ...io.Writer) UpgradeReport {
-	// progress writer for real-time status output (optional, defaults to no-op).
-	var pw io.Writer = io.Discard
+	options := ExecuteOptions{}
 	if len(progress) > 0 && progress[0] != nil {
-		pw = progress[0]
+		options.Progress = progress[0]
+		options.BackupDiagnostics = progress[0]
 	}
-	// Separate tools into executable (UpdateAvailable) and dev-build (DevBuild).
-	// DevBuild tools are included in the report as UpgradeSkipped with a clear hint.
+	return ExecuteWithOptions(ctx, results, profile, homeDir, dryRun, options)
+}
+
+func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, profile system.PlatformProfile, homeDir string, dryRun bool, options ExecuteOptions) UpgradeReport {
+	// progress writer for real-time status output (optional, defaults to no-op).
+	pw := firstWriter(options.Progress)
+	// Separate tools into executable (UpdateAvailable and OpenCode registered-pending),
+	// dev-build (DevBuild), and version-unknown tools. Non-actionable but user-visible
+	// states are included in the report as UpgradeSkipped so the upgrade flow never
+	// fails silently.
 	var executable []update.UpdateResult
 	var devBuilds []update.UpdateResult
+	var versionUnknowns []update.UpdateResult
 	for _, r := range results {
 		switch r.Status {
-		case update.UpdateAvailable:
+		case update.UpdateAvailable, update.RegisteredNotMaterialized:
 			executable = append(executable, r)
 		case update.DevBuild:
 			devBuilds = append(devBuilds, r)
-			// UpToDate, NotInstalled, CheckFailed, VersionUnknown → omit from report
+		case update.VersionUnknown:
+			versionUnknowns = append(versionUnknowns, r)
+			// UpToDate, NotInstalled, CheckFailed → omit from report
 		}
 	}
 
-	// If nothing is executable or dev-built, return empty report.
-	if len(executable) == 0 && len(devBuilds) == 0 {
+	// If nothing is executable, dev-built, or version-unknown, return empty report.
+	if len(executable) == 0 && len(devBuilds) == 0 && len(versionUnknowns) == 0 {
 		return UpgradeReport{DryRun: dryRun}
 	}
 
@@ -242,7 +284,7 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 		sp := NewSpinner(pw, "Creating pre-upgrade backup")
 		snapshotDir := filepath.Join(homeDir, ".gentle-ai", "backups",
 			fmt.Sprintf("upgrade-%s", time.Now().UTC().Format("20060102T150405Z")))
-		manifest, err := snapshotCreator(snapshotDir, configPathsForBackup(homeDir))
+		manifest, err := snapshotCreator(snapshotDir, configPathsForBackup(homeDir, options.BackupDiagnostics))
 		if err != nil {
 			sp.Finish(false)
 			backupWarning = fmt.Sprintf("pre-upgrade backup failed — upgrade will run without a backup: %s", err)
@@ -252,7 +294,7 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 			manifest.CreatedByVersion = AppVersion
 			manifestPath := filepath.Join(snapshotDir, backup.ManifestFilename)
 			if wErr := backup.WriteManifest(manifestPath, manifest); wErr != nil {
-				log.Printf("backup: failed to write upgrade metadata to manifest: %v", wErr)
+				writeBackupDiagnostic(options.BackupDiagnostics, "backup: failed to write upgrade metadata to manifest: %v", wErr)
 				backupWarning = fmt.Sprintf("backup created but metadata update failed: %s", wErr)
 				sp.FinishSkipped()
 			} else {
@@ -263,7 +305,7 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 	}
 
 	// Build results slice: dev-build skips first (no exec), then executable tools.
-	toolResults := make([]ToolUpgradeResult, 0, len(executable)+len(devBuilds))
+	toolResults := make([]ToolUpgradeResult, 0, len(executable)+len(devBuilds)+len(versionUnknowns))
 
 	// Dev-build tools: always UpgradeSkipped with a source-build hint.
 	for _, r := range devBuilds {
@@ -274,6 +316,19 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 			Method:     effectiveMethod(r.Tool, profile),
 			Status:     UpgradeSkipped,
 			ManualHint: fmt.Sprintf("source build — upgrade manually or install a release binary from https://github.com/Gentleman-Programming/%s/releases", r.Tool.Repo),
+		})
+	}
+
+	// VersionUnknown tools: surface them as skipped so the user gets a clear hint
+	// instead of a silent omission from the upgrade report.
+	for _, r := range versionUnknowns {
+		toolResults = append(toolResults, ToolUpgradeResult{
+			ToolName:   r.Tool.Name,
+			OldVersion: r.InstalledVersion,
+			NewVersion: r.LatestVersion,
+			Method:     effectiveMethod(r.Tool, profile),
+			Status:     UpgradeSkipped,
+			ManualHint: fmt.Sprintf("installed binary was found but its version could not be determined — check `%s` and reinstall if it is a stale source/dev build", detectCommandHint(r.Tool)),
 		})
 	}
 
@@ -302,6 +357,14 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 		Results:       toolResults,
 		DryRun:        dryRun,
 	}
+}
+
+func detectCommandHint(tool update.ToolInfo) string {
+	if len(tool.DetectCmd) == 0 {
+		return tool.Name
+	}
+
+	return strings.Join(tool.DetectCmd, " ")
 }
 
 // executeOne runs the upgrade for a single tool.
@@ -339,6 +402,9 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 // effectiveMethod resolves the actual upgrade strategy for a tool on a given platform.
 // On brew-managed platforms, brew takes precedence over the tool's declared method.
 func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
+	if tool.InstallMethod == update.InstallOpenCodePlugin {
+		return update.InstallOpenCodePlugin
+	}
 	if profile.PackageManager == "brew" {
 		return update.InstallBrew
 	}

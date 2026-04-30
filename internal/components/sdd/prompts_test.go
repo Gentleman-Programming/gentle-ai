@@ -9,11 +9,10 @@ import (
 
 // TestSharedPromptDir verifies the expected directory path is returned.
 func TestSharedPromptDir(t *testing.T) {
-	home := "/home/testuser"
-	want := "/home/testuser/.config/opencode/prompts/sdd"
-	got := SharedPromptDir(home)
+	want := filepath.FromSlash("/home/testuser/.config/opencode/prompts/sdd")
+	got := SharedPromptDir(filepath.FromSlash("/home/testuser"))
 	if got != want {
-		t.Fatalf("SharedPromptDir(%q) = %q, want %q", home, got, want)
+		t.Fatalf("SharedPromptDir(%q) = %q, want %q", "/home/testuser", got, want)
 	}
 }
 
@@ -149,9 +148,10 @@ func TestInjectOpenCodeMultiModeSubagentPromptsUseFilePaths(t *testing.T) {
 
 	promptDir := SharedPromptDir(home)
 
-	text := string(content)
+	text := strings.ReplaceAll(string(content), `\\`, `/`)
 	for _, phase := range []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"} {
 		expectedRef := "{file:" + filepath.Join(promptDir, phase+".md") + "}"
+		expectedRef = strings.ReplaceAll(expectedRef, `\`, `/`)
 		if !strings.Contains(text, expectedRef) {
 			t.Errorf("opencode.json sub-agent %q missing {file:...} reference %q", phase, expectedRef)
 		}

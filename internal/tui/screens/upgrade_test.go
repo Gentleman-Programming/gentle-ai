@@ -86,6 +86,22 @@ func TestRenderUpgrade_ResultState(t *testing.T) {
 	}
 }
 
+// TestRenderUpgrade_ResultStateEmptyReport verifies that an empty upgrade report
+// still renders the completed result path with an "up to date" message.
+func TestRenderUpgrade_ResultStateEmptyReport(t *testing.T) {
+	report := &upgrade.UpgradeReport{}
+
+	out := RenderUpgrade(nil, report, nil, false, true, 0, 0)
+
+	lower := strings.ToLower(out)
+	if !strings.Contains(lower, "up to date") {
+		t.Errorf("RenderUpgrade(empty report) should contain 'up to date'; got:\n%s", out)
+	}
+	if !strings.Contains(lower, "return") {
+		t.Errorf("RenderUpgrade(empty report) should contain return hint; got:\n%s", out)
+	}
+}
+
 // TestRenderUpgrade_RunningState verifies that while an upgrade is running
 // (operationRunning=true, report=nil), the screen shows a spinner/progress indicator.
 func TestRenderUpgrade_RunningState(t *testing.T) {

@@ -118,6 +118,11 @@ func renderUpgradeSyncResult(report *upgrade.UpgradeReport, syncFilesChanged int
 		b.WriteString(styles.ErrorStyle.Render("✗ Upgrade failed: " + upgradeErr.Error()))
 		b.WriteString("\n")
 	} else if report != nil {
+		if len(report.Results) == 0 {
+			b.WriteString("  " + styles.SuccessStyle.Render("✓ All tools are up to date"))
+			b.WriteString("\n")
+		}
+
 		upgradeSucceeded, upgradeFailed, upgradeSkipped := 0, 0, 0
 
 		for _, r := range report.Results {

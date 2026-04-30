@@ -8,8 +8,12 @@ FROM --platform=linux/amd64 archlinux:base
 # System dependencies (includes npm for claude-code tests)
 # ---------------------------------------------------------------------------
 # Disable pacman's seccomp sandbox — it fails under QEMU emulation on ARM hosts.
+# Initialize the pacman keyring explicitly because fresh Arch containers may not
+# have a local secret key yet, which breaks archlinux-keyring post-install hooks.
 # DisableSandbox prevents the ALPM seccomp filter that is incompatible with QEMU user-mode.
 RUN echo 'DisableSandbox' >> /etc/pacman.conf && \
+    pacman-key --init && \
+    pacman-key --populate archlinux && \
     pacman -Syu --noconfirm && \
     pacman -S --noconfirm \
         git \

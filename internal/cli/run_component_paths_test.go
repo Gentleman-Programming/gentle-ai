@@ -94,6 +94,41 @@ func TestComponentPathsSDDIncludesSkillsAndSharedConventions(t *testing.T) {
 	}
 }
 
+func TestComponentPathsSDDKimiIncludesAgentFilesAndGlobalSkills(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentKimi})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
+
+	for _, want := range []string{
+		filepath.Join(home, ".kimi", "KIMI.md"),
+		filepath.Join(home, ".kimi", "agents", "gentleman.yaml"),
+		filepath.Join(home, ".kimi", "agents", "sdd-init.yaml"),
+		filepath.Join(home, ".kimi", "agents", "sdd-propose.md"),
+		filepath.Join(home, ".kimi", "agents", "sdd-apply.yaml"),
+		filepath.Join(home, ".kimi", "agents", "sdd-verify.md"),
+		filepath.Join(home, ".kimi", "agents", "sdd-archive.yaml"),
+		filepath.Join(home, ".config", "agents", "skills", "sdd-init", "SKILL.md"),
+		filepath.Join(home, ".config", "agents", "skills", "_shared", "engram-convention.md"),
+	} {
+		if !containsPath(paths, want) {
+			t.Fatalf("componentPaths(sdd,kimi) missing %q\npaths=%v", want, paths)
+		}
+	}
+}
+
+func TestComponentPathsContext7KimiIncludesMCPConfig(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentKimi})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentContext7)
+
+	want := filepath.Join(home, ".kimi", "mcp.json")
+	if !containsPath(paths, want) {
+		t.Fatalf("componentPaths(context7,kimi) missing %q\npaths=%v", want, paths)
+	}
+}
+
 // TestComponentPathsEngramCodexIncludesConfigTOML verifies that componentPaths
 // for ComponentEngram + Codex reports ~/.codex/config.toml as a backup target.
 func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
@@ -102,7 +137,7 @@ func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
 
 	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentEngram)
 
-	want := home + "/.codex/config.toml"
+	want := filepath.Join(home, ".codex", "config.toml")
 	if !containsPath(paths, want) {
 		t.Fatalf("componentPaths(engram,codex) missing %q\npaths=%v", want, paths)
 	}

@@ -158,6 +158,9 @@ func (a noSkillsAdapter) SupportsOutputStyles() bool              { return false
 func (a noSkillsAdapter) OutputStyleDir(_ string) string          { return "" }
 func (a noSkillsAdapter) SupportsSlashCommands() bool             { return false }
 func (a noSkillsAdapter) CommandsDir(_ string) string             { return "" }
+func (a noSkillsAdapter) SupportsSubAgents() bool                 { return false }
+func (a noSkillsAdapter) SubAgentsDir(_ string) string            { return "" }
+func (a noSkillsAdapter) EmbeddedSubAgentsDir() string            { return "" }
 func (a noSkillsAdapter) SupportsSkills() bool                    { return false }
 func (a noSkillsAdapter) SupportsSystemPrompt() bool              { return false }
 func (a noSkillsAdapter) SupportsMCP() bool                       { return false }

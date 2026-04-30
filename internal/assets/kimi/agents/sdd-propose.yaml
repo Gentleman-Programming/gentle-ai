@@ -1,0 +1,9 @@
+version: "1"
+agent:
+  name: sdd-propose
+  extend: default
+  system_prompt_path: ./sdd-propose.md
+  exclude_tools:
+    - "kimi_cli.tools.multiagent:Task"
+    - "kimi_cli.tools.file:WriteFile"
+    - "kimi_cli.tools.file:StrReplaceFile"

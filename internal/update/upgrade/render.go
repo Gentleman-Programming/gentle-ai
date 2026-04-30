@@ -46,10 +46,10 @@ func RenderUpgradeReport(report UpgradeReport) string {
 			fmt.Fprintf(&b, "  FAILED: %s\n", errMsg)
 			failed++
 		case UpgradeSkipped:
-			if report.DryRun {
-				fmt.Fprintf(&b, "  %s → %s  (dry-run)\n", r.OldVersion, r.NewVersion)
-			} else if r.ManualHint != "" {
+			if r.ManualHint != "" {
 				fmt.Fprintf(&b, "  manual update required: %s\n", r.ManualHint)
+			} else if report.DryRun {
+				fmt.Fprintf(&b, "  %s → %s  (dry-run)\n", r.OldVersion, r.NewVersion)
 			} else {
 				fmt.Fprintf(&b, "  skipped\n")
 			}
@@ -67,7 +67,24 @@ func RenderUpgradeReport(report UpgradeReport) string {
 	}
 
 	if report.DryRun {
-		fmt.Fprintf(&b, "  %d upgrade(s) pending. Run without --dry-run to apply.\n", len(report.Results))
+		// Count only actionable upgrades (no ManualHint) as pending.
+		// Manual-hint items (DevBuild, VersionUnknown) will not run even
+		// without --dry-run, so counting them as "pending" is misleading.
+		actionable := 0
+		for _, r := range report.Results {
+			if r.Status == UpgradeSkipped && r.ManualHint == "" {
+				actionable++
+			}
+		}
+		if actionable > 0 {
+			fmt.Fprintf(&b, "  %d upgrade(s) pending. Run without --dry-run to apply.\n", actionable)
+		}
+		if skipped-actionable > 0 {
+			fmt.Fprintf(&b, "  %d tool(s) require manual attention (see hints above).\n", skipped-actionable)
+		}
+		if actionable == 0 && skipped == 0 {
+			b.WriteString("  No actionable upgrades found.\n")
+		}
 	} else {
 		fmt.Fprintf(&b, "  %d succeeded, %d failed, %d skipped.\n", succeeded, failed, skipped)
 	}

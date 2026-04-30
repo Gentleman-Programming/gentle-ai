@@ -238,3 +238,163 @@ func TestMergeJSONObjectsReplaceSentinelNotInOutput(t *testing.T) {
 	}
 	walk(got)
 }
+
+// ─── Issue #278: deep merge preserves stale wildcard permissions ──────────────
+
+// TestMergeJSONObjects_Issue278_WildcardSurvivesDeepMerge proves that when an
+// existing opencode.json contains the old "sdd-*": "allow" wildcard and the
+// overlay supplies an explicit allowlist, deep merge keeps BOTH — the wildcard
+// is never removed. This is the core of issue #278.
+func TestMergeJSONObjects_Issue278_WildcardSurvivesDeepMerge(t *testing.T) {
+	// Simulates an existing user's opencode.json (installed before the fix).
+	base := []byte(`{
+  "agent": {
+    "sdd-orchestrator": {
+      "permission": {
+        "task": {
+          "*": "deny",
+          "sdd-*": "allow"
+        }
+      }
+    }
+  }
+}`)
+
+	// Simulates the NEW overlay with explicit allowlist (the fix).
+	overlay := []byte(`{
+  "agent": {
+    "sdd-orchestrator": {
+      "permission": {
+        "task": {
+          "*": "deny",
+          "sdd-init": "allow",
+          "sdd-explore": "allow",
+          "sdd-propose": "allow",
+          "sdd-spec": "allow",
+          "sdd-design": "allow",
+          "sdd-tasks": "allow",
+          "sdd-apply": "allow",
+          "sdd-verify": "allow",
+          "sdd-archive": "allow",
+          "sdd-onboard": "allow"
+        }
+      }
+    }
+  }
+}`)
+
+	merged, err := MergeJSONObjects(base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjects() error = %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(merged, &got); err != nil {
+		t.Fatalf("Unmarshal merged error = %v", err)
+	}
+
+	agent := got["agent"].(map[string]any)
+	orch := agent["sdd-orchestrator"].(map[string]any)
+	perm := orch["permission"].(map[string]any)
+	task := perm["task"].(map[string]any)
+
+	// The critical assertion: "sdd-*" SURVIVES the deep merge.
+	// This proves existing users keep the wildcard even after syncing
+	// with the new explicit overlay — the bug persists without __replace__.
+	if _, hasWildcard := task["sdd-*"]; !hasWildcard {
+		t.Fatal("UNEXPECTED: 'sdd-*' was removed by deep merge — this contradicts the merge algorithm")
+	}
+
+	// Verify the new explicit entries are also present (merge adds them).
+	for _, phase := range []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"} {
+		if _, ok := task[phase]; !ok {
+			t.Fatalf("explicit permission %q missing from merged result", phase)
+		}
+	}
+
+	t.Logf("CONFIRMED: deep merge produces %d task keys (wildcard + explicit coexist)", len(task))
+	t.Logf("Merged task block: %v", task)
+}
+
+// TestMergeJSONObjects_Issue278_ReplaceSentinelFixesWildcard proves that
+// wrapping the task block in __replace__ DOES remove the old wildcard,
+// which is the proposed fix for issue #278.
+func TestMergeJSONObjects_Issue278_ReplaceSentinelFixesWildcard(t *testing.T) {
+	// Same base: existing user with old wildcard.
+	base := []byte(`{
+  "agent": {
+    "sdd-orchestrator": {
+      "permission": {
+        "task": {
+          "*": "deny",
+          "sdd-*": "allow"
+        }
+      }
+    }
+  }
+}`)
+
+	// Overlay using __replace__ sentinel on the task block.
+	overlay := []byte(`{
+  "agent": {
+    "sdd-orchestrator": {
+      "permission": {
+        "task": {
+          "__replace__": {
+            "*": "deny",
+            "sdd-init": "allow",
+            "sdd-explore": "allow",
+            "sdd-propose": "allow",
+            "sdd-spec": "allow",
+            "sdd-design": "allow",
+            "sdd-tasks": "allow",
+            "sdd-apply": "allow",
+            "sdd-verify": "allow",
+            "sdd-archive": "allow",
+            "sdd-onboard": "allow"
+          }
+        }
+      }
+    }
+  }
+}`)
+
+	merged, err := MergeJSONObjects(base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjects() error = %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(merged, &got); err != nil {
+		t.Fatalf("Unmarshal merged error = %v", err)
+	}
+
+	agent := got["agent"].(map[string]any)
+	orch := agent["sdd-orchestrator"].(map[string]any)
+	perm := orch["permission"].(map[string]any)
+	task := perm["task"].(map[string]any)
+
+	// The wildcard MUST be gone.
+	if _, hasWildcard := task["sdd-*"]; hasWildcard {
+		t.Fatal("'sdd-*' survived __replace__ — sentinel is broken")
+	}
+
+	// __replace__ must NOT leak into output.
+	if _, leaked := task["__replace__"]; leaked {
+		t.Fatal("__replace__ sentinel leaked into output")
+	}
+
+	// All explicit entries must be present.
+	expected := []string{"*", "sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"}
+	for _, key := range expected {
+		if _, ok := task[key]; !ok {
+			t.Fatalf("expected key %q missing from task block after __replace__", key)
+		}
+	}
+
+	if len(task) != len(expected) {
+		t.Fatalf("task block has %d keys, want %d; got: %v", len(task), len(expected), task)
+	}
+
+	t.Logf("CONFIRMED: __replace__ produces exactly %d task keys (no wildcard)", len(task))
+}

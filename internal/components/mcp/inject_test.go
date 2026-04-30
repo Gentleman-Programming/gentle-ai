@@ -9,6 +9,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 )
@@ -23,6 +24,7 @@ func cursorAdapter(t *testing.T) agents.Adapter {
 }
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
+func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 
 func TestInjectOpenCodeMergesContext7AndIsIdempotent(t *testing.T) {
@@ -190,5 +192,45 @@ func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 	}
 	if strings.Contains(text, `"mcpServers"`) {
 		t.Fatal("mcp.json should use 'servers' key, not 'mcpServers'")
+	}
+}
+
+func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
+	home := t.TempDir()
+
+	first, err := Inject(home, kimiAdapter())
+	if err != nil {
+		t.Fatalf("Inject(kimi) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(kimi) first changed = false")
+	}
+
+	second, err := Inject(home, kimiAdapter())
+	if err != nil {
+		t.Fatalf("Inject(kimi) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(kimi) second changed = true")
+	}
+
+	path := filepath.Join(home, ".kimi", "mcp.json")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(kimi mcp.json) error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, `"mcpServers"`) {
+		t.Fatal("kimi mcp.json missing mcpServers key")
+	}
+	if !strings.Contains(text, `"context7"`) {
+		t.Fatal("kimi mcp.json missing context7 server")
+	}
+	if !strings.Contains(text, `"transport": "http"`) {
+		t.Fatal("kimi mcp.json should set transport=http for documented remote MCP configuration")
+	}
+	if !strings.Contains(text, `"url": "https://mcp.context7.com/mcp"`) {
+		t.Fatal("kimi mcp.json should use the documented remote MCP URL for context7")
 	}
 }

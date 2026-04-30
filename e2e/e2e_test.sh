@@ -449,7 +449,7 @@ test_cc_engram_injection() {
 }
 
 test_cc_sdd_injection() {
-    log_test "Claude Code: SDD injection (CLAUDE.md)"
+    log_test "Claude Code: SDD injection (CLAUDE.md + native sub-agents)"
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component sdd --persona neutral 2>&1; then
@@ -457,6 +457,37 @@ test_cc_sdd_injection() {
         assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:sdd-orchestrator" "CLAUDE.md has SDD section marker"
         assert_file_contains "$HOME/.claude/CLAUDE.md" "sub-agent\|dependency\|orchestrator" "CLAUDE.md has real SDD content"
         assert_file_size_min "$HOME/.claude/CLAUDE.md" 500 "CLAUDE.md SDD section is substantial"
+
+        for phase in sdd-explore sdd-propose sdd-spec sdd-design sdd-tasks sdd-apply sdd-verify sdd-archive; do
+            assert_file_exists "$HOME/.claude/agents/${phase}.md" "Claude native sub-agent exists: ${phase}"
+            assert_file_size_min "$HOME/.claude/agents/${phase}.md" 200 "Claude native sub-agent is substantial: ${phase}"
+        done
+
+        assert_file_contains "$HOME/.claude/agents/sdd-design.md" "model: opus" "Claude design sub-agent uses balanced Opus assignment"
+        assert_file_contains "$HOME/.claude/agents/sdd-spec.md" "model: sonnet" "Claude spec sub-agent uses balanced Sonnet assignment"
+        assert_file_contains "$HOME/.claude/agents/sdd-archive.md" "model: haiku" "Claude archive sub-agent uses balanced Haiku assignment"
+
+        assert_file_contains "$HOME/.claude/agents/sdd-explore.md" "tools:" "Claude explore sub-agent declares tool scope"
+        assert_file_contains "$HOME/.claude/agents/sdd-explore.md" "WebFetch" "Claude explore sub-agent includes WebFetch"
+        assert_file_contains "$HOME/.claude/agents/sdd-explore.md" "WebSearch" "Claude explore sub-agent includes WebSearch"
+        assert_file_contains "$HOME/.claude/agents/sdd-explore.md" "mcp__plugin_engram_engram__mem_save" "Claude explore sub-agent includes Engram save"
+
+        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "tools:" "Claude apply sub-agent declares tool scope"
+        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "Read" "Claude apply sub-agent includes Read"
+        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "Edit" "Claude apply sub-agent includes Edit"
+        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "Write" "Claude apply sub-agent includes Write"
+        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "Bash" "Claude apply sub-agent includes Bash"
+        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "mcp__plugin_engram_engram__mem_search" "Claude apply sub-agent includes Engram search"
+        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "mcp__plugin_engram_engram__mem_get_observation" "Claude apply sub-agent includes Engram read"
+        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "mcp__plugin_engram_engram__mem_save" "Claude apply sub-agent includes Engram save"
+        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "mcp__plugin_engram_engram__mem_update" "Claude apply sub-agent includes Engram update"
+
+        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "tools:" "Claude verify sub-agent declares tool scope"
+        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "Read" "Claude verify sub-agent includes Read"
+        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "Bash" "Claude verify sub-agent includes Bash"
+        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "mcp__plugin_engram_engram__mem_search" "Claude verify sub-agent includes Engram search"
+        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "mcp__plugin_engram_engram__mem_get_observation" "Claude verify sub-agent includes Engram read"
+        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "mcp__plugin_engram_engram__mem_save" "Claude verify sub-agent includes Engram save"
     else
         log_fail "SDD install command failed"
     fi
@@ -533,8 +564,8 @@ test_cc_skills_minimal() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # Minimal preset = 11 SDD + orchestration skills (10 SDD + judgment-day)
-        assert_file_count "$skills_dir" "SKILL.md" 11 "Minimal preset: 11 skill files"
+        # Minimal preset = 12 files: 10 SDD + judgment-day + _shared/SKILL.md
+        assert_file_count "$skills_dir" "SKILL.md" 12 "Minimal preset: 12 skill files"
 
         # Verify specific SDD skills exist
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init SKILL.md"
@@ -564,8 +595,8 @@ test_cc_skills_full() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # Full preset = 16 skills (10 SDD + judgment-day + 5 foundation)
-        assert_file_count "$skills_dir" "SKILL.md" 16 "Full preset: 16 skill files"
+        # Full preset = 17 files: 10 SDD + judgment-day + 5 foundation + _shared/SKILL.md
+        assert_file_count "$skills_dir" "SKILL.md" 17 "Full preset: 17 skill files"
 
         # Verify foundation skills exist
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
@@ -593,8 +624,8 @@ test_cc_skills_ecosystem() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # ecosystem-only = 10 SDD + judgment-day + 5 foundation = 16
-        assert_file_count "$skills_dir" "SKILL.md" 16 "Ecosystem preset: 16 skill files"
+        # ecosystem-only = 17 files: 10 SDD + judgment-day + 5 foundation + _shared/SKILL.md
+        assert_file_count "$skills_dir" "SKILL.md" 17 "Ecosystem preset: 17 skill files"
 
         # SDD skills present
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "SDD skills present"
@@ -626,9 +657,9 @@ test_cc_custom_skills_with_flag() {
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
         assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md"
 
-        # Note: --component skills auto-resolves sdd (graph dep), which installs 11 SDD skills.
-        # Total = 11 SDD skills + 2 explicit skills = 13 SKILL.md files.
-        assert_file_count "$skills_dir" "SKILL.md" 13 "Custom + explicit skills: 11 SDD + 2 explicit = 13 files"
+        # Note: --component skills auto-resolves sdd (graph dep), which installs 11 SDD skills + _shared/SKILL.md.
+        # Total = 11 SDD skills + 2 explicit skills + 1 _shared/SKILL.md = 14 SKILL.md files.
+        assert_file_count "$skills_dir" "SKILL.md" 14 "Custom + explicit skills: 11 SDD + 2 explicit + 1 _shared = 14 files"
 
         # SDD skills ARE present (from the sdd dependency)
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init SKILL.md (from sdd dep)"
@@ -646,9 +677,9 @@ test_cc_custom_no_skills_flag_installs_nothing() {
         # --component skills auto-resolves sdd as a hard dependency (graph: skills → sdd → engram).
         # The SDD component always installs its 11 SDD+orchestration skills.
         # The skills component itself is a no-op (SkillsForPreset(custom) returns nil, no --skills flag).
-        # Result: exactly 11 SKILL.md files from the sdd dependency.
+        # Result: exactly 12 SKILL.md files from the sdd dependency (11 SDD + _shared/SKILL.md).
         assert_dir_exists "$skills_dir" "Skills directory created by sdd dependency"
-        assert_file_count "$skills_dir" "SKILL.md" 11 "11 SDD skills from sdd dependency (skills component is no-op)"
+        assert_file_count "$skills_dir" "SKILL.md" 12 "12 skill files from sdd dependency (11 SDD + _shared/SKILL.md)"
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init installed by sdd dependency"
     else
         log_fail "custom + skills component (no flag) install command failed"
@@ -670,8 +701,8 @@ test_cc_custom_sdd_plus_skills() {
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md (from --skills flag)"
         assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md (from --skills flag)"
 
-        # Total: 11 SDD skills + 2 explicit skills = 13
-        assert_file_count "$skills_dir" "SKILL.md" 13 "SDD + explicit skills: 13 skill files total"
+        # Total: 11 SDD skills + 2 explicit skills + _shared/SKILL.md = 14
+        assert_file_count "$skills_dir" "SKILL.md" 14 "SDD + explicit skills: 14 skill files total"
     else
         log_fail "custom + SDD + skills install command failed"
     fi
@@ -810,7 +841,7 @@ test_oc_skills_minimal() {
     if $BINARY install --agent opencode --component skills --preset minimal --persona neutral 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 11 "Minimal preset: 11 skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 12 "Minimal preset: 12 skill files"
         assert_file_exists "$skill_dir/sdd-init/SKILL.md" "sdd-init SKILL.md"
         assert_file_size_min "$skill_dir/sdd-init/SKILL.md" 100 "sdd-init skill has real content"
     else
@@ -825,7 +856,7 @@ test_oc_skills_full() {
     if $BINARY install --agent opencode --component skills --preset full-gentleman --persona neutral 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 16 "Full preset: 16 skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 17 "Full preset: 17 skill files"
         assert_file_exists "$skill_dir/go-testing/SKILL.md" "go-testing skill"
         assert_file_exists "$skill_dir/skill-creator/SKILL.md" "skill-creator skill"
         assert_file_exists "$skill_dir/branch-pr/SKILL.md" "branch-pr skill"
@@ -849,6 +880,56 @@ test_oc_context7_injection() {
         assert_valid_json "$settings" "opencode.json is valid JSON"
     else
         log_fail "OpenCode context7 install command failed"
+    fi
+}
+
+# --- Category 4: Qwen Code injection ---
+
+test_qwen_engram_injection() {
+    log_test "Qwen: engram injection (settings.json)"
+    cleanup_test_env
+
+    if $BINARY install --agent qwen-code --component engram --persona neutral 2>&1; then
+        local settings="$HOME/.qwen/settings.json"
+        assert_file_exists "$settings" "Qwen settings.json"
+        assert_file_contains "$settings" '"mcp"' "Has mcp key"
+        assert_file_contains "$settings" '"engram"' "Has engram MCP entry"
+        assert_file_contains "$settings" '"command"' "Has command key"
+        assert_valid_json "$settings" "settings.json is valid JSON"
+    else
+        log_fail "Qwen engram install command failed"
+    fi
+}
+
+test_qwen_engram_idempotency() {
+    log_test "Qwen: engram injection is idempotent"
+    cleanup_test_env
+
+    local settings="$HOME/.qwen/settings.json"
+
+    # First run — `|| true` keeps `set -e` from aborting the suite if install
+    # errors out (e.g. transient npm failure); we assert on the resulting file.
+    $BINARY install --agent qwen-code --component engram --persona neutral > /dev/null 2>&1 || true
+    if [ ! -f "$settings" ]; then
+        log_fail "Qwen settings.json missing after first install"
+        return
+    fi
+    local checksum1
+    checksum1=$(md5sum "$settings" | cut -d' ' -f1)
+
+    # Second run
+    $BINARY install --agent qwen-code --component engram --persona neutral > /dev/null 2>&1 || true
+    if [ ! -f "$settings" ]; then
+        log_fail "Qwen settings.json missing after second install"
+        return
+    fi
+    local checksum2
+    checksum2=$(md5sum "$settings" | cut -d' ' -f1)
+
+    if [ "$checksum1" = "$checksum2" ]; then
+        log_pass "Qwen settings.json is idempotent"
+    else
+        log_fail "Qwen settings.json changed between runs"
     fi
 }
 
@@ -1339,25 +1420,30 @@ test_idempotent_full_claude() {
     $BINARY install --agent claude-code --component sdd --component persona --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1 || true
     local first_md_hash
     first_md_hash=$(md5sum "$HOME/.claude/CLAUDE.md" 2>/dev/null | cut -d' ' -f1)
-    local first_settings_hash
-    first_settings_hash=$(md5sum "$HOME/.claude/settings.json" 2>/dev/null | cut -d' ' -f1)
+    # Snapshot settings.json for semantic comparison (engram setup may reorder
+    # top-level keys on re-run — see engram binary's non-deterministic map
+    # serialization). Byte-exact hashing would false-fail on harmless reorder.
+    cp "$HOME/.claude/settings.json" /tmp/gai_settings_run1.json 2>/dev/null || true
 
     $BINARY install --agent claude-code --component sdd --component persona --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1 || true
     local second_md_hash
     second_md_hash=$(md5sum "$HOME/.claude/CLAUDE.md" 2>/dev/null | cut -d' ' -f1)
-    local second_settings_hash
-    second_settings_hash=$(md5sum "$HOME/.claude/settings.json" 2>/dev/null | cut -d' ' -f1)
 
     if [ "$first_md_hash" = "$second_md_hash" ] && [ -n "$first_md_hash" ]; then
         log_pass "Idempotent: CLAUDE.md identical after 2 runs"
     else
         log_fail "CLAUDE.md changed between runs"
     fi
-    if [ "$first_settings_hash" = "$second_settings_hash" ] && [ -n "$first_settings_hash" ]; then
-        log_pass "Idempotent: settings.json identical after 2 runs"
+    if [ -f /tmp/gai_settings_run1.json ] && [ -f "$HOME/.claude/settings.json" ]; then
+        if json_files_equal /tmp/gai_settings_run1.json "$HOME/.claude/settings.json"; then
+            log_pass "Idempotent: settings.json identical after 2 runs"
+        else
+            log_fail "settings.json changed between runs"
+        fi
     else
-        log_fail "settings.json changed between runs"
+        log_fail "settings.json missing after install"
     fi
+    rm -f /tmp/gai_settings_run1.json
 }
 
 # --- Category 8: Edge cases ---
@@ -2157,6 +2243,10 @@ if [ "${RUN_FULL_E2E:-0}" = "1" ]; then
 
     # Category 12: Codex context7 by-design skip
     test_codex_context7_not_in_toml
+
+    # Category 13: Qwen integration
+    test_qwen_engram_injection
+    test_qwen_engram_idempotency
 else
     log_skip "Tier 2 tests (set RUN_FULL_E2E=1 to enable)"
 fi

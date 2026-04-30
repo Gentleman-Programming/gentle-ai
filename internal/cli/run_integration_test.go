@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
@@ -364,6 +366,52 @@ func TestRunInstallLinuxRollsBackOnComponentFailure(t *testing.T) {
 
 	if string(after) != string(before) {
 		t.Fatalf("settings content changed after rollback on Linux\nafter=%s\nbefore=%s", after, before)
+	}
+}
+
+func TestRunInstallFedoraQwenEngramSkipsUnsupportedSetupAndWritesSettings(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = missingBinaryLookPath
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return filepath.Join(home, "bin", "engram"), nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
+
+	detection := linuxDetectionResult(system.LinuxDistroFedora, "dnf")
+	result, err := RunInstall(
+		[]string{"--agent", "qwen-code", "--component", "engram"},
+		detection,
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	settingsPath := filepath.Join(home, ".qwen", "settings.json")
+	if _, err := os.Stat(settingsPath); err != nil {
+		t.Fatalf("expected qwen settings at %q: %v", settingsPath, err)
+	}
+
+	for _, cmd := range recorder.get() {
+		if strings.Contains(cmd, "engram setup qwen-code") {
+			t.Fatalf("unexpected unsupported setup command: %s", cmd)
+		}
 	}
 }
 
@@ -873,6 +921,106 @@ func TestRunInstallEngramDefaultModeAttemptsClaudeSetup(t *testing.T) {
 	}
 	if !foundSetup {
 		t.Fatalf("expected default setup mode to attempt claude-code setup, got commands: %v", commands)
+	}
+}
+
+func TestRunInstallAntigravityCopiesGeminiSettingsAfterEngramSetup(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+	runCommand = func(name string, args ...string) error {
+		if name == "engram" && len(args) == 2 && args[0] == "setup" && args[1] == "gemini-cli" {
+			settingsPath := filepath.Join(home, ".gemini", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(settingsPath, []byte("{\"theme\":\"dark\"}\n"), 0o644)
+		}
+		return nil
+	}
+
+	result, err := RunInstall(
+		[]string{"--agent", "antigravity", "--component", "engram", "--component", "context7", "--component", "permissions"},
+		macOSDetectionResult(),
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false")
+	}
+
+	settingsPath := filepath.Join(home, ".gemini", "antigravity", "settings.json")
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+	}
+	if string(got) != "{\"theme\":\"dark\"}\n" {
+		t.Fatalf("antigravity settings = %q, want copied Gemini settings", got)
+	}
+}
+
+func TestRunInstallDeduplicatesSharedEngramSetupSlugs(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+
+	recorder := &commandRecorder{}
+	runCommand = func(name string, args ...string) error {
+		if err := recorder.record(name, args...); err != nil {
+			return err
+		}
+		if name == "engram" && len(args) == 2 && args[0] == "setup" && args[1] == "gemini-cli" {
+			settingsPath := filepath.Join(home, ".gemini", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(settingsPath, []byte("{\"theme\":\"dark\"}\n"), 0o644)
+		}
+		return nil
+	}
+
+	result, err := RunInstall(
+		[]string{"--agent", "gemini-cli", "--agent", "antigravity", "--component", "engram", "--component", "context7", "--component", "permissions"},
+		macOSDetectionResult(),
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false")
+	}
+
+	var setupCount int
+	for _, cmd := range recorder.get() {
+		if strings.Contains(cmd, "engram setup gemini-cli") {
+			setupCount++
+		}
+	}
+	if setupCount != 1 {
+		t.Fatalf("engram setup gemini-cli count = %d, want 1", setupCount)
 	}
 }
 
@@ -1534,9 +1682,9 @@ func TestRunInstallCustomPresetExplicitSkillsFlagPopulatesSelection(t *testing.T
 			skillCount++
 		}
 	}
-	// 11 SDD skills (from sdd dep, includes sdd-onboard) + 2 explicit skills (go-testing, branch-pr) = 13
-	if skillCount != 13 {
-		t.Fatalf("expected 13 skill files (11 SDD + 2 explicit), got %d", skillCount)
+	// 11 SDD skills (from sdd dep, includes sdd-onboard) + 2 explicit skills (go-testing, branch-pr) + 1 _shared/SKILL.md = 14
+	if skillCount != 14 {
+		t.Fatalf("expected 14 skill files (11 SDD + 2 explicit + 1 _shared), got %d", skillCount)
 	}
 }
 
@@ -1593,10 +1741,10 @@ func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
 			}
 		}
 	}
-	// Expect exactly 11 SKILL.md files (from SDD dependency: 10 SDD phases + judgment-day).
+	// Expect exactly 12 SKILL.md files: 10 SDD phases + judgment-day (from SDD dependency) + 1 _shared/SKILL.md.
 	// The skills component itself adds 0 (no --skills flag, SkillsForPreset(custom) = nil).
-	if skillCount != 11 {
-		t.Fatalf("expected 11 SDD skill files installed by the sdd dependency, got %d", skillCount)
+	if skillCount != 12 {
+		t.Fatalf("expected 12 SDD skill files installed by the sdd dependency, got %d", skillCount)
 	}
 }
 
@@ -1740,5 +1888,147 @@ func TestOpenCodePersonaBeforeSDDPreservesAllSections(t *testing.T) {
 	}
 	if !strings.Contains(string(jsonContent), "sdd-orchestrator") {
 		t.Error("opencode.json missing sdd-orchestrator agent entry (SDD not injected)")
+	}
+}
+func TestRunInstallKimiBootstrapsHub(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		if name == "uv" {
+			return "/usr/bin/uv", nil
+		}
+		return "", exec.ErrNotFound
+	})
+	t.Cleanup(restoreInstallcmdLookPath)
+
+	// Install Kimi with minimalist component (e.g., permissions only, NO persona).
+	_, err := RunInstall(
+		[]string{"--agent", "kimi", "--component", "permissions"},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	// Verify that KIMI.md was created in the agent's config dir.
+	hubPath := filepath.Join(home, ".kimi", "KIMI.md")
+	if _, err := os.Stat(hubPath); err != nil {
+		t.Fatalf("expected Kimi prompt hub file %q to be bootstrapped: %v", hubPath, err)
+	}
+
+	// Verify content includes sub-modules (basic check).
+	content, err := os.ReadFile(hubPath)
+	if err != nil {
+		t.Fatalf("failed to read bootstrapped hub: %v", err)
+	}
+	if !strings.Contains(string(content), "{% include \"persona.md\" ignore missing %}") {
+		t.Errorf("bootstrapped hub missing modular include: %s", string(content))
+	}
+}
+
+func TestRunInstallKimiMissingUVFailsBeforeExecutingInstallCommands(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = missingBinaryLookPath
+
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+
+	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		if name == "uv" {
+			return "", exec.ErrNotFound
+		}
+		return "/usr/bin/" + name, nil
+	})
+	t.Cleanup(restoreInstallcmdLookPath)
+
+	_, err := RunInstall(
+		[]string{"--agent", "kimi", "--component", "permissions"},
+		macOSDetectionResult(),
+	)
+	if err == nil {
+		t.Fatal("RunInstall() expected error when Kimi uv preflight fails")
+	}
+
+	if !strings.Contains(err.Error(), "preflight for agent \"kimi\"") || !strings.Contains(err.Error(), "uv") {
+		t.Fatalf("RunInstall() error = %q, expected Kimi uv preflight error", err.Error())
+	}
+
+	if got := recorder.get(); len(got) != 0 {
+		t.Fatalf("expected no install commands to execute before Kimi preflight failure, got: %v", got)
+	}
+}
+
+func TestRunInstallKimiAlreadyInstalledDoesNotRequireUV(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = missingBinaryLookPath
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+
+	originalKimiLookPath := kimi.LookPathOverride
+	kimi.LookPathOverride = func(name string) (string, error) {
+		if name == "kimi" {
+			return "/usr/local/bin/kimi", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { kimi.LookPathOverride = originalKimiLookPath })
+
+	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		if name == "uv" {
+			return "", exec.ErrNotFound
+		}
+		return "/usr/bin/" + name, nil
+	})
+	t.Cleanup(restoreInstallcmdLookPath)
+
+	result, err := RunInstall(
+		[]string{"--agent", "kimi", "--component", "permissions"},
+		macOSDetectionResult(),
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	hubPath := filepath.Join(home, ".kimi", "KIMI.md")
+	if _, err := os.Stat(hubPath); err != nil {
+		t.Fatalf("expected Kimi prompt hub file %q to be bootstrapped: %v", hubPath, err)
+	}
+
+	if got := recorder.get(); len(got) != 0 {
+		t.Fatalf("expected no install commands when Kimi is already installed, got: %v", got)
 	}
 }

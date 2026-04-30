@@ -54,7 +54,7 @@ func injectMergeIntoSettings(homeDir string, adapter agents.Adapter) (InjectionR
 	}
 
 	overlay := DefaultContext7OverlayJSON()
-	if adapter.Agent() == model.AgentOpenCode {
+	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
 		overlay = OpenCodeContext7OverlayJSON()
 	}
 
@@ -79,6 +79,9 @@ func injectMCPConfigFile(homeDir string, adapter agents.Adapter) (InjectionResul
 	}
 	if adapter.Agent() == model.AgentAntigravity {
 		overlay = AntigravityContext7OverlayJSON()
+	}
+	if adapter.Agent() == model.AgentKimi {
+		overlay = KimiContext7OverlayJSON()
 	}
 
 	// For mcp.json pattern, merge the server config as a named entry.

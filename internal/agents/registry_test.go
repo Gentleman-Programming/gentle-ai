@@ -35,6 +35,9 @@ func (m mockAdapter) SupportsOutputStyles() bool              { return false }
 func (m mockAdapter) OutputStyleDir(_ string) string          { return "" }
 func (m mockAdapter) SupportsSlashCommands() bool             { return false }
 func (m mockAdapter) CommandsDir(_ string) string             { return "" }
+func (m mockAdapter) SupportsSubAgents() bool                 { return false }
+func (m mockAdapter) SubAgentsDir(_ string) string            { return "" }
+func (m mockAdapter) EmbeddedSubAgentsDir() string            { return "" }
 func (m mockAdapter) SupportsSkills() bool                    { return true }
 func (m mockAdapter) SupportsSystemPrompt() bool              { return true }
 func (m mockAdapter) SupportsMCP() bool                       { return true }
@@ -95,7 +98,9 @@ func TestDefaultRegistryIncludesAllAgents(t *testing.T) {
 		model.AgentCursor,
 		model.AgentVSCodeCopilot,
 		model.AgentCodex,
+		model.AgentAntigravity,
 		model.AgentWindsurf,
+		model.AgentQwenCode,
 	} {
 		if _, ok := registry.Get(agent); !ok {
 			t.Fatalf("registry missing %s adapter", agent)

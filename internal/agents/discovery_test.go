@@ -42,6 +42,9 @@ func (s stubAdapter) SupportsOutputStyles() bool              { return false }
 func (s stubAdapter) OutputStyleDir(_ string) string          { return "" }
 func (s stubAdapter) SupportsSlashCommands() bool             { return false }
 func (s stubAdapter) CommandsDir(_ string) string             { return "" }
+func (s stubAdapter) SupportsSubAgents() bool                 { return false }
+func (s stubAdapter) SubAgentsDir(_ string) string            { return "" }
+func (s stubAdapter) EmbeddedSubAgentsDir() string            { return "" }
 func (s stubAdapter) SupportsSkills() bool                    { return true }
 func (s stubAdapter) SupportsSystemPrompt() bool              { return true }
 func (s stubAdapter) SupportsMCP() bool                       { return true }

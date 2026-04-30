@@ -43,6 +43,10 @@ func (profileResolver) ResolveAgentInstall(profile system.PlatformProfile, agent
 		return resolveClaudeCodeInstall(profile), nil
 	case model.AgentOpenCode:
 		return resolveOpenCodeInstall(profile)
+	case model.AgentKilocode:
+		return resolveKilocodeInstall(profile), nil
+	case model.AgentKimi:
+		return resolveKimiInstall(profile)
 	default:
 		return nil, fmt.Errorf("install command is not supported for agent %q", agent)
 	}
@@ -56,6 +60,75 @@ func resolveClaudeCodeInstall(profile system.PlatformProfile) CommandSequence {
 		return CommandSequence{{"sudo", "npm", "install", "-g", "@anthropic-ai/claude-code"}}
 	}
 	return CommandSequence{{"npm", "install", "-g", "@anthropic-ai/claude-code"}}
+}
+
+// resolveKilocodeInstall returns the npm install command sequence for Kilocode.
+// On Linux with system npm, sudo is required. With nvm/fnm/volta, it is not.
+// On Windows and macOS, sudo is never needed.
+func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
+	if profile.OS == "linux" && !profile.NpmWritable {
+		return CommandSequence{{"sudo", "npm", "install", "-g", "@kilocode/cli"}}
+	}
+	return CommandSequence{{"npm", "install", "-g", "@kilocode/cli"}}
+}
+
+// resolveKimiInstall returns the official Kimi install command sequence.
+// To avoid the security risks of pipe-to-shell patterns (curl | bash),
+// we execute the underlying command that the scripts alias: `uv tool install`.
+func resolveKimiInstall(profile system.PlatformProfile) (CommandSequence, error) {
+	// Kimi CLI is a python-based tool. We use Astral's `uv` as our deterministic
+	// prerequisite manager to ensure secure and isolated installs.
+	if !profile.Supported {
+		return nil, fmt.Errorf("Kimi is not supported on this platform (%s/%s)", profile.OS, profile.LinuxDistro)
+	}
+
+	// We explicitly request python 3.13 as strictly defined by Kimi upstream.
+	return CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}}, nil
+}
+
+// ValidateAgentInstallPreflight validates agent-specific prerequisites that must
+// exist before running installation commands.
+func ValidateAgentInstallPreflight(profile system.PlatformProfile, agent model.AgentID) error {
+	switch agent {
+	case model.AgentKimi:
+		return validateKimiInstallPreflight(profile)
+	default:
+		return nil
+	}
+}
+
+func validateKimiInstallPreflight(profile system.PlatformProfile) error {
+	if !profile.Supported {
+		return fmt.Errorf("Kimi is not supported on this platform (%s/%s)", profile.OS, profile.LinuxDistro)
+	}
+
+	if _, err := cmdLookPath("uv"); err != nil {
+		return fmt.Errorf(
+			"Kimi requires Astral uv, but `uv` was not found in PATH.\n"+
+				"Install uv and retry:\n"+
+				"  %s",
+			uvInstallHint(profile),
+		)
+	}
+
+	return nil
+}
+
+func uvInstallHint(profile system.PlatformProfile) string {
+	switch profile.PackageManager {
+	case "brew":
+		return "brew install uv"
+	case "apt":
+		return "sudo apt-get install -y uv (or see https://docs.astral.sh/uv/getting-started/installation/)"
+	case "pacman":
+		return "sudo pacman -S --noconfirm uv"
+	case "dnf":
+		return "sudo dnf install -y uv"
+	case "winget":
+		return "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements"
+	default:
+		return "https://docs.astral.sh/uv/getting-started/installation/"
+	}
 }
 
 func (profileResolver) ResolveComponentInstall(profile system.PlatformProfile, component model.ComponentID) (CommandSequence, error) {

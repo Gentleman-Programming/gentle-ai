@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -13,7 +15,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
@@ -27,6 +31,11 @@ import (
 // osStatModelCache is a package-level variable so tests can override it to
 // simulate a missing or present OpenCode model cache file.
 var osStatModelCache = os.Stat
+var osStatPathFn = os.Stat
+var osGetwdFn = os.Getwd
+var osExecutableFn = os.Executable
+var osRemoveFn = os.Remove
+var execCommandFn = exec.Command
 
 // readCurrentAssignmentsFn is a package-level variable so tests can override
 // how current model assignments are read from opencode.json. It wraps
@@ -85,6 +94,14 @@ type SyncDoneMsg struct {
 	Err          error
 }
 
+// UninstallDoneMsg is sent when the uninstall operation completes.
+type UninstallDoneMsg struct {
+	Result           componentuninstall.Result
+	Err              error
+	SyncFilesChanged int   // only set for CleanInstall mode
+	SyncErr          error // only set for CleanInstall mode
+}
+
 // UpgradePhaseCompletedMsg is sent by startUpgradeSync when the upgrade phase
 // finishes (before the sync phase begins). This enables the intermediate "sync
 // running" state to be displayed.
@@ -102,6 +119,11 @@ type AgentBuilderGeneratedMsg struct {
 // AgentBuilderInstallDoneMsg is sent when the agent installation goroutine completes.
 type AgentBuilderInstallDoneMsg struct {
 	Results []agentbuilder.InstallResult
+	Err     error
+}
+
+type OpenCodePluginRegistrationDoneMsg struct {
+	Results []opencodeplugin.Result
 	Err     error
 }
 
@@ -130,6 +152,13 @@ type UpgradeFunc func(ctx context.Context, results []update.UpdateResult) upgrad
 // When overrides is non-nil, the sync merges those model assignments into the
 // selection before executing. Returns the number of files changed and any error.
 type SyncFunc func(overrides *model.SyncOverrides) (int, error)
+
+// UninstallFunc is the signature of the function injected to perform managed uninstall.
+type UninstallFunc func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error)
+
+// UninstallWithProfilesFunc is an uninstall function variant that accepts an
+// explicit profile selection for OpenCode SDD profile cleanup.
+type UninstallWithProfilesFunc func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error)
 
 // ExecuteFunc builds and runs the installation pipeline. It receives a ProgressFunc
 // callback to emit step-level progress events, and returns the ExecutionResult.
@@ -163,8 +192,11 @@ const (
 	ScreenPersona
 	ScreenPreset
 	ScreenClaudeModelPicker
+	ScreenKiroModelPicker
 	ScreenSDDMode
 	ScreenStrictTDD
+	ScreenOpenCodePlugins
+	ScreenOpenCodePluginResult
 	ScreenDependencyTree
 	ScreenSkillPicker
 	ScreenReview
@@ -181,6 +213,12 @@ const (
 	ScreenSync
 	ScreenUpgradeSync
 	ScreenModelConfig
+	ScreenUninstallMode
+	ScreenUninstall
+	ScreenUninstallComponents
+	ScreenUninstallProfiles
+	ScreenUninstallConfirm
+	ScreenUninstallResult
 	ScreenProfiles
 	ScreenProfileCreate
 	ScreenProfileDelete
@@ -212,6 +250,7 @@ type Model struct {
 	Backups           []backup.Manifest
 	ModelPicker       screens.ModelPickerState
 	ClaudeModelPicker screens.ClaudeModelPickerState
+	KiroModelPicker   screens.KiroModelPickerState
 	SkillPicker       []model.SkillID
 	Err               error
 
@@ -304,7 +343,7 @@ type Model struct {
 	OperationRunning bool
 
 	// OperationMode records which operation is running or was last run.
-	// Values: "upgrade", "sync", "upgrade-sync".
+	// Values: "upgrade", "sync", "upgrade-sync", "uninstall".
 	OperationMode string
 
 	// HasSyncRun is true once a sync or upgrade-sync operation has completed.
@@ -326,8 +365,50 @@ type Model struct {
 	ProfileNameCollision bool            // true when name collides with existing profile (awaiting second enter to overwrite)
 	ProfileDeleteErr     error           // error from the last RemoveProfileAgents call, displayed on ScreenProfiles
 
+	// UninstallMode holds the selected uninstall mode (partial, full, full-remove).
+	UninstallMode model.UninstallMode
+
+	// UninstallAgents holds the current TUI selection for the uninstall flow.
+	UninstallAgents            []model.AgentID
+	UninstallComponents        []model.ComponentID
+	UninstallProfilesAvailable []string
+	UninstallProfilesToRemove  []string
+	UninstallProfileSelection  bool
+	// UninstallEngramProjectScopeAvailable indicates whether .engram project data
+	// was detected for the current workspace, enabling project-only cleanup.
+	UninstallEngramProjectScopeAvailable bool
+	// UninstallEngramScope controls Engram cleanup behavior in uninstall.
+	UninstallEngramScope model.EngramUninstallScope
+
+	// UninstallResult holds the last uninstall execution result.
+	UninstallResult componentuninstall.Result
+
+	// UninstallErr holds the error from the last uninstall execution.
+	UninstallErr error
+
+	// SyncCleanInstallFilesChanged holds the sync files changed count after a clean install.
+	SyncCleanInstallFilesChanged int
+
+	// SyncCleanInstallErr holds the sync error from a clean install.
+	SyncCleanInstallErr error
+
+	// UninstallFn performs the managed uninstall operation.
+	UninstallFn UninstallFunc
+
+	// UninstallWithProfilesFn performs managed uninstall with explicit profile
+	// cleanup selection when the current flow requires it.
+	UninstallWithProfilesFn UninstallWithProfilesFunc
+
 	// AgentBuilder holds the transient state for the agent-builder TUI flow.
 	AgentBuilder AgentBuilderState
+
+	// OpenCodePluginsStandalone is true when ScreenOpenCodePlugins was opened
+	// from the main menu shortcut instead of the full installation flow.
+	OpenCodePluginsStandalone bool
+
+	// OpenCodePluginRegistrationResults and Err hold the dedicated shortcut result.
+	OpenCodePluginRegistrationResults []opencodeplugin.Result
+	OpenCodePluginRegistrationErr     error
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -339,10 +420,13 @@ func NewModel(detection system.DetectionResult, version string) Model {
 	}
 
 	return Model{
-		Screen:    ScreenWelcome,
-		Version:   version,
-		Selection: selection,
-		Detection: detection,
+		Screen:               ScreenWelcome,
+		Version:              version,
+		Selection:            selection,
+		Detection:            detection,
+		UninstallAgents:      preselectedAgents(detection),
+		UninstallComponents:  defaultUninstallComponents(),
+		UninstallEngramScope: model.EngramUninstallScopeGlobal,
 		Progress: NewProgressState([]string{
 			"Install dependencies",
 			"Configure selected agents",
@@ -421,6 +505,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenAgentBuilderComplete)
 		}
 		return m, nil
+	case OpenCodePluginRegistrationDoneMsg:
+		m.OperationRunning = false
+		m.OpenCodePluginRegistrationResults = msg.Results
+		m.OpenCodePluginRegistrationErr = msg.Err
+		m.setScreen(ScreenOpenCodePluginResult)
+		return m, nil
 	case StepProgressMsg:
 		return m.handleStepProgress(msg)
 	case PipelineDoneMsg:
@@ -461,6 +551,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		} // else keep existing list
+		return m, nil
+	case UninstallDoneMsg:
+		m.OperationRunning = false
+		m.UninstallResult = msg.Result
+		m.UninstallErr = msg.Err
+		m.SyncCleanInstallFilesChanged = msg.SyncFilesChanged
+		m.SyncCleanInstallErr = msg.SyncErr
+		m.setScreen(ScreenUninstallResult)
 		return m, nil
 	case UpgradePhaseCompletedMsg:
 		// Upgrade phase done; sync phase is about to start (OperationRunning stays true).
@@ -609,6 +707,18 @@ func (m Model) View() string {
 		return screens.RenderProfileDelete(m.ProfileDeleteTarget, m.Cursor)
 	case ScreenUpgradeSync:
 		return screens.RenderUpgradeSync(m.UpdateResults, m.UpgradeReport, m.SyncFilesChanged, m.UpgradeErr, m.SyncErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
+	case ScreenUninstallMode:
+		return screens.RenderUninstallMode(m.Cursor)
+	case ScreenUninstall:
+		return screens.RenderUninstall(m.UninstallAgents, m.Cursor)
+	case ScreenUninstallComponents:
+		return screens.RenderUninstallComponents(m.UninstallComponents, m.Cursor)
+	case ScreenUninstallProfiles:
+		return screens.RenderUninstallProfiles(m.UninstallProfilesAvailable, m.UninstallProfilesToRemove, m.UninstallEngramProjectScopeAvailable, m.UninstallEngramScope, m.Cursor)
+	case ScreenUninstallConfirm:
+		return screens.RenderUninstallConfirm(m.UninstallMode, m.UninstallAgents, m.UninstallComponents, m.UninstallProfilesToRemove, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.Cursor, m.OperationRunning, m.SpinnerFrame)
+	case ScreenUninstallResult:
+		return screens.RenderUninstallResult(m.UninstallResult, m.UninstallErr, m.UninstallMode, m.UninstallProfilesToRemove, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.SyncCleanInstallFilesChanged, m.SyncCleanInstallErr)
 	case ScreenDetection:
 		return screens.RenderDetection(m.Detection, m.Cursor)
 	case ScreenAgents:
@@ -619,10 +729,16 @@ func (m Model) View() string {
 		return screens.RenderPreset(m.Selection.Preset, m.Cursor)
 	case ScreenClaudeModelPicker:
 		return screens.RenderClaudeModelPicker(m.ClaudeModelPicker, m.Cursor)
+	case ScreenKiroModelPicker:
+		return screens.RenderKiroModelPicker(m.KiroModelPicker, m.Cursor)
 	case ScreenSDDMode:
 		return screens.RenderSDDMode(m.Selection.SDDMode, m.Cursor)
 	case ScreenStrictTDD:
 		return screens.RenderStrictTDD(m.Selection.StrictTDD, m.Cursor)
+	case ScreenOpenCodePlugins:
+		return screens.RenderOpenCodePlugins(m.Selection.OpenCodePlugins, m.Cursor)
+	case ScreenOpenCodePluginResult:
+		return screens.RenderOpenCodePluginResult(m.OpenCodePluginRegistrationResults, m.OpenCodePluginRegistrationErr)
 	case ScreenModelPicker:
 		return screens.RenderModelPicker(m.Selection.ModelAssignments, m.ModelPicker, m.Cursor)
 	case ScreenDependencyTree:
@@ -719,11 +835,55 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
+				} else if m.shouldShowKiroModelPickerScreen() {
+					m.KiroModelPicker = screens.NewKiroModelPickerState()
+					m.setScreen(ScreenKiroModelPicker)
 				} else if m.shouldShowSDDModeScreen() {
 					m.setScreen(ScreenSDDMode)
 				} else if m.Selection.Preset == model.PresetCustom {
 					// Custom preset: dependency plan was already built before model picker.
 					// Check StrictTDD, then skill picker before going to review.
+					if m.shouldShowStrictTDDScreen() {
+						m.setScreen(ScreenStrictTDD)
+					} else if m.shouldShowSkillPickerScreen() {
+						if len(m.SkillPicker) == 0 {
+							m.initSkillPicker()
+						}
+						m.setScreen(ScreenSkillPicker)
+					} else {
+						m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+						m.setScreen(ScreenReview)
+					}
+				} else if m.shouldShowStrictTDDScreen() {
+					m.setScreen(ScreenStrictTDD)
+				} else {
+					m.buildDependencyPlan()
+					m.setScreen(ScreenDependencyTree)
+				}
+			}
+			return m, nil
+		}
+	}
+
+	if m.Screen == ScreenKiroModelPicker {
+		wasInCustomMode := m.KiroModelPicker.InCustomMode
+		handled, updated := screens.HandleKiroModelPickerNav(keyStr, &m.KiroModelPicker, m.Cursor)
+		if handled {
+			if wasInCustomMode && !m.KiroModelPicker.InCustomMode {
+				m.Cursor = 0
+			}
+			if updated != nil {
+				m.Selection.KiroModelAssignments = updated
+				if m.ModelConfigMode {
+					m.ModelConfigMode = false
+					m.PendingSyncOverrides = &model.SyncOverrides{
+						KiroModelAssignments: updated,
+					}
+					m = m.withResetSyncState()
+					m.setScreen(ScreenSync)
+				} else if m.shouldShowSDDModeScreen() {
+					m.setScreen(ScreenSDDMode)
+				} else if m.Selection.Preset == model.PresetCustom {
 					if m.shouldShowStrictTDDScreen() {
 						m.setScreen(ScreenStrictTDD)
 					} else if m.shouldShowSkillPickerScreen() {
@@ -835,12 +995,24 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch m.Screen {
 		case ScreenAgents:
 			m.toggleCurrentAgent()
+		case ScreenUninstall:
+			m.toggleCurrentUninstallAgent()
+		case ScreenUninstallComponents:
+			m.toggleCurrentUninstallComponent()
+		case ScreenUninstallProfiles:
+			if m.Cursor < len(m.UninstallProfilesAvailable) {
+				m.toggleCurrentUninstallProfile()
+			} else {
+				m.toggleCurrentUninstallEngramScope()
+			}
 		case ScreenDependencyTree:
 			if m.Selection.Preset == model.PresetCustom {
 				m.toggleCurrentComponent()
 			}
 		case ScreenSkillPicker:
 			m.toggleCurrentSkill()
+		case ScreenOpenCodePlugins:
+			m.toggleCurrentOpenCodePlugin()
 		}
 		return m, nil
 	case "r":
@@ -941,26 +1113,156 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			ta.SetHeight(5)
 			m.AgentBuilder.Textarea = ta
 			m.setScreen(ScreenAgentBuilderEngine)
-		case 6:
-			if m.hasDetectedOpenCode() {
-				// "OpenCode SDD Profiles" (only shown when OpenCode is detected)
-				m.setScreen(ScreenProfiles)
-			} else {
-				// "Manage backups"
-				m.setScreen(ScreenBackups)
+		default:
+			next := 6
+			if m.Cursor == next {
+				m.OpenCodePluginsStandalone = true
+				m.OpenCodePluginRegistrationResults = nil
+				m.OpenCodePluginRegistrationErr = nil
+				m.Selection.OpenCodePlugins = nil
+				m.setScreen(ScreenOpenCodePlugins)
+				return m, nil
 			}
-		case 7:
+			next++
+
 			if m.hasDetectedOpenCode() {
-				// "Manage backups"
+				if m.Cursor == next {
+					m.setScreen(ScreenProfiles)
+					return m, nil
+				}
+				next++
+			}
+
+			if m.Cursor == next {
 				m.setScreen(ScreenBackups)
-			} else {
-				// "Quit"
+				return m, nil
+			}
+			next++
+
+			if m.Cursor == next {
+				m.setScreen(ScreenUninstallMode)
+				return m, nil
+			}
+			next++
+
+			if m.Cursor == next {
 				return m, tea.Quit
 			}
-		case 8:
-			// "Quit" (only reachable when showProfiles is true, so OpenCode is detected)
-			return m, tea.Quit
 		}
+	case ScreenUninstallMode:
+		m.refreshUninstallProfiles()
+		options := screens.UninstallModeOptions()
+		switch {
+		case m.Cursor < len(options):
+			m.UninstallMode = options[m.Cursor].Mode
+			switch m.UninstallMode {
+			case model.UninstallModePartial:
+				m.setScreen(ScreenUninstall)
+			case model.UninstallModeFull, model.UninstallModeFullRemove, model.UninstallModeCleanInstall:
+				// Populate all agents and all components for full uninstall
+				allAgents := screens.UninstallAgentOptions()
+				m.UninstallAgents = make([]model.AgentID, 0, len(allAgents))
+				for _, agent := range allAgents {
+					m.UninstallAgents = append(m.UninstallAgents, agent.ID)
+				}
+				allComponents := screens.UninstallComponentOptions()
+				m.UninstallComponents = make([]model.ComponentID, 0, len(allComponents))
+				for _, component := range allComponents {
+					m.UninstallComponents = append(m.UninstallComponents, component.ID)
+				}
+				if m.shouldShowUninstallSubSelection() {
+					m.selectAllUninstallProfiles()
+					m.UninstallProfileSelection = true
+					m.setScreen(ScreenUninstallProfiles)
+				} else {
+					m.UninstallProfileSelection = false
+					m.setScreen(ScreenUninstallConfirm)
+				}
+			}
+		case m.Cursor == len(options):
+			m.setScreen(ScreenWelcome)
+		}
+		return m, nil
+	case ScreenUninstall:
+		agentCount := len(screens.UninstallAgentOptions())
+		switch {
+		case m.Cursor < agentCount:
+			m.toggleCurrentUninstallAgent()
+		case m.Cursor == agentCount && len(m.UninstallAgents) > 0:
+			m.setScreen(ScreenUninstallComponents)
+		case m.Cursor == agentCount+1:
+			m.setScreen(ScreenWelcome)
+		}
+		return m, nil
+	case ScreenUninstallComponents:
+		componentCount := len(screens.UninstallComponentOptions())
+		switch {
+		case m.Cursor < componentCount:
+			m.toggleCurrentUninstallComponent()
+		case m.Cursor == componentCount && len(m.UninstallComponents) > 0:
+			m.refreshUninstallProfiles()
+			if m.shouldShowUninstallSubSelection() {
+				m.selectAllUninstallProfiles()
+				m.UninstallProfileSelection = true
+				m.setScreen(ScreenUninstallProfiles)
+			} else {
+				m.UninstallProfileSelection = false
+				m.setScreen(ScreenUninstallConfirm)
+			}
+		case m.Cursor == componentCount+1:
+			m.setScreen(ScreenUninstall)
+		}
+		return m, nil
+	case ScreenUninstallProfiles:
+		profileCount := len(m.UninstallProfilesAvailable)
+		engramScopeOptionCount := 0
+		if m.shouldShowUninstallEngramScopeSelection() {
+			engramScopeOptionCount = 2
+		}
+		continueIdx := profileCount + engramScopeOptionCount
+		switch {
+		case m.Cursor < profileCount:
+			m.toggleCurrentUninstallProfile()
+		case m.Cursor < continueIdx:
+			m.toggleCurrentUninstallEngramScope()
+		case m.Cursor == continueIdx:
+			m.UninstallProfileSelection = true
+			m.setScreen(ScreenUninstallConfirm)
+		case m.Cursor == continueIdx+1:
+			if m.UninstallMode == model.UninstallModePartial {
+				m.setScreen(ScreenUninstallComponents)
+			} else {
+				m.setScreen(ScreenUninstallMode)
+			}
+		}
+		return m, nil
+	case ScreenUninstallConfirm:
+		if m.OperationRunning {
+			return m, nil
+		}
+		if m.Cursor == 0 {
+			m.OperationRunning = true
+			m.OperationMode = "uninstall"
+			return m, tea.Batch(tickCmd(), m.startUninstall())
+		}
+		// Route cancel/back based on uninstall mode:
+		// - partial: go back to components selection
+		// - full/full-remove: go back to uninstall mode selection
+		if m.UninstallProfileSelection {
+			m.setScreen(ScreenUninstallProfiles)
+		} else {
+			switch m.UninstallMode {
+			case model.UninstallModePartial:
+				m.setScreen(ScreenUninstallComponents)
+			default:
+				m.setScreen(ScreenUninstallMode)
+			}
+		}
+		return m, nil
+	case ScreenUninstallResult:
+		m = m.withResetUninstallState()
+		m.setScreen(ScreenWelcome)
+		return m, nil
 	case ScreenUpgrade:
 		// Guard: don't re-launch while running.
 		if m.OperationRunning {
@@ -1099,6 +1401,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				}
 			}
 			m.setScreen(ScreenModelPicker)
+		case 2: // Configure Kiro models
+			m.ModelConfigMode = true
+			m.KiroModelPicker = screens.NewKiroModelPickerState()
+			m.setScreen(ScreenKiroModelPicker)
 		default: // Back
 			m.setScreen(ScreenWelcome)
 		}
@@ -1137,12 +1443,21 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenClaudeModelPicker)
 				return m, nil
 			}
+			if m.shouldShowKiroModelPickerScreen() {
+				m.KiroModelPicker = screens.NewKiroModelPickerState()
+				m.setScreen(ScreenKiroModelPicker)
+				return m, nil
+			}
 			if m.shouldShowSDDModeScreen() {
 				m.setScreen(ScreenSDDMode)
 				return m, nil
 			}
 			if m.shouldShowStrictTDDScreen() {
 				m.setScreen(ScreenStrictTDD)
+				return m, nil
+			}
+			if m.shouldShowOpenCodePluginsScreen() {
+				m.setScreen(ScreenOpenCodePlugins)
 				return m, nil
 			}
 			m.buildDependencyPlan()
@@ -1160,6 +1475,22 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.Selection.Preset == model.PresetCustom {
+				m.setScreen(ScreenDependencyTree)
+			} else {
+				m.setScreen(ScreenPreset)
+			}
+			return m, nil
+		}
+	case ScreenKiroModelPicker:
+		if !m.KiroModelPicker.InCustomMode && m.Cursor == screens.KiroModelPickerOptionCount(m.KiroModelPicker)-1 {
+			if m.ModelConfigMode {
+				m.ModelConfigMode = false
+				m.setScreen(ScreenModelConfig)
+				return m, nil
+			}
+			if m.shouldShowClaudeModelPickerScreen() {
+				m.setScreen(ScreenClaudeModelPicker)
+			} else if m.Selection.Preset == model.PresetCustom {
 				m.setScreen(ScreenDependencyTree)
 			} else {
 				m.setScreen(ScreenPreset)
@@ -1304,7 +1635,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		if m.Cursor < len(options) {
 			// Enable is index 0, Disable is index 1.
 			m.Selection.StrictTDD = (m.Cursor == screens.StrictTDDOptionEnable)
-			if m.Selection.Preset == model.PresetCustom {
+			if m.shouldShowOpenCodePluginsScreen() {
+				m.setScreen(ScreenOpenCodePlugins)
+			} else if m.Selection.Preset == model.PresetCustom {
 				// Custom preset: dependency plan was already built before SDD mode.
 				// Check skill picker before going to review.
 				if m.shouldShowSkillPickerScreen() {
@@ -1341,6 +1674,15 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		} else {
 			m.setScreen(ScreenPreset)
 		}
+	case ScreenOpenCodePlugins:
+		return m.confirmOpenCodePlugins()
+	case ScreenOpenCodePluginResult:
+		m.OpenCodePluginsStandalone = false
+		m.Selection.OpenCodePlugins = nil
+		m.OpenCodePluginRegistrationResults = nil
+		m.OpenCodePluginRegistrationErr = nil
+		m.setScreen(ScreenWelcome)
+		return m, nil
 	case ScreenDependencyTree:
 		if m.Selection.Preset == model.PresetCustom {
 			allComps := screens.AllComponents()
@@ -1361,6 +1703,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				}
 				if m.shouldShowStrictTDDScreen() {
 					m.setScreen(ScreenStrictTDD)
+					return m, nil
+				}
+				if m.shouldShowOpenCodePluginsScreen() {
+					m.setScreen(ScreenOpenCodePlugins)
 					return m, nil
 				}
 				// Show skill picker if Skills component is selected.
@@ -1675,6 +2021,25 @@ func (m Model) withResetOperationState() Model {
 	return m
 }
 
+func (m Model) withResetUninstallState() Model {
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = preselectedAgents(m.Detection)
+	m.UninstallComponents = defaultUninstallComponents()
+	m.UninstallProfilesAvailable = nil
+	m.UninstallProfilesToRemove = nil
+	m.UninstallProfileSelection = false
+	m.UninstallEngramProjectScopeAvailable = false
+	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	m.UninstallResult = componentuninstall.Result{}
+	m.UninstallErr = nil
+	m.SyncCleanInstallFilesChanged = 0
+	m.SyncCleanInstallErr = nil
+	m.OperationRunning = false
+	m.OperationMode = ""
+	m.Cursor = 0
+	return m
+}
+
 // startUpgrade launches the upgrade goroutine and returns a tea.Cmd.
 func (m Model) startUpgrade() tea.Cmd {
 	upgradeFn := m.UpgradeFn
@@ -1700,6 +2065,115 @@ func (m Model) startSync(overrides *model.SyncOverrides) tea.Cmd {
 		filesChanged, err := syncFn(overrides)
 		return SyncDoneMsg{FilesChanged: filesChanged, Err: err}
 	}
+}
+
+func (m Model) startOpenCodePluginRegistration() tea.Cmd {
+	plugins := append([]model.OpenCodeCommunityPluginID(nil), m.Selection.OpenCodePlugins...)
+	home := homeDir()
+	return func() tea.Msg {
+		results := make([]opencodeplugin.Result, 0, len(plugins))
+		for _, plugin := range plugins {
+			result, err := opencodeplugin.Install(home, plugin)
+			if err != nil {
+				return OpenCodePluginRegistrationDoneMsg{Results: results, Err: err}
+			}
+			results = append(results, result)
+		}
+		return OpenCodePluginRegistrationDoneMsg{Results: results}
+	}
+}
+
+func (m Model) startUninstall() tea.Cmd {
+	uninstallFn := m.UninstallFn
+	uninstallWithProfilesFn := m.UninstallWithProfilesFn
+	syncFn := m.SyncFn
+	agentIDs := append([]model.AgentID(nil), m.UninstallAgents...)
+	componentIDs := append([]model.ComponentID(nil), m.UninstallComponents...)
+	profileNamesToRemove := append([]string(nil), m.UninstallProfilesToRemove...)
+	engramScope := m.UninstallEngramScope
+	profileSelectionUsed := m.UninstallProfileSelection || len(profileNamesToRemove) > 0
+	mode := m.UninstallMode
+	return func() tea.Msg {
+		if uninstallFn == nil && uninstallWithProfilesFn == nil {
+			return UninstallDoneMsg{Err: fmt.Errorf("uninstall function not configured")}
+		}
+
+		var (
+			result componentuninstall.Result
+			err    error
+		)
+		if uninstallWithProfilesFn != nil && profileSelectionUsed {
+			result, err = uninstallWithProfilesFn(agentIDs, componentIDs, profileNamesToRemove, engramScope)
+		} else {
+			result, err = uninstallFn(agentIDs, componentIDs)
+		}
+		if err != nil {
+			return UninstallDoneMsg{Result: result, Err: err}
+		}
+		// If FullRemove mode, attempt to delete the binary itself
+		if mode == model.UninstallModeFullRemove {
+			execPath, execErr := osExecutableFn()
+			if execErr != nil {
+				return UninstallDoneMsg{Result: result, Err: fmt.Errorf("uninstall succeeded but failed to locate binary: %w", execErr)}
+			}
+			if isHomebrewManagedBinary(execPath) {
+				result.ManualActions = append(result.ManualActions,
+					"Homebrew-managed install detected. Run 'brew uninstall gentle-ai' to remove the executable cleanly.")
+			} else if removeErr := osRemoveFn(execPath); removeErr != nil {
+				return UninstallDoneMsg{Result: result, Err: fmt.Errorf("uninstall succeeded but failed to remove binary at %q: %w", execPath, removeErr)}
+			}
+		}
+		// If CleanInstall mode, run sync to re-create all managed assets.
+		// Sync errors are non-fatal — we still show the uninstall result.
+		if mode == model.UninstallModeCleanInstall {
+			msg := UninstallDoneMsg{Result: result}
+			if syncFn == nil {
+				msg.SyncErr = fmt.Errorf("sync function not configured")
+				return msg
+			}
+			filesChanged, syncErr := syncFn(nil)
+			msg.SyncFilesChanged = filesChanged
+			msg.SyncErr = syncErr
+			return msg
+		}
+		return UninstallDoneMsg{Result: result, Err: err}
+	}
+}
+
+func (m *Model) refreshUninstallProfiles() {
+	m.UninstallEngramProjectScopeAvailable = m.detectProjectEngramData()
+	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+
+	if !m.hasDetectedOpenCode() {
+		m.UninstallProfilesAvailable = nil
+		m.UninstallProfilesToRemove = nil
+		m.UninstallProfileSelection = false
+		return
+	}
+
+	profiles, err := readProfilesFn(opencode.DefaultSettingsPath())
+	if err != nil {
+		m.UninstallProfilesAvailable = nil
+		m.UninstallProfilesToRemove = nil
+		m.UninstallProfileSelection = false
+		return
+	}
+	m.UninstallProfilesAvailable = profileNames(profiles)
+}
+
+func (m Model) detectProjectEngramData() bool {
+	if !hasSelectedComponent(m.UninstallComponents, model.ComponentEngram) {
+		return false
+	}
+	cwd, err := osGetwdFn()
+	if err != nil || strings.TrimSpace(cwd) == "" {
+		return false
+	}
+	info, err := osStatPathFn(filepath.Join(cwd, ".engram"))
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }
 
 // startUpgradeSync runs upgrade then sync sequentially via tea.Sequence.
@@ -1773,13 +2247,22 @@ func buildProgressLabels(resolved planner.ResolvedPlan) []string {
 }
 
 func (m Model) goBack() Model {
-	// Block navigation while an operation (upgrade/sync) is running.
+	// Block navigation while an operation (upgrade/sync/uninstall) is running.
 	if m.OperationRunning {
 		return m
 	}
 
 	// Block going back while agent installation is in progress.
 	if m.AgentBuilder.Installing {
+		return m
+	}
+
+	if m.Screen == ScreenOpenCodePluginResult {
+		m.OpenCodePluginsStandalone = false
+		m.Selection.OpenCodePlugins = nil
+		m.OpenCodePluginRegistrationResults = nil
+		m.OpenCodePluginRegistrationErr = nil
+		m.setScreen(ScreenWelcome)
 		return m
 	}
 
@@ -1807,11 +2290,37 @@ func (m Model) goBack() Model {
 			m.setScreen(ScreenAgentBuilderPrompt)
 			return m
 		}
+	}
+
+	// ScreenUninstallConfirm: dynamic back navigation based on uninstall mode.
+	// - with profile selection: go back to profile selection screen
+	// - partial: go back to component selection (ScreenUninstallComponents)
+	// - full/full-remove: go back to mode selection (ScreenUninstallMode)
+	if m.Screen == ScreenUninstallConfirm {
+		if m.UninstallProfileSelection {
+			m.setScreen(ScreenUninstallProfiles)
+		} else {
+			switch m.UninstallMode {
+			case model.UninstallModePartial:
+				m.setScreen(ScreenUninstallComponents)
+			default:
+				m.setScreen(ScreenUninstallMode)
+			}
+		}
+		return m
+	}
+
+	if m.Screen == ScreenUninstallProfiles {
+		if m.UninstallMode == model.UninstallModePartial {
+			m.setScreen(ScreenUninstallComponents)
+		} else {
+			m.setScreen(ScreenUninstallMode)
+		}
 		return m
 	}
 
 	// ModelConfigMode: pickers reached via Model Config shortcut return to ScreenModelConfig.
-	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenModelPicker) {
+	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenKiroModelPicker || m.Screen == ScreenModelPicker) {
 		m.ModelConfigMode = false
 		m.setScreen(ScreenModelConfig)
 		return m
@@ -1834,6 +2343,8 @@ func (m Model) goBack() Model {
 				} else {
 					m.setScreen(ScreenSDDMode)
 				}
+			} else if m.shouldShowKiroModelPickerScreen() {
+				m.setScreen(ScreenKiroModelPicker)
 			} else if m.shouldShowClaudeModelPickerScreen() {
 				m.setScreen(ScreenClaudeModelPicker)
 			} else {
@@ -1851,6 +2362,10 @@ func (m Model) goBack() Model {
 	// going back should return to the preset screen (handled by linearRoutes).
 	// NOTE: DependencyTree back logic also in confirmSelection() — keep in sync.
 	if m.Screen == ScreenDependencyTree && m.Selection.Preset != model.PresetCustom {
+		if m.shouldShowOpenCodePluginsScreen() {
+			m.setScreen(ScreenOpenCodePlugins)
+			return m
+		}
 		if m.shouldShowStrictTDDScreen() {
 			// StrictTDD screen is between (SDDMode/ClaudeModelPicker/Preset) and DependencyTree.
 			m.setScreen(ScreenStrictTDD)
@@ -1880,6 +2395,10 @@ func (m Model) goBack() Model {
 			m.setScreen(ScreenSDDMode)
 			return m
 		}
+		if m.shouldShowKiroModelPickerScreen() {
+			m.setScreen(ScreenKiroModelPicker)
+			return m
+		}
 		if m.shouldShowClaudeModelPickerScreen() {
 			m.setScreen(ScreenClaudeModelPicker)
 			return m
@@ -1894,17 +2413,27 @@ func (m Model) goBack() Model {
 		return m
 	}
 
+	if m.Screen == ScreenOpenCodePlugins {
+		return m.goBackFromOpenCodePlugins()
+	}
+
 	// In custom preset, going back from SDDMode should return to ClaudeModelPicker
 	// if applicable, otherwise DependencyTree (the component selector).
 	// For non-custom, check if ClaudeModelPicker was shown first.
 	// NOTE: SDDMode back logic is also in confirmSelection — keep in sync.
 	if m.Screen == ScreenSDDMode {
 		if m.Selection.Preset == model.PresetCustom {
-			if m.shouldShowClaudeModelPickerScreen() {
+			if m.shouldShowKiroModelPickerScreen() {
+				m.setScreen(ScreenKiroModelPicker)
+			} else if m.shouldShowClaudeModelPickerScreen() {
 				m.setScreen(ScreenClaudeModelPicker)
 			} else {
 				m.setScreen(ScreenDependencyTree)
 			}
+			return m
+		}
+		if m.shouldShowKiroModelPickerScreen() {
+			m.setScreen(ScreenKiroModelPicker)
 			return m
 		}
 		if m.shouldShowClaudeModelPickerScreen() {
@@ -1916,6 +2445,26 @@ func (m Model) goBack() Model {
 	// In custom preset, going back from ClaudeModelPicker should return to DependencyTree.
 	if m.Screen == ScreenClaudeModelPicker && m.Selection.Preset == model.PresetCustom {
 		m.setScreen(ScreenDependencyTree)
+		return m
+	}
+
+	if m.Screen == ScreenKiroModelPicker {
+		if m.Selection.Preset == model.PresetCustom {
+			// Custom preset: Kiro → Claude (if present) → DependencyTree.
+			if m.shouldShowClaudeModelPickerScreen() {
+				m.setScreen(ScreenClaudeModelPicker)
+			} else {
+				m.setScreen(ScreenDependencyTree)
+			}
+		} else {
+			// Non-custom preset: Kiro → Claude (if present) → Preset.
+			// This keeps Esc consistent with Enter on "← Back".
+			if m.shouldShowClaudeModelPickerScreen() {
+				m.setScreen(ScreenClaudeModelPicker)
+			} else {
+				m.setScreen(ScreenPreset)
+			}
+		}
 		return m
 	}
 
@@ -1994,6 +2543,12 @@ func (m *Model) setScreen(next Screen) {
 			m.Cursor = 0
 		}
 	}
+	if next == ScreenUninstallMode {
+		m.refreshUninstallProfiles()
+		m.UninstallProfilesToRemove = nil
+		m.UninstallProfileSelection = false
+		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	}
 }
 
 // handleRenameInput processes key events when the rename backup screen is active.
@@ -2061,6 +2616,22 @@ func (m Model) optionCount() int {
 		return 1
 	case ScreenModelConfig:
 		return len(screens.ModelConfigOptions())
+	case ScreenUninstallMode:
+		return len(screens.UninstallModeOptions()) + 1
+	case ScreenUninstall:
+		return len(screens.UninstallAgentOptions()) + 2
+	case ScreenUninstallComponents:
+		return len(screens.UninstallComponentOptions()) + 2
+	case ScreenUninstallProfiles:
+		count := len(m.UninstallProfilesAvailable) + 2
+		if m.shouldShowUninstallEngramScopeSelection() {
+			count += 2
+		}
+		return count
+	case ScreenUninstallConfirm:
+		return 2
+	case ScreenUninstallResult:
+		return 1
 	case ScreenDetection:
 		return len(screens.DetectionOptions())
 	case ScreenAgents:
@@ -2071,10 +2642,16 @@ func (m Model) optionCount() int {
 		return len(screens.PresetOptions()) + 1
 	case ScreenClaudeModelPicker:
 		return screens.ClaudeModelPickerOptionCount(m.ClaudeModelPicker)
+	case ScreenKiroModelPicker:
+		return screens.KiroModelPickerOptionCount(m.KiroModelPicker)
 	case ScreenSDDMode:
 		return len(screens.SDDModeOptions()) + 1
 	case ScreenStrictTDD:
 		return len(screens.StrictTDDOptions()) + 1 // Enable + Disable + Back
+	case ScreenOpenCodePlugins:
+		return screens.OpenCodePluginsOptionCount()
+	case ScreenOpenCodePluginResult:
+		return 1
 	case ScreenModelPicker:
 		if len(m.ModelPicker.AvailableIDs) == 0 {
 			return 1 // only "Back to SDD mode"
@@ -2135,6 +2712,38 @@ func (m Model) optionCount() int {
 	}
 }
 
+func isHomebrewManagedBinary(execPath string) bool {
+	path := filepath.Clean(execPath)
+	if strings.Contains(path, "/Cellar/") {
+		return true
+	}
+	return strings.HasPrefix(path, "/opt/homebrew/") ||
+		strings.HasPrefix(path, "/usr/local/Homebrew/") ||
+		strings.HasPrefix(path, "/home/linuxbrew/.linuxbrew/")
+}
+
+func setOSExecutableForTest(path string, err error) func() {
+	original := osExecutableFn
+	osExecutableFn = func() (string, error) {
+		return path, err
+	}
+	return func() { osExecutableFn = original }
+}
+
+func setOSGetwdForTest(path string, err error) func() {
+	original := osGetwdFn
+	osGetwdFn = func() (string, error) {
+		return path, err
+	}
+	return func() { osGetwdFn = original }
+}
+
+func setOSRemoveForTest(fn func(path string) error) func() {
+	original := osRemoveFn
+	osRemoveFn = fn
+	return func() { osRemoveFn = original }
+}
+
 func (m *Model) toggleCurrentAgent() {
 	options := screens.AgentOptions()
 	if m.Cursor >= len(options) {
@@ -2169,6 +2778,71 @@ func (m *Model) toggleCurrentComponent() {
 	m.Selection.Components = append(m.Selection.Components, compID)
 }
 
+func (m *Model) toggleCurrentUninstallAgent() {
+	options := screens.UninstallAgentOptions()
+	if m.Cursor >= len(options) {
+		return
+	}
+
+	agentID := options[m.Cursor].ID
+	for idx, selected := range m.UninstallAgents {
+		if selected == agentID {
+			m.UninstallAgents = append(m.UninstallAgents[:idx], m.UninstallAgents[idx+1:]...)
+			return
+		}
+	}
+
+	m.UninstallAgents = append(m.UninstallAgents, agentID)
+}
+
+func (m *Model) toggleCurrentUninstallComponent() {
+	options := screens.UninstallComponentOptions()
+	if m.Cursor >= len(options) {
+		return
+	}
+
+	componentID := options[m.Cursor].ID
+	for idx, selected := range m.UninstallComponents {
+		if selected == componentID {
+			m.UninstallComponents = append(m.UninstallComponents[:idx], m.UninstallComponents[idx+1:]...)
+			return
+		}
+	}
+
+	m.UninstallComponents = append(m.UninstallComponents, componentID)
+}
+
+func (m *Model) toggleCurrentUninstallProfile() {
+	if m.Cursor >= len(m.UninstallProfilesAvailable) {
+		return
+	}
+
+	profileName := m.UninstallProfilesAvailable[m.Cursor]
+	for idx, selected := range m.UninstallProfilesToRemove {
+		if selected == profileName {
+			m.UninstallProfilesToRemove = append(m.UninstallProfilesToRemove[:idx], m.UninstallProfilesToRemove[idx+1:]...)
+			return
+		}
+	}
+
+	m.UninstallProfilesToRemove = append(m.UninstallProfilesToRemove, profileName)
+}
+
+func (m *Model) toggleCurrentUninstallEngramScope() {
+	profileCount := len(m.UninstallProfilesAvailable)
+	if m.Cursor < profileCount || !m.shouldShowUninstallEngramScopeSelection() {
+		return
+	}
+	idx := m.Cursor - profileCount
+	if idx == 0 {
+		m.UninstallEngramScope = model.EngramUninstallScopeProject
+		return
+	}
+	if idx == 1 {
+		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	}
+}
+
 func (m *Model) toggleCurrentSkill() {
 	allSkills := screens.AllSkillsOrdered()
 	if m.Cursor >= len(allSkills) {
@@ -2186,6 +2860,120 @@ func (m *Model) toggleCurrentSkill() {
 	m.SkillPicker = append(m.SkillPicker, skillID)
 }
 
+func (m *Model) toggleCurrentOpenCodePlugin() {
+	defs := opencodepluginDefinitions()
+	if m.Cursor%2 != 0 || m.Cursor/2 >= len(defs) {
+		return
+	}
+	id := defs[m.Cursor/2]
+	for idx, selected := range m.Selection.OpenCodePlugins {
+		if selected == id {
+			m.Selection.OpenCodePlugins = append(m.Selection.OpenCodePlugins[:idx], m.Selection.OpenCodePlugins[idx+1:]...)
+			return
+		}
+	}
+	m.Selection.OpenCodePlugins = append(m.Selection.OpenCodePlugins, id)
+}
+
+func (m Model) confirmOpenCodePlugins() (tea.Model, tea.Cmd) {
+	defs := opencodepluginDefinitions()
+	pluginRows := len(defs) * 2
+	switch {
+	case m.Cursor < pluginRows && m.Cursor%2 == 0:
+		m.toggleCurrentOpenCodePlugin()
+		return m, nil
+	case m.Cursor < pluginRows && m.Cursor%2 == 1:
+		idx := m.Cursor / 2
+		url := opencodepluginRepoURLs()[idx]
+		return m, openBrowserCmd(url)
+	case m.Cursor == pluginRows:
+		if m.OpenCodePluginsStandalone {
+			m.OpenCodePluginRegistrationResults = nil
+			m.OpenCodePluginRegistrationErr = nil
+			m.OperationRunning = len(m.Selection.OpenCodePlugins) > 0
+			m.setScreen(ScreenOpenCodePluginResult)
+			if len(m.Selection.OpenCodePlugins) == 0 {
+				return m, nil
+			}
+			return m, m.startOpenCodePluginRegistration()
+		}
+		return m.continueAfterOpenCodePlugins(), nil
+	default:
+		return m.goBackFromOpenCodePlugins(), nil
+	}
+}
+
+func (m Model) continueAfterOpenCodePlugins() Model {
+	if m.OpenCodePluginsStandalone {
+		m.OpenCodePluginRegistrationResults = nil
+		m.OpenCodePluginRegistrationErr = nil
+		m.setScreen(ScreenOpenCodePluginResult)
+		return m
+	}
+
+	if m.Selection.Preset == model.PresetCustom {
+		if m.shouldShowSkillPickerScreen() {
+			if len(m.SkillPicker) == 0 {
+				m.initSkillPicker()
+			}
+			m.setScreen(ScreenSkillPicker)
+		} else {
+			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+			m.setScreen(ScreenReview)
+		}
+		return m
+	}
+	m.buildDependencyPlan()
+	m.setScreen(ScreenDependencyTree)
+	return m
+}
+
+func (m Model) goBackFromOpenCodePlugins() Model {
+	if m.OpenCodePluginsStandalone {
+		m.OpenCodePluginsStandalone = false
+		m.Selection.OpenCodePlugins = nil
+		m.OpenCodePluginRegistrationResults = nil
+		m.OpenCodePluginRegistrationErr = nil
+		m.setScreen(ScreenWelcome)
+		return m
+	}
+
+	if m.shouldShowStrictTDDScreen() {
+		m.setScreen(ScreenStrictTDD)
+		return m
+	}
+	if m.shouldShowSDDModeScreen() {
+		m.setScreen(ScreenSDDMode)
+		return m
+	}
+	m.setScreen(ScreenPreset)
+	return m
+}
+
+func opencodepluginDefinitions() []model.OpenCodeCommunityPluginID {
+	return []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline, model.OpenCodePluginSDDEngramManage}
+}
+
+func opencodepluginRepoURLs() []string {
+	return []string{"https://github.com/Joaquinvesapa/sub-agent-statusline", "https://github.com/j0k3r-dev-rgl/sdd-engram-plugin"}
+}
+
+func openBrowserCmd(url string) tea.Cmd {
+	return func() tea.Msg {
+		var cmd *exec.Cmd
+		switch runtime.GOOS {
+		case "darwin":
+			cmd = execCommandFn("open", url)
+		case "windows":
+			cmd = execCommandFn("rundll32", "url.dll,FileProtocolHandler", url)
+		default:
+			cmd = execCommandFn("xdg-open", url)
+		}
+		_ = cmd.Start()
+		return nil
+	}
+}
+
 // initSkillPicker pre-selects ALL available skills (custom mode default).
 func (m *Model) initSkillPicker() {
 	all := screens.AllSkillsOrdered()
@@ -2198,6 +2986,10 @@ func (m *Model) initSkillPicker() {
 func (m Model) shouldShowSkillPickerScreen() bool {
 	return m.Selection.Preset == model.PresetCustom &&
 		hasSelectedComponent(m.Selection.Components, model.ComponentSkills)
+}
+
+func (m Model) shouldShowOpenCodePluginsScreen() bool {
+	return m.Selection.HasAgent(model.AgentOpenCode)
 }
 
 func (m *Model) buildDependencyPlan() {
@@ -2235,6 +3027,8 @@ func preselectedAgents(detection system.DetectionResult) []model.AgentID {
 			selected = append(selected, model.AgentAntigravity)
 		case string(model.AgentWindsurf):
 			selected = append(selected, model.AgentWindsurf)
+		case string(model.AgentQwenCode):
+			selected = append(selected, model.AgentQwenCode)
 		}
 	}
 
@@ -2248,6 +3042,15 @@ func preselectedAgents(detection system.DetectionResult) []model.AgentID {
 		selected = append(selected, agent.ID)
 	}
 
+	return selected
+}
+
+func defaultUninstallComponents() []model.ComponentID {
+	options := screens.UninstallComponentOptions()
+	selected := make([]model.ComponentID, 0, len(options))
+	for _, component := range options {
+		selected = append(selected, component.ID)
+	}
 	return selected
 }
 
@@ -2325,6 +3128,11 @@ func (m Model) shouldShowClaudeModelPickerScreen() bool {
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
 }
 
+func (m Model) shouldShowKiroModelPickerScreen() bool {
+	return m.Selection.HasAgent(model.AgentKiroIDE) &&
+		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
+}
+
 func componentsForPreset(preset model.PresetID) []model.ComponentID {
 	switch preset {
 	case model.PresetMinimal:
@@ -2353,6 +3161,54 @@ func hasSelectedComponent(components []model.ComponentID, target model.Component
 		}
 	}
 	return false
+}
+
+func hasSelectedAgent(agents []model.AgentID, target model.AgentID) bool {
+	for _, agent := range agents {
+		if agent == target {
+			return true
+		}
+	}
+	return false
+}
+
+func profileNames(profiles []model.Profile) []string {
+	names := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		if strings.TrimSpace(profile.Name) == "" {
+			continue
+		}
+		names = append(names, profile.Name)
+	}
+	return names
+}
+
+func (m Model) shouldShowUninstallProfilesSelection() bool {
+	if len(m.UninstallProfilesAvailable) == 0 {
+		return false
+	}
+	if !hasSelectedAgent(m.UninstallAgents, model.AgentOpenCode) {
+		return false
+	}
+	if !hasSelectedComponent(m.UninstallComponents, model.ComponentSDD) {
+		return false
+	}
+	return true
+}
+
+func (m Model) shouldShowUninstallEngramScopeSelection() bool {
+	if !hasSelectedComponent(m.UninstallComponents, model.ComponentEngram) {
+		return false
+	}
+	return m.UninstallEngramProjectScopeAvailable
+}
+
+func (m Model) shouldShowUninstallSubSelection() bool {
+	return m.shouldShowUninstallProfilesSelection() || m.shouldShowUninstallEngramScopeSelection()
+}
+
+func (m *Model) selectAllUninstallProfiles() {
+	m.UninstallProfilesToRemove = append([]string(nil), m.UninstallProfilesAvailable...)
 }
 
 // isScrollableScreen returns true for screens that use scroll-based navigation

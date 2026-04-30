@@ -53,8 +53,9 @@ func TestSetupAgentSlug(t *testing.T) {
 		{model.AgentClaudeCode, "claude-code", true},
 		{model.AgentGeminiCLI, "gemini-cli", true},
 		{model.AgentCodex, "codex", true},
-		{model.AgentAntigravity, "antigravity", true},
+		{model.AgentAntigravity, "gemini-cli", true},
 		{model.AgentWindsurf, "windsurf", true},
+		{model.AgentQwenCode, "", false},
 		{model.AgentCursor, "", false},
 		{model.AgentVSCodeCopilot, "", false},
 	}
@@ -79,6 +80,9 @@ func TestShouldAttemptSetup(t *testing.T) {
 	}
 	if !ShouldAttemptSetup(SetupModeSupported, model.AgentClaudeCode) {
 		t.Fatal("ShouldAttemptSetup(supported, claude-code) = false, want true")
+	}
+	if ShouldAttemptSetup(SetupModeSupported, model.AgentQwenCode) {
+		t.Fatal("ShouldAttemptSetup(supported, qwen-code) = true, want false")
 	}
 	if ShouldAttemptSetup(SetupModeSupported, model.AgentCursor) {
 		t.Fatal("ShouldAttemptSetup(supported, cursor) = true, want false")

@@ -11,6 +11,7 @@ func OpenCodeCommands() []OpenCodeCommand {
 		{Name: "sdd-init", Description: "Initialize SDD context", Body: "/sdd-init"},
 		{Name: "sdd-new", Description: "Start a new SDD change", Body: "/sdd-new ${change-name}"},
 		{Name: "sdd-continue", Description: "Continue next pending artifact", Body: "/sdd-continue ${change-name}"},
+		{Name: "sdd-explore", Description: "Explore an idea before committing", Body: "/sdd-explore ${topic}"},
 		{Name: "sdd-ff", Description: "Generate all planning artifacts", Body: "/sdd-ff ${change-name}"},
 		{Name: "sdd-apply", Description: "Implement tasks", Body: "/sdd-apply ${change-name}"},
 		{Name: "sdd-verify", Description: "Verify implementation", Body: "/sdd-verify ${change-name}"},

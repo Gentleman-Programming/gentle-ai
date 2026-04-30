@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -103,6 +104,107 @@ func TestExecute_DevBuildOnlyNoBackupCreated(t *testing.T) {
 	// No backup should be created — nothing executed.
 	if report.BackupID != "" {
 		t.Errorf("BackupID = %q, want empty — no backup when no execution occurs", report.BackupID)
+	}
+}
+
+func TestExecute_VersionUnknownIsSurfacedAsSkipped(t *testing.T) {
+	results := []update.UpdateResult{
+		makeResult("engram", update.VersionUnknown, "", "1.2.0", update.InstallBinary),
+	}
+	results[0].Tool.DetectCmd = []string{"engram", "version"}
+
+	report := Execute(context.Background(), results, linuxProfile(), t.TempDir(), false)
+
+	if len(report.Results) != 1 {
+		t.Fatalf("len(Results) = %d, want 1", len(report.Results))
+	}
+	if report.Results[0].Status != UpgradeSkipped {
+		t.Fatalf("status = %q, want %q", report.Results[0].Status, UpgradeSkipped)
+	}
+	if report.Results[0].ManualHint == "" {
+		t.Fatal("ManualHint must be populated for version-unknown tools")
+	}
+	if !strings.Contains(report.Results[0].ManualHint, "`engram version`") {
+		t.Fatalf("ManualHint = %q, want detect command hint", report.Results[0].ManualHint)
+	}
+	if report.BackupID != "" {
+		t.Fatalf("BackupID = %q, want empty when nothing is executed", report.BackupID)
+	}
+}
+
+func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
+	origExecCommand := execCommand
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	origSnapshotCreator := snapshotCreator
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+		snapshotCreator = origSnapshotCreator
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "npm" {
+			return "/usr/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest, error) {
+		return backup.Manifest{ID: "backup-test"}, nil
+	}
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return exec.Command("true")
+	}
+
+	result := makeResult("opencode-sdd-engram-manage", update.RegisteredNotMaterialized, "", "1.2.0", update.InstallOpenCodePlugin)
+	result.Tool.NpmPackage = "opencode-sdd-engram-manage"
+	result.UpdateHint = "Restart or reload OpenCode; check OpenCode logs for package or peer dependency errors."
+
+	report := Execute(context.Background(), []update.UpdateResult{result}, linuxProfile(), home, false)
+
+	if !execCalled {
+		t.Fatal("registered-pending OpenCode plugins should execute npm dependency upgrade")
+	}
+	if len(report.Results) != 1 {
+		t.Fatalf("len(Results) = %d, want 1", len(report.Results))
+	}
+	if report.Results[0].Status != UpgradeSucceeded {
+		t.Fatalf("status = %q, want %q", report.Results[0].Status, UpgradeSucceeded)
+	}
+	if report.BackupID == "" {
+		t.Fatal("BackupID should be populated before executing registered-pending plugin upgrade")
+	}
+}
+
+// --- TestRenderUpgradeReport_DryRunManualHintNotCountedAsPending ---
+
+func TestRenderUpgradeReport_DryRunManualHintNotCountedAsPending(t *testing.T) {
+	report := UpgradeReport{
+		DryRun: true,
+		Results: []ToolUpgradeResult{
+			{ToolName: "engram", Status: UpgradeSkipped, ManualHint: "source build — upgrade manually"},
+		},
+	}
+
+	output := RenderUpgradeReport(report)
+
+	if strings.Contains(output, "upgrade(s) pending") {
+		t.Fatalf("manual-hint skips must NOT be counted as pending upgrades in dry-run:\n%s", output)
+	}
+	if !strings.Contains(output, "manual") {
+		t.Fatalf("dry-run output should mention manual attention:\n%s", output)
 	}
 }
 
@@ -885,6 +987,64 @@ func TestEnumerateFilesInDir_ExcludesSubdirs(t *testing.T) {
 	}
 }
 
+func TestEnumerateFilesInDir_DefaultExclusionDiagnosticsAreSilent(t *testing.T) {
+	root := t.TempDir()
+	excludedFile := filepath.Join(root, "projects", "data.json")
+	if err := os.MkdirAll(filepath.Dir(excludedFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(excludedFile, []byte("runtime"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var legacyLog bytes.Buffer
+	origLogWriter := log.Writer()
+	log.SetOutput(&legacyLog)
+	t.Cleanup(func() { log.SetOutput(origLogWriter) })
+
+	files, err := enumerateFilesInDir(root, map[string]bool{"projects": true})
+	if err != nil {
+		t.Fatalf("enumerateFilesInDir error: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("files = %v, want no files from excluded directory", files)
+	}
+	if got := legacyLog.String(); got != "" {
+		t.Fatalf("default backup enumeration wrote to global log output %q; TUI paths must remain silent", got)
+	}
+}
+
+func TestEnumerateFilesInDir_WritesExclusionDiagnosticsToInjectedWriter(t *testing.T) {
+	root := t.TempDir()
+	configFile := filepath.Join(root, "settings.json")
+	excludedFile := filepath.Join(root, "projects", "data.json")
+	for _, f := range []string{configFile, excludedFile} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	var diagnostics bytes.Buffer
+	files, err := enumerateFilesInDir(root, map[string]bool{"projects": true}, &diagnostics)
+	if err != nil {
+		t.Fatalf("enumerateFilesInDir error: %v", err)
+	}
+	if len(files) != 1 || files[0] != configFile {
+		t.Fatalf("files = %v, want only %q", files, configFile)
+	}
+
+	got := diagnostics.String()
+	if !strings.Contains(got, "backup: excluding directory ") || !strings.Contains(got, "projects") {
+		t.Fatalf("diagnostics = %q, want controlled exclusion diagnostic", got)
+	}
+	if !strings.HasPrefix(got, "backup:") {
+		t.Fatalf("diagnostics = %q, want backup message without log package timestamp prefix", got)
+	}
+}
+
 // TestEnumerateFilesInDir_NilExcludesWalksEverything verifies that passing nil
 // for excludeSubdirs results in a full walk with no exclusions.
 func TestEnumerateFilesInDir_NilExcludesWalksEverything(t *testing.T) {
@@ -974,6 +1134,16 @@ func TestConfigPathsForBackup_ExcludesRuntimeDirs(t *testing.T) {
 			excludedFiles = append(excludedFiles, f)
 		}
 	}
+
+	// Gemini Antigravity temp dir is nested under antigravity/ and must also be excluded.
+	geminiAntigravityTmpFile := filepath.Join(homeDir, ".gemini", "antigravity", "tmp", "artifact.json")
+	if err := os.MkdirAll(filepath.Dir(geminiAntigravityTmpFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll gemini antigravity tmp: %v", err)
+	}
+	if err := os.WriteFile(geminiAntigravityTmpFile, []byte("temp runtime data"), 0o644); err != nil {
+		t.Fatalf("WriteFile gemini antigravity tmp: %v", err)
+	}
+	excludedFiles = append(excludedFiles, geminiAntigravityTmpFile)
 
 	paths := configPathsForBackup(homeDir)
 	pathSet := make(map[string]struct{}, len(paths))

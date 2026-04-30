@@ -126,6 +126,22 @@ chmod +x docker-test.sh
 
 > ⚠️ E2E tests spin up containers to simulate real installation environments. They may take a few minutes to complete.
 
+### Windows — Known Test Limitations
+
+Some unit tests require OS-level capabilities that are restricted on Windows by default.
+
+#### Symlink tests (`SeCreateSymbolicLinkPrivilege`)
+
+Tests that create symbolic links (e.g. in `internal/components/filemerge`) will be **skipped automatically** on Windows builds where the process lacks `SeCreateSymbolicLinkPrivilege` (`ERROR_PRIVILEGE_NOT_HELD`, errno 1314). This is a Windows security policy, not a bug in the code.
+
+To run these tests without restrictions, choose one of:
+
+- **Enable Developer Mode** — Settings → System → For developers → Developer Mode. This grants symlink creation to all processes without admin rights.
+- **Run as Administrator** — open your terminal as Administrator before running `go test ./...`.
+- **Grant the privilege explicitly** via Group Policy: `Local Security Policy → User Rights Assignment → Create symbolic links`.
+
+> On Linux and macOS these tests always run without any extra setup.
+
 ---
 
 ## Commit Convention

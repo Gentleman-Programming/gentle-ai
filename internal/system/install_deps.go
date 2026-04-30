@@ -57,7 +57,7 @@ func installHintNode(profile PlatformProfile) string {
 }
 
 // installHintNpm returns the platform-specific install hint for npm.
-func installHintNpm(profile PlatformProfile) string {
+func installHintNpm(_ PlatformProfile) string {
 	// npm comes with node on all platforms.
 	return "npm is included with node — install node first"
 }

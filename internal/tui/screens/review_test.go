@@ -127,3 +127,26 @@ func TestRenderReviewHidesStrictTDDWhenNoSDD(t *testing.T) {
 		t.Errorf("RenderReview should NOT show 'Strict TDD' when HasSDD=false; output:\n%s", out)
 	}
 }
+
+func TestRenderReviewClarifiesCustomPersonaAndPreset(t *testing.T) {
+	payload := planner.ReviewPayload{
+		Agents:  []model.AgentID{model.AgentClaudeCode},
+		Persona: model.PersonaCustom,
+		Preset:  model.PresetCustom,
+	}
+
+	out := RenderReview(payload, 0)
+
+	if !strings.Contains(out, "keep existing persona unmanaged") {
+		t.Fatalf("RenderReview missing custom persona clarification; output:\n%s", out)
+	}
+	if !strings.Contains(out, "choose components and skills manually") {
+		t.Fatalf("RenderReview missing custom preset clarification; output:\n%s", out)
+	}
+	if strings.Contains(out, "Persona  custom") {
+		t.Fatalf("RenderReview should not show raw custom persona label; output:\n%s", out)
+	}
+	if strings.Contains(out, "Preset  custom") {
+		t.Fatalf("RenderReview should not show raw custom preset label; output:\n%s", out)
+	}
+}

@@ -12,7 +12,7 @@
 | SDD | `sdd` | Spec-Driven Development workflow (9 phases) — the agent handles SDD organically when the task warrants it, or when you ask; you don't need to learn the commands |
 | Skills | `skills` | Curated coding skill library |
 | Context7 | `context7` | MCP server for live framework/library documentation |
-| Persona | `persona` | Gentleman, neutral, or custom behavior mode |
+| Persona | `persona` | Managed Gentleman/neutral persona injection, or unmanaged custom persona mode |
 | Permissions | `permissions` | Security-first defaults and guardrails |
 | GGA | `gga` | Gentleman Guardian Angel — AI provider switcher |
 | Theme | `theme` | Gentleman Kanagawa theme overlay |
@@ -77,4 +77,4 @@ For framework-specific skills (React 19, Angular, TypeScript, Tailwind 4, Zod 4,
 | Full Gentleman | `full-gentleman` | All components (Engram + SDD + Skills + Context7 + GGA + Persona + Permissions + Theme) + all skills + gentleman persona |
 | Ecosystem Only | `ecosystem-only` | Core components (Engram + SDD + Skills + Context7 + GGA) + all skills + gentleman persona |
 | Minimal | `minimal` | Engram + SDD skills only |
-| Custom | `custom` | You pick components, skills, and persona individually |
+| Custom | `custom` | You choose components and skills manually while keeping any existing persona/settings unmanaged |

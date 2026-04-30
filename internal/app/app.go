@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
@@ -27,9 +28,11 @@ import (
 var Version = "dev"
 
 var (
-	updateCheckAll      = update.CheckAll
-	updateCheckFiltered = update.CheckFiltered
-	upgradeExecute      = upgrade.Execute
+	updateCheckAll           = update.CheckAll
+	updateCheckFiltered      = update.CheckFiltered
+	upgradeExecute           = upgrade.Execute
+	ensureCurrentOSSupported = system.EnsureCurrentOSSupported
+	detectSystem             = system.Detect
 )
 
 func Run() error {
@@ -51,14 +54,17 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "help", "--help", "-h":
 			printHelp(stdout, Version)
 			return nil
+		case "uninstall":
+			_, err := cli.RunUninstall(args[1:], stdout)
+			return err
 		}
 	}
 
-	if err := system.EnsureCurrentOSSupported(); err != nil {
+	if err := ensureCurrentOSSupported(); err != nil {
 		return err
 	}
 
-	result, err := system.Detect(context.Background())
+	result, err := detectSystem(context.Background())
 	if err != nil {
 		return fmt.Errorf("detect system: %w", err)
 	}
@@ -96,6 +102,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.Backups = ListBackups()
 		m.UpgradeFn = tuiUpgrade(profile, homeDir)
 		m.SyncFn = tuiSync(homeDir)
+		m.UninstallFn = tuiUninstall(homeDir)
+		m.UninstallWithProfilesFn = tuiUninstallWithProfiles(homeDir)
 		p := tea.NewProgram(m, tea.WithAltScreen())
 		_, err = p.Run()
 		return err
@@ -127,6 +135,20 @@ func RunArgs(args []string, stdout io.Writer) error {
 		}
 
 		_, _ = fmt.Fprintln(stdout, cli.RenderSyncReport(syncResult))
+		return nil
+	case "uninstall":
+		uninstallResult, err := cli.RunUninstall(args[1:], stdout)
+		if err != nil {
+			// If a backup was created before the failure, surface it so
+			// the user can restore safely.
+			if uninstallResult.Manifest.ID != "" {
+				_, _ = fmt.Fprintln(stdout, cli.RenderUninstallReport(uninstallResult))
+			}
+			return err
+		}
+		if uninstallResult.Manifest.ID != "" {
+			_, _ = fmt.Fprintln(stdout, cli.RenderUninstallReport(uninstallResult))
+		}
 		return nil
 	case "restore":
 		return cli.RunRestore(args[1:], stdout)
@@ -235,14 +257,18 @@ func tuiExecute(
 
 	execResult := orchestrator.Execute(stagePlan)
 	if execResult.Err == nil {
-		// Persist the user's agent selection so that future `sync` runs target only
-		// the agents the user actually installed, not every IDE config dir on disk.
+		// Persist the user's agent selection and model assignments so that future
+		// `sync` runs target only the installed agents and preserve model choices.
 		agentIDs := make([]string, 0, len(selection.Agents))
 		for _, a := range selection.Agents {
 			agentIDs = append(agentIDs, string(a))
 		}
 		// Non-fatal: a state write failure must not break an otherwise successful install.
-		_ = state.Write(homeDir, agentIDs)
+		_ = state.Write(homeDir, state.InstallState{
+			InstalledAgents:        agentIDs,
+			ClaudeModelAssignments: claudeAliasesToStrings(selection.ClaudeModelAssignments),
+			ModelAssignments:       modelAssignmentsToState(selection.ModelAssignments),
+		})
 	}
 
 	return execResult
@@ -274,13 +300,45 @@ func tuiSync(homeDir string) tui.SyncFunc {
 		agentIDs := cli.DiscoverAgents(homeDir)
 		selection := cli.BuildSyncSelection(cli.SyncFlags{}, agentIDs)
 
+		// Load persisted model assignments so a plain sync (no overrides)
+		// preserves the user's previous choices instead of falling back
+		// to the "balanced" preset.
+		loadPersistedAssignments(homeDir, &selection)
+
 		applyOverrides(&selection, overrides)
 
 		result, err := cli.RunSyncWithSelection(homeDir, selection)
 		if err != nil {
 			return 0, err
 		}
+
+		// Persist model assignments that were actually used (from overrides
+		// or loaded from state) so the next sync preserves them too.
+		persistAssignments(homeDir, selection)
+
 		return result.FilesChanged, nil
+	}
+}
+
+// tuiUninstall returns a tui.UninstallFunc that mirrors the CLI uninstall path
+// for selected agents/components, but without interactive flag parsing.
+func tuiUninstall(homeDir string) tui.UninstallFunc {
+	return func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		workspaceDir, err := os.Getwd()
+		if err != nil {
+			return componentuninstall.Result{}, fmt.Errorf("resolve workspace directory: %w", err)
+		}
+		return cli.RunUninstallWithSelection(homeDir, workspaceDir, agentIDs, componentIDs)
+	}
+}
+
+func tuiUninstallWithProfiles(homeDir string) tui.UninstallWithProfilesFunc {
+	return func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
+		workspaceDir, err := os.Getwd()
+		if err != nil {
+			return componentuninstall.Result{}, fmt.Errorf("resolve workspace directory: %w", err)
+		}
+		return cli.RunUninstallWithSelectionAndProfiles(homeDir, workspaceDir, agentIDs, componentIDs, profileNames, engramScope)
 	}
 }
 
@@ -295,6 +353,9 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	}
 	if overrides.ClaudeModelAssignments != nil {
 		selection.ClaudeModelAssignments = overrides.ClaudeModelAssignments
+	}
+	if overrides.KiroModelAssignments != nil {
+		selection.KiroModelAssignments = overrides.KiroModelAssignments
 	}
 	if overrides.SDDMode != "" {
 		selection.SDDMode = overrides.SDDMode
@@ -311,6 +372,88 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 			selection.SDDMode = model.SDDModeMulti
 		}
 	}
+}
+
+// loadPersistedAssignments reads previously-saved model assignments from
+// state.json and populates the selection when the corresponding maps are empty.
+// This ensures a plain `sync` (no TUI overrides, no CLI flags) preserves the
+// user's last-known model choices.
+func loadPersistedAssignments(homeDir string, selection *model.Selection) {
+	s, err := state.Read(homeDir)
+	if err != nil {
+		return
+	}
+	if len(selection.ClaudeModelAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
+		m := make(map[string]model.ClaudeModelAlias, len(s.ClaudeModelAssignments))
+		for k, v := range s.ClaudeModelAssignments {
+			m[k] = model.ClaudeModelAlias(v)
+		}
+		selection.ClaudeModelAssignments = m
+	}
+	if len(selection.KiroModelAssignments) == 0 && len(s.KiroModelAssignments) > 0 {
+		m := make(map[string]model.ClaudeModelAlias, len(s.KiroModelAssignments))
+		for k, v := range s.KiroModelAssignments {
+			m[k] = model.ClaudeModelAlias(v)
+		}
+		selection.KiroModelAssignments = m
+	}
+	if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
+		m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
+		for k, v := range s.ModelAssignments {
+			m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID}
+		}
+		selection.ModelAssignments = m
+	}
+}
+
+// persistAssignments writes the model assignments from selection back to
+// state.json using a read-merge-write pattern so that other fields
+// (InstalledAgents) are not lost.
+func persistAssignments(homeDir string, selection model.Selection) {
+	if len(selection.ClaudeModelAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 {
+		return
+	}
+	current, err := state.Read(homeDir)
+	if err != nil {
+		// State file may not exist yet (e.g. pre-state users).
+		current = state.InstallState{}
+	}
+	if len(selection.ClaudeModelAssignments) > 0 {
+		current.ClaudeModelAssignments = claudeAliasesToStrings(selection.ClaudeModelAssignments)
+	}
+	if len(selection.KiroModelAssignments) > 0 {
+		current.KiroModelAssignments = claudeAliasesToStrings(selection.KiroModelAssignments)
+	}
+	if len(selection.ModelAssignments) > 0 {
+		current.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+	}
+	_ = state.Write(homeDir, current)
+}
+
+// claudeAliasesToStrings converts a typed ClaudeModelAlias map to plain strings
+// for JSON serialisation in state.json.
+func claudeAliasesToStrings(m map[string]model.ClaudeModelAlias) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = string(v)
+	}
+	return out
+}
+
+// modelAssignmentsToState converts model.ModelAssignment maps to the
+// state-serialisable form.
+func modelAssignmentsToState(m map[string]model.ModelAssignment) map[string]state.ModelAssignmentState {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]state.ModelAssignmentState, len(m))
+	for k, v := range m {
+		out[k] = state.ModelAssignmentState{ProviderID: v.ProviderID, ModelID: v.ModelID}
+	}
+	return out
 }
 
 // ListBackups returns all backup manifests from the backup directory.
