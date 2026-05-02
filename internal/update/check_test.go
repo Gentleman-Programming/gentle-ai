@@ -160,7 +160,7 @@ func TestDetectInstalledVersion_WindowsGGAPowerShellShim(t *testing.T) {
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = append([]string(nil), args...)
-		return exec.Command("echo", "gga v2.8.1")
+		return fakeVersionCommand("gga v2.8.1")
 	}
 
 	tool := ToolInfo{Name: "gga", DetectCmd: []string{"gga", "--version"}}
@@ -174,6 +174,25 @@ func TestDetectInstalledVersion_WindowsGGAPowerShellShim(t *testing.T) {
 	if strings.Join(gotArgs, "\x00") != strings.Join(wantArgs, "\x00") {
 		t.Fatalf("exec args = %#v, want %#v", gotArgs, wantArgs)
 	}
+}
+
+func fakeVersionCommand(output string) *exec.Cmd {
+	cmd := exec.Command(os.Args[0], "-test.run=TestFakeVersionCommand", "--", output)
+	cmd.Env = append(os.Environ(), "GO_WANT_FAKE_VERSION_COMMAND=1")
+	return cmd
+}
+
+func TestFakeVersionCommand(t *testing.T) {
+	if os.Getenv("GO_WANT_FAKE_VERSION_COMMAND") != "1" {
+		return
+	}
+	for i, arg := range os.Args {
+		if arg == "--" && i+1 < len(os.Args) {
+			fmt.Fprintln(os.Stdout, os.Args[i+1])
+			os.Exit(0)
+		}
+	}
+	os.Exit(1)
 }
 
 func TestDetectInstalledVersionFromOpenCodeNodeModulePackageJSON(t *testing.T) {
