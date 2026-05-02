@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -16,6 +17,7 @@ var (
 	execCommand = exec.Command
 	lookPath    = exec.LookPath
 	userHomeDir = os.UserHomeDir
+	runtimeGOOS = runtime.GOOS
 )
 
 // versionRegexp extracts a semver-like version from command output.
@@ -44,15 +46,44 @@ func detectInstalledVersion(ctx context.Context, tool ToolInfo, currentBuildVers
 
 	binary := tool.DetectCmd[0]
 	if _, err := lookPath(binary); err != nil {
+		if version := detectWindowsGGAShimVersion(ctx, tool); version != "" {
+			return version
+		}
 		return "" // binary not found
 	}
 
+	return runDetectCommand(ctx, tool.DetectCmd[0], tool.DetectCmd[1:]...)
+}
+
+func detectWindowsGGAShimVersion(ctx context.Context, tool ToolInfo) string {
+	if runtimeGOOS != "windows" || tool.Name != "gga" {
+		return ""
+	}
+	if _, err := lookPath("powershell.exe"); err != nil {
+		return ""
+	}
+
+	home, err := userHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ""
+	}
+
+	shimPath := filepath.Join(home, "bin", "gga.ps1")
+	if _, err := os.Stat(shimPath); err != nil {
+		return ""
+	}
+
+	args := append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", shimPath}, tool.DetectCmd[1:]...)
+	return runDetectCommand(ctx, "powershell.exe", args...)
+}
+
+func runDetectCommand(ctx context.Context, name string, args ...string) string {
 	// Apply a bounded timeout so a hanging binary (e.g. engram stuck on DB
 	// lock) cannot block update/upgrade flows forever.
 	detectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	cmd := execCommand(tool.DetectCmd[0], tool.DetectCmd[1:]...)
+	cmd := execCommand(name, args...)
 
 	// Kill the subprocess when the context fires. We use a goroutine because
 	// the testable execCommand var returns a plain *exec.Cmd (not CommandContext).

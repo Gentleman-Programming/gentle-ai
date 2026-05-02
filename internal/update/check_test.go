@@ -121,6 +121,61 @@ func TestDetectInstalledVersion(t *testing.T) {
 	}
 }
 
+func TestDetectInstalledVersion_WindowsGGAPowerShellShim(t *testing.T) {
+	home := t.TempDir()
+	shimPath := filepath.Join(home, "bin", "gga.ps1")
+	if err := os.MkdirAll(filepath.Dir(shimPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shimPath, []byte("# shim"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	origUserHomeDir := userHomeDir
+	origRuntimeGOOS := runtimeGOOS
+	t.Cleanup(func() {
+		lookPath = origLookPath
+		execCommand = origExecCommand
+		userHomeDir = origUserHomeDir
+		runtimeGOOS = origRuntimeGOOS
+	})
+
+	runtimeGOOS = "windows"
+	userHomeDir = func() (string, error) { return home, nil }
+	lookPath = func(name string) (string, error) {
+		switch name {
+		case "gga":
+			return "", fmt.Errorf("not found")
+		case "powershell.exe":
+			return "powershell.exe", nil
+		default:
+			return "", fmt.Errorf("unexpected lookup: %s", name)
+		}
+	}
+
+	var gotName string
+	var gotArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		return exec.Command("echo", "gga v2.8.1")
+	}
+
+	tool := ToolInfo{Name: "gga", DetectCmd: []string{"gga", "--version"}}
+	if got := detectInstalledVersion(context.Background(), tool, "dev"); got != "2.8.1" {
+		t.Fatalf("detectInstalledVersion() = %q, want 2.8.1", got)
+	}
+	if gotName != "powershell.exe" {
+		t.Fatalf("exec command = %q, want powershell.exe", gotName)
+	}
+	wantArgs := []string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", shimPath, "--version"}
+	if strings.Join(gotArgs, "\x00") != strings.Join(wantArgs, "\x00") {
+		t.Fatalf("exec args = %#v, want %#v", gotArgs, wantArgs)
+	}
+}
+
 func TestDetectInstalledVersionFromOpenCodeNodeModulePackageJSON(t *testing.T) {
 	home := t.TempDir()
 	pkgDir := filepath.Join(home, ".config", "opencode", "node_modules", "opencode-sdd-engram-manage")
