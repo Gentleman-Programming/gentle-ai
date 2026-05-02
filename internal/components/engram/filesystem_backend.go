@@ -101,8 +101,7 @@ func (b *LocalDataBackend) ExpandPath(dir string) (string, error) {
 // DetectExistingData reports whether an Engram database already exists in the
 // given directory. It looks for engram.db and its SQLite companion files.
 func (b *LocalDataBackend) DetectExistingData(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, "engram.db"))
-	return err == nil
+	return len(b.ExistingFiles(dir)) > 0
 }
 
 // ExistingFiles returns the list of Engram SQLite files that exist in
@@ -110,7 +109,7 @@ func (b *LocalDataBackend) DetectExistingData(dir string) bool {
 func (b *LocalDataBackend) ExistingFiles(dir string) []string {
 	var found []string
 	for _, f := range engramSQLiteFiles {
-		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+		if info, err := os.Stat(filepath.Join(dir, f)); err == nil && !info.IsDir() {
 			found = append(found, f)
 		}
 	}
@@ -165,6 +164,13 @@ func (b *LocalDataBackend) EstimateMigration(source string) ([]FileInfo, uint64,
 // It uses read/write instead of os.Rename so that cross-device moves work
 // (e.g. C:\ → D:\ on Windows or /home → /mnt/data on Linux).
 func (b *LocalDataBackend) MigrateData(source, target string) (Result, error) {
+	if sameFilesystemPath(source, target) {
+		return Result{}, fmt.Errorf("%w: source and target are the same directory", ErrInvalidPath)
+	}
+	if len(b.ExistingFiles(target)) > 0 {
+		return Result{}, ErrTargetHasData
+	}
+
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return Result{}, fmt.Errorf("create target directory %q: %w", target, err)
 	}
@@ -228,6 +234,24 @@ func (b *LocalDataBackend) MigrateData(source, target string) (Result, error) {
 	}
 
 	return result, nil
+}
+
+func sameFilesystemPath(a, b string) bool {
+	aAbs, aErr := filepath.Abs(a)
+	bAbs, bErr := filepath.Abs(b)
+	if aErr == nil {
+		a = aAbs
+	}
+	if bErr == nil {
+		b = bAbs
+	}
+
+	a = filepath.Clean(a)
+	b = filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // DetectLockedData tries to determine whether any Engram SQLite files in dir

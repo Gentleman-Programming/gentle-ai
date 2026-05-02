@@ -125,6 +125,81 @@ func TestPrepareBackupStep_SyncWritesMetadataToManifest(t *testing.T) {
 	}
 }
 
+// TestPrepareBackupStep_CleansUpOnFailure verifies that when Run() fails
+// (e.g., snapshot directory cannot be created), the deferred cleanup removes
+// any partial snapshot directory that may have been created.
+func TestPrepareBackupStep_CleansUpOnFailure(t *testing.T) {
+	home := t.TempDir()
+
+	// Create a file where the parent directory should be — this causes
+	// os.MkdirAll to fail when Snapshotter.Create tries to create snapshotDir.
+	parentAsFile := filepath.Join(home, "parent-is-file")
+	if err := os.WriteFile(parentAsFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	snapshotDir := filepath.Join(parentAsFile, "snap")
+
+	step := prepareBackupStep{
+		id:          "prepare:backup-snapshot",
+		snapshotter: backup.NewSnapshotter(),
+		snapshotDir: snapshotDir,
+		targets:     []string{},
+		state:       &runtimeState{},
+	}
+
+	err := step.Run()
+	if err == nil {
+		t.Fatal("prepareBackupStep.Run() expected error for invalid snapshotDir")
+	}
+
+	// The partial snapshot directory must NOT exist after the failure.
+	if _, statErr := os.Stat(snapshotDir); !os.IsNotExist(statErr) {
+		t.Errorf("snapshotDir %q still exists after failure; should have been cleaned up", snapshotDir)
+	}
+}
+
+// TestPrepareBackupStep_RollbackRemovesSnapshotDir verifies that the Rollback
+// method cleans up the snapshot directory, making prepareBackupStep a valid
+// RollbackStep for the pipeline.
+func TestPrepareBackupStep_RollbackRemovesSnapshotDir(t *testing.T) {
+	home := t.TempDir()
+
+	configPath := filepath.Join(home, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	snapshotDir := filepath.Join(home, "backup", "snap")
+	state := &runtimeState{}
+
+	step := prepareBackupStep{
+		id:          "prepare:backup-snapshot",
+		snapshotter: backup.NewSnapshotter(),
+		snapshotDir: snapshotDir,
+		targets:     []string{configPath},
+		state:       state,
+	}
+
+	// Run succeeds first.
+	if err := step.Run(); err != nil {
+		t.Fatalf("prepareBackupStep.Run() error = %v", err)
+	}
+
+	// Verify the snapshot dir exists.
+	if _, err := os.Stat(snapshotDir); err != nil {
+		t.Fatalf("snapshotDir should exist after Run: %v", err)
+	}
+
+	// Rollback removes it.
+	if err := step.Rollback(); err != nil {
+		t.Fatalf("prepareBackupStep.Rollback() error = %v", err)
+	}
+
+	if _, err := os.Stat(snapshotDir); !os.IsNotExist(err) {
+		t.Errorf("snapshotDir %q still exists after Rollback", snapshotDir)
+	}
+}
+
 // TestPrepareBackupStep_NoMetadataWhenSourceEmpty verifies backward-compatible
 // behavior: when source and appVersion are empty, the manifest fields are
 // omitted (zero-values), keeping old-manifest compatibility intact.

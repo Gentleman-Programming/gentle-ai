@@ -23,19 +23,27 @@ const EngramChoiceClean = 3
 // EngramDataDirRenderArgs holds all the state needed to render the Engram data
 // directory configuration screen.
 type EngramDataDirRenderArgs struct {
-	CurrentDir       string
-	HasExistingData  bool
-	Choice           int // 0=default, 1=migrate, 2=start-fresh, 3=clean
-	CustomPath       string
-	Cursor           int
-	InputPos         int
-	ErrMsg           string
+	CurrentDir      string
+	HasExistingData bool
+	Choice          int // 0=default, 1=migrate, 2=start-fresh, 3=clean
+	CustomPath      string
+	Cursor          int
+	InputPos        int
+	ErrMsg          string
 
 	// Preview info shown when a custom path is selected.
-	FilesToMove      []string // list of files that will be affected
-	TotalBytes       uint64   // total size of files
-	TargetSpace      uint64   // available space at target path (0 = unknown)
-	TargetSpaceErr   string   // error getting target space ("" = ok)
+	FilesToMove    []string // list of files that will be affected
+	TotalBytes     uint64   // total size of files
+	TargetSpace    uint64   // available space at target path (0 = unknown)
+	TargetSpaceErr string   // error getting target space ("" = ok)
+
+	// DefaultDirSpace is shown on first-time install to reassure the user
+	// there is enough space at the default location.
+	DefaultDirSpace uint64
+
+	// SuggestedLocations appears when the user needs to pick a custom path
+	// (Migrate / StartFresh). It shows common destinations with available space.
+	SuggestedLocations []engram.LocationSuggestion
 
 	// PartialWarning is shown if an interrupted migration is detected.
 	PartialWarning string
@@ -45,8 +53,12 @@ type EngramDataDirRenderArgs struct {
 // data directory screen, including the text-input row, Continue, and Back.
 func EngramDataDirOptionCount(hasExistingData bool, choice int) int {
 	if !hasExistingData {
-		// default, custom, continue, back
-		return 4
+		if choice == EngramChoiceDefault {
+			// default, custom, continue, back
+			return 4
+		}
+		// default, custom, path-input, continue, back
+		return 5
 	}
 	// default, migrate, start-fresh, clean, continue, back
 	count := 6
@@ -88,7 +100,7 @@ func EngramDataDirContinueRow(hasExistingData bool, choice int) int {
 	// hasExistingData
 	switch choice {
 	case EngramChoiceDefault:
-		return 3 // default, migrate, start-fresh, clean, continue... wait
+		return 4 // default, migrate, start-fresh, clean, continue
 	case EngramChoiceMigrate:
 		return 3 // default, migrate, path-input, continue
 	case EngramChoiceStartFresh:
@@ -178,6 +190,20 @@ func RenderEngramDataDir(args EngramDataDirRenderArgs) string {
 	}
 	b.WriteString("\n")
 
+	// First-time install: show the default path prominently when the user
+	// hasn't chosen a custom location yet.
+	if !args.HasExistingData && args.Choice == EngramChoiceDefault {
+		b.WriteString(styles.LabelStyle.Render("Engram will store your memories at:"))
+		b.WriteString("\n")
+		b.WriteString("  " + styles.ValueStyle.Render(args.CurrentDir))
+		b.WriteString("\n")
+		if args.DefaultDirSpace > 0 {
+			b.WriteString("  " + styles.SubtextStyle.Render("Available space: "+engram.FormatBytes(args.DefaultDirSpace)))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
 	rows := buildEngramDataDirRows(args)
 	for idx, row := range rows {
 		focused := idx == args.Cursor
@@ -185,6 +211,21 @@ func RenderEngramDataDir(args EngramDataDirRenderArgs) string {
 	}
 
 	b.WriteString("\n")
+
+	// Show suggested locations when a custom path is needed.
+	if NeedsPathInput(args.Choice) && len(args.SuggestedLocations) > 0 {
+		b.WriteString(styles.LabelStyle.Render("Suggested locations:"))
+		b.WriteString("\n")
+		for _, loc := range args.SuggestedLocations {
+			line := "  • " + loc.Label
+			if loc.Space > 0 {
+				line += " — " + engram.FormatBytes(loc.Space) + " available"
+			}
+			b.WriteString(styles.DimStyle.Render(line))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
 
 	// Show preview of what will happen for custom-path choices.
 	if NeedsPathInput(args.Choice) && len(args.FilesToMove) > 0 {
@@ -203,7 +244,7 @@ func RenderEngramDataDir(args EngramDataDirRenderArgs) string {
 			b.WriteString("\n")
 		} else if args.TargetSpace > 0 {
 			b.WriteString(styles.LabelStyle.Render("Available at target: "))
-		b.WriteString(styles.ValueStyle.Render(engram.FormatBytes(args.TargetSpace)))
+			b.WriteString(styles.ValueStyle.Render(engram.FormatBytes(args.TargetSpace)))
 			b.WriteString("\n")
 		}
 
@@ -252,12 +293,12 @@ func buildEngramDataDirRows(args EngramDataDirRenderArgs) []engramRow {
 	if !args.HasExistingData {
 		// No existing data — simple install flow.
 		rows = append(rows, engramRow{
-			Label:      "Use default location (~/.engram)",
+			Label:      "Continue with this location",
 			IsRadio:    true,
 			IsSelected: args.Choice == EngramChoiceDefault,
 		})
 		rows = append(rows, engramRow{
-			Label:      "Use custom location",
+			Label:      "Choose a different location",
 			IsRadio:    true,
 			IsSelected: args.Choice == EngramChoiceStartFresh,
 		})
@@ -377,8 +418,8 @@ func renderEngramTextInput(text string, focused bool, cursorPos int) string {
 type EngramConfirmRenderArgs struct {
 	Title          string
 	Message        string
-	Warning        string   // optional warning line
-	Cursor         int      // 0=Confirm, 1=Cancel
+	Warning        string // optional warning line
+	Cursor         int    // 0=Confirm, 1=Cancel
 	ErrMsg         string
 	FilesToMove    []string // list of files that will be affected
 	TotalBytes     uint64   // total size
@@ -487,5 +528,3 @@ func RenderEngramFeedback(args EngramFeedbackRenderArgs) string {
 
 	return styles.FrameStyle.Render(b.String())
 }
-
-

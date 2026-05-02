@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -31,6 +32,7 @@ var (
 	ErrInsufficientSpace = errors.New("insufficient disk space")
 	ErrPathNotWritable   = errors.New("path is not writable")
 	ErrInvalidPath       = errors.New("invalid path")
+	ErrTargetHasData     = errors.New("target already contains engram data")
 )
 
 // FileInfo describes a single Engram SQLite file for preview purposes.
@@ -44,7 +46,7 @@ type Preview struct {
 	Files                   []FileInfo
 	TotalBytes              uint64
 	AvailableSpace          uint64
-	SpaceErr                error // nil when space check succeeded
+	SpaceErr                error  // nil when space check succeeded
 	ExpandedPath            string // absolute path with ~ expanded
 	PartialMigrationWarning string // set when data exists in both source and target
 }
@@ -153,7 +155,7 @@ func (s *DataDirService) Preview(action Action, inputPath string) (Preview, erro
 			dstFiles := s.backend.ExistingFiles(expanded)
 			if len(srcFiles) > 0 && len(dstFiles) > 0 {
 				p.PartialMigrationWarning = fmt.Sprintf(
-					"Found data in both locations. Using %s. To recover old data, set ENGRAM_DATA_DIR manually.",
+					"Found data in both locations. Migration to %s is blocked until one location is cleaned or chosen explicitly.",
 					expanded,
 				)
 			}
@@ -184,21 +186,40 @@ func (s *DataDirService) Execute(action Action, path string) (Result, error) {
 		if locked, _ := s.backend.DetectLockedData(src); locked {
 			return Result{}, ErrLocked
 		}
+		// Best-effort temp backup before destructive operation.
+		backupDir, backupErr := s.backupBeforeClean(src)
+		if backupErr != nil {
+			log.Printf("engram: clean temp backup failed (proceeding anyway): %v", backupErr)
+		}
 		if err := s.backend.CleanData(src); err != nil {
 			return Result{}, err
+		}
+		// Success: remove temp backup.
+		if backupDir != "" {
+			_ = os.RemoveAll(backupDir)
 		}
 		return Result{Message: "All Engram data has been permanently deleted."}, nil
 	case ActionMigrate:
 		src := s.backend.HardDefaultDataDir()
+		target, err := s.backend.ExpandPath(path)
+		if err != nil {
+			return Result{}, fmt.Errorf("%w: %v", ErrInvalidPath, err)
+		}
+		if sameFilesystemPath(src, target) {
+			return Result{}, fmt.Errorf("%w: target is already the current Engram data location", ErrInvalidPath)
+		}
+		if len(s.backend.ExistingFiles(target)) > 0 {
+			return Result{}, ErrTargetHasData
+		}
 		if locked, _ := s.backend.DetectLockedData(src); locked {
 			return Result{}, ErrLocked
 		}
-		result, err := s.backend.MigrateData(src, path)
+		result, err := s.backend.MigrateData(src, target)
 		if err != nil {
 			return Result{}, err
 		}
-		if err := s.persister.Write(path); err != nil {
-			return Result{}, fmt.Errorf("data copied to %s but config could not be saved: %w", path, err)
+		if err := s.persister.Write(target); err != nil {
+			return Result{}, fmt.Errorf("data copied to %s but config could not be saved: %w", target, err)
 		}
 		// Config is persisted — now it is safe to remove the source.
 		if err := s.backend.CleanData(src); err != nil {
@@ -208,6 +229,13 @@ func (s *DataDirService) Execute(action Action, path string) (Result, error) {
 		return result, nil
 	case ActionStartFresh:
 		src := s.backend.HardDefaultDataDir()
+		target, err := s.backend.ExpandPath(path)
+		if err != nil {
+			return Result{}, fmt.Errorf("%w: %v", ErrInvalidPath, err)
+		}
+		if !sameFilesystemPath(src, target) && len(s.backend.ExistingFiles(target)) > 0 {
+			return Result{}, ErrTargetHasData
+		}
 		if s.backend.DetectExistingData(src) {
 			if locked, _ := s.backend.DetectLockedData(src); locked {
 				return Result{}, ErrLocked
@@ -216,16 +244,45 @@ func (s *DataDirService) Execute(action Action, path string) (Result, error) {
 				return Result{}, err
 			}
 		}
-		if err := s.backend.EnsureDir(path); err != nil {
+		if err := s.backend.EnsureDir(target); err != nil {
 			return Result{}, err
 		}
-		if err := s.persister.Write(path); err != nil {
-			return Result{}, fmt.Errorf("new database directory ready at %s but config could not be saved: %w", path, err)
+		if err := s.persister.Write(target); err != nil {
+			return Result{}, fmt.Errorf("new database directory ready at %s but config could not be saved: %w", target, err)
 		}
 		return Result{Message: "A new empty database will be created at the selected location."}, nil
 	default:
 		return Result{}, fmt.Errorf("unknown action: %v", action)
 	}
+}
+
+// backupBeforeClean creates a temporary backup of Engram SQLite files before
+// a destructive Clean operation. The caller is responsible for removing the
+// backup directory after successful cleanup. Returns ("", nil) on best-effort
+// failure so that Clean can still proceed.
+func (s *DataDirService) backupBeforeClean(src string) (string, error) {
+	files := s.backend.ExistingFiles(src)
+	if len(files) == 0 {
+		return "", nil
+	}
+	backupDir, err := os.MkdirTemp("", "gentle-ai-engram-clean-*")
+	if err != nil {
+		return "", err
+	}
+	for _, f := range files {
+		srcPath := filepath.Join(src, f)
+		dstPath := filepath.Join(backupDir, f)
+		info, err := os.Stat(srcPath)
+		if err != nil {
+			_ = os.RemoveAll(backupDir)
+			return "", err
+		}
+		if err := copyFileBuffered(srcPath, dstPath, info.Mode()); err != nil {
+			_ = os.RemoveAll(backupDir)
+			return "", err
+		}
+	}
+	return backupDir, nil
 }
 
 // LocalConfigPersister implements ConfigPersister using state.json + env var + shell profile.

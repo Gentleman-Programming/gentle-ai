@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
 )
 
@@ -36,6 +37,7 @@ type CompletePayload struct {
 	MissingDeps         []MissingDep
 	AvailableUpdates    []UpdateInfo
 	EngramDataDir       string // empty if not configured / keep default
+	EngramDataSize      uint64 // size of engram DB files at EngramDataDir
 }
 
 func RenderComplete(data CompletePayload) string {
@@ -60,6 +62,9 @@ func renderCompleteSuccess(data CompletePayload) string {
 
 	if data.EngramDataDir != "" {
 		b.WriteString("  " + styles.HeadingStyle.Render("Engram data directory") + "  " + styles.ValueStyle.Render(data.EngramDataDir) + "\n")
+		if data.EngramDataSize > 0 {
+			b.WriteString("  " + styles.SubtextStyle.Render("Database size: "+engram.FormatBytes(data.EngramDataSize)) + "\n")
+		}
 		b.WriteString("  " + styles.SubtextStyle.Render("Verify with: engram stats") + "\n")
 		b.WriteString("\n")
 	}

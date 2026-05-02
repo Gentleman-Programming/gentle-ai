@@ -2,6 +2,7 @@ package backup
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,6 +154,13 @@ func restoreEntry(entry ManifestEntry, trustedSnapshot bool) error {
 
 	if _, err := filemerge.WriteFileAtomic(entry.OriginalPath, content, os.FileMode(entry.Mode)); err != nil {
 		return fmt.Errorf("restore path %q: %w", entry.OriginalPath, err)
+	}
+
+	// Best-effort validation using in-memory content to avoid a second disk read.
+	// A warning is logged for corrupted files but the restore is not aborted —
+	// a warning is better than leaving the system in an inconsistent state.
+	if warn := ValidateRestoredContent(entry.OriginalPath, content); warn != "" {
+		log.Printf("backup: restore validation: %s", warn)
 	}
 
 	return nil

@@ -127,6 +127,8 @@ func ErrorMessage(err error) string {
 		return "The path you entered is invalid. Please check the path and try again."
 	case errors.Is(err, ErrPathNotWritable):
 		return "The selected directory is not writable. Please choose a different location or fix permissions."
+	case errors.Is(err, ErrTargetHasData):
+		return "The selected directory already contains Engram data. Choose an empty directory, keep that location explicitly, or clean it first."
 	default:
 		return err.Error()
 	}

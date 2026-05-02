@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/gentleman-programming/gentle-ai/internal/undo"
 )
 
 // runtimeGOOS and syncDirFn are package-level vars so tests can override them
@@ -38,7 +40,9 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 	created := false
 	existing, err := readComparableFile(path)
 	if err == nil {
-		if bytes.Equal(existing, content) {
+		// When existing is nil and err is nil, the file exceeds the comparison
+		// threshold — treat it as different and proceed with the write.
+		if existing != nil && bytes.Equal(existing, content) {
 			return WriteResult{}, nil
 		}
 	} else if !os.IsNotExist(err) {
@@ -101,6 +105,19 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 	return WriteResult{Changed: true, Created: created}, nil
 }
 
+// WriteFileAtomicWithRecorder performs an atomic write identical to
+// WriteFileAtomic, but first records the existing file contents via rec
+// so the write can be rolled back later. If rec is nil, it behaves exactly
+// like WriteFileAtomic.
+func WriteFileAtomicWithRecorder(path string, content []byte, perm fs.FileMode, rec *undo.Recorder) (WriteResult, error) {
+	if rec != nil {
+		if err := rec.BeforeWrite(path); err != nil {
+			return WriteResult{}, fmt.Errorf("record undo for %q: %w", path, err)
+		}
+	}
+	return WriteFileAtomic(path, content, perm)
+}
+
 func readComparableFile(path string) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -110,7 +127,11 @@ func readComparableFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("refusing to read symlink %q", path)
 	}
 	if info.Size() > maxAtomicFileSize {
-		return nil, fmt.Errorf("file %q exceeds max atomic compare size %d bytes", path, maxAtomicFileSize)
+		// File exceeds the comparison threshold. Return nil, nil to signal
+		// "file exists but content was not compared" — the caller proceeds
+		// with the write rather than failing. This avoids loading large
+		// files into memory while still allowing writes to succeed.
+		return nil, nil
 	}
 
 	file, err := os.Open(path)

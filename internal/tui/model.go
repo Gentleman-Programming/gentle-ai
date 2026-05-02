@@ -405,6 +405,8 @@ type Model struct {
 	EngramDataDirInput           string // text buffer for custom path
 	EngramDataDirPos             int    // cursor position in runes
 	EngramDataDirErr             string // validation error
+	EngramDataDirDefaultSpace    uint64 // cached available space at default dir
+	EngramDataDirSuggestions     []engram.LocationSuggestion // cached location suggestions
 
 	// EngramDataDir confirmation/feedback phases
 	EngramDataDirPhase        int    // 0=choose, 1=confirm, 2=feedback
@@ -413,6 +415,9 @@ type Model struct {
 	EngramDataDirFilesMoved   int    // files migrated (for feedback)
 	EngramDataDirBytesMoved   uint64 // bytes migrated (for feedback)
 	EngramDataDirPreview      engram.Preview // cached preview to avoid syscalls in View()
+
+	// EngramDataSize is computed once when entering ScreenComplete.
+	EngramDataSize uint64
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -765,18 +770,20 @@ func (m Model) View() string {
 		default: // 0 = choose
 			backend := engram.NewLocalDataBackend()
 			return screens.RenderEngramDataDir(screens.EngramDataDirRenderArgs{
-				CurrentDir:      backend.DefaultDataDir(),
-				HasExistingData: m.EngramDataDirHasExistingData,
-				Choice:          m.EngramDataDirChoice,
-				CustomPath:      m.EngramDataDirInput,
-				Cursor:          m.Cursor,
-				InputPos:        m.EngramDataDirPos,
-				ErrMsg:          m.EngramDataDirErr,
-				FilesToMove:     engram.PreviewFileNames(preview.Files),
-				TotalBytes:      preview.TotalBytes,
-				TargetSpace:     preview.AvailableSpace,
-				TargetSpaceErr:  errString(preview.SpaceErr),
-				PartialWarning:  preview.PartialMigrationWarning,
+				CurrentDir:         backend.DefaultDataDir(),
+				HasExistingData:    m.EngramDataDirHasExistingData,
+				Choice:             m.EngramDataDirChoice,
+				CustomPath:         m.EngramDataDirInput,
+				Cursor:             m.Cursor,
+				InputPos:           m.EngramDataDirPos,
+				ErrMsg:             m.EngramDataDirErr,
+				FilesToMove:        engram.PreviewFileNames(preview.Files),
+				TotalBytes:         preview.TotalBytes,
+				TargetSpace:        preview.AvailableSpace,
+				TargetSpaceErr:     errString(preview.SpaceErr),
+				DefaultDirSpace:    m.EngramDataDirDefaultSpace,
+				SuggestedLocations: m.EngramDataDirSuggestions,
+				PartialWarning:     preview.PartialMigrationWarning,
 			})
 		}
 	case ScreenSkillPicker:
@@ -795,6 +802,7 @@ func (m Model) View() string {
 			MissingDeps:         extractMissingDeps(m.Detection),
 			AvailableUpdates:    extractAvailableUpdates(m.UpdateResults),
 			EngramDataDir:       m.Selection.EngramDataDir,
+			EngramDataSize:      m.EngramDataSize,
 		})
 	case ScreenBackups:
 		return screens.RenderBackups(m.Backups, m.Cursor, m.BackupScroll, m.PinErr)
@@ -2654,7 +2662,7 @@ func (m *Model) setScreen(next Screen) {
 	}
 	if next == ScreenEngramDataDir {
 		backend := engram.NewLocalDataBackend()
-		m.EngramDataDirHasExistingData = backend.DetectExistingData(backend.HardDefaultDataDir())
+		m.EngramDataDirHasExistingData = backend.DetectExistingData(backend.DefaultDataDir())
 		m.EngramDataDirChoice = screens.EngramChoiceDefault
 		m.EngramDataDirPhase = 0
 		m.EngramDataDirErr = ""
@@ -2662,6 +2670,14 @@ func (m *Model) setScreen(next Screen) {
 		m.EngramDataDirFeedbackMsg = ""
 		m.EngramDataDirFilesMoved = 0
 		m.EngramDataDirBytesMoved = 0
+		m.EngramDataDirDefaultSpace = 0
+		m.EngramDataDirSuggestions = nil
+		if space, err := backend.AvailableSpace(backend.DefaultDataDir()); err == nil {
+			m.EngramDataDirDefaultSpace = space
+		}
+		if home, err := osUserHomeDirFn(); err == nil {
+			m.EngramDataDirSuggestions = engram.SuggestedLocations(backend, home)
+		}
 		if m.Selection.EngramDataDir != "" {
 			m.EngramDataDirInput = m.Selection.EngramDataDir
 			m.EngramDataDirPos = len([]rune(m.EngramDataDirInput))
@@ -2675,6 +2691,19 @@ func (m *Model) setScreen(next Screen) {
 			m.EngramDataDirPos = 0
 		}
 		m.refreshEngramPreview()
+	}
+	if next == ScreenComplete {
+		m.EngramDataSize = 0
+		if m.Selection.EngramDataDir != "" || hasSelectedComponent(m.Selection.Components, model.ComponentEngram) {
+			backend := engram.NewLocalDataBackend()
+			dataDir := m.Selection.EngramDataDir
+			if dataDir == "" {
+				dataDir = backend.DefaultDataDir()
+			}
+			if _, total, err := backend.EstimateMigration(dataDir); err == nil {
+				m.EngramDataSize = total
+			}
+		}
 	}
 }
 

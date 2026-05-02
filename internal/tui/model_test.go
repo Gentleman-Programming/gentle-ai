@@ -1129,6 +1129,27 @@ func TestGoBack_ReviewCustomPreset_WithEngram(t *testing.T) {
 	}
 }
 
+// TestSetScreenEngramDataDir_RespectsEnvVar verifies that existing data detection
+// uses the effective data directory (respecting ENGRAM_DATA_DIR) rather than
+// always checking the hard default ~/.engram.
+func TestSetScreenEngramDataDir_RespectsEnvVar(t *testing.T) {
+	customDir := t.TempDir()
+	t.Setenv(engram.DataDirEnvVar, customDir)
+
+	// Create data in the custom dir, NOT in ~/.engram.
+	if err := os.WriteFile(filepath.Join(customDir, "engram.db"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenEngramDataDir
+	m.setScreen(ScreenEngramDataDir)
+
+	if !m.EngramDataDirHasExistingData {
+		t.Fatal("EngramDataDirHasExistingData = false, want true (data exists at ENGRAM_DATA_DIR)")
+	}
+}
+
 func TestUninstallModeScreen_PartialNavigatesToAgentSelection(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstallMode

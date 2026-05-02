@@ -12,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/internal/undo"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
@@ -237,5 +238,76 @@ func TestSkillPathForAgent(t *testing.T) {
 	want = "/home/test/.config/opencode/skills/skill-creator/SKILL.md"
 	if path != want {
 		t.Fatalf("SkillPathForAgent() = %q, want %q", path, want)
+	}
+}
+
+// TestInjectWithRecorderRollsBackCreatedFiles verifies that when a skill is
+// injected with an undo Recorder, rolling back the recorder removes the
+// created skill files.
+func TestInjectWithRecorderRollsBackCreatedFiles(t *testing.T) {
+	home := t.TempDir()
+	undoDir := filepath.Join(home, "undo")
+
+	rec := undo.NewRecorder(undoDir)
+	_, err := InjectWithRecorder(home, opencodeAdapter(), []model.SkillID{model.SkillCreator}, rec)
+	if err != nil {
+		t.Fatalf("InjectWithRecorder() error = %v", err)
+	}
+
+	path := filepath.Join(home, ".config", "opencode", "skills", "skill-creator", "SKILL.md")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected skill file %q after inject: %v", path, err)
+	}
+
+	// Rollback should remove the created file.
+	if err := rec.Rollback(); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("skill file %q still exists after rollback", path)
+	}
+}
+
+// TestInjectWithRecorderRestoresModifiedFiles verifies that when a skill file
+// already exists and is overwritten, the undo Recorder restores the original.
+func TestInjectWithRecorderRestoresModifiedFiles(t *testing.T) {
+	home := t.TempDir()
+	undoDir := filepath.Join(home, "undo")
+
+	path := filepath.Join(home, ".config", "opencode", "skills", "skill-creator", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("original content"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	rec := undo.NewRecorder(undoDir)
+	_, err := InjectWithRecorder(home, opencodeAdapter(), []model.SkillID{model.SkillCreator}, rec)
+	if err != nil {
+		t.Fatalf("InjectWithRecorder() error = %v", err)
+	}
+
+	// The file should have been overwritten with embedded content.
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) == "original content" {
+		t.Fatal("skill file was not overwritten")
+	}
+
+	// Rollback should restore the original.
+	if err := rec.Rollback(); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+
+	restored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile after rollback: %v", err)
+	}
+	if string(restored) != "original content" {
+		t.Errorf("after rollback content = %q, want %q", string(restored), "original content")
 	}
 }

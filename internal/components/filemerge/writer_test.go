@@ -111,7 +111,7 @@ func TestWriteFileAtomicRejectsExistingSymlink(t *testing.T) {
 	}
 }
 
-func TestWriteFileAtomicRejectsOversizedExistingFile(t *testing.T) {
+func TestWriteFileAtomicProceedsWhenExistingFileExceedsMaxSize(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "big.txt")
 	data := make([]byte, maxAtomicFileSize+1)
@@ -119,9 +119,23 @@ func TestWriteFileAtomicRejectsOversizedExistingFile(t *testing.T) {
 		t.Fatalf("WriteFile(big) error = %v", err)
 	}
 
-	_, err := WriteFileAtomic(path, []byte("small\n"), 0o644)
-	if err == nil {
-		t.Fatal("WriteFileAtomic(big) error = nil, want max-size rejection")
+	// Writing to an oversized file should succeed — the comparison is skipped,
+	// and the write proceeds without loading the file into memory.
+	result, err := WriteFileAtomic(path, []byte("small\n"), 0o644)
+	if err != nil {
+		t.Fatalf("WriteFileAtomic(big) error = %v, want nil (write should proceed)", err)
+	}
+	if !result.Changed {
+		t.Fatal("WriteFileAtomic(big) Changed = false, want true (content changed)")
+	}
+
+	// Verify the content was actually written.
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("ReadFile() after write: %v", readErr)
+	}
+	if string(got) != "small\n" {
+		t.Fatalf("file content = %q, want %q", string(got), "small\n")
 	}
 }
 

@@ -19,6 +19,10 @@ type ArchiveEntry struct {
 	SourcePath string
 	// Mode is the file permission bits.
 	Mode os.FileMode
+	// Size is the file size in bytes. When zero, addFileToTar will stat the file
+	// to determine the size for backward compatibility with callers that do not
+	// set this field.
+	Size int64
 }
 
 // CreateArchive writes a tar.gz archive at archivePath containing all entries.
@@ -57,26 +61,45 @@ func CreateArchive(archivePath string, entries []ArchiveEntry) error {
 	return nil
 }
 
-// addFileToTar appends a single file to the tar writer.
+// addFileToTar appends a single file to the tar writer using streaming.
+// It opens the source file and copies its contents directly into the tar
+// archive via io.Copy, avoiding loading the entire file into memory.
+// The tar header size is populated from entry.Size (or from os.Stat when
+// Size is zero for backward compatibility). After copying, it validates
+// that the number of bytes written matches the declared size.
 func addFileToTar(tw *tar.Writer, entry ArchiveEntry) error {
-	data, err := os.ReadFile(entry.SourcePath)
-	if err != nil {
-		return fmt.Errorf("read source file %q: %w", entry.SourcePath, err)
+	size := entry.Size
+	if size == 0 {
+		info, err := os.Stat(entry.SourcePath)
+		if err != nil {
+			return fmt.Errorf("stat source file %q: %w", entry.SourcePath, err)
+		}
+		size = info.Size()
 	}
+
+	file, err := os.Open(entry.SourcePath)
+	if err != nil {
+		return fmt.Errorf("open source file %q: %w", entry.SourcePath, err)
+	}
+	defer file.Close()
 
 	hdr := &tar.Header{
 		Typeflag: tar.TypeReg,
 		Name:     filepath.ToSlash(entry.RelPath),
 		Mode:     int64(entry.Mode),
-		Size:     int64(len(data)),
+		Size:     size,
 	}
 
 	if err := tw.WriteHeader(hdr); err != nil {
 		return fmt.Errorf("write tar header for %q: %w", entry.RelPath, err)
 	}
 
-	if _, err := tw.Write(data); err != nil {
-		return fmt.Errorf("write tar content for %q: %w", entry.RelPath, err)
+	written, err := io.Copy(tw, file)
+	if err != nil {
+		return fmt.Errorf("copy tar content for %q: %w", entry.RelPath, err)
+	}
+	if written != size {
+		return fmt.Errorf("size mismatch for %q: wrote %d bytes, expected %d", entry.RelPath, written, size)
 	}
 
 	return nil
@@ -158,6 +181,7 @@ func ExtractArchive(archivePath string, destDir string) ([]ArchiveEntry, error) 
 			RelPath:    hdr.Name,
 			SourcePath: destPath,
 			Mode:       mode,
+			Size:       hdr.Size,
 		})
 	}
 

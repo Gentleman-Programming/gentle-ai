@@ -125,6 +125,7 @@ func (s Snapshotter) buildEntry(sourcePath string) (ManifestEntry, ArchiveEntry,
 		RelPath:    relPath,
 		SourcePath: cleanSource,
 		Mode:       info.Mode(),
+		Size:       info.Size(),
 	}
 
 	entry.SnapshotPath = relPath

@@ -2,6 +2,7 @@ package backup
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"io"
 	"os"
@@ -273,6 +274,64 @@ func TestExtractArchive_RejectsDotEntry(t *testing.T) {
 	_, err := ExtractArchive(archivePath, destDir)
 	if err == nil {
 		t.Fatal("ExtractArchive() should return error for '.' entry")
+	}
+}
+
+// TestCreateArchive_StreamsLargeFile verifies that CreateArchive correctly
+// archives a large file without loading its entire content into memory.
+// The tar header size must match the actual file size, and round-trip
+// extraction must produce identical content.
+func TestCreateArchive_StreamsLargeFile(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a 1 MB file with deterministic content.
+	largeFile := filepath.Join(dir, "large.bin")
+	data := make([]byte, 1024*1024)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+	if err := os.WriteFile(largeFile, data, 0o644); err != nil {
+		t.Fatalf("WriteFile large.bin: %v", err)
+	}
+
+	archivePath := filepath.Join(dir, "snapshot.tar.gz")
+	entries := []ArchiveEntry{
+		{RelPath: "files/large.bin", SourcePath: largeFile, Mode: 0o644, Size: int64(len(data))},
+	}
+
+	if err := CreateArchive(archivePath, entries); err != nil {
+		t.Fatalf("CreateArchive() error = %v", err)
+	}
+
+	// Verify the tar header reports the exact size.
+	headers := openAndListTar(t, archivePath)
+	hdr, ok := headers["files/large.bin"]
+	if !ok {
+		t.Fatalf("archive does not contain files/large.bin")
+	}
+	if hdr.Size != int64(len(data)) {
+		t.Errorf("tar header size = %d, want %d", hdr.Size, len(data))
+	}
+
+	// Round-trip extraction.
+	destDir := filepath.Join(dir, "extracted")
+	extracted, err := ExtractArchive(archivePath, destDir)
+	if err != nil {
+		t.Fatalf("ExtractArchive() error = %v", err)
+	}
+	if len(extracted) != 1 {
+		t.Fatalf("ExtractArchive() returned %d entries, want 1", len(extracted))
+	}
+
+	got, err := os.ReadFile(extracted[0].SourcePath)
+	if err != nil {
+		t.Fatalf("ReadFile extracted: %v", err)
+	}
+	if len(got) != len(data) {
+		t.Fatalf("extracted size = %d, want %d", len(got), len(data))
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("extracted content does not match original")
 	}
 }
 

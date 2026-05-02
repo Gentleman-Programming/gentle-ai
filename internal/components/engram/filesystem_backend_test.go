@@ -1,6 +1,7 @@
 package engram
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -98,6 +99,14 @@ func TestLocalDataBackend_DetectExistingData(t *testing.T) {
 	if !backend.DetectExistingData(tmp) {
 		t.Error("DetectExistingData(tmp) = false, want true")
 	}
+
+	walOnly := t.TempDir()
+	if err := os.WriteFile(filepath.Join(walOnly, "engram.db-wal"), []byte("wal"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !backend.DetectExistingData(walOnly) {
+		t.Error("DetectExistingData(wal-only) = false, want true")
+	}
 }
 
 func TestLocalDataBackend_ExistingFiles(t *testing.T) {
@@ -150,6 +159,52 @@ func TestLocalDataBackend_MigrateData(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(source, f)); err != nil {
 			t.Errorf("source missing %s after copy-only migration", f)
 		}
+	}
+}
+
+func TestLocalDataBackend_MigrateData_RejectsSameDirectory(t *testing.T) {
+	backend := NewLocalDataBackend()
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "engram.db"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := backend.MigrateData(source, source)
+	if !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("MigrateData(same dir) error = %v, want ErrInvalidPath", err)
+	}
+
+	got, readErr := os.ReadFile(filepath.Join(source, "engram.db"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "data" {
+		t.Fatalf("source data changed after rejected same-dir migration: %q", got)
+	}
+}
+
+func TestLocalDataBackend_MigrateData_RejectsTargetWithExistingData(t *testing.T) {
+	backend := NewLocalDataBackend()
+	source := t.TempDir()
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "engram.db"), []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "engram.db"), []byte("target"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := backend.MigrateData(source, target)
+	if !errors.Is(err, ErrTargetHasData) {
+		t.Fatalf("MigrateData(existing target) error = %v, want ErrTargetHasData", err)
+	}
+
+	got, readErr := os.ReadFile(filepath.Join(target, "engram.db"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "target" {
+		t.Fatalf("target data was overwritten: %q", got)
 	}
 }
 

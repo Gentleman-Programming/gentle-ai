@@ -30,6 +30,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/storage"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/internal/undo"
 	"github.com/gentleman-programming/gentle-ai/internal/verify"
 )
 
@@ -324,7 +325,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	for _, component := range r.resolved.OrderedComponents {
-		apply = append(apply, componentApplyStep{
+		apply = append(apply, &componentApplyStep{
 			id:           "component:" + string(component),
 			component:    component,
 			homeDir:      r.homeDir,
@@ -332,6 +333,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			agents:       r.resolved.Agents,
 			selection:    r.selection,
 			profile:      r.profile,
+			undoDir:      filepath.Join(r.homeDir, ".gentle-ai", "undo", string(component)+"-"+time.Now().UTC().Format("20060102150405.000000000")),
 		})
 	}
 
@@ -365,6 +367,15 @@ func (s prepareBackupStep) ID() string {
 }
 
 func (s prepareBackupStep) Run() error {
+	// Deferred cleanup: if anything fails, remove the partial snapshot directory
+	// so that failed backups do not leave orphan files on disk.
+	var succeeded bool
+	defer func() {
+		if !succeeded {
+			_ = os.RemoveAll(s.snapshotDir)
+		}
+	}()
+
 	// Deduplication: skip snapshot creation when content is identical to the
 	// most recent backup. Only active when backupRoot is set.
 	if s.backupRoot != "" {
@@ -375,6 +386,7 @@ func (s prepareBackupStep) Run() error {
 			} else if dup {
 				// Content is identical to the most recent backup — skip creation.
 				// state.manifest is left at its zero value; rollback is a no-op.
+				succeeded = true
 				return nil
 			}
 		}
@@ -409,7 +421,15 @@ func (s prepareBackupStep) Run() error {
 		}
 	}
 
+	succeeded = true
 	return nil
+}
+
+// Rollback cleans up the snapshot directory if the prepare stage fails.
+// This is a no-op when the step succeeded because the deferred cleanup
+// in Run() already handles partial failures.
+func (s prepareBackupStep) Rollback() error {
+	return os.RemoveAll(s.snapshotDir)
 }
 
 type rollbackRestoreStep struct {
@@ -498,9 +518,11 @@ type componentApplyStep struct {
 	agents       []model.AgentID
 	selection    model.Selection
 	profile      system.PlatformProfile
+	undoDir      string
+	rec          *undo.Recorder
 }
 
-func (s componentApplyStep) ID() string {
+func (s *componentApplyStep) ID() string {
 	return s.id
 }
 
@@ -517,8 +539,13 @@ func resolveAdapters(agentIDs []model.AgentID) []agents.Adapter {
 	return adapters
 }
 
-func (s componentApplyStep) Run() error {
+func (s *componentApplyStep) Run() error {
 	adapters := resolveAdapters(s.agents)
+
+	// Set up per-component undo tracking when an undo directory is configured.
+	if s.undoDir != "" {
+		s.rec = undo.NewRecorder(s.undoDir)
+	}
 
 	switch s.component {
 	case model.ComponentEngram:
@@ -646,12 +673,18 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentSkills:
 		skillIDs := selectedSkillIDs(s.selection)
 		if len(skillIDs) == 0 {
+			if s.rec != nil {
+				return s.rec.Commit()
+			}
 			return nil
 		}
 		for _, adapter := range adapters {
-			if _, err := skills.Inject(s.homeDir, adapter, skillIDs); err != nil {
+			if _, err := skills.InjectWithRecorder(s.homeDir, adapter, skillIDs, s.rec); err != nil {
 				return fmt.Errorf("inject skills for %q: %w", adapter.Agent(), err)
 			}
+		}
+		if s.rec != nil {
+			return s.rec.Commit()
 		}
 		return nil
 	case model.ComponentGGA:
@@ -706,6 +739,15 @@ func (s componentApplyStep) Run() error {
 	default:
 		return fmt.Errorf("component %q is not supported in install runtime", s.component)
 	}
+}
+
+// Rollback restores files modified by this component step and removes files
+// that were created. It uses the undo recorder set up during Run().
+func (s *componentApplyStep) Rollback() error {
+	if s.rec != nil {
+		return s.rec.Rollback()
+	}
+	return nil
 }
 
 func ensureGoAvailableAfterInstall(profile system.PlatformProfile) error {
