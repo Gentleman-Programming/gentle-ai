@@ -102,9 +102,11 @@ func ReadCurrentModelAssignments(settingsPath string) (map[string]model.ModelAss
 				continue
 			}
 		}
+		effort, _ := defMap["variant"].(string)
 		result[assignmentKey] = model.ModelAssignment{
 			ProviderID: providerID,
 			ModelID:    modelID,
+			Effort:     effort,
 		}
 	}
 

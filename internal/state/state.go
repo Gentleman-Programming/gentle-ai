@@ -12,9 +12,12 @@ const stateFile = "state.json"
 // ModelAssignmentState is the JSON-serialisable form of a provider+model pair
 // used by OpenCode-style model assignments. It mirrors model.ModelAssignment
 // but lives in the state package to avoid an import cycle.
+// Effort is the reasoning effort level ("" | "low" | "medium" | "high");
+// omitempty ensures backward-compatibility with existing state files.
 type ModelAssignmentState struct {
 	ProviderID string `json:"provider_id"`
 	ModelID    string `json:"model_id"`
+	Effort     string `json:"effort,omitempty"`
 }
 
 // InstallState holds the persisted user selections from the last install run.

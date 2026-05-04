@@ -504,6 +504,43 @@ func TestPersistAssignmentsNoOpWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestModelAssignmentsToStateWiresEffort verifies that modelAssignmentsToState
+// includes the Effort field in the serialisable output.
+func TestModelAssignmentsToStateWiresEffort(t *testing.T) {
+	input := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "medium"},
+	}
+	got := modelAssignmentsToState(input)
+	s := got["sdd-apply"]
+	if s.Effort != "medium" {
+		t.Errorf("modelAssignmentsToState Effort = %q, want %q", s.Effort, "medium")
+	}
+}
+
+// TestLoadPersistedAssignmentsWiresEffort verifies that loadPersistedAssignments
+// populates the Effort field on the model.ModelAssignment when Effort is stored
+// in state.json.
+func TestLoadPersistedAssignmentsWiresEffort(t *testing.T) {
+	home := t.TempDir()
+
+	err := state.Write(home, state.InstallState{
+		ModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "medium"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	sel := model.Selection{}
+	loadPersistedAssignments(home, &sel)
+
+	a := sel.ModelAssignments["sdd-apply"]
+	if a.Effort != "medium" {
+		t.Errorf("loadPersistedAssignments Effort = %q, want %q", a.Effort, "medium")
+	}
+}
+
 // TestVersionBeforeSystemGuards verifies that `gentle-ai version` returns the
 // version string without going through system detection or platform guards.
 func TestVersionBeforeSystemGuards(t *testing.T) {

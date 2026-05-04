@@ -744,6 +744,100 @@ func expectedTaskPermissions(suffix string) map[string]any {
 	return permissions
 }
 
+// ─── Effort propagation through profiles ─────────────────────────────────
+
+// TestExtractModelFromAgent_ReadsVariant verifies that extractModelFromAgent
+// populates Effort from the "variant" key in the agent map.
+func TestExtractModelFromAgent_ReadsVariant(t *testing.T) {
+	agentMap := map[string]any{
+		"model":   "anthropic:claude-opus-4",
+		"variant": "high",
+	}
+	got := extractModelFromAgent(agentMap)
+	if got.Effort != "high" {
+		t.Errorf("extractModelFromAgent Effort = %q, want %q", got.Effort, "high")
+	}
+	if got.ProviderID != "anthropic" {
+		t.Errorf("extractModelFromAgent ProviderID = %q, want %q", got.ProviderID, "anthropic")
+	}
+	if got.ModelID != "claude-opus-4" {
+		t.Errorf("extractModelFromAgent ModelID = %q, want %q", got.ModelID, "claude-opus-4")
+	}
+}
+
+// TestExtractModelFromAgent_NoVariantDefaultsEmpty verifies that a missing
+// "variant" key results in Effort="".
+func TestExtractModelFromAgent_NoVariantDefaultsEmpty(t *testing.T) {
+	agentMap := map[string]any{
+		"model": "anthropic:claude-sonnet-4",
+	}
+	got := extractModelFromAgent(agentMap)
+	if got.Effort != "" {
+		t.Errorf("extractModelFromAgent Effort = %q, want empty string", got.Effort)
+	}
+}
+
+// TestGenerateProfileOverlay_VariantInjected verifies that a profile
+// phase assignment with Effort="medium" results in "variant":"medium"
+// in the generated overlay JSON.
+func TestGenerateProfileOverlay_VariantInjected(t *testing.T) {
+	home := t.TempDir()
+
+	profile := model.Profile{
+		Name:              "reasoning",
+		OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-opus-4"},
+		PhaseAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "medium"},
+		},
+	}
+
+	overlay, err := GenerateProfileOverlay(profile, home)
+	if err != nil {
+		t.Fatalf("GenerateProfileOverlay() error = %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(overlay, &root); err != nil {
+		t.Fatalf("overlay is not valid JSON: %v", err)
+	}
+
+	agentMap := root["agent"].(map[string]any)
+	applyAgent := agentMap["sdd-apply-reasoning"].(map[string]any)
+	if re, _ := applyAgent["variant"].(string); re != "medium" {
+		t.Errorf("sdd-apply-reasoning variant = %q, want %q", re, "medium")
+	}
+}
+
+// TestGenerateProfileOverlay_EmptyEffortOmitsKey verifies that a profile phase
+// assignment with Effort="" does not produce a "variant" key.
+func TestGenerateProfileOverlay_EmptyEffortOmitsKey(t *testing.T) {
+	home := t.TempDir()
+
+	profile := model.Profile{
+		Name:              "cheap",
+		OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"},
+		PhaseAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-haiku-3-5", Effort: ""},
+		},
+	}
+
+	overlay, err := GenerateProfileOverlay(profile, home)
+	if err != nil {
+		t.Fatalf("GenerateProfileOverlay() error = %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(overlay, &root); err != nil {
+		t.Fatalf("overlay is not valid JSON: %v", err)
+	}
+
+	agentMap := root["agent"].(map[string]any)
+	applyAgent := agentMap["sdd-apply-cheap"].(map[string]any)
+	if _, hasKey := applyAgent["variant"]; hasKey {
+		t.Error("variant key should be absent when Effort is empty")
+	}
+}
+
 func assertExactTaskPermissions(t *testing.T, got, want map[string]any) {
 	t.Helper()
 

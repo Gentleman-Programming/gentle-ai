@@ -155,11 +155,14 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/plugins) error = %v", err)
 	}
-	if len(pluginEntries) != 1 {
-		t.Fatalf("opencode plugins count = %d, want 1", len(pluginEntries))
+	if len(pluginEntries) != 2 {
+		t.Fatalf("opencode plugins count = %d, want 2", len(pluginEntries))
 	}
-	if pluginEntries[0].Name() != "background-agents.ts" {
-		t.Fatalf("plugin entry = %q, want background-agents.ts", pluginEntries[0].Name())
+	wantPlugins := map[string]bool{"background-agents.ts": true, "model-variants.ts": true}
+	for _, entry := range pluginEntries {
+		if !wantPlugins[entry.Name()] {
+			t.Fatalf("unexpected plugin entry = %q", entry.Name())
+		}
 	}
 }
 

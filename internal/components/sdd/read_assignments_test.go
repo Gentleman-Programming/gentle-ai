@@ -215,6 +215,40 @@ func TestReadCurrentModelAssignmentsSlashSeparator(t *testing.T) {
 	}
 }
 
+// TestReadCurrentModelAssignmentsReadsVariant verifies that the
+// variant field in an agent definition is populated on the returned
+// ModelAssignment.Effort.
+func TestReadCurrentModelAssignmentsReadsVariant(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.json")
+
+	content := `{
+  "agent": {
+    "sdd-apply": { "model": "anthropic:claude-opus-4", "variant": "high" },
+    "sdd-verify": { "model": "anthropic:claude-sonnet-4" }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	got, err := ReadCurrentModelAssignments(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadCurrentModelAssignments() error = %v", err)
+	}
+
+	a := got["sdd-apply"]
+	if a.Effort != "high" {
+		t.Errorf("sdd-apply Effort = %q, want %q", a.Effort, "high")
+	}
+
+	// Agent without variant must default to empty string.
+	b := got["sdd-verify"]
+	if b.Effort != "" {
+		t.Errorf("sdd-verify Effort = %q, want empty string", b.Effort)
+	}
+}
+
 // TestReadCurrentModelAssignmentsMixedSeparators verifies that a file containing
 // agents with both colon and slash separators is parsed correctly (issue #152).
 func TestReadCurrentModelAssignmentsMixedSeparators(t *testing.T) {

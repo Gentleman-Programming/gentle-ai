@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -271,6 +272,317 @@ func TestSetAllPhasesSetsAllPhasesModelField(t *testing.T) {
 		t.Errorf("AllPhasesModel.ModelID = %q, want model-alpha", state.AllPhasesModel.ModelID)
 	}
 }
+
+// ─── ModeEffortSelect constant ────────────────────────────────────────────
+
+func TestModeEffortSelectConstantValue(t *testing.T) {
+	// ModeEffortSelect must be 3 (the 4th constant after 0, 1, 2).
+	if ModeEffortSelect != 3 {
+		t.Fatalf("ModeEffortSelect = %d, want 3", ModeEffortSelect)
+	}
+}
+
+// ─── makeTestStateReasoning helper ────────────────────────────────────────
+
+// makeTestStateReasoning is like makeTestState but includes a reasoning model.
+func makeTestStateReasoning(phaseIdx int) *ModelPickerState {
+	const providerID = "test-provider"
+	testModels := []opencode.Model{
+		{ID: "model-reason", Name: "Reasoning Model", Reasoning: true, ToolCall: true, Variants: []string{"high", "low", "medium"}},
+		{ID: "model-plain", Name: "Plain Model", Reasoning: false, ToolCall: true},
+	}
+	return &ModelPickerState{
+		Mode:             ModeModelSelect,
+		SelectedPhaseIdx: phaseIdx,
+		SelectedProvider: providerID,
+		SDDModels:        map[string][]opencode.Model{providerID: testModels},
+		ModelCursor:      0, // reasoning model is first
+	}
+}
+
+// ─── handleModelNav: reasoning model triggers ModeEffortSelect ────────────
+
+func TestHandleModelNav_ReasoningModelSetsModeEffortSelect(t *testing.T) {
+	state := makeTestStateReasoning(2) // any sub-agent row
+	assignments := make(map[string]model.ModelAssignment)
+
+	handled, _ := handleModelNav("enter", state, assignments)
+
+	if !handled {
+		t.Fatal("handleModelNav should return handled=true on enter")
+	}
+	if state.Mode != ModeEffortSelect {
+		t.Errorf("Mode after selecting reasoning model = %v, want ModeEffortSelect (%d)", state.Mode, ModeEffortSelect)
+	}
+	// PendingAssignment must be populated with provider + model
+	if state.PendingAssignment.ProviderID == "" {
+		t.Error("PendingAssignment.ProviderID should be set after selecting reasoning model")
+	}
+	if state.PendingAssignment.ModelID != "model-reason" {
+		t.Errorf("PendingAssignment.ModelID = %q, want %q", state.PendingAssignment.ModelID, "model-reason")
+	}
+}
+
+func TestHandleModelNav_NonReasoningModelSkipsEffortPicker(t *testing.T) {
+	const providerID = "test-provider"
+	testModels := []opencode.Model{
+		{ID: "model-plain", Name: "Plain Model", Reasoning: false, ToolCall: true},
+	}
+	state := &ModelPickerState{
+		Mode:             ModeModelSelect,
+		SelectedPhaseIdx: 2,
+		SelectedProvider: providerID,
+		SDDModels:        map[string][]opencode.Model{providerID: testModels},
+		ModelCursor:      0,
+	}
+	assignments := make(map[string]model.ModelAssignment)
+
+	handled, updated := handleModelNav("enter", state, assignments)
+
+	if !handled {
+		t.Fatal("handleModelNav should return handled=true on enter")
+	}
+	if state.Mode != ModePhaseList {
+		t.Errorf("Mode after non-reasoning model = %v, want ModePhaseList (%d)", state.Mode, ModePhaseList)
+	}
+	// Effort must be empty on the assignment
+	phases := opencode.SDDPhases()
+	phase := phases[0] // phaseIdx 2 = phases[0]
+	a := updated[phase]
+	if a.Effort != "" {
+		t.Errorf("non-reasoning model assignment Effort = %q, want empty string", a.Effort)
+	}
+}
+
+// ─── applyAssignment helper ──────────────────────────────────────────────
+
+func TestApplyAssignment_SinglePhase(t *testing.T) {
+	phases := opencode.SDDPhases()
+	state := ModelPickerState{SelectedPhaseIdx: 2} // phases[0]
+	assignments := make(map[string]model.ModelAssignment)
+	assignment := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "high"}
+
+	updated := applyAssignment(state, assignments, assignment)
+
+	// Only phases[0] should be set
+	if updated[phases[0]].Effort != "high" {
+		t.Errorf("phases[0] Effort = %q, want %q", updated[phases[0]].Effort, "high")
+	}
+	// Others should not be set
+	for _, phase := range phases[1:] {
+		if _, ok := updated[phase]; ok {
+			t.Errorf("phase %q should not be set in single-phase apply", phase)
+		}
+	}
+}
+
+func TestApplyAssignment_AllPhases(t *testing.T) {
+	phases := opencode.SDDPhases()
+	state := ModelPickerState{SelectedPhaseIdx: 1} // "Set all phases"
+	assignments := make(map[string]model.ModelAssignment)
+	assignment := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "low"}
+
+	updated := applyAssignment(state, assignments, assignment)
+
+	for _, phase := range phases {
+		a := updated[phase]
+		if a.Effort != "low" {
+			t.Errorf("phase %q Effort = %q, want %q", phase, a.Effort, "low")
+		}
+	}
+	// Orchestrator must NOT be touched
+	if _, ok := updated[SDDOrchestratorPhase]; ok {
+		t.Error("applyAssignment with SelectedPhaseIdx==1 should not set orchestrator")
+	}
+}
+
+// ─── handleEffortNav ──────────────────────────────────────────────────────
+
+func TestHandleEffortNav_EnterAppliesEffortAndReturnsModePhaseList(t *testing.T) {
+	phases := opencode.SDDPhases()
+	state := ModelPickerState{
+		Mode:                      ModeEffortSelect,
+		SelectedPhaseIdx:          2, // phases[0]
+		EffortCursor:              1, // second option = "low" (after "default" at index 0)
+		PendingAssignment:         model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-opus-4"},
+		SelectedModelEffortLevels: []string{"low", "medium", "high"},
+	}
+	assignments := make(map[string]model.ModelAssignment)
+
+	newState, updated := handleEffortNav("enter", state, assignments)
+
+	if newState.Mode != ModePhaseList {
+		t.Errorf("Mode after effort selection = %v, want ModePhaseList", newState.Mode)
+	}
+	// EffortCursor 1 -> "low" (options: ["default", "low", "medium", "high"])
+	a := updated[phases[0]]
+	if a.Effort != "low" {
+		t.Errorf("assignment Effort = %q, want %q", a.Effort, "low")
+	}
+}
+
+func TestHandleEffortNav_DefaultOptionMapsToEmptyEffort(t *testing.T) {
+	phases := opencode.SDDPhases()
+	state := ModelPickerState{
+		Mode:                      ModeEffortSelect,
+		SelectedPhaseIdx:          2, // phases[0]
+		EffortCursor:              0, // "default" option
+		PendingAssignment:         model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-opus-4"},
+		SelectedModelEffortLevels: []string{"low", "medium", "high"},
+	}
+	assignments := make(map[string]model.ModelAssignment)
+
+	_, updated := handleEffortNav("enter", state, assignments)
+
+	a := updated[phases[0]]
+	if a.Effort != "" {
+		t.Errorf("'default' option should yield Effort=\"\", got %q", a.Effort)
+	}
+}
+
+func TestHandleEffortNav_EscReturnsModePhaseList(t *testing.T) {
+	state := ModelPickerState{
+		Mode:             ModeEffortSelect,
+		SelectedPhaseIdx: 2,
+	}
+	assignments := make(map[string]model.ModelAssignment)
+
+	newState, _ := handleEffortNav("esc", state, assignments)
+
+	if newState.Mode != ModePhaseList {
+		t.Errorf("Mode after esc = %v, want ModePhaseList", newState.Mode)
+	}
+}
+
+func TestHandleEffortNav_NavigationUpdatesEffortCursor(t *testing.T) {
+	// options: ["default", "low", "medium", "high"] — 4 items
+	state := ModelPickerState{
+		Mode:                      ModeEffortSelect,
+		EffortCursor:              0,
+		SelectedModelEffortLevels: []string{"low", "medium", "high"},
+	}
+	assignments := make(map[string]model.ModelAssignment)
+
+	newState, _ := handleEffortNav("j", state, assignments)
+	if newState.EffortCursor != 1 {
+		t.Errorf("after j: EffortCursor = %d, want 1", newState.EffortCursor)
+	}
+
+	newState, _ = handleEffortNav("k", newState, assignments)
+	if newState.EffortCursor != 0 {
+		t.Errorf("after k: EffortCursor = %d, want 0", newState.EffortCursor)
+	}
+}
+
+// ─── HandleModelPickerNav dispatches ModeEffortSelect ─────────────────────
+
+func TestHandleModelPickerNav_DispatchesToEffortNav(t *testing.T) {
+	phases := opencode.SDDPhases()
+	state := &ModelPickerState{
+		Mode:                      ModeEffortSelect,
+		SelectedPhaseIdx:          2,
+		EffortCursor:              2, // "medium"
+		PendingAssignment:         model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-opus-4"},
+		SelectedModelEffortLevels: []string{"low", "medium", "high"},
+	}
+	assignments := make(map[string]model.ModelAssignment)
+
+	handled, updated := HandleModelPickerNav("enter", state, assignments)
+
+	if !handled {
+		t.Fatal("HandleModelPickerNav should handle enter in ModeEffortSelect")
+	}
+	a := updated[phases[0]]
+	if a.Effort != "medium" {
+		t.Errorf("Effort = %q, want %q", a.Effort, "medium")
+	}
+}
+
+// ─── TestIndividualPhaseSelectionDoesNotSetAllPhasesModel (unchanged) ──────
+
+// ─── Phase list display — effort annotation ───────────────────────────────
+
+func TestRenderPhaseList_EffortAnnotation(t *testing.T) {
+	const providerID = "test-provider"
+	state := ModelPickerState{
+		Providers: map[string]opencode.Provider{
+			providerID: {ID: providerID, Name: "TestProv", Models: map[string]opencode.Model{
+				"model-x": {ID: "model-x", Name: "Model X"},
+			}},
+		},
+		AvailableIDs: []string{providerID},
+		SDDModels: map[string][]opencode.Model{
+			providerID: {{ID: "model-x", Name: "Model X"}},
+		},
+		Mode: ModePhaseList,
+	}
+	phases := opencode.SDDPhases()
+	assignments := map[string]model.ModelAssignment{
+		phases[0]: {ProviderID: providerID, ModelID: "model-x", Effort: "high"},
+		phases[1]: {ProviderID: providerID, ModelID: "model-x", Effort: ""},
+	}
+
+	rendered := RenderModelPicker(assignments, state, 0)
+
+	// Row for phases[0] must contain "[high]"
+	if !strings.Contains(rendered, "[high]") {
+		t.Errorf("rendered phase list should contain '[high]' for assignment with Effort=high; got:\n%s", rendered)
+	}
+}
+
+func TestRenderPhaseList_OrchestratorEffortAnnotation(t *testing.T) {
+	const providerID = "test-provider"
+	state := ModelPickerState{
+		Providers: map[string]opencode.Provider{
+			providerID: {ID: providerID, Name: "TestProv", Models: map[string]opencode.Model{
+				"model-x": {ID: "model-x", Name: "Model X"},
+			}},
+		},
+		AvailableIDs: []string{providerID},
+		SDDModels: map[string][]opencode.Model{
+			providerID: {{ID: "model-x", Name: "Model X"}},
+		},
+		Mode: ModePhaseList,
+	}
+	assignments := map[string]model.ModelAssignment{
+		SDDOrchestratorPhase: {ProviderID: providerID, ModelID: "model-x", Effort: "high"},
+	}
+
+	rendered := RenderModelPicker(assignments, state, 0)
+
+	if !strings.Contains(rendered, "[high]") {
+		t.Errorf("orchestrator row should contain '[high]' when Effort is set; got:\n%s", rendered)
+	}
+}
+
+func TestRenderPhaseList_NoEffortAnnotationWhenEmpty(t *testing.T) {
+	const providerID = "test-provider"
+	state := ModelPickerState{
+		Providers: map[string]opencode.Provider{
+			providerID: {ID: providerID, Name: "TestProv", Models: map[string]opencode.Model{
+				"model-x": {ID: "model-x", Name: "Model X"},
+			}},
+		},
+		AvailableIDs: []string{providerID},
+		SDDModels: map[string][]opencode.Model{
+			providerID: {{ID: "model-x", Name: "Model X"}},
+		},
+		Mode: ModePhaseList,
+	}
+	phases := opencode.SDDPhases()
+	assignments := map[string]model.ModelAssignment{
+		phases[0]: {ProviderID: providerID, ModelID: "model-x", Effort: ""},
+	}
+
+	rendered := RenderModelPicker(assignments, state, 0)
+
+	// No "[" bracket annotation should appear in the phase rows when Effort is empty
+	if strings.Contains(rendered, "[high]") || strings.Contains(rendered, "[low]") || strings.Contains(rendered, "[medium]") {
+		t.Errorf("rendered phase list should not contain effort bracket when Effort is empty; got:\n%s", rendered)
+	}
+}
+
+// ─── TestIndividualPhaseSelectionDoesNotSetAllPhasesModel (unchanged) ──────
 
 // TestIndividualPhaseSelectionDoesNotSetAllPhasesModel verifies that selecting
 // a model for any individual sub-agent phase does NOT update AllPhasesModel.

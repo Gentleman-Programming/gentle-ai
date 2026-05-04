@@ -333,3 +333,122 @@ func TestLoadAuthProvidersMissingFile(t *testing.T) {
 		t.Fatalf("expected nil for missing file, got %v", result)
 	}
 }
+
+func TestModel_EffortLevels(t *testing.T) {
+	tests := []struct {
+		name     string
+		variants []string
+		want     []string
+	}{
+		{"no variants", nil, nil},
+		{"claude style", []string{"high", "low", "medium"}, []string{"high", "low", "medium"}},
+		{"openai style", []string{"high", "low", "medium", "none", "xhigh"}, []string{"high", "low", "medium", "none", "xhigh"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := Model{Variants: tt.variants}
+			got := m.EffortLevels()
+			if len(got) != len(tt.want) {
+				t.Fatalf("EffortLevels() = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("EffortLevels()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestLoadVariants(t *testing.T) {
+	t.Run("valid file", func(t *testing.T) {
+		tmp := t.TempDir()
+		p := tmp + "/variants.json"
+		data := `{"openai":{"gpt-5":["high","low","medium"]}}`
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := LoadVariants(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if levels := got["openai"]["gpt-5"]; len(levels) != 3 || levels[0] != "high" {
+			t.Errorf("unexpected levels: %v", levels)
+		}
+	})
+
+	t.Run("missing file", func(t *testing.T) {
+		_, err := LoadVariants("/nonexistent/variants.json")
+		if err == nil {
+			t.Fatal("expected error for missing file")
+		}
+	})
+
+	t.Run("invalid json", func(t *testing.T) {
+		tmp := t.TempDir()
+		p := tmp + "/variants.json"
+		if err := os.WriteFile(p, []byte("not json"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadVariants(p)
+		if err == nil {
+			t.Fatal("expected error for invalid json")
+		}
+	})
+}
+
+func TestEnrichWithVariants(t *testing.T) {
+	providers := map[string]Provider{
+		"openai": {
+			ID:   "openai",
+			Name: "OpenAI",
+			Models: map[string]Model{
+				"gpt-5": {ID: "gpt-5", Name: "GPT-5", ToolCall: true, Reasoning: true},
+			},
+		},
+	}
+
+	t.Run("merges variants from file", func(t *testing.T) {
+		tmp := t.TempDir()
+		p := tmp + "/variants.json"
+		data := `{"openai":{"gpt-5":["high","low","medium","none","xhigh"]}}`
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		EnrichWithVariants(providers, p)
+		m := providers["openai"].Models["gpt-5"]
+		if len(m.Variants) != 5 {
+			t.Fatalf("expected 5 variants, got %v", m.Variants)
+		}
+	})
+
+	t.Run("missing file leaves models unchanged", func(t *testing.T) {
+		clean := map[string]Provider{
+			"openai": {ID: "openai", Models: map[string]Model{
+				"gpt-5": {ID: "gpt-5"},
+			}},
+		}
+		EnrichWithVariants(clean, "/nonexistent/variants.json")
+		if clean["openai"].Models["gpt-5"].Variants != nil {
+			t.Fatal("expected nil variants for missing file")
+		}
+	})
+
+	t.Run("non-matching provider ignored", func(t *testing.T) {
+		tmp := t.TempDir()
+		p := tmp + "/variants.json"
+		data := `{"unknown-provider":{"model-x":["low","high"]}}`
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		clean := map[string]Provider{
+			"openai": {ID: "openai", Models: map[string]Model{
+				"gpt-5": {ID: "gpt-5"},
+			}},
+		}
+		EnrichWithVariants(clean, p)
+		if clean["openai"].Models["gpt-5"].Variants != nil {
+			t.Fatal("expected nil variants for non-matching provider")
+		}
+	})
+}

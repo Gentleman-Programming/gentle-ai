@@ -195,8 +195,9 @@ func DetectProfiles(settingsPath string) ([]model.Profile, error) {
 	return profiles, nil
 }
 
-// extractModelFromAgent reads the "model" field from an agent definition map
-// and parses it into a ModelAssignment. Returns zero-value if missing or malformed.
+// extractModelFromAgent reads the "model" and optional "variant" fields
+// from an agent definition map and parses them into a ModelAssignment.
+// Returns zero-value if missing or malformed.
 func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 	if agentMap == nil {
 		return model.ModelAssignment{}
@@ -219,7 +220,8 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 	if modelID == "" {
 		return model.ModelAssignment{}
 	}
-	return model.ModelAssignment{ProviderID: providerID, ModelID: modelID}
+	effort, _ := agentMap["variant"].(string)
+	return model.ModelAssignment{ProviderID: providerID, ModelID: modelID, Effort: effort}
 }
 
 // GenerateProfileOverlay builds an OpenCode agent overlay JSON for the given
@@ -275,6 +277,9 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 	}
 	if profile.OrchestratorModel.ProviderID != "" && profile.OrchestratorModel.ModelID != "" {
 		orchEntry["model"] = profile.OrchestratorModel.FullID()
+		if profile.OrchestratorModel.Effort != "" {
+			orchEntry["variant"] = profile.OrchestratorModel.Effort
+		}
 	}
 	agentMap[orchestratorKey] = orchEntry
 
@@ -309,6 +314,9 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 		}
 		if assignment, ok := profile.PhaseAssignments[phase]; ok && assignment.ProviderID != "" && assignment.ModelID != "" {
 			entry["model"] = assignment.FullID()
+			if assignment.Effort != "" {
+				entry["variant"] = assignment.Effort
+			}
 		}
 		agentMap[key] = entry
 	}

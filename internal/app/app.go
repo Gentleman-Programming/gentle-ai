@@ -400,7 +400,7 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
 		m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
 		for k, v := range s.ModelAssignments {
-			m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID}
+			m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
 		}
 		selection.ModelAssignments = m
 	}
@@ -451,7 +451,7 @@ func modelAssignmentsToState(m map[string]model.ModelAssignment) map[string]stat
 	}
 	out := make(map[string]state.ModelAssignmentState, len(m))
 	for k, v := range m {
-		out[k] = state.ModelAssignmentState{ProviderID: v.ProviderID, ModelID: v.ModelID}
+		out[k] = state.ModelAssignmentState{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
 	}
 	return out
 }

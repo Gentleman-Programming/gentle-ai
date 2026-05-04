@@ -56,6 +56,7 @@ type Model struct {
 	Reasoning bool       `json:"reasoning"`
 	Cost      ModelCost  `json:"cost"`
 	Limit     ModelLimit `json:"limit"`
+	Variants  []string   `json:"-"` // populated by EnrichWithVariants from plugin cache
 }
 
 // Provider represents a model provider with its env vars and model catalog.
@@ -189,6 +190,59 @@ func FilterModelsForSDD(provider Provider) []Model {
 	})
 
 	return models
+}
+
+// EffortLevels returns the available reasoning effort levels for this model.
+// Returns nil if the model has no variants (effort picker should be skipped).
+func (m Model) EffortLevels() []string {
+	if len(m.Variants) == 0 {
+		return nil
+	}
+	return m.Variants
+}
+
+// DefaultVariantsCachePath returns the path to the plugin-generated model variants file.
+func DefaultVariantsCachePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".cache", "gentle-ai", "model-variants.json")
+}
+
+// LoadVariants reads the plugin-generated model-variants.json file.
+func LoadVariants(variantsPath string) (map[string]map[string][]string, error) {
+	data, err := os.ReadFile(variantsPath)
+	if err != nil {
+		return nil, err
+	}
+	var variants map[string]map[string][]string
+	if err := json.Unmarshal(data, &variants); err != nil {
+		return nil, err
+	}
+	return variants, nil
+}
+
+// EnrichWithVariants merges variant data from the plugin cache file into
+// cache-loaded providers. If the file is missing or invalid, models keep nil Variants.
+func EnrichWithVariants(cached map[string]Provider, variantsPath string) {
+	variants, err := LoadVariants(variantsPath)
+	if err != nil {
+		return
+	}
+	for provID, models := range variants {
+		cachedProv, ok := cached[provID]
+		if !ok {
+			continue
+		}
+		for modelID, levels := range models {
+			if cachedModel, ok := cachedProv.Models[modelID]; ok {
+				cachedModel.Variants = levels
+				cachedProv.Models[modelID] = cachedModel
+			}
+		}
+		cached[provID] = cachedProv
+	}
 }
 
 // SDDPhases returns the ordered list of SDD phase sub-agent names.

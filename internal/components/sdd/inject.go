@@ -877,16 +877,23 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 		return InjectionResult{}, fmt.Errorf("create plugins dir: %w", err)
 	}
 
-	content := assets.MustRead("opencode/plugins/background-agents.ts")
-	pluginPath := filepath.Join(pluginsDir, "background-agents.ts")
+	var files []string
+	var changed bool
 
-	writeResult, err := filemerge.WriteFileAtomic(pluginPath, []byte(content), 0o644)
-	if err != nil {
-		return InjectionResult{}, fmt.Errorf("write plugin: %w", err)
+	for _, name := range []string{"background-agents.ts", "model-variants.ts"} {
+		content := assets.MustRead("opencode/plugins/" + name)
+		pluginPath := filepath.Join(pluginsDir, name)
+
+		writeResult, err := filemerge.WriteFileAtomic(pluginPath, []byte(content), 0o644)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("write plugin %s: %w", name, err)
+		}
+
+		files = append(files, pluginPath)
+		if writeResult.Changed {
+			changed = true
+		}
 	}
-
-	files := []string{pluginPath}
-	changed := writeResult.Changed
 
 	// Install dependency — prefer bun (OpenCode uses it), fall back to npm.
 	// If neither is available, skip with a soft no-op (npm/bun not installed).
@@ -1564,6 +1571,11 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 		case hasExplicitAssignment && assignment.ProviderID != "" && assignment.ModelID != "":
 			// 1. TUI choice always wins
 			agentMap["model"] = assignment.FullID()
+			if assignment.Effort != "" {
+				agentMap["variant"] = assignment.Effort
+			} else {
+				agentMap["variant"] = ""
+			}
 		case existingAgentKeys[phase]:
 			// 2. Agent already exists in user's config — let merge preserve whatever they have
 			// (don't touch the overlay for this agent's model)

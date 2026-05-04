@@ -17,6 +17,7 @@ const (
 	ModePhaseList      ModelPickerMode = iota // Main screen: phase list + Continue/Back
 	ModeProviderSelect                        // Sub-mode: pick a provider
 	ModeModelSelect                           // Sub-mode: pick a model from chosen provider
+	ModeEffortSelect                          // Sub-mode: pick a reasoning effort level
 )
 
 // maxVisibleItems is the maximum number of items shown in scrollable sub-lists.
@@ -51,6 +52,19 @@ type ModelPickerState struct {
 	// label from changing when the user picks a model for a single phase.
 	// Issue #146.
 	AllPhasesModel model.ModelAssignment
+
+	// EffortCursor and EffortScroll manage navigation in ModeEffortSelect.
+	EffortCursor int
+	EffortScroll int
+
+	// PendingAssignment holds the provider+model selected in ModeModelSelect
+	// when the model has variants. The assignment is not finalized until
+	// the user confirms an effort level in ModeEffortSelect.
+	PendingAssignment model.ModelAssignment
+
+	// SelectedModelEffortLevels holds the effort levels for the currently
+	// selected model, populated when entering ModeEffortSelect.
+	SelectedModelEffortLevels []string
 }
 
 // NewModelPickerState initializes the picker state from the models cache.
@@ -59,6 +73,8 @@ func NewModelPickerState(cachePath string) ModelPickerState {
 	if err != nil {
 		return ModelPickerState{}
 	}
+
+	opencode.EnrichWithVariants(providers, opencode.DefaultVariantsCachePath())
 
 	available := opencode.DetectAvailableProviders(providers)
 
@@ -123,6 +139,10 @@ func HandleModelPickerNav(
 		return handleProviderNav(key, state), assignments
 	case ModeModelSelect:
 		return handleModelNav(key, state, assignments)
+	case ModeEffortSelect:
+		newState, updatedAssignments := handleEffortNav(key, *state, assignments)
+		*state = newState
+		return true, updatedAssignments
 	}
 	return false, assignments
 }
@@ -199,26 +219,20 @@ func handleModelNav(
 			ModelID:    selected.ID,
 		}
 
-		phases := opencode.SDDPhases()
-		switch {
-		case state.SelectedPhaseIdx == 0:
-			// "gentle-orchestrator" row — assign only to the base orchestrator key
-			assignments[SDDOrchestratorPhase] = assignment
-		case state.SelectedPhaseIdx == 1:
-			// "Set all phases" — sets only the 9 sub-agents, NOT the orchestrator.
-			// Also update AllPhasesModel so the label stays in sync with the last
-			// "Set all" action (Issue #146: individual phase selections must NOT touch this).
-			for _, phase := range phases {
-				assignments[phase] = assignment
-			}
+		if effortLevels := selected.EffortLevels(); len(effortLevels) > 0 {
+			state.PendingAssignment = assignment
+			state.SelectedModelEffortLevels = effortLevels
+			state.Mode = ModeEffortSelect
+			state.EffortCursor = 0
+			state.EffortScroll = 0
+			return true, assignments
+		}
+
+		// Non-reasoning model: apply directly with empty effort.
+		assignments = applyAssignment(*state, assignments, assignment)
+		// Mirror the AllPhasesModel update on the pointer when "Set all phases" row.
+		if state.SelectedPhaseIdx == 1 {
 			state.AllPhasesModel = assignment
-		default:
-			// Sub-agent rows start at idx 2; phases[idx-2] is the correct phase.
-			// Individual selection intentionally does NOT update AllPhasesModel (Issue #146).
-			phaseIdx := state.SelectedPhaseIdx - 2
-			if phaseIdx < len(phases) {
-				assignments[phases[phaseIdx]] = assignment
-			}
 		}
 
 		// Return to phase list
@@ -237,6 +251,135 @@ func handleModelNav(
 	return false, assignments
 }
 
+func formatAssignmentLabel(row, provName, modelName, effort string) string {
+	if effort != "" {
+		return fmt.Sprintf("%-20s %s / %s [%s]", row, provName, modelName, effort)
+	}
+	return fmt.Sprintf("%-20s %s / %s", row, provName, modelName)
+}
+
+// applyAssignment applies the given assignment to the assignments map based on
+// the currently selected phase index in state. When SelectedPhaseIdx is 1 ("Set
+// all phases"), the assignment is applied to all 9 SDD sub-agent phases and
+// AllPhasesModel is updated. When SelectedPhaseIdx is 0, only the orchestrator
+// phase is set. Otherwise, the single sub-agent phase matching the index is set.
+func applyAssignment(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment) map[string]model.ModelAssignment {
+	phases := opencode.SDDPhases()
+	switch {
+	case state.SelectedPhaseIdx == 0:
+		assignments[SDDOrchestratorPhase] = assignment
+	case state.SelectedPhaseIdx == 1:
+		for _, phase := range phases {
+			assignments[phase] = assignment
+		}
+	default:
+		phaseIdx := state.SelectedPhaseIdx - 2
+		if phaseIdx < len(phases) {
+			assignments[phases[phaseIdx]] = assignment
+		}
+	}
+	return assignments
+}
+
+// effortOptionsFromLevels returns the effort picker options in display order.
+// The first entry ("default") maps to an empty Effort string (provider default).
+func effortOptionsFromLevels(levels []string) []string {
+	opts := make([]string, 0, len(levels)+1)
+	opts = append(opts, "default")
+	opts = append(opts, levels...)
+	return opts
+}
+
+// handleEffortNav handles j/k/enter/esc navigation in ModeEffortSelect.
+// Returns the updated state and assignments map.
+func handleEffortNav(
+	key string,
+	state ModelPickerState,
+	assignments map[string]model.ModelAssignment,
+) (ModelPickerState, map[string]model.ModelAssignment) {
+	opts := effortOptionsFromLevels(state.SelectedModelEffortLevels)
+
+	switch key {
+	case "up", "k":
+		if state.EffortCursor > 0 {
+			state.EffortCursor--
+			if state.EffortCursor < state.EffortScroll {
+				state.EffortScroll = state.EffortCursor
+			}
+		}
+	case "down", "j":
+		if state.EffortCursor < len(opts)-1 {
+			state.EffortCursor++
+			if state.EffortCursor >= state.EffortScroll+maxVisibleItems {
+				state.EffortScroll = state.EffortCursor - maxVisibleItems + 1
+			}
+		}
+	case "enter":
+		// "default" maps to empty effort; all other options use the label directly.
+		effort := opts[state.EffortCursor]
+		if effort == "default" {
+			effort = ""
+		}
+		assignment := state.PendingAssignment
+		assignment.Effort = effort
+		assignments = applyAssignment(state, assignments, assignment)
+		// Mirror the AllPhasesModel update when "Set all phases" row.
+		if state.SelectedPhaseIdx == 1 {
+			state.AllPhasesModel = assignment
+		}
+		state.Mode = ModePhaseList
+		state.EffortCursor = 0
+		state.EffortScroll = 0
+	case "esc":
+		state.Mode = ModePhaseList
+		state.EffortCursor = 0
+		state.EffortScroll = 0
+	}
+
+	return state, assignments
+}
+
+// renderEffortSelect renders the effort level selection screen.
+func renderEffortSelect(state ModelPickerState) string {
+	var b strings.Builder
+
+	b.WriteString(styles.TitleStyle.Render("Select reasoning effort level:"))
+	b.WriteString("\n\n")
+
+	opts := effortOptionsFromLevels(state.SelectedModelEffortLevels)
+
+	end := state.EffortScroll + maxVisibleItems
+	if end > len(opts) {
+		end = len(opts)
+	}
+
+	if state.EffortScroll > 0 {
+		b.WriteString(styles.SubtextStyle.Render("  ↑ more"))
+		b.WriteString("\n")
+	}
+
+	for i := state.EffortScroll; i < end; i++ {
+		opt := opts[i]
+		focused := i == state.EffortCursor
+
+		if focused {
+			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+opt) + "\n")
+		} else {
+			b.WriteString(styles.UnselectedStyle.Render("  "+opt) + "\n")
+		}
+	}
+
+	if end < len(opts) {
+		b.WriteString(styles.SubtextStyle.Render("  ↓ more"))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
+
+	return b.String()
+}
+
 // RenderModelPicker renders the model picker screen based on the current mode.
 func RenderModelPicker(
 	assignments map[string]model.ModelAssignment,
@@ -248,6 +391,8 @@ func RenderModelPicker(
 		return renderProviderSelect(state)
 	case ModeModelSelect:
 		return renderModelSelect(state)
+	case ModeEffortSelect:
+		return renderEffortSelect(state)
 	default:
 		return renderPhaseList(assignments, state, cursor)
 	}
@@ -292,7 +437,7 @@ func renderPhaseList(
 			assignment, ok := assignments[SDDOrchestratorPhase]
 			if ok && assignment.ProviderID != "" {
 				provName, modelName := resolveNames(assignment, state)
-				label = fmt.Sprintf("%-20s %s / %s", row+" (coordinator)", provName, modelName)
+				label = formatAssignmentLabel(row+" (coordinator)", provName, modelName, assignment.Effort)
 			} else {
 				label = fmt.Sprintf("%-20s (default)", row+" (coordinator)")
 			}
@@ -312,7 +457,7 @@ func renderPhaseList(
 			assignment, ok := assignments[phase]
 			if ok && assignment.ProviderID != "" {
 				provName, modelName := resolveNames(assignment, state)
-				label = fmt.Sprintf("%-20s %s / %s", row, provName, modelName)
+				label = formatAssignmentLabel(row, provName, modelName, assignment.Effort)
 			} else {
 				label = fmt.Sprintf("%-20s (default)", row)
 			}

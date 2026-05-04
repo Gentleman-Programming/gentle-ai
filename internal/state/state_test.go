@@ -166,6 +166,57 @@ func TestModelAssignmentsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestModelAssignmentStateEffortRoundTrip verifies that Effort field survives
+// a JSON serialization round-trip.
+func TestModelAssignmentStateEffortRoundTrip(t *testing.T) {
+	home := t.TempDir()
+
+	want := InstallState{
+		ModelAssignments: map[string]ModelAssignmentState{
+			"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "high"},
+		},
+	}
+
+	if err := Write(home, want); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	a := got.ModelAssignments["sdd-apply"]
+	if a.Effort != "high" {
+		t.Errorf("Effort after round-trip = %q, want %q", a.Effort, "high")
+	}
+}
+
+// TestModelAssignmentStateEffortLegacyMissing verifies that a state.json file
+// with no "effort" key in a phase assignment deserializes to Effort="" with no error.
+func TestModelAssignmentStateEffortLegacyMissing(t *testing.T) {
+	home := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(home, stateDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	// Legacy format: no effort field
+	legacy := `{"installed_agents":["opencode"],"model_assignments":{"sdd-apply":{"provider_id":"anthropic","model_id":"claude-opus-4"}}}` + "\n"
+	if err := os.WriteFile(Path(home), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	s, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	a := s.ModelAssignments["sdd-apply"]
+	if a.Effort != "" {
+		t.Errorf("legacy missing effort field: got %q, want empty string", a.Effort)
+	}
+}
+
 // TestBackwardCompatNoAssignments verifies that a state.json written before
 // model assignment support was added still reads correctly (fields are nil).
 func TestBackwardCompatNoAssignments(t *testing.T) {
