@@ -82,6 +82,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 	}
 
 	if len(args) == 0 {
+		if _, ok := stdout.(*os.File); !ok {
+			return fmt.Errorf("launch TUI: stdout is not a TTY-compatible file")
+		}
+
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("resolve user home directory: %w", err)

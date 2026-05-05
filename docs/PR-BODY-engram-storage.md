@@ -96,28 +96,33 @@ The feature includes production-grade hardening from peer review: transactional 
 
 ## 🧪 Test Plan
 
-**Unit Tests**
-```bash
-go test ./internal/components/engram/... ./internal/tui/... ./internal/platform/... ./internal/app/... ./internal/storage/...
+**Scoped/headless tests run locally with sandboxed HOME/APPDATA/TMP/GOCACHE**
+```powershell
+go test -p 1 -timeout=15m -count=1 ./internal/components/engram ./internal/tui ./internal/tui/screens ./internal/backup ./internal/platform ./internal/storage ./internal/undo ./internal/components/filemerge ./internal/model
+go test -p 1 -timeout=12m -count=1 ./internal/cli -run 'TestRunInstallEngram|TestWithEngramEnv|TestRunRestore'
+go test -p 1 -timeout=8m -count=1 ./internal/app -run 'TestRunArgsNoCommandLaunchesTUI|TestRunArgsRestoreByIDWithYes|Test.*Engram|Test.*Persisted|Test.*Backup|Test.*Restore'
+```
+
+**Build run locally**
+```powershell
+go build -o .\gentle-ai.exe .\cmd\gentle-ai
+.\gentle-ai.exe --version
 ```
 
 **Results**
-- `internal/components/engram/` — 52/54 pass (2 pre-existing Windows-only failures: `TestInjectVSCodeMergesEngramToMCPConfigFile`, `TestInjectCodexInjectsTOMLKeys`)
-- `internal/tui/screens/` — 17/17 pass (all Engram render tests)
-- `internal/tui/` — 10/10 pass (all Engram state/navigation tests)
-- `internal/platform/` — all pass (profile persistence)
-- `internal/app/` — all pass (persisted path validation)
-- `internal/storage/` — all pass (space/format)
+- [x] Engram domain/API tests pass
+- [x] Headless TUI model and screen tests pass
+- [x] Backup/restore tests pass, including rollback paths under sandbox temp roots
+- [x] CLI Engram install/env/restore targeted tests pass
+- [x] App restore/Engram/persisted-state targeted tests pass
+- [x] Windows exe builds successfully
+- [ ] Full `go test ./...` locally: attempted, but local Windows run is blocked by out-of-scope environment/test issues (real AppData agent discovery, Windows shell command assumptions, low C: temp space, and Docker/WSL dependencies). CI Linux should run the authoritative full suite.
+- [ ] Docker E2E locally: not run because Docker daemon is not available (`docker info` cannot connect to Docker Desktop Linux engine). Pending CI.
 
-**E2E Tests** (Docker required)
-```bash
-cd e2e && ./docker-test.sh
+**Latest local build**
+```text
+gentle-ai 1.23.1-0.20260505113948-962d7011e124+dirty
 ```
-
-- [x] Unit tests pass for modified packages
-- [x] Engram-specific tests pass
-- [ ] E2E tests pass (`cd e2e && ./docker-test.sh`) — pending CI
-- [x] Manually tested locally (Windows): TUI flow, migration, clean with temp backup, profile persistence
 
 ---
 
@@ -128,8 +133,8 @@ cd e2e && ./docker-test.sh
 | Check Issue Reference | ⏳ | PR body contains `Closes/Fixes/Resolves #N` |
 | Check Issue Has `status:approved` | ⏳ | Linked issue must have been approved before work began |
 | Check PR Has `type:*` Label | ⏳ | Exactly one `type:*` label must be applied |
-| Unit Tests | ⏳ | `go test ./...` passes (2 pre-existing Windows failures noted) |
-| E2E Tests | ⏳ | `cd e2e && ./docker-test.sh` must pass |
+| Unit Tests | ⏳ | Scoped/headless branch tests pass locally; full `go test ./...` is authoritative in CI |
+| E2E Tests | ⏳ | Pending CI; local Docker daemon unavailable |
 
 ---
 
@@ -137,8 +142,8 @@ cd e2e && ./docker-test.sh
 
 - [ ] PR is linked to an issue with `status:approved`
 - [ ] I have added the appropriate `type:*` label to this PR
-- [x] Unit tests pass for all modified packages (`go test ./internal/components/engram/... ./internal/tui/... ./internal/platform/...`)
-- [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
+- [x] Scoped/headless tests pass for branch-critical packages
+- [ ] E2E tests pass in CI (local Docker daemon unavailable)
 - [x] I have updated documentation (`docs/pre-existing-test-failures-windows.md`, `openspec/changes/`)
 - [x] My commits follow Conventional Commits format
 - [x] My commits do not include `Co-Authored-By` trailers

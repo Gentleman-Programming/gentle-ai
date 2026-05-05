@@ -14,32 +14,64 @@ import (
 // Package-level var for testability — swapped in tests to use a temp directory.
 var UserHomeDirFn = os.UserHomeDir
 
-// isPathUnderHome reports whether path is an absolute path that resides under
-// the current user's home directory. This is used to prevent arbitrary file
-// writes via tampered manifest OriginalPath fields.
+// isPathAllowedForRestore reports whether path is an absolute path that resides
+// under a restore-safe root. Production config paths should normally live under
+// the user's home directory; tests and rollback flows may operate under the
+// process temp directory, so temp roots are also accepted.
+//
+// This still prevents arbitrary writes via tampered manifest OriginalPath
+// fields such as system roots or unrelated user directories.
 //
 // Symlink note: if the path already exists on disk, EvalSymlinks is used to
-// resolve the real path and re-check against home, preventing symlink escapes.
+// resolve the real path and re-check against the allowed root, preventing
+// symlink escapes.
 // If the path does not exist yet (typical during restore), only filepath.Clean
 // is used — symlinks cannot be resolved for non-existent paths, so this
 // limitation is accepted and documented here.
-func isPathUnderHome(path string) bool {
-	home, err := UserHomeDirFn()
-	if err != nil {
+func isPathAllowedForRestore(path string) bool {
+	if !filepath.IsAbs(path) {
 		return false
 	}
 	clean := filepath.Clean(path)
-	homeClean := filepath.Clean(home)
-	if !strings.HasPrefix(clean, homeClean+string(filepath.Separator)) {
+
+	home, err := UserHomeDirFn()
+	if err == nil && isPathUnderRestoreRoot(clean, filepath.Clean(home)) {
+		return true
+	}
+
+	for _, root := range restoreTempRoots() {
+		if isPathUnderRestoreRoot(clean, filepath.Clean(root)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func restoreTempRoots() []string {
+	candidates := []string{os.TempDir()}
+	for _, key := range []string{"GOTMPDIR", "TMP", "TEMP"} {
+		if value := os.Getenv(key); value != "" {
+			candidates = append(candidates, value)
+		}
+	}
+	return candidates
+}
+
+func isPathUnderRestoreRoot(clean, rootClean string) bool {
+	if rootClean == "" || clean == rootClean {
+		return false
+	}
+	if !strings.HasPrefix(clean, rootClean+string(filepath.Separator)) {
 		return false
 	}
 	// If the path exists, resolve symlinks and re-check to prevent symlink escapes.
 	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
-		resolvedHome, err := filepath.EvalSymlinks(homeClean)
+		resolvedRoot, err := filepath.EvalSymlinks(rootClean)
 		if err != nil {
-			resolvedHome = homeClean
+			resolvedRoot = rootClean
 		}
-		return strings.HasPrefix(resolved, resolvedHome+string(filepath.Separator))
+		return strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator))
 	}
 	// Path does not exist yet (file will be created by restore) — accept Clean-only check.
 	return true
@@ -89,8 +121,8 @@ func (s RestoreService) restoreCompressed(manifest Manifest) error {
 			continue
 		}
 
-		if !filepath.IsAbs(entry.OriginalPath) || !isPathUnderHome(entry.OriginalPath) {
-			return fmt.Errorf("manifest entry has invalid OriginalPath %q: must be an absolute path under the user home directory", entry.OriginalPath)
+		if !isPathAllowedForRestore(entry.OriginalPath) {
+			return fmt.Errorf("manifest entry has invalid OriginalPath %q: must be an absolute path under the user home or temp directory", entry.OriginalPath)
 		}
 		if err := os.Remove(entry.OriginalPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove path %q: %w", entry.OriginalPath, err)
@@ -111,8 +143,8 @@ func (s RestoreService) restorePlain(manifest Manifest) error {
 			continue
 		}
 
-		if !filepath.IsAbs(entry.OriginalPath) || !isPathUnderHome(entry.OriginalPath) {
-			return fmt.Errorf("manifest entry has invalid OriginalPath %q: must be an absolute path under the user home directory", entry.OriginalPath)
+		if !isPathAllowedForRestore(entry.OriginalPath) {
+			return fmt.Errorf("manifest entry has invalid OriginalPath %q: must be an absolute path under the user home or temp directory", entry.OriginalPath)
 		}
 		if err := os.Remove(entry.OriginalPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove path %q: %w", entry.OriginalPath, err)
@@ -128,8 +160,8 @@ func (s RestoreService) restorePlain(manifest Manifest) error {
 // It must be false for plain restores where SnapshotPath comes directly from the manifest
 // and must be validated against the backup root to prevent arbitrary file reads.
 func restoreEntry(entry ManifestEntry, trustedSnapshot bool) error {
-	if !filepath.IsAbs(entry.OriginalPath) || !isPathUnderHome(entry.OriginalPath) {
-		return fmt.Errorf("manifest entry has invalid OriginalPath %q: must be an absolute path under the user home directory", entry.OriginalPath)
+	if !isPathAllowedForRestore(entry.OriginalPath) {
+		return fmt.Errorf("manifest entry has invalid OriginalPath %q: must be an absolute path under the user home or temp directory", entry.OriginalPath)
 	}
 
 	// Validate SnapshotPath is under the backup root to prevent reading arbitrary

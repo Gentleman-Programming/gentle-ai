@@ -20,8 +20,10 @@ type LocationSuggestion struct {
 func SuggestedLocations(backend DataBackend, homeDir string) []LocationSuggestion {
 	var candidates []string
 
-	// 1. Hard default (~/.engram)
-	candidates = append(candidates, backend.HardDefaultDataDir())
+	// 1. Hard default for the provided home (~/.engram). Do not call
+	// backend.HardDefaultDataDir() here because callers/tests may deliberately
+	// pass a sandbox home that differs from the process-global user home.
+	candidates = append(candidates, filepath.Join(homeDir, ".engram"))
 
 	// 2. Documents subfolder
 	candidates = append(candidates, filepath.Join(homeDir, "Documents", ".engram"))

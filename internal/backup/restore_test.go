@@ -3,6 +3,7 @@ package backup
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -87,6 +88,76 @@ func TestRestoreFailsWhenSnapshotMissing(t *testing.T) {
 
 	if err == nil {
 		t.Fatalf("Restore() expected error for missing snapshot")
+	}
+}
+
+func TestRestoreAllowsOriginalPathUnderProcessTemp(t *testing.T) {
+	home := t.TempDir()
+	tempRoot := t.TempDir()
+	t.Setenv("TMP", tempRoot)
+	t.Setenv("TEMP", tempRoot)
+	t.Setenv("GOTMPDIR", tempRoot)
+
+	origHome := UserHomeDirFn
+	origBackupRoot := BackupRootFn
+	defer func() {
+		UserHomeDirFn = origHome
+		BackupRootFn = origBackupRoot
+	}()
+	UserHomeDirFn = func() (string, error) { return home, nil }
+	BackupRootFn = func() (string, error) { return home, nil }
+
+	originalPath := filepath.Join(tempRoot, "rollback", "config.json")
+	snapshotPath := filepath.Join(home, "backup", "snapshot.json")
+	if err := os.MkdirAll(filepath.Dir(snapshotPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(snapshot) error = %v", err)
+	}
+	if err := os.WriteFile(snapshotPath, []byte(`{"ok":true}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(snapshot) error = %v", err)
+	}
+
+	err := RestoreService{}.Restore(Manifest{Entries: []ManifestEntry{{
+		OriginalPath: originalPath,
+		SnapshotPath: snapshotPath,
+		Existed:      true,
+		Mode:         0o600,
+	}}})
+	if err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+	if _, err := os.Stat(originalPath); err != nil {
+		t.Fatalf("restored temp original path stat error = %v", err)
+	}
+}
+
+func TestRestoreRejectsOriginalPathOutsideHomeAndTemp(t *testing.T) {
+	home := t.TempDir()
+	tempRoot := t.TempDir()
+	outside := t.TempDir()
+	t.Setenv("TMP", tempRoot)
+	t.Setenv("TEMP", tempRoot)
+	t.Setenv("GOTMPDIR", tempRoot)
+
+	origHome := UserHomeDirFn
+	origBackupRoot := BackupRootFn
+	defer func() {
+		UserHomeDirFn = origHome
+		BackupRootFn = origBackupRoot
+	}()
+	UserHomeDirFn = func() (string, error) { return home, nil }
+	BackupRootFn = func() (string, error) { return home, nil }
+
+	err := RestoreService{}.Restore(Manifest{Entries: []ManifestEntry{{
+		OriginalPath: filepath.Join(outside, "config.json"),
+		SnapshotPath: filepath.Join(home, "backup", "snapshot.json"),
+		Existed:      true,
+		Mode:         0o600,
+	}}})
+	if err == nil {
+		t.Fatal("Restore() expected error for OriginalPath outside home/temp")
+	}
+	if !strings.Contains(err.Error(), "user home or temp") {
+		t.Fatalf("Restore() error = %v, want user home or temp validation", err)
 	}
 }
 
