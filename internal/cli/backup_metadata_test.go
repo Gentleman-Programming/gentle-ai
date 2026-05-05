@@ -9,8 +9,10 @@ package cli
 // actually writes those fields when running from the install or sync paths.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -153,7 +155,7 @@ func TestPrepareBackupStep_CleansUpOnFailure(t *testing.T) {
 	}
 
 	// The partial snapshot directory must NOT exist after the failure.
-	if _, statErr := os.Stat(snapshotDir); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(snapshotDir); statErr == nil || (!os.IsNotExist(statErr) && !errors.Is(statErr, syscall.ENOTDIR)) {
 		t.Errorf("snapshotDir %q still exists after failure; should have been cleaned up", snapshotDir)
 	}
 }

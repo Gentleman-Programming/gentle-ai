@@ -1,9 +1,7 @@
 package storage
 
 import (
-	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -57,14 +55,10 @@ func TestFormatBytes(t *testing.T) {
 	}
 }
 
-func TestRequireFreeSpace_InvalidPath(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows GetDiskFreeSpaceExW succeeds for any path on an existing drive")
-	}
-	// Use a path that definitely doesn't exist.
-	invalid := filepath.Join(os.TempDir(), "nonexistent-path-for-test-12345")
-	err := RequireFreeSpace(invalid, 1024)
-	if err == nil {
-		t.Error("RequireFreeSpace on nonexistent path expected error, got nil")
+func TestRequireFreeSpace_NonexistentChildUsesExistingParent(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "new", "engram", "data")
+	err := RequireFreeSpace(target, 1024)
+	if err != nil {
+		t.Fatalf("RequireFreeSpace should check the nearest existing parent for creatable paths: %v", err)
 	}
 }

@@ -133,7 +133,7 @@ func TestRestoreAllowsOriginalPathUnderProcessTemp(t *testing.T) {
 func TestRestoreRejectsOriginalPathOutsideHomeAndTemp(t *testing.T) {
 	home := t.TempDir()
 	tempRoot := t.TempDir()
-	outside := t.TempDir()
+	outside := filepath.Join(filepath.VolumeName(home)+string(os.PathSeparator), "gentle-ai-restore-forbidden")
 	t.Setenv("TMP", tempRoot)
 	t.Setenv("TEMP", tempRoot)
 	t.Setenv("GOTMPDIR", tempRoot)
