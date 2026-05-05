@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -357,6 +358,19 @@ func TestModel_EffortLevels(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDefaultVariantsCachePath(t *testing.T) {
+	got := DefaultVariantsCachePath()
+	if got == "" {
+		t.Fatal("DefaultVariantsCachePath() returned empty string")
+	}
+	if !strings.HasSuffix(got, filepath.Join(".gentle-ai", "cache", "model-variants.json")) {
+		t.Fatalf("expected path suffix .gentle-ai/cache/model-variants.json, got %q", got)
+	}
+	if strings.Contains(got, filepath.Join(".cache", "gentle-ai")) {
+		t.Fatalf("path must not contain legacy .cache/gentle-ai, got %q", got)
 	}
 }
 

@@ -4,7 +4,7 @@
  *
  * On OpenCode startup, fetches the provider list via the in-process SDK client,
  * extracts variant keys per model, and writes a minimal JSON cache to
- * ~/.cache/gentle-ai/model-variants.json. gentle-ai reads this file
+ * ~/.gentle-ai/cache/model-variants.json. gentle-ai reads this file
  * to populate the effort level picker without needing a live API connection.
  */
 
@@ -33,7 +33,7 @@ export const ModelVariantsPlugin: Plugin = async (input) => {
 
       if (Object.keys(variants).length === 0) return
 
-      const cacheDir = path.join(homedir(), ".cache", "gentle-ai")
+      const cacheDir = path.join(homedir(), ".gentle-ai", "cache")
       await mkdir(cacheDir, { recursive: true })
       await writeFile(
         path.join(cacheDir, "model-variants.json"),
