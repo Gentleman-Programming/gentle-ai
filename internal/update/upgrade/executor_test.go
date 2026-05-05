@@ -159,7 +159,7 @@ func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
 		}
 		return "", errors.New("not found")
 	}
-	snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest, error) {
+	snapshotCreator = func(_ context.Context, snapshotDir string, paths []string) (backup.Manifest, error) {
 		return backup.Manifest{ID: "backup-test"}, nil
 	}
 	execCalled := false
@@ -722,7 +722,7 @@ func TestExecute_ForcedSnapshotFailureSurfacesWarningEndToEnd(t *testing.T) {
 	}
 
 	// Force snapshot creation to fail.
-	snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest, error) {
+	snapshotCreator = func(_ context.Context, snapshotDir string, paths []string) (backup.Manifest, error) {
 		return backup.Manifest{}, errors.New("simulated snapshot failure: disk full")
 	}
 

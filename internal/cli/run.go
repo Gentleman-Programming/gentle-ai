@@ -368,7 +368,11 @@ func (s prepareBackupStep) Run() error {
 		}
 	}
 
-	manifest, err := s.snapshotter.Create(s.snapshotDir, s.targets)
+	// Create context with 5-minute timeout for backup operation
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	
+	manifest, err := s.snapshotter.Create(ctx, s.snapshotDir, s.targets)
 	if err != nil {
 		return fmt.Errorf("create backup snapshot: %w", err)
 	}

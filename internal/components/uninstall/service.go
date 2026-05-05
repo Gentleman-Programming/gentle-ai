@@ -1,6 +1,7 @@
 package uninstall
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -25,7 +26,7 @@ type Manager interface {
 }
 
 type Snapshotter interface {
-	Create(snapshotDir string, paths []string) (backup.Manifest, error)
+	Create(ctx context.Context, snapshotDir string, paths []string) (backup.Manifest, error)
 }
 
 type Result struct {
@@ -341,7 +342,12 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 
 func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, error) {
 	snapshotDir := filepath.Join(s.backupRoot, s.now().UTC().Format("20060102150405.000000000"))
-	manifest, err := s.snapshotter.Create(snapshotDir, p.backupTargets)
+	
+	// Create context with 5-minute timeout for backup operation
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	
+	manifest, err := s.snapshotter.Create(ctx, snapshotDir, p.backupTargets)
 	if err != nil {
 		return Result{}, fmt.Errorf("create uninstall snapshot: %w", err)
 	}

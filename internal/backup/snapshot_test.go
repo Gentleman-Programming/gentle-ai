@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,7 +23,7 @@ func TestSnapshotterCreatesCompressedBackup(t *testing.T) {
 
 	snapshotDir := filepath.Join(home, "snap")
 	snap := NewSnapshotter()
-	manifest, err := snap.Create(snapshotDir, []string{file1, file2})
+	manifest, err := snap.Create(context.Background(), snapshotDir, []string{file1, file2})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -63,7 +64,7 @@ func TestSnapshotterCompressedArchiveContainsFiles(t *testing.T) {
 
 	snapshotDir := filepath.Join(home, "snap")
 	snap := NewSnapshotter()
-	if _, err := snap.Create(snapshotDir, []string{file1}); err != nil {
+	if _, err := snap.Create(context.Background(), snapshotDir, []string{file1}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
@@ -107,7 +108,7 @@ func TestSnapshotterSetsChecksum(t *testing.T) {
 
 	snapshotDir := filepath.Join(home, "snap")
 	snap := NewSnapshotter()
-	manifest, err := snap.Create(snapshotDir, []string{file1})
+	manifest, err := snap.Create(context.Background(), snapshotDir, []string{file1})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -130,13 +131,13 @@ func TestSnapshotterChecksumIsDeterministic(t *testing.T) {
 	snap := NewSnapshotter()
 
 	snap1Dir := filepath.Join(home, "snap1")
-	manifest1, err := snap.Create(snap1Dir, []string{file1})
+	manifest1, err := snap.Create(context.Background(), snap1Dir, []string{file1})
 	if err != nil {
 		t.Fatalf("Create() snap1 error = %v", err)
 	}
 
 	snap2Dir := filepath.Join(home, "snap2")
-	manifest2, err := snap.Create(snap2Dir, []string{file1})
+	manifest2, err := snap.Create(context.Background(), snap2Dir, []string{file1})
 	if err != nil {
 		t.Fatalf("Create() snap2 error = %v", err)
 	}
@@ -162,7 +163,7 @@ func TestSnapshotterManifestEntrySnapshotPath(t *testing.T) {
 
 	snapshotDir := filepath.Join(home, "snap")
 	snap := NewSnapshotter()
-	manifest, err := snap.Create(snapshotDir, []string{file1})
+	manifest, err := snap.Create(context.Background(), snapshotDir, []string{file1})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

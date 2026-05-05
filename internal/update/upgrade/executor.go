@@ -34,8 +34,8 @@ var execCommand = exec.Command
 // snapshotCreator is the function used to create a backup snapshot before
 // upgrade execution. Swapping this var in tests allows forcing snapshot
 // failures to verify end-to-end warning surfacing in UpgradeReport.
-var snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest, error) {
-	return backup.NewSnapshotter().Create(snapshotDir, paths)
+var snapshotCreator = func(ctx context.Context, snapshotDir string, paths []string) (backup.Manifest, error) {
+	return backup.NewSnapshotter().Create(ctx, snapshotDir, paths)
 }
 
 // AppVersion is the gentle-ai version written into backup manifests created by
@@ -285,15 +285,22 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	}
 
 	// Create backup snapshot BEFORE any execution (only when there are executables).
-	// When SkipBackup is set the entire backup subsystem is bypassed for this run:
+<<<<<<< HEAD
+// When SkipBackup is set the entire backup subsystem is bypassed for this run:
 	// no snapshot, no retention pruning, the backups directory is left untouched.
+	// Timeout after 5 minutes — if backup takes longer, fail gracefully and proceed without it.
 	backupID := ""
 	backupWarning := ""
 	if !dryRun && len(executable) > 0 && !options.SkipBackup {
 		sp := NewSpinner(pw, "Creating pre-upgrade backup")
 		snapshotDir := filepath.Join(homeDir, ".gentle-ai", "backups",
 			fmt.Sprintf("upgrade-%s", time.Now().UTC().Format("20060102T150405Z")))
-		manifest, err := snapshotCreator(snapshotDir, configPathsForBackup(homeDir, options.BackupDiagnostics))
+		
+		// Create context with 5-minute timeout for backup operation
+		backupCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		
+		manifest, err := snapshotCreator(backupCtx, snapshotDir, configPathsForBackup(homeDir, options.BackupDiagnostics))
 		if err != nil {
 			sp.Finish(false)
 			backupWarning = fmt.Sprintf("pre-upgrade backup failed — upgrade will run without a backup: %s", err)

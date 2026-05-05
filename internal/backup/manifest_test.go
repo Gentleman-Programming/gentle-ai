@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -385,7 +386,7 @@ func TestSnapshotterPopulatesFileCount(t *testing.T) {
 
 	snapshotDir := filepath.Join(home, "snap")
 	snap := NewSnapshotter()
-	manifest, err := snap.Create(snapshotDir, []string{file1, file2, missing})
+	manifest, err := snap.Create(context.Background(), snapshotDir, []string{file1, file2, missing})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -415,7 +416,7 @@ func TestSnapshotterSkipsDirectories(t *testing.T) {
 
 	snapshotDir := filepath.Join(home, "snap")
 	snap := NewSnapshotter()
-	manifest, err := snap.Create(snapshotDir, []string{file1, skillDir})
+	manifest, err := snap.Create(context.Background(), snapshotDir, []string{file1, skillDir})
 	if err != nil {
 		t.Fatalf("Create() error = %v, want nil (directories should be skipped)", err)
 	}

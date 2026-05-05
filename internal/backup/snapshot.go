@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"log"
@@ -27,7 +28,7 @@ func NewSnapshotter() Snapshotter {
 	return Snapshotter{now: time.Now}
 }
 
-func (s Snapshotter) Create(snapshotDir string, paths []string) (Manifest, error) {
+func (s Snapshotter) Create(ctx context.Context, snapshotDir string, paths []string) (Manifest, error) {
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
 		return Manifest{}, fmt.Errorf("create snapshot directory %q: %w", snapshotDir, err)
 	}
@@ -45,6 +46,13 @@ func (s Snapshotter) Create(snapshotDir string, paths []string) (Manifest, error
 	var existingPaths []string
 
 	for _, path := range paths {
+		// Check context cancellation between files
+		select {
+		case <-ctx.Done():
+			return Manifest{}, fmt.Errorf("backup cancelled: %w", ctx.Err())
+		default:
+		}
+
 		entry, archiveEntry, err := s.buildEntry(path)
 		if err != nil {
 			return Manifest{}, err

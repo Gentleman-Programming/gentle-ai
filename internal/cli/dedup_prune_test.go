@@ -4,6 +4,7 @@ package cli
 // and prunes old backups after a successful snapshot (BKUP-T16, BKUP-T27).
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -171,7 +172,7 @@ func TestPrepareBackupStep_PrunesOldBackups(t *testing.T) {
 		}
 		snapshotDir := filepath.Join(backupRoot, time.Now().UTC().Add(time.Duration(i)*time.Millisecond).Format("20060102150405.000000000")+"-"+string(rune('A'+i)))
 		snapshotter := backup.NewSnapshotter()
-		if _, err := snapshotter.Create(snapshotDir, []string{configPath}); err != nil {
+		if _, err := snapshotter.Create(context.Background(), snapshotDir, []string{configPath}); err != nil {
 			t.Fatalf("Snapshotter.Create %d: %v", i, err)
 		}
 	}

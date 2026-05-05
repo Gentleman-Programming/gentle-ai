@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -113,7 +114,7 @@ func TestRestoreCompressedBackup(t *testing.T) {
 	// Use Snapshotter to create a compressed backup — this produces snapshot.tar.gz
 	// and sets Compressed=true + relative SnapshotPaths in the manifest.
 	snapshotter := Snapshotter{now: func() time.Time { return time.Now() }}
-	manifest, err := snapshotter.Create(backupDir, []string{srcFile})
+	manifest, err := snapshotter.Create(context.Background(), backupDir, []string{srcFile})
 	if err != nil {
 		t.Fatalf("Snapshotter.Create() error = %v", err)
 	}
@@ -216,7 +217,7 @@ func TestRestoreCompressedMultipleFiles(t *testing.T) {
 	}
 
 	snapshotter := Snapshotter{now: func() time.Time { return time.Now() }}
-	manifest, err := snapshotter.Create(backupDir, []string{fileA, fileB})
+	manifest, err := snapshotter.Create(context.Background(), backupDir, []string{fileA, fileB})
 	if err != nil {
 		t.Fatalf("Snapshotter.Create() error = %v", err)
 	}
@@ -302,7 +303,7 @@ func TestRestoreCompressedRemovesCreatedFiles(t *testing.T) {
 	}
 
 	snapshotter := Snapshotter{now: func() time.Time { return time.Now() }}
-	manifest, err := snapshotter.Create(backupDir, []string{srcFile})
+	manifest, err := snapshotter.Create(context.Background(), backupDir, []string{srcFile})
 	if err != nil {
 		t.Fatalf("Snapshotter.Create() error = %v", err)
 	}

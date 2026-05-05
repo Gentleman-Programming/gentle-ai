@@ -1,6 +1,7 @@
 package uninstall
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -14,7 +15,7 @@ import (
 
 type stubSnapshotter struct{}
 
-func (stubSnapshotter) Create(snapshotDir string, paths []string) (backup.Manifest, error) {
+func (stubSnapshotter) Create(_ context.Context, snapshotDir string, paths []string) (backup.Manifest, error) {
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
 		return backup.Manifest{}, err
 	}
