@@ -1,10 +1,6 @@
 ---
-name: gentle-ai-chained-pr
-description: >
-  Split large changes into chained or stacked pull requests that protect reviewer
-  focus and stay within Gentle AI's 400-line cognitive review budget. Trigger:
-  when a PR would exceed 400 changed lines, when planning chained PRs, stacked
-  PRs, or reviewable slices.
+name: chained-pr
+description: "Split large changes into chained or stacked pull requests that protect reviewer focus and stay within Gentle AI's 400-line cognitive review budget. Trigger: when a PR would exceed 400 changed lines, when planning chained PRs, stacked PRs, or reviewable slices."
 license: Apache-2.0
 metadata:
   author: gentleman-programming

@@ -26,6 +26,49 @@ func TestWriteAndRead(t *testing.T) {
 	}
 }
 
+// TestPersonaRoundTrip verifies the Persona field round-trips through
+// Write/Read. Both `gentle-ai install` (CLI in run.go) and the TUI app
+// (internal/app/app.go) write this field after a successful install so that
+// `gentle-ai sync` regenerates the persona the user actually selected — not a
+// hard-coded default.
+func TestPersonaRoundTrip(t *testing.T) {
+	for _, persona := range []string{"gentleman", "neutral", "custom"} {
+		t.Run(persona, func(t *testing.T) {
+			home := t.TempDir()
+			if err := Write(home, InstallState{
+				InstalledAgents: []string{"claude-code"},
+				Persona:         persona,
+			}); err != nil {
+				t.Fatalf("Write() error = %v", err)
+			}
+			s, err := Read(home)
+			if err != nil {
+				t.Fatalf("Read() error = %v", err)
+			}
+			if s.Persona != persona {
+				t.Errorf("Persona = %q, want %q", s.Persona, persona)
+			}
+		})
+	}
+}
+
+// TestPersonaBackwardCompat verifies that state files written before persona
+// persistence (no `persona` JSON field) still read cleanly with an empty
+// Persona, allowing the sync fallback to take over.
+func TestPersonaBackwardCompat(t *testing.T) {
+	home := t.TempDir()
+	if err := Write(home, InstallState{InstalledAgents: []string{"claude-code"}}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	s, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if s.Persona != "" {
+		t.Errorf("Persona = %q, want empty for pre-feature state", s.Persona)
+	}
+}
+
 // TestWriteCreatesStateDir verifies that Write creates the .gentle-ai directory
 // when it does not exist yet.
 func TestWriteCreatesStateDir(t *testing.T) {

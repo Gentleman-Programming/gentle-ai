@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 )
@@ -193,13 +195,18 @@ func TestBuildSyncSelectionDefaultScopeIncludesManagedComponents(t *testing.T) {
 
 	sel := BuildSyncSelection(flags, agents)
 
-	// Default sync must include: SDD, Engram, Context7, GGA, Skills
+	// Default sync must include: SDD, Engram, Context7, GGA, Skills, Persona.
+	// Persona is included because the content between <!-- gentle-ai:persona -->
+	// markers is harness-managed; sync must propagate embedded-asset changes to
+	// users who already have a persona installed. Content outside the markers
+	// is preserved by InjectMarkdownSection.
 	mandatoryComponents := []model.ComponentID{
 		model.ComponentSDD,
 		model.ComponentEngram,
 		model.ComponentContext7,
 		model.ComponentGGA,
 		model.ComponentSkills,
+		model.ComponentPersona,
 	}
 
 	for _, want := range mandatoryComponents {
@@ -216,14 +223,13 @@ func TestBuildSyncSelectionDefaultScopeIncludesManagedComponents(t *testing.T) {
 	}
 }
 
-func TestBuildSyncSelectionDefaultExcludesPersonaPermissionsTheme(t *testing.T) {
+func TestBuildSyncSelectionDefaultExcludesPermissionsTheme(t *testing.T) {
 	agents := []model.AgentID{model.AgentOpenCode}
 	flags := SyncFlags{}
 
 	sel := BuildSyncSelection(flags, agents)
 
 	excluded := []model.ComponentID{
-		model.ComponentPersona,
 		model.ComponentPermission,
 		model.ComponentTheme,
 	}
@@ -464,22 +470,46 @@ func TestComponentSyncStepSkipsEngramBinaryInstall(t *testing.T) {
 	}
 }
 
-func TestComponentSyncStepSkipsPersonaByDefault(t *testing.T) {
-	// The sync step should never inject persona — it is not in the sync scope.
-	// We verify by confirming ComponentPersona is not handled and returns error.
+func TestComponentSyncStepRunsPersonaInjectForSync(t *testing.T) {
+	// The sync step regenerates the marker-bound persona block (markdown only).
+	// It must NOT touch the OpenCode agent definition in opencode.json (those
+	// JSON merges are install-only — running them in sync would conflict with
+	// SDD's settings writes and break idempotency).
 	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	step := componentSyncStep{
 		id:        "sync:persona",
 		component: model.ComponentPersona,
 		homeDir:   home,
 		agents:    []model.AgentID{model.AgentOpenCode},
-		selection: model.Selection{},
+		selection: model.Selection{Persona: model.PersonaGentleman},
 	}
 
-	err := step.Run()
-	if err == nil {
-		t.Fatalf("componentSyncStep.Run() with ComponentPersona should return error (out of sync scope)")
+	if err := step.Run(); err != nil {
+		t.Fatalf("componentSyncStep.Run() with ComponentPersona = %v, want nil", err)
+	}
+
+	// Persona block in AGENTS.md must exist after the sync step.
+	agentsMD := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	body, err := os.ReadFile(agentsMD)
+	if err != nil {
+		t.Fatalf("ReadFile AGENTS.md: %v", err)
+	}
+	if !strings.Contains(string(body), "<!-- gentle-ai:persona -->") {
+		t.Errorf("AGENTS.md missing persona open marker after sync; got:\n%s", string(body))
+	}
+
+	// opencode.json must NOT have been touched by the sync persona step
+	// (that JSON merge belongs to install). Either absent or empty is fine.
+	settings := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if _, err := os.Stat(settings); err == nil {
+		raw, _ := os.ReadFile(settings)
+		if strings.Contains(string(raw), "gentleman") {
+			t.Errorf("opencode.json should NOT contain gentleman agent after sync; got:\n%s", string(raw))
+		}
 	}
 }
 
@@ -559,15 +589,18 @@ func TestComponentSyncStepRunsGGAInjectWithoutBinaryInstall(t *testing.T) {
 func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
 
@@ -671,15 +704,18 @@ func TestRunSyncPreservesUnmanagedAdjacentFiles(t *testing.T) {
 	}
 
 	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
 
@@ -701,15 +737,18 @@ func TestRunSyncPreservesUnmanagedAdjacentFiles(t *testing.T) {
 func TestRunSyncDryRunDoesNotWriteFiles(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
 
@@ -736,15 +775,18 @@ func TestRunSyncDryRunDoesNotWriteFiles(t *testing.T) {
 func TestRunSyncIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
 
@@ -836,15 +878,18 @@ func TestRunSyncNoOpWhenNoAgentsDiscovered(t *testing.T) {
 func TestRenderSyncReportIncludesManagedActions(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
 
@@ -892,15 +937,18 @@ func TestRunSyncExcludesUnmanagedLookalikeFile(t *testing.T) {
 	}
 
 	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
 
@@ -936,15 +984,18 @@ func TestRunSyncExcludesUnmanagedLookalikeFile(t *testing.T) {
 func TestRunSyncNoOpWhenAssetsAlreadyCurrent(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
 
@@ -990,15 +1041,18 @@ func TestRunSyncNoOpWhenAssetsAlreadyCurrent(t *testing.T) {
 func TestSyncActionsExecutedReflectsChangedFiles(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
 
@@ -1930,15 +1984,18 @@ func TestBuildSyncSelectionSDDProfileStrategyForwarded(t *testing.T) {
 func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
 
@@ -1988,15 +2045,18 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 func TestRunSyncDoesNotOverridePersistedAssignmentsOnSecondSync(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
 
@@ -2043,15 +2103,18 @@ func TestRunSyncDoesNotOverridePersistedAssignmentsOnSecondSync(t *testing.T) {
 func TestRunSyncWithNoPersistedAssignmentsDoesNotPanic(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
 
@@ -2074,5 +2137,150 @@ func TestRunSyncWithNoPersistedAssignmentsDoesNotPanic(t *testing.T) {
 	// Should work fine — empty maps, no panic.
 	if len(result.Selection.ClaudeModelAssignments) != 0 {
 		t.Errorf("expected empty ClaudeModelAssignments, got %v", result.Selection.ClaudeModelAssignments)
+	}
+}
+
+// ─── Phase 2: Persona-in-sync regression tests ─────────────────────────────
+
+func setSyncTestHome(t *testing.T, home string) {
+	t.Helper()
+	rOSHome := osUserHomeDir
+	rBackup := backup.UserHomeDirFn
+	rRun := runCommand
+	rLook := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = rOSHome
+		backup.UserHomeDirFn = rBackup
+		runCommand = rRun
+		cmdLookPath = rLook
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+}
+
+// TestBuildSyncSelectionDoesNotHardcodePersona verifies that BuildSyncSelection
+// leaves Persona empty so RunSync can resolve it from state.
+func TestBuildSyncSelectionDoesNotHardcodePersona(t *testing.T) {
+	sel := BuildSyncSelection(SyncFlags{}, []model.AgentID{model.AgentOpenCode})
+	if sel.Persona != "" {
+		t.Errorf("BuildSyncSelection().Persona = %q, want empty (state-resolved)", sel.Persona)
+	}
+}
+
+// TestSyncPersonaPathsExcludeOpenCodeAgentJson verifies the install/sync
+// contract split: syncPersonaPaths must NOT declare opencode.json (that JSON
+// merge is install-only because it conflicts with SDD).
+func TestSyncPersonaPathsExcludeOpenCodeAgentJson(t *testing.T) {
+	home := t.TempDir()
+	reg, _ := agents.NewDefaultRegistry()
+	a, _ := reg.Get(model.AgentOpenCode)
+
+	paths := syncPersonaPaths(home, model.Selection{Persona: model.PersonaGentleman}, []agents.Adapter{a})
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	for _, p := range paths {
+		if p == settingsPath {
+			t.Errorf("syncPersonaPaths should NOT declare opencode.json (install-only); got %v", paths)
+		}
+	}
+}
+
+// TestRunSyncRegeneratesPersonaBlockBetweenMarkers verifies the core fix:
+// when an old persona block lives between markers, sync replaces it with the
+// embedded asset for the current version.
+func TestRunSyncRegeneratesPersonaBlockBetweenMarkers(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// Write a stale managed persona block — what an older version of gentle-ai
+	// would have emitted. The sync must replace this with the v1.26 directive.
+	stalePersona := "# pre-existing notes by user\n\n" +
+		"<!-- gentle-ai:persona -->\n" +
+		"## Skills (Auto-load based on context)\n\nstale 2-row table here.\n" +
+		"<!-- /gentle-ai:persona -->\n"
+	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.WriteFile(claudeMD, []byte(stalePersona), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		Persona:         "gentleman",
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	if _, err := RunSync([]string{"--agents", "claude-code", "--sdd-mode", "single"}); err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+
+	body, err := os.ReadFile(claudeMD)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	got := string(body)
+	if !strings.Contains(got, "# pre-existing notes by user") {
+		t.Errorf("CLAUDE.md content outside markers was not preserved; got:\n%s", got)
+	}
+	if strings.Contains(got, "Skills (Auto-load based on context)") {
+		t.Errorf("CLAUDE.md still contains the stale Auto-load table; got:\n%s", got)
+	}
+	if !strings.Contains(got, "Contextual Skill Loading (MANDATORY)") {
+		t.Errorf("CLAUDE.md missing the new Contextual Skill Loading directive; got:\n%s", got)
+	}
+}
+
+// TestRunSyncReadsPersonaFromState verifies that sync uses the persona the
+// user installed (from state.json) rather than always defaulting to Gentleman.
+func TestRunSyncReadsPersonaFromState(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		Persona:         "neutral",
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	res, err := RunSync([]string{"--agents", "claude-code", "--sdd-mode", "single"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+	if got, want := res.Selection.Persona, model.PersonaNeutral; got != want {
+		t.Errorf("Selection.Persona = %q, want %q (read from state.json)", got, want)
+	}
+}
+
+// TestRunSyncFallsBackToGentlemanWhenStateLacksPersona verifies the backward
+// compatibility path: state files written before persona persistence still
+// produce a working sync.
+func TestRunSyncFallsBackToGentlemanWhenStateLacksPersona(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		// No Persona field — pre-feature state.
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	res, err := RunSync([]string{"--agents", "claude-code", "--sdd-mode", "single"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+	if got, want := res.Selection.Persona, model.PersonaGentleman; got != want {
+		t.Errorf("Selection.Persona = %q, want %q (fallback for pre-feature state)", got, want)
 	}
 }

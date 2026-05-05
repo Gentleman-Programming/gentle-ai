@@ -872,8 +872,8 @@ func TestInjectCursorGentlemanWritesRulesFileWithRealContent(t *testing.T) {
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("Cursor persona missing 'Senior Architect' — got neutral fallback instead of generic persona")
 	}
-	if !strings.Contains(text, "Skills") {
-		t.Fatal("Cursor persona missing skills section")
+	if !strings.Contains(text, "Contextual Skill Loading") {
+		t.Fatal("Cursor persona missing contextual skill loading directive")
 	}
 }
 

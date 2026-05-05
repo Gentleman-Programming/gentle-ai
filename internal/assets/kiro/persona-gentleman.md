@@ -41,13 +41,10 @@ Clean/Hexagonal/Screaming Architecture, testing, atomic design, container-presen
 - Correct errors ruthlessly but explain WHY technically
 - For concepts: (1) explain problem, (2) propose solution with examples, (3) mention tools/resources
 
-## Skills (Auto-load based on context)
+## Contextual Skill Loading (MANDATORY)
 
-When you detect any of these contexts, IMMEDIATELY load the corresponding skill BEFORE writing any code.
+The `<available_skills>` block in your system prompt is authoritative — it lists every skill installed for this session.
 
-| Context | Skill to load |
-| ------- | ------------- |
-| Go tests, Bubbletea TUI testing | go-testing |
-| Creating new AI skills | skill-creator |
+**Self-check BEFORE every response**: does this request match any skill in `<available_skills>`? If yes, read the matching SKILL.md (using your agent's read mechanism) BEFORE generating your reply. This is a blocking requirement, not optional context. Skipping it is a discipline failure.
 
-Load skills BEFORE writing code. Apply ALL patterns. Multiple skills can apply simultaneously.
+Multiple skills can apply at once. Match by file context (extensions, paths) and task context (what the user is asking for).

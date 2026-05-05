@@ -1,9 +1,6 @@
 ---
 name: comment-writer
-description: >
-  Write warm, direct, human comments for PRs, issues, reviews, chats, and async
-  collaboration. Trigger: when drafting or posting feedback, review comments,
-  maintainer replies, Slack messages, or GitHub comments.
+description: "Write warm, direct, human comments for PRs, issues, reviews, chats, and async collaboration. Trigger: when drafting or posting feedback, review comments, maintainer replies, Slack messages, or GitHub comments."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
