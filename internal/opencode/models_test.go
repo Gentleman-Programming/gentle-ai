@@ -369,8 +369,9 @@ func TestDefaultVariantsCachePath(t *testing.T) {
 	if !strings.HasSuffix(got, filepath.Join(".gentle-ai", "cache", "model-variants.json")) {
 		t.Fatalf("expected path suffix .gentle-ai/cache/model-variants.json, got %q", got)
 	}
-	if strings.Contains(got, filepath.Join(".cache", "gentle-ai")) {
-		t.Fatalf("path must not contain legacy .cache/gentle-ai, got %q", got)
+	legacy := filepath.Join(".cache", "gentle-ai")
+	if strings.Contains(got, legacy) {
+		t.Fatalf("path must not contain legacy %s, got %q", legacy, got)
 	}
 }
 
