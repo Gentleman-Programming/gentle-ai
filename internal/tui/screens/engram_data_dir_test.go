@@ -50,6 +50,67 @@ func TestRenderEngramDataDir_WithData(t *testing.T) {
 	}
 }
 
+func TestRenderEngramDataDir_InstallFreshShowsOnlyInstallChoices(t *testing.T) {
+	out := RenderEngramDataDir(EngramDataDirRenderArgs{
+		Context:         EngramDataDirContextInstall,
+		CurrentDir:      "/home/user/.engram",
+		HasExistingData: false,
+	})
+
+	for _, want := range []string{
+		"No existing Engram data was detected",
+		"Use default Engram location",
+		"Set a custom Engram location",
+		"Back",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing install fresh choice/helper %q in output:\n%s", want, out)
+		}
+	}
+	for _, notWant := range []string{
+		"Move existing data",
+		"Copy existing data",
+		"Start fresh",
+		"Set active Engram directory",
+		"Back / keep current location",
+	} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("fresh install should not show %q; output:\n%s", notWant, out)
+		}
+	}
+}
+
+func TestRenderEngramDataDir_InstallExistingShowsContinuityFirst(t *testing.T) {
+	out := RenderEngramDataDir(EngramDataDirRenderArgs{
+		Context:         EngramDataDirContextInstall,
+		CurrentDir:      "/home/user/.engram",
+		HasExistingData: true,
+	})
+
+	ordered := []string{
+		"Continue with current Engram location",
+		"Set active Engram directory",
+		"Move existing data to a new location",
+		"Back",
+	}
+	last := -1
+	for _, want := range ordered {
+		idx := strings.Index(out, want)
+		if idx == -1 {
+			t.Fatalf("missing install existing choice %q in output:\n%s", want, out)
+		}
+		if idx < last {
+			t.Fatalf("choice %q rendered out of order; output:\n%s", want, out)
+		}
+		last = idx
+	}
+	for _, notWant := range []string{"Copy existing data", "Start fresh", "Back / keep current location"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("existing install should not show %q; output:\n%s", notWant, out)
+		}
+	}
+}
+
 func TestRenderEngramDataDir_WithoutData_DefaultChoice(t *testing.T) {
 	args := EngramDataDirRenderArgs{
 		CurrentDir:      "/home/user/.engram",
@@ -203,6 +264,12 @@ func TestEngramDataDirOptionCount(t *testing.T) {
 	if got := EngramDataDirOptionCount(true, EngramChoiceCopy); got != 5 {
 		t.Errorf("EngramDataDirOptionCount(true, copy) = %d, want 5", got)
 	}
+	if got := EngramDataDirOptionCountForContext(EngramDataDirContextInstall, false, EngramChoiceDefault); got != 3 {
+		t.Errorf("install fresh option count = %d, want 3", got)
+	}
+	if got := EngramDataDirOptionCountForContext(EngramDataDirContextInstall, true, EngramChoiceDefault); got != 4 {
+		t.Errorf("install existing option count = %d, want 4", got)
+	}
 }
 
 func TestEngramDataDirFeatureParityRows(t *testing.T) {
@@ -249,6 +316,7 @@ func TestEngramFilesHeadingByChoice(t *testing.T) {
 		{"copy", EngramChoiceCopy, "Files that will be copied:"},
 		{"set active", EngramChoiceSetActive, "Files at selected active directory:"},
 		{"start fresh", EngramChoiceStartFresh, "Files that will be deleted:"},
+		{"custom", EngramChoiceCustom, "New Engram directory:"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

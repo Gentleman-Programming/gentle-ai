@@ -42,6 +42,8 @@ func ConfirmTitle(action Action) string {
 		return "CONFIRM ACTIVE DIRECTORY"
 	case ActionStartFresh:
 		return "CONFIRM DELETE & START FRESH"
+	case ActionUseCustom:
+		return "CONFIRM ENGRAM LOCATION"
 	}
 	return "CONFIRM ACTION"
 }
@@ -59,6 +61,8 @@ func ConfirmMessage(action Action, srcDir, dstDir string) string {
 		return fmt.Sprintf("This will set the active Engram data directory to:\n  %s\n\nNo files will be copied or deleted.", dstDir)
 	case ActionStartFresh:
 		return fmt.Sprintf("This will delete all existing Engram data at:\n  %s\nand create a new empty database at:\n  %s", srcDir, dstDir)
+	case ActionUseCustom:
+		return fmt.Sprintf("This will set the Engram data directory to:\n  %s\n\nEngram will create new data there during install.", dstDir)
 	}
 	return ""
 }
@@ -76,6 +80,8 @@ func ConfirmWarning(action Action) string {
 		return "Selected directory must already contain Engram data."
 	case ActionStartFresh:
 		return "All existing memory will be permanently lost."
+	case ActionUseCustom:
+		return "No existing Engram data is required for this location."
 	}
 	return ""
 }
@@ -93,6 +99,8 @@ func FeedbackTitle(action Action) string {
 		return "ACTIVE DIRECTORY UPDATED"
 	case ActionStartFresh:
 		return "FRESH DATABASE CREATED"
+	case ActionUseCustom:
+		return "ENGRAM LOCATION READY"
 	}
 	return "COMPLETE"
 }
@@ -116,6 +124,8 @@ func FeedbackDetails(action Action, filesMoved int, bytesMoved uint64, filesCopi
 		if filesDeleted > 0 {
 			return fmt.Sprintf("%d files deleted, %s removed", filesDeleted, FormatBytes(bytesDeleted))
 		}
+	case ActionUseCustom:
+		return "New Engram data will be created here during install"
 	}
 	return ""
 }

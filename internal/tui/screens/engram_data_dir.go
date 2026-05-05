@@ -23,9 +23,22 @@ const EngramChoiceSetActive = 3
 // EngramChoiceStartFresh means delete existing data and use a new location.
 const EngramChoiceStartFresh = 4
 
+// EngramChoiceCustom means use a new custom directory for fresh install data.
+const EngramChoiceCustom = 5
+
+// EngramDataDirContext identifies whether the data-dir screen is being used as
+// part of install or as a dedicated management/configuration surface.
+type EngramDataDirContext int
+
+const (
+	EngramDataDirContextManagement EngramDataDirContext = iota
+	EngramDataDirContextInstall
+)
+
 // EngramDataDirRenderArgs holds all the state needed to render the Engram data
 // directory configuration screen.
 type EngramDataDirRenderArgs struct {
+	Context         EngramDataDirContext
 	CurrentDir      string
 	HasExistingData bool
 	Choice          int // 0=default, 1=migrate, 2=copy, 3=set-active, 4=start-fresh
@@ -59,8 +72,22 @@ func EngramDataDirOptionCount(hasExistingData bool, choice int) int {
 	return len(EngramDataDirChoices(hasExistingData)) + 1 // choices + Back
 }
 
+func EngramDataDirOptionCountForContext(context EngramDataDirContext, hasExistingData bool, choice int) int {
+	return len(EngramDataDirChoicesForContext(context, hasExistingData)) + 1 // choices + Back
+}
+
 // EngramDataDirChoices returns the primary choices for the data-directory flow.
 func EngramDataDirChoices(hasExistingData bool) []int {
+	return EngramDataDirChoicesForContext(EngramDataDirContextManagement, hasExistingData)
+}
+
+func EngramDataDirChoicesForContext(context EngramDataDirContext, hasExistingData bool) []int {
+	if context == EngramDataDirContextInstall {
+		if !hasExistingData {
+			return []int{EngramChoiceDefault, EngramChoiceCustom}
+		}
+		return []int{EngramChoiceDefault, EngramChoiceSetActive, EngramChoiceMigrate}
+	}
 	if !hasExistingData {
 		return []int{EngramChoiceSetActive, EngramChoiceStartFresh}
 	}
@@ -70,6 +97,10 @@ func EngramDataDirChoices(hasExistingData bool) []int {
 // EngramDataDirBackRow returns the row index of the Back option.
 func EngramDataDirBackRow(hasExistingData bool) int {
 	return len(EngramDataDirChoices(hasExistingData))
+}
+
+func EngramDataDirBackRowForContext(context EngramDataDirContext, hasExistingData bool) int {
+	return len(EngramDataDirChoicesForContext(context, hasExistingData))
 }
 
 // EngramPathPickerOptionCount returns selectable rows in the path picker:
@@ -92,8 +123,24 @@ func EngramDataDirChoiceFromCursor(hasExistingData bool, cursor int) int {
 	return EngramChoiceFromFirstAvailable(hasExistingData)
 }
 
+func EngramDataDirChoiceFromCursorForContext(context EngramDataDirContext, hasExistingData bool, cursor int) int {
+	choices := EngramDataDirChoicesForContext(context, hasExistingData)
+	if cursor >= 0 && cursor < len(choices) {
+		return choices[cursor]
+	}
+	return EngramChoiceFromFirstAvailableForContext(context, hasExistingData)
+}
+
 func EngramChoiceFromFirstAvailable(hasExistingData bool) int {
 	choices := EngramDataDirChoices(hasExistingData)
+	if len(choices) == 0 {
+		return EngramChoiceDefault
+	}
+	return choices[0]
+}
+
+func EngramChoiceFromFirstAvailableForContext(context EngramDataDirContext, hasExistingData bool) int {
+	choices := EngramDataDirChoicesForContext(context, hasExistingData)
 	if len(choices) == 0 {
 		return EngramChoiceDefault
 	}
@@ -110,9 +157,18 @@ func EngramDataDirCursorFromChoice(hasExistingData bool, choice int) int {
 	return 0
 }
 
+func EngramDataDirCursorFromChoiceForContext(context EngramDataDirContext, hasExistingData bool, choice int) int {
+	for idx, candidate := range EngramDataDirChoicesForContext(context, hasExistingData) {
+		if candidate == choice {
+			return idx
+		}
+	}
+	return 0
+}
+
 // needsPathInput returns true when the given choice requires a custom path.
 func NeedsPathInput(choice int) bool {
-	return choice == EngramChoiceMigrate || choice == EngramChoiceCopy || choice == EngramChoiceSetActive || choice == EngramChoiceStartFresh
+	return choice == EngramChoiceMigrate || choice == EngramChoiceCopy || choice == EngramChoiceSetActive || choice == EngramChoiceStartFresh || choice == EngramChoiceCustom
 }
 
 // RenderEngramDataDir renders the main Engram data directory decision screen.
@@ -121,7 +177,11 @@ func RenderEngramDataDir(args EngramDataDirRenderArgs) string {
 
 	b.WriteString(styles.TitleStyle.Render("ENGRAM DATA DIRECTORY"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose the high-level action for Engram persistent memory."))
+	if args.Context == EngramDataDirContextInstall {
+		b.WriteString(styles.SubtextStyle.Render("Choose where Engram persistent memory should live for this install."))
+	} else {
+		b.WriteString(styles.SubtextStyle.Render("Choose the high-level action for Engram persistent memory."))
+	}
 	b.WriteString("\n\n")
 
 	b.WriteString(styles.LabelStyle.Render("Current location: "))
@@ -130,6 +190,9 @@ func RenderEngramDataDir(args EngramDataDirRenderArgs) string {
 
 	if args.HasExistingData {
 		b.WriteString(styles.WarningStyle.Render("Existing Engram data detected at this location."))
+		b.WriteString("\n")
+	} else if args.Context == EngramDataDirContextInstall {
+		b.WriteString(styles.SubtextStyle.Render("No existing Engram data was detected. Engram will create a new data directory at the selected location."))
 		b.WriteString("\n")
 	}
 
@@ -269,6 +332,8 @@ func engramFilesHeading(choice int) string {
 		return "Files at selected active directory:"
 	case EngramChoiceStartFresh:
 		return "Files that will be deleted:"
+	case EngramChoiceCustom:
+		return "New Engram directory:"
 	default:
 		return "Files that will be affected:"
 	}
@@ -285,7 +350,14 @@ type engramRow struct {
 func buildEngramDataDirRows(args EngramDataDirRenderArgs) []engramRow {
 	var rows []engramRow
 
-	if !args.HasExistingData {
+	if args.Context == EngramDataDirContextInstall && !args.HasExistingData {
+		rows = append(rows, engramRow{Label: "Use default Engram location", IsRadio: true})
+		rows = append(rows, engramRow{Label: "Set a custom Engram location", IsRadio: true})
+	} else if args.Context == EngramDataDirContextInstall {
+		rows = append(rows, engramRow{Label: "Continue with current Engram location", IsRadio: true})
+		rows = append(rows, engramRow{Label: "Set active Engram directory", IsRadio: true})
+		rows = append(rows, engramRow{Label: "Move existing data to a new location", IsRadio: true})
+	} else if !args.HasExistingData {
 		rows = append(rows, engramRow{Label: "Set active Engram directory", IsRadio: true})
 		rows = append(rows, engramRow{Label: "Start fresh at a new location", IsRadio: true})
 	} else {
@@ -295,7 +367,11 @@ func buildEngramDataDirRows(args EngramDataDirRenderArgs) []engramRow {
 		rows = append(rows, engramRow{Label: "Start fresh at a new location", IsRadio: true})
 	}
 
-	rows = append(rows, engramRow{Label: "Back / keep current location"})
+	if args.Context == EngramDataDirContextInstall {
+		rows = append(rows, engramRow{Label: "Back"})
+	} else {
+		rows = append(rows, engramRow{Label: "Back / keep current location"})
+	}
 	return rows
 }
 

@@ -1550,6 +1550,97 @@ func TestSetScreenEngramDataDir_ShowsMigrateWhenHardDefaultHasData(t *testing.T)
 	}
 }
 
+func TestSetScreenEngramDataDir_InstallContextUsesInstallChoices(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDirFn
+	osUserHomeDirFn = func() (string, error) { return home, nil }
+	defer func() { osUserHomeDirFn = restoreHome }()
+
+	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreEngramHome()
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.EngramDataDirContext = screens.EngramDataDirContextInstall
+	m.setScreen(ScreenEngramDataDir)
+
+	if m.EngramDataDirContext != screens.EngramDataDirContextInstall {
+		t.Fatalf("EngramDataDirContext = %v, want install", m.EngramDataDirContext)
+	}
+	out := m.View()
+	if !strings.Contains(out, "Use default Engram location") || !strings.Contains(out, "Set a custom Engram location") {
+		t.Fatalf("fresh install screen missing install choices:\n%s", out)
+	}
+	if strings.Contains(out, "Start fresh") || strings.Contains(out, "Copy existing data") || strings.Contains(out, "Move existing data") {
+		t.Fatalf("fresh install screen contains management-only choices:\n%s", out)
+	}
+}
+
+func TestSetScreenEngramDataDir_ManagementContextKeepsManagementChoices(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDirFn
+	osUserHomeDirFn = func() (string, error) { return home, nil }
+	defer func() { osUserHomeDirFn = restoreHome }()
+
+	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreEngramHome()
+
+	backend := engram.NewLocalDataBackend()
+	src := backend.HardDefaultDataDir()
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "engram.db"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.EngramDataDirContext = screens.EngramDataDirContextManagement
+	m.setScreen(ScreenEngramDataDir)
+
+	out := m.View()
+	for _, want := range []string{"Move existing data", "Copy existing data", "Set active Engram directory", "Start fresh"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("management screen missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestEngramDataDir_FreshInstallCustomLocationDoesNotRequireExistingData(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDirFn
+	osUserHomeDirFn = func() (string, error) { return home, nil }
+	defer func() { osUserHomeDirFn = restoreHome }()
+
+	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreEngramHome()
+
+	target := filepath.Join(home, "new-engram")
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenEngramDataDir
+	m.EngramDataDirContext = screens.EngramDataDirContextInstall
+	m.EngramDataDirHasExistingData = false
+	m.EngramDataDirChoice = screens.EngramChoiceCustom
+	m.EngramDataDirPhase = 3
+	m.EngramDataDirInput = target
+	m.EngramDataDirPos = len([]rune(target))
+	m.Cursor = 0
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM := updated.(Model)
+	if stateM.EngramDataDirPhase != 1 {
+		t.Fatalf("phase = %d, want confirm; err=%q", stateM.EngramDataDirPhase, stateM.EngramDataDirErr)
+	}
+	if stateM.EngramDataDirErr != "" {
+		t.Fatalf("unexpected validation error for empty fresh custom dir: %q", stateM.EngramDataDirErr)
+	}
+	if stateM.Selection.EngramDataDir != target {
+		t.Fatalf("Selection.EngramDataDir = %q, want %q", stateM.Selection.EngramDataDir, target)
+	}
+	if stateM.Selection.EngramDataDirOperation != model.EngramDataDirOperationSetActive {
+		t.Fatalf("operation = %q, want set-active semantics", stateM.Selection.EngramDataDirOperation)
+	}
+}
+
 // TestSetScreenEngramDataDir_RespectsEnvVar verifies that existing data detection
 // uses the effective data directory (respecting ENGRAM_DATA_DIR) rather than
 // always checking the hard default ~/.engram.

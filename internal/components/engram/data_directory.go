@@ -25,6 +25,7 @@ const (
 	ActionCopy
 	ActionSetActive
 	ActionStartFresh
+	ActionUseCustom
 	ActionClean
 )
 
@@ -171,7 +172,7 @@ func (s *DataDirService) Preview(action Action, inputPath string) (Preview, erro
 	var p Preview
 
 	switch action {
-	case ActionMigrate, ActionCopy, ActionSetActive, ActionStartFresh:
+	case ActionMigrate, ActionCopy, ActionSetActive, ActionStartFresh, ActionUseCustom:
 		expanded, err := s.backend.ExpandPath(inputPath)
 		if err != nil {
 			return p, fmt.Errorf("%w: %v", ErrInvalidPath, err)
@@ -308,6 +309,21 @@ func (s *DataDirService) Execute(action Action, path string) (Result, error) {
 		}
 		files, totalBytes, _ := s.backend.EstimateMigration(target)
 		return Result{FilesCopied: len(files), BytesCopied: totalBytes, Message: "Active Engram data directory has been updated."}, nil
+	case ActionUseCustom:
+		target, err := s.backend.ExpandPath(path)
+		if err != nil {
+			return Result{}, fmt.Errorf("%w: %v", ErrInvalidPath, err)
+		}
+		if err := s.backend.CheckWritable(target); err != nil {
+			return Result{}, err
+		}
+		if err := s.persister.Write(target); err != nil {
+			return Result{}, fmt.Errorf("Engram data directory %s could not be saved: %w", target, err)
+		}
+		if err := s.runAfterConfigPersist(action, target); err != nil {
+			return Result{}, fmt.Errorf("Engram data directory %s was saved but MCP config could not be updated: %w", target, err)
+		}
+		return Result{Message: "Engram will create new data at the selected location."}, nil
 	case ActionMigrate:
 		src := EffectiveSourceDataDir(s.backend)
 		target, err := s.backend.ExpandPath(path)

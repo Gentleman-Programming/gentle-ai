@@ -413,6 +413,7 @@ type Model struct {
 
 	// EngramDataDir screen state.
 	EngramDataDirHasExistingData bool
+	EngramDataDirContext         screens.EngramDataDirContext
 	EngramDataDirChoice          int                         // 0=default, 1=migrate, 2=start-fresh, 3=clean
 	EngramDataDirInput           string                      // text buffer for custom path
 	EngramDataDirPos             int                         // cursor position in runes
@@ -818,6 +819,7 @@ func (m Model) View() string {
 		default: // 0 = choose
 			backend := engram.NewLocalDataBackend()
 			return screens.RenderEngramDataDir(screens.EngramDataDirRenderArgs{
+				Context:            m.EngramDataDirContext,
 				CurrentDir:         backend.DefaultDataDir(),
 				HasExistingData:    m.EngramDataDirHasExistingData,
 				Choice:             m.EngramDataDirChoice,
@@ -1196,6 +1198,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenModelConfig)
 		case 5:
 			m.EngramConfigMode = true
+			m.EngramDataDirContext = screens.EngramDataDirContextManagement
 			m.setScreen(ScreenEngramDataDir)
 		case 6:
 			// "Create your own Agent" — blocked when no engines are available.
@@ -1816,6 +1819,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				if hasSelectedComponent(m.Selection.Components, model.ComponentEngram) {
+					m.EngramDataDirContext = screens.EngramDataDirContextInstall
 					m.setScreen(ScreenEngramDataDir)
 					return m, nil
 				}
@@ -1828,6 +1832,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		if m.Cursor == 0 {
 			if hasSelectedComponent(m.Selection.Components, model.ComponentEngram) {
+				m.EngramDataDirContext = screens.EngramDataDirContextInstall
 				m.setScreen(ScreenEngramDataDir)
 				return m, nil
 			}
@@ -1879,7 +1884,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			case m.Cursor == backRow:
 				m.EngramDataDirPhase = 0
 				m.EngramDataDirErr = ""
-				m.Cursor = screens.EngramDataDirCursorFromChoice(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
+				m.Cursor = screens.EngramDataDirCursorFromChoiceForContext(m.EngramDataDirContext, m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
 				return m, nil
 			case m.Cursor > 0 && m.Cursor < backRow:
 				m.EngramDataDirInput = engram.NormalizeTargetPath(m.EngramDataDirSuggestions[m.Cursor-1].Path)
@@ -1890,7 +1895,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				return m.useEngramPath()
 			}
 		default: // 0 = choose
-			backRow := screens.EngramDataDirBackRow(m.EngramDataDirHasExistingData)
+			backRow := screens.EngramDataDirBackRowForContext(m.EngramDataDirContext, m.EngramDataDirHasExistingData)
 			if m.Cursor == backRow {
 				if m.EngramConfigMode {
 					m.EngramConfigMode = false
@@ -1901,7 +1906,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			m.EngramDataDirChoice = screens.EngramDataDirChoiceFromCursor(m.EngramDataDirHasExistingData, m.Cursor)
+			m.EngramDataDirChoice = screens.EngramDataDirChoiceFromCursorForContext(m.EngramDataDirContext, m.EngramDataDirHasExistingData, m.Cursor)
 			m.EngramDataDirErr = ""
 			if m.EngramDataDirChoice == screens.EngramChoiceDefault {
 				m.Selection.EngramDataDir = ""
@@ -1981,6 +1986,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 		} else {
 			if hasSelectedComponent(m.Selection.Components, model.ComponentEngram) {
+				m.EngramDataDirContext = screens.EngramDataDirContextInstall
 				m.setScreen(ScreenEngramDataDir)
 			} else {
 				m.setScreen(ScreenDependencyTree)
@@ -2641,6 +2647,7 @@ func (m Model) goBack() Model {
 	// Order (reverse of forward): EngramDataDir → SkillPicker → StrictTDD → SDDMode/ModelPicker → ClaudeModelPicker → DependencyTree.
 	if m.Screen == ScreenReview && m.Selection.Preset == model.PresetCustom {
 		if hasSelectedComponent(m.Selection.Components, model.ComponentEngram) {
+			m.EngramDataDirContext = screens.EngramDataDirContextInstall
 			m.setScreen(ScreenEngramDataDir)
 			return m
 		}
@@ -2679,6 +2686,7 @@ func (m Model) goBack() Model {
 	// Non-custom preset: going back from Review to EngramDataDir when applicable.
 	if m.Screen == ScreenReview && m.Selection.Preset != model.PresetCustom {
 		if hasSelectedComponent(m.Selection.Components, model.ComponentEngram) {
+			m.EngramDataDirContext = screens.EngramDataDirContextInstall
 			m.setScreen(ScreenEngramDataDir)
 			return m
 		}
@@ -2766,7 +2774,11 @@ func (m *Model) setScreen(next Screen) {
 			case model.EngramDataDirOperationMove:
 				m.EngramDataDirChoice = screens.EngramChoiceMigrate
 			case model.EngramDataDirOperationSetActive:
-				m.EngramDataDirChoice = screens.EngramChoiceSetActive
+				if m.EngramDataDirContext == screens.EngramDataDirContextInstall && !m.EngramDataDirHasExistingData {
+					m.EngramDataDirChoice = screens.EngramChoiceCustom
+				} else {
+					m.EngramDataDirChoice = screens.EngramChoiceSetActive
+				}
 			case model.EngramDataDirOperationStartFresh:
 				m.EngramDataDirChoice = screens.EngramChoiceStartFresh
 			default:
@@ -2912,7 +2924,7 @@ func (m Model) optionCount() int {
 		case 3: // path picker
 			return screens.EngramPathPickerOptionCount(m.EngramDataDirSuggestions)
 		default: // 0 = choose
-			return screens.EngramDataDirOptionCount(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
+			return screens.EngramDataDirOptionCountForContext(m.EngramDataDirContext, m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
 		}
 	case ScreenSkillPicker:
 		return screens.SkillPickerOptionCount()
@@ -3132,6 +3144,8 @@ func (m Model) engramAction() engram.Action {
 		return engram.ActionSetActive
 	case screens.EngramChoiceStartFresh:
 		return engram.ActionStartFresh
+	case screens.EngramChoiceCustom:
+		return engram.ActionUseCustom
 	}
 	return engram.ActionKeepDefault
 }
@@ -3203,7 +3217,7 @@ func (m Model) handleEngramConfirm() (tea.Model, tea.Cmd) {
 	m.EngramDataDirFilesDeleted = result.FilesDeleted
 	m.EngramDataDirBytesDeleted = result.BytesDeleted
 
-	if action == engram.ActionMigrate || action == engram.ActionSetActive || action == engram.ActionStartFresh {
+	if action == engram.ActionMigrate || action == engram.ActionSetActive || action == engram.ActionStartFresh || action == engram.ActionUseCustom {
 		m.Selection.EngramDataDir = path
 		m.Selection.EngramMigrateData = (action == engram.ActionMigrate)
 		switch action {
@@ -3213,6 +3227,8 @@ func (m Model) handleEngramConfirm() (tea.Model, tea.Cmd) {
 			m.Selection.EngramDataDirOperation = model.EngramDataDirOperationSetActive
 		case engram.ActionStartFresh:
 			m.Selection.EngramDataDirOperation = model.EngramDataDirOperationStartFresh
+		case engram.ActionUseCustom:
+			m.Selection.EngramDataDirOperation = model.EngramDataDirOperationSetActive
 		}
 	}
 
@@ -3260,7 +3276,7 @@ func (m Model) useEngramPath() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.EngramDataDirChoice == screens.EngramChoiceMigrate || m.EngramDataDirChoice == screens.EngramChoiceSetActive || m.EngramDataDirChoice == screens.EngramChoiceStartFresh {
+	if m.EngramDataDirChoice == screens.EngramChoiceMigrate || m.EngramDataDirChoice == screens.EngramChoiceSetActive || m.EngramDataDirChoice == screens.EngramChoiceStartFresh || m.EngramDataDirChoice == screens.EngramChoiceCustom {
 		m.Selection.EngramDataDir = path
 		m.Selection.EngramMigrateData = m.EngramDataDirChoice == screens.EngramChoiceMigrate
 		switch m.EngramDataDirChoice {
@@ -3270,6 +3286,8 @@ func (m Model) useEngramPath() (tea.Model, tea.Cmd) {
 			m.Selection.EngramDataDirOperation = model.EngramDataDirOperationSetActive
 		case screens.EngramChoiceStartFresh:
 			m.Selection.EngramDataDirOperation = model.EngramDataDirOperationStartFresh
+		case screens.EngramChoiceCustom:
+			m.Selection.EngramDataDirOperation = model.EngramDataDirOperationSetActive
 		}
 	}
 	m.EngramDataDirErr = ""
@@ -3280,10 +3298,10 @@ func (m Model) useEngramPath() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) toggleEngramDataDirChoice() {
-	if m.Cursor >= screens.EngramDataDirBackRow(m.EngramDataDirHasExistingData) {
+	if m.Cursor >= screens.EngramDataDirBackRowForContext(m.EngramDataDirContext, m.EngramDataDirHasExistingData) {
 		return
 	}
-	m.EngramDataDirChoice = screens.EngramDataDirChoiceFromCursor(m.EngramDataDirHasExistingData, m.Cursor)
+	m.EngramDataDirChoice = screens.EngramDataDirChoiceFromCursorForContext(m.EngramDataDirContext, m.EngramDataDirHasExistingData, m.Cursor)
 	if m.EngramDataDirChoice == screens.EngramChoiceDefault {
 		m.Selection.EngramDataDir = ""
 		m.Selection.EngramMigrateData = false
@@ -3300,7 +3318,7 @@ func (m Model) handleEngramDataDirKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case tea.KeyEsc:
 			// Cancel: go back to choice
 			m.EngramDataDirPhase = 0
-			m.Cursor = screens.EngramDataDirCursorFromChoice(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
+			m.Cursor = screens.EngramDataDirCursorFromChoiceForContext(m.EngramDataDirContext, m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
 			return m, nil
 		case tea.KeyEnter:
 			if m.Cursor == 0 {
@@ -3372,7 +3390,7 @@ func (m Model) handleEngramDataDirKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case tea.KeyEsc:
 			m.EngramDataDirPhase = 0
 			m.EngramDataDirErr = ""
-			m.Cursor = screens.EngramDataDirCursorFromChoice(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
+			m.Cursor = screens.EngramDataDirCursorFromChoiceForContext(m.EngramDataDirContext, m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
 			return m, nil
 		}
 	}
@@ -3380,7 +3398,7 @@ func (m Model) handleEngramDataDirKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.EngramDataDirPhase == 3 && msg.Type == tea.KeyEsc {
 		m.EngramDataDirPhase = 0
 		m.EngramDataDirErr = ""
-		m.Cursor = screens.EngramDataDirCursorFromChoice(m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
+		m.Cursor = screens.EngramDataDirCursorFromChoiceForContext(m.EngramDataDirContext, m.EngramDataDirHasExistingData, m.EngramDataDirChoice)
 		return m, nil
 	}
 
