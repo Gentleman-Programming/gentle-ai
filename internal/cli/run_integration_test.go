@@ -1880,14 +1880,20 @@ func TestOpenCodePersonaBeforeSDDPreservesAllSections(t *testing.T) {
 		t.Error("AGENTS.md should NOT have sdd-orchestrator marker — OpenCode uses opencode.json agent overlay")
 	}
 
-	// SDD orchestrator for OpenCode lives in opencode.json agent overlay
+	// SDD orchestrator for OpenCode lives in opencode.json agent overlay under
+	// the canonical gentle-orchestrator key. Legacy sdd-orchestrator should be
+	// migrated away during injection.
 	opencodeJSON := filepath.Join(home, ".config", "opencode", "opencode.json")
 	jsonContent, err := os.ReadFile(opencodeJSON)
 	if err != nil {
 		t.Fatalf("ReadFile(opencode.json) error = %v", err)
 	}
-	if !strings.Contains(string(jsonContent), "sdd-orchestrator") {
-		t.Error("opencode.json missing sdd-orchestrator agent entry (SDD not injected)")
+	jsonText := string(jsonContent)
+	if !strings.Contains(jsonText, "gentle-orchestrator") {
+		t.Error("opencode.json missing gentle-orchestrator agent entry (SDD not injected)")
+	}
+	if strings.Contains(jsonText, `"sdd-orchestrator"`) {
+		t.Error("opencode.json should not contain legacy sdd-orchestrator agent entry")
 	}
 }
 func TestRunInstallKimiBootstrapsHub(t *testing.T) {

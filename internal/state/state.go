@@ -34,6 +34,13 @@ type InstallState struct {
 
 	// ModelAssignments maps sub-agent names to provider/model pairs (OpenCode).
 	ModelAssignments map[string]ModelAssignmentState `json:"model_assignments,omitempty"`
+
+	// Persona records the persona the user installed ("gentleman", "neutral",
+	// "custom"). Persisted so that `gentle-ai sync` regenerates the same persona
+	// the user originally chose instead of defaulting to Gentleman every time.
+	// Empty for state files written before persona persistence was added —
+	// callers fall back to PersonaGentleman in that case.
+	Persona string `json:"persona,omitempty"`
 }
 
 // Path returns the absolute path to the state file for the given home directory.

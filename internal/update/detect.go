@@ -77,21 +77,74 @@ func detectInstalledVersion(ctx context.Context, tool ToolInfo, currentBuildVers
 }
 
 func detectNpmPackageVersion(pkg string) string {
+	version, _ := detectOpenCodePluginPackage(pkg)
+	return version
+}
+
+func detectOpenCodePluginPackage(pkg string) (string, bool) {
 	home, err := userHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {
-		return ""
+		return "", false
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "node_modules", pkg, "package.json"))
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	data, err := os.ReadFile(filepath.Join(opencodeDir, "node_modules", pkg, "package.json"))
 	if err != nil {
-		return ""
+		if version, ok := openCodePackageJSONDependencyVersion(opencodeDir, pkg); ok {
+			return version, false
+		}
+		return "", isOpenCodePluginRegistered(opencodeDir, pkg)
 	}
 	var manifest struct {
 		Version string `json:"version"`
 	}
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		return ""
+		return "", isOpenCodePluginRegistered(opencodeDir, pkg)
 	}
-	return parseVersionFromOutput(manifest.Version)
+	return parseVersionFromOutput(manifest.Version), false
+}
+
+func openCodePackageJSONDependencyVersion(opencodeDir, pkg string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(opencodeDir, "package.json"))
+	if err != nil || strings.TrimSpace(string(data)) == "" {
+		return "", false
+	}
+
+	var manifest struct {
+		Dependencies    map[string]string `json:"dependencies"`
+		DevDependencies map[string]string `json:"devDependencies"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return "", false
+	}
+
+	if version, ok := manifest.Dependencies[pkg]; ok {
+		return parseVersionFromOutput(version), true
+	}
+	if version, ok := manifest.DevDependencies[pkg]; ok {
+		return parseVersionFromOutput(version), true
+	}
+	return "", false
+}
+
+func isOpenCodePluginRegistered(opencodeDir, pkg string) bool {
+	data, err := os.ReadFile(filepath.Join(opencodeDir, "tui.json"))
+	if err != nil || strings.TrimSpace(string(data)) == "" {
+		return false
+	}
+
+	var root struct {
+		Plugin []string `json:"plugin"`
+	}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return false
+	}
+
+	for _, plugin := range root.Plugin {
+		if strings.TrimSpace(plugin) == pkg {
+			return true
+		}
+	}
+	return false
 }
 
 // parseVersionFromOutput extracts the first semver-like pattern from raw output.

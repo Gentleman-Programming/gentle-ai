@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Dockerfile.ubuntu — E2E test image for gentle-ai on Ubuntu 22.04
 # Builds the binary from source and runs the E2E test suite as a non-root user.
 FROM ubuntu:22.04
@@ -7,7 +8,13 @@ ARG DEBIAN_FRONTEND=noninteractive
 # ---------------------------------------------------------------------------
 # System dependencies (includes npm/node for claude-code tests)
 # ---------------------------------------------------------------------------
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Repoint apt to Canonical's Azure-hosted mirror. GitHub Actions ubuntu-latest
+# runners live in Azure, so this is LAN-speed and avoids stalls on the default
+# regional mirror lottery (commit 5f6af97 had to extend the CI timeout for that).
+RUN sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; \
+            s|http://security.ubuntu.com|http://azure.archive.ubuntu.com|g' \
+            /etc/apt/sources.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
         sudo \
@@ -40,9 +47,13 @@ RUN useradd -m -s /bin/bash testuser && \
 # ---------------------------------------------------------------------------
 WORKDIR /build
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/root/go/pkg/mod \
+    go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/root/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -o /usr/local/bin/gentle-ai ./cmd/gentle-ai
 
 # ---------------------------------------------------------------------------

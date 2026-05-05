@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Dockerfile.arch — E2E test image for gentle-ai on Arch Linux
 # Builds the binary from source and runs the E2E test suite as a non-root user.
 # archlinux:base only provides x86_64 images. Force amd64 platform so Docker
@@ -35,9 +36,13 @@ RUN useradd -m -s /bin/bash testuser && \
 # ---------------------------------------------------------------------------
 WORKDIR /build
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/root/go/pkg/mod \
+    go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/root/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -o /usr/local/bin/gentle-ai ./cmd/gentle-ai
 
 # ---------------------------------------------------------------------------

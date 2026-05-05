@@ -22,9 +22,10 @@ Load this skill whenever you need to:
 
 1. **Every PR MUST link an approved issue** — `Closes/Fixes/Resolves #<N>` in the PR body, and that issue MUST have `status:approved`. PRs without this are **automatically rejected** by CI.
 2. **Exactly one `type:*` label** — apply exactly ONE type label to the PR. CI will reject PRs with zero or multiple type labels.
-3. **5 automated checks must pass** — see the Automated Checks table below.
-4. **No `Co-Authored-By` trailers** — never add AI attribution to commits.
-5. **No force-push to main/master** — protected branch.
+3. **400-line review budget** — keep PRs within 400 changed lines (`additions + deletions`) or request/obtain maintainer-applied `size:exception` with rationale documented.
+4. **Automated checks must pass** — see the Automated Checks table below.
+5. **No `Co-Authored-By` trailers** — never add AI attribution to commits.
+6. **No force-push to main/master** — protected branch.
 
 ## Workflow
 
@@ -44,7 +45,7 @@ Load this skill whenever you need to:
    → Add exactly ONE type:* label
    → Fill in the PR body using the template
 
-7. All 5 automated checks must pass before merge
+7. All automated checks must pass before merge
 ```
 
 ---
@@ -125,6 +126,7 @@ cd e2e && ./docker-test.sh
 ## ✅ Contributor Checklist
 
 - [ ] PR is linked to an issue with `status:approved`
+- [ ] PR stays within 400 changed lines, or I have requested/obtained maintainer-applied `size:exception` with rationale documented
 - [ ] I have added the appropriate `type:*` label to this PR
 - [ ] Unit tests pass (`go test ./...`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
@@ -137,10 +139,11 @@ cd e2e && ./docker-test.sh
 
 ## Automated Checks
 
-All 5 checks run on every PR and **all must pass** before merge:
+These checks run on every PR and **all must pass** before merge:
 
 | Check | What It Verifies | How to Fix |
 |-------|-----------------|------------|
+| **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) or has `size:exception` | Split the PR, or request/obtain maintainer-applied `size:exception` and document the rationale |
 | **Check Issue Reference** | PR body contains `Closes/Fixes/Resolves #N` | Add `Closes #<N>` to the PR body |
 | **Check Issue Has `status:approved`** | Linked issue has been approved by a maintainer | Wait for maintainer to add `status:approved` to the issue |
 | **Check PR Has `type:*` Label** | Exactly one `type:*` label is applied to the PR | Ask a maintainer to add the correct label; remove extras |
@@ -277,6 +280,7 @@ Fixes Claude Code binary detection failing on Linux when HOME is not set.
 ## ✅ Contributor Checklist
 
 - [x] PR is linked to an issue with \`status:approved\`
+- [x] PR stays within 400 changed lines, or I have requested/obtained maintainer-applied \`size:exception\` with rationale documented
 - [x] I have added the appropriate \`type:*\` label to this PR
 - [x] Unit tests pass (\`go test ./...\`)
 - [x] E2E tests pass (\`cd e2e && ./docker-test.sh\`)

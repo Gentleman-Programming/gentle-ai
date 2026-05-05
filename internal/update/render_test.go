@@ -25,6 +25,27 @@ func TestRenderCLI_IncompleteCheckDoesNotClaimUpToDate(t *testing.T) {
 	}
 }
 
+func TestRenderCLI_OpenCodeRegisteredNotMaterialized(t *testing.T) {
+	results := []UpdateResult{
+		{
+			Tool:       ToolInfo{Name: "opencode-sdd-engram-manage"},
+			Status:     RegisteredNotMaterialized,
+			UpdateHint: "Restart or reload OpenCode to materialize the plugin; if it stays pending, check OpenCode logs for package or peer dependency errors.",
+		},
+	}
+
+	out := RenderCLI(results)
+
+	if strings.Contains(out, "not installed") {
+		t.Fatalf("registered plugin must not render as not installed:\n%s", out)
+	}
+	for _, want := range []string{"registered", "pending", "Restart or reload OpenCode", "peer dependency"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("RenderCLI missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestCheckFailures(t *testing.T) {
 	results := []UpdateResult{
 		{Tool: ToolInfo{Name: "gentle-ai"}, Status: UpToDate},

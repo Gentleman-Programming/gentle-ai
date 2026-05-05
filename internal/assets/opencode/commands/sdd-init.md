@@ -1,6 +1,6 @@
 ---
 description: Initialize SDD context — detects project stack and bootstraps persistence backend
-agent: sdd-orchestrator
+agent: gentle-orchestrator
 subtask: true
 ---
 
@@ -16,7 +16,8 @@ Initialize Spec-Driven Development in this project. Detect the tech stack, exist
 
 ENGRAM PERSISTENCE (artifact store mode: engram):
 After detecting the project context, save it:
-  mem_save(title: "sdd-init/{project}", topic_key: "sdd-init/{project}", type: "architecture", project: "{project}", content: "{detected context}")
+  mem_save(title: "sdd-init/{project}", topic_key: "sdd-init/{project}", type: "architecture", project: "{project}", capture_prompt: false, content: "{detected context}")
+  Set capture_prompt: false when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
 topic_key enables upserts — re-running init updates, not duplicates.
 
 Return a structured result with: status, executive_summary, artifacts, and next_recommended.

@@ -47,16 +47,13 @@ Clean/Hexagonal/Screaming Architecture, testing, atomic design, container-presen
 - Correct errors ruthlessly but explain WHY technically
 - For concepts: (1) explain problem, (2) propose solution, (3) mention examples or tools only when they materially help
 
-## Skills (Auto-load based on context)
+## Contextual Skill Loading (MANDATORY)
 
-When you detect any of these contexts, IMMEDIATELY read the corresponding skill file BEFORE writing any code.
+The `<available_skills>` block in your system prompt is authoritative — it lists every skill installed for this session.
 
-| Context | Read this file |
-| ------- | -------------- |
-| Go tests, Bubbletea TUI testing | `~/.claude/skills/go-testing/SKILL.md` |
-| Creating new AI skills | `~/.claude/skills/skill-creator/SKILL.md` |
+**Self-check BEFORE every response**: does this request match any skill in `<available_skills>`? If yes, invoke it via the built-in `Skill` tool BEFORE generating your reply. This is a blocking requirement, not optional context. Skipping it is a discipline failure.
 
-Read skills BEFORE writing code. Apply ALL patterns. Multiple skills can apply simultaneously.
+Multiple skills can apply at once. Match by file context (extensions, paths) and task context (what the user is asking for).
 <!-- /gentle-ai:persona -->
 
 <!-- gentle-ai:sdd-orchestrator -->
@@ -164,6 +161,10 @@ If the user doesn't specify, detect: if engram is available → default to `engr
 
 Cache the artifact store choice for the session. Pass it as `artifact_store.mode` to every sub-agent launch.
 
+### Delivery Strategy
+
+On the first `/sdd-new`, `/sdd-ff`, or `/sdd-continue` in a session, ask once for and cache delivery strategy: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
+
 ### Dependency Graph
 ```
 proposal -> specs --> tasks -> apply -> verify -> archive
@@ -174,6 +175,19 @@ proposal -> specs --> tasks -> apply -> verify -> archive
 
 ### Result Contract
 Each phase returns: `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, `skill_resolution`.
+
+### Review Workload Guard (MANDATORY)
+
+After `sdd-tasks` completes and before launching `sdd-apply`, inspect `Review Workload Forecast`.
+
+If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimated changed lines exceed 400, or `Decision needed before apply: Yes`, apply cached `delivery_strategy`:
+
+- **`ask-on-risk`**: STOP and ask chained/stacked PRs vs maintainer-approved `size:exception`.
+- **`auto-chain`**: Do not ask. Tell `sdd-apply` to implement only the next autonomous chained/stacked PR slice using work-unit commits.
+- **`single-pr`**: STOP and require/record `size:exception` before apply.
+- **`exception-ok`**: Continue, but tell `sdd-apply` this run uses `size:exception`.
+
+Automatic mode does not override this guard. Always pass the resolved delivery strategy to `sdd-apply`.
 
 <!-- gentle-ai:sdd-model-assignments -->
 ## Model Assignments
@@ -331,11 +345,20 @@ Format for `mem_save`:
 - **type**: bugfix | decision | architecture | discovery | pattern | config | preference
 - **scope**: `project` (default) | `personal`
 - **topic_key** (recommended for evolving topics): stable key like `architecture/auth-model`
+- **capture_prompt**: optional; default `true`. Do not set this for normal human/proactive saves. Set `false` only for automated artifacts such as SDD proposal/spec/design/tasks/apply/verify/archive/init reports, testing-capabilities caches, onboarding/state artifacts, or skill-registry output.
 - **content**:
   - **What**: One sentence — what was done
   - **Why**: What motivated it (user request, bug, performance, etc.)
   - **Where**: Files or paths affected
   - **Learned**: Gotchas, edge cases, things that surprised you (omit if none)
+
+Prompt capture behavior (Engram v1.15.3+):
+- `mem_save` captures the user prompt best-effort when the MCP process already has prompt context for the same `project + session_id`.
+- `mem_save` never invents prompt text. If no prompt context exists, the save still succeeds without prompt capture.
+- `mem_save_prompt` records the prompt and feeds SessionActivity so later `mem_save` calls can capture and dedupe it.
+- If an agent/plugin hook can observe the user's prompt before derived memory saves happen, it should call `mem_save_prompt` first.
+- Do not decide prompt capture by `type`; SDD artifacts also use `architecture`, and human decisions can too. Use explicit `capture_prompt: false` for automated artifacts.
+- If an older Engram tool schema does not expose `capture_prompt`, omit the field rather than failing.
 
 Topic update rules:
 - Different topics MUST NOT overwrite each other

@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # ============================================================================
-# gentle-ai — Install Script
-# One command to configure any AI coding agent on any OS.
+# Gentle-AI — Install Script
+# Ecosystem, Frameworks, Workflows for AI coding agents.
 #
 # Usage:
 #   curl -sL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
@@ -55,7 +55,7 @@ step()    { echo -e "\n${CYAN}${BOLD}==>${NC} ${BOLD}$*${NC}"; }
 
 show_help() {
     cat <<EOF
-${BOLD}gentle-ai installer${NC}
+${BOLD}Gentle-AI installer${NC}
 
 Usage: install.sh [OPTIONS]
 
@@ -428,7 +428,7 @@ print_banner() {
     echo " | |_| |  __/ | | | |_| |  __/_____/ ___ \ | | "
     echo "  \____|\___|_| |_|\__|_|\___|    /_/   \_\___|"
     echo -e "${NC}"
-    echo -e "  ${DIM}One command to configure any AI coding agent on any OS${NC}"
+    echo -e "  ${DIM}Gentle-AI — Ecosystem, Frameworks, Workflows${NC}"
     echo ""
 }
 

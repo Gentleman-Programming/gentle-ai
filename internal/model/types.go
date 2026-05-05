@@ -73,9 +73,13 @@ const (
 	SkillGoTesting     SkillID = "go-testing"
 	SkillCreator       SkillID = "skill-creator"
 	SkillJudgmentDay   SkillID = "judgment-day"
-	SkillBranchPR      SkillID = "branch-pr"
-	SkillIssueCreation SkillID = "issue-creation"
-	SkillSkillRegistry SkillID = "skill-registry"
+	SkillBranchPR        SkillID = "branch-pr"
+	SkillIssueCreation   SkillID = "issue-creation"
+	SkillSkillRegistry   SkillID = "skill-registry"
+	SkillChainedPR       SkillID = "chained-pr"
+	SkillCognitiveDoc    SkillID = "cognitive-doc-design"
+	SkillCommentWriter   SkillID = "comment-writer"
+	SkillWorkUnitCommits SkillID = "work-unit-commits"
 )
 
 type PersonaID string

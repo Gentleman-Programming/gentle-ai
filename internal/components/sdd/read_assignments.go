@@ -9,8 +9,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
-// sddPhaseSet is the set of valid SDD phase agent names that may appear in
-// opencode.json. It includes the sub-agent phases plus the orchestrator.
+// sddPhaseSet is the set of valid base SDD agent names that may appear in
+// opencode.json. It includes the sub-agent phases plus the gentle-orchestrator coordinator.
 var sddPhaseSet = buildSDDPhaseSet()
 
 func buildSDDPhaseSet() map[string]bool {
@@ -19,6 +19,8 @@ func buildSDDPhaseSet() map[string]bool {
 	for _, p := range phases {
 		set[p] = true
 	}
+	set["gentle-orchestrator"] = true
+	// Backward-compatible read alias for configs that have not been synced yet.
 	set["sdd-orchestrator"] = true
 	return set
 }
@@ -34,7 +36,8 @@ func ReadCurrentProfiles(settingsPath string) ([]model.Profile, error) {
 // at settingsPath and extracts the "model" field for each SDD phase agent.
 //
 // Only agents whose names match an SDD phase (from opencode.SDDPhases()) or
-// "sdd-orchestrator" are included. Agents without a "model" field, or with a
+// "gentle-orchestrator" are included. Legacy "sdd-orchestrator" entries are read as
+// "gentle-orchestrator" until the next sync migrates the config. Agents without a "model" field, or with a
 // malformed model value (not in "provider:model-id" format), are silently
 // skipped.
 //
@@ -92,7 +95,14 @@ func ReadCurrentModelAssignments(settingsPath string) (map[string]model.ModelAss
 		if modelID == "" {
 			continue
 		}
-		result[name] = model.ModelAssignment{
+		assignmentKey := name
+		if name == "sdd-orchestrator" {
+			assignmentKey = "gentle-orchestrator"
+			if _, hasGentleOrchestrator := result[assignmentKey]; hasGentleOrchestrator {
+				continue
+			}
+		}
+		result[assignmentKey] = model.ModelAssignment{
 			ProviderID: providerID,
 			ModelID:    modelID,
 		}

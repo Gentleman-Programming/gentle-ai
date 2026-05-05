@@ -13,6 +13,7 @@ Before you dive in, please read this guide fully. We have a structured workflow 
 - [Development Setup](#development-setup)
 - [Testing](#testing)
 - [Commit Convention](#commit-convention)
+- [Delivery Strategy for SDD Changes](#delivery-strategy-for-sdd-changes)
 - [Pull Request Rules](#pull-request-rules)
 - [Code of Conduct](#code-of-conduct)
 
@@ -41,11 +42,16 @@ PRs that are not linked to an approved issue will be **automatically rejected** 
 |-------|-------------|
 | `type:bug` | Bug fix |
 | `type:feature` | New feature or enhancement |
-| `type:refactor` | Code refactoring, no functional changes |
 | `type:docs` | Documentation only |
-| `type:test` | Test coverage additions |
+| `type:refactor` | Code refactoring, no functional changes |
 | `type:chore` | Build, CI, tooling changes |
-| `type:breaking` | Breaking change |
+| `type:breaking-change` | Breaking change |
+
+### Size Labels (applied to PRs)
+
+| Label | Description |
+|-------|-------------|
+| `size:exception` | Maintainer-approved exception for PRs above the 400 changed-line review budget |
 
 ### Status Labels (applied to Issues)
 
@@ -230,9 +236,49 @@ Branch names **must** match this pattern:
 
 ## Pull Request Rules
 
+### Delivery Strategy for SDD Changes
+
+Before `sdd-apply` starts, the SDD conductor checks the **Review Workload Forecast** from `sdd-tasks`. This protects reviewers from one giant, exhausting PR when the work should be split.
+
+| Strategy | Use when | What happens before apply |
+|---|---|---|
+| `ask-on-risk` | Default. You want the conductor to pause only when the forecast is risky. | If the forecast is high or above 400 changed lines, it asks whether to split or proceed with `size:exception`. |
+| `auto-chain` | You already know the change should be reviewed in slices. | The apply phase implements the next chained/stacked PR slice using work-unit commits. |
+| `single-pr` | The change is small or must land atomically. | If the forecast exceeds 400 changed lines, apply stops until a maintainer approves `size:exception`. |
+| `exception-ok` | A maintainer already accepted a large PR. | Apply continues and records that the PR has maintainer-approved `size:exception`. |
+
+**Decision checklist:**
+
+- [ ] Can one reviewer understand this in about 60 minutes?
+- [ ] Is the PR at or below 400 changed lines?
+- [ ] Does each work-unit commit include its code, tests, and docs together?
+- [ ] If the answer is “no” to any item, choose `auto-chain` or get explicit `size:exception` approval.
+
+**Mental model:** work-unit commits are the bricks; chained PRs are the wall sections. Don’t make reviewers inspect the whole building in one sitting.
+
+### PR Size Budget
+
+Keep PRs at or below **400 changed lines** (`additions + deletions`). This is a deliberate cognitive-load limit: a PR should be reviewable in roughly **60 minutes** without pushing reviewers into fatigue.
+
+If your change cannot fit that budget, split it into **chained or stacked PRs** so each review remains focused. Large generated/vendor/migration diffs may use the `size:exception` label, but only when a maintainer agrees the large diff is unavoidable.
+
+### Work-Unit Commits
+
+Structure commits by deliverable unit, not by file type. A good commit includes the code, tests, and docs needed to understand and verify one behavior or workflow.
+
+- Prefer `feat(auth): validate tokens at login` over separate `models`, `services`, and `tests` commits.
+- Keep rollback reasonable: reverting one commit should not remove unrelated work.
+- When a PR grows near 400 changed lines, promote work-unit commits into chained or stacked PRs.
+
+### Review Comments
+
+Review feedback should be warm, direct, and useful quickly. Start with the actionable point, explain why when needed, and avoid recapping the PR before giving feedback.
+
 ### Before Opening a PR
 
 - [ ] There is a linked approved issue (`Closes #<N>`)
+- [ ] The PR is at or below 400 changed lines, or a maintainer approved `size:exception`
+- [ ] Commits are organized by deliverable work unit
 - [ ] All unit tests pass (`go test ./...`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
 - [ ] Commits follow Conventional Commits format
@@ -253,6 +299,7 @@ All PRs go through automated checks:
 
 | Check | What It Verifies |
 |-------|-----------------|
+| **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) unless labelled `size:exception` |
 | **Check Issue Reference** | PR body contains `Closes/Fixes/Resolves #N` |
 | **Check Issue Has status:approved** | The linked issue has been approved by a maintainer |
 | **Check PR Has type:* Label** | Exactly one `type:*` label is applied |

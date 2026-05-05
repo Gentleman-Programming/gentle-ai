@@ -116,7 +116,7 @@ Hoy eso es un dolor de cabeza manual. Esta feature lo resuelve.
 3. **Seleccionar modelos para los sub-agentes** (reutilizando el ModelPicker existente con las 9+1 filas: Set all + 9 fases)
 4. **Confirmar** → se genera el perfil y se ejecuta sync
 
-**R-PROF-05**: El nombre "default" ESTÁ RESERVADO para el orchestrator base (`sdd-orchestrator`). El usuario NO puede crear un perfil llamado "default".
+**R-PROF-05**: El nombre "default" ESTÁ RESERVADO para el conductor SDD base de OpenCode (`gentle-orchestrator`). El usuario NO puede crear un perfil llamado "default".
 
 **R-PROF-06**: Si el usuario ingresa un nombre que ya existe, se DEBE preguntar si quiere sobreescribir.
 
@@ -128,7 +128,7 @@ Hoy eso es un dolor de cabeza manual. Esta feature lo resuelve.
 - Los modelos de sub-agentes vienen pre-seleccionados con los valores actuales
 - Al confirmar, se sobreescribe el perfil existente y se ejecuta sync
 
-**R-PROF-07b**: El perfil `default` también se PUEDE editar — es el `sdd-orchestrator` base. Editar el default es equivalente a lo que hoy hace "Configure Models → OpenCode" pero integrado en el flujo de perfiles.
+**R-PROF-07b**: El perfil `default` también se PUEDE editar — es el `gentle-orchestrator` base. Editar el default es equivalente a lo que hoy hace "Configure Models → OpenCode" pero integrado en el flujo de perfiles.
 
 ### 5.1c TUI: Profile Deletion
 
@@ -262,7 +262,7 @@ Los sub-agente prompts SÍ se comparten porque son idénticos entre perfiles (so
 - **Modelo del orchestrator**: el campo `"model"` del orchestrator
 - **Modelos de sub-agentes**: los campos `"model"` de `sdd-{phase}-{name}`
 
-**R-PROF-43**: El perfil default (`sdd-orchestrator` sin sufijo) SIEMPRE existe cuando SDD está configurado. Los perfiles adicionales son opcionales.
+**R-PROF-43**: El perfil default (`gentle-orchestrator`) SIEMPRE existe cuando SDD está configurado. Los perfiles adicionales son opcionales.
 
 ### 5.6 CLI Support
 
@@ -706,4 +706,4 @@ El orchestrator prompt del default profile referencia sub-agentes como `sdd-appl
    → Validar con OpenCode docs. Si no soporta `~`, usar path absoluto expandido durante la generación.
 
 5. **¿El `gentleman` agent (persona) también necesita variantes por perfil?**
-   → No. El `gentleman` agent es la persona general, no parte de SDD. Solo se mirror el modelo del orchestrator default.
+   → No. El `gentleman` agent es la persona general, no parte de SDD. El conductor SDD base de OpenCode es `gentle-orchestrator`.

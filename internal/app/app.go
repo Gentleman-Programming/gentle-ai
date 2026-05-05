@@ -268,6 +268,7 @@ func tuiExecute(
 			InstalledAgents:        agentIDs,
 			ClaudeModelAssignments: claudeAliasesToStrings(selection.ClaudeModelAssignments),
 			ModelAssignments:       modelAssignmentsToState(selection.ModelAssignments),
+			Persona:                string(selection.Persona),
 		})
 	}
 

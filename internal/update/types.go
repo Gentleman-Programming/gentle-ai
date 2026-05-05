@@ -7,8 +7,12 @@ const (
 	UpToDate        UpdateStatus = "up-to-date"
 	UpdateAvailable UpdateStatus = "update-available"
 	NotInstalled    UpdateStatus = "not-installed"
-	VersionUnknown  UpdateStatus = "version-unknown"
-	CheckFailed     UpdateStatus = "check-failed"
+	// RegisteredNotMaterialized means an OpenCode community plugin is listed in
+	// ~/.config/opencode/tui.json, but OpenCode has not yet materialized it under
+	// ~/.config/opencode/node_modules/<pkg>/package.json.
+	RegisteredNotMaterialized UpdateStatus = "registered-not-materialized"
+	VersionUnknown            UpdateStatus = "version-unknown"
+	CheckFailed               UpdateStatus = "check-failed"
 	// DevBuild is used when the installed version is the sentinel "dev" string,
 	// indicating a source-built binary. Such builds are not auto-targeted for upgrade.
 	DevBuild UpdateStatus = "dev-build"

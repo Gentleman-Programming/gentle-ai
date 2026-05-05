@@ -155,6 +155,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		InstalledAgents:        agentIDs,
 		ClaudeModelAssignments: claudeAliasesToStrings(input.Selection.ClaudeModelAssignments),
 		ModelAssignments:       modelAssignmentsToState(input.Selection.ModelAssignments),
+		Persona:                string(input.Selection.Persona),
 	})
 
 	return result, nil

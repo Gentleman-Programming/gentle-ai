@@ -27,12 +27,36 @@ type bootstrapper interface {
 // outputStyleOverlayJSON is the settings.json overlay to enable the Gentleman output style.
 var outputStyleOverlayJSON = []byte("{\n  \"outputStyle\": \"Gentleman\"\n}\n")
 
-// openCodeAgentOverlayJSON defines Tab-switchable agents for OpenCode.
-// "gentleman" is the primary agent, "sdd-orchestrator" is available via Tab.
-// Both reference AGENTS.md via {file:./AGENTS.md} for their system prompt.
-var openCodeAgentOverlayJSON = []byte("{\n  \"agent\": {\n    \"gentleman\": {\n      \"mode\": \"primary\",\n      \"description\": \"Senior Architect mentor - helpful first, challenging when it matters\",\n      \"prompt\": \"{file:./AGENTS.md}\",\n      \"tools\": {\n        \"write\": true,\n        \"edit\": true\n      }\n    },\n    \"sdd-orchestrator\": {\n      \"mode\": \"all\",\n      \"description\": \"Gentleman personality + SDD delegate-only orchestrator\",\n      \"prompt\": \"{file:./AGENTS.md}\",\n      \"tools\": {\n        \"read\": true,\n        \"write\": true,\n        \"edit\": true,\n        \"bash\": true\n      }\n    }\n  }\n}\n")
+// openCodeAgentOverlayJSON defines the Tab-switchable persona agent for OpenCode.
+// SDD is installed separately by the SDD component as "gentle-orchestrator";
+// persona injection must not create legacy SDD conductor keys.
+var openCodeAgentOverlayJSON = []byte("{\n  \"agent\": {\n    \"gentleman\": {\n      \"mode\": \"primary\",\n      \"description\": \"Senior Architect mentor - helpful first, challenging when it matters\",\n      \"prompt\": \"{file:./AGENTS.md}\",\n      \"tools\": {\n        \"write\": true,\n        \"edit\": true\n      }\n    }\n  }\n}\n")
 
+// Inject performs a full persona injection: the marker-bound markdown block,
+// the OpenCode/Kilocode `gentleman` agent definition in settings JSON, AND
+// the Claude Code output-style overlay. Used by `gentle-ai install`.
 func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (InjectionResult, error) {
+	return injectInternal(homeDir, adapter, persona, false)
+}
+
+// InjectForSync regenerates the persona assets that `gentle-ai sync` is
+// allowed to touch. It writes:
+//   - The marker-bound persona block in the agent's prompt file (markdown).
+//   - The Gentleman output-style file + outputStyle settings overlay (Claude
+//     Code only — no conflict with other components).
+//
+// It deliberately skips the OpenCode/Kilocode `gentleman` agent definition in
+// opencode.json/kilocode.json: that JSON merge shares the "agent" key with
+// SDD's gentle-orchestrator overlay, so running both in the same sync clobbers
+// each other's entries and breaks idempotency. That overlay remains an
+// install-only concern.
+func InjectForSync(homeDir string, adapter agents.Adapter, persona model.PersonaID) (InjectionResult, error) {
+	return injectInternal(homeDir, adapter, persona, true)
+}
+
+// syncManaged is the internal flag previously called `markdownOnly`.
+// When true the OpenCode/Kilocode agent overlay is skipped (see InjectForSync).
+func injectInternal(homeDir string, adapter agents.Adapter, persona model.PersonaID, syncManaged bool) (InjectionResult, error) {
 	if !adapter.SupportsSystemPrompt() {
 		return InjectionResult{}, nil
 	}
@@ -280,7 +304,11 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 	}
 
 	// 2. OpenCode/Kilocode agent definitions — Tab-switchable agents in settings.
-	if (adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode) && persona != model.PersonaCustom {
+	// Skipped under syncManaged because this overlay shares the "agent" key in
+	// opencode.json with SDD's gentle-orchestrator overlay; running both in the
+	// same sync (in either order) makes them clobber each other's entries and
+	// breaks idempotency. Install handles this overlay once at install time.
+	if !syncManaged && (adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode) && persona != model.PersonaCustom {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
 			agentResult, err := mergeJSONFile(settingsPath, openCodeAgentOverlayJSON)

@@ -1,8 +1,8 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    gentle-ai — Install Script for Windows
-    One command to configure any AI coding agent on any OS.
+    Gentle-AI — Install Script for Windows
+    Ecosystem, Frameworks, Workflows for AI coding agents.
 
 .DESCRIPTION
     Downloads and installs the gentle-ai binary for Windows.
@@ -63,7 +63,7 @@ function Show-Banner {
     Write-Host " | |_| |  __/ | | | |_| |  __/_____/ ___ \ | | " -ForegroundColor Cyan
     Write-Host "  \____|\___|_| |_|\__|_|\___|    /_/   \_\___|" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  One command to configure any AI coding agent on any OS" -ForegroundColor DarkGray
+    Write-Host "  Gentle-AI — Ecosystem, Frameworks, Workflows" -ForegroundColor DarkGray
     Write-Host ""
 }
 
