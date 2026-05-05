@@ -25,18 +25,20 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 
 **After**: Your agent now has memory, skills, workflow, MCP tools, and a persona that actually teaches you.
 
-### 10 Supported Agents
+### 12 Supported Agents
 
 | Agent | Delegation Model | Key Feature |
 |-------|:---:|---|
 | **Claude Code** | Full (Task tool) | Sub-agents, output styles |
 | **OpenCode** | Full (multi-mode overlay) | Per-phase model routing |
+| **Kilo Code** | Full (multi-mode overlay) | OpenCode-compatible config in `~/.config/kilo` |
 | **Gemini CLI** | Full (experimental) | Custom agents in `~/.gemini/agents/` |
-| **Cursor** | Full (native subagents) | 9 SDD agents in `~/.cursor/agents/` |
+| **Cursor** | Full (native subagents) | 10 SDD agents in `~/.cursor/agents/` |
 | **VS Code Copilot** | Full (runSubagent) | Parallel execution |
 | **Codex** | Solo-agent | CLI-native, TOML config |
 | **Windsurf** | Solo-agent | Plan Mode, Code Mode, native workflows |
 | **Antigravity** | Solo-agent + Mission Control | Built-in Browser/Terminal sub-agents |
+| **Kimi Code** | Full (native custom agents) | Modular prompt templates in `~/.kimi` |
 | **Kiro IDE** | Full (native subagents) | Native `~/.kiro/agents/` + steering orchestration |
 | **Qwen Code** | Full (native sub-agents) | Slash commands, `~/.qwen/commands/`, `auto_edit` mode |
 
@@ -172,6 +174,7 @@ engram tui                    # Visual memory browser
 | [Intended Usage](docs/intended-usage.md) | How Gentle-AI is meant to be used — the mental model |
 | [OpenCode SDD Profiles](docs/opencode-profiles.md) | Create and manage per-phase model profiles for OpenCode |
 | [Engram Commands](docs/engram.md) | CLI commands, MCP tools, project management, team sharing |
+| [Codebase Guide](docs/CODEBASE-GUIDE.md) | Maintainer map for repository ownership, architecture boundaries, and review guardrails |
 | [Agents](docs/agents.md) | Supported agents, feature matrix, config paths, and per-agent notes |
 | [Components, Skills & Presets](docs/components.md) | All components, GGA behavior, skill catalog, and preset definitions |
 | [Usage](docs/usage.md) | Persona modes, interactive TUI, CLI flags, and dependency management |
