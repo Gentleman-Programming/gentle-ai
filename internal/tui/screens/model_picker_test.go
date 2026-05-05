@@ -354,6 +354,44 @@ func TestHandleModelNav_NonReasoningModelSkipsEffortPicker(t *testing.T) {
 	}
 }
 
+// TestHandleModelNav_ReasoningModelWithoutVariantsSkipsEffortPicker covers the
+// realistic scenario where the model-variants plugin has not run yet (or failed
+// silently): a reasoning-capable model is loaded from the cache but its
+// Variants field is nil because EnrichWithVariants found no JSON. The picker
+// must skip ModeEffortSelect instead of presenting an empty list.
+func TestHandleModelNav_ReasoningModelWithoutVariantsSkipsEffortPicker(t *testing.T) {
+	const providerID = "test-provider"
+	testModels := []opencode.Model{
+		// Reasoning: true but Variants: nil — plugin cache absent.
+		{ID: "model-reason", Name: "Reasoning Model", Reasoning: true, ToolCall: true},
+	}
+	state := &ModelPickerState{
+		Mode:             ModeModelSelect,
+		SelectedPhaseIdx: 2,
+		SelectedProvider: providerID,
+		SDDModels:        map[string][]opencode.Model{providerID: testModels},
+		ModelCursor:      0,
+	}
+	assignments := make(map[string]model.ModelAssignment)
+
+	handled, updated := handleModelNav("enter", state, assignments)
+
+	if !handled {
+		t.Fatal("handleModelNav should return handled=true on enter")
+	}
+	if state.Mode != ModePhaseList {
+		t.Errorf("Mode after reasoning model without variants = %v, want ModePhaseList (%d)", state.Mode, ModePhaseList)
+	}
+	phase := opencode.SDDPhases()[0]
+	a := updated[phase]
+	if a.ProviderID != providerID || a.ModelID != "model-reason" {
+		t.Errorf("assignment = %+v, want provider=%q model=%q", a, providerID, "model-reason")
+	}
+	if a.Effort != "" {
+		t.Errorf("Effort = %q, want empty (no variants available)", a.Effort)
+	}
+}
+
 // ─── applyAssignment helper ──────────────────────────────────────────────
 
 func TestApplyAssignment_SinglePhase(t *testing.T) {

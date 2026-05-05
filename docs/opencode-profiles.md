@@ -27,6 +27,20 @@ That means you can stay with the built-in multi-profile overlay, or plug Gentle 
 
 Open OpenCode and press **Tab** -- your new orchestrator appears alongside `gentle-orchestrator`, the default OpenCode SDD conductor.
 
+### Reasoning effort levels (per-model variants)
+
+For models that expose reasoning effort variants (e.g. OpenAI `gpt-5` with `low`/`medium`/`high`/`xhigh`), the picker shows an extra **Select reasoning effort level** step right after you choose the model. Pick `default` to use the provider's default, or pick a specific level to lock the assignment to that effort.
+
+The effort options are populated from a cache file written by the bundled `model-variants` OpenCode plugin at `~/.cache/gentle-ai/model-variants.json`. The plugin runs the first time OpenCode starts after `gentle-ai sync` and refreshes the cache on every subsequent start.
+
+**First-run order matters:**
+
+1. Run `gentle-ai` (installs the plugin into `~/.config/opencode/plugins/`).
+2. Run `opencode` once -- on startup the plugin queries the provider list and writes `~/.cache/gentle-ai/model-variants.json`.
+3. Re-run `gentle-ai` and open the model picker. Reasoning models now show the effort selector.
+
+If the JSON does not exist yet (plugin has not run, no providers expose variants, or the request failed silently), reasoning models still work -- the picker simply skips the effort step and saves the assignment with the provider default. You will not see the `[effort]` annotation next to those rows in the phase list.
+
 ## Key Names To Remember
 
 Use this table when reviewing configs or debugging profile sync:
