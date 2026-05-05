@@ -1,6 +1,6 @@
 ---
 description: Fast-forward all SDD planning phases — proposal through tasks
-agent: sdd-orchestrator
+agent: gentle-orchestrator
 ---
 
 Follow the SDD orchestrator workflow to fast-forward all planning phases for change "$ARGUMENTS".
@@ -18,9 +18,10 @@ CONTEXT:
 - Working directory: !`echo -n "$(pwd)"`
 - Current project: !`echo -n "$(basename $(pwd))"`
 - Change name: $ARGUMENTS
-- Artifact store mode: engram
+- Artifact store mode: ask/cache per orchestrator
+- Delivery strategy: ask/cache per orchestrator
 
 ENGRAM NOTE:
-Sub-agents handle persistence automatically. Each phase saves its artifact to engram with topic_key "sdd/$ARGUMENTS/{type}" where type is: proposal, spec, design, tasks.
+Sub-agents handle persistence automatically using the selected artifact store. In engram/hybrid, each phase saves with topic_key "sdd/$ARGUMENTS/{type}" where type is: proposal, spec, design, tasks.
 
 Read the orchestrator instructions to coordinate this workflow. Do NOT execute phase work inline — delegate to sub-agents.

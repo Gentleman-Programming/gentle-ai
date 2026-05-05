@@ -40,4 +40,20 @@ var Tools = []ToolInfo{
 		// Using InstallScript runs curl | bash via the project's install.sh.
 		InstallMethod: InstallScript,
 	},
+	{
+		Name:          "opencode-subagent-statusline",
+		Owner:         "Joaquinvesapa",
+		Repo:          "sub-agent-statusline",
+		VersionPrefix: "v",
+		InstallMethod: InstallOpenCodePlugin,
+		NpmPackage:    "opencode-subagent-statusline",
+	},
+	{
+		Name:          "opencode-sdd-engram-manage",
+		Owner:         "j0k3r-dev-rgl",
+		Repo:          "sdd-engram-plugin",
+		VersionPrefix: "v",
+		InstallMethod: InstallOpenCodePlugin,
+		NpmPackage:    "opencode-sdd-engram-manage",
+	},
 }

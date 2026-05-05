@@ -291,6 +291,52 @@ func TestInjectOpenCodeMigratesFromOldFormat(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeMigratesCellarEngramCommandToStablePath(t *testing.T) {
+	home := t.TempDir()
+
+	mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+
+	adapter := opencodeAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	oldFormat := `{"mcp": {"engram": {"command": ["/opt/homebrew/Cellar/engram/1.14.1/bin/engram", "mcp", "--tools=agent"], "type": "local"}}}`
+	if err := os.WriteFile(configPath, []byte(oldFormat), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	result, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject() changed = false; expected Cellar command migration")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	text := string(content)
+	if strings.Contains(text, "/Cellar/") {
+		t.Fatalf("opencode.json still contains versioned Homebrew Cellar path; got:\n%s", text)
+	}
+	if !strings.Contains(text, "/opt/homebrew/bin/engram") {
+		t.Fatalf("opencode.json did not migrate to stable Homebrew symlink; got:\n%s", text)
+	}
+
+	second, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject() second changed = true; expected idempotent Cellar migration")
+	}
+}
+
 func TestInjectCursorMergesEngramToSettings(t *testing.T) {
 	home := t.TempDir()
 
@@ -722,6 +768,46 @@ func TestInjectClaudeAddsToolsAgentWhenSetupWritesBareArgs(t *testing.T) {
 	assertArgsHaveToolsAgent(t, mcpPath)
 }
 
+func TestInjectClaudeMigratesCellarCommandToStablePath(t *testing.T) {
+	home := t.TempDir()
+
+	mockEngramLookPath(t, "/usr/local/bin/engram", "")
+
+	mcpPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	setupContent := []byte(`{
+  "command": "/usr/local/Cellar/engram/1.14.1/bin/engram",
+  "args": ["mcp", "--tools=agent"]
+}
+`)
+	if err := os.WriteFile(mcpPath, setupContent, 0o644); err != nil {
+		t.Fatalf("WriteFile(engram.json) error = %v", err)
+	}
+
+	result, err := Inject(home, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject() changed = false; expected Cellar command migration")
+	}
+
+	content, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(engram.json) error = %v", err)
+	}
+	text := string(content)
+	if strings.Contains(text, "/Cellar/") {
+		t.Fatalf("engram.json still contains versioned Homebrew Cellar path; got:\n%s", text)
+	}
+	if !strings.Contains(text, "/usr/local/bin/engram") {
+		t.Fatalf("engram.json did not migrate to stable Homebrew symlink; got:\n%s", text)
+	}
+	assertArgsHaveToolsAgent(t, mcpPath)
+}
+
 func TestInjectCodexIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 
@@ -883,10 +969,10 @@ func TestEngramInjectAbsolutePathForOpenCodeMergeStrategy(t *testing.T) {
 	}
 
 	text := string(content)
-	// For standard agents (OpenCode), we now prioritize a stable relative path
-	// "engram" instead of a dynamic absolute path to ensure idempotency.
+	// For standard agents (OpenCode), prefer the stable Homebrew symlink when
+	// available instead of a versioned Cellar path.
 	if !strings.Contains(text, `"engram"`) {
-		t.Fatalf("OpenCode settings missing stable relative engram path, got: %s", text)
+		t.Fatalf("OpenCode settings missing stable engram command, got: %s", text)
 	}
 	// OpenCode 1.3.3+: command must be an array, no separate "args" field.
 	if strings.Contains(text, `"args"`) {
@@ -926,8 +1012,8 @@ func TestEngramInjectAbsolutePathForOpenCodeMergeStrategy(t *testing.T) {
 		t.Fatalf("mcp.engram.command array is empty; got:\n%s", text)
 	}
 	firstElem, ok := cmdArr[0].(string)
-	if !ok || firstElem != "engram" {
-		t.Fatalf("mcp.engram.command[0] = %v, want stable relative 'engram'; got:\n%s", cmdArr[0], text)
+	if !ok || firstElem != absPath {
+		t.Fatalf("mcp.engram.command[0] = %v, want stable Homebrew symlink %q; got:\n%s", cmdArr[0], absPath, text)
 	}
 }
 

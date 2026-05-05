@@ -38,6 +38,13 @@ type InstallState struct {
 	// EngramDataDir is the user-selected Engram data directory. Empty means
 	// "use the default location" (~/.engram or whatever ENGRAM_DATA_DIR points to).
 	EngramDataDir string `json:"engram_data_dir,omitempty"`
+
+	// Persona records the persona the user installed ("gentleman", "neutral",
+	// "custom"). Persisted so that `gentle-ai sync` regenerates the same persona
+	// the user originally chose instead of defaulting to Gentleman every time.
+	// Empty for state files written before persona persistence was added —
+	// callers fall back to PersonaGentleman in that case.
+	Persona string `json:"persona,omitempty"`
 }
 
 // Path returns the absolute path to the state file for the given home directory.

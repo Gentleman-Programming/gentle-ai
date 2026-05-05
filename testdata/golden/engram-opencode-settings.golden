@@ -2,7 +2,7 @@
   "mcp": {
     "engram": {
       "command": [
-        "engram",
+        "/opt/homebrew/bin/engram",
         "mcp",
         "--tools=agent"
       ],

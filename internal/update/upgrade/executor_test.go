@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -131,6 +132,62 @@ func TestExecute_VersionUnknownIsSurfacedAsSkipped(t *testing.T) {
 	}
 }
 
+func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
+	origExecCommand := execCommand
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	origSnapshotCreator := snapshotCreator
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+		snapshotCreator = origSnapshotCreator
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "npm" {
+			return "/usr/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest, error) {
+		return backup.Manifest{ID: "backup-test"}, nil
+	}
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return exec.Command("true")
+	}
+
+	result := makeResult("opencode-sdd-engram-manage", update.RegisteredNotMaterialized, "", "1.2.0", update.InstallOpenCodePlugin)
+	result.Tool.NpmPackage = "opencode-sdd-engram-manage"
+	result.UpdateHint = "Restart or reload OpenCode; check OpenCode logs for package or peer dependency errors."
+
+	report := Execute(context.Background(), []update.UpdateResult{result}, linuxProfile(), home, false)
+
+	if !execCalled {
+		t.Fatal("registered-pending OpenCode plugins should execute npm dependency upgrade")
+	}
+	if len(report.Results) != 1 {
+		t.Fatalf("len(Results) = %d, want 1", len(report.Results))
+	}
+	if report.Results[0].Status != UpgradeSucceeded {
+		t.Fatalf("status = %q, want %q", report.Results[0].Status, UpgradeSucceeded)
+	}
+	if report.BackupID == "" {
+		t.Fatal("BackupID should be populated before executing registered-pending plugin upgrade")
+	}
+}
+
 // --- TestRenderUpgradeReport_DryRunManualHintNotCountedAsPending ---
 
 func TestRenderUpgradeReport_DryRunManualHintNotCountedAsPending(t *testing.T) {
@@ -183,6 +240,45 @@ func TestExecute_BackupBeforeExecution(t *testing.T) {
 	// At least one result must be present.
 	if len(report.Results) != 1 {
 		t.Fatalf("len(Results) = %d, want 1", len(report.Results))
+	}
+}
+
+func TestExecuteProgressDoesNotIncludeBackupExclusionDiagnostics(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("echo", "ok")
+	}
+
+	home := t.TempDir()
+	configFile := filepath.Join(home, ".claude", "CLAUDE.md")
+	excludedFile := filepath.Join(home, ".claude", "projects", "session.json")
+	for _, f := range []string{configFile, excludedFile} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	results := []update.UpdateResult{
+		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
+	}
+	results[0].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
+
+	var progress bytes.Buffer
+	report := Execute(context.Background(), results, linuxProfile(), home, false, &progress)
+	if report.BackupID == "" {
+		t.Fatal("BackupID should be populated before upgrade execution")
+	}
+
+	got := progress.String()
+	if strings.Contains(got, "backup: excluding directory") {
+		t.Fatalf("progress output leaked backup exclusion diagnostics:\n%s", got)
+	}
+	if !strings.Contains(got, "Creating pre-upgrade backup") {
+		t.Fatalf("progress output should still show user-visible backup progress, got:\n%s", got)
 	}
 }
 
@@ -927,6 +1023,64 @@ func TestEnumerateFilesInDir_ExcludesSubdirs(t *testing.T) {
 	// Config file next to excluded dir must still be present.
 	if _, ok := pathSet[nestedConfigFile]; !ok {
 		t.Errorf("config file next to excluded dir should be present; missing %q", nestedConfigFile)
+	}
+}
+
+func TestEnumerateFilesInDir_DefaultExclusionDiagnosticsAreSilent(t *testing.T) {
+	root := t.TempDir()
+	excludedFile := filepath.Join(root, "projects", "data.json")
+	if err := os.MkdirAll(filepath.Dir(excludedFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(excludedFile, []byte("runtime"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var legacyLog bytes.Buffer
+	origLogWriter := log.Writer()
+	log.SetOutput(&legacyLog)
+	t.Cleanup(func() { log.SetOutput(origLogWriter) })
+
+	files, err := enumerateFilesInDir(root, map[string]bool{"projects": true})
+	if err != nil {
+		t.Fatalf("enumerateFilesInDir error: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("files = %v, want no files from excluded directory", files)
+	}
+	if got := legacyLog.String(); got != "" {
+		t.Fatalf("default backup enumeration wrote to global log output %q; TUI paths must remain silent", got)
+	}
+}
+
+func TestEnumerateFilesInDir_WritesExclusionDiagnosticsToInjectedWriter(t *testing.T) {
+	root := t.TempDir()
+	configFile := filepath.Join(root, "settings.json")
+	excludedFile := filepath.Join(root, "projects", "data.json")
+	for _, f := range []string{configFile, excludedFile} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	var diagnostics bytes.Buffer
+	files, err := enumerateFilesInDir(root, map[string]bool{"projects": true}, &diagnostics)
+	if err != nil {
+		t.Fatalf("enumerateFilesInDir error: %v", err)
+	}
+	if len(files) != 1 || files[0] != configFile {
+		t.Fatalf("files = %v, want only %q", files, configFile)
+	}
+
+	got := diagnostics.String()
+	if !strings.Contains(got, "backup: excluding directory ") || !strings.Contains(got, "projects") {
+		t.Fatalf("diagnostics = %q, want controlled exclusion diagnostic", got)
+	}
+	if !strings.HasPrefix(got, "backup:") {
+		t.Fatalf("diagnostics = %q, want backup message without log package timestamp prefix", got)
 	}
 }
 

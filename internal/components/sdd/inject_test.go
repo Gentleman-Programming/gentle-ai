@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -261,8 +262,11 @@ func TestInjectOpenCodeWritesCommandFiles(t *testing.T) {
 	if !strings.Contains(settingsText, `"agent"`) {
 		t.Fatal("opencode.json missing agent key for SDD commands")
 	}
-	if !strings.Contains(settingsText, `"sdd-orchestrator"`) {
-		t.Fatal("opencode.json missing sdd-orchestrator agent")
+	if !strings.Contains(settingsText, `"gentle-orchestrator"`) {
+		t.Fatal("opencode.json missing gentle-orchestrator agent")
+	}
+	if strings.Contains(settingsText, `"sdd-orchestrator"`) {
+		t.Fatal("opencode.json should not install legacy sdd-orchestrator agent")
 	}
 
 	sharedPath := filepath.Join(home, ".config", "opencode", "skills", "_shared", "persistence-contract.md")
@@ -353,7 +357,7 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 	const customPrompt = "EXTERNAL_PROFILE_MANAGER_CUSTOM_PROMPT_DO_NOT_OVERWRITE"
 	seed := `{
   "agent": {
-    "sdd-orchestrator": {
+    "gentle-orchestrator": {
       "mode": "primary",
       "prompt": "` + customPrompt + `"
     }
@@ -379,6 +383,228 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 	}
 }
 
+func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+
+	const stalePrompt = "# Gentle AI — SDD Orchestrator Instructions\n\nBind this to the dedicated `sdd-orchestrator` agent only.\n\n- Treat `agent.sdd-orchestrator.model` as authoritative when it is set.\n"
+	seed := `{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "prompt": ` + strconv.Quote(stalePrompt) + `
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		PreserveOpenCodeOrchestratorPrompt: true,
+	})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	text := string(settingsBytes)
+	for _, unwanted := range []string{
+		"Bind this to the dedicated `sdd-orchestrator` agent only.",
+		"agent.sdd-orchestrator.model",
+	} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("opencode.json still contains stale preserved prompt reference %q", unwanted)
+		}
+	}
+	for _, wanted := range []string{
+		"Bind this to the dedicated `gentle-orchestrator` agent only.",
+		"agent.gentle-orchestrator.model",
+	} {
+		if !strings.Contains(text, wanted) {
+			t.Fatalf("opencode.json missing migrated preserved prompt reference %q", wanted)
+		}
+	}
+}
+
+func TestInjectOpenCodeMigratesLegacyBaseOrchestratorToGentleOrchestrator(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+
+	const legacyPrompt = "LEGACY_SDD_ORCHESTRATOR_PROMPT_TO_MIGRATE"
+	seed := `{
+  "agent": {
+    "sdd-orchestrator": {
+      "mode": "primary",
+      "prompt": "` + legacyPrompt + `"
+    },
+    "sdd-orchestrator-cheap": {
+      "mode": "primary"
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		PreserveOpenCodeOrchestratorPrompt: true,
+	})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(settingsBytes, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+	if _, exists := agentMap["sdd-orchestrator"]; exists {
+		t.Fatal("legacy base sdd-orchestrator should be removed")
+	}
+	if _, exists := agentMap["sdd-orchestrator-cheap"]; !exists {
+		t.Fatal("named profile orchestrator should be preserved")
+	}
+	gentleOrchestratorAgent, ok := agentMap["gentle-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatal("gentle-orchestrator agent not found or wrong type")
+	}
+	if prompt, _ := gentleOrchestratorAgent["prompt"].(string); prompt != legacyPrompt {
+		t.Fatalf("gentle-orchestrator prompt = %q, want migrated legacy prompt", prompt)
+	}
+}
+
+func TestInjectOpenCodeMigratesMisnamedGentlemanSDDOrchestrator(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+
+	const priorPrompt = "MISNAMED_GENTLEMAN_SDD_ORCHESTRATOR_PROMPT_TO_MIGRATE"
+	seed := `{
+  "agent": {
+    "gentleman": {
+      "mode": "primary",
+      "description": "Gentleman SDD Orchestrator - coordinates sub-agents",
+      "prompt": "` + priorPrompt + `"
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		PreserveOpenCodeOrchestratorPrompt: true,
+	})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(settingsBytes, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+	if _, exists := agentMap["gentleman"]; exists {
+		t.Fatal("misnamed SDD gentleman agent should be removed")
+	}
+	gentleOrchestratorAgent, ok := agentMap["gentle-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatal("gentle-orchestrator agent not found or wrong type")
+	}
+	if prompt, _ := gentleOrchestratorAgent["prompt"].(string); prompt != priorPrompt {
+		t.Fatalf("gentle-orchestrator prompt = %q, want migrated misnamed prompt", prompt)
+	}
+}
+
+func TestInjectOpenCodeDeletesRevokedGentlemanAgent(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+
+	seed := `{
+  "agent": {
+    "gentleman": {
+      "mode": "primary",
+      "description": "Senior Architect mentor - revoked OpenCode persona",
+      "prompt": "REVOKED_GENTLEMAN_PROMPT_SHOULD_NOT_SURVIVE"
+    },
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "prompt": "CURRENT_GENTLE_ORCHESTRATOR_PROMPT"
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		PreserveOpenCodeOrchestratorPrompt: true,
+	})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(settingsBytes, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+	if _, exists := agentMap["gentleman"]; exists {
+		t.Fatal("revoked gentleman agent should be removed")
+	}
+	gentleOrchestratorAgent, ok := agentMap["gentle-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatal("gentle-orchestrator agent not found or wrong type")
+	}
+	if prompt, _ := gentleOrchestratorAgent["prompt"].(string); prompt != "CURRENT_GENTLE_ORCHESTRATOR_PROMPT" {
+		t.Fatalf("gentle-orchestrator prompt = %q, want preserved current prompt", prompt)
+	}
+}
+
 func TestInjectOpenCodeOverwritesOrchestratorPromptByDefault(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
@@ -391,7 +617,7 @@ func TestInjectOpenCodeOverwritesOrchestratorPromptByDefault(t *testing.T) {
 	const customPrompt = "EXTERNAL_PROFILE_MANAGER_CUSTOM_PROMPT_DO_NOT_OVERWRITE"
 	seed := `{
   "agent": {
-    "sdd-orchestrator": {
+    "gentle-orchestrator": {
       "mode": "primary",
       "prompt": "` + customPrompt + `"
     }
@@ -470,8 +696,11 @@ func TestInjectOpenCodeMigratesLegacyAgentsKey(t *testing.T) {
 	if _, ok := agentMap["legacy-agent"]; !ok {
 		t.Fatal("legacy agent was not migrated under agent key")
 	}
-	if _, ok := agentMap["sdd-orchestrator"]; !ok {
-		t.Fatal("sdd-orchestrator agent missing after merge")
+	if _, ok := agentMap["gentle-orchestrator"]; !ok {
+		t.Fatal("gentle-orchestrator agent missing after merge")
+	}
+	if _, ok := agentMap["sdd-orchestrator"]; ok {
+		t.Fatal("legacy sdd-orchestrator agent should not remain after merge")
 	}
 }
 
@@ -955,28 +1184,28 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Multi overlay must contain orchestrator + 10 sub-agents = 11 agents.
+	// Multi overlay must contain gentle-orchestrator + 10 sub-agents = 11 agents.
 	if len(agentMap) != 11 {
 		t.Fatalf("agent count = %d, want 11", len(agentMap))
 	}
 
-	// Verify orchestrator is present.
-	orchestratorRaw, ok := agentMap["sdd-orchestrator"]
+	// Verify gentle-orchestrator is present.
+	orchestratorRaw, ok := agentMap["gentle-orchestrator"]
 	if !ok {
-		t.Fatal("missing sdd-orchestrator agent")
+		t.Fatal("missing gentle-orchestrator agent")
 	}
 	orchestratorAgent, ok := orchestratorRaw.(map[string]any)
 	if !ok {
-		t.Fatalf("sdd-orchestrator has unexpected type: %T", orchestratorRaw)
+		t.Fatalf("gentle-orchestrator has unexpected type: %T", orchestratorRaw)
 	}
 	toolsRaw, ok := orchestratorAgent["tools"].(map[string]any)
 	if !ok {
-		t.Fatalf("sdd-orchestrator tools has unexpected type: %T", orchestratorAgent["tools"])
+		t.Fatalf("gentle-orchestrator tools has unexpected type: %T", orchestratorAgent["tools"])
 	}
 	for _, toolName := range []string{"delegate", "delegation_read", "delegation_list"} {
 		value, ok := toolsRaw[toolName].(bool)
 		if !ok || !value {
-			t.Fatalf("sdd-orchestrator missing multi-mode tool %q", toolName)
+			t.Fatalf("gentle-orchestrator missing multi-mode tool %q", toolName)
 		}
 	}
 
@@ -1137,25 +1366,25 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Empty mode defaults to single — orchestrator + 10 sub-agents = 11 agents.
-	if _, ok := agentMap["sdd-orchestrator"]; !ok {
-		t.Fatal("missing sdd-orchestrator agent")
+	// Empty mode defaults to single — gentle-orchestrator + 10 sub-agents = 11 agents.
+	if _, ok := agentMap["gentle-orchestrator"]; !ok {
+		t.Fatal("missing gentle-orchestrator agent")
 	}
 	if len(agentMap) != 11 {
 		t.Fatalf("agent count = %d, want 11", len(agentMap))
 	}
 
 	// Verify orchestrator mode is "primary".
-	orchestratorRaw, ok := agentMap["sdd-orchestrator"]
+	orchestratorRaw, ok := agentMap["gentle-orchestrator"]
 	if !ok {
-		t.Fatal("missing sdd-orchestrator agent")
+		t.Fatal("missing gentle-orchestrator agent")
 	}
 	orchestratorAgent, ok := orchestratorRaw.(map[string]any)
 	if !ok {
-		t.Fatalf("sdd-orchestrator has unexpected type: %T", orchestratorRaw)
+		t.Fatalf("gentle-orchestrator has unexpected type: %T", orchestratorRaw)
 	}
 	if mode, _ := orchestratorAgent["mode"].(string); mode != "primary" {
-		t.Fatalf("sdd-orchestrator mode = %q, want %q", mode, "primary")
+		t.Fatalf("gentle-orchestrator mode = %q, want %q", mode, "primary")
 	}
 
 	// Verify sub-agents are present with mode "subagent".
@@ -1244,8 +1473,11 @@ func TestInjectOpenCodeSingleToMultiSwitch(t *testing.T) {
 	}
 
 	agentMap, _ := root["agent"].(map[string]any)
-	if _, ok := agentMap["sdd-orchestrator"]; !ok {
-		t.Fatal("missing sdd-orchestrator after switch to multi")
+	if _, ok := agentMap["gentle-orchestrator"]; !ok {
+		t.Fatal("missing gentle-orchestrator after switch to multi")
+	}
+	if _, ok := agentMap["sdd-orchestrator"]; ok {
+		t.Fatal("legacy sdd-orchestrator should not remain after switch to multi")
 	}
 	if _, ok := agentMap["sdd-apply"]; !ok {
 		t.Fatal("missing sdd-apply after switch to multi")
@@ -1556,7 +1788,7 @@ func TestInjectOpenCodeMultiModeUsesRootModelForUnassignedAgents(t *testing.T) {
 	// pre-existing in the user's config should get the root model injected.
 	// Since we started with only {"model":"openai/gpt-5"} (no agent entries),
 	// ALL agents are "new" from the 3-way logic perspective and should get rootModel.
-	for _, phase := range []string{"sdd-orchestrator", "sdd-init", "sdd-verify"} {
+	for _, phase := range []string{"gentle-orchestrator", "sdd-init", "sdd-verify"} {
 		agentDef, ok := agentMap[phase].(map[string]any)
 		if !ok {
 			t.Fatalf("phase %q agent not found or wrong type", phase)
@@ -2893,8 +3125,11 @@ func TestInjectOpenCodeMultiModeWithPreExistingMinimalConfig(t *testing.T) {
 	if !ok {
 		t.Fatal("opencode.json missing agent key after merge")
 	}
-	if _, ok := agentMap["sdd-orchestrator"]; !ok {
-		t.Fatal("missing sdd-orchestrator after merge with pre-existing config")
+	if _, ok := agentMap["gentle-orchestrator"]; !ok {
+		t.Fatal("missing gentle-orchestrator after merge with pre-existing config")
+	}
+	if _, ok := agentMap["sdd-orchestrator"]; ok {
+		t.Fatal("legacy sdd-orchestrator should be removed after merge with pre-existing config")
 	}
 	if _, ok := agentMap["sdd-apply"]; !ok {
 		t.Fatal("missing sdd-apply after merge with pre-existing config — post-check regression")
@@ -2966,9 +3201,9 @@ func TestInjectOpenCodeMultiModeWithPreExistingFullConfig(t *testing.T) {
 		t.Fatal("opencode.json missing agent key after merge")
 	}
 
-	// All 10 multi-mode agents must be present.
+	// All multi-mode agents must be present with gentle-orchestrator as the base orchestrator.
 	for _, agentName := range []string{
-		"sdd-orchestrator", "sdd-init", "sdd-explore", "sdd-propose",
+		"gentle-orchestrator", "sdd-init", "sdd-explore", "sdd-propose",
 		"sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
 	} {
 		if _, ok := agentMap[agentName]; !ok {
@@ -2978,14 +3213,13 @@ func TestInjectOpenCodeMultiModeWithPreExistingFullConfig(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// gentleman agent model mirroring from sdd-orchestrator
+// gentle-orchestrator agent model assignment from SDD coordinator selection
 // ---------------------------------------------------------------------------
 
-// TestInjectOpenCodeMultiModeMirrorsOrchestratorModelToGentleman verifies that
-// when sdd-orchestrator has an explicit TUI model assignment and the gentleman
-// agent already exists in opencode.json (persona installed), the orchestrator
-// model is mirrored to the gentleman agent.
-func TestInjectOpenCodeMultiModeMirrorsOrchestratorModelToGentleman(t *testing.T) {
+// TestInjectOpenCodeMultiModeAssignsGentleOrchestratorModelFromLegacyOrchestratorKey
+// verifies that historical TUI assignments keyed by sdd-orchestrator are
+// migrated to the current gentle-orchestrator base coordinator.
+func TestInjectOpenCodeMultiModeAssignsGentleOrchestratorModelFromLegacyOrchestratorKey(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -2994,10 +3228,10 @@ func TestInjectOpenCodeMultiModeMirrorsOrchestratorModelToGentleman(t *testing.T
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 
-	// Pre-existing opencode.json with gentleman agent (persona installed).
+	// Pre-existing opencode.json with gentle-orchestrator agent.
 	existing := `{
   "agent": {
-    "gentleman": {
+    "gentle-orchestrator": {
       "mode": "primary"
     }
   }
@@ -3033,29 +3267,23 @@ func TestInjectOpenCodeMultiModeMirrorsOrchestratorModelToGentleman(t *testing.T
 		t.Fatal("opencode.json missing agent map")
 	}
 
-	// sdd-orchestrator must have the assigned model.
-	orchAgent, ok := agentMap["sdd-orchestrator"].(map[string]any)
-	if !ok {
-		t.Fatal("sdd-orchestrator agent not found or wrong type")
-	}
-	if m, _ := orchAgent["model"].(string); m != "openai/gpt-4o" {
-		t.Fatalf("sdd-orchestrator model = %q, want %q", m, "openai/gpt-4o")
+	if _, exists := agentMap["sdd-orchestrator"]; exists {
+		t.Fatal("legacy sdd-orchestrator agent should not be installed")
 	}
 
-	// gentleman must have the same model as sdd-orchestrator (mirrored).
-	gentlemanAgent, ok := agentMap["gentleman"].(map[string]any)
+	// gentle-orchestrator must receive the historical sdd-orchestrator assignment.
+	gentleOrchestratorAgent, ok := agentMap["gentle-orchestrator"].(map[string]any)
 	if !ok {
-		t.Fatal("gentleman agent not found or wrong type")
+		t.Fatal("gentle-orchestrator agent not found or wrong type")
 	}
-	if m, _ := gentlemanAgent["model"].(string); m != "openai/gpt-4o" {
-		t.Fatalf("gentleman model = %q, want %q (should mirror sdd-orchestrator)", m, "openai/gpt-4o")
+	if m, _ := gentleOrchestratorAgent["model"].(string); m != "openai/gpt-4o" {
+		t.Fatalf("gentle-orchestrator model = %q, want %q", m, "openai/gpt-4o")
 	}
 }
 
-// TestInjectOpenCodeMultiModeDoesNotInjectGentlemanIfNotInstalled verifies that
-// when the gentleman agent does NOT exist in opencode.json (persona not installed),
-// the orchestrator model is NOT mirrored to a gentleman entry.
-func TestInjectOpenCodeMultiModeDoesNotInjectGentlemanIfNotInstalled(t *testing.T) {
+// TestInjectOpenCodeMultiModeInstallsGentleOrchestratorWithModel verifies that the base
+// SDD overlay owns the gentle-orchestrator coordinator.
+func TestInjectOpenCodeMultiModeInstallsGentleOrchestratorWithModel(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -3088,14 +3316,15 @@ func TestInjectOpenCodeMultiModeDoesNotInjectGentlemanIfNotInstalled(t *testing.
 		t.Fatal("opencode.json missing agent map")
 	}
 
-	// gentleman must NOT appear — persona is not installed.
-	if gentlemanRaw, exists := agentMap["gentleman"]; exists {
-		// If it somehow exists, it must not have a model field.
-		if gentlemanMap, ok := gentlemanRaw.(map[string]any); ok {
-			if _, hasModel := gentlemanMap["model"]; hasModel {
-				t.Fatal("gentleman should NOT have a model field when persona is not installed")
-			}
-		}
+	gentleOrchestratorAgent, ok := agentMap["gentle-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatal("gentle-orchestrator agent not found or wrong type")
+	}
+	if m, _ := gentleOrchestratorAgent["model"].(string); m != "openai/gpt-4o" {
+		t.Fatalf("gentle-orchestrator model = %q, want %q", m, "openai/gpt-4o")
+	}
+	if _, exists := agentMap["sdd-orchestrator"]; exists {
+		t.Fatal("legacy sdd-orchestrator agent should not be installed")
 	}
 }
 
@@ -3683,7 +3912,7 @@ func TestFindProjectRootAllMarkers(t *testing.T) {
 func TestInjectOpenCodePostCheckDiskFallback(t *testing.T) {
 	home := t.TempDir()
 
-	// Pre-create a minimal config file with sdd-orchestrator already present.
+	// Pre-create a minimal config file with gentle-orchestrator already present.
 	// This simulates a previous successful install where the file on disk
 	// is correct but in-memory buffer might be stale.
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
@@ -3691,15 +3920,11 @@ func TestInjectOpenCodePostCheckDiskFallback(t *testing.T) {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 
-	// Write a config that already has sdd-orchestrator (simulating previous install)
+	// Write a config that already has gentle-orchestrator (simulating previous install)
 	existingConfig := `{
   "agent": {
-    "gentleman": {
-      "description": "Gentleman",
-      "mode": "primary"
-    },
-    "sdd-orchestrator": {
-      "description": "SDD Orchestrator",
+    "gentle-orchestrator": {
+      "description": "Gentle AI SDD Orchestrator",
       "mode": "primary"
     }
   }
@@ -3729,13 +3954,16 @@ func TestInjectOpenCodePostCheckDiskFallback(t *testing.T) {
 		t.Log("Note: result.Changed = false, but that's OK for idempotent runs")
 	}
 
-	// Verify the file on disk still has sdd-orchestrator
+	// Verify the file on disk still has gentle-orchestrator and not the legacy base key.
 	diskContent, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if !strings.Contains(string(diskContent), "sdd-orchestrator") {
-		t.Fatal("File on disk lost sdd-orchestrator after inject")
+	if !strings.Contains(string(diskContent), "gentle-orchestrator") {
+		t.Fatal("File on disk lost gentle-orchestrator after inject")
+	}
+	if strings.Contains(string(diskContent), `"sdd-orchestrator"`) {
+		t.Fatal("File on disk still has legacy sdd-orchestrator after inject")
 	}
 }
 

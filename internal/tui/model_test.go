@@ -13,9 +13,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
@@ -829,66 +829,6 @@ func TestWelcomeMenu_ConfigureModelsNavigation(t *testing.T) {
 	}
 }
 
-// TestWelcomeMenu_BackupsNavigation verifies cursor 7 (Manage backups) goes to ScreenBackups.
-func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenWelcome
-	m.Cursor = 7
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenBackups {
-		t.Fatalf("cursor=7 (Backups): screen = %v, want %v", state.Screen, ScreenBackups)
-	}
-}
-
-func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenWelcome
-	m.Cursor = 8
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenUninstallMode {
-		t.Fatalf("cursor=8 (Managed uninstall): screen = %v, want %v", state.Screen, ScreenUninstallMode)
-	}
-}
-
-func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
-	m := NewModel(system.DetectionResult{
-		Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}},
-	}, "dev")
-	m.Screen = ScreenWelcome
-	m.Cursor = 9
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenUninstallMode {
-		t.Fatalf("cursor=9 (Managed uninstall with profiles): screen = %v, want %v", state.Screen, ScreenUninstallMode)
-	}
-}
-
-// TestWelcomeMenu_OptionCount verifies the welcome menu has 10 items without OpenCode
-// and 11 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
-func TestWelcomeMenu_OptionCount(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	// Without OpenCode detected: 10 options (includes "Managed uninstall").
-	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
-	if len(opts) != 10 {
-		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 10; got %v", len(opts), opts)
-	}
-	// With OpenCode detected: 11 options (adds "OpenCode SDD Profiles").
-	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 0, true)
-	if len(optsWithProfiles) != 11 {
-		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 11; got %v", len(optsWithProfiles), optsWithProfiles)
-	}
-}
-
-// TestWelcomeMenu_EngramDirNavigation verifies cursor 5 (Configure Engram directory)
-// goes to ScreenEngramDataDir with EngramConfigMode set.
 func TestWelcomeMenu_EngramDirNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
@@ -905,8 +845,75 @@ func TestWelcomeMenu_EngramDirNavigation(t *testing.T) {
 	}
 }
 
-// TestEngramConfigMode_EscReturnsToWelcome verifies that pressing Esc from
-// ScreenEngramDataDir when in EngramConfigMode returns to ScreenWelcome.
+func TestWelcomeMenu_OpenCodeCommunityPluginsNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 7
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenOpenCodePlugins {
+		t.Fatalf("cursor=7 (OpenCode Community Plugins): screen = %v, want %v", state.Screen, ScreenOpenCodePlugins)
+	}
+	if !state.OpenCodePluginsStandalone {
+		t.Fatalf("expected standalone OpenCode plugin mode")
+	}
+}
+
+func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 8
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenBackups {
+		t.Fatalf("cursor=8 (Backups): screen = %v, want %v", state.Screen, ScreenBackups)
+	}
+}
+
+func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 9
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallMode {
+		t.Fatalf("cursor=9 (Managed uninstall): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+	}
+}
+
+func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
+	m := NewModel(system.DetectionResult{
+		Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}},
+	}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 10
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallMode {
+		t.Fatalf("cursor=10 (Managed uninstall with profiles): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+	}
+}
+
+func TestWelcomeMenu_OptionCount(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
+	if len(opts) != 11 {
+		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 11; got %v", len(opts), opts)
+	}
+	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 0, true)
+	if len(optsWithProfiles) != 12 {
+		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 12; got %v", len(optsWithProfiles), optsWithProfiles)
+	}
+}
+
 func TestEngramConfigMode_EscReturnsToWelcome(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenEngramDataDir
@@ -923,8 +930,6 @@ func TestEngramConfigMode_EscReturnsToWelcome(t *testing.T) {
 	}
 }
 
-// TestEngramConfigMode_BackReturnsToWelcome verifies that pressing Esc from
-// ScreenEngramDataDir when in EngramConfigMode returns to ScreenWelcome.
 func TestEngramConfigMode_BackReturnsToWelcome(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenEngramDataDir
@@ -941,15 +946,13 @@ func TestEngramConfigMode_BackReturnsToWelcome(t *testing.T) {
 	}
 }
 
-// TestEngramConfigMode_EscFromTextInputGoesBack verifies that pressing Esc while
-// the cursor is on the text input row navigates back instead of clearing input.
 func TestEngramConfigMode_EscFromTextInputGoesBack(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenEngramDataDir
 	m.EngramConfigMode = true
 	m.EngramDataDirHasExistingData = false
 	m.EngramDataDirChoice = screens.EngramChoiceStartFresh
-	m.Cursor = screens.EngramDataDirTextRow(false, screens.EngramChoiceStartFresh) // on text input
+	m.Cursor = screens.EngramDataDirTextRow(false, screens.EngramChoiceStartFresh)
 	m.EngramDataDirInput = "/some/path"
 	m.EngramDataDirPos = 5
 
@@ -961,15 +964,12 @@ func TestEngramConfigMode_EscFromTextInputGoesBack(t *testing.T) {
 	}
 }
 
-// TestEngramConfigMode_DefaultClearsState verifies that choosing "Use default location"
-// in EngramConfigMode clears the persisted EngramDataDir from state.
 func TestEngramConfigMode_DefaultClearsState(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDirFn
 	osUserHomeDirFn = func() (string, error) { return home, nil }
 	defer func() { osUserHomeDirFn = restoreHome }()
 
-	// Seed a previous custom directory.
 	_ = state.Write(home, state.InstallState{EngramDataDir: "/old/engram"})
 
 	m := NewModel(system.DetectionResult{}, "dev")
@@ -995,16 +995,12 @@ func TestEngramConfigMode_DefaultClearsState(t *testing.T) {
 	}
 }
 
-// TestEngramConfigMode_CustomPathSavesState verifies that choosing a custom path
-// in EngramConfigMode persists the new directory to state and sets the env var.
-// The flow is: choose → confirm → feedback → welcome.
 func TestEngramConfigMode_CustomPathSavesState(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDirFn
 	osUserHomeDirFn = func() (string, error) { return home, nil }
 	defer func() { osUserHomeDirFn = restoreHome }()
 
-	// Also mock engram's userHomeDir so HardDefaultDataDir() uses our temp dir.
 	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return home, nil })
 	defer restoreEngramHome()
 
@@ -1020,14 +1016,12 @@ func TestEngramConfigMode_CustomPathSavesState(t *testing.T) {
 	m.Cursor = screens.EngramDataDirContinueRow(false, screens.EngramChoiceStartFresh)
 	m.refreshEngramPreview()
 
-	// Step 1: Continue → confirmation
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM := updated.(Model)
 	if stateM.EngramDataDirPhase != 1 {
 		t.Fatalf("expected phase=1 (confirm), got %d", stateM.EngramDataDirPhase)
 	}
 
-	// Step 2: Confirm (cursor defaults to Cancel=1, so move to Confirm=0)
 	stateM.Cursor = 0
 	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM = updated.(Model)
@@ -1035,7 +1029,6 @@ func TestEngramConfigMode_CustomPathSavesState(t *testing.T) {
 		t.Fatalf("expected phase=2 (feedback), got %d", stateM.EngramDataDirPhase)
 	}
 
-	// Step 3: Continue on feedback → Welcome
 	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM = updated.(Model)
 	if stateM.Screen != ScreenWelcome {
@@ -1054,13 +1047,8 @@ func TestEngramConfigMode_CustomPathSavesState(t *testing.T) {
 	}
 }
 
-// TestEngramConfigMode_StateDoesNotLeak verifies that after returning from
-// EngramConfigMode to Welcome, the Engram screen state is fully reset so the
-// next install flow starts clean.
-// The flow is: choose → confirm → feedback → welcome.
 func TestEngramConfigMode_StateDoesNotLeak(t *testing.T) {
 	tmp := t.TempDir()
-	// Mock engram's userHomeDir so HardDefaultDataDir() uses our temp dir.
 	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return tmp, nil })
 	defer restoreEngramHome()
 
@@ -1075,14 +1063,12 @@ func TestEngramConfigMode_StateDoesNotLeak(t *testing.T) {
 	m.Cursor = screens.EngramDataDirContinueRow(false, screens.EngramChoiceStartFresh)
 	m.refreshEngramPreview()
 
-	// Step 1: Continue → confirmation
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM := updated.(Model)
 	if stateM.EngramDataDirPhase != 1 {
 		t.Fatalf("expected phase=1 (confirm), got %d", stateM.EngramDataDirPhase)
 	}
 
-	// Step 2: Confirm
 	stateM.Cursor = 0
 	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM = updated.(Model)
@@ -1090,31 +1076,26 @@ func TestEngramConfigMode_StateDoesNotLeak(t *testing.T) {
 		t.Fatalf("expected phase=2 (feedback), got %d", stateM.EngramDataDirPhase)
 	}
 
-	// Step 3: Continue on feedback → Welcome
 	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM = updated.(Model)
 	if stateM.Screen != ScreenWelcome {
 		t.Fatalf("screen = %v, want ScreenWelcome", stateM.Screen)
 	}
 
-	// Now simulate the user starting an install flow and reaching EngramDataDir.
 	stateM.Screen = ScreenEngramDataDir
 	stateM.setScreen(ScreenEngramDataDir)
 
-	// The previously configured path should be restored (not leaked state).
 	if stateM.EngramDataDirChoice != screens.EngramChoiceStartFresh {
 		t.Fatalf("EngramDataDirChoice = %d, want StartFresh", stateM.EngramDataDirChoice)
 	}
 	if stateM.EngramDataDirInput != filepath.Join(tmp, "engram") {
 		t.Fatalf("EngramDataDirInput = %q, want %q", stateM.EngramDataDirInput, filepath.Join(tmp, "engram"))
 	}
-	// Most importantly: old errors must be cleared.
 	if stateM.EngramDataDirErr != "" {
 		t.Fatalf("EngramDataDirErr = %q, want empty", stateM.EngramDataDirErr)
 	}
 }
 
-// TestGoBack_ReviewCustomPreset_WithEngram returns to EngramDataDir first.
 func TestGoBack_ReviewCustomPreset_WithEngram(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenReview
@@ -1129,14 +1110,10 @@ func TestGoBack_ReviewCustomPreset_WithEngram(t *testing.T) {
 	}
 }
 
-// TestSetScreenEngramDataDir_RespectsEnvVar verifies that existing data detection
-// uses the effective data directory (respecting ENGRAM_DATA_DIR) rather than
-// always checking the hard default ~/.engram.
 func TestSetScreenEngramDataDir_RespectsEnvVar(t *testing.T) {
 	customDir := t.TempDir()
 	t.Setenv(engram.DataDirEnvVar, customDir)
 
-	// Create data in the custom dir, NOT in ~/.engram.
 	if err := os.WriteFile(filepath.Join(customDir, "engram.db"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1147,6 +1124,76 @@ func TestSetScreenEngramDataDir_RespectsEnvVar(t *testing.T) {
 
 	if !m.EngramDataDirHasExistingData {
 		t.Fatal("EngramDataDirHasExistingData = false, want true (data exists at ENGRAM_DATA_DIR)")
+	}
+}
+
+func TestStandaloneOpenCodePluginsContinueRegistersSelectedPlugins(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenOpenCodePlugins
+	m.OpenCodePluginsStandalone = true
+	m.Selection.OpenCodePlugins = []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline}
+	m.Cursor = len(opencodepluginDefinitions()) * 2
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenOpenCodePluginResult {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenOpenCodePluginResult)
+	}
+	if cmd == nil {
+		t.Fatal("expected registration command")
+	}
+
+	msg := cmd()
+	done, ok := msg.(OpenCodePluginRegistrationDoneMsg)
+	if !ok {
+		t.Fatalf("message = %T, want OpenCodePluginRegistrationDoneMsg", msg)
+	}
+	if done.Err != nil {
+		t.Fatalf("registration error = %v", done.Err)
+	}
+	if len(done.Results) != 1 || !done.Results[0].Changed {
+		t.Fatalf("results = %#v, want one changed registration", done.Results)
+	}
+
+	updated, _ = state.Update(done)
+	state = updated.(Model)
+	if state.OpenCodePluginRegistrationErr != nil {
+		t.Fatalf("state registration err = %v", state.OpenCodePluginRegistrationErr)
+	}
+	if len(state.OpenCodePluginRegistrationResults) != 1 {
+		t.Fatalf("state results = %#v, want one result", state.OpenCodePluginRegistrationResults)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "tui.json"))
+	if err != nil {
+		t.Fatalf("read tui.json: %v", err)
+	}
+	if !strings.Contains(string(data), "opencode-subagent-statusline") {
+		t.Fatalf("tui.json missing plugin registration: %s", data)
+	}
+}
+
+func TestStandaloneOpenCodePluginsResultEnterReturnsToWelcome(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenOpenCodePluginResult
+	m.OpenCodePluginsStandalone = true
+	m.Selection.OpenCodePlugins = []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenWelcome {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenWelcome)
+	}
+	if state.OpenCodePluginsStandalone {
+		t.Fatalf("standalone mode should reset after result acknowledgement")
+	}
+	if len(state.Selection.OpenCodePlugins) != 0 {
+		t.Fatalf("selection should reset after standalone flow, got %v", state.Selection.OpenCodePlugins)
 	}
 }
 
@@ -3316,8 +3363,8 @@ func TestNoWrapAroundUpOnBackupScreen(t *testing.T) {
 func TestModelConfigOpenCodePrePopulatesAssignments(t *testing.T) {
 	// Pre-existing assignments that should be read from settings
 	preExisting := map[string]model.ModelAssignment{
-		"sdd-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
-		"sdd-apply":        {ProviderID: "openai", ModelID: "gpt-4o"},
+		"gentle-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
+		"sdd-apply":           {ProviderID: "openai", ModelID: "gpt-4o"},
 	}
 
 	// Override the read function to return pre-existing assignments
@@ -3350,10 +3397,10 @@ func TestModelConfigOpenCodePrePopulatesAssignments(t *testing.T) {
 	if state.Selection.ModelAssignments == nil {
 		t.Fatal("ModelAssignments should be pre-populated, got nil")
 	}
-	got := state.Selection.ModelAssignments["sdd-orchestrator"]
-	want := preExisting["sdd-orchestrator"]
+	got := state.Selection.ModelAssignments["gentle-orchestrator"]
+	want := preExisting["gentle-orchestrator"]
 	if got != want {
-		t.Errorf("sdd-orchestrator assignment = %+v, want %+v", got, want)
+		t.Errorf("gentle-orchestrator assignment = %+v, want %+v", got, want)
 	}
 	got2 := state.Selection.ModelAssignments["sdd-apply"]
 	want2 := preExisting["sdd-apply"]
@@ -3371,7 +3418,7 @@ func TestModelConfigOpenCodeDoesNotOverwriteExistingSessionAssignments(t *testin
 	orig := readCurrentAssignmentsFn
 	readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
 		return map[string]model.ModelAssignment{
-			"sdd-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
+			"gentle-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
 		}, nil
 	}
 	t.Cleanup(func() { readCurrentAssignmentsFn = orig })
@@ -3385,14 +3432,14 @@ func TestModelConfigOpenCodeDoesNotOverwriteExistingSessionAssignments(t *testin
 	m.Cursor = 1
 	// Pre-populate Selection.ModelAssignments in the current session
 	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
-		"sdd-orchestrator": sessionAssignment,
+		"gentle-orchestrator": sessionAssignment,
 	}
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	// The session assignment must be preserved, not overwritten by file contents
-	got := state.Selection.ModelAssignments["sdd-orchestrator"]
+	got := state.Selection.ModelAssignments["gentle-orchestrator"]
 	if got != sessionAssignment {
 		t.Errorf("session assignment overwritten: got %+v, want %+v", got, sessionAssignment)
 	}
@@ -3603,7 +3650,7 @@ func TestPinErrClearedOnScreenReentry(t *testing.T) {
 	}
 
 	// Navigate back to ScreenBackups (cursor 7 on Welcome → enter).
-	afterEsc.Cursor = 7
+	afterEsc.Cursor = 8
 	updated2, _ := afterEsc.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	afterReturn := updated2.(Model)
 	if afterReturn.Screen != ScreenBackups {

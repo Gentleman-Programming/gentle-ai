@@ -18,6 +18,7 @@ var linearRoutes = map[Screen]Route{
 	ScreenKiroModelPicker:        {Forward: ScreenDependencyTree, Backward: ScreenPreset},
 	ScreenSDDMode:                {Forward: ScreenStrictTDD, Backward: ScreenPreset},
 	ScreenStrictTDD:              {Forward: ScreenDependencyTree, Backward: ScreenSDDMode},
+	ScreenOpenCodePluginResult:   {Backward: ScreenWelcome},
 	ScreenModelPicker:            {Forward: ScreenStrictTDD, Backward: ScreenSDDMode},
 	ScreenDependencyTree:         {Forward: ScreenReview, Backward: ScreenPreset},
 	ScreenEngramDataDir:          {Forward: ScreenReview, Backward: ScreenDependencyTree},

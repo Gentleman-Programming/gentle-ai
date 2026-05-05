@@ -1,6 +1,6 @@
 ---
 description: Continue the next SDD phase in the dependency chain
-agent: sdd-orchestrator
+agent: gentle-orchestrator
 ---
 
 Follow the SDD orchestrator workflow to continue the active change.
@@ -16,10 +16,11 @@ CONTEXT:
 - Working directory: !`echo -n "$(pwd)"`
 - Current project: !`echo -n "$(basename $(pwd))"`
 - Change name: $ARGUMENTS
-- Artifact store mode: engram
+- Artifact store mode: ask/cache per orchestrator
+- Delivery strategy: ask/cache per orchestrator
 
 ENGRAM NOTE:
-To check which artifacts exist, search: mem_search(query: "sdd/$ARGUMENTS/", project: "{project}") to list all artifacts for this change.
-Sub-agents handle persistence automatically with topic_key "sdd/$ARGUMENTS/{type}".
+To check which artifacts exist in engram/hybrid, search: mem_search(query: "sdd/$ARGUMENTS/", project: "{project}") to list all artifacts for this change.
+Sub-agents handle persistence automatically using the selected artifact store.
 
 Read the orchestrator instructions to coordinate this workflow. Do NOT execute phase work inline — delegate to sub-agents.

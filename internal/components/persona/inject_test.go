@@ -367,6 +367,31 @@ func TestInjectOpenCodeGentlemanWritesAgentsFile(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeGentlemanDoesNotCreateSDDConductor(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	text := string(content)
+	if strings.Contains(text, `"sdd-orchestrator"`) {
+		t.Fatal("persona injection must not create legacy sdd-orchestrator conductor")
+	}
+	if strings.Contains(text, `"gentle-orchestrator"`) {
+		t.Fatal("persona injection must not create SDD conductor; SDD component owns gentle-orchestrator")
+	}
+	if !strings.Contains(text, `"gentleman"`) {
+		t.Fatal("persona injection should still create the gentleman persona agent")
+	}
+}
+
 func TestInjectOpenCodePreservesUserContentInsteadOfOverwriting(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
@@ -847,8 +872,8 @@ func TestInjectCursorGentlemanWritesRulesFileWithRealContent(t *testing.T) {
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("Cursor persona missing 'Senior Architect' — got neutral fallback instead of generic persona")
 	}
-	if !strings.Contains(text, "Skills") {
-		t.Fatal("Cursor persona missing skills section")
+	if !strings.Contains(text, "Contextual Skill Loading") {
+		t.Fatal("Cursor persona missing contextual skill loading directive")
 	}
 }
 

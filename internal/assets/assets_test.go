@@ -254,6 +254,73 @@ func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
 	}
 }
 
+// TestPersonasContainContextualSkillLoadingDirective verifies that every
+// persona asset injected into a host's system prompt carries the mandatory
+// "Contextual Skill Loading" directive (design Decisions 1 and 2 of the
+// contextual-skill-loading change). The hardcoded "Skills (Auto-load based
+// on context)" table MUST be removed at the same time.
+//
+// Claude variant references the native `Skill` tool by name. Non-Claude
+// variants instruct the model to read the matching SKILL.md using their
+// agent's read mechanism, since they have no Skill tool.
+func TestPersonasContainContextualSkillLoadingDirective(t *testing.T) {
+	tests := []struct {
+		path      string
+		isClaude  bool
+		invokeMsg string // wording specific to the agent family
+	}{
+		{path: "claude/persona-gentleman.md", isClaude: true, invokeMsg: "invoke it via the built-in `Skill` tool"},
+		{path: "opencode/persona-gentleman.md", isClaude: false, invokeMsg: "read the matching SKILL.md"},
+		{path: "generic/persona-gentleman.md", isClaude: false, invokeMsg: "read the matching SKILL.md"},
+		{path: "generic/persona-neutral.md", isClaude: false, invokeMsg: "read the matching SKILL.md"},
+		{path: "kiro/persona-gentleman.md", isClaude: false, invokeMsg: "read the matching SKILL.md"},
+		{path: "kimi/persona-gentleman.md", isClaude: false, invokeMsg: "read the matching SKILL.md"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			content := MustRead(tc.path)
+
+			// The competing hardcoded table MUST be gone.
+			if strings.Contains(content, "## Skills (Auto-load based on context)") {
+				t.Errorf("%s still contains the hardcoded `## Skills (Auto-load based on context)` table — must be replaced by the contextual directive", tc.path)
+			}
+			if strings.Contains(content, "| Context | Read this file |") {
+				t.Errorf("%s still contains the hardcoded skill trigger table header — must be replaced by the contextual directive", tc.path)
+			}
+
+			// The new directive MUST be present.
+			for _, required := range []string{
+				"## Contextual Skill Loading (MANDATORY)",
+				"<available_skills>",
+				"Self-check BEFORE every response",
+				"blocking requirement",
+			} {
+				if !strings.Contains(content, required) {
+					t.Errorf("%s missing required directive substring %q", tc.path, required)
+				}
+			}
+
+			// Claude variant references the Skill tool; non-Claude variants
+			// instruct the model to read SKILL.md directly.
+			if !strings.Contains(content, tc.invokeMsg) {
+				t.Errorf("%s missing agent-specific invocation phrasing %q", tc.path, tc.invokeMsg)
+			}
+			if tc.isClaude {
+				if !strings.Contains(content, "`Skill` tool") {
+					t.Errorf("claude variant must name the `Skill` tool: %s", tc.path)
+				}
+			} else {
+				// Non-Claude personas must NOT reference the Skill tool — that
+				// would mislead users on agents that lack it.
+				if strings.Contains(content, "`Skill` tool") {
+					t.Errorf("non-Claude variant must not reference the `Skill` tool: %s", tc.path)
+				}
+			}
+		})
+	}
+}
+
 // TestMustReadPanicsOnMissingFile verifies that MustRead panics for a
 // nonexistent file, confirming the safety mechanism works.
 func TestMustReadPanicsOnMissingFile(t *testing.T) {
@@ -283,9 +350,9 @@ func TestEmbeddedAssetCount(t *testing.T) {
 		}
 	}
 
-	// We expect 17 skill directories (10 SDD + judgment-day + 5 foundation + _shared).
-	if skillDirs != 17 {
-		t.Fatalf("expected 17 skill directories, got %d", skillDirs)
+	// We expect 21 skill directories (10 SDD + judgment-day + 5 foundation + 4 sustainable-review + _shared).
+	if skillDirs != 21 {
+		t.Fatalf("expected 21 skill directories, got %d", skillDirs)
 	}
 
 	// Verify each skill directory has a SKILL.md.
@@ -396,7 +463,11 @@ func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 	} {
 		t.Run(assetPath, func(t *testing.T) {
 			content := MustRead(assetPath)
-			if !strings.Contains(content, "dedicated `sdd-orchestrator`") {
+			dedicatedAgent := "sdd-orchestrator"
+			if assetPath == "opencode/sdd-orchestrator.md" {
+				dedicatedAgent = "gentle-orchestrator"
+			}
+			if !strings.Contains(content, "dedicated `"+dedicatedAgent+"`") {
 				t.Fatalf("%q missing dedicated-agent scoping note", assetPath)
 			}
 			if !strings.Contains(content, "Do NOT apply it to executor phase agents") {

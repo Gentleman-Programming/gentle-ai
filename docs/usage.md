@@ -123,6 +123,8 @@ gentle-ai upgrade
 
 After upgrading, run `gentle-ai sync` to refresh all managed assets to the new version's content.
 
+If GitHub rate-limits update checks, export `GITHUB_TOKEN` or `GH_TOKEN` before running `gentle-ai update`/`upgrade`.
+
 ### version
 
 ```bash

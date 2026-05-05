@@ -63,6 +63,9 @@ func resolveEngramCommand() (string, bool) {
 	if err != nil || p == "" {
 		return "engram", false
 	}
+	if isVersionedHomebrewCellarPath(p) {
+		return "engram", false
+	}
 	return p, true
 }
 
@@ -447,16 +450,35 @@ func stableEngramCommandForMergedConfig(path string, agentID model.AgentID) stri
 	raw, err := osReadFile(path)
 	if err == nil {
 		if cmd, ok := existingMergedEngramCommand(raw, agentID); ok {
-			return cmd
+			return stableEngramCommandForExisting(cmd, agentID)
 		}
 	}
 
 	if isStandardAgent(agentID) {
-		return "engram"
+		return preferredStableEngramCommand()
 	}
 
 	cmd, _ := resolveEngramCommand()
 	return cmd
+}
+
+func stableEngramCommandForExisting(cmd string, agentID model.AgentID) string {
+	if isVersionedHomebrewCellarPath(cmd) {
+		if stable := preferredStableEngramCommand(); stable != "" {
+			return stable
+		}
+		return "engram"
+	}
+
+	return cmd
+}
+
+func preferredStableEngramCommand() string {
+	p, err := EngramLookPath("engram")
+	if err == nil && isStableHomebrewEngramPath(p) {
+		return p
+	}
+	return "engram"
 }
 
 func existingMergedEngramCommand(raw []byte, agentID model.AgentID) (string, bool) {
@@ -568,6 +590,7 @@ func buildSeparateMCPContent(mcpPath string, defaultContent []byte) []byte {
 		// No command, or not an engram command — use the default.
 		return defaultContent
 	}
+	cmd = stableEngramCommandForExisting(cmd, "")
 
 	// Rebuild with the preserved command and the canonical args (["mcp", "--tools=agent"]).
 	rebuilt := map[string]any{
@@ -602,4 +625,14 @@ func isEngramCommand(cmd string) bool {
 // that points to an engram binary.
 func isAbsoluteEngramPath(path string) bool {
 	return filepath.IsAbs(path) && isEngramCommand(path)
+}
+
+func isVersionedHomebrewCellarPath(path string) bool {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	return strings.Contains(clean, "/Cellar/engram/") && isEngramCommand(clean)
+}
+
+func isStableHomebrewEngramPath(path string) bool {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	return (clean == "/opt/homebrew/bin/engram" || clean == "/usr/local/bin/engram") && isEngramCommand(clean)
 }

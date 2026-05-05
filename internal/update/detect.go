@@ -2,7 +2,10 @@ package update
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -12,6 +15,7 @@ import (
 var (
 	execCommand = exec.Command
 	lookPath    = exec.LookPath
+	userHomeDir = os.UserHomeDir
 )
 
 // versionRegexp extracts a semver-like version from command output.
@@ -26,6 +30,10 @@ var devVersionRegexp = regexp.MustCompile(`(?i)(?:^|\s)dev(?:$|\s)`)
 // For tools with nil DetectCmd (gentle-ai), returns currentBuildVersion.
 // For other tools, checks LookPath then runs the detect command.
 func detectInstalledVersion(ctx context.Context, tool ToolInfo, currentBuildVersion string) string {
+	if strings.TrimSpace(tool.NpmPackage) != "" {
+		return detectNpmPackageVersion(tool.NpmPackage)
+	}
+
 	if tool.DetectCmd == nil {
 		return currentBuildVersion
 	}
@@ -66,6 +74,77 @@ func detectInstalledVersion(ctx context.Context, tool ToolInfo, currentBuildVers
 	}
 
 	return parseVersionFromOutput(strings.TrimSpace(string(out)))
+}
+
+func detectNpmPackageVersion(pkg string) string {
+	version, _ := detectOpenCodePluginPackage(pkg)
+	return version
+}
+
+func detectOpenCodePluginPackage(pkg string) (string, bool) {
+	home, err := userHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return "", false
+	}
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	data, err := os.ReadFile(filepath.Join(opencodeDir, "node_modules", pkg, "package.json"))
+	if err != nil {
+		if version, ok := openCodePackageJSONDependencyVersion(opencodeDir, pkg); ok {
+			return version, false
+		}
+		return "", isOpenCodePluginRegistered(opencodeDir, pkg)
+	}
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return "", isOpenCodePluginRegistered(opencodeDir, pkg)
+	}
+	return parseVersionFromOutput(manifest.Version), false
+}
+
+func openCodePackageJSONDependencyVersion(opencodeDir, pkg string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(opencodeDir, "package.json"))
+	if err != nil || strings.TrimSpace(string(data)) == "" {
+		return "", false
+	}
+
+	var manifest struct {
+		Dependencies    map[string]string `json:"dependencies"`
+		DevDependencies map[string]string `json:"devDependencies"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return "", false
+	}
+
+	if version, ok := manifest.Dependencies[pkg]; ok {
+		return parseVersionFromOutput(version), true
+	}
+	if version, ok := manifest.DevDependencies[pkg]; ok {
+		return parseVersionFromOutput(version), true
+	}
+	return "", false
+}
+
+func isOpenCodePluginRegistered(opencodeDir, pkg string) bool {
+	data, err := os.ReadFile(filepath.Join(opencodeDir, "tui.json"))
+	if err != nil || strings.TrimSpace(string(data)) == "" {
+		return false
+	}
+
+	var root struct {
+		Plugin []string `json:"plugin"`
+	}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return false
+	}
+
+	for _, plugin := range root.Plugin {
+		if strings.TrimSpace(plugin) == pkg {
+			return true
+		}
+	}
+	return false
 }
 
 // parseVersionFromOutput extracts the first semver-like pattern from raw output.

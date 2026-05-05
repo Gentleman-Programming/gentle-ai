@@ -15,6 +15,7 @@ type Selection struct {
 	Profiles               []Profile                   // named SDD profiles to generate/update during sync
 	EngramDataDir          string                      // absolute path; empty means "use default"
 	EngramMigrateData      bool                        // true if user chose to migrate existing data
+	OpenCodePlugins        []OpenCodeCommunityPluginID // optional community OpenCode TUI plugins
 }
 
 func (s Selection) HasAgent(agent AgentID) bool {

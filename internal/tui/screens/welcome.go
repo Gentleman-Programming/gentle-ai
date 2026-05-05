@@ -35,6 +35,7 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 		"Configure models",
 		"Configure Engram directory",
 		agentLabel,
+		"OpenCode Community Plugins",
 	}
 
 	if showProfiles {

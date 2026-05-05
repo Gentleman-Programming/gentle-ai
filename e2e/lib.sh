@@ -81,6 +81,56 @@ cleanup_test_env() {
     mkdir -p "$HOME/.config"
 }
 
+# setup_fake_engram_binary — install a deterministic local engram shim for E2E.
+#
+# Full Docker E2E validates gentle-ai's agent/config injection behavior, not the
+# external Engram release CDN. The real installer skips the network download when
+# an `engram` binary already exists on PATH, so this shim keeps coverage of the
+# install pipeline while avoiding flaky GitHub API/rate-limit failures.
+#
+# Set GENTLE_AI_E2E_REAL_ENGRAM=1 to opt out and exercise the live download path.
+setup_fake_engram_binary() {
+    if [ "${GENTLE_AI_E2E_REAL_ENGRAM:-0}" = "1" ]; then
+        log_info "Using real Engram binary/download path for E2E"
+        return 0
+    fi
+
+    local fake_bin_dir="$HOME/.gentle-ai-e2e/bin"
+    local fake_engram="$fake_bin_dir/engram"
+
+    mkdir -p "$fake_bin_dir"
+    cat > "$fake_engram" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+
+case "${1:-}" in
+  setup)
+    exit 0
+    ;;
+  mcp)
+    # Keep the shim alive if an MCP client probes it during E2E, but do not
+    # require real Engram services or network access.
+    exit 0
+    ;;
+  version|--version|-v)
+    printf 'engram e2e-shim\n'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+    chmod +x "$fake_engram"
+
+    case ":$PATH:" in
+        *":$fake_bin_dir:"*) ;;
+        *) export PATH="$fake_bin_dir:$PATH" ;;
+    esac
+
+    log_info "Using deterministic Engram E2E shim: $fake_engram"
+}
+
 # setup_fake_configs — seed fake config files so backup tests have something
 # to snapshot and restore.
 setup_fake_configs() {

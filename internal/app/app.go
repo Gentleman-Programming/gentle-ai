@@ -289,6 +289,7 @@ func tuiExecute(
 			ClaudeModelAssignments: claudeAliasesToStrings(selection.ClaudeModelAssignments),
 			ModelAssignments:       modelAssignmentsToState(selection.ModelAssignments),
 			EngramDataDir:          engramDataDir,
+			Persona:                string(selection.Persona),
 		})
 	}
 
