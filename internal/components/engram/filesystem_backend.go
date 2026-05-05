@@ -118,6 +118,17 @@ func (b *LocalDataBackend) ExistingFiles(dir string) []string {
 
 // CleanData deletes all Engram SQLite files in the given directory.
 // It is a no-op when the directory does not exist.
+func (b *LocalDataBackend) DeleteData(dir string) (Result, error) {
+	files, total, err := b.EstimateMigration(dir)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := b.CleanData(dir); err != nil {
+		return Result{}, err
+	}
+	return Result{FilesDeleted: len(files), BytesDeleted: total}, nil
+}
+
 func (b *LocalDataBackend) CleanData(dir string) error {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return nil
@@ -163,7 +174,7 @@ func (b *LocalDataBackend) EstimateMigration(source string) ([]FileInfo, uint64,
 //
 // It uses read/write instead of os.Rename so that cross-device moves work
 // (e.g. C:\ → D:\ on Windows or /home → /mnt/data on Linux).
-func (b *LocalDataBackend) MigrateData(source, target string) (Result, error) {
+func (b *LocalDataBackend) CopyData(source, target string) (Result, error) {
 	if sameFilesystemPath(source, target) {
 		return Result{}, fmt.Errorf("%w: source and target are the same directory", ErrInvalidPath)
 	}
@@ -228,11 +239,34 @@ func (b *LocalDataBackend) MigrateData(source, target string) (Result, error) {
 			return Result{}, fmt.Errorf("verify %s failed after copy", f)
 		}
 
-		result.FilesMoved++
-		result.BytesMoved += uint64(info.Size())
+		result.FilesCopied++
+		result.BytesCopied += uint64(info.Size())
 		copied = append(copied, dstPath)
 	}
 
+	return result, nil
+}
+
+func (b *LocalDataBackend) MigrateData(source, target string) (Result, error) {
+	result, err := b.CopyData(source, target)
+	if err != nil {
+		return Result{}, err
+	}
+	result.FilesMoved = result.FilesCopied
+	result.BytesMoved = result.BytesCopied
+	result.FilesCopied = 0
+	result.BytesCopied = 0
+	return result, nil
+}
+
+func (b *LocalDataBackend) MoveData(source, target string) (Result, error) {
+	result, err := b.MigrateData(source, target)
+	if err != nil {
+		return Result{}, err
+	}
+	if _, err := b.DeleteData(source); err != nil {
+		return Result{}, err
+	}
 	return result, nil
 }
 

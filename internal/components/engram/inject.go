@@ -20,6 +20,13 @@ type InjectionResult struct {
 	Files   []string
 }
 
+func resolveInjectDataDir(dataDir string) string {
+	if strings.TrimSpace(dataDir) != "" {
+		return dataDir
+	}
+	return os.Getenv(DataDirEnvVar)
+}
+
 // bootstrapper is an optional adapter capability: if an adapter implements
 // this interface, any injector that writes Jinja modules will first ensure
 // the base template (entry point) exists.
@@ -81,7 +88,10 @@ func engramServerJSON() []byte {
 // macOS) use the correct data directory even though they don't inherit shell
 // profile environment variables.
 func engramEnvMap() map[string]any {
-	dataDir := os.Getenv(DataDirEnvVar)
+	return engramEnvMapForDataDir(os.Getenv(DataDirEnvVar))
+}
+
+func engramEnvMapForDataDir(dataDir string) map[string]any {
 	if dataDir == "" {
 		return nil
 	}
@@ -97,11 +107,15 @@ func engramEnvMap() map[string]any {
 // engramServerJSONWithCmd returns the MCP server config bytes for a specific
 // command.
 func engramServerJSONWithCmd(cmd string) []byte {
+	return engramServerJSONWithCmdAndDataDir(cmd, "")
+}
+
+func engramServerJSONWithCmdAndDataDir(cmd, dataDir string) []byte {
 	cfg := map[string]any{
 		"command": cmd,
 		"args":    []string{"mcp", "--tools=agent"},
 	}
-	if env := engramEnvMap(); env != nil {
+	if env := engramEnvMapForDataDir(resolveInjectDataDir(dataDir)); env != nil {
 		cfg["env"] = env
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
@@ -111,6 +125,10 @@ func engramServerJSONWithCmd(cmd string) []byte {
 // engramOverlayJSON returns the settings overlay JSON (used for merge-into-settings
 // and MCPConfigFile strategies), with the resolved engram command.
 func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
+	return engramOverlayJSONWithDataDir(agentID, cmd, "")
+}
+
+func engramOverlayJSONWithDataDir(agentID model.AgentID, cmd, dataDir string) []byte {
 	var cfg map[string]any
 	engramCfg := map[string]any{}
 	if agentID == model.AgentOpenCode || agentID == model.AgentKilocode {
@@ -133,7 +151,7 @@ func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 			"args":    []string{"mcp", "--tools=agent"},
 		}
 	}
-	if env := engramEnvMap(); env != nil {
+	if env := engramEnvMapForDataDir(resolveInjectDataDir(dataDir)); env != nil {
 		engramCfg["env"] = env
 	}
 
@@ -161,11 +179,15 @@ func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 // VS Code uses a fixed "servers" key structure rather than mcpServers, so it
 // is kept as a separate helper.
 func vsCodeEngramOverlayJSON(cmd string) []byte {
+	return vsCodeEngramOverlayJSONWithDataDir(cmd, "")
+}
+
+func vsCodeEngramOverlayJSONWithDataDir(cmd, dataDir string) []byte {
 	engramCfg := map[string]any{
 		"command": cmd,
 		"args":    []string{"mcp", "--tools=agent"},
 	}
-	if env := engramEnvMap(); env != nil {
+	if env := engramEnvMapForDataDir(resolveInjectDataDir(dataDir)); env != nil {
 		engramCfg["env"] = env
 	}
 	cfg := map[string]any{
@@ -177,7 +199,15 @@ func vsCodeEngramOverlayJSON(cmd string) []byte {
 	return append(b, '\n')
 }
 
+type InjectOptions struct {
+	DataDir string
+}
+
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	return InjectWithOptions(homeDir, adapter, InjectOptions{})
+}
+
+func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
 	if !adapter.SupportsMCP() {
 		return InjectionResult{}, nil
 	}
@@ -195,7 +225,7 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		// See: https://github.com/Gentleman-Programming/gentle-ai/issues (engram absolute path regression)
 		mcpPath := adapter.MCPConfigPath(homeDir, "engram")
 		cmd := stableEngramCommandForMergedConfig(mcpPath, adapter.Agent())
-		content := buildSeparateMCPContent(mcpPath, engramServerJSONWithCmd(cmd))
+		content := buildSeparateMCPContent(mcpPath, engramServerJSONWithCmdAndDataDir(cmd, opts.DataDir), opts.DataDir)
 		mcpWrite, err := filemerge.WriteFileAtomic(mcpPath, content, 0o644)
 		if err != nil {
 			return InjectionResult{}, err
@@ -208,7 +238,7 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		if settingsPath == "" {
 			break
 		}
-		overlay := engramOverlayJSON(adapter.Agent(), stableEngramCommandForMergedConfig(settingsPath, adapter.Agent()))
+		overlay := engramOverlayJSONWithDataDir(adapter.Agent(), stableEngramCommandForMergedConfig(settingsPath, adapter.Agent()), opts.DataDir)
 		settingsWrite, err := mergeJSONFile(settingsPath, overlay)
 		if err != nil {
 			return InjectionResult{}, err
@@ -223,9 +253,9 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		}
 		var overlay []byte
 		if adapter.Agent() == model.AgentVSCodeCopilot {
-			overlay = vsCodeEngramOverlayJSON(stableEngramCommandForMergedConfig(mcpPath, adapter.Agent()))
+			overlay = vsCodeEngramOverlayJSONWithDataDir(stableEngramCommandForMergedConfig(mcpPath, adapter.Agent()), opts.DataDir)
 		} else {
-			overlay = engramOverlayJSON(adapter.Agent(), stableEngramCommandForMergedConfig(mcpPath, adapter.Agent()))
+			overlay = engramOverlayJSONWithDataDir(adapter.Agent(), stableEngramCommandForMergedConfig(mcpPath, adapter.Agent()), opts.DataDir)
 		}
 
 		mcpWrite, err := mergeJSONFile(mcpPath, overlay)
@@ -270,7 +300,7 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		engramCmd := stableEngramCommandForMergedConfig(configPath, adapter.Agent())
 		// Convert env map to map[string]string for TOML.
 		tomlEnv := make(map[string]string)
-		if env := engramEnvMap(); env != nil {
+		if env := engramEnvMapForDataDir(resolveInjectDataDir(opts.DataDir)); env != nil {
 			for k, v := range env {
 				tomlEnv[k] = v.(string)
 			}
@@ -388,9 +418,9 @@ func ensureAntigravitySettings(homeDir string, adapter agents.Adapter) (settings
 // writeCodexInstructionFiles writes the Engram memory protocol and compact prompt
 // files to ~/.codex/ and returns their paths.
 func writeCodexInstructionFiles(homeDir string) (instructionsPath, compactPath string, err error) {
-	codexDir := homeDir + "/.codex"
-	instructionsPath = codexDir + "/engram-instructions.md"
-	compactPath = codexDir + "/engram-compact-prompt.md"
+	codexDir := filepath.Join(homeDir, ".codex")
+	instructionsPath = filepath.Join(codexDir, "engram-instructions.md")
+	compactPath = filepath.Join(codexDir, "engram-compact-prompt.md")
 
 	instrContent := assets.MustRead("codex/engram-instructions.md")
 	instrWrite, err := filemerge.WriteFileAtomic(instructionsPath, []byte(instrContent), 0o644)
@@ -572,7 +602,7 @@ func isStandardAgent(id model.AgentID) bool {
 //     args (["mcp", "--tools=agent"]) so that the absolute path is preserved
 //     and the correct flags are always present.
 //   - Otherwise (relative command or other value), return defaultContent.
-func buildSeparateMCPContent(mcpPath string, defaultContent []byte) []byte {
+func buildSeparateMCPContent(mcpPath string, defaultContent []byte, dataDir string) []byte {
 	raw, err := os.ReadFile(mcpPath)
 	if err != nil {
 		// File does not exist or is not readable — use the default.
@@ -597,7 +627,7 @@ func buildSeparateMCPContent(mcpPath string, defaultContent []byte) []byte {
 		"command": cmd,
 		"args":    []string{"mcp", "--tools=agent"},
 	}
-	if env := engramEnvMap(); env != nil {
+	if env := engramEnvMapForDataDir(resolveInjectDataDir(dataDir)); env != nil {
 		rebuilt["env"] = env
 	}
 	encoded, err := json.MarshalIndent(rebuilt, "", "  ")

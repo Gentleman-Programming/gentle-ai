@@ -1,5 +1,16 @@
 package model
 
+// EngramDataDirOperation describes the user's explicit data-directory intent.
+type EngramDataDirOperation string
+
+const (
+	EngramDataDirOperationKeep       EngramDataDirOperation = "keep"
+	EngramDataDirOperationMove       EngramDataDirOperation = "move"
+	EngramDataDirOperationCopy       EngramDataDirOperation = "copy"
+	EngramDataDirOperationSetActive  EngramDataDirOperation = "set-active"
+	EngramDataDirOperationStartFresh EngramDataDirOperation = "start-fresh"
+)
+
 type Selection struct {
 	Agents                 []AgentID
 	Components             []ComponentID
@@ -14,7 +25,8 @@ type Selection struct {
 	KiroModelAssignments   map[string]ClaudeModelAlias // key = phase name; value = opus|sonnet|haiku (Kiro-only)
 	Profiles               []Profile                   // named SDD profiles to generate/update during sync
 	EngramDataDir          string                      // absolute path; empty means "use default"
-	EngramMigrateData      bool                        // true if user chose to migrate existing data
+	EngramDataDirOperation EngramDataDirOperation      // explicit data-dir operation for install/config flows
+	EngramMigrateData      bool                        // deprecated: true if user chose to migrate existing data
 	OpenCodePlugins        []OpenCodeCommunityPluginID // optional community OpenCode TUI plugins
 }
 

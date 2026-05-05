@@ -82,6 +82,95 @@ func TestInjectClaudeWritesMCPConfig(t *testing.T) {
 	assertArgsHaveToolsAgent(t, mcpPath)
 }
 
+func TestInjectWithOptionsClaudeIncludesExplicitDataDir(t *testing.T) {
+	home := t.TempDir()
+	activeDir := filepath.Join(home, "active-engram")
+	t.Setenv(DataDirEnvVar, "")
+
+	_, err := InjectWithOptions(home, claudeAdapter(), InjectOptions{DataDir: activeDir})
+	if err != nil {
+		t.Fatalf("InjectWithOptions(claude) error = %v", err)
+	}
+
+	mcpPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	content, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(engram.json) error = %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("Unmarshal(engram.json) error = %v", err)
+	}
+	env, ok := parsed["env"].(map[string]any)
+	if !ok || env[DataDirEnvVar] != activeDir {
+		t.Fatalf("engram.json ENGRAM_DATA_DIR = %#v, want %q; got:\n%s", parsed["env"], activeDir, content)
+	}
+}
+
+func TestInjectWithOptionsOpenCodeIncludesExplicitDataDirAndIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	activeDir := filepath.Join(home, "external", "engram")
+	t.Setenv(DataDirEnvVar, "")
+
+	first, err := InjectWithOptions(home, opencodeAdapter(), InjectOptions{DataDir: activeDir})
+	if err != nil {
+		t.Fatalf("InjectWithOptions(opencode) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("InjectWithOptions(opencode) first changed = false")
+	}
+	second, err := InjectWithOptions(home, opencodeAdapter(), InjectOptions{DataDir: activeDir})
+	if err != nil {
+		t.Fatalf("InjectWithOptions(opencode) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("InjectWithOptions(opencode) second changed = true")
+	}
+
+	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	mcp, ok := parsed["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("opencode.json missing mcp object; got:\n%s", content)
+	}
+	server, ok := mcp["engram"].(map[string]any)
+	if !ok {
+		t.Fatalf("opencode.json missing mcp.engram object; got:\n%s", content)
+	}
+	env, ok := server["env"].(map[string]any)
+	if !ok || env[DataDirEnvVar] != activeDir {
+		t.Fatalf("opencode.json ENGRAM_DATA_DIR = %#v, want %q; got:\n%s", server["env"], activeDir, content)
+	}
+}
+
+func TestInjectWithOptionsCodexOmitsCanonicalDefaultDataDir(t *testing.T) {
+	home := t.TempDir()
+	canonical := filepath.Join(home, ".engram")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv(DataDirEnvVar, "")
+
+	_, err := InjectWithOptions(home, codexAdapter(), InjectOptions{DataDir: canonical})
+	if err != nil {
+		t.Fatalf("InjectWithOptions(codex) error = %v", err)
+	}
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	if strings.Contains(string(content), "ENGRAM_DATA_DIR") {
+		t.Fatalf("config.toml should omit ENGRAM_DATA_DIR for canonical default %q; got:\n%s", canonical, content)
+	}
+}
+
 func TestInjectClaudeWritesProtocolSection(t *testing.T) {
 	home := t.TempDir()
 
@@ -400,6 +489,7 @@ func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
 
 func TestInjectVSCodeMergesEngramToMCPConfigFile(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	adapter := vscode.NewAdapter()
 
@@ -627,7 +717,7 @@ func TestInjectCodexInjectsTOMLKeys(t *testing.T) {
 	if !strings.Contains(text, `model_instructions_file`) {
 		t.Fatalf("config.toml missing model_instructions_file key; got:\n%s", text)
 	}
-	if !strings.Contains(text, instructionsPath) {
+	if !strings.Contains(text, fmt.Sprintf("model_instructions_file = %q", instructionsPath)) {
 		t.Fatalf("config.toml model_instructions_file does not reference %q; got:\n%s", instructionsPath, text)
 	}
 
@@ -635,7 +725,7 @@ func TestInjectCodexInjectsTOMLKeys(t *testing.T) {
 	if !strings.Contains(text, `experimental_compact_prompt_file`) {
 		t.Fatalf("config.toml missing experimental_compact_prompt_file key; got:\n%s", text)
 	}
-	if !strings.Contains(text, compactPath) {
+	if !strings.Contains(text, fmt.Sprintf("experimental_compact_prompt_file = %q", compactPath)) {
 		t.Fatalf("config.toml experimental_compact_prompt_file does not reference %q; got:\n%s", compactPath, text)
 	}
 }

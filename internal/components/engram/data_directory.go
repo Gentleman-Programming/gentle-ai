@@ -22,6 +22,8 @@ type Action int
 const (
 	ActionKeepDefault Action = iota
 	ActionMigrate
+	ActionCopy
+	ActionSetActive
 	ActionStartFresh
 	ActionClean
 )
@@ -33,6 +35,7 @@ var (
 	ErrPathNotWritable   = errors.New("path is not writable")
 	ErrInvalidPath       = errors.New("invalid path")
 	ErrTargetHasData     = errors.New("target already contains engram data")
+	ErrNoEngramData      = errors.New("selected directory does not contain engram data")
 )
 
 // FileInfo describes a single Engram SQLite file for preview purposes.
@@ -52,8 +55,8 @@ type Preview struct {
 }
 
 // HasEnoughSpace reports whether the target has enough space for the operation.
-// For non-migration actions (StartFresh, Clean), this is always true.
-// For Migrate, it checks AvailableSpace >= TotalBytes.
+// Operations with no bytes to transfer are always safe. Otherwise this checks
+// AvailableSpace >= TotalBytes for the selected target.
 func (p Preview) HasEnoughSpace() bool {
 	if p.TotalBytes == 0 {
 		return true
@@ -63,9 +66,13 @@ func (p Preview) HasEnoughSpace() bool {
 
 // Result holds the outcome of a successful DataDirService.Execute call.
 type Result struct {
-	FilesMoved int
-	BytesMoved uint64
-	Message    string
+	FilesMoved   int
+	BytesMoved   uint64
+	FilesCopied  int
+	BytesCopied  uint64
+	FilesDeleted int
+	BytesDeleted uint64
+	Message      string
 }
 
 // DataBackend abstracts all filesystem operations related to Engram data.
@@ -83,7 +90,10 @@ type DataBackend interface {
 
 	// Operations
 	EstimateMigration(source string) ([]FileInfo, uint64, error)
-	MigrateData(source, target string) (Result, error)
+	CopyData(source, target string) (Result, error)
+	MoveData(source, target string) (Result, error)
+	DeleteData(dir string) (Result, error)
+	MigrateData(source, target string) (Result, error) // deprecated: use CopyData/MoveData
 	CleanData(dir string) error
 	EnsureDir(dir string) error
 
@@ -92,6 +102,29 @@ type DataBackend interface {
 
 	// Validation
 	CheckWritable(dir string) error
+}
+
+// EffectiveSourceDataDir returns the source directory that should be used when the
+// user chooses an operation that depends on existing Engram data. Prefer the effective
+// configured directory, but fall back to the hard default when the effective
+// location is empty and legacy/default data still exists there.
+func EffectiveSourceDataDir(backend DataBackend) string {
+	effective := backend.DefaultDataDir()
+	if backend.DetectExistingData(effective) {
+		return effective
+	}
+
+	hardDefault := backend.HardDefaultDataDir()
+	if !sameFilesystemPath(effective, hardDefault) && backend.DetectExistingData(hardDefault) {
+		return hardDefault
+	}
+
+	return effective
+}
+
+// HasExistingSourceData reports whether any operation can use existing Engram data.
+func HasExistingSourceData(backend DataBackend) bool {
+	return backend.DetectExistingData(EffectiveSourceDataDir(backend))
 }
 
 // ConfigPersister handles where the ENGRAM_DATA_DIR configuration is stored.
@@ -107,13 +140,28 @@ type ConfigPersister interface {
 // It uses a DataBackend for filesystem operations and a ConfigPersister
 // for saving the user's choice.
 type DataDirService struct {
-	backend   DataBackend
-	persister ConfigPersister
+	backend            DataBackend
+	persister          ConfigPersister
+	afterConfigPersist func(action Action, target string) error
 }
 
 // NewDataDirService creates a service with the given backend and persister.
 func NewDataDirService(backend DataBackend, persister ConfigPersister) *DataDirService {
 	return &DataDirService{backend: backend, persister: persister}
+}
+
+// SetAfterConfigPersist installs a hook that runs after the active data-dir
+// config is persisted and before any move-source cleanup happens. UI callers
+// use this to reinject MCP configs before old data is removed.
+func (s *DataDirService) SetAfterConfigPersist(fn func(action Action, target string) error) {
+	s.afterConfigPersist = fn
+}
+
+func (s *DataDirService) runAfterConfigPersist(action Action, target string) error {
+	if s.afterConfigPersist == nil {
+		return nil
+	}
+	return s.afterConfigPersist(action, target)
 }
 
 // Preview returns a preview for the given action and input path.
@@ -123,22 +171,30 @@ func (s *DataDirService) Preview(action Action, inputPath string) (Preview, erro
 	var p Preview
 
 	switch action {
-	case ActionMigrate, ActionStartFresh:
+	case ActionMigrate, ActionCopy, ActionSetActive, ActionStartFresh:
 		expanded, err := s.backend.ExpandPath(inputPath)
 		if err != nil {
 			return p, fmt.Errorf("%w: %v", ErrInvalidPath, err)
 		}
 		p.ExpandedPath = expanded
 
-		// Show existing files from hard default so the user knows what they
-		// stand to lose (migrate moves them, start-fresh deletes them).
-		src := s.backend.HardDefaultDataDir()
-		files, total, err := s.backend.EstimateMigration(src)
-		if err != nil {
-			return p, err
+		if action == ActionSetActive {
+			files, total, err := s.backend.EstimateMigration(expanded)
+			if err != nil {
+				return p, err
+			}
+			p.Files = files
+			p.TotalBytes = total
+		} else {
+			// Show existing files from the actual source so the user knows what will be moved, copied, or deleted.
+			src := EffectiveSourceDataDir(s.backend)
+			files, total, err := s.backend.EstimateMigration(src)
+			if err != nil {
+				return p, err
+			}
+			p.Files = files
+			p.TotalBytes = total
 		}
-		p.Files = files
-		p.TotalBytes = total
 
 		space, err := s.backend.AvailableSpace(expanded)
 		if err != nil {
@@ -149,19 +205,24 @@ func (s *DataDirService) Preview(action Action, inputPath string) (Preview, erro
 
 		// Check for interrupted migration: if both source and target have data,
 		// warn the user that they might be in an inconsistent state.
-		if action == ActionMigrate {
-			src := s.backend.HardDefaultDataDir()
+		if action == ActionMigrate || action == ActionCopy {
+			src := EffectiveSourceDataDir(s.backend)
 			srcFiles := s.backend.ExistingFiles(src)
 			dstFiles := s.backend.ExistingFiles(expanded)
 			if len(srcFiles) > 0 && len(dstFiles) > 0 {
+				operation := "Migration"
+				if action == ActionCopy {
+					operation = "Copy"
+				}
 				p.PartialMigrationWarning = fmt.Sprintf(
-					"Found data in both locations. Migration to %s is blocked until one location is cleaned or chosen explicitly.",
+					"Found data in both locations. %s to %s is blocked until one location is cleaned or chosen explicitly.",
+					operation,
 					expanded,
 				)
 			}
 		}
 	case ActionClean:
-		src := s.backend.HardDefaultDataDir()
+		src := EffectiveSourceDataDir(s.backend)
 		files, total, err := s.backend.EstimateMigration(src)
 		if err != nil {
 			return p, err
@@ -182,7 +243,11 @@ func (s *DataDirService) Execute(action Action, path string) (Result, error) {
 		}
 		return Result{Message: "Using default Engram data location."}, nil
 	case ActionClean:
-		src := s.backend.HardDefaultDataDir()
+		src := EffectiveSourceDataDir(s.backend)
+		files, totalBytes, err := s.backend.EstimateMigration(src)
+		if err != nil {
+			return Result{}, err
+		}
 		if locked, _ := s.backend.DetectLockedData(src); locked {
 			return Result{}, ErrLocked
 		}
@@ -191,16 +256,17 @@ func (s *DataDirService) Execute(action Action, path string) (Result, error) {
 		if backupErr != nil {
 			log.Printf("engram: clean temp backup failed (proceeding anyway): %v", backupErr)
 		}
-		if err := s.backend.CleanData(src); err != nil {
-			return Result{}, err
+		_, delErr := s.backend.DeleteData(src)
+		if delErr != nil {
+			return Result{}, delErr
 		}
 		// Success: remove temp backup.
 		if backupDir != "" {
 			_ = os.RemoveAll(backupDir)
 		}
-		return Result{Message: "All Engram data has been permanently deleted."}, nil
-	case ActionMigrate:
-		src := s.backend.HardDefaultDataDir()
+		return Result{FilesDeleted: len(files), BytesDeleted: totalBytes, Message: "All Engram data has been permanently deleted."}, nil
+	case ActionCopy:
+		src := EffectiveSourceDataDir(s.backend)
 		target, err := s.backend.ExpandPath(path)
 		if err != nil {
 			return Result{}, fmt.Errorf("%w: %v", ErrInvalidPath, err)
@@ -214,21 +280,76 @@ func (s *DataDirService) Execute(action Action, path string) (Result, error) {
 		if locked, _ := s.backend.DetectLockedData(src); locked {
 			return Result{}, ErrLocked
 		}
-		result, err := s.backend.MigrateData(src, target)
+		result, err := s.backend.CopyData(src, target)
 		if err != nil {
 			return Result{}, err
 		}
+		result.Message = "Engram data has been copied successfully. The current data location is unchanged."
+		return result, nil
+	case ActionSetActive:
+		target, err := s.backend.ExpandPath(path)
+		if err != nil {
+			return Result{}, fmt.Errorf("%w: %v", ErrInvalidPath, err)
+		}
+		if !s.backend.DetectExistingData(target) {
+			return Result{}, ErrNoEngramData
+		}
+		if locked, _ := s.backend.DetectLockedData(target); locked {
+			return Result{}, ErrLocked
+		}
+		if err := s.backend.CheckWritable(target); err != nil {
+			return Result{}, err
+		}
+		if err := s.persister.Write(target); err != nil {
+			return Result{}, fmt.Errorf("active data directory %s could not be saved: %w", target, err)
+		}
+		if err := s.runAfterConfigPersist(action, target); err != nil {
+			return Result{}, fmt.Errorf("active data directory %s was saved but MCP config could not be updated: %w", target, err)
+		}
+		files, totalBytes, _ := s.backend.EstimateMigration(target)
+		return Result{FilesCopied: len(files), BytesCopied: totalBytes, Message: "Active Engram data directory has been updated."}, nil
+	case ActionMigrate:
+		src := EffectiveSourceDataDir(s.backend)
+		target, err := s.backend.ExpandPath(path)
+		if err != nil {
+			return Result{}, fmt.Errorf("%w: %v", ErrInvalidPath, err)
+		}
+		if sameFilesystemPath(src, target) {
+			return Result{}, fmt.Errorf("%w: target is already the current Engram data location", ErrInvalidPath)
+		}
+		if len(s.backend.ExistingFiles(target)) > 0 {
+			return Result{}, ErrTargetHasData
+		}
+		if locked, _ := s.backend.DetectLockedData(src); locked {
+			return Result{}, ErrLocked
+		}
+		result, err := s.backend.CopyData(src, target)
+		if err != nil {
+			return Result{}, err
+		}
+		result.FilesMoved = result.FilesCopied
+		result.BytesMoved = result.BytesCopied
+		result.FilesCopied = 0
+		result.BytesCopied = 0
 		if err := s.persister.Write(target); err != nil {
 			return Result{}, fmt.Errorf("data copied to %s but config could not be saved: %w", target, err)
 		}
-		// Config is persisted — now it is safe to remove the source.
-		if err := s.backend.CleanData(src); err != nil {
-			return Result{}, fmt.Errorf("config saved but could not remove old data from %s: %w", src, err)
+		if err := s.runAfterConfigPersist(action, target); err != nil {
+			return Result{}, fmt.Errorf("data copied to %s and config saved but MCP config could not be updated: %w", target, err)
+		}
+		// Config and MCP wiring are persisted — now it is safe to remove the source.
+		_, delErr := s.backend.DeleteData(src)
+		if delErr != nil {
+			return Result{}, fmt.Errorf("config saved but could not remove old data from %s: %w", src, delErr)
 		}
 		result.Message = "Engram data has been moved successfully."
 		return result, nil
 	case ActionStartFresh:
-		src := s.backend.HardDefaultDataDir()
+		src := EffectiveSourceDataDir(s.backend)
+		files, totalBytes, estimateErr := s.backend.EstimateMigration(src)
+		if estimateErr != nil {
+			return Result{}, estimateErr
+		}
 		target, err := s.backend.ExpandPath(path)
 		if err != nil {
 			return Result{}, fmt.Errorf("%w: %v", ErrInvalidPath, err)
@@ -240,8 +361,9 @@ func (s *DataDirService) Execute(action Action, path string) (Result, error) {
 			if locked, _ := s.backend.DetectLockedData(src); locked {
 				return Result{}, ErrLocked
 			}
-			if err := s.backend.CleanData(src); err != nil {
-				return Result{}, err
+			_, delErr := s.backend.DeleteData(src)
+			if delErr != nil {
+				return Result{}, delErr
 			}
 		}
 		if err := s.backend.EnsureDir(target); err != nil {
@@ -250,7 +372,10 @@ func (s *DataDirService) Execute(action Action, path string) (Result, error) {
 		if err := s.persister.Write(target); err != nil {
 			return Result{}, fmt.Errorf("new database directory ready at %s but config could not be saved: %w", target, err)
 		}
-		return Result{Message: "A new empty database will be created at the selected location."}, nil
+		if err := s.runAfterConfigPersist(action, target); err != nil {
+			return Result{}, fmt.Errorf("new database directory ready at %s and config saved but MCP config could not be updated: %w", target, err)
+		}
+		return Result{FilesDeleted: len(files), BytesDeleted: totalBytes, Message: "A new empty database will be created at the selected location."}, nil
 	default:
 		return Result{}, fmt.Errorf("unknown action: %v", action)
 	}

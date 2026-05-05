@@ -829,38 +829,7 @@ func TestWelcomeMenu_ConfigureModelsNavigation(t *testing.T) {
 	}
 }
 
-func TestWelcomeMenu_EngramDirNavigation(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenWelcome
-	m.Cursor = 5
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenEngramDataDir {
-		t.Fatalf("cursor=5 (Configure Engram directory): screen = %v, want %v", state.Screen, ScreenEngramDataDir)
-	}
-	if !state.EngramConfigMode {
-		t.Fatal("EngramConfigMode should be true after entering from Welcome menu")
-	}
-}
-
-func TestWelcomeMenu_OpenCodeCommunityPluginsNavigation(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenWelcome
-	m.Cursor = 7
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenOpenCodePlugins {
-		t.Fatalf("cursor=7 (OpenCode Community Plugins): screen = %v, want %v", state.Screen, ScreenOpenCodePlugins)
-	}
-	if !state.OpenCodePluginsStandalone {
-		t.Fatalf("expected standalone OpenCode plugin mode")
-	}
-}
-
+// TestWelcomeMenu_BackupsNavigation verifies cursor 8 (Manage backups) goes to ScreenBackups.
 func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
@@ -902,18 +871,58 @@ func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
 	}
 }
 
+// TestWelcomeMenu_OptionCount verifies the welcome menu has 11 items without OpenCode
+// and 12 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
+	// Without OpenCode detected: 11 options (includes Engram directory, OpenCode plugins, and managed uninstall).
 	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
 	if len(opts) != 11 {
 		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 11; got %v", len(opts), opts)
 	}
+	// With OpenCode detected: 12 options (adds "OpenCode SDD Profiles").
 	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 0, true)
 	if len(optsWithProfiles) != 12 {
 		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 12; got %v", len(optsWithProfiles), optsWithProfiles)
 	}
 }
 
+// TestWelcomeMenu_EngramDirNavigation verifies cursor 5 (Configure Engram directory)
+// goes to ScreenEngramDataDir with EngramConfigMode set.
+func TestWelcomeMenu_EngramDirNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 5
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenEngramDataDir {
+		t.Fatalf("cursor=5 (Configure Engram directory): screen = %v, want %v", state.Screen, ScreenEngramDataDir)
+	}
+	if !state.EngramConfigMode {
+		t.Fatal("EngramConfigMode should be true after entering from Welcome menu")
+	}
+}
+
+func TestWelcomeMenu_OpenCodeCommunityPluginsNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 7
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenOpenCodePlugins {
+		t.Fatalf("cursor=7 (OpenCode Community Plugins): screen = %v, want %v", state.Screen, ScreenOpenCodePlugins)
+	}
+	if !state.OpenCodePluginsStandalone {
+		t.Fatalf("expected standalone OpenCode plugin mode")
+	}
+}
+
+// TestEngramConfigMode_EscReturnsToWelcome verifies that pressing Esc from
+// ScreenEngramDataDir when in EngramConfigMode returns to ScreenWelcome.
 func TestEngramConfigMode_EscReturnsToWelcome(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenEngramDataDir
@@ -930,6 +939,8 @@ func TestEngramConfigMode_EscReturnsToWelcome(t *testing.T) {
 	}
 }
 
+// TestEngramConfigMode_BackReturnsToWelcome verifies that pressing Esc from
+// ScreenEngramDataDir when in EngramConfigMode returns to ScreenWelcome.
 func TestEngramConfigMode_BackReturnsToWelcome(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenEngramDataDir
@@ -946,38 +957,46 @@ func TestEngramConfigMode_BackReturnsToWelcome(t *testing.T) {
 	}
 }
 
-func TestEngramConfigMode_EscFromTextInputGoesBack(t *testing.T) {
+// TestEngramConfigMode_EscFromPathPickerReturnsToDecision verifies that pressing Esc
+// from the second-step path picker returns to the main decision screen.
+func TestEngramConfigMode_EscFromPathPickerReturnsToDecision(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenEngramDataDir
 	m.EngramConfigMode = true
 	m.EngramDataDirHasExistingData = false
 	m.EngramDataDirChoice = screens.EngramChoiceStartFresh
-	m.Cursor = screens.EngramDataDirTextRow(false, screens.EngramChoiceStartFresh)
+	m.EngramDataDirPhase = 3
+	m.Cursor = 0 // path input
 	m.EngramDataDirInput = "/some/path"
 	m.EngramDataDirPos = 5
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	state := updated.(Model)
 
-	if state.Screen != ScreenWelcome {
-		t.Fatalf("Esc from text input: screen = %v, want %v", state.Screen, ScreenWelcome)
+	if state.Screen != ScreenEngramDataDir {
+		t.Fatalf("Esc from path picker: screen = %v, want %v", state.Screen, ScreenEngramDataDir)
+	}
+	if state.EngramDataDirPhase != 0 {
+		t.Fatalf("Esc from path picker: phase = %d, want 0", state.EngramDataDirPhase)
 	}
 }
 
-func TestEngramConfigMode_DefaultClearsState(t *testing.T) {
+// TestEngramConfigMode_BackKeepsCurrentState verifies that the main data-dir
+// screen uses Back as the no-op "keep current location" action.
+func TestEngramConfigMode_BackKeepsCurrentState(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDirFn
 	osUserHomeDirFn = func() (string, error) { return home, nil }
 	defer func() { osUserHomeDirFn = restoreHome }()
 
+	// Seed a previous custom directory.
 	_ = state.Write(home, state.InstallState{EngramDataDir: "/old/engram"})
 
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenEngramDataDir
 	m.EngramConfigMode = true
 	m.EngramDataDirHasExistingData = false
-	m.EngramDataDirChoice = screens.EngramChoiceDefault
-	m.Cursor = screens.EngramDataDirContinueRow(false, screens.EngramChoiceDefault)
+	m.Cursor = screens.EngramDataDirBackRow(false)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM := updated.(Model)
@@ -990,17 +1009,21 @@ func TestEngramConfigMode_DefaultClearsState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Read error: %v", err)
 	}
-	if s.EngramDataDir != "" {
-		t.Fatalf("expected EngramDataDir cleared in state, got %q", s.EngramDataDir)
+	if s.EngramDataDir != "/old/engram" {
+		t.Fatalf("expected EngramDataDir kept, got %q", s.EngramDataDir)
 	}
 }
 
+// TestEngramConfigMode_CustomPathSavesState verifies that choosing a custom path
+// in EngramConfigMode persists the new directory to state and sets the env var.
+// The flow is: choose → confirm → feedback → welcome.
 func TestEngramConfigMode_CustomPathSavesState(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDirFn
 	osUserHomeDirFn = func() (string, error) { return home, nil }
 	defer func() { osUserHomeDirFn = restoreHome }()
 
+	// Also mock engram's userHomeDir so HardDefaultDataDir() uses our temp dir.
 	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return home, nil })
 	defer restoreEngramHome()
 
@@ -1013,15 +1036,18 @@ func TestEngramConfigMode_CustomPathSavesState(t *testing.T) {
 	m.EngramDataDirHasExistingData = false
 	m.EngramDataDirChoice = screens.EngramChoiceStartFresh
 	m.EngramDataDirInput = home + string(os.PathSeparator) + "custom-engram"
-	m.Cursor = screens.EngramDataDirContinueRow(false, screens.EngramChoiceStartFresh)
+	m.EngramDataDirPhase = 3
+	m.Cursor = 0
 	m.refreshEngramPreview()
 
+	// Step 1: Continue → confirmation
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM := updated.(Model)
 	if stateM.EngramDataDirPhase != 1 {
 		t.Fatalf("expected phase=1 (confirm), got %d", stateM.EngramDataDirPhase)
 	}
 
+	// Step 2: Confirm (cursor defaults to Cancel=1, so move to Confirm=0)
 	stateM.Cursor = 0
 	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM = updated.(Model)
@@ -1029,6 +1055,7 @@ func TestEngramConfigMode_CustomPathSavesState(t *testing.T) {
 		t.Fatalf("expected phase=2 (feedback), got %d", stateM.EngramDataDirPhase)
 	}
 
+	// Step 3: Continue on feedback → Welcome
 	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM = updated.(Model)
 	if stateM.Screen != ScreenWelcome {
@@ -1047,8 +1074,13 @@ func TestEngramConfigMode_CustomPathSavesState(t *testing.T) {
 	}
 }
 
+// TestEngramConfigMode_StateDoesNotLeak verifies that after returning from
+// EngramConfigMode to Welcome, the Engram screen state is fully reset so the
+// next install flow starts clean.
+// The flow is: choose → confirm → feedback → welcome.
 func TestEngramConfigMode_StateDoesNotLeak(t *testing.T) {
 	tmp := t.TempDir()
+	// Mock engram's userHomeDir so HardDefaultDataDir() uses our temp dir.
 	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return tmp, nil })
 	defer restoreEngramHome()
 
@@ -1060,15 +1092,18 @@ func TestEngramConfigMode_StateDoesNotLeak(t *testing.T) {
 	m.EngramDataDirInput = filepath.Join(tmp, "engram")
 	m.EngramDataDirPos = 5
 	m.EngramDataDirErr = "some old error"
-	m.Cursor = screens.EngramDataDirContinueRow(false, screens.EngramChoiceStartFresh)
+	m.EngramDataDirPhase = 3
+	m.Cursor = 0
 	m.refreshEngramPreview()
 
+	// Step 1: Continue → confirmation
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM := updated.(Model)
 	if stateM.EngramDataDirPhase != 1 {
 		t.Fatalf("expected phase=1 (confirm), got %d", stateM.EngramDataDirPhase)
 	}
 
+	// Step 2: Confirm
 	stateM.Cursor = 0
 	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM = updated.(Model)
@@ -1076,26 +1111,50 @@ func TestEngramConfigMode_StateDoesNotLeak(t *testing.T) {
 		t.Fatalf("expected phase=2 (feedback), got %d", stateM.EngramDataDirPhase)
 	}
 
+	// Step 3: Continue on feedback → Welcome
 	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	stateM = updated.(Model)
 	if stateM.Screen != ScreenWelcome {
 		t.Fatalf("screen = %v, want ScreenWelcome", stateM.Screen)
 	}
 
+	// Now simulate the user starting an install flow and reaching EngramDataDir.
 	stateM.Screen = ScreenEngramDataDir
 	stateM.setScreen(ScreenEngramDataDir)
 
+	// The action choice can be restored, but the path picker input must stay empty.
 	if stateM.EngramDataDirChoice != screens.EngramChoiceStartFresh {
 		t.Fatalf("EngramDataDirChoice = %d, want StartFresh", stateM.EngramDataDirChoice)
 	}
-	if stateM.EngramDataDirInput != filepath.Join(tmp, "engram") {
-		t.Fatalf("EngramDataDirInput = %q, want %q", stateM.EngramDataDirInput, filepath.Join(tmp, "engram"))
+	if stateM.EngramDataDirInput != "" {
+		t.Fatalf("EngramDataDirInput = %q, want empty path picker input", stateM.EngramDataDirInput)
 	}
+	// Most importantly: old errors must be cleared.
 	if stateM.EngramDataDirErr != "" {
 		t.Fatalf("EngramDataDirErr = %q, want empty", stateM.EngramDataDirErr)
 	}
 }
 
+func TestEngramPathPicker_EmptyEnterShowsCrossPlatformPathError(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenEngramDataDir
+	m.EngramDataDirHasExistingData = false
+	m.EngramDataDirChoice = screens.EngramChoiceStartFresh
+	m.EngramDataDirPhase = 3
+	m.Cursor = 0
+	m.EngramDataDirInput = ""
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM := updated.(Model)
+	if stateM.EngramDataDirPhase != 3 {
+		t.Fatalf("phase = %d, want path picker", stateM.EngramDataDirPhase)
+	}
+	if !strings.Contains(stateM.EngramDataDirErr, "Windows, macOS, and Linux") {
+		t.Fatalf("EngramDataDirErr = %q, want cross-platform helper", stateM.EngramDataDirErr)
+	}
+}
+
+// TestGoBack_ReviewCustomPreset_WithEngram returns to EngramDataDir first.
 func TestGoBack_ReviewCustomPreset_WithEngram(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenReview
@@ -1110,10 +1169,395 @@ func TestGoBack_ReviewCustomPreset_WithEngram(t *testing.T) {
 	}
 }
 
+func TestEngramDataDir_SelectingMoveOpensPathPicker(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenEngramDataDir
+	m.EngramDataDirHasExistingData = true
+	m.EngramDataDirChoice = screens.EngramChoiceDefault
+	m.Cursor = screens.EngramDataDirCursorFromChoice(true, screens.EngramChoiceMigrate)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM := updated.(Model)
+	if stateM.Screen != ScreenEngramDataDir {
+		t.Fatalf("screen = %v, want ScreenEngramDataDir", stateM.Screen)
+	}
+	if stateM.EngramDataDirPhase != 3 {
+		t.Fatalf("phase = %d, want 3 (path picker)", stateM.EngramDataDirPhase)
+	}
+	if stateM.Cursor != 0 {
+		t.Fatalf("cursor = %d, want 0 on path input", stateM.Cursor)
+	}
+}
+
+func TestEngramDataDir_ConfirmSupportsArrowAndJKNavigation(t *testing.T) {
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyUp},
+		{Type: tea.KeyRunes, Runes: []rune("k")},
+		{Type: tea.KeyDown},
+		{Type: tea.KeyRunes, Runes: []rune("j")},
+	} {
+		t.Run(key.String(), func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenEngramDataDir
+			m.EngramDataDirPhase = 1
+			m.EngramDataDirChoice = screens.EngramChoiceCopy
+			m.Cursor = 1 // default safe focus: Cancel
+
+			updated, _ := m.Update(key)
+			stateM := updated.(Model)
+			if stateM.EngramDataDirPhase != 1 {
+				t.Fatalf("phase = %d, want confirm phase", stateM.EngramDataDirPhase)
+			}
+			if stateM.Cursor == 1 {
+				t.Fatalf("cursor did not move for key %q", key.String())
+			}
+		})
+	}
+}
+
+func TestEngramDataDir_ConfirmEnterOnCancelReturnsToPathPicker(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenEngramDataDir
+	m.EngramDataDirPhase = 1
+	m.EngramDataDirChoice = screens.EngramChoiceCopy
+	m.Cursor = 1
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM := updated.(Model)
+	if stateM.EngramDataDirPhase != 3 {
+		t.Fatalf("phase = %d, want path picker after cancel", stateM.EngramDataDirPhase)
+	}
+	if stateM.Cursor != 0 {
+		t.Fatalf("cursor = %d, want path input", stateM.Cursor)
+	}
+}
+
+func TestEngramDataDir_StartFreshFeedbackShowsDeletedData(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDirFn
+	osUserHomeDirFn = func() (string, error) { return home, nil }
+	defer func() { osUserHomeDirFn = restoreHome }()
+
+	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreEngramHome()
+
+	backend := engram.NewLocalDataBackend()
+	src := backend.HardDefaultDataDir()
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("MkdirAll(src): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "engram.db"), []byte("data"), 0o644); err != nil {
+		t.Fatalf("WriteFile db: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "engram.db-wal"), []byte("wal"), 0o644); err != nil {
+		t.Fatalf("WriteFile wal: %v", err)
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenEngramDataDir
+	m.EngramConfigMode = true
+	m.EngramDataDirHasExistingData = true
+	m.EngramDataDirChoice = screens.EngramChoiceStartFresh
+	m.EngramDataDirPhase = 3
+	m.EngramDataDirInput = filepath.Join(home, "fresh")
+	m.EngramDataDirPos = len([]rune(m.EngramDataDirInput))
+	m.Cursor = 0
+	m.refreshEngramPreview()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM := updated.(Model)
+	if stateM.EngramDataDirPhase != 1 {
+		t.Fatalf("phase after path Enter = %d, want 1 (confirm)", stateM.EngramDataDirPhase)
+	}
+
+	stateM.Cursor = 0
+	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM = updated.(Model)
+	if stateM.EngramDataDirPhase != 2 {
+		t.Fatalf("phase after confirm = %d, want 2 (feedback)", stateM.EngramDataDirPhase)
+	}
+	if stateM.EngramDataDirFilesDeleted != 2 {
+		t.Fatalf("FilesDeleted = %d, want 2", stateM.EngramDataDirFilesDeleted)
+	}
+	if stateM.EngramDataDirBytesDeleted != uint64(len("data")+len("wal")) {
+		t.Fatalf("BytesDeleted = %d, want %d", stateM.EngramDataDirBytesDeleted, len("data")+len("wal"))
+	}
+
+	view := stateM.View()
+	if !strings.Contains(view, "2 files deleted") {
+		t.Fatalf("feedback view missing deleted count:\n%s", view)
+	}
+	if !strings.Contains(view, "7 B") {
+		t.Fatalf("feedback view missing deleted size:\n%s", view)
+	}
+}
+
+func TestEngramDataDir_HeadlessMigrateFlowMovesDataCleansSourceAndShowsFeedback(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDirFn
+	osUserHomeDirFn = func() (string, error) { return home, nil }
+	defer func() { osUserHomeDirFn = restoreHome }()
+
+	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreEngramHome()
+
+	backend := engram.NewLocalDataBackend()
+	src := backend.HardDefaultDataDir()
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("MkdirAll(src): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "engram.db"), []byte("data"), 0o644); err != nil {
+		t.Fatalf("WriteFile db: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "engram.db-wal"), []byte("wal"), 0o644); err != nil {
+		t.Fatalf("WriteFile wal: %v", err)
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenEngramDataDir
+	m.EngramConfigMode = true
+	m.EngramDataDirHasExistingData = true
+	m.EngramDataDirChoice = screens.EngramChoiceMigrate
+	m.EngramDataDirPhase = 3
+	target := filepath.Join(home, "moved", "engram")
+	m.EngramDataDirInput = target
+	m.EngramDataDirPos = len([]rune(target))
+	m.Cursor = 0
+	m.refreshEngramPreview()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM := updated.(Model)
+	if stateM.EngramDataDirPhase != 1 {
+		t.Fatalf("phase after path Enter = %d, want 1", stateM.EngramDataDirPhase)
+	}
+	stateM.Cursor = 0
+	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM = updated.(Model)
+
+	if stateM.EngramDataDirPhase != 2 {
+		t.Fatalf("phase after confirm = %d, want 2 feedback", stateM.EngramDataDirPhase)
+	}
+	if backend.DetectExistingData(src) {
+		t.Fatal("source data still exists after migrate; migrate should clean source after successful config persistence")
+	}
+	if !backend.DetectExistingData(target) {
+		t.Fatal("target data missing after migrate")
+	}
+	view := stateM.View()
+	if !strings.Contains(view, "2 files moved") || !strings.Contains(view, "7 B") {
+		t.Fatalf("feedback view missing moved count/size:\n%s", view)
+	}
+}
+
+func TestEngramDataDir_HeadlessCopyFlowCopiesDataKeepsSourceAndShowsFeedback(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDirFn
+	osUserHomeDirFn = func() (string, error) { return home, nil }
+	defer func() { osUserHomeDirFn = restoreHome }()
+
+	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreEngramHome()
+
+	backend := engram.NewLocalDataBackend()
+	src := backend.HardDefaultDataDir()
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("MkdirAll(src): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "engram.db"), []byte("copyme"), 0o644); err != nil {
+		t.Fatalf("WriteFile db: %v", err)
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenEngramDataDir
+	m.EngramConfigMode = true
+	m.EngramDataDirHasExistingData = true
+	m.EngramDataDirChoice = screens.EngramChoiceCopy
+	m.EngramDataDirPhase = 3
+	target := filepath.Join(home, "usb", "engram")
+	m.EngramDataDirInput = target
+	m.EngramDataDirPos = len([]rune(target))
+	m.Cursor = 0
+	m.refreshEngramPreview()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM := updated.(Model)
+	if stateM.EngramDataDirPhase != 1 {
+		t.Fatalf("phase after path Enter = %d, want 1", stateM.EngramDataDirPhase)
+	}
+	stateM.Cursor = 0
+	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM = updated.(Model)
+
+	if stateM.EngramDataDirPhase != 2 {
+		t.Fatalf("phase after confirm = %d, want 2 feedback", stateM.EngramDataDirPhase)
+	}
+	if !backend.DetectExistingData(src) {
+		t.Fatal("source data was removed; copy should keep the current data in place")
+	}
+	if !backend.DetectExistingData(target) {
+		t.Fatal("target data missing after copy")
+	}
+	if stateM.Selection.EngramDataDir != "" || stateM.Selection.EngramMigrateData {
+		t.Fatalf("copy should not change install data-dir selection: dir=%q migrate=%v", stateM.Selection.EngramDataDir, stateM.Selection.EngramMigrateData)
+	}
+	view := stateM.View()
+	if !strings.Contains(view, "1 files copied") || !strings.Contains(view, "6 B") {
+		t.Fatalf("feedback view missing copied count/size:\n%s", view)
+	}
+}
+
+func TestEngramDataDir_HeadlessSetActiveFlowPersistsExistingDirWithoutCopyOrDelete(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDirFn
+	osUserHomeDirFn = func() (string, error) { return home, nil }
+	defer func() { osUserHomeDirFn = restoreHome }()
+
+	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreEngramHome()
+
+	backend := engram.NewLocalDataBackend()
+	target := filepath.Join(home, "external", "engram")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("MkdirAll(target): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "engram.db"), []byte("existing"), 0o644); err != nil {
+		t.Fatalf("WriteFile target db: %v", err)
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenEngramDataDir
+	m.EngramConfigMode = true
+	m.EngramDataDirHasExistingData = false
+	m.EngramDataDirChoice = screens.EngramChoiceSetActive
+	m.EngramDataDirPhase = 3
+	m.EngramDataDirInput = target
+	m.EngramDataDirPos = len([]rune(target))
+	m.Cursor = 0
+	m.refreshEngramPreview()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM := updated.(Model)
+	if stateM.EngramDataDirPhase != 1 {
+		t.Fatalf("phase after path Enter = %d, want 1", stateM.EngramDataDirPhase)
+	}
+	stateM.Cursor = 0
+	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM = updated.(Model)
+
+	if stateM.EngramDataDirPhase != 2 {
+		t.Fatalf("phase after confirm = %d, want 2 feedback", stateM.EngramDataDirPhase)
+	}
+	if !backend.DetectExistingData(target) {
+		t.Fatal("set active deleted selected data")
+	}
+	if stateM.Selection.EngramDataDir != target {
+		t.Fatalf("Selection.EngramDataDir = %q, want %q", stateM.Selection.EngramDataDir, target)
+	}
+	if stateM.Selection.EngramDataDirOperation != model.EngramDataDirOperationSetActive {
+		t.Fatalf("Selection.EngramDataDirOperation = %q, want set-active", stateM.Selection.EngramDataDirOperation)
+	}
+	if stateM.Selection.EngramMigrateData {
+		t.Fatal("set active must not set legacy migrate flag")
+	}
+	view := stateM.View()
+	if !strings.Contains(view, "ACTIVE DIRECTORY UPDATED") || !strings.Contains(view, "1 existing files found") {
+		t.Fatalf("feedback view missing active-dir result:\n%s", view)
+	}
+}
+
+func TestEngramDataDir_SetActiveReinjectsMCPConfigWithDataDir(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDirFn
+	osUserHomeDirFn = func() (string, error) { return home, nil }
+	defer func() { osUserHomeDirFn = restoreHome }()
+
+	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreEngramHome()
+
+	target := filepath.Join(home, "external", "engram")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("MkdirAll(target): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "engram.db"), []byte("existing"), 0o644); err != nil {
+		t.Fatalf("WriteFile target db: %v", err)
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Selection.Agents = []model.AgentID{model.AgentClaudeCode}
+	m.Screen = ScreenEngramDataDir
+	m.EngramConfigMode = true
+	m.EngramDataDirHasExistingData = false
+	m.EngramDataDirChoice = screens.EngramChoiceSetActive
+	m.EngramDataDirPhase = 3
+	m.EngramDataDirInput = target
+	m.EngramDataDirPendingPath = target
+	m.EngramDataDirPreview.ExpandedPath = target
+	m.Cursor = 0
+	m.refreshEngramPreview()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM := updated.(Model)
+	stateM.Cursor = 0
+	updated, _ = stateM.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stateM = updated.(Model)
+	if stateM.EngramDataDirPhase != 2 {
+		t.Fatalf("phase after confirm = %d, want 2 feedback", stateM.EngramDataDirPhase)
+	}
+	mcpPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	content, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(engram.json): %v", err)
+	}
+	if !strings.Contains(string(content), "ENGRAM_DATA_DIR") || !strings.Contains(string(content), "external") {
+		t.Fatalf("engram MCP config missing active data dir; got:\n%s", content)
+	}
+}
+
+func TestSetScreenEngramDataDir_ShowsMigrateWhenHardDefaultHasData(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDirFn
+	osUserHomeDirFn = func() (string, error) { return home, nil }
+	defer func() { osUserHomeDirFn = restoreHome }()
+
+	restoreEngramHome := engram.SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreEngramHome()
+
+	effective := filepath.Join(home, "empty-current")
+	if err := os.Setenv(engram.DataDirEnvVar, effective); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Unsetenv(engram.DataDirEnvVar)
+
+	backend := engram.NewLocalDataBackend()
+	hardDefault := backend.HardDefaultDataDir()
+	if err := os.MkdirAll(hardDefault, 0o755); err != nil {
+		t.Fatalf("MkdirAll(hardDefault): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hardDefault, "engram.db"), []byte("legacy"), 0o644); err != nil {
+		t.Fatalf("WriteFile hard-default db: %v", err)
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenEngramDataDir
+	m.setScreen(ScreenEngramDataDir)
+
+	if !m.EngramDataDirHasExistingData {
+		t.Fatal("EngramDataDirHasExistingData = false, want true when hard-default has migratable data")
+	}
+	out := m.View()
+	if !strings.Contains(out, "Move existing data to a new location") {
+		t.Fatalf("Engram data-dir screen missing migrate option:\n%s", out)
+	}
+}
+
+// TestSetScreenEngramDataDir_RespectsEnvVar verifies that existing data detection
+// uses the effective data directory (respecting ENGRAM_DATA_DIR) rather than
+// always checking the hard default ~/.engram.
 func TestSetScreenEngramDataDir_RespectsEnvVar(t *testing.T) {
 	customDir := t.TempDir()
 	t.Setenv(engram.DataDirEnvVar, customDir)
 
+	// Create data in the custom dir, NOT in ~/.engram.
 	if err := os.WriteFile(filepath.Join(customDir, "engram.db"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -3363,8 +3807,8 @@ func TestNoWrapAroundUpOnBackupScreen(t *testing.T) {
 func TestModelConfigOpenCodePrePopulatesAssignments(t *testing.T) {
 	// Pre-existing assignments that should be read from settings
 	preExisting := map[string]model.ModelAssignment{
-		"gentle-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
-		"sdd-apply":           {ProviderID: "openai", ModelID: "gpt-4o"},
+		"sdd-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
+		"sdd-apply":        {ProviderID: "openai", ModelID: "gpt-4o"},
 	}
 
 	// Override the read function to return pre-existing assignments
@@ -3397,10 +3841,10 @@ func TestModelConfigOpenCodePrePopulatesAssignments(t *testing.T) {
 	if state.Selection.ModelAssignments == nil {
 		t.Fatal("ModelAssignments should be pre-populated, got nil")
 	}
-	got := state.Selection.ModelAssignments["gentle-orchestrator"]
-	want := preExisting["gentle-orchestrator"]
+	got := state.Selection.ModelAssignments["sdd-orchestrator"]
+	want := preExisting["sdd-orchestrator"]
 	if got != want {
-		t.Errorf("gentle-orchestrator assignment = %+v, want %+v", got, want)
+		t.Errorf("sdd-orchestrator assignment = %+v, want %+v", got, want)
 	}
 	got2 := state.Selection.ModelAssignments["sdd-apply"]
 	want2 := preExisting["sdd-apply"]
@@ -3418,7 +3862,7 @@ func TestModelConfigOpenCodeDoesNotOverwriteExistingSessionAssignments(t *testin
 	orig := readCurrentAssignmentsFn
 	readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
 		return map[string]model.ModelAssignment{
-			"gentle-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
+			"sdd-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
 		}, nil
 	}
 	t.Cleanup(func() { readCurrentAssignmentsFn = orig })
@@ -3432,14 +3876,14 @@ func TestModelConfigOpenCodeDoesNotOverwriteExistingSessionAssignments(t *testin
 	m.Cursor = 1
 	// Pre-populate Selection.ModelAssignments in the current session
 	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
-		"gentle-orchestrator": sessionAssignment,
+		"sdd-orchestrator": sessionAssignment,
 	}
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	// The session assignment must be preserved, not overwritten by file contents
-	got := state.Selection.ModelAssignments["gentle-orchestrator"]
+	got := state.Selection.ModelAssignments["sdd-orchestrator"]
 	if got != sessionAssignment {
 		t.Errorf("session assignment overwritten: got %+v, want %+v", got, sessionAssignment)
 	}
@@ -3649,12 +4093,12 @@ func TestPinErrClearedOnScreenReentry(t *testing.T) {
 		t.Fatalf("Esc from ScreenBackups: screen = %v, want ScreenWelcome", afterEsc.Screen)
 	}
 
-	// Navigate back to ScreenBackups (cursor 7 on Welcome → enter).
+	// Navigate back to ScreenBackups (cursor 8 on Welcome → enter).
 	afterEsc.Cursor = 8
 	updated2, _ := afterEsc.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	afterReturn := updated2.(Model)
 	if afterReturn.Screen != ScreenBackups {
-		t.Fatalf("Enter cursor=7 from ScreenWelcome: screen = %v, want ScreenBackups", afterReturn.Screen)
+		t.Fatalf("Enter cursor=8 from ScreenWelcome: screen = %v, want ScreenBackups", afterReturn.Screen)
 	}
 
 	// PinErr must be cleared on re-entry.

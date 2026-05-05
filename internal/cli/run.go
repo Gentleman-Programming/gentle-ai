@@ -578,16 +578,22 @@ func (s *componentApplyStep) Run() error {
 			dataDir = backend.DefaultDataDir()
 		}
 
-		// Migrate existing data when explicitly requested.
-		if s.selection.EngramMigrateData && s.selection.EngramDataDir != "" {
-			srcDir := backend.HardDefaultDataDir()
+		// Move existing data when explicitly requested.
+		operation := s.selection.EngramDataDirOperation
+		if operation == "" && s.selection.EngramMigrateData {
+			operation = model.EngramDataDirOperationMove
+		}
+		pendingMoveSource := ""
+		if operation == model.EngramDataDirOperationMove && s.selection.EngramDataDir != "" {
+			srcDir := engram.EffectiveSourceDataDir(backend)
 			if filepath.Clean(srcDir) != filepath.Clean(s.selection.EngramDataDir) && backend.DetectExistingData(srcDir) {
 				if locked, _ := backend.DetectLockedData(srcDir); locked {
-					return fmt.Errorf("migrate engram data: engram data appears to be in use. Close any running engram processes and try again")
+					return fmt.Errorf("move engram data: engram data appears to be in use. Close any running engram processes and try again")
 				}
-				if _, err := backend.MigrateData(srcDir, s.selection.EngramDataDir); err != nil {
-					return fmt.Errorf("migrate engram data: %w", err)
+				if _, err := backend.CopyData(srcDir, s.selection.EngramDataDir); err != nil {
+					return fmt.Errorf("move engram data: %w", err)
 				}
+				pendingMoveSource = srcDir
 			}
 		}
 
@@ -647,13 +653,18 @@ func (s *componentApplyStep) Run() error {
 						attemptedSlugs[slug] = struct{}{}
 					}
 				}
-				if _, err := engram.Inject(s.homeDir, adapter); err != nil {
+				if _, err := engram.InjectWithOptions(s.homeDir, adapter, engram.InjectOptions{DataDir: dataDir}); err != nil {
 					return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
 				}
 			}
 			return nil
 		}); err != nil {
 			return err
+		}
+		if pendingMoveSource != "" {
+			if _, err := backend.DeleteData(pendingMoveSource); err != nil {
+				return fmt.Errorf("move engram data cleanup: %w", err)
+			}
 		}
 		return nil
 	case model.ComponentContext7:

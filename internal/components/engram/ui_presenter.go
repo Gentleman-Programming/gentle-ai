@@ -36,6 +36,10 @@ func ConfirmTitle(action Action) string {
 		return "CONFIRM CLEAN DATA"
 	case ActionMigrate:
 		return "CONFIRM MIGRATION"
+	case ActionCopy:
+		return "CONFIRM COPY"
+	case ActionSetActive:
+		return "CONFIRM ACTIVE DIRECTORY"
 	case ActionStartFresh:
 		return "CONFIRM DELETE & START FRESH"
 	}
@@ -49,6 +53,10 @@ func ConfirmMessage(action Action, srcDir, dstDir string) string {
 		return fmt.Sprintf("This will permanently delete all Engram data at:\n%s", srcDir)
 	case ActionMigrate:
 		return fmt.Sprintf("This will move all Engram data from:\n  %s\nto:\n  %s", srcDir, dstDir)
+	case ActionCopy:
+		return fmt.Sprintf("This will copy all Engram data from:\n  %s\nto:\n  %s\n\nThe current Engram data location will not change.", srcDir, dstDir)
+	case ActionSetActive:
+		return fmt.Sprintf("This will set the active Engram data directory to:\n  %s\n\nNo files will be copied or deleted.", dstDir)
 	case ActionStartFresh:
 		return fmt.Sprintf("This will delete all existing Engram data at:\n  %s\nand create a new empty database at:\n  %s", srcDir, dstDir)
 	}
@@ -62,6 +70,10 @@ func ConfirmWarning(action Action) string {
 		return "This cannot be undone. All memory will be lost."
 	case ActionMigrate:
 		return "The original files will be deleted after successful migration."
+	case ActionCopy:
+		return "Original files will stay in place. This creates a copy only."
+	case ActionSetActive:
+		return "Selected directory must already contain Engram data."
 	case ActionStartFresh:
 		return "All existing memory will be permanently lost."
 	}
@@ -75,6 +87,10 @@ func FeedbackTitle(action Action) string {
 		return "DATA CLEANED"
 	case ActionMigrate:
 		return "MIGRATION COMPLETE"
+	case ActionCopy:
+		return "COPY COMPLETE"
+	case ActionSetActive:
+		return "ACTIVE DIRECTORY UPDATED"
 	case ActionStartFresh:
 		return "FRESH DATABASE CREATED"
 	}
@@ -82,9 +98,24 @@ func FeedbackTitle(action Action) string {
 }
 
 // FeedbackDetails returns the detail line for the feedback screen.
-func FeedbackDetails(action Action, filesMoved int, bytesMoved uint64) string {
-	if action == ActionMigrate && filesMoved > 0 {
-		return fmt.Sprintf("%d files moved, %s transferred", filesMoved, FormatBytes(bytesMoved))
+func FeedbackDetails(action Action, filesMoved int, bytesMoved uint64, filesCopied int, bytesCopied uint64, filesDeleted int, bytesDeleted uint64) string {
+	switch action {
+	case ActionMigrate:
+		if filesMoved > 0 {
+			return fmt.Sprintf("%d files moved, %s transferred", filesMoved, FormatBytes(bytesMoved))
+		}
+	case ActionCopy:
+		if filesCopied > 0 {
+			return fmt.Sprintf("%d files copied, %s transferred", filesCopied, FormatBytes(bytesCopied))
+		}
+	case ActionSetActive:
+		if filesCopied > 0 {
+			return fmt.Sprintf("%d existing files found, %s active", filesCopied, FormatBytes(bytesCopied))
+		}
+	case ActionStartFresh, ActionClean:
+		if filesDeleted > 0 {
+			return fmt.Sprintf("%d files deleted, %s removed", filesDeleted, FormatBytes(bytesDeleted))
+		}
 	}
 	return ""
 }
@@ -95,6 +126,10 @@ func PreviewMessage(action Action) string {
 	switch action {
 	case ActionMigrate:
 		return "The files above will be copied to the new location, verified, then removed from the original location."
+	case ActionCopy:
+		return "The files above will be copied to the selected location. The current Engram data location will not change."
+	case ActionSetActive:
+		return "The selected location will become the active Engram data directory. No files will be copied or deleted."
 	case ActionStartFresh:
 		return "All existing data above will be permanently deleted, then a new empty database will be created at the new location."
 	}
@@ -129,6 +164,8 @@ func ErrorMessage(err error) string {
 		return "The selected directory is not writable. Please choose a different location or fix permissions."
 	case errors.Is(err, ErrTargetHasData):
 		return "The selected directory already contains Engram data. Choose an empty directory, keep that location explicitly, or clean it first."
+	case errors.Is(err, ErrNoEngramData):
+		return "The selected directory does not contain Engram data. Choose a directory with engram.db, or use Start Fresh for an empty location."
 	default:
 		return err.Error()
 	}

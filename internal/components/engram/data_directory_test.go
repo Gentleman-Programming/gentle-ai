@@ -10,6 +10,32 @@ import (
 	"testing"
 )
 
+type recordingConfigPersister struct {
+	value    string
+	writeErr error
+	clearErr error
+}
+
+func (p *recordingConfigPersister) Read() (string, error) {
+	return p.value, nil
+}
+
+func (p *recordingConfigPersister) Write(dir string) error {
+	if p.writeErr != nil {
+		return p.writeErr
+	}
+	p.value = dir
+	return nil
+}
+
+func (p *recordingConfigPersister) Clear() error {
+	if p.clearErr != nil {
+		return p.clearErr
+	}
+	p.value = ""
+	return nil
+}
+
 func TestPreview_HasEnoughSpace(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -170,6 +196,233 @@ func TestDataDirService_Execute_KeepDefault(t *testing.T) {
 	}
 }
 
+func TestExecuteStartFreshReportsDeletedFilesAndBytes(t *testing.T) {
+	home := t.TempDir()
+	backend := NewLocalDataBackend()
+	restoreHome := SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreHome()
+
+	src := backend.HardDefaultDataDir()
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("MkdirAll(src): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "engram.db"), []byte("data"), 0o644); err != nil {
+		t.Fatalf("WriteFile db: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "engram.db-wal"), []byte("wal"), 0o644); err != nil {
+		t.Fatalf("WriteFile wal: %v", err)
+	}
+
+	persister := NewLocalConfigPersister(home)
+	service := NewDataDirService(backend, persister)
+	result, err := service.Execute(ActionStartFresh, filepath.Join(home, "fresh"))
+	if err != nil {
+		t.Fatalf("Execute(StartFresh) error = %v", err)
+	}
+	if result.FilesDeleted != 2 {
+		t.Fatalf("FilesDeleted = %d, want 2", result.FilesDeleted)
+	}
+	if result.BytesDeleted != uint64(len("data")+len("wal")) {
+		t.Fatalf("BytesDeleted = %d, want %d", result.BytesDeleted, len("data")+len("wal"))
+	}
+}
+
+func TestFeedbackDetailsIncludesDeletedDataForStartFresh(t *testing.T) {
+	got := FeedbackDetails(ActionStartFresh, 0, 0, 0, 0, 2, 7*1024)
+	if !strings.Contains(got, "2 files deleted") {
+		t.Fatalf("FeedbackDetails(StartFresh) = %q, want deleted file count", got)
+	}
+	if !strings.Contains(got, "7.0 KB") {
+		t.Fatalf("FeedbackDetails(StartFresh) = %q, want deleted byte size", got)
+	}
+}
+
+func TestPreviewMigrateUsesEffectiveDataDirWhenItHasData(t *testing.T) {
+	home := t.TempDir()
+	backend := NewLocalDataBackend()
+	restoreHome := SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreHome()
+
+	effective := filepath.Join(home, "current-engram")
+	if err := os.Setenv(DataDirEnvVar, effective); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Unsetenv(DataDirEnvVar)
+	if err := os.MkdirAll(effective, 0o755); err != nil {
+		t.Fatalf("MkdirAll(effective): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(effective, "engram.db"), []byte("current"), 0o644); err != nil {
+		t.Fatalf("WriteFile effective db: %v", err)
+	}
+
+	service := NewDataDirService(backend, nil)
+	preview, err := service.Preview(ActionMigrate, filepath.Join(home, "target"))
+	if err != nil {
+		t.Fatalf("Preview(Migrate) error = %v", err)
+	}
+	if preview.TotalBytes != uint64(len("current")) {
+		t.Fatalf("TotalBytes = %d, want %d from effective data dir", preview.TotalBytes, len("current"))
+	}
+}
+
+func TestHasExistingSourceDataDetectsHardDefaultWhenEffectiveIsEmpty(t *testing.T) {
+	home := t.TempDir()
+	backend := NewLocalDataBackend()
+	restoreHome := SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreHome()
+
+	effective := filepath.Join(home, "empty-current")
+	if err := os.Setenv(DataDirEnvVar, effective); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Unsetenv(DataDirEnvVar)
+
+	hardDefault := backend.HardDefaultDataDir()
+	if err := os.MkdirAll(hardDefault, 0o755); err != nil {
+		t.Fatalf("MkdirAll(hardDefault): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hardDefault, "engram.db"), []byte("legacy"), 0o644); err != nil {
+		t.Fatalf("WriteFile hard-default db: %v", err)
+	}
+
+	if !HasExistingSourceData(backend) {
+		t.Fatal("HasExistingSourceData() = false, want true when hard-default has Engram data")
+	}
+}
+
+func TestExecuteCopyCopiesDataWithoutCleaningSourceOrPersistingConfig(t *testing.T) {
+	home := t.TempDir()
+	backend := NewLocalDataBackend()
+	restoreHome := SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreHome()
+
+	src := backend.HardDefaultDataDir()
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("MkdirAll(src): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "engram.db"), []byte("copy-data"), 0o644); err != nil {
+		t.Fatalf("WriteFile source db: %v", err)
+	}
+
+	persister := &recordingConfigPersister{}
+	service := NewDataDirService(backend, persister)
+	target := filepath.Join(home, "copy-drive", "engram")
+	result, err := service.Execute(ActionCopy, target)
+	if err != nil {
+		t.Fatalf("Execute(Copy) error = %v", err)
+	}
+
+	if result.FilesCopied != 1 {
+		t.Fatalf("FilesCopied = %d, want 1", result.FilesCopied)
+	}
+	if result.BytesCopied != uint64(len("copy-data")) {
+		t.Fatalf("BytesCopied = %d, want %d", result.BytesCopied, len("copy-data"))
+	}
+	if !backend.DetectExistingData(src) {
+		t.Fatal("source data was cleaned; copy must leave original data in place")
+	}
+	if !backend.DetectExistingData(target) {
+		t.Fatal("target data missing after copy")
+	}
+	if got, err := persister.Read(); err != nil || got != "" {
+		t.Fatalf("persister.Read() = %q, %v; copy must not change configured data dir", got, err)
+	}
+}
+
+func TestExecuteMoveDoesNotDeleteSourceWhenAfterConfigPersistFails(t *testing.T) {
+	home := t.TempDir()
+	backend := NewLocalDataBackend()
+	restoreHome := SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreHome()
+
+	src := backend.HardDefaultDataDir()
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("MkdirAll(src): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "engram.db"), []byte("move-data"), 0o644); err != nil {
+		t.Fatalf("WriteFile source db: %v", err)
+	}
+
+	persister := &recordingConfigPersister{}
+	service := NewDataDirService(backend, persister)
+	service.SetAfterConfigPersist(func(Action, string) error {
+		return errors.New("mcp write failed")
+	})
+	target := filepath.Join(home, "target-engram")
+	_, err := service.Execute(ActionMigrate, target)
+	if err == nil || !strings.Contains(err.Error(), "MCP config could not be updated") {
+		t.Fatalf("Execute(Migrate) error = %v, want MCP config failure", err)
+	}
+	if !backend.DetectExistingData(src) {
+		t.Fatal("source was deleted even though MCP reinjection failed")
+	}
+	if !backend.DetectExistingData(target) {
+		t.Fatal("target copy should remain for recovery after MCP reinjection failure")
+	}
+}
+
+func TestExecuteSetActivePersistsExistingDataDirWithoutCopyOrDelete(t *testing.T) {
+	home := t.TempDir()
+	backend := NewLocalDataBackend()
+	restoreHome := SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreHome()
+
+	target := filepath.Join(home, "external-engram")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("MkdirAll(target): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "engram.db"), []byte("existing"), 0o644); err != nil {
+		t.Fatalf("WriteFile target db: %v", err)
+	}
+
+	persister := &recordingConfigPersister{}
+	service := NewDataDirService(backend, persister)
+	result, err := service.Execute(ActionSetActive, target)
+	if err != nil {
+		t.Fatalf("Execute(SetActive) error = %v", err)
+	}
+	if persister.value != target {
+		t.Fatalf("active dir = %q, want %q", persister.value, target)
+	}
+	if !backend.DetectExistingData(target) {
+		t.Fatal("set active must not delete selected data")
+	}
+	if result.FilesCopied != 1 || result.BytesCopied != uint64(len("existing")) {
+		t.Fatalf("result active stats = files %d bytes %d, want 1/%d", result.FilesCopied, result.BytesCopied, len("existing"))
+	}
+}
+
+func TestExecuteSetActiveRejectsEmptyDirectory(t *testing.T) {
+	home := t.TempDir()
+	backend := NewLocalDataBackend()
+	restoreHome := SetUserHomeDirForTest(func() (string, error) { return home, nil })
+	defer restoreHome()
+
+	target := filepath.Join(home, "empty-engram")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("MkdirAll(target): %v", err)
+	}
+	persister := &recordingConfigPersister{}
+	service := NewDataDirService(backend, persister)
+	_, err := service.Execute(ActionSetActive, target)
+	if !errors.Is(err, ErrNoEngramData) {
+		t.Fatalf("Execute(SetActive empty) error = %v, want ErrNoEngramData", err)
+	}
+	if persister.value != "" {
+		t.Fatalf("active dir changed to %q for invalid target", persister.value)
+	}
+}
+
+func TestFeedbackDetailsIncludesCopiedDataForCopy(t *testing.T) {
+	got := FeedbackDetails(ActionCopy, 0, 0, 3, 12*1024, 0, 0)
+	if !strings.Contains(got, "3 files copied") {
+		t.Fatalf("FeedbackDetails(Copy) = %q, want copied file count", got)
+	}
+	if !strings.Contains(got, "12.0 KB") {
+		t.Fatalf("FeedbackDetails(Copy) = %q, want copied byte size", got)
+	}
+}
+
 func TestConfirmTitle(t *testing.T) {
 	tests := []struct {
 		action Action
@@ -177,6 +430,8 @@ func TestConfirmTitle(t *testing.T) {
 	}{
 		{ActionKeepDefault, "CONFIRM ACTION"},
 		{ActionMigrate, "CONFIRM MIGRATION"},
+		{ActionCopy, "CONFIRM COPY"},
+		{ActionSetActive, "CONFIRM ACTIVE DIRECTORY"},
 		{ActionStartFresh, "CONFIRM DELETE & START FRESH"},
 		{ActionClean, "CONFIRM CLEAN DATA"},
 	}
@@ -196,6 +451,8 @@ func TestFeedbackTitle(t *testing.T) {
 	}{
 		{ActionKeepDefault, "COMPLETE"},
 		{ActionMigrate, "MIGRATION COMPLETE"},
+		{ActionCopy, "COPY COMPLETE"},
+		{ActionSetActive, "ACTIVE DIRECTORY UPDATED"},
 		{ActionStartFresh, "FRESH DATABASE CREATED"},
 		{ActionClean, "DATA CLEANED"},
 	}
@@ -501,6 +758,9 @@ func (m *mockSpaceErrorBackend) DetectLockedData(dir string) (bool, error) { ret
 func (m *mockSpaceErrorBackend) EstimateMigration(source string) ([]FileInfo, uint64, error) {
 	return nil, 0, nil
 }
+func (m *mockSpaceErrorBackend) CopyData(source, target string) (Result, error) { return Result{}, nil }
+func (m *mockSpaceErrorBackend) MoveData(source, target string) (Result, error) { return Result{}, nil }
+func (m *mockSpaceErrorBackend) DeleteData(dir string) (Result, error)          { return Result{}, nil }
 func (m *mockSpaceErrorBackend) MigrateData(source, target string) (Result, error) {
 	return Result{}, nil
 }

@@ -131,4 +131,29 @@ func labelForPath(path, homeDir string) string {
 	return path
 }
 
+// NormalizeTargetPath converts a user-selected drive or mount root into the
+// concrete Engram data folder used there. Full folder paths are returned cleanly
+// as-is. Examples: C:\ -> C:\engram on Windows, /mnt/usb -> /mnt/usb/.engram
+// on Unix-like systems.
+func NormalizeTargetPath(path string) string {
+	clean := filepath.Clean(strings.TrimSpace(path))
+	if clean == "." {
+		return clean
+	}
 
+	if runtime.GOOS == "windows" {
+		volume := filepath.VolumeName(clean)
+		if volume != "" {
+			rest := strings.TrimPrefix(clean, volume)
+			if rest == "" || rest == string(filepath.Separator) || rest == `/` {
+				return filepath.Join(volume+string(filepath.Separator), "engram")
+			}
+		}
+		return clean
+	}
+
+	if clean == string(filepath.Separator) {
+		return filepath.Join(clean, ".engram")
+	}
+	return clean
+}

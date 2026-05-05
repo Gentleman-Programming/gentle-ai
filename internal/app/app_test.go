@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
@@ -19,6 +20,10 @@ import (
 // TestListBackupsNewestFirst verifies that ListBackups returns manifests sorted
 // newest-first by CreatedAt timestamp, matching the spec "newest first" ordering.
 func TestListBackupsNewestFirst(t *testing.T) {
+	origDataDir := os.Getenv(engram.DataDirEnvVar)
+	t.Cleanup(func() { _ = os.Setenv(engram.DataDirEnvVar, origDataDir) })
+	_ = os.Unsetenv(engram.DataDirEnvVar)
+
 	home := t.TempDir()
 	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
 
@@ -69,6 +74,10 @@ func TestListBackupsNewestFirst(t *testing.T) {
 // TestListBackupsWithSourceMetadata verifies that ListBackups returns manifests
 // with Source metadata intact, so display labels can use the source field.
 func TestListBackupsWithSourceMetadata(t *testing.T) {
+	origDataDir := os.Getenv(engram.DataDirEnvVar)
+	t.Cleanup(func() { _ = os.Setenv(engram.DataDirEnvVar, origDataDir) })
+	_ = os.Unsetenv(engram.DataDirEnvVar)
+
 	home := t.TempDir()
 	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
 
@@ -228,6 +237,10 @@ func TestRunArgsUninstallBypassesPlatformValidation(t *testing.T) {
 // without Source/Description are still returned (not skipped) and can be displayed
 // via DisplayLabel without panicking.
 func TestListBackupsFallsBackGracefullyForOldManifests(t *testing.T) {
+	origDataDir := os.Getenv(engram.DataDirEnvVar)
+	t.Cleanup(func() { _ = os.Setenv(engram.DataDirEnvVar, origDataDir) })
+	_ = os.Unsetenv(engram.DataDirEnvVar)
+
 	_ = fmt.Sprintf // Ensure fmt is used.
 	home := t.TempDir()
 	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
@@ -711,4 +724,3 @@ func TestLoadPersistedAssignments_InvalidPathCleared(t *testing.T) {
 		t.Errorf("persisted EngramDataDir = %q, want empty (should have been cleared)", s.EngramDataDir)
 	}
 }
-

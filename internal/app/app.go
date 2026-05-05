@@ -505,31 +505,51 @@ func modelAssignmentsToState(m map[string]model.ModelAssignment) map[string]stat
 	return out
 }
 
-// ListBackups returns all backup manifests from the backup directory.
+// ListBackups returns all backup manifests from the current Engram backup
+// directory plus the legacy ~/.gentle-ai/backups directory. New backups are
+// written beside Engram data; legacy backups remain visible for restore/delete.
 func ListBackups() []backup.Manifest {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return nil
+		if override := os.Getenv("HOME"); override != "" {
+			homeDir = override
+		} else {
+			return nil
+		}
+	} else if override := os.Getenv("HOME"); override != "" {
+		homeDir = override
 	}
 
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
-	entries, err := os.ReadDir(backupRoot)
-	if err != nil {
-		return nil
+	roots := []string{
+		backup.BackupRootForHome(homeDir),
+		backup.LegacyBackupRoot(homeDir),
 	}
 
-	manifests := make([]backup.Manifest, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	seenRoots := make(map[string]struct{}, len(roots))
+	manifests := make([]backup.Manifest, 0)
+	for _, backupRoot := range roots {
+		backupRoot = filepath.Clean(backupRoot)
+		if _, seen := seenRoots[backupRoot]; seen {
 			continue
 		}
+		seenRoots[backupRoot] = struct{}{}
 
-		manifestPath := filepath.Join(backupRoot, entry.Name(), backup.ManifestFilename)
-		manifest, err := backup.ReadManifest(manifestPath)
+		entries, err := os.ReadDir(backupRoot)
 		if err != nil {
 			continue
 		}
-		manifests = append(manifests, manifest)
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+
+			manifestPath := filepath.Join(backupRoot, entry.Name(), backup.ManifestFilename)
+			manifest, err := backup.ReadManifest(manifestPath)
+			if err != nil {
+				continue
+			}
+			manifests = append(manifests, manifest)
+		}
 	}
 
 	// Sort by creation time (newest first) — the IDs are timestamps.

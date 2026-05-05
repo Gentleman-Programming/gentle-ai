@@ -14,25 +14,28 @@ const EngramChoiceDefault = 0
 // EngramChoiceMigrate means move existing data to a new location.
 const EngramChoiceMigrate = 1
 
-// EngramChoiceStartFresh means delete existing data and use a new location.
-const EngramChoiceStartFresh = 2
+// EngramChoiceCopy means copy existing data to another location without changing the current location.
+const EngramChoiceCopy = 2
 
-// EngramChoiceClean means delete existing data but keep the current location.
-const EngramChoiceClean = 3
+// EngramChoiceSetActive means point Engram at an existing data directory.
+const EngramChoiceSetActive = 3
+
+// EngramChoiceStartFresh means delete existing data and use a new location.
+const EngramChoiceStartFresh = 4
 
 // EngramDataDirRenderArgs holds all the state needed to render the Engram data
 // directory configuration screen.
 type EngramDataDirRenderArgs struct {
 	CurrentDir      string
 	HasExistingData bool
-	Choice          int // 0=default, 1=migrate, 2=start-fresh, 3=clean
+	Choice          int // 0=default, 1=migrate, 2=copy, 3=set-active, 4=start-fresh
 	CustomPath      string
 	Cursor          int
 	InputPos        int
 	ErrMsg          string
 
 	// Preview info shown when a custom path is selected.
-	FilesToMove    []string // list of files that will be affected
+	FilesToMove    []string // list of files that will be moved, copied, or deleted
 	TotalBytes     uint64   // total size of files
 	TargetSpace    uint64   // available space at target path (0 = unknown)
 	TargetSpaceErr string   // error getting target space ("" = ok)
@@ -42,137 +45,83 @@ type EngramDataDirRenderArgs struct {
 	DefaultDirSpace uint64
 
 	// SuggestedLocations appears when the user needs to pick a custom path
-	// (Migrate / StartFresh). It shows common destinations with available space.
+	// (Migrate / Copy / StartFresh). It shows common destinations with available space.
 	SuggestedLocations []engram.LocationSuggestion
 
 	// PartialWarning is shown if an interrupted migration is detected.
 	PartialWarning string
 }
 
-// EngramDataDirOptionCount returns the number of selectable rows on the Engram
-// data directory screen, including the text-input row, Continue, and Back.
+// EngramDataDirOptionCount returns the number of selectable rows on the main
+// Engram data directory decision screen. The path input and suggestions live on
+// a separate picker phase, so this screen stays focused on the primary action.
 func EngramDataDirOptionCount(hasExistingData bool, choice int) int {
-	if !hasExistingData {
-		if choice == EngramChoiceDefault {
-			// default, custom, continue, back
-			return 4
-		}
-		// default, custom, path-input, continue, back
-		return 5
-	}
-	// default, migrate, start-fresh, clean, continue, back
-	count := 6
-	if choice == EngramChoiceMigrate || choice == EngramChoiceStartFresh {
-		count++ // path-input
-	}
-	return count
+	return len(EngramDataDirChoices(hasExistingData)) + 1 // choices + Back
 }
 
-// EngramDataDirTextRow returns the row index of the text input field,
-// or -1 when the text input is hidden.
-func EngramDataDirTextRow(hasExistingData bool, choice int) int {
+// EngramDataDirChoices returns the primary choices for the data-directory flow.
+func EngramDataDirChoices(hasExistingData bool) []int {
 	if !hasExistingData {
-		if choice == EngramChoiceDefault {
-			return -1
-		}
-		return 2 // default, custom, path-input
+		return []int{EngramChoiceSetActive, EngramChoiceStartFresh}
 	}
-	// hasExistingData
-	switch choice {
-	case EngramChoiceDefault, EngramChoiceClean:
-		return -1
-	case EngramChoiceMigrate:
-		return 2 // default, migrate, path-input
-	case EngramChoiceStartFresh:
-		return 3 // default, migrate, start-fresh, path-input
-	}
-	return -1
+	return []int{EngramChoiceMigrate, EngramChoiceCopy, EngramChoiceSetActive, EngramChoiceStartFresh}
 }
 
-// EngramDataDirContinueRow returns the row index of the Continue button.
-func EngramDataDirContinueRow(hasExistingData bool, choice int) int {
-	if !hasExistingData {
-		if choice == EngramChoiceDefault {
-			return 2 // default, custom, continue
-		}
-		return 3 // default, custom, path-input, continue
-	}
-	// hasExistingData
-	switch choice {
-	case EngramChoiceDefault:
-		return 4 // default, migrate, start-fresh, clean, continue
-	case EngramChoiceMigrate:
-		return 3 // default, migrate, path-input, continue
-	case EngramChoiceStartFresh:
-		return 4 // default, migrate, start-fresh, path-input, continue
-	case EngramChoiceClean:
-		return 4 // default, migrate, start-fresh, clean, continue
-	}
-	return 3
+// EngramDataDirBackRow returns the row index of the Back option.
+func EngramDataDirBackRow(hasExistingData bool) int {
+	return len(EngramDataDirChoices(hasExistingData))
+}
+
+// EngramPathPickerOptionCount returns selectable rows in the path picker:
+// text input, suggestions, and Back.
+func EngramPathPickerOptionCount(suggestions []engram.LocationSuggestion) int {
+	return len(suggestions) + 2
+}
+
+// EngramPathPickerBackRow returns the row index of Back in the path picker.
+func EngramPathPickerBackRow(suggestions []engram.LocationSuggestion) int {
+	return len(suggestions) + 1
 }
 
 // EngramDataDirChoiceFromCursor maps a cursor position to a choice constant.
 func EngramDataDirChoiceFromCursor(hasExistingData bool, cursor int) int {
-	if !hasExistingData {
-		switch cursor {
-		case 0:
-			return EngramChoiceDefault
-		case 1:
-			return EngramChoiceStartFresh // custom location
-		}
+	choices := EngramDataDirChoices(hasExistingData)
+	if cursor >= 0 && cursor < len(choices) {
+		return choices[cursor]
+	}
+	return EngramChoiceFromFirstAvailable(hasExistingData)
+}
+
+func EngramChoiceFromFirstAvailable(hasExistingData bool) int {
+	choices := EngramDataDirChoices(hasExistingData)
+	if len(choices) == 0 {
 		return EngramChoiceDefault
 	}
-	// hasExistingData
-	switch cursor {
-	case 0:
-		return EngramChoiceDefault
-	case 1:
-		return EngramChoiceMigrate
-	case 2:
-		return EngramChoiceStartFresh
-	case 3:
-		return EngramChoiceClean
-	}
-	return EngramChoiceDefault
+	return choices[0]
 }
 
 // EngramDataDirCursorFromChoice maps a choice constant to the cursor position.
 func EngramDataDirCursorFromChoice(hasExistingData bool, choice int) int {
-	if !hasExistingData {
-		switch choice {
-		case EngramChoiceDefault:
-			return 0
-		case EngramChoiceStartFresh:
-			return 1
+	for idx, candidate := range EngramDataDirChoices(hasExistingData) {
+		if candidate == choice {
+			return idx
 		}
-		return 0
-	}
-	// hasExistingData
-	switch choice {
-	case EngramChoiceDefault:
-		return 0
-	case EngramChoiceMigrate:
-		return 1
-	case EngramChoiceStartFresh:
-		return 2
-	case EngramChoiceClean:
-		return 3
 	}
 	return 0
 }
 
 // needsPathInput returns true when the given choice requires a custom path.
 func NeedsPathInput(choice int) bool {
-	return choice == EngramChoiceMigrate || choice == EngramChoiceStartFresh
+	return choice == EngramChoiceMigrate || choice == EngramChoiceCopy || choice == EngramChoiceSetActive || choice == EngramChoiceStartFresh
 }
 
-// RenderEngramDataDir renders the Engram data directory selection screen.
+// RenderEngramDataDir renders the main Engram data directory decision screen.
 func RenderEngramDataDir(args EngramDataDirRenderArgs) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("ENGRAM DATA DIRECTORY"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose where Engram stores its persistent memory database."))
+	b.WriteString(styles.SubtextStyle.Render("Choose the high-level action for Engram persistent memory."))
 	b.WriteString("\n\n")
 
 	b.WriteString(styles.LabelStyle.Render("Current location: "))
@@ -190,9 +139,7 @@ func RenderEngramDataDir(args EngramDataDirRenderArgs) string {
 	}
 	b.WriteString("\n")
 
-	// First-time install: show the default path prominently when the user
-	// hasn't chosen a custom location yet.
-	if !args.HasExistingData && args.Choice == EngramChoiceDefault {
+	if !args.HasExistingData {
 		b.WriteString(styles.LabelStyle.Render("Engram will store your memories at:"))
 		b.WriteString("\n")
 		b.WriteString("  " + styles.ValueStyle.Render(args.CurrentDir))
@@ -211,25 +158,65 @@ func RenderEngramDataDir(args EngramDataDirRenderArgs) string {
 	}
 
 	b.WriteString("\n")
+	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
 
-	// Show suggested locations when a custom path is needed.
-	if NeedsPathInput(args.Choice) && len(args.SuggestedLocations) > 0 {
-		b.WriteString(styles.LabelStyle.Render("Suggested locations:"))
+	if args.ErrMsg != "" {
 		b.WriteString("\n")
-		for _, loc := range args.SuggestedLocations {
-			line := "  • " + loc.Label
-			if loc.Space > 0 {
-				line += " — " + engram.FormatBytes(loc.Space) + " available"
-			}
-			b.WriteString(styles.DimStyle.Render(line))
-			b.WriteString("\n")
-		}
+		b.WriteString(styles.ErrorStyle.Render(args.ErrMsg))
+	}
+
+	return styles.FrameStyle.Render(b.String())
+}
+
+// EngramPathPickerRenderArgs holds state for choosing a custom Engram path.
+type EngramPathPickerRenderArgs struct {
+	Choice             int
+	CustomPath         string
+	Cursor             int
+	InputPos           int
+	ErrMsg             string
+	SuggestedLocations []engram.LocationSuggestion
+	FilesToMove        []string
+	TotalBytes         uint64
+	TargetSpace        uint64
+	TargetSpaceErr     string
+}
+
+// RenderEngramPathPicker renders the second-step keyboard path picker.
+func RenderEngramPathPicker(args EngramPathPickerRenderArgs) string {
+	var b strings.Builder
+
+	b.WriteString(styles.TitleStyle.Render("ENGRAM DATA LOCATION"))
+	b.WriteString("\n\n")
+	b.WriteString(styles.SubtextStyle.Render("Paste or type an Engram folder path. Windows, macOS, and Linux paths are supported."))
+	b.WriteString("\n\n")
+
+	b.WriteString(renderEngramRow(engramRow{Label: "Path:", IsInput: true, InputText: args.CustomPath}, args.Cursor == 0, args.InputPos))
+	if args.CustomPath == "" {
+		b.WriteString(styles.HelpStyle.Render(`  Paste or type a full directory path, for example C:\engram, ~/engram, /Volumes/Drive/engram, or /mnt/usb/engram.`))
 		b.WriteString("\n")
 	}
 
-	// Show preview of what will happen for custom-path choices.
-	if NeedsPathInput(args.Choice) && len(args.FilesToMove) > 0 {
-		b.WriteString(styles.LabelStyle.Render("Files that will be affected:"))
+	if len(args.SuggestedLocations) > 0 {
+		b.WriteString("\n")
+		b.WriteString(styles.LabelStyle.Render("Suggested locations:"))
+		b.WriteString("\n")
+		for idx, loc := range args.SuggestedLocations {
+			line := loc.Label + " — " + loc.Path
+			if loc.Space > 0 {
+				line += " (" + engram.FormatBytes(loc.Space) + " available)"
+			}
+			b.WriteString(renderEngramLine("  "+line, args.Cursor == idx+1, false))
+			b.WriteString("\n")
+		}
+	}
+
+	backRow := EngramPathPickerBackRow(args.SuggestedLocations)
+	b.WriteString(renderEngramLine("  Back", args.Cursor == backRow, false))
+	b.WriteString("\n\n")
+
+	if len(args.FilesToMove) > 0 {
+		b.WriteString(styles.LabelStyle.Render(engramFilesHeading(args.Choice)))
 		b.WriteString("\n")
 		for _, f := range args.FilesToMove {
 			b.WriteString(styles.DimStyle.Render("  • " + f))
@@ -238,38 +225,31 @@ func RenderEngramDataDir(args EngramDataDirRenderArgs) string {
 		b.WriteString(styles.LabelStyle.Render("Total size: "))
 		b.WriteString(styles.ValueStyle.Render(engram.FormatBytes(args.TotalBytes)))
 		b.WriteString("\n")
+	}
 
-		if args.TargetSpaceErr != "" {
-			b.WriteString(styles.ErrorStyle.Render("Cannot check target space: " + args.TargetSpaceErr))
-			b.WriteString("\n")
-		} else if args.TargetSpace > 0 {
-			b.WriteString(styles.LabelStyle.Render("Available at target: "))
-			b.WriteString(styles.ValueStyle.Render(engram.FormatBytes(args.TargetSpace)))
-			b.WriteString("\n")
-		}
-
+	if args.TargetSpaceErr != "" {
+		b.WriteString(styles.ErrorStyle.Render("Cannot check target space: " + args.TargetSpaceErr))
 		b.WriteString("\n")
-		if args.Choice == EngramChoiceMigrate {
-			b.WriteString(styles.SubtextStyle.Render("The files above will be copied to the new location, verified, then removed from the original location."))
-		} else {
-			b.WriteString(styles.SubtextStyle.Render("All existing data above will be permanently deleted, then a new empty database will be created at the new location."))
-		}
+	} else if args.TargetSpace > 0 {
+		b.WriteString(styles.LabelStyle.Render("Available at target: "))
+		b.WriteString(styles.ValueStyle.Render(engram.FormatBytes(args.TargetSpace)))
 		b.WriteString("\n")
 	}
 
-	// Show contextual warning for destructive options.
-	if args.HasExistingData {
-		switch args.Choice {
-		case EngramChoiceStartFresh:
-			b.WriteString(styles.WarningStyle.Render("Warning: existing data will be deleted. A new empty database will be created at the path you specify."))
-			b.WriteString("\n")
-		case EngramChoiceClean:
-			b.WriteString(styles.WarningStyle.Render("Warning: all existing Engram data will be permanently deleted. This cannot be undone."))
-			b.WriteString("\n")
-		}
+	if args.Choice == EngramChoiceCopy {
+		b.WriteString("\n")
+		b.WriteString(styles.SubtextStyle.Render("Original data will stay at the current location. This creates a copy only."))
+		b.WriteString("\n")
 	}
 
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select/continue • esc: back"))
+	if args.Choice == EngramChoiceStartFresh {
+		b.WriteString("\n")
+		b.WriteString(styles.WarningStyle.Render("Warning: existing data will be deleted after confirmation. A new empty database will be created at this location."))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(styles.HelpStyle.Render("type path • j/k: suggestions • enter: use location • esc: back"))
 
 	if args.ErrMsg != "" {
 		b.WriteString("\n")
@@ -277,6 +257,21 @@ func RenderEngramDataDir(args EngramDataDirRenderArgs) string {
 	}
 
 	return styles.FrameStyle.Render(b.String())
+}
+
+func engramFilesHeading(choice int) string {
+	switch choice {
+	case EngramChoiceMigrate:
+		return "Files that will be moved:"
+	case EngramChoiceCopy:
+		return "Files that will be copied:"
+	case EngramChoiceSetActive:
+		return "Files at selected active directory:"
+	case EngramChoiceStartFresh:
+		return "Files that will be deleted:"
+	default:
+		return "Files that will be affected:"
+	}
 }
 
 type engramRow struct {
@@ -291,64 +286,16 @@ func buildEngramDataDirRows(args EngramDataDirRenderArgs) []engramRow {
 	var rows []engramRow
 
 	if !args.HasExistingData {
-		// No existing data — simple install flow.
-		rows = append(rows, engramRow{
-			Label:      "Continue with this location",
-			IsRadio:    true,
-			IsSelected: args.Choice == EngramChoiceDefault,
-		})
-		rows = append(rows, engramRow{
-			Label:      "Choose a different location",
-			IsRadio:    true,
-			IsSelected: args.Choice == EngramChoiceStartFresh,
-		})
+		rows = append(rows, engramRow{Label: "Set active Engram directory", IsRadio: true})
+		rows = append(rows, engramRow{Label: "Start fresh at a new location", IsRadio: true})
 	} else {
-		// Existing data found — show all options.
-		rows = append(rows, engramRow{
-			Label:      "Keep data at current location",
-			IsRadio:    true,
-			IsSelected: args.Choice == EngramChoiceDefault,
-		})
-		rows = append(rows, engramRow{
-			Label:      "Migrate data to a new location",
-			IsRadio:    true,
-			IsSelected: args.Choice == EngramChoiceMigrate,
-		})
-		rows = append(rows, engramRow{
-			Label:      "Delete data and start fresh at a new location",
-			IsRadio:    true,
-			IsSelected: args.Choice == EngramChoiceStartFresh,
-		})
-		rows = append(rows, engramRow{
-			Label:      "Clean/reset data (keep at current location)",
-			IsRadio:    true,
-			IsSelected: args.Choice == EngramChoiceClean,
-		})
+		rows = append(rows, engramRow{Label: "Move existing data to a new location", IsRadio: true})
+		rows = append(rows, engramRow{Label: "Copy existing data to another location", IsRadio: true})
+		rows = append(rows, engramRow{Label: "Set active Engram directory", IsRadio: true})
+		rows = append(rows, engramRow{Label: "Start fresh at a new location", IsRadio: true})
 	}
 
-	// Text input row (only for choices that need a custom path).
-	if NeedsPathInput(args.Choice) {
-		path := args.CustomPath
-		if path == "" {
-			path = " "
-		}
-		rows = append(rows, engramRow{
-			Label:     "Path:",
-			IsInput:   true,
-			InputText: path,
-		})
-	}
-
-	// Continue
-	rows = append(rows, engramRow{
-		Label: "Continue",
-	})
-
-	// Back
-	rows = append(rows, engramRow{
-		Label: "Back",
-	})
-
+	rows = append(rows, engramRow{Label: "Back / keep current location"})
 	return rows
 }
 
@@ -416,6 +363,7 @@ func renderEngramTextInput(text string, focused bool, cursorPos int) string {
 
 // EngramConfirmRenderArgs holds state for the confirmation screen.
 type EngramConfirmRenderArgs struct {
+	Choice         int
 	Title          string
 	Message        string
 	Warning        string // optional warning line
@@ -443,7 +391,7 @@ func RenderEngramConfirm(args EngramConfirmRenderArgs) string {
 
 	if len(args.FilesToMove) > 0 {
 		b.WriteString("\n")
-		b.WriteString(styles.LabelStyle.Render("Files that will be affected:"))
+		b.WriteString(styles.LabelStyle.Render(engramFilesHeading(args.Choice)))
 		b.WriteString("\n")
 		for _, f := range args.FilesToMove {
 			b.WriteString(styles.DimStyle.Render("  • " + f))
@@ -473,9 +421,9 @@ func RenderEngramConfirm(args EngramConfirmRenderArgs) string {
 	for i, label := range []string{"Confirm", "Cancel"} {
 		focused := i == args.Cursor
 		if focused {
-			b.WriteString(styles.SelectedOptionStyle.Render("> ● " + label))
+			b.WriteString(styles.SelectedOptionStyle.Render("> " + label))
 		} else {
-			b.WriteString(styles.OptionStyle.Render("  ○ " + label))
+			b.WriteString(styles.OptionStyle.Render("  " + label))
 		}
 		b.WriteString("\n")
 	}
@@ -520,7 +468,7 @@ func RenderEngramFeedback(args EngramFeedbackRenderArgs) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(styles.SelectedOptionStyle.Render("> ● Continue"))
+	b.WriteString(styles.SelectedOptionStyle.Render("> Continue"))
 	b.WriteString("\n")
 
 	b.WriteString("\n")

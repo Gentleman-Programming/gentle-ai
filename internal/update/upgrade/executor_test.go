@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 )
@@ -774,6 +775,10 @@ func TestExecute_ForcedSnapshotFailureSurfacesWarningEndToEnd(t *testing.T) {
 // This closes the verify gap: "no runtime test proves upgrade manifests are
 // emitted with metadata". This test reads the manifest from disk directly.
 func TestExecute_UpgradeBackupManifestHasUpgradeMetadata(t *testing.T) {
+	origDataDir := os.Getenv(engram.DataDirEnvVar)
+	t.Cleanup(func() { _ = os.Setenv(engram.DataDirEnvVar, origDataDir) })
+	_ = os.Unsetenv(engram.DataDirEnvVar)
+
 	origExecCommand := execCommand
 	origAppVersion := AppVersion
 	t.Cleanup(func() {
@@ -807,7 +812,7 @@ func TestExecute_UpgradeBackupManifestHasUpgradeMetadata(t *testing.T) {
 	}
 
 	// Find the backup manifest on disk and verify its metadata.
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	backupRoot := backup.BackupRootForHome(homeDir)
 	entries, err := os.ReadDir(backupRoot)
 	if err != nil {
 		t.Fatalf("ReadDir backups: %v", err)

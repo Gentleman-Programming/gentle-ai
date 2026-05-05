@@ -27,17 +27,26 @@ func TestRenderEngramDataDir_WithData(t *testing.T) {
 	if !strings.Contains(out, "Existing Engram data detected") {
 		t.Error("missing existing data warning")
 	}
-	if !strings.Contains(out, "Keep data at current location") {
-		t.Error("missing default option label")
+	if strings.Contains(out, "Keep data at current location") {
+		t.Error("keep data should be folded into the back row, not shown as a redundant action")
 	}
-	if !strings.Contains(out, "Migrate data to a new location") {
+	if !strings.Contains(out, "Move existing data to a new location") {
 		t.Error("missing migrate option")
 	}
-	if !strings.Contains(out, "Delete data and start fresh") {
+	if !strings.Contains(out, "Copy existing data to another location") {
+		t.Error("missing copy option")
+	}
+	if !strings.Contains(out, "Set active Engram directory") {
+		t.Error("missing set active option")
+	}
+	if !strings.Contains(out, "Start fresh at a new location") {
 		t.Error("missing start fresh option")
 	}
-	if !strings.Contains(out, "Clean/reset data") {
-		t.Error("missing clean option")
+	if strings.Contains(out, "Clean/reset data") {
+		t.Error("clean/reset should not be a main option")
+	}
+	if strings.Contains(out, "Continue") {
+		t.Error("main decision screen should not show Continue")
 	}
 }
 
@@ -62,64 +71,92 @@ func TestRenderEngramDataDir_WithoutData_DefaultChoice(t *testing.T) {
 	if !strings.Contains(out, "45.0 GB") {
 		t.Error("missing available space")
 	}
-	if !strings.Contains(out, "Continue with this location") {
-		t.Error("missing continue option")
+	if strings.Contains(out, "Keep this location") {
+		t.Error("keep location should be folded into the back row, not shown as a redundant action")
 	}
-	if !strings.Contains(out, "Choose a different location") {
-		t.Error("missing choose different option")
+	if !strings.Contains(out, "Set active Engram directory") {
+		t.Error("missing set active option without local data")
 	}
-	// Should NOT show migrate/clean options when no data
+	if !strings.Contains(out, "Start fresh at a new location") {
+		t.Error("missing start fresh option")
+	}
+	// Should NOT show migrate/copy/clean options when no data.
 	if strings.Contains(out, "Migrate") {
 		t.Error("should not show migrate option without data")
 	}
+	if strings.Contains(out, "Copy existing data") {
+		t.Error("should not show copy option without data")
+	}
 }
 
-func TestRenderEngramDataDir_WithoutData_CustomChoiceHidesHeading(t *testing.T) {
+func TestRenderEngramDataDir_WithoutData_CustomChoiceKeepsMainScreenFocused(t *testing.T) {
 	args := EngramDataDirRenderArgs{
 		CurrentDir:      "/home/user/.engram",
 		HasExistingData: false,
 		Choice:          EngramChoiceStartFresh,
-		CustomPath:      "",
-		Cursor:          0,
-		InputPos:        0,
-		ErrMsg:          "",
 		DefaultDirSpace: 45 * 1024 * 1024 * 1024,
 	}
 	out := RenderEngramDataDir(args)
-	if strings.Contains(out, "Engram will store your memories at") {
-		t.Error("heading should be hidden when user chooses a different location")
+	if strings.Contains(out, "Path:") {
+		t.Error("main screen should not show path input")
+	}
+	if strings.Contains(out, "Suggested locations:") {
+		t.Error("main screen should not show suggestions")
 	}
 }
 
-func TestRenderEngramDataDir_CustomPath(t *testing.T) {
-	args := EngramDataDirRenderArgs{
-		CurrentDir:      "/home/user/.engram",
-		HasExistingData: false,
-		Choice:          EngramChoiceStartFresh,
-		CustomPath:      "/data/engram",
-		Cursor:          EngramDataDirTextRow(false, EngramChoiceStartFresh),
-		InputPos:        5,
-		ErrMsg:          "",
+func TestRenderEngramPathPicker_EmptyInputShowsCrossPlatformHelper(t *testing.T) {
+	out := RenderEngramPathPicker(EngramPathPickerRenderArgs{Choice: EngramChoiceStartFresh, CustomPath: "", Cursor: 0})
+	if !strings.Contains(out, "Paste or type a full directory path") {
+		t.Fatalf("missing empty-input helper; output:\n%s", out)
 	}
-	out := RenderEngramDataDir(args)
+	for _, example := range []string{`C:\engram`, "~/engram", "/Volumes/Drive/engram", "/mnt/usb/engram"} {
+		if !strings.Contains(out, example) {
+			t.Fatalf("missing path example %q in helper; output:\n%s", example, out)
+		}
+	}
+	if strings.Contains(out, "/data/engram") || strings.Contains(out, "~/.engram") {
+		t.Fatalf("path input should not be prefilled with a suggested/default path; output:\n%s", out)
+	}
+}
+
+func TestRenderEngramPathPicker_CustomPath(t *testing.T) {
+	args := EngramPathPickerRenderArgs{
+		Choice:     EngramChoiceStartFresh,
+		CustomPath: "/data/engram",
+		Cursor:     0,
+		InputPos:   5,
+	}
+	out := RenderEngramPathPicker(args)
 	if !strings.Contains(out, "/data/engram") {
 		t.Error("missing custom path")
 	}
 }
 
-func TestRenderEngramDataDir_SuggestedLocations(t *testing.T) {
-	args := EngramDataDirRenderArgs{
-		CurrentDir:      "/home/user/.engram",
-		HasExistingData: true,
-		Choice:          EngramChoiceMigrate,
-		CustomPath:      "",
-		Cursor:          0,
+func TestRenderEngramPathPicker_CopyExplainsOriginalStaysPut(t *testing.T) {
+	out := RenderEngramPathPicker(EngramPathPickerRenderArgs{
+		Choice:      EngramChoiceCopy,
+		CustomPath:  "/copy/engram",
+		Cursor:      0,
+		FilesToMove: []string{"engram.db (4 B)"},
+		TotalBytes:  4,
+	})
+	if !strings.Contains(out, "Original data will stay at the current location") {
+		t.Fatalf("copy path picker should explain source remains, output:\n%s", out)
+	}
+}
+
+func TestRenderEngramPathPicker_SuggestedLocations(t *testing.T) {
+	args := EngramPathPickerRenderArgs{
+		Choice:     EngramChoiceMigrate,
+		CustomPath: "",
+		Cursor:     0,
 		SuggestedLocations: []engram.LocationSuggestion{
 			{Label: "Home", Path: "/home/user/.engram", Space: 45 * 1024 * 1024 * 1024},
 			{Label: "External", Path: "/mnt/external/engram", Space: 120 * 1024 * 1024 * 1024},
 		},
 	}
-	out := RenderEngramDataDir(args)
+	out := RenderEngramPathPicker(args)
 	if !strings.Contains(out, "Suggested locations:") {
 		t.Error("missing suggested locations heading")
 	}
@@ -151,47 +188,85 @@ func TestRenderEngramDataDir_NoSuggestedLocationsWhenPathNotNeeded(t *testing.T)
 }
 
 func TestEngramDataDirOptionCount(t *testing.T) {
-	// Without existing data
-	if got := EngramDataDirOptionCount(false, EngramChoiceDefault); got != 4 {
-		t.Errorf("EngramDataDirOptionCount(false, default) = %d, want 4", got)
+	if got := EngramDataDirOptionCount(false, EngramChoiceDefault); got != 3 {
+		t.Errorf("EngramDataDirOptionCount(false, default) = %d, want 3", got)
 	}
-	if got := EngramDataDirOptionCount(false, EngramChoiceStartFresh); got != 5 {
-		t.Errorf("EngramDataDirOptionCount(false, startFresh) = %d, want 5", got)
+	if got := EngramDataDirOptionCount(false, EngramChoiceStartFresh); got != 3 {
+		t.Errorf("EngramDataDirOptionCount(false, startFresh) = %d, want 3", got)
 	}
-
-	// With existing data
-	if got := EngramDataDirOptionCount(true, EngramChoiceDefault); got != 6 {
-		t.Errorf("EngramDataDirOptionCount(true, default) = %d, want 6", got)
+	if got := EngramDataDirOptionCount(true, EngramChoiceDefault); got != 5 {
+		t.Errorf("EngramDataDirOptionCount(true, default) = %d, want 5", got)
 	}
-	if got := EngramDataDirOptionCount(true, EngramChoiceMigrate); got != 7 {
-		t.Errorf("EngramDataDirOptionCount(true, migrate) = %d, want 7", got)
+	if got := EngramDataDirOptionCount(true, EngramChoiceMigrate); got != 5 {
+		t.Errorf("EngramDataDirOptionCount(true, migrate) = %d, want 5", got)
 	}
-	if got := EngramDataDirOptionCount(true, EngramChoiceStartFresh); got != 7 {
-		t.Errorf("EngramDataDirOptionCount(true, startFresh) = %d, want 7", got)
-	}
-	if got := EngramDataDirOptionCount(true, EngramChoiceClean); got != 6 {
-		t.Errorf("EngramDataDirOptionCount(true, clean) = %d, want 6", got)
+	if got := EngramDataDirOptionCount(true, EngramChoiceCopy); got != 5 {
+		t.Errorf("EngramDataDirOptionCount(true, copy) = %d, want 5", got)
 	}
 }
 
-func TestEngramDataDirContinueRow_WithExistingData(t *testing.T) {
+func TestEngramDataDirFeatureParityRows(t *testing.T) {
+	withData := RenderEngramDataDir(EngramDataDirRenderArgs{HasExistingData: true})
+	checks := []struct {
+		label string
+		want  bool
+	}{
+		{"Keep data at current location", false},
+		{"Back / keep current location", true},
+		{"Move existing data to a new location", true},
+		{"Copy existing data to another location", true},
+		{"Set active Engram directory", true},
+		{"Start fresh at a new location", true},
+		{"Continue", false},
+		{"Clean/reset data", false},
+	}
+	for _, tt := range checks {
+		t.Run(tt.label, func(t *testing.T) {
+			got := strings.Contains(withData, tt.label)
+			if got != tt.want {
+				t.Fatalf("contains(%q) = %v, want %v; output:\n%s", tt.label, got, tt.want, withData)
+			}
+		})
+	}
+}
+
+func TestRenderEngramDataDir_NoActionPreselectedWithFilledBlob(t *testing.T) {
+	for _, hasData := range []bool{false, true} {
+		out := RenderEngramDataDir(EngramDataDirRenderArgs{HasExistingData: hasData, Choice: EngramChoiceStartFresh})
+		if strings.Contains(out, "●") {
+			t.Fatalf("main data-dir screen should not render a filled selected blob; hasData=%v output:\n%s", hasData, out)
+		}
+	}
+}
+
+func TestEngramFilesHeadingByChoice(t *testing.T) {
 	tests := []struct {
 		name   string
 		choice int
-		want   int
+		want   string
 	}{
-		{"default", EngramChoiceDefault, 4},
-		{"migrate", EngramChoiceMigrate, 3},
-		{"start fresh", EngramChoiceStartFresh, 4},
-		{"clean", EngramChoiceClean, 4},
+		{"migrate", EngramChoiceMigrate, "Files that will be moved:"},
+		{"copy", EngramChoiceCopy, "Files that will be copied:"},
+		{"set active", EngramChoiceSetActive, "Files at selected active directory:"},
+		{"start fresh", EngramChoiceStartFresh, "Files that will be deleted:"},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := EngramDataDirContinueRow(true, tt.choice); got != tt.want {
-				t.Errorf("EngramDataDirContinueRow(true, %d) = %d, want %d", tt.choice, got, tt.want)
+			out := RenderEngramPathPicker(EngramPathPickerRenderArgs{Choice: tt.choice, FilesToMove: []string{"engram.db (1 B)"}})
+			if !strings.Contains(out, tt.want) {
+				t.Fatalf("missing heading %q in output:\n%s", tt.want, out)
 			}
 		})
+	}
+}
+
+func TestEngramPathPickerOptionCount(t *testing.T) {
+	suggestions := []engram.LocationSuggestion{{Label: "Home", Path: "/home/user/.engram"}, {Label: "External", Path: "/mnt/external/.engram"}}
+	if got := EngramPathPickerOptionCount(suggestions); got != 4 {
+		t.Errorf("EngramPathPickerOptionCount() = %d, want 4", got)
+	}
+	if got := EngramPathPickerBackRow(suggestions); got != 3 {
+		t.Errorf("EngramPathPickerBackRow() = %d, want 3", got)
 	}
 }
 
@@ -229,17 +304,31 @@ func TestRenderEngramConfirm(t *testing.T) {
 	}
 }
 
+func TestRenderEngramConfirm_NoSelectedBlobs(t *testing.T) {
+	out := RenderEngramConfirm(EngramConfirmRenderArgs{
+		Title:   "CONFIRM COPY",
+		Message: "Copy Engram data.",
+		Cursor:  0,
+	})
+	if strings.Contains(out, "●") || strings.Contains(out, "○") {
+		t.Fatalf("confirm screen should render focus only, not selected blobs; output:\n%s", out)
+	}
+	if !strings.Contains(out, "> Confirm") {
+		t.Fatalf("confirm row should still be focused; output:\n%s", out)
+	}
+}
+
 func TestRenderEngramConfirm_CancelFocused(t *testing.T) {
 	out := RenderEngramConfirm(EngramConfirmRenderArgs{
 		Title:   "CONFIRM CLEAN",
 		Message: "This will permanently delete all Engram data.",
 		Cursor:  1,
 	})
-	if !strings.Contains(out, "> ● Cancel") {
+	if !strings.Contains(out, "> Cancel") {
 		t.Error("Cancel should be focused")
 	}
-	if !strings.Contains(out, "○ Confirm") {
-		t.Error("Confirm should not be focused")
+	if strings.Contains(out, "●") || strings.Contains(out, "○") {
+		t.Error("confirm screen should show focus only, not selected radio blobs")
 	}
 }
 
@@ -297,6 +386,30 @@ func TestRenderEngramFeedback_WithDetails(t *testing.T) {
 	}
 	if !strings.Contains(out, "2 files moved") {
 		t.Error("missing details")
+	}
+}
+
+func TestRenderEngramFeedback_WithDeletedDetails(t *testing.T) {
+	out := RenderEngramFeedback(EngramFeedbackRenderArgs{
+		Title:   "FRESH DATABASE CREATED",
+		Message: "A new empty database will be created at the selected location.",
+		Details: "2 files deleted, 7.0 KB removed",
+	})
+	if !strings.Contains(out, "2 files deleted") {
+		t.Error("missing deleted file count")
+	}
+	if !strings.Contains(out, "7.0 KB removed") {
+		t.Error("missing deleted byte size")
+	}
+}
+
+func TestRenderEngramFeedback_NoSelectedBlob(t *testing.T) {
+	out := RenderEngramFeedback(EngramFeedbackRenderArgs{Title: "DONE", Message: "Complete."})
+	if strings.Contains(out, "●") || strings.Contains(out, "○") {
+		t.Fatalf("feedback screen should render focus only, not selected blobs; output:\n%s", out)
+	}
+	if !strings.Contains(out, "> Continue") {
+		t.Fatalf("continue row should still be focused; output:\n%s", out)
 	}
 }
 

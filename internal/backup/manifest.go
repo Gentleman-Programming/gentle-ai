@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 )
 
 // BackupSource identifies what operation created a backup.
@@ -133,13 +136,36 @@ func ReadManifest(path string) (Manifest, error) {
 	return manifest, nil
 }
 
-// backupRoot returns the expected parent directory for all backups.
+// LegacyBackupRoot returns the pre-Engram-storage parent directory for backups.
+// It remains readable so older backups do not disappear after users move Engram data.
+func LegacyBackupRoot(homeDir string) string {
+	return filepath.Join(homeDir, ".gentle-ai", "backups")
+}
+
+// EffectiveDataDir resolves the Engram data directory used for new backups.
+// Priority: ENGRAM_DATA_DIR > persisted install state > hard default (~/.engram).
+func EffectiveDataDir(homeDir string) string {
+	if dir := os.Getenv(engram.DataDirEnvVar); dir != "" {
+		return filepath.Clean(dir)
+	}
+	if s, err := state.Read(homeDir); err == nil && s.EngramDataDir != "" {
+		return filepath.Clean(s.EngramDataDir)
+	}
+	return filepath.Join(homeDir, ".engram")
+}
+
+// BackupRootForHome returns the current parent directory for new backups.
+func BackupRootForHome(homeDir string) string {
+	return filepath.Join(EffectiveDataDir(homeDir), "backups")
+}
+
+// backupRoot returns the expected current parent directory for new backups.
 func backupRoot() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
-	return filepath.Join(home, ".gentle-ai", "backups"), nil
+	return BackupRootForHome(home), nil
 }
 
 // BackupRootFn is the function used to resolve the backup root directory.
@@ -162,19 +188,47 @@ func isRootDirUnderBackupRoot(dir string) (bool, error) {
 	}
 	clean := filepath.Clean(dir)
 	rootClean := filepath.Clean(root)
-	if !strings.HasPrefix(clean, rootClean+string(filepath.Separator)) {
-		return false, nil
+	if isPathUnderRoot(clean, rootClean) {
+		return isPathUnderRootAfterSymlinkResolution(clean, rootClean), nil
 	}
-	// If the path exists, resolve symlinks and re-check to prevent symlink escapes.
-	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
-		resolvedRoot, err := filepath.EvalSymlinks(rootClean)
-		if err != nil {
-			resolvedRoot = rootClean
+
+	if home, err := backupHomeDir(); err == nil {
+		legacyRoot := filepath.Clean(LegacyBackupRoot(home))
+		if isPathUnderRoot(clean, legacyRoot) {
+			return isPathUnderRootAfterSymlinkResolution(clean, legacyRoot), nil
 		}
-		return strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator)), nil
 	}
-	// Path does not exist yet — accept Clean-only check.
-	return true, nil
+
+	return false, nil
+}
+
+func backupHomeDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		if override := os.Getenv("HOME"); override != "" {
+			return override, nil
+		}
+		return "", err
+	}
+	if override := os.Getenv("HOME"); override != "" {
+		return override, nil
+	}
+	return home, nil
+}
+
+func isPathUnderRoot(path, root string) bool {
+	return strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
+func isPathUnderRootAfterSymlinkResolution(path, root string) bool {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		resolvedRoot, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			resolvedRoot = root
+		}
+		return strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator))
+	}
+	return true
 }
 
 // DeleteBackup removes the entire backup directory.
