@@ -2843,6 +2843,48 @@ func TestInjectModelAssignments_StaleVariantOverwritten(t *testing.T) {
 	}
 }
 
+// TestInjectModelAssignments_RootModelFallbackClearsVariant verifies that
+// case 3 (rootModelID fallback — no TUI assignment, agent absent from user
+// config, root model set) writes variant:"" alongside the model. Mirrors the
+// case 1 contract so case 3 cannot leak a stale variant from the overlay
+// through to the user's settings file. See PR #440 review.
+func TestInjectModelAssignments_RootModelFallbackClearsVariant(t *testing.T) {
+	// The overlay carries a stale variant for sdd-apply but the user has no
+	// matching agent key, so case 2 cannot fire — case 3 must take over and
+	// clear the variant.
+	overlayJSON := []byte(`{
+  "agent": {
+    "sdd-apply": {"mode": "subagent", "prompt": "test", "variant": "high"}
+  }
+}`)
+
+	// No TUI assignment for sdd-apply, no existing agent key in user config,
+	// rootModelID is set → case 3 fires.
+	result, err := injectModelAssignments(overlayJSON, nil, "anthropic/claude-sonnet-4", map[string]bool{})
+	if err != nil {
+		t.Fatalf("injectModelAssignments() error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("Unmarshal result error = %v", err)
+	}
+
+	agents := parsed["agent"].(map[string]any)
+	applyAgent := agents["sdd-apply"].(map[string]any)
+
+	if m, _ := applyAgent["model"].(string); m != "anthropic/claude-sonnet-4" {
+		t.Errorf("model = %q, want rootModelID", m)
+	}
+	v, hasKey := applyAgent["variant"].(string)
+	if !hasKey {
+		t.Fatal("variant key must be present (set to \"\") in case 3 — symmetric with case 1")
+	}
+	if v != "" {
+		t.Errorf("variant = %q, want empty string (case 3 must clear stale variant)", v)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Windsurf workflow injection tests
 // ---------------------------------------------------------------------------

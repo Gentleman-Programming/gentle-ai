@@ -1539,7 +1539,9 @@ func renderClaudeModelAssignmentsSection(assignments map[string]model.ClaudeMode
 //     (existingAgentKeys) → skip; let the deep merge preserve whatever the
 //     user already has (including no model at all — that's intentional)
 //  3. Neither of the above AND rootModelID is set → inject rootModelID so the
-//     agent does not silently inherit the orchestrator model at runtime
+//     agent does not silently inherit the orchestrator model at runtime, and
+//     write variant="" to stay symmetric with case 1 and prevent stale variant
+//     leakage on the deep merge.
 //
 // If none of the above conditions apply, nothing is written for that agent.
 func injectModelAssignments(overlayBytes []byte, assignments map[string]model.ModelAssignment, rootModelID string, existingAgentKeys map[string]bool) ([]byte, error) {
@@ -1580,8 +1582,12 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 			// 2. Agent already exists in user's config — let merge preserve whatever they have
 			// (don't touch the overlay for this agent's model)
 		case rootModelID != "":
-			// 3. Fresh install or new agent: use root model as default to break inheritance
+			// 3. Fresh install or new agent: use root model as default to break inheritance.
+			// Also clear variant explicitly so the overlay output stays symmetric
+			// with case 1 — this prevents a stale variant from leaking through if
+			// the embedded overlay or upstream pipeline ever carries a variant.
 			agentMap["model"] = rootModelID
+			agentMap["variant"] = ""
 		}
 	}
 
