@@ -7,11 +7,11 @@ FROM fedora:43
 # System dependencies (includes npm/node for claude-code tests)
 # ---------------------------------------------------------------------------
 RUN dnf install -y \
-        git \
-        curl \
-        sudo \
-        ca-certificates \
-        @development-tools \
+    git \
+    curl \
+    sudo \
+    ca-certificates \
+    @development-tools \
     && dnf clean all
 
 # ---------------------------------------------------------------------------
@@ -23,7 +23,7 @@ RUN curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash - && \
 # ---------------------------------------------------------------------------
 # Install Go (match go.mod version)
 # ---------------------------------------------------------------------------
-ARG GO_VERSION=1.24.2
+ARG GO_VERSION=1.25.9
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
     | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}"

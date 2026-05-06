@@ -12,14 +12,14 @@ ARG DEBIAN_FRONTEND=noninteractive
 # runners live in Azure, so this is LAN-speed and avoids stalls on the default
 # regional mirror lottery (commit 5f6af97 had to extend the CI timeout for that).
 RUN sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; \
-            s|http://security.ubuntu.com|http://azure.archive.ubuntu.com|g' \
-            /etc/apt/sources.list && \
+    s|http://security.ubuntu.com|http://azure.archive.ubuntu.com|g' \
+    /etc/apt/sources.list && \
     apt-get update && apt-get install -y --no-install-recommends \
-        git \
-        curl \
-        sudo \
-        ca-certificates \
-        build-essential \
+    git \
+    curl \
+    sudo \
+    ca-certificates \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -31,7 +31,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \
 # ---------------------------------------------------------------------------
 # Install Go (match go.mod version)
 # ---------------------------------------------------------------------------
-ARG GO_VERSION=1.24.2
+ARG GO_VERSION=1.25.9
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
     | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}"
