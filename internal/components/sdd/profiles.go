@@ -277,8 +277,12 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 	}
 	if profile.OrchestratorModel.ProviderID != "" && profile.OrchestratorModel.ModelID != "" {
 		orchEntry["model"] = profile.OrchestratorModel.FullID()
+		// Always write variant (even "") so the deep merge clears any stale
+		// effort from a previous profile. Mirrors inject.go (case 1).
 		if profile.OrchestratorModel.Effort != "" {
 			orchEntry["variant"] = profile.OrchestratorModel.Effort
+		} else {
+			orchEntry["variant"] = ""
 		}
 	}
 	agentMap[orchestratorKey] = orchEntry
@@ -314,8 +318,12 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 		}
 		if assignment, ok := profile.PhaseAssignments[phase]; ok && assignment.ProviderID != "" && assignment.ModelID != "" {
 			entry["model"] = assignment.FullID()
+			// Always write variant (even "") so the deep merge clears any stale
+			// effort from a previous profile. Mirrors inject.go (case 1).
 			if assignment.Effort != "" {
 				entry["variant"] = assignment.Effort
+			} else {
+				entry["variant"] = ""
 			}
 		}
 		agentMap[key] = entry

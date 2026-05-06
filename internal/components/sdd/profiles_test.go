@@ -808,9 +808,11 @@ func TestGenerateProfileOverlay_VariantInjected(t *testing.T) {
 	}
 }
 
-// TestGenerateProfileOverlay_EmptyEffortOmitsKey verifies that a profile phase
-// assignment with Effort="" does not produce a "variant" key.
-func TestGenerateProfileOverlay_EmptyEffortOmitsKey(t *testing.T) {
+// TestGenerateProfileOverlay_EmptyEffortClearsVariant verifies that a profile
+// phase assignment with Effort="" produces variant:"" so the deep merge clears
+// any stale variant value left over from a previous profile. Mirrors the
+// inject.go behavior — see PR #440 review.
+func TestGenerateProfileOverlay_EmptyEffortClearsVariant(t *testing.T) {
 	home := t.TempDir()
 
 	profile := model.Profile{
@@ -832,9 +834,25 @@ func TestGenerateProfileOverlay_EmptyEffortOmitsKey(t *testing.T) {
 	}
 
 	agentMap := root["agent"].(map[string]any)
+
 	applyAgent := agentMap["sdd-apply-cheap"].(map[string]any)
-	if _, hasKey := applyAgent["variant"]; hasKey {
-		t.Error("variant key should be absent when Effort is empty")
+	variant, hasKey := applyAgent["variant"]
+	if !hasKey {
+		t.Fatal("variant key must be present (set to \"\") so the deep merge clears stale values")
+	}
+	if got := variant.(string); got != "" {
+		t.Errorf("sdd-apply-cheap variant = %q, want empty string", got)
+	}
+
+	// Orchestrator should follow the same rule.
+	orchKey := "sdd-orchestrator-cheap"
+	orchAgent := agentMap[orchKey].(map[string]any)
+	orchVariant, orchHasKey := orchAgent["variant"]
+	if !orchHasKey {
+		t.Fatalf("orchestrator %q variant key must be present (set to \"\")", orchKey)
+	}
+	if got := orchVariant.(string); got != "" {
+		t.Errorf("%s variant = %q, want empty string", orchKey, got)
 	}
 }
 
