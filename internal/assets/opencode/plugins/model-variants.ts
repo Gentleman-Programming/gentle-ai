@@ -9,7 +9,7 @@
  */
 
 import type { Plugin } from "@opencode-ai/plugin"
-import { writeFile, mkdir } from "fs/promises"
+import { writeFile, mkdir, rename } from "fs/promises"
 import { homedir } from "os"
 import path from "path"
 
@@ -31,21 +31,26 @@ export const ModelVariantsPlugin: Plugin = async (input) => {
         }
       }
 
-      if (Object.keys(variants).length === 0) return
-
       const cacheDir = path.join(homedir(), ".gentle-ai", "cache")
       await mkdir(cacheDir, { recursive: true })
-      await writeFile(
-        path.join(cacheDir, "model-variants.json"),
-        JSON.stringify(variants, null, 2),
-      )
-    } catch {
-      // Silent failure — file won't be created/updated
+
+      // Atomic write: write to .tmp then rename. rename() is atomic on POSIX,
+      // so concurrent readers (e.g. `gentle-ai sync`) never see a partial JSON.
+      // Always write — even when empty — to avoid leaving a stale cache from
+      // a previous run alive after providers stop reporting variants.
+      const finalPath = path.join(cacheDir, "model-variants.json")
+      const tmpPath = finalPath + ".tmp"
+      await writeFile(tmpPath, JSON.stringify(variants, null, 2))
+      await rename(tmpPath, finalPath)
+    } catch (err) {
+      console.error("[model-variants] cache refresh failed:", err)
     }
   }
 
   // Don't await — server isn't ready during plugin init. Fire and forget.
-  refreshVariantsCache().catch(() => {})
+  refreshVariantsCache().catch((err) => {
+    console.error("[model-variants] unexpected refresh error:", err)
+  })
 
   return {}
 }
