@@ -173,12 +173,15 @@ func runUpdate(ctx context.Context, currentVersion string, profile system.Platfo
 //   - Falls back to manual guidance for unsafe platforms (Windows binary self-replace)
 func runUpgrade(ctx context.Context, args []string, detection system.DetectionResult, stdout io.Writer) error {
 	dryRun := false
+	noBackup := false
 	var toolFilter []string
 
 	for _, arg := range args {
 		switch {
 		case arg == "--dry-run" || arg == "-n":
 			dryRun = true
+		case arg == "--no-backup":
+			noBackup = true
 		case !strings.HasPrefix(arg, "-"):
 			toolFilter = append(toolFilter, arg)
 		}
@@ -202,7 +205,14 @@ func runUpgrade(ctx context.Context, args []string, detection system.DetectionRe
 	}
 
 	// Execute upgrades (no-op if nothing is UpdateAvailable).
-	report := upgradeExecute(ctx, checkResults, profile, homeDir, dryRun, stdout)
+	// Use ExecuteWithOptions directly so CLI-only flags (e.g. --no-backup) can
+	// be wired through without expanding the upgradeExecute test seam used by
+	// the TUI dispatcher (see tuiUpgrade below).
+	report := upgrade.ExecuteWithOptions(ctx, checkResults, profile, homeDir, dryRun, upgrade.ExecuteOptions{
+		Progress:          stdout,
+		BackupDiagnostics: stdout,
+		SkipBackup:        noBackup,
+	})
 
 	_, _ = fmt.Fprint(stdout, upgrade.RenderUpgradeReport(report))
 

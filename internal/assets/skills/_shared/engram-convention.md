@@ -31,7 +31,7 @@ Set `capture_prompt: false` when the Engram tool schema supports it; if an older
 | `archive-report` | sdd-archive | Archive closure with lineage |
 | `state` | orchestrator | DAG state for recovery after compaction |
 
-Exception: `sdd-init` uses `sdd-init/{project-name}` as both title and topic_key.
+
 
 ### State Artifact
 

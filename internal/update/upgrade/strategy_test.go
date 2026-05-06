@@ -619,15 +619,15 @@ func TestBrewUpgrade_RunsUpdateBeforeUpgrade(t *testing.T) {
 		t.Fatalf("brewUpgrade: unexpected error: %v", err)
 	}
 
-	// Must have called brew update AND brew upgrade — in that order.
-	if len(callOrder) < 2 {
-		t.Fatalf("expected 2 brew calls (update, upgrade), got %d: %v", len(callOrder), callOrder)
+	// Must have called brew tap, brew update AND brew upgrade — in that order.
+	if len(callOrder) < 3 {
+		t.Fatalf("expected 3 brew calls (tap, update, upgrade), got %d: %v", len(callOrder), callOrder)
 	}
-	if callOrder[0] != "update" {
-		t.Errorf("first brew call = %q, want %q", callOrder[0], "update")
+	if callOrder[1] != "update" {
+		t.Errorf("second brew call = %q, want %q", callOrder[1], "update")
 	}
-	if callOrder[1] != "upgrade" {
-		t.Errorf("second brew call = %q, want %q", callOrder[1], "upgrade")
+	if callOrder[2] != "upgrade" {
+		t.Errorf("third brew call = %q, want %q", callOrder[2], "upgrade")
 	}
 }
 
@@ -658,15 +658,62 @@ func TestBrewUpgrade_UpdateFailureIsNonFatal(t *testing.T) {
 		t.Errorf("expected success when brew update fails but brew upgrade succeeds, got: %v", err)
 	}
 
-	// Both brew update and brew upgrade must have been called.
-	if len(callArgs) < 2 {
-		t.Fatalf("expected 2 brew calls, got %d: %v", len(callArgs), callArgs)
+	// Both brew update and brew upgrade must have been called (after the tap).
+	if len(callArgs) < 3 {
+		t.Fatalf("expected 3 brew calls, got %d: %v", len(callArgs), callArgs)
 	}
-	if callArgs[0] != "update" {
-		t.Errorf("first brew call = %q, want %q", callArgs[0], "update")
+	if callArgs[1] != "update" {
+		t.Errorf("second brew call = %q, want %q", callArgs[1], "update")
 	}
-	if callArgs[1] != "upgrade" {
-		t.Errorf("second brew call = %q, want %q", callArgs[1], "upgrade")
+	if callArgs[2] != "upgrade" {
+		t.Errorf("third brew call = %q, want %q", callArgs[2], "upgrade")
+	}
+}
+
+// --- TestBrewUpgrade_TapsBeforeUpdateAndUpgrade ---
+
+// TestBrewUpgrade_TapsBeforeUpdateAndUpgrade verifies that brewUpgrade calls
+// `brew tap Gentleman-Programming/homebrew-tap` BEFORE `brew update` and
+// `brew upgrade <toolName>`. This makes the upgrade idempotent when a user
+// has lost the tap (untap, machine swap, brew cleanup). See issue #455.
+func TestBrewUpgrade_TapsBeforeUpdateAndUpgrade(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	type call struct {
+		subcommand string
+		arg        string
+	}
+	var calls []call
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "brew" && len(args) > 0 {
+			c := call{subcommand: args[0]}
+			if len(args) > 1 {
+				c.arg = args[1]
+			}
+			calls = append(calls, c)
+		}
+		return exec.Command("echo", "ok")
+	}
+
+	if err := brewUpgrade(context.Background(), "engram"); err != nil {
+		t.Fatalf("brewUpgrade: unexpected error: %v", err)
+	}
+
+	if len(calls) < 3 {
+		t.Fatalf("expected 3 brew calls (tap, update, upgrade), got %d: %+v", len(calls), calls)
+	}
+	if calls[0].subcommand != "tap" {
+		t.Errorf("first brew call subcommand = %q, want %q", calls[0].subcommand, "tap")
+	}
+	if calls[0].arg != "Gentleman-Programming/homebrew-tap" {
+		t.Errorf("first brew call arg = %q, want %q", calls[0].arg, "Gentleman-Programming/homebrew-tap")
+	}
+	if calls[1].subcommand != "update" {
+		t.Errorf("second brew call = %q, want %q", calls[1].subcommand, "update")
+	}
+	if calls[2].subcommand != "upgrade" {
+		t.Errorf("third brew call = %q, want %q", calls[2].subcommand, "upgrade")
 	}
 }
 

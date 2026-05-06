@@ -21,10 +21,10 @@ You are an EXECUTOR for this phase, not the orchestrator. Do the initialization 
   **Save project context**:
   ```
   mem_save(
-    title: "sdd-init/{project-name}",
-    topic_key: "sdd-init/{project-name}",
+    title: "sdd-init/{project}",
+    topic_key: "sdd-init/{project}",
     type: "architecture",
-    project: "{project-name}",
+    project: "{project}",
     capture_prompt: false,
     content: "{detected project context markdown}"
   )
@@ -178,10 +178,10 @@ Persist detected testing capabilities as a separate Engram observation (or secti
 If mode is `engram` or `hybrid`:
 ```
 mem_save(
-  title: "sdd/{project-name}/testing-capabilities",
-  topic_key: "sdd/{project-name}/testing-capabilities",
+  title: "sdd/{project}/testing-capabilities",
+  topic_key: "sdd/{project}/testing-capabilities",
   type: "config",
-  project: "{project-name}",
+  project: "{project}",
   capture_prompt: false,
   content: "{testing capabilities markdown — see format below}"
 )
@@ -239,10 +239,10 @@ See `skills/skill-registry/SKILL.md` for the full registry format and scanning d
 If mode is `engram`:
 ```
 mem_save(
-  title: "sdd-init/{project-name}",
-  topic_key: "sdd-init/{project-name}",
+  title: "sdd-init/{project}",
+  topic_key: "sdd-init/{project}",
   type: "architecture",
-  project: "{project-name}",
+  project: "{project}",
   capture_prompt: false,
   content: "{your detected project context from Steps 1-7}"
 )
@@ -259,7 +259,7 @@ Return a structured summary adapted to the resolved mode:
 
 #### If mode is `engram`:
 
-Persist project context following `skills/_shared/engram-convention.md` with title and topic_key `sdd-init/{project-name}`.
+Persist project context following `skills/_shared/engram-convention.md` with title and topic_key `sdd-init/{project}`.
 
 Return:
 ```
@@ -284,9 +284,9 @@ Return:
 ### Context Saved
 Project context persisted to Engram.
 - **Engram ID**: #{observation-id}
-- **Topic key**: sdd-init/{project-name}
+- **Topic key**: sdd-init/{project}
 - **Capabilities ID**: #{capabilities-observation-id}
-- **Capabilities key**: sdd/{project-name}/testing-capabilities
+- **Capabilities key**: sdd/{project}/testing-capabilities
 
 No project files created.
 
