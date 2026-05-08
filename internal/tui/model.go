@@ -409,6 +409,11 @@ type Model struct {
 	// OpenCodePluginRegistrationResults and Err hold the dedicated shortcut result.
 	OpenCodePluginRegistrationResults []opencodeplugin.Result
 	OpenCodePluginRegistrationErr     error
+
+	// EngramDataDir is the persisted Engram data directory path loaded from
+	// state.json before the TUI starts. "" means the default (~/.engram).
+	// The management screens (PR D) read and update this field.
+	EngramDataDir string
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
