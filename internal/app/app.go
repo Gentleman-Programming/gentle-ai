@@ -86,7 +86,15 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return fmt.Errorf("resolve user home directory: %w", err)
 		}
 
+		// Pre-load persisted Engram data directory so the TUI can display and
+		// manage it without a separate state read on the management screen.
+		var engramDataDir string
+		if s, stateErr := state.Read(homeDir); stateErr == nil {
+			engramDataDir = s.EngramDataDir
+		}
+
 		m := tui.NewModel(result, Version)
+		m.EngramDataDir = engramDataDir
 		m.ExecuteFn = tuiExecute
 		m.RestoreFn = tuiRestore
 		m.DeleteBackupFn = func(manifest backup.Manifest) error {
@@ -279,6 +287,7 @@ func tuiExecute(
 			ClaudeModelAssignments: claudeAliasesToStrings(selection.ClaudeModelAssignments),
 			ModelAssignments:       modelAssignmentsToState(selection.ModelAssignments),
 			Persona:                string(selection.Persona),
+			EngramDataDir:          selection.EngramDataDir,
 		})
 	}
 

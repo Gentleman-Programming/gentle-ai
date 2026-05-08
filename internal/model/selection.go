@@ -1,5 +1,18 @@
 package model
 
+// EngramDataDirOp is the operation the user chose for their Engram data directory.
+// String-based enum — matches the AgentID / ComponentID convention.
+type EngramDataDirOp string
+
+const (
+	EngramDataDirOpNone   EngramDataDirOp = ""
+	EngramDataDirOpKeep   EngramDataDirOp = "keep"
+	EngramDataDirOpCopy   EngramDataDirOp = "copy"
+	EngramDataDirOpMove   EngramDataDirOp = "move"
+	EngramDataDirOpDelete EngramDataDirOp = "delete"
+	EngramDataDirOpFresh  EngramDataDirOp = "fresh"
+)
+
 type Selection struct {
 	Agents                 []AgentID
 	Components             []ComponentID
@@ -14,6 +27,8 @@ type Selection struct {
 	KiroModelAssignments   map[string]ClaudeModelAlias // key = phase name; value = opus|sonnet|haiku (Kiro-only)
 	Profiles               []Profile                   // named SDD profiles to generate/update during sync
 	OpenCodePlugins        []OpenCodeCommunityPluginID // optional community OpenCode TUI plugins
+	EngramDataDir          string                      // custom Engram data directory path; "" means default ~/.engram
+	EngramDataDirOp        EngramDataDirOp             // operation chosen at install time; "" means no change
 }
 
 func (s Selection) HasAgent(agent AgentID) bool {

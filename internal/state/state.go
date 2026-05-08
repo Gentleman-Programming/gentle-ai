@@ -41,6 +41,10 @@ type InstallState struct {
 	// Empty for state files written before persona persistence was added —
 	// callers fall back to PersonaGentleman in that case.
 	Persona string `json:"persona,omitempty"`
+
+	// EngramDataDir is the filesystem path of the Engram data directory chosen
+	// by the user. When empty the default (~/.engram) is used.
+	EngramDataDir string `json:"engram_data_dir,omitempty"`
 }
 
 // Path returns the absolute path to the state file for the given home directory.
