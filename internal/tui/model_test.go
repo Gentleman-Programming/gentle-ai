@@ -1599,7 +1599,7 @@ func TestModelConfig_OpenCodePickerBackReturnsToModelConfig(t *testing.T) {
 // makeDetectionWithAgents builds a DetectionResult with the specified agents
 // marked as Exists=true. All other agents are absent.
 func makeDetectionWithAgents(present ...string) system.DetectionResult {
-	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "qwen-code"}
+	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "copilot-cli", "codex", "antigravity", "windsurf", "qwen-code"}
 	presentSet := make(map[string]bool, len(present))
 	for _, p := range present {
 		presentSet[p] = true
@@ -2293,11 +2293,11 @@ func TestModelConfig_EscFromPickersReturnsToModelConfig(t *testing.T) {
 	}
 }
 
-// TestPreselectedAgents_AllSixAgentsMappedCorrectly verifies every canonical
+// TestPreselectedAgents_AllAgentsMappedCorrectly verifies every canonical
 // agent string maps to its model.AgentID constant in preselectedAgents.
 // This prevents silent drops when new agents are added to ScanConfigs without
 // updating the TUI switch statement.
-func TestPreselectedAgents_AllSixAgentsMappedCorrectly(t *testing.T) {
+func TestPreselectedAgents_AllAgentsMappedCorrectly(t *testing.T) {
 	tests := []struct {
 		configAgent string
 		wantID      model.AgentID
@@ -2307,6 +2307,7 @@ func TestPreselectedAgents_AllSixAgentsMappedCorrectly(t *testing.T) {
 		{"gemini-cli", model.AgentGeminiCLI},
 		{"cursor", model.AgentCursor},
 		{"vscode-copilot", model.AgentVSCodeCopilot},
+		{"copilot-cli", model.AgentCopilotCLI},
 		{"codex", model.AgentCodex},
 	}
 

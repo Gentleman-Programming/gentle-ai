@@ -60,7 +60,7 @@ Test coverage:
 - **78 E2E test functions** running in Docker containers (Ubuntu + Arch)
 - **17 golden files** for snapshot testing component output
 - Full pipeline tested: detection, planning, execution, backup, restore, verification
-- All 8 agent adapters have unit tests with cross-platform path validation
+- All agent adapters have unit tests with cross-platform path validation
 
 ---
 
@@ -69,7 +69,7 @@ Test coverage:
 | | Gentleman.Dots | AI Gentle Stack |
 |--|---------------|-----------------|
 | **Purpose** | Dev environment (editors, shells, terminals) | AI development layer (agents, memory, skills) |
-| **Installs** | Neovim, Fish/Zsh, Tmux/Zellij, Ghostty | Configures Claude Code, OpenCode, Gemini CLI, Cursor, VS Code Copilot, Codex, Windsurf, Antigravity |
+| **Installs** | Neovim, Fish/Zsh, Tmux/Zellij, Ghostty | Configures Claude Code, OpenCode, Gemini CLI, Cursor, VS Code Copilot, Copilot CLI, Codex, Windsurf, Antigravity |
 | **Overlap** | None — complementary | None — different layer |
 
 Install Gentleman.Dots first for your dev environment, then AI Gentle Stack for the AI layer on top.

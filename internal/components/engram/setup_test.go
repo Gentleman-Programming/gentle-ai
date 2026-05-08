@@ -58,6 +58,7 @@ func TestSetupAgentSlug(t *testing.T) {
 		{model.AgentQwenCode, "", false},
 		{model.AgentCursor, "", false},
 		{model.AgentVSCodeCopilot, "", false},
+		{model.AgentCopilotCLI, "", false},
 	}
 
 	for _, tt := range tests {

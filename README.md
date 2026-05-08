@@ -25,7 +25,7 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 
 **After**: Your agent now has memory, skills, workflow, MCP tools, and a persona that actually teaches you.
 
-### 12 Supported Agents
+### 13 Supported Agents
 
 | Agent | Delegation Model | Key Feature |
 |-------|:---:|---|
@@ -35,6 +35,7 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 | **Gemini CLI** | Full (experimental) | Custom agents in `~/.gemini/agents/` |
 | **Cursor** | Full (native subagents) | 10 SDD agents in `~/.cursor/agents/` |
 | **VS Code Copilot** | Full (runSubagent) | Parallel execution |
+| **Copilot CLI** | Full (Task tool) | Native terminal workflow in `~/.copilot` |
 | **Codex** | Solo-agent | CLI-native, TOML config |
 | **Windsurf** | Solo-agent | Plan Mode, Code Mode, native workflows |
 | **Antigravity** | Solo-agent + Mission Control | Built-in Browser/Terminal sub-agents |

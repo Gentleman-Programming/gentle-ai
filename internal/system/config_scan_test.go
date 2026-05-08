@@ -25,11 +25,10 @@ func TestScanConfigs_ReturnsAllKnownAgentsWithExistsFlag(t *testing.T) {
 	configs := ScanConfigs(home)
 
 	// Must return at least as many entries as the registry has adapters with
-	// a non-empty GlobalConfigDir. Currently 12 agents are supported.
-	if len(configs) < 12 {
-		t.Fatalf("ScanConfigs() returned %d entries, want >= 12; got %v", len(configs), configs)
+	// a non-empty GlobalConfigDir. Currently 13 agents are supported.
+	if len(configs) < 13 {
+		t.Fatalf("ScanConfigs() returned %d entries, want >= 13; got %v", len(configs), configs)
 	}
-
 
 	// Find claude — must be Exists=true.
 	var claudeState *ConfigState
@@ -76,6 +75,7 @@ func TestScanConfigs_AgentFieldMatchesModelAgentID(t *testing.T) {
 		"gemini-cli":     false,
 		"cursor":         false,
 		"vscode-copilot": false,
+		"copilot-cli":    false,
 		"codex":          false,
 		"antigravity":    false,
 		"windsurf":       false,
@@ -83,7 +83,6 @@ func TestScanConfigs_AgentFieldMatchesModelAgentID(t *testing.T) {
 		"qwen-code":      false,
 		"kiro-ide":       false,
 	}
-
 
 	for _, c := range configs {
 		if _, known := knownAgents[c.Agent]; known {
