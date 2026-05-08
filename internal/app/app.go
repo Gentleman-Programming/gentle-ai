@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
@@ -33,10 +34,52 @@ var (
 	upgradeExecute           = upgrade.Execute
 	ensureCurrentOSSupported = system.EnsureCurrentOSSupported
 	detectSystem             = system.Detect
+	findAllBinaries          = system.FindAllBinaryCopies
 )
 
 func Run() error {
 	return RunArgs(os.Args[1:], os.Stdout)
+}
+
+func runDoctor(args []string, stdout io.Writer) error {
+	opts := doctor.Options{
+		Timeout: doctor.DefaultTimeout,
+	}
+
+	// Manual arg-loop: same pattern as runUpgrade (no flag package).
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--json":
+			opts.JSON = true
+		case args[i] == "--verbose":
+			opts.Verbose = true
+		case args[i] == "--category" && i+1 < len(args):
+			i++
+			opts.Category = args[i]
+		case strings.HasPrefix(args[i], "-"):
+			return fmt.Errorf("unknown flag %q — run 'gentle-ai help' for usage", args[i])
+		}
+	}
+
+	// Wire dependency injection.
+	doctor.SetFindAllBinaries(findAllBinaries)
+
+	checks := doctor.AllChecks()
+	report := doctor.RunChecks(context.Background(), checks, opts)
+
+	if opts.JSON {
+		if err := doctor.RenderJSON(stdout, report); err != nil {
+			return fmt.Errorf("render JSON: %w", err)
+		}
+	} else {
+		_, _ = fmt.Fprint(stdout, doctor.RenderReport(report))
+	}
+
+	if !report.Healthy {
+		return fmt.Errorf("doctor found %d failing check(s)", report.Failed)
+	}
+
+	return nil
 }
 
 func RunArgs(args []string, stdout io.Writer) error {
@@ -57,6 +100,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "uninstall":
 			_, err := cli.RunUninstall(args[1:], stdout)
 			return err
+		case "doctor":
+			return runDoctor(args[1:], stdout)
 		}
 	}
 

@@ -77,3 +77,68 @@ func addToProcessPath(dir string) error {
 	}
 	return os.Setenv("PATH", dir+string(os.PathListSeparator)+currentPath)
 }
+
+// FindAllBinaryCopies walks every directory in PATH and returns all absolute
+// paths where a binary named name exists. Unlike exec.LookPath, which stops
+// at the first match, this iterates the entire PATH to detect shadowed binaries.
+//
+// Results are ordered by PATH precedence (first entry = highest priority).
+// Symlinks are resolved for deduplication: if two PATH entries point to the
+// same real file, only the first is returned. On Windows, common executable
+// extensions (.exe, .cmd, .bat) are checked automatically.
+//
+// Returns nil when PATH is empty or the binary is not found.
+func FindAllBinaryCopies(name string) []string {
+	pathEnv := os.Getenv("PATH")
+	if pathEnv == "" {
+		return nil
+	}
+
+	dirs := filepath.SplitList(pathEnv)
+	seen := make(map[string]bool)
+	var results []string
+
+	candidates := []string{name}
+	if runtime.GOOS == "windows" && filepath.Ext(name) == "" {
+		candidates = append(candidates, name+".exe", name+".cmd", name+".bat")
+	}
+
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		for _, candidate := range candidates {
+			fullPath := filepath.Join(dir, candidate)
+
+			// Resolve symlinks for deduplication.
+			resolved, err := filepath.EvalSymlinks(fullPath)
+			if err != nil {
+				continue // file doesn't exist or broken symlink
+			}
+
+			info, err := os.Stat(resolved)
+			if err != nil || info.IsDir() {
+				continue
+			}
+
+			// On Unix, the file must be executable.
+			if runtime.GOOS != "windows" && info.Mode()&0111 == 0 {
+				continue
+			}
+
+			// Deduplicate by resolved path (case-insensitive on Windows).
+			key := resolved
+			if runtime.GOOS == "windows" {
+				key = strings.ToLower(resolved)
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			results = append(results, fullPath)
+		}
+	}
+
+	return results
+}
