@@ -25,6 +25,7 @@ Thanks to everyone who has contributed to gentle-ai. This project exists because
 | <img src="https://github.com/Unamunoqueva.png" width="40"> | Unamunoqueva | [@Unamunoqueva](https://github.com/Unamunoqueva) | Engram MCP config fix (#59) |
 | <img src="https://github.com/Tech-Codde.png" width="40"> | Tech-Codde | [@Tech-Codde](https://github.com/Tech-Codde) | Early contributions |
 | <img src="https://github.com/alexandervazquez98.png" width="40"> | Edgar Alexander Vazquez | [@alexandervazquez98](https://github.com/alexandervazquez98) | Antigravity IDE agent support |
+| <img src="https://github.com/cxto21.png" width="40"> | Ignacio del Corro (Naiam) | [@cxto21](https://github.com/cxto21) | Copilot CLI support |
 | <img src="https://github.com/ARG-PROG.png" width="40"> | ARG-PROG | [@ARG-PROG](https://github.com/ARG-PROG) | Early contributions |
 | <img src="https://github.com/maxiozonas.png" width="40"> | Maximo Ozonas | [@maxiozonas](https://github.com/maxiozonas) | sdd-onboard OpenCode registration (#200) |
 
