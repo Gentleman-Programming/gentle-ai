@@ -3,7 +3,7 @@ name: jd-judge-a
 description: >
   Adversarial code reviewer — blind judge A for judgment-day parallel review protocol.
 model: {{KIRO_MODEL}}
-tools: ["@builtin", "@engram"]
+tools: ["read", "shell", "@engram"]
 includeMcpJson: true
 ---
 
