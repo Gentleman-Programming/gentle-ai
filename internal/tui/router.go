@@ -43,6 +43,12 @@ var linearRoutes = map[Screen]Route{
 	ScreenAgentBuilderPreview:    {Backward: ScreenAgentBuilderPrompt},
 	ScreenAgentBuilderInstalling: {Forward: ScreenAgentBuilderComplete},
 	ScreenAgentBuilderComplete:   {Backward: ScreenWelcome},
+	// Engram data-directory management (from Welcome menu).
+	ScreenEngramDataDir:        {Backward: ScreenWelcome},
+	ScreenEngramDataDirConfirm: {Backward: ScreenEngramDataDir},
+	ScreenEngramDataDirResult:  {Backward: ScreenEngramDataDir},
+	// Install-time Engram data detection (between Preset and DependencyTree).
+	ScreenEngramDataDirInstall: {Forward: ScreenDependencyTree, Backward: ScreenPreset},
 	ScreenUninstallMode:          {Backward: ScreenWelcome},
 	ScreenUninstall:              {Backward: ScreenUninstallMode},
 	ScreenUninstallComponents:    {Backward: ScreenUninstall},

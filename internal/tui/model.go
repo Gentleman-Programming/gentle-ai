@@ -15,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
@@ -127,6 +128,13 @@ type OpenCodePluginRegistrationDoneMsg struct {
 	Err     error
 }
 
+// EngramDataDirDoneMsg is sent when an Engram data-directory operation completes.
+type EngramDataDirDoneMsg struct {
+	Op         model.EngramDataDirOp
+	SnapshotID string
+	Err        error
+}
+
 // AgentBuilderState holds all transient state for the agent-builder TUI flow.
 type AgentBuilderState struct {
 	AvailableEngines []model.AgentID
@@ -230,6 +238,12 @@ const (
 	ScreenAgentBuilderPreview
 	ScreenAgentBuilderInstalling
 	ScreenAgentBuilderComplete
+
+	// Engram data-directory management screens.
+	ScreenEngramDataDir        // main management screen, entered from Welcome
+	ScreenEngramDataDirConfirm // confirm before a destructive/non-trivial op
+	ScreenEngramDataDirResult  // success/error result after the op
+	ScreenEngramDataDirInstall // install-time: existing data dir detected
 )
 
 type Model struct {
@@ -412,8 +426,33 @@ type Model struct {
 
 	// EngramDataDir is the persisted Engram data directory path loaded from
 	// state.json before the TUI starts. "" means the default (~/.engram).
-	// The management screens (PR D) read and update this field.
 	EngramDataDir string
+
+	// HomeDir is the user's home directory, used for Engram path resolution.
+	HomeDir string
+
+	// EngramDetected is true when the engram data directory or binary is present
+	// at startup. Controls whether "Manage Engram directory" appears on Welcome.
+	EngramDetected bool
+
+	// EngramDataDirFn executes a data-directory operation. Injected at startup
+	// to avoid an import of the engram package into app.go while still keeping
+	// model.go free of filesystem knowledge.
+	EngramDataDirFn func(op model.EngramDataDirOp, currentDir, dstDir string) (snapshotID string, err error)
+
+	// engramDirLocations is the candidate location list loaded when entering
+	// ScreenEngramDataDir.
+	engramDirLocations []engram.Location
+
+	// engramDirOp is the operation chosen on ScreenEngramDataDir.
+	engramDirOp model.EngramDataDirOp
+
+	// engramDirDstIdx is the index into engramDirLocations for the destination.
+	// -1 for ops that have no destination (Keep, Delete).
+	engramDirDstIdx int
+
+	// engramDirDoneMsg holds the result of the last data-dir operation.
+	engramDirDoneMsg *EngramDataDirDoneMsg
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -515,6 +554,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.OpenCodePluginRegistrationResults = msg.Results
 		m.OpenCodePluginRegistrationErr = msg.Err
 		m.setScreen(ScreenOpenCodePluginResult)
+		return m, nil
+	case EngramDataDirDoneMsg:
+		m.engramDirDoneMsg = &msg
+		if msg.Err == nil {
+			// Update the in-memory data-dir reference to match the operation result.
+			// app.go's EngramDataDirFn closure is responsible for persisting to state.json.
+			switch msg.Op {
+			case model.EngramDataDirOpMove:
+				// After a move the data now lives at dstDir.
+				if m.engramDirDstIdx >= 0 && m.engramDirDstIdx < len(m.engramDirLocations) {
+					m.EngramDataDir = m.engramDirLocations[m.engramDirDstIdx].Path
+				}
+			case model.EngramDataDirOpDelete, model.EngramDataDirOpFresh:
+				// Data was removed — reset to default (~/.engram).
+				m.EngramDataDir = ""
+			// Copy and Keep leave the current directory unchanged.
+			}
+		}
+		m.setScreen(ScreenEngramDataDirResult)
 		return m, nil
 	case StepProgressMsg:
 		return m.handleStepProgress(msg)
@@ -687,7 +745,7 @@ func (m Model) View() string {
 		if m.UpdateCheckDone && update.HasUpdates(m.UpdateResults) {
 			banner = "Updates available: " + update.UpdateSummaryLine(m.UpdateResults)
 		}
-		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
+		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.hasEngram())
 	case ScreenUpgrade:
 		return screens.RenderUpgrade(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenSync:
@@ -795,6 +853,30 @@ func (m Model) View() string {
 		return screens.RenderABInstalling(engineName, m.SpinnerFrame, m.AgentBuilder.InstallErr)
 	case ScreenAgentBuilderComplete:
 		return screens.RenderABComplete(m.AgentBuilder.Generated, m.AgentBuilder.InstallResults)
+
+	case ScreenEngramDataDir:
+		currentDir := m.resolvedEngramDir()
+		return screens.RenderEngramDataDir(m.Cursor, currentDir, m.engramDBSize(), m.engramDirLocations)
+
+	case ScreenEngramDataDirInstall:
+		currentDir := m.resolvedEngramDir()
+		return screens.RenderEngramDataDirInstall(m.Cursor, currentDir, m.engramDBSize())
+
+	case ScreenEngramDataDirConfirm:
+		currentDir := m.resolvedEngramDir()
+		var dstDir string
+		if m.engramDirDstIdx >= 0 && m.engramDirDstIdx < len(m.engramDirLocations) {
+			dstDir = m.engramDirLocations[m.engramDirDstIdx].Path
+		}
+		return screens.RenderEngramDataDirConfirm(m.engramDirOp, currentDir, dstDir, m.Cursor)
+
+	case ScreenEngramDataDirResult:
+		var done EngramDataDirDoneMsg
+		if m.engramDirDoneMsg != nil {
+			done = *m.engramDirDoneMsg
+		}
+		return screens.RenderEngramDataDirResult(done.Op, done.SnapshotID, done.Err)
+
 	default:
 		return ""
 	}
@@ -1133,6 +1215,16 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			if m.hasDetectedOpenCode() {
 				if m.Cursor == next {
 					m.setScreen(ScreenProfiles)
+					return m, nil
+				}
+				next++
+			}
+
+			if m.hasEngram() {
+				if m.Cursor == next {
+					m.engramDirLocations = engram.SuggestLocations(m.HomeDir, m.resolvedEngramDir())
+					m.engramDirDoneMsg = nil
+					m.setScreen(ScreenEngramDataDir)
 					return m, nil
 				}
 				next++
@@ -1944,6 +2036,61 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 	case ScreenAgentBuilderComplete:
 		m.setScreen(ScreenWelcome)
+
+	case ScreenEngramDataDir:
+		choices := screens.EngramDirChoices(m.engramDirLocations)
+		if m.Cursor >= len(choices) {
+			break
+		}
+		ch := choices[m.Cursor]
+		if ch.Op == model.EngramDataDirOpKeep {
+			m.setScreen(ScreenWelcome)
+			return m, nil
+		}
+		m.engramDirOp = ch.Op
+		m.engramDirDstIdx = ch.DstIdx
+		m.setScreen(ScreenEngramDataDirConfirm)
+
+	case ScreenEngramDataDirInstall:
+		switch m.Cursor {
+		case 0: // Keep — continue the install flow without touching the data dir.
+			m.Selection.EngramDataDirOp = model.EngramDataDirOpKeep
+			m.setScreen(ScreenDependencyTree)
+			return m, nil
+		case 1: // Fresh — snapshot existing data, then delete. Confirm first.
+			m.Selection.EngramDataDirOp = model.EngramDataDirOpFresh
+			m.engramDirOp = model.EngramDataDirOpFresh
+			m.engramDirDstIdx = -1
+			m.setScreen(ScreenEngramDataDirConfirm)
+			return m, nil
+		}
+
+	case ScreenEngramDataDirConfirm:
+		if m.Cursor == 1 {
+			// Cancel — return to whichever screen launched the confirm (management
+			// screen or install-time screen). m.PreviousScreen is set by setScreen.
+			m.setScreen(m.PreviousScreen)
+			return m, nil
+		}
+		// Confirm — run the operation in a goroutine.
+		currentDir := m.resolvedEngramDir()
+		var dstDir string
+		if m.engramDirDstIdx >= 0 && m.engramDirDstIdx < len(m.engramDirLocations) {
+			dstDir = m.engramDirLocations[m.engramDirDstIdx].Path
+		}
+		op := m.engramDirOp
+		fn := m.EngramDataDirFn
+		return m, func() tea.Msg {
+			if fn == nil {
+				return EngramDataDirDoneMsg{Op: op, Err: fmt.Errorf("EngramDataDirFn not configured")}
+			}
+			snapID, err := fn(op, currentDir, dstDir)
+			return EngramDataDirDoneMsg{Op: op, SnapshotID: snapID, Err: err}
+		}
+
+	case ScreenEngramDataDirResult:
+		// Any key returns to the management screen.
+		m.setScreen(ScreenEngramDataDir)
 	}
 
 	return m, nil
@@ -2606,7 +2753,7 @@ func (m Model) handleRenameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) optionCount() int {
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines()))
+		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.hasEngram()))
 	case ScreenUpgrade:
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			return 1 // "return" option in results/error state
@@ -2712,6 +2859,14 @@ func (m Model) optionCount() int {
 		return 0 // no cursor navigation while installing
 	case ScreenAgentBuilderComplete:
 		return 1 // Done
+	case ScreenEngramDataDir:
+		return len(screens.EngramDirChoices(m.engramDirLocations))
+	case ScreenEngramDataDirInstall:
+		return 2 // Keep + Fresh
+	case ScreenEngramDataDirConfirm:
+		return 2 // Confirm + Cancel
+	case ScreenEngramDataDirResult:
+		return 1
 	default:
 		return 0
 	}
@@ -3116,6 +3271,29 @@ func extractAvailableUpdates(results []update.UpdateResult) []screens.UpdateInfo
 		}
 	}
 	return updates
+}
+
+// hasEngram returns true when engram is present (binary or data directory found
+// at startup). Controls whether Engram directory management is shown on Welcome.
+func (m Model) hasEngram() bool { return m.EngramDetected }
+
+// resolvedEngramDir returns the active Engram data directory path.
+// Falls back to the default (~/.engram) when no custom dir is set.
+func (m Model) resolvedEngramDir() string {
+	if m.EngramDataDir != "" {
+		return m.EngramDataDir
+	}
+	return engram.DefaultDir(m.HomeDir)
+}
+
+// engramDBSize returns the file size of the current Engram DB, or 0 on error.
+func (m Model) engramDBSize() int64 {
+	dbPath := engram.DBPath(m.resolvedEngramDir())
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
 }
 
 // hasDetectedOpenCode returns true if OpenCode config directory was detected.

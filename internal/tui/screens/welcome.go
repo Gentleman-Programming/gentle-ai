@@ -10,11 +10,12 @@ import (
 
 // WelcomeOptions returns the welcome menu options.
 // When showProfiles is true, an "OpenCode SDD Profiles" option is inserted
-// between "Configure models" and "Manage backups".
+// before "Manage backups".
+// When hasEngram is true, a "Manage Engram directory" option is inserted
+// before "Manage backups".
 // profileCount is used to show a badge with the current profile count.
-// When hasEngines is false, "Create your own Agent" is shown as disabled
-// (labelled "(no agents)") to signal that no supported AI engine is installed.
-func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) []string {
+// When hasEngines is false, "Create your own Agent" is shown as disabled.
+func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, hasEngram bool) []string {
 	upgradeLabel := "Upgrade tools"
 	if updateCheckDone && update.HasUpdates(updateResults) {
 		upgradeLabel = "Upgrade tools ★"
@@ -45,6 +46,10 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 		opts = append(opts, profilesLabel)
 	}
 
+	if hasEngram {
+		opts = append(opts, "Manage Engram directory")
+	}
+
 	opts = append(opts, "Manage backups")
 	opts = append(opts, "Managed uninstall")
 	opts = append(opts, "Quit")
@@ -52,7 +57,7 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 	return opts
 }
 
-func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) string {
+func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, hasEngram bool) string {
 	var b strings.Builder
 
 	b.WriteString(styles.RenderLogo())
@@ -68,7 +73,7 @@ func RenderWelcome(cursor int, version string, updateBanner string, updateResult
 	b.WriteString("\n")
 	b.WriteString(styles.HeadingStyle.Render("Menu"))
 	b.WriteString("\n\n")
-	b.WriteString(renderOptions(WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines), cursor))
+	b.WriteString(renderOptions(WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines, hasEngram), cursor))
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • q: quit"))
 
