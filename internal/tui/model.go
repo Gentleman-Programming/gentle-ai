@@ -436,6 +436,9 @@ type Model struct {
 	// at startup. Controls whether "Manage Engram directory" appears on Welcome.
 	EngramDetected bool
 
+	// EngramSpaceErr is shown when a copy/move destination does not pass disk-space checks.
+	EngramSpaceErr string
+
 	// EngramDataDirFn executes a data-directory operation. Injected at startup
 	// to avoid an import of the engram package into app.go while still keeping
 	// model.go free of filesystem knowledge.
@@ -454,6 +457,9 @@ type Model struct {
 
 	engramDirCustomPath string
 	engramDirCustomPos  int
+
+	installEngramGateResolved bool
+	installFlowEngramActive   bool
 
 	// engramDirDoneMsg holds the result of the last data-dir operation.
 	engramDirDoneMsg *EngramDataDirDoneMsg
@@ -869,10 +875,10 @@ func (m Model) View() string {
 
 	case ScreenEngramDataDir:
 		currentDir := m.resolvedEngramDir()
-		return screens.RenderEngramDataDir(m.Cursor, currentDir, m.engramDBSize(), m.engramDirLocations, m.engramDirOp)
+		return screens.RenderEngramDataDir(m.Cursor, currentDir, m.engramDBSize(), m.engramDirLocations, m.engramDirOp, m.EngramSpaceErr)
 
 	case ScreenEngramDataDirCustomPath:
-		return screens.RenderEngramDataDirCustomPath(m.engramDirOp, m.resolvedEngramDir(), m.engramDirCustomPath, m.engramDirCustomPos, "")
+		return screens.RenderEngramDataDirCustomPath(m.engramDirOp, m.resolvedEngramDir(), m.engramDirCustomPath, m.engramDirCustomPos, m.EngramSpaceErr)
 
 	case ScreenEngramDataDirInstall:
 		currentDir := m.resolvedEngramDir()
@@ -1094,6 +1100,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.engramDirDstIdx = -1
 			m.engramDirCustomPath = ""
 			m.engramDirCustomPos = 0
+			m.EngramSpaceErr = ""
 			m.Cursor = 0
 			return m, nil
 		}
@@ -1248,6 +1255,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.engramDirDstIdx = -1
 					m.engramDirCustomPath = ""
 					m.engramDirCustomPos = 0
+					m.EngramSpaceErr = ""
 					m.Cursor = 0
 					m.setScreen(ScreenEngramDataDir)
 					return m, nil
@@ -2092,23 +2100,30 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.engramDirDstIdx = ch.DstIdx
 			m.engramDirCustomPath = ""
 			m.engramDirCustomPos = 0
+			m.EngramSpaceErr = ""
 			m.setScreen(ScreenEngramDataDirCustomPath)
 			return m, nil
 		}
 		m.engramDirOp = ch.Op
 		m.engramDirDstIdx = ch.DstIdx
+		if !m.checkEngramCopyMoveDiskSpace(ch.DstIdx) {
+			return m, nil
+		}
 		m.setScreen(ScreenEngramDataDirConfirm)
 
 	case ScreenEngramDataDirInstall:
 		switch m.Cursor {
 		case 0: // Keep — continue the install flow without touching the data dir.
 			m.Selection.EngramDataDirOp = model.EngramDataDirOpKeep
+			m.installEngramGateResolved = true
+			m.installFlowEngramActive = false
 			m.setScreen(ScreenDependencyTree)
 			return m, nil
 		case 1: // Fresh — snapshot existing data, then delete. Confirm first.
 			m.Selection.EngramDataDirOp = model.EngramDataDirOpFresh
 			m.engramDirOp = model.EngramDataDirOpFresh
 			m.engramDirDstIdx = -1
+			m.installEngramGateResolved = true
 			m.setScreen(ScreenEngramDataDirConfirm)
 			return m, nil
 		}
@@ -2139,6 +2154,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		m.engramDirDstIdx = -1
 		m.engramDirCustomPath = ""
 		m.engramDirCustomPos = 0
+		m.EngramSpaceErr = ""
 		m.setScreen(ScreenEngramDataDir)
 	}
 

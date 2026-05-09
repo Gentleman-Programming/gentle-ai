@@ -75,7 +75,8 @@ func (s DataDirService) Delete(dataDir string) (backup.Manifest, error) {
 }
 
 // DiskSpaceOK reports whether the volume at dst has enough free space to hold
-// a copy of the DB at srcDB. Returns (ok, needed bytes, available bytes, error).
+// a copy of the single DB file at srcDB. For copying all SQLite artifacts (DB+WAL+SHM),
+// use DiskSpaceOKForSQLiteArtifacts instead.
 func (s DataDirService) DiskSpaceOK(srcDB, dst string) (bool, int64, int64, error) {
 	info, err := os.Stat(srcDB)
 	if err != nil {

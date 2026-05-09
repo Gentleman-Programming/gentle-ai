@@ -47,7 +47,7 @@ func EngramDirLocationChoices(locations []engram.Location, op model.EngramDataDi
 }
 
 // RenderEngramDataDir renders the main management screen shown from Welcome.
-func RenderEngramDataDir(cursor int, currentDir string, dbSize int64, locations []engram.Location, selectedOp model.EngramDataDirOp) string {
+func RenderEngramDataDir(cursor int, currentDir string, dbSize int64, locations []engram.Location, selectedOp model.EngramDataDirOp, spaceErr string) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Manage Engram Data Directory"))
@@ -59,6 +59,10 @@ func RenderEngramDataDir(cursor int, currentDir string, dbSize int64, locations 
 		b.WriteString("\n\n")
 	} else {
 		b.WriteString(styles.SubtextStyle.Render("Choose what you want to do first. Destinations are shown on the next screen."))
+		b.WriteString("\n\n")
+	}
+	if strings.TrimSpace(spaceErr) != "" {
+		b.WriteString(styles.WarningStyle.Render(spaceErr))
 		b.WriteString("\n\n")
 	}
 

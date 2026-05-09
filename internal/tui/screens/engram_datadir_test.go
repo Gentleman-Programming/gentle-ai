@@ -13,7 +13,7 @@ func TestRenderEngramDataDir_HasTitle(t *testing.T) {
 	locs := []engram.Location{
 		{Path: "/home/user/.engram", Label: "~/.engram", Available: -1, IsCurrent: true},
 	}
-	out := RenderEngramDataDir(0, "/home/user/.engram", 1024, locs, model.EngramDataDirOpNone)
+	out := RenderEngramDataDir(0, "/home/user/.engram", 1024, locs, model.EngramDataDirOpNone, "")
 	if !strings.Contains(out, "Manage Engram Data Directory") {
 		t.Error("expected title in output")
 	}
@@ -23,7 +23,7 @@ func TestRenderEngramDataDir_ShowsCurrentDir(t *testing.T) {
 	locs := []engram.Location{
 		{Path: "/home/user/.engram", Label: "~/.engram", Available: -1, IsCurrent: true},
 	}
-	out := RenderEngramDataDir(0, "/home/user/.engram", 0, locs, model.EngramDataDirOpNone)
+	out := RenderEngramDataDir(0, "/home/user/.engram", 0, locs, model.EngramDataDirOpNone, "")
 	if !strings.Contains(out, "/home/user/.engram") {
 		t.Error("expected current dir in output")
 	}
@@ -34,7 +34,7 @@ func TestRenderEngramDataDir_ActionMenuHidesLocations(t *testing.T) {
 		{Path: "/home/user/.engram", Label: "~/.engram", Available: 1024 * 1024, IsCurrent: true},
 		{Path: "/mnt/external/Engram", Label: "/mnt/external/Engram", Available: 1024 * 1024 * 1024, IsCurrent: false},
 	}
-	out := RenderEngramDataDir(0, "/home/user/.engram", 0, locs, model.EngramDataDirOpNone)
+	out := RenderEngramDataDir(0, "/home/user/.engram", 0, locs, model.EngramDataDirOpNone, "")
 	for _, want := range []string{"Migrate / Move Data", "Copy Data", "Delete current Data"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected action %q", want)
@@ -50,7 +50,7 @@ func TestRenderEngramDataDir_DestinationMenuShowsRelevantLocations(t *testing.T)
 		{Path: "/home/user/.engram", Label: "~/.engram", IsCurrent: true},
 		{Path: "/mnt/external/Engram", Label: "/mnt/external/Engram", IsCurrent: false},
 	}
-	out := RenderEngramDataDir(0, "/home/user/.engram", 0, locs, model.EngramDataDirOpMove)
+	out := RenderEngramDataDir(0, "/home/user/.engram", 0, locs, model.EngramDataDirOpMove, "")
 	if !strings.Contains(out, "Move to") || !strings.Contains(out, "/mnt/external/Engram") {
 		t.Fatal("expected move destination option")
 	}
