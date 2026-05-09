@@ -1,0 +1,2 @@
+# TUI snapshot goldens must compare stable across OS checkouts (LF).
+internal/tui/testdata/*.golden text eol=lf

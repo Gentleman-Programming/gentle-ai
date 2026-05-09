@@ -13,7 +13,7 @@ func TestRenderEngramDataDir_HasTitle(t *testing.T) {
 	locs := []engram.Location{
 		{Path: "/home/user/.engram", Label: "~/.engram", Available: -1, IsCurrent: true},
 	}
-	out := RenderEngramDataDir(0, "/home/user/.engram", 1024, locs)
+	out := RenderEngramDataDir(0, "/home/user/.engram", 1024, locs, "")
 	if !strings.Contains(out, "Manage Engram Data Directory") {
 		t.Error("expected title in output")
 	}
@@ -23,7 +23,7 @@ func TestRenderEngramDataDir_ShowsCurrentDir(t *testing.T) {
 	locs := []engram.Location{
 		{Path: "/home/user/.engram", Label: "~/.engram", Available: -1, IsCurrent: true},
 	}
-	out := RenderEngramDataDir(0, "/home/user/.engram", 0, locs)
+	out := RenderEngramDataDir(0, "/home/user/.engram", 0, locs, "")
 	if !strings.Contains(out, "/home/user/.engram") {
 		t.Error("expected current dir in output")
 	}
@@ -34,7 +34,7 @@ func TestRenderEngramDataDir_MultipleLocations(t *testing.T) {
 		{Path: "/home/user/.engram", Label: "~/.engram", Available: 1024 * 1024, IsCurrent: true},
 		{Path: "/mnt/external/Engram", Label: "/mnt/external/Engram", Available: 1024 * 1024 * 1024, IsCurrent: false},
 	}
-	out := RenderEngramDataDir(0, "/home/user/.engram", 0, locs)
+	out := RenderEngramDataDir(0, "/home/user/.engram", 0, locs, "")
 	if !strings.Contains(out, "Copy to") {
 		t.Error("expected Copy to option for non-current location")
 	}

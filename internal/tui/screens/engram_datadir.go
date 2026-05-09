@@ -37,13 +37,17 @@ func EngramDirChoices(locations []engram.Location) []EngramDirChoice {
 }
 
 // RenderEngramDataDir renders the main management screen shown from Welcome.
-func RenderEngramDataDir(cursor int, currentDir string, dbSize int64, locations []engram.Location) string {
+func RenderEngramDataDir(cursor int, currentDir string, dbSize int64, locations []engram.Location, spaceErr string) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Manage Engram Data Directory"))
 	b.WriteString("\n\n")
 	b.WriteString(styles.SubtextStyle.Render("Current: " + engram.FormatDirLine(currentDir, dbSize)))
 	b.WriteString("\n\n")
+	if strings.TrimSpace(spaceErr) != "" {
+		b.WriteString(styles.WarningStyle.Render(spaceErr))
+		b.WriteString("\n\n")
+	}
 
 	choices := EngramDirChoices(locations)
 	labels := make([]string, len(choices))

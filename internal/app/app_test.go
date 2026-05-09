@@ -14,6 +14,20 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 )
 
+// overrideUserHomeDir sets HOME and USERPROFILE so os.UserHomeDir matches `home`
+// during the test (Windows prioritizes USERPROFILE).
+func overrideUserHomeDir(t *testing.T, home string) {
+	t.Helper()
+	origHome := os.Getenv("HOME")
+	origUserProfile := os.Getenv("USERPROFILE")
+	t.Cleanup(func() {
+		os.Setenv("HOME", origHome)
+		os.Setenv("USERPROFILE", origUserProfile)
+	})
+	os.Setenv("HOME", home)
+	os.Setenv("USERPROFILE", home)
+}
+
 // TestListBackupsNewestFirst verifies that ListBackups returns manifests sorted
 // newest-first by CreatedAt timestamp, matching the spec "newest first" ordering.
 func TestListBackupsNewestFirst(t *testing.T) {
@@ -44,10 +58,7 @@ func TestListBackupsNewestFirst(t *testing.T) {
 		}
 	}
 
-	// Temporarily override home dir resolution for ListBackups.
-	origHomeDir := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHomeDir) })
-	os.Setenv("HOME", home)
+	overrideUserHomeDir(t, home)
 
 	manifests := ListBackups()
 
@@ -87,9 +98,7 @@ func TestListBackupsWithSourceMetadata(t *testing.T) {
 		t.Fatalf("WriteManifest: %v", err)
 	}
 
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	os.Setenv("HOME", home)
+	overrideUserHomeDir(t, home)
 
 	manifests := ListBackups()
 
@@ -111,9 +120,7 @@ func TestListBackupsWithSourceMetadata(t *testing.T) {
 // (either a backup list or a "no backups" message — never "unknown command").
 func TestRunArgsRestoreListIsDispatched(t *testing.T) {
 	home := t.TempDir()
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	os.Setenv("HOME", home)
+	overrideUserHomeDir(t, home)
 
 	var buf bytes.Buffer
 	err := RunArgs([]string{"restore", "--list"}, &buf)
@@ -166,9 +173,7 @@ func TestRunArgsRestoreByIDWithYes(t *testing.T) {
 		t.Fatalf("WriteManifest: %v", err)
 	}
 
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	os.Setenv("HOME", home)
+	overrideUserHomeDir(t, home)
 
 	var buf bytes.Buffer
 	err := RunArgs([]string{"restore", "test-backup-001", "--yes"}, &buf)
@@ -186,9 +191,7 @@ func TestRunArgsRestoreByIDWithYes(t *testing.T) {
 // is surfaced as an error from RunArgs.
 func TestRunArgsRestoreUnknownIDReturnsError(t *testing.T) {
 	home := t.TempDir()
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	os.Setenv("HOME", home)
+	overrideUserHomeDir(t, home)
 
 	var buf bytes.Buffer
 	err := RunArgs([]string{"restore", "no-such-backup", "--yes"}, &buf)
@@ -247,9 +250,7 @@ func TestListBackupsFallsBackGracefullyForOldManifests(t *testing.T) {
 		t.Fatalf("WriteManifest: %v", err)
 	}
 
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	os.Setenv("HOME", home)
+	overrideUserHomeDir(t, home)
 
 	manifests := ListBackups()
 
