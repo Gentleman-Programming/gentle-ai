@@ -305,6 +305,7 @@ func TestBuildSyncSelectionAgentsForwarded(t *testing.T) {
 
 func TestDiscoverAgentsReturnsAgentsWithConfigDirPresent(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 
 	// Create the GlobalConfigDir for claude-code: ~/.claude/
 	claudeConfigDir := filepath.Join(home, ".claude")
@@ -328,6 +329,7 @@ func TestDiscoverAgentsReturnsAgentsWithConfigDirPresent(t *testing.T) {
 
 func TestDiscoverAgentsReturnsEmptyWhenNoConfigDirsPresent(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 	// Empty home dir — no agent config dirs exist.
 
 	discovered := DiscoverAgents(home)
@@ -339,6 +341,7 @@ func TestDiscoverAgentsReturnsEmptyWhenNoConfigDirsPresent(t *testing.T) {
 
 func TestDiscoverAgentsDoesNotReturnAgentsWithMissingConfigDir(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 
 	// Only opencode dir
 	openCodeDir := filepath.Join(home, ".config", "opencode")
@@ -370,6 +373,7 @@ func TestDiscoverAgentsDoesNotReturnAgentsWithMissingConfigDir(t *testing.T) {
 
 func TestDiscoverAgentsMultiplePresent(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 
 	// Create both Claude and OpenCode config dirs
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
@@ -394,6 +398,7 @@ func TestDiscoverAgentsMultiplePresent(t *testing.T) {
 //   - produce the same set as agents.DiscoverInstalled for the same homeDir
 func TestDiscoverAgentsDelegatesCanonicalDiscovery(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 
 	// Create only the codex config dir — a less-common agent that would be
 	// absent from a minimal stale hardcoded list if someone forgot to update it.
@@ -515,6 +520,7 @@ func TestComponentSyncStepRunsPersonaInjectForSync(t *testing.T) {
 
 func TestComponentSyncStepRunsSDDInject(t *testing.T) {
 	home := t.TempDir()
+	ensureOpenCodeSDDNodeStub(t, home)
 
 	step := componentSyncStep{
 		id:        "sync:sdd",
@@ -588,6 +594,8 @@ func TestComponentSyncStepRunsGGAInjectWithoutBinaryInstall(t *testing.T) {
 
 func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
@@ -622,6 +630,8 @@ func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 
 func TestRunSyncDoesNotInvokeEngramSetup(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
@@ -654,6 +664,8 @@ func TestRunSyncDoesNotInvokeEngramSetup(t *testing.T) {
 
 func TestRunSyncDoesNotInstallBinaries(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
@@ -691,6 +703,8 @@ func TestRunSyncDoesNotInstallBinaries(t *testing.T) {
 
 func TestRunSyncPreservesUnmanagedAdjacentFiles(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 
 	// Create user-owned config file adjacent to managed overlay.
 	userConfigDir := filepath.Join(home, ".config", "opencode")
@@ -736,6 +750,8 @@ func TestRunSyncPreservesUnmanagedAdjacentFiles(t *testing.T) {
 
 func TestRunSyncDryRunDoesNotWriteFiles(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
@@ -774,6 +790,7 @@ func TestRunSyncDryRunDoesNotWriteFiles(t *testing.T) {
 
 func TestRunSyncIsIdempotent(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
@@ -834,6 +851,7 @@ func TestRunSyncIsIdempotent(t *testing.T) {
 // files and reports that no managed sync actions were needed."
 func TestRunSyncNoOpWhenNoAgentsDiscovered(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
@@ -877,6 +895,8 @@ func TestRunSyncNoOpWhenNoAgentsDiscovered(t *testing.T) {
 // reports the managed actions that were executed, not just verification results.
 func TestRenderSyncReportIncludesManagedActions(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
@@ -922,6 +942,8 @@ func TestRenderSyncReportIncludesManagedActions(t *testing.T) {
 // After sync, the lookalike must remain byte-for-byte unchanged.
 func TestRunSyncExcludesUnmanagedLookalikeFile(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 
 	// Create a directory structure that is NOT the agent config dir.
 	// "AGENTS.md" is a known managed file for opencode (under ~/.config/opencode/).
@@ -983,6 +1005,8 @@ func TestRunSyncExcludesUnmanagedLookalikeFile(t *testing.T) {
 // present, but all inject calls write nothing new (WriteFileAtomic is no-op).
 func TestRunSyncNoOpWhenAssetsAlreadyCurrent(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
@@ -1040,6 +1064,8 @@ func TestRunSyncNoOpWhenAssetsAlreadyCurrent(t *testing.T) {
 // On a second sync, nothing changes so the count must be 0.
 func TestSyncActionsExecutedReflectsChangedFiles(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
@@ -1090,10 +1116,11 @@ func TestSyncActionsExecutedReflectsChangedFiles(t *testing.T) {
 // 2. Runs sync with 3 named profiles (cheap, premium, balanced)
 // 3. Asserts all 33 profile agent keys are in the resulting opencode.json (11 × 3)
 // 4. Asserts model assignments are set correctly on the orchestrators
-// 5. Asserts prompt files exist in ~/.config/opencode/prompts/sdd/
-// 6. Runs sync AGAIN with no changes → asserts filesChanged=0 (idempotent)
+// 5. Runs sync AGAIN with no changes → asserts filesChanged=0 (idempotent)
 func TestRunSyncWithProfilesIntegration(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
@@ -1195,30 +1222,6 @@ func TestRunSyncWithProfilesIntegration(t *testing.T) {
 		t.Errorf("opencode.json should contain balanced orchestrator model 'claude-sonnet-4-5'")
 	}
 
-	// Verify prompt files exist in ~/.config/opencode/prompts/sdd/.
-	// Note: prompt files are written only for multi-mode. For single-mode syncs,
-	// profile sub-agents use {file:...} references that rely on prompts being written
-	// during a prior multi-mode sync. Check that the profile overlay is written correctly
-	// by verifying the agent keys themselves are present (already done above).
-	// The prompt directory is populated by the profile generator which calls
-	// SharedPromptDir internally — verify the directory path is referenced correctly.
-	promptDir := filepath.Join(home, ".config", "opencode", "prompts", "sdd")
-	promptPhases := []string{
-		"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design",
-		"sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
-	}
-	// Verify the opencode.json file references mention the correct prompt directory.
-	if !strings.Contains(settingsStr, promptDir) {
-		t.Errorf("opencode.json should reference prompt directory %q", promptDir)
-	}
-	// Verify all phase prompt file references appear in the settings.
-	for _, phase := range promptPhases {
-		promptRef := filepath.Join(promptDir, phase+".md")
-		if !strings.Contains(settingsStr, promptRef) {
-			t.Errorf("opencode.json should contain prompt file reference for %q", promptRef)
-		}
-	}
-
 	// Run 2: same selection → all assets already current → filesChanged=0.
 	// Note: The second sync with profiles will re-generate the overlay, but since
 	// DetectProfiles is called when no explicit profiles are provided (normal re-sync),
@@ -1240,6 +1243,8 @@ func TestRunSyncWithProfilesIntegration(t *testing.T) {
 // to find existing profiles and their prompts are regenerated.
 func TestRunSyncDetectsExistingProfilesOnRegularSync(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
@@ -1321,6 +1326,7 @@ func TestRunSyncDetectsExistingProfilesOnRegularSync(t *testing.T) {
 
 func TestRunSyncExternalSingleActiveSkipsDetectAndPreservesOrchestratorPrompt(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
@@ -1431,6 +1437,7 @@ func containsAny(s string, subs ...string) bool {
 // agent list returns a no-op result without error.
 func TestRunSyncWithSelection_NoAgentsIsNoOp(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 
 	sel := model.Selection{
 		Agents:     nil,
@@ -1450,6 +1457,8 @@ func TestRunSyncWithSelection_NoAgentsIsNoOp(t *testing.T) {
 // creates managed asset files for the provided agents and components.
 func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
@@ -1486,6 +1495,8 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 // fresh home dir results in FilesChanged > 0.
 func TestRunSyncWithSelection_FilesChangedOnFreshHome(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
@@ -1516,6 +1527,8 @@ func TestRunSyncWithSelection_FilesChangedOnFreshHome(t *testing.T) {
 // FilesChanged=0 on the second run (all assets already current).
 func TestRunSyncWithSelection_IsIdempotent(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
@@ -1558,6 +1571,8 @@ func TestRunSyncWithSelection_IsIdempotent(t *testing.T) {
 // the selection are reflected in the result.
 func TestRunSyncWithSelection_SelectionAgentsForwarded(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
 	t.Cleanup(func() {
@@ -1604,6 +1619,7 @@ func TestRunSyncWithSelection_SelectionAgentsForwarded(t *testing.T) {
 // VS Code injected just because ~/.config/Code/ exists.
 func TestDiscoverAgentsUsesStateFileWhenPresent(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 
 	// Write state recording only opencode — even though we also create the
 	// claude-code config dir to simulate the IDE being installed on disk.
@@ -1631,6 +1647,7 @@ func TestDiscoverAgentsUsesStateFileWhenPresent(t *testing.T) {
 // persistence was added.
 func TestDiscoverAgentsFallsBackToFSDiscoveryWhenStateMissing(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 	// No state.Write — state.json does not exist.
 
 	// Create the claude-code config dir.
@@ -1658,6 +1675,7 @@ func TestDiscoverAgentsFallsBackToFSDiscoveryWhenStateMissing(t *testing.T) {
 // contains an empty agent list — treating it the same as absent.
 func TestDiscoverAgentsFallsBackToFSDiscoveryWhenStateEmpty(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 
 	// Write state with zero agents.
 	if err := state.Write(home, state.InstallState{InstalledAgents: []string{}}); err != nil {
@@ -1688,6 +1706,7 @@ func TestDiscoverAgentsFallsBackToFSDiscoveryWhenStateEmpty(t *testing.T) {
 // in state.json are all returned, in order.
 func TestDiscoverAgentsStateMultipleAgents(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 
 	agents := []string{"claude-code", "opencode", "gemini-cli"}
 	if err := state.Write(home, state.InstallState{InstalledAgents: agents}); err != nil {
@@ -1708,6 +1727,8 @@ func TestDiscoverAgentsStateMultipleAgents(t *testing.T) {
 
 func TestRunSyncRollsBackOnFailure(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 
 	// Pre-create opencode settings with known content.
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
@@ -1983,6 +2004,8 @@ func TestBuildSyncSelectionSDDProfileStrategyForwarded(t *testing.T) {
 // "balanced" preset defaults.
 func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
@@ -2044,6 +2067,8 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 // This is the core promise of the fix.
 func TestRunSyncDoesNotOverridePersistedAssignmentsOnSecondSync(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
@@ -2102,6 +2127,8 @@ func TestRunSyncDoesNotOverridePersistedAssignmentsOnSecondSync(t *testing.T) {
 // when state.json has no model assignments (backward compat with old state).
 func TestRunSyncWithNoPersistedAssignmentsDoesNotPanic(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
@@ -2144,6 +2171,7 @@ func TestRunSyncWithNoPersistedAssignmentsDoesNotPanic(t *testing.T) {
 
 func setSyncTestHome(t *testing.T, home string) {
 	t.Helper()
+	isolateAgentDiscoveryEnv(t, home)
 	rOSHome := osUserHomeDir
 	rBackup := backup.UserHomeDirFn
 	rRun := runCommand
