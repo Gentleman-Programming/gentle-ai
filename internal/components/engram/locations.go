@@ -47,8 +47,10 @@ func SuggestLocations(homeDir, currentDir string) []Location {
 		add(currentDir, true)
 	}
 
-	// Default location.
-	add(DefaultDir(homeDir), currentDir == "" || filepath.Clean(currentDir) != filepath.Clean(DefaultDir(homeDir)))
+	// Default location — isCurrent only when no explicit current dir was provided.
+	// If currentDir equals the default the seen-map dedup above already handles it;
+	// if currentDir is a custom path the default is a non-current alternative.
+	add(DefaultDir(homeDir), currentDir == "")
 
 	// Platform-specific extra volumes (see locations_unix.go / locations_windows.go).
 	for _, vol := range platformVolumes() {
