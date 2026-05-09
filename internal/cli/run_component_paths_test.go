@@ -94,6 +94,62 @@ func TestComponentPathsSDDIncludesSkillsAndSharedConventions(t *testing.T) {
 	}
 }
 
+func TestComponentPathsWithWorkspaceOpenClawSDDUsesWorkspaceScopedSkills(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentOpenClaw})
+
+	paths := componentPathsWithWorkspace(home, workspace, model.Selection{}, adapters, model.ComponentSDD)
+
+	for _, want := range []string{
+		filepath.Join(workspace, ".openclaw", "skills", "_shared", "sdd-phase-common.md"),
+		filepath.Join(workspace, ".openclaw", "skills", "sdd-init", "SKILL.md"),
+		filepath.Join(workspace, ".openclaw", "skills", "sdd-verify", "SKILL.md"),
+	} {
+		if !containsPath(paths, want) {
+			t.Fatalf("componentPathsWithWorkspace(sdd,openclaw) missing workspace-scoped skill path %q\npaths=%v", want, paths)
+		}
+	}
+
+	for _, unwanted := range []string{
+		filepath.Join(home, ".openclaw", "skills", "_shared", "sdd-phase-common.md"),
+		filepath.Join(home, ".openclaw", "skills", "sdd-init", "SKILL.md"),
+		filepath.Join(home, ".openclaw", "skills", "sdd-verify", "SKILL.md"),
+	} {
+		if containsPath(paths, unwanted) {
+			t.Fatalf("componentPathsWithWorkspace(sdd,openclaw) must not include home-scoped SDD skill path %q\npaths=%v", unwanted, paths)
+		}
+	}
+}
+
+func TestComponentPathsOpenClawSkillsSkipsSDDPhaseSkills(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentOpenClaw})
+	selection := model.Selection{
+		Skills: []model.SkillID{
+			model.SkillSDDInit,
+			model.SkillGoTesting,
+			model.SkillSDDOnboard,
+		},
+	}
+
+	paths := componentPathsWithWorkspace(home, t.TempDir(), selection, adapters, model.ComponentSkills)
+
+	want := filepath.Join(home, ".openclaw", "skills", "go-testing", "SKILL.md")
+	if !containsPath(paths, want) {
+		t.Fatalf("componentPaths(skills,openclaw) missing portable skill path %q\npaths=%v", want, paths)
+	}
+
+	for _, unwanted := range []string{
+		filepath.Join(home, ".openclaw", "skills", "sdd-init", "SKILL.md"),
+		filepath.Join(home, ".openclaw", "skills", "sdd-onboard", "SKILL.md"),
+	} {
+		if containsPath(paths, unwanted) {
+			t.Fatalf("componentPaths(skills,openclaw) must not verify SDD phase skill path %q\npaths=%v", unwanted, paths)
+		}
+	}
+}
+
 func TestComponentPathsSDDKimiIncludesAgentFilesAndGlobalSkills(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentKimi})

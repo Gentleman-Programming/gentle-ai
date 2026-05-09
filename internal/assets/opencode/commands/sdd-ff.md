@@ -18,6 +18,7 @@ CONTEXT:
 - Working directory: !`echo -n "$(pwd)"`
 - Current project: !`echo -n "$(basename $(pwd))"`
 - Change name: $ARGUMENTS
+- Execution mode: ask/cache per orchestrator
 - Artifact store mode: ask/cache per orchestrator
 - Delivery strategy: ask/cache per orchestrator
 

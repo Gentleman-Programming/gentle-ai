@@ -15,7 +15,9 @@ CONTEXT:
 - Working directory: !`echo -n "$(pwd)"`
 - Current project: !`echo -n "$(basename $(pwd))"`
 - Change name: $ARGUMENTS
-- Artifact store mode: engram
+- Execution mode: ask/cache per orchestrator
+- Artifact store mode: ask/cache per orchestrator
+- Delivery strategy: ask/cache per orchestrator
 
 ENGRAM NOTE:
 Sub-agents handle persistence automatically. Each phase saves its artifact to engram with topic_key "sdd/$ARGUMENTS/{type}".

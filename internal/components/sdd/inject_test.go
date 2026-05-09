@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	windsurfagent "github.com/gentleman-programming/gentle-ai/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
@@ -22,6 +23,7 @@ import (
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
+func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func windsurfAdapter() agents.Adapter { return windsurfagent.NewAdapter() }
 
@@ -1621,6 +1623,110 @@ func TestInjectClaudeDeduplicatesBareOrchestratorAtEndOfFile(t *testing.T) {
 	}
 	if !strings.Contains(text, "Be excellent.") {
 		t.Fatal("user content outside orchestrator section was lost")
+	}
+}
+
+func TestInjectOpenClawWritesWorkspaceAgentsProtocolSectionsAndNoToolsProtocol(t *testing.T) {
+	workspace := t.TempDir()
+	adapter := openclawAdapter()
+	toolsPath := filepath.Join(workspace, "TOOLS.md")
+	if err := os.WriteFile(toolsPath, []byte("# User tool notes\n\nKeep this.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(TOOLS.md) error = %v", err)
+	}
+
+	result, err := Inject(workspace, adapter, model.SDDModeSingle, InjectOptions{StrictTDD: true, WorkspaceDir: workspace})
+	if err != nil {
+		t.Fatalf("Inject(openclaw) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(openclaw) changed = false")
+	}
+
+	agentsPath := filepath.Join(workspace, "AGENTS.md")
+	content, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
+	}
+	text := string(content)
+	for _, want := range []string{
+		"<!-- gentle-ai:sdd-orchestrator -->",
+		"<!-- /gentle-ai:sdd-orchestrator -->",
+		"<!-- gentle-ai:strict-tdd-mode -->",
+		"Strict TDD Mode: enabled",
+		"Spec-Driven Development",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("OpenClaw AGENTS.md missing %q; got:\n%s", want, text)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".openclaw", "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("OpenClaw SDD injection must not write global .openclaw/AGENTS.md; stat err=%v", err)
+	}
+
+	toolsContent, err := os.ReadFile(toolsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(TOOLS.md) error = %v", err)
+	}
+	toolsText := string(toolsContent)
+	if strings.Contains(toolsText, "gentle-ai:sdd-orchestrator") || strings.Contains(toolsText, "Strict TDD Mode") {
+		t.Fatalf("TOOLS.md must not receive OpenClaw protocol sections; got:\n%s", toolsText)
+	}
+	if !strings.Contains(toolsText, "Keep this.") {
+		t.Fatalf("TOOLS.md user content was modified; got:\n%s", toolsText)
+	}
+
+	second, err := Inject(workspace, adapter, model.SDDModeSingle, InjectOptions{StrictTDD: true, WorkspaceDir: workspace})
+	if err != nil {
+		t.Fatalf("Inject(openclaw) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("OpenClaw SDD injection should be idempotent on second run")
+	}
+	updated, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md) second error = %v", err)
+	}
+	if count := strings.Count(string(updated), "<!-- gentle-ai:sdd-orchestrator -->"); count != 1 {
+		t.Fatalf("AGENTS.md has %d SDD markers, want exactly 1", count)
+	}
+}
+
+func TestInjectOpenClawPreservesWorkspaceAgentsUserContent(t *testing.T) {
+	workspace := t.TempDir()
+	agentsPath := filepath.Join(workspace, "AGENTS.md")
+	if err := os.WriteFile(agentsPath, []byte("# Project Rules\n\nDo not delete workspace instructions.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(AGENTS.md) error = %v", err)
+	}
+
+	if _, err := Inject(workspace, openclawAdapter(), model.SDDModeSingle); err != nil {
+		t.Fatalf("Inject(openclaw) error = %v", err)
+	}
+	content, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "Do not delete workspace instructions.") {
+		t.Fatalf("OpenClaw workspace AGENTS.md user content was lost; got:\n%s", text)
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatalf("OpenClaw workspace AGENTS.md missing managed SDD section; got:\n%s", text)
+	}
+}
+
+func TestInjectOpenClawRejectsAmbiguousWorkspacePath(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	result, err := Inject("", openclawAdapter(), model.SDDModeSingle, InjectOptions{StrictTDD: true})
+	if err == nil {
+		t.Fatalf("Inject(openclaw, empty workspace) error = nil, want deterministic ambiguity error; result=%+v", result)
+	}
+	if _, statErr := os.Stat(filepath.Join(cwd, "AGENTS.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("ambiguous OpenClaw workspace must not create relative AGENTS.md; stat err=%v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(cwd, "TOOLS.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("ambiguous OpenClaw workspace must not create relative TOOLS.md; stat err=%v", statErr)
 	}
 }
 

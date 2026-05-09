@@ -197,6 +197,9 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if !adapter.SupportsSystemPrompt() {
 		return InjectionResult{}, nil
 	}
+	if err := validateOpenClawWorkspacePath(homeDir, adapter); err != nil {
+		return InjectionResult{}, err
+	}
 
 	var opts InjectOptions
 	if len(options) > 0 {
@@ -706,6 +709,13 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
+	if adapter.Agent() == model.AgentOpenClaw && strings.TrimSpace(workspaceDir) == "" {
+		return fmt.Errorf("openclaw workspace path is required for workspace-first injection")
+	}
+	return nil
 }
 
 func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string, preserveExistingOrchestratorPrompt bool) ([]byte, error) {

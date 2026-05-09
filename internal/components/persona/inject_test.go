@@ -10,6 +10,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -17,6 +18,7 @@ import (
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
+func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 
 func assertGentlemanLanguageGuardrails(t *testing.T, text string, required []string, banned []string) {
@@ -420,6 +422,103 @@ func TestInjectOpenCodePreservesUserContentInsteadOfOverwriting(t *testing.T) {
 	}
 	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
 		t.Fatal("AGENTS.md missing managed persona section after inject")
+	}
+}
+
+func TestInjectOpenClawWritesPersonaToWorkspaceSoulAndNotAgents(t *testing.T) {
+	workspace := t.TempDir()
+	adapter := openclawAdapter()
+	agentsPath := filepath.Join(workspace, "AGENTS.md")
+	if err := os.WriteFile(agentsPath, []byte("# Existing agent protocols\n\nKeep SDD here.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(AGENTS.md) error = %v", err)
+	}
+
+	result, err := Inject(workspace, adapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(openclaw) changed = false")
+	}
+
+	soulPath := filepath.Join(workspace, "SOUL.md")
+	soulContent, err := os.ReadFile(soulPath)
+	if err != nil {
+		t.Fatalf("ReadFile(SOUL.md) error = %v", err)
+	}
+	soulText := string(soulContent)
+	if !strings.Contains(soulText, "<!-- gentle-ai:persona -->") {
+		t.Fatalf("SOUL.md missing managed persona marker; got:\n%s", soulText)
+	}
+	if !strings.Contains(soulText, "Senior Architect") {
+		t.Fatalf("SOUL.md missing real persona content; got:\n%s", soulText)
+	}
+	if !strings.Contains(soulText, "Match the user's current language.") {
+		t.Fatalf("SOUL.md missing persona language guardrail; got:\n%s", soulText)
+	}
+
+	agentsContent, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
+	}
+	agentsText := string(agentsContent)
+	if !strings.Contains(agentsText, "Keep SDD here.") {
+		t.Fatalf("AGENTS.md user protocol content was modified; got:\n%s", agentsText)
+	}
+	if strings.Contains(agentsText, "<!-- gentle-ai:persona -->") || strings.Contains(agentsText, "Senior Architect") {
+		t.Fatalf("OpenClaw persona must not be written to AGENTS.md; got:\n%s", agentsText)
+	}
+}
+
+func TestInjectOpenClawSoulPersonaIsIdempotentAndPreservesUserContent(t *testing.T) {
+	workspace := t.TempDir()
+	soulPath := filepath.Join(workspace, "SOUL.md")
+	if err := os.WriteFile(soulPath, []byte("# Custom soul\n\nKeep my tone note.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(SOUL.md) error = %v", err)
+	}
+
+	adapter := openclawAdapter()
+	first, err := Inject(workspace, adapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(openclaw) first changed = false")
+	}
+	second, err := Inject(workspace, adapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("OpenClaw SOUL.md persona injection should be idempotent")
+	}
+
+	content, err := os.ReadFile(soulPath)
+	if err != nil {
+		t.Fatalf("ReadFile(SOUL.md) error = %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "Keep my tone note.") {
+		t.Fatalf("SOUL.md user content was lost; got:\n%s", text)
+	}
+	if count := strings.Count(text, "<!-- gentle-ai:persona -->"); count != 1 {
+		t.Fatalf("SOUL.md has %d persona markers, want exactly 1", count)
+	}
+}
+
+func TestInjectOpenClawRejectsAmbiguousWorkspacePath(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	result, err := Inject("", openclawAdapter(), model.PersonaGentleman)
+	if err == nil {
+		t.Fatalf("Inject(openclaw, empty workspace) error = nil, want deterministic ambiguity error; result=%+v", result)
+	}
+	if _, statErr := os.Stat(filepath.Join(cwd, "SOUL.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("ambiguous OpenClaw workspace must not create relative SOUL.md; stat err=%v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(cwd, "AGENTS.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("ambiguous OpenClaw workspace must not create relative AGENTS.md; stat err=%v", statErr)
 	}
 }
 

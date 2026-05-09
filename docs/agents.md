@@ -20,6 +20,7 @@
 | Kimi Code       | `kimi`           | Yes          | Yes | Full (native custom agents)  | No            | No             | `~/.kimi`                           |
 | Qwen Code       | `qwen-code`      | Yes          | Yes | Full (native sub-agents)     | No            | Yes            | `~/.qwen`                           |
 | Kiro IDE        | `kiro-ide`       | Yes          | Yes | Full (native subagents)      | No            | No             | `~/.kiro`                           |
+| OpenClaw        | `openclaw`       | Yes          | Yes | Solo-agent                   | No            | No             | `~/.openclaw`                       |
 
 All agents receive the **full SDD orchestrator** policy, plus skill files written to their skills directory. Most agents receive it through their system prompt; OpenCode and Kilo Code receive it through the OpenCode-compatible `opencode.json` agent overlay. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
 
@@ -30,7 +31,7 @@ All agents receive the **full SDD orchestrator** policy, plus skill files writte
 | Model                 | How It Works                                                                                                                         | Agents                                                           |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
 | **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation or an OpenCode-compatible overlay. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Kimi Code, Kiro IDE, Qwen Code |
-| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence.       | Codex, Windsurf, Antigravity                                     |
+| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence.       | Codex, Windsurf, Antigravity, OpenClaw                           |
 
 ### Cursor Native Subagents
 
@@ -65,11 +66,11 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 
 ## SDD Mode Support
 
-| Feature | Claude Code | OpenCode | Kilo Code | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE | Qwen Code |
-|---------|:-----------:|:--------:|:---------:|:----------:|:------:|:---------------:|:-----:|:--------:|:-----------:|:--------:|:---------:|
-| SDD orchestrator | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Single-mode SDD | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Multi-mode SDD | — | Yes | Yes | — | — | — | — | — | — | Yes* | — |
+| Feature | Claude Code | OpenCode | Kilo Code | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE | Qwen Code | OpenClaw |
+|---------|:-----------:|:--------:|:---------:|:----------:|:------:|:---------------:|:-----:|:--------:|:-----------:|:--------:|:---------:|:--------:|
+| SDD orchestrator | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Single-mode SDD | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Multi-mode SDD | — | Yes | Yes | — | — | — | — | — | — | Yes* | — | — |
 
 **Multi-mode** (assigning different AI models to each SDD phase) is supported by **OpenCode** and **Kilo Code** through the OpenCode-compatible multi-mode overlay, and by **Kiro IDE** through native subagent `model:` frontmatter. All other agents run in **single-mode** — the orchestrator manages everything using whatever model the agent is already running.
 
@@ -171,3 +172,12 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 - **Install**: via npm — `npm install -g @qwen-code/qwen-code@latest`
 - **Engram slug**: `"qwen-code"` for `engram setup` integration
 - **SDD orchestrator**: `internal/assets/qwen/sdd-orchestrator.md` with Qwen-specific path references
+
+### OpenClaw
+
+- **Detection**: gentle-ai detects OpenClaw from the `openclaw` binary on `PATH` and its config root at `~/.openclaw`.
+- **Install**: manual only — install OpenClaw first, then run `gentle-ai install --agent openclaw`.
+- **Active workspace**: gentle-ai reads `agents.defaults.workspace` from `~/.openclaw/openclaw.json` and writes instruction files there.
+- **Instructions**: Engram and SDD protocols are injected into workspace `AGENTS.md`; persona is injected into workspace `SOUL.md`.
+- **MCP config**: Engram and Context7 are merged into global `~/.openclaw/openclaw.json` under `mcp.servers`; legacy root `mcpServers` entries are migrated.
+- **Skills**: SDD phase skills are workspace-scoped at `<workspace>/.openclaw/skills/sdd-*`; portable skills remain global at `~/.openclaw/skills/`.

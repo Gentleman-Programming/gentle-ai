@@ -72,7 +72,7 @@ Do NOT skip this check. Do NOT ask the user — just run init silently if needed
 
 ### Execution Mode
 
-When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ASK which execution mode they prefer:
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request, e.g. "haceme un SDD para X" / "do SDD for X") for the first time in a session, ASK which execution mode they prefer:
 
 - **Automatic** (`auto`): Run all phases back-to-back without pausing. Show the final result only.
 - **Interactive** (`interactive`): After each phase completes, show the result summary and ASK: "Want to adjust anything or continue?" before proceeding to the next phase.
@@ -81,7 +81,7 @@ If the user doesn't specify, default to **Interactive**.
 
 ### Artifact Store Mode
 
-When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ALSO ASK which artifact store they want for this change:
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request) for the first time in a session, ALSO ASK which artifact store they want for this change:
 
 - **`engram`**: Fast, no files created. Artifacts live in engram only.
 - **`openspec`**: File-based. Creates `openspec/` with a shareable artifact trail.
@@ -93,7 +93,7 @@ Cache the artifact store choice for the session. Pass it as `artifact_store.mode
 
 ### Delivery Strategy
 
-On the first `/sdd-new`, `/sdd-ff`, or `/sdd-continue` in a session, ask once for and cache delivery strategy: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
+On the first `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request) in a session, ask once for and cache delivery strategy: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
 
 ### Dependency Graph
 ```

@@ -25,7 +25,7 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 
 **After**: Your agent now has memory, skills, workflow, MCP tools, and a persona that actually teaches you.
 
-### 12 Supported Agents
+### 13 Supported Agents
 
 | Agent | Delegation Model | Key Feature |
 |-------|:---:|---|
@@ -41,6 +41,7 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 | **Kimi Code** | Full (native custom agents) | Modular prompt templates in `~/.kimi` |
 | **Kiro IDE** | Full (native subagents) | Native `~/.kiro/agents/` + steering orchestration |
 | **Qwen Code** | Full (native sub-agents) | Slash commands, `~/.qwen/commands/`, `auto_edit` mode |
+| **OpenClaw** | Solo-agent | Workspace-first `AGENTS.md` / `SOUL.md` with global MCP config |
 
 > **Note**: This project supersedes [Agent Teams Lite](https://github.com/Gentleman-Programming/agent-teams-lite) (now archived). Everything ATL provided is included here with better installation, automatic updates, and persistent memory.
 

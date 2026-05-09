@@ -51,6 +51,11 @@ gentle-ai install \
   --agent cursor \
   --preset minimal
 
+# OpenClaw setup after installing OpenClaw manually
+gentle-ai install \
+  --agent openclaw \
+  --preset full-gentleman
+
 # Pick specific components and skills
 gentle-ai install \
   --agent claude-code \
@@ -79,9 +84,14 @@ gentle-ai sync --agent cursor --agent windsurf
 gentle-ai sync --component sdd
 gentle-ai sync --component skills
 gentle-ai sync --component engram
+
+# Refresh OpenClaw workspace instructions and MCP config
+gentle-ai sync --agent openclaw
 ```
 
 Sync is safe and idempotent — running it twice produces no changes the second time.
+
+For OpenClaw, sync reads the active workspace from `~/.openclaw/openclaw.json` (`agents.defaults.workspace`). It writes `AGENTS.md` / `SOUL.md` into that workspace, while MCP servers stay in the global OpenClaw config under `mcp.servers`.
 
 ### uninstall
 

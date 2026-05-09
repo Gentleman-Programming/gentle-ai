@@ -73,7 +73,7 @@ Do NOT skip this check. Do NOT ask the user - just run init silently if needed.
 
 ### Execution Mode
 
-When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ASK which execution mode they prefer:
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request, e.g. "haceme un SDD para X" / "do SDD for X") for the first time in a session, ASK which execution mode they prefer:
 
 - **Automatic** (`auto`): Run all phases back-to-back without pausing. Show the final result only.
 - **Interactive** (`interactive`): After each phase completes, show the result summary and ASK: "Want to adjust anything or continue?" before proceeding.
@@ -84,7 +84,7 @@ Cache the mode choice for the session - do not ask again unless the user explici
 
 ### Artifact Store Mode
 
-When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ALSO ASK which artifact store they want for this change:
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request) for the first time in a session, ALSO ASK which artifact store they want for this change:
 
 - **`engram`**: Fast, no files created. Artifacts live in engram only.
 - **`openspec`**: File-based. Creates `openspec/` with a shareable artifact trail.
@@ -96,7 +96,7 @@ Cache the artifact store choice for the session. Pass it as `artifact_store.mode
 
 ### Delivery Strategy
 
-When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ALSO ASK which delivery/review strategy they want:
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request) for the first time in a session, ALSO ASK which delivery/review strategy they want:
 
 - **`ask-on-risk`** (default): Ask later if `sdd-tasks` forecasts high risk or >400 changed lines.
 - **`auto-chain`**: If forecast is high, continue with chained/stacked PR slices without asking again.

@@ -134,6 +134,19 @@ func engramOverlayJSON(agentID model.AgentID, cmd string, env map[string]any) []
 				},
 			},
 		}
+	} else if agentID == model.AgentOpenClaw {
+		cfg = map[string]any{
+			"mcp": map[string]any{
+				"servers": map[string]any{
+					"engram": map[string]any{
+						"__replace__": map[string]any{
+							"command": cmd,
+							"args":    []string{"mcp", "--tools=agent"},
+						},
+					},
+				},
+			},
+		}
 	} else {
 		server := map[string]any{
 			"command": cmd,
@@ -184,8 +197,23 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 // opts.DataDir is non-empty, ENGRAM_DATA_DIR is injected into every MCP
 // server config block so the agent uses the specified data directory.
 func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
+	return injectCore(homeDir, homeDir, adapter, opts)
+}
+
+// InjectWithPromptDir writes Engram's MCP configuration using configHomeDir and
+// writes prompt protocol files using promptDir. This is needed for agents such
+// as OpenClaw where MCP is loaded from the global config but instructions are
+// read from an active workspace.
+func InjectWithPromptDir(configHomeDir, promptDir string, adapter agents.Adapter) (InjectionResult, error) {
+	return injectCore(configHomeDir, promptDir, adapter, InjectOptions{})
+}
+
+func injectCore(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
 	if !adapter.SupportsMCP() {
 		return InjectionResult{}, nil
+	}
+	if err := validateOpenClawWorkspacePath(promptDir, adapter); err != nil {
+		return InjectionResult{}, err
 	}
 
 	env := engramEnvMap(opts.DataDir)
@@ -200,7 +228,7 @@ func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOption
 		// engram setup, so we must preserve any absolute command path already
 		// present instead of silently overwriting it with the relative "engram".
 		// See: https://github.com/Gentleman-Programming/gentle-ai/issues (engram absolute path regression)
-		mcpPath := adapter.MCPConfigPath(homeDir, "engram")
+		mcpPath := adapter.MCPConfigPath(configHomeDir, "engram")
 		cmd := stableEngramCommandForMergedConfig(mcpPath, adapter.Agent())
 		content := buildSeparateMCPContent(mcpPath, engramServerJSONWithCmd(cmd, env), env)
 		mcpWrite, err := filemerge.WriteFileAtomic(mcpPath, content, 0o644)
@@ -211,7 +239,7 @@ func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOption
 		files = append(files, mcpPath)
 
 	case model.StrategyMergeIntoSettings:
-		settingsPath := adapter.SettingsPath(homeDir)
+		settingsPath := adapter.SettingsPath(configHomeDir)
 		if settingsPath == "" {
 			break
 		}
@@ -224,7 +252,7 @@ func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOption
 		files = append(files, settingsPath)
 
 	case model.StrategyMCPConfigFile:
-		mcpPath := adapter.MCPConfigPath(homeDir, "engram")
+		mcpPath := adapter.MCPConfigPath(configHomeDir, "engram")
 		if mcpPath == "" {
 			break
 		}
@@ -243,7 +271,7 @@ func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOption
 		files = append(files, mcpPath)
 
 		if adapter.Agent() == model.AgentAntigravity {
-			settingsWrite, err := ensureAntigravitySettings(homeDir, adapter)
+			settingsWrite, err := ensureAntigravitySettings(configHomeDir, adapter)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -258,13 +286,13 @@ func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOption
 		// in ~/.codex/config.toml, then write instruction files.
 		// All TOML mutations are composed in a single pass before writing to
 		// ensure idempotency (no intermediate states that differ on re-run).
-		configPath := adapter.MCPConfigPath(homeDir, "engram")
+		configPath := adapter.MCPConfigPath(configHomeDir, "engram")
 		if configPath == "" {
 			break
 		}
 
 		// Determine instruction file paths before mutating the config.
-		instructionsPath, compactPath, instrErr := writeCodexInstructionFiles(homeDir)
+		instructionsPath, compactPath, instrErr := writeCodexInstructionFiles(configHomeDir)
 		if instrErr != nil {
 			return InjectionResult{}, instrErr
 		}
@@ -291,7 +319,7 @@ func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOption
 	if adapter.SupportsSystemPrompt() {
 		switch adapter.SystemPromptStrategy() {
 		case model.StrategyMarkdownSections:
-			promptPath := adapter.SystemPromptFile(homeDir)
+			promptPath := adapter.SystemPromptFile(promptDir)
 			protocolContent := assets.MustRead("claude/engram-protocol.md")
 
 			existing, err := readFileOrEmpty(promptPath)
@@ -311,14 +339,14 @@ func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOption
 		case model.StrategyJinjaModules:
 			// Ensure the base template exists for Jinja-based agents.
 			if bs, ok := adapter.(bootstrapper); ok {
-				if err := bs.BootstrapTemplate(homeDir); err != nil {
+				if err := bs.BootstrapTemplate(promptDir); err != nil {
 					return InjectionResult{}, fmt.Errorf("bootstrap template: %w", err)
 				}
 			}
 
 			// Write the Engram protocol as a standalone Jinja include module.
 			// The static KIMI.md template references it via {% include "engram-protocol.md" %}.
-			configDir := adapter.GlobalConfigDir(homeDir)
+			configDir := adapter.GlobalConfigDir(promptDir)
 			protocolContent := assets.MustRead("claude/engram-protocol.md")
 			modulePath := filepath.Join(configDir, "engram-protocol.md")
 			mdWrite, err := filemerge.WriteFileAtomic(modulePath, []byte(protocolContent), 0o644)
@@ -329,7 +357,7 @@ func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOption
 			files = append(files, modulePath)
 
 		default:
-			promptPath := adapter.SystemPromptFile(homeDir)
+			promptPath := adapter.SystemPromptFile(promptDir)
 			protocolContent := assets.MustRead("claude/engram-protocol.md")
 
 			existing, err := readFileOrEmpty(promptPath)
@@ -349,6 +377,13 @@ func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOption
 	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
+	if adapter.Agent() == model.AgentOpenClaw && strings.TrimSpace(workspaceDir) == "" {
+		return fmt.Errorf("openclaw workspace path is required for workspace-first injection")
+	}
+	return nil
 }
 
 type settingsBootstrapResult struct {
@@ -504,6 +539,16 @@ func existingMergedEngramCommand(raw []byte, agentID model.AgentID) (string, boo
 			return "", false
 		}
 		server = mcp["engram"]
+	case model.AgentOpenClaw:
+		mcp, ok := root["mcp"].(map[string]any)
+		if !ok {
+			return "", false
+		}
+		servers, ok := mcp["servers"].(map[string]any)
+		if !ok {
+			return "", false
+		}
+		server = servers["engram"]
 	case model.AgentVSCodeCopilot:
 		servers, ok := root["servers"].(map[string]any)
 		if !ok {
@@ -549,7 +594,7 @@ func executableFromCommandValue(command any) (string, bool) {
 
 func isStandardAgent(id model.AgentID) bool {
 	switch id {
-	case model.AgentOpenCode, model.AgentQwenCode, model.AgentCodex, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentClaudeCode:
+	case model.AgentOpenCode, model.AgentQwenCode, model.AgentCodex, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentClaudeCode, model.AgentOpenClaw:
 		return true
 	default:
 		return false

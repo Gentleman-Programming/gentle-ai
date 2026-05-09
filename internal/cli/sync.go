@@ -386,6 +386,7 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 	}
 
 	workspaceDir, _ := os.Getwd()
+	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, selection.Agents)
 
 	return &syncRuntime{
 		homeDir:      homeDir,
@@ -399,7 +400,7 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 
 func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	adapters := resolveAdapters(r.agentIDs)
-	targets := syncBackupTargets(r.homeDir, r.selection, adapters)
+	targets := syncBackupTargets(r.homeDir, r.workspaceDir, r.selection, adapters)
 
 	prepare := []pipeline.Step{
 		prepareBackupStep{
@@ -438,10 +439,10 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 // before sync executes. Uses syncComponentPaths so that the backup/verify
 // contract matches the actual files sync touches (which differ from install
 // for ComponentPersona — see syncComponentPaths).
-func syncBackupTargets(homeDir string, selection model.Selection, adapters []agents.Adapter) []string {
+func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) []string {
 	paths := map[string]struct{}{}
 	for _, component := range selection.Components {
-		for _, path := range syncComponentPaths(homeDir, selection, adapters, component) {
+		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
 	}
@@ -462,10 +463,14 @@ func syncBackupTargets(homeDir string, selection model.Selection, adapters []age
 // same file). Sync therefore must NOT declare those JSON paths or the post-sync
 // verification will look for files sync never promised to write.
 func syncComponentPaths(homeDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
+	return syncComponentPathsWithWorkspace(homeDir, "", selection, adapters, component)
+}
+
+func syncComponentPathsWithWorkspace(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	if component == model.ComponentPersona {
-		return syncPersonaPaths(homeDir, selection, adapters)
+		return syncPersonaPathsWithWorkspace(homeDir, workspaceDir, selection, adapters)
 	}
-	return componentPaths(homeDir, selection, adapters, component)
+	return componentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component)
 }
 
 // syncPersonaPaths returns the file paths that ComponentPersona writes during
@@ -477,20 +482,29 @@ func syncComponentPaths(homeDir string, selection model.Selection, adapters []ag
 // Step 2 (OpenCode/Kilocode agent definition in opencode.json) is install-only
 // and intentionally NOT declared here.
 func syncPersonaPaths(homeDir string, selection model.Selection, adapters []agents.Adapter) []string {
+	return syncPersonaPathsWithWorkspace(homeDir, "", selection, adapters)
+}
+
+func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) []string {
 	if selection.Persona == model.PersonaCustom {
 		return nil
 	}
 	paths := []string{}
 	for _, adapter := range adapters {
+		targetDir := componentInjectionDir(homeDir, workspaceDir, adapter)
+		if adapter.Agent() == model.AgentOpenClaw {
+			paths = append(paths, filepath.Join(targetDir, "SOUL.md"))
+			continue
+		}
 		if !adapter.SupportsSystemPrompt() {
 			continue
 		}
 		if adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
-			paths = append(paths, adapter.SystemPromptFile(homeDir))
+			paths = append(paths, adapter.SystemPromptFile(targetDir))
 		}
 		if selection.Persona == model.PersonaGentleman && adapter.SupportsOutputStyles() {
-			paths = append(paths, adapter.OutputStyleDir(homeDir)+"/gentleman.md")
-			if p := adapter.SettingsPath(homeDir); p != "" {
+			paths = append(paths, adapter.OutputStyleDir(targetDir)+"/gentleman.md")
+			if p := adapter.SettingsPath(targetDir); p != "" {
 				paths = append(paths, p)
 			}
 		}
@@ -527,7 +541,14 @@ func (s componentSyncStep) Run() error {
 		// Sync: inject MCP config + system prompt protocol only.
 		// NO binary install. NO engram setup.
 		for _, adapter := range adapters {
-			res, err := engram.Inject(s.homeDir, adapter)
+			var res engram.InjectionResult
+			var err error
+			if adapter.Agent() == model.AgentOpenClaw {
+				res, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
+			} else {
+				targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+				res, err = engram.Inject(targetDir, adapter)
+			}
 			if err != nil {
 				return fmt.Errorf("sync engram for %q: %w", adapter.Agent(), err)
 			}
@@ -581,6 +602,7 @@ func (s componentSyncStep) Run() error {
 		}
 
 		for _, adapter := range adapters {
+			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments:           s.selection.ModelAssignments,
 				ClaudeModelAssignments:             s.selection.ClaudeModelAssignments,
@@ -590,7 +612,7 @@ func (s componentSyncStep) Run() error {
 				PreserveOpenCodeOrchestratorPrompt: profileStrategy == model.SDDProfileStrategyExternalSingleActive,
 				Profiles:                           profiles,
 			}
-			res, err := sdd.Inject(s.homeDir, adapter, sddMode, opts)
+			res, err := sdd.Inject(targetDir, adapter, sddMode, opts)
 			if err != nil {
 				return fmt.Errorf("sync sdd for %q: %w", adapter.Agent(), err)
 			}
@@ -650,7 +672,8 @@ func (s componentSyncStep) Run() error {
 		// merge conflicts with SDD's writes to the same settings file and
 		// remains an install-only concern.
 		for _, adapter := range adapters {
-			res, err := persona.InjectForSync(s.homeDir, adapter, s.selection.Persona)
+			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+			res, err := persona.InjectForSync(targetDir, adapter, s.selection.Persona)
 			if err != nil {
 				return fmt.Errorf("sync persona for %q: %w", adapter.Agent(), err)
 			}
@@ -736,7 +759,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	}
 
 	// Post-apply verification reuses the same component paths as install.
-	result.Verify = runPostSyncVerification(homeDir, selection)
+	result.Verify = runPostSyncVerification(homeDir, rt.workspaceDir, selection)
 	if !result.Verify.Ready {
 		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
@@ -892,12 +915,12 @@ func RenderSyncReport(result SyncResult) string {
 }
 
 // runPostSyncVerification verifies that managed files exist after sync.
-func runPostSyncVerification(homeDir string, selection model.Selection) verify.Report {
+func runPostSyncVerification(homeDir, workspaceDir string, selection model.Selection) verify.Report {
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(selection.Agents)
 
 	for _, component := range selection.Components {
-		for _, path := range syncComponentPaths(homeDir, selection, adapters, component) {
+		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
 			currentPath := path
 			checks = append(checks, verify.Check{
 				ID:          "verify:sync:file:" + currentPath,

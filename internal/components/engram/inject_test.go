@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/qwen"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
@@ -23,6 +24,7 @@ func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func codexAdapter() agents.Adapter    { return codex.NewAdapter() }
 func geminiAdapter() agents.Adapter   { return gemini.NewAdapter() }
 func qwenAdapter() agents.Adapter     { return qwen.NewAdapter() }
+func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func antigravityAdapter() agents.Adapter {
 	return antigravity.NewAdapter()
 }
@@ -1087,4 +1089,268 @@ func TestQwenEngramIdempotency(t *testing.T) {
 	if string(content1) != string(content2) {
 		t.Errorf("Idempotency failure! Settings changed between runs despite engram command being stable-relative.\nRun 1:\n%s\nRun 2:\n%s", string(content1), string(content2))
 	}
+}
+
+func TestInjectOpenClawMergesEngramIntoMCPServersPreservingStdioAndRemoteFields(t *testing.T) {
+	home := t.TempDir()
+	adapter := openclawAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	existing := `{
+  "mcp": {
+    "sessionIdleTtlMs": 120000,
+    "servers": {
+      "filesystem": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+        "env": {"ROOT": "/workspace"},
+        "unknownStdioField": true
+      },
+      "linear": {
+        "url": "https://mcp.linear.app/sse",
+        "transport": "sse",
+        "headers": {"Authorization": "Bearer existing-token"},
+        "unknownRemoteField": "preserve-me"
+      }
+    }
+  },
+  "theme": "kanagawa"
+}`
+	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(openclaw.json) error = %v", err)
+	}
+
+	result, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(openclaw) changed = false")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(openclaw.json) error = %v", err)
+	}
+	root := unmarshalObjectForTest(t, content)
+	mcp := objectAtForTest(t, root, "mcp")
+	if got := mcp["sessionIdleTtlMs"]; got != float64(120000) {
+		t.Fatalf("mcp.sessionIdleTtlMs = %v, want preserved 120000", got)
+	}
+	servers := objectAtForTest(t, mcp, "servers")
+
+	filesystem := objectAtForTest(t, servers, "filesystem")
+	if got := filesystem["command"]; got != "npx" {
+		t.Fatalf("filesystem.command = %v, want npx", got)
+	}
+	if got := filesystem["unknownStdioField"]; got != true {
+		t.Fatalf("filesystem.unknownStdioField = %v, want true", got)
+	}
+	args, ok := filesystem["args"].([]any)
+	if !ok || len(args) != 2 || args[1] != "@modelcontextprotocol/server-filesystem" {
+		t.Fatalf("filesystem.args = %#v, want preserved stdio args", filesystem["args"])
+	}
+
+	linear := objectAtForTest(t, servers, "linear")
+	if got := linear["url"]; got != "https://mcp.linear.app/sse" {
+		t.Fatalf("linear.url = %v, want preserved remote url", got)
+	}
+	if got := linear["transport"]; got != "sse" {
+		t.Fatalf("linear.transport = %v, want sse", got)
+	}
+	headers := objectAtForTest(t, linear, "headers")
+	if got := headers["Authorization"]; got != "Bearer existing-token" {
+		t.Fatalf("linear Authorization header = %v, want preserved token", got)
+	}
+	if got := linear["unknownRemoteField"]; got != "preserve-me" {
+		t.Fatalf("linear.unknownRemoteField = %v, want preserve-me", got)
+	}
+
+	engram := objectAtForTest(t, servers, "engram")
+	if got := engram["command"]; got != "engram" {
+		t.Fatalf("engram.command = %v, want engram", got)
+	}
+	engramArgs, ok := engram["args"].([]any)
+	if !ok || len(engramArgs) != 2 || engramArgs[0] != "mcp" || engramArgs[1] != "--tools=agent" {
+		t.Fatalf("engram.args = %#v, want [mcp --tools=agent]", engram["args"])
+	}
+	if _, hasMCPServers := root["mcpServers"]; hasMCPServers {
+		t.Fatal("OpenClaw config must use mcp.servers, not top-level mcpServers")
+	}
+}
+
+func TestInjectOpenClawHandlesJSON5ConfigAndMissingConfigPath(t *testing.T) {
+	t.Run("preserves JSON5 compatible config content as normalized JSON", func(t *testing.T) {
+		home := t.TempDir()
+		adapter := openclawAdapter()
+		configPath := adapter.SettingsPath(home)
+		if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+
+		existing := `{
+  // OpenClaw user config with JSON5-style comments.
+  "ui": {
+    "theme": "kanagawa", // trailing comma survives via normalization
+  },
+  "mcp": {
+    "servers": {
+      "remoteDocs": {
+        "url": "https://docs.example/mcp",
+        "transport": "http",
+      },
+    },
+  },
+}`
+		if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+			t.Fatalf("WriteFile(openclaw.json) error = %v", err)
+		}
+
+		if _, err := Inject(home, adapter); err != nil {
+			t.Fatalf("Inject(openclaw) error = %v", err)
+		}
+
+		content, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("ReadFile(openclaw.json) error = %v", err)
+		}
+		root := unmarshalObjectForTest(t, content)
+		ui := objectAtForTest(t, root, "ui")
+		if got := ui["theme"]; got != "kanagawa" {
+			t.Fatalf("ui.theme = %v, want preserved kanagawa", got)
+		}
+		servers := objectAtForTest(t, objectAtForTest(t, root, "mcp"), "servers")
+		remoteDocs := objectAtForTest(t, servers, "remoteDocs")
+		if got := remoteDocs["transport"]; got != "http" {
+			t.Fatalf("remoteDocs.transport = %v, want preserved http", got)
+		}
+		if _, ok := servers["engram"]; !ok {
+			t.Fatal("mcp.servers.engram missing after JSON5 merge")
+		}
+	})
+
+	t.Run("creates canonical OpenClaw config when missing", func(t *testing.T) {
+		home := t.TempDir()
+		adapter := openclawAdapter()
+		configPath := filepath.Join(home, ".openclaw", "openclaw.json")
+
+		if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+			t.Fatalf("expected missing OpenClaw config before inject, got err=%v", err)
+		}
+		if _, err := Inject(home, adapter); err != nil {
+			t.Fatalf("Inject(openclaw) error = %v", err)
+		}
+		content, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("ReadFile(created openclaw.json) error = %v", err)
+		}
+		servers := objectAtForTest(t, objectAtForTest(t, unmarshalObjectForTest(t, content), "mcp"), "servers")
+		if _, ok := servers["engram"]; !ok {
+			t.Fatal("created OpenClaw config missing mcp.servers.engram")
+		}
+	})
+}
+
+func TestInjectOpenClawWritesEngramProtocolToWorkspaceAgentsOnly(t *testing.T) {
+	workspace := t.TempDir()
+	adapter := openclawAdapter()
+	toolsPath := filepath.Join(workspace, "TOOLS.md")
+	if err := os.WriteFile(toolsPath, []byte("# Tool guidance\n\nUser-owned tool notes.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(TOOLS.md) error = %v", err)
+	}
+
+	first, err := Inject(workspace, adapter)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(openclaw) first changed = false")
+	}
+
+	agentsPath := filepath.Join(workspace, "AGENTS.md")
+	agentsContent, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
+	}
+	agentsText := string(agentsContent)
+	for _, want := range []string{
+		"<!-- gentle-ai:engram-protocol -->",
+		"<!-- /gentle-ai:engram-protocol -->",
+		"mem_save",
+	} {
+		if !strings.Contains(agentsText, want) {
+			t.Fatalf("OpenClaw AGENTS.md missing Engram protocol content %q; got:\n%s", want, agentsText)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".openclaw", "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("OpenClaw Engram injection must not write global .openclaw/AGENTS.md; stat err=%v", err)
+	}
+
+	toolsContent, err := os.ReadFile(toolsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(TOOLS.md) error = %v", err)
+	}
+	toolsText := string(toolsContent)
+	if strings.Contains(toolsText, "gentle-ai:engram-protocol") || strings.Contains(toolsText, "mem_save") {
+		t.Fatalf("TOOLS.md must not receive Engram protocol sections; got:\n%s", toolsText)
+	}
+	if !strings.Contains(toolsText, "User-owned tool notes.") {
+		t.Fatalf("TOOLS.md user content was modified; got:\n%s", toolsText)
+	}
+
+	second, err := Inject(workspace, adapter)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("OpenClaw Engram injection should be idempotent")
+	}
+	updated, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md) second error = %v", err)
+	}
+	if count := strings.Count(string(updated), "<!-- gentle-ai:engram-protocol -->"); count != 1 {
+		t.Fatalf("AGENTS.md has %d Engram protocol markers, want exactly 1", count)
+	}
+}
+
+func TestInjectOpenClawRejectsAmbiguousWorkspacePath(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	result, err := Inject("", openclawAdapter())
+	if err == nil {
+		t.Fatalf("Inject(openclaw, empty workspace) error = nil, want deterministic ambiguity error; result=%+v", result)
+	}
+	if _, statErr := os.Stat(filepath.Join(cwd, ".openclaw", "openclaw.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("ambiguous OpenClaw workspace must not create relative config; stat err=%v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(cwd, "AGENTS.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("ambiguous OpenClaw workspace must not create relative AGENTS.md; stat err=%v", statErr)
+	}
+}
+
+func unmarshalObjectForTest(t *testing.T, content []byte) map[string]any {
+	t.Helper()
+	var root map[string]any
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal JSON error = %v; content:\n%s", err, content)
+	}
+	return root
+}
+
+func objectAtForTest(t *testing.T, root map[string]any, key string) map[string]any {
+	t.Helper()
+	value, ok := root[key]
+	if !ok {
+		t.Fatalf("missing object key %q in %#v", key, root)
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("key %q has type %T, want object", key, value)
+	}
+	return object
 }

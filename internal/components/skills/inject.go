@@ -13,10 +13,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
-// isSDDSkill reports whether a skill ID belongs to the SDD orchestrator suite.
+// IsSDDSkill reports whether a skill ID belongs to the SDD orchestrator suite.
 // SDD skills are installed by the SDD component; the skills component skips
 // them to prevent duplicate writes when both components are selected.
-func isSDDSkill(id model.SkillID) bool {
+func IsSDDSkill(id model.SkillID) bool {
 	return strings.HasPrefix(string(id), "sdd-")
 }
 
@@ -54,7 +54,7 @@ func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (I
 
 	for _, id := range skillIDs {
 		// SDD skills are written by the SDD component — skip to avoid conflicts.
-		if isSDDSkill(id) {
+		if IsSDDSkill(id) {
 			continue
 		}
 
