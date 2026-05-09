@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -186,6 +187,14 @@ func TestSelfUpdate_UpdateAvailable_CallsUpgradeAndReExec(t *testing.T) {
 	if stubs.upgradeCalled != 1 {
 		t.Errorf("upgradeCalled = %d, want 1", stubs.upgradeCalled)
 	}
+
+	if runtime.GOOS == "windows" {
+		if stubs.reExecCalled != 0 {
+			t.Errorf("reExecCalled = %d, want 0 on Windows", stubs.reExecCalled)
+		}
+		return
+	}
+
 	if stubs.reExecCalled != 1 {
 		t.Errorf("reExecCalled = %d, want 1", stubs.reExecCalled)
 	}

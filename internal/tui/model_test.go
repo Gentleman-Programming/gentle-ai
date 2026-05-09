@@ -181,6 +181,20 @@ func TestEngramDataDirCustomPathFlow(t *testing.T) {
 	}
 }
 
+func TestEngramDataDirCustomPathEmptyEnterShowsError(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenEngramDataDirCustomPath
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenEngramDataDirCustomPath {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenEngramDataDirCustomPath)
+	}
+	if state.EngramSpaceErr == "" {
+		t.Fatal("expected empty custom path to set EngramSpaceErr")
+	}
+}
+
 func TestPiCombinedWithOtherAgentKeepsGenericFlow(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgents
