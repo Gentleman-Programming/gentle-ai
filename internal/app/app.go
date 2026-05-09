@@ -59,6 +59,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "help", "--help", "-h":
 			printHelp(stdout, Version)
 			return nil
+		case "stats":
+			return cli.RunStats(args[1:], stdout)
+		case "--engram-stats":
+			return cli.RunStats([]string{"engram"}, stdout)
 		case "uninstall":
 			_, err := cli.RunUninstall(args[1:], stdout)
 			return err

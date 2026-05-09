@@ -21,10 +21,12 @@ COMMANDS
   update       Check for available updates
   upgrade      Apply updates to managed tools
   restore      Restore a config backup
+  stats        Print diagnostics for installed components (see stats --help)
   version      Print version
 
 FLAGS
-  --help, -h    Show this help
+  --help, -h       Show this help
+  --engram-stats   Same as: stats engram (path, disk space, SQLite sizes)
 
 Run 'gentle-ai help' for this message.
 Documentation: https://github.com/Gentleman-Programming/gentle-ai

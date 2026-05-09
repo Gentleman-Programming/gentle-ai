@@ -525,6 +525,36 @@ func TestVersionBeforeSystemGuards(t *testing.T) {
 	}
 }
 
+// TestStatsEngramBeforeSystemGuards verifies stats engram skips detection (like version).
+func TestStatsEngramBeforeSystemGuards(t *testing.T) {
+	home := t.TempDir()
+	overrideUserHomeDir(t, home)
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{"stats", "engram"}, &buf)
+	if err != nil {
+		t.Fatalf("stats engram should not fail: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Engram data directory") {
+		t.Fatalf("expected Engram stats header, got: %q", buf.String())
+	}
+}
+
+// TestEngramStatsFlagBeforeSystemGuards verifies --engram-stats aliases stats engram.
+func TestEngramStatsFlagBeforeSystemGuards(t *testing.T) {
+	home := t.TempDir()
+	overrideUserHomeDir(t, home)
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{"--engram-stats"}, &buf)
+	if err != nil {
+		t.Fatalf("--engram-stats should not fail: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Engram data directory") {
+		t.Fatalf("expected Engram stats header, got: %q", buf.String())
+	}
+}
+
 // TestHelpCommand verifies that help, --help, and -h all print USAGE and COMMANDS
 // without triggering system detection or platform guards.
 func TestHelpCommand(t *testing.T) {
