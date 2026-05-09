@@ -378,7 +378,9 @@ func JDPhases() []string {
 
 // ConfigurableAgentPhases returns all agent names that support per-agent
 // model configuration. This includes SDD phases + JD agents.
-// Used by the TUI model picker and ReadCurrentModelAssignments.
+// Used by the inject model assignment table builder and the configurable agent set
+// in ReadCurrentModelAssignments. The TUI model picker uses SDDPhases() and
+// JDPhases() separately for row layout control.
 func ConfigurableAgentPhases() []string {
 	phases := SDDPhases()
 	phases = append(phases, JDPhases()...)
