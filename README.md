@@ -19,13 +19,13 @@
 
 ## What It Does
 
-Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is an **ecosystem configurator** -- it takes whatever AI coding agent(s) you use and supercharges them with persistent memory, Spec-Driven Development workflows, curated coding skills, MCP servers, an AI provider switcher, a teaching-oriented persona with security-first permissions, and per-phase model assignment so each SDD step can run on a different model.
+Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is an **ecosystem configurator** -- it takes whatever AI coding agent(s) you use and supercharges them with persistent memory, Spec-Driven Development workflows, curated coding skills, MCP servers where supported, an AI provider switcher, a teaching-oriented persona with security-first permissions, and per-phase model assignment so each SDD step can run on a different model.
 
 **Before**: "I installed Claude Code / OpenCode / Cursor, but it's just a chatbot that writes code."
 
 **After**: Your agent now has memory, skills, workflow, MCP tools, and a persona that actually teaches you.
 
-### 13 Supported Agents
+### 14 Supported Agents
 
 | Agent | Delegation Model | Key Feature |
 |-------|:---:|---|
@@ -42,6 +42,7 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 | **Kiro IDE** | Full (native subagents) | Native `~/.kiro/agents/` + steering orchestration |
 | **Qwen Code** | Full (native sub-agents) | Slash commands, `~/.qwen/commands/`, `auto_edit` mode |
 | **OpenClaw** | Solo-agent | Workspace-first `AGENTS.md` / `SOUL.md` with global MCP config |
+| **Pi coding agent** | Solo-agent | Pi prompt templates + Agent Skills |
 
 > **Note**: This project supersedes [Agent Teams Lite](https://github.com/Gentleman-Programming/agent-teams-lite) (now archived). Everything ATL provided is included here with better installation, automatic updates, and persistent memory.
 

@@ -173,6 +173,48 @@ func TestComponentPathsSDDKimiIncludesAgentFilesAndGlobalSkills(t *testing.T) {
 	}
 }
 
+func TestComponentPathsSDDPiUsesPiPromptSkillPaths(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentPiCodingAgent})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
+
+	for _, want := range []string{
+		filepath.Join(home, ".pi", "agent", "APPEND_SYSTEM.md"),
+		filepath.Join(home, ".pi", "agent", "prompts", "sdd-init.md"),
+		filepath.Join(home, ".pi", "agent", "prompts", "sdd-verify.md"),
+		filepath.Join(home, ".pi", "agent", "skills", "_shared", "sdd-phase-common.md"),
+		filepath.Join(home, ".pi", "agent", "skills", "sdd-init", "SKILL.md"),
+		filepath.Join(home, ".pi", "agent", "skills", "sdd-verify", "SKILL.md"),
+	} {
+		if !containsPath(paths, want) {
+			t.Fatalf("componentPaths(sdd,pi) missing %q\npaths=%v", want, paths)
+		}
+	}
+
+	for _, unwanted := range []string{
+		filepath.Join(home, ".pi", "agent", "agents", "sdd-apply.md"),
+		filepath.Join(home, ".pi", "agent", "chains", "sdd.chain.md"),
+		filepath.Join(home, ".pi", "agent", "settings.json"),
+	} {
+		if containsPath(paths, unwanted) {
+			t.Fatalf("componentPaths(sdd,pi) must not include unsupported path %q\npaths=%v", unwanted, paths)
+		}
+	}
+}
+
+func TestComponentPathsPiSkipsMCPBackedComponents(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentPiCodingAgent})
+
+	for _, component := range []model.ComponentID{model.ComponentEngram, model.ComponentContext7, model.ComponentTheme} {
+		paths := componentPaths(home, model.Selection{}, adapters, component)
+		if len(paths) != 0 {
+			t.Fatalf("componentPaths(%s,pi) = %v, want no paths", component, paths)
+		}
+	}
+}
+
 func TestComponentPathsContext7KimiIncludesMCPConfig(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentKimi})

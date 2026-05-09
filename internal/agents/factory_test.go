@@ -19,6 +19,17 @@ func TestFactoryResolvesOpenClawAdapter(t *testing.T) {
 	}
 }
 
+func TestFactoryResolvesPiCodingAgentAdapter(t *testing.T) {
+	adapter, err := NewAdapter(model.AgentPiCodingAgent)
+	if err != nil {
+		t.Fatalf("NewAdapter(%q) returned error: %v", model.AgentPiCodingAgent, err)
+	}
+
+	if got := adapter.Agent(); got != model.AgentPiCodingAgent {
+		t.Fatalf("adapter.Agent() = %q, want %q", got, model.AgentPiCodingAgent)
+	}
+}
+
 func TestDefaultRegistryIncludesOpenClaw(t *testing.T) {
 	registry, err := NewDefaultRegistry()
 	if err != nil {
@@ -32,6 +43,22 @@ func TestDefaultRegistryIncludesOpenClaw(t *testing.T) {
 
 	if got := adapter.Agent(); got != model.AgentOpenClaw {
 		t.Fatalf("registry adapter.Agent() = %q, want %q", got, model.AgentOpenClaw)
+	}
+}
+
+func TestDefaultRegistryIncludesPiCodingAgent(t *testing.T) {
+	registry, err := NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("NewDefaultRegistry() returned error: %v", err)
+	}
+
+	adapter, ok := registry.Get(model.AgentPiCodingAgent)
+	if !ok {
+		t.Fatalf("registry missing %s adapter", model.AgentPiCodingAgent)
+	}
+
+	if got := adapter.Agent(); got != model.AgentPiCodingAgent {
+		t.Fatalf("registry adapter.Agent() = %q, want %q", got, model.AgentPiCodingAgent)
 	}
 }
 
@@ -52,6 +79,7 @@ func TestDefaultRegistrySupportedAgentsMatchesFactoryAgents(t *testing.T) {
 		model.AgentKiroIDE,
 		model.AgentOpenClaw,
 		model.AgentOpenCode,
+		model.AgentPiCodingAgent,
 		model.AgentQwenCode,
 		model.AgentVSCodeCopilot,
 		model.AgentWindsurf,

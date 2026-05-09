@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
 // TestAllEmbeddedAssetsAreReadable verifies that every expected embedded file
@@ -86,6 +88,18 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"kimi/agents/sdd-archive.md",
 		"kimi/agents/sdd-onboard.md",
 
+		// Pi coding agent files
+		"pi/sdd-orchestrator.md",
+		"pi/prompts/sdd-apply.md",
+		"pi/prompts/sdd-archive.md",
+		"pi/prompts/sdd-continue.md",
+		"pi/prompts/sdd-explore.md",
+		"pi/prompts/sdd-ff.md",
+		"pi/prompts/sdd-init.md",
+		"pi/prompts/sdd-new.md",
+		"pi/prompts/sdd-onboard.md",
+		"pi/prompts/sdd-verify.md",
+
 		// SDD skills
 		"skills/sdd-init/SKILL.md",
 		"skills/sdd-init/references/init-details.md",
@@ -131,6 +145,12 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 	}
 }
 
+func TestSDDCommandsAssetDirRoutesPiToPrompts(t *testing.T) {
+	if got := SDDCommandsAssetDir(model.AgentPiCodingAgent); got != "pi/prompts" {
+		t.Fatalf("SDDCommandsAssetDir(pi) = %q, want pi/prompts", got)
+	}
+}
+
 func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	entries, err := FS.ReadDir("opencode")
 	if err != nil {
@@ -165,6 +185,32 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	}
 	if pluginEntries[0].Name() != "background-agents.ts" {
 		t.Fatalf("plugin entry = %q, want background-agents.ts", pluginEntries[0].Name())
+	}
+}
+
+func TestPiEmbeddedAssetLayout(t *testing.T) {
+	entries, err := FS.ReadDir("pi")
+	if err != nil {
+		t.Fatalf("ReadDir(pi) error = %v", err)
+	}
+
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		seen[entry.Name()] = true
+	}
+
+	for _, name := range []string{"prompts", "sdd-orchestrator.md"} {
+		if !seen[name] {
+			t.Fatalf("pi embedded assets missing %q", name)
+		}
+	}
+
+	promptEntries, err := FS.ReadDir("pi/prompts")
+	if err != nil {
+		t.Fatalf("ReadDir(pi/prompts) error = %v", err)
+	}
+	if len(promptEntries) != 9 {
+		t.Fatalf("pi prompts count = %d, want 9", len(promptEntries))
 	}
 }
 

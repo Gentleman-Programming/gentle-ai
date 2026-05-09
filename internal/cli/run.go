@@ -879,6 +879,9 @@ func componentPathsWithWorkspace(homeDir, workspaceDir string, selection model.S
 		targetDir := componentPathDir(homeDir, workspaceDir, adapter, component)
 		switch component {
 		case model.ComponentEngram:
+			if !adapter.SupportsMCP() {
+				break
+			}
 			switch adapter.MCPStrategy() {
 			case model.StrategySeparateMCPFiles:
 				paths = append(paths, adapter.MCPConfigPath(targetDir, "engram"))
@@ -964,6 +967,9 @@ func componentPathsWithWorkspace(homeDir, workspaceDir string, selection model.S
 				}
 			}
 		case model.ComponentContext7:
+			if !adapter.SupportsMCP() {
+				break
+			}
 			switch adapter.MCPStrategy() {
 			case model.StrategySeparateMCPFiles:
 				paths = append(paths, adapter.MCPConfigPath(homeDir, "context7"))
@@ -1006,6 +1012,9 @@ func componentPathsWithWorkspace(homeDir, workspaceDir string, selection model.S
 			paths = append(paths, gga.ConfigPath(homeDir))
 			paths = append(paths, gga.AgentsTemplatePath(homeDir))
 		case model.ComponentTheme:
+			if adapter.Agent() == model.AgentPiCodingAgent {
+				break
+			}
 			if p := adapter.SettingsPath(homeDir); p != "" {
 				paths = append(paths, p)
 			}

@@ -16,17 +16,22 @@ const (
 	AgentQwenCode      AgentID = "qwen-code"
 	AgentKiroIDE       AgentID = "kiro-ide"
 	AgentOpenClaw      AgentID = "openclaw"
+	AgentPiCodingAgent AgentID = "pi-coding-agent"
 )
 
 // SupportTier indicates how fully an agent supports the Gentleman AI ecosystem.
-// All current agents receive the full SDD orchestrator, skill files, MCP config,
-// and system prompt injection. The tier is kept as metadata for display purposes.
+// It is metadata for display and product guidance; capability flags on each
+// adapter remain the source of truth for what is actually injected.
 type SupportTier string
 
 const (
-	// TierFull — the agent receives all ecosystem features: SDD orchestrator,
-	// skill files, MCP servers, system prompt, and sub-agent delegation.
+	// TierFull — the agent receives the full supported ecosystem for its native
+	// integration surface, including SDD, skills, prompt/system instructions, and
+	// MCP/sub-agent integration where the agent exposes those capabilities.
 	TierFull SupportTier = "full"
+	// TierPartial — the agent receives a supported subset because its native
+	// integration surface does not currently expose every ecosystem feature.
+	TierPartial SupportTier = "partial"
 )
 
 type ComponentID string

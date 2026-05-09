@@ -9,10 +9,12 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
+func piAdapter() agents.Adapter       { return pi.NewAdapter() }
 
 func TestInjectMergesThemeOverlayIntoAdapterSettings(t *testing.T) {
 	home := t.TempDir()
@@ -94,6 +96,21 @@ func TestInjectCreatesAdapterSettingsWhenMissing(t *testing.T) {
 	}
 	if root.Theme != "gentleman-kanagawa" {
 		t.Fatalf("theme = %q, want gentleman-kanagawa", root.Theme)
+	}
+}
+
+func TestInjectSkipsPiUntilThemeAssetExists(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if result.Changed || len(result.Files) != 0 {
+		t.Fatalf("Inject() = %#v, want no-op for Pi", result)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".pi", "agent", "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("Inject() should not write Pi settings.json; stat error = %v", err)
 	}
 }
 

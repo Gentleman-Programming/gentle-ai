@@ -78,6 +78,7 @@ cleanup_test_env() {
     rm -rf "$HOME/.qwen" 2>/dev/null || true
     rm -rf "$HOME/.kiro" 2>/dev/null || true
     rm -rf "$HOME/.kimi" 2>/dev/null || true
+    rm -rf "$HOME/.pi" 2>/dev/null || true
     mkdir -p "$HOME/.config"
 }
 

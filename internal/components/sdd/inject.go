@@ -1209,8 +1209,12 @@ func sddOrchestratorAsset(agent model.AgentID) string {
 		return "qwen/sdd-orchestrator.md"
 	case model.AgentKiroIDE:
 		return "kiro/sdd-orchestrator.md"
+	case model.AgentPiCodingAgent:
+		return "pi/sdd-orchestrator.md"
 	case model.AgentOpenCode:
 		return "opencode/sdd-orchestrator.md"
+	case model.AgentClaudeCode:
+		return "claude/sdd-orchestrator.md"
 	default:
 		return "generic/sdd-orchestrator.md"
 	}
@@ -1428,8 +1432,8 @@ func stripBareOrchestratorSection(content string) string {
 
 func injectMarkdownSections(homeDir string, adapter agents.Adapter, assignments map[string]model.ClaudeModelAlias) (InjectionResult, error) {
 	promptPath := adapter.SystemPromptFile(homeDir)
-	content := assets.MustRead("claude/sdd-orchestrator.md")
-	if len(assignments) > 0 {
+	content := assets.MustRead(sddOrchestratorAsset(adapter.Agent()))
+	if adapter.Agent() == model.AgentClaudeCode && len(assignments) > 0 {
 		var err error
 		content, err = injectClaudeModelAssignments(content, assignments)
 		if err != nil {

@@ -40,6 +40,12 @@ var gentlemanClaudeTheme = claudeTheme{
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	// Pi supports themes, but Gentle-AI does not ship a Pi theme asset yet. Avoid
+	// setting a theme name that Pi cannot resolve.
+	if adapter.Agent() == model.AgentPiCodingAgent {
+		return InjectionResult{}, nil
+	}
+
 	settingsPath := adapter.SettingsPath(homeDir)
 	if settingsPath == "" {
 		return InjectionResult{}, nil

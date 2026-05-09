@@ -15,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 	windsurfagent "github.com/gentleman-programming/gentle-ai/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -25,6 +26,7 @@ func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
 func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
+func piAdapter() agents.Adapter       { return pi.NewAdapter() }
 func windsurfAdapter() agents.Adapter { return windsurfagent.NewAdapter() }
 
 func mockNoPackageManager(t *testing.T) {
@@ -284,6 +286,73 @@ func TestInjectOpenCodeWritesCommandFiles(t *testing.T) {
 
 	if !strings.Contains(string(skillContent), "sdd-init") {
 		t.Fatal("SDD skill file missing expected content")
+	}
+}
+
+func TestInjectPiWritesPromptTemplatesAndSkills(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, piAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject() first changed = false")
+	}
+
+	promptPath := filepath.Join(home, ".pi", "agent", "APPEND_SYSTEM.md")
+	content, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile(APPEND_SYSTEM.md) error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("APPEND_SYSTEM.md missing open marker for sdd-orchestrator")
+	}
+	if !strings.Contains(text, "solo-agent MVP") {
+		t.Fatal("APPEND_SYSTEM.md missing Pi-specific solo-agent guidance")
+	}
+	if strings.Contains(text, "MUST call mem_search") {
+		t.Fatal("APPEND_SYSTEM.md should not require Pi MVP to call Engram MCP tools")
+	}
+
+	commandPath := filepath.Join(home, ".pi", "agent", "prompts", "sdd-init.md")
+	commandContent, err := os.ReadFile(commandPath)
+	if err != nil {
+		t.Fatalf("ReadFile(pi sdd-init.md) error = %v", err)
+	}
+	commandText := string(commandContent)
+	if !strings.Contains(commandText, "description:") {
+		t.Fatal("Pi sdd-init.md missing prompt-template description")
+	}
+	if strings.Contains(commandText, "agent:") {
+		t.Fatal("Pi sdd-init.md contains non-Pi agent frontmatter")
+	}
+	if strings.Contains(commandText, "!`") {
+		t.Fatal("Pi sdd-init.md contains OpenCode/Claude shell interpolation")
+	}
+	if !strings.Contains(commandText, "~/.pi/agent/skills/sdd-init/SKILL.md") {
+		t.Fatal("Pi sdd-init.md missing Pi skill path")
+	}
+
+	for _, want := range []string{
+		filepath.Join(home, ".pi", "agent", "skills", "_shared", "sdd-phase-common.md"),
+		filepath.Join(home, ".pi", "agent", "skills", "sdd-init", "SKILL.md"),
+		filepath.Join(home, ".pi", "agent", "skills", "sdd-verify", "SKILL.md"),
+	} {
+		if _, err := os.Stat(want); err != nil {
+			t.Fatalf("expected Pi SDD skill path %q: %v", want, err)
+		}
+	}
+
+	for _, unwanted := range []string{
+		filepath.Join(home, ".pi", "agent", "agents", "sdd-apply.md"),
+		filepath.Join(home, ".pi", "agent", "chains", "sdd.chain.md"),
+	} {
+		if _, err := os.Stat(unwanted); err == nil {
+			t.Fatalf("Pi MVP should not write subagent artifact %q", unwanted)
+		}
 	}
 }
 
@@ -3080,7 +3149,10 @@ func TestSDDOrchestratorAssetSelection(t *testing.T) {
 		{agent: model.AgentWindsurf, want: "windsurf/sdd-orchestrator.md"},
 		{agent: model.AgentCursor, want: "cursor/sdd-orchestrator.md"},
 		{agent: model.AgentQwenCode, want: "qwen/sdd-orchestrator.md"},
-		{agent: model.AgentClaudeCode, want: "generic/sdd-orchestrator.md"},
+		{agent: model.AgentKiroIDE, want: "kiro/sdd-orchestrator.md"},
+		{agent: model.AgentOpenClaw, want: "generic/sdd-orchestrator.md"},
+		{agent: model.AgentPiCodingAgent, want: "pi/sdd-orchestrator.md"},
+		{agent: model.AgentClaudeCode, want: "claude/sdd-orchestrator.md"},
 		{agent: model.AgentOpenCode, want: "opencode/sdd-orchestrator.md"},
 		{agent: model.AgentVSCodeCopilot, want: "generic/sdd-orchestrator.md"},
 	}

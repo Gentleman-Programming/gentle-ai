@@ -1,0 +1,180 @@
+package pi
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+
+	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/system"
+)
+
+var LookPathOverride = exec.LookPath
+
+type statResult struct {
+	isDir bool
+	err   error
+}
+
+// Adapter implements agents.Adapter for Pi coding agent.
+//
+// Pi uses ~/.pi/agent as its global configuration root. Gentle-AI writes its
+// managed system prompt sections to APPEND_SYSTEM.md, installs Agent Skills in
+// skills/, and exposes SDD commands as Pi prompt templates in prompts/.
+type Adapter struct {
+	lookPath func(string) (string, error)
+	statPath func(string) statResult
+}
+
+func NewAdapter() *Adapter {
+	return &Adapter{
+		lookPath: LookPathOverride,
+		statPath: defaultStat,
+	}
+}
+
+// --- Identity ---
+
+func (a *Adapter) Agent() model.AgentID {
+	return model.AgentPiCodingAgent
+}
+
+func (a *Adapter) Tier() model.SupportTier {
+	return model.TierPartial
+}
+
+// --- Detection ---
+
+func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, string, bool, error) {
+	configPath := filepath.Join(homeDir, ".pi", "agent")
+
+	binaryPath, err := a.lookPath("pi")
+	installed := err == nil
+
+	stat := a.statPath(configPath)
+	if stat.err != nil {
+		if os.IsNotExist(stat.err) {
+			return installed, binaryPath, configPath, false, nil
+		}
+		return false, "", "", false, stat.err
+	}
+
+	return installed, binaryPath, configPath, stat.isDir, nil
+}
+
+// --- Installation ---
+
+func (a *Adapter) SupportsAutoInstall() bool {
+	return true
+}
+
+func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
+	// Pi installs via npm. Only use sudo on known Linux distro profiles where
+	// global npm is not user-writable. Unknown/Termux-like environments should
+	// not receive sudo by default.
+	if profile.OS == "linux" && !profile.NpmWritable && isKnownLinuxDistro(profile.LinuxDistro) {
+		return [][]string{{"sudo", "npm", "install", "-g", "@earendil-works/pi-coding-agent"}}, nil
+	}
+	return [][]string{{"npm", "install", "-g", "@earendil-works/pi-coding-agent"}}, nil
+}
+
+func isKnownLinuxDistro(distro string) bool {
+	switch distro {
+	case system.LinuxDistroUbuntu, system.LinuxDistroDebian, system.LinuxDistroArch, system.LinuxDistroFedora:
+		return true
+	default:
+		return false
+	}
+}
+
+// --- Config paths ---
+
+func (a *Adapter) GlobalConfigDir(homeDir string) string {
+	return filepath.Join(homeDir, ".pi", "agent")
+}
+
+func (a *Adapter) SystemPromptDir(homeDir string) string {
+	return filepath.Join(homeDir, ".pi", "agent")
+}
+
+func (a *Adapter) SystemPromptFile(homeDir string) string {
+	return filepath.Join(homeDir, ".pi", "agent", "APPEND_SYSTEM.md")
+}
+
+func (a *Adapter) SkillsDir(homeDir string) string {
+	return filepath.Join(homeDir, ".pi", "agent", "skills")
+}
+
+func (a *Adapter) SettingsPath(homeDir string) string {
+	return filepath.Join(homeDir, ".pi", "agent", "settings.json")
+}
+
+// --- Config strategies ---
+
+func (a *Adapter) SystemPromptStrategy() model.SystemPromptStrategy {
+	return model.StrategyMarkdownSections
+}
+
+func (a *Adapter) MCPStrategy() model.MCPStrategy {
+	return model.StrategyMCPConfigFile
+}
+
+// --- MCP ---
+
+func (a *Adapter) MCPConfigPath(_ string, _ string) string {
+	return ""
+}
+
+// --- Optional capabilities ---
+
+func (a *Adapter) SupportsOutputStyles() bool {
+	return false
+}
+
+func (a *Adapter) OutputStyleDir(_ string) string {
+	return ""
+}
+
+// SupportsSlashCommands returns true because Pi exposes prompt templates as
+// slash commands from ~/.pi/agent/prompts/*.md.
+func (a *Adapter) SupportsSlashCommands() bool {
+	return true
+}
+
+func (a *Adapter) CommandsDir(homeDir string) string {
+	return filepath.Join(homeDir, ".pi", "agent", "prompts")
+}
+
+func (a *Adapter) SupportsSubAgents() bool {
+	return false
+}
+
+func (a *Adapter) SubAgentsDir(_ string) string {
+	return ""
+}
+
+func (a *Adapter) EmbeddedSubAgentsDir() string {
+	return ""
+}
+
+func (a *Adapter) SupportsSkills() bool {
+	return true
+}
+
+func (a *Adapter) SupportsSystemPrompt() bool {
+	return true
+}
+
+func (a *Adapter) SupportsMCP() bool {
+	return false
+}
+
+func defaultStat(path string) statResult {
+	info, err := os.Stat(path)
+	if err != nil {
+		return statResult{err: err}
+	}
+
+	return statResult{isDir: info.IsDir()}
+}
