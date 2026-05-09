@@ -114,7 +114,21 @@ var (
 		"jd-judge-b",
 		"jd-fix-agent",
 	}
-	sddSkillPhaseIDs = sddPhaseAgents[1:]
+	// sddSkillPhaseIDs contains SDD skill phase IDs only (used for skill dir cleanup).
+	// JD agents are sub-agents, not skills — they are included in sddPhaseAgents
+	// for opencode.json agent-key cleanup but must NOT be treated as skill phase IDs.
+	sddSkillPhaseIDs = []string{
+		"sdd-init",
+		"sdd-explore",
+		"sdd-propose",
+		"sdd-spec",
+		"sdd-design",
+		"sdd-tasks",
+		"sdd-apply",
+		"sdd-verify",
+		"sdd-archive",
+		"sdd-onboard",
+	}
 )
 
 type operation struct {
