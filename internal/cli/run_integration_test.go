@@ -1497,6 +1497,7 @@ func TestRunInstallDryRunMatchesActualInstallOpenCodeSDDMulti(t *testing.T) {
 	}
 
 	home := t.TempDir()
+	ensureOpenCodeSDDNodeStub(t, home)
 	adapters := resolveAdapters(dryResult.Resolved.Agents)
 	var expectedPaths []string
 	for _, component := range dryResult.Resolved.OrderedComponents {
@@ -1941,6 +1942,7 @@ func TestRunInstallCustomPresetExplicitComponentsResolveCorrectly(t *testing.T) 
 // contains all three sections with no duplicates.
 func TestOpenCodePersonaBeforeSDDPreservesAllSections(t *testing.T) {
 	home := t.TempDir()
+	ensureOpenCodeSDDNodeStub(t, home)
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
@@ -2069,6 +2071,7 @@ func TestRunInstallKimiBootstrapsHub(t *testing.T) {
 
 func TestRunInstallKimiMissingUVFailsBeforeExecutingInstallCommands(t *testing.T) {
 	home := t.TempDir()
+	isolateAgentDiscoveryEnv(t, home)
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
@@ -2080,6 +2083,12 @@ func TestRunInstallKimiMissingUVFailsBeforeExecutingInstallCommands(t *testing.T
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = missingBinaryLookPath
+
+	originalKimiLookPath := kimi.LookPathOverride
+	kimi.LookPathOverride = func(name string) (string, error) {
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { kimi.LookPathOverride = originalKimiLookPath })
 
 	recorder := &commandRecorder{}
 	runCommand = recorder.record

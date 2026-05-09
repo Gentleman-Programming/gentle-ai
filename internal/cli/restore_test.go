@@ -282,10 +282,16 @@ func TestRunRestore_UnknownFlagReturnsError(t *testing.T) {
 
 // --- helpers ---
 
-// restoreHomeDir sets HOME to dir for the duration of the test.
+// restoreHomeDir sets HOME and USERPROFILE to dir for the duration of the test.
+// Windows resolves os.UserHomeDir from USERPROFILE first.
 func restoreHomeDir(t *testing.T, dir string) {
 	t.Helper()
-	orig := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", orig) })
+	origHome := os.Getenv("HOME")
+	origUserProfile := os.Getenv("USERPROFILE")
+	t.Cleanup(func() {
+		os.Setenv("HOME", origHome)
+		os.Setenv("USERPROFILE", origUserProfile)
+	})
 	os.Setenv("HOME", dir)
+	os.Setenv("USERPROFILE", dir)
 }
