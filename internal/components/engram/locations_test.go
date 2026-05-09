@@ -35,6 +35,20 @@ func TestSuggestLocations_CurrentFirst(t *testing.T) {
 	}
 }
 
+func TestSuggestLocations_DefaultNotCurrentWhenCustomDirSet(t *testing.T) {
+	home := t.TempDir()
+	custom := filepath.Join(home, "custom-engram")
+
+	locs := SuggestLocations(home, custom)
+
+	defaultPath := filepath.Clean(DefaultDir(home))
+	for _, loc := range locs {
+		if loc.Path == defaultPath && loc.IsCurrent {
+			t.Errorf("default dir %q should NOT be IsCurrent when a custom dir is set", defaultPath)
+		}
+	}
+}
+
 func TestSuggestLocations_NoDuplicates(t *testing.T) {
 	home := t.TempDir()
 	// When current == default, we should get exactly one entry for that path.
