@@ -47,8 +47,8 @@ func TestModelPickerRows_OrchestratorIsFirst(t *testing.T) {
 
 func TestModelPickerRows_SetAllIsSecond(t *testing.T) {
 	rows := ModelPickerRows()
-	if rows[1] != "Set all phases" {
-		t.Fatalf("ModelPickerRows()[1] = %q, want %q", rows[1], "Set all phases")
+	if rows[1] != "Set all SDD phases" {
+		t.Fatalf("ModelPickerRows()[1] = %q, want %q", rows[1], "Set all SDD phases")
 	}
 }
 
@@ -1240,5 +1240,37 @@ func TestHandleModelNav_JDLastRow(t *testing.T) {
 	lastPhase := jdPhases[len(jdPhases)-1]
 	if _, ok := updated[lastPhase]; !ok {
 		t.Fatalf("last JD row should assign %q; got: %v", lastPhase, updated)
+	}
+}
+
+// ─── ModelPickerRowsForProfile ──────────────────────────────────────────
+
+func TestModelPickerRowsForProfile_Count(t *testing.T) {
+	rows := ModelPickerRowsForProfile()
+	// 1 orchestrator + 1 "Set all SDD phases" + 9 sub-agents = 11
+	want := 2 + len(opencode.SDDPhases())
+	if len(rows) != want {
+		t.Fatalf("ModelPickerRowsForProfile() len = %d, want %d; rows = %v", len(rows), want, rows)
+	}
+}
+
+func TestModelPickerRowsForProfile_NoSeparator(t *testing.T) {
+	rows := ModelPickerRowsForProfile()
+	for _, row := range rows {
+		if strings.Contains(row, "---") {
+			t.Fatalf("ModelPickerRowsForProfile() should not contain separator; got: %v", rows)
+		}
+	}
+}
+
+func TestModelPickerRowsForProfile_NoJDAgents(t *testing.T) {
+	rows := ModelPickerRowsForProfile()
+	jdPhases := opencode.JDPhases()
+	for _, jd := range jdPhases {
+		for _, row := range rows {
+			if row == jd {
+				t.Fatalf("ModelPickerRowsForProfile() should not contain JD agent %q; got: %v", jd, rows)
+			}
+		}
 	}
 }

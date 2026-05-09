@@ -127,10 +127,12 @@ const SDDOrchestratorPhase = "gentle-orchestrator"
 func ModelPickerRows() []string {
 	rows := make([]string, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases()))
 	rows = append(rows, SDDOrchestratorPhase)
-	rows = append(rows, "Set all phases")
+	rows = append(rows, "Set all SDD phases")
 	rows = append(rows, opencode.SDDPhases()...)
-	rows = append(rows, "--- Judgment Day ---")
-	rows = append(rows, opencode.JDPhases()...)
+	if len(opencode.JDPhases()) > 0 {
+		rows = append(rows, "--- Judgment Day ---")
+		rows = append(rows, opencode.JDPhases()...)
+	}
 	return rows
 }
 
@@ -139,7 +141,7 @@ func ModelPickerRows() []string {
 func ModelPickerRowsForProfile() []string {
 	rows := make([]string, 0, 2+len(opencode.SDDPhases()))
 	rows = append(rows, SDDOrchestratorPhase)
-	rows = append(rows, "Set all phases")
+	rows = append(rows, "Set all SDD phases")
 	rows = append(rows, opencode.SDDPhases()...)
 	return rows
 }
@@ -422,8 +424,7 @@ func compareVersionKeys(left, right []int) int {
 func applyAssignmentPreservingMatchingEffort(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment, preserveEffort bool) map[string]model.ModelAssignment {
 	phases := opencode.SDDPhases()
 	jdPhases := opencode.JDPhases()
-	// separatorIdx is the index of the "--- Judgment Day ---" row.
-	separatorIdx := 2 + len(phases)
+	separatorIdx := SeparatorRowIdx()
 	switch {
 	case state.SelectedPhaseIdx == 0:
 		assignments[SDDOrchestratorPhase] = preserveMatchingEffort(assignments[SDDOrchestratorPhase], assignment, preserveEffort)
@@ -472,8 +473,7 @@ func formatAssignmentLabel(row, provName, modelName, effort string) string {
 func applyAssignment(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment) map[string]model.ModelAssignment {
 	phases := opencode.SDDPhases()
 	jdPhases := opencode.JDPhases()
-	// separatorIdx is the index of the "--- Judgment Day ---" row.
-	separatorIdx := 2 + len(phases)
+	separatorIdx := SeparatorRowIdx()
 	switch {
 	case state.SelectedPhaseIdx == 0:
 		assignments[SDDOrchestratorPhase] = assignment
@@ -633,7 +633,7 @@ func renderPhaseList(
 ) string {
 	var b strings.Builder
 
-	b.WriteString(styles.TitleStyle.Render("Assign Models to SDD Phases"))
+	b.WriteString(styles.TitleStyle.Render("Assign Models to SDD Phases & JD Agents"))
 	b.WriteString("\n\n")
 	if state.ConfigWarning != "" {
 		b.WriteString(styles.WarningStyle.Render(state.ConfigWarning))
@@ -664,7 +664,7 @@ func renderPhaseList(
 	}
 	phases := opencode.SDDPhases()
 	jdPhases := opencode.JDPhases()
-	separatorIdx := 2 + len(phases)
+	separatorIdx := SeparatorRowIdx()
 
 	for idx, row := range rows {
 		focused := idx == cursor
