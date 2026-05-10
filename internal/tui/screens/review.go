@@ -19,8 +19,8 @@ func RenderReview(payload planner.ReviewPayload, cursor int) string {
 	b.WriteString("\n\n")
 
 	b.WriteString("  " + styles.HeadingStyle.Render("Agents") + "  " + styles.UnselectedStyle.Render(joinIDs(payload.Agents)) + "\n")
-	b.WriteString("  " + styles.HeadingStyle.Render("Persona") + "  " + styles.UnselectedStyle.Render(string(payload.Persona)) + "\n")
-	b.WriteString("  " + styles.HeadingStyle.Render("Preset") + "  " + styles.UnselectedStyle.Render(string(payload.Preset)) + "\n")
+	b.WriteString("  " + styles.HeadingStyle.Render("Persona") + "  " + styles.UnselectedStyle.Render(reviewPersonaLabel(payload.Persona)) + "\n")
+	b.WriteString("  " + styles.HeadingStyle.Render("Preset") + "  " + styles.UnselectedStyle.Render(reviewPresetLabel(payload.Preset)) + "\n")
 	b.WriteString("\n")
 
 	if len(payload.Components) > 0 {
@@ -83,4 +83,20 @@ func joinIDs[T ~string](values []T) string {
 	}
 
 	return strings.Join(parts, ", ")
+}
+
+func reviewPersonaLabel(persona model.PersonaID) string {
+	if persona == model.PersonaCustom {
+		return "keep existing persona unmanaged"
+	}
+
+	return string(persona)
+}
+
+func reviewPresetLabel(preset model.PresetID) string {
+	if preset == model.PresetCustom {
+		return "choose components and skills manually"
+	}
+
+	return string(preset)
 }

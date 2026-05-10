@@ -40,6 +40,18 @@ ENV_FLAGS=""
 [ "${RUN_BACKUP_TESTS:-0}" = "1" ] && ENV_FLAGS="$ENV_FLAGS -e RUN_BACKUP_TESTS=1"
 [ -n "${GITHUB_TOKEN:-}" ]         && ENV_FLAGS="$ENV_FLAGS -e GITHUB_TOKEN=$GITHUB_TOKEN"
 
+# Per Docker build/run timeout. CI runners can otherwise hang indefinitely while
+# logs remain unavailable until GitHub closes the job.
+PLATFORM_TIMEOUT_SECONDS="${E2E_PLATFORM_TIMEOUT_SECONDS:-900}"
+
+run_with_timeout() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$PLATFORM_TIMEOUT_SECONDS" "$@"
+    else
+        "$@"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -59,7 +71,7 @@ for entry in "${PLATFORMS[@]}"; do
     TOTAL=$((TOTAL + 1))
     printf "${YELLOW}[BUILD]${NC} %s — building from %s\n" "$name" "$dockerfile"
 
-    if docker build \
+    if run_with_timeout docker build \
         -f "$SCRIPT_DIR/$dockerfile" \
         -t "$image_tag" \
         "$PROJECT_ROOT" 2>&1; then
@@ -74,7 +86,7 @@ for entry in "${PLATFORMS[@]}"; do
     printf "${YELLOW}[RUN]${NC}   %s — running tests\n" "$name"
 
     # shellcheck disable=SC2086
-    if docker run --rm $ENV_FLAGS "$image_tag" 2>&1; then
+    if run_with_timeout docker run --rm $ENV_FLAGS "$image_tag" 2>&1; then
         printf "${GREEN}[RUN]${NC}   %s — PASSED\n" "$name"
         PASS=$((PASS + 1))
     else

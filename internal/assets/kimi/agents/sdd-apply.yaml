@@ -1,0 +1,7 @@
+version: "1"
+agent:
+  name: sdd-apply
+  extend: default
+  system_prompt_path: ./sdd-apply.md
+  exclude_tools:
+    - "kimi_cli.tools.multiagent:Task"

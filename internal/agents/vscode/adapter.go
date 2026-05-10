@@ -132,6 +132,18 @@ func (a *Adapter) CommandsDir(_ string) string {
 	return ""
 }
 
+func (a *Adapter) SupportsSubAgents() bool {
+	return false
+}
+
+func (a *Adapter) SubAgentsDir(_ string) string {
+	return ""
+}
+
+func (a *Adapter) EmbeddedSubAgentsDir() string {
+	return ""
+}
+
 func (a *Adapter) SupportsSkills() bool {
 	return true
 }

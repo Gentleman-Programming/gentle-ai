@@ -9,13 +9,33 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
+func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
+func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
+
+func assertGentlemanLanguageGuardrails(t *testing.T, text string, required []string, banned []string) {
+	t.Helper()
+
+	for _, needle := range required {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("missing language guardrail %q", needle)
+		}
+	}
+
+	for _, needle := range banned {
+		if strings.Contains(text, needle) {
+			t.Fatalf("contains drift-prone language instruction %q", needle)
+		}
+	}
+}
 
 func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
 	home := t.TempDir()
@@ -45,6 +65,90 @@ func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("CLAUDE.md missing real persona content (expected 'Senior Architect')")
 	}
+
+	assertGentlemanLanguageGuardrails(t, text,
+		[]string{
+			"Match the user's current language.",
+			"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
+			"In English conversations, keep the full reply in natural English with the same warm energy.",
+		},
+		[]string{
+			`Say "déjame verificar"`,
+			"Spanish input → Rioplatense Spanish",
+			"English input → same warm energy",
+		},
+	)
+}
+
+func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, kimiAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(kimi) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(kimi) changed = false")
+	}
+
+	// KIMI.md should be the static Jinja template (includes + variable placeholders).
+	templatePath := filepath.Join(home, ".kimi", "KIMI.md")
+	content, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", templatePath, err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, `{% include "output-style.md"`) {
+		t.Fatal("KIMI.md template missing {% include \"output-style.md\" %}")
+	}
+	if !strings.Contains(text, "${KIMI_AGENTS_MD}") {
+		t.Fatal("KIMI.md missing ${KIMI_AGENTS_MD} for project AGENTS.md parity")
+	}
+	if !strings.Contains(text, "${KIMI_SKILLS}") {
+		t.Fatal("KIMI.md missing ${KIMI_SKILLS} for loaded-skills parity")
+	}
+
+	// output-style.md module should contain the Gentleman style content.
+	outputStylePath := filepath.Join(home, ".kimi", "output-style.md")
+	styleContent, err := os.ReadFile(outputStylePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", outputStylePath, err)
+	}
+	if !strings.Contains(string(styleContent), "Gentleman Output Style") {
+		t.Fatal("output-style.md missing Gentleman Output Style content")
+	}
+	assertGentlemanLanguageGuardrails(t, string(styleContent),
+		[]string{
+			"Always match the user's current language.",
+			"Do not drift into another language because of persona wording, examples, or stylistic momentum.",
+			"If the conversation is in English, keep the full response in English unless the user explicitly asks for another language or you are translating/quoting.",
+		},
+		[]string{
+			"### Spanish Input → Rioplatense Spanish (voseo)",
+			`Use naturally: "Bien"`,
+			`Use naturally: "Here's the thing"`,
+		},
+	)
+
+	// persona.md module should exist and contain persona content.
+	personaPath := filepath.Join(home, ".kimi", "persona.md")
+	personaContent, err := os.ReadFile(personaPath)
+	if err != nil {
+		t.Fatalf("persona.md not written: %v", err)
+	}
+	assertGentlemanLanguageGuardrails(t, string(personaContent),
+		[]string{
+			"Match the user's current language.",
+			"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
+			"In English conversations, keep the full reply in natural English with the same warm energy.",
+		},
+		[]string{
+			`Say "déjame verificar"`,
+			"Spanish input → Rioplatense Spanish",
+			"English input → same warm energy",
+		},
+	)
 }
 
 func TestInjectClaudeGentlemanWritesOutputStyleFile(t *testing.T) {
@@ -259,6 +363,302 @@ func TestInjectOpenCodeGentlemanWritesAgentsFile(t *testing.T) {
 	text := string(content)
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("AGENTS.md missing real persona content")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing persona marker")
+	}
+}
+
+func TestInjectOpenCodeGentlemanDoesNotCreateSDDConductor(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	text := string(content)
+	if strings.Contains(text, `"sdd-orchestrator"`) {
+		t.Fatal("persona injection must not create legacy sdd-orchestrator conductor")
+	}
+	if strings.Contains(text, `"gentle-orchestrator"`) {
+		t.Fatal("persona injection must not create SDD conductor; SDD component owns gentle-orchestrator")
+	}
+	if !strings.Contains(text, `"gentleman"`) {
+		t.Fatal("persona injection should still create the gentleman persona agent")
+	}
+}
+
+func TestInjectOpenCodePreservesUserContentInsteadOfOverwriting(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	userContent := "# My custom rules\n\nDo not overwrite this file.\n"
+	if err := os.WriteFile(path, []byte(userContent), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "Do not overwrite this file.") {
+		t.Fatal("AGENTS.md user content was overwritten")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing managed persona section after inject")
+	}
+}
+
+func TestInjectOpenClawWritesPersonaToWorkspaceSoulAndNotAgents(t *testing.T) {
+	workspace := t.TempDir()
+	adapter := openclawAdapter()
+	agentsPath := filepath.Join(workspace, "AGENTS.md")
+	if err := os.WriteFile(agentsPath, []byte("# Existing agent protocols\n\nKeep SDD here.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(AGENTS.md) error = %v", err)
+	}
+
+	result, err := Inject(workspace, adapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(openclaw) changed = false")
+	}
+
+	soulPath := filepath.Join(workspace, "SOUL.md")
+	soulContent, err := os.ReadFile(soulPath)
+	if err != nil {
+		t.Fatalf("ReadFile(SOUL.md) error = %v", err)
+	}
+	soulText := string(soulContent)
+	if !strings.Contains(soulText, "<!-- gentle-ai:persona -->") {
+		t.Fatalf("SOUL.md missing managed persona marker; got:\n%s", soulText)
+	}
+	if !strings.Contains(soulText, "Senior Architect") {
+		t.Fatalf("SOUL.md missing real persona content; got:\n%s", soulText)
+	}
+	if !strings.Contains(soulText, "Match the user's current language.") {
+		t.Fatalf("SOUL.md missing persona language guardrail; got:\n%s", soulText)
+	}
+
+	agentsContent, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
+	}
+	agentsText := string(agentsContent)
+	if !strings.Contains(agentsText, "Keep SDD here.") {
+		t.Fatalf("AGENTS.md user protocol content was modified; got:\n%s", agentsText)
+	}
+	if strings.Contains(agentsText, "<!-- gentle-ai:persona -->") || strings.Contains(agentsText, "Senior Architect") {
+		t.Fatalf("OpenClaw persona must not be written to AGENTS.md; got:\n%s", agentsText)
+	}
+}
+
+func TestInjectOpenClawSoulPersonaIsIdempotentAndPreservesUserContent(t *testing.T) {
+	workspace := t.TempDir()
+	soulPath := filepath.Join(workspace, "SOUL.md")
+	if err := os.WriteFile(soulPath, []byte("# Custom soul\n\nKeep my tone note.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(SOUL.md) error = %v", err)
+	}
+
+	adapter := openclawAdapter()
+	first, err := Inject(workspace, adapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(openclaw) first changed = false")
+	}
+	second, err := Inject(workspace, adapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("OpenClaw SOUL.md persona injection should be idempotent")
+	}
+
+	content, err := os.ReadFile(soulPath)
+	if err != nil {
+		t.Fatalf("ReadFile(SOUL.md) error = %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "Keep my tone note.") {
+		t.Fatalf("SOUL.md user content was lost; got:\n%s", text)
+	}
+	if count := strings.Count(text, "<!-- gentle-ai:persona -->"); count != 1 {
+		t.Fatalf("SOUL.md has %d persona markers, want exactly 1", count)
+	}
+}
+
+func TestInjectOpenClawRejectsAmbiguousWorkspacePath(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	result, err := Inject("", openclawAdapter(), model.PersonaGentleman)
+	if err == nil {
+		t.Fatalf("Inject(openclaw, empty workspace) error = nil, want deterministic ambiguity error; result=%+v", result)
+	}
+	if _, statErr := os.Stat(filepath.Join(cwd, "SOUL.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("ambiguous OpenClaw workspace must not create relative SOUL.md; stat err=%v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(cwd, "AGENTS.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("ambiguous OpenClaw workspace must not create relative AGENTS.md; stat err=%v", statErr)
+	}
+}
+
+func TestInjectOpenCodeDoesNotStripLookalikeUserContent(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	lookalike := "## Rules\n\n- Team rules.\n\n## Personality\n\nSenior Architect for my org.\n\nDo not delete this custom preface.\n"
+	if err := os.WriteFile(path, []byte(lookalike), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "Do not delete this custom preface.") {
+		t.Fatal("OpenCode AGENTS.md lookalike user content was stripped")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing managed persona section after inject")
+	}
+}
+
+func TestInjectOpenCodePreservesUserPrefaceAboveATLBlock(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// User has custom content with fingerprint-like headings ABOVE an old ATL block.
+	// ATL markers must NOT trigger persona legacy stripping.
+	existing := "## Rules\n\n- My team's custom rules.\n\n## Personality\n\nSenior Architect in my org.\n\n" +
+		"<!-- BEGIN:agent-teams-lite -->\nOld ATL content.\n<!-- END:agent-teams-lite -->\n"
+	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "My team's custom rules.") {
+		t.Fatal("user preface above ATL block was stripped — ATL should not enable persona stripping")
+	}
+	if strings.Contains(text, "BEGIN:agent-teams-lite") {
+		t.Fatal("ATL block should have been stripped by StripLegacyATLBlock")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing managed persona section")
+	}
+}
+
+func TestInjectOpenCodeReplacesExactLegacyAssetWithoutDuplication(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Write the exact legacy asset (no markers) — simulates old installer output.
+	legacyContent := assets.MustRead("opencode/persona-gentleman.md")
+	if err := os.WriteFile(path, []byte(legacyContent), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	text := string(content)
+	// Must have exactly ONE persona marker — no duplication.
+	if strings.Count(text, "<!-- gentle-ai:persona -->") != 1 {
+		t.Fatalf("expected exactly 1 persona marker, got %d — legacy asset was not replaced cleanly",
+			strings.Count(text, "<!-- gentle-ai:persona -->"))
+	}
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("persona content missing after replacing legacy asset")
+	}
+}
+
+func TestInjectOpenCodePreservesUserPrefaceAboveManagedMarkers(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Simulate: user has custom content with fingerprint-like headings ABOVE
+	// existing managed markers. This is the exact scenario where aggressive
+	// legacy stripping would destroy user content.
+	existing := "## Rules\n\n- My team's custom rules.\n\n## Personality\n\nSenior Architect in my org.\n\n" +
+		"<!-- gentle-ai:engram-protocol -->\nEngram protocol here.\n<!-- /gentle-ai:engram-protocol -->\n"
+	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "My team's custom rules.") {
+		t.Fatal("user preface above managed markers was stripped — should be preserved")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing managed persona section after inject")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:engram-protocol -->") {
+		t.Fatal("existing engram section was lost")
 	}
 }
 
@@ -571,8 +971,8 @@ func TestInjectCursorGentlemanWritesRulesFileWithRealContent(t *testing.T) {
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("Cursor persona missing 'Senior Architect' — got neutral fallback instead of generic persona")
 	}
-	if !strings.Contains(text, "Skills") {
-		t.Fatal("Cursor persona missing skills section")
+	if !strings.Contains(text, "Contextual Skill Loading") {
+		t.Fatal("Cursor persona missing contextual skill loading directive")
 	}
 }
 
@@ -603,6 +1003,18 @@ func TestInjectGeminiGentlemanWritesSystemPromptWithRealContent(t *testing.T) {
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("Gemini persona missing 'Senior Architect'")
 	}
+	assertGentlemanLanguageGuardrails(t, text,
+		[]string{
+			"Match the user's current language.",
+			"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
+			"In English conversations, keep the full reply in natural English with the same warm energy.",
+		},
+		[]string{
+			`Say "déjame verificar"`,
+			"Spanish input → Rioplatense Spanish",
+			"English input → same warm energy",
+		},
+	)
 }
 
 func TestInjectVSCodeGentlemanWritesInstructionsFile(t *testing.T) {
@@ -645,7 +1057,6 @@ func TestInjectVSCodeGentlemanWritesInstructionsFile(t *testing.T) {
 const legacyClaudePersonaBlock = `## Rules
 
 - NEVER add "Co-Authored-By" or any AI attribution to commits. Use conventional commits format only.
-- Never build after changes.
 
 ## Personality
 

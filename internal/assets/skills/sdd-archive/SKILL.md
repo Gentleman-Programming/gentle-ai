@@ -1,8 +1,8 @@
 ---
 name: sdd-archive
-description: >
-  Sync delta specs to main specs and archive a completed change.
-  Trigger: When the orchestrator launches you to archive a change after implementation and verification.
+description: "Archive a completed SDD change by syncing delta specs. Trigger: orchestrator launches archive after implementation and verification."
+disable-model-invocation: true
+user-invocable: false
 license: MIT
 metadata:
   author: gentleman-programming

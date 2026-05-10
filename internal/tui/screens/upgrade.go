@@ -116,6 +116,13 @@ func renderUpgradeReady(b *strings.Builder, results []update.UpdateResult) strin
 }
 
 func renderUpgradeResult(b *strings.Builder, report *upgrade.UpgradeReport) string {
+	if len(report.Results) == 0 {
+		b.WriteString("  " + styles.SuccessStyle.Render("✓ All tools are up to date"))
+		b.WriteString("\n\n")
+		b.WriteString(styles.HelpStyle.Render("enter: return • esc: back • q: quit"))
+		return b.String()
+	}
+
 	succeeded, failed, skipped := 0, 0, 0
 
 	for _, r := range report.Results {

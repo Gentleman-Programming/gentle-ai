@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -45,6 +48,17 @@ func TestDetectInstalledVersion(t *testing.T) {
 				return exec.Command("echo", "engram v0.3.2")
 			},
 			wantVersion: "0.3.2",
+		},
+		{
+			name: "engram dev output is preserved as dev sentinel",
+			tool: ToolInfo{Name: "engram", DetectCmd: []string{"engram", "version"}},
+			lookPathFn: func(string) (string, error) {
+				return "/usr/local/bin/engram", nil
+			},
+			execCommandFn: func(name string, args ...string) *exec.Cmd {
+				return exec.Command("echo", "engram dev")
+			},
+			wantVersion: "dev",
 		},
 		{
 			name: "gga not installed",
@@ -104,6 +118,99 @@ func TestDetectInstalledVersion(t *testing.T) {
 				t.Fatalf("detectInstalledVersion() = %q, want %q", got, tc.wantVersion)
 			}
 		})
+	}
+}
+
+func TestDetectInstalledVersionFromOpenCodeNodeModulePackageJSON(t *testing.T) {
+	home := t.TempDir()
+	pkgDir := filepath.Join(home, ".config", "opencode", "node_modules", "opencode-sdd-engram-manage")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.1.7"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origHome := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = origHome })
+
+	tool := ToolInfo{Name: "sdd-engram-plugin", NpmPackage: "opencode-sdd-engram-manage"}
+	if got := detectInstalledVersion(context.Background(), tool, "dev"); got != "1.1.7" {
+		t.Fatalf("detectInstalledVersion() = %q, want 1.1.7", got)
+	}
+}
+
+func TestDetectInstalledVersionFromOpenCodePackageJSONDependency(t *testing.T) {
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "package.json"), []byte(`{"dependencies":{"opencode-sdd-engram-manage":"^1.3.3"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origHome := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = origHome })
+
+	tool := ToolInfo{Name: "sdd-engram-plugin", NpmPackage: "opencode-sdd-engram-manage"}
+	if got := detectInstalledVersion(context.Background(), tool, "dev"); got != "1.3.3" {
+		t.Fatalf("detectInstalledVersion() = %q, want 1.3.3", got)
+	}
+}
+
+func TestCheckSingleToolOpenCodePluginRegisteredNotMaterialized(t *testing.T) {
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origHome := userHomeDir
+	origClient := httpClient
+	t.Cleanup(func() {
+		userHomeDir = origHome
+		httpClient = origClient
+	})
+	userHomeDir = func() (string, error) { return home, nil }
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(githubRelease{TagName: "v1.2.3", HTMLURL: "https://example.test/release"})
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	tool := ToolInfo{
+		Name:          "opencode-sdd-engram-manage",
+		Owner:         "owner",
+		Repo:          "repo",
+		InstallMethod: InstallOpenCodePlugin,
+		NpmPackage:    "opencode-sdd-engram-manage",
+	}
+
+	result := checkSingleTool(context.Background(), tool, "dev", system.PlatformProfile{})
+	if result.Status != RegisteredNotMaterialized {
+		t.Fatalf("status = %q, want %q", result.Status, RegisteredNotMaterialized)
+	}
+	if result.InstalledVersion != "" {
+		t.Fatalf("InstalledVersion = %q, want empty while package.json is missing", result.InstalledVersion)
+	}
+	if !strings.Contains(strings.ToLower(result.UpdateHint), "restart or reload opencode") {
+		t.Fatalf("UpdateHint should tell the user to restart/reload OpenCode, got %q", result.UpdateHint)
+	}
+	if !strings.Contains(result.UpdateHint, "peer dependency") {
+		t.Fatalf("UpdateHint should mention checking logs for dependency errors, got %q", result.UpdateHint)
+	}
+}
+
+func TestParseVersionFromOutput_DevSentinel(t *testing.T) {
+	if got := parseVersionFromOutput("engram dev"); got != "dev" {
+		t.Fatalf("parseVersionFromOutput(engram dev) = %q, want %q", got, "dev")
 	}
 }
 
@@ -258,10 +365,22 @@ func TestResolveGitHubToken_EnvVarWins(t *testing.T) {
 	}
 }
 
+// TestResolveGitHubToken_GHTokenFallback verifies GH_TOKEN is used when
+// GITHUB_TOKEN is unset, matching the gh CLI environment convention.
+func TestResolveGitHubToken_GHTokenFallback(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", " gh-token ")
+
+	if got := resolveGitHubToken(); got != "gh-token" {
+		t.Fatalf("resolveGitHubToken() = %q, want %q", got, "gh-token")
+	}
+}
+
 // TestResolveGitHubToken_EmptyWhenNoEnvAndNoGh verifies empty string returned when
 // GITHUB_TOKEN is unset and gh is not in PATH.
 func TestResolveGitHubToken_EmptyWhenNoEnvAndNoGh(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
 	origLookPath := ghLookPath
 	t.Cleanup(func() { ghLookPath = origLookPath })
 	ghLookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
@@ -284,10 +403,14 @@ func TestCheckAll(t *testing.T) {
 		switch {
 		case contains(path, "gentle-ai"):
 			release = githubRelease{TagName: "v1.5.0", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.5.0"}
-		case contains(path, "engram"):
-			release = githubRelease{TagName: "v0.4.0", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/v0.4.0"}
 		case contains(path, "gentleman-guardian-angel"):
 			release = githubRelease{TagName: "v2.0.0", HTMLURL: "https://github.com/Gentleman-Programming/gentleman-guardian-angel/releases/tag/v2.0.0"}
+		case contains(path, "sub-agent-statusline"):
+			release = githubRelease{TagName: "v0.4.0", HTMLURL: "https://github.com/Joaquinvesapa/sub-agent-statusline/releases/tag/v0.4.0"}
+		case contains(path, "sdd-engram-plugin"):
+			release = githubRelease{TagName: "v1.1.7", HTMLURL: "https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/releases/tag/v1.1.7"}
+		case contains(path, "engram"):
+			release = githubRelease{TagName: "v0.4.0", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/v0.4.0"}
 		}
 		json.NewEncoder(w).Encode(release)
 	}))
@@ -296,10 +419,12 @@ func TestCheckAll(t *testing.T) {
 	origClient := httpClient
 	origLookPath := lookPath
 	origExecCommand := execCommand
+	origUserHomeDir := userHomeDir
 	t.Cleanup(func() {
 		httpClient = origClient
 		lookPath = origLookPath
 		execCommand = origExecCommand
+		userHomeDir = origUserHomeDir
 	})
 
 	httpClient = server.Client()
@@ -322,12 +447,14 @@ func TestCheckAll(t *testing.T) {
 		}
 		return exec.Command("false")
 	}
+	pluginHome := t.TempDir()
+	userHomeDir = func() (string, error) { return pluginHome, nil }
 
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
 	results := CheckAll(context.Background(), "1.5.0", profile)
 
-	if len(results) != 3 {
-		t.Fatalf("len(results) = %d, want 3", len(results))
+	if len(results) != 5 {
+		t.Fatalf("len(results) = %d, want 5", len(results))
 	}
 
 	// gentle-ai: 1.5.0 local == 1.5.0 remote → UpToDate
@@ -338,6 +465,8 @@ func TestCheckAll(t *testing.T) {
 
 	// gga: not installed
 	assertResult(t, results[2], "gga", NotInstalled, "", "2.0.0")
+	assertResult(t, results[3], "opencode-subagent-statusline", NotInstalled, "", "0.4.0")
+	assertResult(t, results[4], "opencode-sdd-engram-manage", NotInstalled, "", "1.1.7")
 }
 
 func TestCheckAll_NetworkError(t *testing.T) {
@@ -630,17 +759,19 @@ func TestParseVersionFromOutput(t *testing.T) {
 
 // TestRegistryContents verifies the registry has all expected tools.
 func TestRegistryContents(t *testing.T) {
-	if len(Tools) != 3 {
-		t.Fatalf("len(Tools) = %d, want 3", len(Tools))
+	if len(Tools) != 5 {
+		t.Fatalf("len(Tools) = %d, want 5", len(Tools))
 	}
 
 	expected := map[string]struct {
 		owner string
 		repo  string
 	}{
-		"gentle-ai": {owner: "Gentleman-Programming", repo: "gentle-ai"},
-		"engram":    {owner: "Gentleman-Programming", repo: "engram"},
-		"gga":       {owner: "Gentleman-Programming", repo: "gentleman-guardian-angel"},
+		"gentle-ai":                    {owner: "Gentleman-Programming", repo: "gentle-ai"},
+		"engram":                       {owner: "Gentleman-Programming", repo: "engram"},
+		"gga":                          {owner: "Gentleman-Programming", repo: "gentleman-guardian-angel"},
+		"opencode-subagent-statusline": {owner: "Joaquinvesapa", repo: "sub-agent-statusline"},
+		"opencode-sdd-engram-manage":   {owner: "j0k3r-dev-rgl", repo: "sdd-engram-plugin"},
 	}
 
 	for _, tool := range Tools {
@@ -667,6 +798,9 @@ func TestRegistryContents(t *testing.T) {
 	}
 	if Tools[2].DetectCmd == nil {
 		t.Fatalf("gga DetectCmd should not be nil")
+	}
+	if Tools[3].NpmPackage == "" || Tools[4].NpmPackage == "" {
+		t.Fatalf("OpenCode plugin tools should declare NpmPackage")
 	}
 }
 

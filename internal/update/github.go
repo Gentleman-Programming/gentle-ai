@@ -27,10 +27,14 @@ type githubRelease struct {
 
 // resolveGitHubToken returns a GitHub token for API auth, trying in order:
 // 1. GITHUB_TOKEN env var
-// 2. `gh auth token` CLI output (if gh is available)
+// 2. GH_TOKEN env var (gh CLI convention)
+// 3. `gh auth token` CLI output (if gh is available)
 // Returns empty string if neither is available.
 func resolveGitHubToken() string {
 	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
+		return token
+	}
+	if token := strings.TrimSpace(os.Getenv("GH_TOKEN")); token != "" {
 		return token
 	}
 	if ghPath, err := ghLookPath("gh"); err == nil {
@@ -47,7 +51,7 @@ func resolveGitHubToken() string {
 }
 
 // fetchLatestRelease fetches the latest release from a GitHub repository.
-// Supports optional GITHUB_TOKEN env var or `gh auth token` to avoid rate limits.
+// Supports optional GITHUB_TOKEN/GH_TOKEN env vars or `gh auth token` to avoid rate limits.
 func fetchLatestRelease(ctx context.Context, owner, repo string) (githubRelease, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
 

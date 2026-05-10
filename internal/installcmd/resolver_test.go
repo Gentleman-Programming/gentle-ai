@@ -370,6 +370,25 @@ func TestResolveAgentInstall(t *testing.T) {
 			want:    CommandSequence{{"npm", "install", "-g", "opencode-ai"}},
 		},
 		{
+			name:    "kimi on windows uses uv to strictly enforce secure package installation",
+			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true},
+			agent:   model.AgentKimi,
+			want:    CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}},
+		},
+		{
+			name:    "kimi on unix uses uv to strictly enforce secure package installation",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", Supported: true},
+			agent:   model.AgentKimi,
+			want:    CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}},
+		},
+		{
+			name:    "kimi on unsupported profile returns error",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", Supported: false},
+			agent:   model.AgentKimi,
+			wantErr: true,
+		},
+
+		{
 			name:    "unsupported agent returns error",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
 			agent:   "unsupported",
@@ -390,6 +409,95 @@ func TestResolveAgentInstall(t *testing.T) {
 
 			if !reflect.DeepEqual(command, tt.want) {
 				t.Fatalf("ResolveAgentInstall() = %v, want %v", command, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateAgentInstallPreflight(t *testing.T) {
+	tests := []struct {
+		name        string
+		profile     system.PlatformProfile
+		agent       model.AgentID
+		lookPath    func(string) (string, error)
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:    "kimi on unsupported platform returns unsupported error before uv lookup",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "unknown", PackageManager: "", Supported: false},
+			agent:   model.AgentKimi,
+			lookPath: func(file string) (string, error) {
+				return "", fmt.Errorf("should not be called")
+			},
+			wantErr:     true,
+			errContains: "not supported on this platform",
+		},
+		{
+			name:    "kimi missing uv returns actionable remediation",
+			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true},
+			agent:   model.AgentKimi,
+			lookPath: func(file string) (string, error) {
+				if file == "uv" {
+					return "", fmt.Errorf("not found")
+				}
+				return "/usr/bin/" + file, nil
+			},
+			wantErr:     true,
+			errContains: "brew install uv",
+		},
+		{
+			name:    "kimi with uv present passes preflight",
+			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true},
+			agent:   model.AgentKimi,
+			lookPath: func(file string) (string, error) {
+				if file == "uv" {
+					return "/usr/bin/uv", nil
+				}
+				return "", fmt.Errorf("not found")
+			},
+			wantErr: false,
+		},
+		{
+			name:    "non kimi agent does not require uv",
+			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true},
+			agent:   model.AgentClaudeCode,
+			lookPath: func(file string) (string, error) {
+				return "", fmt.Errorf("not found")
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls int
+			lookPath := tt.lookPath
+			if lookPath == nil {
+				lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+			}
+			wrappedLookPath := func(file string) (string, error) {
+				calls++
+				return lookPath(file)
+			}
+			origLookPath := cmdLookPath
+			cmdLookPath = wrappedLookPath
+			t.Cleanup(func() { cmdLookPath = origLookPath })
+
+			err := ValidateAgentInstallPreflight(tt.profile, tt.agent)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateAgentInstallPreflight() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if tt.wantErr && !strings.Contains(err.Error(), tt.errContains) {
+				t.Fatalf("ValidateAgentInstallPreflight() error = %q, want to contain %q", err.Error(), tt.errContains)
+			}
+			if tt.name == "kimi on unsupported platform returns unsupported error before uv lookup" && strings.Contains(strings.ToLower(err.Error()), "install uv") {
+				t.Fatalf("ValidateAgentInstallPreflight() unsupported-platform error leaked uv remediation: %q", err.Error())
+			}
+
+			if tt.name == "kimi on unsupported platform returns unsupported error before uv lookup" && calls != 0 {
+				t.Fatalf("ValidateAgentInstallPreflight() called uv lookup %d times on unsupported platform, want 0", calls)
 			}
 		})
 	}

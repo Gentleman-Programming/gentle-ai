@@ -32,6 +32,14 @@
       "sessions": 7,
       "memories": 54,
       "prompts": 151
+    },
+    {
+      "id": "d21f9e56",
+      "created_by": "alanbuscaglia",
+      "created_at": "2026-05-04T21:43:16Z",
+      "sessions": 74,
+      "memories": 278,
+      "prompts": 395
     }
   ]
 }
