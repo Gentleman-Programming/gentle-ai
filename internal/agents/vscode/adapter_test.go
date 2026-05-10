@@ -91,3 +91,28 @@ func TestMCPConfigPathUsesVSCodeUserProfile(t *testing.T) {
 		}
 	}
 }
+
+func TestSupportsSubAgentsReturnsTrue(t *testing.T) {
+	a := NewAdapter()
+	if !a.SupportsSubAgents() {
+		t.Fatal("SupportsSubAgents() = false, want true")
+	}
+}
+
+func TestSubAgentsDirReturnsCopilotAgentsPath(t *testing.T) {
+	a := NewAdapter()
+	got := a.SubAgentsDir("/tmp/home")
+	want := filepath.Join("/tmp/home", ".copilot", "agents")
+	if got != want {
+		t.Fatalf("SubAgentsDir(%q) = %q, want %q", "/tmp/home", got, want)
+	}
+}
+
+func TestEmbeddedSubAgentsDirReturnsVSCodeAgents(t *testing.T) {
+	a := NewAdapter()
+	got := a.EmbeddedSubAgentsDir()
+	want := "vscode/agents"
+	if got != want {
+		t.Fatalf("EmbeddedSubAgentsDir() = %q, want %q", got, want)
+	}
+}
