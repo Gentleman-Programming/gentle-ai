@@ -305,6 +305,11 @@ func TestReadCurrentModelAssignmentsMixedSeparators(t *testing.T) {
 // providerID="openrouter" and modelID="qwen/qwen3.6-plus:free". Splitting
 // on ':' first would mis-attribute "openrouter/qwen/qwen3.6-plus" to the
 // provider, which breaks OpenCode model resolution.
+//
+// The fixture intentionally uses the legacy "sdd-orchestrator" key (the
+// real-world config shape from issue #260, before the user re-syncs) and
+// asserts the result lands under "gentle-orchestrator" — exercising both
+// the first-separator split and the legacy alias normalization together.
 func TestReadCurrentModelAssignmentsOpenRouterFreeSuffix(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "opencode.json")
@@ -329,7 +334,8 @@ func TestReadCurrentModelAssignmentsOpenRouterFreeSuffix(t *testing.T) {
 		providerID string
 		modelID    string
 	}{
-		{"sdd-orchestrator", "openrouter", "qwen/qwen3.6-plus:free"},
+		// Legacy "sdd-orchestrator" fixture key normalizes to "gentle-orchestrator".
+		{"gentle-orchestrator", "openrouter", "qwen/qwen3.6-plus:free"},
 		{"sdd-apply", "openrouter", "anthropic/claude-sonnet-4"},
 	}
 
