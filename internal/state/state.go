@@ -75,3 +75,15 @@ func Write(homeDir string, s InstallState) error {
 	}
 	return os.WriteFile(Path(homeDir), append(data, '\n'), 0o644)
 }
+
+// InstalledAgentsFromState reads the persisted agent list from state.json.
+// Returns the installed agent names, or nil if the file is absent, unreadable,
+// or contains an empty list. Callers should fall back to filesystem detection
+// when the result is nil.
+func InstalledAgentsFromState(homeDir string) []string {
+	s, err := Read(homeDir)
+	if err != nil || len(s.InstalledAgents) == 0 {
+		return nil
+	}
+	return s.InstalledAgents
+}

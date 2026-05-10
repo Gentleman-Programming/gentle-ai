@@ -2,10 +2,12 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
 
@@ -17,7 +19,8 @@ type InstallInput struct {
 func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult) (InstallInput, error) {
 	selection := model.Selection{}
 
-	agents := defaultAgentsFromDetection(detection)
+	homeDir, _ := os.UserHomeDir()
+	agents := defaultAgentsFromDetection(homeDir, detection)
 	if len(flags.Agents) > 0 {
 		agents = asAgentIDs(flags.Agents)
 	}
@@ -163,7 +166,21 @@ func componentsForPreset(preset model.PresetID) []model.ComponentID {
 	}
 }
 
-func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentID {
+func defaultAgentsFromDetection(homeDir string, detection system.DetectionResult) []model.AgentID {
+	// Priority 1: Read persisted state (~/.gentle-ai/state.json).
+	// When present and non-empty, only the agents the user explicitly
+	// installed are returned. This prevents install from injecting into
+	// every IDE config dir that happens to exist on the system (issue #114).
+	if agents := state.InstalledAgentsFromState(homeDir); len(agents) > 0 {
+		ids := make([]model.AgentID, 0, len(agents))
+		for _, a := range agents {
+			ids = append(ids, model.AgentID(a))
+		}
+		return ids
+	}
+
+	// Priority 2: Fallback to filesystem detection (backward compat
+	// for users who installed before state persistence was added).
 	agents := []model.AgentID{}
 	for _, state := range detection.Configs {
 		if !state.Exists {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
 
@@ -37,6 +38,10 @@ func TestParseInstallFlagsSupportsCSVAndRepeated(t *testing.T) {
 }
 
 func TestNormalizeInstallFlagsDefaults(t *testing.T) {
+	// Use a temp dir as HOME so state.json from the real home doesn't interfere.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
 	input, err := NormalizeInstallFlags(InstallFlags{}, system.DetectionResult{})
 	if err != nil {
 		t.Fatalf("NormalizeInstallFlags() error = %v", err)
@@ -222,7 +227,7 @@ func makeDetectionWithAgents(present ...string) system.DetectionResult {
 // omitted codex, so detection-driven selection silently dropped it.
 func TestDefaultAgentsFromDetection_CodexIsIncludedWhenPresent(t *testing.T) {
 	detection := makeDetectionWithAgents("codex")
-	agents := defaultAgentsFromDetection(detection)
+	agents := defaultAgentsFromDetection("", detection)
 
 	found := false
 	for _, id := range agents {
@@ -263,7 +268,7 @@ func TestDefaultAgentsFromDetection_AllAgentsMappedCorrectly(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.configAgent, func(t *testing.T) {
 			detection := makeDetectionWithAgents(tt.configAgent)
-			agents := defaultAgentsFromDetection(detection)
+			agents := defaultAgentsFromDetection("", detection)
 
 			found := false
 			for _, id := range agents {
@@ -281,5 +286,53 @@ func TestDefaultAgentsFromDetection_AllAgentsMappedCorrectly(t *testing.T) {
 				t.Errorf("defaultAgentsFromDetection() returned %d agents, want 1; got %v", len(agents), agents)
 			}
 		})
+	}
+}
+
+// TestDefaultAgentsFromDetection_UsesStateFileWhenPresent verifies that
+// defaultAgentsFromDetection returns only the agents recorded in state.json
+// when the file exists and is non-empty, ignoring any agent config dirs that
+// happen to be on disk. This covers issue #114.
+func TestDefaultAgentsFromDetection_UsesStateFileWhenPresent(t *testing.T) {
+	home := t.TempDir()
+
+	// Write state recording only opencode — even though we also simulate the
+	// claude-code config dir existing on disk.
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	// Simulate detection with claude-code present on disk.
+	detection := makeDetectionWithAgents("claude-code")
+	agents := defaultAgentsFromDetection(home, detection)
+
+	// Must return exactly the persisted selection: only opencode.
+	want := []model.AgentID{model.AgentOpenCode}
+	if !reflect.DeepEqual(agents, want) {
+		t.Errorf("defaultAgentsFromDetection() with state = %v, want %v", agents, want)
+	}
+}
+
+// TestDefaultAgentsFromDetection_FallsBackToFSWhenStateMissing verifies that
+// defaultAgentsFromDetection falls back to filesystem detection when state.json
+// is absent. This is the backward-compat path for users who installed before
+// state persistence was added.
+func TestDefaultAgentsFromDetection_FallsBackToFSWhenStateMissing(t *testing.T) {
+	home := t.TempDir()
+	// No state.Write — state.json does not exist.
+
+	detection := makeDetectionWithAgents("claude-code")
+	agents := defaultAgentsFromDetection(home, detection)
+
+	// FS discovery must return claude-code since its config dir exists.
+	found := false
+	for _, id := range agents {
+		if id == model.AgentClaudeCode {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("defaultAgentsFromDetection() without state should fall back to FS; got %v", agents)
 	}
 }
