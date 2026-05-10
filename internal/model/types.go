@@ -5,12 +5,17 @@ type AgentID string
 const (
 	AgentClaudeCode    AgentID = "claude-code"
 	AgentOpenCode      AgentID = "opencode"
+	AgentKilocode      AgentID = "kilocode"
 	AgentGeminiCLI     AgentID = "gemini-cli"
 	AgentCursor        AgentID = "cursor"
 	AgentVSCodeCopilot AgentID = "vscode-copilot"
 	AgentCodex         AgentID = "codex"
 	AgentAntigravity   AgentID = "antigravity"
 	AgentWindsurf      AgentID = "windsurf"
+	AgentKimi          AgentID = "kimi"
+	AgentQwenCode      AgentID = "qwen-code"
+	AgentKiroIDE       AgentID = "kiro-ide"
+	AgentOpenClaw      AgentID = "openclaw"
 )
 
 // SupportTier indicates how fully an agent supports the Gentleman AI ecosystem.
@@ -27,35 +32,57 @@ const (
 type ComponentID string
 
 const (
-	ComponentEngram     ComponentID = "engram"
-	ComponentSDD        ComponentID = "sdd"
-	ComponentSkills     ComponentID = "skills"
-	ComponentContext7   ComponentID = "context7"
-	ComponentPersona    ComponentID = "persona"
-	ComponentPermission ComponentID = "permissions"
-	ComponentGGA        ComponentID = "gga"
-	ComponentTheme      ComponentID = "theme"
+	ComponentEngram             ComponentID = "engram"
+	ComponentSDD                ComponentID = "sdd"
+	ComponentSkills             ComponentID = "skills"
+	ComponentContext7           ComponentID = "context7"
+	ComponentPersona            ComponentID = "persona"
+	ComponentPermission         ComponentID = "permissions"
+	ComponentGGA                ComponentID = "gga"
+	ComponentTheme              ComponentID = "theme"
+	ComponentClaudeTheme        ComponentID = "claude-theme"
+	ComponentOpenCodeGentleLogo ComponentID = "opencode-gentle-logo"
+)
+
+type UninstallMode string
+
+const (
+	UninstallModePartial      UninstallMode = "partial"
+	UninstallModeFull         UninstallMode = "full"
+	UninstallModeFullRemove   UninstallMode = "full-remove"
+	UninstallModeCleanInstall UninstallMode = "clean-install"
+)
+
+type EngramUninstallScope string
+
+const (
+	EngramUninstallScopeGlobal  EngramUninstallScope = "global"
+	EngramUninstallScopeProject EngramUninstallScope = "project"
 )
 
 type SkillID string
 
 const (
-	SkillSDDInit       SkillID = "sdd-init"
-	SkillSDDApply      SkillID = "sdd-apply"
-	SkillSDDVerify     SkillID = "sdd-verify"
-	SkillSDDExplore    SkillID = "sdd-explore"
-	SkillSDDPropose    SkillID = "sdd-propose"
-	SkillSDDSpec       SkillID = "sdd-spec"
-	SkillSDDDesign     SkillID = "sdd-design"
-	SkillSDDTasks      SkillID = "sdd-tasks"
-	SkillSDDArchive    SkillID = "sdd-archive"
-	SkillSDDOnboard    SkillID = "sdd-onboard"
-	SkillGoTesting     SkillID = "go-testing"
-	SkillCreator       SkillID = "skill-creator"
-	SkillJudgmentDay   SkillID = "judgment-day"
-	SkillBranchPR      SkillID = "branch-pr"
-	SkillIssueCreation SkillID = "issue-creation"
-	SkillSkillRegistry SkillID = "skill-registry"
+	SkillSDDInit         SkillID = "sdd-init"
+	SkillSDDApply        SkillID = "sdd-apply"
+	SkillSDDVerify       SkillID = "sdd-verify"
+	SkillSDDExplore      SkillID = "sdd-explore"
+	SkillSDDPropose      SkillID = "sdd-propose"
+	SkillSDDSpec         SkillID = "sdd-spec"
+	SkillSDDDesign       SkillID = "sdd-design"
+	SkillSDDTasks        SkillID = "sdd-tasks"
+	SkillSDDArchive      SkillID = "sdd-archive"
+	SkillSDDOnboard      SkillID = "sdd-onboard"
+	SkillGoTesting       SkillID = "go-testing"
+	SkillCreator         SkillID = "skill-creator"
+	SkillJudgmentDay     SkillID = "judgment-day"
+	SkillBranchPR        SkillID = "branch-pr"
+	SkillIssueCreation   SkillID = "issue-creation"
+	SkillSkillRegistry   SkillID = "skill-registry"
+	SkillChainedPR       SkillID = "chained-pr"
+	SkillCognitiveDoc    SkillID = "cognitive-doc-design"
+	SkillCommentWriter   SkillID = "comment-writer"
+	SkillWorkUnitCommits SkillID = "work-unit-commits"
 )
 
 type PersonaID string
@@ -77,6 +104,13 @@ const (
 	StrategyFileReplace
 	// StrategyAppendToFile appends content to an existing system prompt file.
 	StrategyAppendToFile
+	// StrategyInstructionsFile writes a dedicated instructions file (e.g. .instructions.md).
+	StrategyInstructionsFile
+	// StrategyJinjaModules writes separate module files that are included into a
+	// thin Jinja2 template (e.g. Kimi's KIMI.md).
+	StrategyJinjaModules
+	// StrategySteeringFile writes a Kiro steering file with inclusion: always frontmatter.
+	StrategySteeringFile
 )
 
 // MCPStrategy defines how MCP server configs are written for an agent.
@@ -109,6 +143,28 @@ type SDDModeID string
 const (
 	SDDModeSingle SDDModeID = "single"
 	SDDModeMulti  SDDModeID = "multi"
+)
+
+// SDDProfileStrategyID defines how sync handles OpenCode SDD profiles.
+type SDDProfileStrategyID string
+
+const (
+	// SDDProfileStrategyGeneratedMulti is the default/backward-compatible mode:
+	// named profiles coexist in opencode.json as suffixed agents and are detected
+	// from sdd-orchestrator-{name} keys during regular sync.
+	SDDProfileStrategyGeneratedMulti SDDProfileStrategyID = "generated-multi"
+	// SDDProfileStrategyExternalSingleActive supports external profile managers
+	// that keep profile state outside opencode.json and activate one runtime
+	// profile without requiring a restart.
+	SDDProfileStrategyExternalSingleActive SDDProfileStrategyID = "external-single-active"
+)
+
+type OpenCodeCommunityPluginID string
+
+const (
+	OpenCodePluginSubAgentStatusline OpenCodeCommunityPluginID = "sub-agent-statusline"
+	OpenCodePluginSDDEngramManage    OpenCodeCommunityPluginID = "sdd-engram-plugin"
+	OpenCodePluginGentleLogo         OpenCodeCommunityPluginID = "gentle-logo"
 )
 
 // Profile represents a named SDD orchestrator configuration with model assignments.

@@ -20,7 +20,7 @@ var presetDescriptions = map[model.PresetID]string{
 	model.PresetFullGentleman: "Everything: memory, SDD, skills, docs, persona & security",
 	model.PresetEcosystemOnly: "Core tools only: memory, SDD, skills & docs (no persona/security)",
 	model.PresetMinimal:       "Just Engram persistent memory",
-	model.PresetCustom:        "Pick individual components yourself",
+	model.PresetCustom:        "Choose components and skills manually; keep existing persona/settings unmanaged",
 }
 
 func RenderPreset(selected model.PresetID, cursor int) string {

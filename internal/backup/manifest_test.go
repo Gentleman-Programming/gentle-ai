@@ -20,6 +20,7 @@ func TestManifestSourceLabel(t *testing.T) {
 		{BackupSourceInstall, "install"},
 		{BackupSourceSync, "sync"},
 		{BackupSourceUpgrade, "upgrade"},
+		{BackupSourceUninstall, "uninstall"},
 		{BackupSource(""), "unknown source"},
 		{BackupSource("other"), "unknown source"},
 	}
@@ -71,6 +72,15 @@ func TestManifestDisplayLabel(t *testing.T) {
 				Source:    BackupSourceUpgrade,
 			},
 			contains: "upgrade",
+		},
+		{
+			name: "uninstall source shows uninstall label",
+			manifest: Manifest{
+				ID:        "20260322150405.000000000",
+				CreatedAt: ts,
+				Source:    BackupSourceUninstall,
+			},
+			contains: "uninstall",
 		},
 		{
 			name: "no source falls back to unknown",

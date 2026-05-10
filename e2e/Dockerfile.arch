@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Dockerfile.arch — E2E test image for gentle-ai on Arch Linux
 # Builds the binary from source and runs the E2E test suite as a non-root user.
 # archlinux:base only provides x86_64 images. Force amd64 platform so Docker
@@ -8,8 +9,12 @@ FROM --platform=linux/amd64 archlinux:base
 # System dependencies (includes npm for claude-code tests)
 # ---------------------------------------------------------------------------
 # Disable pacman's seccomp sandbox — it fails under QEMU emulation on ARM hosts.
+# Initialize the pacman keyring explicitly because fresh Arch containers may not
+# have a local secret key yet, which breaks archlinux-keyring post-install hooks.
 # DisableSandbox prevents the ALPM seccomp filter that is incompatible with QEMU user-mode.
 RUN echo 'DisableSandbox' >> /etc/pacman.conf && \
+    pacman-key --init && \
+    pacman-key --populate archlinux && \
     pacman -Syu --noconfirm && \
     pacman -S --noconfirm \
         git \
@@ -31,9 +36,13 @@ RUN useradd -m -s /bin/bash testuser && \
 # ---------------------------------------------------------------------------
 WORKDIR /build
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/root/go/pkg/mod \
+    go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/root/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -o /usr/local/bin/gentle-ai ./cmd/gentle-ai
 
 # ---------------------------------------------------------------------------

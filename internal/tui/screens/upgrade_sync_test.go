@@ -91,6 +91,26 @@ func TestRenderUpgradeSync_CombinedResult(t *testing.T) {
 	}
 }
 
+// TestRenderUpgradeSync_CombinedResultEmptyUpgradeReport verifies that the
+// combined results view still renders when the upgrade report has no tool
+// results because everything is already up to date.
+func TestRenderUpgradeSync_CombinedResultEmptyUpgradeReport(t *testing.T) {
+	report := &upgrade.UpgradeReport{}
+
+	out := RenderUpgradeSync(nil, report, 0, nil, nil, false, true, 0, 0)
+
+	lower := strings.ToLower(out)
+	if !strings.Contains(lower, "up to date") {
+		t.Errorf("RenderUpgradeSync(empty upgrade report) should contain 'up to date'; got:\n%s", out)
+	}
+	if !strings.Contains(out, "Sync Results") {
+		t.Errorf("RenderUpgradeSync(empty upgrade report) should show 'Sync Results'; got:\n%s", out)
+	}
+	if !strings.Contains(lower, "no files needed updating") {
+		t.Errorf("RenderUpgradeSync(empty upgrade report) should preserve sync results path; got:\n%s", out)
+	}
+}
+
 // TestRenderUpgradeSync_CombinedResultWithSyncError verifies that a sync error
 // is shown in the combined result.
 func TestRenderUpgradeSync_CombinedResultWithSyncError(t *testing.T) {

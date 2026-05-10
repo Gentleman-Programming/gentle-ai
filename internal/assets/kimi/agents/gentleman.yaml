@@ -1,0 +1,36 @@
+version: "1"
+agent:
+  name: gentleman
+  extend: default
+  system_prompt_path: ../KIMI.md
+  subagents:
+    sdd-init:
+      path: ./sdd-init.yaml
+      description: "Initializes Spec-Driven Development context"
+    sdd-explore:
+      path: ./sdd-explore.yaml
+      description: "Explores code and options before proposing a change"
+    sdd-propose:
+      path: ./sdd-propose.yaml
+      description: "Creates change proposals with intent and scope"
+    sdd-spec:
+      path: ./sdd-spec.yaml
+      description: "Creates comprehensive technical specifications"
+    sdd-design:
+      path: ./sdd-design.yaml
+      description: "Creates implementation designs from specs"
+    sdd-tasks:
+      path: ./sdd-tasks.yaml
+      description: "Breaks approved changes into implementation tasks"
+    sdd-apply:
+      path: ./sdd-apply.yaml
+      description: "Implements approved changes"
+    sdd-verify:
+      path: ./sdd-verify.yaml
+      description: "Verifies implementation against specs"
+    sdd-archive:
+      path: ./sdd-archive.yaml
+      description: "Archives verified changes and closes the SDD cycle"
+    sdd-onboard:
+      path: ./sdd-onboard.yaml
+      description: "Guided SDD walkthrough using the real codebase"

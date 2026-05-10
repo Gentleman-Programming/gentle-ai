@@ -29,6 +29,7 @@ After completing work, call `mem_save` with:
 - topic_key: `"sdd/{change-name}/proposal"`
 - type: `"architecture"`
 - project: `{project-name from context}`
+- capture_prompt: `false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
 
 ## Result Contract
 

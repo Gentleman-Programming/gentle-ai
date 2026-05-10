@@ -9,6 +9,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 )
@@ -23,6 +25,8 @@ func cursorAdapter(t *testing.T) agents.Adapter {
 }
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
+func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
+func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 
 func TestInjectOpenCodeMergesContext7AndIsIdempotent(t *testing.T) {
@@ -63,6 +67,76 @@ func TestInjectOpenCodeMergesContext7AndIsIdempotent(t *testing.T) {
 	}
 	if strings.Contains(text, `"mcpServers"`) {
 		t.Fatal("opencode.json should use 'mcp' key, not 'mcpServers'")
+	}
+}
+
+func TestInjectOpenClawMergesContext7UnderMCPDotServersAndMigratesLegacyMCPServers(t *testing.T) {
+	home := t.TempDir()
+	adapter := openclawAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(openclaw config dir) error = %v", err)
+	}
+
+	existing := `{
+  "mcpServers": {
+    "legacyDocs": {
+      "command": "legacy-docs"
+    },
+    "context7": {
+      "command": "old-context7"
+    }
+  },
+  "mcp": {
+    "sessionIdleTtlMs": 120000,
+    "servers": {
+      "context7": {
+        "command": "npx",
+        "args": ["-y", "@upstash/context7-mcp"]
+      }
+    }
+  },
+  "theme": "kanagawa"
+}`
+	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(openclaw.json) error = %v", err)
+	}
+
+	first, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(openclaw) first changed = false")
+	}
+
+	second, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(openclaw) second changed = true")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(openclaw.json) error = %v", err)
+	}
+	text := string(content)
+	if strings.Contains(text, `"mcpServers"`) {
+		t.Fatalf("openclaw.json must use mcp.servers, not root mcpServers; got:\n%s", text)
+	}
+	if !strings.Contains(text, `"mcp"`) || !strings.Contains(text, `"servers"`) {
+		t.Fatalf("openclaw.json missing mcp.servers; got:\n%s", text)
+	}
+	if !strings.Contains(text, `"legacyDocs"`) {
+		t.Fatalf("openclaw.json should migrate legacy mcpServers entries into mcp.servers; got:\n%s", text)
+	}
+	if !strings.Contains(text, `"sessionIdleTtlMs": 120000`) {
+		t.Fatalf("openclaw.json should preserve existing mcp fields; got:\n%s", text)
+	}
+	if !strings.Contains(text, `"context7"`) || !strings.Contains(text, `"@upstash/context7-mcp"`) {
+		t.Fatalf("openclaw.json missing context7 under mcp.servers; got:\n%s", text)
 	}
 }
 
@@ -190,5 +264,45 @@ func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 	}
 	if strings.Contains(text, `"mcpServers"`) {
 		t.Fatal("mcp.json should use 'servers' key, not 'mcpServers'")
+	}
+}
+
+func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
+	home := t.TempDir()
+
+	first, err := Inject(home, kimiAdapter())
+	if err != nil {
+		t.Fatalf("Inject(kimi) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(kimi) first changed = false")
+	}
+
+	second, err := Inject(home, kimiAdapter())
+	if err != nil {
+		t.Fatalf("Inject(kimi) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(kimi) second changed = true")
+	}
+
+	path := filepath.Join(home, ".kimi", "mcp.json")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(kimi mcp.json) error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, `"mcpServers"`) {
+		t.Fatal("kimi mcp.json missing mcpServers key")
+	}
+	if !strings.Contains(text, `"context7"`) {
+		t.Fatal("kimi mcp.json missing context7 server")
+	}
+	if !strings.Contains(text, `"transport": "http"`) {
+		t.Fatal("kimi mcp.json should set transport=http for documented remote MCP configuration")
+	}
+	if !strings.Contains(text, `"url": "https://mcp.context7.com/mcp"`) {
+		t.Fatal("kimi mcp.json should use the documented remote MCP URL for context7")
 	}
 }

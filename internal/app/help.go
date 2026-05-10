@@ -6,7 +6,7 @@ import (
 )
 
 func printHelp(w io.Writer, version string) {
-	fmt.Fprintf(w, `gentle-ai — AI Gentle Stack (%s)
+	fmt.Fprintf(w, `gentle-ai — Gentle-AI: Ecosystem, Frameworks, Workflows (%s)
 
 USAGE
   gentle-ai                     Launch interactive TUI
@@ -14,6 +14,7 @@ USAGE
 
 COMMANDS
   install      Configure AI coding agents on this machine
+  uninstall    Remove Gentle AI managed files from this machine
   sync         Sync agent configs and skills to current version
   update       Check for available updates
   upgrade      Apply updates to managed tools

@@ -154,8 +154,7 @@ func TestDetectDepsWithMockDeps(t *testing.T) {
 
 	// Build report manually to simulate what detectDeps would produce.
 	report := DependencyReport{
-		Dependencies: deps,
-		AllPresent:   true,
+		AllPresent: true,
 	}
 
 	for _, dep := range deps {
@@ -189,8 +188,7 @@ func TestDependencyReportMissingRequired(t *testing.T) {
 	}
 
 	report := DependencyReport{
-		Dependencies: deps,
-		AllPresent:   true,
+		AllPresent: true,
 	}
 
 	for _, dep := range deps {

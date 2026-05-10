@@ -1,11 +1,14 @@
 package theme
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
 type InjectionResult struct {
@@ -14,6 +17,27 @@ type InjectionResult struct {
 }
 
 var themeOverlayJSON = []byte("{\n  \"theme\": \"gentleman-kanagawa\"\n}\n")
+
+type claudeTheme struct {
+	Name      string            `json:"name"`
+	Base      string            `json:"base"`
+	Overrides map[string]string `json:"overrides"`
+}
+
+var gentlemanClaudeTheme = claudeTheme{
+	Name: "Gentleman",
+	Base: "dark",
+	Overrides: map[string]string{
+		"diffAdded":                 "#3F4A2D",
+		"diffRemoved":               "#5C3838",
+		"diffAddedWord":             "#76946A",
+		"diffRemovedWord":           "#C34043",
+		"chromeYellow":              "#DCA561",
+		"briefLabelYou":             "#DCA561",
+		"rainbow_yellow":            "#DCA561",
+		"yellow_FOR_SUBAGENTS_ONLY": "#DCA561",
+	},
+}
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	settingsPath := adapter.SettingsPath(homeDir)
@@ -27,6 +51,26 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	}
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
+}
+
+func InjectClaudeTheme(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	if adapter.Agent() != model.AgentClaudeCode {
+		return InjectionResult{}, nil
+	}
+
+	themePath := filepath.Join(homeDir, ".claude", "themes", "gentleman.json")
+	content, err := json.MarshalIndent(gentlemanClaudeTheme, "", "  ")
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	content = append(content, '\n')
+
+	writeResult, err := filemerge.WriteFileAtomic(themePath, content, 0o644)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	return InjectionResult{Changed: writeResult.Changed, Files: []string{themePath}}, nil
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {

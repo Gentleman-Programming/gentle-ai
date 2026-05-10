@@ -77,41 +77,62 @@ func DownloadLatestBinary(profile system.PlatformProfile) (string, error) {
 // fetchLatestEngramVersion queries the GitHub Releases API for the latest engram
 // release and returns the version string (without leading "v").
 func fetchLatestEngramVersion() (string, error) {
+	token := githubToken()
+	version, status, err := fetchLatestEngramVersionRequest(token)
+	if err == nil {
+		return version, nil
+	}
+
+	// GitHub Actions injects a repository-scoped GITHUB_TOKEN into CI. When that
+	// token is forwarded into our Linux E2E containers, the public engram releases
+	// endpoint can respond 401/403 for a different repository. Retry anonymously
+	// before failing because the release metadata is public.
+	if token != "" && (status == http.StatusUnauthorized || status == http.StatusForbidden) {
+		version, _, retryErr := fetchLatestEngramVersionRequest("")
+		if retryErr == nil {
+			return version, nil
+		}
+	}
+
+	return "", err
+}
+
+func fetchLatestEngramVersionRequest(token string) (string, int, error) {
 	apiURL := fmt.Sprintf("%s/repos/%s/%s/releases/latest",
 		engramAPIBaseURL(), engramOwner, engramRepo)
 
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
+		return "", 0, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	if token := githubToken(); token != "" {
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := engramHTTPClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("call GitHub API: %w", err)
+		return "", 0, fmt.Errorf("call GitHub API: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub API returned HTTP %d", resp.StatusCode)
+		return "", resp.StatusCode, fmt.Errorf("GitHub API returned HTTP %d", resp.StatusCode)
 	}
 
 	var release struct {
 		TagName string `json:"tag_name"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", fmt.Errorf("decode release JSON: %w", err)
+		return "", resp.StatusCode, fmt.Errorf("decode release JSON: %w", err)
 	}
 
 	version := strings.TrimPrefix(release.TagName, "v")
 	if version == "" {
-		return "", fmt.Errorf("empty tag_name in GitHub release response")
+		return "", resp.StatusCode, fmt.Errorf("empty tag_name in GitHub release response")
 	}
 
-	return version, nil
+	return version, resp.StatusCode, nil
 }
 
 // githubToken returns a GitHub API token from the environment, if available.
@@ -313,20 +334,50 @@ func (b *byteReaderAt) ReadAt(p []byte, off int64) (int, error) {
 }
 
 // writeExecutable writes the content from r to outPath with executable permissions.
+// writeExecutable writes a binary to outPath using an atomic rename to avoid
+// ETXTBSY ("text file busy") errors on Linux when the target binary is
+// currently running (e.g. engram as an MCP server). The rename trick works
+// because os.Rename replaces the directory entry — the running process keeps
+// its open file descriptor to the old inode, while new executions pick up
+// the new binary.
 func writeExecutable(r io.Reader, outPath string) error {
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+	dir := filepath.Dir(outPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
 
-	f, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	// Write to a temp file in the same directory so Rename is always
+	// same-filesystem (atomic on POSIX).
+	tmp, err := os.CreateTemp(dir, ".engram-upgrade-*.tmp")
 	if err != nil {
-		return fmt.Errorf("create %s: %w", outPath, err)
+		return fmt.Errorf("create temp file: %w", err)
 	}
-	defer f.Close()
+	tmpPath := tmp.Name()
 
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("write %s: %w", outPath, err)
+	// Clean up on any failure path.
+	defer func() {
+		if tmpPath != "" {
+			os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := io.Copy(tmp, r); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
 	}
 
+	if err := os.Chmod(tmpPath, 0o755); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, outPath); err != nil {
+		return fmt.Errorf("rename %s -> %s: %w", tmpPath, outPath, err)
+	}
+
+	// Rename succeeded — disarm the deferred cleanup.
+	tmpPath = ""
 	return nil
 }

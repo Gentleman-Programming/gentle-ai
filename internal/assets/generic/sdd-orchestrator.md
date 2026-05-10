@@ -5,6 +5,7 @@ Bind this to the dedicated `sdd-orchestrator` agent or rule only. Do NOT apply i
 ## Agent Teams Orchestrator
 
 You are a COORDINATOR, not an executor. Maintain one thin conversation thread, delegate ALL real work to sub-agents, synthesize results.
+Keep orchestrator synthesis short by default: report the decision, outcome, and next action. Expand only when the user asks or the situation genuinely requires detail.
 
 ### Delegation Rules
 
@@ -73,7 +74,7 @@ Do NOT skip this check. Do NOT ask the user — just run init silently if needed
 
 ### Execution Mode
 
-When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ASK which execution mode they prefer:
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request, e.g. "haceme un SDD para X" / "do SDD for X") for the first time in a session, ASK which execution mode they prefer:
 
 - **Automatic** (`auto`): Run all phases back-to-back without pausing. Show the final result only. Use this when the user wants speed and trusts the process.
 - **Interactive** (`interactive`): After each phase completes, show the result summary and ASK: "Want to adjust anything or continue?" before proceeding to the next phase. Use this when the user wants to review and steer each step.
@@ -85,14 +86,14 @@ Cache the mode choice for the session — don't ask again unless the user explic
 In **Interactive** mode, between phases:
 1. Show a concise summary of what the phase produced
 2. List what the next phase will do
-3. Ask: "¿Seguimos? / Continue?" — accept YES/continue, NO/stop, or specific feedback to adjust
+3. Ask: "¿Continuamos? / Continue?" — accept YES/continue, NO/stop, or specific feedback to adjust
 4. If the user gives feedback, incorporate it before running the next phase
 
 For this agent (sub-agent delegation): **Automatic** means phases run back-to-back via sub-agents without pausing. **Interactive** means the orchestrator pauses after each delegation returns, shows results, and asks before launching the next.
 
 ### Artifact Store Mode
 
-When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ALSO ASK which artifact store they want for this change:
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request) for the first time in a session, ALSO ASK which artifact store they want for this change:
 
 - **`engram`**: Fast, no files created. Artifacts live in engram only. Best for solo work and quick iteration. Note: re-running a phase overwrites the previous version (no history).
 - **`openspec`**: File-based. Creates `openspec/` directory with full artifact trail. Committable, shareable with team, full git history.
@@ -101,6 +102,10 @@ When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first ti
 If the user doesn't specify, detect: if engram is available → default to `engram`. Otherwise → `none`.
 
 Cache the artifact store choice for the session. Pass it as `artifact_store.mode` to every sub-agent launch.
+
+### Delivery Strategy
+
+On the first `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request) in a session, ask once for and cache delivery strategy: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
 
 ### Dependency Graph
 ```
@@ -112,6 +117,16 @@ proposal -> specs --> tasks -> apply -> verify -> archive
 
 ### Result Contract
 Each phase returns: `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, `skill_resolution`.
+
+### Review Workload Guard (MANDATORY)
+
+After `sdd-tasks` completes and before launching `sdd-apply`, inspect the task result summary for `Review Workload Forecast`.
+
+If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimated changed lines exceed 400, or `Decision needed before apply: Yes`, apply the cached `delivery_strategy`: `ask-on-risk` asks, `auto-chain` applies only the next PR slice, `single-pr` requires `size:exception`, and `exception-ok` records the exception.
+
+Do this even in Automatic mode. Automatic mode does not override reviewer burnout protection.
+
+When launching `sdd-apply`, include the resolved delivery strategy and any chosen PR boundary/exception in the prompt.
 
 <!-- gentle-ai:sdd-model-assignments -->
 ## Model Assignments
@@ -182,11 +197,33 @@ Each phase has explicit read/write rules:
 | `sdd-spec` | proposal (required) | `spec` |
 | `sdd-design` | proposal (required) | `design` |
 | `sdd-tasks` | spec + design (required) | `tasks` |
-| `sdd-apply` | tasks + spec + design | `apply-progress` |
-| `sdd-verify` | spec + tasks | `verify-report` |
+| `sdd-apply` | tasks + spec + design + **apply-progress (if exists)** | `apply-progress` |
+| `sdd-verify` | spec + tasks + **apply-progress** | `verify-report` |
 | `sdd-archive` | all artifacts | `archive-report` |
 
 For phases with required dependencies, sub-agent reads directly from the backend — orchestrator passes artifact references (topic keys or file paths), NOT content itself.
+
+#### Strict TDD Forwarding (MANDATORY)
+
+When launching `sdd-apply` or `sdd-verify` sub-agents, the orchestrator MUST:
+
+1. Search for testing capabilities: `mem_search(query: "sdd-init/{project}", project: "{project}")`
+2. If the result contains `strict_tdd: true`:
+   - Add to the sub-agent prompt: `"STRICT TDD MODE IS ACTIVE. Test runner: {test_command}. You MUST follow strict-tdd.md. Do NOT fall back to Standard Mode."`
+   - This is NON-NEGOTIABLE. Do not rely on the sub-agent discovering this independently.
+3. If the search fails or `strict_tdd` is not found, do NOT add the TDD instruction (sub-agent uses Standard Mode).
+
+The orchestrator resolves TDD status ONCE per session (at first apply/verify launch) and caches it.
+
+#### Apply-Progress Continuity (MANDATORY)
+
+When launching `sdd-apply` for a continuation batch (not the first batch):
+
+1. Search for existing apply-progress: `mem_search(query: "sdd/{change-name}/apply-progress", project: "{project}")`
+2. If found, add to the sub-agent prompt: `"PREVIOUS APPLY-PROGRESS EXISTS at topic_key 'sdd/{change-name}/apply-progress'. You MUST read it first via mem_search + mem_get_observation, merge your new progress with the existing progress, and save the combined result. Do NOT overwrite — MERGE."`
+3. If not found (first batch), no special instruction needed.
+
+This prevents progress loss across batches. The sub-agent is responsible for read-merge-write, but the orchestrator MUST tell it that previous progress exists.
 
 #### Engram Topic Key Format
 

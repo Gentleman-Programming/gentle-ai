@@ -1,0 +1,12 @@
+Select SDD Mode
+
+How should the SDD orchestrator be configured for OpenCode?
+
+▸ ( ) single
+    Single orchestrator — one agent handles all SDD phases
+  ( ) multi
+    Multi-agent — dedicated sub-agent per SDD phase (9 hidden agents)
+
+  Back
+
+j/k: navigate • enter: select • esc: back

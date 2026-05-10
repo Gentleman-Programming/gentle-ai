@@ -21,6 +21,7 @@ Execute all steps from the skill directly in this context window:
 1. Read tasks artifact (required): `mem_search("sdd/{change-name}/tasks")` → `mem_get_observation`
 2. Read spec artifact (required): `mem_search("sdd/{change-name}/spec")` → `mem_get_observation`
 3. Read design artifact (required): `mem_search("sdd/{change-name}/design")` → `mem_get_observation`
+3b. Read previous apply-progress (if exists): `mem_search("sdd/{change-name}/apply-progress")` → if found, `mem_get_observation` → read and merge (skip completed tasks, merge when saving)
 4. Detect TDD mode from config or existing test patterns
 5. Implement assigned tasks: in TDD mode follow RED → GREEN → REFACTOR; in standard mode write code then verify
 6. Match existing code patterns and conventions
@@ -34,6 +35,7 @@ After completing work, call `mem_save` with:
 - topic_key: `"sdd/{change-name}/apply-progress"`
 - type: `"architecture"`
 - project: `{project-name from context}`
+- capture_prompt: `false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
 
 Also update the tasks artifact with `[x]` marks via `mem_update` (engram) or file edit (openspec/hybrid).
 

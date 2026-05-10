@@ -17,7 +17,11 @@
       "skill-creator",
       "branch-pr",
       "issue-creation",
-      "skill-registry"
+      "skill-registry",
+      "chained-pr",
+      "cognitive-doc-design",
+      "comment-writer",
+      "work-unit-commits"
     ]
   },
   {
@@ -38,7 +42,11 @@
       "skill-creator",
       "branch-pr",
       "issue-creation",
-      "skill-registry"
+      "skill-registry",
+      "chained-pr",
+      "cognitive-doc-design",
+      "comment-writer",
+      "work-unit-commits"
     ]
   },
   {

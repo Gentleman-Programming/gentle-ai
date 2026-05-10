@@ -1,8 +1,8 @@
 ---
 name: sdd-explore
-description: >
-  Explore and investigate ideas before committing to a change.
-  Trigger: When the orchestrator launches you to think through a feature, investigate the codebase, or clarify requirements.
+description: "Explore SDD ideas before committing to a change. Trigger: orchestrator launches exploration or requirement clarification."
+disable-model-invocation: true
+user-invocable: false
 license: MIT
 metadata:
   author: gentleman-programming

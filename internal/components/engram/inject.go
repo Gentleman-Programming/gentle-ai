@@ -20,6 +20,13 @@ type InjectionResult struct {
 	Files   []string
 }
 
+// bootstrapper is an optional adapter capability: if an adapter implements
+// this interface, any injector that writes Jinja modules will first ensure
+// the base template (entry point) exists.
+type bootstrapper interface {
+	BootstrapTemplate(homeDir string) error
+}
+
 // EngramLookPath is the function used to resolve the engram binary path.
 // It is a package-level variable so it can be replaced in tests — both from
 // within the engram package and from external test packages (e.g. golden_test.go).
@@ -56,6 +63,9 @@ func resolveEngramCommand() (string, bool) {
 	if err != nil || p == "" {
 		return "engram", false
 	}
+	if isVersionedHomebrewCellarPath(p) {
+		return "engram", false
+	}
 	return p, true
 }
 
@@ -63,6 +73,12 @@ func resolveEngramCommand() (string, bool) {
 // path to the engram binary if it can be resolved via PATH.
 func engramServerJSON() []byte {
 	cmd, _ := resolveEngramCommand()
+	return engramServerJSONWithCmd(cmd)
+}
+
+// engramServerJSONWithCmd returns the MCP server config bytes for a specific
+// command.
+func engramServerJSONWithCmd(cmd string) []byte {
 	cfg := map[string]any{
 		"command": cmd,
 		"args":    []string{"mcp", "--tools=agent"},
@@ -73,10 +89,9 @@ func engramServerJSON() []byte {
 
 // engramOverlayJSON returns the settings overlay JSON (used for merge-into-settings
 // and MCPConfigFile strategies), with the resolved engram command.
-func engramOverlayJSON(agentID model.AgentID) []byte {
-	cmd, _ := resolveEngramCommand()
+func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 	var cfg map[string]any
-	if agentID == model.AgentOpenCode {
+	if agentID == model.AgentOpenCode || agentID == model.AgentKilocode {
 		// OpenCode 1.3.3+ requires command as an array for type:local servers.
 		// The separate "args" field is not accepted; all args must be in the
 		// command array itself.
@@ -92,6 +107,19 @@ func engramOverlayJSON(agentID model.AgentID) []byte {
 					"__replace__": map[string]any{
 						"command": []string{cmd, "mcp", "--tools=agent"},
 						"type":    "local",
+					},
+				},
+			},
+		}
+	} else if agentID == model.AgentOpenClaw {
+		cfg = map[string]any{
+			"mcp": map[string]any{
+				"servers": map[string]any{
+					"engram": map[string]any{
+						"__replace__": map[string]any{
+							"command": cmd,
+							"args":    []string{"mcp", "--tools=agent"},
+						},
 					},
 				},
 			},
@@ -114,8 +142,7 @@ func engramOverlayJSON(agentID model.AgentID) []byte {
 // Uses --tools=agent per engram contract.
 // VS Code uses a fixed "servers" key structure rather than mcpServers, so it
 // is kept as a separate helper.
-func vsCodeEngramOverlayJSON() []byte {
-	cmd, _ := resolveEngramCommand()
+func vsCodeEngramOverlayJSON(cmd string) []byte {
 	cfg := map[string]any{
 		"servers": map[string]any{
 			"engram": map[string]any{
@@ -129,8 +156,23 @@ func vsCodeEngramOverlayJSON() []byte {
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	return inject(homeDir, homeDir, adapter)
+}
+
+// InjectWithPromptDir writes Engram's MCP configuration using configHomeDir and
+// writes prompt protocol files using promptDir. This is needed for agents such
+// as OpenClaw where MCP is loaded from the global config but instructions are
+// read from an active workspace.
+func InjectWithPromptDir(configHomeDir, promptDir string, adapter agents.Adapter) (InjectionResult, error) {
+	return inject(configHomeDir, promptDir, adapter)
+}
+
+func inject(configHomeDir, promptDir string, adapter agents.Adapter) (InjectionResult, error) {
 	if !adapter.SupportsMCP() {
 		return InjectionResult{}, nil
+	}
+	if err := validateOpenClawWorkspacePath(promptDir, adapter); err != nil {
+		return InjectionResult{}, err
 	}
 
 	files := make([]string, 0, 2)
@@ -144,8 +186,9 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		// engram setup, so we must preserve any absolute command path already
 		// present instead of silently overwriting it with the relative "engram".
 		// See: https://github.com/Gentleman-Programming/gentle-ai/issues (engram absolute path regression)
-		mcpPath := adapter.MCPConfigPath(homeDir, "engram")
-		content := buildSeparateMCPContent(mcpPath, engramServerJSON())
+		mcpPath := adapter.MCPConfigPath(configHomeDir, "engram")
+		cmd := stableEngramCommandForMergedConfig(mcpPath, adapter.Agent())
+		content := buildSeparateMCPContent(mcpPath, engramServerJSONWithCmd(cmd))
 		mcpWrite, err := filemerge.WriteFileAtomic(mcpPath, content, 0o644)
 		if err != nil {
 			return InjectionResult{}, err
@@ -154,11 +197,11 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		files = append(files, mcpPath)
 
 	case model.StrategyMergeIntoSettings:
-		settingsPath := adapter.SettingsPath(homeDir)
+		settingsPath := adapter.SettingsPath(configHomeDir)
 		if settingsPath == "" {
 			break
 		}
-		overlay := engramOverlayJSON(adapter.Agent())
+		overlay := engramOverlayJSON(adapter.Agent(), stableEngramCommandForMergedConfig(settingsPath, adapter.Agent()))
 		settingsWrite, err := mergeJSONFile(settingsPath, overlay)
 		if err != nil {
 			return InjectionResult{}, err
@@ -167,15 +210,15 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		files = append(files, settingsPath)
 
 	case model.StrategyMCPConfigFile:
-		mcpPath := adapter.MCPConfigPath(homeDir, "engram")
+		mcpPath := adapter.MCPConfigPath(configHomeDir, "engram")
 		if mcpPath == "" {
 			break
 		}
 		var overlay []byte
 		if adapter.Agent() == model.AgentVSCodeCopilot {
-			overlay = vsCodeEngramOverlayJSON()
+			overlay = vsCodeEngramOverlayJSON(stableEngramCommandForMergedConfig(mcpPath, adapter.Agent()))
 		} else {
-			overlay = engramOverlayJSON(adapter.Agent())
+			overlay = engramOverlayJSON(adapter.Agent(), stableEngramCommandForMergedConfig(mcpPath, adapter.Agent()))
 		}
 
 		mcpWrite, err := mergeJSONFile(mcpPath, overlay)
@@ -185,18 +228,29 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		changed = changed || mcpWrite.Changed
 		files = append(files, mcpPath)
 
+		if adapter.Agent() == model.AgentAntigravity {
+			settingsWrite, err := ensureAntigravitySettings(configHomeDir, adapter)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || settingsWrite.Changed
+			if settingsWrite.Path != "" {
+				files = append(files, settingsWrite.Path)
+			}
+		}
+
 	case model.StrategyTOMLFile:
 		// Codex: upsert [mcp_servers.engram] block and instruction-file keys
 		// in ~/.codex/config.toml, then write instruction files.
 		// All TOML mutations are composed in a single pass before writing to
 		// ensure idempotency (no intermediate states that differ on re-run).
-		configPath := adapter.MCPConfigPath(homeDir, "engram")
+		configPath := adapter.MCPConfigPath(configHomeDir, "engram")
 		if configPath == "" {
 			break
 		}
 
 		// Determine instruction file paths before mutating the config.
-		instructionsPath, compactPath, instrErr := writeCodexInstructionFiles(homeDir)
+		instructionsPath, compactPath, instrErr := writeCodexInstructionFiles(configHomeDir)
 		if instrErr != nil {
 			return InjectionResult{}, instrErr
 		}
@@ -206,7 +260,7 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		if err != nil {
 			return InjectionResult{}, err
 		}
-		engramCmd, _ := resolveEngramCommand()
+		engramCmd := stableEngramCommandForMergedConfig(configPath, adapter.Agent())
 		withMCP := filemerge.UpsertCodexEngramBlock(existing, engramCmd)
 		withInstr := filemerge.UpsertTopLevelTOMLString(withMCP, "model_instructions_file", instructionsPath)
 		withCompact := filemerge.UpsertTopLevelTOMLString(withInstr, "experimental_compact_prompt_file", compactPath)
@@ -223,7 +277,7 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	if adapter.SupportsSystemPrompt() {
 		switch adapter.SystemPromptStrategy() {
 		case model.StrategyMarkdownSections:
-			promptPath := adapter.SystemPromptFile(homeDir)
+			promptPath := adapter.SystemPromptFile(promptDir)
 			protocolContent := assets.MustRead("claude/engram-protocol.md")
 
 			existing, err := readFileOrEmpty(promptPath)
@@ -240,8 +294,28 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 			changed = changed || mdWrite.Changed
 			files = append(files, promptPath)
 
+		case model.StrategyJinjaModules:
+			// Ensure the base template exists for Jinja-based agents.
+			if bs, ok := adapter.(bootstrapper); ok {
+				if err := bs.BootstrapTemplate(promptDir); err != nil {
+					return InjectionResult{}, fmt.Errorf("bootstrap template: %w", err)
+				}
+			}
+
+			// Write the Engram protocol as a standalone Jinja include module.
+			// The static KIMI.md template references it via {% include "engram-protocol.md" %}.
+			configDir := adapter.GlobalConfigDir(promptDir)
+			protocolContent := assets.MustRead("claude/engram-protocol.md")
+			modulePath := filepath.Join(configDir, "engram-protocol.md")
+			mdWrite, err := filemerge.WriteFileAtomic(modulePath, []byte(protocolContent), 0o644)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || mdWrite.Changed
+			files = append(files, modulePath)
+
 		default:
-			promptPath := adapter.SystemPromptFile(homeDir)
+			promptPath := adapter.SystemPromptFile(promptDir)
 			protocolContent := assets.MustRead("claude/engram-protocol.md")
 
 			existing, err := readFileOrEmpty(promptPath)
@@ -261,6 +335,47 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
+	if adapter.Agent() == model.AgentOpenClaw && strings.TrimSpace(workspaceDir) == "" {
+		return fmt.Errorf("openclaw workspace path is required for workspace-first injection")
+	}
+	return nil
+}
+
+type settingsBootstrapResult struct {
+	Changed bool
+	Path    string
+}
+
+func ensureAntigravitySettings(homeDir string, adapter agents.Adapter) (settingsBootstrapResult, error) {
+	settingsPath := adapter.SettingsPath(homeDir)
+	if settingsPath == "" {
+		return settingsBootstrapResult{}, nil
+	}
+
+	if _, err := os.Stat(settingsPath); err == nil {
+		return settingsBootstrapResult{Path: settingsPath}, nil
+	} else if !os.IsNotExist(err) {
+		return settingsBootstrapResult{}, fmt.Errorf("stat antigravity settings %q: %w", settingsPath, err)
+	}
+
+	sourcePath := filepath.Join(homeDir, ".gemini", "settings.json")
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return settingsBootstrapResult{}, fmt.Errorf("read gemini settings %q: %w", sourcePath, err)
+		}
+		content = []byte("{}")
+	}
+
+	writeResult, err := filemerge.WriteFileAtomic(settingsPath, content, 0o644)
+	if err != nil {
+		return settingsBootstrapResult{}, err
+	}
+
+	return settingsBootstrapResult{Changed: writeResult.Changed, Path: settingsPath}, nil
 }
 
 // writeCodexInstructionFiles writes the Engram memory protocol and compact prompt
@@ -324,6 +439,126 @@ func readFileOrEmpty(path string) (string, error) {
 	return string(data), nil
 }
 
+func stableEngramCommandForMergedConfig(path string, agentID model.AgentID) string {
+	raw, err := osReadFile(path)
+	if err == nil {
+		if cmd, ok := existingMergedEngramCommand(raw, agentID); ok {
+			return stableEngramCommandForExisting(cmd, agentID)
+		}
+	}
+
+	if isStandardAgent(agentID) {
+		return preferredStableEngramCommand()
+	}
+
+	cmd, _ := resolveEngramCommand()
+	return cmd
+}
+
+func stableEngramCommandForExisting(cmd string, agentID model.AgentID) string {
+	if isVersionedHomebrewCellarPath(cmd) {
+		if stable := preferredStableEngramCommand(); stable != "" {
+			return stable
+		}
+		return "engram"
+	}
+
+	return cmd
+}
+
+func preferredStableEngramCommand() string {
+	p, err := EngramLookPath("engram")
+	if err == nil && isStableHomebrewEngramPath(p) {
+		return p
+	}
+	return "engram"
+}
+
+func existingMergedEngramCommand(raw []byte, agentID model.AgentID) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+
+	normalized, err := filemerge.MergeJSONObjects(raw, []byte("{}"))
+	if err != nil {
+		return "", false
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(normalized, &root); err != nil {
+		return "", false
+	}
+
+	var server any
+	switch agentID {
+	case model.AgentOpenCode:
+		mcp, ok := root["mcp"].(map[string]any)
+		if !ok {
+			return "", false
+		}
+		server = mcp["engram"]
+	case model.AgentOpenClaw:
+		mcp, ok := root["mcp"].(map[string]any)
+		if !ok {
+			return "", false
+		}
+		servers, ok := mcp["servers"].(map[string]any)
+		if !ok {
+			return "", false
+		}
+		server = servers["engram"]
+	case model.AgentVSCodeCopilot:
+		servers, ok := root["servers"].(map[string]any)
+		if !ok {
+			return "", false
+		}
+		server = servers["engram"]
+	default:
+		mcpServers, ok := root["mcpServers"].(map[string]any)
+		if !ok {
+			return "", false
+		}
+		server = mcpServers["engram"]
+	}
+
+	serverMap, ok := server.(map[string]any)
+	if !ok {
+		return "", false
+	}
+
+	return executableFromCommandValue(serverMap["command"])
+}
+
+func executableFromCommandValue(command any) (string, bool) {
+	switch value := command.(type) {
+	case string:
+		if value == "" {
+			return "", false
+		}
+		return value, true
+	case []any:
+		if len(value) == 0 {
+			return "", false
+		}
+		first, ok := value[0].(string)
+		if !ok || first == "" {
+			return "", false
+		}
+		return first, true
+	default:
+		return "", false
+	}
+}
+
+func isStandardAgent(id model.AgentID) bool {
+	switch id {
+	case model.AgentOpenCode, model.AgentQwenCode, model.AgentCodex, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentClaudeCode, model.AgentOpenClaw:
+		return true
+	default:
+		return false
+	}
+}
+
 // buildSeparateMCPContent returns the content to write to the MCP server JSON
 // file for agents that use the StrategySeparateMCPFiles strategy (e.g. Claude
 // Code).
@@ -353,13 +588,14 @@ func buildSeparateMCPContent(mcpPath string, defaultContent []byte) []byte {
 		return defaultContent
 	}
 
-	cmd, ok := existing["command"].(string)
-	if !ok || !isAbsoluteEngramPath(cmd) {
-		// No command, or not an absolute path — use the default.
+	cmd, ok := executableFromCommandValue(existing["command"])
+	if !ok || !isEngramCommand(cmd) {
+		// No command, or not an engram command — use the default.
 		return defaultContent
 	}
+	cmd = stableEngramCommandForExisting(cmd, "")
 
-	// Rebuild with the preserved absolute command and the canonical args.
+	// Rebuild with the preserved command and the canonical args (["mcp", "--tools=agent"]).
 	rebuilt := map[string]any{
 		"command": cmd,
 		"args":    []string{"mcp", "--tools=agent"},
@@ -372,19 +608,31 @@ func buildSeparateMCPContent(mcpPath string, defaultContent []byte) []byte {
 	return append(encoded, '\n')
 }
 
-// isAbsoluteEngramPath reports whether path is an absolute filesystem path
-// that points to an engram binary.
-//
-// Engram setup writes the full resolved path of the binary it was invoked
-// from, so any absolute path ending in "engram" (Unix) or "engram.exe"
-// (Windows) is considered valid.
-func isAbsoluteEngramPath(path string) bool {
-	if !filepath.IsAbs(path) {
+// isEngramCommand reports whether cmd is either a relative "engram" command
+// or an absolute path pointing to an engram binary.
+func isEngramCommand(cmd string) bool {
+	if cmd == "" {
 		return false
 	}
-	base := filepath.Base(path)
+	base := filepath.Base(cmd)
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(base, "engram.exe") || strings.EqualFold(base, "engram")
 	}
 	return base == "engram"
+}
+
+// isAbsoluteEngramPath reports whether path is an absolute filesystem path
+// that points to an engram binary.
+func isAbsoluteEngramPath(path string) bool {
+	return filepath.IsAbs(path) && isEngramCommand(path)
+}
+
+func isVersionedHomebrewCellarPath(path string) bool {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	return strings.Contains(clean, "/Cellar/engram/") && isEngramCommand(clean)
+}
+
+func isStableHomebrewEngramPath(path string) bool {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	return (clean == "/opt/homebrew/bin/engram" || clean == "/usr/local/bin/engram") && isEngramCommand(clean)
 }

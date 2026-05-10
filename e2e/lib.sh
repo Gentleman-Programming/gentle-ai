@@ -75,7 +75,60 @@ cleanup_test_env() {
     rm -rf "$HOME/.gentle-ai" 2>/dev/null || true
     rm -rf "$HOME/.codeium" 2>/dev/null || true
     rm -rf "$HOME/.cursor" 2>/dev/null || true
+    rm -rf "$HOME/.qwen" 2>/dev/null || true
+    rm -rf "$HOME/.kiro" 2>/dev/null || true
+    rm -rf "$HOME/.kimi" 2>/dev/null || true
     mkdir -p "$HOME/.config"
+}
+
+# setup_fake_engram_binary — install a deterministic local engram shim for E2E.
+#
+# Full Docker E2E validates gentle-ai's agent/config injection behavior, not the
+# external Engram release CDN. The real installer skips the network download when
+# an `engram` binary already exists on PATH, so this shim keeps coverage of the
+# install pipeline while avoiding flaky GitHub API/rate-limit failures.
+#
+# Set GENTLE_AI_E2E_REAL_ENGRAM=1 to opt out and exercise the live download path.
+setup_fake_engram_binary() {
+    if [ "${GENTLE_AI_E2E_REAL_ENGRAM:-0}" = "1" ]; then
+        log_info "Using real Engram binary/download path for E2E"
+        return 0
+    fi
+
+    local fake_bin_dir="$HOME/.gentle-ai-e2e/bin"
+    local fake_engram="$fake_bin_dir/engram"
+
+    mkdir -p "$fake_bin_dir"
+    cat > "$fake_engram" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+
+case "${1:-}" in
+  setup)
+    exit 0
+    ;;
+  mcp)
+    # Keep the shim alive if an MCP client probes it during E2E, but do not
+    # require real Engram services or network access.
+    exit 0
+    ;;
+  version|--version|-v)
+    printf 'engram e2e-shim\n'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+    chmod +x "$fake_engram"
+
+    case ":$PATH:" in
+        *":$fake_bin_dir:"*) ;;
+        *) export PATH="$fake_bin_dir:$PATH" ;;
+    esac
+
+    log_info "Using deterministic Engram E2E shim: $fake_engram"
 }
 
 # setup_fake_configs — seed fake config files so backup tests have something
@@ -225,6 +278,25 @@ assert_valid_json() {
         log_skip "No JSON parser available to validate $file"
         return 0
     fi
+}
+
+# json_files_equal FILE1 FILE2
+# Returns 0 if both files contain semantically equal JSON (key order ignored).
+# Uses python3 for comparison (available in CI and most dev machines).
+json_files_equal() {
+    local file1="$1"
+    local file2="$2"
+    if ! command -v python3 >/dev/null 2>&1; then
+        # Fallback: byte comparison (may false-fail on key reorder)
+        [ "$(md5sum "$file1" | cut -d' ' -f1)" = "$(md5sum "$file2" | cut -d' ' -f1)" ]
+        return $?
+    fi
+    python3 -c "
+import json, sys
+a = json.load(open(sys.argv[1]))
+b = json.load(open(sys.argv[2]))
+sys.exit(0 if a == b else 1)
+" "$file1" "$file2"
 }
 
 # assert_file_count DIR PATTERN EXPECTED LABEL

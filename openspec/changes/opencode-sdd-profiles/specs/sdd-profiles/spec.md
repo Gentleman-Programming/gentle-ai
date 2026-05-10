@@ -83,7 +83,7 @@ Empty names MUST be rejected. The name `sdd-orchestrator` MUST be rejected
 
 The system MUST generate agents in `opencode.json` following these naming rules:
 
-- Default profile: `sdd-orchestrator` (orchestrator) + `sdd-{phase}` (sub-agents, 10 total)
+- Default profile: `gentle-orchestrator` (orchestrator) + `sdd-{phase}` (sub-agents, 10 total)
 - Named profile `{name}`: `sdd-orchestrator-{name}` + `sdd-{phase}-{name}` (10 sub-agents)
 
 The SDD phases are: `init`, `explore`, `propose`, `spec`, `design`, `tasks`,

@@ -1,8 +1,8 @@
 ---
 name: sdd-spec
-description: >
-  Write specifications with requirements and scenarios (delta specs for changes).
-  Trigger: When the orchestrator launches you to write or update specs for a change.
+description: "Write SDD delta specs with requirements and scenarios. Trigger: orchestrator launches spec work for a change."
+disable-model-invocation: true
+user-invocable: false
 license: MIT
 metadata:
   author: gentleman-programming

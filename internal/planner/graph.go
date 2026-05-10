@@ -35,14 +35,16 @@ func (g Graph) DependenciesOf(component model.ComponentID) []model.ComponentID {
 
 func MVPGraph() Graph {
 	return NewGraph(map[model.ComponentID][]model.ComponentID{
-		model.ComponentEngram:     nil,
-		model.ComponentSDD:        {model.ComponentEngram},
-		model.ComponentSkills:     {model.ComponentSDD},
-		model.ComponentContext7:   nil,
-		model.ComponentPersona:    nil,
-		model.ComponentPermission: nil,
-		model.ComponentGGA:        nil,
-		model.ComponentTheme:      nil,
+		model.ComponentEngram:             nil,
+		model.ComponentSDD:                {model.ComponentEngram},
+		model.ComponentSkills:             {model.ComponentSDD},
+		model.ComponentContext7:           nil,
+		model.ComponentPersona:            nil,
+		model.ComponentPermission:         nil,
+		model.ComponentGGA:                nil,
+		model.ComponentTheme:              nil,
+		model.ComponentClaudeTheme:        nil,
+		model.ComponentOpenCodeGentleLogo: nil,
 	})
 }
 

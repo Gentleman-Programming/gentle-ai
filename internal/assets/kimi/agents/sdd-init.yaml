@@ -1,0 +1,7 @@
+version: "1"
+agent:
+  name: sdd-init
+  extend: default
+  system_prompt_path: ./sdd-init.md
+  exclude_tools:
+    - "kimi_cli.tools.multiagent:Task"
