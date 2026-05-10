@@ -558,10 +558,19 @@ func TestUnknownCommandSuggestsHelp(t *testing.T) {
 func TestRunArgs_UpdateSkipsSelfUpdate(t *testing.T) {
 	origSelfUpdate := selfUpdateFn
 	origCheckAll := updateCheckAll
+	origDetect := detectSystem
+	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() {
 		selfUpdateFn = origSelfUpdate
 		updateCheckAll = origCheckAll
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
 	})
+
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
 
 	selfUpdateCalled := 0
 	selfUpdateFn = func(context.Context, string, system.PlatformProfile, io.Writer) error {
@@ -594,11 +603,20 @@ func TestRunArgs_UpgradeSkipsSelfUpdate(t *testing.T) {
 	origSelfUpdate := selfUpdateFn
 	origCheckFiltered := updateCheckFiltered
 	origUpgradeExecute := upgradeExecute
+	origDetect := detectSystem
+	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() {
 		selfUpdateFn = origSelfUpdate
 		updateCheckFiltered = origCheckFiltered
 		upgradeExecute = origUpgradeExecute
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
 	})
+
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
 
 	selfUpdateCalled := 0
 	selfUpdateFn = func(context.Context, string, system.PlatformProfile, io.Writer) error {
