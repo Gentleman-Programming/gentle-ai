@@ -924,6 +924,54 @@ func TestInjectVSCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
 	if _, err := os.Stat(sharedPath); err != nil {
 		t.Fatalf("expected shared SDD convention file %q: %v", sharedPath, err)
 	}
+
+	// Verify sub-agent .agent.md files are written to ~/.copilot/agents/.
+	agentsDir := filepath.Join(home, ".copilot", "agents")
+	expectedAgents := []string{
+		"sdd-orchestrator.agent.md",
+		"sdd-explore.agent.md",
+		"sdd-propose.agent.md",
+		"sdd-spec.agent.md",
+		"sdd-design.agent.md",
+		"sdd-apply.agent.md",
+		"sdd-verify.agent.md",
+		"sdd-tasks.agent.md",
+		"sdd-archive.agent.md",
+		"sdd-onboard.agent.md",
+		"judgment-day.agent.md",
+	}
+	for _, name := range expectedAgents {
+		path := filepath.Join(agentsDir, name)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("expected sub-agent file %q: %v", path, err)
+		}
+		text := string(content)
+		// Verify VS Code frontmatter format.
+		if !strings.Contains(text, "---") {
+			t.Fatalf("%s missing YAML frontmatter", name)
+		}
+		if !strings.Contains(text, "name: ") {
+			t.Fatalf("%s missing name field in frontmatter", name)
+		}
+		if !strings.Contains(text, "description:") {
+			t.Fatalf("%s missing description field in frontmatter", name)
+		}
+		if !strings.Contains(text, "tools:") {
+			t.Fatalf("%s missing tools field in frontmatter", name)
+		}
+		// Phase agents must have disable-model-invocation: true.
+		if name != "sdd-orchestrator.agent.md" {
+			if !strings.Contains(text, "disable-model-invocation: true") {
+				t.Fatalf("%s missing disable-model-invocation: true", name)
+			}
+		} else {
+			// Orchestrator must have user-invocable: true.
+			if !strings.Contains(text, "user-invocable: true") {
+				t.Fatalf("%s missing user-invocable: true", name)
+			}
+		}
+	}
 }
 
 func TestInjectFileAppendSkipsIfAlreadyPresent(t *testing.T) {
