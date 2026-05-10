@@ -2,7 +2,7 @@
 name: sdd-spec
 description: >
   Write specifications with requirements and scenarios. Use when a proposal is approved and the change needs formal requirements (delta specs) captured before implementation.
-tools: Read, Edit, Write, Grep, Glob
+tools: [vscode/askQuestions, execute, read, edit, search]
 disable-model-invocation: true
 ---
 

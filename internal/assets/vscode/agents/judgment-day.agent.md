@@ -2,7 +2,7 @@
 name: judgment-day
 description: >
   Run blind dual review of a change — two independent agents review the same diff, issues are compared and confirmed, then fixes are applied and re-judged. Use for high-stakes changes requiring adversarial review.
-tools: Read, Edit, Write, Glob, Grep, Bash
+tools: [vscode/askQuestions, execute, read, edit, search]
 disable-model-invocation: true
 ---
 

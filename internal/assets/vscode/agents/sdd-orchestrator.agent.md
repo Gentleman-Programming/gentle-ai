@@ -2,7 +2,8 @@
 name: sdd-orchestrator
 description: >
   SDD orchestrator agent. Coordinates Spec-Driven Development workflows, delegates work to phase sub-agents, and manages artifact stores.
-tools: Read, Edit, Write, Glob, Grep, Bash
+tools: [vscode/askQuestions, read, agent]
+agents: [sdd-init, sdd-explore, sdd-propose, sdd-spec, sdd-design, sdd-tasks, sdd-apply, sdd-verify, sdd-archive, sdd-onboard, judgment-day]
 user-invocable: true
 ---
 

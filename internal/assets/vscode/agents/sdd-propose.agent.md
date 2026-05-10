@@ -2,7 +2,7 @@
 name: sdd-propose
 description: >
   Create a change proposal with intent, scope, and approach. Use when exploration is complete and the idea is ready to be formalized into a proposal document.
-tools: Read, Edit, Write, Grep, Glob
+tools: [vscode/askQuestions, execute, read, edit, search]
 disable-model-invocation: true
 ---
 

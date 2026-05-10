@@ -2,7 +2,7 @@
 name: sdd-archive
 description: >
   Archive a completed and verified change. Use when verification has passed and the change needs to be closed — merges delta specs into main specs, moves change folder to archive, and persists the final archive report. Completes the SDD cycle.
-tools: Read, Edit, Write, Glob
+tools: [vscode/askQuestions, execute, read, edit]
 disable-model-invocation: true
 ---
 

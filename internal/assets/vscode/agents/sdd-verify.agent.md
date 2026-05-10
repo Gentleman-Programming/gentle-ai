@@ -2,7 +2,7 @@
 name: sdd-verify
 description: >
   Validate that implementation matches specs, design, and tasks. Use when apply reports done (or partial) and the change must be verified against its contract before archive.
-tools: Read, Grep, Glob, Bash
+tools: [vscode/askQuestions, execute, read, search]
 disable-model-invocation: true
 ---
 

@@ -2,7 +2,7 @@
 name: sdd-explore
 description: >
   Explore and investigate ideas before committing to a change. Use when asked to think through a feature, investigate the codebase, understand current architecture, compare approaches, or clarify requirements.
-tools: Read, Grep, Glob, WebFetch
+tools: [vscode/askQuestions, execute, read, search, web]
 disable-model-invocation: true
 ---
 

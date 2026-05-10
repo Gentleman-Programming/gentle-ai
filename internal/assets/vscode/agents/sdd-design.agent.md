@@ -2,7 +2,7 @@
 name: sdd-design
 description: >
   Create the technical design document with architecture decisions and approach. Use when a proposal is approved and the implementation approach needs to be chosen before tasks are broken down.
-tools: Read, Edit, Write, Grep, Glob
+tools: [vscode/askQuestions, execute, read, edit, search]
 disable-model-invocation: true
 ---
 

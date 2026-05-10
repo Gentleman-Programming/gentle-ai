@@ -2,7 +2,7 @@
 name: sdd-tasks
 description: >
   Break down a change into an implementation task checklist. Use when spec and design are both ready and the change needs to be sliced into actionable, ordered work items.
-tools: Read, Edit, Write, Grep, Glob
+tools: [vscode/askQuestions, execute, read, edit, search]
 disable-model-invocation: true
 ---
 
