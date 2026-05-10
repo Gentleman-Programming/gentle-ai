@@ -1556,12 +1556,12 @@ func TestUninstallConfirm_CleanInstallRunsSyncAfterUninstall(t *testing.T) {
 		uninstallCalled = true
 		return componentuninstall.Result{RemovedFiles: []string{"/tmp/managed-file"}}, nil
 	}
-	m.SyncFn = func(overrides *model.SyncOverrides) (int, error) {
+	m.SyncFn = func(overrides *model.SyncOverrides) ([]string, error) {
 		syncCalled = true
 		if overrides != nil {
 			t.Fatalf("clean-install sync overrides = %+v, want nil", overrides)
 		}
-		return 7, nil
+		return []string{"a", "b", "c", "d", "e", "f", "g"}, nil
 	}
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1586,8 +1586,8 @@ func TestUninstallConfirm_CleanInstallRunsSyncAfterUninstall(t *testing.T) {
 	if uninstallMsg.SyncErr != nil {
 		t.Fatalf("unexpected clean-install sync error: %v", uninstallMsg.SyncErr)
 	}
-	if uninstallMsg.SyncFilesChanged != 7 {
-		t.Fatalf("SyncFilesChanged = %d, want 7", uninstallMsg.SyncFilesChanged)
+	if len(uninstallMsg.SyncFiles) != 7 {
+		t.Fatalf("SyncFiles len = %d, want 7", len(uninstallMsg.SyncFiles))
 	}
 
 	updated, _ = state.Update(*uninstallMsg)
@@ -1595,8 +1595,8 @@ func TestUninstallConfirm_CleanInstallRunsSyncAfterUninstall(t *testing.T) {
 	if state.Screen != ScreenUninstallResult {
 		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallResult)
 	}
-	if state.SyncCleanInstallFilesChanged != 7 {
-		t.Fatalf("SyncCleanInstallFilesChanged = %d, want 7", state.SyncCleanInstallFilesChanged)
+	if len(state.SyncCleanInstallFiles) != 7 {
+		t.Fatalf("SyncCleanInstallFiles len = %d, want 7", len(state.SyncCleanInstallFiles))
 	}
 	if state.SyncCleanInstallErr != nil {
 		t.Fatalf("unexpected SyncCleanInstallErr: %v", state.SyncCleanInstallErr)
@@ -2371,9 +2371,9 @@ func TestModelConfig_SyncPassesOverridesToSyncFn(t *testing.T) {
 	m.PendingSyncOverrides = testOverrides
 
 	var capturedOverrides *model.SyncOverrides
-	m.SyncFn = func(overrides *model.SyncOverrides) (int, error) {
+	m.SyncFn = func(overrides *model.SyncOverrides) ([]string, error) {
 		capturedOverrides = overrides
-		return 3, nil
+		return []string{"a", "b", "c"}, nil
 	}
 
 	// Press enter on ScreenSync to start the sync.
@@ -2400,8 +2400,8 @@ func TestModelConfig_SyncPassesOverridesToSyncFn(t *testing.T) {
 	if syncMsg.Err != nil {
 		t.Fatalf("unexpected sync error: %v", syncMsg.Err)
 	}
-	if syncMsg.FilesChanged != 3 {
-		t.Fatalf("FilesChanged = %d, want 3", syncMsg.FilesChanged)
+	if len(syncMsg.Files) != 3 {
+		t.Fatalf("Files len = %d, want 3", len(syncMsg.Files))
 	}
 
 	if capturedOverrides == nil {
@@ -2495,11 +2495,11 @@ func TestSyncDoneMsg_ClearsPendingOverrides(t *testing.T) {
 	}{
 		{
 			name:     "success clears overrides",
-			syncDone: SyncDoneMsg{FilesChanged: 5, Err: nil},
+			syncDone: SyncDoneMsg{Files: []string{"a", "b", "c", "d", "e"}, Err: nil},
 		},
 		{
 			name:     "error also clears overrides",
-			syncDone: SyncDoneMsg{FilesChanged: 0, Err: fmt.Errorf("sync failed")},
+			syncDone: SyncDoneMsg{Files: nil, Err: fmt.Errorf("sync failed")},
 		},
 	}
 
@@ -2548,7 +2548,7 @@ func TestSyncDoneMsg_CursorClampedAfterProfileListRefresh(t *testing.T) {
 	// Cursor was at 5 (pointing at a profile that no longer exists after sync).
 	m.Cursor = 5
 
-	updated, _ := m.Update(SyncDoneMsg{FilesChanged: 1, Err: nil})
+	updated, _ := m.Update(SyncDoneMsg{Files: []string{"a"}, Err: nil})
 	state := updated.(Model)
 
 	// After refresh, ProfileList has 2 items; cursor must be clamped to 1 (len-1).
@@ -2580,11 +2580,11 @@ func TestSyncDoneMsg_ClearsPendingOverrides_WithReadProfilesStub(t *testing.T) {
 	}{
 		{
 			name:     "success clears overrides",
-			syncDone: SyncDoneMsg{FilesChanged: 5, Err: nil},
+			syncDone: SyncDoneMsg{Files: []string{"a", "b", "c", "d", "e"}, Err: nil},
 		},
 		{
 			name:     "error also clears overrides",
-			syncDone: SyncDoneMsg{FilesChanged: 0, Err: fmt.Errorf("sync failed")},
+			syncDone: SyncDoneMsg{Files: nil, Err: fmt.Errorf("sync failed")},
 		},
 	}
 

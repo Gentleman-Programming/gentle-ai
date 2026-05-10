@@ -388,7 +388,7 @@ func tuiUpgrade(profile system.PlatformProfile, homeDir string) tui.UpgradeFunc 
 // When overrides is non-nil, model assignments are merged into the selection
 // so that the "Configure Models" TUI flow persists its choices to disk.
 func tuiSync(homeDir string) tui.SyncFunc {
-	return func(overrides *model.SyncOverrides) (int, error) {
+	return func(overrides *model.SyncOverrides) ([]string, error) {
 		agentIDs := syncAgentIDs(homeDir, overrides)
 		selection := cli.BuildSyncSelection(cli.SyncFlags{}, agentIDs)
 
@@ -401,14 +401,14 @@ func tuiSync(homeDir string) tui.SyncFunc {
 
 		result, err := cli.RunSyncWithSelection(homeDir, selection)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 
 		// Persist model assignments that were actually used (from overrides
 		// or loaded from state) so the next sync preserves them too.
 		persistAssignments(homeDir, selection)
 
-		return result.FilesChanged, nil
+		return result.ChangedFiles, nil
 	}
 }
 

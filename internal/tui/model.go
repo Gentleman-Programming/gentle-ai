@@ -143,16 +143,16 @@ type UpgradeDoneMsg struct {
 
 // SyncDoneMsg is sent when the sync operation completes.
 type SyncDoneMsg struct {
-	FilesChanged int
-	Err          error
+	Files []string
+	Err   error
 }
 
 // UninstallDoneMsg is sent when the uninstall operation completes.
 type UninstallDoneMsg struct {
-	Result           componentuninstall.Result
-	Err              error
-	SyncFilesChanged int   // only set for CleanInstall mode
-	SyncErr          error // only set for CleanInstall mode
+	Result      componentuninstall.Result
+	Err         error
+	SyncFiles   []string // only set for CleanInstall mode
+	SyncErr     error    // only set for CleanInstall mode
 }
 
 // UpgradePhaseCompletedMsg is sent by startUpgradeSync when the upgrade phase
@@ -203,8 +203,8 @@ type UpgradeFunc func(ctx context.Context, results []update.UpdateResult) upgrad
 
 // SyncFunc is the signature of the function injected to perform config sync.
 // When overrides is non-nil, the sync merges those model assignments into the
-// selection before executing. Returns the number of files changed and any error.
-type SyncFunc func(overrides *model.SyncOverrides) (int, error)
+// selection before executing. Returns the list of changed file paths and any error.
+type SyncFunc func(overrides *model.SyncOverrides) ([]string, error)
 
 // UninstallFunc is the signature of the function injected to perform managed uninstall.
 type UninstallFunc func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error)
@@ -368,8 +368,8 @@ type Model struct {
 	// nil means the upgrade has not been run yet or is currently running.
 	UpgradeReport *upgrade.UpgradeReport
 
-	// SyncFilesChanged holds the number of files changed during the last sync run.
-	SyncFilesChanged int
+	// SyncFiles holds the list of files changed during the last sync run.
+	SyncFiles []string
 
 	// SyncErr holds the error from the last sync run (nil on success).
 	SyncErr error
@@ -439,8 +439,8 @@ type Model struct {
 	// UninstallErr holds the error from the last uninstall execution.
 	UninstallErr error
 
-	// SyncCleanInstallFilesChanged holds the sync files changed count after a clean install.
-	SyncCleanInstallFilesChanged int
+	// SyncCleanInstallFiles holds the sync file paths changed after a clean install.
+	SyncCleanInstallFiles []string
 
 	// SyncCleanInstallErr holds the sync error from a clean install.
 	SyncCleanInstallErr error
@@ -601,7 +601,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.Init()
 	case SyncDoneMsg:
 		m.OperationRunning = false
-		m.SyncFilesChanged = msg.FilesChanged
+		m.SyncFiles = msg.Files
 		m.SyncErr = msg.Err
 		m.HasSyncRun = true
 		m.PendingSyncOverrides = nil
@@ -624,7 +624,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.OperationRunning = false
 		m.UninstallResult = msg.Result
 		m.UninstallErr = msg.Err
-		m.SyncCleanInstallFilesChanged = msg.SyncFilesChanged
+		m.SyncCleanInstallFiles = msg.SyncFiles
 		m.SyncCleanInstallErr = msg.SyncErr
 		m.setScreen(ScreenUninstallResult)
 		return m, nil
@@ -754,7 +754,7 @@ func (m Model) View() string {
 	case ScreenUpgrade:
 		return screens.RenderUpgrade(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenSync:
-		return screens.RenderSync(m.SyncFilesChanged, m.SyncErr, m.OperationRunning, m.HasSyncRun, m.SpinnerFrame)
+		return screens.RenderSync(m.SyncFiles, m.SyncErr, m.OperationRunning, m.HasSyncRun, m.SpinnerFrame)
 	case ScreenModelConfig:
 		return screens.RenderModelConfig(m.Cursor)
 	case ScreenProfiles:
@@ -774,7 +774,7 @@ func (m Model) View() string {
 	case ScreenProfileDelete:
 		return screens.RenderProfileDelete(m.ProfileDeleteTarget, m.Cursor)
 	case ScreenUpgradeSync:
-		return screens.RenderUpgradeSync(m.UpdateResults, m.UpgradeReport, m.SyncFilesChanged, m.UpgradeErr, m.SyncErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
+		return screens.RenderUpgradeSync(m.UpdateResults, m.UpgradeReport, m.SyncFiles, m.UpgradeErr, m.SyncErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenUninstallMode:
 		return screens.RenderUninstallMode(m.Cursor)
 	case ScreenUninstall:
@@ -786,7 +786,7 @@ func (m Model) View() string {
 	case ScreenUninstallConfirm:
 		return screens.RenderUninstallConfirm(m.UninstallMode, m.UninstallAgents, m.UninstallComponents, m.UninstallProfilesToRemove, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.Cursor, m.OperationRunning, m.SpinnerFrame)
 	case ScreenUninstallResult:
-		return screens.RenderUninstallResult(m.UninstallResult, m.UninstallErr, m.UninstallMode, m.UninstallProfilesToRemove, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.SyncCleanInstallFilesChanged, m.SyncCleanInstallErr)
+		return screens.RenderUninstallResult(m.UninstallResult, m.UninstallErr, m.UninstallMode, m.UninstallProfilesToRemove, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.SyncCleanInstallFiles, m.SyncCleanInstallErr)
 	case ScreenDetection:
 		return screens.RenderDetection(m.Detection, m.Cursor)
 	case ScreenAgents:
@@ -2093,7 +2093,7 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 // screen (State 3) instead of stale results from a previous run.
 // Unlike withResetOperationState, this preserves PendingSyncOverrides.
 func (m Model) withResetSyncState() Model {
-	m.SyncFilesChanged = 0
+	m.SyncFiles = nil
 	m.SyncErr = nil
 	m.HasSyncRun = false
 	m.OperationRunning = false
@@ -2108,7 +2108,7 @@ func (m Model) withResetSyncState() Model {
 func (m Model) withResetOperationState() Model {
 	m.UpgradeReport = nil
 	m.UpgradeErr = nil
-	m.SyncFilesChanged = 0
+	m.SyncFiles = nil
 	m.SyncErr = nil
 	m.HasSyncRun = false
 	m.OperationRunning = false
@@ -2129,7 +2129,7 @@ func (m Model) withResetUninstallState() Model {
 	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
 	m.UninstallResult = componentuninstall.Result{}
 	m.UninstallErr = nil
-	m.SyncCleanInstallFilesChanged = 0
+	m.SyncCleanInstallFiles = nil
 	m.SyncCleanInstallErr = nil
 	m.OperationRunning = false
 	m.OperationMode = ""
@@ -2159,8 +2159,8 @@ func (m Model) startSync(overrides *model.SyncOverrides) tea.Cmd {
 		if syncFn == nil {
 			return SyncDoneMsg{Err: fmt.Errorf("sync function not configured")}
 		}
-		filesChanged, err := syncFn(overrides)
-		return SyncDoneMsg{FilesChanged: filesChanged, Err: err}
+		files, err := syncFn(overrides)
+		return SyncDoneMsg{Files: files, Err: err}
 	}
 }
 
@@ -2228,8 +2228,8 @@ func (m Model) startUninstall() tea.Cmd {
 				msg.SyncErr = fmt.Errorf("sync function not configured")
 				return msg
 			}
-			filesChanged, syncErr := syncFn(nil)
-			msg.SyncFilesChanged = filesChanged
+			files, syncErr := syncFn(nil)
+			msg.SyncFiles = files
 			msg.SyncErr = syncErr
 			return msg
 		}
@@ -2302,8 +2302,8 @@ func (m Model) startUpgradeSync() tea.Cmd {
 		// Overrides are intentionally nil: upgrade-sync is triggered from
 		// Welcome menu, not ModelConfig. PendingSyncOverrides is cleared
 		// by withResetOperationState before entering this flow.
-		filesChanged, err := syncFn(nil)
-		return SyncDoneMsg{FilesChanged: filesChanged, Err: err}
+		files, err := syncFn(nil)
+		return SyncDoneMsg{Files: files, Err: err}
 	}
 
 	return tea.Sequence(upgradeCmd, syncCmd)
