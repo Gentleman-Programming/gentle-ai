@@ -11,6 +11,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
@@ -1169,7 +1170,7 @@ func TestDeleteResult_EnterRefreshesAndReturnsToBackups(t *testing.T) {
 // detection-driven TUI preselection silently dropped it.
 func TestPreselectedAgents_CodexIsIncludedWhenPresent(t *testing.T) {
 	detection := makeDetectionWithAgents("codex")
-	selected := preselectedAgents(detection)
+	selected := preselectedAgents("", detection)
 
 	found := false
 	for _, id := range selected {
@@ -1203,7 +1204,7 @@ func TestPreselectedAgents_AllSixAgentsMappedCorrectly(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.configAgent, func(t *testing.T) {
 			detection := makeDetectionWithAgents(tt.configAgent)
-			selected := preselectedAgents(detection)
+			selected := preselectedAgents("", detection)
 
 			found := false
 			for _, id := range selected {
@@ -1222,5 +1223,60 @@ func TestPreselectedAgents_AllSixAgentsMappedCorrectly(t *testing.T) {
 					len(selected), tt.configAgent, selected)
 			}
 		})
+	}
+}
+
+// ─── state.json priority in preselectedAgents ───────────────────────────────
+
+// TestPreselectedAgents_UsesStateFileWhenPresent verifies that preselectedAgents
+// returns only the agents recorded in state.json when the file exists, ignoring
+// agent config dirs on disk. Covers issue #114.
+func TestPreselectedAgents_UsesStateFileWhenPresent(t *testing.T) {
+	home := t.TempDir()
+
+	// Write state recording only opencode.
+	if err := state.Write(home, []string{"opencode"}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	// Simulate detection with claude-code present on disk.
+	detection := system.DetectionResult{
+		Configs: []system.ConfigState{
+			{Agent: "claude-code", Path: "/home/user/.claude", Exists: true, IsDirectory: true},
+		},
+	}
+	selected := preselectedAgents(home, detection)
+
+	// Must return exactly the persisted selection: only opencode.
+	want := []model.AgentID{model.AgentOpenCode}
+	if !reflect.DeepEqual(selected, want) {
+		t.Errorf("preselectedAgents() with state = %v, want %v", selected, want)
+	}
+}
+
+// TestPreselectedAgents_FallsBackToFSWhenStateMissing verifies that
+// preselectedAgents falls back to filesystem detection when state.json
+// is absent.
+func TestPreselectedAgents_FallsBackToFSWhenStateMissing(t *testing.T) {
+	home := t.TempDir()
+	// No state.Write — state.json does not exist.
+
+	detection := system.DetectionResult{
+		Configs: []system.ConfigState{
+			{Agent: "claude-code", Path: "/home/user/.claude", Exists: true, IsDirectory: true},
+		},
+	}
+	selected := preselectedAgents(home, detection)
+
+	// FS discovery must return claude-code.
+	found := false
+	for _, id := range selected {
+		if id == model.AgentClaudeCode {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("preselectedAgents() without state should fall back to FS; got %v", selected)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
@@ -241,8 +242,9 @@ type Model struct {
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
+	homeDir, _ := os.UserHomeDir()
 	selection := model.Selection{
-		Agents:     preselectedAgents(detection),
+		Agents:     preselectedAgents(homeDir, detection),
 		Persona:    model.PersonaGentleman,
 		Preset:     model.PresetFullGentleman,
 		Components: componentsForPreset(model.PresetFullGentleman),
@@ -1326,14 +1328,28 @@ func (m *Model) buildDependencyPlan() {
 	m.DependencyPlan = resolved
 }
 
-func preselectedAgents(detection system.DetectionResult) []model.AgentID {
+func preselectedAgents(homeDir string, detection system.DetectionResult) []model.AgentID {
+	// Priority 1: Read persisted state (~/.gentle-ai/state.json).
+	// When present and non-empty, only the agents the user explicitly
+	// installed are returned. This prevents install from injecting into
+	// every IDE config dir that happens to exist on the system (issue #114).
+	if agents := state.InstalledAgentsFromState(homeDir); len(agents) > 0 {
+		ids := make([]model.AgentID, 0, len(agents))
+		for _, a := range agents {
+			ids = append(ids, model.AgentID(a))
+		}
+		return ids
+	}
+
+	// Priority 2: Fallback to filesystem detection (backward compat
+	// for users who installed before state persistence was added).
 	selected := []model.AgentID{}
-	for _, state := range detection.Configs {
-		if !state.Exists {
+	for _, cs := range detection.Configs {
+		if !cs.Exists {
 			continue
 		}
 
-		switch strings.TrimSpace(state.Agent) {
+		switch strings.TrimSpace(cs.Agent) {
 		case string(model.AgentClaudeCode):
 			selected = append(selected, model.AgentClaudeCode)
 		case string(model.AgentOpenCode):
