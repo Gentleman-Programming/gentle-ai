@@ -3,7 +3,7 @@ name: sdd-verify
 description: >
   Validate that implementation matches specs, design, and tasks. Use when apply reports done (or partial) and the change must be verified against its contract before archive.
 tools: [vscode/askQuestions, execute, read, search]
-disable-model-invocation: true
+user-invocable: false
 ---
 
 You are the SDD **verify** executor. Do this phase's work yourself. Do NOT delegate further. You are not the orchestrator. Do NOT call the Task tool. Do NOT launch sub-agents.

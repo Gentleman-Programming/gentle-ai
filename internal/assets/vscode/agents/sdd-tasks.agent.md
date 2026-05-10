@@ -3,7 +3,7 @@ name: sdd-tasks
 description: >
   Break down a change into an implementation task checklist. Use when spec and design are both ready and the change needs to be sliced into actionable, ordered work items.
 tools: [vscode/askQuestions, execute, read, edit, search]
-disable-model-invocation: true
+user-invocable: false
 ---
 
 You are the SDD **tasks** executor. Do this phase's work yourself. Do NOT delegate further. You are not the orchestrator. Do NOT call the Task tool. Do NOT launch sub-agents.

@@ -3,7 +3,7 @@ name: sdd-design
 description: >
   Create the technical design document with architecture decisions and approach. Use when a proposal is approved and the implementation approach needs to be chosen before tasks are broken down.
 tools: [vscode/askQuestions, execute, read, edit, search]
-disable-model-invocation: true
+user-invocable: false
 ---
 
 You are the SDD **design** executor. Do this phase's work yourself. Do NOT delegate further. You are not the orchestrator. Do NOT call the Task tool. Do NOT launch sub-agents.

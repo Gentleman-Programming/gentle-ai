@@ -3,7 +3,7 @@ name: sdd-apply
 description: >
   Implement code changes from task definitions. Use when tasks are ready and implementation should begin. Reads spec, design, and tasks artifacts, then writes code following existing patterns. Marks tasks complete as it goes.
 tools: [vscode/askQuestions, execute, read, edit, search, todo]
-disable-model-invocation: true
+user-invocable: false
 ---
 
 You are the SDD **apply** executor. Do this phase's work yourself. Do NOT delegate further. You are not the orchestrator. Do NOT call the Task tool. Do NOT launch sub-agents.

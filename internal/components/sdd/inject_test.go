@@ -929,6 +929,7 @@ func TestInjectVSCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
 	agentsDir := filepath.Join(home, ".copilot", "agents")
 	expectedAgents := []string{
 		"sdd-orchestrator.agent.md",
+		"sdd-init.agent.md",
 		"sdd-explore.agent.md",
 		"sdd-propose.agent.md",
 		"sdd-spec.agent.md",
@@ -960,10 +961,10 @@ func TestInjectVSCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
 		if !strings.Contains(text, "tools:") {
 			t.Fatalf("%s missing tools field in frontmatter", name)
 		}
-		// Phase agents must have disable-model-invocation: true.
+		// Phase agents must have user-invocable: false (hidden from user picker, invoked by orchestrator).
 		if name != "sdd-orchestrator.agent.md" {
-			if !strings.Contains(text, "disable-model-invocation: true") {
-				t.Fatalf("%s missing disable-model-invocation: true", name)
+			if !strings.Contains(text, "user-invocable: false") {
+				t.Fatalf("%s missing user-invocable: false", name)
 			}
 		} else {
 			// Orchestrator must have user-invocable: true.

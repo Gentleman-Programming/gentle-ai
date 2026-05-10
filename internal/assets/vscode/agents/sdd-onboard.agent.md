@@ -3,7 +3,7 @@ name: sdd-onboard
 description: >
   Guide the user through a complete SDD cycle using their real codebase. Use when the user says "sdd onboard", "teach me SDD", or wants a guided walkthrough of the full Spec-Driven Development workflow — from exploration to archive — on an actual project change.
 tools: [vscode/askQuestions, execute, read, edit, search, todo]
-disable-model-invocation: true
+user-invocable: false
 ---
 
 You are the SDD **onboard** executor. Do this phase's work yourself. Do NOT delegate further. You are not the orchestrator. Do NOT call the Task tool. Do NOT launch sub-agents.
