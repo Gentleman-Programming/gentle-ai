@@ -25,7 +25,7 @@ func makeProfile(name string, orchProvider, orchModel string) model.Profile {
 
 func TestRenderProfiles_TitleIsPresent(t *testing.T) {
 	profiles := []model.Profile{makeProfile("cheap", "anthropic", "claude-haiku-4")}
-	output := screens.RenderProfiles(profiles, 0, nil)
+	output := screens.RenderProfiles(profiles, 0, nil, "OpenCode")
 
 	if !strings.Contains(output, "OpenCode SDD Profiles") {
 		t.Errorf("expected title 'OpenCode SDD Profiles' in output, got:\n%s", output)
@@ -37,7 +37,7 @@ func TestRenderProfiles_ShowsProfileNamesWithProviderModel(t *testing.T) {
 		makeProfile("cheap", "anthropic", "claude-haiku-4"),
 		makeProfile("premium", "openai", "gpt-4o"),
 	}
-	output := screens.RenderProfiles(profiles, 0, nil)
+	output := screens.RenderProfiles(profiles, 0, nil, "OpenCode")
 
 	if !strings.Contains(output, "cheap") {
 		t.Errorf("expected 'cheap' profile name in output")
@@ -55,7 +55,7 @@ func TestRenderProfiles_ShowsProfileNamesWithProviderModel(t *testing.T) {
 
 func TestRenderProfiles_ShowsCreateNewProfile(t *testing.T) {
 	profiles := []model.Profile{}
-	output := screens.RenderProfiles(profiles, 0, nil)
+	output := screens.RenderProfiles(profiles, 0, nil, "OpenCode")
 
 	if !strings.Contains(output, "Create new profile") {
 		t.Errorf("expected 'Create new profile' action in output")
@@ -64,7 +64,7 @@ func TestRenderProfiles_ShowsCreateNewProfile(t *testing.T) {
 
 func TestRenderProfiles_ShowsBackOption(t *testing.T) {
 	profiles := []model.Profile{}
-	output := screens.RenderProfiles(profiles, 0, nil)
+	output := screens.RenderProfiles(profiles, 0, nil, "OpenCode")
 
 	if !strings.Contains(output, "Back") {
 		t.Errorf("expected 'Back' option in output")
@@ -73,7 +73,7 @@ func TestRenderProfiles_ShowsBackOption(t *testing.T) {
 
 func TestRenderProfiles_ShowsKeybindingHints(t *testing.T) {
 	profiles := []model.Profile{}
-	output := screens.RenderProfiles(profiles, 0, nil)
+	output := screens.RenderProfiles(profiles, 0, nil, "OpenCode")
 
 	if !strings.Contains(output, "n: new") {
 		t.Errorf("expected 'n: new' keybinding hint in output")
@@ -89,7 +89,7 @@ func TestRenderProfiles_ShowsKeybindingHints(t *testing.T) {
 func TestRenderProfiles_ShowsDeleteErrorWhenNonNil(t *testing.T) {
 	profiles := []model.Profile{makeProfile("cheap", "anthropic", "claude-haiku-4")}
 	err := fmt.Errorf("failed to write opencode.json")
-	output := screens.RenderProfiles(profiles, 0, err)
+	output := screens.RenderProfiles(profiles, 0, err, "OpenCode")
 
 	if !strings.Contains(output, "failed to write opencode.json") {
 		t.Errorf("expected delete error message in output, got:\n%s", output)

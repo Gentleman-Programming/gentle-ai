@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
@@ -204,6 +205,92 @@ func RemoveVSCodeProfileAgents(agentsDir, profileName string) error {
 	}
 
 	return nil
+}
+
+// DetectVSCodeProfiles scans agentsDir for sdd-{phase}-{name}.agent.md files
+// and returns deduplicated, sorted []model.Profile. An empty or missing
+// directory is not an error — callers treat it as "no profiles yet".
+func DetectVSCodeProfiles(agentsDir string) ([]model.Profile, error) {
+	entries, err := os.ReadDir(agentsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read agents dir: %w", err)
+	}
+
+	seen := make(map[string]struct{})
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		// Must match sdd-{phase}-{profileName}.agent.md
+		// Strategy: strip known phase prefixes and .agent.md suffix to extract profile name.
+		profileName := extractProfileName(name)
+		if profileName == "" {
+			continue
+		}
+		seen[profileName] = struct{}{}
+	}
+
+	if len(seen) == 0 {
+		return nil, nil
+	}
+
+	profiles := make([]model.Profile, 0, len(seen))
+	for name := range seen {
+		profiles = append(profiles, model.Profile{Name: name})
+	}
+
+	// Sort deterministically by name.
+	sort.Slice(profiles, func(i, j int) bool {
+		return profiles[i].Name < profiles[j].Name
+	})
+
+	return profiles, nil
+}
+
+// extractProfileName parses a filename of the form sdd-{phase}-{profileName}.agent.md
+// and returns the profile name. Returns "" if the file does not match the pattern.
+func extractProfileName(filename string) string {
+	const suffix = ".agent.md"
+	if !strings.HasSuffix(filename, suffix) {
+		return ""
+	}
+	if !strings.HasPrefix(filename, "sdd-") {
+		return ""
+	}
+	// Strip suffix
+	base := filename[:len(filename)-len(suffix)]
+	// Try to match sdd-{phase}-{name}: look for a known phase prefix
+	for _, phase := range sddPhases {
+		phasePrefix := phase + "-"
+		if strings.HasPrefix(base, phasePrefix) {
+			profileName := base[len(phasePrefix):]
+			if profileName != "" {
+				return profileName
+			}
+		}
+	}
+	return ""
+}
+
+// VSCodeStaticModels returns the static list of VS Code Copilot model entries
+// as (modelSubstr, displayName) pairs for the TUI model picker.
+// The order matches vscModelEntries — most specific entries first.
+func VSCodeStaticModels() []VSCodeModelEntry {
+	result := make([]VSCodeModelEntry, len(vscModelEntries))
+	for i, e := range vscModelEntries {
+		result[i] = VSCodeModelEntry{ModelSubstr: e.substr, DisplayName: e.display}
+	}
+	return result
+}
+
+// VSCodeModelEntry is a public representation of one VS Code model option.
+type VSCodeModelEntry struct {
+	ModelSubstr string // model ID substring used for matching
+	DisplayName string // human-friendly display name shown in the TUI
 }
 
 // ReadVSCodeAgentTemplate reads an embedded .agent.md template by phase name.

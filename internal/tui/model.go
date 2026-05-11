@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
@@ -49,6 +50,18 @@ var readCurrentAssignmentsFn = func(settingsPath string) (map[string]model.Model
 // on ScreenProfiles entry and after SyncDoneMsg to refresh the profile list.
 var readProfilesFn = func(settingsPath string) ([]model.Profile, error) {
 	return sdd.DetectProfiles(settingsPath)
+}
+
+// readVSCodeProfilesFn is a package-level variable so tests can override how
+// VS Code profiles are detected from the agents directory.
+var readVSCodeProfilesFn = func(agentsDir string) ([]model.Profile, error) {
+	return vscode.DetectVSCodeProfiles(agentsDir)
+}
+
+// vscodeAgentsDirFn returns the path to the VS Code Copilot agents directory.
+// Package-level so tests can override it.
+var vscodeAgentsDirFn = func() string {
+	return filepath.Join(homeDir(), ".copilot", "agents")
 }
 
 // TickMsg drives the spinner animation on the installing screen.
@@ -248,9 +261,10 @@ type Model struct {
 	Progress          ProgressState
 	Execution         pipeline.ExecutionResult
 	Backups           []backup.Manifest
-	ModelPicker       screens.ModelPickerState
-	ClaudeModelPicker screens.ClaudeModelPickerState
-	KiroModelPicker   screens.KiroModelPickerState
+	ModelPicker         screens.ModelPickerState
+	VSCodeModelPicker   screens.VSCodeModelPickerState
+	ClaudeModelPicker   screens.ClaudeModelPickerState
+	KiroModelPicker     screens.KiroModelPickerState
 	SkillPicker       []model.SkillID
 	Err               error
 
@@ -364,6 +378,14 @@ type Model struct {
 	ProfileNameErr       string          // validation error message
 	ProfileNameCollision bool            // true when name collides with existing profile (awaiting second enter to overwrite)
 	ProfileDeleteErr     error           // error from the last RemoveProfileAgents call, displayed on ScreenProfiles
+
+	// VSCodeProfileList holds the VS Code SDD profiles detected from ~/.copilot/agents/.
+	VSCodeProfileList []model.Profile
+
+	// ActiveProfileAdapter identifies which adapter's profile screen is currently
+	// shown. Set when the user selects a profiles entry from the welcome menu.
+	// Empty means OpenCode (the default); model.AgentVSCodeCopilot means VS Code.
+	ActiveProfileAdapter model.AgentID
 
 	// UninstallMode holds the selected uninstall mode (partial, full, full-remove).
 	UninstallMode model.UninstallMode
@@ -557,6 +579,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		} // else keep existing list
+		// Sync doesn't change VS Code files, but refresh the list cheaply to keep
+		// it in sync with any out-of-band changes.
+		if m.hasDetectedVSCode() {
+			if vscProfiles, err := readVSCodeProfilesFn(vscodeAgentsDirFn()); err == nil {
+				m.VSCodeProfileList = vscProfiles
+			}
+		}
 		return m, nil
 	case UninstallDoneMsg:
 		m.OperationRunning = false
@@ -688,7 +717,7 @@ func (m Model) View() string {
 		if m.UpdateCheckDone && update.HasUpdates(m.UpdateResults) {
 			banner = "Updates available: " + update.UpdateSummaryLine(m.UpdateResults)
 		}
-		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
+		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.hasDetectedVSCode(), len(m.VSCodeProfileList))
 	case ScreenUpgrade:
 		return screens.RenderUpgrade(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenSync:
@@ -696,8 +725,22 @@ func (m Model) View() string {
 	case ScreenModelConfig:
 		return screens.RenderModelConfig(m.Cursor)
 	case ScreenProfiles:
-		return screens.RenderProfiles(m.ProfileList, m.Cursor, m.ProfileDeleteErr)
+		profiles, adapterLabel := m.activeProfiles()
+		return screens.RenderProfiles(profiles, m.Cursor, m.ProfileDeleteErr, adapterLabel)
 	case ScreenProfileCreate:
+		if m.ActiveProfileAdapter == model.AgentVSCodeCopilot {
+			return screens.RenderVSCodeProfileCreate(
+				m.ProfileCreateStep,
+				m.ProfileDraft,
+				m.ProfileNameInput,
+				m.ProfileNamePos,
+				m.ProfileNameErr,
+				m.ProfileEditMode,
+				m.Selection.ModelAssignments,
+				m.VSCodeModelPicker,
+				m.Cursor,
+			)
+		}
 		return screens.RenderProfileCreate(
 			m.ProfileCreateStep,
 			m.ProfileDraft,
@@ -710,7 +753,7 @@ func (m Model) View() string {
 			m.Cursor,
 		)
 	case ScreenProfileDelete:
-		return screens.RenderProfileDelete(m.ProfileDeleteTarget, m.Cursor)
+		return screens.RenderProfileDelete(m.ProfileDeleteTarget, m.Cursor, m.ActiveProfileAdapter == model.AgentVSCodeCopilot)
 	case ScreenUpgradeSync:
 		return screens.RenderUpgradeSync(m.UpdateResults, m.UpgradeReport, m.SyncFilesChanged, m.UpgradeErr, m.SyncErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenUninstallMode:
@@ -813,13 +856,22 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Profile create step 1 reuses the ModelPicker sub-modes (provider/model drill-down).
-	if (m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 1) &&
-		m.ModelPicker.Mode != screens.ModePhaseList {
-		handled, updated := screens.HandleModelPickerNav(keyStr, &m.ModelPicker, m.Selection.ModelAssignments)
-		if handled {
-			m.Selection.ModelAssignments = updated
-			return m, nil
+	// Profile create step 1 — delegate to the correct model picker sub-mode.
+	if m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 1 {
+		if m.ActiveProfileAdapter == model.AgentVSCodeCopilot {
+			if m.VSCodeModelPicker.Mode != screens.ModePhaseList {
+				handled, updated := screens.HandleVSCodeModelPickerNav(keyStr, &m.VSCodeModelPicker, m.Selection.ModelAssignments)
+				if handled {
+					m.Selection.ModelAssignments = updated
+					return m, nil
+				}
+			}
+		} else if m.ModelPicker.Mode != screens.ModePhaseList {
+			handled, updated := screens.HandleModelPickerNav(keyStr, &m.ModelPicker, m.Selection.ModelAssignments)
+			if handled {
+				m.Selection.ModelAssignments = updated
+				return m, nil
+			}
 		}
 	}
 
@@ -1133,6 +1185,20 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 
 			if m.hasDetectedOpenCode() {
 				if m.Cursor == next {
+					m.ActiveProfileAdapter = model.AgentOpenCode
+					m.setScreen(ScreenProfiles)
+					return m, nil
+				}
+				next++
+			}
+
+			if m.hasDetectedVSCode() {
+				if m.Cursor == next {
+					m.ActiveProfileAdapter = model.AgentVSCodeCopilot
+					// Refresh VS Code profile list on entry.
+					if profiles, err := readVSCodeProfilesFn(vscodeAgentsDirFn()); err == nil {
+						m.VSCodeProfileList = profiles
+					}
 					m.setScreen(ScreenProfiles)
 					return m, nil
 				}
@@ -1324,29 +1390,37 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		m.OperationMode = "upgrade-sync"
 		return m, tea.Batch(tickCmd(), m.startUpgradeSync())
 	case ScreenProfiles:
-		// Profiles are: 0..len(ProfileList)-1, then Create, then Back.
-		profileCount := len(m.ProfileList)
+		// Profiles are: 0..len(profiles)-1, then Create, then Back.
+		profiles, _ := m.activeProfiles()
+		profileCount := len(profiles)
 		switch {
 		case m.Cursor < profileCount:
 			// Edit an existing profile.
-			profile := m.ProfileList[m.Cursor]
+			profile := profiles[m.Cursor]
 			m.ProfileEditMode = true
 			m.ProfileDraft = profile
 			m.ProfileCreateStep = 0
 			m.ProfileNameInput = profile.Name
 			m.ProfileNamePos = len([]rune(profile.Name))
 			m.ProfileNameErr = ""
-			// Build ModelAssignments from the profile's phase assignments + orchestrator.
-			// The ModelPicker shows gentle-orchestrator as the base row, so we need
-			// to include it in the map for it to display the current model.
-			assignments := make(map[string]model.ModelAssignment)
-			for k, v := range profile.PhaseAssignments {
-				assignments[k] = v
+			if m.ActiveProfileAdapter == model.AgentVSCodeCopilot {
+				// VS Code edit: no orchestrator model, just phase assignments.
+				assignments := make(map[string]model.ModelAssignment)
+				for k, v := range profile.PhaseAssignments {
+					assignments[k] = v
+				}
+				m.Selection.ModelAssignments = assignments
+			} else {
+				// OpenCode: include orchestrator model in assignments for the picker.
+				assignments := make(map[string]model.ModelAssignment)
+				for k, v := range profile.PhaseAssignments {
+					assignments[k] = v
+				}
+				if profile.OrchestratorModel.ProviderID != "" {
+					assignments[screens.SDDOrchestratorPhase] = profile.OrchestratorModel
+				}
+				m.Selection.ModelAssignments = assignments
 			}
-			if profile.OrchestratorModel.ProviderID != "" {
-				assignments[screens.SDDOrchestratorPhase] = profile.OrchestratorModel
-			}
-			m.Selection.ModelAssignments = assignments
 			m.setScreen(ScreenProfileCreate)
 		case m.Cursor == profileCount:
 			// "Create new profile"
@@ -1367,17 +1441,33 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		return m.confirmProfileCreate()
 	case ScreenProfileDelete:
 		switch m.Cursor {
-		case 0: // "Delete & Sync"
-			if err := sdd.RemoveProfileAgents(opencode.DefaultSettingsPath(), m.ProfileDeleteTarget); err != nil {
-				// Store the error so it can be displayed on ScreenProfiles.
-				m.ProfileDeleteErr = err
+		case 0: // "Delete & Sync" (OpenCode) / "Delete" (VS Code)
+			if m.ActiveProfileAdapter == model.AgentVSCodeCopilot {
+				// VS Code: remove agent files directly, no sync needed.
+				if err := vscode.RemoveVSCodeProfileAgents(vscodeAgentsDirFn(), m.ProfileDeleteTarget); err != nil {
+					m.ProfileDeleteErr = err
+					m.setScreen(ScreenProfiles)
+					return m, nil
+				}
+				m.ProfileDeleteErr = nil
+				// Refresh VS Code profile list.
+				if profiles, err := readVSCodeProfilesFn(vscodeAgentsDirFn()); err == nil {
+					m.VSCodeProfileList = profiles
+				}
 				m.setScreen(ScreenProfiles)
 			} else {
-				m.ProfileDeleteErr = nil
-				m.PendingSyncOverrides = nil
-				m = m.withResetSyncState()
-				m.setScreen(ScreenSync)
-				return m, tea.Batch(tickCmd(), m.startSync(nil))
+				// OpenCode: sync pipeline.
+				if err := sdd.RemoveProfileAgents(opencode.DefaultSettingsPath(), m.ProfileDeleteTarget); err != nil {
+					// Store the error so it can be displayed on ScreenProfiles.
+					m.ProfileDeleteErr = err
+					m.setScreen(ScreenProfiles)
+				} else {
+					m.ProfileDeleteErr = nil
+					m.PendingSyncOverrides = nil
+					m = m.withResetSyncState()
+					m.setScreen(ScreenSync)
+					return m, tea.Batch(tickCmd(), m.startSync(nil))
+				}
 			}
 		default: // "Cancel"
 			m.setScreen(ScreenProfiles)
@@ -2541,18 +2631,27 @@ func (m *Model) setScreen(next Screen) {
 	if next == ScreenProfiles {
 		// Clear stale delete error so it is not shown after Cancel/Esc from ScreenProfileDelete.
 		m.ProfileDeleteErr = nil
-		// Refresh profile list on entry. Surface errors via m.Err so callers can react.
-		profiles, err := readProfilesFn(opencode.DefaultSettingsPath())
-		if err != nil {
-			m.Err = err
-			m.ProfileList = nil
+		if m.ActiveProfileAdapter == model.AgentVSCodeCopilot {
+			// Refresh VS Code profile list on entry.
+			if profiles, err := readVSCodeProfilesFn(vscodeAgentsDirFn()); err == nil {
+				m.VSCodeProfileList = profiles
+			}
+			if m.Cursor >= len(m.VSCodeProfileList) {
+				m.Cursor = 0
+			}
 		} else {
-			m.ProfileList = profiles
-		}
-		// Clamp cursor so it never points past the end of a refreshed list.
-		// m.Cursor was just reset to 0 above, so this only triggers if ProfileList is empty.
-		if m.Cursor >= len(m.ProfileList) {
-			m.Cursor = 0
+			// Refresh OpenCode profile list on entry.
+			profiles, err := readProfilesFn(opencode.DefaultSettingsPath())
+			if err != nil {
+				m.Err = err
+				m.ProfileList = nil
+			} else {
+				m.ProfileList = profiles
+			}
+			// Clamp cursor so it never points past the end of a refreshed list.
+			if m.Cursor >= len(m.ProfileList) {
+				m.Cursor = 0
+			}
 		}
 	}
 	if next == ScreenUninstallMode {
@@ -2613,7 +2712,7 @@ func (m Model) handleRenameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) optionCount() int {
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines()))
+		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.hasDetectedVSCode(), len(m.VSCodeProfileList)))
 	case ScreenUpgrade:
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			return 1 // "return" option in results/error state
@@ -2695,8 +2794,12 @@ func (m Model) optionCount() int {
 	case ScreenRenameBackup:
 		return 0 // text input mode — no cursor navigation
 	case ScreenProfiles:
-		return screens.ProfileListOptionCount(m.ProfileList)
+		profiles, _ := m.activeProfiles()
+		return screens.ProfileListOptionCount(profiles)
 	case ScreenProfileCreate:
+		if m.ActiveProfileAdapter == model.AgentVSCodeCopilot {
+			return screens.VSCodeProfileCreateOptionCount(m.ProfileCreateStep)
+		}
 		return screens.ProfileCreateOptionCount(m.ProfileCreateStep, m.ModelPicker)
 	case ScreenProfileDelete:
 		return screens.ProfileDeleteOptionCount()
@@ -3145,6 +3248,25 @@ func (m Model) hasDetectedOpenCode() bool {
 	return false
 }
 
+// hasDetectedVSCode returns true if VS Code Copilot config directory was detected.
+func (m Model) hasDetectedVSCode() bool {
+	for _, cfg := range m.Detection.Configs {
+		if cfg.Agent == string(model.AgentVSCodeCopilot) && cfg.Exists {
+			return true
+		}
+	}
+	return false
+}
+
+// activeProfiles returns the profile list and display label for the currently
+// active adapter. Used by View() and optionCount() to branch on adapter.
+func (m Model) activeProfiles() ([]model.Profile, string) {
+	if m.ActiveProfileAdapter == model.AgentVSCodeCopilot {
+		return m.VSCodeProfileList, "VS Code"
+	}
+	return m.ProfileList, "OpenCode"
+}
+
 func (m Model) shouldShowSDDModeScreen() bool {
 	return m.Selection.HasAgent(model.AgentOpenCode) &&
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
@@ -3333,6 +3455,44 @@ func (m Model) handleProfileNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// confirmVSCodeProfileCreateStep1 handles enter on step 1 of the VS Code profile
+// create flow. Uses VSCodeModelPicker (static flat model list, no orchestrator row).
+func (m Model) confirmVSCodeProfileCreateStep1() (tea.Model, tea.Cmd) {
+	rows := screens.VSCodeModelRows()
+	if m.Cursor < len(rows) {
+		// Enter model select for the chosen phase row.
+		m.VSCodeModelPicker.SelectedPhaseIdx = m.Cursor
+		m.VSCodeModelPicker.Mode = screens.ModeModelSelect
+		m.VSCodeModelPicker.ModelCursor = 0
+		m.VSCodeModelPicker.ModelScroll = 0
+		return m, nil
+	}
+	if m.Cursor == len(rows) {
+		// "Continue": copy phase assignments to draft, advance.
+		if m.Selection.ModelAssignments != nil {
+			if m.ProfileDraft.PhaseAssignments == nil {
+				m.ProfileDraft.PhaseAssignments = make(map[string]model.ModelAssignment)
+			}
+			for k, v := range m.Selection.ModelAssignments {
+				m.ProfileDraft.PhaseAssignments[k] = v
+			}
+		}
+		m.ProfileCreateStep = 2
+		m.Cursor = 0
+		return m, nil
+	}
+	if m.Cursor == len(rows)+1 {
+		// "Back"
+		if m.ProfileEditMode {
+			m.setScreen(ScreenProfiles)
+		} else {
+			m.ProfileCreateStep = 0
+			m.Cursor = 0
+		}
+	}
+	return m, nil
+}
+
 // confirmProfileCreate handles enter key presses on ScreenProfileCreate.
 // Step 0 (name input) is handled by handleProfileNameInput for create mode.
 // Steps: 0=name, 1=assign models (orchestrator + sub-agents), 2=confirm.
@@ -3342,18 +3502,24 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 		// Edit mode: step 0 shows read-only name, enter advances to step 1.
 		if m.ProfileEditMode {
 			m.ProfileCreateStep = 1
-			cachePath := opencode.DefaultCachePath()
-			if _, err := osStatModelCache(cachePath); err == nil {
-				m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
+			if m.ActiveProfileAdapter == model.AgentVSCodeCopilot {
+				m.VSCodeModelPicker = screens.VSCodeModelPickerState{}
 			} else {
-				m.ModelPicker = screens.ModelPickerState{}
+				cachePath := opencode.DefaultCachePath()
+				if _, err := osStatModelCache(cachePath); err == nil {
+					m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
+				} else {
+					m.ModelPicker = screens.ModelPickerState{}
+				}
 			}
 			m.Cursor = 0
 		}
 		return m, nil
 	case 1:
-		// Model assignment picker: orchestrator + all sub-agent phases in one screen.
-		// Reuse the same enter-on-row logic as ScreenModelPicker.
+		if m.ActiveProfileAdapter == model.AgentVSCodeCopilot {
+			return m.confirmVSCodeProfileCreateStep1()
+		}
+		// OpenCode: model assignment picker with orchestrator + sub-agent phases.
 		rows := screens.ModelPickerRows()
 		if m.Cursor < len(rows) {
 			// Enter sub-selection: pick provider then model.
@@ -3396,8 +3562,23 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 	default:
 		// Step 2: confirm.
 		switch m.Cursor {
-		case 0: // "Create & Sync" / "Save & Sync"
+		case 0: // "Create & Sync" / "Save & Sync" / "Create" (VS Code)
 			draft := m.ProfileDraft
+			if m.ActiveProfileAdapter == model.AgentVSCodeCopilot {
+				// VS Code: write files directly, no sync needed.
+				if _, err := vscode.GenerateVSCodeProfileFiles(draft, vscodeAgentsDirFn()); err != nil {
+					m.ProfileDeleteErr = err
+					m.setScreen(ScreenProfiles)
+					return m, nil
+				}
+				// Refresh VS Code profile list.
+				if profiles, err := readVSCodeProfilesFn(vscodeAgentsDirFn()); err == nil {
+					m.VSCodeProfileList = profiles
+				}
+				m.setScreen(ScreenProfiles)
+				return m, nil
+			}
+			// OpenCode: sync pipeline.
 			m.PendingSyncOverrides = &model.SyncOverrides{
 				Profiles: []model.Profile{draft},
 			}

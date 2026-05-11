@@ -10,7 +10,7 @@ import (
 // ─── RenderProfileDelete ──────────────────────────────────────────────────────
 
 func TestRenderProfileDelete_ShowsProfileName(t *testing.T) {
-	output := screens.RenderProfileDelete("cheap", 0)
+	output := screens.RenderProfileDelete("cheap", 0, false)
 
 	if !strings.Contains(output, "cheap") {
 		t.Errorf("expected profile name 'cheap' in output, got:\n%s", output)
@@ -18,7 +18,7 @@ func TestRenderProfileDelete_ShowsProfileName(t *testing.T) {
 }
 
 func TestRenderProfileDelete_ShowsTitle(t *testing.T) {
-	output := screens.RenderProfileDelete("premium", 0)
+	output := screens.RenderProfileDelete("premium", 0, false)
 
 	if !strings.Contains(output, "Delete Profile") {
 		t.Errorf("expected title 'Delete Profile' in output, got:\n%s", output)
@@ -26,7 +26,7 @@ func TestRenderProfileDelete_ShowsTitle(t *testing.T) {
 }
 
 func TestRenderProfileDelete_ShowsDeleteAndSync(t *testing.T) {
-	output := screens.RenderProfileDelete("cheap", 0)
+	output := screens.RenderProfileDelete("cheap", 0, false)
 
 	if !strings.Contains(output, "Delete & Sync") {
 		t.Errorf("expected 'Delete & Sync' option in output, got:\n%s", output)
@@ -34,7 +34,7 @@ func TestRenderProfileDelete_ShowsDeleteAndSync(t *testing.T) {
 }
 
 func TestRenderProfileDelete_ShowsCancel(t *testing.T) {
-	output := screens.RenderProfileDelete("cheap", 1)
+	output := screens.RenderProfileDelete("cheap", 1, false)
 
 	if !strings.Contains(output, "Cancel") {
 		t.Errorf("expected 'Cancel' option in output, got:\n%s", output)
@@ -42,7 +42,7 @@ func TestRenderProfileDelete_ShowsCancel(t *testing.T) {
 }
 
 func TestRenderProfileDelete_ShowsAgentKeyCount(t *testing.T) {
-	output := screens.RenderProfileDelete("cheap", 0)
+	output := screens.RenderProfileDelete("cheap", 0, false)
 
 	// Should mention 11 agents that will be removed.
 	if !strings.Contains(output, "11") {

@@ -10,11 +10,11 @@ import (
 
 // WelcomeOptions returns the welcome menu options.
 // When showProfiles is true, an "OpenCode SDD Profiles" option is inserted
-// between "Configure models" and "Manage backups".
-// profileCount is used to show a badge with the current profile count.
-// When hasEngines is false, "Create your own Agent" is shown as disabled
-// (labelled "(no agents)") to signal that no supported AI engine is installed.
-func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) []string {
+// after the plugins entry. profileCount is used to show a badge.
+// When showVSCodeProfiles is true, a "VS Code SDD Profiles" option is inserted
+// right after the OpenCode profiles entry. vscodeProfileCount is its badge.
+// When hasEngines is false, "Create your own Agent" is shown as disabled.
+func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, showVSCodeProfiles bool, vscodeProfileCount int) []string {
 	upgradeLabel := "Upgrade tools"
 	if updateCheckDone && update.HasUpdates(updateResults) {
 		upgradeLabel = "Upgrade tools ★"
@@ -45,6 +45,14 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 		opts = append(opts, profilesLabel)
 	}
 
+	if showVSCodeProfiles {
+		vscLabel := "VS Code SDD Profiles"
+		if vscodeProfileCount > 0 {
+			vscLabel = fmt.Sprintf("VS Code SDD Profiles (%d)", vscodeProfileCount)
+		}
+		opts = append(opts, vscLabel)
+	}
+
 	opts = append(opts, "Manage backups")
 	opts = append(opts, "Managed uninstall")
 	opts = append(opts, "Quit")
@@ -52,7 +60,7 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 	return opts
 }
 
-func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) string {
+func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, showVSCodeProfiles bool, vscodeProfileCount int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.RenderLogo())
@@ -68,7 +76,7 @@ func RenderWelcome(cursor int, version string, updateBanner string, updateResult
 	b.WriteString("\n")
 	b.WriteString(styles.HeadingStyle.Render("Menu"))
 	b.WriteString("\n\n")
-	b.WriteString(renderOptions(WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines), cursor))
+	b.WriteString(renderOptions(WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines, showVSCodeProfiles, vscodeProfileCount), cursor))
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • q: quit"))
 

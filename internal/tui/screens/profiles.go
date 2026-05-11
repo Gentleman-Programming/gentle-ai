@@ -8,15 +8,24 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
 )
 
-// RenderProfiles renders the OpenCode SDD Profiles list screen.
-// It shows all named profiles with their orchestrator model, plus Create and Back actions.
+// RenderProfiles renders the SDD Profiles list screen for the given adapter.
+// adapterLabel is "OpenCode" or "VS Code" — it drives the title and subtitle text.
 // deleteErr is displayed when non-nil (e.g. RemoveProfileAgents returned an error).
-func RenderProfiles(profiles []model.Profile, cursor int, deleteErr error) string {
+func RenderProfiles(profiles []model.Profile, cursor int, deleteErr error, adapterLabel string) string {
 	var b strings.Builder
 
-	b.WriteString(styles.TitleStyle.Render("OpenCode SDD Profiles"))
+	title := adapterLabel + " SDD Profiles"
+	b.WriteString(styles.TitleStyle.Render(title))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Your SDD model profiles for OpenCode. Each profile creates its own orchestrator (visible with Tab)."))
+
+	var subtitle string
+	switch adapterLabel {
+	case "VS Code":
+		subtitle = "Your SDD model profiles for VS Code Copilot. Each profile creates 10 .agent.md files in ~/.copilot/agents/."
+	default:
+		subtitle = "Your SDD model profiles for OpenCode. Each profile creates its own orchestrator (visible with Tab)."
+	}
+	b.WriteString(styles.SubtextStyle.Render(subtitle))
 	b.WriteString("\n\n")
 
 	if deleteErr != nil {
