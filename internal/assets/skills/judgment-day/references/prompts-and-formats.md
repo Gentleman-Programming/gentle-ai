@@ -81,15 +81,16 @@ Fix Agent: delegate(agent="jd-fix-agent", prompt="...")
 
 Each named agent uses its configured model from the Model Assignments table.
 
-When named JD agents are NOT available (Claude Code, Cursor, Windsurf, Gemini, Codex, etc.):
+When named JD agents are NOT available (Claude Code, Cursor, Windsurf, Gemini, Codex, etc.), use the adapter's generic delegate syntax. These adapters do not support the `agent` parameter — all calls use the same delegate entry point and the model is controlled externally:
 
 ```
-Judge A:   delegate(prompt="...")   // generic async delegate
-Judge B:   delegate(prompt="...")   // generic async delegate
-Fix Agent: delegate(prompt="...")   // generic async delegate
+// Generic delegate — no named agent support; adapter-native syntax
+Judge A:   delegate(prompt="...")
+Judge B:   delegate(prompt="...")
+Fix Agent: delegate(prompt="...")
 ```
 
-The model is controlled by the agent's native model switching mechanism. Pass the model alias from the Model Assignments table if the agent supports per-call model parameters.
+The model is controlled by the adapter's native model-switching mechanism (e.g., model sentinels in agent .md files). Pass the model alias from the Model Assignments table if the adapter supports per-call model parameters.
 
 ## Language Snippets
 
