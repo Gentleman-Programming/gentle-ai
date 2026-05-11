@@ -133,15 +133,15 @@ func (a *Adapter) CommandsDir(_ string) string {
 }
 
 func (a *Adapter) SupportsSubAgents() bool {
-	return false
+	return true
 }
 
-func (a *Adapter) SubAgentsDir(_ string) string {
-	return ""
+func (a *Adapter) SubAgentsDir(homeDir string) string {
+	return filepath.Join(homeDir, ".copilot", "agents")
 }
 
 func (a *Adapter) EmbeddedSubAgentsDir() string {
-	return ""
+	return "vscode/agents"
 }
 
 func (a *Adapter) SupportsSkills() bool {
