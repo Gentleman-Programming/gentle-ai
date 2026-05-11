@@ -3503,11 +3503,11 @@ func (m Model) handleProfileNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // confirmVSCodeProfileCreateStep1 handles enter on step 1 of the VS Code profile
-// create flow. Uses VSCodeModelPicker (static flat model list, no orchestrator row).
+// create flow. Uses VSCodeModelPicker (Copilot-only catalog; orchestrator row + phase rows).
 func (m Model) confirmVSCodeProfileCreateStep1() (tea.Model, tea.Cmd) {
 	rows := screens.VSCodeModelRows()
 	if m.Cursor < len(rows) {
-		// Enter model select for the chosen phase row.
+		// Enter model select for the chosen row.
 		m.VSCodeModelPicker.SelectedPhaseIdx = m.Cursor
 		m.VSCodeModelPicker.Mode = screens.ModeModelSelect
 		m.VSCodeModelPicker.ModelCursor = 0
@@ -3515,13 +3515,20 @@ func (m Model) confirmVSCodeProfileCreateStep1() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.Cursor == len(rows) {
-		// "Continue": copy phase assignments to draft, advance.
+		// "Continue": extract orchestrator + phase assignments from selection, advance.
 		if m.Selection.ModelAssignments != nil {
+			// Extract orchestrator model (key = sdd-orchestrator).
+			if orch, ok := m.Selection.ModelAssignments[screens.VSCodeOrchestratorPhase]; ok {
+				m.ProfileDraft.OrchestratorModel = orch
+			}
+			// Copy phase assignments (all keys except the orchestrator).
 			if m.ProfileDraft.PhaseAssignments == nil {
 				m.ProfileDraft.PhaseAssignments = make(map[string]model.ModelAssignment)
 			}
 			for k, v := range m.Selection.ModelAssignments {
-				m.ProfileDraft.PhaseAssignments[k] = v
+				if k != screens.VSCodeOrchestratorPhase {
+					m.ProfileDraft.PhaseAssignments[k] = v
+				}
 			}
 		}
 		m.ProfileCreateStep = 2

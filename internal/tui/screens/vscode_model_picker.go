@@ -61,11 +61,18 @@ func NewVSCodeModelPickerState(cachePath string) VSCodeModelPickerState {
 	}
 }
 
+// VSCodeOrchestratorPhase is the assignment key for the VS Code Copilot
+// SDD orchestrator model. It mirrors vscodeagent.OrchestratorPhase and
+// is re-exported here so model.go can reference it without importing the
+// vscode agent package directly.
+const VSCodeOrchestratorPhase = vscodeagent.OrchestratorPhase
+
 // VSCodeModelRows returns the row labels for the VS Code model picker phase list.
-// VS Code profiles have no orchestrator row (phases only).
-// Row 0 is "Set all phases", rows 1-10 are the 10 SDD phases.
+// Row 0 is the orchestrator (sdd-orchestrator), row 1 is "Set all phases",
+// rows 2-11 are the 10 SDD phase executors.
 func VSCodeModelRows() []string {
-	rows := make([]string, 0, 11)
+	rows := make([]string, 0, 12)
+	rows = append(rows, vscodeagent.OrchestratorPhase)
 	rows = append(rows, "Set all phases")
 	rows = append(rows, vscodeagent.SDDPhases()...)
 	return rows
@@ -129,14 +136,24 @@ func renderVSCodePhaseList(
 		focused := idx == cursor
 
 		var label string
-		if idx == 0 {
+		switch {
+		case idx == 0:
+			// Row 0: sdd-orchestrator — individual assignment.
+			if assignment, ok := assignments[vscodeagent.OrchestratorPhase]; ok && assignment.ModelID != "" {
+				label = fmt.Sprintf("%-22s %s", row, assignment.ModelID)
+			} else {
+				label = fmt.Sprintf("%-22s (default)", row)
+			}
+		case idx == 1:
+			// Row 1: "Set all phases" — shows last bulk-set model.
 			if state.AllPhasesModel != "" {
 				label = fmt.Sprintf("%-22s (%s)", row, state.AllPhasesModel)
 			} else {
 				label = fmt.Sprintf("%-22s (not set)", row)
 			}
-		} else {
-			phaseIdx := idx - 1
+		default:
+			// Rows 2-11: individual SDD phases.
+			phaseIdx := idx - 2
 			if phaseIdx < len(phases) {
 				phase := phases[phaseIdx]
 				if assignment, ok := assignments[phase]; ok && assignment.ModelID != "" {
@@ -255,13 +272,19 @@ func HandleVSCodeModelPickerNav(
 			ModelID:    entry.ID,
 		}
 		label := vscodeModelLabel(entry)
-		if state.SelectedPhaseIdx == 0 {
+		switch state.SelectedPhaseIdx {
+		case 0:
+			// Row 0: sdd-orchestrator — assign only to the orchestrator key.
+			assignments[vscodeagent.OrchestratorPhase] = assignment
+		case 1:
+			// Row 1: "Set all phases" — sets the 10 sub-agents, NOT the orchestrator.
 			for _, phase := range phases {
 				assignments[phase] = assignment
 			}
 			state.AllPhasesModel = label
-		} else {
-			phaseIdx := state.SelectedPhaseIdx - 1
+		default:
+			// Rows 2-11: individual SDD phases.
+			phaseIdx := state.SelectedPhaseIdx - 2
 			if phaseIdx < len(phases) {
 				assignments[phases[phaseIdx]] = assignment
 			}
@@ -281,7 +304,7 @@ func HandleVSCodeModelPickerNav(
 }
 
 // VSCodeModelPickerOptionCount returns the option count for the VS Code phase list.
-// Rows + Continue + Back.
+// Rows (1 orchestrator + 1 "Set all" + 10 phases) + Continue + Back = 14.
 func VSCodeModelPickerOptionCount() int {
 	return len(VSCodeModelRows()) + 2
 }
