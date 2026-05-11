@@ -1,5 +1,6 @@
 ---
 name: sdd-spec
+user-invocable: false
 description: >
   Write specifications with requirements and scenarios. Use when a proposal is approved and the
   change needs formal requirements (delta specs) captured before implementation.

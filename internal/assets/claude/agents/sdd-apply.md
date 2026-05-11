@@ -1,5 +1,6 @@
 ---
 name: sdd-apply
+user-invocable: false
 description: >
   Implement code changes from task definitions. Use when tasks are ready and implementation
   should begin. Reads spec, design, and tasks artifacts, then writes code following existing

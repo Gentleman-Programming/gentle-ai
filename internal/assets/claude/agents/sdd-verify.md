@@ -1,5 +1,6 @@
 ---
 name: sdd-verify
+user-invocable: false
 description: >
   Validate that implementation matches specs, design, and tasks. Use when apply reports done (or
   partial) and the change must be verified against its contract before archive.

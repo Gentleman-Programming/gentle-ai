@@ -1,5 +1,6 @@
 ---
 name: sdd-tasks
+user-invocable: false
 description: >
   Break down a change into an implementation task checklist. Use when spec and design are both
   ready and the change needs to be sliced into actionable, ordered work items.

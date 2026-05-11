@@ -1,5 +1,6 @@
 ---
 name: sdd-explore
+user-invocable: false
 description: >
   Explore and investigate ideas before committing to a change. Use when asked to think through
   a feature, investigate the codebase, understand current architecture, compare approaches, or

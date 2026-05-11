@@ -1,5 +1,6 @@
 ---
 name: sdd-design
+user-invocable: false
 description: >
   Create the technical design document with architecture decisions and approach. Use when a
   proposal is approved and the implementation approach needs to be chosen before tasks are

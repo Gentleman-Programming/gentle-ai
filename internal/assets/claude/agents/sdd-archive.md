@@ -1,5 +1,6 @@
 ---
 name: sdd-archive
+user-invocable: false
 description: >
   Archive a completed and verified change. Use when verification has passed and the change
   needs to be closed — merges delta specs into main specs, moves change folder to archive,
