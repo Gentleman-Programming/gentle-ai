@@ -601,6 +601,13 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// Copy all files (not just .md) to support Kimi's YAML-based agents
 			contentStr := assets.MustRead(embeddedDir + "/" + entry.Name())
 
+			// Normalize line endings to LF before sentinel replacement.
+			// Embedded templates may contain CRLF (e.g. Windows checkouts).
+			// Without normalization, replacements like "model: {{VSC_MODEL}}\n"
+			// silently fail because they only match LF — leaving raw sentinels
+			// in the output file, which causes YAML parse errors in Copilot.
+			contentStr = strings.ReplaceAll(contentStr, "\r\n", "\n")
+
 			// Resolve {{KIRO_MODEL}} placeholder for adapters that support it (e.g. Kiro).
 			// Non-Kiro adapters (Cursor, etc.) don't implement kiroModelResolver and are unaffected.
 			if kmr, ok := adapter.(kiroModelResolver); ok {

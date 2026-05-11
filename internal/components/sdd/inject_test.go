@@ -926,6 +926,52 @@ func TestInjectVSCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
 	}
 }
 
+func TestInjectVSCodeStripsModelSentinelEvenWithCRLF(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	vscodeAdapter, err := agents.NewAdapter("vscode-copilot")
+	if err != nil {
+		t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+	}
+
+	// Inject with NO model assignments — this is the default path where
+	// VSCModelID returns "" and the sentinel must be removed entirely.
+	result, injectErr := Inject(home, vscodeAdapter, "")
+	if injectErr != nil {
+		t.Fatalf("Inject(vscode) error = %v", injectErr)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(vscode) changed = false")
+	}
+
+	// Verify NO agent file contains the raw {{VSC_MODEL}} sentinel.
+	// This was a real bug: templates with CRLF line endings caused
+	// strings.ReplaceAll("model: {{VSC_MODEL}}\n", "") to miss the
+	// \r\n variant, leaving the raw placeholder in the output.
+	agentsDir := vscodeAdapter.SubAgentsDir(home)
+	entries, err := os.ReadDir(agentsDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", agentsDir, err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		content, readErr := os.ReadFile(filepath.Join(agentsDir, entry.Name()))
+		if readErr != nil {
+			t.Fatalf("ReadFile(%q) error = %v", entry.Name(), readErr)
+		}
+		if strings.Contains(string(content), "{{VSC_MODEL}}") {
+			t.Fatalf("agent %q still contains raw {{VSC_MODEL}} sentinel — CRLF normalization failed", entry.Name())
+		}
+		if strings.Contains(string(content), "{{VSC_PROFILE_SUFFIX}}") {
+			t.Fatalf("agent %q still contains raw {{VSC_PROFILE_SUFFIX}} sentinel", entry.Name())
+		}
+	}
+}
+
 func TestInjectFileAppendSkipsIfAlreadyPresent(t *testing.T) {
 	home := t.TempDir()
 
