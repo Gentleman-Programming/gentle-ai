@@ -611,10 +611,10 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 		}
 
-		// Post-check: verify critical agent files exist (either .md or .yaml)
+		// Post-check: verify critical agent files exist (either .md, .yaml, or .agent.md)
 		for _, phase := range []string{"sdd-apply", "sdd-verify"} {
 			found := false
-			for _, ext := range []string{".md", ".yaml"} {
+			for _, ext := range []string{".md", ".yaml", ".agent.md"} {
 				checkPath := filepath.Join(agentsDir, phase+ext)
 				if info, err := os.Stat(checkPath); err == nil && info.Size() >= 10 {
 					found = true
