@@ -994,6 +994,10 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else if !m.isScrollableScreen() {
 				// Issue #150: wrap-around — Up at 0 goes to last option.
 				m.Cursor = count - 1
+				// If wrap-around landed on the separator row, skip past it.
+				if m.Screen == ScreenModelPicker && !m.ModelPicker.ForProfile && m.Cursor == screens.SeparatorRowIdx() && m.Cursor > 0 {
+					m.Cursor--
+				}
 			}
 		}
 		// Adjust scroll for the backup list.
@@ -1041,6 +1045,10 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else if !m.isScrollableScreen() {
 				// Issue #150: wrap-around — Up at 0 goes to last option.
 				m.Cursor = count - 1
+				// If wrap-around landed on the separator row, skip past it.
+				if m.Screen == ScreenModelPicker && !m.ModelPicker.ForProfile && m.Cursor == screens.SeparatorRowIdx() && m.Cursor > 0 {
+					m.Cursor--
+				}
 			}
 		}
 		// Adjust scroll for the backup list.
