@@ -276,23 +276,6 @@ func extractProfileName(filename string) string {
 	return ""
 }
 
-// VSCodeStaticModels returns the static list of VS Code Copilot model entries
-// as (modelSubstr, displayName) pairs for the TUI model picker.
-// The order matches vscModelEntries — most specific entries first.
-func VSCodeStaticModels() []VSCodeModelEntry {
-	result := make([]VSCodeModelEntry, len(vscModelEntries))
-	for i, e := range vscModelEntries {
-		result[i] = VSCodeModelEntry{ModelSubstr: e.substr, DisplayName: e.display}
-	}
-	return result
-}
-
-// VSCodeModelEntry is a public representation of one VS Code model option.
-type VSCodeModelEntry struct {
-	ModelSubstr string // model ID substring used for matching
-	DisplayName string // human-friendly display name shown in the TUI
-}
-
 // ReadVSCodeAgentTemplate reads an embedded .agent.md template by phase name.
 func ReadVSCodeAgentTemplate(phase string) (string, error) {
 	return assets.Read("vscode/agents/" + phase + ".agent.md")

@@ -3406,9 +3406,13 @@ func (m Model) handleProfileNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.ProfileNameCollision = false
 		m.ProfileDraft.Name = name
 		m.ProfileCreateStep = 1
-		// Initialize model picker for orchestrator step.
+		// Initialize model picker for step 1. VS Code uses the github-copilot
+		// catalog from the OpenCode cache; OpenCode uses the full multi-provider
+		// picker.
 		cachePath := opencode.DefaultCachePath()
-		if _, err := osStatModelCache(cachePath); err == nil {
+		if m.ActiveProfileAdapter == model.AgentVSCodeCopilot {
+			m.VSCodeModelPicker = screens.NewVSCodeModelPickerState(cachePath)
+		} else if _, err := osStatModelCache(cachePath); err == nil {
 			m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
 		} else {
 			m.ModelPicker = screens.ModelPickerState{}
@@ -3502,15 +3506,13 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 		// Edit mode: step 0 shows read-only name, enter advances to step 1.
 		if m.ProfileEditMode {
 			m.ProfileCreateStep = 1
+			cachePath := opencode.DefaultCachePath()
 			if m.ActiveProfileAdapter == model.AgentVSCodeCopilot {
-				m.VSCodeModelPicker = screens.VSCodeModelPickerState{}
+				m.VSCodeModelPicker = screens.NewVSCodeModelPickerState(cachePath)
+			} else if _, err := osStatModelCache(cachePath); err == nil {
+				m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
 			} else {
-				cachePath := opencode.DefaultCachePath()
-				if _, err := osStatModelCache(cachePath); err == nil {
-					m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
-				} else {
-					m.ModelPicker = screens.ModelPickerState{}
-				}
+				m.ModelPicker = screens.ModelPickerState{}
 			}
 			m.Cursor = 0
 		}

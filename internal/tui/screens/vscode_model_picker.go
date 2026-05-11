@@ -4,24 +4,61 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
 	vscodeagent "github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
 )
 
-// VSCodeModelPickerState holds navigation state for the VS Code static model picker.
-// It is embedded in the profile-create flow when ActiveProfileAdapter == VS Code.
+// VSCodeModelPickerState holds navigation state for the VS Code model picker.
+// The model catalog is loaded dynamically from the OpenCode models cache
+// (provider "github-copilot") rather than from a hardcoded list, so the
+// picker reflects whatever models GitHub Copilot currently exposes to the user.
 type VSCodeModelPickerState struct {
 	// Mode mirrors ModelPickerMode: ModePhaseList shows phase rows,
-	// ModeModelSelect shows the flat VS Code model list for a chosen phase.
+	// ModeModelSelect shows the flat list of Copilot models for a chosen phase.
 	Mode ModelPickerMode
 
-	SelectedPhaseIdx int // which phase row was selected
+	// Models is the list of github-copilot models loaded from the OpenCode
+	// cache (filtered to tool-call-capable models, sorted by Name).
+	Models []opencode.Model
+
+	// ConfigWarning is non-empty when the OpenCode cache could not be loaded
+	// or when it does not contain a github-copilot provider entry. The picker
+	// is still shown but with a banner explaining the situation.
+	ConfigWarning string
+
+	SelectedPhaseIdx int
 	ModelCursor      int
 	ModelScroll      int
 
-	// AllPhasesModel tracks the last "Set all phases" assignment (VS Code display name).
-	AllPhasesModel string // display name of the model, e.g. "Claude Sonnet 4 (copilot)"
+	// AllPhasesModel tracks the last "Set all phases" assignment (display name).
+	AllPhasesModel string
+}
+
+// NewVSCodeModelPickerState loads the github-copilot model catalog from the
+// OpenCode models cache and returns a picker state ready for use. When the
+// cache is missing or the provider entry is absent, ConfigWarning is populated
+// and Models is empty — the UI surfaces this to the user.
+func NewVSCodeModelPickerState(cachePath string) VSCodeModelPickerState {
+	providers, err := opencode.LoadModels(cachePath)
+	if err != nil {
+		return VSCodeModelPickerState{
+			Mode:          ModePhaseList,
+			ConfigWarning: fmt.Sprintf("Could not load models cache %q: %v. Run `opencode sync` to populate it.", cachePath, err),
+		}
+	}
+	copilot, ok := providers["github-copilot"]
+	if !ok {
+		return VSCodeModelPickerState{
+			Mode:          ModePhaseList,
+			ConfigWarning: "github-copilot provider not found in OpenCode models cache. Run `opencode sync` to fetch the Copilot model catalog.",
+		}
+	}
+	return VSCodeModelPickerState{
+		Mode:   ModePhaseList,
+		Models: opencode.FilterModelsForSDD(copilot),
+	}
 }
 
 // VSCodeModelRows returns the row labels for the VS Code model picker phase list.
@@ -34,15 +71,13 @@ func VSCodeModelRows() []string {
 	return rows
 }
 
-// VSCodeStaticModelNames returns the display names of all VS Code Copilot models
-// in the canonical order from vscModelEntries.
-func VSCodeStaticModelNames() []string {
-	entries := vscodeagent.VSCodeStaticModels()
-	names := make([]string, len(entries))
-	for i, e := range entries {
-		names[i] = e.DisplayName
+// vscodeModelLabel returns the display label for a single opencode.Model entry.
+// Prefers Name; falls back to ID when Name is empty.
+func vscodeModelLabel(m opencode.Model) string {
+	if m.Name != "" {
+		return m.Name
 	}
-	return names
+	return m.ID
 }
 
 // RenderVSCodeModelPicker renders the VS Code model picker for profile create step 1.
@@ -82,6 +117,11 @@ func renderVSCodePhaseList(
 	b.WriteString(styles.SubtextStyle.Render("Assign Copilot models for profile: " + profileName))
 	b.WriteString("\n\n")
 
+	if state.ConfigWarning != "" {
+		b.WriteString(styles.WarningStyle.Render(state.ConfigWarning))
+		b.WriteString("\n\n")
+	}
+
 	rows := VSCodeModelRows()
 	phases := vscodeagent.SDDPhases()
 
@@ -90,14 +130,12 @@ func renderVSCodePhaseList(
 
 		var label string
 		if idx == 0 {
-			// "Set all phases" row
 			if state.AllPhasesModel != "" {
 				label = fmt.Sprintf("%-22s (%s)", row, state.AllPhasesModel)
 			} else {
 				label = fmt.Sprintf("%-22s (not set)", row)
 			}
 		} else {
-			// Phase row — idx 1 maps to phases[0]
 			phaseIdx := idx - 1
 			if phaseIdx < len(phases) {
 				phase := phases[phaseIdx]
@@ -131,11 +169,20 @@ func renderVSCodeModelSelect(state VSCodeModelPickerState) string {
 	b.WriteString(styles.TitleStyle.Render("Select Copilot model:"))
 	b.WriteString("\n\n")
 
-	models := VSCodeStaticModelNames()
+	if len(state.Models) == 0 {
+		if state.ConfigWarning != "" {
+			b.WriteString(styles.WarningStyle.Render(state.ConfigWarning))
+		} else {
+			b.WriteString(styles.SubtextStyle.Render("No Copilot models available."))
+		}
+		b.WriteString("\n\n")
+		b.WriteString(styles.HelpStyle.Render("esc: back"))
+		return b.String()
+	}
 
 	end := state.ModelScroll + maxVisibleItems
-	if end > len(models) {
-		end = len(models)
+	if end > len(state.Models) {
+		end = len(state.Models)
 	}
 
 	if state.ModelScroll > 0 {
@@ -144,7 +191,7 @@ func renderVSCodeModelSelect(state VSCodeModelPickerState) string {
 	}
 
 	for i := state.ModelScroll; i < end; i++ {
-		label := models[i]
+		label := vscodeModelLabel(state.Models[i])
 		focused := i == state.ModelCursor
 		if focused {
 			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+label) + "\n")
@@ -153,7 +200,7 @@ func renderVSCodeModelSelect(state VSCodeModelPickerState) string {
 		}
 	}
 
-	if end < len(models) {
+	if end < len(state.Models) {
 		b.WriteString(styles.SubtextStyle.Render("  ↓ more"))
 		b.WriteString("\n")
 	}
@@ -164,7 +211,7 @@ func renderVSCodeModelSelect(state VSCodeModelPickerState) string {
 	return b.String()
 }
 
-// HandleVSCodeModelPickerNav handles key navigation for the VS Code static model picker.
+// HandleVSCodeModelPickerNav handles key navigation for the VS Code model picker.
 // Returns true when handled (caller should skip default nav).
 func HandleVSCodeModelPickerNav(
 	key string,
@@ -179,8 +226,6 @@ func HandleVSCodeModelPickerNav(
 		return false, assignments
 	}
 
-	models := VSCodeStaticModelNames()
-	entries := vscodeagent.VSCodeStaticModels()
 	phases := vscodeagent.SDDPhases()
 
 	switch key {
@@ -193,7 +238,7 @@ func HandleVSCodeModelPickerNav(
 		}
 		return true, assignments
 	case "down", "j":
-		if state.ModelCursor < len(models)-1 {
+		if state.ModelCursor < len(state.Models)-1 {
 			state.ModelCursor++
 			if state.ModelCursor >= state.ModelScroll+maxVisibleItems {
 				state.ModelScroll = state.ModelCursor - maxVisibleItems + 1
@@ -201,17 +246,20 @@ func HandleVSCodeModelPickerNav(
 		}
 		return true, assignments
 	case "enter":
-		entry := entries[state.ModelCursor]
-		assignment := model.ModelAssignment{
-			ProviderID: "copilot",
-			ModelID:    entry.DisplayName,
+		if len(state.Models) == 0 {
+			return true, assignments
 		}
+		entry := state.Models[state.ModelCursor]
+		assignment := model.ModelAssignment{
+			ProviderID: "github-copilot",
+			ModelID:    entry.ID,
+		}
+		label := vscodeModelLabel(entry)
 		if state.SelectedPhaseIdx == 0 {
-			// "Set all phases"
 			for _, phase := range phases {
 				assignments[phase] = assignment
 			}
-			state.AllPhasesModel = entry.DisplayName
+			state.AllPhasesModel = label
 		} else {
 			phaseIdx := state.SelectedPhaseIdx - 1
 			if phaseIdx < len(phases) {
@@ -240,7 +288,7 @@ func VSCodeModelPickerOptionCount() int {
 
 // RenderVSCodeProfileCreate renders the multi-step profile create/edit screen for VS Code.
 // Step 0: name input (identical to OpenCode)
-// Step 1: VS Code model picker (static, no provider hierarchy)
+// Step 1: VS Code model picker (Copilot-only catalog from cache)
 // Step 2: confirm
 func RenderVSCodeProfileCreate(
 	step int,
@@ -255,7 +303,6 @@ func RenderVSCodeProfileCreate(
 ) string {
 	switch step {
 	case 0:
-		// Reuse the OpenCode name step renderer — it's adapter-agnostic.
 		return RenderProfileCreate(step, draft, nameInput, namePos, nameErr, editMode, nil, ModelPickerState{}, cursor)
 	case 1:
 		return RenderVSCodeModelPicker(assignments, picker, cursor, editMode, draft.Name)
@@ -311,10 +358,10 @@ func renderVSCodeProfileConfirmStep(draft model.Profile, cursor int, editMode bo
 func VSCodeProfileCreateOptionCount(step int) int {
 	switch step {
 	case 0:
-		return 0 // text input
+		return 0
 	case 1:
 		return VSCodeModelPickerOptionCount()
 	default:
-		return 2 // Create/Save + Cancel
+		return 2
 	}
 }
