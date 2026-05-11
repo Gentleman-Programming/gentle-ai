@@ -3040,6 +3040,7 @@ func TestInjectCopiesAllFilesFromSkillDirectory(t *testing.T) {
 }
 
 func TestInjectCopiesNestedSDDSkillReferences(t *testing.T) {
+	disablePluginInstall(t)
 	home := t.TempDir()
 
 	result, err := Inject(home, opencodeAdapter(), "")
