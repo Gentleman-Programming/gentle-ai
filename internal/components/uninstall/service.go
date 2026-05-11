@@ -115,19 +115,17 @@ var (
 		"jd-fix-agent",
 	}
 	// sddSkillPhaseIDs contains SDD skill phase IDs only (used for skill dir cleanup).
-	// JD agents are sub-agents, not skills — they are included in sddPhaseAgents
-	// for opencode.json agent-key cleanup but must NOT be treated as skill phase IDs.
-	sddSkillPhaseIDs = []string{
-		"sdd-init",
-		"sdd-explore",
-		"sdd-propose",
-		"sdd-spec",
-		"sdd-design",
-		"sdd-tasks",
-		"sdd-apply",
-		"sdd-verify",
-		"sdd-archive",
-		"sdd-onboard",
+	// Derived from sddPhaseAgents: excludes the orchestrator (not a skill) and any
+	// non-skill agents (e.g. jd-*). When new phases or agents are added to
+	// sddPhaseAgents, this list stays in sync automatically.
+	sddSkillPhaseIDs func() []string = func() []string {
+		skills := make([]string, 0, len(sddPhaseAgents))
+		for _, id := range sddPhaseAgents {
+			if strings.HasPrefix(id, "sdd-") && id != "sdd-orchestrator" {
+				skills = append(skills, id)
+			}
+		}
+		return skills
 	}
 )
 
@@ -1115,7 +1113,7 @@ func compareOperations(a, b operation) int {
 }
 
 func managedSDDSkillIDs() []string {
-	ids := append([]string(nil), sddSkillPhaseIDs...)
+	ids := append([]string(nil), sddSkillPhaseIDs()...)
 	return append(ids, "judgment-day")
 }
 
