@@ -1771,16 +1771,24 @@ func renderClaudeModelAssignmentsSection(assignments map[string]model.ClaudeMode
 	return b.String()
 }
 
+// jdAgentSet is a package-level set for O(1) JD agent membership checks,
+// consistent with the sddPhaseSet pattern in read_assignments.go.
+var jdAgentSet = buildJDAgentSet()
+
+func buildJDAgentSet() map[string]bool {
+	phases := opencode.JDPhases()
+	set := make(map[string]bool, len(phases))
+	for _, p := range phases {
+		set[p] = true
+	}
+	return set
+}
+
 // isJDAgent reports whether the agent name is a judgment-day workflow agent.
 // JD agents are excluded from root model fallback to preserve independent
 // model configuration for diversity of perspective between judges.
 func isJDAgent(name string) bool {
-	for _, jd := range opencode.JDPhases() {
-		if name == jd {
-			return true
-		}
-	}
-	return false
+	return jdAgentSet[name]
 }
 
 // injectModelAssignments injects "model" fields into sub-agent definitions

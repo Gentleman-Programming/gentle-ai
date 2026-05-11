@@ -1,5 +1,7 @@
 package model
 
+import "maps"
+
 // ClaudeModelAlias represents one of the three Claude model tiers used for
 // per-phase model assignments in the SDD orchestrator.
 //
@@ -101,7 +103,7 @@ func ClaudeModelPresetEconomy() map[string]ClaudeModelAlias {
 // architectural reasoning, Judge B uses haiku for fast pattern matching,
 // and the fix agent uses sonnet for balanced implementation.
 func ClaudeModelPresetDiversity() map[string]ClaudeModelAlias {
-	base := ClaudeModelPresetBalanced()
+	base := maps.Clone(ClaudeModelPresetBalanced())
 	base["jd-judge-a"] = ClaudeModelOpus
 	base["jd-judge-b"] = ClaudeModelHaiku
 	base["jd-fix-agent"] = ClaudeModelSonnet
