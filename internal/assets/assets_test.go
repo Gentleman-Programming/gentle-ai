@@ -458,6 +458,7 @@ func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 
 func TestVSCodeAgentsEmbedded(t *testing.T) {
 	expectedAgents := []string{
+		"vscode/agents/sdd-orchestrator.agent.md",
 		"vscode/agents/sdd-init.agent.md",
 		"vscode/agents/sdd-explore.agent.md",
 		"vscode/agents/sdd-propose.agent.md",
