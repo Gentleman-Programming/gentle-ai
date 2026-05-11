@@ -456,6 +456,46 @@ func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 	}
 }
 
+func TestVSCodeAgentsEmbedded(t *testing.T) {
+	expectedAgents := []string{
+		"vscode/agents/sdd-init.agent.md",
+		"vscode/agents/sdd-explore.agent.md",
+		"vscode/agents/sdd-propose.agent.md",
+		"vscode/agents/sdd-spec.agent.md",
+		"vscode/agents/sdd-design.agent.md",
+		"vscode/agents/sdd-tasks.agent.md",
+		"vscode/agents/sdd-apply.agent.md",
+		"vscode/agents/sdd-verify.agent.md",
+		"vscode/agents/sdd-archive.agent.md",
+		"vscode/agents/sdd-onboard.agent.md",
+	}
+
+	for _, path := range expectedAgents {
+		t.Run(path, func(t *testing.T) {
+			content, err := Read(path)
+			if err != nil {
+				t.Fatalf("Read(%q) error = %v", path, err)
+			}
+			if len(strings.TrimSpace(content)) == 0 {
+				t.Fatalf("Read(%q) returned empty content", path)
+			}
+			if len(content) < 50 {
+				t.Fatalf("Read(%q) content is suspiciously short (%d bytes) — possible stub", path, len(content))
+			}
+			// Must contain required YAML frontmatter fields
+			for _, field := range []string{"name:", "description:", "readonly:", "background:", "user-invocable:"} {
+				if !strings.Contains(content, field) {
+					t.Fatalf("Read(%q) missing required frontmatter field %q", path, field)
+				}
+			}
+			// Must contain {{VSC_MODEL}} placeholder for model resolution
+			if !strings.Contains(content, "{{VSC_MODEL}}") {
+				t.Fatalf("Read(%q) missing {{VSC_MODEL}} placeholder — model field must be dynamically resolved", path)
+			}
+		})
+	}
+}
+
 func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 	for _, assetPath := range []string{
 		"generic/sdd-orchestrator.md",

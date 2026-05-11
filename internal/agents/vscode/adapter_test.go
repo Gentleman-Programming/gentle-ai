@@ -63,6 +63,56 @@ func TestSettingsPathUsesVSCodeUserProfile(t *testing.T) {
 	}
 }
 
+func TestSupportsSubAgents_ReturnsTrue(t *testing.T) {
+	a := NewAdapter()
+	if !a.SupportsSubAgents() {
+		t.Fatal("SupportsSubAgents() = false, want true")
+	}
+}
+
+func TestSubAgentsDir_CrossPlatform(t *testing.T) {
+	a := NewAdapter()
+
+	tests := []struct {
+		name    string
+		homeDir string
+		want    string
+	}{
+		{
+			name:    "macOS",
+			homeDir: "/Users/alice",
+			want:    filepath.Join("/Users/alice", ".copilot", "agents"),
+		},
+		{
+			name:    "Linux with default home",
+			homeDir: "/home/bob",
+			want:    filepath.Join("/home/bob", ".copilot", "agents"),
+		},
+		{
+			name:    "Windows with home dir",
+			homeDir: `C:\Users\charlie`,
+			want:    filepath.Join(`C:\Users\charlie`, ".copilot", "agents"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := a.SubAgentsDir(tt.homeDir)
+			if got != tt.want {
+				t.Fatalf("SubAgentsDir(%q) = %q, want %q", tt.homeDir, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEmbeddedSubAgentsDir(t *testing.T) {
+	a := NewAdapter()
+	got := a.EmbeddedSubAgentsDir()
+	if got != "vscode/agents" {
+		t.Fatalf("EmbeddedSubAgentsDir() = %q, want %q", got, "vscode/agents")
+	}
+}
+
 func TestMCPConfigPathUsesVSCodeUserProfile(t *testing.T) {
 	a := NewAdapter()
 	home := "/tmp/home"

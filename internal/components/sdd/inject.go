@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 )
 
 type InjectionResult struct {
@@ -80,6 +81,16 @@ type kiroModelResolver interface {
 // shape consistent with kiroModelResolver.
 type claudeModelResolver interface {
 	ClaudeModelID(alias model.ClaudeModelAlias) string
+}
+
+// vscModelResolver is an optional adapter capability. When implemented,
+// the subagent copy loop stamps the resolved model display name into the agent
+// frontmatter sentinel {{VSC_MODEL}}. VS Code Copilot expects display names
+// like "Claude Sonnet 4 (copilot)", not raw provider/model pairs.
+// When the resolver returns empty string, the entire "model:" line is removed
+// (Copilot falls back to its default model).
+type vscModelResolver interface {
+	VSCModelID(m model.ModelAssignment) string
 }
 
 // monorepoRootMarkers identify files/dirs that ONLY exist at the true root
@@ -428,6 +439,25 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 	}
 
+	// 2c. VS Code Copilot named SDD profiles → .agent.md files.
+	// The default (unsuffixed) set is handled by section 3c which copies the
+	// embedded templates directly. Named profiles are generated here using
+	// GenerateVSCodeProfileFiles which resolves model assignments dynamically.
+	if adapter.Agent() == model.AgentVSCodeCopilot && sddMode == model.SDDModeMulti && len(opts.Profiles) > 0 {
+		agentsDir := adapter.SubAgentsDir(homeDir)
+		for _, profile := range opts.Profiles {
+			if profile.Name == "" || profile.Name == "default" {
+				continue // default profile handled by 3c
+			}
+			profileFiles, profileErr := vscode.GenerateVSCodeProfileFiles(profile, agentsDir)
+			if profileErr != nil {
+				return InjectionResult{}, fmt.Errorf("generate VS Code profile %q: %w", profile.Name, profileErr)
+			}
+			changed = changed || len(profileFiles) > 0
+			files = append(files, profileFiles...)
+		}
+	}
+
 	// 3. Write SDD skill files (if the agent supports skills).
 	if adapter.SupportsSkills() {
 		skillDir := adapter.SkillsDir(homeDir)
@@ -600,6 +630,34 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				alias := resolveClaudeModelAlias(opts.ClaudeModelAssignments, phase)
 				contentStr = strings.ReplaceAll(contentStr, "{{CLAUDE_MODEL}}", cmr.ClaudeModelID(alias))
 			}
+
+			// Resolve {{VSC_MODEL}} placeholder for VS Code Copilot adapters.
+			// When VSCModelID returns empty string (no model assignment), remove
+			// the entire "model: {{VSC_MODEL}}" line so Copilot uses its default.
+			if vmr, ok := adapter.(vscModelResolver); ok {
+				// Trim the .agent.md or .md extension to get the phase name
+				phase := strings.TrimSuffix(entry.Name(), ".agent.md")
+				phase = strings.TrimSuffix(phase, ".md")
+				assignment := model.ModelAssignment{}
+				if opts.OpenCodeModelAssignments != nil {
+					if a, has := opts.OpenCodeModelAssignments[phase]; has {
+						assignment = a
+					} else if d, hasDefault := opts.OpenCodeModelAssignments["default"]; hasDefault {
+						assignment = d
+					}
+				}
+				resolved := vmr.VSCModelID(assignment)
+				if resolved == "" {
+					// Remove the model line entirely — Copilot falls back to default
+					contentStr = strings.ReplaceAll(contentStr, "model: {{VSC_MODEL}}\n", "")
+				} else {
+					contentStr = strings.ReplaceAll(contentStr, "{{VSC_MODEL}}", resolved)
+				}
+			} else if strings.Contains(contentStr, "{{VSC_MODEL}}") {
+				// Adapter doesn't resolve VSC_MODEL but template contains it;
+				// remove the model line so Copilot uses its default.
+				contentStr = strings.ReplaceAll(contentStr, "model: {{VSC_MODEL}}\n", "")
+			}
 			outPath := filepath.Join(agentsDir, entry.Name())
 			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
 			if err != nil {
@@ -611,10 +669,10 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 		}
 
-		// Post-check: verify critical agent files exist (either .md or .yaml)
+		// Post-check: verify critical agent files exist (supports .md, .yaml, and .agent.md extensions)
 		for _, phase := range []string{"sdd-apply", "sdd-verify"} {
 			found := false
-			for _, ext := range []string{".md", ".yaml"} {
+			for _, ext := range []string{".md", ".yaml", ".agent.md"} {
 				checkPath := filepath.Join(agentsDir, phase+ext)
 				if info, err := os.Stat(checkPath); err == nil && info.Size() >= 10 {
 					found = true
