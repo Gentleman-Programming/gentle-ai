@@ -84,10 +84,23 @@ var sddPhaseDescriptions = map[string]string{
 	"sdd-onboard":   "Guided end-to-end SDD walkthrough",
 }
 
-// GenerateAgentFile produces .agent.md content with YAML frontmatter and markdown body
-// for a VS Code Copilot sub-agent. The profile name is used to suffix the agent name
-// for named profiles (e.g., "sdd-apply-cheap"), and omitted for the default profile.
+// OrchestratorPhase is the name of the orchestrator agent that coordinates
+// dispatch to the 10 SDD phase executors. It must be in sync with the
+// embedded template at internal/assets/vscode/agents/sdd-orchestrator.agent.md
+// and with the OpenCode SDDOrchestratorPhase constant.
+const OrchestratorPhase = "sdd-orchestrator"
+
+// GenerateAgentFile produces .agent.md content with YAML frontmatter and markdown
+// body for a VS Code Copilot agent. The profile name is used to suffix the agent
+// name for named profiles (e.g., "sdd-apply-cheap"), and omitted for the default
+// profile. When phase == OrchestratorPhase, the orchestrator template is used
+// (with `tools: ['agent']`, an `agents:` whitelist, and `user-invocable: true`).
+// All other phases produce phase executor agents with `user-invocable: false`.
 func GenerateAgentFile(phase string, profile model.Profile) string {
+	if phase == OrchestratorPhase {
+		return generateOrchestratorAgent(profile)
+	}
+
 	agentName := phase
 	if profile.Name != "" && profile.Name != "default" {
 		agentName = phase + "-" + profile.Name
@@ -98,33 +111,95 @@ func GenerateAgentFile(phase string, profile model.Profile) string {
 		description = "SDD " + phase + " executor"
 	}
 
-	// Build YAML frontmatter
 	var sb strings.Builder
 	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("name: %s\n", agentName))
-	sb.WriteString(fmt.Sprintf("description: >\n  %s\n", description))
+	fmt.Fprintf(&sb, "name: %s\n", agentName)
+	fmt.Fprintf(&sb, "description: >\n  %s\n", description)
 
-	// Model resolution: if the phase has a model assignment, resolve it
 	if assignment, ok := profile.PhaseAssignments[phase]; ok {
-		modelID := VSCodeModelID(assignment)
-		if modelID != "" {
-			sb.WriteString(fmt.Sprintf("model: \"%s\"\n", modelID))
+		if modelID := VSCodeModelID(assignment); modelID != "" {
+			fmt.Fprintf(&sb, "model: \"%s\"\n", modelID)
 		}
 	}
-	// If no assignment, the model field is omitted — Copilot uses its default
 
 	sb.WriteString("readonly: false\n")
 	sb.WriteString("background: false\n")
-	// Phase executors are NOT user-invocable — they are dispatched by the orchestrator
 	sb.WriteString("user-invocable: false\n")
 	sb.WriteString("---\n\n")
 
-	// Markdown body — SDD phase executor instructions
-	sb.WriteString(fmt.Sprintf("You are the SDD **%s** executor. Do this phase's work yourself. Do NOT delegate further.\n", phase))
+	fmt.Fprintf(&sb, "You are the SDD **%s** executor. Do this phase's work yourself. Do NOT delegate further.\n", phase)
 	sb.WriteString("You are not the orchestrator. Do NOT call task/delegate. Do NOT launch sub-agents.\n\n")
 	sb.WriteString("## Instructions\n\n")
-	sb.WriteString(fmt.Sprintf("Read the skill file at `~/.copilot/skills/sdd-%s/SKILL.md` and follow it exactly.\n", phaseWithoutPrefix(phase)))
+	fmt.Fprintf(&sb, "Read the skill file at `~/.copilot/skills/sdd-%s/SKILL.md` and follow it exactly.\n", phaseWithoutPrefix(phase))
 	sb.WriteString("Also read shared conventions at `~/.copilot/skills/_shared/sdd-phase-common.md`.\n")
+
+	return sb.String()
+}
+
+// generateOrchestratorAgent renders the SDD orchestrator agent for a profile.
+// The orchestrator has tools: ['agent'] and an `agents:` whitelist so VS Code
+// Copilot's main chat agent can dispatch through it deterministically rather
+// than inferring the SDD sequence from sub-agent descriptions alone.
+func generateOrchestratorAgent(profile model.Profile) string {
+	suffix := ""
+	if profile.Name != "" && profile.Name != "default" {
+		suffix = "-" + profile.Name
+	}
+
+	var sb strings.Builder
+	sb.WriteString("---\n")
+	fmt.Fprintf(&sb, "name: %s%s\n", OrchestratorPhase, suffix)
+	sb.WriteString("description: >\n  SDD workflow orchestrator — coordinates the 10 SDD phase executors in a strict, deterministic sequence.\n")
+
+	if profile.OrchestratorModel.ModelID != "" {
+		if modelID := VSCodeModelID(profile.OrchestratorModel); modelID != "" {
+			fmt.Fprintf(&sb, "model: \"%s\"\n", modelID)
+		}
+	}
+
+	sb.WriteString("tools: ['agent']\n")
+	sb.WriteString("agents:\n")
+	for _, phase := range sddPhases {
+		fmt.Fprintf(&sb, "  - %s%s\n", phase, suffix)
+	}
+	sb.WriteString("readonly: false\n")
+	sb.WriteString("background: false\n")
+	sb.WriteString("user-invocable: true\n")
+	sb.WriteString("---\n\n")
+
+	sb.WriteString("You are the SDD workflow orchestrator for the Gentleman AI ecosystem in VS Code Copilot.\n\n")
+	sb.WriteString("Your job is to coordinate the SDD phase executors in a strict, deterministic sequence. ")
+	sb.WriteString("You do NOT perform phase work yourself — you delegate to the matching `sdd-*` sub-agent and synthesize their results back to the user.\n\n")
+
+	sb.WriteString("## SDD phase sequence — substantial changes\n\n")
+	sb.WriteString("For any non-trivial change, drive the user through this exact sequence. Do NOT skip phases.\n\n")
+	steps := []struct {
+		num   int
+		phase string
+		desc  string
+	}{
+		{1, "sdd-explore", "Survey the codebase, gather context, compare approaches. No files written yet."},
+		{2, "sdd-propose", "Draft a change proposal with intent, scope, and approach."},
+		{3, "sdd-spec", "Write requirements and acceptance scenarios derived from the proposal."},
+		{4, "sdd-design", "Document the technical design and file-change plan."},
+		{5, "sdd-tasks", "Break the change into an ordered task checklist."},
+		{6, "sdd-apply", "Implement the tasks. When Strict TDD is enabled, the executor follows Red-Green-Refactor."},
+		{7, "sdd-verify", "Validate the implementation against spec/design/tasks. Reports CRITICAL / WARNING / SUGGESTION findings."},
+		{8, "sdd-archive", "Sync delta specs into the main spec set and close the change."},
+	}
+	for _, s := range steps {
+		fmt.Fprintf(&sb, "%d. Delegate to `%s%s` — %s\n", s.num, s.phase, suffix, s.desc)
+	}
+	sb.WriteString("\n## SDD utility flows\n\n")
+	fmt.Fprintf(&sb, "- Delegate to `sdd-init%s` when the project has not yet been initialized for SDD.\n", suffix)
+	fmt.Fprintf(&sb, "- Delegate to `sdd-onboard%s` when the user asks for a guided end-to-end SDD walkthrough.\n\n", suffix)
+
+	sb.WriteString("## Dispatch rules\n\n")
+	sb.WriteString("1. One phase at a time. Wait for the sub-agent to finish and return before dispatching the next phase.\n")
+	sb.WriteString("2. No skipping. If the user asks to jump phases, push back and explain why each phase is non-negotiable for a substantial change.\n")
+	sb.WriteString("3. Synthesize between phases. Give the user a one-line summary of what each phase produced before continuing.\n")
+	sb.WriteString("4. Stop on risk. If a phase returns CRITICAL findings or blockers, stop the chain and ask the user how to proceed.\n")
+	sb.WriteString("5. Pass forward, not back. Each phase reads prior artifacts via the persistence backend (Engram or OpenSpec). Pass topic keys / file paths, not artifact content.\n")
 
 	return sb.String()
 }
@@ -141,10 +216,11 @@ func SDDPhases() []string {
 	return result
 }
 
-// GenerateVSCodeProfileFiles writes 10 .agent.md files (one per SDD phase)
-// for a named VS Code profile to the agents directory. Returns a list of written
-// file paths. Default profile (name="" or name="default") is handled by the
-// existing 3c block in inject.go and should NOT go through this function.
+// GenerateVSCodeProfileFiles writes 11 .agent.md files (the orchestrator plus
+// the 10 SDD phase executors) for a named VS Code profile to the agents
+// directory. Returns the list of file paths that actually changed on disk.
+// Default profile (name="" or name="default") is handled by the existing 3c
+// block in inject.go and must NOT go through this function.
 func GenerateVSCodeProfileFiles(profile model.Profile, agentsDir string) ([]string, error) {
 	if profile.Name == "" || profile.Name == "default" {
 		return nil, fmt.Errorf("GenerateVSCodeProfileFiles: default profile is handled by the generic sub-agent path, not profile generation")
@@ -156,7 +232,9 @@ func GenerateVSCodeProfileFiles(profile model.Profile, agentsDir string) ([]stri
 
 	var files []string
 
-	for _, phase := range sddPhases {
+	// Render orchestrator first so it appears at the top of any directory listing.
+	allPhases := append([]string{OrchestratorPhase}, sddPhases...)
+	for _, phase := range allPhases {
 		content := GenerateAgentFile(phase, profile)
 		fileName := phase + "-" + profile.Name + ".agent.md"
 		outPath := filepath.Join(agentsDir, fileName)

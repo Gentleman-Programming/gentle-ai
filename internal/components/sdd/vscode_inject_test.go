@@ -190,8 +190,8 @@ func TestInject_VSCode_DefaultProfile_IsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshotAgentFiles after first inject error = %v", err)
 	}
-	if len(firstFiles) != 10 {
-		t.Fatalf("expected 10 default .agent.md files, got %d", len(firstFiles))
+	if len(firstFiles) != 11 {
+		t.Fatalf("expected 11 default .agent.md files (orchestrator + 10 phases), got %d", len(firstFiles))
 	}
 
 	second, err := Inject(home, vscodeAdapter, model.SDDModeMulti)
@@ -242,9 +242,9 @@ func TestInject_VSCode_NamedProfile_IsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshotAgentFiles after first inject error = %v", err)
 	}
-	// Expect 20: 10 default unsuffixed + 10 "*-cheap.agent.md"
-	if len(firstFiles) != 20 {
-		t.Fatalf("expected 20 files (10 default + 10 cheap), got %d", len(firstFiles))
+	// Expect 22: 11 default unsuffixed (orchestrator + 10 phases) + 11 "*-cheap.agent.md"
+	if len(firstFiles) != 22 {
+		t.Fatalf("expected 22 files (11 default + 11 cheap, each including orchestrator), got %d", len(firstFiles))
 	}
 
 	second, err := Inject(home, vscodeAdapter, model.SDDModeMulti, opts)

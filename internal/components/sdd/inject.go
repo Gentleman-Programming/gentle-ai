@@ -658,6 +658,11 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				// remove the model line so Copilot uses its default.
 				contentStr = strings.ReplaceAll(contentStr, "model: {{VSC_MODEL}}\n", "")
 			}
+
+			// Resolve {{VSC_PROFILE_SUFFIX}} placeholder. The default (unsuffixed)
+			// set always resolves to empty — named-profile suffixes are written
+			// by step 2c via GenerateVSCodeProfileFiles, not by step 3c.
+			contentStr = strings.ReplaceAll(contentStr, "{{VSC_PROFILE_SUFFIX}}", "")
 			outPath := filepath.Join(agentsDir, entry.Name())
 			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
 			if err != nil {
@@ -669,8 +674,21 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 		}
 
-		// Post-check: verify critical agent files exist (supports .md, .yaml, and .agent.md extensions)
-		for _, phase := range []string{"sdd-apply", "sdd-verify"} {
+		// Post-check: verify critical agent files exist (supports .md, .yaml, and .agent.md extensions).
+		// sdd-apply and sdd-verify are always critical — they are the executors
+		// whose absence would mask the most damage during a sync. sdd-orchestrator
+		// is critical only for adapters that ship it as a template (VS Code
+		// Copilot does; Claude Code does not — Claude uses CLAUDE.md as the root
+		// orchestrator prompt instead of a separate agent file).
+		criticalPhases := []string{"sdd-apply", "sdd-verify"}
+		for _, e := range entries {
+			name := e.Name()
+			if name == "sdd-orchestrator.agent.md" || name == "sdd-orchestrator.md" || name == "sdd-orchestrator.yaml" {
+				criticalPhases = append([]string{"sdd-orchestrator"}, criticalPhases...)
+				break
+			}
+		}
+		for _, phase := range criticalPhases {
 			found := false
 			for _, ext := range []string{".md", ".yaml", ".agent.md"} {
 				checkPath := filepath.Join(agentsDir, phase+ext)
