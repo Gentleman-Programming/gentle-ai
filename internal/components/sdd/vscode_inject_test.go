@@ -5,10 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
 func TestInject_VSCodeSubAgents(t *testing.T) {
@@ -160,5 +161,152 @@ func TestPostInjectionValidation_VSCode_MissingFileDetected(t *testing.T) {
 	_, err = Inject(home, vscodeAdapter, model.SDDModeMulti)
 	if err != nil {
 		t.Fatalf("Re-inject after removing verify file error = %v", err)
+	}
+}
+
+// TestInject_VSCode_DefaultProfile_IsIdempotent verifies that running Inject
+// twice in a row with identical inputs does NOT duplicate or rewrite files.
+// The second run must report Changed=false and leave file mtimes untouched —
+// proving that filemerge.WriteFileAtomic's content-equality short-circuit
+// holds across the full VS Code default-profile path.
+func TestInject_VSCode_DefaultProfile_IsIdempotent(t *testing.T) {
+	vscodeAdapter, err := agents.NewAdapter("vscode-copilot")
+	if err != nil {
+		t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+	}
+
+	home := t.TempDir()
+
+	first, err := Inject(home, vscodeAdapter, model.SDDModeMulti)
+	if err != nil {
+		t.Fatalf("first Inject() error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("first Inject() should report Changed = true")
+	}
+
+	agentsDir := vscodeAdapter.SubAgentsDir(home)
+	firstFiles, err := snapshotAgentFiles(agentsDir)
+	if err != nil {
+		t.Fatalf("snapshotAgentFiles after first inject error = %v", err)
+	}
+	if len(firstFiles) != 10 {
+		t.Fatalf("expected 10 default .agent.md files, got %d", len(firstFiles))
+	}
+
+	second, err := Inject(home, vscodeAdapter, model.SDDModeMulti)
+	if err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+	if second.Changed {
+		t.Errorf("second Inject() with identical inputs reported Changed=true; want false (not idempotent)")
+	}
+
+	assertNoFileChurn(t, agentsDir, firstFiles)
+}
+
+// TestInject_VSCode_NamedProfile_IsIdempotent verifies idempotency for the
+// step-2c named profile path. Running Inject twice with the same Profile
+// must leave the 10 default agents AND the 10 suffixed profile agents
+// unchanged on disk.
+func TestInject_VSCode_NamedProfile_IsIdempotent(t *testing.T) {
+	vscodeAdapter, err := agents.NewAdapter("vscode-copilot")
+	if err != nil {
+		t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+	}
+
+	home := t.TempDir()
+
+	opts := InjectOptions{
+		Profiles: []model.Profile{
+			{
+				Name: "cheap",
+				PhaseAssignments: map[string]model.ModelAssignment{
+					"sdd-apply":  {ProviderID: "anthropic", ModelID: "claude-haiku-4-5"},
+					"sdd-verify": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+				},
+			},
+		},
+	}
+
+	first, err := Inject(home, vscodeAdapter, model.SDDModeMulti, opts)
+	if err != nil {
+		t.Fatalf("first Inject() error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("first Inject() with named profile should report Changed = true")
+	}
+
+	agentsDir := vscodeAdapter.SubAgentsDir(home)
+	firstFiles, err := snapshotAgentFiles(agentsDir)
+	if err != nil {
+		t.Fatalf("snapshotAgentFiles after first inject error = %v", err)
+	}
+	// Expect 20: 10 default unsuffixed + 10 "*-cheap.agent.md"
+	if len(firstFiles) != 20 {
+		t.Fatalf("expected 20 files (10 default + 10 cheap), got %d", len(firstFiles))
+	}
+
+	second, err := Inject(home, vscodeAdapter, model.SDDModeMulti, opts)
+	if err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+	if second.Changed {
+		t.Errorf("second Inject() with identical profile reported Changed=true; want false (named-profile path not idempotent)")
+	}
+
+	assertNoFileChurn(t, agentsDir, firstFiles)
+}
+
+// snapshotAgentFiles returns a map of file name → mod time for all entries
+// in agentsDir. Used to detect spurious rewrites between Inject calls.
+func snapshotAgentFiles(agentsDir string) (map[string]time.Time, error) {
+	entries, err := os.ReadDir(agentsDir)
+	if err != nil {
+		return nil, err
+	}
+	snap := make(map[string]time.Time, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		snap[entry.Name()] = info.ModTime()
+	}
+	return snap, nil
+}
+
+// assertNoFileChurn checks that agentsDir matches prior exactly: same file
+// set, same modification times. Any divergence indicates a non-idempotent
+// rewrite.
+func assertNoFileChurn(t *testing.T, agentsDir string, prior map[string]time.Time) {
+	t.Helper()
+	entries, err := os.ReadDir(agentsDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", agentsDir, err)
+	}
+	if len(entries) != len(prior) {
+		t.Errorf("file count diverged: prior=%d, current=%d", len(prior), len(entries))
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			t.Fatalf("Info(%q) error = %v", entry.Name(), err)
+		}
+		priorMod, existed := prior[entry.Name()]
+		if !existed {
+			t.Errorf("new file %q appeared after re-inject — not idempotent", entry.Name())
+			continue
+		}
+		if !info.ModTime().Equal(priorMod) {
+			t.Errorf("file %q mtime changed: prior=%v, current=%v — atomic writer rewrote unchanged content",
+				entry.Name(), priorMod, info.ModTime())
+		}
 	}
 }
