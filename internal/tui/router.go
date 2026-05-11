@@ -14,6 +14,7 @@ var linearRoutes = map[Screen]Route{
 	ScreenClaudeModelPicker:      {Forward: ScreenDependencyTree, Backward: ScreenPreset},
 	ScreenKiroModelPicker:        {Forward: ScreenDependencyTree, Backward: ScreenPreset},
 	ScreenSDDMode:                {Forward: ScreenStrictTDD, Backward: ScreenPreset},
+	ScreenSDDDuplicateAgentsWarning: {Forward: ScreenStrictTDD, Backward: ScreenSDDMode},
 	ScreenStrictTDD:              {Forward: ScreenDependencyTree, Backward: ScreenSDDMode},
 	ScreenOpenCodePluginResult:   {Backward: ScreenWelcome},
 	ScreenModelPicker:            {Forward: ScreenStrictTDD, Backward: ScreenSDDMode},

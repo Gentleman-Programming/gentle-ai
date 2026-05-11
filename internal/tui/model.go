@@ -207,6 +207,7 @@ const (
 	ScreenClaudeModelPicker
 	ScreenKiroModelPicker
 	ScreenSDDMode
+	ScreenSDDDuplicateAgentsWarning
 	ScreenStrictTDD
 	ScreenOpenCodePlugins
 	ScreenOpenCodePluginResult
@@ -782,6 +783,8 @@ func (m Model) View() string {
 		return screens.RenderKiroModelPicker(m.KiroModelPicker, m.Cursor)
 	case ScreenSDDMode:
 		return screens.RenderSDDMode(m.Selection.SDDMode, m.Cursor)
+	case ScreenSDDDuplicateAgentsWarning:
+		return screens.RenderSDDDuplicateAgentsWarning(m.Cursor)
 	case ScreenStrictTDD:
 		return screens.RenderStrictTDD(m.Selection.StrictTDD, m.Cursor)
 	case ScreenOpenCodePlugins:
@@ -1603,46 +1606,14 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		options := screens.SDDModeOptions()
 		if m.Cursor < len(options) {
 			m.Selection.SDDMode = options[m.Cursor]
-			if m.Selection.SDDMode == model.SDDModeMulti {
-				cachePath := opencode.DefaultCachePath()
-				if _, err := osStatModelCache(cachePath); err == nil {
-					// Cache exists — OpenCode has been run at least once.
-					// Show the model picker so the user can assign models.
-					m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
-					m.Selection.ModelAssignments = nil
-					m.setScreen(ScreenModelPicker)
-					return m, nil
-				}
-				// Cache missing — OpenCode hasn't been run yet on this machine.
-				// Skip the model picker; models will use OpenCode defaults.
-				// The picker empty-state message explains what to do after install.
-				m.ModelPicker = screens.ModelPickerState{}
-			}
-			// Clear assignments for both single mode and multi-no-cache paths.
-			m.Selection.ModelAssignments = nil
-			// Show StrictTDD screen when OpenCode + SDD are selected.
-			// This is the next step before the dependency tree.
-			if m.shouldShowSDDModeScreen() {
-				m.setScreen(ScreenStrictTDD)
+			// Surface duplicate-agent warning when SDD multi-mode is paired with
+			// adapter combinations that VS Code Copilot will surface as duplicate
+			// entries (e.g. VS Code Copilot + Claude Code).
+			if m.Selection.SDDMode == model.SDDModeMulti && m.shouldWarnAboutDuplicateAgents() {
+				m.setScreen(ScreenSDDDuplicateAgentsWarning)
 				return m, nil
 			}
-			if m.Selection.Preset == model.PresetCustom {
-				// Custom preset: dependency plan was already built before SDD mode.
-				// Check skill picker before going to review.
-				if m.shouldShowSkillPickerScreen() {
-					if len(m.SkillPicker) == 0 {
-						m.initSkillPicker()
-					}
-					m.setScreen(ScreenSkillPicker)
-				} else {
-					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-					m.setScreen(ScreenReview)
-				}
-			} else {
-				m.buildDependencyPlan()
-				m.setScreen(ScreenDependencyTree)
-			}
-			return m, nil
+			return m.advanceFromSDDModeSelection()
 		}
 		// Back — in custom preset, return to ClaudeModelPicker if applicable,
 		// otherwise DependencyTree (component selector).
@@ -1661,6 +1632,18 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenPreset)
 			}
 		}
+	case ScreenSDDDuplicateAgentsWarning:
+		options := screens.SDDDuplicateAgentsWarningOptions()
+		if m.Cursor < len(options) {
+			if m.Cursor == 0 {
+				// "Continue anyway" — resume the normal post-SDDMode flow.
+				return m.advanceFromSDDModeSelection()
+			}
+			// "Back to adapter selection" — return to SDDMode so the user
+			// can reconsider their adapter set.
+			m.setScreen(ScreenSDDMode)
+		}
+		return m, nil
 	case ScreenModelPicker:
 		// When no providers are detected the screen only shows a "Back" option
 		// at cursor 0.  Handle that before the normal row logic.
@@ -2757,6 +2740,8 @@ func (m Model) optionCount() int {
 		return screens.KiroModelPickerOptionCount(m.KiroModelPicker)
 	case ScreenSDDMode:
 		return len(screens.SDDModeOptions()) + 1
+	case ScreenSDDDuplicateAgentsWarning:
+		return len(screens.SDDDuplicateAgentsWarningOptions())
 	case ScreenStrictTDD:
 		return len(screens.StrictTDDOptions()) + 1 // Enable + Disable + Back
 	case ScreenOpenCodePlugins:
@@ -3270,6 +3255,64 @@ func (m Model) activeProfiles() ([]model.Profile, string) {
 func (m Model) shouldShowSDDModeScreen() bool {
 	return m.Selection.HasAgent(model.AgentOpenCode) &&
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
+}
+
+// shouldWarnAboutDuplicateAgents reports whether the active selection will
+// surface visually duplicated sub-agent entries in VS Code Copilot's Agent
+// customizations panel. VS Code Copilot scans `.agent.md` (its native
+// format) and Claude-format `.md` agents in parallel, so when both
+// VS Code Copilot and a Claude-format adapter ship SDD sub-agents the user
+// sees each phase twice.
+//
+// Today only Claude Code writes the conflicting `.md` format from the
+// gentle-ai installer. Extend this list when other adapters start shipping
+// Claude-format agent files.
+func (m Model) shouldWarnAboutDuplicateAgents() bool {
+	if !hasSelectedComponent(m.Selection.Components, model.ComponentSDD) {
+		return false
+	}
+	if !m.Selection.HasAgent(model.AgentVSCodeCopilot) {
+		return false
+	}
+	return m.Selection.HasAgent(model.AgentClaudeCode)
+}
+
+// advanceFromSDDModeSelection executes the navigation that follows after
+// the user has chosen an SDDMode value. It is called directly from the
+// ScreenSDDMode handler when no warning is required, and from the
+// ScreenSDDDuplicateAgentsWarning handler when the user opts to continue
+// past the warning.
+func (m Model) advanceFromSDDModeSelection() (tea.Model, tea.Cmd) {
+	if m.Selection.SDDMode == model.SDDModeMulti {
+		cachePath := opencode.DefaultCachePath()
+		if _, err := osStatModelCache(cachePath); err == nil {
+			m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
+			m.Selection.ModelAssignments = nil
+			m.setScreen(ScreenModelPicker)
+			return m, nil
+		}
+		m.ModelPicker = screens.ModelPickerState{}
+	}
+	m.Selection.ModelAssignments = nil
+	if m.shouldShowSDDModeScreen() {
+		m.setScreen(ScreenStrictTDD)
+		return m, nil
+	}
+	if m.Selection.Preset == model.PresetCustom {
+		if m.shouldShowSkillPickerScreen() {
+			if len(m.SkillPicker) == 0 {
+				m.initSkillPicker()
+			}
+			m.setScreen(ScreenSkillPicker)
+		} else {
+			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+			m.setScreen(ScreenReview)
+		}
+	} else {
+		m.buildDependencyPlan()
+		m.setScreen(ScreenDependencyTree)
+	}
+	return m, nil
 }
 
 // shouldShowStrictTDDScreen reports whether the Strict TDD Mode screen should
