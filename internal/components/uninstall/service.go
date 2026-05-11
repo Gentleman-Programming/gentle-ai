@@ -98,7 +98,7 @@ var (
 		model.ComponentClaudeTheme,
 		model.ComponentOpenCodeGentleLogo,
 	}
-	sddPhaseAgents = []string{
+	configuredAgents = []string{
 		"sdd-orchestrator",
 		"sdd-init",
 		"sdd-explore",
@@ -115,12 +115,12 @@ var (
 		"jd-fix-agent",
 	}
 	// sddSkillPhaseIDs contains SDD skill phase IDs only (used for skill dir cleanup).
-	// Derived from sddPhaseAgents: excludes the orchestrator (not a skill) and any
+	// Derived from configuredAgents: excludes the orchestrator (not a skill) and any
 	// non-skill agents (e.g. jd-*). When new phases or agents are added to
-	// sddPhaseAgents, this list stays in sync automatically.
+	// configuredAgents, this list stays in sync automatically.
 	sddSkillPhaseIDs func() []string = func() []string {
-		skills := make([]string, 0, len(sddPhaseAgents))
-		for _, id := range sddPhaseAgents {
+		skills := make([]string, 0, len(configuredAgents))
+		for _, id := range configuredAgents {
 			if strings.HasPrefix(id, "sdd-") && id != "sdd-orchestrator" {
 				skills = append(skills, id)
 			}
@@ -565,8 +565,8 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		}
 		if path := adapter.SettingsPath(homeDir); path != "" && adapter.Agent() == model.AgentOpenCode {
 			targets = append(targets, path)
-			paths := make([]jsonPath, 0, len(sddPhaseAgents))
-			for _, agentKey := range sddPhaseAgents {
+			paths := make([]jsonPath, 0, len(configuredAgents))
+			for _, agentKey := range configuredAgents {
 				paths = append(paths, jsonPath{"agent", agentKey})
 			}
 
