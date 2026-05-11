@@ -2083,6 +2083,70 @@ func TestInjectOpenCodeMultiModeUsesRootModelForUnassignedAgents(t *testing.T) {
 	}
 }
 
+// TestInjectOpenCodeMultiModeJDAgentsExcludedFromRootModel verifies that JD
+// agents are NOT injected with the root model when no explicit assignment
+// exists, even though SDD agents do receive root model propagation.
+// This preserves model diversity — JD agents inherit the runtime default
+// instead of being coupled to the root model.
+func TestInjectOpenCodeMultiModeJDAgentsExcludedFromRootModel(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"model":"openai/gpt-5"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), "multi"); err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+
+	// JD agents must NOT have a "model" field when only root model is set.
+	// They should be excluded from root model propagation to preserve diversity.
+	for _, jd := range []string{"jd-judge-a", "jd-judge-b", "jd-fix-agent"} {
+		agentDef, ok := agentMap[jd].(map[string]any)
+		if !ok {
+			t.Fatalf("JD agent %q not found or wrong type", jd)
+		}
+		if _, hasModel := agentDef["model"]; hasModel {
+			t.Fatalf("%s must NOT have model field (JD agents excluded from root model propagation for diversity), got model=%v", jd, agentDef["model"])
+		}
+	}
+
+	// Sanity: SDD agents should still get the root model (not excluded).
+	for _, phase := range []string{"sdd-init", "sdd-verify"} {
+		agentDef, ok := agentMap[phase].(map[string]any)
+		if !ok {
+			t.Fatalf("phase %q agent not found or wrong type", phase)
+		}
+		m, hasModel := agentDef["model"]
+		if !hasModel {
+			t.Fatalf("%s should have model field (root model should propagate)", phase)
+		}
+		if m != "openai/gpt-5" {
+			t.Fatalf("%s model = %q, want %q", phase, m, "openai/gpt-5")
+		}
+	}
+}
+
 func TestInjectOpenCodeMultiModeExplicitAssignmentsDoNotSpread(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
