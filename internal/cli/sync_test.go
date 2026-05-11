@@ -12,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
+	"github.com/gentleman-programming/gentle-ai/internal/verify"
 )
 
 // ─── Phase 1: ParseSyncFlags ───────────────────────────────────────────────
@@ -2332,5 +2333,60 @@ func TestRunSyncFallsBackToGentlemanWhenStateLacksPersona(t *testing.T) {
 	}
 	if got, want := res.Selection.Persona, model.PersonaGentleman; got != want {
 		t.Errorf("Selection.Persona = %q, want %q (fallback for pre-feature state)", got, want)
+	}
+}
+
+// ─── Changed file path reporting ────────────────────────────────────────────
+
+// TestRenderSyncReportIncludesChangedFilePaths verifies that RenderSyncReport
+// lists individual file paths when ChangedFiles is populated.
+func TestRenderSyncReportIncludesChangedFilePaths(t *testing.T) {
+	result := SyncResult{
+		NoOp:         false,
+		Agents:       []model.AgentID{model.AgentOpenCode},
+		FilesChanged: 3,
+		ChangedFiles: []string{
+			"~/.config/opencode/AGENTS.md",
+			"~/.config/opencode/skills/sdd-apply/SKILL.md",
+			"~/.config/opencode/sdd-overlay-single.json",
+		},
+		Selection: model.Selection{
+			Components: []model.ComponentID{model.ComponentSDD},
+		},
+		Verify: verify.Report{Ready: true},
+	}
+
+	report := RenderSyncReport(result)
+
+	for _, path := range result.ChangedFiles {
+		if !strings.Contains(report, path) {
+			t.Errorf("RenderSyncReport() should include changed file path %q; got:\n%s", path, report)
+		}
+	}
+
+	if !strings.Contains(report, "3 files changed") {
+		t.Errorf("RenderSyncReport() should mention file count; got:\n%s", report)
+	}
+}
+
+// TestRenderSyncReportNoOpOmitsChangedFilePaths verifies that RenderSyncReport
+// does not list individual file path bullets in the no-op case.
+func TestRenderSyncReportNoOpOmitsChangedFilePaths(t *testing.T) {
+	result := SyncResult{
+		NoOp:         true,
+		Agents:       []model.AgentID{model.AgentOpenCode},
+		FilesChanged: 0,
+		ChangedFiles: nil,
+	}
+
+	report := RenderSyncReport(result)
+
+	// The no-op path says "No files changed." but must not render bullet paths.
+	if strings.Contains(report, "  - ") {
+		t.Errorf("RenderSyncReport() should not render file path bullets on no-op; got:\n%s", report)
+	}
+
+	if strings.Contains(report, "Sync actions executed") {
+		t.Errorf("RenderSyncReport() should not mention 'Sync actions executed' on no-op; got:\n%s", report)
 	}
 }
