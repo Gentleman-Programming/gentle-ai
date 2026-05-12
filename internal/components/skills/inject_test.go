@@ -69,15 +69,44 @@ func TestInjectWritesSkillFilesForClaude(t *testing.T) {
 		t.Fatalf("Inject() changed = false")
 	}
 
-	if len(result.Files) != 2 {
-		t.Fatalf("Inject() files len = %d, want 2", len(result.Files))
-	}
-
-	for _, id := range []model.SkillID{model.SkillCreator, model.SkillGoTesting} {
-		path := filepath.Join(home, ".claude", "skills", string(id), "SKILL.md")
+	for _, path := range []string{
+		filepath.Join(home, ".claude", "skills", "skill-creator", "SKILL.md"),
+		filepath.Join(home, ".claude", "skills", "go-testing", "SKILL.md"),
+		filepath.Join(home, ".claude", "skills", "go-testing", "references", "examples.md"),
+	} {
+		if !containsFile(result.Files, path) {
+			t.Fatalf("Inject() files = %v, missing %q", result.Files, path)
+		}
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected skill file %q: %v", path, err)
 		}
+	}
+}
+
+func TestInjectCopiesNonSDDSkillReferences(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, opencodeAdapter(), []model.SkillID{model.SkillGoTesting, model.SkillChainedPR})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() changed = false")
+	}
+
+	skillsDir := filepath.Join(home, ".config", "opencode", "skills")
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "go-testing examples", path: filepath.Join(skillsDir, "go-testing", "references", "examples.md")},
+		{name: "chained-pr details", path: filepath.Join(skillsDir, "chained-pr", "references", "chaining-details.md")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertNonEmptyFile(t, tt.path)
+		})
 	}
 }
 
@@ -238,4 +267,25 @@ func TestSkillPathForAgent(t *testing.T) {
 	if path != want {
 		t.Fatalf("SkillPathForAgent() = %q, want %q", path, want)
 	}
+}
+
+func assertNonEmptyFile(t *testing.T, path string) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected file %q: %v", path, err)
+	}
+	if info.Size() == 0 {
+		t.Fatalf("expected file %q to be non-empty", path)
+	}
+}
+
+func containsFile(files []string, want string) bool {
+	for _, file := range files {
+		if file == want {
+			return true
+		}
+	}
+	return false
 }

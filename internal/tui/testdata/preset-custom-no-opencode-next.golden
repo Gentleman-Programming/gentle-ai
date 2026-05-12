@@ -1,0 +1,29 @@
+Select Components
+
+Toggle components with enter or space.
+
+▸ [ ] engram
+    Persistent cross-session memory
+  [ ] sdd
+    Spec-driven development workflow
+  [ ] skills
+    Curated coding skill library
+  [ ] context7
+    Latest framework and library docs
+  [ ] persona
+    Gentleman, neutral or custom behavior
+  [ ] permissions
+    Security-first defaults and guardrails
+  [ ] gga
+    Gentleman Guardian Angel — AI provider switcher
+  [ ] theme
+    Gentleman Kanagawa theme overlay
+  [ ] claude-theme
+    Claude Code Gentleman custom theme
+  [ ] opencode-gentle-logo
+    OpenCode home logo TUI plugin with Braille rose
+
+  Continue
+  Back
+
+j/k: navigate • space/enter: toggle • esc: back

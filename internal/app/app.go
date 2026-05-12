@@ -31,6 +31,7 @@ var (
 	updateCheckAll           = update.CheckAll
 	updateCheckFiltered      = update.CheckFiltered
 	upgradeExecute           = upgrade.Execute
+	selfUpdateFn             = selfUpdate
 	ensureCurrentOSSupported = system.EnsureCurrentOSSupported
 	detectSystem             = system.Detect
 )
@@ -73,11 +74,24 @@ func RunArgs(args []string, stdout io.Writer) error {
 		return system.EnsureSupportedPlatform(result.System.Profile)
 	}
 
+	var (
+		profile         system.PlatformProfile
+		profileResolved bool
+	)
+	resolveProfile := func() system.PlatformProfile {
+		if !profileResolved {
+			profile = cli.ResolveInstallProfile(result)
+			profileResolved = true
+		}
+		return profile
+	}
+
 	// Self-update: check for a newer gentle-ai release and apply it before
 	// CLI/TUI dispatch. Errors are non-fatal — logged and swallowed.
-	profile := cli.ResolveInstallProfile(result)
-	if err := selfUpdate(context.Background(), Version, profile, stdout); err != nil {
-		_, _ = fmt.Fprintf(stdout, "Warning: self-update failed: %v\n", err)
+	if !isExplicitUpdateFlow(args) {
+		if err := selfUpdateFn(context.Background(), Version, resolveProfile(), stdout); err != nil {
+			_, _ = fmt.Fprintf(stdout, "Warning: self-update failed: %v\n", err)
+		}
 	}
 
 	if len(args) == 0 {
@@ -100,7 +114,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 		}
 		m.ListBackupsFn = ListBackups
 		m.Backups = ListBackups()
-		m.UpgradeFn = tuiUpgrade(profile, homeDir)
+		m.UpgradeFn = tuiUpgrade(resolveProfile(), homeDir)
 		m.SyncFn = tuiSync(homeDir)
 		m.UninstallFn = tuiUninstall(homeDir)
 		m.UninstallWithProfilesFn = tuiUninstallWithProfiles(homeDir)
@@ -111,8 +125,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 
 	switch args[0] {
 	case "update":
-		profile := cli.ResolveInstallProfile(result)
-		return runUpdate(context.Background(), Version, profile, stdout)
+		return runUpdate(context.Background(), Version, resolveProfile(), stdout)
 	case "upgrade":
 		return runUpgrade(context.Background(), args[1:], result, stdout)
 	case "install":
@@ -504,4 +517,14 @@ func ListBackups() []backup.Manifest {
 	}
 
 	return manifests
+}
+
+// isExplicitUpdateFlow reports whether the current invocation is already in the
+// explicit update/upgrade path. In those cases, self-update must be skipped to
+// avoid preempting the user's requested command behavior.
+func isExplicitUpdateFlow(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	return args[0] == "update" || args[0] == "upgrade"
 }

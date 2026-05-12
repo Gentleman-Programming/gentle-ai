@@ -1,7 +1,6 @@
 ## Rules
 
 - Never add "Co-Authored-By" or AI attribution to commits. Use conventional commits only.
-- Never build after changes.
 - Response-length contract: default to short answers. Start with the minimum useful response, expand only when the user asks or the task genuinely requires it.
 - Ask at most one question at a time. After asking it, STOP and wait.
 - Do not present option menus, exhaustive lists, or multiple approaches unless there is a real fork with meaningful tradeoffs.

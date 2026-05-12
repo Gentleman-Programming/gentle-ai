@@ -24,14 +24,14 @@ Engram is persistent memory for your AI agent. It saves decisions, discoveries, 
 
 **But engram has useful tools when you need them:**
 
-| Command | When to use |
-|---------|-------------|
-| `engram tui` | Browse your memories visually -- search, filter, drill into observations |
-| `engram sync` | Export project memories to `.engram/` for git tracking. Run after significant work sessions |
-| `engram sync --import` | Import memories on another machine after cloning a repo with `.engram/` |
-| `engram projects list` | See all projects with observation counts |
-| `engram projects consolidate` | Fix project name drift (e.g., "my-app" vs "My-App" vs "my-app-frontend") |
-| `engram search <query>` | Quick memory search from the terminal |
+| Command                       | When to use                                                                                 |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| `engram tui`                  | Browse your memories visually -- search, filter, drill into observations                    |
+| `engram sync`                 | Export project memories to `.engram/` for git tracking. Run after significant work sessions |
+| `engram sync --import`        | Import memories on another machine after cloning a repo with `.engram/`                     |
+| `engram projects list`        | See all projects with observation counts                                                    |
+| `engram projects consolidate` | Fix project name drift (e.g., "my-app" vs "My-App" vs "my-app-frontend")                    |
+| `engram search <query>`       | Quick memory search from the terminal                                                       |
 
 Since v1.11.0, engram auto-detects the project name from git remote at startup, normalizes to lowercase, and warns if it finds similar existing project names. This prevents the name drift issue where the same project ends up with multiple name variants.
 
@@ -83,21 +83,32 @@ When the orchestrator delegates work to a sub-agent (say, `sdd-explore` to inves
 
 What makes them "super sub-agents":
 
-1. **They discover skills on their own.** Each sub-agent's first action is to search for the skill registry -- via engram memory or the local `.atl/skill-registry.md` file. If it finds relevant skills (React patterns, Go testing, Angular architecture, etc.), it loads and follows them. The orchestrator doesn't need to spoon-feed skill paths.
+1. **The orchestrator keeps them focused.** The parent/orchestrator resolves the skill registry once, injects the relevant compact rules into each sub-agent prompt, and gives the child one concrete role. Sub-agents do not rediscover project skills or spawn more sub-agents during normal runtime.
 
-2. **They adapt to your project.** A `sdd-apply` sub-agent working on a React project will load React 19 patterns. The same sub-agent working on a Go project will load Go testing conventions. The skills it loads depend on what the registry says is relevant, not a hardcoded list.
+2. **They adapt to your project.** A `sdd-apply` sub-agent working on a React project receives React patterns. The same sub-agent working on a Go project receives Go testing conventions. The rules depend on the registry and task context, not a hardcoded list.
 
 3. **They persist their work.** Every sub-agent saves its artifacts to engram before returning. The next sub-agent in the pipeline can pick up exactly where the previous one left off, even across sessions.
 
 This pattern works today on:
 
-| Agent | How sub-agents run |
-|-------|-------------------|
-| **OpenCode** | Native sub-agent system — each phase is a dedicated agent with its own model, tools, and permissions defined in `opencode.json` |
-| **Claude Code** | Via the Agent tool — the orchestrator spawns sub-agents that self-discover skills from the registry |
-| **Others** | SDD runs inline (single session) — the model follows the orchestrator instructions without spawning separate agents |
+| Agent           | How sub-agents run                                                                                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **OpenCode**    | Native sub-agent system — each phase is a dedicated agent with its own model, tools, and permissions defined in `opencode.json` |
+| **Claude Code** | Via the Agent tool — the orchestrator spawns focused sub-agents and injects resolved project rules                              |
+| **Others**      | SDD runs inline (single session) — the model follows the orchestrator instructions without spawning separate agents             |
 
 You don't need to configure any of this. The installer sets it up, and the orchestrator manages delegation automatically.
+
+### Delegation Stop Rules
+
+The orchestrator must stop acting as a monolithic executor when complexity appears:
+
+- **4-file rule**: reading 4+ files to understand a flow means delegate exploration or run an exploration phase.
+- **Multi-file write rule**: touching 2+ non-trivial files means use one writer or require fresh review before completion.
+- **PR rule**: before commit, push, or PR after code changes, run fresh review unless the diff is trivial docs/text.
+- **Incident rule**: after wrong cwd, worktree/git accident, merge recovery, confusing test command, or environment workaround, run a fresh audit before continuing.
+- **Long-session rule**: after roughly 20 tool calls, 5 exploratory reads, or 2 non-mechanical edits with growing complexity, pause and delegate, re-plan, or justify why not.
+- **Fresh review rule**: use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents when the agent platform supports it.
 
 ---
 
@@ -140,12 +151,12 @@ The less you think about gentle-ai after installing, the better it's working.
 
 ## Quick Reference
 
-| Do | Don't |
-|----|-------|
-| Run the installer, pick your agents and preset | Manually edit the generated config files |
-| Just start coding with your AI agent | Memorize SDD phases or commands |
-| Let the agent suggest SDD when a task is big enough | Force SDD on every small task |
-| Trust that engram is saving context for you | Dig into engram's storage unless you need `engram sync` or `engram tui` |
-| Run `/skill-registry` after installing or changing skills | Forget to update the registry after adding new skills |
-| Say "use sdd" if you know you want structured planning | Worry about which SDD phase comes next |
-| Re-run the installer to update or change your setup | Manually patch skill files or persona instructions |
+| Do                                                        | Don't                                                                   |
+| --------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Run the installer, pick your agents and preset            | Manually edit the generated config files                                |
+| Just start coding with your AI agent                      | Memorize SDD phases or commands                                         |
+| Let the agent suggest SDD when a task is big enough       | Force SDD on every small task                                           |
+| Trust that engram is saving context for you               | Dig into engram's storage unless you need `engram sync` or `engram tui` |
+| Run `/skill-registry` after installing or changing skills | Forget to update the registry after adding new skills                   |
+| Say "use sdd" if you know you want structured planning    | Worry about which SDD phase comes next                                  |
+| Re-run the installer to update or change your setup       | Manually patch skill files or persona instructions                      |

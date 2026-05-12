@@ -1,6 +1,8 @@
 package assets
 
 import (
+	"io/fs"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -11,11 +13,11 @@ import (
 //
 //  1. Frontmatter is delimited by a leading `---` and a closing `---`.
 //  2. `name:` value equals the parent directory basename.
-//  3. `description:` raw line first non-whitespace char is NOT `>` or `|`
-//     (rejects folded/literal block scalars).
+//  3. `description:` raw value is a quoted scalar on the same line, not `>`
+//     or `|` (rejects YAML-unsafe plain scalars and block scalars).
 //  4. The parsed `description` value is a single line (no embedded newline)
-//     and contains the substring `Trigger:` (skipped only for `_shared`,
-//     which is documented as not a real invokable skill).
+//     with <=160 chars and contains the substring `Trigger:` (skipped only
+//     for `_shared`, which is documented as not a real invokable skill).
 //  5. No top-level frontmatter keys outside the whitelist
 //     {name, description, license, metadata, version}. This catches
 //     non-standard fields like `allowed-tools:`.
@@ -23,36 +25,16 @@ import (
 // The test deliberately uses a tiny manual parser instead of pulling in a
 // YAML dependency — the rules above only require line-level inspection.
 func TestSkillFrontmatterIsLintClean(t *testing.T) {
-	skillPaths := []string{
-		"skills/_shared/SKILL.md",
-		"skills/branch-pr/SKILL.md",
-		"skills/chained-pr/SKILL.md",
-		"skills/cognitive-doc-design/SKILL.md",
-		"skills/comment-writer/SKILL.md",
-		"skills/go-testing/SKILL.md",
-		"skills/issue-creation/SKILL.md",
-		"skills/judgment-day/SKILL.md",
-		"skills/sdd-apply/SKILL.md",
-		"skills/sdd-archive/SKILL.md",
-		"skills/sdd-design/SKILL.md",
-		"skills/sdd-explore/SKILL.md",
-		"skills/sdd-init/SKILL.md",
-		"skills/sdd-onboard/SKILL.md",
-		"skills/sdd-propose/SKILL.md",
-		"skills/sdd-spec/SKILL.md",
-		"skills/sdd-tasks/SKILL.md",
-		"skills/sdd-verify/SKILL.md",
-		"skills/skill-creator/SKILL.md",
-		"skills/skill-registry/SKILL.md",
-		"skills/work-unit-commits/SKILL.md",
-	}
+	skillPaths := embeddedSkillPaths(t)
 
 	allowedKeys := map[string]bool{
-		"name":        true,
-		"description": true,
-		"license":     true,
-		"metadata":    true,
-		"version":     true,
+		"name":                     true,
+		"description":              true,
+		"license":                  true,
+		"metadata":                 true,
+		"version":                  true,
+		"user-invocable":           true,
+		"disable-model-invocation": true,
 	}
 
 	for _, path := range skillPaths {
@@ -70,14 +52,20 @@ func TestSkillFrontmatterIsLintClean(t *testing.T) {
 				t.Errorf("name = %q, want %q (must match directory basename)", fm.name, expectedName)
 			}
 
-			// Rule 3: description raw line is a plain scalar (no `>` or `|`).
+			// Rule 3: description raw line is a quoted YAML-safe scalar (no `>` or `|`).
 			if strings.HasPrefix(fm.descriptionRawAfterColon, ">") || strings.HasPrefix(fm.descriptionRawAfterColon, "|") {
-				t.Errorf("description uses block scalar (`%s`); must be a plain single-line scalar", string(fm.descriptionRawAfterColon[0]))
+				t.Errorf("description uses block scalar (`%s`); must be a quoted single-line scalar", string(fm.descriptionRawAfterColon[0]))
+			}
+			if !isQuotedScalar(fm.descriptionRawAfterColon) {
+				t.Errorf("description must be quoted to stay YAML-safe; got raw value: %q", fm.descriptionRawAfterColon)
 			}
 
-			// Rule 4: parsed description is single-line and contains Trigger.
+			// Rule 4: parsed description is single-line, within budget, and contains Trigger.
 			if strings.Contains(fm.description, "\n") {
 				t.Errorf("description spans multiple lines; must be a single line. got: %q", fm.description)
+			}
+			if got := len([]rune(fm.description)); got > 160 {
+				t.Errorf("description length = %d chars, want <=160 for Claude Code budget: %q", got, fm.description)
 			}
 			if path != "skills/_shared/SKILL.md" {
 				if !strings.Contains(fm.description, "Trigger:") {
@@ -88,11 +76,35 @@ func TestSkillFrontmatterIsLintClean(t *testing.T) {
 			// Rule 5: only allowed top-level keys.
 			for _, key := range fm.topLevelKeys {
 				if !allowedKeys[key] {
-					t.Errorf("non-standard top-level frontmatter key %q (allowed: name, description, license, metadata, version)", key)
+					t.Errorf("non-standard top-level frontmatter key %q (allowed: name, description, license, metadata, version, user-invocable, disable-model-invocation)", key)
 				}
 			}
 		})
 	}
+}
+
+func embeddedSkillPaths(t *testing.T) []string {
+	t.Helper()
+
+	var paths []string
+	if err := fs.WalkDir(FS, "skills", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, "/SKILL.md") {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	}); err != nil {
+		t.Fatalf("walk embedded skills: %v", err)
+	}
+
+	if len(paths) == 0 {
+		t.Fatal("no embedded SKILL.md files found")
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 type skillFrontmatter struct {
@@ -197,6 +209,17 @@ func unquote(s string) string {
 		}
 	}
 	return s
+}
+
+func isQuotedScalar(s string) bool {
+	if len(s) < 2 {
+		return false
+	}
+	quote := s[0]
+	if quote != '\'' && quote != '"' {
+		return false
+	}
+	return s[len(s)-1] == quote
 }
 
 type frontmatterError struct{ msg string }

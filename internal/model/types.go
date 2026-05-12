@@ -15,6 +15,8 @@ const (
 	AgentKimi          AgentID = "kimi"
 	AgentQwenCode      AgentID = "qwen-code"
 	AgentKiroIDE       AgentID = "kiro-ide"
+	AgentOpenClaw      AgentID = "openclaw"
+	AgentPi            AgentID = "pi"
 )
 
 // SupportTier indicates how fully an agent supports the Gentleman AI ecosystem.
@@ -31,14 +33,16 @@ const (
 type ComponentID string
 
 const (
-	ComponentEngram     ComponentID = "engram"
-	ComponentSDD        ComponentID = "sdd"
-	ComponentSkills     ComponentID = "skills"
-	ComponentContext7   ComponentID = "context7"
-	ComponentPersona    ComponentID = "persona"
-	ComponentPermission ComponentID = "permissions"
-	ComponentGGA        ComponentID = "gga"
-	ComponentTheme      ComponentID = "theme"
+	ComponentEngram             ComponentID = "engram"
+	ComponentSDD                ComponentID = "sdd"
+	ComponentSkills             ComponentID = "skills"
+	ComponentContext7           ComponentID = "context7"
+	ComponentPersona            ComponentID = "persona"
+	ComponentPermission         ComponentID = "permissions"
+	ComponentGGA                ComponentID = "gga"
+	ComponentTheme              ComponentID = "theme"
+	ComponentClaudeTheme        ComponentID = "claude-theme"
+	ComponentOpenCodeGentleLogo ComponentID = "opencode-gentle-logo"
 )
 
 type UninstallMode string
@@ -60,19 +64,19 @@ const (
 type SkillID string
 
 const (
-	SkillSDDInit       SkillID = "sdd-init"
-	SkillSDDApply      SkillID = "sdd-apply"
-	SkillSDDVerify     SkillID = "sdd-verify"
-	SkillSDDExplore    SkillID = "sdd-explore"
-	SkillSDDPropose    SkillID = "sdd-propose"
-	SkillSDDSpec       SkillID = "sdd-spec"
-	SkillSDDDesign     SkillID = "sdd-design"
-	SkillSDDTasks      SkillID = "sdd-tasks"
-	SkillSDDArchive    SkillID = "sdd-archive"
-	SkillSDDOnboard    SkillID = "sdd-onboard"
-	SkillGoTesting     SkillID = "go-testing"
-	SkillCreator       SkillID = "skill-creator"
-	SkillJudgmentDay   SkillID = "judgment-day"
+	SkillSDDInit         SkillID = "sdd-init"
+	SkillSDDApply        SkillID = "sdd-apply"
+	SkillSDDVerify       SkillID = "sdd-verify"
+	SkillSDDExplore      SkillID = "sdd-explore"
+	SkillSDDPropose      SkillID = "sdd-propose"
+	SkillSDDSpec         SkillID = "sdd-spec"
+	SkillSDDDesign       SkillID = "sdd-design"
+	SkillSDDTasks        SkillID = "sdd-tasks"
+	SkillSDDArchive      SkillID = "sdd-archive"
+	SkillSDDOnboard      SkillID = "sdd-onboard"
+	SkillGoTesting       SkillID = "go-testing"
+	SkillCreator         SkillID = "skill-creator"
+	SkillJudgmentDay     SkillID = "judgment-day"
 	SkillBranchPR        SkillID = "branch-pr"
 	SkillIssueCreation   SkillID = "issue-creation"
 	SkillSkillRegistry   SkillID = "skill-registry"
@@ -161,6 +165,7 @@ type OpenCodeCommunityPluginID string
 const (
 	OpenCodePluginSubAgentStatusline OpenCodeCommunityPluginID = "sub-agent-statusline"
 	OpenCodePluginSDDEngramManage    OpenCodeCommunityPluginID = "sdd-engram-plugin"
+	OpenCodePluginGentleLogo         OpenCodeCommunityPluginID = "gentle-logo"
 )
 
 // Profile represents a named SDD orchestrator configuration with model assignments.

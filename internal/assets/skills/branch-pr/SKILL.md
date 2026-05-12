@@ -1,6 +1,6 @@
 ---
 name: branch-pr
-description: "PR creation workflow for Agent Teams Lite following the issue-first enforcement system. Trigger: When creating a pull request, opening a PR, or preparing changes for review."
+description: "Create Gentle AI pull requests with issue-first checks. Trigger: creating, opening, or preparing PRs for review."
 license: Apache-2.0
 metadata:
   author: gentleman-programming

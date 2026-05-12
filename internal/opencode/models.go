@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -125,12 +126,23 @@ var authPath = DefaultAuthPath
 //  3. The "opencode" provider is always included if present (built-in subscription)
 //
 // Results are sorted alphabetically.
-func DetectAvailableProviders(providers map[string]Provider) []string {
+func DetectAvailableProviders(providers map[string]Provider, customProviderIDs ...string) []string {
 	authProviders := loadAuthProviders(authPath())
+
+	customSet := make(map[string]bool, len(customProviderIDs))
+	for _, id := range customProviderIDs {
+		customSet[id] = true
+	}
 
 	var available []string
 	for id, provider := range providers {
 		if !hasToolCallModel(provider) {
+			continue
+		}
+
+		// Check: explicitly configured custom provider (always available).
+		if customSet[id] {
+			available = append(available, id)
 			continue
 		}
 
@@ -243,6 +255,85 @@ func EnrichWithVariants(cached map[string]Provider, variantsPath string) {
 		}
 		cached[provID] = cachedProv
 	}
+}
+
+// ConfigModel represents a model entry in the opencode.json provider section.
+type ConfigModel struct {
+	Name     string `json:"name"`
+	ToolCall bool   `json:"tool_call"`
+}
+
+// ConfigProvider represents a custom provider defined in opencode.json.
+type ConfigProvider struct {
+	Name   string                 `json:"name"`
+	Models map[string]ConfigModel `json:"models"`
+}
+
+// LoadConfigProviders reads the provider section from an opencode.json settings file.
+// Returns an empty map with nil error if the file is missing or has no provider key.
+func LoadConfigProviders(path string) (map[string]ConfigProvider, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]ConfigProvider{}, nil
+		}
+		return map[string]ConfigProvider{}, err
+	}
+
+	var raw struct {
+		Provider map[string]ConfigProvider `json:"provider"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return map[string]ConfigProvider{}, fmt.Errorf("parse opencode settings %q: %w", path, err)
+	}
+	if raw.Provider == nil {
+		return map[string]ConfigProvider{}, nil
+	}
+	return raw.Provider, nil
+}
+
+// MergeCustomProviders merges custom providers from opencode.json into the cache-loaded
+// providers map. Custom models use the tool_call value from opencode.json, defaulting to false
+// when omitted. Cache models win on ID collision. Returns the original providers map unchanged
+// when config is empty; otherwise returns a merged copy without mutating the input.
+func MergeCustomProviders(providers map[string]Provider, config map[string]ConfigProvider) map[string]Provider {
+	if len(config) == 0 {
+		return providers
+	}
+
+	merged := make(map[string]Provider, len(providers)+len(config))
+	for id, p := range providers {
+		clone := Provider{ID: p.ID, Name: p.Name, Env: append([]string(nil), p.Env...), Models: make(map[string]Model, len(p.Models))}
+		for mid, m := range p.Models {
+			clone.Models[mid] = m
+		}
+		merged[id] = clone
+	}
+
+	for id, cp := range config {
+		// Provider-level collision: when a provider ID already exists in the cache,
+		// we keep the cache's Name/Env and only merge in the config's models below.
+		// The config's provider Name is silently ignored in that case.
+		existing, ok := merged[id]
+		if !ok {
+			existing = Provider{ID: id, Name: cp.Name, Models: make(map[string]Model, len(cp.Models))}
+		}
+		if existing.Models == nil {
+			existing.Models = make(map[string]Model, len(cp.Models))
+		}
+		for mid, cm := range cp.Models {
+			if _, exists := existing.Models[mid]; !exists {
+				name := cm.Name
+				if name == "" {
+					name = mid
+				}
+				existing.Models[mid] = Model{ID: mid, Name: name, ToolCall: cm.ToolCall}
+			}
+		}
+		merged[id] = existing
+	}
+
+	return merged
 }
 
 // SDDPhases returns the ordered list of SDD phase sub-agent names.

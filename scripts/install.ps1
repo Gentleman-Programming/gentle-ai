@@ -19,6 +19,9 @@
     # Force a specific method:
     .\install.ps1 -Method binary
     .\install.ps1 -Method go
+
+    # Skip checksum verification (not recommended):
+    .\install.ps1 -Method binary -Insecure
 #>
 
 [CmdletBinding()]
@@ -26,7 +29,9 @@ param(
     [ValidateSet("auto", "go", "binary")]
     [string]$Method = "auto",
 
-    [string]$InstallDir = ""
+    [string]$InstallDir = "",
+
+    [switch]$Insecure
 )
 
 $ErrorActionPreference = "Stop"
@@ -220,10 +225,18 @@ function Install-ViaBinary {
                 }
                 Write-Success "Checksum verified"
             } else {
-                Write-Warn "Archive not found in checksums.txt - skipping verification"
+                if ($Insecure) {
+                    Write-Warn "Archive '$archiveName' not found in checksums.txt - checksum verification skipped (-Insecure)"
+                } else {
+                    Stop-WithError "Archive '$archiveName' not found in checksums.txt. Refusing to install unverified binary.`nUse -Insecure to skip (not recommended)."
+                }
             }
         } catch {
-            Write-Warn "Could not download checksums.txt - skipping verification"
+            if ($Insecure) {
+                Write-Warn "Could not download checksums.txt - checksum verification skipped (-Insecure)"
+            } else {
+                Stop-WithError "Could not download checksums.txt from: $checksumsUrl`nRefusing to install without integrity verification.`nUse -Insecure to skip (not recommended)."
+            }
         }
 
         # Extract binary

@@ -88,6 +88,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 
 		// SDD skills
 		"skills/sdd-init/SKILL.md",
+		"skills/sdd-init/references/init-details.md",
 		"skills/sdd-apply/SKILL.md",
 		"skills/sdd-archive/SKILL.md",
 		"skills/sdd-design/SKILL.md",
@@ -96,7 +97,9 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/sdd-spec/SKILL.md",
 		"skills/sdd-tasks/SKILL.md",
 		"skills/sdd-verify/SKILL.md",
+		"skills/sdd-verify/references/report-format.md",
 		"skills/skill-registry/SKILL.md",
+		"skills/judgment-day/references/prompts-and-formats.md",
 		"skills/_shared/persistence-contract.md",
 		"skills/_shared/engram-convention.md",
 		"skills/_shared/openspec-convention.md",
@@ -104,7 +107,9 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 
 		// Foundation skills
 		"skills/go-testing/SKILL.md",
+		"skills/go-testing/references/examples.md",
 		"skills/skill-creator/SKILL.md",
+		"skills/chained-pr/references/chaining-details.md",
 	}
 
 	for _, path := range expectedFiles {

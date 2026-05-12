@@ -1,11 +1,20 @@
 ---
 name: sdd-design
-description: "Create technical design document with architecture decisions and approach. Trigger: When the orchestrator launches you to write or update the technical design for a change."
+description: "Create the SDD technical design and architecture approach. Trigger: orchestrator launches design for a change."
+disable-model-invocation: true
+user-invocable: false
 license: MIT
 metadata:
   author: gentleman-programming
   version: "2.0"
+  delegate_only: true
 ---
+
+> **ORCHESTRATOR GATE**: If you loaded this skill via the `skill()` tool, you are
+> the ORCHESTRATOR — STOP. Do NOT execute these instructions inline. Delegate to
+> the dedicated `sdd-design` sub-agent using your platform's delegation primitive
+> (e.g., `task(...)`, sub-agent invocation, etc.). This skill is for EXECUTORS
+> only.
 
 ## Purpose
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -138,7 +139,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		return result, fmt.Errorf("execute install pipeline: %w", result.Execution.Err)
 	}
 
-	result.Verify = runPostApplyVerification(homeDir, input.Selection, resolved)
+	result.Verify = runPostApplyVerification(homeDir, runtime.workspaceDir, input.Selection, resolved)
 	result.Verify = withPostInstallNotes(result.Verify, resolved)
 	if !result.Verify.Ready {
 		return result, fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
@@ -260,6 +261,7 @@ func newInstallRuntime(homeDir string, selection model.Selection, resolved plann
 	}
 
 	workspaceDir, _ := os.Getwd()
+	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, resolved.Agents)
 
 	return &installRuntime{
 		homeDir:      homeDir,
@@ -273,7 +275,7 @@ func newInstallRuntime(homeDir string, selection model.Selection, resolved plann
 }
 
 func (r *installRuntime) stagePlan() pipeline.StagePlan {
-	targets := backupTargets(r.homeDir, r.selection, r.resolved)
+	targets := backupTargets(r.homeDir, r.workspaceDir, r.selection, r.resolved)
 	prepare := []pipeline.Step{
 		checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile, homeDir: r.homeDir, selection: r.selection},
 		prepareBackupStep{
@@ -459,7 +461,7 @@ func (s agentInstallStep) Run() error {
 	if err != nil {
 		return fmt.Errorf("detect agent %q: %w", s.agent, err)
 	}
-	if installed {
+	if installed && s.agent != model.AgentPi {
 		return nil
 	}
 
@@ -566,7 +568,14 @@ func (s componentApplyStep) Run() error {
 					attemptedSlugs[slug] = struct{}{}
 				}
 			}
-			if _, err := engram.Inject(s.homeDir, adapter); err != nil {
+			var err error
+			if adapter.Agent() == model.AgentOpenClaw {
+				_, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
+			} else {
+				targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+				_, err = engram.Inject(targetDir, adapter)
+			}
+			if err != nil {
 				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -580,7 +589,8 @@ func (s componentApplyStep) Run() error {
 		return nil
 	case model.ComponentPersona:
 		for _, adapter := range adapters {
-			if _, err := persona.Inject(s.homeDir, adapter, s.selection.Persona); err != nil {
+			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+			if _, err := persona.Inject(targetDir, adapter, s.selection.Persona); err != nil {
 				return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -594,6 +604,7 @@ func (s componentApplyStep) Run() error {
 		return nil
 	case model.ComponentSDD:
 		for _, adapter := range adapters {
+			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments: s.selection.ModelAssignments,
 				ClaudeModelAssignments:   s.selection.ClaudeModelAssignments,
@@ -601,7 +612,7 @@ func (s componentApplyStep) Run() error {
 				WorkspaceDir:             s.workspaceDir,
 				StrictTDD:                s.selection.StrictTDD,
 			}
-			if _, err := sdd.Inject(s.homeDir, adapter, s.selection.SDDMode, opts); err != nil {
+			if _, err := sdd.Inject(targetDir, adapter, s.selection.SDDMode, opts); err != nil {
 				return fmt.Errorf("inject sdd for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -664,6 +675,18 @@ func (s componentApplyStep) Run() error {
 			if _, err := theme.Inject(s.homeDir, adapter); err != nil {
 				return fmt.Errorf("inject theme for %q: %w", adapter.Agent(), err)
 			}
+		}
+		return nil
+	case model.ComponentClaudeTheme:
+		for _, adapter := range adapters {
+			if _, err := theme.InjectClaudeTheme(s.homeDir, adapter); err != nil {
+				return fmt.Errorf("inject Claude theme for %q: %w", adapter.Agent(), err)
+			}
+		}
+		return nil
+	case model.ComponentOpenCodeGentleLogo:
+		if _, err := opencodeplugin.Install(s.homeDir, model.OpenCodePluginGentleLogo); err != nil {
+			return fmt.Errorf("install OpenCode Gentle Logo plugin: %w", err)
 		}
 		return nil
 	default:
@@ -828,12 +851,12 @@ func selectedSkillIDs(selection model.Selection) []model.SkillID {
 	return skills.SkillsForPreset(selection.Preset)
 }
 
-func backupTargets(homeDir string, selection model.Selection, resolved planner.ResolvedPlan) []string {
+func backupTargets(homeDir, workspaceDir string, selection model.Selection, resolved planner.ResolvedPlan) []string {
 	paths := map[string]struct{}{}
 	adapters := resolveAdapters(resolved.Agents)
 
 	for _, component := range resolved.OrderedComponents {
-		for _, path := range componentPaths(homeDir, selection, adapters, component) {
+		for _, path := range componentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
 	}
@@ -847,19 +870,24 @@ func backupTargets(homeDir string, selection model.Selection, resolved planner.R
 }
 
 func componentPaths(homeDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
+	return componentPathsWithWorkspace(homeDir, "", selection, adapters, component)
+}
+
+func componentPathsWithWorkspace(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	paths := []string{}
 	for _, adapter := range adapters {
+		targetDir := componentPathDir(homeDir, workspaceDir, adapter, component)
 		switch component {
 		case model.ComponentEngram:
 			switch adapter.MCPStrategy() {
 			case model.StrategySeparateMCPFiles:
-				paths = append(paths, adapter.MCPConfigPath(homeDir, "engram"))
+				paths = append(paths, adapter.MCPConfigPath(targetDir, "engram"))
 			case model.StrategyMergeIntoSettings:
-				if p := adapter.SettingsPath(homeDir); p != "" {
+				if p := adapter.SettingsPath(targetDir); p != "" {
 					paths = append(paths, p)
 				}
 			case model.StrategyMCPConfigFile:
-				if p := adapter.MCPConfigPath(homeDir, "engram"); p != "" {
+				if p := adapter.MCPConfigPath(targetDir, "engram"); p != "" {
 					paths = append(paths, p)
 				}
 				if adapter.Agent() == model.AgentAntigravity {
@@ -868,18 +896,18 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 					}
 				}
 			case model.StrategyTOMLFile:
-				if p := adapter.MCPConfigPath(homeDir, "engram"); p != "" {
+				if p := adapter.MCPConfigPath(targetDir, "engram"); p != "" {
 					paths = append(paths, p)
 				}
 			}
 			if adapter.SystemPromptStrategy() == model.StrategyMarkdownSections {
-				paths = append(paths, adapter.SystemPromptFile(homeDir))
+				paths = append(paths, adapter.SystemPromptFile(targetDir))
 			}
 		case model.ComponentSDD:
 			// Jinja modular hubs (e.g. Kimi KIMI.md) are appended once below so SDD+Persona
 			// do not duplicate the same system prompt path.
 			if adapter.SupportsSystemPrompt() && adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
-				paths = append(paths, adapter.SystemPromptFile(homeDir))
+				paths = append(paths, adapter.SystemPromptFile(targetDir))
 			}
 			if adapter.SupportsSlashCommands() {
 				for _, command := range sdd.OpenCodeCommands() {
@@ -904,7 +932,7 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 				}
 			}
 			if adapter.SupportsSkills() {
-				skillDir := adapter.SkillsDir(homeDir)
+				skillDir := adapter.SkillsDir(targetDir)
 				if skillDir != "" {
 					paths = append(paths,
 						filepath.Join(skillDir, "_shared", "persistence-contract.md"),
@@ -927,6 +955,9 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 			paths = append(paths, sddSubAgentPaths(homeDir, adapter)...)
 		case model.ComponentSkills:
 			for _, skillID := range selectedSkillIDs(selection) {
+				if skills.IsSDDSkill(skillID) {
+					continue
+				}
 				path := skills.SkillPathForAgent(homeDir, adapter, skillID)
 				if path != "" {
 					paths = append(paths, path)
@@ -952,13 +983,17 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 			if selection.Persona == model.PersonaCustom {
 				break
 			}
+			if adapter.Agent() == model.AgentOpenClaw {
+				paths = append(paths, filepath.Join(targetDir, "SOUL.md"))
+				break
+			}
 			if adapter.SupportsSystemPrompt() && adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
-				paths = append(paths, adapter.SystemPromptFile(homeDir))
+				paths = append(paths, adapter.SystemPromptFile(targetDir))
 			}
 			if selection.Persona == model.PersonaGentleman {
 				if adapter.SupportsOutputStyles() {
-					paths = append(paths, adapter.OutputStyleDir(homeDir)+"/gentleman.md")
-					if p := adapter.SettingsPath(homeDir); p != "" {
+					paths = append(paths, adapter.OutputStyleDir(targetDir)+"/gentleman.md")
+					if p := adapter.SettingsPath(targetDir); p != "" {
 						paths = append(paths, p)
 					}
 				}
@@ -974,6 +1009,15 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 			if p := adapter.SettingsPath(homeDir); p != "" {
 				paths = append(paths, p)
 			}
+		case model.ComponentClaudeTheme:
+			if adapter.Agent() == model.AgentClaudeCode {
+				paths = append(paths, filepath.Join(homeDir, ".claude", "themes", "gentleman.json"))
+			}
+		case model.ComponentOpenCodeGentleLogo:
+			paths = append(paths,
+				filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
+				filepath.Join(homeDir, ".config", "opencode", "tui.json"),
+			)
 		}
 	}
 
@@ -988,6 +1032,60 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 	}
 
 	return paths
+}
+
+func componentInjectionDir(homeDir, workspaceDir string, adapter agents.Adapter) string {
+	if adapter.Agent() == model.AgentOpenClaw && strings.TrimSpace(workspaceDir) != "" {
+		return workspaceDir
+	}
+	return homeDir
+}
+
+type openClawWorkspaceConfig struct {
+	Agents struct {
+		Defaults struct {
+			Workspace string `json:"workspace"`
+		} `json:"defaults"`
+	} `json:"agents"`
+}
+
+func resolveOpenClawWorkspaceDir(homeDir, fallback string, agentIDs []model.AgentID) string {
+	if !containsAgent(agentIDs, model.AgentOpenClaw) {
+		return fallback
+	}
+
+	configPath := filepath.Join(homeDir, ".openclaw", "openclaw.json")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return fallback
+	}
+
+	var config openClawWorkspaceConfig
+	if err := json.Unmarshal(content, &config); err != nil {
+		return fallback
+	}
+
+	workspace := strings.TrimSpace(config.Agents.Defaults.Workspace)
+	if workspace == "" {
+		return fallback
+	}
+	if filepath.IsAbs(workspace) {
+		return filepath.Clean(workspace)
+	}
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		return filepath.Clean(workspace)
+	}
+	return abs
+}
+
+func componentPathDir(homeDir, workspaceDir string, adapter agents.Adapter, component model.ComponentID) string {
+	switch component {
+	case model.ComponentEngram, model.ComponentSDD, model.ComponentPersona:
+		return componentInjectionDir(homeDir, workspaceDir, adapter)
+	default:
+		return homeDir
+	}
 }
 
 func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
@@ -1011,14 +1109,14 @@ func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
 	return paths
 }
 
-func runPostApplyVerification(homeDir string, selection model.Selection, resolved planner.ResolvedPlan) verify.Report {
+func runPostApplyVerification(homeDir, workspaceDir string, selection model.Selection, resolved planner.ResolvedPlan) verify.Report {
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(resolved.Agents)
 
 	seenPath := make(map[string]struct{})
 	var uniqueFilePaths []string
 	for _, component := range resolved.OrderedComponents {
-		for _, path := range componentPaths(homeDir, selection, adapters, component) {
+		for _, path := range componentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
 			if path == "" {
 				continue
 			}

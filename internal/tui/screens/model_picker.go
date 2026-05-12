@@ -33,9 +33,10 @@ type ProviderEntry struct {
 // ModelPickerState holds the available providers and models for the picker screen,
 // plus navigation state for the two-step sub-selection modes.
 type ModelPickerState struct {
-	Providers    map[string]opencode.Provider
-	AvailableIDs []string                    // provider IDs with tool_call-capable models
-	SDDModels    map[string][]opencode.Model // provider ID -> SDD-capable models
+	Providers     map[string]opencode.Provider
+	AvailableIDs  []string                    // provider IDs with tool_call-capable models
+	SDDModels     map[string][]opencode.Model // provider ID -> SDD-capable models
+	ConfigWarning string
 
 	Mode             ModelPickerMode
 	SelectedPhaseIdx int    // which phase row was selected (0 = "Set all")
@@ -67,27 +68,44 @@ type ModelPickerState struct {
 	SelectedModelEffortLevels []string
 }
 
-// NewModelPickerState initializes the picker state from the models cache.
-func NewModelPickerState(cachePath string) ModelPickerState {
+// NewModelPickerState initializes the picker state from the models cache,
+// merging any custom providers defined in the OpenCode settings file.
+func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState {
 	providers, err := opencode.LoadModels(cachePath)
 	if err != nil {
 		return ModelPickerState{}
 	}
 
+	configProviders, configErr := opencode.LoadConfigProviders(settingsPath)
+	if len(configProviders) > 0 {
+		providers = opencode.MergeCustomProviders(providers, configProviders)
+	}
+
 	opencode.EnrichWithVariants(providers, opencode.DefaultVariantsCachePath())
 
-	available := opencode.DetectAvailableProviders(providers)
+	customIDs := make([]string, 0, len(configProviders))
+	for id := range configProviders {
+		customIDs = append(customIDs, id)
+	}
+
+	available := opencode.DetectAvailableProviders(providers, customIDs...)
 
 	sddModels := make(map[string][]opencode.Model, len(available))
 	for _, id := range available {
 		sddModels[id] = opencode.FilterModelsForSDD(providers[id])
 	}
 
+	var configWarning string
+	if configErr != nil {
+		configWarning = fmt.Sprintf("Could not load custom providers from opencode.json: %v", configErr)
+	}
+
 	return ModelPickerState{
-		Providers:    providers,
-		AvailableIDs: available,
-		SDDModels:    sddModels,
-		Mode:         ModePhaseList,
+		Providers:     providers,
+		AvailableIDs:  available,
+		SDDModels:     sddModels,
+		ConfigWarning: configWarning,
+		Mode:          ModePhaseList,
 	}
 }
 
@@ -407,6 +425,10 @@ func renderPhaseList(
 
 	b.WriteString(styles.TitleStyle.Render("Assign Models to SDD Phases"))
 	b.WriteString("\n\n")
+	if state.ConfigWarning != "" {
+		b.WriteString(styles.WarningStyle.Render(state.ConfigWarning))
+		b.WriteString("\n\n")
+	}
 
 	if len(state.AvailableIDs) == 0 {
 		b.WriteString(styles.WarningStyle.Render("OpenCode has not been run yet — model cache not found."))

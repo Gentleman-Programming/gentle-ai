@@ -43,7 +43,7 @@ func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 	}
 
 	want := model.Selection{
-		Agents:  []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKilocode, model.AgentGeminiCLI, model.AgentCodex, model.AgentCursor, model.AgentVSCodeCopilot, model.AgentAntigravity, model.AgentWindsurf, model.AgentKimi, model.AgentQwenCode, model.AgentKiroIDE},
+		Agents:  []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKilocode, model.AgentGeminiCLI, model.AgentCodex, model.AgentCursor, model.AgentVSCodeCopilot, model.AgentAntigravity, model.AgentWindsurf, model.AgentKimi, model.AgentQwenCode, model.AgentKiroIDE, model.AgentOpenClaw, model.AgentPi},
 		Persona: model.PersonaGentleman,
 		Preset:  model.PresetFullGentleman,
 		Components: []model.ComponentID{
@@ -54,11 +54,76 @@ func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 			model.ComponentPersona,
 			model.ComponentPermission,
 			model.ComponentGGA,
+			model.ComponentClaudeTheme,
+			model.ComponentOpenCodeGentleLogo,
 		},
 	}
 
 	if !reflect.DeepEqual(input.Selection, want) {
 		t.Fatalf("selection = %#v, want %#v", input.Selection, want)
+	}
+}
+
+func TestNormalizeInstallFlagsCustomAcceptsOptionalGentlemanInstallables(t *testing.T) {
+	input, err := NormalizeInstallFlags(InstallFlags{
+		Preset:     string(model.PresetCustom),
+		Components: []string{string(model.ComponentClaudeTheme), string(model.ComponentOpenCodeGentleLogo)},
+	}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("NormalizeInstallFlags() error = %v", err)
+	}
+
+	want := []model.ComponentID{model.ComponentClaudeTheme, model.ComponentOpenCodeGentleLogo}
+	if !reflect.DeepEqual(input.Selection.Components, want) {
+		t.Fatalf("components = %#v, want %#v", input.Selection.Components, want)
+	}
+}
+
+func TestNormalizeInstallFlagsPiOnlyDefaultsToEngramOnly(t *testing.T) {
+	input, err := NormalizeInstallFlags(InstallFlags{
+		Agents: []string{string(model.AgentPi)},
+	}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("NormalizeInstallFlags() error = %v", err)
+	}
+
+	wantAgents := []model.AgentID{model.AgentPi}
+	if !reflect.DeepEqual(input.Selection.Agents, wantAgents) {
+		t.Fatalf("agents = %#v, want %#v", input.Selection.Agents, wantAgents)
+	}
+	wantComponents := []model.ComponentID{model.ComponentEngram}
+	if !reflect.DeepEqual(input.Selection.Components, wantComponents) {
+		t.Fatalf("components = %#v, want %#v", input.Selection.Components, wantComponents)
+	}
+}
+
+func TestNormalizeInstallFlagsPiOnlyRespectsExplicitComponents(t *testing.T) {
+	input, err := NormalizeInstallFlags(InstallFlags{
+		Agents:     []string{string(model.AgentPi)},
+		Components: []string{string(model.ComponentEngram)},
+	}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("NormalizeInstallFlags() error = %v", err)
+	}
+
+	want := []model.ComponentID{model.ComponentEngram}
+	if !reflect.DeepEqual(input.Selection.Components, want) {
+		t.Fatalf("components = %#v, want %#v", input.Selection.Components, want)
+	}
+}
+
+func TestNormalizeInstallFlagsPiOnlyRespectsExplicitPreset(t *testing.T) {
+	input, err := NormalizeInstallFlags(InstallFlags{
+		Agents: []string{string(model.AgentPi)},
+		Preset: string(model.PresetMinimal),
+	}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("NormalizeInstallFlags() error = %v", err)
+	}
+
+	want := []model.ComponentID{model.ComponentEngram}
+	if !reflect.DeepEqual(input.Selection.Components, want) {
+		t.Fatalf("components = %#v, want %#v", input.Selection.Components, want)
 	}
 }
 
@@ -183,7 +248,7 @@ func TestRunInstallDryRunSkipsExecution(t *testing.T) {
 func makeDetectionWithAgents(present ...string) system.DetectionResult {
 	var configs []system.ConfigState
 	// Full canonical agent set — mirrors knownAgentConfigDirs in config_scan.go.
-	known := []string{"claude-code", "opencode", "kilocode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "kimi", "qwen-code", "kiro-ide"}
+	known := []string{"claude-code", "opencode", "kilocode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "kimi", "qwen-code", "kiro-ide", "openclaw", "pi"}
 	presentSet := make(map[string]bool, len(present))
 	for _, p := range present {
 		presentSet[p] = true
@@ -240,6 +305,8 @@ func TestDefaultAgentsFromDetection_AllAgentsMappedCorrectly(t *testing.T) {
 		{"kimi", model.AgentKimi},
 		{"qwen-code", model.AgentQwenCode},
 		{"kiro-ide", model.AgentKiroIDE},
+		{"openclaw", model.AgentOpenClaw},
+		{"pi", model.AgentPi},
 	}
 
 	for _, tt := range tests {

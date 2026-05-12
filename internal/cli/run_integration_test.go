@@ -26,6 +26,26 @@ func missingBinaryLookPath(name string) (string, error) {
 	return "", exec.ErrNotFound
 }
 
+func assertFileContains(t *testing.T, path string, want string) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if !strings.Contains(string(body), want) {
+		t.Fatalf("file %q missing %q; got:\n%s", path, want, string(body))
+	}
+}
+
+func stringSliceContains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
@@ -53,6 +73,106 @@ func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
 	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("expected config file %q: %v", configPath, err)
+	}
+}
+
+func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		return filepath.Join(home, "bin", name), nil
+	}
+
+	var commands []string
+	runCommand = func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}
+
+	result, err := RunInstall([]string{
+		"--agent", "pi",
+		"--agent", "opencode",
+		"--component", "engram",
+	}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	assertFileContains(t, filepath.Join(home, ".pi", "agent", "settings.json"), "npm:pi-mcp-adapter")
+	assertFileContains(t, filepath.Join(home, ".pi", "npm", "package.json"), "pi-mcp-adapter")
+	assertFileContains(t, filepath.Join(home, ".pi", "agent", "mcp.json"), "directTools")
+	assertFileContains(t, filepath.Join(home, ".config", "opencode", "opencode.json"), "engram")
+
+	for _, want := range []string{"pi install npm:pi-mcp-adapter", "npm exec --yes --package gentle-engram -- pi-engram init"} {
+		if !stringSliceContains(commands, want) {
+			t.Fatalf("commands missing %q; got %v", want, commands)
+		}
+	}
+}
+
+func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
+	binDir := t.TempDir()
+	fakePi := filepath.Join(binDir, "pi")
+	if err := os.WriteFile(fakePi, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake pi) error = %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		if name == "pi" {
+			return fakePi, nil
+		}
+		return "", exec.ErrNotFound
+	})
+	t.Cleanup(restorePreflightLookPath)
+
+	restoreCommand := runCommand
+	t.Cleanup(func() { runCommand = restoreCommand })
+
+	var commands []string
+	runCommand = func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}
+
+	step := agentInstallStep{
+		id:      "agent:pi",
+		agent:   model.AgentPi,
+		homeDir: t.TempDir(),
+	}
+
+	if err := step.Run(); err != nil {
+		t.Fatalf("agentInstallStep.Run() error = %v", err)
+	}
+
+	for _, want := range []string{
+		"pi install npm:gentle-pi",
+		"pi install npm:gentle-engram",
+		"pi install npm:pi-mcp-adapter",
+		"npm exec --yes --package gentle-engram -- pi-engram init",
+		"pi install npm:pi-subagents",
+		"pi install npm:pi-intercom",
+		"pi install npm:@juicesharp/rpiv-ask-user-question",
+		"pi install npm:pi-web-access",
+		"pi install npm:pi-lens",
+		"pi install npm:@juicesharp/rpiv-todo",
+		"pi install npm:pi-btw",
+	} {
+		if !stringSliceContains(commands, want) {
+			t.Fatalf("commands missing %q; got %v", want, commands)
+		}
 	}
 }
 

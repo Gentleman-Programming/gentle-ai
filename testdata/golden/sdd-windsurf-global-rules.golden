@@ -31,6 +31,27 @@ Anti-patterns — these ALWAYS inflate context without need:
 - Running tests or builds inline → defer to `sdd-verify` phase
 - Reading files as preparation for edits, then editing inline → do both in the same phase
 
+Phase boundaries are not optional once complexity appears. If a task crosses a trigger below, stop the monolithic flow, save artifacts, and move through the smallest safe SDD phase instead of continuing ad hoc.
+
+#### Mandatory Phase-Boundary Triggers
+
+These are orchestrator stop rules for solo-agent platforms. Once any trigger fires, the orchestrator MUST defer to the right SDD phase or explicitly tell the user why deferral would be unsafe or wasteful for this exact case.
+
+1. **4-file rule**: if understanding requires reading 4+ files, run an exploration/mapping phase before implementation.
+2. **Multi-file write rule**: if implementation will touch 2+ non-trivial files, require an explicit apply phase and verify phase boundary.
+3. **PR rule**: before commit, push, or PR after code changes, run verification/review unless the diff is trivial docs/text.
+4. **Incident rule**: after wrong `cwd`, accidental repo/worktree mutation, merge recovery, confusing test command, or environment workaround, stop and perform a fresh audit/verification pass before continuing.
+5. **Long-session rule**: after roughly 20 tool calls, 5 exploratory file reads, or 2 non-mechanical edits without a phase boundary and growing complexity, pause and re-plan instead of silently continuing monolithically.
+6. **Fresh review rule**: when the platform has no custom review sub-agent, simulate independence by re-reading the diff/spec from scratch during verification and challenging prior assumptions.
+
+#### Cost and Context Balance
+
+- Keep exploration, apply, and verify concerns separated even when all phases run in one conversation.
+- Preserve one writer thread; do not interleave broad exploration with edits unless it is the explicit apply phase.
+- Use verification after implementation, conflict resolution, or incidents because its value is independent judgment, not token saving.
+- Avoid extra phase ceremony for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
+
+
 ## SDD Workflow (Spec-Driven Development)
 
 SDD is the structured planning layer for substantial changes.
@@ -78,7 +99,7 @@ Native Windsurf Workflow: `/sdd-new` is also available as a native Windsurf work
 
 ### Execution Mode
 
-When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ASK which execution mode they prefer:
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request, e.g. "haceme un SDD para X" / "do SDD for X") for the first time in a session, ASK which execution mode they prefer:
 
 - **Automatic** (`auto`): Run all phases sequentially without pausing. Show the final result only. Use this when the user wants speed and trusts the process.
 - **Interactive** (`interactive`): After each phase completes, show the result summary and ASK: "Want to adjust anything or continue?" before proceeding to the next phase. Use this when the user wants to review and steer each step.
@@ -97,7 +118,7 @@ For this agent (solo inline execution): **Interactive** is already the natural b
 
 ### Artifact Store Mode
 
-When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ALSO ASK which artifact store they want for this change:
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request) for the first time in a session, ALSO ASK which artifact store they want for this change:
 
 - **`engram`**: Fast, no files created. Artifacts live in engram only. Best for solo work and quick iteration. Note: re-running a phase overwrites the previous version (no history).
 - **`openspec`**: File-based. Creates `openspec/` directory with full artifact trail. Committable, shareable with team, full git history.
@@ -109,7 +130,7 @@ Cache the artifact store choice for the session. Pass it as `artifact_store.mode
 
 ### Delivery Strategy
 
-On the first `/sdd-new`, `/sdd-ff`, or `/sdd-continue` in a session, ask once for and cache delivery strategy: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
+On the first `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request) in a session, ask once for and cache delivery strategy: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
 
 ### Dependency Graph
 ```

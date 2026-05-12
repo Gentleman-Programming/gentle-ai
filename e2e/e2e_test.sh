@@ -217,7 +217,7 @@ test_preset_ecosystem_components() {
 }
 
 test_preset_full_components() {
-    log_test "Preset full-gentleman produces 7 components"
+    log_test "Preset full-gentleman includes core and optional Gentleman components"
 
     output=$($BINARY install --preset full-gentleman --agent claude-code --dry-run 2>&1) || true
 
@@ -231,6 +231,8 @@ test_preset_full_components() {
     assert_output_contains "$components_line" "persona" "Full includes persona"
     assert_output_contains "$components_line" "permissions" "Full includes permissions"
     assert_output_contains "$components_line" "gga" "Full includes gga"
+    assert_output_contains "$components_line" "claude-theme" "Full includes Claude Gentleman theme"
+    assert_output_contains "$components_line" "opencode-gentle-logo" "Full includes OpenCode Gentle logo"
 }
 
 test_dry_run_full_preset_persona_before_sdd() {
@@ -269,14 +271,21 @@ test_dry_run_full_preset_persona_before_sdd() {
     fi
 }
 
-test_preset_no_theme_in_any_preset() {
-    log_test "Theme is NOT in any preset"
+test_preset_no_legacy_theme_in_any_preset() {
+    log_test "Legacy theme component is NOT in any preset"
 
     for preset in minimal ecosystem-only full-gentleman; do
         output=$($BINARY install --preset "$preset" --agent claude-code --dry-run 2>&1) || true
         local components_line
         components_line=$(echo "$output" | grep "Components order:")
-        assert_output_not_contains "$components_line" "theme" "Preset '$preset' does NOT include theme"
+        local order_str
+        order_str=${components_line#*Components order:}
+        order_str=${order_str# }
+        if echo "$order_str" | tr ',' '\n' | grep -qx "theme"; then
+            log_fail "Preset '$preset' unexpectedly includes legacy theme component"
+        else
+            log_pass "Preset '$preset' does NOT include legacy theme component"
+        fi
     done
 }
 
@@ -2134,7 +2143,7 @@ test_preset_minimal_components
 test_preset_ecosystem_components
 test_preset_full_components
 test_dry_run_full_preset_persona_before_sdd
-test_preset_no_theme_in_any_preset
+test_preset_no_legacy_theme_in_any_preset
 test_preset_custom_no_components
 test_preset_custom_explicit_components
 

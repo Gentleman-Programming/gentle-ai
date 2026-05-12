@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -57,6 +58,9 @@ func injectMergeIntoSettings(homeDir string, adapter agents.Adapter) (InjectionR
 	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
 		overlay = OpenCodeContext7OverlayJSON()
 	}
+	if adapter.Agent() == model.AgentOpenClaw {
+		return injectOpenClawMergeIntoSettings(settingsPath)
+	}
 
 	settingsWrite, err := mergeJSONFile(settingsPath, overlay)
 	if err != nil {
@@ -64,6 +68,73 @@ func injectMergeIntoSettings(homeDir string, adapter agents.Adapter) (InjectionR
 	}
 
 	return InjectionResult{Changed: settingsWrite.Changed, Files: []string{settingsPath}}, nil
+}
+
+func injectOpenClawMergeIntoSettings(settingsPath string) (InjectionResult, error) {
+	baseJSON, err := osReadFile(settingsPath)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	normalized, err := migrateOpenClawLegacyMCPServers(baseJSON)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	merged, err := filemerge.MergeJSONObjects(normalized, OpenClawContext7OverlayJSON())
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	settingsWrite, err := filemerge.WriteFileAtomic(settingsPath, merged, 0o644)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	return InjectionResult{Changed: settingsWrite.Changed, Files: []string{settingsPath}}, nil
+}
+
+func migrateOpenClawLegacyMCPServers(baseJSON []byte) ([]byte, error) {
+	normalized, err := filemerge.MergeJSONObjects(baseJSON, []byte("{}"))
+	if err != nil {
+		return nil, err
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(normalized, &root); err != nil {
+		return nil, fmt.Errorf("unmarshal openclaw settings json: %w", err)
+	}
+
+	legacyServers, ok := root["mcpServers"].(map[string]any)
+	if !ok {
+		return normalized, nil
+	}
+
+	mcp, ok := root["mcp"].(map[string]any)
+	if !ok {
+		mcp = map[string]any{}
+		root["mcp"] = mcp
+	}
+
+	servers, ok := mcp["servers"].(map[string]any)
+	if !ok {
+		servers = map[string]any{}
+		mcp["servers"] = servers
+	}
+
+	for name, server := range legacyServers {
+		if _, exists := servers[name]; !exists {
+			servers[name] = server
+		}
+	}
+	delete(root, "mcpServers")
+
+	migrated, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal migrated openclaw settings json: %w", err)
+	}
+
+	return append(migrated, '\n'), nil
 }
 
 // injectMCPConfigFile writes to a dedicated mcp.json config file (Cursor pattern).

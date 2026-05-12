@@ -1,0 +1,12 @@
+STRICT TDD MODE
+
+Should agents follow Strict TDD (RED → GREEN → REFACTOR) for every task?
+When enabled, the sdd-apply agent writes tests first, confirms failure,
+then implements the minimum code to pass before refactoring.
+
+▸ ( ) Enable
+  (*) Disable
+
+  Back
+
+j/k: navigate • enter: select • esc: back

@@ -1,6 +1,6 @@
 ---
 name: work-unit-commits
-description: "Structure commits as deliverable work units instead of file-type batches, with tests and docs kept beside the code they verify. Trigger: when implementing a change, preparing commits, splitting PRs, or planning chained or stacked PRs."
+description: "Plan commits as reviewable work units. Trigger: implementation, commit splitting, chained PRs, or keeping tests and docs with code."
 license: Apache-2.0
 metadata:
   author: gentleman-programming

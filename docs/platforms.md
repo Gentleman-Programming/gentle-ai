@@ -10,40 +10,21 @@
 | Linux (Ubuntu/Debian) | apt | Supported |
 | Linux (Arch) | pacman | Supported |
 | Linux (Fedora/RHEL family) | dnf | Supported |
-| Windows 10/11 | winget | Supported |
+| Windows 10/11 | Scoop | Supported |
 
 Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, CentOS Stream, Rocky Linux, AlmaLinux, etc.).
 
-Release binaries are built for `linux`, `darwin`, and `windows` on both `amd64` and `arm64`.
+Release artifacts are produced by CI, but Windows users should install through Scoop so upgrades stay consistent.
 
 ---
 
 ## Windows Notes
 
-- **winget** is used as the default package manager (pre-installed on Windows 10/11).
+- **Scoop** is the supported Windows install path for Gentle AI.
 - **npm global installs** do not require `sudo` on Windows (user-writable by default).
 - **curl** is pre-installed on Windows 10+ and does not require separate installation.
 - **PowerShell** is the default shell when `$SHELL` is not set.
-- Release archives use `.zip` format on Windows (`.tar.gz` on macOS/Linux).
 - **GGA on Windows** works from both Git Bash and PowerShell. gentle-ai installs a `gga.ps1` shim that automatically delegates to Git Bash, so no manual shell switching is required.
-
----
-
-## Windows Security Verification
-
-Some antivirus products can flag unsigned Go binaries heuristically.
-
-Use the release checksum to verify integrity:
-
-```powershell
-# 1) Download checksums.txt from the same release tag
-# 2) Compute local hash
-Get-FileHash .\gentle-ai_<VERSION>_windows_amd64.zip -Algorithm SHA256
-
-# 3) Compare the hash with checksums.txt entry for that file
-```
-
-If the hash matches `checksums.txt`, the file is authentic for that release.
 
 ---
 
@@ -61,3 +42,5 @@ If the hash matches `checksums.txt`, the file is authentic for that release.
 | Kimi | `%USERPROFILE%\.kimi\` (includes `config.toml`, system prompt, agents, MCP) |
 | Antigravity | `%USERPROFILE%\.gemini\antigravity\` |
 | Kiro IDE | `%USERPROFILE%\.kiro\steering\` (prompts) + `%USERPROFILE%\.kiro\skills\` (skills) + `%USERPROFILE%\.kiro\agents\` (SDD agents) + `%APPDATA%\kiro\User\settings.json` (settings) + `%USERPROFILE%\.kiro\settings\mcp.json` (MCP) |
+| OpenClaw | `%USERPROFILE%\.openclaw\openclaw.json` (global MCP/settings) + active workspace from `agents.defaults.workspace` for `AGENTS.md` / `SOUL.md` / workspace-scoped SDD skills |
+| Pi | `%USERPROFILE%\.pi\` (Pi config, project agents/chains, Gentle AI support assets) |

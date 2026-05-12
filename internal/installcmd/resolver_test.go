@@ -459,6 +459,31 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "pi missing binary returns actionable remediation",
+			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true},
+			agent:   model.AgentPi,
+			lookPath: func(file string) (string, error) {
+				if file == "pi" {
+					return "", fmt.Errorf("not found")
+				}
+				return "/usr/bin/" + file, nil
+			},
+			wantErr:     true,
+			errContains: "Pi requires the `pi` executable",
+		},
+		{
+			name:    "pi with binary present passes preflight",
+			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true},
+			agent:   model.AgentPi,
+			lookPath: func(file string) (string, error) {
+				if file == "pi" {
+					return "/usr/bin/pi", nil
+				}
+				return "", fmt.Errorf("not found")
+			},
+			wantErr: false,
+		},
+		{
 			name:    "non kimi agent does not require uv",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true},
 			agent:   model.AgentClaudeCode,

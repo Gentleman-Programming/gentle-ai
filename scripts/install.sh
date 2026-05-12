@@ -62,6 +62,7 @@ Usage: install.sh [OPTIONS]
 Options:
   --method METHOD   Force install method: brew, go, binary (default: auto-detect)
   --dir DIR         Custom install directory for binary method
+  --insecure        Skip checksum verification (not recommended)
   -h, --help        Show this help
 
 Install methods (auto-detected in priority order):
@@ -73,6 +74,7 @@ Examples:
   curl -sL https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/main/scripts/install.sh | bash
   ./install.sh --method binary
   ./install.sh --method binary --dir \$HOME/.local/bin
+  ./install.sh --method binary --insecure   # skip checksum (not recommended)
 
 EOF
 }
@@ -299,7 +301,7 @@ install_binary() {
 
     success "Downloaded ${archive_name} (${file_size} bytes)"
 
-    # Download and verify checksum
+    # Download and verify checksum — fail closed unless --insecure is set
     info "Verifying checksum..."
     if curl -sL -o "${tmpdir}/checksums.txt" "$checksums_url"; then
         local expected_checksum
@@ -312,8 +314,12 @@ install_binary() {
             elif command -v shasum &>/dev/null; then
                 actual_checksum="$(shasum -a 256 "${tmpdir}/${archive_name}" | awk '{print $1}')"
             else
-                warn "No sha256sum or shasum found — skipping checksum verification"
-                actual_checksum="$expected_checksum"
+                if [ "$INSECURE" = "true" ]; then
+                    warn "No sha256sum or shasum found — checksum verification skipped (--insecure)"
+                    actual_checksum="$expected_checksum"
+                else
+                    fatal "No sha256sum or shasum tool found. Cannot verify checksum.\nInstall coreutils (sha256sum) or use --insecure to skip (not recommended)."
+                fi
             fi
 
             if [ "$actual_checksum" != "$expected_checksum" ]; then
@@ -321,10 +327,18 @@ install_binary() {
             fi
             success "Checksum verified"
         else
-            warn "Archive not found in checksums.txt — skipping verification"
+            if [ "$INSECURE" = "true" ]; then
+                warn "Archive '${archive_name}' not found in checksums.txt — checksum verification skipped (--insecure)"
+            else
+                fatal "Archive '${archive_name}' not found in checksums.txt. Refusing to install unverified binary.\nUse --insecure to skip (not recommended)."
+            fi
         fi
     else
-        warn "Could not download checksums.txt — skipping verification"
+        if [ "$INSECURE" = "true" ]; then
+            warn "Could not download checksums.txt — checksum verification skipped (--insecure)"
+        else
+            fatal "Could not download checksums.txt from:\n  ${checksums_url}\nRefusing to install without integrity verification.\nUse --insecure to skip (not recommended)."
+        fi
     fi
 
     # Extract binary
@@ -456,6 +470,7 @@ main() {
     # Parse arguments
     FORCE_METHOD=""
     INSTALL_DIR=""
+    INSECURE="false"
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -466,6 +481,9 @@ main() {
             --dir)
                 [ $# -lt 2 ] && fatal "--dir requires an argument"
                 INSTALL_DIR="$2"; shift 2
+                ;;
+            --insecure)
+                INSECURE="true"; shift
                 ;;
             -h|--help)
                 setup_colors

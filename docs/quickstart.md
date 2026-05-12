@@ -30,6 +30,11 @@
 
 - Go 1.24+ (for building from source).
 - Node.js / npm if installing Claude Code (agent is installed via `npm install -g`).
+- Pi installed and available as `pi` on `PATH` if you select the Pi agent.
+
+### Windows
+
+- Scoop installed. Gentle AI recommends Scoop as the Windows install path.
 
 ## Run
 
@@ -54,6 +59,8 @@ After completion, verify that agent configs and selected components were install
 When checks pass, installer reports:
 
 `You're ready. Run 'claude' or 'opencode' and start building.`
+
+For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi`, `gentle-engram`, `pi-subagents`, `pi-intercom`, `@juicesharp/rpiv-ask-user-question`, `pi-web-access`, `pi-lens`, `@juicesharp/rpiv-todo`, and `pi-btw` through `pi install npm:*` commands.
 
 ## Unsupported platforms
 

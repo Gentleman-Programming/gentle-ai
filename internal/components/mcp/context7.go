@@ -8,6 +8,11 @@ var defaultContext7OverlayJSON = []byte("{\n  \"mcpServers\": {\n    \"context7\
 // Context7 is a remote MCP server — no npx needed.
 var openCodeContext7OverlayJSON = []byte("{\n  \"mcp\": {\n    \"context7\": {\n      \"type\": \"remote\",\n      \"url\": \"https://mcp.context7.com/mcp\",\n      \"enabled\": true\n    }\n  }\n}\n")
 
+// openClawContext7OverlayJSON is the OpenClaw openclaw.json overlay.
+// OpenClaw rejects top-level mcpServers and expects MCP entries under
+// mcp.servers.
+var openClawContext7OverlayJSON = []byte("{\n  \"mcp\": {\n    \"servers\": {\n      \"context7\": {\n        \"command\": \"npx\",\n        \"args\": [\n          \"-y\",\n          \"@upstash/context7-mcp\"\n        ]\n      }\n    }\n  }\n}\n")
+
 // vsCodeContext7OverlayJSON is the VS Code mcp.json overlay using the "servers" key.
 var vsCodeContext7OverlayJSON = []byte("{\n  \"servers\": {\n    \"context7\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.context7.com/mcp\"\n    }\n  }\n}\n")
 
@@ -34,6 +39,12 @@ func DefaultContext7OverlayJSON() []byte {
 func OpenCodeContext7OverlayJSON() []byte {
 	content := make([]byte, len(openCodeContext7OverlayJSON))
 	copy(content, openCodeContext7OverlayJSON)
+	return content
+}
+
+func OpenClawContext7OverlayJSON() []byte {
+	content := make([]byte, len(openClawContext7OverlayJSON))
+	copy(content, openClawContext7OverlayJSON)
 	return content
 }
 

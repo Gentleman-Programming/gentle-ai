@@ -25,24 +25,41 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 
 **After**: Your agent now has memory, skills, workflow, MCP tools, and a persona that actually teaches you.
 
-### 12 Supported Agents
+### 13 Supported Agents
 
-| Agent | Delegation Model | Key Feature |
-|-------|:---:|---|
-| **Claude Code** | Full (Task tool) | Sub-agents, output styles |
-| **OpenCode** | Full (multi-mode overlay) | Per-phase model routing |
-| **Kilo Code** | Full (multi-mode overlay) | OpenCode-compatible config in `~/.config/kilo` |
-| **Gemini CLI** | Full (experimental) | Custom agents in `~/.gemini/agents/` |
-| **Cursor** | Full (native subagents) | 10 SDD agents in `~/.cursor/agents/` |
-| **VS Code Copilot** | Full (runSubagent) | Parallel execution |
-| **Codex** | Solo-agent | CLI-native, TOML config |
-| **Windsurf** | Solo-agent | Plan Mode, Code Mode, native workflows |
-| **Antigravity** | Solo-agent + Mission Control | Built-in Browser/Terminal sub-agents |
-| **Kimi Code** | Full (native custom agents) | Modular prompt templates in `~/.kimi` |
-| **Kiro IDE** | Full (native subagents) | Native `~/.kiro/agents/` + steering orchestration |
-| **Qwen Code** | Full (native sub-agents) | Slash commands, `~/.qwen/commands/`, `auto_edit` mode |
+| Agent               |         Delegation Model         | Key Feature                                                     |
+| ------------------- | :------------------------------: | --------------------------------------------------------------- |
+| **Claude Code**     |         Full (Task tool)         | Sub-agents, output styles                                       |
+| **OpenCode**        |    Full (multi-mode overlay)     | Per-phase model routing                                         |
+| **Kilo Code**       |    Full (multi-mode overlay)     | OpenCode-compatible config in `~/.config/kilo`                  |
+| **Gemini CLI**      |       Full (experimental)        | Custom agents in `~/.gemini/agents/`                            |
+| **Cursor**          |     Full (native subagents)      | 10 SDD agents in `~/.cursor/agents/`                            |
+| **VS Code Copilot** |        Full (runSubagent)        | Parallel execution                                              |
+| **Codex**           |            Solo-agent            | CLI-native, TOML config                                         |
+| **Windsurf**        |            Solo-agent            | Plan Mode, Code Mode, native workflows                          |
+| **Antigravity**     |   Solo-agent + Mission Control   | Built-in Browser/Terminal sub-agents                            |
+| **Kimi Code**       |   Full (native custom agents)    | Modular prompt templates in `~/.kimi`                           |
+| **Kiro IDE**        |     Full (native subagents)      | Native `~/.kiro/agents/` + steering orchestration               |
+| **Qwen Code**       |     Full (native sub-agents)     | Slash commands, `~/.qwen/commands/`, `auto_edit` mode           |
+| **OpenClaw**        |            Solo-agent            | Workspace-first `AGENTS.md` / `SOUL.md` with global MCP config  |
+| **Pi**              | Full (package-managed subagents) | `gentle-pi` harness with persona/model commands + Engram memory |
 
 > **Note**: This project supersedes [Agent Teams Lite](https://github.com/Gentleman-Programming/agent-teams-lite) (now archived). Everything ATL provided is included here with better installation, automatic updates, and persistent memory.
+
+### Delegation Triggers
+
+Gentle-AI keeps the parent/orchestrator thread thin. Once a task stops being small, delegation or an explicit SDD phase boundary is expected rather than optional.
+
+| Trigger                                                                    | Expected behavior                                         |
+| -------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Reading 4+ files to understand a flow                                      | Delegate exploration or run an exploration phase.         |
+| Touching 2+ non-trivial files                                              | Use one writer or require fresh review before completion. |
+| Commit, push, or PR after code changes                                     | Run fresh review unless the diff is trivial docs/text.    |
+| Wrong cwd, worktree/git accident, merge recovery, confusing test/env issue | Stop and run a fresh audit before continuing.             |
+| Long monolithic session with accumulating complexity                       | Pause and delegate, re-plan, or justify why not.          |
+| Adversarial review of diffs, conflicts, PR readiness, or incidents         | Use fresh context when the agent platform supports it.    |
+
+The goal is not ceremony. The goal is to avoid accidental chaos while preserving one responsible orchestrator and one writer thread.
 
 ---
 
@@ -61,16 +78,14 @@ scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
 scoop install gentle-ai
 ```
 
-Or via PowerShell script: `irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex`
-
 ### After install: project-level setup
 
 Once your agents are configured, open your AI agent in a project and run these two commands to register the project context:
 
-| Command | What it does | When to re-run |
-|---------|-------------|----------------|
-| `/sdd-init` | Detects stack, testing capabilities, activates Strict TDD Mode if available | When your project adds/removes test frameworks, or first time in a new project |
-| `skill-registry` | Scans installed skills and project conventions, builds the registry | After installing/removing skills, or first time in a new project |
+| Command          | What it does                                                                | When to re-run                                                                 |
+| ---------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `/sdd-init`      | Detects stack, testing capabilities, activates Strict TDD Mode if available | When your project adds/removes test frameworks, or first time in a new project |
+| `skill-registry` | Scans installed skills and project conventions, builds the registry         | After installing/removing skills, or first time in a new project               |
 
 These are **not required** for basic usage. The SDD orchestrator runs `/sdd-init` automatically if it detects no context. But if something changed in your project (new test runner, new dependencies), re-running them manually ensures the agents have up-to-date context.
 
@@ -91,7 +106,7 @@ scoop install gentle-ai
 ```
 
 <details>
-<summary><strong>Other install methods</strong> (Go install, PowerShell script, binary download)</summary>
+<summary><strong>Other install methods</strong> (Go install)</summary>
 
 #### Go install (any platform with Go 1.24+)
 
@@ -99,22 +114,14 @@ scoop install gentle-ai
 go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest
 ```
 
-#### Windows (PowerShell script)
+#### Windows
+
+Use Scoop on Windows. It is the supported install path for keeping Gentle AI updated cleanly:
 
 ```powershell
-irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
+scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
+scoop install gentle-ai
 ```
-
-**Migrating from PowerShell installer to Scoop?** Remove the old binary first:
-
-```powershell
-Remove-Item "$env:LOCALAPPDATA\gentle-ai" -Recurse -Force
-# Then install via Scoop as shown above
-```
-
-#### From releases
-
-Download the binary for your platform from [GitHub Releases](https://github.com/Gentleman-Programming/gentle-ai/releases).
 
 </details>
 
@@ -144,11 +151,11 @@ gentle-ai sync --profile-phase cheap:sdd-design:anthropic/claude-sonnet-4-202505
 
 After creating a profile, open OpenCode and press **Tab** to switch between `gentle-orchestrator` (default) and your custom profiles.
 
-| What you need | Use this |
-|---|---|
-| Default SDD conductor | `gentle-orchestrator` |
-| Legacy configs | `sdd-orchestrator` is migrated to `gentle-orchestrator` on sync |
-| Named model profiles | `sdd-orchestrator-cheap`, `sdd-orchestrator-premium`, etc. |
+| What you need         | Use this                                                        |
+| --------------------- | --------------------------------------------------------------- |
+| Default SDD conductor | `gentle-orchestrator`                                           |
+| Legacy configs        | `sdd-orchestrator` is migrated to `gentle-orchestrator` on sync |
+| Named model profiles  | `sdd-orchestrator-cheap`, `sdd-orchestrator-premium`, etc.      |
 
 **Full guide**: [OpenCode SDD Profiles](docs/opencode-profiles.md)
 
@@ -169,19 +176,20 @@ engram tui                    # Visual memory browser
 
 ## Documentation
 
-| Topic | Description |
-|-------|-------------|
-| [Intended Usage](docs/intended-usage.md) | How Gentle-AI is meant to be used — the mental model |
-| [OpenCode SDD Profiles](docs/opencode-profiles.md) | Create and manage per-phase model profiles for OpenCode |
-| [Engram Commands](docs/engram.md) | CLI commands, MCP tools, project management, team sharing |
-| [Codebase Guide](docs/CODEBASE-GUIDE.md) | Maintainer map for repository ownership, architecture boundaries, and review guardrails |
-| [Agents](docs/agents.md) | Supported agents, feature matrix, config paths, and per-agent notes |
-| [Components, Skills & Presets](docs/components.md) | All components, GGA behavior, skill catalog, and preset definitions |
-| [Usage](docs/usage.md) | Persona modes, interactive TUI, CLI flags, and dependency management |
-| [Backup & Rollback](docs/rollback.md) | Backup retention, compression, dedup, pinning, and restore |
-| [Kiro IDE](docs/kiro.md) | Kiro-specific setup, config paths, native subagents, and SDD behavior |
-| [Platforms](docs/platforms.md) | Supported platforms, Windows notes, security verification, config paths |
-| [Architecture & Development](docs/architecture.md) | Codebase layout, testing, and relationship to Gentleman.Dots |
+| Topic                                              | Description                                                                             |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| [Intended Usage](docs/intended-usage.md)           | How Gentle-AI is meant to be used — the mental model                                    |
+| [OpenCode SDD Profiles](docs/opencode-profiles.md) | Create and manage per-phase model profiles for OpenCode                                 |
+| [Engram Commands](docs/engram.md)                  | CLI commands, MCP tools, project management, team sharing                               |
+| [Codebase Guide](docs/CODEBASE-GUIDE.md)           | Maintainer map for repository ownership, architecture boundaries, and review guardrails |
+| [Agents](docs/agents.md)                           | Supported agents, feature matrix, config paths, and per-agent notes                     |
+| [Pi Agent](docs/pi.md)                             | Pi package stack, commands, persona, model assignment, and troubleshooting              |
+| [Components, Skills & Presets](docs/components.md) | All components, GGA behavior, skill catalog, and preset definitions                     |
+| [Usage](docs/usage.md)                             | Persona modes, interactive TUI, CLI flags, and dependency management                    |
+| [Backup & Rollback](docs/rollback.md)              | Backup retention, compression, dedup, pinning, and restore                              |
+| [Kiro IDE](docs/kiro.md)                           | Kiro-specific setup, config paths, native subagents, and SDD behavior                   |
+| [Platforms](docs/platforms.md)                     | Supported platforms, Windows notes, security verification, config paths                 |
+| [Architecture & Development](docs/architecture.md) | Codebase layout, testing, and relationship to Gentleman.Dots                            |
 
 ---
 
@@ -210,6 +218,7 @@ This project exists because of the community. See [CONTRIBUTORS.md](CONTRIBUTORS
 
 - **Just installed?** Read [Intended Usage](docs/intended-usage.md) -- the one page that explains the mental model.
 - **Using OpenCode?** Set up [SDD Profiles](docs/opencode-profiles.md) to assign different models per phase.
+- **Using Pi?** Read [Pi Agent](docs/pi.md) for Pi commands, persona, model assignments, and package behavior.
 - **Want to share memory across machines?** Learn `engram sync` in the [Engram reference](docs/engram.md).
 - **Ready to contribute?** Check [CONTRIBUTING.md](CONTRIBUTING.md) and the [open issues](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3A%22status%3Aapproved%22).
 

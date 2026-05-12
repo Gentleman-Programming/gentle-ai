@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -309,6 +312,256 @@ func TestFindBinaryInTar(t *testing.T) {
 	got, _ := os.ReadFile(outPath)
 	if string(got) != string(content) {
 		t.Errorf("binary content = %q, want %q", got, content)
+	}
+}
+
+// --- TestExpectedChecksumFor ---
+
+func TestExpectedChecksumFor(t *testing.T) {
+	content := "abc123  gentle-ai_1.0.0_darwin_arm64.tar.gz\ndef456  gentle-ai_1.0.0_linux_amd64.tar.gz\n"
+
+	tests := []struct {
+		name      string
+		content   string
+		filename  string
+		want      string
+		wantErr   bool
+	}{
+		{
+			name:     "found first entry",
+			content:  content,
+			filename: "gentle-ai_1.0.0_darwin_arm64.tar.gz",
+			want:     "abc123",
+		},
+		{
+			name:     "found second entry",
+			content:  content,
+			filename: "gentle-ai_1.0.0_linux_amd64.tar.gz",
+			want:     "def456",
+		},
+		{
+			name:     "not found returns error",
+			content:  content,
+			filename: "gentle-ai_1.0.0_windows_amd64.zip",
+			wantErr:  true,
+		},
+		{
+			name:     "empty content returns error",
+			content:  "",
+			filename: "gentle-ai_1.0.0_darwin_arm64.tar.gz",
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := expectedChecksumFor(tc.content, tc.filename)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("expectedChecksumFor(%q) error = %v, wantErr %v", tc.filename, err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("expectedChecksumFor(%q) = %q, want %q", tc.filename, got, tc.want)
+			}
+		})
+	}
+}
+
+// --- TestFetchChecksums ---
+
+func TestFetchChecksums(t *testing.T) {
+	const fakeContent = "abc123  gentle-ai_1.0.0_darwin_arm64.tar.gz\n"
+
+	t.Run("success returns content", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, fakeContent)
+		}))
+		defer server.Close()
+
+		orig := httpClient
+		t.Cleanup(func() { httpClient = orig })
+		httpClient = server.Client()
+
+		got, err := fetchChecksums(context.Background(), server.URL+"/checksums.txt")
+		if err != nil {
+			t.Fatalf("fetchChecksums: unexpected error: %v", err)
+		}
+		if got != fakeContent {
+			t.Errorf("fetchChecksums = %q, want %q", got, fakeContent)
+		}
+	})
+
+	t.Run("HTTP 404 returns error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		orig := httpClient
+		t.Cleanup(func() { httpClient = orig })
+		httpClient = server.Client()
+
+		_, err := fetchChecksums(context.Background(), server.URL+"/checksums.txt")
+		if err == nil {
+			t.Error("expected error for HTTP 404, got nil")
+		}
+	})
+}
+
+// --- TestDownloadToFile ---
+
+func TestDownloadToFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("binary download not supported on Windows")
+	}
+
+	content := []byte("test archive content")
+	h := sha256.New()
+	h.Write(content)
+	wantDigest := hex.EncodeToString(h.Sum(nil))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write(content) //nolint:errcheck
+	}))
+	defer server.Close()
+
+	orig := httpClient
+	t.Cleanup(func() { httpClient = orig })
+	httpClient = server.Client()
+
+	outPath := filepath.Join(t.TempDir(), "downloaded.tar.gz")
+	gotDigest, err := downloadToFile(context.Background(), server.URL+"/file", outPath)
+	if err != nil {
+		t.Fatalf("downloadToFile: %v", err)
+	}
+	if gotDigest != wantDigest {
+		t.Errorf("digest = %q, want %q", gotDigest, wantDigest)
+	}
+	if _, err := os.Stat(outPath); err != nil {
+		t.Errorf("output file not created: %v", err)
+	}
+}
+
+// --- TestDownload_ChecksumVerification ---
+
+// TestDownload_ChecksumVerification exercises all four checksum failure modes
+// from issue #245: match, mismatch, missing checksums.txt, and archive not listed.
+func TestDownload_ChecksumVerification(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("binary download not supported on Windows")
+	}
+
+	binaryName := "fake-tool"
+	tarPath := makeFakeTarGz(t, binaryName)
+	tarContent, err := os.ReadFile(tarPath)
+	if err != nil {
+		t.Fatalf("read fake tar.gz: %v", err)
+	}
+
+	// Compute the real SHA256 of the archive so we can produce a matching digest.
+	h := sha256.New()
+	h.Write(tarContent)
+	realDigest := hex.EncodeToString(h.Sum(nil))
+
+	// archiveName is what Download computes internally; we match it exactly.
+	archiveName := resolveArchiveName(binaryName, "1.0.0", runtime.GOOS, runtime.GOARCH)
+
+	tests := []struct {
+		name            string
+		checksumsBody   string
+		checksumsStatus int
+		wantErr         bool
+		errContains     string
+	}{
+		{
+			name:            "matching checksum succeeds",
+			checksumsBody:   fmt.Sprintf("%s  %s\n", realDigest, archiveName),
+			checksumsStatus: http.StatusOK,
+			wantErr:         false,
+		},
+		{
+			name:            "checksum mismatch returns error",
+			checksumsBody:   fmt.Sprintf("%s  %s\n", "deadbeefdeadbeef", archiveName),
+			checksumsStatus: http.StatusOK,
+			wantErr:         true,
+			errContains:     "checksum mismatch",
+		},
+		{
+			name:            "missing checksums.txt returns error",
+			checksumsBody:   "",
+			checksumsStatus: http.StatusNotFound,
+			wantErr:         true,
+			errContains:     "checksums.txt unavailable",
+		},
+		{
+			name:            "archive not in checksums.txt returns error",
+			checksumsBody:   "abc123  other-tool_1.0.0_linux_amd64.tar.gz\n",
+			checksumsStatus: http.StatusOK,
+			wantErr:         true,
+			errContains:     "not listed in checksums.txt",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "checksums.txt") {
+					w.WriteHeader(tc.checksumsStatus)
+					fmt.Fprint(w, tc.checksumsBody)
+				} else {
+					w.WriteHeader(http.StatusOK)
+					w.Write(tarContent) //nolint:errcheck
+				}
+			}))
+			defer server.Close()
+
+			// Mock HTTP client.
+			origClient := httpClient
+			t.Cleanup(func() { httpClient = origClient })
+			httpClient = server.Client()
+
+			// Mock URL builders to redirect to the test server.
+			origAssetURLFn := resolveAssetURLFn
+			origChecksumURLFn := resolveChecksumURLFn
+			t.Cleanup(func() {
+				resolveAssetURLFn = origAssetURLFn
+				resolveChecksumURLFn = origChecksumURLFn
+			})
+			resolveAssetURLFn = func(owner, repo, version, goos, goarch string) string {
+				return server.URL + "/" + archiveName
+			}
+			resolveChecksumURLFn = func(owner, repo, version string) string {
+				return server.URL + "/checksums.txt"
+			}
+
+			// Mock lookPathFn with a real temp binary (atomicReplace needs a valid path).
+			tmpBinary := filepath.Join(t.TempDir(), binaryName)
+			if err := os.WriteFile(tmpBinary, []byte("old binary"), 0o755); err != nil {
+				t.Fatalf("write temp binary: %v", err)
+			}
+			origLookPath := lookPathFn
+			t.Cleanup(func() { lookPathFn = origLookPath })
+			lookPathFn = func(name string) (string, error) { return tmpBinary, nil }
+
+			r := update.UpdateResult{
+				Tool: update.ToolInfo{
+					Name:  binaryName,
+					Owner: "test-owner",
+					Repo:  binaryName,
+				},
+				LatestVersion: "1.0.0",
+			}
+			profile := system.PlatformProfile{OS: runtime.GOOS}
+
+			err := Download(context.Background(), r, profile)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Download() error = %v, wantErr = %v", err, tc.wantErr)
+			}
+			if tc.errContains != "" && err != nil && !strings.Contains(err.Error(), tc.errContains) {
+				t.Errorf("Download() error = %q, want it to contain %q", err.Error(), tc.errContains)
+			}
+		})
 	}
 }
 

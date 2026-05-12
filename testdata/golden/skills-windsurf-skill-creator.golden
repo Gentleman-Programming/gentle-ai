@@ -1,13 +1,13 @@
 ---
 name: skill-creator
-description: "Creates new AI agent skills following the Agent Skills spec. Trigger: When user asks to create a new skill, add agent instructions, or document patterns for AI."
+description: "Trigger: new skills, agent instructions, documenting AI usage patterns. Create LLM-first skills with valid frontmatter."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
   version: "1.0"
 ---
 
-## When to Create a Skill
+## Activation Contract
 
 Create a skill when:
 - A pattern is used repeatedly and AI needs guidance
@@ -15,14 +15,31 @@ Create a skill when:
 - Complex workflows need step-by-step instructions
 - Decision trees help AI choose the right approach
 
-**Don't create a skill when:**
-- Documentation already exists (create a reference instead)
-- Pattern is trivial or self-explanatory
-- It's a one-off task
+Do not create a skill when the pattern is trivial, one-off, or better served by normal documentation.
 
----
+## Hard Rules
 
-## Skill Structure
+- When working in this repo, first follow `docs/skill-style-guide.md` as the normative source before creating or updating skills.
+- If that guide is unavailable, use the compact inline rules below.
+- A skill is a runtime instruction contract for an LLM, not human documentation.
+- Do not add a `Keywords` section; preserve essential trigger words in `description`.
+- References must point to local files.
+- Keep the skill body concise: target 180–450 tokens, recommended max 700, hard max 1000.
+
+## Decision Gates
+
+| Need | Action |
+|------|--------|
+| Code templates, schemas, fixtures, generated examples | Put them in `assets/` |
+| Conceptual detail, edge cases, existing docs | Put local links in `references/` |
+| Long explanation in `SKILL.md` | Move it to a supporting file |
+| Multiple meaningful paths | Add a compact decision table |
+
+## Execution Steps
+
+1. Check whether `docs/skill-style-guide.md` exists; if it does, apply it before the inline fallback rules.
+2. Confirm the skill does not already exist and the pattern is reusable.
+3. Create or update `skills/{skill-name}/SKILL.md` using this required structure:
 
 ```
 skills/{skill-name}/
@@ -33,124 +50,52 @@ skills/{skill-name}/
 └── references/           # Optional - links to local docs
     └── docs.md           # Points to docs/developer-guide/*.mdx
 ```
-
----
-
-## SKILL.md Template
+4. Use this frontmatter shape:
 
 ```markdown
 ---
 name: {skill-name}
-description: >
-  {One-line description of what this skill does}.
-  Trigger: {When the AI should load this skill}.
+description: "Trigger: {essential trigger words users or agents will say}. {What this skill does}."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
   version: "1.0"
 ---
+```
+5. Write sections in this order: Activation Contract, Hard Rules, Decision Gates, Execution Steps, Output Contract, References.
+6. Register the skill in `AGENTS.md` when it is a project skill.
 
-## When to Use
+## Inline Fallback Rules
 
-{Bullet points of when to use this skill}
+- `description` MUST be one physical line, quoted, YAML-safe, and include essential trigger words first.
+- `description` SHOULD be <=160 chars and MUST be <=250 chars.
+- Frontmatter MUST include `name`, `description`, `license`, `metadata.author`, and `metadata.version`.
+- Use imperative instructions, not tutorials or background prose.
+- Put supporting material in `assets/` or `references/`, not the main skill body.
 
-## Critical Patterns
+Good:
 
-{The most important rules - what AI MUST know}
-
-## Code Examples
-
-{Minimal, focused examples}
-
-## Commands
-
-```bash
-{Common commands}
+```yaml
+description: "Trigger: Jira task, ticket, issue, task creation. Create Jira tasks in the team format."
 ```
 
-## Resources
+Bad:
 
-- **Templates**: See [assets/](assets/) for {description}
-- **Documentation**: See [references/](references/) for local docs
+```yaml
+description: >
+  Create Jira tasks in the team format.
+  Trigger: Jira task, ticket, issue, or task creation.
+Keywords: jira, task
 ```
 
----
+## Output Contract
 
-## Naming Conventions
+Return:
+- Files created or modified.
+- Whether the repo style guide or inline fallback rules were used.
+- Any AGENTS.md registration change.
+- Any supporting files added under `assets/` or `references/`.
 
-| Type | Pattern | Examples |
-|------|---------|----------|
-| Generic skill | `{technology}` | `pytest`, `playwright`, `typescript` |
-| Project-specific | `{project}-{component}` | `myapp-api`, `myapp-ui` |
-| Testing skill | `{project}-test-{component}` | `myapp-test-sdk`, `myapp-test-api` |
-| Workflow skill | `{action}-{target}` | `skill-creator`, `jira-task` |
+## References
 
----
-
-## Decision: assets/ vs references/
-
-```
-Need code templates?        → assets/
-Need JSON schemas?          → assets/
-Need example configs?       → assets/
-Link to existing docs?      → references/
-Link to external guides?    → references/ (with local path)
-```
-
-**Key Rule**: `references/` should point to LOCAL files, not web URLs.
-
----
-
-## Frontmatter Fields
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | Yes | Skill identifier (lowercase, hyphens) |
-| `description` | Yes | What + Trigger in one block |
-| `license` | Yes | Always `Apache-2.0` |
-| `metadata.author` | Yes | `gentleman-programming` |
-| `metadata.version` | Yes | Semantic version as string |
-
----
-
-## Content Guidelines
-
-### DO
-- Start with the most critical patterns
-- Use tables for decision trees
-- Keep code examples minimal and focused
-- Include Commands section with copy-paste commands
-
-### DON'T
-- Add Keywords section (agent searches frontmatter, not body)
-- Duplicate content from existing docs (reference instead)
-- Include lengthy explanations (link to docs)
-- Add troubleshooting sections (keep focused)
-- Use web URLs in references (use local paths)
-
----
-
-## Registering the Skill
-
-After creating the skill, add it to `AGENTS.md`:
-
-```markdown
-| `{skill-name}` | {Description} | [SKILL.md](skills/{skill-name}/SKILL.md) |
-```
-
----
-
-## Checklist Before Creating
-
-- [ ] Skill doesn't already exist (check `skills/`)
-- [ ] Pattern is reusable (not one-off)
-- [ ] Name follows conventions
-- [ ] Frontmatter is complete (description includes trigger keywords)
-- [ ] Critical patterns are clear
-- [ ] Code examples are minimal
-- [ ] Commands section exists
-- [ ] Added to AGENTS.md
-
-## Resources
-
-- **Templates**: See [assets/](assets/) for SKILL.md template
+- `docs/skill-style-guide.md` — normative LLM-first skill style guide for this repo.

@@ -92,9 +92,19 @@ func ValidateAgentInstallPreflight(profile system.PlatformProfile, agent model.A
 	switch agent {
 	case model.AgentKimi:
 		return validateKimiInstallPreflight(profile)
+	case model.AgentPi:
+		return validatePiInstallPreflight()
 	default:
 		return nil
 	}
+}
+
+func validatePiInstallPreflight() error {
+	if _, err := cmdLookPath("pi"); err != nil {
+		return fmt.Errorf("Pi requires the `pi` executable in PATH before installing Gentle AI Pi packages")
+	}
+
+	return nil
 }
 
 func validateKimiInstallPreflight(profile system.PlatformProfile) error {

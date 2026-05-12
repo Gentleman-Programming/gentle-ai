@@ -195,6 +195,13 @@ func TestSDDOrchestratorPhaseConstant(t *testing.T) {
 	}
 }
 
+func TestRenderModelPickerShowsConfigWarning(t *testing.T) {
+	output := RenderModelPicker(nil, ModelPickerState{ConfigWarning: "invalid opencode.json"}, 0)
+	if !strings.Contains(output, "invalid opencode.json") {
+		t.Fatalf("RenderModelPicker() missing config warning; got:\n%s", output)
+	}
+}
+
 // ─── Issue #146: "Set all phases" label must not change when individual phase selected ─
 
 // TestSetAllPhasesLabelSeparateFromIndividualPhases verifies that the ModelPickerState

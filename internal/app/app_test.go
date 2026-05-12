@@ -2,7 +2,9 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
+	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
 )
 
 // TestListBackupsNewestFirst verifies that ListBackups returns manifests sorted
@@ -584,5 +589,124 @@ func TestUnknownCommandSuggestsHelp(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "gentle-ai help") {
 		t.Error("unknown command error should suggest 'gentle-ai help'")
+	}
+}
+
+func TestRunArgs_UpdateSkipsSelfUpdate(t *testing.T) {
+	origSelfUpdate := selfUpdateFn
+	origCheckAll := updateCheckAll
+	origDetect := detectSystem
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() {
+		selfUpdateFn = origSelfUpdate
+		updateCheckAll = origCheckAll
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+	})
+
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
+
+	selfUpdateCalled := 0
+	selfUpdateFn = func(context.Context, string, system.PlatformProfile, io.Writer) error {
+		selfUpdateCalled++
+		return nil
+	}
+
+	updateCheckAll = func(context.Context, string, system.PlatformProfile) []update.UpdateResult {
+		return []update.UpdateResult{
+			{
+				Tool:             update.ToolInfo{Name: "gentle-ai"},
+				InstalledVersion: "1.0.0",
+				LatestVersion:    "1.0.0",
+				Status:           update.UpToDate,
+			},
+		}
+	}
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{"update"}, &buf)
+	if err != nil {
+		t.Fatalf("RunArgs(update) error = %v", err)
+	}
+	if selfUpdateCalled != 0 {
+		t.Fatalf("selfUpdate should be skipped for explicit update flow; got %d call(s)", selfUpdateCalled)
+	}
+}
+
+func TestRunArgs_UpgradeSkipsSelfUpdate(t *testing.T) {
+	origSelfUpdate := selfUpdateFn
+	origCheckFiltered := updateCheckFiltered
+	origUpgradeExecute := upgradeExecute
+	origDetect := detectSystem
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() {
+		selfUpdateFn = origSelfUpdate
+		updateCheckFiltered = origCheckFiltered
+		upgradeExecute = origUpgradeExecute
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+	})
+
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
+
+	selfUpdateCalled := 0
+	selfUpdateFn = func(context.Context, string, system.PlatformProfile, io.Writer) error {
+		selfUpdateCalled++
+		return nil
+	}
+
+	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult {
+		return []update.UpdateResult{
+			{
+				Tool:             update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
+				InstalledVersion: "1.0.0",
+				LatestVersion:    "1.0.0",
+				Status:           update.UpToDate,
+			},
+		}
+	}
+
+	upgradeExecute = func(context.Context, []update.UpdateResult, system.PlatformProfile, string, bool, ...io.Writer) upgrade.UpgradeReport {
+		return upgrade.UpgradeReport{}
+	}
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{"upgrade", "--dry-run"}, &buf)
+	if err != nil {
+		t.Fatalf("RunArgs(upgrade --dry-run) error = %v", err)
+	}
+	if selfUpdateCalled != 0 {
+		t.Fatalf("selfUpdate should be skipped for explicit upgrade flow; got %d call(s)", selfUpdateCalled)
+	}
+}
+
+func TestIsExplicitUpdateFlow(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "empty args", args: nil, want: false},
+		{name: "no command", args: []string{}, want: false},
+		{name: "update", args: []string{"update"}, want: true},
+		{name: "upgrade", args: []string{"upgrade"}, want: true},
+		{name: "version", args: []string{"version"}, want: false},
+		{name: "help", args: []string{"help"}, want: false},
+		{name: "install", args: []string{"install"}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isExplicitUpdateFlow(tt.args)
+			if got != tt.want {
+				t.Fatalf("isExplicitUpdateFlow(%v) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
 	}
 }

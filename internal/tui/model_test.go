@@ -73,6 +73,156 @@ func TestAgentSelectionToggleAndContinue(t *testing.T) {
 	}
 }
 
+func TestPiOnlyAgentContinueSkipsPromptsAndIncludesEngram(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgents
+	m.Selection.Agents = []model.AgentID{model.AgentPi}
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+	m.Cursor = len(screensAgentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenDependencyTree {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenDependencyTree)
+	}
+	wantComponents := []model.ComponentID{model.ComponentEngram}
+	if !reflect.DeepEqual(state.Selection.Components, wantComponents) {
+		t.Fatalf("components = %v, want %v", state.Selection.Components, wantComponents)
+	}
+	if !reflect.DeepEqual(state.DependencyPlan.Agents, []model.AgentID{model.AgentPi}) {
+		t.Fatalf("dependency agents = %v, want [pi]", state.DependencyPlan.Agents)
+	}
+	if !reflect.DeepEqual(state.DependencyPlan.OrderedComponents, wantComponents) {
+		t.Fatalf("dependency components = %v, want %v", state.DependencyPlan.OrderedComponents, wantComponents)
+	}
+}
+
+func TestNewModelPiOnlyDetectionDefaultsToEngramOnly(t *testing.T) {
+	detection := system.DetectionResult{Configs: []system.ConfigState{{
+		Agent:       string(model.AgentPi),
+		Path:        "/tmp/fake/pi",
+		Exists:      true,
+		IsDirectory: true,
+	}}}
+
+	m := NewModel(detection, "dev")
+
+	wantAgents := []model.AgentID{model.AgentPi}
+	if !reflect.DeepEqual(m.Selection.Agents, wantAgents) {
+		t.Fatalf("agents = %v, want %v", m.Selection.Agents, wantAgents)
+	}
+	wantComponents := []model.ComponentID{model.ComponentEngram}
+	if !reflect.DeepEqual(m.Selection.Components, wantComponents) {
+		t.Fatalf("components = %v, want %v", m.Selection.Components, wantComponents)
+	}
+}
+
+func TestPiCombinedWithOtherAgentKeepsGenericFlow(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgents
+	m.Selection.Agents = []model.AgentID{model.AgentPi, model.AgentOpenCode}
+	m.Cursor = len(screensAgentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenPersona {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenPersona)
+	}
+}
+
+func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgents
+	m.Selection.Agents = []model.AgentID{model.AgentPi, model.AgentOpenCode, model.AgentClaudeCode}
+	m.Cursor = len(screensAgentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenPersona {
+		t.Fatalf("after agents screen = %v, want %v", state.Screen, ScreenPersona)
+	}
+
+	state.Cursor = 0
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenPreset {
+		t.Fatalf("after persona screen = %v, want %v", state.Screen, ScreenPreset)
+	}
+
+	state.Cursor = 2 // Minimal preset: Engram only, no SDD/model detours.
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenOpenCodePlugins {
+		t.Fatalf("after preset screen = %v, want %v", state.Screen, ScreenOpenCodePlugins)
+	}
+
+	state.Cursor = len(opencodepluginDefinitions()) * 2 // Continue without optional plugins.
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenDependencyTree {
+		t.Fatalf("after OpenCode plugins screen = %v, want %v", state.Screen, ScreenDependencyTree)
+	}
+
+	wantAgents := []model.AgentID{model.AgentPi, model.AgentOpenCode, model.AgentClaudeCode}
+	if !reflect.DeepEqual(state.DependencyPlan.Agents, wantAgents) {
+		t.Fatalf("dependency agents = %v, want %v", state.DependencyPlan.Agents, wantAgents)
+	}
+	wantComponents := []model.ComponentID{model.ComponentEngram}
+	if !reflect.DeepEqual(state.DependencyPlan.OrderedComponents, wantComponents) {
+		t.Fatalf("dependency components = %v, want %v", state.DependencyPlan.OrderedComponents, wantComponents)
+	}
+
+	state.Cursor = 0
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenReview {
+		t.Fatalf("after dependency tree screen = %v, want %v", state.Screen, ScreenReview)
+	}
+
+	var gotSelection model.Selection
+	var gotPlan planner.ResolvedPlan
+	state.ExecuteFn = func(selection model.Selection, resolved planner.ResolvedPlan, _ system.DetectionResult, _ pipeline.ProgressFunc) pipeline.ExecutionResult {
+		gotSelection = selection
+		gotPlan = resolved
+		return pipeline.ExecutionResult{
+			Prepare: pipeline.StageResult{Success: true},
+			Apply:   pipeline.StageResult{Success: true},
+		}
+	}
+
+	updated, cmd := state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenInstalling {
+		t.Fatalf("after review screen = %v, want %v", state.Screen, ScreenInstalling)
+	}
+	if cmd == nil {
+		t.Fatal("start installing command = nil")
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, innerCmd := range batch {
+			if innerCmd == nil {
+				continue
+			}
+			if _, ok := innerCmd().(PipelineDoneMsg); ok {
+				break
+			}
+		}
+	}
+
+	if !reflect.DeepEqual(gotSelection.Agents, wantAgents) {
+		t.Fatalf("execute selection agents = %v, want %v", gotSelection.Agents, wantAgents)
+	}
+	if !reflect.DeepEqual(gotPlan.Agents, wantAgents) {
+		t.Fatalf("execute plan agents = %v, want %v", gotPlan.Agents, wantAgents)
+	}
+	if !reflect.DeepEqual(gotPlan.OrderedComponents, wantComponents) {
+		t.Fatalf("execute plan components = %v, want %v", gotPlan.OrderedComponents, wantComponents)
+	}
+}
+
 func TestReviewToInstallingInitializesProgress(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenReview
