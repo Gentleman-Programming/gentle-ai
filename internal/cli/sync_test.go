@@ -2390,3 +2390,40 @@ func TestRenderSyncReportNoOpOmitsChangedFilePaths(t *testing.T) {
 		t.Errorf("RenderSyncReport() should not mention 'Sync actions executed' on no-op; got:\n%s", report)
 	}
 }
+
+// ─── Deduplication ──────────────────────────────────────────────────────────
+
+func TestDedupPathsRemovesDuplicates(t *testing.T) {
+	input := []string{
+		"/home/user/.config/opencode/AGENTS.md",
+		"/home/user/.config/opencode/settings.json",
+		"/home/user/.config/opencode/AGENTS.md", // duplicate
+		"/home/user/.config/opencode/mcp.json",
+		"/home/user/.config/opencode/settings.json", // duplicate
+	}
+	got := dedupPaths(input)
+	want := []string{
+		"/home/user/.config/opencode/AGENTS.md",
+		"/home/user/.config/opencode/settings.json",
+		"/home/user/.config/opencode/mcp.json",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("dedupPaths: got %d paths, want %d", len(got), len(want))
+	}
+	for i, p := range got {
+		if p != want[i] {
+			t.Errorf("dedupPaths[%d] = %q, want %q", i, p, want[i])
+		}
+	}
+}
+
+func TestDedupPathsNilOnEmpty(t *testing.T) {
+	got := dedupPaths(nil)
+	if got != nil {
+		t.Errorf("dedupPaths(nil) = %v, want nil", got)
+	}
+	got = dedupPaths([]string{})
+	if got != nil {
+		t.Errorf("dedupPaths([]) = %v, want nil", got)
+	}
+}

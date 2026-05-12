@@ -58,11 +58,14 @@ type SyncResult struct {
 	// either no agents were discovered/provided, or all managed assets
 	// were already current (idempotent re-sync).
 	NoOp bool
-	// FilesChanged is the number of managed files actually written or updated
-	// during this sync. Zero means all assets were already current.
+	// FilesChanged is the number of deduplicated managed file paths
+	// processed during this sync. A file is counted when at least one
+	// component reports it as part of its injection result.
+	// Zero means all assets were already current.
 	FilesChanged int
-	// ChangedFiles lists the absolute paths of managed files that were actually
-	// written or updated during this sync. It is nil when no files changed.
+	// ChangedFiles lists deduplicated absolute paths of managed files
+	// processed during this sync. Paths appear once even when multiple
+	// components touch the same file. It is nil when no files changed.
 	ChangedFiles []string
 }
 
@@ -519,9 +522,10 @@ func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model
 // Unlike componentApplyStep, it ONLY calls inject functions —
 // no binary install, no engram setup, no persona injection.
 //
-// filesChanged is a shared counter pointer. Each step increments it by the
-// number of files that were actually written (i.e., whose content changed).
-// This lets RunSync detect a true no-op when all assets are already current.
+// changedFiles is a shared slice pointer. Each step appends the file
+// paths from its InjectionResult.Files when InjectionResult.Changed
+// is true. Paths may contain duplicates across components; the caller
+// (RunSync) deduplicates before exposing them via SyncResult.
 type componentSyncStep struct {
 	id           string
 	component    model.ComponentID
@@ -716,6 +720,22 @@ func (s componentSyncStep) countChanged(n int, files ...string) {
 	}
 }
 
+// dedupPaths removes duplicate paths while preserving first-seen order.
+func dedupPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if _, ok := seen[p]; !ok {
+			seen[p] = struct{}{}
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // boolToInt converts a boolean to 0 or 1.
 func boolToInt(b bool) int {
 	if b {
@@ -759,8 +779,10 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	}
 
 	// Capture how many managed assets were actually changed.
-	result.ChangedFiles = rt.changedFiles
-	result.FilesChanged = len(rt.changedFiles)
+	// Deduplicate paths — multiple components may touch the same file
+	// (e.g. Engram and Context7 both merge into settings.json).
+	result.ChangedFiles = dedupPaths(rt.changedFiles)
+	result.FilesChanged = len(result.ChangedFiles)
 
 	// True no-op: agents were discovered but all managed assets were already
 	// current — no file was written or updated. Per spec scenario:
