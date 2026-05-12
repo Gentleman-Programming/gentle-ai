@@ -423,6 +423,86 @@ func TestHandleModelNav_ReasoningModelWithoutVariantsSkipsEffortPicker(t *testin
 	}
 }
 
+func TestHandleModelNav_ReasoningModelWithoutVariantsPreservesExistingEffortForSameIndividualPhase(t *testing.T) {
+	const providerID = "test-provider"
+	testModels := []opencode.Model{
+		{ID: "model-reason", Name: "Reasoning Model", Reasoning: true, ToolCall: true},
+	}
+	state := &ModelPickerState{
+		Mode:             ModeModelSelect,
+		SelectedPhaseIdx: 2,
+		SelectedProvider: providerID,
+		SDDModels:        map[string][]opencode.Model{providerID: testModels},
+		ModelCursor:      0,
+	}
+	phase := opencode.SDDPhases()[0]
+	assignments := map[string]model.ModelAssignment{
+		phase: {ProviderID: providerID, ModelID: "model-reason", Effort: "high"},
+	}
+
+	_, updated := handleModelNav("enter", state, assignments)
+
+	if got := updated[phase].Effort; got != "high" {
+		t.Errorf("Effort after reselecting same model with unknown variants = %q, want preserved %q", got, "high")
+	}
+}
+
+func TestHandleModelNav_NonReasoningModelClearsExistingEffortForSameIndividualPhase(t *testing.T) {
+	const providerID = "test-provider"
+	testModels := []opencode.Model{
+		{ID: "model-plain", Name: "Plain Model", Reasoning: false, ToolCall: true},
+	}
+	state := &ModelPickerState{
+		Mode:             ModeModelSelect,
+		SelectedPhaseIdx: 2,
+		SelectedProvider: providerID,
+		SDDModels:        map[string][]opencode.Model{providerID: testModels},
+		ModelCursor:      0,
+	}
+	phase := opencode.SDDPhases()[0]
+	assignments := map[string]model.ModelAssignment{
+		phase: {ProviderID: providerID, ModelID: "model-plain", Effort: "high"},
+	}
+
+	_, updated := handleModelNav("enter", state, assignments)
+
+	if got := updated[phase].Effort; got != "" {
+		t.Errorf("Effort after reselecting known non-reasoning model = %q, want empty", got)
+	}
+}
+
+func TestHandleModelNav_SetAllPhasesWithoutVariantsPreservesMatchingExistingEfforts(t *testing.T) {
+	const providerID = "test-provider"
+	testModels := []opencode.Model{
+		{ID: "model-reason", Name: "Reasoning Model", Reasoning: true, ToolCall: true},
+	}
+	state := &ModelPickerState{
+		Mode:             ModeModelSelect,
+		SelectedPhaseIdx: 1,
+		SelectedProvider: providerID,
+		SDDModels:        map[string][]opencode.Model{providerID: testModels},
+		ModelCursor:      0,
+	}
+	phases := opencode.SDDPhases()
+	assignments := map[string]model.ModelAssignment{
+		SDDOrchestratorPhase: {ProviderID: providerID, ModelID: "model-reason", Effort: "high"},
+		phases[0]:            {ProviderID: providerID, ModelID: "model-reason", Effort: "high"},
+		phases[1]:            {ProviderID: providerID, ModelID: "other-model", Effort: "medium"},
+	}
+
+	_, updated := handleModelNav("enter", state, assignments)
+
+	if got := updated[phases[0]].Effort; got != "high" {
+		t.Errorf("matching phase effort = %q, want preserved %q", got, "high")
+	}
+	if got := updated[phases[1]].Effort; got != "" {
+		t.Errorf("non-matching phase effort = %q, want empty", got)
+	}
+	if got := updated[SDDOrchestratorPhase].Effort; got != "high" {
+		t.Errorf("orchestrator effort = %q, want untouched %q", got, "high")
+	}
+}
+
 // ─── applyAssignment helper ──────────────────────────────────────────────
 
 func TestApplyAssignment_SinglePhase(t *testing.T) {
@@ -515,7 +595,7 @@ func TestHandleEffortNav_DefaultOptionMapsToEmptyEffort(t *testing.T) {
 	}
 }
 
-func TestHandleEffortNav_EscReturnsModePhaseList(t *testing.T) {
+func TestHandleEffortNav_EscReturnsModeModelSelect(t *testing.T) {
 	state := ModelPickerState{
 		Mode:                      ModeEffortSelect,
 		SelectedPhaseIdx:          2,
@@ -526,8 +606,8 @@ func TestHandleEffortNav_EscReturnsModePhaseList(t *testing.T) {
 
 	newState, _ := handleEffortNav("esc", state, assignments)
 
-	if newState.Mode != ModePhaseList {
-		t.Errorf("Mode after esc = %v, want ModePhaseList", newState.Mode)
+	if newState.Mode != ModeModelSelect {
+		t.Errorf("Mode after esc = %v, want ModeModelSelect", newState.Mode)
 	}
 	if newState.PendingAssignment != (model.ModelAssignment{}) {
 		t.Errorf("PendingAssignment after esc = %+v, want zero value", newState.PendingAssignment)

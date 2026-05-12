@@ -1325,7 +1325,7 @@ func modelAssignmentsToState(m map[string]model.ModelAssignment) map[string]stat
 	}
 	out := make(map[string]state.ModelAssignmentState, len(m))
 	for k, v := range m {
-		out[k] = state.ModelAssignmentState{ProviderID: v.ProviderID, ModelID: v.ModelID}
+		out[k] = state.ModelAssignmentState{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
 	}
 	return out
 }

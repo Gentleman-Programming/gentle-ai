@@ -36,6 +36,21 @@ func TestParseInstallFlagsSupportsCSVAndRepeated(t *testing.T) {
 	}
 }
 
+func TestModelAssignmentsToStatePreservesEffort(t *testing.T) {
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply": {
+			ProviderID: "anthropic",
+			ModelID:    "claude-opus-4",
+			Effort:     "high",
+		},
+	}
+
+	got := modelAssignmentsToState(assignments)
+	if got["sdd-apply"].Effort != "high" {
+		t.Fatalf("Effort = %q, want high", got["sdd-apply"].Effort)
+	}
+}
+
 func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 	input, err := NormalizeInstallFlags(InstallFlags{}, system.DetectionResult{})
 	if err != nil {

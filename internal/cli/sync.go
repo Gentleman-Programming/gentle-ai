@@ -808,7 +808,7 @@ func RunSync(args []string) (SyncResult, error) {
 			if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
 				m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
 				for k, v := range s.ModelAssignments {
-					m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID}
+					m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
 				}
 				selection.ModelAssignments = m
 			}

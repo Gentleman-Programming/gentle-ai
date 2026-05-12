@@ -2039,6 +2039,44 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 	}
 }
 
+func TestRunSyncLoadsPersistedModelAssignmentsPreservesEffort(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"opencode"},
+		ModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "high"},
+		},
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	result, err := RunSync([]string{"--agents", "opencode", "--sdd-mode", "single", "--dry-run"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+
+	assignment := result.Selection.ModelAssignments["sdd-apply"]
+	if assignment.Effort != "high" {
+		t.Fatalf("Effort = %q, want high", assignment.Effort)
+	}
+}
+
 // TestRunSyncDoesNotOverridePersistedAssignmentsOnSecondSync verifies the
 // full cycle: sync1 loads persisted assignments → sync2 still has them.
 // This is the core promise of the fix.

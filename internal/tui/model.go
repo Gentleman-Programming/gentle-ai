@@ -77,7 +77,14 @@ func sanitizeKnownModelEffort(assignment model.ModelAssignment, sddModels map[st
 			continue
 		}
 		levels := available.EffortLevels()
-		if len(levels) == 0 || containsString(levels, assignment.Effort) {
+		if len(levels) == 0 {
+			if available.Reasoning {
+				return assignment
+			}
+			assignment.Effort = ""
+			return assignment
+		}
+		if containsString(levels, assignment.Effort) {
 			return assignment
 		}
 		assignment.Effort = ""
@@ -3410,16 +3417,17 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 		}
 		if m.Cursor == len(rows) {
 			// "Continue": extract orchestrator + phase assignments, advance to confirm.
-			if m.Selection.ModelAssignments != nil {
+			assignments := sanitizeKnownModelEfforts(m.Selection.ModelAssignments, m.ModelPicker.SDDModels)
+			if assignments != nil {
 				// Extract orchestrator model.
-				if orch, ok := m.Selection.ModelAssignments[screens.SDDOrchestratorPhase]; ok {
+				if orch, ok := assignments[screens.SDDOrchestratorPhase]; ok {
 					m.ProfileDraft.OrchestratorModel = orch
 				}
 				// Copy all phase assignments (excluding orchestrator).
 				if m.ProfileDraft.PhaseAssignments == nil {
 					m.ProfileDraft.PhaseAssignments = make(map[string]model.ModelAssignment)
 				}
-				for k, v := range m.Selection.ModelAssignments {
+				for k, v := range assignments {
 					if k != screens.SDDOrchestratorPhase {
 						m.ProfileDraft.PhaseAssignments[k] = v
 					}

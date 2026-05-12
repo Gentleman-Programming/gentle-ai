@@ -62,6 +62,21 @@ func TestSanitizeKnownModelEfforts_InvalidKnownEffortCleared(t *testing.T) {
 	}
 }
 
+func TestSanitizeKnownModelEfforts_KnownNonReasoningModelClearsEffort(t *testing.T) {
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+	}
+	sddModels := map[string][]opencode.Model{
+		"anthropic": {{ID: "claude-sonnet-4", Reasoning: false}},
+	}
+
+	got := sanitizeKnownModelEfforts(assignments, sddModels)
+
+	if got["sdd-apply"].Effort != "" {
+		t.Fatalf("Effort = %q, want empty for known non-reasoning model", got["sdd-apply"].Effort)
+	}
+}
+
 func TestSanitizeKnownModelEfforts_UnknownModelDataPreservesStoredEffort(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -77,11 +92,11 @@ func TestSanitizeKnownModelEfforts_UnknownModelDataPreservesStoredEffort(t *test
 		},
 		{
 			name:      "nil variants",
-			sddModels: map[string][]opencode.Model{"anthropic": {{ID: "claude-opus-4"}}},
+			sddModels: map[string][]opencode.Model{"anthropic": {{ID: "claude-opus-4", Reasoning: true}}},
 		},
 		{
 			name:      "empty variants",
-			sddModels: map[string][]opencode.Model{"anthropic": {{ID: "claude-opus-4", Variants: []string{}}}},
+			sddModels: map[string][]opencode.Model{"anthropic": {{ID: "claude-opus-4", Reasoning: true, Variants: []string{}}}},
 		},
 	}
 
@@ -97,6 +112,84 @@ func TestSanitizeKnownModelEfforts_UnknownModelDataPreservesStoredEffort(t *test
 				t.Fatalf("Effort = %q, want high when variants are unknown", got["sdd-apply"].Effort)
 			}
 		})
+	}
+}
+
+func TestProfileCreateContinueSanitizesStaleEffort(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenProfileCreate
+	m.ProfileCreateStep = 1
+	m.ProfileDraft = model.Profile{Name: "work"}
+	m.Cursor = len(screens.ModelPickerRows())
+	m.ModelPicker = screens.ModelPickerState{
+		SDDModels: map[string][]opencode.Model{
+			"anthropic": {{ID: "claude-sonnet-4", Variants: []string{"low", "medium"}}},
+		},
+	}
+	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
+		screens.SDDOrchestratorPhase: {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+		"sdd-apply":                  {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if got := state.ProfileDraft.OrchestratorModel.Effort; got != "" {
+		t.Fatalf("orchestrator Effort = %q, want empty for stale known effort", got)
+	}
+	if got := state.ProfileDraft.PhaseAssignments["sdd-apply"].Effort; got != "" {
+		t.Fatalf("sdd-apply Effort = %q, want empty for stale known effort", got)
+	}
+}
+
+func TestProfileEditContinueSanitizesStaleEffort(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenProfileCreate
+	m.ProfileCreateStep = 1
+	m.ProfileEditMode = true
+	m.ProfileDraft = model.Profile{Name: "work"}
+	m.Cursor = len(screens.ModelPickerRows())
+	m.ModelPicker = screens.ModelPickerState{
+		SDDModels: map[string][]opencode.Model{
+			"anthropic": {{ID: "claude-sonnet-4", Variants: []string{"low", "medium"}}},
+		},
+	}
+	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
+		screens.SDDOrchestratorPhase: {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+		"sdd-apply":                  {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if got := state.ProfileDraft.OrchestratorModel.Effort; got != "" {
+		t.Fatalf("orchestrator Effort = %q, want empty for stale known effort", got)
+	}
+	if got := state.ProfileDraft.PhaseAssignments["sdd-apply"].Effort; got != "" {
+		t.Fatalf("sdd-apply Effort = %q, want empty for stale known effort", got)
+	}
+}
+
+func TestProfileCreateContinuePreservesEffortWhenVariantDataUnknown(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenProfileCreate
+	m.ProfileCreateStep = 1
+	m.ProfileDraft = model.Profile{Name: "work"}
+	m.Cursor = len(screens.ModelPickerRows())
+	m.ModelPicker = screens.ModelPickerState{SDDModels: map[string][]opencode.Model{}}
+	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
+		screens.SDDOrchestratorPhase: {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+		"sdd-apply":                  {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if got := state.ProfileDraft.OrchestratorModel.Effort; got != "high" {
+		t.Fatalf("orchestrator Effort = %q, want high when variant data is unknown", got)
+	}
+	if got := state.ProfileDraft.PhaseAssignments["sdd-apply"].Effort; got != "high" {
+		t.Fatalf("sdd-apply Effort = %q, want high when variant data is unknown", got)
 	}
 }
 

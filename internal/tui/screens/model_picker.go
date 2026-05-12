@@ -246,11 +246,14 @@ func handleModelNav(
 			return true, assignments
 		}
 
-		// Non-reasoning model: apply directly with empty effort.
-		assignments = applyAssignment(*state, assignments, assignment)
+		// Effort levels are unavailable: preserve stored effort only for reasoning
+		// models whose variant metadata is missing. Known non-reasoning models do
+		// not support effort and must clear any stale value.
+		preserveEffort := selected.Reasoning
+		assignments = applyAssignmentPreservingMatchingEffort(*state, assignments, assignment, preserveEffort)
 		// Mirror the AllPhasesModel update on the pointer when "Set all phases" row.
 		if state.SelectedPhaseIdx == 1 {
-			state.AllPhasesModel = assignment
+			state.AllPhasesModel = preserveMatchingEffort(state.AllPhasesModel, assignment, preserveEffort)
 		}
 
 		// Return to phase list
@@ -267,6 +270,32 @@ func handleModelNav(
 		return true, assignments
 	}
 	return false, assignments
+}
+
+func applyAssignmentPreservingMatchingEffort(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment, preserveEffort bool) map[string]model.ModelAssignment {
+	phases := opencode.SDDPhases()
+	switch {
+	case state.SelectedPhaseIdx == 0:
+		assignments[SDDOrchestratorPhase] = preserveMatchingEffort(assignments[SDDOrchestratorPhase], assignment, preserveEffort)
+	case state.SelectedPhaseIdx == 1:
+		for _, phase := range phases {
+			assignments[phase] = preserveMatchingEffort(assignments[phase], assignment, preserveEffort)
+		}
+	default:
+		phaseIdx := state.SelectedPhaseIdx - 2
+		if phaseIdx < len(phases) {
+			phase := phases[phaseIdx]
+			assignments[phase] = preserveMatchingEffort(assignments[phase], assignment, preserveEffort)
+		}
+	}
+	return assignments
+}
+
+func preserveMatchingEffort(existing, assignment model.ModelAssignment, preserveEffort bool) model.ModelAssignment {
+	if preserveEffort && existing.ProviderID == assignment.ProviderID && existing.ModelID == assignment.ModelID {
+		assignment.Effort = existing.Effort
+	}
+	return assignment
 }
 
 func formatAssignmentLabel(row, provName, modelName, effort string) string {
@@ -352,7 +381,7 @@ func handleEffortNav(
 		state.PendingAssignment = model.ModelAssignment{}
 		state.SelectedModelEffortLevels = nil
 	case "esc":
-		state.Mode = ModePhaseList
+		state.Mode = ModeModelSelect
 		state.EffortCursor = 0
 		state.EffortScroll = 0
 		state.PendingAssignment = model.ModelAssignment{}
