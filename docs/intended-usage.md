@@ -131,13 +131,14 @@ Once installed, your agent detects what you're working on and loads the relevant
 
 How it works:
 
-1. **Run `/skill-registry` inside your project** -- it scans all your installed skills (user-level and project-level), reads their frontmatter, and builds a registry at `.atl/skill-registry.md`. If engram is available, it also saves the registry to memory for cross-session access.
-2. **The orchestrator uses it automatically** -- once the registry exists, the orchestrator reads it at session start and passes pre-resolved skill paths to sub-agents. You don't interact with the registry after that.
-3. **Re-run it when things change** -- any time you add, remove, or modify a skill, run `/skill-registry` again so the orchestrator picks up the changes.
+1. **The registry refreshes at startup where the agent supports hooks.** Pi runs the `gentle-pi` session hook. Claude Code and OpenCode run `gentle-ai skill-registry refresh --quiet` from their installed startup/plugin hooks.
+2. **The refresh is cached.** Gentle-AI fingerprints discovered `SKILL.md` files using schema version, path, mtime, and size. If `.atl/.skill-registry.cache.json` matches and `.atl/skill-registry.md` exists, startup is a cheap cache-hit.
+3. **The orchestrator uses it automatically** -- once the registry exists, the orchestrator reads it at session start and passes pre-resolved compact rule text to sub-agents. You don't interact with the registry after that.
+4. **Manual fallback stays available** -- run `gentle-ai skill-registry refresh --force` from a project if you want to regenerate immediately.
 
 There's also an automated side: `sdd-init` runs the same registry logic internally, so if you use SDD in a new project, the registry gets built as part of that flow.
 
-**Pro tip**: If you find yourself updating skills often, you can create a skill (using `/skill-creator`) that automatically triggers a registry update after skill changes -- that way you never have to think about it.
+**Pro tip**: On Claude Code, OpenCode, and Pi you normally do not need to remember this. The startup hook refreshes the registry and the cache prevents unnecessary work.
 
 ---
 
@@ -151,12 +152,12 @@ The less you think about gentle-ai after installing, the better it's working.
 
 ## Quick Reference
 
-| Do                                                        | Don't                                                                   |
-| --------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Run the installer, pick your agents and preset            | Manually edit the generated config files                                |
-| Just start coding with your AI agent                      | Memorize SDD phases or commands                                         |
-| Let the agent suggest SDD when a task is big enough       | Force SDD on every small task                                           |
-| Trust that engram is saving context for you               | Dig into engram's storage unless you need `engram sync` or `engram tui` |
-| Run `/skill-registry` after installing or changing skills | Forget to update the registry after adding new skills                   |
-| Say "use sdd" if you know you want structured planning    | Worry about which SDD phase comes next                                  |
-| Re-run the installer to update or change your setup       | Manually patch skill files or persona instructions                      |
+| Do                                                         | Don't                                                                             |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Run the installer, pick your agents and preset             | Manually edit the generated config files                                          |
+| Just start coding with your AI agent                       | Memorize SDD phases or commands                                                   |
+| Let the agent suggest SDD when a task is big enough        | Force SDD on every small task                                                     |
+| Trust that engram is saving context for you                | Dig into engram's storage unless you need `engram sync` or `engram tui`           |
+| Let startup hooks refresh the skill registry automatically | Manually rescan skills unless you need `gentle-ai skill-registry refresh --force` |
+| Say "use sdd" if you know you want structured planning     | Worry about which SDD phase comes next                                            |
+| Re-run the installer to update or change your setup        | Manually patch skill files or persona instructions                                |

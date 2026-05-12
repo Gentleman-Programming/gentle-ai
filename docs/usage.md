@@ -6,11 +6,11 @@
 
 ## Persona Modes
 
-| Persona | ID | Description |
-|---------|-----|-------------|
+| Persona   | ID          | Description                                                                       |
+| --------- | ----------- | --------------------------------------------------------------------------------- |
 | Gentleman | `gentleman` | Teaching-oriented mentor persona — pushes back on bad practices, explains the why |
-| Neutral | `neutral` | Same teacher, same philosophy, no regional language — warm and professional |
-| Custom | `custom` | Keep your existing persona/config unmanaged — gentle-ai does not inject a persona |
+| Neutral   | `neutral`   | Same teacher, same philosophy, no regional language — warm and professional       |
+| Custom    | `custom`    | Keep your existing persona/config unmanaged — gentle-ai does not inject a persona |
 
 `custom` is a compatibility/ownership choice, not a persona editor. Use it when you already have your own persona instructions and want gentle-ai to leave them alone.
 
@@ -68,6 +68,20 @@ gentle-ai install --dry-run \
   --agent claude-code,opencode \
   --preset full-gentleman
 ```
+
+### skill-registry refresh
+
+Refresh the project-local skill registry used by orchestrators before they delegate work:
+
+```bash
+gentle-ai skill-registry refresh
+gentle-ai skill-registry refresh --force
+gentle-ai skill-registry refresh --cwd /path/to/project --quiet
+```
+
+The command writes `.atl/skill-registry.md` and `.atl/.skill-registry.cache.json`. The cache fingerprint includes schema version plus each discovered `SKILL.md` file path, mtime, and size, so normal startup is a cheap cache-hit when skills have not changed.
+
+Claude Code and OpenCode installs wire this command into startup/plugin hooks. Pi gets the equivalent behavior from `gentle-pi`.
 
 ### sync
 
@@ -147,26 +161,26 @@ gentle-ai -v
 
 ## CLI Flags (install)
 
-| Flag | Description |
-|------|-------------|
-| `--agent`, `--agents` | Agents to configure (comma-separated) |
-| `--component`, `--components` | Components to install (comma-separated) |
-| `--skill`, `--skills` | Skills to install (comma-separated) |
-| `--persona` | Persona mode: `gentleman`, `neutral`, `custom` (`custom` keeps your existing persona unmanaged) |
-| `--preset` | Preset: `full-gentleman`, `ecosystem-only`, `minimal`, `custom` (`custom` means manual component/skill selection) |
-| `--dry-run` | Preview the install plan without applying changes |
+| Flag                          | Description                                                                                                       |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `--agent`, `--agents`         | Agents to configure (comma-separated)                                                                             |
+| `--component`, `--components` | Components to install (comma-separated)                                                                           |
+| `--skill`, `--skills`         | Skills to install (comma-separated)                                                                               |
+| `--persona`                   | Persona mode: `gentleman`, `neutral`, `custom` (`custom` keeps your existing persona unmanaged)                   |
+| `--preset`                    | Preset: `full-gentleman`, `ecosystem-only`, `minimal`, `custom` (`custom` means manual component/skill selection) |
+| `--dry-run`                   | Preview the install plan without applying changes                                                                 |
 
 ## CLI Flags (sync)
 
-| Flag | Description |
-|------|-------------|
-| `--agent`, `--agents` | Agents to sync (defaults to all installed agents) |
-| `--component` | Sync a specific component only: `sdd`, `engram`, `context7`, `skills`, `gga`, `permissions`, `theme` |
-| `--profile` | Create or update an SDD profile: `name:provider/model` (sets the default model for all phases) |
-| `--profile-phase` | Override a specific phase in a profile: `name:phase:provider/model` |
-| `--sdd-profile-strategy` | OpenCode profile sync strategy: `generated-multi` or `external-single-active` |
-| `--include-permissions` | Include permissions sync (opt-in) |
-| `--include-theme` | Include theme sync (opt-in) |
+| Flag                     | Description                                                                                          |
+| ------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `--agent`, `--agents`    | Agents to sync (defaults to all installed agents)                                                    |
+| `--component`            | Sync a specific component only: `sdd`, `engram`, `context7`, `skills`, `gga`, `permissions`, `theme` |
+| `--profile`              | Create or update an SDD profile: `name:provider/model` (sets the default model for all phases)       |
+| `--profile-phase`        | Override a specific phase in a profile: `name:phase:provider/model`                                  |
+| `--sdd-profile-strategy` | OpenCode profile sync strategy: `generated-multi` or `external-single-active`                        |
+| `--include-permissions`  | Include permissions sync (opt-in)                                                                    |
+| `--include-theme`        | Include theme sync (opt-in)                                                                          |
 
 **Profile examples:**
 
@@ -190,12 +204,12 @@ See [OpenCode SDD Profiles](opencode-profiles.md) for the full guide.
 
 ## CLI Flags (uninstall)
 
-| Flag | Description |
-|------|-------------|
-| `--agent`, `--agents` | Agents to uninstall managed config from (required unless using `--all`) |
-| `--component`, `--components` | Managed components to remove only from the selected agents |
-| `--all` | Remove managed configuration from all supported agents |
-| `--yes`, `-y` | Skip the confirmation prompt |
+| Flag                          | Description                                                             |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| `--agent`, `--agents`         | Agents to uninstall managed config from (required unless using `--all`) |
+| `--component`, `--components` | Managed components to remove only from the selected agents              |
+| `--all`                       | Remove managed configuration from all supported agents                  |
+| `--yes`, `-y`                 | Skip the confirmation prompt                                            |
 
 ---
 

@@ -91,6 +91,10 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	cmdLookPath = func(name string) (string, error) {
 		return filepath.Join(home, "bin", name), nil
 	}
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		return filepath.Join(home, "bin", name), nil
+	})
+	t.Cleanup(restorePreflightLookPath)
 
 	var commands []string
 	runCommand = func(name string, args ...string) error {

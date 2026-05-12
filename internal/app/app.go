@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/internal/skillregistry"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui"
@@ -58,6 +59,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "uninstall":
 			_, err := cli.RunUninstall(args[1:], stdout)
 			return err
+		case "skill-registry":
+			return runSkillRegistry(args[1:], stdout)
 		}
 	}
 
@@ -168,6 +171,63 @@ func RunArgs(args []string, stdout io.Writer) error {
 	default:
 		return fmt.Errorf("unknown command %q — run 'gentle-ai help' for available commands", args[0])
 	}
+}
+
+func runSkillRegistry(args []string, stdout io.Writer) error {
+	if len(args) == 0 || args[0] != "refresh" {
+		return fmt.Errorf("usage: gentle-ai skill-registry refresh [--cwd <dir>] [--force] [--quiet] [--no-gitignore]")
+	}
+
+	cwd := ""
+	force := false
+	quiet := false
+	ensureGitignore := true
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--force", "-f":
+			force = true
+		case "--quiet", "-q":
+			quiet = true
+		case "--no-gitignore":
+			ensureGitignore = false
+		case "--cwd":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--cwd requires a value")
+			}
+			cwd = args[i+1]
+			i++
+		default:
+			return fmt.Errorf("unknown skill-registry argument %q", args[i])
+		}
+	}
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return fmt.Errorf("resolve cwd: %w", err)
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home directory: %w", err)
+	}
+	if ensureGitignore {
+		if err := skillregistry.EnsureATLIgnored(cwd); err != nil {
+			return err
+		}
+	}
+	result, err := skillregistry.Regenerate(cwd, home, force)
+	if err != nil {
+		return err
+	}
+	if !quiet {
+		if result.Regenerated {
+			_, _ = fmt.Fprintf(stdout, "Skill registry refreshed (%d skills): %s\n", result.SkillCount, result.Registry)
+		} else {
+			_, _ = fmt.Fprintf(stdout, "Skill registry up to date (%s): %s\n", result.Reason, result.Registry)
+		}
+	}
+	return nil
 }
 
 func runUpdate(ctx context.Context, currentVersion string, profile system.PlatformProfile, stdout io.Writer) error {

@@ -21,6 +21,7 @@ import * as crypto from "node:crypto"
 import * as fs from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
+import { execFile } from "node:child_process"
 import { stat } from "node:fs/promises"
 import { type Plugin, type ToolContext, tool } from "@opencode-ai/plugin"
 import type { createOpencodeClient } from "@opencode-ai/sdk"
@@ -33,6 +34,24 @@ const { adjectives, animals, colors, uniqueNamesGenerator } = ung
 // ==========================================
 
 export type OpencodeClient = ReturnType<typeof createOpencodeClient>
+
+async function refreshSkillRegistry(directory: string, log: (level: "info" | "warn" | "error", message: string) => void): Promise<void> {
+  await new Promise<void>((resolve) => {
+    execFile(
+      "gentle-ai",
+      ["skill-registry", "refresh", "--quiet", "--no-gitignore", "--cwd", directory],
+      { timeout: 10_000 },
+      (error) => {
+        if (error) {
+          log("warn", `skill-registry refresh skipped: ${error.message}`)
+        } else {
+          log("info", "skill-registry refresh completed")
+        }
+        resolve()
+      },
+    )
+  })
+}
 
 // ==========================================
 // INLINED: kdco-primitives/with-timeout
@@ -1373,6 +1392,14 @@ export const BackgroundAgents: Plugin = async (ctx) => {
   const manager = new DelegationManager(client as OpencodeClient, baseDir, log)
 
   await manager.debugLog("BackgroundAgents initialized with delegation system")
+  let skillRegistryRefreshStarted = false
+  const refreshSkillRegistryOnce = async () => {
+    if (skillRegistryRefreshStarted) return
+    skillRegistryRefreshStarted = true
+    await refreshSkillRegistry(directory, (level, message) => {
+      manager.debugLog(`[${level}] ${message}`).catch(() => {})
+    })
+  }
 
   return {
     tool: {
@@ -1387,6 +1414,7 @@ export const BackgroundAgents: Plugin = async (ctx) => {
 
     // Inject delegation rules into system prompt
     "experimental.chat.system.transform": async (_input: SystemTransformInput, output) => {
+      await refreshSkillRegistryOnce()
       const combined = [...output.system, DELEGATION_RULES].join("\n\n---\n\n")
       output.system = [combined]
     },

@@ -4547,3 +4547,113 @@ func TestInjectClaudeSubAgentsScopedTools(t *testing.T) {
 		})
 	}
 }
+
+func TestEnsureClaudeSkillRegistryHookAppendsIdempotently(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := `{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": "echo keep"}
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {"type": "command", "command": "echo existing"}
+        ]
+      }
+    ]
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	if err != nil {
+		t.Fatalf("ensureClaudeSkillRegistryHook() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("first call changed = false, want true")
+	}
+	changed, err = ensureClaudeSkillRegistryHook(settingsPath)
+	if err != nil {
+		t.Fatalf("second ensureClaudeSkillRegistryHook() error = %v", err)
+	}
+	if changed {
+		t.Fatal("second call changed = true, want false")
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Count(text, "gentle-ai skill-registry refresh") != 1 {
+		t.Fatalf("hook command count mismatch:\n%s", text)
+	}
+	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo existing") {
+		t.Fatalf("existing hooks not preserved:\n%s", text)
+	}
+}
+
+func TestEnsureClaudeSkillRegistryHookRejectsMalformedSettings(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"permissions":`)
+	if err := os.WriteFile(settingsPath, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	if err == nil {
+		t.Fatal("ensureClaudeSkillRegistryHook() error = nil, want parse error")
+	}
+	if changed {
+		t.Fatal("changed = true, want false")
+	}
+	after, readErr := os.ReadFile(settingsPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(after) != string(original) {
+		t.Fatalf("malformed settings were modified: %q", after)
+	}
+}
+
+func TestEnsureClaudeSkillRegistryHookRejectsUnexpectedHookSchema(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"hooks":{"UserPromptSubmit":{"bad":true}}}`)
+	if err := os.WriteFile(settingsPath, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	if err == nil {
+		t.Fatal("ensureClaudeSkillRegistryHook() error = nil, want schema error")
+	}
+	if changed {
+		t.Fatal("changed = true, want false")
+	}
+	after, readErr := os.ReadFile(settingsPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(after) != string(original) {
+		t.Fatalf("settings were modified: %q", after)
+	}
+}

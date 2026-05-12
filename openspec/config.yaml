@@ -2,7 +2,7 @@
 schema: spec-driven
 
 context: |
-  Tech stack: Go 1.24.2, Bubbletea TUI (charmbracelet/bubbletea v1.3.10), lipgloss v1.1.0
+  Tech stack: Go 1.25.10, Bubbletea TUI (charmbracelet/bubbletea v1.3.10), lipgloss v1.1.0
   Architecture: cmd/ entrypoints, internal/ packages (agents, tui, model, pipeline, catalog, system, planner, verify, update, opencode, installcmd, cli, app, components, state, backup, assets, agentbuilder)
   Feature branch: feat/claude-contextual-skill-loading — contextual skill loading from Claude Code
   Agents: multi-agent support (claude, opencode, cursor, codex, gemini, vscode, windsurf, antigravity)

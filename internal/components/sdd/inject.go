@@ -627,7 +627,18 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 	}
 
-	// 4. Post-injection verification — catch silent failures.
+	// 4. Install skill-registry startup automation for agents with runtime hooks.
+	// This keeps `.atl/skill-registry.md` fresh without making the orchestrator
+	// spend tokens rescanning skills on every session. The command itself is
+	// fingerprint-cached, so normal startup is cheap.
+	automationResult, err := installSkillRegistryAutomation(homeDir, adapter)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	changed = changed || automationResult.Changed
+	files = append(files, automationResult.Files...)
+
+	// 5. Post-injection verification — catch silent failures.
 	// Primary: validate against the in-memory merged bytes to avoid false
 	// negatives on Windows/WSL2 where a freshly-renamed file may not be
 	// immediately visible via os.ReadFile.
@@ -884,6 +895,110 @@ func readMisnamedOpenCodeGentlemanSDDPrompt(settingsPath string) (string, error)
 	}
 	prompt, _ := agentMap["prompt"].(string)
 	return prompt, nil
+}
+
+func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	if adapter.Agent() != model.AgentClaudeCode {
+		return InjectionResult{}, nil
+	}
+	settingsPath := adapter.SettingsPath(homeDir)
+	if settingsPath == "" {
+		return InjectionResult{}, nil
+	}
+	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("install Claude skill-registry hook: %w", err)
+	}
+	return InjectionResult{Changed: changed, Files: []string{settingsPath}}, nil
+}
+
+func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
+	root := map[string]any{}
+	if data, err := os.ReadFile(settingsPath); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		if err := json.Unmarshal(data, &root); err != nil {
+			return false, fmt.Errorf("parse Claude settings %q: %w", settingsPath, err)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	if claudeHookExists(root, command) {
+		return false, nil
+	}
+
+	hooksRaw, hasHooks := root["hooks"]
+	hooksMap, _ := hooksRaw.(map[string]any)
+	if hasHooks && hooksMap == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks shape: want object", settingsPath)
+	}
+	if hooksMap == nil {
+		hooksMap = map[string]any{}
+	}
+	promptRaw, hasUserPromptSubmit := hooksMap["UserPromptSubmit"]
+	userPromptSubmit, _ := promptRaw.([]any)
+	if hasUserPromptSubmit && userPromptSubmit == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks.UserPromptSubmit shape: want array", settingsPath)
+	}
+	userPromptSubmit = append(userPromptSubmit, map[string]any{
+		"matcher": "",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": command,
+			},
+		},
+	})
+	hooksMap["UserPromptSubmit"] = userPromptSubmit
+	root["hooks"] = hooksMap
+
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	out = append(out, '\n')
+	wr, err := filemerge.WriteFileAtomic(settingsPath, out, 0o644)
+	if err != nil {
+		return false, err
+	}
+	return wr.Changed, nil
+}
+
+func claudeHookExists(root map[string]any, command string) bool {
+	hooksMap, ok := root["hooks"].(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, key := range []string{"UserPromptSubmit", "SessionStart"} {
+		hookEntries, ok := hooksMap[key].([]any)
+		if !ok {
+			continue
+		}
+		if claudeHookListContains(hookEntries, command) {
+			return true
+		}
+	}
+	return false
+}
+
+func claudeHookListContains(hookEntries []any, command string) bool {
+	for _, item := range hookEntries {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		hooks, ok := itemMap["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, hook := range hooks {
+			hookMap, ok := hook.(map[string]any)
+			if ok && hookMap["command"] == command {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // installOpenCodePlugins copies the background-agents plugin and installs its
