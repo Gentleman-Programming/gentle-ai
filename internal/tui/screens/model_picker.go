@@ -279,8 +279,9 @@ func formatAssignmentLabel(row, provName, modelName, effort string) string {
 // applyAssignment applies the given assignment to the assignments map based on
 // the currently selected phase index in state. When SelectedPhaseIdx is 1 ("Set
 // all phases"), the assignment is applied to all 9 SDD sub-agent phases and
-// AllPhasesModel is updated. When SelectedPhaseIdx is 0, only the orchestrator
-// phase is set. Otherwise, the single sub-agent phase matching the index is set.
+// callers should mirror the assignment into state.AllPhasesModel if needed.
+// When SelectedPhaseIdx is 0, only the orchestrator phase is set. Otherwise,
+// the single sub-agent phase matching the index is set.
 func applyAssignment(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment) map[string]model.ModelAssignment {
 	phases := opencode.SDDPhases()
 	switch {
@@ -348,10 +349,14 @@ func handleEffortNav(
 		state.Mode = ModePhaseList
 		state.EffortCursor = 0
 		state.EffortScroll = 0
+		state.PendingAssignment = model.ModelAssignment{}
+		state.SelectedModelEffortLevels = nil
 	case "esc":
 		state.Mode = ModePhaseList
 		state.EffortCursor = 0
 		state.EffortScroll = 0
+		state.PendingAssignment = model.ModelAssignment{}
+		state.SelectedModelEffortLevels = nil
 	}
 
 	return state, assignments
@@ -469,7 +474,7 @@ func renderPhaseList(
 			// when the user picks a model for an individual sub-agent phase (Issue #146).
 			if state.AllPhasesModel.ProviderID != "" {
 				provName, modelName := resolveNames(state.AllPhasesModel, state)
-				label = fmt.Sprintf("%-20s (%s / %s)", row, provName, modelName)
+				label = formatAssignmentLabel(row, provName, modelName, state.AllPhasesModel.Effort)
 			} else {
 				label = fmt.Sprintf("%-20s (not set)", row)
 			}

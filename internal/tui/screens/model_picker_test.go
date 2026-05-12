@@ -202,6 +202,30 @@ func TestRenderModelPickerShowsConfigWarning(t *testing.T) {
 	}
 }
 
+func TestRenderModelPickerShowsSetAllPhasesEffort(t *testing.T) {
+	state := ModelPickerState{
+		AvailableIDs: []string{"anthropic"},
+		Providers: map[string]opencode.Provider{
+			"anthropic": {
+				Name: "Anthropic",
+				Models: map[string]opencode.Model{
+					"claude-opus-4": {Name: "Claude Opus 4"},
+				},
+			},
+		},
+		AllPhasesModel: model.ModelAssignment{
+			ProviderID: "anthropic",
+			ModelID:    "claude-opus-4",
+			Effort:     "high",
+		},
+	}
+
+	output := RenderModelPicker(nil, state, 1)
+	if !strings.Contains(output, "Set all phases") || !strings.Contains(output, "Anthropic / Claude Opus 4 [high]") {
+		t.Fatalf("RenderModelPicker() missing Set all phases effort label; got:\n%s", output)
+	}
+}
+
 // ─── Issue #146: "Set all phases" label must not change when individual phase selected ─
 
 // TestSetAllPhasesLabelSeparateFromIndividualPhases verifies that the ModelPickerState
@@ -464,6 +488,12 @@ func TestHandleEffortNav_EnterAppliesEffortAndReturnsModePhaseList(t *testing.T)
 	if a.Effort != "low" {
 		t.Errorf("assignment Effort = %q, want %q", a.Effort, "low")
 	}
+	if newState.PendingAssignment != (model.ModelAssignment{}) {
+		t.Errorf("PendingAssignment after effort selection = %+v, want zero value", newState.PendingAssignment)
+	}
+	if newState.SelectedModelEffortLevels != nil {
+		t.Errorf("SelectedModelEffortLevels after effort selection = %v, want nil", newState.SelectedModelEffortLevels)
+	}
 }
 
 func TestHandleEffortNav_DefaultOptionMapsToEmptyEffort(t *testing.T) {
@@ -487,8 +517,10 @@ func TestHandleEffortNav_DefaultOptionMapsToEmptyEffort(t *testing.T) {
 
 func TestHandleEffortNav_EscReturnsModePhaseList(t *testing.T) {
 	state := ModelPickerState{
-		Mode:             ModeEffortSelect,
-		SelectedPhaseIdx: 2,
+		Mode:                      ModeEffortSelect,
+		SelectedPhaseIdx:          2,
+		PendingAssignment:         model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-opus-4"},
+		SelectedModelEffortLevels: []string{"low", "medium", "high"},
 	}
 	assignments := make(map[string]model.ModelAssignment)
 
@@ -496,6 +528,12 @@ func TestHandleEffortNav_EscReturnsModePhaseList(t *testing.T) {
 
 	if newState.Mode != ModePhaseList {
 		t.Errorf("Mode after esc = %v, want ModePhaseList", newState.Mode)
+	}
+	if newState.PendingAssignment != (model.ModelAssignment{}) {
+		t.Errorf("PendingAssignment after esc = %+v, want zero value", newState.PendingAssignment)
+	}
+	if newState.SelectedModelEffortLevels != nil {
+		t.Errorf("SelectedModelEffortLevels after esc = %v, want nil", newState.SelectedModelEffortLevels)
 	}
 }
 

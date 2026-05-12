@@ -51,6 +51,51 @@ var readProfilesFn = func(settingsPath string) ([]model.Profile, error) {
 	return sdd.DetectProfiles(settingsPath)
 }
 
+func sanitizeKnownModelEfforts(assignments map[string]model.ModelAssignment, sddModels map[string][]opencode.Model) map[string]model.ModelAssignment {
+	if assignments == nil {
+		return nil
+	}
+	sanitized := make(map[string]model.ModelAssignment, len(assignments))
+	for phase, assignment := range assignments {
+		sanitized[phase] = sanitizeKnownModelEffort(assignment, sddModels)
+	}
+	return sanitized
+}
+
+func sanitizeKnownModelEffort(assignment model.ModelAssignment, sddModels map[string][]opencode.Model) model.ModelAssignment {
+	if assignment.Effort == "" {
+		return assignment
+	}
+
+	modelsForProvider, ok := sddModels[assignment.ProviderID]
+	if !ok {
+		return assignment
+	}
+
+	for _, available := range modelsForProvider {
+		if available.ID != assignment.ModelID {
+			continue
+		}
+		levels := available.EffortLevels()
+		if len(levels) == 0 || containsString(levels, assignment.Effort) {
+			return assignment
+		}
+		assignment.Effort = ""
+		return assignment
+	}
+
+	return assignment
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 // TickMsg drives the spinner animation on the installing screen.
 type TickMsg time.Time
 
@@ -1599,7 +1644,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
 				m.PendingSyncOverrides = &model.SyncOverrides{
-					ModelAssignments: m.Selection.ModelAssignments,
+					ModelAssignments: sanitizeKnownModelEfforts(m.Selection.ModelAssignments, m.ModelPicker.SDDModels),
 					SDDMode:          model.SDDModeMulti,
 				}
 				m = m.withResetSyncState()

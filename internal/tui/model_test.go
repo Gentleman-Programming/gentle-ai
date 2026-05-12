@@ -12,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -28,6 +29,74 @@ func TestNavigationWelcomeToDetection(t *testing.T) {
 
 	if state.Screen != ScreenDetection {
 		t.Fatalf("screen = %v, want %v", state.Screen, ScreenDetection)
+	}
+}
+
+func TestSanitizeKnownModelEfforts_ValidKnownEffortPreserved(t *testing.T) {
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "high"},
+	}
+	sddModels := map[string][]opencode.Model{
+		"anthropic": {{ID: "claude-opus-4", Variants: []string{"low", "medium", "high"}}},
+	}
+
+	got := sanitizeKnownModelEfforts(assignments, sddModels)
+
+	if got["sdd-apply"].Effort != "high" {
+		t.Fatalf("Effort = %q, want high", got["sdd-apply"].Effort)
+	}
+}
+
+func TestSanitizeKnownModelEfforts_InvalidKnownEffortCleared(t *testing.T) {
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "high"},
+	}
+	sddModels := map[string][]opencode.Model{
+		"anthropic": {{ID: "claude-opus-4", Variants: []string{"low", "medium"}}},
+	}
+
+	got := sanitizeKnownModelEfforts(assignments, sddModels)
+
+	if got["sdd-apply"].Effort != "" {
+		t.Fatalf("Effort = %q, want empty for invalid known effort", got["sdd-apply"].Effort)
+	}
+}
+
+func TestSanitizeKnownModelEfforts_UnknownModelDataPreservesStoredEffort(t *testing.T) {
+	tests := []struct {
+		name      string
+		sddModels map[string][]opencode.Model
+	}{
+		{
+			name:      "provider missing",
+			sddModels: map[string][]opencode.Model{},
+		},
+		{
+			name:      "model missing",
+			sddModels: map[string][]opencode.Model{"anthropic": {{ID: "other-model", Variants: []string{"low"}}}},
+		},
+		{
+			name:      "nil variants",
+			sddModels: map[string][]opencode.Model{"anthropic": {{ID: "claude-opus-4"}}},
+		},
+		{
+			name:      "empty variants",
+			sddModels: map[string][]opencode.Model{"anthropic": {{ID: "claude-opus-4", Variants: []string{}}}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assignments := map[string]model.ModelAssignment{
+				"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "high"},
+			}
+
+			got := sanitizeKnownModelEfforts(assignments, tt.sddModels)
+
+			if got["sdd-apply"].Effort != "high" {
+				t.Fatalf("Effort = %q, want high when variants are unknown", got["sdd-apply"].Effort)
+			}
+		})
 	}
 }
 
@@ -2098,11 +2167,14 @@ func TestModelConfig_OpenCodePickerContinueTriggersSyncScreen(t *testing.T) {
 	// Populate AvailableIDs so ModelPicker shows rows (not just "Back").
 	m.ModelPicker = screens.ModelPickerState{
 		AvailableIDs: []string{"anthropic"},
+		SDDModels: map[string][]opencode.Model{
+			"anthropic": {{ID: "claude-sonnet-4", Variants: []string{"low", "medium"}}},
+		},
 	}
 
 	// Set some model assignments so we can verify they're captured.
 	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
-		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
 	}
 
 	// cursor == len(ModelPickerRows()) is the "Continue" option.
@@ -2130,6 +2202,9 @@ func TestModelConfig_OpenCodePickerContinueTriggersSyncScreen(t *testing.T) {
 	}
 	if got := state.PendingSyncOverrides.ModelAssignments["sdd-apply"]; got.ProviderID != "anthropic" {
 		t.Errorf("ModelAssignments[sdd-apply].ProviderID = %q, want %q", got.ProviderID, "anthropic")
+	}
+	if got := state.PendingSyncOverrides.ModelAssignments["sdd-apply"]; got.Effort != "" {
+		t.Errorf("ModelAssignments[sdd-apply].Effort = %q, want empty for invalid known effort", got.Effort)
 	}
 }
 
