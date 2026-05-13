@@ -26,7 +26,7 @@ func TestRunStrategy_BrewUpgrade(t *testing.T) {
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = args
-		return exec.Command("echo", "Upgraded engram")
+		return commandOutput("Upgraded engram")
 	}
 
 	r := update.UpdateResult{
@@ -62,7 +62,7 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = args
-		return exec.Command("echo", "go install ok")
+		return commandOutput("go install ok")
 	}
 
 	r := update.UpdateResult{
@@ -135,7 +135,7 @@ func TestRunStrategy_BrewUpgradeFailure(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false") // always fails
+		return commandFailure() // always fails
 	}
 
 	r := update.UpdateResult{
@@ -160,7 +160,7 @@ func TestRunStrategy_GoInstallFailure(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false")
+		return commandFailure()
 	}
 
 	r := update.UpdateResult{
@@ -191,7 +191,7 @@ func TestRunStrategy_BinaryWindowsSelfUpdateSkipped(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not run")
+		return commandOutput("should not run")
 	}
 
 	r := update.UpdateResult{
@@ -293,7 +293,7 @@ func TestRunStrategyOpenCodePluginManualFallback(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not run")
+		return commandOutput("should not run")
 	}
 
 	err := runStrategy(context.Background(), update.UpdateResult{
@@ -446,7 +446,7 @@ func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = append([]string(nil), args...)
-		return exec.Command("true")
+		return commandSuccess()
 	}
 
 	err := runStrategy(context.Background(), update.UpdateResult{
@@ -491,7 +491,7 @@ func TestRunStrategyOpenCodePluginFallsBackWithoutPackageManager(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not run")
+		return commandOutput("should not run")
 	}
 
 	err := runStrategy(context.Background(), update.UpdateResult{
@@ -611,7 +611,7 @@ func TestBrewUpgrade_RunsUpdateBeforeUpgrade(t *testing.T) {
 		if name == "brew" && len(args) > 0 {
 			callOrder = append(callOrder, args[0]) // "update" or "upgrade"
 		}
-		return exec.Command("echo", "ok")
+		return commandOutput("ok")
 	}
 
 	err := brewUpgrade(context.Background(), "gentle-ai")
@@ -645,11 +645,11 @@ func TestBrewUpgrade_UpdateFailureIsNonFatal(t *testing.T) {
 			callArgs = append(callArgs, args[0])
 			if args[0] == "update" {
 				// brew update fails (e.g. no network).
-				return exec.Command("false")
+				return commandFailure()
 			}
 		}
 		// brew upgrade succeeds.
-		return exec.Command("echo", "Upgraded gentle-ai")
+		return commandOutput("Upgraded gentle-ai")
 	}
 
 	err := brewUpgrade(context.Background(), "gentle-ai")
@@ -693,7 +693,7 @@ func TestBrewUpgrade_TapsBeforeUpdateAndUpgrade(t *testing.T) {
 			}
 			calls = append(calls, c)
 		}
-		return exec.Command("echo", "ok")
+		return commandOutput("ok")
 	}
 
 	if err := brewUpgrade(context.Background(), "engram"); err != nil {
@@ -723,7 +723,7 @@ func TestRunStrategy_ExecErrorWrapped(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false")
+		return commandFailure()
 	}
 
 	r := update.UpdateResult{
@@ -785,7 +785,7 @@ func TestRunStrategy_ScriptUpgradeSuccess(t *testing.T) {
 		if name == "bash" && len(args) >= 2 && args[0] == "-c" {
 			gotScriptContent = args[1]
 		}
-		return exec.Command("echo", "ok")
+		return commandOutput("ok")
 	}
 
 	r := update.UpdateResult{
@@ -855,7 +855,7 @@ func TestRunStrategy_ScriptUpgradeWindowsManualFallback(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not run")
+		return commandOutput("should not run")
 	}
 
 	r := update.UpdateResult{
@@ -902,7 +902,7 @@ func TestGGAScriptUpgradeUsesGitClone(t *testing.T) {
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		calls = append(calls, call{name: name, args: args})
-		return exec.Command("echo", "ok")
+		return commandOutput("ok")
 	}
 
 	r := update.UpdateResult{
@@ -973,7 +973,7 @@ func TestGGAScriptUpgradeWindowsManualFallback(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not run")
+		return commandOutput("should not run")
 	}
 
 	r := update.UpdateResult{
@@ -1021,7 +1021,7 @@ func TestRunStrategy_GGAUsesGitClone(t *testing.T) {
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		calls = append(calls, call{name: name, args: args})
-		return exec.Command("echo", "ok")
+		return commandOutput("ok")
 	}
 
 	r := update.UpdateResult{
@@ -1074,7 +1074,7 @@ func TestEngramUpgradeUsesDownloadNotGoInstall(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not be called")
+		return commandOutput("should not be called")
 	}
 
 	downloadCalled := false
@@ -1123,7 +1123,7 @@ func TestEngramUpgradeLinuxUsesDownload(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not be called")
+		return commandOutput("should not be called")
 	}
 
 	downloadCalled := false
@@ -1179,7 +1179,7 @@ func TestRunStrategy_ScriptUpgradeExecFailure(t *testing.T) {
 	}
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false")
+		return commandFailure()
 	}
 
 	r := update.UpdateResult{
