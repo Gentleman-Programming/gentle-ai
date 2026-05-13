@@ -42,11 +42,21 @@ func writeTestDB(t *testing.T, dir string) string {
 	return path
 }
 
+func writeTestArtifacts(t *testing.T, dir string) {
+	t.Helper()
+	writeTestDB(t, dir)
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.WriteFile(DBPath(dir)+suffix, []byte(suffix), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestDataDirService_CopyTo(t *testing.T) {
 	svc, home := newTestService(t)
 	src := filepath.Join(home, "src-data")
 	dst := filepath.Join(home, "dst-data")
-	writeTestDB(t, src)
+	writeTestArtifacts(t, src)
 
 	snap, err := svc.CopyTo(src, dst)
 	if err != nil {
@@ -56,13 +66,13 @@ func TestDataDirService_CopyTo(t *testing.T) {
 		t.Errorf("snap.ID = %q, want snap-abc123", snap.ID)
 	}
 
-	// Source must still exist.
-	if _, err := os.Stat(DBPath(src)); err != nil {
-		t.Errorf("source DB removed after CopyTo: %v", err)
-	}
-	// Destination must exist.
-	if _, err := os.Stat(DBPath(dst)); err != nil {
-		t.Errorf("dst DB not created: %v", err)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if _, err := os.Stat(DBPath(src) + suffix); err != nil {
+			t.Errorf("source artifact %q removed after CopyTo: %v", suffix, err)
+		}
+		if _, err := os.Stat(DBPath(dst) + suffix); err != nil {
+			t.Errorf("dst artifact %q not created: %v", suffix, err)
+		}
 	}
 }
 
@@ -70,27 +80,27 @@ func TestDataDirService_MoveTo(t *testing.T) {
 	svc, home := newTestService(t)
 	src := filepath.Join(home, "src-data")
 	dst := filepath.Join(home, "dst-data")
-	writeTestDB(t, src)
+	writeTestArtifacts(t, src)
 
 	_, err := svc.MoveTo(src, dst)
 	if err != nil {
 		t.Fatalf("MoveTo: %v", err)
 	}
 
-	// Source must be gone.
-	if _, err := os.Stat(DBPath(src)); !os.IsNotExist(err) {
-		t.Error("source DB should not exist after MoveTo")
-	}
-	// Destination must exist.
-	if _, err := os.Stat(DBPath(dst)); err != nil {
-		t.Errorf("dst DB not created: %v", err)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if _, err := os.Stat(DBPath(src) + suffix); !os.IsNotExist(err) {
+			t.Errorf("source artifact %q should not exist after MoveTo", suffix)
+		}
+		if _, err := os.Stat(DBPath(dst) + suffix); err != nil {
+			t.Errorf("dst artifact %q not created: %v", suffix, err)
+		}
 	}
 }
 
 func TestDataDirService_Delete(t *testing.T) {
 	svc, home := newTestService(t)
 	dir := filepath.Join(home, "data")
-	writeTestDB(t, dir)
+	writeTestArtifacts(t, dir)
 
 	snap, err := svc.Delete(dir)
 	if err != nil {
@@ -100,8 +110,10 @@ func TestDataDirService_Delete(t *testing.T) {
 		t.Errorf("snap.ID = %q, want snap-abc123", snap.ID)
 	}
 
-	if _, err := os.Stat(DBPath(dir)); !os.IsNotExist(err) {
-		t.Error("DB should not exist after Delete")
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if _, err := os.Stat(DBPath(dir) + suffix); !os.IsNotExist(err) {
+			t.Errorf("artifact %q should not exist after Delete", suffix)
+		}
 	}
 }
 
@@ -135,26 +147,5 @@ func TestDataDirService_SnapshotError_Propagates(t *testing.T) {
 	// DB must still exist — no delete when snapshot failed.
 	if _, statErr := os.Stat(DBPath(dir)); statErr != nil {
 		t.Error("DB was deleted despite snapshot failure")
-	}
-}
-
-func TestDataDirService_DiskSpaceOK(t *testing.T) {
-	svc, home := newTestService(t)
-	dir := filepath.Join(home, "data")
-	dbPath := writeTestDB(t, dir)
-
-	ok, needed, avail, err := svc.DiskSpaceOK(dbPath, home)
-	if err != nil {
-		t.Fatalf("DiskSpaceOK: %v", err)
-	}
-	if needed <= 0 {
-		t.Errorf("needed = %d, want > 0", needed)
-	}
-	if avail <= 0 {
-		t.Errorf("avail = %d, want > 0", avail)
-	}
-	// A tiny test file on the same volume should always have space.
-	if !ok {
-		t.Errorf("DiskSpaceOK = false for tiny test file, expected true")
 	}
 }

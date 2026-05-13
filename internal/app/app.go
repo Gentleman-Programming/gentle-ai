@@ -605,7 +605,9 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 			newDir = dstDir
 		case model.EngramDataDirOpDelete, model.EngramDataDirOpFresh:
 			newDir = "" // reset to default (~/.engram)
-		// Copy leaves the current dir unchanged; Keep already returned above.
+		default:
+			// Copy leaves the current dir unchanged; Keep already returned above.
+			return snapID, nil
 		}
 		current, _ := state.Read(homeDir) // ignore not-exist; treat as empty
 		current.EngramDataDir = newDir
