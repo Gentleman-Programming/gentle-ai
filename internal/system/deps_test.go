@@ -2,6 +2,7 @@ package system
 
 import (
 	"context"
+	"runtime"
 	"testing"
 )
 
@@ -247,7 +248,7 @@ func TestDetectSingleDepWithEchoTrue(t *testing.T) {
 	dep := Dependency{
 		Name:      "echo",
 		Required:  true,
-		DetectCmd: []string{"echo", "v1.0.0"},
+		DetectCmd: echoVersionCmd(),
 	}
 
 	result := detectSingleDep(context.Background(), dep)
@@ -279,7 +280,7 @@ func TestDetectSingleDepMinVersionFail(t *testing.T) {
 		Name:       "echo",
 		Required:   true,
 		MinVersion: "99.0.0",
-		DetectCmd:  []string{"echo", "v1.0.0"},
+		DetectCmd:  echoVersionCmd(),
 	}
 
 	result := detectSingleDep(context.Background(), dep)
@@ -289,6 +290,13 @@ func TestDetectSingleDepMinVersionFail(t *testing.T) {
 	if result.Version != "1.0.0" {
 		t.Fatalf("Version = %q, want 1.0.0", result.Version)
 	}
+}
+
+func echoVersionCmd() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"cmd", "/c", "echo v1.0.0"}
+	}
+	return []string{"sh", "-c", "echo v1.0.0"}
 }
 
 func TestDetectSingleDepEmptyDetectCmd(t *testing.T) {

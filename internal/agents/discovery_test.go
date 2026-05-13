@@ -50,6 +50,14 @@ func (s stubAdapter) SupportsSystemPrompt() bool              { return true }
 func (s stubAdapter) SupportsMCP() bool                       { return true }
 
 // newStubRegistry creates a Registry from stub adapters.
+func isolateDefaultRegistryEnv(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+}
+
 func newStubRegistry(t *testing.T, adapters ...stubAdapter) *Registry {
 	t.Helper()
 	ifaces := make([]Adapter, len(adapters))
@@ -258,6 +266,7 @@ func TestConfigRootsForBackup_NilSafeOnEmptyRegistry(t *testing.T) {
 // Only agents whose config dirs are created are returned.
 func TestDiscoverInstalled_WithDefaultRegistryAndRealFS(t *testing.T) {
 	home := t.TempDir()
+	isolateDefaultRegistryEnv(t, home)
 
 	// Create claude-code config dir only.
 	claudeDir := filepath.Join(home, ".claude")
@@ -288,6 +297,7 @@ func TestDiscoverInstalled_WithDefaultRegistryAndRealFS(t *testing.T) {
 // ConfigRootsForBackup returns exactly the dirs created on disk.
 func TestConfigRootsForBackup_WithDefaultRegistryCoversCreatedDirs(t *testing.T) {
 	home := t.TempDir()
+	isolateDefaultRegistryEnv(t, home)
 
 	// Create two agent config dirs.
 	dirs := []string{

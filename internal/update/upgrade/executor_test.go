@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -38,6 +39,31 @@ func makeResult(name string, status update.UpdateStatus, oldVer, newVer string, 
 		LatestVersion:    newVer,
 		Status:           status,
 	}
+}
+
+func commandOutput(output string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.Command("cmd", "/c", "echo "+output)
+	}
+	return exec.Command("sh", "-c", "echo "+shellQuote(output))
+}
+
+func commandSuccess() *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.Command("cmd", "/c", "exit 0")
+	}
+	return exec.Command("sh", "-c", "exit 0")
+}
+
+func commandFailure() *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.Command("cmd", "/c", "exit 1")
+	}
+	return exec.Command("sh", "-c", "exit 1")
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // --- TestExecute_NoopWhenNothingIsExecutable ---
@@ -80,7 +106,7 @@ func TestExecute_DevBuildOnlyNoBackupCreated(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not be called")
+		return commandOutput("should not be called")
 	}
 
 	results := []update.UpdateResult{
@@ -165,7 +191,7 @@ func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("true")
+		return commandSuccess()
 	}
 
 	result := makeResult("opencode-sdd-engram-manage", update.RegisteredNotMaterialized, "", "1.2.0", update.InstallOpenCodePlugin)
@@ -222,7 +248,7 @@ func TestExecute_BackupBeforeExecution(t *testing.T) {
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		calls = append(calls, name)
 		// Return a real passing command (echo) so exec succeeds.
-		return exec.Command("echo", "ok")
+		return commandOutput("ok")
 	}
 
 	results := []update.UpdateResult{
@@ -247,7 +273,7 @@ func TestExecuteProgressDoesNotIncludeBackupExclusionDiagnostics(t *testing.T) {
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "ok")
+		return commandOutput("ok")
 	}
 
 	home := t.TempDir()
@@ -293,7 +319,7 @@ func TestExecute_DryRunNeverExecs(t *testing.T) {
 	called := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		called = true
-		return exec.Command("echo", "should not run")
+		return commandOutput("should not run")
 	}
 
 	results := []update.UpdateResult{
@@ -332,10 +358,10 @@ func TestExecute_PerToolSuccessAndFailure(t *testing.T) {
 		// engram go install succeeds, gga curl/download attempt fails — we simulate
 		// the failure by having execCommand return false for "gga" detection.
 		if name == "go" {
-			return exec.Command("echo", "go install ok")
+			return commandOutput("go install ok")
 		}
 		// Any other exec attempt fails.
-		return exec.Command("false")
+		return commandFailure()
 	}
 
 	results := []update.UpdateResult{
@@ -365,7 +391,7 @@ func TestExecute_DevBuildIsSkipped(t *testing.T) {
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "ok")
+		return commandOutput("ok")
 	}
 
 	results := []update.UpdateResult{
@@ -419,7 +445,7 @@ func TestExecute_FailureDoesNotImplyConfigLoss(t *testing.T) {
 
 	// Force all exec to fail.
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false")
+		return commandFailure()
 	}
 
 	results := []update.UpdateResult{
@@ -461,7 +487,7 @@ func TestExecute_DevBuildSurfacedAsSkipped(t *testing.T) {
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "ok")
+		return commandOutput("ok")
 	}
 
 	results := []update.UpdateResult{
@@ -521,7 +547,7 @@ func TestExecute_ManualFallbackSurfacedAsSkippedNotFailed(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not be called")
+		return commandOutput("should not be called")
 	}
 
 	// Windows profile → binaryUpgrade returns a manual fallback error.
@@ -590,7 +616,7 @@ func TestExecute_ConfigNotMutatedDuringUpgrade(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		// Simulate a successful upgrade (no-op shell command).
-		return exec.Command("echo", "upgrade ok")
+		return commandOutput("upgrade ok")
 	}
 
 	results := []update.UpdateResult{
@@ -721,7 +747,7 @@ func TestExecute_ForcedSnapshotFailureSurfacesWarningEndToEnd(t *testing.T) {
 
 	// Stub exec so the upgrade itself succeeds (we're only testing the backup path).
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "upgrade ok")
+		return commandOutput("upgrade ok")
 	}
 
 	// Force snapshot creation to fail.
@@ -784,7 +810,7 @@ func TestExecute_UpgradeBackupManifestHasUpgradeMetadata(t *testing.T) {
 		AppVersion = origAppVersion
 	})
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "ok")
+		return commandOutput("ok")
 	}
 	AppVersion = "3.0.0"
 
@@ -843,7 +869,7 @@ func TestExecute_SuccessfulSnapshotHasNoWarning(t *testing.T) {
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "ok")
+		return commandOutput("ok")
 	}
 	// snapshotCreator is intentionally left at its real default.
 
@@ -1253,7 +1279,7 @@ func TestExecute_SkippedUpgradeDoesNotRenderFailureMarker(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "should not run")
+		return commandOutput("should not run")
 	}
 
 	// Windows profile → binary self-update returns manual fallback → UpgradeSkipped.

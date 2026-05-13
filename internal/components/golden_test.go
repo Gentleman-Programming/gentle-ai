@@ -124,6 +124,7 @@ func TestGoldenSDD_Claude(t *testing.T) {
 
 func TestGoldenSDD_OpenCode(t *testing.T) {
 	home := t.TempDir()
+	ensureOpenCodeSDDNodeStub(t, home)
 
 	result, err := sdd.Inject(home, opencodeAdapter(), "")
 	if err != nil {
@@ -157,6 +158,7 @@ func TestGoldenSDD_OpenCode(t *testing.T) {
 
 func TestGoldenSDD_OpenCode_Multi(t *testing.T) {
 	home := t.TempDir()
+	ensureOpenCodeSDDNodeStub(t, home)
 
 	result, err := sdd.Inject(home, opencodeAdapter(), "multi")
 	if err != nil {
@@ -176,7 +178,10 @@ func TestGoldenSDD_OpenCode_Multi(t *testing.T) {
 	// Normalize the absolute home path in the settings JSON so the golden
 	// file remains stable across test runs (temp dirs change each run).
 	// Sub-agent prompts now use {file:/abs/path/...} references.
-	normalizedSettings := []byte(strings.ReplaceAll(string(settingsJSON), home, "{{HOME}}"))
+	normalized := strings.ReplaceAll(string(settingsJSON), home, "{{HOME}}")
+	normalized = strings.ReplaceAll(normalized, strings.ReplaceAll(home, `\`, `\\`), "{{HOME}}")
+	normalized = strings.ReplaceAll(normalized, `\\`, "/")
+	normalizedSettings := []byte(normalized)
 	assertGolden(t, "sdd-opencode-multi-settings.golden", normalizedSettings)
 
 	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
@@ -901,9 +906,11 @@ func assertGolden(t *testing.T, name string, actual []byte) {
 		t.Fatalf("ReadFile(%q) error = %v\n\nRun with -update to generate golden files:\n  go test ./internal/components/ -run %s -update", goldenPath, err, t.Name())
 	}
 
-	if string(actual) != string(expected) {
+	actualText := normalizeGoldenText(actual)
+	expectedText := normalizeGoldenText(expected)
+	if actualText != expectedText {
 		// Show first difference for easier debugging.
-		diffIdx := firstDiffIndex(string(expected), string(actual))
+		diffIdx := firstDiffIndex(expectedText, actualText)
 		context := 80
 		start := diffIdx - context
 		if start < 0 {
@@ -912,10 +919,23 @@ func assertGolden(t *testing.T, name string, actual []byte) {
 
 		t.Fatalf("golden mismatch for %s (first diff at byte %d)\n\nexpected[%d:%d]:\n%s\n\nactual[%d:%d]:\n%s\n\nRun with -update to regenerate:\n  go test ./internal/components/ -run %s -update",
 			name, diffIdx,
-			start, min(diffIdx+context, len(string(expected))), string(expected)[start:min(diffIdx+context, len(string(expected)))],
-			start, min(diffIdx+context, len(string(actual))), string(actual)[start:min(diffIdx+context, len(string(actual)))],
+			start, min(diffIdx+context, len(expectedText)), expectedText[start:min(diffIdx+context, len(expectedText))],
+			start, min(diffIdx+context, len(actualText)), actualText[start:min(diffIdx+context, len(actualText))],
 			t.Name(),
 		)
+	}
+}
+
+func normalizeGoldenText(b []byte) string {
+	s := strings.ReplaceAll(string(b), "\r\n", "\n")
+	return strings.ReplaceAll(s, `\r\n`, `\n`)
+}
+
+func ensureOpenCodeSDDNodeStub(t *testing.T, home string) {
+	t.Helper()
+	p := filepath.Join(home, ".config", "opencode", "node_modules", "unique-names-generator")
+	if err := os.MkdirAll(p, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", p, err)
 	}
 }
 

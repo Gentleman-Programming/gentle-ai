@@ -21,6 +21,12 @@ func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
 func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 
+func isolateVSCodeEnv(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+}
+
 func assertGentlemanLanguageGuardrails(t *testing.T, text string, required []string, banned []string) {
 	t.Helper()
 
@@ -722,6 +728,7 @@ func TestInjectOpenCodeNeutralPreservesManagedSections(t *testing.T) {
 
 func TestInjectVSCodeNeutralPreservesManagedSections(t *testing.T) {
 	home := t.TempDir()
+	isolateVSCodeEnv(t, home)
 
 	vscodeAdapter, err := agents.NewAdapter("vscode-copilot")
 	if err != nil {
@@ -1019,7 +1026,7 @@ func TestInjectGeminiGentlemanWritesSystemPromptWithRealContent(t *testing.T) {
 
 func TestInjectVSCodeGentlemanWritesInstructionsFile(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	isolateVSCodeEnv(t, home)
 
 	vscodeAdapter, err := agents.NewAdapter("vscode-copilot")
 	if err != nil {
@@ -1220,7 +1227,7 @@ func TestInjectClaudeHealDoesNotTouchNonPersonaContent(t *testing.T) {
 
 func TestInjectVSCodeCleansLegacyGitHubPersonaFile(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	isolateVSCodeEnv(t, home)
 
 	// Plant an old-style Gentleman persona file at the legacy path.
 	legacyPath := filepath.Join(home, ".github", "copilot-instructions.md")
@@ -1264,7 +1271,7 @@ func TestInjectVSCodeCleansLegacyGitHubPersonaFile(t *testing.T) {
 
 func TestInjectVSCodePreservesNonPersonaGitHubFile(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	isolateVSCodeEnv(t, home)
 
 	// Plant a .github/copilot-instructions.md that has user content (not a
 	// Gentleman persona) — it must NOT be deleted.
@@ -1324,7 +1331,7 @@ func TestNeutralAndGentlemanToneSectionsMatch(t *testing.T) {
 
 func TestInjectVSCodeIdempotentAfterHeal(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	isolateVSCodeEnv(t, home)
 
 	// Plant legacy file and run inject twice — second run should be idempotent.
 	legacyPath := filepath.Join(home, ".github", "copilot-instructions.md")
