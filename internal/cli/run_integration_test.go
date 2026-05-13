@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
 
 // missingBinaryLookPath simulates all installable binaries (engram, gga) as
@@ -119,7 +120,7 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	assertFileContains(t, filepath.Join(home, ".pi", "agent", "mcp.json"), "directTools")
 	assertFileContains(t, filepath.Join(home, ".config", "opencode", "opencode.json"), "engram")
 
-	for _, want := range []string{"pi install npm:pi-mcp-adapter", "npm exec --yes --package gentle-engram -- pi-engram init"} {
+	for _, want := range []string{"pi install npm:pi-mcp-adapter", fmt.Sprintf("npm exec --yes --package gentle-engram@%s -- pi-engram init", versions.GentleEngram)} {
 		if !stringSliceContains(commands, want) {
 			t.Fatalf("commands missing %q; got %v", want, commands)
 		}
@@ -165,7 +166,7 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
 		"pi install npm:pi-mcp-adapter",
-		"npm exec --yes --package gentle-engram -- pi-engram init",
+		fmt.Sprintf("npm exec --yes --package gentle-engram@%s -- pi-engram init", versions.GentleEngram),
 		"pi install npm:pi-subagents",
 		"pi install npm:pi-intercom",
 		"pi install npm:@juicesharp/rpiv-ask-user-question",
@@ -575,7 +576,7 @@ func TestRunInstallLinuxAgentInstallResolvesGoInstallCommand(t *testing.T) {
 	commands := recorder.get()
 	foundNpmInstall := false
 	for _, cmd := range commands {
-		if strings.Contains(cmd, "sudo npm install -g opencode-ai") {
+		if strings.Contains(cmd, "sudo npm install -g --ignore-scripts opencode-ai@"+versions.OpenCode) {
 			foundNpmInstall = true
 			break
 		}

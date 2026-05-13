@@ -62,6 +62,19 @@ When checks pass, installer reports:
 
 For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi`, `gentle-engram`, `pi-subagents`, `pi-intercom`, `@juicesharp/rpiv-ask-user-question`, `pi-web-access`, `pi-lens`, `@juicesharp/rpiv-todo`, and `pi-btw` through `pi install npm:*` commands.
 
+## Hardening recommendations for users
+
+Gentle AI pins versions and disables postinstall scripts on every npm install it generates. For broader protection across npm packages you install yourself, set these once on your machine:
+
+- `npm config set ignore-scripts true` — blocks postinstall scripts globally; the primary supply-chain attack vector.
+- `npm config set min-release-age 3` — skip packages published in the last 3 days; catches malicious typosquats before you install them.
+- `npm config set allow-git none` — block git: dependencies, which can be moving targets.
+
+Optional wrapper tools for extra defense:
+
+- [`npq`](https://github.com/lirantal/npq) — audits a package against several heuristics before it installs.
+- [`sfw`](https://socket.dev/) (Socket Firewall) — runtime guard that intercepts suspicious behavior at install/run time.
+
 ## Unsupported platforms
 
 If you run the installer on an unsupported OS or Linux distro, it exits immediately with an error:

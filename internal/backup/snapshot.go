@@ -107,8 +107,10 @@ func (s Snapshotter) buildEntry(sourcePath string) (ManifestEntry, ArchiveEntry,
 		return ManifestEntry{}, ArchiveEntry{}, fmt.Errorf("stat source path %q: %w", cleanSource, err)
 	}
 
-	if info.IsDir() {
-		// Skip directories — callers should enumerate files first.
+	if !info.Mode().IsRegular() {
+		// Skip directories and special runtime files such as sockets, FIFOs, and
+		// devices. Backup archives only contain regular files that can be restored
+		// safely as files.
 		return entry, ArchiveEntry{}, nil
 	}
 

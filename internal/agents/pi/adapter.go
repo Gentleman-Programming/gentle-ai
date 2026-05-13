@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
 
 const (
@@ -74,7 +75,7 @@ func (a *Adapter) InstallCommand(system.PlatformProfile) ([][]string, error) {
 		{"pi", "install", "npm:gentle-pi"},
 		{"pi", "install", "npm:gentle-engram"},
 		{"pi", "install", "npm:pi-mcp-adapter"},
-		{"npm", "exec", "--yes", "--package", "gentle-engram", "--", "pi-engram", "init"},
+		{"npm", "exec", "--yes", "--package", "gentle-engram@" + versions.GentleEngram, "--", "pi-engram", "init"},
 		{"pi", "install", "npm:pi-subagents"},
 		{"pi", "install", "npm:pi-intercom"},
 		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},

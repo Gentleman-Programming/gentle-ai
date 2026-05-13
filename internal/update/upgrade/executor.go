@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -20,8 +21,13 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 )
@@ -109,53 +115,186 @@ var backupExcludeSubdirs = map[string]bool{
 	"tmp":                         true, // Antigravity temporary runtime artifacts
 }
 
-// configPathsForBackup returns the agent config file paths that the backup
-// snapshot must include before any upgrade execution.
+// configPathsForBackup returns the explicit Gentle AI-managed file paths that
+// the backup snapshot must include before any upgrade execution.
 //
-// Roots are derived from two sources:
-//  1. Canonical managed agent roots — via agents.ConfigRootsForBackup using the
-//     default registry. This automatically covers all registered adapters and
-//     picks up new agents without manual list maintenance.
-//  2. Approved GGA extras — gga.ConfigPath and gga.RuntimeLibDir are not adapter-
-//     managed but must still be backed up. They are appended separately and do
-//     not affect the canonical managed set used by sync.
-//
-// Only files (not directories) are included — Snapshotter.Create rejects dirs.
-// Non-existent directories are silently skipped.
-// Runtime/cache subdirectories listed in backupExcludeSubdirs are skipped to
-// prevent the backup from walking gigabytes of non-config data.
+// This is intentionally NOT a recursive backup of agent config directories.
+// Upgrade backups are rollback artifacts for files Gentle AI may create or
+// modify, not general-purpose backups of conversations, sessions, caches,
+// sockets, package installs, or other runtime state.
 func configPathsForBackup(homeDir string, diagnostics ...io.Writer) []string {
 	dw := firstWriter(diagnostics...)
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
-		// Programming error — registry construction failed. Fall back gracefully.
-		reg = nil
+		writeBackupDiagnostic(dw, "backup: default agent registry unavailable: %v", err)
+		return managedGlobalBackupPaths(homeDir)
 	}
 
-	// Collect config root dirs: canonical agent roots first.
-	var configDirs []string
-	if reg != nil {
-		configDirs = append(configDirs, agents.ConfigRootsForBackup(reg, homeDir)...)
+	paths := make(map[string]struct{})
+	addPath := func(path string) {
+		if strings.TrimSpace(path) == "" {
+			return
+		}
+		paths[filepath.Clean(path)] = struct{}{}
+	}
+	addPaths := func(values ...string) {
+		for _, value := range values {
+			addPath(value)
+		}
 	}
 
-	// Approved GGA extras — outside the canonical managed agent set.
-	// gga.ConfigPath returns the config *file* path; its parent dir is the root to walk.
-	ggaConfigDir := filepath.Dir(gga.ConfigPath(homeDir))
-	ggaLibDir := gga.RuntimeLibDir(homeDir)
-	configDirs = append(configDirs, ggaConfigDir, ggaLibDir)
-
-	// Enumerate all regular files under each root dir, skipping non-config subdirs.
-	paths := make([]string, 0)
-	for _, dir := range configDirs {
-		files, err := enumerateFilesInDir(dir, backupExcludeSubdirs, dw)
-		if err != nil {
-			// Directory doesn't exist or can't be read — silently skip.
+	for _, installed := range agents.DiscoverInstalled(reg, homeDir) {
+		adapter, ok := reg.Get(installed.ID)
+		if !ok {
 			continue
 		}
-		paths = append(paths, files...)
+		for _, path := range managedAgentBackupPaths(homeDir, adapter, dw) {
+			addPath(path)
+		}
+	}
+
+	addPaths(managedGlobalBackupPaths(homeDir)...)
+
+	out := make([]string, 0, len(paths))
+	for path := range paths {
+		out = append(out, path)
+	}
+	return out
+}
+
+func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics io.Writer) []string {
+	paths := make([]string, 0)
+	add := func(values ...string) {
+		for _, value := range values {
+			if strings.TrimSpace(value) != "" {
+				paths = append(paths, value)
+			}
+		}
+	}
+
+	if adapter.SupportsSystemPrompt() {
+		add(adapter.SystemPromptFile(homeDir))
+	}
+	add(adapter.SettingsPath(homeDir))
+
+	if adapter.SystemPromptStrategy() == model.StrategyJinjaModules {
+		configDir := adapter.GlobalConfigDir(homeDir)
+		add(
+			filepath.Join(configDir, "persona.md"),
+			filepath.Join(configDir, "output-style.md"),
+			filepath.Join(configDir, "sdd-orchestrator.md"),
+			filepath.Join(configDir, "strict-tdd-mode.md"),
+		)
+	}
+
+	if adapter.SupportsMCP() {
+		add(adapter.MCPConfigPath(homeDir, "engram"), adapter.MCPConfigPath(homeDir, "context7"))
+	}
+
+	if adapter.SupportsOutputStyles() {
+		add(filepath.Join(adapter.OutputStyleDir(homeDir), "gentleman.md"))
+	}
+
+	if adapter.SupportsSlashCommands() {
+		for _, command := range sdd.OpenCodeCommands() {
+			add(filepath.Join(adapter.CommandsDir(homeDir), command.Name+".md"))
+		}
+	}
+
+	if adapter.SupportsSubAgents() {
+		for _, name := range embeddedFileNames(adapter.EmbeddedSubAgentsDir(), diagnostics) {
+			add(filepath.Join(adapter.SubAgentsDir(homeDir), name))
+		}
+	}
+
+	if adapter.SupportsSkills() {
+		add(managedSkillBackupPaths(homeDir, adapter, diagnostics)...)
+	}
+
+	switch adapter.Agent() {
+	case model.AgentClaudeCode:
+		add(filepath.Join(homeDir, ".claude", "themes", "gentleman.json"))
+	case model.AgentOpenCode:
+		add(
+			filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"),
+			filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
+			filepath.Join(homeDir, ".config", "opencode", "tui.json"),
+		)
+		for _, phase := range sdd.SharedPromptPhases() {
+			add(filepath.Join(sdd.SharedPromptDir(homeDir), phase+".md"))
+		}
 	}
 
 	return paths
+}
+
+func managedGlobalBackupPaths(homeDir string) []string {
+	return []string{
+		state.Path(homeDir),
+		gga.ConfigPath(homeDir),
+		gga.AgentsTemplatePath(homeDir),
+		gga.RuntimePRModePath(homeDir),
+		gga.RuntimePS1Path(homeDir),
+	}
+}
+
+func managedSkillBackupPaths(homeDir string, adapter agents.Adapter, diagnostics io.Writer) []string {
+	skillDir := adapter.SkillsDir(homeDir)
+	if skillDir == "" {
+		return nil
+	}
+
+	paths := make([]string, 0)
+	for _, id := range skills.AllSkillIDs() {
+		embedDir := filepath.ToSlash(filepath.Join("skills", string(id)))
+		walkEmbeddedFiles(embedDir, diagnostics, func(relPath string) {
+			paths = append(paths, filepath.Join(skillDir, string(id), relPath))
+		})
+	}
+
+	for _, relPath := range []string{
+		"_shared/persistence-contract.md",
+		"_shared/engram-convention.md",
+		"_shared/openspec-convention.md",
+		"_shared/sdd-phase-common.md",
+		"_shared/skill-resolver.md",
+	} {
+		paths = append(paths, filepath.Join(skillDir, relPath))
+	}
+
+	return paths
+}
+
+func embeddedFileNames(embedDir string, diagnostics io.Writer) []string {
+	var names []string
+	walkEmbeddedFiles(embedDir, diagnostics, func(relPath string) {
+		names = append(names, relPath)
+	})
+	return names
+}
+
+func walkEmbeddedFiles(embedDir string, diagnostics io.Writer, visit func(relPath string)) {
+	if strings.TrimSpace(embedDir) == "" {
+		return
+	}
+	cleanEmbedDir := filepath.ToSlash(filepath.Clean(embedDir))
+	err := fs.WalkDir(assets.FS, cleanEmbedDir, func(assetPath string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		relPath, relErr := filepath.Rel(filepath.FromSlash(cleanEmbedDir), filepath.FromSlash(assetPath))
+		if relErr != nil {
+			return relErr
+		}
+		visit(relPath)
+		return nil
+	})
+	if err != nil {
+		writeBackupDiagnostic(diagnostics, "backup: skipping embedded path %s: %v", cleanEmbedDir, err)
+	}
 }
 
 // enumerateFilesInDir returns the paths of all regular files (recursively) in dir.

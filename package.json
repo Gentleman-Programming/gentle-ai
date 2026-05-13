@@ -1,6 +1,7 @@
 {
   "name": "gentleman-ai-installer",
   "version": "1.0.0",
+  "private": true,
   "description": "Gentle-AI — ecosystem, frameworks, and workflows for AI coding agents.",
   "main": "index.js",
   "directories": {

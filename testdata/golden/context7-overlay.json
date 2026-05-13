@@ -4,7 +4,9 @@
       "command": "npx",
       "args": [
         "-y",
-        "@upstash/context7-mcp"
+        "--package=@upstash/context7-mcp@2.2.5",
+        "--",
+        "context7-mcp"
       ]
     }
   }

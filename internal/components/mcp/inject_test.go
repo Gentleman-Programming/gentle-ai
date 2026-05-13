@@ -135,7 +135,7 @@ func TestInjectOpenClawMergesContext7UnderMCPDotServersAndMigratesLegacyMCPServe
 	if !strings.Contains(text, `"sessionIdleTtlMs": 120000`) {
 		t.Fatalf("openclaw.json should preserve existing mcp fields; got:\n%s", text)
 	}
-	if !strings.Contains(text, `"context7"`) || !strings.Contains(text, `"@upstash/context7-mcp"`) {
+	if !strings.Contains(text, `"context7"`) || !strings.Contains(text, `@upstash/context7-mcp@`) {
 		t.Fatalf("openclaw.json missing context7 under mcp.servers; got:\n%s", text)
 	}
 }

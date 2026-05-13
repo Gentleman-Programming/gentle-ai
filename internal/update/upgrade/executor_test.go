@@ -640,23 +640,22 @@ func TestToolUpgradeResult_ErrorWrapping(t *testing.T) {
 
 // --- Upgrade Backup Hardening Tests ---
 
-// TestConfigPathsForBackup_CoversAgentDirectories verifies that configPathsForBackup
-// returns files from all expected agent config directories, not just 4 hardcoded paths.
-// This tests the G5 gap fix: computed paths aligned with ScanConfigs directories.
-func TestConfigPathsForBackup_CoversAgentDirectories(t *testing.T) {
+// TestConfigPathsForBackup_CoversManagedAgentPaths verifies that upgrade
+// backups include Gentle AI-managed files for installed agents, without treating
+// every file in an agent config directory as backup-owned.
+func TestConfigPathsForBackup_CoversManagedAgentPaths(t *testing.T) {
 	homeDir := t.TempDir()
 
-	// Create files in each agent config directory to verify they are discovered.
-	agentFiles := map[string]string{
-		".claude/CLAUDE.md":              "# Claude",
-		".claude/extra_rule.md":          "# extra rule",
-		".config/opencode/config.json":   `{"model":"claude"}`,
-		".config/opencode/settings.json": `{"theme":"dark"}`,
-		".gemini/GEMINI.md":              "# Gemini",
-		".cursor/rules":                  "# Cursor rules",
+	managedFiles := map[string]string{
+		".claude/CLAUDE.md":             "# Claude",
+		".config/opencode/AGENTS.md":    "# OpenCode",
+		".config/opencode/opencode.json": `{"model":"claude"}`,
+		".gemini/GEMINI.md":                "# Gemini",
+		".cursor/rules/gentle-ai.mdc":       "# Cursor rules",
 	}
+	unmanagedFile := filepath.Join(homeDir, ".claude", "conversation-transcript.md")
 
-	for relPath, content := range agentFiles {
+	for relPath, content := range managedFiles {
 		full := filepath.Join(homeDir, relPath)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", relPath, err)
@@ -665,20 +664,24 @@ func TestConfigPathsForBackup_CoversAgentDirectories(t *testing.T) {
 			t.Fatalf("write %s: %v", relPath, err)
 		}
 	}
+	if err := os.WriteFile(unmanagedFile, []byte("runtime data"), 0o644); err != nil {
+		t.Fatalf("write unmanaged file: %v", err)
+	}
 
 	paths := configPathsForBackup(homeDir)
-
-	// Must include at least the files we created.
 	pathSet := make(map[string]struct{}, len(paths))
 	for _, p := range paths {
 		pathSet[p] = struct{}{}
 	}
 
-	for relPath := range agentFiles {
+	for relPath := range managedFiles {
 		full := filepath.Join(homeDir, relPath)
 		if _, ok := pathSet[full]; !ok {
-			t.Errorf("configPathsForBackup missing %q — computed paths must cover all files in agent dirs", relPath)
+			t.Errorf("configPathsForBackup missing managed file %q", relPath)
 		}
+	}
+	if _, ok := pathSet[unmanagedFile]; ok {
+		t.Errorf("configPathsForBackup included unmanaged file %q", unmanagedFile)
 	}
 }
 
@@ -867,11 +870,9 @@ func TestExecute_SuccessfulSnapshotHasNoWarning(t *testing.T) {
 // --- Phase 3: Adapter-driven configPathsForBackup ---
 
 // TestConfigPathsForBackup_CoversRegistryAgentsNotInOldList verifies that
-// configPathsForBackup covers agents from the full registry, not just the
-// previous hardcoded 4-agent list (claude, opencode, gemini, cursor).
-//
-// codex (~/.codex) was NOT in the old hardcoded list. After wiring to
-// agents.ConfigRootsForBackup, it must be covered automatically.
+// configPathsForBackup covers managed paths for agents from the full registry,
+// not just the previous hardcoded 4-agent list (claude, opencode, gemini,
+// cursor). codex (~/.codex) was NOT in the old hardcoded list.
 func TestConfigPathsForBackup_CoversRegistryAgentsNotInOldList(t *testing.T) {
 	homeDir := t.TempDir()
 
@@ -892,7 +893,7 @@ func TestConfigPathsForBackup_CoversRegistryAgentsNotInOldList(t *testing.T) {
 	}
 
 	if _, ok := pathSet[codexFile]; !ok {
-		t.Errorf("configPathsForBackup() missing codex config file %q — must cover all registry agents, not just old hardcoded 4; got paths: %v", codexFile, paths)
+		t.Errorf("configPathsForBackup() missing codex managed file %q — must cover registry agents, not just old hardcoded 4; got paths: %v", codexFile, paths)
 	}
 }
 
@@ -1110,9 +1111,43 @@ func TestEnumerateFilesInDir_NilExcludesWalksEverything(t *testing.T) {
 	}
 }
 
-// TestConfigPathsForBackup_ExcludesRuntimeDirs verifies that the production
-// backupExcludeSubdirs list prevents configPathsForBackup from walking into
-// large runtime directories across ALL agents: Claude, Gemini, OpenCode.
+// TestConfigPathsForBackup_ExcludesRuntimeDirs verifies that upgrade backup
+// target selection ignores runtime directories across agents. Upgrade backups
+// must stay limited to Gentle AI-managed files, not conversations or caches.
+func TestConfigPathsForBackup_ExcludesPiRuntimeFiles(t *testing.T) {
+	homeDir := t.TempDir()
+
+	managedPiSettings := filepath.Join(homeDir, ".pi", "agent", "settings.json")
+	managedPiMCP := filepath.Join(homeDir, ".pi", "agent", "mcp.json")
+	runtimeSocket := filepath.Join(homeDir, ".pi", "agent", "intercom", "broker.sock")
+	runtimeSession := filepath.Join(homeDir, ".pi", "agent", "sessions", "session.jsonl")
+	for _, path := range []string{managedPiSettings, managedPiMCP, runtimeSocket, runtimeSession} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", path, err)
+		}
+	}
+
+	paths := configPathsForBackup(homeDir)
+	pathSet := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		pathSet[p] = struct{}{}
+	}
+
+	for _, managed := range []string{managedPiSettings, managedPiMCP} {
+		if _, ok := pathSet[managed]; !ok {
+			t.Errorf("configPathsForBackup missing Pi managed file %q", managed)
+		}
+	}
+	for _, runtime := range []string{runtimeSocket, runtimeSession} {
+		if _, ok := pathSet[runtime]; ok {
+			t.Errorf("configPathsForBackup included Pi runtime file %q", runtime)
+		}
+	}
+}
+
 func TestConfigPathsForBackup_ExcludesRuntimeDirs(t *testing.T) {
 	homeDir := t.TempDir()
 
@@ -1138,8 +1173,8 @@ func TestConfigPathsForBackup_ExcludesRuntimeDirs(t *testing.T) {
 
 	geminiExcludes := []string{"browser_recordings", "brain", "conversations"}
 
-	// --- OpenCode: config file (keep) + node_modules (exclude) ---
-	openCodeConfig := filepath.Join(homeDir, ".config", "opencode", "config.json")
+	// --- OpenCode: managed config file (keep) + node_modules (exclude) ---
+	openCodeConfig := filepath.Join(homeDir, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(openCodeConfig), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
