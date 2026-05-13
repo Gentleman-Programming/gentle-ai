@@ -27,6 +27,12 @@ func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func windsurfAdapter() agents.Adapter { return windsurfagent.NewAdapter() }
 
+func init() {
+	npmLookPath = func(string) (string, error) {
+		return "", fmt.Errorf("not found")
+	}
+}
+
 func mockNoPackageManager(t *testing.T) {
 	t.Helper()
 	orig := npmLookPath
