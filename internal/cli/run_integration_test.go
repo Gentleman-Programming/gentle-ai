@@ -1501,9 +1501,14 @@ func TestRunInstallDryRunMatchesActualInstallOpenCodeSDDMulti(t *testing.T) {
 	for _, component := range dryResult.Resolved.OrderedComponents {
 		expectedPaths = append(expectedPaths, componentPaths(home, dryResult.Selection, adapters, component)...)
 	}
-	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
-	if !containsPath(expectedPaths, pluginPath) {
-		t.Fatalf("dry-run expected paths missing multi-mode plugin %q\npaths=%v", pluginPath, expectedPaths)
+	pluginPaths := []string{
+		filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts"),
+		filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts"),
+	}
+	for _, pluginPath := range pluginPaths {
+		if !containsPath(expectedPaths, pluginPath) {
+			t.Fatalf("dry-run expected paths missing multi-mode plugin %q\npaths=%v", pluginPath, expectedPaths)
+		}
 	}
 
 	restoreHome := osUserHomeDir
@@ -1530,6 +1535,11 @@ func TestRunInstallDryRunMatchesActualInstallOpenCodeSDDMulti(t *testing.T) {
 	for _, path := range expectedPaths {
 		if _, statErr := os.Stat(path); statErr != nil {
 			t.Fatalf("expected dry-run path %q to exist after install: %v", path, statErr)
+		}
+	}
+	for _, pluginPath := range pluginPaths {
+		if _, statErr := os.Stat(pluginPath); statErr != nil {
+			t.Fatalf("expected OpenCode SDD plugin %q to exist after install: %v", pluginPath, statErr)
 		}
 	}
 }

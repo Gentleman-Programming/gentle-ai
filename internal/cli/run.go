@@ -918,7 +918,10 @@ func componentPathsWithWorkspace(homeDir, workspaceDir string, selection model.S
 				if p := adapter.SettingsPath(homeDir); p != "" {
 					paths = append(paths, p)
 				}
-				paths = append(paths, filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"))
+				paths = append(paths,
+					filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"),
+					filepath.Join(homeDir, ".config", "opencode", "plugins", "model-variants.ts"),
+				)
 				// Shared prompt files in ~/.config/opencode/prompts/sdd/ — back these up
 				// so a sync does not silently overwrite user-customized prompt content.
 				// These files are only written for multi-mode (SDDModeMulti), so we only

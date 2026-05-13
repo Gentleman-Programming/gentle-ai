@@ -44,27 +44,31 @@ func TestComponentPathsSDDIncludesOpenCodeSettingsAndCommands(t *testing.T) {
 	}
 }
 
-func TestComponentPathsSDDMultiIncludesOpenCodePlugin(t *testing.T) {
+func TestComponentPathsSDDMultiIncludesOpenCodePlugins(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode})
 
 	paths := componentPaths(home, model.Selection{SDDMode: model.SDDModeMulti}, adapters, model.ComponentSDD)
 
-	plugin := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
-	if !containsPath(paths, plugin) {
-		t.Fatalf("componentPaths(sdd multi) missing OpenCode plugin path %q\npaths=%v", plugin, paths)
+	for _, plugin := range []string{"background-agents.ts", "model-variants.ts"} {
+		path := filepath.Join(home, ".config", "opencode", "plugins", plugin)
+		if !containsPath(paths, path) {
+			t.Fatalf("componentPaths(sdd multi) missing OpenCode plugin path %q\npaths=%v", path, paths)
+		}
 	}
 }
 
-func TestComponentPathsSDDSingleIncludesOpenCodePlugin(t *testing.T) {
+func TestComponentPathsSDDSingleIncludesOpenCodePlugins(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode})
 
 	paths := componentPaths(home, model.Selection{SDDMode: model.SDDModeSingle}, adapters, model.ComponentSDD)
 
-	plugin := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
-	if !containsPath(paths, plugin) {
-		t.Fatalf("componentPaths(sdd single) missing OpenCode plugin path %q\npaths=%v", plugin, paths)
+	for _, plugin := range []string{"background-agents.ts", "model-variants.ts"} {
+		path := filepath.Join(home, ".config", "opencode", "plugins", plugin)
+		if !containsPath(paths, path) {
+			t.Fatalf("componentPaths(sdd single) missing OpenCode plugin path %q\npaths=%v", path, paths)
+		}
 	}
 }
 

@@ -1475,10 +1475,20 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 		t.Fatalf("Verify.Ready = false, report = %#v", result.Verify)
 	}
 
-	// SDD assets should exist for opencode.
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
-	if _, err := os.Stat(settingsPath); err != nil {
-		t.Errorf("expected SDD inject to create %q: %v", settingsPath, err)
+	// SDD assets should exist for opencode and match the managed path contract
+	// used by post-sync verification.
+	managedPaths := componentPaths(home, sel, resolveAdapters(sel.Agents), model.ComponentSDD)
+	for _, want := range []string{
+		filepath.Join(home, ".config", "opencode", "opencode.json"),
+		filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts"),
+		filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts"),
+	} {
+		if !containsPath(managedPaths, want) {
+			t.Fatalf("managed SDD paths missing %q\npaths=%v", want, managedPaths)
+		}
+		if _, err := os.Stat(want); err != nil {
+			t.Errorf("expected SDD sync to create %q: %v", want, err)
+		}
 	}
 }
 
