@@ -79,9 +79,11 @@ gentle-ai skill-registry refresh --force
 gentle-ai skill-registry refresh --cwd /path/to/project --quiet
 ```
 
+The command scans project skills first (`skills/`, `.opencode/skills/`, `.claude/skills/`, `.github/skills/`, and other supported workspace skill roots), then global agent skill directories. Project-local skills win over same-name global skills.
+
 The command writes `.atl/skill-registry.md` and `.atl/.skill-registry.cache.json`. The cache fingerprint includes schema version plus each discovered `SKILL.md` file path, mtime, and size, so normal startup is a cheap cache-hit when skills have not changed.
 
-Claude Code and OpenCode installs wire this command into startup/plugin hooks. Pi gets the equivalent behavior from `gentle-pi`.
+Claude Code and OpenCode installs wire this command into startup/plugin hooks. Pi gets the equivalent behavior from `gentle-pi`; keep that extension's scan roots in sync when changing these discovery rules.
 
 ### sync
 

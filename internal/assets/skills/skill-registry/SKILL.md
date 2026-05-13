@@ -27,18 +27,33 @@ This is the foundation of the **Skill Resolver Protocol** (see `_shared/skill-re
 1. Glob for `*/SKILL.md` files across ALL known skill directories. Check every path below — scan ALL that exist, not just the first match:
 
    **User-level (global skills):**
-   - `~/.claude/skills/` — Claude Code
+   - `~/.pi/agent/skills/` — Pi/Gentle AI user skills
+   - `~/.config/agents/skills/`, `~/.agents/skills/`, `~/.kimi/skills/` — generic Agent Skills / Kimi-compatible locations
    - `~/.config/opencode/skills/` — OpenCode
+   - `~/.config/kilo/skills/` — Kilo Code
+   - `~/.claude/skills/` — Claude Code
    - `~/.gemini/skills/` — Gemini CLI
+   - `~/.gemini/antigravity/skills/` — Antigravity
    - `~/.cursor/skills/` — Cursor
    - `~/.copilot/skills/` — VS Code Copilot
-   - The parent directory of this skill file (catch-all for any tool)
+   - `~/.codex/skills/` — Codex
+   - `~/.codeium/windsurf/skills/` — Windsurf
+   - `~/.qwen/skills/` — Qwen Code
+   - `~/.kiro/skills/` — Kiro
+   - `~/.openclaw/skills/` — OpenClaw
 
    **Project-level (workspace skills):**
-   - `{project-root}/.claude/skills/` — Claude Code
-   - `{project-root}/.gemini/skills/` — Gemini CLI
-   - `{project-root}/.agent/skills/` — Antigravity (workspace)
-   - `{project-root}/skills/` — Generic
+   - `{project-root}/skills/` — Generic repo skills
+   - `{project-root}/.opencode/skills/` — OpenCode workspace skills
+   - `{project-root}/.claude/skills/` — Claude Code workspace skills
+   - `{project-root}/.gemini/skills/` — Gemini CLI workspace skills
+   - `{project-root}/.cursor/skills/` — Cursor workspace skills
+   - `{project-root}/.github/skills/` — VS Code Copilot workspace skills
+   - `{project-root}/.codex/skills/` — Codex workspace skills
+   - `{project-root}/.qwen/skills/` — Qwen Code workspace skills
+   - `{project-root}/.kiro/skills/` — Kiro workspace skills
+   - `{project-root}/.openclaw/skills/` — OpenClaw workspace skills
+   - `{project-root}/.pi/skills/`, `{project-root}/.agent/skills/`, `{project-root}/.agents/skills/`, `{project-root}/.atl/skills/` — Gentle AI/Pi and generic workspace skills
 
 2. **SKIP `sdd-*` and `_shared`** — those are SDD workflow skills, not coding/task skills
 3. Also **SKIP `skill-registry`** — that's this skill
@@ -52,6 +67,7 @@ This is the foundation of the **Skill Resolver Protocol** (see `_shared/skill-re
 ### Step 1b: Generate Compact Rules
 
 For each skill found in Step 1, generate a **compact rules block** (5-15 lines max) containing ONLY:
+
 - Actionable rules and constraints ("do X", "never Y", "prefer Z over W")
 - Key patterns with one-line examples where critical
 - Breaking changes or gotchas that would cause bugs if missed
@@ -59,16 +75,20 @@ For each skill found in Step 1, generate a **compact rules block** (5-15 lines m
 **DO NOT include**: purpose/motivation, when-to-use, full code examples, installation steps, or anything the sub-agent doesn't need to APPLY the skill.
 
 Format per skill:
+
 ```markdown
 ### {skill-name}
+
 - Rule 1
 - Rule 2
 - ...
 ```
 
 **Example** — compact rules for a React 19 skill:
+
 ```markdown
 ### react-19
+
 - No useMemo/useCallback — React Compiler handles memoization automatically
 - use() hook for promises/context, replaces useEffect for data fetching
 - Server Components by default, add 'use client' only for interactivity/hooks
@@ -104,21 +124,23 @@ See `_shared/skill-resolver.md` for the full resolution protocol.
 
 ## User Skills
 
-| Trigger | Skill | Path |
-|---------|-------|------|
+| Trigger                    | Skill        | Path                    |
+| -------------------------- | ------------ | ----------------------- |
 | {trigger from frontmatter} | {skill name} | {full path to SKILL.md} |
-| ... | ... | ... |
+| ...                        | ...          | ...                     |
 
 ## Compact Rules
 
 Pre-digested rules per skill. Delegators copy matching blocks into sub-agent prompts as `## Project Standards (auto-resolved)`.
 
 ### {skill-name-1}
+
 - Rule 1
 - Rule 2
 - ...
 
 ### {skill-name-2}
+
 - Rule 1
 - Rule 2
 - ...
@@ -127,11 +149,11 @@ Pre-digested rules per skill. Delegators copy matching blocks into sub-agent pro
 
 ## Project Conventions
 
-| File | Path | Notes |
-|------|------|-------|
-| {index file} | {path} | Index — references files below |
-| {referenced file} | {extracted path} | Referenced by {index file} |
-| {standalone file} | {path} | |
+| File              | Path             | Notes                          |
+| ----------------- | ---------------- | ------------------------------ |
+| {index file}      | {path}           | Index — references files below |
+| {referenced file} | {extracted path} | Referenced by {index file}     |
+| {standalone file} | {path}           |                                |
 
 Read the convention files listed above for project-specific patterns and rules. All referenced paths have been extracted — no need to read index files to discover more.
 ```
@@ -175,17 +197,20 @@ mem_save(
 **Engram**: {saved / not available}
 
 ### User Skills Found
-| Skill | Trigger |
-|-------|---------|
+
+| Skill  | Trigger   |
+| ------ | --------- |
 | {name} | {trigger} |
-| ... | ... |
+| ...    | ...       |
 
 ### Project Conventions Found
-| File | Path |
-|------|------|
+
+| File   | Path   |
+| ------ | ------ |
 | {file} | {path} |
 
 ### Next Steps
+
 The orchestrator reads this registry once per session and passes pre-resolved skill paths to sub-agents via their launch prompts.
 To update after installing/removing skills, run this again.
 ```

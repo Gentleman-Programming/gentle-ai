@@ -18,19 +18,23 @@ import (
 const (
 	RegistryRelPath      = ".atl/skill-registry.md"
 	CacheRelPath         = ".atl/.skill-registry.cache.json"
-	RegistrySchema       = 2
+	RegistrySchema       = 3
 	sectionMarker        = "## Selected skills and compact rules"
 	atlIgnoreEntry       = ".atl/"
 	fallbackCompactRules = "No compact rules declared; delegators should load the full skill file before direct work, or pass an explicit fallback path only when Project Standards cannot be injected."
 )
 
 var (
-	excludeNames    = map[string]bool{"_shared": true, "skill-registry": true}
-	excludePrefixes = []string{"sdd-"}
-	compactHeading  = regexp.MustCompile(`(?i)^##\s+Compact Rules\s*$`)
-	nextH2          = regexp.MustCompile(`^##\s+`)
-	bulletLine      = regexp.MustCompile(`^-\s+(.+)$`)
-	frontmatterLine = regexp.MustCompile(`^(\w+):\s*(.*)$`)
+	excludeNames          = map[string]bool{"_shared": true, "skill-registry": true}
+	excludePrefixes       = []string{"sdd-"}
+	compactHeading        = regexp.MustCompile(`(?i)^##\s+Compact Rules\s*$`)
+	h2Heading             = regexp.MustCompile(`^##\s+(.+?)\s*$`)
+	nextH2                = regexp.MustCompile(`^##\s+`)
+	bulletLine            = regexp.MustCompile(`^-\s+(.+)$`)
+	orderedListLine       = regexp.MustCompile(`^\d+[.)]\s+(.+)$`)
+	fallbackRuleHeadings  = []string{"Hard Rules", "Critical Rules", "Critical Patterns", "Voice Rules", "Decision Gates"}
+	maxExtractedRuleCount = 15
+	frontmatterLine       = regexp.MustCompile(`^(\w+):\s*(.*)$`)
 )
 
 type SkillEntry struct {
@@ -52,26 +56,51 @@ type cacheFile struct {
 	Fingerprint string `json:"fingerprint"`
 }
 
+// Keep these source roots in sync with the gentle-pi skill-registry extension.
 func UserSkillDirs(home string) []string {
 	return []string{
+		// Gentle AI/Pi and generic Agent Skills locations.
 		filepath.Join(home, ".pi", "agent", "skills"),
+		filepath.Join(home, ".config", "agents", "skills"),
 		filepath.Join(home, ".agents", "skills"),
+		filepath.Join(home, ".kimi", "skills"),
+
+		// Agent-specific global skill locations supported by Gentle AI adapters.
 		filepath.Join(home, ".config", "opencode", "skills"),
+		filepath.Join(home, ".config", "kilo", "skills"),
 		filepath.Join(home, ".claude", "skills"),
 		filepath.Join(home, ".gemini", "skills"),
+		filepath.Join(home, ".gemini", "antigravity", "skills"),
 		filepath.Join(home, ".cursor", "skills"),
 		filepath.Join(home, ".copilot", "skills"),
+		filepath.Join(home, ".codex", "skills"),
+		filepath.Join(home, ".codeium", "windsurf", "skills"),
+		filepath.Join(home, ".qwen", "skills"),
+		filepath.Join(home, ".kiro", "skills"),
+		filepath.Join(home, ".openclaw", "skills"),
 	}
 }
 
 func ProjectSkillDirs(cwd string) []string {
 	return []string{
+		// Generic project skills first: repo-local intent beats user/global skills.
 		filepath.Join(cwd, "skills"),
+
+		// Agent-native workspace skill locations.
+		filepath.Join(cwd, ".opencode", "skills"),
+		filepath.Join(cwd, ".claude", "skills"),
+		filepath.Join(cwd, ".gemini", "skills"),
+		filepath.Join(cwd, ".cursor", "skills"),
+		filepath.Join(cwd, ".github", "skills"),
+		filepath.Join(cwd, ".codex", "skills"),
+		filepath.Join(cwd, ".qwen", "skills"),
+		filepath.Join(cwd, ".kiro", "skills"),
+		filepath.Join(cwd, ".openclaw", "skills"),
+
+		// Gentle AI/Pi and generic Agent Skills workspace locations.
 		filepath.Join(cwd, ".pi", "skills"),
 		filepath.Join(cwd, ".agent", "skills"),
 		filepath.Join(cwd, ".agents", "skills"),
-		filepath.Join(cwd, ".claude", "skills"),
-		filepath.Join(cwd, ".gemini", "skills"),
 		filepath.Join(cwd, ".atl", "skills"),
 	}
 }
@@ -85,7 +114,6 @@ func Regenerate(cwd, home string, force bool) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	sort.Strings(files)
 
 	registryPath := filepath.Join(cwd, RegistryRelPath)
 	cachePath := filepath.Join(cwd, CacheRelPath)
@@ -289,26 +317,96 @@ func parseFrontmatter(source string) (name, description, body string) {
 }
 
 func extractCompactRules(body string) []string {
+	if rules := extractRulesFromHeadings(body, []string{"Compact Rules"}); len(rules) > 0 {
+		return rules
+	}
+	return extractRulesFromHeadings(body, fallbackRuleHeadings)
+}
+
+func extractRulesFromHeadings(body string, headings []string) []string {
+	wanted := map[string]bool{}
+	for _, heading := range headings {
+		wanted[normalizeHeading(heading)] = true
+	}
+
 	inSection := false
 	var rules []string
 	for _, raw := range strings.Split(body, "\n") {
 		line := strings.TrimRight(raw, " \t")
-		if compactHeading.MatchString(line) {
-			inSection = true
+		if m := h2Heading.FindStringSubmatch(line); len(m) == 2 {
+			inSection = wanted[normalizeHeading(m[1])]
 			continue
 		}
 		if !inSection {
 			continue
 		}
 		if nextH2.MatchString(line) {
-			break
+			inSection = false
+			continue
 		}
-		m := bulletLine.FindStringSubmatch(strings.TrimSpace(line))
-		if len(m) == 2 {
-			rules = append(rules, strings.TrimSpace(m[1]))
+		if rule, ok := extractRuleLine(line); ok {
+			rules = append(rules, rule)
+			if len(rules) >= maxExtractedRuleCount {
+				return rules
+			}
 		}
 	}
 	return rules
+}
+
+func extractRuleLine(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", false
+	}
+	if m := bulletLine.FindStringSubmatch(trimmed); len(m) == 2 {
+		return strings.TrimSpace(m[1]), true
+	}
+	if m := orderedListLine.FindStringSubmatch(trimmed); len(m) == 2 {
+		return strings.TrimSpace(m[1]), true
+	}
+	if strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|") {
+		return extractRuleTableRow(trimmed)
+	}
+	return "", false
+}
+
+func extractRuleTableRow(line string) (string, bool) {
+	inner := strings.Trim(line, "|")
+	cells := strings.Split(inner, "|")
+	if len(cells) < 2 {
+		return "", false
+	}
+	for i := range cells {
+		cells[i] = strings.TrimSpace(cells[i])
+	}
+	if isTableSeparator(cells) || isTableHeader(cells) || cells[0] == "" || cells[1] == "" {
+		return "", false
+	}
+	return cells[0] + ": " + cells[1], true
+}
+
+func isTableSeparator(cells []string) bool {
+	for _, cell := range cells {
+		trimmed := strings.Trim(cell, " -:")
+		if trimmed != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func isTableHeader(cells []string) bool {
+	if len(cells) < 2 {
+		return false
+	}
+	first := normalizeHeading(cells[0])
+	second := normalizeHeading(cells[1])
+	return (first == "rule" && second == "requirement") || (first == "target" && second == "test pattern")
+}
+
+func normalizeHeading(heading string) string {
+	return strings.ToLower(strings.TrimSpace(heading))
 }
 
 func dedupeBySkillName(entries []SkillEntry, cwd string) []SkillEntry {
