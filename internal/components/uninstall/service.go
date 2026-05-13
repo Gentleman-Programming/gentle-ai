@@ -574,9 +574,24 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 
 			ops = append(ops, rewriteJSONFile(path, paths...))
 
-			pluginPath := filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts")
-			targets = append(targets, pluginPath)
-			ops = append(ops, removeFile(pluginPath), removeDirIfEmpty(filepath.Dir(pluginPath)))
+			pluginDir := filepath.Join(homeDir, ".config", "opencode", "plugins")
+			for _, pluginPath := range []string{
+				filepath.Join(pluginDir, "background-agents.ts"),
+				filepath.Join(pluginDir, "model-variants.ts"),
+			} {
+				targets = append(targets, pluginPath)
+				ops = append(ops, removeFile(pluginPath))
+			}
+			ops = append(ops, removeDirIfEmpty(pluginDir))
+
+			modelVariantsCacheDir := filepath.Join(homeDir, ".gentle-ai", "cache")
+			for _, cachePath := range []string{
+				filepath.Join(modelVariantsCacheDir, "model-variants.json"),
+				filepath.Join(modelVariantsCacheDir, "model-variants.json.tmp"),
+			} {
+				targets = append(targets, cachePath)
+				ops = append(ops, removeFile(cachePath))
+			}
 
 			depDir := filepath.Join(homeDir, ".config", "opencode", "node_modules", "unique-names-generator")
 			targets = append(targets, depDir)

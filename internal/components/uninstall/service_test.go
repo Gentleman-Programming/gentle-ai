@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
@@ -288,6 +289,136 @@ func TestComponentOperationsSDD_ClaudeRemovesManagedCommandFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(customPath); err != nil {
 		t.Fatalf("custom command should be preserved, stat err = %v", err)
+	}
+}
+
+func TestComponentOperationsSDD_OpenCodeRemovesManagedPluginSourcesAndModelVariantsCache(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("openCode adapter not found in registry")
+	}
+
+	pluginDir := filepath.Join(homeDir, ".config", "opencode", "plugins")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(pluginDir) error = %v", err)
+	}
+	backgroundAgentsPath := filepath.Join(pluginDir, "background-agents.ts")
+	modelVariantsPluginPath := filepath.Join(pluginDir, "model-variants.ts")
+	thirdPartyPluginPath := filepath.Join(pluginDir, "third-party.ts")
+	for _, path := range []string{backgroundAgentsPath, modelVariantsPluginPath} {
+		if err := os.WriteFile(path, []byte("managed"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+	}
+	if err := os.WriteFile(thirdPartyPluginPath, []byte("third-party"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", thirdPartyPluginPath, err)
+	}
+
+	cacheDir := filepath.Join(homeDir, ".gentle-ai", "cache")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(cacheDir) error = %v", err)
+	}
+	modelVariantsCachePath := filepath.Join(cacheDir, "model-variants.json")
+	modelVariantsTempPath := filepath.Join(cacheDir, "model-variants.json.tmp")
+	unrelatedCachePath := filepath.Join(cacheDir, "keep.txt")
+	for _, path := range []string{modelVariantsCachePath, modelVariantsTempPath, unrelatedCachePath} {
+		if err := os.WriteFile(path, []byte("cache"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+	}
+
+	applySDDOpenCodeOperations(t, svc, adapter)
+
+	for _, path := range []string{backgroundAgentsPath, modelVariantsPluginPath, modelVariantsCachePath, modelVariantsTempPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("managed file %q should be removed; stat err = %v", path, err)
+		}
+	}
+	if _, err := os.Stat(cacheDir); err != nil {
+		t.Fatalf("cache directory should be preserved, stat err = %v", err)
+	}
+	if _, err := os.Stat(unrelatedCachePath); err != nil {
+		t.Fatalf("unrelated cache file should be preserved, stat err = %v", err)
+	}
+	if _, err := os.Stat(thirdPartyPluginPath); err != nil {
+		t.Fatalf("third-party plugin should be preserved, stat err = %v", err)
+	}
+}
+
+func TestComponentOperationsSDD_OpenCodePreservesEmptyModelVariantsCacheDirectory(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("openCode adapter not found in registry")
+	}
+
+	cacheDir := filepath.Join(homeDir, ".gentle-ai", "cache")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(cacheDir) error = %v", err)
+	}
+	for _, name := range []string{"model-variants.json", "model-variants.json.tmp"} {
+		path := filepath.Join(cacheDir, name)
+		if err := os.WriteFile(path, []byte("cache"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+	}
+
+	applySDDOpenCodeOperations(t, svc, adapter)
+
+	if _, err := os.Stat(cacheDir); err != nil {
+		t.Fatalf("empty cache directory should be preserved, stat err = %v", err)
+	}
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatalf("ReadDir(cacheDir) error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("cache directory should be empty after managed cleanup, got %d entries", len(entries))
+	}
+}
+
+func TestComponentOperationsSDD_OpenCodeMissingManagedModelVariantFilesAreNonFatal(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("openCode adapter not found in registry")
+	}
+
+	applySDDOpenCodeOperations(t, svc, adapter)
+}
+
+func applySDDOpenCodeOperations(t *testing.T, svc *Service, adapter agents.Adapter) {
+	t.Helper()
+	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("op.apply(%q) error = %v", op.path, err)
+		}
 	}
 }
 
