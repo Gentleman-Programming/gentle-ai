@@ -79,14 +79,36 @@ func TestEngramDirLocationChoices_NonCurrentLocations(t *testing.T) {
 		{Path: "/b", Label: "B", IsCurrent: false},
 	}
 	choices := EngramDirLocationChoices(locs, model.EngramDataDirOpCopy)
-	if len(choices) != 1 {
-		t.Fatalf("len(choices) = %d, want 1", len(choices))
+	if len(choices) != 2 {
+		t.Fatalf("len(choices) = %d, want 2", len(choices))
 	}
 	if choices[0].Op != model.EngramDataDirOpCopy {
 		t.Errorf("choices[0].Op = %q, want Copy", choices[0].Op)
 	}
 	if choices[0].DstIdx != 1 {
 		t.Errorf("choices[0].DstIdx = %d, want 1", choices[0].DstIdx)
+	}
+	if choices[1].DstIdx != EngramCustomPathDstIdx {
+		t.Errorf("custom path DstIdx = %d, want %d", choices[1].DstIdx, EngramCustomPathDstIdx)
+	}
+}
+
+func TestRenderEngramDataDirCustomPath_ShowsCrossPlatformExamples(t *testing.T) {
+	out := RenderEngramDataDirCustomPath(model.EngramDataDirOpMove, "/home/user/.engram", "", 0, "")
+	for _, want := range []string{`D:\Engram`, "~/Engram", "/Volumes/Drive/Engram", "/mnt/usb/Engram"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing example %q in output:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderEngramDataDirCustomPath_ShowsTypedPathAndError(t *testing.T) {
+	out := RenderEngramDataDirCustomPath(model.EngramDataDirOpCopy, "/src", "/dst/Engram", 4, "path required")
+	if !strings.Contains(out, "/dst") || !strings.Contains(out, "/Engram") {
+		t.Fatal("expected typed path in output")
+	}
+	if !strings.Contains(out, "path required") {
+		t.Fatal("expected error in output")
 	}
 }
 

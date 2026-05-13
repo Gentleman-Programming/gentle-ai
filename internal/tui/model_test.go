@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
@@ -115,6 +116,68 @@ func TestNewModelPiOnlyDetectionDefaultsToEngramOnly(t *testing.T) {
 	wantComponents := []model.ComponentID{model.ComponentEngram}
 	if !reflect.DeepEqual(m.Selection.Components, wantComponents) {
 		t.Fatalf("components = %v, want %v", m.Selection.Components, wantComponents)
+	}
+}
+
+func TestResolveEngramCustomPath(t *testing.T) {
+	home := filepath.Join("home", "ada")
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "trims and cleans", input: "  /tmp/../tmp/Engram  ", want: filepath.Clean("/tmp/Engram")},
+		{name: "home only", input: "~", want: filepath.Clean(home)},
+		{name: "home child forward slash", input: "~/Engram", want: filepath.Join(home, "Engram")},
+		{name: "home child backslash", input: `~\Engram`, want: filepath.Join(home, "Engram")},
+		{name: "empty", input: "   ", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveEngramCustomPath(home, tt.input); got != tt.want {
+				t.Fatalf("resolveEngramCustomPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveEngramCustomPath_RequiresHomeForTilde(t *testing.T) {
+	for _, input := range []string{"~", "~/Engram", `~\Engram`} {
+		if got := resolveEngramCustomPath("", input); got != "" {
+			t.Fatalf("resolveEngramCustomPath(%q) = %q, want empty without home", input, got)
+		}
+	}
+}
+
+func TestEngramDataDirCustomPathFlow(t *testing.T) {
+	home := t.TempDir()
+	dst := filepath.Join(home, "external", "Engram")
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenEngramDataDir
+	m.HomeDir = home
+	m.EngramDataDir = filepath.Join(home, ".engram")
+	m.engramDirLocations = []engram.Location{
+		{Path: m.EngramDataDir, Label: "Current", IsCurrent: true},
+	}
+	m.engramDirOp = model.EngramDataDirOpCopy
+	m.Cursor = 0 // only "Type custom path…" is available after filtering current.
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenEngramDataDirCustomPath {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenEngramDataDirCustomPath)
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(dst)})
+	state = updated.(Model)
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenEngramDataDirConfirm {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenEngramDataDirConfirm)
+	}
+	if got := state.engramDirDstPath(); got != filepath.Clean(dst) {
+		t.Fatalf("destination = %q, want %q", got, filepath.Clean(dst))
 	}
 }
 

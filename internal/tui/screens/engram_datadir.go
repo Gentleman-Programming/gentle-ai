@@ -16,6 +16,8 @@ type EngramDirChoice struct {
 	DstIdx int // index into the locations slice; -1 for Keep and Delete
 }
 
+const EngramCustomPathDstIdx = -2
+
 // EngramDirActionChoices builds the first-step management actions.
 func EngramDirActionChoices() []EngramDirChoice {
 	return []EngramDirChoice{
@@ -40,6 +42,7 @@ func EngramDirLocationChoices(locations []engram.Location, op model.EngramDataDi
 		}
 		out = append(out, EngramDirChoice{Label: verb + "  " + loc.Label, Op: op, DstIdx: i})
 	}
+	out = append(out, EngramDirChoice{Label: "Type custom path…", Op: op, DstIdx: EngramCustomPathDstIdx})
 	return out
 }
 
@@ -97,6 +100,32 @@ func RenderEngramDataDirInstall(cursor int, detectedDir string, dbSize int64) st
 	return b.String()
 }
 
+func RenderEngramDataDirCustomPath(op model.EngramDataDirOp, currentDir, path string, pos int, errMsg string) string {
+	var b strings.Builder
+
+	b.WriteString(styles.TitleStyle.Render("Custom Engram Path"))
+	b.WriteString("\n\n")
+	b.WriteString(styles.SubtextStyle.Render("Action: " + engramOpVerb(op)))
+	b.WriteString("\n")
+	b.WriteString(styles.SubtextStyle.Render("Current: " + currentDir))
+	b.WriteString("\n\n")
+	b.WriteString("Path: " + renderPathInput(path, pos))
+	b.WriteString("\n")
+	if strings.TrimSpace(path) == "" {
+		b.WriteString(styles.HelpStyle.Render(`Examples: D:\Engram • ~/Engram • /Volumes/Drive/Engram • /mnt/usb/Engram`))
+		b.WriteString("\n")
+	}
+	if strings.TrimSpace(errMsg) != "" {
+		b.WriteString("\n")
+		b.WriteString(styles.WarningStyle.Render(errMsg))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(styles.HelpStyle.Render("type/paste path • enter: continue • esc: destinations"))
+
+	return b.String()
+}
+
 // RenderEngramDataDirConfirm renders the confirmation screen before a
 // destructive (move, delete, fresh) or non-trivial (copy) operation.
 func RenderEngramDataDirConfirm(op model.EngramDataDirOp, currentDir, dstDir string, cursor int) string {
@@ -132,6 +161,19 @@ func RenderEngramDataDirConfirm(op model.EngramDataDirOp, currentDir, dstDir str
 	b.WriteString(styles.HelpStyle.Render("enter: confirm • esc: cancel"))
 
 	return b.String()
+}
+
+func renderPathInput(path string, pos int) string {
+	runes := []rune(path)
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > len(runes) {
+		pos = len(runes)
+	}
+	before := string(runes[:pos])
+	after := string(runes[pos:])
+	return styles.SelectedStyle.Render("[" + before + "▌" + after + "]")
 }
 
 // RenderEngramDataDirResult renders the success/error screen after an operation.
