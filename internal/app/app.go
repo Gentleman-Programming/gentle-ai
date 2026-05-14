@@ -381,7 +381,7 @@ func tuiUpgrade(profile system.PlatformProfile, homeDir string) tui.UpgradeFunc 
 // so that the "Configure Models" TUI flow persists its choices to disk.
 func tuiSync(homeDir string) tui.SyncFunc {
 	return func(overrides *model.SyncOverrides) (int, error) {
-		agentIDs := cli.DiscoverAgents(homeDir)
+		agentIDs := syncAgentIDs(homeDir, overrides)
 		selection := cli.BuildSyncSelection(cli.SyncFlags{}, agentIDs)
 
 		// Load persisted model assignments so a plain sync (no overrides)
@@ -424,6 +424,23 @@ func tuiUninstallWithProfiles(homeDir string) tui.UninstallWithProfilesFunc {
 		}
 		return cli.RunUninstallWithSelectionAndProfiles(homeDir, workspaceDir, agentIDs, componentIDs, profileNames, engramScope)
 	}
+}
+
+func syncAgentIDs(homeDir string, overrides *model.SyncOverrides) []model.AgentID {
+	if overrides == nil || len(overrides.TargetAgents) == 0 {
+		return cli.DiscoverAgents(homeDir)
+	}
+
+	seen := make(map[model.AgentID]bool, len(overrides.TargetAgents))
+	ids := make([]model.AgentID, 0, len(overrides.TargetAgents))
+	for _, id := range overrides.TargetAgents {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // applyOverrides merges non-nil fields from overrides into selection.
@@ -470,6 +487,11 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	if len(selection.ClaudeModelAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
 		m := make(map[string]model.ClaudeModelAlias, len(s.ClaudeModelAssignments))
 		for k, v := range s.ClaudeModelAssignments {
+			// Claude Code controls the main session/orchestrator model itself.
+			// Keep persisted assignments scoped to Agent tool calls only.
+			if k == "orchestrator" {
+				continue
+			}
 			m[k] = model.ClaudeModelAlias(v)
 		}
 		selection.ClaudeModelAssignments = m
@@ -522,6 +544,11 @@ func claudeAliasesToStrings(m map[string]model.ClaudeModelAlias) map[string]stri
 	}
 	out := make(map[string]string, len(m))
 	for k, v := range m {
+		// Claude Code owns the main session/orchestrator model; do not persist it
+		// as a Gentle AI model assignment.
+		if k == "orchestrator" {
+			continue
+		}
 		out[k] = string(v)
 	}
 	return out

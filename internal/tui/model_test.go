@@ -738,8 +738,8 @@ func TestClaudeModelPickerBalancedSelectionStoresAssignments(t *testing.T) {
 	if state.Screen != ScreenStrictTDD {
 		t.Fatalf("screen = %v, want %v (ClaudeCode + SDD goes to StrictTDD first)", state.Screen, ScreenStrictTDD)
 	}
-	if got := state.Selection.ClaudeModelAssignments["orchestrator"]; got != model.ClaudeModelOpus {
-		t.Fatalf("orchestrator = %q, want %q", got, model.ClaudeModelOpus)
+	if _, exists := state.Selection.ClaudeModelAssignments["orchestrator"]; exists {
+		t.Fatalf("orchestrator should not be configurable by Claude model picker: %v", state.Selection.ClaudeModelAssignments)
 	}
 	if got := state.Selection.ClaudeModelAssignments["default"]; got != model.ClaudeModelSonnet {
 		t.Fatalf("default = %q, want %q", got, model.ClaudeModelSonnet)
@@ -2239,19 +2239,46 @@ func TestModelConfig_ClaudePickerTriggersSyncScreen(t *testing.T) {
 	if state.PendingSyncOverrides == nil {
 		t.Fatalf("step2: PendingSyncOverrides should be non-nil after Claude model selection")
 	}
+	if got := state.PendingSyncOverrides.TargetAgents; len(got) != 1 || got[0] != model.AgentClaudeCode {
+		t.Fatalf("step2: TargetAgents = %v, want [%s]", got, model.AgentClaudeCode)
+	}
 	if len(state.PendingSyncOverrides.ClaudeModelAssignments) == 0 {
 		t.Fatalf("step2: PendingSyncOverrides.ClaudeModelAssignments should be non-empty, got: %v",
 			state.PendingSyncOverrides.ClaudeModelAssignments)
 	}
-	// Balanced preset: orchestrator → opus, sdd-archive → haiku.
-	if got := state.PendingSyncOverrides.ClaudeModelAssignments["orchestrator"]; got != model.ClaudeModelOpus {
-		t.Errorf("step2: ClaudeModelAssignments[orchestrator] = %q, want %q", got, model.ClaudeModelOpus)
+	// Balanced preset configures sub-agents/default only; Claude controls the main orchestrator model.
+	if _, exists := state.PendingSyncOverrides.ClaudeModelAssignments["orchestrator"]; exists {
+		t.Errorf("step2: orchestrator should not be configurable by Claude model picker: %v", state.PendingSyncOverrides.ClaudeModelAssignments)
 	}
 }
 
 // TestModelConfig_OpenCodePickerContinueTriggersSyncScreen verifies that pressing
 // "Continue" from ScreenModelPicker while in ModelConfigMode navigates to ScreenSync
 // and populates PendingSyncOverrides with ModelAssignments and SDDMode=multi.
+func TestModelConfig_ProfileSaveTargetsOpenCode(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenProfileCreate
+	m.ProfileCreateStep = 2
+	m.Cursor = 0
+	m.ProfileDraft = model.Profile{Name: "free"}
+
+	updated, _ := m.confirmProfileCreate()
+	state := updated.(Model)
+
+	if state.Screen != ScreenSync {
+		t.Fatalf("screen = %v, want ScreenSync", state.Screen)
+	}
+	if state.PendingSyncOverrides == nil {
+		t.Fatalf("PendingSyncOverrides should be non-nil after profile Save & Sync")
+	}
+	if got := state.PendingSyncOverrides.TargetAgents; len(got) != 1 || got[0] != model.AgentOpenCode {
+		t.Fatalf("TargetAgents = %v, want [%s]", got, model.AgentOpenCode)
+	}
+	if got := state.PendingSyncOverrides.Profiles; len(got) != 1 || got[0].Name != "free" {
+		t.Fatalf("Profiles = %v, want profile named free", got)
+	}
+}
+
 func TestModelConfig_OpenCodePickerContinueTriggersSyncScreen(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelPicker
@@ -2286,6 +2313,9 @@ func TestModelConfig_OpenCodePickerContinueTriggersSyncScreen(t *testing.T) {
 	if state.PendingSyncOverrides == nil {
 		t.Fatalf("PendingSyncOverrides should be non-nil after OpenCode model selection")
 	}
+	if got := state.PendingSyncOverrides.TargetAgents; len(got) != 1 || got[0] != model.AgentOpenCode {
+		t.Fatalf("TargetAgents = %v, want [%s]", got, model.AgentOpenCode)
+	}
 	if got := state.PendingSyncOverrides.SDDMode; got != model.SDDModeMulti {
 		t.Errorf("PendingSyncOverrides.SDDMode = %q, want %q", got, model.SDDModeMulti)
 	}
@@ -2310,8 +2340,7 @@ func TestModelConfig_SyncPassesOverridesToSyncFn(t *testing.T) {
 
 	testOverrides := &model.SyncOverrides{
 		ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
-			"orchestrator": model.ClaudeModelOpus,
-			"default":      model.ClaudeModelSonnet,
+			"default": model.ClaudeModelSonnet,
 		},
 	}
 	m.PendingSyncOverrides = testOverrides
@@ -2353,8 +2382,8 @@ func TestModelConfig_SyncPassesOverridesToSyncFn(t *testing.T) {
 	if capturedOverrides == nil {
 		t.Fatalf("SyncFn was not called with overrides — capturedOverrides is nil")
 	}
-	if got := capturedOverrides.ClaudeModelAssignments["orchestrator"]; got != model.ClaudeModelOpus {
-		t.Errorf("captured ClaudeModelAssignments[orchestrator] = %q, want %q", got, model.ClaudeModelOpus)
+	if got := capturedOverrides.ClaudeModelAssignments["default"]; got != model.ClaudeModelSonnet {
+		t.Errorf("captured ClaudeModelAssignments[default] = %q, want %q", got, model.ClaudeModelSonnet)
 	}
 
 	// Feed SyncDoneMsg back through Update to verify end-to-end state cleanup.

@@ -167,9 +167,8 @@ func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 	home := t.TempDir()
 
 	opts := InjectOptions{ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
-		"orchestrator": model.ClaudeModelSonnet,
-		"sdd-design":   model.ClaudeModelSonnet,
-		"default":      model.ClaudeModelHaiku,
+		"sdd-design": model.ClaudeModelSonnet,
+		"default":    model.ClaudeModelHaiku,
 	}}
 
 	result, err := Inject(home, claudeAdapter(), "", opts)
@@ -186,10 +185,13 @@ func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 	}
 
 	text := string(content)
+	if strings.Contains(text, "| orchestrator |") {
+		t.Fatal("CLAUDE.md should not expose orchestrator as a configurable model row")
+	}
 	for _, want := range []string{
-		"| orchestrator | sonnet | Coordinates, makes decisions |",
 		"| sdd-design | sonnet | Architecture decisions |",
 		"| default | haiku | Non-SDD general delegation |",
+		"Gentle AI does not configure the main orchestrator model",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("CLAUDE.md missing custom table row %q", want)
@@ -202,13 +204,21 @@ func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 	if !strings.Contains(text, "<!-- /gentle-ai:sdd-model-assignments -->") {
 		t.Fatal("CLAUDE.md missing model assignment close marker")
 	}
+	for _, want := range []string{
+		"Every Agent tool call MUST include `model`",
+		"for general/non-SDD delegation use `default`",
+		"If `model` is absent, do not send the Agent call",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("CLAUDE.md missing mandatory model gate text %q", want)
+		}
+	}
 }
 
 func TestInjectClaudeCustomModelAssignmentsIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 	opts := InjectOptions{ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
-		"orchestrator": model.ClaudeModelSonnet,
-		"sdd-design":   model.ClaudeModelSonnet,
+		"sdd-design": model.ClaudeModelSonnet,
 	}}
 
 	first, err := Inject(home, claudeAdapter(), "", opts)

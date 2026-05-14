@@ -1585,7 +1585,6 @@ func injectMarkdownSections(homeDir string, adapter agents.Adapter, assignments 
 }
 
 var claudeModelAssignmentRowOrder = []string{
-	"orchestrator",
 	"sdd-explore",
 	"sdd-propose",
 	"sdd-spec",
@@ -1598,16 +1597,15 @@ var claudeModelAssignmentRowOrder = []string{
 }
 
 var claudeModelAssignmentReasons = map[string]string{
-	"orchestrator": "Coordinates, makes decisions",
-	"sdd-explore":  "Reads code, structural - not architectural",
-	"sdd-propose":  "Architectural decisions",
-	"sdd-spec":     "Structured writing",
-	"sdd-design":   "Architecture decisions",
-	"sdd-tasks":    "Mechanical breakdown",
-	"sdd-apply":    "Implementation",
-	"sdd-verify":   "Validation against spec",
-	"sdd-archive":  "Copy and close",
-	"default":      "Non-SDD general delegation",
+	"sdd-explore": "Reads code, structural - not architectural",
+	"sdd-propose": "Architectural decisions",
+	"sdd-spec":    "Structured writing",
+	"sdd-design":  "Architecture decisions",
+	"sdd-tasks":   "Mechanical breakdown",
+	"sdd-apply":   "Implementation",
+	"sdd-verify":  "Validation against spec",
+	"sdd-archive": "Copy and close",
+	"default":     "Non-SDD general delegation",
 }
 
 func injectClaudeModelAssignments(content string, assignments map[string]model.ClaudeModelAlias) (string, error) {
@@ -1653,6 +1651,8 @@ func renderClaudeModelAssignmentsSection(assignments map[string]model.ClaudeMode
 	var b strings.Builder
 	b.WriteString("## Model Assignments\n\n")
 	b.WriteString("Read this table at session start (or before first delegation), cache it for the session, and pass the mapped alias in every Agent tool call via the `model` parameter. If a phase is missing, use the `default` row. If you do not have access to the assigned model (for example, no Opus access), substitute `sonnet` and continue.\n\n")
+	b.WriteString("The Claude Code session model is controlled by Claude Code itself; Gentle AI does not configure the main orchestrator model. This table applies only to Agent tool calls for SDD phase sub-agents and general delegation.\n\n")
+	b.WriteString("**Mandatory model gate:** Every Agent tool call MUST include `model`. Calling Agent without `model` is invalid. Before each Agent call, resolve the target phase to an alias from this table; for general/non-SDD delegation use `default`. If you are about to call Agent and have not chosen a `model`, STOP and choose the mapped alias first.\n\n")
 	b.WriteString("| Phase | Default Model | Reason |\n")
 	b.WriteString("|-------|---------------|--------|\n")
 	for _, key := range claudeModelAssignmentRowOrder {

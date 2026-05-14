@@ -100,6 +100,16 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	var commands []string
 	runCommand = func(name string, args ...string) error {
 		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		// Simulate pi-engram init writing mcp.json with the new schema.
+		if name == "npm" && len(args) >= 7 && args[5] == "pi-engram" && args[6] == "init" {
+			mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
+			if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(mcpPath, []byte(`{"activeMCP":"engram","mcpServers":{"engram":{"command":"node","args":["--eval","require('child_process').spawn('engram',['mcp','--tools=agent'],{stdio:'inherit'})"]}}}`+"\n"), 0o644); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -117,7 +127,6 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 
 	assertFileContains(t, filepath.Join(home, ".pi", "agent", "settings.json"), "npm:pi-mcp-adapter")
 	assertFileContains(t, filepath.Join(home, ".pi", "npm", "package.json"), "pi-mcp-adapter")
-	assertFileContains(t, filepath.Join(home, ".pi", "agent", "mcp.json"), "directTools")
 	assertFileContains(t, filepath.Join(home, ".config", "opencode", "opencode.json"), "engram")
 
 	for _, want := range []string{"pi install npm:pi-mcp-adapter", fmt.Sprintf("npm exec --yes --package gentle-engram@%s -- pi-engram init", versions.GentleEngram)} {

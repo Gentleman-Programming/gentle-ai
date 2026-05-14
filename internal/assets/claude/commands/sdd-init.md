@@ -6,8 +6,8 @@ If the native `sdd-init` sub-agent is available, delegate this command to it.
 Otherwise, read the skill file at `~/.claude/skills/sdd-init/SKILL.md` FIRST, then follow its instructions exactly inline.
 
 CONTEXT:
-- Working directory: !`echo -n "$(pwd)"`
-- Current project: !`echo -n "$(basename $(pwd))"`
+- Working directory: !`pwd`
+- Current project: !`basename "$(pwd)"`
 - Artifact store mode: engram
 
 TASK:

@@ -82,12 +82,12 @@ scoop install gentle-ai
 
 Once your agents are configured, open your AI agent in a project and run these two commands to register the project context:
 
-| Command          | What it does                                                                | When to re-run                                                                 |
-| ---------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `/sdd-init`      | Detects stack, testing capabilities, activates Strict TDD Mode if available | When your project adds/removes test frameworks, or first time in a new project |
-| `skill-registry` | Scans installed skills and project conventions, builds the registry         | After installing/removing skills, or first time in a new project               |
+| Command                            | What it does                                                                | When to re-run                                                                 |
+| ---------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `/sdd-init`                        | Detects stack, testing capabilities, activates Strict TDD Mode if available | When your project adds/removes test frameworks, or first time in a new project |
+| `gentle-ai skill-registry refresh` | Scans installed skills and project conventions, builds the registry         | After installing/removing skills, or first time in a new project               |
 
-These are **not required** for basic usage. The SDD orchestrator runs `/sdd-init` automatically if it detects no context. But if something changed in your project (new test runner, new dependencies), re-running them manually ensures the agents have up-to-date context.
+These are **not required** for basic usage. The SDD orchestrator runs `/sdd-init` automatically if it detects no context. Startup hooks normally keep the skill registry fresh for agents that support hooks, including Pi through `gentle-pi`. If you start Pi with `pi -ns`, startup skill loading/hooks are skipped, so run the registry refresh manually when you need updated project rules.
 
 ---
 

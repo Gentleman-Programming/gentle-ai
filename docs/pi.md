@@ -23,11 +23,13 @@ Gentle AI detects the `pi` binary first. If Pi is the only selected agent, the i
 
 ## Installed Packages
 
-Gentle AI runs exactly these Pi package installs:
+Gentle AI runs exactly these Pi setup steps:
 
 ```bash
 pi install npm:gentle-pi
 pi install npm:gentle-engram
+pi install npm:pi-mcp-adapter
+npm exec --yes --package gentle-engram@0.1.4 -- pi-engram init
 pi install npm:pi-subagents
 pi install npm:pi-intercom
 pi install npm:@juicesharp/rpiv-ask-user-question
@@ -41,6 +43,8 @@ pi install npm:pi-btw
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | [`gentle-pi`](https://www.npmjs.com/package/gentle-pi)   | Gentleman persona, SDD/OpenSpec workflow, strict TDD support, safety policy, skills, prompts, SDD agents, and SDD chains. |
 | [`gentle-engram`](https://pi.dev/packages/gentle-engram) | Pi integration for Engram session memory and MCP tools. It is not the Engram binary itself.                               |
+| `pi-mcp-adapter`                                         | Lets Pi expose MCP servers, including Engram, through Pi's MCP runtime.                                                   |
+| `pi-engram init`                                         | Initializes the Pi Engram MCP config shape owned by `gentle-engram`.                                                      |
 | `pi-subagents`                                           | Runs SDD agents discovered from `.pi/agents/`.                                                                            |
 | `pi-intercom`                                            | Lets child agents ask the parent Pi session for decisions while chains run.                                               |
 | `@juicesharp/rpiv-ask-user-question`                     | Lets Pi child agents ask the active user session for clarification when they need human input.                            |
@@ -52,15 +56,16 @@ pi install npm:pi-btw
 `gentle-pi` owns Pi's runtime behavior. Its current harness enforces parent-only delegation triggers: delegate exploration after 4+ files, use one writer for multi-file changes, require fresh review before PRs, run fresh audits after incidents, and pause long monolithic sessions before they drift.
 
 The real Engram component is provisioned separately by Gentle AI so `gentle-engram` has an Engram runtime to talk to.
-During that Engram provisioning step, Gentle AI also declares `npm:pi-mcp-adapter@2.5.4` in Pi config, adds the npm dependency, and activates the `engram` MCP server with `directTools` enabled. Existing unrelated Pi settings, package entries, npm dependencies, and MCP servers are preserved.
+During that Engram provisioning step, Gentle AI declares `npm:pi-mcp-adapter` in Pi's agent settings and adds the npm dependency. Existing unrelated Pi settings, package entries, and npm dependencies are preserved.
 
-Files updated by Engram provisioning:
+Files updated by Gentle AI's Engram provisioning:
 
 ```text
-.pi/settings.json          # packages includes npm:pi-mcp-adapter@2.5.4
-.pi/npm/package.json       # dependencies.pi-mcp-adapter = ^2.5.4
-.pi/mcp.json               # activeMCP = engram; engram runs `engram mcp --tools=agent`
+.pi/agent/settings.json    # packages includes npm:pi-mcp-adapter
+.pi/npm/package.json       # dependencies.pi-mcp-adapter = ^2.6.0
 ```
+
+`gentle-engram` owns the MCP schema itself. The installer runs `pi-engram init`, which initializes Pi's Engram MCP config under the Pi agent config directory instead of having Gentle AI hand-write that file.
 
 ## Pi Commands
 
@@ -133,7 +138,7 @@ Use `Inherit active/default model` to remove an agent override.
 
 ## Project Files
 
-On Pi `session_start`, `gentle-pi` copies project-local assets without overwriting local edits:
+On normal Pi `session_start`, `gentle-pi` copies project-local assets without overwriting local edits:
 
 ```text
 .pi/agents/sdd-*.md
@@ -144,16 +149,18 @@ On Pi `session_start`, `gentle-pi` copies project-local assets without overwriti
 
 Use `/gentle-ai:install-sdd --force` only when you want to replace local SDD assets with the package version.
 
+If you start Pi with `pi -ns`, Pi skips startup skill loading/hooks. That mode is useful for a clean or faster Pi session, but it also means `gentle-pi` startup work such as asset checks and skill-registry refreshes will not run automatically.
+
 ## Troubleshooting
 
-| Symptom                                                | Fix                                                                                                                                               |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Gentle AI says Pi is missing                           | Install Pi first and make sure `pi` is on `PATH`.                                                                                                 |
-| SDD agents are missing in Pi                           | Start Pi in the project so `gentle-pi` can run `session_start`, or run `/gentle-ai:install-sdd`.                                                  |
-| Persona did not change immediately                     | Run `/reload` or start a new Pi session.                                                                                                          |
-| Model override should be removed                       | Open `/gentleman:models` and choose `Inherit active/default model`.                                                                               |
-| Memory tools or `/mcp` are missing                     | Re-run `gentle-ai install --agent pi` to refresh `.pi/settings.json`, `.pi/npm/package.json`, and `.pi/mcp.json`, then check `/gentle-ai:status`. |
-| `gentle-engram` is installed but Engram is unavailable | Re-run `gentle-ai install --agent pi` so the real Engram component is provisioned.                                                                |
+| Symptom                                                | Fix                                                                                                                                                                  |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gentle AI says Pi is missing                           | Install Pi first and make sure `pi` is on `PATH`.                                                                                                                    |
+| SDD agents are missing in Pi                           | Start Pi normally in the project so `gentle-pi` can run `session_start`, or run `/gentle-ai:install-sdd`. If you used `pi -ns`, startup hooks were skipped.          |
+| Persona did not change immediately                     | Run `/reload` or start a new Pi session.                                                                                                                             |
+| Model override should be removed                       | Open `/gentleman:models` and choose `Inherit active/default model`.                                                                                                  |
+| Memory tools or `/mcp` are missing                     | Re-run `gentle-ai install --agent pi` to refresh `.pi/agent/settings.json`, `.pi/npm/package.json`, and the `pi-engram init` wiring, then check `/gentle-ai:status`. |
+| `gentle-engram` is installed but Engram is unavailable | Re-run `gentle-ai install --agent pi` so the real Engram component is provisioned.                                                                                   |
 
 ## Next Steps
 

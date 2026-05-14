@@ -22,7 +22,6 @@ const (
 	piMCPAdapterDependency   = "pi-mcp-adapter"
 	piMCPAdapterVersion      = "2.6.0"
 	piMCPAdapterVersionRange = "^2.6.0"
-	piEngramMCPActiveServer  = "engram"
 	piEngramMCPConfigFile    = "mcp.json"
 	piSettingsFile           = "settings.json"
 	piNPMDirectory           = "npm"
@@ -134,33 +133,23 @@ func ConfigPath(homeDir string) string { return filepath.Join(homeDir, ".pi") }
 // AgentConfigPath returns Pi's current agent-owned config directory path.
 func AgentConfigPath(homeDir string) string { return filepath.Join(ConfigPath(homeDir), "agent") }
 
-// ProvisionEngramMCP declares and wires pi-mcp-adapter so Pi exposes the
-// Engram MCP server through /mcp. It is invoked by ComponentEngram; keeping it
-// here lets Pi own the exact config shape without teaching the generic Engram
-// injector about Pi internals.
+// ProvisionEngramMCP declares pi-mcp-adapter in Pi's settings.json and
+// package.json. It is invoked by ComponentEngram; keeping it here lets Pi
+// own the exact config shape without teaching the generic Engram injector
+// about Pi internals.
+//
+// mcp.json is NOT written here. pi-engram init (invoked by InstallCommand)
+// is the sole writer of that file and owns its schema.
 func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 	paths := []string{
 		a.SettingsPath(homeDir),
 		filepath.Join(ConfigPath(homeDir), piNPMDirectory, piNPMPackageFile),
-		a.MCPConfigPath(homeDir, piEngramMCPActiveServer),
 	}
 	overlays := [][]byte{
 		nil,
 		mustJSON(map[string]any{
 			"dependencies": map[string]any{
 				piMCPAdapterDependency: piMCPAdapterVersionRange,
-			},
-		}),
-		mustJSON(map[string]any{
-			"activeMCP": piEngramMCPActiveServer,
-			"mcpServers": map[string]any{
-				piEngramMCPActiveServer: map[string]any{
-					"__replace__": map[string]any{
-						"command":     "engram",
-						"args":        []string{"mcp", "--tools=agent"},
-						"directTools": true,
-					},
-				},
 			},
 		}),
 	}

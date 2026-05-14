@@ -36,7 +36,6 @@ var claudePresetOrder = []ClaudeModelPreset{
 
 // claudePhases is the ordered list of model-assignment keys shown in custom mode.
 var claudePhases = []string{
-	"orchestrator",
 	"sdd-explore",
 	"sdd-propose",
 	"sdd-spec",
@@ -50,16 +49,15 @@ var claudePhases = []string{
 
 // claudePhaseLabels are the human-readable labels for each SDD phase.
 var claudePhaseLabels = map[string]string{
-	"orchestrator": "Orchestrator",
-	"sdd-explore":  "Explore",
-	"sdd-propose":  "Propose",
-	"sdd-spec":     "Spec",
-	"sdd-design":   "Design",
-	"sdd-tasks":    "Tasks",
-	"sdd-apply":    "Apply",
-	"sdd-verify":   "Verify",
-	"sdd-archive":  "Archive",
-	"default":      "General delegation",
+	"sdd-explore": "Explore",
+	"sdd-propose": "Propose",
+	"sdd-spec":    "Spec",
+	"sdd-design":  "Design",
+	"sdd-tasks":   "Tasks",
+	"sdd-apply":   "Apply",
+	"sdd-verify":  "Verify",
+	"sdd-archive": "Archive",
+	"default":     "General delegation",
 }
 
 // claudeAliasOrder defines the cycling order when pressing Enter on a phase row.

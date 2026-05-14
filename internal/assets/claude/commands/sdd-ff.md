@@ -2,11 +2,12 @@
 description: Fast-forward all SDD planning phases — proposal through tasks
 ---
 
-If the native `sdd-orchestrator` agent is available, delegate this command to it.
-Otherwise, follow the SDD orchestrator workflow inline using the instructions already installed in `~/.claude/CLAUDE.md`.
+Follow the SDD orchestrator workflow inline using the instructions already installed in `~/.claude/CLAUDE.md`.
+The Claude Code session model is controlled by Claude Code; Gentle AI only configures models for Agent tool calls to phase sub-agents.
 
 WORKFLOW:
 Run these sub-agents in sequence:
+
 1. `sdd-propose` — create the proposal
 2. `sdd-spec` — write specifications
 3. `sdd-design` — create technical design
@@ -15,8 +16,9 @@ Run these sub-agents in sequence:
 Present a combined summary after ALL phases complete (not between each one).
 
 CONTEXT:
-- Working directory: !`echo -n "$(pwd)"`
-- Current project: !`echo -n "$(basename $(pwd))"`
+
+- Working directory: !`pwd`
+- Current project: !`basename "$(pwd)"`
 - Change name: $ARGUMENTS
 - Execution mode: ask/cache per orchestrator
 - Artifact store mode: ask/cache per orchestrator

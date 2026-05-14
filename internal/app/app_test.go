@@ -315,6 +315,91 @@ func TestTuiSyncStrictTDDNilOverrideNoChange(t *testing.T) {
 
 func boolPtr(b bool) *bool { return &b }
 
+func TestTuiSyncTargetAgentsOverridePersistedInstallState(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentOpenCode)}}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	got := syncAgentIDs(home, &model.SyncOverrides{
+		TargetAgents: []model.AgentID{model.AgentClaudeCode, model.AgentClaudeCode, ""},
+	})
+
+	if len(got) != 1 || got[0] != model.AgentClaudeCode {
+		t.Fatalf("syncAgentIDs() = %v, want [%s]", got, model.AgentClaudeCode)
+	}
+}
+
+func TestTuiSyncTargetAgentsFallsBackToDiscoveredAgents(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentOpenCode)}}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	got := syncAgentIDs(home, nil)
+
+	if len(got) != 1 || got[0] != model.AgentOpenCode {
+		t.Fatalf("syncAgentIDs(nil) = %v, want [%s]", got, model.AgentOpenCode)
+	}
+}
+
+func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentPi)}}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	assignments := map[string]model.ClaudeModelAlias{
+		"sdd-explore": model.ClaudeModelHaiku,
+		"sdd-propose": model.ClaudeModelHaiku,
+		"sdd-spec":    model.ClaudeModelHaiku,
+		"sdd-design":  model.ClaudeModelHaiku,
+		"sdd-tasks":   model.ClaudeModelHaiku,
+		"sdd-apply":   model.ClaudeModelHaiku,
+		"sdd-verify":  model.ClaudeModelHaiku,
+		"sdd-archive": model.ClaudeModelHaiku,
+		"default":     model.ClaudeModelHaiku,
+	}
+
+	changed, err := tuiSync(home)(&model.SyncOverrides{
+		TargetAgents:           []model.AgentID{model.AgentClaudeCode},
+		ClaudeModelAssignments: assignments,
+	})
+	if err != nil {
+		t.Fatalf("tuiSync Claude model config error: %v", err)
+	}
+	if changed == 0 {
+		t.Fatal("tuiSync Claude model config changed 0 files, want Claude assets written")
+	}
+
+	applyAgent := filepath.Join(home, ".claude", "agents", "sdd-apply.md")
+	body, err := os.ReadFile(applyAgent)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", applyAgent, err)
+	}
+	if !strings.Contains(string(body), "model: haiku") {
+		t.Fatalf("sdd-apply agent did not receive selected model; got:\n%s", body)
+	}
+
+	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
+	body, err = os.ReadFile(claudeMD)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", claudeMD, err)
+	}
+	if strings.Contains(string(body), "| orchestrator |") {
+		t.Fatalf("CLAUDE.md should not expose orchestrator as a configurable model row; got:\n%s", body)
+	}
+	for _, want := range []string{
+		"| sdd-apply | haiku | Implementation |",
+		"| default | haiku | Non-SDD general delegation |",
+		"Gentle AI does not configure the main orchestrator model",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("CLAUDE.md missing %q; got:\n%s", want, body)
+		}
+	}
+}
+
 // TestApplyOverrides_KiroModelAssignments verifies that a non-nil KiroModelAssignments
 // override replaces the entire KiroModelAssignments map in the selection (same
 // replacement semantics as ClaudeModelAssignments — not a key-level merge).
@@ -367,8 +452,8 @@ func TestLoadPersistedAssignmentsPopulatesEmptySelection(t *testing.T) {
 	selection := model.Selection{}
 	loadPersistedAssignments(home, &selection)
 
-	if got := selection.ClaudeModelAssignments["orchestrator"]; got != "opus" {
-		t.Errorf("ClaudeModelAssignments[orchestrator] = %q, want %q", got, "opus")
+	if _, exists := selection.ClaudeModelAssignments["orchestrator"]; exists {
+		t.Errorf("ClaudeModelAssignments should not load persisted orchestrator model: %v", selection.ClaudeModelAssignments)
 	}
 	if got := selection.ClaudeModelAssignments["sdd-apply"]; got != "sonnet" {
 		t.Errorf("ClaudeModelAssignments[sdd-apply] = %q, want %q", got, "sonnet")
@@ -393,7 +478,7 @@ func TestLoadPersistedAssignmentsDoesNotOverrideExisting(t *testing.T) {
 
 	// Seed state with "old" assignments.
 	err := state.Write(home, state.InstallState{
-		ClaudeModelAssignments: map[string]string{"orchestrator": "haiku"},
+		ClaudeModelAssignments: map[string]string{"sdd-apply": "haiku"},
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"sdd-init": {ProviderID: "google", ModelID: "gemini-pro"},
 		},
@@ -405,7 +490,7 @@ func TestLoadPersistedAssignmentsDoesNotOverrideExisting(t *testing.T) {
 	// Selection already has assignments from the TUI configure flow.
 	selection := model.Selection{
 		ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
-			"orchestrator": "opus",
+			"sdd-apply": "opus",
 		},
 		ModelAssignments: map[string]model.ModelAssignment{
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
@@ -414,8 +499,8 @@ func TestLoadPersistedAssignmentsDoesNotOverrideExisting(t *testing.T) {
 	loadPersistedAssignments(home, &selection)
 
 	// Existing values must be preserved, NOT overwritten.
-	if got := selection.ClaudeModelAssignments["orchestrator"]; got != "opus" {
-		t.Errorf("ClaudeModelAssignments[orchestrator] = %q, want %q (should not be overwritten)", got, "opus")
+	if got := selection.ClaudeModelAssignments["sdd-apply"]; got != "opus" {
+		t.Errorf("ClaudeModelAssignments[sdd-apply] = %q, want %q (should not be overwritten)", got, "opus")
 	}
 	ma := selection.ModelAssignments["sdd-init"]
 	if ma.ProviderID != "anthropic" {
@@ -439,6 +524,7 @@ func TestPersistAssignmentsPreservesInstalledAgents(t *testing.T) {
 	selection := model.Selection{
 		ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
 			"orchestrator": "opus",
+			"sdd-apply":    "sonnet",
 		},
 	}
 	persistAssignments(home, selection)
@@ -451,8 +537,11 @@ func TestPersistAssignmentsPreservesInstalledAgents(t *testing.T) {
 	if len(got.InstalledAgents) != 2 {
 		t.Fatalf("InstalledAgents = %v, want [claude-code opencode]", got.InstalledAgents)
 	}
-	if got.ClaudeModelAssignments["orchestrator"] != "opus" {
-		t.Errorf("ClaudeModelAssignments[orchestrator] = %q, want %q", got.ClaudeModelAssignments["orchestrator"], "opus")
+	if _, exists := got.ClaudeModelAssignments["orchestrator"]; exists {
+		t.Errorf("ClaudeModelAssignments should not persist orchestrator model: %v", got.ClaudeModelAssignments)
+	}
+	if got.ClaudeModelAssignments["sdd-apply"] != "sonnet" {
+		t.Errorf("ClaudeModelAssignments[sdd-apply] = %q, want %q", got.ClaudeModelAssignments["sdd-apply"], "sonnet")
 	}
 }
 

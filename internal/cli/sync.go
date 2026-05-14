@@ -801,6 +801,11 @@ func RunSync(args []string) (SyncResult, error) {
 			if len(selection.ClaudeModelAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
 				m := make(map[string]model.ClaudeModelAlias, len(s.ClaudeModelAssignments))
 				for k, v := range s.ClaudeModelAssignments {
+					// Claude Code controls the main session/orchestrator model itself.
+					// Keep persisted assignments scoped to Agent tool calls only.
+					if k == "orchestrator" {
+						continue
+					}
 					m[k] = model.ClaudeModelAlias(v)
 				}
 				selection.ClaudeModelAssignments = m

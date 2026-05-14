@@ -299,6 +299,29 @@ func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
 			}
 		})
 	}
+
+	// engram-protocol assets must not ship Spanish trigger examples that bias
+	// English sessions into Spanish replies (same mechanism as #341 / #350).
+	// Covers all agent families that ship a dedicated engram instruction asset.
+	for _, path := range []string{
+		"claude/engram-protocol.md",
+		"codex/engram-instructions.md",
+	} {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+
+			for _, banned := range []string{
+				`"recordar"`,
+				`"listo"`,
+				`"acordate"`,
+				`"qué hicimos"`,
+			} {
+				if strings.Contains(content, banned) {
+					t.Fatalf("%s still contains Spanish trigger phrase %q that biases English sessions", path, banned)
+				}
+			}
+		})
+	}
 }
 
 // TestPersonasContainContextualSkillLoadingDirective verifies that every
@@ -498,6 +521,31 @@ func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 	}
 }
 
+// TestCommandsDoNotUseEchoNPwd guards against the nested-subshell pattern
+// `echo -n "$(pwd)"` (and the basename variant) that causes Claude Code v2.1.113+
+// to reject slash commands with "Unhandled node type: string". Use plain `!`pwd``
+// or `!`basename "$(pwd)"`` instead — both are accepted by old and new parsers.
+func TestCommandsDoNotUseEchoNPwd(t *testing.T) {
+	forbidden := `echo -n "$(pwd)"`
+
+	for _, dir := range []string{"claude/commands", "opencode/commands"} {
+		entries, err := FS.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("ReadDir(%s) error = %v", dir, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			path := dir + "/" + entry.Name()
+			content := MustRead(path)
+			if strings.Contains(content, forbidden) {
+				t.Errorf("%s contains banned pattern %q — use !`pwd` or !`basename \"$(pwd)\"` instead", path, forbidden)
+			}
+		}
+	}
+}
+
 func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 	for _, assetPath := range []string{
 		"generic/sdd-orchestrator.md",
@@ -514,7 +562,11 @@ func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 			if assetPath == "opencode/sdd-orchestrator.md" {
 				dedicatedAgent = "gentle-orchestrator"
 			}
-			if !strings.Contains(content, "dedicated `"+dedicatedAgent+"`") {
+			if assetPath == "claude/sdd-orchestrator.md" {
+				if !strings.Contains(content, "Claude Code orchestrator rule") {
+					t.Fatalf("%q missing Claude rule scoping note", assetPath)
+				}
+			} else if !strings.Contains(content, "dedicated `"+dedicatedAgent+"`") {
 				t.Fatalf("%q missing dedicated-agent scoping note", assetPath)
 			}
 			if !strings.Contains(content, "Do NOT apply it to executor phase agents") {

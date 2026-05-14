@@ -1,7 +1,7 @@
 <!-- gentle-ai:sdd-orchestrator -->
 # Agent Teams Lite — Orchestrator Instructions
 
-Bind this to the dedicated `sdd-orchestrator` agent or rule only. Do NOT apply it to executor phase agents such as `sdd-apply` or `sdd-verify`.
+Bind this to the Claude Code orchestrator rule only. Do NOT apply it to executor phase agents such as `sdd-apply` or `sdd-verify`.
 
 ## Agent Teams Orchestrator
 
@@ -11,19 +11,20 @@ You are a COORDINATOR, not an executor. Maintain one thin conversation thread, d
 
 Core principle: **does this inflate my context without need?** If yes → delegate. If no → do it inline.
 
-| Action | Inline | Delegate |
-|--------|--------|----------|
-| Read to decide/verify (1-3 files) | ✅ | — |
-| Read to explore/understand (4+ files) | — | ✅ |
-| Read as preparation for writing | — | ✅ together with the write |
-| Write atomic (one file, mechanical, you already know what) | ✅ | — |
-| Write with analysis (multiple files, new logic) | — | ✅ |
-| Bash for state (git, gh) | ✅ | — |
-| Bash for execution (test, build, install) | — | ✅ |
+| Action                                                     | Inline | Delegate                   |
+| ---------------------------------------------------------- | ------ | -------------------------- |
+| Read to decide/verify (1-3 files)                          | ✅     | —                          |
+| Read to explore/understand (4+ files)                      | —      | ✅                         |
+| Read as preparation for writing                            | —      | ✅ together with the write |
+| Write atomic (one file, mechanical, you already know what) | ✅     | —                          |
+| Write with analysis (multiple files, new logic)            | —      | ✅                         |
+| Bash for state (git, gh)                                   | ✅     | —                          |
+| Bash for execution (test, build, install)                  | —      | ✅                         |
 
 delegate (async) is the default for delegated work. Use task (sync) only when you need the result before your next action.
 
 Anti-patterns — these ALWAYS inflate context without need:
+
 - Reading 4+ files to "understand" the codebase inline → delegate an exploration
 - Writing a feature across multiple files inline → delegate
 - Running tests or builds inline → delegate
@@ -49,7 +50,6 @@ These are parent-orchestrator stop rules. Once any trigger fires, the orchestrat
 - Use fresh reviewers after implementation, conflict resolution, or incidents because their value is independent judgment, not token saving.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
-
 ## SDD Workflow (Spec-Driven Development)
 
 SDD is the structured planning layer for substantial changes.
@@ -64,14 +64,16 @@ SDD is the structured planning layer for substantial changes.
 ### Commands
 
 Skills (appear in autocomplete):
+
 - `/sdd-init` → initialize SDD context; detects stack, bootstraps persistence
 - `/sdd-explore <topic>` → investigate an idea; reads codebase, compares approaches; no files created
 - `/sdd-apply [change]` → implement tasks in batches; checks off items as it goes
 - `/sdd-verify [change]` → validate implementation against specs; reports CRITICAL / WARNING / SUGGESTION
-- `/sdd-archive [change]` → close a change and persist final state in the active artifact store 
+- `/sdd-archive [change]` → close a change and persist final state in the active artifact store
 - `/sdd-onboard` → guided end-to-end walkthrough of SDD using your real codebase
 
 Meta-commands (type directly — orchestrator handles them, won't appear in autocomplete):
+
 - `/sdd-new <change>` → start a new change by delegating exploration + proposal to sub-agents
 - `/sdd-continue [change]` → run the next dependency-ready phase via sub-agent(s)
 - `/sdd-ff <name>` → fast-forward planning: proposal → specs → design → tasks
@@ -87,6 +89,7 @@ Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-
 3. If NOT found → run `sdd-init` FIRST (delegate to sdd-init sub-agent), THEN proceed with the requested command
 
 This ensures:
+
 - Testing capabilities are always detected and cached
 - Strict TDD Mode is activated when the project supports it
 - The project context (stack, conventions) is available for all phases
@@ -105,6 +108,7 @@ If the user doesn't specify, default to **Interactive** (safer, gives the user c
 Cache the mode choice for the session — don't ask again unless the user explicitly requests a mode change.
 
 In **Interactive** mode, between phases:
+
 1. Show a concise summary of what the phase produced
 2. List what the next phase will do
 3. Ask: "¿Continuamos? / Continue?" — accept YES/continue, NO/stop, or specific feedback to adjust
@@ -129,6 +133,7 @@ Cache the artifact store choice for the session. Pass it as `artifact_store.mode
 On the first `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request) in a session, ask once for and cache delivery strategy: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
 
 ### Dependency Graph
+
 ```
 proposal -> specs --> tasks -> apply -> verify -> archive
              ^
@@ -137,6 +142,7 @@ proposal -> specs --> tasks -> apply -> verify -> archive
 ```
 
 ### Result Contract
+
 Each phase returns: `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, `skill_resolution`.
 
 ### Review Workload Guard (MANDATORY)
@@ -153,22 +159,26 @@ If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimat
 Automatic mode does not override this guard. Always pass the resolved delivery strategy to `sdd-apply`.
 
 <!-- gentle-ai:sdd-model-assignments -->
+
 ## Model Assignments
 
 Read this table at session start (or before first delegation), cache it for the session, and pass the mapped alias in every Agent tool call via the `model` parameter. If a phase is missing, use the `default` row. If you lack access to the assigned model, substitute `sonnet` and continue.
 
-| Phase | Default Model | Reason |
-|-------|---------------|--------|
-| orchestrator | opus | Coordinates, makes decisions |
-| sdd-explore | sonnet | Reads code, structural - not architectural |
-| sdd-propose | opus | Architectural decisions |
-| sdd-spec | sonnet | Structured writing |
-| sdd-design | opus | Architecture decisions |
-| sdd-tasks | sonnet | Mechanical breakdown |
-| sdd-apply | sonnet | Implementation |
-| sdd-verify | sonnet | Validation against spec |
-| sdd-archive | haiku | Copy and close |
-| default | sonnet | Non-SDD general delegation |
+The Claude Code session model is controlled by Claude Code itself; Gentle AI does not configure the main orchestrator model. This table applies only to Agent tool calls for SDD phase sub-agents and general delegation.
+
+**Mandatory model gate:** Every Agent tool call MUST include `model`. Calling Agent without `model` is invalid. Before each Agent call, resolve the target phase to an alias from this table; for general/non-SDD delegation use `default`. If you are about to call Agent and have not chosen a `model`, STOP and choose the mapped alias first.
+
+| Phase       | Default Model | Reason                                     |
+| ----------- | ------------- | ------------------------------------------ |
+| sdd-explore | sonnet        | Reads code, structural - not architectural |
+| sdd-propose | opus          | Architectural decisions                    |
+| sdd-spec    | sonnet        | Structured writing                         |
+| sdd-design  | opus          | Architecture decisions                     |
+| sdd-tasks   | sonnet        | Mechanical breakdown                       |
+| sdd-apply   | sonnet        | Implementation                             |
+| sdd-verify  | sonnet        | Validation against spec                    |
+| sdd-archive | haiku         | Copy and close                             |
+| default     | sonnet        | Non-SDD general delegation                 |
 
 <!-- /gentle-ai:sdd-model-assignments -->
 
@@ -176,15 +186,24 @@ Read this table at session start (or before first delegation), cache it for the 
 
 ALL sub-agent launch prompts that involve reading, writing, or reviewing code MUST include pre-resolved **compact rules** from the skill registry. Follow the **Skill Resolver Protocol** (`~/.claude/skills/_shared/skill-resolver.md`).
 
+**Pre-flight before every Agent call (mandatory):**
+
+1. Identify the phase key (`sdd-apply`, `sdd-verify`, etc.) or use `default` for general delegation.
+2. Look up the alias in the Model Assignments table.
+3. Include `model: "<alias>"` in the Agent tool call.
+4. If `model` is absent, do not send the Agent call.
+
 The orchestrator resolves skills from the registry ONCE (at session start or first delegation), caches the compact rules, and injects matching rules into each sub-agent's prompt. Also reads the Model Assignments table once per session, caches `phase → alias`, includes that alias in every Agent tool call via `model`.
 
 Orchestrator skill resolution (do once per session):
+
 1. `mem_search(query: "skill-registry", project: "{project}")` → `mem_get_observation(id)` for full registry content
 2. Fallback: read `.atl/skill-registry.md` if engram not available
 3. Cache the **Compact Rules** section and the **User Skills** trigger table
 4. If no registry exists, warn user and proceed without project-specific standards
 
 For each sub-agent launch:
+
 1. Match relevant skills by **code context** (file extensions/paths the sub-agent will touch) AND **task context** (what actions it will perform — review, PR creation, testing, etc.)
 2. Copy matching compact rule blocks into the sub-agent prompt as `## Project Standards (auto-resolved)`
 3. Inject BEFORE the sub-agent's task-specific instructions
@@ -194,6 +213,7 @@ For each sub-agent launch:
 ### Skill Resolution Feedback
 
 After every delegation that returns a result, check the `skill_resolution` field:
+
 - `injected` → all good, skills were passed correctly
 - `fallback-registry`, `fallback-path`, or `none` → skill cache was lost (likely compaction). Re-read the registry immediately and inject compact rules in all subsequent delegations.
 
@@ -214,16 +234,16 @@ Sub-agents get a fresh context with NO memory. The orchestrator controls context
 
 Each phase has explicit read/write rules:
 
-| Phase | Reads | Writes |
-|-------|-------|--------|
-| `sdd-explore` | nothing | `explore` |
-| `sdd-propose` | exploration (optional) | `proposal` |
-| `sdd-spec` | proposal (required) | `spec` |
-| `sdd-design` | proposal (required) | `design` |
-| `sdd-tasks` | spec + design (required) | `tasks` |
-| `sdd-apply` | tasks + spec + design + **apply-progress (if exists)** | `apply-progress` |
-| `sdd-verify` | spec + tasks + **apply-progress** | `verify-report` |
-| `sdd-archive` | all artifacts | `archive-report` |
+| Phase         | Reads                                                  | Writes           |
+| ------------- | ------------------------------------------------------ | ---------------- |
+| `sdd-explore` | nothing                                                | `explore`        |
+| `sdd-propose` | exploration (optional)                                 | `proposal`       |
+| `sdd-spec`    | proposal (required)                                    | `spec`           |
+| `sdd-design`  | proposal (required)                                    | `design`         |
+| `sdd-tasks`   | spec + design (required)                               | `tasks`          |
+| `sdd-apply`   | tasks + spec + design + **apply-progress (if exists)** | `apply-progress` |
+| `sdd-verify`  | spec + tasks + **apply-progress**                      | `verify-report`  |
+| `sdd-archive` | all artifacts                                          | `archive-report` |
 
 For phases with required dependencies, sub-agent reads directly from the backend — orchestrator passes artifact references (topic keys or file paths), NOT content itself.
 
@@ -251,20 +271,21 @@ This prevents progress loss across batches. The sub-agent is responsible for rea
 
 #### Engram Topic Key Format
 
-| Artifact | Topic Key |
-|----------|-----------|
-| Project context | `sdd-init/{project}` |
-| Exploration | `sdd/{change-name}/explore` |
-| Proposal | `sdd/{change-name}/proposal` |
-| Spec | `sdd/{change-name}/spec` |
-| Design | `sdd/{change-name}/design` |
-| Tasks | `sdd/{change-name}/tasks` |
-| Apply progress | `sdd/{change-name}/apply-progress` |
-| Verify report | `sdd/{change-name}/verify-report` |
-| Archive report | `sdd/{change-name}/archive-report` |
-| DAG state | `sdd/{change-name}/state` |
+| Artifact        | Topic Key                          |
+| --------------- | ---------------------------------- |
+| Project context | `sdd-init/{project}`               |
+| Exploration     | `sdd/{change-name}/explore`        |
+| Proposal        | `sdd/{change-name}/proposal`       |
+| Spec            | `sdd/{change-name}/spec`           |
+| Design          | `sdd/{change-name}/design`         |
+| Tasks           | `sdd/{change-name}/tasks`          |
+| Apply progress  | `sdd/{change-name}/apply-progress` |
+| Verify report   | `sdd/{change-name}/verify-report`  |
+| Archive report  | `sdd/{change-name}/archive-report` |
+| DAG state       | `sdd/{change-name}/state`          |
 
 Sub-agents retrieve full content via two steps:
+
 1. `mem_search(query: "{topic_key}", project: "{project}")` → get observation ID
 2. `mem_get_observation(id: {id})` → full content (REQUIRED — search results are truncated)
 

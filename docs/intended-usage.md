@@ -131,14 +131,14 @@ Once installed, your agent detects what you're working on and loads the relevant
 
 How it works:
 
-1. **The registry refreshes at startup where the agent supports hooks.** Pi runs the `gentle-pi` session hook. Claude Code and OpenCode run `gentle-ai skill-registry refresh --quiet` from their installed startup/plugin hooks.
+1. **The registry refreshes at startup where the agent supports hooks.** Normal Pi startup runs the `gentle-pi` session hook. Claude Code and OpenCode run `gentle-ai skill-registry refresh --quiet` from their installed startup/plugin hooks.
 2. **The refresh is cached.** Gentle-AI fingerprints discovered `SKILL.md` files using schema version, path, mtime, and size. If `.atl/.skill-registry.cache.json` matches and `.atl/skill-registry.md` exists, startup is a cheap cache-hit.
 3. **The orchestrator uses it automatically** -- once the registry exists, the orchestrator reads it at session start and passes pre-resolved compact rule text to sub-agents. You don't interact with the registry after that.
 4. **Manual fallback stays available** -- run `gentle-ai skill-registry refresh --force` from a project if you want to regenerate immediately.
 
 There's also an automated side: `sdd-init` runs the same registry logic internally, so if you use SDD in a new project, the registry gets built as part of that flow.
 
-**Pro tip**: On Claude Code, OpenCode, and Pi you normally do not need to remember this. The startup hook refreshes the registry and the cache prevents unnecessary work.
+**Pro tip**: On Claude Code, OpenCode, and normal Pi startup you normally do not need to remember this. The startup hook refreshes the registry and the cache prevents unnecessary work. If you start Pi with `pi -ns`, Pi skips startup skill loading/hooks, so run the manual refresh when you need the registry updated in that session.
 
 ---
 

@@ -13,8 +13,8 @@ WORKFLOW:
 4. Present the result and ask the user to proceed
 
 CONTEXT:
-- Working directory: !`echo -n "$(pwd)"`
-- Current project: !`echo -n "$(basename $(pwd))"`
+- Working directory: !`pwd`
+- Current project: !`basename "$(pwd)"`
 - Change name: $ARGUMENTS
 - Execution mode: ask/cache per orchestrator
 - Artifact store mode: ask/cache per orchestrator

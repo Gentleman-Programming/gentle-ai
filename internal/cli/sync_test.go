@@ -2034,9 +2034,10 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 		t.Fatalf("RunSync() error = %v", err)
 	}
 
-	// Claude assignments must be loaded.
-	if got := result.Selection.ClaudeModelAssignments["orchestrator"]; got != "opus" {
-		t.Errorf("ClaudeModelAssignments[orchestrator] = %q, want %q", got, "opus")
+	// Claude assignments must be loaded, excluding the main orchestrator model
+	// because Claude Code controls the session model itself.
+	if _, exists := result.Selection.ClaudeModelAssignments["orchestrator"]; exists {
+		t.Errorf("ClaudeModelAssignments should not load persisted orchestrator model: %v", result.Selection.ClaudeModelAssignments)
 	}
 	if got := result.Selection.ClaudeModelAssignments["sdd-apply"]; got != "sonnet" {
 		t.Errorf("ClaudeModelAssignments[sdd-apply] = %q, want %q", got, "sonnet")
@@ -2115,7 +2116,7 @@ func TestRunSyncDoesNotOverridePersistedAssignmentsOnSecondSync(t *testing.T) {
 	err := state.Write(home, state.InstallState{
 		InstalledAgents: []string{"opencode"},
 		ClaudeModelAssignments: map[string]string{
-			"orchestrator": "opus",
+			"sdd-apply": "sonnet",
 		},
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
@@ -2137,8 +2138,8 @@ func TestRunSyncDoesNotOverridePersistedAssignmentsOnSecondSync(t *testing.T) {
 		t.Fatalf("RunSync(2) error = %v", err)
 	}
 
-	if got := result.Selection.ClaudeModelAssignments["orchestrator"]; got != "opus" {
-		t.Errorf("After second sync: ClaudeModelAssignments[orchestrator] = %q, want %q", got, "opus")
+	if got := result.Selection.ClaudeModelAssignments["sdd-apply"]; got != "sonnet" {
+		t.Errorf("After second sync: ClaudeModelAssignments[sdd-apply] = %q, want %q", got, "sonnet")
 	}
 	ma := result.Selection.ModelAssignments["sdd-init"]
 	if ma.ProviderID != "anthropic" || ma.ModelID != "claude-sonnet-4" {
