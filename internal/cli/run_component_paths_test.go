@@ -199,6 +199,32 @@ func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
 	}
 }
 
+// TestComponentPathsEngramOpenClawUsesCanonicalSettingsPath asserts that the
+// engram component path for OpenClaw always resolves to the canonical
+// ~/.openclaw/openclaw.json and never to a workspace-scoped copy.
+//
+// This is a regression test for issue #522: the verifier used to call
+// SettingsPath(workspaceDir) which produced
+// <workspace>/.openclaw/openclaw.json, causing post-sync verification to
+// fail even when the file at the canonical path existed.
+func TestComponentPathsEngramOpenClawUsesCanonicalSettingsPath(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentOpenClaw})
+
+	paths := componentPathsWithWorkspace(home, workspace, model.Selection{}, adapters, model.ComponentEngram)
+
+	canonical := filepath.Join(home, ".openclaw", "openclaw.json")
+	if !containsPath(paths, canonical) {
+		t.Fatalf("componentPathsWithWorkspace(engram,openclaw) missing canonical path %q\npaths=%v", canonical, paths)
+	}
+
+	wrongPath := filepath.Join(workspace, ".openclaw", "openclaw.json")
+	if containsPath(paths, wrongPath) {
+		t.Fatalf("componentPathsWithWorkspace(engram,openclaw) must not include workspace-scoped path %q\npaths=%v", wrongPath, paths)
+	}
+}
+
 func containsPath(paths []string, want string) bool {
 	for _, p := range paths {
 		if p == want {
