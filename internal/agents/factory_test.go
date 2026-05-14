@@ -54,6 +54,7 @@ func TestDefaultRegistrySupportedAgentsMatchesFactoryAgents(t *testing.T) {
 		model.AgentOpenCode,
 		model.AgentPi,
 		model.AgentQwenCode,
+		model.AgentTrae,
 		model.AgentVSCodeCopilot,
 		model.AgentWindsurf,
 	}

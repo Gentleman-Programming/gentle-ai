@@ -15,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/qwen"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/trae"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -35,6 +36,7 @@ var defaultAgentIDs = []model.AgentID{
 	model.AgentKiroIDE,
 	model.AgentOpenClaw,
 	model.AgentPi,
+	model.AgentTrae,
 }
 
 func NewAdapter(agent model.AgentID) (Adapter, error) {
@@ -67,6 +69,8 @@ func NewAdapter(agent model.AgentID) (Adapter, error) {
 		return openclaw.NewAdapter(), nil
 	case model.AgentPi:
 		return pi.NewAdapter(), nil
+	case model.AgentTrae:
+		return trae.NewAdapter(), nil
 	default:
 		return nil, AgentNotSupportedError{Agent: agent}
 	}
