@@ -99,7 +99,8 @@ var (
 		model.ComponentOpenCodeGentleLogo,
 	}
 	configuredAgents = []string{
-		"sdd-orchestrator",
+		"gentle-orchestrator",
+		"sdd-orchestrator", // legacy key — kept for backward-compat cleanup
 		"sdd-init",
 		"sdd-explore",
 		"sdd-propose",
