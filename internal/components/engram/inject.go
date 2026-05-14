@@ -207,7 +207,7 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 // opts.DataDir is non-empty, ENGRAM_DATA_DIR is injected into every MCP
 // server config block so the agent uses the specified data directory.
 func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
-	return injectCore(homeDir, homeDir, adapter, opts)
+	return injectCore(homeDir, homeDir, adapter, opts, true)
 }
 
 // InjectWithPromptDir writes Engram's MCP configuration using configHomeDir and
@@ -215,15 +215,22 @@ func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOption
 // as OpenClaw where MCP is loaded from the global config but instructions are
 // read from an active workspace.
 func InjectWithPromptDir(configHomeDir, promptDir string, adapter agents.Adapter) (InjectionResult, error) {
-	return injectCore(configHomeDir, promptDir, adapter, InjectOptions{})
+	return injectCore(configHomeDir, promptDir, adapter, InjectOptions{}, true)
 }
 
 // InjectWithPromptDirOptions is InjectWithPromptDir plus optional MCP settings.
 func InjectWithPromptDirOptions(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
-	return injectCore(configHomeDir, promptDir, adapter, opts)
+	return injectCore(configHomeDir, promptDir, adapter, opts, true)
 }
 
-func injectCore(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
+// InjectMCPWithOptions updates only the MCP server config. It intentionally
+// skips prompt files; data-directory switching should not mutate workspace
+// instructions, especially for workspace-first agents such as OpenClaw.
+func InjectMCPWithOptions(homeDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
+	return injectCore(homeDir, "", adapter, opts, false)
+}
+
+func injectCore(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions, writePrompt bool) (InjectionResult, error) {
 	if opts.DataDir != "" && !filepath.IsAbs(opts.DataDir) {
 		return InjectionResult{}, fmt.Errorf("engram DataDir must be an absolute path, got: %q", opts.DataDir)
 	}
@@ -255,8 +262,14 @@ func injectCore(configHomeDir, promptDir string, adapter agents.Adapter, opts In
 	if !adapter.SupportsMCP() {
 		return InjectionResult{}, nil
 	}
-	if err := validateOpenClawWorkspacePath(promptDir, adapter); err != nil {
-		return InjectionResult{}, err
+	if writePrompt {
+		if err := validateOpenClawWorkspacePath(promptDir, adapter); err != nil {
+			return InjectionResult{}, err
+		}
+	}
+
+	if !writePrompt {
+		promptDir = ""
 	}
 
 	env := engramEnvMap(opts.DataDir)
@@ -360,7 +373,7 @@ func injectCore(configHomeDir, promptDir string, adapter agents.Adapter, opts In
 	}
 
 	// 2. Inject Engram memory protocol into system prompt (if supported).
-	if adapter.SupportsSystemPrompt() {
+	if writePrompt && adapter.SupportsSystemPrompt() {
 		switch adapter.SystemPromptStrategy() {
 		case model.StrategyMarkdownSections:
 			promptPath := adapter.SystemPromptFile(promptDir)

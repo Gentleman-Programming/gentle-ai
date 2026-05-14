@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -734,6 +735,27 @@ func TestBuildEngramDataDirFn_SetUpdatesStateAndMCPEnv(t *testing.T) {
 	assertOpenCodeEngramDataDir(t, home, dst)
 }
 
+func TestBuildEngramDataDirFn_SetUpdatesOpenClawMCPOnly(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, "src-engram")
+	dst := filepath.Join(home, "dst-engram")
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{string(model.AgentOpenClaw)},
+		EngramDataDir:   src,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := buildEngramDataDirFn(home)(model.EngramDataDirOpSet, src, dst); err != nil {
+		t.Fatalf("set op: %v", err)
+	}
+
+	assertOpenClawEngramDataDir(t, home, dst)
+	if _, err := os.Stat(filepath.Join(home, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("set active should update MCP only, not write OpenClaw prompt AGENTS.md")
+	}
+}
+
 func TestBuildEngramDataDirFn_DeleteResetsStateAndClearsData(t *testing.T) {
 	home := t.TempDir()
 	src := filepath.Join(home, "src-engram")
@@ -809,6 +831,39 @@ func assertOpenCodeEngramDataDir(t *testing.T, home, want string) {
 		t.Fatalf("opencode config missing ENGRAM_DATA_DIR %q:\n%s", want, raw)
 	}
 }
+
+func assertOpenClawEngramDataDir(t *testing.T, home, want string) {
+	t.Helper()
+	path := filepath.Join(home, ".openclaw", "openclaw.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read openclaw MCP config: %v", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("parse openclaw MCP config: %v\n%s", err, raw)
+	}
+	mcp, ok := cfg["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("openclaw config missing mcp: %#v", cfg)
+	}
+	servers, ok := mcp["servers"].(map[string]any)
+	if !ok {
+		t.Fatalf("openclaw config missing mcp.servers: %#v", mcp)
+	}
+	engramServer, ok := servers["engram"].(map[string]any)
+	if !ok {
+		t.Fatalf("openclaw config missing mcp.servers.engram: %#v", servers)
+	}
+	env, ok := engramServer["env"].(map[string]any)
+	if !ok {
+		t.Fatalf("openclaw config missing mcp.servers.engram.env: %#v", engramServer)
+	}
+	if got := env["ENGRAM_DATA_DIR"]; got != want {
+		t.Fatalf("ENGRAM_DATA_DIR = %#v, want %q", got, want)
+	}
+}
+
 
 func assertEngramStateDir(t *testing.T, home, want string) {
 	t.Helper()

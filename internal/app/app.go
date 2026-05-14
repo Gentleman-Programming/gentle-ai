@@ -677,7 +677,7 @@ func syncEngramMCPDataDir(homeDir, dataDir string) error {
 		if err != nil || !adapter.SupportsMCP() {
 			continue
 		}
-		if _, err := engram.InjectWithOptions(homeDir, adapter, engram.InjectOptions{DataDir: dataDir}); err != nil {
+		if _, err := engram.InjectMCPWithOptions(homeDir, adapter, engram.InjectOptions{DataDir: dataDir}); err != nil {
 			return fmt.Errorf("update Engram MCP data dir for %q: %w", raw, err)
 		}
 	}
