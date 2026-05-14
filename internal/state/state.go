@@ -45,6 +45,10 @@ type InstallState struct {
 	// EngramDataDir is the filesystem path of the Engram data directory chosen
 	// by the user. When empty the default (~/.engram) is used.
 	EngramDataDir string `json:"engram_data_dir,omitempty"`
+
+	// EngramKnownDataDirs records non-active directories created or selected by
+	// data-dir management so users can later make a copied directory active.
+	EngramKnownDataDirs []string `json:"engram_known_data_dirs,omitempty"`
 }
 
 // Path returns the absolute path to the state file for the given home directory.

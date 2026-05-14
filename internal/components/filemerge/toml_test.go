@@ -120,6 +120,15 @@ func TestUpsertCodexEngramBlockWindowsPath(t *testing.T) {
 	}
 }
 
+func TestUpsertCodexEngramBlockWithEnv(t *testing.T) {
+	result := UpsertCodexEngramBlockWithEnv("", "engram", `C:\Users\me\.engram`)
+
+	want := `env = { ENGRAM_DATA_DIR = "C:\\Users\\me\\.engram" }`
+	if !strings.Contains(result, want) {
+		t.Fatalf("result missing escaped ENGRAM_DATA_DIR;\nwant substring: %s\ngot:\n%s", want, result)
+	}
+}
+
 // ─── UpsertTopLevelTOMLString ─────────────────────────────────────────────────
 
 func TestUpsertTopLevelTOMLString_NewKey(t *testing.T) {

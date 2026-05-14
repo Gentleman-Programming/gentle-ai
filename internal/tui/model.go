@@ -429,6 +429,9 @@ type Model struct {
 	// state.json before the TUI starts. "" means the default (~/.engram).
 	EngramDataDir string
 
+	// EngramKnownDataDirs are non-active data dirs remembered for Set Active.
+	EngramKnownDataDirs []string
+
 	// HomeDir is the user's home directory, used for Engram path resolution.
 	HomeDir string
 
@@ -581,10 +584,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Update the in-memory data-dir reference to match the operation result.
 			// app.go's EngramDataDirFn closure is responsible for persisting to state.json.
 			switch msg.Op {
-			case model.EngramDataDirOpMove:
+			case model.EngramDataDirOpMove, model.EngramDataDirOpSet:
 				// After a move the data now lives at dstDir.
 				if dst := m.engramDirDstPath(); dst != "" {
 					m.EngramDataDir = dst
+					m.addKnownEngramDir(dst)
+				}
+			case model.EngramDataDirOpCopy:
+				if dst := m.engramDirDstPath(); dst != "" {
+					m.addKnownEngramDir(dst)
 				}
 			case model.EngramDataDirOpDelete, model.EngramDataDirOpFresh:
 				// Data was removed — reset to default (~/.engram).
@@ -1109,7 +1117,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.Screen == ScreenInstalling && m.pipelineRunning {
 			return m, nil
 		}
-		if m.Screen == ScreenEngramDataDir && (m.engramDirOp == model.EngramDataDirOpMove || m.engramDirOp == model.EngramDataDirOpCopy) {
+		if m.Screen == ScreenEngramDataDir && screens.EngramDirOpNeedsLocation(m.engramDirOp) {
 			m.engramDirOp = model.EngramDataDirOpNone
 			m.engramDirDstIdx = -1
 			m.engramDirCustomPath = ""
@@ -1263,7 +1271,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 
 			if m.hasEngram() {
 				if m.Cursor == next {
-					m.engramDirLocations = engram.SuggestLocations(m.HomeDir, m.resolvedEngramDir())
+					m.engramDirLocations = engram.SuggestLocationsWithKnown(m.HomeDir, m.resolvedEngramDir(), m.EngramKnownDataDirs)
 					m.engramDirDoneMsg = nil
 					m.engramDirOp = model.EngramDataDirOpNone
 					m.engramDirDstIdx = -1
@@ -2116,7 +2124,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		m.engramDirOp = ch.Op
 		m.engramDirDstIdx = ch.DstIdx
-		if !m.checkEngramCopyMoveDiskSpace(ch.DstIdx) {
+		if (ch.Op == model.EngramDataDirOpMove || ch.Op == model.EngramDataDirOpCopy) && !m.checkEngramCopyMoveDiskSpace(ch.DstIdx) {
 			return m, nil
 		}
 		m.setScreen(ScreenEngramDataDirConfirm)
@@ -2176,6 +2184,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		m.engramDirCustomPath = ""
 		m.engramDirCustomPos = 0
 		m.EngramSpaceErr = ""
+		m.engramDirLocations = engram.SuggestLocationsWithKnown(m.HomeDir, m.resolvedEngramDir(), m.EngramKnownDataDirs)
 		m.setScreen(ScreenEngramDataDir)
 	}
 
@@ -2946,7 +2955,7 @@ func (m Model) optionCount() int {
 	case ScreenAgentBuilderComplete:
 		return 1 // Done
 	case ScreenEngramDataDir:
-		if m.engramDirOp == model.EngramDataDirOpMove || m.engramDirOp == model.EngramDataDirOpCopy {
+		if screens.EngramDirOpNeedsLocation(m.engramDirOp) {
 			return len(screens.EngramDirLocationChoices(m.engramDirLocations, m.engramDirOp))
 		}
 		return len(screens.EngramDirActionChoices())
@@ -3399,6 +3408,19 @@ func (m Model) engramDirDstPath() string {
 	return ""
 }
 
+func (m *Model) addKnownEngramDir(path string) {
+	clean := filepath.Clean(path)
+	if clean == "." || clean == "" {
+		return
+	}
+	for _, existing := range m.EngramKnownDataDirs {
+		if filepath.Clean(existing) == clean {
+			return
+		}
+	}
+	m.EngramKnownDataDirs = append(m.EngramKnownDataDirs, clean)
+}
+
 func resolveEngramCustomPath(homeDir, input string) string {
 	path := strings.TrimSpace(input)
 	if path == "" {
@@ -3635,7 +3657,7 @@ func (m Model) handleEngramCustomPathInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 			m.EngramSpaceErr = "Enter a destination path."
 			return m, nil
 		}
-		if !m.checkEngramCopyMoveDiskSpacePath(dst) {
+		if (m.engramDirOp == model.EngramDataDirOpMove || m.engramDirOp == model.EngramDataDirOpCopy) && !m.checkEngramCopyMoveDiskSpacePath(dst) {
 			return m, nil
 		}
 		m.setScreen(ScreenEngramDataDirConfirm)

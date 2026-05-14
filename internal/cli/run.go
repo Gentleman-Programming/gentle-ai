@@ -328,6 +328,15 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
 }
 
+func engramInjectOptions(homeDir string, selection model.Selection) engram.InjectOptions {
+	if strings.TrimSpace(selection.EngramDataDir) == "" {
+		return engram.InjectOptions{}
+	}
+	return engram.InjectOptions{
+		DataDir: engram.DataDirRef(selection.EngramDataDir).Resolve(homeDir),
+	}
+}
+
 type prepareBackupStep struct {
 	id          string
 	snapshotter backup.Snapshotter
@@ -569,11 +578,12 @@ func (s componentApplyStep) Run() error {
 				}
 			}
 			var err error
+			opts := engramInjectOptions(s.homeDir, s.selection)
 			if adapter.Agent() == model.AgentOpenClaw {
-				_, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
+				_, err = engram.InjectWithPromptDirOptions(s.homeDir, s.workspaceDir, adapter, opts)
 			} else {
 				targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
-				_, err = engram.Inject(targetDir, adapter)
+				_, err = engram.InjectWithOptions(targetDir, adapter, opts)
 			}
 			if err != nil {
 				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)

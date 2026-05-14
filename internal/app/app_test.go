@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -695,6 +696,7 @@ func TestBuildEngramDataDirFn_CopyKeepsStateAndSource(t *testing.T) {
 	assertEngramArtifactsExist(t, src)
 	assertEngramArtifactsExist(t, dst)
 	assertEngramStateDir(t, home, src)
+	assertEngramKnownDir(t, home, dst)
 }
 
 func TestBuildEngramDataDirFn_MoveUpdatesStateAndRemovesSource(t *testing.T) {
@@ -710,6 +712,27 @@ func TestBuildEngramDataDirFn_MoveUpdatesStateAndRemovesSource(t *testing.T) {
 	assertEngramArtifactsMissing(t, src)
 	assertEngramArtifactsExist(t, dst)
 	assertEngramStateDir(t, home, dst)
+	assertEngramKnownDir(t, home, dst)
+}
+
+func TestBuildEngramDataDirFn_SetUpdatesStateAndMCPEnv(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, "src-engram")
+	dst := filepath.Join(home, "dst-engram")
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{string(model.AgentOpenCode)},
+		EngramDataDir:   src,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := buildEngramDataDirFn(home)(model.EngramDataDirOpSet, src, dst); err != nil {
+		t.Fatalf("set op: %v", err)
+	}
+
+	assertEngramStateDir(t, home, dst)
+	assertEngramKnownDir(t, home, dst)
+	assertOpenCodeEngramDataDir(t, home, dst)
 }
 
 func TestBuildEngramDataDirFn_DeleteResetsStateAndRemovesArtifacts(t *testing.T) {
@@ -726,6 +749,48 @@ func TestBuildEngramDataDirFn_DeleteResetsStateAndRemovesArtifacts(t *testing.T)
 
 	assertEngramArtifactsMissing(t, src)
 	assertEngramStateDir(t, home, "")
+}
+
+func assertEngramKnownDir(t *testing.T, home, want string) {
+	t.Helper()
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range got.EngramKnownDataDirs {
+		if filepath.Clean(dir) == filepath.Clean(want) {
+			return
+		}
+	}
+	t.Fatalf("state EngramKnownDataDirs missing %q: %#v", want, got.EngramKnownDataDirs)
+}
+
+func assertOpenCodeEngramDataDir(t *testing.T, home, want string) {
+	t.Helper()
+	path := filepath.Join(home, ".config", "opencode", "opencode.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read opencode MCP config: %v", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("parse opencode MCP config: %v\n%s", err, raw)
+	}
+	mcp, ok := cfg["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("opencode config missing mcp: %#v", cfg)
+	}
+	engramServer, ok := mcp["engram"].(map[string]any)
+	if !ok {
+		t.Fatalf("opencode config missing mcp.engram: %#v", mcp)
+	}
+	env, ok := engramServer["env"].(map[string]any)
+	if !ok {
+		t.Fatalf("opencode config missing mcp.engram.env: %#v", engramServer)
+	}
+	if got := env["ENGRAM_DATA_DIR"]; got != want {
+		t.Fatalf("ENGRAM_DATA_DIR = %#v, want %q", got, want)
+	}
 }
 
 func writeFakeEngramArtifacts(t *testing.T, dir string) {

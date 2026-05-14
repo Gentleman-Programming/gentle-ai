@@ -139,6 +139,18 @@ func AgentConfigPath(homeDir string) string { return filepath.Join(ConfigPath(ho
 // here lets Pi own the exact config shape without teaching the generic Engram
 // injector about Pi internals.
 func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
+	return a.ProvisionEngramMCPWithDataDir(homeDir, "")
+}
+
+func (a *Adapter) ProvisionEngramMCPWithDataDir(homeDir, dataDir string) (bool, []string, error) {
+	server := map[string]any{
+		"command":     "engram",
+		"args":        []string{"mcp", "--tools=agent"},
+		"directTools": true,
+	}
+	if dataDir != "" {
+		server["env"] = map[string]any{"ENGRAM_DATA_DIR": dataDir}
+	}
 	paths := []string{
 		a.SettingsPath(homeDir),
 		filepath.Join(ConfigPath(homeDir), piNPMDirectory, piNPMPackageFile),
@@ -155,11 +167,7 @@ func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 			"activeMCP": piEngramMCPActiveServer,
 			"mcpServers": map[string]any{
 				piEngramMCPActiveServer: map[string]any{
-					"__replace__": map[string]any{
-						"command":     "engram",
-						"args":        []string{"mcp", "--tools=agent"},
-						"directTools": true,
-					},
+					"__replace__": server,
 				},
 			},
 		}),

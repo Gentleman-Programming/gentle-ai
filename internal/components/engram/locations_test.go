@@ -66,6 +66,27 @@ func TestSuggestLocations_NoDuplicates(t *testing.T) {
 	}
 }
 
+func TestSuggestLocationsWithKnown_IncludesKnownAndMarksActive(t *testing.T) {
+	home := t.TempDir()
+	current := filepath.Join(home, "copied-engram")
+	known := []string{current, filepath.Join(home, "archive-engram")}
+
+	locs := SuggestLocationsWithKnown(home, current, known)
+
+	if locs[0].Path != filepath.Clean(current) || !locs[0].IsCurrent {
+		t.Fatalf("first location = %+v, want current known dir marked active", locs[0])
+	}
+	foundArchive := false
+	for _, loc := range locs {
+		if loc.Path == filepath.Clean(known[1]) {
+			foundArchive = true
+		}
+	}
+	if !foundArchive {
+		t.Fatalf("known non-active dir %q missing from suggestions: %+v", known[1], locs)
+	}
+}
+
 func TestBuildLabel_HomePrefix(t *testing.T) {
 	home := "/home/user"
 	path := filepath.Join(home, ".engram")

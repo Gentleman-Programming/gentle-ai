@@ -35,7 +35,7 @@ func TestRenderEngramDataDir_ActionMenuHidesLocations(t *testing.T) {
 		{Path: "/mnt/external/Engram", Label: "/mnt/external/Engram", Available: 1024 * 1024 * 1024, IsCurrent: false},
 	}
 	out := RenderEngramDataDir(0, "/home/user/.engram", 0, locs, model.EngramDataDirOpNone, "")
-	for _, want := range []string{"Migrate / Move Data", "Copy Data", "Delete current Data"} {
+	for _, want := range []string{"Migrate / Move Data", "Copy Data", "Set Active Directory", "Delete current Data"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected action %q", want)
 		}
@@ -64,6 +64,7 @@ func TestEngramDirActionChoices_Order(t *testing.T) {
 	want := []model.EngramDataDirOp{
 		model.EngramDataDirOpMove,
 		model.EngramDataDirOpCopy,
+		model.EngramDataDirOpSet,
 		model.EngramDataDirOpDelete,
 	}
 	for i, op := range want {
@@ -90,6 +91,23 @@ func TestEngramDirLocationChoices_NonCurrentLocations(t *testing.T) {
 	}
 	if choices[1].DstIdx != EngramCustomPathDstIdx {
 		t.Errorf("custom path DstIdx = %d, want %d", choices[1].DstIdx, EngramCustomPathDstIdx)
+	}
+}
+
+func TestEngramDirLocationChoices_SetShowsCurrentAsActive(t *testing.T) {
+	locs := []engram.Location{
+		{Path: "/a", Label: "A", IsCurrent: true},
+		{Path: "/b", Label: "B", IsCurrent: false},
+	}
+	choices := EngramDirLocationChoices(locs, model.EngramDataDirOpSet)
+	if len(choices) != 3 {
+		t.Fatalf("len(choices) = %d, want current + other + custom", len(choices))
+	}
+	if choices[0].DstIdx != 0 || !strings.Contains(choices[0].Label, "(ACTIVE)") {
+		t.Fatalf("first set choice should show current ACTIVE, got %+v", choices[0])
+	}
+	if !strings.Contains(choices[1].Label, "Use  B") {
+		t.Fatalf("second set choice should offer other known dir, got %+v", choices[1])
 	}
 }
 
@@ -133,6 +151,16 @@ func TestRenderEngramDataDirConfirm_Delete(t *testing.T) {
 	out := RenderEngramDataDirConfirm(model.EngramDataDirOpDelete, "/src", "", 0)
 	if !strings.Contains(out, "Delete") {
 		t.Error("expected Delete in confirm output")
+	}
+}
+
+func TestRenderEngramDataDirConfirm_SetHasNoSnapshotNote(t *testing.T) {
+	out := RenderEngramDataDirConfirm(model.EngramDataDirOpSet, "/src", "/dst", 0)
+	if !strings.Contains(out, "Active") || !strings.Contains(out, "/dst") {
+		t.Fatal("expected active directory handoff in confirm output")
+	}
+	if strings.Contains(out, "snapshot backup") {
+		t.Fatal("set active should not claim it creates a snapshot")
 	}
 }
 
