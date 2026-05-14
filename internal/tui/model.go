@@ -1455,7 +1455,12 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			if m.Selection.ModelAssignments == nil {
 				settingsPath := opencode.DefaultSettingsPath()
 				if current, err := readCurrentAssignmentsFn(settingsPath); err == nil && len(current) > 0 {
-					m.Selection.ModelAssignments = current
+					// Sanitize loaded assignments: clear any stale effort values for
+					// models that no longer report variants (e.g. provider refreshed
+					// their catalog since the user last synced). Without this, a stale
+					// effort would be preserved in the picker and re-injected on the
+					// next sync even if the model no longer supports that effort level.
+					m.Selection.ModelAssignments = sanitizeKnownModelEfforts(current, m.ModelPicker.SDDModels)
 				}
 			}
 			m.setScreen(ScreenModelPicker)

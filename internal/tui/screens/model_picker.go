@@ -331,10 +331,17 @@ func applyAssignment(state ModelPickerState, assignments map[string]model.ModelA
 
 // effortOptionsFromLevels returns the effort picker options in display order.
 // The first entry ("default") maps to an empty Effort string (provider default).
+// Levels that are literally "default" are excluded to prevent a duplicate entry
+// that would produce Effort="default" (a non-empty string) instead of Effort=""
+// when the user selects the first item.
 func effortOptionsFromLevels(levels []string) []string {
 	opts := make([]string, 0, len(levels)+1)
 	opts = append(opts, "default")
-	opts = append(opts, levels...)
+	for _, level := range levels {
+		if level != "default" {
+			opts = append(opts, level)
+		}
+	}
 	return opts
 }
 

@@ -661,6 +661,60 @@ func TestHandleModelPickerNav_DispatchesToEffortNav(t *testing.T) {
 	}
 }
 
+// ─── handleEffortNav: "Set all phases" row (SelectedPhaseIdx==1) ──────────────
+
+// TestHandleEffortNav_SetAllPhasesUpdatesAllPhasesModelAndAllSubAgents verifies
+// that when the effort picker is confirmed via the "Set all phases" row
+// (SelectedPhaseIdx==1), ALL 9 SDD sub-agent phases receive the effort assignment
+// AND state.AllPhasesModel is updated to reflect the chosen effort.
+//
+// This covers the interaction between the effort picker and the "Set all phases"
+// special row — a path not exercised by the single-phase tests above.
+func TestHandleEffortNav_SetAllPhasesUpdatesAllPhasesModelAndAllSubAgents(t *testing.T) {
+	phases := opencode.SDDPhases()
+	pending := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-opus-4"}
+	state := ModelPickerState{
+		Mode:                      ModeEffortSelect,
+		SelectedPhaseIdx:          1, // "Set all phases" row
+		EffortCursor:              2, // index 2 → "medium" in ["default", "low", "medium", "high"]
+		PendingAssignment:         pending,
+		SelectedModelEffortLevels: []string{"low", "medium", "high"},
+	}
+	assignments := make(map[string]model.ModelAssignment)
+
+	newState, updated := handleEffortNav("enter", state, assignments)
+
+	// All 9 sub-agent phases must carry the effort.
+	for _, phase := range phases {
+		a, ok := updated[phase]
+		if !ok {
+			t.Errorf("phase %q missing from assignments after Set all phases effort", phase)
+			continue
+		}
+		if a.Effort != "medium" {
+			t.Errorf("phase %q Effort = %q, want %q", phase, a.Effort, "medium")
+		}
+	}
+
+	// AllPhasesModel must be updated with the full assignment including effort.
+	if newState.AllPhasesModel.Effort != "medium" {
+		t.Errorf("AllPhasesModel.Effort = %q, want %q", newState.AllPhasesModel.Effort, "medium")
+	}
+	if newState.AllPhasesModel.ProviderID != pending.ProviderID {
+		t.Errorf("AllPhasesModel.ProviderID = %q, want %q", newState.AllPhasesModel.ProviderID, pending.ProviderID)
+	}
+
+	// PendingAssignment must be cleared after confirmation.
+	if newState.PendingAssignment != (model.ModelAssignment{}) {
+		t.Errorf("PendingAssignment after Set all effort = %+v, want zero value", newState.PendingAssignment)
+	}
+
+	// gentle-orchestrator must NOT be touched by "Set all phases".
+	if _, exists := updated[SDDOrchestratorPhase]; exists {
+		t.Errorf("gentle-orchestrator should NOT be assigned by Set all phases effort")
+	}
+}
+
 // ─── TestIndividualPhaseSelectionDoesNotSetAllPhasesModel (unchanged) ──────
 
 // ─── Phase list display — effort annotation ───────────────────────────────
