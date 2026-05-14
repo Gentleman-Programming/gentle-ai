@@ -88,6 +88,9 @@ func copyDataDir(src, dst string) error {
 	if samePath(src, dst) {
 		return fmt.Errorf("source and destination data directories must be different")
 	}
+	if DataDirHasContent(dst) {
+		return fmt.Errorf("destination data directory already contains files: %q", dst)
+	}
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err

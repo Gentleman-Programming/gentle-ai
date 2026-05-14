@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
@@ -83,6 +84,21 @@ func TestDataDirService_MoveTo(t *testing.T) {
 	// Destination must have the file.
 	if !DataDirHasContent(dst) {
 		t.Error("dst dir empty after MoveTo — expected files to be moved")
+	}
+}
+
+func TestDataDirService_MoveToRejectsSameDirectory(t *testing.T) {
+	svc, home := newTestService(t)
+	src := filepath.Join(home, "src-data")
+	writeTestDataDir(t, src)
+
+	_, err := svc.MoveTo(src, src)
+	if err == nil || !strings.Contains(err.Error(), "must be different") {
+		t.Fatalf("MoveTo same dir error = %v, want must be different", err)
+	}
+	// Source must be untouched after rejected move.
+	if !DataDirHasContent(src) {
+		t.Fatal("source dir should still have files after rejected same-dir move")
 	}
 }
 

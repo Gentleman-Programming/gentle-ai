@@ -3,6 +3,7 @@ package engram
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -81,5 +82,47 @@ func TestDiskSpaceOKForDataDir_withContent(t *testing.T) {
 	}
 	if !ok {
 		t.Fatal("expected ok=true for one-byte file on same volume")
+	}
+}
+
+func TestCopyDataDir_RejectsSameSourceAndDestination(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "data.bin"), []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := copyDataDir(dir, dir)
+	if err == nil || !strings.Contains(err.Error(), "must be different") {
+		t.Fatalf("copyDataDir same dir error = %v, want 'must be different'", err)
+	}
+}
+
+func TestCopyDataDir_RejectsPopulatedDestination(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, "src")
+	dst := filepath.Join(home, "dst")
+	for _, dir := range []string{src, dst} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(src, "data.bin"), []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "data.bin"), []byte("existing"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := copyDataDir(src, dst)
+	if err == nil || !strings.Contains(err.Error(), "already contains files") {
+		t.Fatalf("copyDataDir populated dst error = %v, want 'already contains files'", err)
+	}
+	// Destination must be untouched.
+	got, readErr := os.ReadFile(filepath.Join(dst, "data.bin"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "existing" {
+		t.Fatalf("destination was modified: %q", got)
 	}
 }
