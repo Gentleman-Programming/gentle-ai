@@ -10,12 +10,12 @@ Define the exact requirements, scenarios, and acceptance criteria for adding Tra
 
 ### REQ-1: Agent Identity
 
-The Trae adapter MUST expose `AgentTrae AgentID = "trae"` and `TierFull` support tier.
+The Trae adapter MUST expose `AgentTrae AgentID = "trae-ide"` and `TierFull` support tier.
 
 #### Scenario: Agent ID and tier
 - GIVEN the Trae adapter is instantiated via `trae.NewAdapter()`
 - WHEN `Agent()` and `Tier()` are called
-- THEN `Agent()` returns `"trae"` and `Tier()` returns `"full"`
+- THEN `Agent()` returns `"trae-ide"` and `Tier()` returns `"full"`
 
 ---
 
@@ -40,9 +40,9 @@ The adapter MUST detect Trae by the presence of `~/.trae` as a directory. Trae i
 
 ---
 
-### REQ-3: Config paths (cross-platform, all under `~/.trae`)
+### REQ-3: Config paths
 
-The adapter MUST return correct paths for all config methods. Trae uses a flat `~/.trae/` root on all platforms (no OS-specific split unlike Windsurf or Kiro).
+The adapter MUST return correct paths for all config methods. Trae uses a mixed layout: `~/.trae/` for detection and skills (cross-platform), and an OS-specific Trae User config dir (VS Code convention) for MCP and personal rules.
 
 #### Scenario: GlobalConfigDir
 - WHEN `GlobalConfigDir(homeDir)` is called
@@ -50,11 +50,14 @@ The adapter MUST return correct paths for all config methods. Trae uses a flat `
 
 #### Scenario: SystemPromptDir
 - WHEN `SystemPromptDir(homeDir)` is called
-- THEN returns `{homeDir}/.trae/user_rules`
+- THEN returns the OS-specific Trae User config dir:
+  - macOS: `{homeDir}/Library/Application Support/Trae/User`
+  - Linux: `{homeDir}/.config/Trae/User` (or `$XDG_CONFIG_HOME/Trae/User`)
+  - Windows: `%APPDATA%\Trae\User`
 
 #### Scenario: SystemPromptFile
 - WHEN `SystemPromptFile(homeDir)` is called
-- THEN returns `{homeDir}/.trae/user_rules/gentle-ai.md`
+- THEN returns `{traeUserDir}/user_rules.md`
 
 #### Scenario: SkillsDir
 - WHEN `SkillsDir(homeDir)` is called
@@ -62,7 +65,8 @@ The adapter MUST return correct paths for all config methods. Trae uses a flat `
 
 #### Scenario: MCPConfigPath
 - WHEN `MCPConfigPath(homeDir, "")` is called
-- THEN returns `{homeDir}/.trae/mcp.json`
+- THEN returns `{traeUserDir}/mcp.json`
+- NOTE: `{traeUserDir}` is the OS-specific Trae User config dir (same as SystemPromptDir)
 
 ---
 
