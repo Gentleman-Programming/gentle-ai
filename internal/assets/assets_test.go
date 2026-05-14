@@ -456,26 +456,27 @@ func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 	}
 }
 
-// TestClaudeCommandsDoNotUseEchoNPwd guards against the nested-subshell pattern
+// TestCommandsDoNotUseEchoNPwd guards against the nested-subshell pattern
 // `echo -n "$(pwd)"` (and the basename variant) that causes Claude Code v2.1.113+
 // to reject slash commands with "Unhandled node type: string". Use plain `!`pwd``
 // or `!`basename "$(pwd)"`` instead — both are accepted by old and new parsers.
-func TestClaudeCommandsDoNotUseEchoNPwd(t *testing.T) {
-	entries, err := FS.ReadDir("claude/commands")
-	if err != nil {
-		t.Fatalf("ReadDir(claude/commands) error = %v", err)
-	}
-
+func TestCommandsDoNotUseEchoNPwd(t *testing.T) {
 	forbidden := `echo -n "$(pwd)"`
 
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+	for _, dir := range []string{"claude/commands", "opencode/commands"} {
+		entries, err := FS.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("ReadDir(%s) error = %v", dir, err)
 		}
-		path := "claude/commands/" + entry.Name()
-		content := MustRead(path)
-		if strings.Contains(content, forbidden) {
-			t.Errorf("%s contains banned pattern %q — use !`pwd` or !`basename \"$(pwd)\"` instead", path, forbidden)
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			path := dir + "/" + entry.Name()
+			content := MustRead(path)
+			if strings.Contains(content, forbidden) {
+				t.Errorf("%s contains banned pattern %q — use !`pwd` or !`basename \"$(pwd)\"` instead", path, forbidden)
+			}
 		}
 	}
 }
