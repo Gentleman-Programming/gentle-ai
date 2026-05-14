@@ -257,6 +257,27 @@ func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
 			}
 		})
 	}
+
+	// engram-protocol assets must not ship Spanish trigger examples that bias
+	// English sessions into Spanish replies (same mechanism as #341 / #350).
+	for _, path := range []string{
+		"claude/engram-protocol.md",
+	} {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+
+			for _, banned := range []string{
+				`"recordar"`,
+				`"listo"`,
+				`"acordate"`,
+				`"qué hicimos"`,
+			} {
+				if strings.Contains(content, banned) {
+					t.Fatalf("%s still contains Spanish trigger phrase %q that biases English sessions", path, banned)
+				}
+			}
+		})
+	}
 }
 
 // TestPersonasContainContextualSkillLoadingDirective verifies that every
