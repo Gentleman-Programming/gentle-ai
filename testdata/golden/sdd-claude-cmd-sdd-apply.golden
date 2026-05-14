@@ -8,8 +8,8 @@ Otherwise, read the skill file at `~/.claude/skills/sdd-apply/SKILL.md` FIRST, t
 The sdd-apply skill (v2.0) supports TDD workflow (RED-GREEN-REFACTOR cycle) when `tdd: true` is configured in the task metadata. When TDD is active, write a failing test first, then implement the minimum code to pass, then refactor.
 
 CONTEXT:
-- Working directory: !`echo -n "$(pwd)"`
-- Current project: !`echo -n "$(basename $(pwd))"`
+- Working directory: !`pwd`
+- Current project: !`basename "$(pwd)"`
 - Artifact store mode: engram
 
 TASK:
