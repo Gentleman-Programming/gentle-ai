@@ -633,7 +633,11 @@ func renderPhaseList(
 ) string {
 	var b strings.Builder
 
-	b.WriteString(styles.TitleStyle.Render("Assign Models to SDD Phases & JD Agents"))
+	title := "Assign Models to SDD Phases & JD Agents"
+	if state.ForProfile {
+		title = "Assign Models to SDD Phases"
+	}
+	b.WriteString(styles.TitleStyle.Render(title))
 	b.WriteString("\n\n")
 	if state.ConfigWarning != "" {
 		b.WriteString(styles.WarningStyle.Render(state.ConfigWarning))

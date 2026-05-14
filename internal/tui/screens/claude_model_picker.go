@@ -53,9 +53,9 @@ var claudePhases = []string{
 	"default",
 }
 
-// claudePhaseLabels are the human-readable labels for each SDD phase.
+// claudePhaseLabels are the human-readable labels for each configurable
+// agent phase (SDD phases, JD agents, and the general delegation row).
 var claudePhaseLabels = map[string]string{
-	"orchestrator": "Orchestrator",
 	"sdd-explore":  "Explore",
 	"sdd-propose":  "Propose",
 	"sdd-spec":     "Spec",
