@@ -9,6 +9,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
@@ -18,6 +19,7 @@ import (
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
+func kilocodeAdapter() agents.Adapter { return kilocode.NewAdapter() }
 func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 
@@ -68,9 +70,9 @@ func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
 
 	assertGentlemanLanguageGuardrails(t, text,
 		[]string{
-			"Match the user's current language.",
+			"Match the user's current language in your REPLY ONLY",
 			"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
-			"In English conversations, keep the full reply in natural English with the same warm energy.",
+			"When replying to the user in English, keep the full reply in natural English with the same warm energy.",
 		},
 		[]string{
 			`Say "déjame verificar"`,
@@ -120,9 +122,9 @@ func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testin
 	}
 	assertGentlemanLanguageGuardrails(t, string(styleContent),
 		[]string{
-			"Always match the user's current language.",
+			"Always match the user's current language in your reply.",
 			"Do not drift into another language because of persona wording, examples, or stylistic momentum.",
-			"If the conversation is in English, keep the full response in English unless the user explicitly asks for another language or you are translating/quoting.",
+			"When replying to the user in English, keep the full response in English unless the user explicitly asks for another language or you are translating/quoting.",
 		},
 		[]string{
 			"### Spanish Input → Rioplatense Spanish (voseo)",
@@ -139,9 +141,9 @@ func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testin
 	}
 	assertGentlemanLanguageGuardrails(t, string(personaContent),
 		[]string{
-			"Match the user's current language.",
+			"Match the user's current language in your REPLY ONLY",
 			"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
-			"In English conversations, keep the full reply in natural English with the same warm energy.",
+			"When replying to the user in English, keep the full reply in natural English with the same warm energy.",
 		},
 		[]string{
 			`Say "déjame verificar"`,
@@ -453,7 +455,7 @@ func TestInjectOpenClawWritesPersonaToWorkspaceSoulAndNotAgents(t *testing.T) {
 	if !strings.Contains(soulText, "Senior Architect") {
 		t.Fatalf("SOUL.md missing real persona content; got:\n%s", soulText)
 	}
-	if !strings.Contains(soulText, "Match the user's current language.") {
+	if !strings.Contains(soulText, "Match the user's current language in your REPLY ONLY") {
 		t.Fatalf("SOUL.md missing persona language guardrail; got:\n%s", soulText)
 	}
 
@@ -1005,9 +1007,9 @@ func TestInjectGeminiGentlemanWritesSystemPromptWithRealContent(t *testing.T) {
 	}
 	assertGentlemanLanguageGuardrails(t, text,
 		[]string{
-			"Match the user's current language.",
+			"Match the user's current language in your REPLY ONLY",
 			"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
-			"In English conversations, keep the full reply in natural English with the same warm energy.",
+			"When replying to the user in English, keep the full reply in natural English with the same warm energy.",
 		},
 		[]string{
 			`Say "déjame verificar"`,
@@ -1354,5 +1356,395 @@ func TestInjectVSCodeIdempotentAfterHeal(t *testing.T) {
 	}
 	if second.Changed {
 		t.Fatalf("second inject should be idempotent (changed = false), but changed = true")
+	}
+}
+
+func TestInjectClaude_SwitchGentlemanToNeutral_CleansOutputStyle(t *testing.T) {
+	home := t.TempDir()
+
+	// Step 1: install gentleman — creates output-styles/gentleman.md and sets outputStyle in settings.json.
+	_, err := Inject(home, claudeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	stylePath := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
+	if _, statErr := os.Stat(stylePath); os.IsNotExist(statErr) {
+		t.Fatal("precondition: gentleman.md must exist after gentleman install")
+	}
+
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	settingsRaw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("precondition: settings.json must exist after gentleman install: %v", err)
+	}
+	var settingsBefore map[string]any
+	if err := json.Unmarshal(settingsRaw, &settingsBefore); err != nil {
+		t.Fatalf("precondition: unmarshal settings.json: %v", err)
+	}
+	if settingsBefore["outputStyle"] != "Gentleman" {
+		t.Fatalf("precondition: outputStyle must be 'Gentleman', got %v", settingsBefore["outputStyle"])
+	}
+
+	// Step 2: switch to neutral — should clean both residuals.
+	result, err := Inject(home, claudeAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(neutral) should report changed when cleaning gentleman residuals")
+	}
+
+	// output-styles/gentleman.md must be gone.
+	if _, statErr := os.Stat(stylePath); !os.IsNotExist(statErr) {
+		t.Fatal("gentleman.md must be removed when switching to neutral")
+	}
+
+	// outputStyle key must be absent from settings.json.
+	settingsRaw, err = os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings.json) after neutral: %v", err)
+	}
+	var settingsAfter map[string]any
+	if err := json.Unmarshal(settingsRaw, &settingsAfter); err != nil {
+		t.Fatalf("Unmarshal settings.json after neutral: %v", err)
+	}
+	if _, ok := settingsAfter["outputStyle"]; ok {
+		t.Fatalf("outputStyle key must be removed from settings.json after switching to neutral, got %v", settingsAfter["outputStyle"])
+	}
+}
+
+func TestInjectClaude_Neutral_PreservesUserOutputStyle(t *testing.T) {
+	home := t.TempDir()
+
+	// Pre-create settings.json with a user-defined outputStyle that is NOT "Gentleman".
+	settingsDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	userSettings := `{"outputStyle": "MyCustom", "syntaxHighlightingDisabled": true}`
+	settingsPath := filepath.Join(settingsDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(userSettings), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, claudeAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) error = %v", err)
+	}
+
+	settingsRaw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings.json) error = %v", err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(settingsRaw, &settings); err != nil {
+		t.Fatalf("Unmarshal settings.json error = %v", err)
+	}
+
+	// User's custom outputStyle must be preserved.
+	if settings["outputStyle"] != "MyCustom" {
+		t.Fatalf("user outputStyle 'MyCustom' was modified: got %v", settings["outputStyle"])
+	}
+	// Other user keys must also survive.
+	if settings["syntaxHighlightingDisabled"] != true {
+		t.Fatal("syntaxHighlightingDisabled was lost")
+	}
+}
+
+func TestInjectClaude_SwitchGentlemanToNeutral_IsIdempotent(t *testing.T) {
+	home := t.TempDir()
+
+	// Install gentleman, then switch to neutral twice — second switch must be a no-op.
+	_, err := Inject(home, claudeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	first, err := Inject(home, claudeAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("first neutral inject after gentleman should report changed")
+	}
+
+	second, err := Inject(home, claudeAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second neutral inject should be idempotent (no residuals to clean)")
+	}
+}
+
+func TestInjectOpenCode_SwitchGentlemanToNeutral_CleansAgentOverlay(t *testing.T) {
+	home := t.TempDir()
+
+	// Step 1: install gentleman — agent.gentleman key must appear in opencode.json.
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	settingsRaw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("precondition: opencode.json must exist after gentleman install: %v", err)
+	}
+	var before map[string]any
+	if err := json.Unmarshal(settingsRaw, &before); err != nil {
+		t.Fatalf("precondition: unmarshal opencode.json: %v", err)
+	}
+	agentBefore, ok := before["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("precondition: 'agent' key must be present after gentleman install")
+	}
+	if _, ok := agentBefore["gentleman"]; !ok {
+		t.Fatal("precondition: agent.gentleman must be present after gentleman install")
+	}
+
+	// Pre-populate a user-defined agent to verify it survives the cleanup.
+	agentBefore["my-custom-agent"] = map[string]any{"mode": "secondary"}
+	before["agent"] = agentBefore
+	before["someUserKey"] = "preserved"
+	encoded, _ := json.MarshalIndent(before, "", "  ")
+	if err := os.WriteFile(settingsPath, append(encoded, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() setup error = %v", err)
+	}
+
+	// Step 2: switch to neutral — agent.gentleman must be removed.
+	result, err := Inject(home, opencodeAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(neutral) should report changed when cleaning agent.gentleman residual")
+	}
+
+	settingsRaw, err = os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) after neutral: %v", err)
+	}
+	var after map[string]any
+	if err := json.Unmarshal(settingsRaw, &after); err != nil {
+		t.Fatalf("Unmarshal opencode.json after neutral: %v", err)
+	}
+
+	// agent.gentleman must be gone.
+	if agentAfter, ok := after["agent"].(map[string]any); ok {
+		if _, stillPresent := agentAfter["gentleman"]; stillPresent {
+			t.Fatal("agent.gentleman must be removed from opencode.json after switching to neutral")
+		}
+		// User-defined agent must survive.
+		if _, ok := agentAfter["my-custom-agent"]; !ok {
+			t.Fatal("user-defined agent 'my-custom-agent' was removed — only agent.gentleman should be cleaned")
+		}
+	}
+
+	// Other top-level user keys must survive.
+	if after["someUserKey"] != "preserved" {
+		t.Fatalf("user key 'someUserKey' was lost: got %v", after["someUserKey"])
+	}
+}
+
+func TestInjectKilocode_SwitchGentlemanToNeutral_CleansAgentOverlay(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := Inject(home, kilocodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".config", "kilo", "opencode.json")
+	data, _ := os.ReadFile(settingsPath)
+	if !strings.Contains(string(data), `"gentleman"`) {
+		t.Fatal("precondition: kilo/opencode.json should have gentleman agent after Gentleman install")
+	}
+
+	result, err := Inject(home, kilocodeAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(neutral) should report changed when cleaning up gentleman agent overlay")
+	}
+
+	data, err = os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile kilo/opencode.json error = %v", err)
+	}
+	if strings.Contains(string(data), `"gentleman"`) {
+		t.Fatal("kilo/opencode.json must not have gentleman agent key after switching to Neutral")
+	}
+}
+
+func TestInjectOpenCode_NeutralFresh_IsNoOp(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) on fresh install error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if _, statErr := os.Stat(settingsPath); !os.IsNotExist(statErr) {
+		data, _ := os.ReadFile(settingsPath)
+		if strings.Contains(string(data), `"gentleman"`) {
+			t.Fatal("Neutral fresh install must not create gentleman agent key")
+		}
+	}
+}
+
+func TestInjectOpenCode_GentlemanOnly_WritesAgentOverlay(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	if !strings.Contains(string(data), `"gentleman"`) {
+		t.Fatal("Gentleman install must write gentleman agent overlay in opencode.json")
+	}
+}
+
+func TestInjectOpenCode_MalformedJSON_DoesNotPanic(t *testing.T) {
+	home := t.TempDir()
+
+	settingsDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	malformed := `{ "agent": { "gentleman": {invalid json`
+	if err := os.WriteFile(filepath.Join(settingsDir, "opencode.json"), []byte(malformed), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) with malformed JSON must not error, got: %v", err)
+	}
+}
+
+func TestInjectClaude_MalformedJSON_DoesNotPanic(t *testing.T) {
+	home := t.TempDir()
+
+	settingsDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	malformed := `{ "outputStyle": "Gentleman", invalid`
+	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(malformed), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, claudeAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) with malformed settings.json must not error, got: %v", err)
+	}
+}
+
+func TestInjectKimi_SwitchGentlemanToNeutral_NoResidualPersonaContent(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, kimiAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	if _, err := Inject(home, kimiAdapter(), model.PersonaNeutral); err != nil {
+		t.Fatalf("Inject(neutral) error = %v", err)
+	}
+
+	outputStylePath := filepath.Join(home, ".kimi", "output-style.md")
+	data, err := os.ReadFile(outputStylePath)
+	if err != nil {
+		t.Fatalf("ReadFile(output-style.md) error = %v", err)
+	}
+	content := string(data)
+
+	if len(strings.TrimSpace(content)) != 0 {
+		t.Errorf("output-style.md should be empty after switching to neutral; got %d bytes:\n%s", len(content), content)
+	}
+	if strings.Contains(content, "Rioplatense") {
+		t.Error("output-style.md still contains 'Rioplatense' after switching to neutral")
+	}
+	if strings.Contains(content, "Gentleman Output Style") {
+		t.Error("output-style.md still contains 'Gentleman Output Style' after switching to neutral")
+	}
+	if strings.Contains(content, "voseo") {
+		t.Error("output-style.md still contains 'voseo' after switching to neutral")
+	}
+}
+
+func TestInjectForSync_OpenCodeNeutral_DoesNotCleanAgentGentleman(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, opencodeAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	before, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) after install error = %v", err)
+	}
+	if !strings.Contains(string(before), `"gentleman"`) {
+		t.Fatalf("opencode.json missing gentleman agent after install; got:\n%s", string(before))
+	}
+
+	if _, err := InjectForSync(home, opencodeAdapter(), model.PersonaNeutral); err != nil {
+		t.Fatalf("InjectForSync(neutral) error = %v", err)
+	}
+
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) after sync error = %v", err)
+	}
+	if !strings.Contains(string(after), `"gentleman"`) {
+		t.Fatalf("opencode.json lost gentleman agent after InjectForSync(neutral) — this is by-design and must not regress;\ngot:\n%s", string(after))
+	}
+}
+
+func TestInjectForSync_ClaudeGentlemanToNeutral_CleansOutputStyle(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, claudeAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	stylePath := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
+	if _, err := os.Stat(stylePath); os.IsNotExist(err) {
+		t.Fatal("gentleman.md not written by Inject(gentleman) — precondition failed")
+	}
+
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings.json) error = %v", err)
+	}
+	if !strings.Contains(string(raw), `"outputStyle"`) {
+		t.Fatal("settings.json missing outputStyle after install — precondition failed")
+	}
+
+	if _, err := InjectForSync(home, claudeAdapter(), model.PersonaNeutral); err != nil {
+		t.Fatalf("InjectForSync(neutral) error = %v", err)
+	}
+
+	if _, err := os.Stat(stylePath); !os.IsNotExist(err) {
+		t.Fatal("gentleman.md still present after InjectForSync(neutral) — residue not cleaned")
+	}
+
+	afterRaw, err := os.ReadFile(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ReadFile(settings.json) after sync error = %v", err)
+	}
+	if strings.Contains(string(afterRaw), `"outputStyle"`) {
+		t.Fatal("settings.json still has outputStyle key after InjectForSync(neutral) — residue not cleaned")
 	}
 }

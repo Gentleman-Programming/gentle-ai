@@ -260,9 +260,9 @@ func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
 			}
 
 			for _, required := range []string{
-				"Match the user's current language.",
+				"Match the user's current language in your REPLY ONLY",
 				"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
-				"In English conversations, keep the full reply in natural English with the same warm energy.",
+				"When replying to the user in English, keep the full reply in natural English with the same warm energy.",
 			} {
 				if !strings.Contains(content, required) {
 					t.Fatalf("%s missing language guardrail %q", path, required)
@@ -289,9 +289,9 @@ func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
 			}
 
 			for _, required := range []string{
-				"Always match the user's current language.",
+				"Always match the user's current language",
 				"Do not drift into another language because of persona wording, examples, or stylistic momentum.",
-				"If the conversation is in English, keep the full response in English unless the user explicitly asks for another language or you are translating/quoting.",
+				"keep the full response in English unless the user explicitly asks for another language or you are translating/quoting",
 			} {
 				if !strings.Contains(content, required) {
 					t.Fatalf("%s missing output-style guardrail %q", path, required)

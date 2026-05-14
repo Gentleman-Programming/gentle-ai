@@ -1,6 +1,7 @@
 package persona
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -318,12 +319,26 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 	if !syncManaged && (adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode) && persona != model.PersonaCustom {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
-			agentResult, err := mergeJSONFile(settingsPath, openCodeAgentOverlayJSON)
-			if err != nil {
-				return InjectionResult{}, err
+			if persona == model.PersonaGentleman {
+				agentResult, err := mergeJSONFile(settingsPath, openCodeAgentOverlayJSON)
+				if err != nil {
+					return InjectionResult{}, err
+				}
+				changed = changed || agentResult.Changed
+				files = append(files, settingsPath)
+			} else {
+				// Non-gentleman: remove any residual agent.gentleman key left by a
+				// previous gentleman install. Only the "gentleman" sub-key is removed
+				// from within "agent" — other user-defined agents are preserved.
+				removed, err := removeJSONNestedSubKey(settingsPath, "agent", "gentleman")
+				if err != nil {
+					return InjectionResult{}, fmt.Errorf("clean agent.gentleman from settings: %w", err)
+				}
+				if removed {
+					changed = true
+					files = append(files, settingsPath)
+				}
 			}
-			changed = changed || agentResult.Changed
-			files = append(files, settingsPath)
 		}
 	}
 
@@ -351,6 +366,35 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 			}
 			changed = changed || settingsResult.Changed
 			files = append(files, settingsPath)
+		}
+	}
+
+	// 3b. Non-gentleman cleanup: remove residual Gentleman output-style artifacts
+	// left by a previous install when the user switches away from the gentleman persona.
+	if persona != model.PersonaGentleman && adapter.Agent() != model.AgentOpenClaw && adapter.SupportsOutputStyles() {
+		outputStyleDir := adapter.OutputStyleDir(homeDir)
+		if outputStyleDir != "" {
+			outputStylePath := outputStyleDir + "/gentleman.md"
+			styleRemoved, err := removeFileAtomic(outputStylePath)
+			if err != nil {
+				return InjectionResult{}, fmt.Errorf("remove gentleman output style: %w", err)
+			}
+			if styleRemoved {
+				changed = true
+				files = append(files, outputStylePath)
+			}
+		}
+
+		settingsPath := adapter.SettingsPath(homeDir)
+		if settingsPath != "" {
+			removed, err := removeJSONKeyIfValue(settingsPath, "outputStyle", "Gentleman")
+			if err != nil {
+				return InjectionResult{}, fmt.Errorf("clean outputStyle from settings: %w", err)
+			}
+			if removed {
+				changed = true
+				files = append(files, settingsPath)
+			}
 		}
 	}
 
@@ -562,6 +606,112 @@ func legacyVSCodePersonaPaths(homeDir string) []string {
 		// v1 path: wrote raw persona to ~/.github/copilot-instructions.md
 		filepath.Join(homeDir, ".github", "copilot-instructions.md"),
 	}
+}
+
+// removeFileAtomic removes path if it exists. Returns true when the file was
+// present and successfully deleted, false when it did not exist. Any other
+// OS-level error is returned as-is.
+func removeFileAtomic(path string) (bool, error) {
+	err := os.Remove(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+// removeJSONKeyIfValue reads the JSON object at path, removes the top-level key
+// only when its current string value equals wantValue, and writes the result
+// back atomically. Returns true when the key was actually removed.
+// If the file does not exist, the key is absent, or the value differs, it is
+// a no-op and returns false.
+func removeJSONKeyIfValue(path, key, wantValue string) (bool, error) {
+	raw, err := osReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	if len(raw) == 0 {
+		return false, nil
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(raw, &root); err != nil {
+		// Malformed settings — leave untouched to avoid data loss.
+		return false, nil
+	}
+
+	current, ok := root[key]
+	if !ok {
+		return false, nil
+	}
+	if current != wantValue {
+		// User has a different value — do not touch it.
+		return false, nil
+	}
+
+	delete(root, key)
+
+	encoded, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("marshal settings after cleanup: %w", err)
+	}
+	encoded = append(encoded, '\n')
+
+	if _, err := filemerge.WriteFileAtomic(path, encoded, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// removeJSONNestedSubKey reads the JSON object at path and removes subKey from
+// within the top-level parentKey object. Only the named subKey is deleted —
+// sibling keys inside parentKey are preserved. If the file does not exist, the
+// parentKey is absent, or subKey is not present, it is a no-op and returns false.
+func removeJSONNestedSubKey(path, parentKey, subKey string) (bool, error) {
+	raw, err := osReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	if len(raw) == 0 {
+		return false, nil
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return false, nil
+	}
+
+	parent, ok := root[parentKey]
+	if !ok {
+		return false, nil
+	}
+	parentMap, ok := parent.(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	if _, exists := parentMap[subKey]; !exists {
+		return false, nil
+	}
+
+	delete(parentMap, subKey)
+	if len(parentMap) == 0 {
+		delete(root, parentKey)
+	} else {
+		root[parentKey] = parentMap
+	}
+
+	encoded, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("marshal settings after cleanup: %w", err)
+	}
+	encoded = append(encoded, '\n')
+
+	if _, err := filemerge.WriteFileAtomic(path, encoded, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // cleanLegacyVSCodePersona removes Gentleman persona content from any old VS Code
