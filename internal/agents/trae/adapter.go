@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -17,10 +18,14 @@ type statResult struct {
 // Adapter implements agents.Adapter for Trae IDE (by ByteDance).
 //
 // Config path summary:
-//   - All config lives under ~/.trae/ (cross-platform, no OS-specific split):
-//     → mcp.json               MCP server configs
-//     → user_rules/gentle-ai.md  System prompt (StrategyMarkdownSections)
+//   - Detection / skills: ~/.trae/ (cross-platform, always under home)
 //     → skills/                Skill files
+//   - Rules / MCP: OS-specific Trae User config dir
+//     macOS:   ~/Library/Application Support/Trae/User/
+//     Linux:   ~/.config/Trae/User/   (respects XDG_CONFIG_HOME)
+//     Windows: %APPDATA%\Trae\User\
+//     → user_rules.md          Personal rules (StrategyMarkdownSections)
+//     → mcp.json               MCP server configs
 //
 // Detection: Trae is a desktop app. If ~/.trae exists as a directory, it's installed.
 // No binary appears on PATH.
@@ -69,14 +74,16 @@ func (a *Adapter) GlobalConfigDir(homeDir string) string {
 	return filepath.Join(homeDir, ".trae")
 }
 
-// SystemPromptDir returns the directory for user-level rules.
+// SystemPromptDir returns the OS-specific Trae User config directory,
+// which is where user_rules.md lives.
 func (a *Adapter) SystemPromptDir(homeDir string) string {
-	return filepath.Join(a.GlobalConfigDir(homeDir), "user_rules")
+	return a.traeUserDir(homeDir)
 }
 
-// SystemPromptFile returns the file where gentle-ai injects its system prompt sections.
+// SystemPromptFile returns the personal rules file that Trae reads.
+// gentle-ai injects its sections via StrategyMarkdownSections markers.
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(a.SystemPromptDir(homeDir), "gentle-ai.md")
+	return filepath.Join(a.traeUserDir(homeDir), "user_rules.md")
 }
 
 // SkillsDir returns the skills directory for Trae.
@@ -84,8 +91,10 @@ func (a *Adapter) SkillsDir(homeDir string) string {
 	return filepath.Join(a.GlobalConfigDir(homeDir), "skills")
 }
 
-// SettingsPath returns an empty string — Trae has no OS-specific settings.json.
-func (a *Adapter) SettingsPath(_ string) string { return "" }
+// SettingsPath returns the platform-specific editor settings.json.
+func (a *Adapter) SettingsPath(homeDir string) string {
+	return filepath.Join(a.traeUserDir(homeDir), "settings.json")
+}
 
 // --- Config strategies ---
 
@@ -102,9 +111,30 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 // --- MCP ---
 
 // MCPConfigPath returns the MCP servers config file.
-// Trae uses ~/.trae/mcp.json across all platforms.
+// Trae uses {traeUserDir}/mcp.json — same format as Cursor (mcpServers object).
 func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
-	return filepath.Join(a.GlobalConfigDir(homeDir), "mcp.json")
+	return filepath.Join(a.traeUserDir(homeDir), "mcp.json")
+}
+
+// traeUserDir returns the OS-specific Trae User config directory.
+// Trae follows VS Code conventions substituting "Trae" for "Code".
+func (a *Adapter) traeUserDir(homeDir string) string {
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(homeDir, "Library", "Application Support", "Trae", "User")
+	case "windows":
+		appData := os.Getenv("APPDATA")
+		if appData == "" {
+			appData = filepath.Join(homeDir, "AppData", "Roaming")
+		}
+		return filepath.Join(appData, "Trae", "User")
+	default: // linux and others
+		xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
+		if xdgConfigHome == "" {
+			xdgConfigHome = filepath.Join(homeDir, ".config")
+		}
+		return filepath.Join(xdgConfigHome, "Trae", "User")
+	}
 }
 
 // --- Optional capabilities ---

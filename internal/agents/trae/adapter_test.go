@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -84,28 +85,91 @@ func TestConfigPathsCrossPlatform(t *testing.T) {
 		t.Fatalf("GlobalConfigDir() = %q, want %q", got, wantGlobal)
 	}
 
-	wantPromptDir := filepath.Join(home, ".trae", "user_rules")
-	if got := a.SystemPromptDir(home); got != wantPromptDir {
-		t.Fatalf("SystemPromptDir() = %q, want %q", got, wantPromptDir)
-	}
-
-	wantPromptFile := filepath.Join(home, ".trae", "user_rules", "gentle-ai.md")
-	if got := a.SystemPromptFile(home); got != wantPromptFile {
-		t.Fatalf("SystemPromptFile() = %q, want %q", got, wantPromptFile)
-	}
-
 	wantSkills := filepath.Join(home, ".trae", "skills")
 	if got := a.SkillsDir(home); got != wantSkills {
 		t.Fatalf("SkillsDir() = %q, want %q", got, wantSkills)
 	}
+}
 
-	wantMCP := filepath.Join(home, ".trae", "mcp.json")
-	if got := a.MCPConfigPath(home, "context7"); got != wantMCP {
-		t.Fatalf("MCPConfigPath() = %q, want %q", got, wantMCP)
+func TestOSSpecificPaths(t *testing.T) {
+	a := NewAdapter()
+	home := testHome
+
+	tests := []struct {
+		name    string
+		goos    string
+		envVars map[string]string
+		wantDir string
+	}{
+		{
+			name:    "macOS",
+			goos:    "darwin",
+			envVars: map[string]string{},
+			wantDir: filepath.Join(home, "Library", "Application Support", "Trae", "User"),
+		},
+		{
+			name:    "Linux default XDG",
+			goos:    "linux",
+			envVars: map[string]string{},
+			wantDir: filepath.Join(home, ".config", "Trae", "User"),
+		},
+		{
+			name:    "Linux custom XDG",
+			goos:    "linux",
+			envVars: map[string]string{"XDG_CONFIG_HOME": "/custom/config"},
+			wantDir: "/custom/config/Trae/User",
+		},
+		{
+			name:    "Windows default APPDATA",
+			goos:    "windows",
+			envVars: map[string]string{},
+			wantDir: filepath.Join(home, "AppData", "Roaming", "Trae", "User"),
+		},
+		{
+			name:    "Windows custom APPDATA",
+			goos:    "windows",
+			envVars: map[string]string{"APPDATA": "C:\\CustomAppData"},
+			wantDir: "C:\\CustomAppData\\Trae\\User",
+		},
 	}
 
-	if got := a.SettingsPath(home); got != "" {
-		t.Fatalf("SettingsPath() = %q, want empty string", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if runtime.GOOS != tt.goos {
+				t.Skipf("Skipping %s test on %s", tt.goos, runtime.GOOS)
+			}
+			for k, v := range tt.envVars {
+				if v != "" {
+					t.Setenv(k, v)
+				}
+			}
+			if _, ok := tt.envVars["XDG_CONFIG_HOME"]; !ok && runtime.GOOS == "linux" {
+				t.Setenv("XDG_CONFIG_HOME", "")
+			}
+			if _, ok := tt.envVars["APPDATA"]; !ok && runtime.GOOS == "windows" {
+				t.Setenv("APPDATA", "")
+			}
+
+			gotDir := a.SystemPromptDir(home)
+			if gotDir != tt.wantDir {
+				t.Fatalf("SystemPromptDir() = %q, want %q", gotDir, tt.wantDir)
+			}
+			gotFile := a.SystemPromptFile(home)
+			wantFile := filepath.Join(tt.wantDir, "user_rules.md")
+			if gotFile != wantFile {
+				t.Fatalf("SystemPromptFile() = %q, want %q", gotFile, wantFile)
+			}
+			gotMCP := a.MCPConfigPath(home, "")
+			wantMCP := filepath.Join(tt.wantDir, "mcp.json")
+			if gotMCP != wantMCP {
+				t.Fatalf("MCPConfigPath() = %q, want %q", gotMCP, wantMCP)
+			}
+			gotSettings := a.SettingsPath(home)
+			wantSettings := filepath.Join(tt.wantDir, "settings.json")
+			if gotSettings != wantSettings {
+				t.Fatalf("SettingsPath() = %q, want %q", gotSettings, wantSettings)
+			}
+		})
 	}
 }
 
@@ -182,12 +246,11 @@ func TestMCPConfigPathIgnoresServerName(t *testing.T) {
 
 	got1 := a.MCPConfigPath(home, "")
 	got2 := a.MCPConfigPath(home, "some-server")
-	want := filepath.Join(home, ".trae", "mcp.json")
 
-	if got1 != want {
-		t.Fatalf("MCPConfigPath(home, \"\") = %q, want %q", got1, want)
+	if got1 != got2 {
+		t.Fatalf("MCPConfigPath() should return same path regardless of server name: %q vs %q", got1, got2)
 	}
-	if got2 != want {
-		t.Fatalf("MCPConfigPath(home, \"some-server\") = %q, want %q", got2, want)
+	if filepath.Base(got1) != "mcp.json" {
+		t.Fatalf("MCPConfigPath() filename = %q, want mcp.json", filepath.Base(got1))
 	}
 }
