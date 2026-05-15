@@ -436,9 +436,6 @@ type Model struct {
 	// at startup. Controls whether "Manage Engram directory" appears on Welcome.
 	EngramDetected bool
 
-	// EngramSpaceErr is shown when a copy/move destination does not pass disk-space checks.
-	EngramSpaceErr string
-
 	// EngramDataDirFn executes a data-directory operation. Injected at startup
 	// to avoid an import of the engram package into app.go while still keeping
 	// model.go free of filesystem knowledge.
@@ -458,11 +455,18 @@ type Model struct {
 	engramDirCustomPath string
 	engramDirCustomPos  int
 
-	installEngramGateResolved bool
-	installFlowEngramActive   bool
-
 	// engramDirDoneMsg holds the result of the last data-dir operation.
 	engramDirDoneMsg *EngramDataDirDoneMsg
+
+	// installEngramGateResolved is set after the install wizard Engram prompt is completed.
+	installEngramGateResolved bool
+
+	// installFlowEngramActive means the install wizard showed ScreenEngramDataDirInstall;
+	// result navigation continues to ScreenDependencyTree instead of management.
+	installFlowEngramActive bool
+
+	// EngramSpaceErr is a non-fatal copy/move preflight message (disk space).
+	EngramSpaceErr string
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -962,8 +966,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				} else if m.shouldShowStrictTDDScreen() {
 					m.setScreen(ScreenStrictTDD)
 				} else {
-					m.buildDependencyPlan()
-					m.setScreen(ScreenDependencyTree)
+					m.proceedToDependencyTreeFromInstallFlow()
 				}
 			}
 			return m, nil
@@ -1003,8 +1006,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				} else if m.shouldShowStrictTDDScreen() {
 					m.setScreen(ScreenStrictTDD)
 				} else {
-					m.buildDependencyPlan()
-					m.setScreen(ScreenDependencyTree)
+					m.proceedToDependencyTreeFromInstallFlow()
 				}
 			}
 			return m, nil
@@ -1021,6 +1023,9 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.AgentBuilder.PreviewScroll--
 			}
 			return m, nil
+		}
+		if m.Screen == ScreenEngramDataDir {
+			m.EngramSpaceErr = ""
 		}
 		count := m.optionCount()
 		if count > 0 {
@@ -1044,6 +1049,9 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.AgentBuilder.PreviewScroll++
 			return m, nil
 		}
+		if m.Screen == ScreenEngramDataDir {
+			m.EngramSpaceErr = ""
+		}
 		count := m.optionCount()
 		if m.Cursor+1 < count {
 			m.Cursor++
@@ -1059,6 +1067,9 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "k":
+		if m.Screen == ScreenEngramDataDir {
+			m.EngramSpaceErr = ""
+		}
 		count := m.optionCount()
 		if count > 0 {
 			if m.Cursor > 0 {
@@ -1076,6 +1087,9 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "j":
+		if m.Screen == ScreenEngramDataDir {
+			m.EngramSpaceErr = ""
+		}
 		count := m.optionCount()
 		if m.Cursor+1 < count {
 			m.Cursor++
@@ -1596,8 +1610,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenOpenCodePlugins)
 				return m, nil
 			}
-			m.buildDependencyPlan()
-			m.setScreen(ScreenDependencyTree)
+			m.proceedToDependencyTreeFromInstallFlow()
 			return m, nil
 		}
 		m.setScreen(ScreenPersona)
@@ -1673,8 +1686,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.setScreen(ScreenReview)
 				}
 			} else {
-				m.buildDependencyPlan()
-				m.setScreen(ScreenDependencyTree)
+				m.proceedToDependencyTreeFromInstallFlow()
 			}
 			return m, nil
 		}
@@ -1749,8 +1761,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				if m.shouldShowStrictTDDScreen() {
 					m.setScreen(ScreenStrictTDD)
 				} else {
-					m.buildDependencyPlan()
-					m.setScreen(ScreenDependencyTree)
+					m.proceedToDependencyTreeFromInstallFlow()
 				}
 			}
 			return m, nil
@@ -1786,8 +1797,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.setScreen(ScreenReview)
 				}
 			} else {
-				m.buildDependencyPlan()
-				m.setScreen(ScreenDependencyTree)
+				m.proceedToDependencyTreeFromInstallFlow()
 			}
 			return m, nil
 		}
@@ -2152,6 +2162,17 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 
 	case ScreenEngramDataDirResult:
+		if m.installFlowEngramActive {
+			m.installFlowEngramActive = false
+			if m.engramDirDoneMsg != nil && m.engramDirDoneMsg.Err != nil {
+				m.Cursor = 1
+				m.setScreen(ScreenEngramDataDirInstall)
+				return m, nil
+			}
+			m.installEngramGateResolved = true
+			m.setScreen(ScreenDependencyTree)
+			return m, nil
+		}
 		// Any key returns to the management screen.
 		m.engramDirOp = model.EngramDataDirOpNone
 		m.engramDirDstIdx = -1
@@ -2946,7 +2967,9 @@ func (m Model) optionCount() int {
 }
 
 func isHomebrewManagedBinary(execPath string) bool {
-	path := filepath.Clean(execPath)
+	// Use slash-normalized path so Unix-style Homebrew prefixes match on Windows
+	// (filepath.Clean turns "/opt/..." into "\\opt\\..." on Windows).
+	path := filepath.ToSlash(filepath.Clean(execPath))
 	if strings.Contains(path, "/Cellar/") {
 		return true
 	}
@@ -3156,9 +3179,9 @@ func (m Model) continueAfterOpenCodePlugins() Model {
 		}
 		return m
 	}
-	m.buildDependencyPlan()
-	m.setScreen(ScreenDependencyTree)
-	return m
+	mm := m
+	(&mm).proceedToDependencyTreeFromInstallFlow()
+	return mm
 }
 
 func (m Model) goBackFromOpenCodePlugins() Model {
@@ -3610,12 +3633,18 @@ func (m Model) handleProfileNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleEngramCustomPathInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEnter:
-		if resolveEngramCustomPath(m.HomeDir, m.engramDirCustomPath) == "" {
+		dst := resolveEngramCustomPath(m.HomeDir, m.engramDirCustomPath)
+		if dst == "" {
+			m.EngramSpaceErr = "Enter a destination path."
+			return m, nil
+		}
+		if !m.checkEngramCopyMoveDiskSpacePath(dst) {
 			return m, nil
 		}
 		m.setScreen(ScreenEngramDataDirConfirm)
 		return m, nil
 	case tea.KeyEsc:
+		m.EngramSpaceErr = ""
 		m.setScreen(ScreenEngramDataDir)
 		return m, nil
 	case tea.KeyBackspace:
@@ -3623,6 +3652,7 @@ func (m Model) handleEngramCustomPathInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 			runes := []rune(m.engramDirCustomPath)
 			m.engramDirCustomPath = string(append(runes[:m.engramDirCustomPos-1], runes[m.engramDirCustomPos:]...))
 			m.engramDirCustomPos--
+			m.EngramSpaceErr = ""
 		}
 		return m, nil
 	case tea.KeyLeft:
@@ -3643,6 +3673,7 @@ func (m Model) handleEngramCustomPathInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 		newRunes = append(newRunes, runes[m.engramDirCustomPos:]...)
 		m.engramDirCustomPath = string(newRunes)
 		m.engramDirCustomPos += len(msg.Runes)
+		m.EngramSpaceErr = ""
 		return m, nil
 	}
 	return m, nil
