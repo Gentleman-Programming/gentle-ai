@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui"
+	"github.com/mattn/go-isatty"
 )
 
 func TestInstallDefaultsMatchTUIModelDefaults(t *testing.T) {
@@ -161,6 +163,9 @@ func TestGuardFlowLinuxDryRunPropagatesDecision(t *testing.T) {
 }
 
 func TestRunArgsNoCommandLaunchesTUI(t *testing.T) {
+	if !isatty.IsTerminal(os.Stdin.Fd()) {
+		t.Skip("stdin is not a TTY; RunArgs(nil) blocks in bubbletea until quit")
+	}
 	var buf bytes.Buffer
 	err := RunArgs(nil, &buf)
 	// With no args, RunArgs now launches the TUI via Bubbletea.

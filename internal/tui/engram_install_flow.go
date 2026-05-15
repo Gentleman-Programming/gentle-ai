@@ -28,11 +28,18 @@ func (m *Model) proceedToDependencyTreeFromInstallFlow() {
 // checkEngramCopyMoveDiskSpace sets m.EngramSpaceErr when the destination volume
 // lacks space for a copy/move; returns false if the operation should not proceed to confirm.
 func (m *Model) checkEngramCopyMoveDiskSpace(dstIdx int) bool {
-	m.EngramSpaceErr = ""
 	if dstIdx < 0 || dstIdx >= len(m.engramDirLocations) {
+		m.EngramSpaceErr = ""
 		return true
 	}
-	dstPath := m.engramDirLocations[dstIdx].Path
+	return m.checkEngramCopyMoveDiskSpacePath(m.engramDirLocations[dstIdx].Path)
+}
+
+func (m *Model) checkEngramCopyMoveDiskSpacePath(dstPath string) bool {
+	m.EngramSpaceErr = ""
+	if dstPath == "" {
+		return true
+	}
 	ok, needed, avail, err := engram.DiskSpaceOKForDataDir(m.resolvedEngramDir(), dstPath)
 	if err != nil {
 		m.EngramSpaceErr = err.Error()
