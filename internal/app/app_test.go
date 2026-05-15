@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -676,11 +675,12 @@ func TestIsExplicitUpdateFlow(t *testing.T) {
 	}
 }
 
+
 func TestBuildEngramDataDirFn_CopyKeepsStateAndSource(t *testing.T) {
 	home := t.TempDir()
 	src := filepath.Join(home, "src-engram")
 	dst := filepath.Join(home, "dst-engram")
-	writeFakeEngramArtifacts(t, src)
+	writeFakeDataDirContent(t, src)
 	if err := state.Write(home, state.InstallState{EngramDataDir: src}); err != nil {
 		t.Fatal(err)
 	}
@@ -692,30 +692,52 @@ func TestBuildEngramDataDirFn_CopyKeepsStateAndSource(t *testing.T) {
 	if snapshotID == "" {
 		t.Fatal("copy op should return a backup snapshot ID")
 	}
-	assertEngramArtifactsExist(t, src)
-	assertEngramArtifactsExist(t, dst)
+	assertDataDirHasFiles(t, src)
+	assertDataDirHasFiles(t, dst)
 	assertEngramStateDir(t, home, src)
+	assertEngramKnownDir(t, home, dst)
 }
 
 func TestBuildEngramDataDirFn_MoveUpdatesStateAndRemovesSource(t *testing.T) {
 	home := t.TempDir()
 	src := filepath.Join(home, "src-engram")
 	dst := filepath.Join(home, "dst-engram")
-	writeFakeEngramArtifacts(t, src)
+	writeFakeDataDirContent(t, src)
 
 	if _, err := buildEngramDataDirFn(home)(model.EngramDataDirOpMove, src, dst); err != nil {
 		t.Fatalf("move op: %v", err)
 	}
 
-	assertEngramArtifactsMissing(t, src)
-	assertEngramArtifactsExist(t, dst)
+	assertDataDirEmpty(t, src)
+	assertDataDirHasFiles(t, dst)
 	assertEngramStateDir(t, home, dst)
+	assertEngramKnownDir(t, home, dst)
 }
 
-func TestBuildEngramDataDirFn_DeleteResetsStateAndRemovesArtifacts(t *testing.T) {
+func TestBuildEngramDataDirFn_SetUpdatesStateAndMCPEnv(t *testing.T) {
 	home := t.TempDir()
 	src := filepath.Join(home, "src-engram")
-	writeFakeEngramArtifacts(t, src)
+	dst := filepath.Join(home, "dst-engram")
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{string(model.AgentOpenCode)},
+		EngramDataDir:   src,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := buildEngramDataDirFn(home)(model.EngramDataDirOpSet, src, dst); err != nil {
+		t.Fatalf("set op: %v", err)
+	}
+
+	assertEngramStateDir(t, home, dst)
+	assertEngramKnownDir(t, home, dst)
+	assertOpenCodeEngramDataDir(t, home, dst)
+}
+
+func TestBuildEngramDataDirFn_DeleteResetsStateAndClearsData(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, "src-engram")
+	writeFakeDataDirContent(t, src)
 	if err := state.Write(home, state.InstallState{EngramDataDir: src}); err != nil {
 		t.Fatal(err)
 	}
@@ -724,37 +746,67 @@ func TestBuildEngramDataDirFn_DeleteResetsStateAndRemovesArtifacts(t *testing.T)
 		t.Fatalf("delete op: %v", err)
 	}
 
-	assertEngramArtifactsMissing(t, src)
+	assertDataDirEmpty(t, src)
 	assertEngramStateDir(t, home, "")
 }
 
-func writeFakeEngramArtifacts(t *testing.T, dir string) {
+// ── test helpers ─────────────────────────────────────────────────────────────
+
+// writeFakeDataDirContent creates a directory with a data file to simulate
+// a populated Engram data directory. The internal format is intentionally opaque.
+func writeFakeDataDirContent(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := os.WriteFile(engram.DBPath(dir)+suffix, []byte("fake"+suffix), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(dir, "data.bin"), []byte("fake engram data"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func assertEngramArtifactsExist(t *testing.T, dir string) {
+func assertDataDirHasFiles(t *testing.T, dir string) {
 	t.Helper()
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if _, err := os.Stat(engram.DBPath(dir) + suffix); err != nil {
-			t.Fatalf("artifact %q missing: %v", suffix, err)
-		}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("expected data dir %q to have files; err=%v entries=%d", dir, err, len(entries))
 	}
 }
 
-func assertEngramArtifactsMissing(t *testing.T, dir string) {
+func assertDataDirEmpty(t *testing.T, dir string) {
 	t.Helper()
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if _, err := os.Stat(engram.DBPath(dir) + suffix); !os.IsNotExist(err) {
-			t.Fatalf("artifact %q should be missing after operation", suffix)
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("reading dir %q: %v", dir, err)
+	}
+	if len(entries) > 0 {
+		t.Fatalf("expected data dir %q to be empty after op, has %d entries", dir, len(entries))
+	}
+}
+
+func assertEngramKnownDir(t *testing.T, home, want string) {
+	t.Helper()
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range got.EngramKnownDataDirs {
+		if filepath.Clean(dir) == filepath.Clean(want) {
+			return
 		}
+	}
+	t.Fatalf("state EngramKnownDataDirs missing %q: %#v", want, got.EngramKnownDataDirs)
+}
+
+func assertOpenCodeEngramDataDir(t *testing.T, home, want string) {
+	t.Helper()
+	path := filepath.Join(home, ".config", "opencode", "opencode.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read opencode MCP config: %v", err)
+	}
+	escapedWant := strings.ReplaceAll(want, `\`, `\\`)
+	if !strings.Contains(string(raw), "ENGRAM_DATA_DIR") || !strings.Contains(string(raw), escapedWant) {
+		t.Fatalf("opencode config missing ENGRAM_DATA_DIR %q:\n%s", want, raw)
 	}
 }
 
@@ -768,3 +820,4 @@ func assertEngramStateDir(t *testing.T, home, want string) {
 		t.Fatalf("state EngramDataDir = %q, want %q", got.EngramDataDir, want)
 	}
 }
+

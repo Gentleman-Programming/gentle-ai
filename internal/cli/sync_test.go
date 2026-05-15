@@ -584,6 +584,34 @@ func TestComponentSyncStepRunsGGAInjectWithoutBinaryInstall(t *testing.T) {
 	}
 }
 
+func TestComponentSyncStepForwardsEngramDataDir(t *testing.T) {
+	home := t.TempDir()
+	dataDir := filepath.Join(home, "active-engram")
+
+	step := componentSyncStep{
+		id:        "sync:engram",
+		component: model.ComponentEngram,
+		homeDir:   home,
+		agents:    []model.AgentID{model.AgentOpenCode},
+		selection: model.Selection{EngramDataDir: dataDir},
+	}
+
+	if err := step.Run(); err != nil {
+		t.Fatalf("componentSyncStep.Run() Engram error = %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatalf("read opencode.json: %v", err)
+	}
+	if !strings.Contains(string(raw), "ENGRAM_DATA_DIR") {
+		t.Fatalf("opencode.json missing ENGRAM_DATA_DIR:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), strings.ReplaceAll(dataDir, `\`, `\\`)) {
+		t.Fatalf("opencode.json missing data dir %q:\n%s", dataDir, raw)
+	}
+}
+
 // ─── Phase 4: RunSync integration tests ───────────────────────────────────
 
 func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
