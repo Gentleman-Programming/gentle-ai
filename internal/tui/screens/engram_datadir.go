@@ -23,6 +23,7 @@ func EngramDirActionChoices() []EngramDirChoice {
 	return []EngramDirChoice{
 		{Label: "Migrate / Move Data", Op: model.EngramDataDirOpMove, DstIdx: -1},
 		{Label: "Copy Data", Op: model.EngramDataDirOpCopy, DstIdx: -1},
+		{Label: "Set Active Directory", Op: model.EngramDataDirOpSet, DstIdx: -1},
 		{Label: "Delete current Data", Op: model.EngramDataDirOpDelete, DstIdx: -1},
 	}
 }
@@ -35,12 +36,18 @@ func EngramDirLocationChoices(locations []engram.Location, op model.EngramDataDi
 		verb = "Move to"
 	} else if op == model.EngramDataDirOpCopy {
 		verb = "Copy to"
+	} else if op == model.EngramDataDirOpSet {
+		verb = "Use"
 	}
 	for i, loc := range locations {
-		if loc.IsCurrent {
+		if loc.IsCurrent && op != model.EngramDataDirOpSet {
 			continue
 		}
-		out = append(out, EngramDirChoice{Label: verb + "  " + loc.Label, Op: op, DstIdx: i})
+		label := verb + "  " + loc.Label
+		if loc.IsCurrent {
+			label += " " + styles.SuccessStyle.Render("(ACTIVE)")
+		}
+		out = append(out, EngramDirChoice{Label: label, Op: op, DstIdx: i})
 	}
 	out = append(out, EngramDirChoice{Label: "Type custom path…", Op: op, DstIdx: EngramCustomPathDstIdx})
 	return out
@@ -54,7 +61,7 @@ func RenderEngramDataDir(cursor int, currentDir string, dbSize int64, locations 
 	b.WriteString("\n\n")
 	b.WriteString(styles.SubtextStyle.Render("Current: " + engram.FormatDirLine(currentDir, dbSize)))
 	b.WriteString("\n\n")
-	if selectedOp == model.EngramDataDirOpMove || selectedOp == model.EngramDataDirOpCopy {
+	if EngramDirOpNeedsLocation(selectedOp) {
 		b.WriteString(styles.SubtextStyle.Render("Choose the destination for " + engramOpVerb(selectedOp) + "."))
 		b.WriteString("\n\n")
 	} else {
@@ -67,7 +74,7 @@ func RenderEngramDataDir(cursor int, currentDir string, dbSize int64, locations 
 	}
 
 	choices := EngramDirActionChoices()
-	if selectedOp == model.EngramDataDirOpMove || selectedOp == model.EngramDataDirOpCopy {
+	if EngramDirOpNeedsLocation(selectedOp) {
 		choices = EngramDirLocationChoices(locations, selectedOp)
 	}
 	labels := make([]string, len(choices))
@@ -147,6 +154,9 @@ func RenderEngramDataDirConfirm(op model.EngramDataDirOp, currentDir, dstDir str
 		b.WriteString(fmt.Sprintf("    → %s\n", styles.SubtextStyle.Render(dstDir)))
 		b.WriteString(styles.WarningStyle.Render("  Source will be removed after successful copy."))
 		b.WriteString("\n")
+	case model.EngramDataDirOpSet:
+		b.WriteString(fmt.Sprintf("  Active  %s\n", styles.SubtextStyle.Render(currentDir)))
+		b.WriteString(fmt.Sprintf("      → %s\n", styles.SubtextStyle.Render(dstDir)))
 	case model.EngramDataDirOpDelete:
 		b.WriteString(fmt.Sprintf("  Delete  %s\n", styles.WarningStyle.Render(currentDir)))
 		b.WriteString(styles.WarningStyle.Render("  A snapshot backup will be created first."))
@@ -158,8 +168,10 @@ func RenderEngramDataDirConfirm(op model.EngramDataDirOp, currentDir, dstDir str
 	}
 
 	b.WriteString("\n")
-	b.WriteString(styles.SubtextStyle.Render("A snapshot backup is created before any change."))
-	b.WriteString("\n\n")
+	if op != model.EngramDataDirOpSet {
+		b.WriteString(styles.SubtextStyle.Render("A snapshot backup is created before any change."))
+		b.WriteString("\n\n")
+	}
 	b.WriteString(renderOptions([]string{"Confirm", "Cancel"}, cursor))
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("enter: confirm • esc: cancel"))
@@ -210,6 +222,8 @@ func engramOpVerb(op model.EngramDataDirOp) string {
 		return "Copy data directory"
 	case model.EngramDataDirOpMove:
 		return "Move data directory"
+	case model.EngramDataDirOpSet:
+		return "Set active data directory"
 	case model.EngramDataDirOpDelete:
 		return "Delete data directory"
 	case model.EngramDataDirOpFresh:
@@ -217,4 +231,10 @@ func engramOpVerb(op model.EngramDataDirOp) string {
 	default:
 		return "Data directory operation"
 	}
+}
+
+func EngramDirOpNeedsLocation(op model.EngramDataDirOp) bool {
+	return op == model.EngramDataDirOpMove ||
+		op == model.EngramDataDirOpCopy ||
+		op == model.EngramDataDirOpSet
 }

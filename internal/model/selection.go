@@ -9,6 +9,7 @@ const (
 	EngramDataDirOpKeep   EngramDataDirOp = "keep"
 	EngramDataDirOpCopy   EngramDataDirOp = "copy"
 	EngramDataDirOpMove   EngramDataDirOp = "move"
+	EngramDataDirOpSet    EngramDataDirOp = "set"
 	EngramDataDirOpDelete EngramDataDirOp = "delete"
 	EngramDataDirOpFresh  EngramDataDirOp = "fresh"
 )

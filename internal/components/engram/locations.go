@@ -20,6 +20,12 @@ type Location struct {
 // then any additional volumes detected on the platform (see platform files).
 // Duplicate paths are deduplicated; labels include free-space info where available.
 func SuggestLocations(homeDir, currentDir string) []Location {
+	return SuggestLocationsWithKnown(homeDir, currentDir, nil)
+}
+
+// SuggestLocationsWithKnown returns suggested locations plus user-known data
+// directories, such as custom copy destinations from previous management ops.
+func SuggestLocationsWithKnown(homeDir, currentDir string, knownDirs []string) []Location {
 	seen := map[string]bool{}
 	var out []Location
 
@@ -51,6 +57,10 @@ func SuggestLocations(homeDir, currentDir string) []Location {
 	// If currentDir equals the default the seen-map dedup above already handles it;
 	// if currentDir is a custom path the default is a non-current alternative.
 	add(DefaultDir(homeDir), currentDir == "")
+
+	for _, dir := range knownDirs {
+		add(dir, filepath.Clean(dir) == filepath.Clean(currentDir))
+	}
 
 	// Platform-specific extra volumes (see locations_unix.go / locations_windows.go).
 	for _, vol := range platformVolumes() {

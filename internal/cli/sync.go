@@ -543,11 +543,12 @@ func (s componentSyncStep) Run() error {
 		for _, adapter := range adapters {
 			var res engram.InjectionResult
 			var err error
+			opts := engramInjectOptions(s.homeDir, s.selection)
 			if adapter.Agent() == model.AgentOpenClaw {
-				res, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
+				res, err = engram.InjectWithPromptDirOptions(s.homeDir, s.workspaceDir, adapter, opts)
 			} else {
 				targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
-				res, err = engram.Inject(targetDir, adapter)
+				res, err = engram.InjectWithOptions(targetDir, adapter, opts)
 			}
 			if err != nil {
 				return fmt.Errorf("sync engram for %q: %w", adapter.Agent(), err)
@@ -792,29 +793,34 @@ func RunSync(args []string) (SyncResult, error) {
 
 	selection := BuildSyncSelection(flags, agentIDs)
 
-	// Load persisted model assignments and persona from state when not provided
-	// via flags. Without this, every CLI sync falls back to defaults and would
-	// silently overwrite the user's model choices and persona selection.
-	if len(selection.ClaudeModelAssignments) == 0 || len(selection.ModelAssignments) == 0 || selection.Persona == "" {
-		s, readErr := state.Read(homeDir)
-		if readErr == nil {
-			if len(selection.ClaudeModelAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
-				m := make(map[string]model.ClaudeModelAlias, len(s.ClaudeModelAssignments))
-				for k, v := range s.ClaudeModelAssignments {
-					m[k] = model.ClaudeModelAlias(v)
+	// Load persisted model assignments, persona, and Engram data dir from state
+	// when not provided via flags. Without this, sync can silently overwrite the
+	// user's last-known agent config or point Engram back at the default dir.
+	if s, readErr := state.Read(homeDir); readErr == nil {
+		if len(selection.ClaudeModelAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
+			m := make(map[string]model.ClaudeModelAlias, len(s.ClaudeModelAssignments))
+			for k, v := range s.ClaudeModelAssignments {
+				// Claude Code controls the main session/orchestrator model itself.
+				// Keep persisted assignments scoped to Agent tool calls only.
+				if k == "orchestrator" {
+					continue
 				}
-				selection.ClaudeModelAssignments = m
+				m[k] = model.ClaudeModelAlias(v)
 			}
-			if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
-				m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
-				for k, v := range s.ModelAssignments {
-					m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID}
-				}
-				selection.ModelAssignments = m
+			selection.ClaudeModelAssignments = m
+		}
+		if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
+			m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
+			for k, v := range s.ModelAssignments {
+				m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID}
 			}
-			if selection.Persona == "" && s.Persona != "" {
-				selection.Persona = model.PersonaID(s.Persona)
-			}
+			selection.ModelAssignments = m
+		}
+		if selection.Persona == "" && s.Persona != "" {
+			selection.Persona = model.PersonaID(s.Persona)
+		}
+		if selection.EngramDataDir == "" && s.EngramDataDir != "" {
+			selection.EngramDataDir = s.EngramDataDir
 		}
 	}
 	// Backward-compat fallback: state files written before persona persistence

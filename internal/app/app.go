@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
@@ -109,12 +110,15 @@ func RunArgs(args []string, stdout io.Writer) error {
 		// Pre-load persisted Engram data directory so the TUI can display and
 		// manage it without a separate state read on the management screen.
 		var engramDataDir string
+		var engramKnownDataDirs []string
 		if s, stateErr := state.Read(homeDir); stateErr == nil {
 			engramDataDir = s.EngramDataDir
+			engramKnownDataDirs = s.EngramKnownDataDirs
 		}
 
 		m := tui.NewModel(result, Version)
 		m.EngramDataDir = engramDataDir
+		m.EngramKnownDataDirs = engramKnownDataDirs
 		m.HomeDir = homeDir
 		m.EngramDetected = engramIsPresent(homeDir)
 		m.EngramDataDirFn = buildEngramDataDirFn(homeDir)
@@ -360,6 +364,7 @@ func tuiExecute(
 		for _, a := range selection.Agents {
 			agentIDs = append(agentIDs, string(a))
 		}
+		currentState, _ := state.Read(homeDir)
 		// Non-fatal: a state write failure must not break an otherwise successful install.
 		_ = state.Write(homeDir, state.InstallState{
 			InstalledAgents:        agentIDs,
@@ -367,6 +372,7 @@ func tuiExecute(
 			ModelAssignments:       modelAssignmentsToState(selection.ModelAssignments),
 			Persona:                string(selection.Persona),
 			EngramDataDir:          selection.EngramDataDir,
+			EngramKnownDataDirs:    currentState.EngramKnownDataDirs,
 		})
 	}
 
@@ -503,6 +509,9 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 		}
 		selection.ModelAssignments = m
 	}
+	if selection.EngramDataDir == "" && s.EngramDataDir != "" {
+		selection.EngramDataDir = s.EngramDataDir
+	}
 }
 
 // persistAssignments writes the model assignments from selection back to
@@ -603,6 +612,8 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 		case model.EngramDataDirOpMove:
 			manifest, err := svc.MoveTo(currentDir, dstDir)
 			snapID, opErr = manifest.ID, err
+		case model.EngramDataDirOpSet:
+			snapID, opErr = "", nil
 		case model.EngramDataDirOpDelete, model.EngramDataDirOpFresh:
 			manifest, err := svc.Delete(currentDir)
 			snapID, opErr = manifest.ID, err
@@ -619,20 +630,58 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 		// Persist the new data directory reference to state.json.
 		var newDir string
 		switch op {
-		case model.EngramDataDirOpMove:
+		case model.EngramDataDirOpMove, model.EngramDataDirOpSet:
 			newDir = dstDir
 		case model.EngramDataDirOpDelete, model.EngramDataDirOpFresh:
 			newDir = "" // reset to default (~/.engram)
 		default:
-			// Copy leaves the current dir unchanged; Keep already returned above.
+			// Copy leaves the active dir unchanged, but records the copied dir
+			// so Set Active can find it later. Keep already returned above.
+			current, _ := state.Read(homeDir)
+			current.EngramKnownDataDirs = appendKnownEngramDir(current.EngramKnownDataDirs, dstDir)
+			_ = state.Write(homeDir, current)
 			return snapID, nil
 		}
 		current, _ := state.Read(homeDir) // ignore not-exist; treat as empty
 		current.EngramDataDir = newDir
+		current.EngramKnownDataDirs = appendKnownEngramDir(current.EngramKnownDataDirs, newDir)
 		_ = state.Write(homeDir, current) // non-fatal: a failed write must not fail the op
+		if err := syncEngramMCPDataDir(homeDir, engram.DataDirRef(newDir).Resolve(homeDir)); err != nil {
+			return snapID, err
+		}
 
 		return snapID, nil
 	}
+}
+
+func appendKnownEngramDir(dirs []string, dir string) []string {
+	if strings.TrimSpace(dir) == "" {
+		return dirs
+	}
+	clean := filepath.Clean(dir)
+	for _, existing := range dirs {
+		if filepath.Clean(existing) == clean {
+			return dirs
+		}
+	}
+	return append(dirs, clean)
+}
+
+func syncEngramMCPDataDir(homeDir, dataDir string) error {
+	s, err := state.Read(homeDir)
+	if err != nil || len(s.InstalledAgents) == 0 {
+		return nil
+	}
+	for _, raw := range s.InstalledAgents {
+		adapter, err := agents.NewAdapter(model.AgentID(raw))
+		if err != nil || !adapter.SupportsMCP() {
+			continue
+		}
+		if _, err := engram.InjectWithOptions(homeDir, adapter, engram.InjectOptions{DataDir: dataDir}); err != nil {
+			return fmt.Errorf("update Engram MCP data dir for %q: %w", raw, err)
+		}
+	}
+	return nil
 }
 
 // ListBackups returns all backup manifests from the backup directory.

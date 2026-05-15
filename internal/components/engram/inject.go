@@ -46,6 +46,10 @@ type piEngramProvisioner interface {
 	ProvisionEngramMCP(homeDir string) (changed bool, files []string, err error)
 }
 
+type dataDirEngramProvisioner interface {
+	ProvisionEngramMCPWithDataDir(homeDir, dataDir string) (changed bool, files []string, err error)
+}
+
 // EngramLookPath is the function used to resolve the engram binary path.
 // It is a package-level variable so it can be replaced in tests — both from
 // within the engram package and from external test packages (e.g. golden_test.go).
@@ -139,15 +143,17 @@ func engramOverlayJSON(agentID model.AgentID, cmd string, env map[string]any) []
 			},
 		}
 	} else if agentID == model.AgentOpenClaw {
+		server := map[string]any{
+			"command": cmd,
+			"args":    []string{"mcp", "--tools=agent"},
+		}
+		if len(env) > 0 {
+			server["env"] = env
+		}
 		cfg = map[string]any{
 			"mcp": map[string]any{
 				"servers": map[string]any{
-					"engram": map[string]any{
-						"__replace__": map[string]any{
-							"command": cmd,
-							"args":    []string{"mcp", "--tools=agent"},
-						},
-					},
+					"engram": map[string]any{"__replace__": server},
 				},
 			},
 		}
@@ -212,9 +218,23 @@ func InjectWithPromptDir(configHomeDir, promptDir string, adapter agents.Adapter
 	return injectCore(configHomeDir, promptDir, adapter, InjectOptions{})
 }
 
+// InjectWithPromptDirOptions is InjectWithPromptDir plus optional MCP settings.
+func InjectWithPromptDirOptions(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
+	return injectCore(configHomeDir, promptDir, adapter, opts)
+}
+
 func injectCore(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
 	if opts.DataDir != "" && !filepath.IsAbs(opts.DataDir) {
 		return InjectionResult{}, fmt.Errorf("engram DataDir must be an absolute path, got: %q", opts.DataDir)
+	}
+	if opts.DataDir != "" {
+		if provisioner, ok := adapter.(dataDirEngramProvisioner); ok {
+			changed, files, err := provisioner.ProvisionEngramMCPWithDataDir(configHomeDir, opts.DataDir)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			return InjectionResult{Changed: changed, Files: files}, nil
+		}
 	}
 	if opts.DataDir == "" {
 		if provisioner, ok := adapter.(piEngramProvisioner); ok {
@@ -224,6 +244,13 @@ func injectCore(configHomeDir, promptDir string, adapter agents.Adapter, opts In
 			}
 			return InjectionResult{Changed: changed, Files: files}, nil
 		}
+	}
+	if provisioner, ok := adapter.(piEngramProvisioner); ok {
+		changed, files, err := provisioner.ProvisionEngramMCP(configHomeDir)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		return InjectionResult{Changed: changed, Files: files}, nil
 	}
 	if !adapter.SupportsMCP() {
 		return InjectionResult{}, nil
@@ -319,7 +346,7 @@ func injectCore(configHomeDir, promptDir string, adapter agents.Adapter, opts In
 			return InjectionResult{}, err
 		}
 		engramCmd := stableEngramCommandForMergedConfig(configPath, adapter.Agent())
-		withMCP := filemerge.UpsertCodexEngramBlock(existing, engramCmd)
+		withMCP := filemerge.UpsertCodexEngramBlockWithEnv(existing, engramCmd, opts.DataDir)
 		// Forward slashes keep Codex TOML portable and stable under %q escaping on Windows.
 		withInstr := filemerge.UpsertTopLevelTOMLString(withMCP, "model_instructions_file", filepath.ToSlash(instructionsPath))
 		withCompact := filemerge.UpsertTopLevelTOMLString(withInstr, "experimental_compact_prompt_file", filepath.ToSlash(compactPath))

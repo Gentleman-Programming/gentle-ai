@@ -16,13 +16,19 @@ import (
 // engram/internal/setup/setup.go. It handles the limited TOML subset that
 // Codex uses.
 func UpsertCodexEngramBlock(content, engramCmd string) string {
+	return UpsertCodexEngramBlockWithEnv(content, engramCmd, "")
+}
+
+// UpsertCodexEngramBlockWithEnv is UpsertCodexEngramBlock plus optional
+// ENGRAM_DATA_DIR forwarding for Codex MCP servers.
+func UpsertCodexEngramBlockWithEnv(content, engramCmd, dataDir string) string {
 	if engramCmd == "" {
 		engramCmd = "engram"
 	}
-	// Escape backslashes for TOML double-quoted strings (Windows paths).
-	// e.g. C:\Users\foo → C:\\Users\\foo — prevents TOML unicode escape errors (\U).
-	escapedCmd := strings.ReplaceAll(engramCmd, `\`, `\\`)
-	codexEngramBlock := "[mcp_servers.engram]\ncommand = \"" + escapedCmd + "\"\nargs = [\"mcp\", \"--tools=agent\"]"
+	codexEngramBlock := "[mcp_servers.engram]\ncommand = " + tomlString(engramCmd) + "\nargs = [\"mcp\", \"--tools=agent\"]"
+	if strings.TrimSpace(dataDir) != "" {
+		codexEngramBlock += "\nenv = { ENGRAM_DATA_DIR = " + tomlString(dataDir) + " }"
+	}
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	lines := strings.Split(content, "\n")
 
@@ -52,6 +58,12 @@ func UpsertCodexEngramBlock(content, engramCmd string) string {
 	}
 
 	return base + "\n\n" + codexEngramBlock + "\n"
+}
+
+func tomlString(value string) string {
+	escaped := strings.ReplaceAll(value, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"`
 }
 
 // UpsertTopLevelTOMLString inserts or replaces a top-level key = "value" pair
