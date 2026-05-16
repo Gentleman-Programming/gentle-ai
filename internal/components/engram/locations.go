@@ -13,6 +13,7 @@ type Location struct {
 	Label     string // human-readable: "Default (~/.engram)", "D:\\ (120 GiB free)"
 	Available int64  // bytes free on the containing volume; -1 if unknown
 	IsCurrent bool   // true when this matches the currently active data dir
+	HasData   bool   // true when the directory is non-empty (contains Engram data)
 }
 
 // SuggestLocations returns an ordered list of candidate data directories.
@@ -45,6 +46,7 @@ func SuggestLocationsWithKnown(homeDir, currentDir string, knownDirs []string) [
 			Label:     label,
 			Available: avail,
 			IsCurrent: isCurrent,
+			HasData:   DataDirHasContent(clean),
 		})
 	}
 

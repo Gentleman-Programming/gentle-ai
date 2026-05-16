@@ -72,10 +72,10 @@ func TestPresetSelectionNextScreenFlowMatrix(t *testing.T) {
 			golden:     "preset-ecosystem-only-no-opencode-next.golden",
 		},
 		{
-			name:       "minimal without opencode enters dependency plan",
+			name:       "minimal without opencode enters engram dir chooser",
 			agents:     []model.AgentID{model.AgentCursor},
 			preset:     model.PresetMinimal,
-			wantScreen: ScreenDependencyTree,
+			wantScreen: ScreenEngramDataDirInstall,
 			golden:     "preset-minimal-no-opencode-next.golden",
 		},
 		{

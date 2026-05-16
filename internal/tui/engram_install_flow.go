@@ -2,27 +2,58 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/storage"
 )
 
 // proceedToDependencyTreeFromInstallFlow builds the dependency plan and either
 // continues to the dependency tree or intercepts with the install-time Engram
-// prompt when SQLite artifacts already exist (single gate per session unless resolved).
+// dir chooser (single gate per session unless resolved).
 func (m *Model) proceedToDependencyTreeFromInstallFlow() {
 	m.buildDependencyPlan()
 	if m.installEngramGateResolved {
 		m.setScreen(ScreenDependencyTree)
 		return
 	}
-	if !engram.DataDirHasContent(m.resolvedEngramDir()) {
+	if !hasSelectedComponent(m.DependencyPlan.OrderedComponents, model.ComponentEngram) {
 		m.setScreen(ScreenDependencyTree)
 		return
 	}
+	currentDir := m.resolvedEngramDir()
+	m.engramDirLocations = engram.SuggestLocationsWithKnown(m.HomeDir, currentDir, m.EngramKnownDataDirs)
+	m.engramDirDoneMsg = nil
+	m.engramDirOp = model.EngramDataDirOpNone
+	m.engramDirDstIdx = -1
+	m.engramDirCustomPath = ""
+	m.engramDirCustomPos = 0
+	m.EngramSpaceErr = ""
+
+	m.installFlowEngramExistingData = engram.DataDirHasContent(m.resolvedEngramDir())
 	m.installFlowEngramActive = true
 	m.Cursor = 0
 	m.setScreen(ScreenEngramDataDirInstall)
+}
+
+func (m *Model) chooseInstallEngramDir(dst string) {
+	clean := filepath.Clean(dst)
+	defaultDir := filepath.Clean(engram.DefaultDir(m.HomeDir))
+	if clean == "." || clean == defaultDir {
+		m.Selection.EngramDataDir = ""
+		m.EngramDataDir = ""
+	} else {
+		m.Selection.EngramDataDir = clean
+		m.EngramDataDir = clean
+		m.addKnownEngramDir(clean)
+	}
+	m.Selection.EngramDataDirOp = model.EngramDataDirOpSet
+	m.installEngramGateResolved = true
+	m.installFlowEngramActive = false
+	m.installFlowEngramExistingData = false
+	m.EngramSpaceErr = ""
+	m.setScreen(ScreenDependencyTree)
 }
 
 // checkEngramCopyMoveDiskSpace sets m.EngramSpaceErr when the destination volume

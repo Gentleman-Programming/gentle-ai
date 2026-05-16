@@ -1,6 +1,7 @@
 package engram
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -85,6 +86,29 @@ func TestSuggestLocationsWithKnown_IncludesKnownAndMarksActive(t *testing.T) {
 	if !foundArchive {
 		t.Fatalf("known non-active dir %q missing from suggestions: %+v", known[1], locs)
 	}
+}
+
+func TestSuggestLocationsWithKnown_MarksNonEmptyDirsAsHasData(t *testing.T) {
+	home := t.TempDir()
+	found := filepath.Join(home, "found-engram")
+	if err := os.MkdirAll(found, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(found, "data.bin"), []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	locs := SuggestLocationsWithKnown(home, "", []string{found})
+
+	for _, loc := range locs {
+		if loc.Path == filepath.Clean(found) {
+			if !loc.HasData {
+				t.Fatalf("known dir with content should be marked HasData")
+			}
+			return
+		}
+	}
+	t.Fatalf("known dir %q missing from suggestions: %+v", found, locs)
 }
 
 func TestBuildLabel_HomePrefix(t *testing.T) {
