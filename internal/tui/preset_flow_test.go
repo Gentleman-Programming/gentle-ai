@@ -72,11 +72,12 @@ func TestPresetSelectionNextScreenFlowMatrix(t *testing.T) {
 			golden:     "preset-ecosystem-only-no-opencode-next.golden",
 		},
 		{
+			// golden intentionally omitted — screen renders platform-specific
+			// disk volumes; content is verified by TestEngramDataDirInstallScreen_StaticContent.
 			name:       "minimal without opencode enters engram dir chooser",
 			agents:     []model.AgentID{model.AgentCursor},
 			preset:     model.PresetMinimal,
 			wantScreen: ScreenEngramDataDirInstall,
-			golden:     "preset-minimal-no-opencode-next.golden",
 		},
 		{
 			name:       "custom without opencode enters component selection",
@@ -102,6 +103,33 @@ func TestPresetSelectionNextScreenFlowMatrix(t *testing.T) {
 			}
 			assertTUIGolden(t, tt.golden, state.View())
 		})
+	}
+}
+
+// TestEngramDataDirInstallScreen_StaticContent verifies the install-time dir
+// chooser renders its static title and instruction text. Location entries are
+// platform-specific (real disk volumes) so they are not asserted here.
+func TestEngramDataDirInstallScreen_StaticContent(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPreset
+	m.Selection.Agents = []model.AgentID{model.AgentCursor}
+	m.Cursor = presetCursor(t, model.PresetMinimal)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenEngramDataDirInstall {
+		t.Fatalf("Screen = %v, want ScreenEngramDataDirInstall", state.Screen)
+	}
+	view := state.View()
+	for _, want := range []string{
+		"Choose Engram Data Directory",
+		"No existing Engram data was found",
+		"Type custom path",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view missing %q", want)
+		}
 	}
 }
 
@@ -207,6 +235,9 @@ func presetCursor(t *testing.T, preset model.PresetID) int {
 
 func assertTUIGolden(t *testing.T, name string, actual string) {
 	t.Helper()
+	if name == "" {
+		return // no golden for platform-specific screens
+	}
 	goldenPath := filepath.Join("testdata", name)
 
 	if *updateTUIGoldens {
