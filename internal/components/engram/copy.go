@@ -1,6 +1,7 @@
 package engram
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -34,11 +35,19 @@ func CopyDB(src, dst string) error {
 		return fmt.Errorf("create temp file %q: %w", tmp, err)
 	}
 
+	// removeTmp cleans up the temp file in error paths. Failures other than
+	// "already gone" are joined onto the returned error so they are not lost.
+	removeTmp := func(primary error) error {
+		if rmErr := os.Remove(tmp); rmErr != nil && !os.IsNotExist(rmErr) {
+			return errors.Join(primary, fmt.Errorf("clean up temp file %q: %w", tmp, rmErr))
+		}
+		return primary
+	}
+
 	srcFile, err := os.Open(src)
 	if err != nil {
 		dstFile.Close()
-		os.Remove(tmp)
-		return fmt.Errorf("open source %q: %w", src, err)
+		return removeTmp(fmt.Errorf("open source %q: %w", src, err))
 	}
 
 	_, copyErr := io.Copy(dstFile, srcFile)
@@ -47,26 +56,22 @@ func CopyDB(src, dst string) error {
 	dstFile.Close()
 
 	if copyErr != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("copy %q → %q: %w", src, dst, copyErr)
+		return removeTmp(fmt.Errorf("copy %q → %q: %w", src, dst, copyErr))
 	}
 	if syncErr != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("sync %q: %w", tmp, syncErr)
+		return removeTmp(fmt.Errorf("sync %q: %w", tmp, syncErr))
 	}
 
 	dstInfo, err := os.Stat(tmp)
-	if err != nil || dstInfo.Size() != srcInfo.Size() {
-		os.Remove(tmp)
-		if err != nil {
-			return fmt.Errorf("stat temp file %q: %w", tmp, err)
-		}
-		return fmt.Errorf("incomplete copy: wrote %d bytes, expected %d", dstInfo.Size(), srcInfo.Size())
+	if err != nil {
+		return removeTmp(fmt.Errorf("stat temp file %q: %w", tmp, err))
+	}
+	if dstInfo.Size() != srcInfo.Size() {
+		return removeTmp(fmt.Errorf("incomplete copy: wrote %d bytes, expected %d", dstInfo.Size(), srcInfo.Size()))
 	}
 
 	if err := os.Rename(tmp, dst); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("rename %q → %q: %w", tmp, dst, err)
+		return removeTmp(fmt.Errorf("rename %q → %q: %w", tmp, dst, err))
 	}
 	return nil
 }

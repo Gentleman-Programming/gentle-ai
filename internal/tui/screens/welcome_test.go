@@ -261,3 +261,67 @@ func TestRenderWelcome_WithProfiles_CountOne(t *testing.T) {
 		t.Errorf("RenderWelcome(showProfiles=true, count=1) missing 'OpenCode SDD Profiles (1)'")
 	}
 }
+
+// ─── Engram option count tests ────────────────────────────────────────────────
+
+// TestWelcomeOptions_OptionCount_WithEngram_WithoutProfiles verifies 11 options
+// when hasEngram=true and showProfiles=false.
+func TestWelcomeOptions_OptionCount_WithEngram_WithoutProfiles(t *testing.T) {
+	opts := screens.WelcomeOptions(nil, true, false, 0, true, true)
+	// 10 base options + 1 "Manage Engram directory" = 11
+	want := 11
+	if len(opts) != want {
+		t.Errorf("WelcomeOptions(showProfiles=false, hasEngram=true) = %d options, want %d; opts: %v",
+			len(opts), want, opts)
+	}
+}
+
+// TestWelcomeOptions_OptionCount_WithEngram_WithProfiles verifies 12 options
+// when hasEngram=true and showProfiles=true (2 profiles).
+func TestWelcomeOptions_OptionCount_WithEngram_WithProfiles(t *testing.T) {
+	opts := screens.WelcomeOptions(nil, true, true, 2, true, true)
+	// 11 base options (with profiles) + 1 "Manage Engram directory" = 12
+	want := 12
+	if len(opts) != want {
+		t.Errorf("WelcomeOptions(showProfiles=true, profileCount=2, hasEngram=true) = %d options, want %d; opts: %v",
+			len(opts), want, opts)
+	}
+}
+
+// TestWelcomeOptions_EngramInsertedBeforeBackups_WithProfiles verifies ordering
+// when both Profiles AND Engram are active: Engram sits immediately before Manage backups.
+func TestWelcomeOptions_EngramInsertedBeforeBackups_WithProfiles(t *testing.T) {
+	opts := screens.WelcomeOptions(nil, true, true, 1, true, true)
+
+	profilesIdx := -1
+	engramIdx := -1
+	backupsIdx := -1
+	for i, opt := range opts {
+		switch {
+		case strings.HasPrefix(opt, "OpenCode SDD Profiles"):
+			profilesIdx = i
+		case opt == "Manage Engram directory":
+			engramIdx = i
+		case opt == "Manage backups":
+			backupsIdx = i
+		}
+	}
+	if profilesIdx < 0 {
+		t.Fatal("'OpenCode SDD Profiles' option not found")
+	}
+	if engramIdx < 0 {
+		t.Fatal("'Manage Engram directory' option not found")
+	}
+	if backupsIdx < 0 {
+		t.Fatal("'Manage backups' option not found")
+	}
+	// Expected order: ... Profiles → Engram → Manage backups
+	if engramIdx != backupsIdx-1 {
+		t.Errorf("'Manage Engram directory' at index %d, expected %d (immediately before 'Manage backups' at %d)",
+			engramIdx, backupsIdx-1, backupsIdx)
+	}
+	if profilesIdx >= engramIdx {
+		t.Errorf("profiles at index %d should come before 'Manage Engram directory' at %d",
+			profilesIdx, engramIdx)
+	}
+}
