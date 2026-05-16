@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	_kernel32              = syscall.NewLazyDLL("kernel32.dll")
-	_getDiskFreeSpaceExW   = _kernel32.NewProc("GetDiskFreeSpaceExW")
+	kernel32DLL          = syscall.NewLazyDLL("kernel32.dll")
+	getDiskFreeSpaceExW  = kernel32DLL.NewProc("GetDiskFreeSpaceExW")
 )
 
 // platformVolumes returns drive roots that have available disk space on Windows.
@@ -24,7 +24,7 @@ func platformVolumes() []string {
 			continue
 		}
 		var avail, total, free uint64
-		r, _, _ := _getDiskFreeSpaceExW.Call(
+		r, _, _ := getDiskFreeSpaceExW.Call(
 			uintptr(unsafe.Pointer(ptr)),
 			uintptr(unsafe.Pointer(&avail)),
 			uintptr(unsafe.Pointer(&total)),
