@@ -1,13 +1,14 @@
 package engram
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/storage"
 )
 
 // snapshotter is a subset of backup.Snapshotter used for testability.
@@ -33,67 +34,103 @@ func NewDataDirService(homeDir string) DataDirService {
 	}
 }
 
-// CopyTo copies the Engram DB from currentDir to dst without removing the source.
-// A snapshot of the source DB is created first. Returns the snapshot manifest.
+// CopyTo copies all files from currentDir to dst without removing source.
 func (s DataDirService) CopyTo(currentDir, dst string) (backup.Manifest, error) {
-	srcDB := DBPath(currentDir)
-	snap, err := s.snapshot(srcDB)
+	snap, err := s.snapshot(currentDir)
 	if err != nil {
 		return backup.Manifest{}, fmt.Errorf("snapshot before copy: %w", err)
 	}
-	if err := CopyDB(srcDB, DBPath(dst)); err != nil {
+	if err := copyDataDir(currentDir, dst); err != nil {
 		return snap, fmt.Errorf("copy: %w", err)
 	}
 	return snap, nil
 }
 
-// MoveTo copies the Engram DB from currentDir to dst, then removes the source DB.
-// The source is only removed after the copy is verified. Returns the snapshot manifest.
+// MoveTo copies all files from currentDir to dst, then removes the source files.
 func (s DataDirService) MoveTo(currentDir, dst string) (backup.Manifest, error) {
 	snap, err := s.CopyTo(currentDir, dst)
 	if err != nil {
 		return snap, err
 	}
-	if err := os.Remove(DBPath(currentDir)); err != nil && !os.IsNotExist(err) {
+	if err := clearDataDir(currentDir); err != nil {
 		return snap, fmt.Errorf("remove source after move: %w", err)
 	}
 	return snap, nil
 }
 
-// Delete creates a snapshot of the current DB, then removes it.
-// Returns the snapshot manifest so the caller can show the backup ID.
+// Delete creates a snapshot of dataDir, then removes all its files.
 func (s DataDirService) Delete(dataDir string) (backup.Manifest, error) {
-	dbPath := DBPath(dataDir)
-	snap, err := s.snapshot(dbPath)
+	snap, err := s.snapshot(dataDir)
 	if err != nil {
 		return backup.Manifest{}, fmt.Errorf("snapshot before delete: %w", err)
 	}
-	if err := os.Remove(dbPath); err != nil && !os.IsNotExist(err) {
+	if err := clearDataDir(dataDir); err != nil {
 		return snap, fmt.Errorf("delete: %w", err)
 	}
 	return snap, nil
 }
 
-// DiskSpaceOK reports whether the volume at dst has enough free space to hold
-// a copy of the DB at srcDB. Returns (ok, needed bytes, available bytes, error).
-func (s DataDirService) DiskSpaceOK(srcDB, dst string) (bool, int64, int64, error) {
-	info, err := os.Stat(srcDB)
-	if err != nil {
-		return false, 0, 0, fmt.Errorf("stat source DB %q: %w", srcDB, err)
-	}
-	avail, err := storage.AvailableBytes(dst)
-	if err != nil {
-		return false, 0, 0, fmt.Errorf("check available space at %q: %w", dst, err)
-	}
-	needed := info.Size()
-	return avail > needed, needed, avail, nil
-}
-
-// snapshot creates a timestamped backup of dbPath under the backup root.
-func (s DataDirService) snapshot(dbPath string) (backup.Manifest, error) {
+func (s DataDirService) snapshot(dataDir string) (backup.Manifest, error) {
 	if err := os.MkdirAll(s.backupRoot, 0o755); err != nil {
 		return backup.Manifest{}, fmt.Errorf("create backup root %q: %w", s.backupRoot, err)
 	}
 	snapshotDir := filepath.Join(s.backupRoot, time.Now().UTC().Format("20060102150405.000000000"))
-	return s.snapshotter.Create(snapshotDir, []string{dbPath})
+	return s.snapshotter.Create(snapshotDir, dataDirFiles(dataDir))
+}
+
+// copyDataDir recursively copies all files from src to dst.
+func copyDataDir(src, dst string) error {
+	src = filepath.Clean(src)
+	dst = filepath.Clean(dst)
+	if src == "." || dst == "." {
+		return fmt.Errorf("source and destination data directories are required")
+	}
+	if samePath(src, dst) {
+		return fmt.Errorf("source and destination data directories must be different")
+	}
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		dstPath := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(dstPath, 0o755)
+		}
+		return CopyDB(path, dstPath)
+	})
+}
+
+// clearDataDir removes all entries under dataDir, leaving the directory itself.
+// All errors are collected and returned together.
+func clearDataDir(dataDir string) error {
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var errs []error
+	for _, e := range entries {
+		p := filepath.Join(dataDir, e.Name())
+		if err := os.RemoveAll(p); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func samePath(a, b string) bool {
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA == nil && errB == nil {
+		a, b = absA, absB
+	}
+	infoA, statA := os.Stat(a)
+	infoB, statB := os.Stat(b)
+	if statA == nil && statB == nil && os.SameFile(infoA, infoB) {
+		return true
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }

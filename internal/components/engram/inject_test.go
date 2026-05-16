@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -505,7 +506,14 @@ func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
 
 func TestInjectVSCodeMergesEngramToMCPConfigFile(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	switch runtime.GOOS {
+	case "windows":
+		t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	case "darwin":
+		// VS Code user dir lives under ~/Library/... — already under `home`.
+	default:
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	}
 	adapter := vscode.NewAdapter()
 
 	result, err := Inject(home, adapter)
@@ -726,16 +734,16 @@ func TestInjectCodexInjectsTOMLKeys(t *testing.T) {
 	if !strings.Contains(text, `model_instructions_file`) {
 		t.Fatalf("config.toml missing model_instructions_file key; got:\n%s", text)
 	}
-	if !strings.Contains(text, instructionsPath) {
-		t.Fatalf("config.toml model_instructions_file does not reference %q; got:\n%s", instructionsPath, text)
+	if !strings.Contains(text, filepath.ToSlash(instructionsPath)) {
+		t.Fatalf("config.toml model_instructions_file does not reference %q; got:\n%s", filepath.ToSlash(instructionsPath), text)
 	}
 
 	compactPath := filepath.Join(home, ".codex", "engram-compact-prompt.md")
 	if !strings.Contains(text, `experimental_compact_prompt_file`) {
 		t.Fatalf("config.toml missing experimental_compact_prompt_file key; got:\n%s", text)
 	}
-	if !strings.Contains(text, compactPath) {
-		t.Fatalf("config.toml experimental_compact_prompt_file does not reference %q; got:\n%s", compactPath, text)
+	if !strings.Contains(text, filepath.ToSlash(compactPath)) {
+		t.Fatalf("config.toml experimental_compact_prompt_file does not reference %q; got:\n%s", filepath.ToSlash(compactPath), text)
 	}
 }
 

@@ -30,23 +30,22 @@ func newTestService(t *testing.T) (DataDirService, string) {
 	return svc, home
 }
 
-func writeTestDB(t *testing.T, dir string) string {
+// writeTestDataDir writes a small file into dir to simulate a populated data directory.
+func writeTestDataDir(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	path := DBPath(dir)
-	if err := os.WriteFile(path, []byte("fake-sqlite"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "engram.db"), []byte("fake-data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return path
 }
 
 func TestDataDirService_CopyTo(t *testing.T) {
 	svc, home := newTestService(t)
 	src := filepath.Join(home, "src-data")
 	dst := filepath.Join(home, "dst-data")
-	writeTestDB(t, src)
+	writeTestDataDir(t, src)
 
 	snap, err := svc.CopyTo(src, dst)
 	if err != nil {
@@ -57,12 +56,12 @@ func TestDataDirService_CopyTo(t *testing.T) {
 	}
 
 	// Source must still exist.
-	if _, err := os.Stat(DBPath(src)); err != nil {
-		t.Errorf("source DB removed after CopyTo: %v", err)
+	if !DataDirHasContent(src) {
+		t.Error("source dir empty after CopyTo — expected files to remain")
 	}
-	// Destination must exist.
-	if _, err := os.Stat(DBPath(dst)); err != nil {
-		t.Errorf("dst DB not created: %v", err)
+	// Destination must contain the copied file.
+	if !DataDirHasContent(dst) {
+		t.Error("dst dir empty after CopyTo — expected files to be copied")
 	}
 }
 
@@ -70,27 +69,27 @@ func TestDataDirService_MoveTo(t *testing.T) {
 	svc, home := newTestService(t)
 	src := filepath.Join(home, "src-data")
 	dst := filepath.Join(home, "dst-data")
-	writeTestDB(t, src)
+	writeTestDataDir(t, src)
 
 	_, err := svc.MoveTo(src, dst)
 	if err != nil {
 		t.Fatalf("MoveTo: %v", err)
 	}
 
-	// Source must be gone.
-	if _, err := os.Stat(DBPath(src)); !os.IsNotExist(err) {
-		t.Error("source DB should not exist after MoveTo")
+	// Source must be empty after move.
+	if DataDirHasContent(src) {
+		t.Error("source dir not empty after MoveTo")
 	}
-	// Destination must exist.
-	if _, err := os.Stat(DBPath(dst)); err != nil {
-		t.Errorf("dst DB not created: %v", err)
+	// Destination must have the file.
+	if !DataDirHasContent(dst) {
+		t.Error("dst dir empty after MoveTo — expected files to be moved")
 	}
 }
 
 func TestDataDirService_Delete(t *testing.T) {
 	svc, home := newTestService(t)
 	dir := filepath.Join(home, "data")
-	writeTestDB(t, dir)
+	writeTestDataDir(t, dir)
 
 	snap, err := svc.Delete(dir)
 	if err != nil {
@@ -100,8 +99,8 @@ func TestDataDirService_Delete(t *testing.T) {
 		t.Errorf("snap.ID = %q, want snap-abc123", snap.ID)
 	}
 
-	if _, err := os.Stat(DBPath(dir)); !os.IsNotExist(err) {
-		t.Error("DB should not exist after Delete")
+	if DataDirHasContent(dir) {
+		t.Error("dir not empty after Delete")
 	}
 }
 
@@ -109,10 +108,10 @@ func TestDataDirService_Delete_AlreadyGone(t *testing.T) {
 	svc, home := newTestService(t)
 	dir := filepath.Join(home, "data")
 
-	// Delete on a non-existent DB must not error (os.IsNotExist is tolerated).
+	// Delete on a non-existent dir must not error.
 	_, err := svc.Delete(dir)
 	if err != nil {
-		t.Fatalf("Delete on missing DB: %v", err)
+		t.Fatalf("Delete on missing dir: %v", err)
 	}
 }
 
@@ -125,36 +124,15 @@ func TestDataDirService_SnapshotError_Propagates(t *testing.T) {
 	}
 
 	dir := filepath.Join(home, "data")
-	writeTestDB(t, dir)
+	writeTestDataDir(t, dir)
 
 	_, err := svc.Delete(dir)
 	if err == nil {
 		t.Fatal("expected error from failing snapshotter, got nil")
 	}
 
-	// DB must still exist — no delete when snapshot failed.
-	if _, statErr := os.Stat(DBPath(dir)); statErr != nil {
-		t.Error("DB was deleted despite snapshot failure")
-	}
-}
-
-func TestDataDirService_DiskSpaceOK(t *testing.T) {
-	svc, home := newTestService(t)
-	dir := filepath.Join(home, "data")
-	dbPath := writeTestDB(t, dir)
-
-	ok, needed, avail, err := svc.DiskSpaceOK(dbPath, home)
-	if err != nil {
-		t.Fatalf("DiskSpaceOK: %v", err)
-	}
-	if needed <= 0 {
-		t.Errorf("needed = %d, want > 0", needed)
-	}
-	if avail <= 0 {
-		t.Errorf("avail = %d, want > 0", avail)
-	}
-	// A tiny test file on the same volume should always have space.
-	if !ok {
-		t.Errorf("DiskSpaceOK = false for tiny test file, expected true")
+	// Dir must still have content — no delete when snapshot failed.
+	if !DataDirHasContent(dir) {
+		t.Error("dir was cleared despite snapshot failure")
 	}
 }
