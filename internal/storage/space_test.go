@@ -34,10 +34,18 @@ func TestAvailableBytes_File(t *testing.T) {
 	}
 }
 
-func TestAvailableBytes_NonExistent(t *testing.T) {
-	_, err := storage.AvailableBytes("/this/path/does/not/exist/ever")
-	if err == nil {
-		t.Fatal("expected error for non-existent path, got nil")
+func TestAvailableBytes_NonExistentChildOfTempDir(t *testing.T) {
+	// AvailableBytes walks up to the nearest existing ancestor, so a
+	// not-yet-created subdirectory of an existing temp dir must succeed
+	// and return the parent volume's available bytes.
+	parent := t.TempDir()
+	child := parent + "/will-be-created-later/nested"
+	n, err := storage.AvailableBytes(child)
+	if err != nil {
+		t.Fatalf("AvailableBytes(%q): unexpected error for unborn child path: %v", child, err)
+	}
+	if n <= 0 {
+		t.Fatalf("AvailableBytes(%q) = %d, want > 0", child, n)
 	}
 }
 
