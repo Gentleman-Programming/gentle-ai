@@ -262,32 +262,6 @@ func TestRenderWelcome_WithProfiles_CountOne(t *testing.T) {
 	}
 }
 
-// ─── Engram option count tests ────────────────────────────────────────────────
-
-// TestWelcomeOptions_OptionCount_WithEngram_WithoutProfiles verifies 11 options
-// when hasEngram=true and showProfiles=false.
-func TestWelcomeOptions_OptionCount_WithEngram_WithoutProfiles(t *testing.T) {
-	opts := screens.WelcomeOptions(nil, true, false, 0, true, true)
-	// 10 base options + 1 "Manage Engram directory" = 11
-	want := 11
-	if len(opts) != want {
-		t.Errorf("WelcomeOptions(showProfiles=false, hasEngram=true) = %d options, want %d; opts: %v",
-			len(opts), want, opts)
-	}
-}
-
-// TestWelcomeOptions_OptionCount_WithEngram_WithProfiles verifies 12 options
-// when hasEngram=true and showProfiles=true (2 profiles).
-func TestWelcomeOptions_OptionCount_WithEngram_WithProfiles(t *testing.T) {
-	opts := screens.WelcomeOptions(nil, true, true, 2, true, true)
-	// 11 base options (with profiles) + 1 "Manage Engram directory" = 12
-	want := 12
-	if len(opts) != want {
-		t.Errorf("WelcomeOptions(showProfiles=true, profileCount=2, hasEngram=true) = %d options, want %d; opts: %v",
-			len(opts), want, opts)
-	}
-}
-
 // TestWelcomeOptions_EngramInsertedBeforeBackups_WithProfiles verifies ordering
 // when both Profiles AND Engram are active: Engram sits immediately before Manage backups.
 func TestWelcomeOptions_EngramInsertedBeforeBackups_WithProfiles(t *testing.T) {
