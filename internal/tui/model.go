@@ -2103,6 +2103,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(m.PreviousScreen)
 			return m, nil
 		}
+		// Clear any result from a previous operation before launching a new one,
+		// so the result screen never shows stale data if the goroutine arrives late.
+		m.engramDirDoneMsg = nil
 		// Confirm — run the operation in a goroutine.
 		currentDir := m.resolvedEngramDir()
 		var dstDir string

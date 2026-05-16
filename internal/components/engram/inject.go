@@ -213,6 +213,9 @@ func InjectWithPromptDir(configHomeDir, promptDir string, adapter agents.Adapter
 }
 
 func injectCore(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
+	if opts.DataDir != "" && !filepath.IsAbs(opts.DataDir) {
+		return InjectionResult{}, fmt.Errorf("engram DataDir must be an absolute path, got: %q", opts.DataDir)
+	}
 	if opts.DataDir == "" {
 		if provisioner, ok := adapter.(piEngramProvisioner); ok {
 			changed, files, err := provisioner.ProvisionEngramMCP(configHomeDir)

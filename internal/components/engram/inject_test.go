@@ -1586,3 +1586,23 @@ func objectAtForTest(t *testing.T, root map[string]any, key string) map[string]a
 	}
 	return object
 }
+
+func TestInjectWithOptions_RelativeDataDirReturnsError(t *testing.T) {
+	home := t.TempDir()
+	_, err := InjectWithOptions(home, claudeAdapter(), InjectOptions{DataDir: "relative/path"})
+	if err == nil {
+		t.Fatal("InjectWithOptions with relative DataDir must return an error")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Errorf("error %q should mention absolute path requirement", err.Error())
+	}
+}
+
+func TestInjectWithOptions_EmptyDataDirIsAllowed(t *testing.T) {
+	home := t.TempDir()
+	// Empty DataDir falls back to the standard injection path — must not error.
+	_, err := InjectWithOptions(home, claudeAdapter(), InjectOptions{DataDir: ""})
+	if err != nil {
+		t.Fatalf("InjectWithOptions with empty DataDir returned unexpected error: %v", err)
+	}
+}

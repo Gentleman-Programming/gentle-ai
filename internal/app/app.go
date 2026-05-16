@@ -15,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/internal/storage"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
@@ -577,6 +578,23 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 
 		var snapID string
 		var opErr error
+
+		// Disk-space pre-check: guard copy and move before any filesystem writes.
+		// The TUI shows an inline warning first, but this is a mandatory
+		// defense-in-depth check so the service layer never starts a partial copy.
+		if op == model.EngramDataDirOpCopy || op == model.EngramDataDirOpMove {
+			ok, needed, avail, spaceErr := engram.DiskSpaceOKForDataDir(currentDir, dstDir)
+			if spaceErr != nil {
+				return "", fmt.Errorf("check destination disk space: %w", spaceErr)
+			}
+			if !ok {
+				return "", fmt.Errorf(
+					"not enough disk space: need %s to copy Engram data; %s available on destination volume",
+					storage.FormatBytes(needed),
+					storage.FormatBytes(avail),
+				)
+			}
+		}
 
 		switch op {
 		case model.EngramDataDirOpCopy:
