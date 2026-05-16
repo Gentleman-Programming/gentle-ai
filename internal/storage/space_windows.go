@@ -16,9 +16,23 @@ var (
 )
 
 func availableBytes(path string) (int64, error) {
-	// GetDiskFreeSpaceExW requires a directory path; resolve parent if path is a file.
-	if info, err := os.Stat(path); err == nil && !info.IsDir() {
-		path = filepath.Dir(path)
+	// GetDiskFreeSpaceExW requires an existing directory. Walk up to the nearest
+	// existing ancestor so callers can safely pass a not-yet-created destination.
+	for {
+		info, err := os.Stat(path)
+		if err == nil {
+			if !info.IsDir() {
+				path = filepath.Dir(path)
+				continue
+			}
+			break // found an existing directory
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			// Reached the filesystem root — path is entirely inaccessible.
+			return 0, fmt.Errorf("no existing ancestor found for %q", path)
+		}
+		path = parent
 	}
 
 	pathPtr, err := syscall.UTF16PtrFromString(path)
