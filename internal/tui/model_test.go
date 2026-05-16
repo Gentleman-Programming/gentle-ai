@@ -238,10 +238,12 @@ func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 	state.Cursor = len(opencodepluginDefinitions()) * 2 // Continue without optional plugins.
 	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state = updated.(Model)
-	if state.Screen != ScreenDependencyTree {
-		t.Fatalf("after OpenCode plugins screen = %v, want %v", state.Screen, ScreenDependencyTree)
+	// Minimal preset includes Engram, so the install-time dir chooser fires first.
+	if state.Screen != ScreenEngramDataDirInstall {
+		t.Fatalf("after OpenCode plugins screen = %v, want %v", state.Screen, ScreenEngramDataDirInstall)
 	}
 
+	// Plan is built before the dir chooser — verify agents and components.
 	wantAgents := []model.AgentID{model.AgentPi, model.AgentOpenCode, model.AgentClaudeCode}
 	if !reflect.DeepEqual(state.DependencyPlan.Agents, wantAgents) {
 		t.Fatalf("dependency agents = %v, want %v", state.DependencyPlan.Agents, wantAgents)
@@ -249,6 +251,14 @@ func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 	wantComponents := []model.ComponentID{model.ComponentEngram}
 	if !reflect.DeepEqual(state.DependencyPlan.OrderedComponents, wantComponents) {
 		t.Fatalf("dependency components = %v, want %v", state.DependencyPlan.OrderedComponents, wantComponents)
+	}
+
+	// Accept default Engram data directory (cursor 0 = first suggested location).
+	state.Cursor = 0
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenDependencyTree {
+		t.Fatalf("after engram dir chooser screen = %v, want %v", state.Screen, ScreenDependencyTree)
 	}
 
 	state.Cursor = 0

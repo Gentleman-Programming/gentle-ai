@@ -2,6 +2,7 @@ package screens
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
@@ -28,7 +29,7 @@ func EngramDirActionChoices() []EngramDirChoice {
 	}
 }
 
-// EngramDirLocationChoices builds the second-step destination list for copy/move.
+// EngramDirLocationChoices builds the second-step location list.
 func EngramDirLocationChoices(locations []engram.Location, op model.EngramDataDirOp) []EngramDirChoice {
 	var out []EngramDirChoice
 	verb := "Use"
@@ -43,13 +44,34 @@ func EngramDirLocationChoices(locations []engram.Location, op model.EngramDataDi
 		if loc.IsCurrent && op != model.EngramDataDirOpSet {
 			continue
 		}
+		if op == model.EngramDataDirOpSet && !loc.IsCurrent && !loc.HasData {
+			continue
+		}
 		label := verb + "  " + loc.Label
 		if loc.IsCurrent {
 			label += " " + styles.SuccessStyle.Render("(ACTIVE)")
 		}
 		out = append(out, EngramDirChoice{Label: label, Op: op, DstIdx: i})
 	}
+	if op == model.EngramDataDirOpSet {
+		return out
+	}
 	out = append(out, EngramDirChoice{Label: "Type custom path…", Op: op, DstIdx: EngramCustomPathDstIdx})
+	return out
+}
+
+// EngramDirInstallLocationChoices builds the install-time list for choosing
+// where a fresh Engram data directory should live.
+func EngramDirInstallLocationChoices(locations []engram.Location) []EngramDirChoice {
+	out := make([]EngramDirChoice, 0, len(locations)+1)
+	for i, loc := range locations {
+		out = append(out, EngramDirChoice{
+			Label:  "Use  " + loc.Label,
+			Op:     model.EngramDataDirOpSet,
+			DstIdx: i,
+		})
+	}
+	out = append(out, EngramDirChoice{Label: "Type custom path…", Op: model.EngramDataDirOpSet, DstIdx: EngramCustomPathDstIdx})
 	return out
 }
 
@@ -91,9 +113,29 @@ func RenderEngramDataDir(cursor int, currentDir string, dbSize int64, locations 
 }
 
 // RenderEngramDataDirInstall renders the install-time data directory screen
-// shown when an existing data directory is detected.
-func RenderEngramDataDirInstall(cursor int, detectedDir string, dbSize int64) string {
+// shown before installing Engram.
+func RenderEngramDataDirInstall(cursor int, detectedDir string, dbSize int64, locations []engram.Location, existingData bool, spaceErr string) string {
 	var b strings.Builder
+
+	if !existingData {
+		b.WriteString(styles.TitleStyle.Render("Choose Engram Data Directory"))
+		b.WriteString("\n\n")
+		b.WriteString(styles.SubtextStyle.Render("No existing Engram data was found. Choose where new Engram data should live."))
+		b.WriteString("\n\n")
+		if strings.TrimSpace(spaceErr) != "" {
+			b.WriteString(styles.WarningStyle.Render(spaceErr))
+			b.WriteString("\n\n")
+		}
+		choices := EngramDirInstallLocationChoices(locations)
+		labels := make([]string, len(choices))
+		for i, c := range choices {
+			labels[i] = c.Label
+		}
+		b.WriteString(renderOptions(labels, cursor))
+		b.WriteString("\n")
+		b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: go back"))
+		return b.String()
+	}
 
 	b.WriteString(styles.TitleStyle.Render("Existing Engram Data Found"))
 	b.WriteString("\n\n")
@@ -132,14 +174,14 @@ func RenderEngramDataDirCustomPath(op model.EngramDataDirOp, currentDir, path st
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("type/paste path • enter: continue • esc: destinations"))
+	b.WriteString(styles.HelpStyle.Render("type/paste path • enter: continue • esc: go back"))
 
 	return b.String()
 }
 
 // RenderEngramDataDirConfirm renders the confirmation screen before a
 // destructive (move, delete, fresh) or non-trivial (copy) operation.
-func RenderEngramDataDirConfirm(op model.EngramDataDirOp, currentDir, dstDir string, cursor int) string {
+func RenderEngramDataDirConfirm(op model.EngramDataDirOp, currentDir, dstDir, backupRoot string, cursor int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Confirm — " + engramOpVerb(op)))
@@ -159,24 +201,46 @@ func RenderEngramDataDirConfirm(op model.EngramDataDirOp, currentDir, dstDir str
 		b.WriteString(fmt.Sprintf("      → %s\n", styles.SubtextStyle.Render(dstDir)))
 	case model.EngramDataDirOpDelete:
 		b.WriteString(fmt.Sprintf("  Delete  %s\n", styles.WarningStyle.Render(currentDir)))
-		b.WriteString(styles.WarningStyle.Render("  A snapshot backup will be created first."))
+		b.WriteString(styles.WarningStyle.Render("  All data files inside that directory will be removed."))
+		b.WriteString("\n")
+		writeBackupLocation(&b, backupRoot)
+		b.WriteString(styles.SubtextStyle.Render("  The directory itself is left in place."))
 		b.WriteString("\n")
 	case model.EngramDataDirOpFresh:
 		b.WriteString(fmt.Sprintf("  Delete  %s\n", styles.WarningStyle.Render(currentDir)))
-		b.WriteString(styles.WarningStyle.Render("  A snapshot backup will be created first."))
+		b.WriteString(styles.WarningStyle.Render("  All data files inside that directory will be removed."))
+		b.WriteString("\n")
+		writeBackupLocation(&b, backupRoot)
+		b.WriteString(styles.SubtextStyle.Render("  The directory itself is left in place."))
 		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
-	if op != model.EngramDataDirOpSet {
-		b.WriteString(styles.SubtextStyle.Render("A snapshot backup is created before any change."))
+	if op != model.EngramDataDirOpSet && op != model.EngramDataDirOpDelete && op != model.EngramDataDirOpFresh {
+		writeBackupLocation(&b, backupRoot)
 		b.WriteString("\n\n")
 	}
-	b.WriteString(renderOptions([]string{"Confirm", "Cancel"}, cursor))
+	options := []string{"Confirm", "Cancel"}
+	if op == model.EngramDataDirOpDelete || op == model.EngramDataDirOpFresh {
+		options = []string{"Yes, delete data", "No, go back"}
+	}
+	b.WriteString(renderOptions(options, cursor))
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("enter: confirm • esc: cancel"))
 
 	return b.String()
+}
+
+func writeBackupLocation(b *strings.Builder, backupRoot string) {
+	if strings.TrimSpace(backupRoot) == "" {
+		b.WriteString(styles.SubtextStyle.Render("  A snapshot backup is created under Gentle AI backups first."))
+		b.WriteString("\n")
+		return
+	}
+	b.WriteString(styles.SubtextStyle.Render("  A snapshot backup is created first under:"))
+	b.WriteString("\n")
+	b.WriteString(styles.SubtextStyle.Render("  " + backupRoot))
+	b.WriteString("\n")
 }
 
 func renderPathInput(path string, pos int) string {
@@ -193,7 +257,7 @@ func renderPathInput(path string, pos int) string {
 }
 
 // RenderEngramDataDirResult renders the success/error screen after an operation.
-func RenderEngramDataDirResult(op model.EngramDataDirOp, snapshotID string, err error) string {
+func RenderEngramDataDirResult(op model.EngramDataDirOp, snapshotID, backupRoot string, err error) string {
 	var b strings.Builder
 
 	if err != nil {
@@ -206,7 +270,11 @@ func RenderEngramDataDirResult(op model.EngramDataDirOp, snapshotID string, err 
 		b.WriteString(styles.SuccessStyle.Render("✓ " + engramOpVerb(op) + " complete"))
 		if snapshotID != "" {
 			b.WriteString("\n\n")
-			b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("  Snapshot: %s", snapshotID)))
+			b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("  Backup snapshot: %s", snapshotID)))
+			if strings.TrimSpace(backupRoot) != "" {
+				b.WriteString("\n")
+				b.WriteString(styles.SubtextStyle.Render("  Location: " + filepath.Join(backupRoot, snapshotID)))
+			}
 		}
 	}
 
