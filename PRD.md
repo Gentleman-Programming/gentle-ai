@@ -1289,7 +1289,7 @@ The completion screen MUST show:
 - R-SEC-02: The curl installer script MUST be verifiable (checksum)
 - R-SEC-03: All downloads MUST use HTTPS
 - R-SEC-04: The installer MUST NOT require root/sudo except for specific system operations (e.g., `chsh`), and MUST explain WHY when it does
-- R-SEC-05: Default agent permissions MUST block access to `.env` files and credentials paths
+- R-SEC-05: Default agent permissions MUST block access to `.env` files, credentials paths, SSH keys (`.ssh/`), macOS keychains (`Library/Keychains/`), and private key files (`.pem`, `.key`)
 
 ### 12.3 Reliability
 - R-REL-01: Every installation step MUST be idempotent (safe to re-run)

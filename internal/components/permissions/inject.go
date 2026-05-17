@@ -27,7 +27,13 @@ var claudeCodeOverlayJSON = []byte(`{
       "Read(.env)",
       "Read(.env.*)",
       "Edit(.env)",
-      "Edit(.env.*)"
+      "Edit(.env.*)",
+      "Read(.ssh/*)",
+      "Edit(.ssh/*)",
+      "Read(.credentials/*)",
+      "Edit(.credentials/*)",
+      "Read(*.pem)",
+      "Read(*.key)"
     ]
   }
 }
@@ -52,7 +58,11 @@ var openCodeOverlayJSON = []byte(`{
       "**/.env": "deny",
       "**/.env.*": "deny",
       "**/secrets/**": "deny",
-      "**/credentials.json": "deny"
+      "**/credentials.json": "deny",
+      "**/.ssh/**": "deny",
+      "**/.credentials/**": "deny",
+      "**/Library/Keychains/**": "deny",
+      "**/*.pem": "deny"
     }
   }
 }

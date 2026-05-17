@@ -70,7 +70,7 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestInjectAddsEnvToDenyList(t *testing.T) {
+func TestInjectClaudeCodeDenyListIncludesSensitivePaths(t *testing.T) {
 	home := t.TempDir()
 
 	if _, err := Inject(home, claudeAdapter()); err != nil {
@@ -98,13 +98,75 @@ func TestInjectAddsEnvToDenyList(t *testing.T) {
 		t.Fatalf("deny list missing or invalid: %#v", permissionsNode["deny"])
 	}
 
+	denySet := make(map[string]bool)
 	for _, entry := range denyList {
-		if value, ok := entry.(string); ok && value == "Read(.env)" {
-			return
+		if value, ok := entry.(string); ok {
+			denySet[value] = true
 		}
 	}
 
-	t.Fatalf("deny list missing explicit .env rule: %#v", denyList)
+	required := []string{
+		"Read(.env)",
+		"Read(.ssh/*)",
+		"Edit(.ssh/*)",
+		"Read(.credentials/*)",
+		"Edit(.credentials/*)",
+		"Read(*.pem)",
+		"Read(*.key)",
+	}
+	for _, pattern := range required {
+		if !denySet[pattern] {
+			t.Errorf("deny list missing %q: %#v", pattern, denyList)
+		}
+	}
+}
+
+func TestInjectOpenCodeDenyListIncludesSensitivePaths(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, opencodeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings file %q: %v", settingsPath, err)
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(content, &settings); err != nil {
+		t.Fatalf("unmarshal settings json: %v", err)
+	}
+
+	permNode, ok := settings["permission"].(map[string]any)
+	if !ok {
+		t.Fatalf("permission node missing or invalid: %#v", settings["permission"])
+	}
+
+	readNode, ok := permNode["read"].(map[string]any)
+	if !ok {
+		t.Fatalf("read node missing or invalid: %#v", permNode["read"])
+	}
+
+	required := []string{
+		"**/.ssh/**",
+		"**/.credentials/**",
+		"**/Library/Keychains/**",
+		"**/*.pem",
+		"**/.env",
+		"**/credentials.json",
+	}
+	for _, pattern := range required {
+		val, exists := readNode[pattern]
+		if !exists {
+			t.Errorf("read deny list missing %q: %#v", pattern, readNode)
+			continue
+		}
+		if val != "deny" {
+			t.Errorf("read deny list %q = %q, want %q", pattern, val, "deny")
+		}
+	}
 }
 
 func TestInjectClaudeCodeUsesBypassPermissions(t *testing.T) {
