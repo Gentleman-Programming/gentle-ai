@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -74,8 +75,14 @@ func DownloadLatestBinary(profile system.PlatformProfile) (string, error) {
 	return outPath, nil
 }
 
-// fetchLatestEngramVersion queries the GitHub Releases API for the latest engram
-// release and returns the version string (without leading "v").
+// semverTagRe matches tags that are stable semver: vX.Y.Z with optional
+// trailing metadata but no pre-release suffix (e.g. "v1.15.13" matches,
+// "v0.1.0-alpha" and "pi-v0.1.7" do not).
+var semverTagRe = regexp.MustCompile(`^v(\d+\.\d+\.\d+)$`)
+
+// fetchLatestEngramVersion queries the GitHub Releases API to find the latest
+// stable semver release of engram with downloadable assets.
+// It ignores non-semver tags (e.g. "pi-v0.1.7") and pre-release/draft releases.
 func fetchLatestEngramVersion() (string, error) {
 	token := githubToken()
 	version, status, err := fetchLatestEngramVersionRequest(token)
@@ -97,8 +104,21 @@ func fetchLatestEngramVersion() (string, error) {
 	return "", err
 }
 
+// githubRelease represents the subset of the GitHub Release API response we need.
+type githubRelease struct {
+	TagName    string `json:"tag_name"`
+	Prerelease bool   `json:"prerelease"`
+	Draft      bool   `json:"draft"`
+	Assets     []struct {
+		Name string `json:"name"`
+	} `json:"assets"`
+}
+
+// fetchLatestEngramVersionRequest lists releases from the GitHub API and returns
+// the version string (without leading "v") of the first stable semver release
+// that has at least one matching engram asset.
 func fetchLatestEngramVersionRequest(token string) (string, int, error) {
-	apiURL := fmt.Sprintf("%s/repos/%s/%s/releases/latest",
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/releases",
 		engramAPIBaseURL(), engramOwner, engramRepo)
 
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
@@ -120,19 +140,54 @@ func fetchLatestEngramVersionRequest(token string) (string, int, error) {
 		return "", resp.StatusCode, fmt.Errorf("GitHub API returned HTTP %d", resp.StatusCode)
 	}
 
-	var release struct {
-		TagName string `json:"tag_name"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", resp.StatusCode, fmt.Errorf("decode release JSON: %w", err)
+	var releases []githubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return "", resp.StatusCode, fmt.Errorf("decode releases JSON: %w", err)
 	}
 
-	version := strings.TrimPrefix(release.TagName, "v")
-	if version == "" {
-		return "", resp.StatusCode, fmt.Errorf("empty tag_name in GitHub release response")
+	for _, r := range releases {
+		// Skip drafts and pre-releases.
+		if r.Draft || r.Prerelease {
+			continue
+		}
+
+		// Only accept stable semver tags like vX.Y.Z.
+		m := semverTagRe.FindStringSubmatch(r.TagName)
+		if m == nil {
+			continue
+		}
+
+		version := m[1] // capture group: X.Y.Z without leading "v"
+
+		// Verify the release has at least one engram asset.
+		if !hasCompatibleAsset(r.Assets, version) {
+			continue
+		}
+
+		return version, resp.StatusCode, nil
 	}
 
-	return version, resp.StatusCode, nil
+	return "", resp.StatusCode, fmt.Errorf(
+		"no stable engram release with compatible assets found (checked %d releases); "+
+			"ensure the engram repo has a vX.Y.Z release with assets named engram_<version>_<os>_<arch>.(zip|tar.gz)",
+		len(releases))
+}
+
+// hasCompatibleAsset reports whether the assets list contains at least one
+// engram binary asset matching the expected naming convention:
+//
+//	engram_<version>_<os>_<arch>.(zip|tar.gz)
+func hasCompatibleAsset(assets []struct {
+	Name string `json:"name"`
+}, version string) bool {
+	prefix := engramName + "_" + version + "_"
+	for _, a := range assets {
+		if strings.HasPrefix(a.Name, prefix) &&
+			(strings.HasSuffix(a.Name, ".zip") || strings.HasSuffix(a.Name, ".tar.gz")) {
+			return true
+		}
+	}
+	return false
 }
 
 // githubToken returns a GitHub API token from the environment, if available.

@@ -19,16 +19,18 @@ import (
 // --- test helpers ---
 
 // makeServerWithFakeTarGz returns an httptest.Server that serves:
-//   - GET /releases/latest  → GitHub API JSON with the given version
+//   - GET /releases  → GitHub API JSON array with a stable semver release for the given version
 //   - GET /releases/download/…  → a real .tar.gz containing "engram" binary
 func makeServerWithFakeTarGz(t *testing.T, version string) *httptest.Server {
 	t.Helper()
 	tarContent := buildFakeTarGz(t, "engram")
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "releases/latest") {
-			payload := map[string]string{"tag_name": "v" + version}
+		if strings.Contains(r.URL.Path, "/releases") && !strings.Contains(r.URL.Path, "/download") {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(payload)
+			json.NewEncoder(w).Encode([]githubRelease{{
+				TagName:    "v" + version,
+				Assets:     []struct{ Name string `json:"name"` }{{Name: "engram_" + version + "_linux_amd64.tar.gz"}},
+			}})
 			return
 		}
 		// All other requests → binary asset
@@ -44,10 +46,12 @@ func makeServerWithFakeZip(t *testing.T, version string) *httptest.Server {
 	t.Helper()
 	zipContent := buildFakeZip(t, "engram.exe")
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "releases/latest") {
-			payload := map[string]string{"tag_name": "v" + version}
+		if strings.Contains(r.URL.Path, "/releases") && !strings.Contains(r.URL.Path, "/download") {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(payload)
+			json.NewEncoder(w).Encode([]githubRelease{{
+				TagName:    "v" + version,
+				Assets:     []struct{ Name string `json:"name"` }{{Name: "engram_" + version + "_windows_amd64.zip"}},
+			}})
 			return
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -332,14 +336,17 @@ func TestDownloadLatestBinaryFallsBackToAnonymousWhenTokenGets403(t *testing.T) 
 	const version = "1.3.0"
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "releases/latest") {
+		if strings.Contains(r.URL.Path, "/releases") && !strings.Contains(r.URL.Path, "/download") {
 			if r.Header.Get("Authorization") == "Bearer "+fakeToken {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"tag_name": "v" + version})
+			json.NewEncoder(w).Encode([]githubRelease{{
+				TagName: "v" + version,
+				Assets:  []struct{ Name string `json:"name"` }{{Name: "engram_" + version + "_linux_amd64.tar.gz"}},
+			}})
 			return
 		}
 
@@ -378,5 +385,138 @@ func TestDownloadLatestBinaryFallsBackToAnonymousWhenTokenGets403(t *testing.T) 
 
 	if _, err := os.Stat(installedPath); err != nil {
 		t.Fatalf("stat installed binary: %v", err)
+	}
+}
+
+// --- TestSkipsNonSemverTag ---
+
+// TestSkipsNonSemverTag verifies that when the first release has a non-semver tag
+// like "pi-v0.1.7" (without a matching asset) and a subsequent release has a
+// stable semver tag "v1.15.13" with assets, the resolver picks v1.15.13.
+func TestSkipsNonSemverTag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/releases") && !strings.Contains(r.URL.Path, "/download") {
+			w.Header().Set("Content-Type", "application/json")
+			// First release: pi-v0.1.7 — no semver tag, should be skipped.
+			// Second release: v1.15.13 — stable semver with assets.
+			json.NewEncoder(w).Encode([]githubRelease{
+				{
+					TagName: "pi-v0.1.7",
+					Assets:  []struct{ Name string `json:"name"` }{{Name: "engram"}},
+				},
+				{
+					TagName: "v1.15.13",
+					Assets:  []struct{ Name string `json:"name"` }{{Name: "engram_1.15.13_linux_amd64.tar.gz"}},
+				},
+			})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write(buildFakeTarGz(t, "engram"))
+	}))
+	defer server.Close()
+
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+	})
+
+	version, err := fetchLatestEngramVersion()
+	if err != nil {
+		t.Fatalf("fetchLatestEngramVersion() error = %v", err)
+	}
+	if version != "1.15.13" {
+		t.Errorf("got version %q, want %q", version, "1.15.13")
+	}
+}
+
+// --- TestNoCompatibleAssetsError ---
+
+// TestNoCompatibleAssetsError verifies that when no release has a compatible
+// engram asset, a clear error is returned.
+func TestNoCompatibleAssetsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/releases") && !strings.Contains(r.URL.Path, "/download") {
+			w.Header().Set("Content-Type", "application/json")
+			// Release with semver tag but no matching assets.
+			json.NewEncoder(w).Encode([]githubRelease{{
+				TagName: "v1.0.0",
+				Assets:  []struct{ Name string `json:"name"` }{{Name: "source.tar.gz"}},
+			}})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+	})
+
+	_, err := fetchLatestEngramVersion()
+	if err == nil {
+		t.Fatal("expected error when no compatible assets, got nil")
+	}
+	if !strings.Contains(err.Error(), "no stable engram release with compatible assets found") {
+		t.Errorf("error message should explain missing assets, got: %v", err)
+	}
+}
+
+// --- TestSkipsDraftAndPrerelease ---
+
+// TestSkipsDraftAndPrerelease verifies that draft and pre-release entries are
+// skipped even when they have valid semver tags.
+func TestSkipsDraftAndPrerelease(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/releases") && !strings.Contains(r.URL.Path, "/download") {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]githubRelease{
+				{
+					TagName:    "v2.0.0",
+					Prerelease: true,
+					Assets:     []struct{ Name string `json:"name"` }{{Name: "engram_2.0.0_linux_amd64.tar.gz"}},
+				},
+				{
+					TagName: "v1.15.13",
+					Draft:   true,
+					Assets:  []struct{ Name string `json:"name"` }{{Name: "engram_1.15.13_linux_amd64.tar.gz"}},
+				},
+				{
+					TagName: "v1.15.12",
+					Assets:  []struct{ Name string `json:"name"` }{{Name: "engram_1.15.12_linux_amd64.tar.gz"}},
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+	})
+
+	version, err := fetchLatestEngramVersion()
+	if err != nil {
+		t.Fatalf("fetchLatestEngramVersion() error = %v", err)
+	}
+	if version != "1.15.12" {
+		t.Errorf("got version %q, want %q (should skip prerelease v2.0.0 and draft v1.15.13)", version, "1.15.12")
 	}
 }
