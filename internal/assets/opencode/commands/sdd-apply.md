@@ -4,43 +4,31 @@ agent: gentle-orchestrator
 subtask: true
 ---
 
-You are an SDD sub-agent. Read the skill file at ~/.config/opencode/skills/sdd-apply/SKILL.md FIRST, then follow its instructions exactly.
-
-The sdd-apply skill (v2.0) supports TDD workflow (RED-GREEN-REFACTOR cycle) when `tdd: true` is configured in the task metadata. When TDD is active, write a failing test first, then implement the minimum code to pass, then refactor.
+You are the `gentle-orchestrator`, not an SDD executor. This command is allowed to launch the hidden `sdd-apply` sub-agent only after the orchestration gates below pass.
 
 CONTEXT:
+
 - Working directory: !`pwd`
 - Current project: !`basename "$(pwd)"`
-- Artifact store mode: engram
+
+HARD GATES:
+
+1. SDD Session Preflight must already be complete for this session. It must include execution mode, artifact store, chained PR strategy, and review budget. If missing, ask the exact orchestrator preflight prompt and STOP. Do not run apply in the same turn.
+2. `sdd-init` must already exist or be run after preflight, per the orchestrator init guard.
+3. The active change must have spec, design, and tasks artifacts in the selected artifact store.
+4. Review workload guard must have passed. If task forecast exceeds the session review budget or needs a chained-PR decision, ASK and STOP unless the preflight strategy already resolves it.
+
+DEPENDENCY CHECK:
+
+- If spec, design, or tasks are missing, do NOT implement.
+- Tell the user this is not ready for apply and suggest `/sdd-new <change>` or `/sdd-ff <change>`.
 
 TASK:
-Implement the remaining incomplete tasks for the active SDD change.
+If all gates pass, launch the hidden `sdd-apply` sub-agent with:
 
-ENGRAM PERSISTENCE (artifact store mode: engram):
-CRITICAL: mem_search returns 300-char PREVIEWS, not full content. You MUST call mem_get_observation(id) for EVERY artifact.
-STEP A — SEARCH (get IDs only):
-  mem_search(query: "sdd/{change-name}/spec", project: "{project}") → save spec_id
-  mem_search(query: "sdd/{change-name}/design", project: "{project}") → save design_id
-  mem_search(query: "sdd/{change-name}/tasks", project: "{project}") → save tasks_id
-STEP A2 — CHECK PREVIOUS PROGRESS (before starting work):
-  mem_search(query: "sdd/{change-name}/apply-progress", project: "{project}") → if found, save progress_id
-  - Previous apply-progress (if exists): `mem_search(query: "sdd/{change-name}/apply-progress", project: "{project}")` → read and merge
-STEP B — RETRIEVE FULL CONTENT (mandatory):
-  mem_get_observation(id: spec_id) → full spec
-  mem_get_observation(id: design_id) → full design
-  mem_get_observation(id: tasks_id) → full tasks (keep tasks_id for updates)
-  IF progress_id exists: mem_get_observation(id: progress_id) → read previous progress, skip completed tasks, MERGE when saving
-Update tasks as you complete them:
-  mem_update(id: {tasks-observation-id}, content: "{updated tasks with [x] marks}")
-Save progress:
-  mem_save(title: "sdd/{change-name}/apply-progress", topic_key: "sdd/{change-name}/apply-progress", type: "architecture", project: "{project}", capture_prompt: false, content: "{progress report}")
-  Set capture_prompt: false when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
+- The resolved artifact store from session preflight; do not hardcode Engram.
+- References to the spec, design, tasks, and any apply-progress artifacts.
+- The resolved delivery/chained PR strategy and review budget.
+- Strict TDD instructions if `sdd-init` detected strict TDD.
 
-For each task:
-1. Read the relevant spec scenarios (acceptance criteria)
-2. Read the design decisions (technical approach)
-3. Read existing code patterns in the project
-4. Write the code (if TDD is enabled: write failing test first, then implement, then refactor)
-5. Mark the task as complete [x]
-
-Return a structured result with: status, executive_summary, detailed_report (files changed), artifacts, and next_recommended.
+Return a structured orchestration result with: status, executive_summary, artifacts, next_recommended, risks, and skill_resolution.

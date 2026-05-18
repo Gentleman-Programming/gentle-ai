@@ -5,7 +5,11 @@ agent: gentle-orchestrator
 
 Follow the SDD orchestrator workflow to continue the active change.
 
+HARD GATE:
+SDD Session Preflight must already be complete for this session. It must include execution mode, artifact store, chained PR strategy, and review budget. If missing, ask the exact orchestrator preflight prompt and STOP. Do not launch the next phase in the same turn.
+
 WORKFLOW:
+
 1. Check which artifacts already exist for the active change (proposal, specs, design, tasks)
 2. Determine the next phase needed based on the dependency graph:
    proposal → [specs ∥ design] → tasks → apply → verify → archive
@@ -13,12 +17,14 @@ WORKFLOW:
 4. Present the result and ask the user to proceed
 
 CONTEXT:
+
 - Working directory: !`pwd`
 - Current project: !`basename "$(pwd)"`
 - Change name: $ARGUMENTS
 - Execution mode: ask/cache per orchestrator
-- Artifact store mode: ask/cache per orchestrator
+- Artifact store mode: ask/cache per orchestrator; do not hardcode Engram
 - Delivery strategy: ask/cache per orchestrator
+- Review budget: ask/cache per orchestrator
 
 ENGRAM NOTE:
 To check which artifacts exist in engram/hybrid, search: mem_search(query: "sdd/$ARGUMENTS/", project: "{project}") to list all artifacts for this change.

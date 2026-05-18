@@ -4,38 +4,26 @@ agent: gentle-orchestrator
 subtask: true
 ---
 
-You are an SDD sub-agent. Read the skill file at ~/.config/opencode/skills/sdd-archive/SKILL.md FIRST, then follow its instructions exactly.
+You are the `gentle-orchestrator`, not an SDD executor. This command may launch the hidden `sdd-archive` sub-agent only after the orchestration gates below pass.
 
 CONTEXT:
+
 - Working directory: !`pwd`
 - Current project: !`basename "$(pwd)"`
-- Artifact store mode: engram
+
+HARD GATES:
+
+1. SDD Session Preflight must already be complete for this session. It must include execution mode, artifact store, chained PR strategy, and review budget. If missing, ask the exact orchestrator preflight prompt and STOP. Do not run archive in the same turn.
+2. `sdd-init` must already exist or be run after preflight, per the orchestrator init guard.
+3. The active change must have proposal, spec, design, tasks, apply-progress, and verify-report artifacts in the selected artifact store.
+4. Use the resolved artifact store from session preflight; do not hardcode Engram.
+
+DEPENDENCY CHECK:
+
+- If the verification report is missing or does not say the change is ready, do NOT archive.
+- Tell the user what is missing and suggest `/sdd-verify <change>` or `/sdd-continue <change>`.
 
 TASK:
-Archive the active SDD change. Read the verification report first to confirm the change is ready. Then:
+If all gates pass, launch the hidden `sdd-archive` sub-agent with references to all required artifacts and the resolved artifact store.
 
-ENGRAM PERSISTENCE (artifact store mode: engram):
-CRITICAL: mem_search returns 300-char PREVIEWS, not full content. You MUST call mem_get_observation(id) for EVERY artifact.
-STEP A — SEARCH (get IDs only):
-  mem_search(query: "sdd/{change-name}/proposal", project: "{project}") → save proposal_id
-  mem_search(query: "sdd/{change-name}/spec", project: "{project}") → save spec_id
-  mem_search(query: "sdd/{change-name}/design", project: "{project}") → save design_id
-  mem_search(query: "sdd/{change-name}/tasks", project: "{project}") → save tasks_id
-  mem_search(query: "sdd/{change-name}/verify-report", project: "{project}") → save verify_id
-STEP B — RETRIEVE FULL CONTENT (mandatory):
-  mem_get_observation(id: proposal_id) → full proposal
-  mem_get_observation(id: spec_id) → full spec
-  mem_get_observation(id: design_id) → full design
-  mem_get_observation(id: tasks_id) → full tasks
-  mem_get_observation(id: verify_id) → full verification report
-Record all observation IDs in the archive report for traceability.
-Save:
-  mem_save(title: "sdd/{change-name}/archive-report", topic_key: "sdd/{change-name}/archive-report", type: "architecture", project: "{project}", capture_prompt: false, content: "{archive report with observation IDs}")
-  Set capture_prompt: false when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
-
-Then:
-1. Sync delta specs into main specs (source of truth)
-2. Move the change folder to archive with date prefix
-3. Verify the archive is complete
-
-Return a structured result with: status, executive_summary, artifacts, and next_recommended.
+Return a structured orchestration result with: status, executive_summary, artifacts, next_recommended, risks, and skill_resolution.

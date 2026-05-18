@@ -440,9 +440,59 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 	for _, wanted := range []string{
 		"Bind this to the dedicated `gentle-orchestrator` agent only.",
 		"agent.gentle-orchestrator.model",
+		"### SDD Session Preflight (HARD GATE)",
+		"ask the exact user-facing preflight prompt above and STOP",
+		"Never launch `sdd-apply` just because the user asked to implement a feature",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated preserved prompt reference %q", wanted)
+		}
+	}
+}
+
+func TestInjectOpenCodeMigratesPartialPreflightPrompt(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+
+	const partialPrompt = "# Custom prompt\n\nBefore continuing with SDD, choose one option per group.\n"
+	seed := `{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "prompt": ` + strconv.Quote(partialPrompt) + `
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		PreserveOpenCodeOrchestratorPrompt: true,
+	})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	text := string(settingsBytes)
+	for _, wanted := range []string{
+		"# Custom prompt",
+		"Before continuing with SDD, choose one option per group.",
+		"### SDD Session Preflight (HARD GATE)",
+		"openspec/config.yaml",
+		"Never launch `sdd-apply` just because the user asked to implement a feature",
+	} {
+		if !strings.Contains(text, wanted) {
+			t.Fatalf("opencode.json missing migrated partial prompt content %q", wanted)
 		}
 	}
 }
@@ -501,8 +551,12 @@ func TestInjectOpenCodeMigratesLegacyBaseOrchestratorToGentleOrchestrator(t *tes
 	if !ok {
 		t.Fatal("gentle-orchestrator agent not found or wrong type")
 	}
-	if prompt, _ := gentleOrchestratorAgent["prompt"].(string); prompt != legacyPrompt {
-		t.Fatalf("gentle-orchestrator prompt = %q, want migrated legacy prompt", prompt)
+	prompt, _ := gentleOrchestratorAgent["prompt"].(string)
+	if !strings.Contains(prompt, legacyPrompt) {
+		t.Fatalf("gentle-orchestrator prompt = %q, want it to preserve migrated legacy prompt", prompt)
+	}
+	if !strings.Contains(prompt, "### SDD Session Preflight (HARD GATE)") {
+		t.Fatalf("gentle-orchestrator prompt = %q, want appended preflight migration", prompt)
 	}
 }
 
@@ -555,8 +609,12 @@ func TestInjectOpenCodeMigratesMisnamedGentlemanSDDOrchestrator(t *testing.T) {
 	if !ok {
 		t.Fatal("gentle-orchestrator agent not found or wrong type")
 	}
-	if prompt, _ := gentleOrchestratorAgent["prompt"].(string); prompt != priorPrompt {
-		t.Fatalf("gentle-orchestrator prompt = %q, want migrated misnamed prompt", prompt)
+	prompt, _ := gentleOrchestratorAgent["prompt"].(string)
+	if !strings.Contains(prompt, priorPrompt) {
+		t.Fatalf("gentle-orchestrator prompt = %q, want it to preserve migrated misnamed prompt", prompt)
+	}
+	if !strings.Contains(prompt, "### SDD Session Preflight (HARD GATE)") {
+		t.Fatalf("gentle-orchestrator prompt = %q, want appended preflight migration", prompt)
 	}
 }
 
@@ -612,8 +670,12 @@ func TestInjectOpenCodeDeletesRevokedGentlemanAgent(t *testing.T) {
 	if !ok {
 		t.Fatal("gentle-orchestrator agent not found or wrong type")
 	}
-	if prompt, _ := gentleOrchestratorAgent["prompt"].(string); prompt != "CURRENT_GENTLE_ORCHESTRATOR_PROMPT" {
-		t.Fatalf("gentle-orchestrator prompt = %q, want preserved current prompt", prompt)
+	prompt, _ := gentleOrchestratorAgent["prompt"].(string)
+	if !strings.Contains(prompt, "CURRENT_GENTLE_ORCHESTRATOR_PROMPT") {
+		t.Fatalf("gentle-orchestrator prompt = %q, want it to preserve current prompt", prompt)
+	}
+	if !strings.Contains(prompt, "### SDD Session Preflight (HARD GATE)") {
+		t.Fatalf("gentle-orchestrator prompt = %q, want appended preflight migration", prompt)
 	}
 }
 
@@ -867,7 +929,7 @@ func TestInjectKimiKiroWindsurfAntigravityPreserveNativeChainStrategyWording(t *
 			promptPath: func(home string, _ agents.Adapter) string {
 				return filepath.Join(home, ".kimi", "sdd-orchestrator.md")
 			},
-			required: []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "/skill:sdd-*", "multiagent:Task", "custom-agent prompt"},
+			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "/skill:sdd-*", "multiagent:Task", "custom-agent prompt"},
 			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation"},
 		},
 		{
@@ -876,7 +938,7 @@ func TestInjectKimiKiroWindsurfAntigravityPreserveNativeChainStrategyWording(t *
 			promptPath: func(home string, adapter agents.Adapter) string {
 				return adapter.SystemPromptFile(home)
 			},
-			required: []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "Kiro phase context", "native Kiro subagent context"},
+			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "Kiro phase context", "native Kiro subagent context"},
 			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation"},
 		},
 		{
@@ -885,7 +947,7 @@ func TestInjectKimiKiroWindsurfAntigravityPreserveNativeChainStrategyWording(t *
 			promptPath: func(home string, adapter agents.Adapter) string {
 				return adapter.SystemPromptFile(home)
 			},
-			required: []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "inline phase context", "There are no sub-agents"},
+			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "inline phase context", "There are no sub-agents"},
 			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation", "custom sub-agent prompts"},
 		},
 		{
@@ -894,7 +956,7 @@ func TestInjectKimiKiroWindsurfAntigravityPreserveNativeChainStrategyWording(t *
 			promptPath: func(home string, adapter agents.Adapter) string {
 				return adapter.SystemPromptFile(home)
 			},
-			required: []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "inline phase context", "Phase Execution Protocol"},
+			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "inline phase context", "Phase Execution Protocol"},
 			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation", "custom sub-agent prompts"},
 		},
 	}

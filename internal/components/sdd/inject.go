@@ -819,7 +819,78 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 		"agent.sdd-orchestrator.model",
 		"agent.gentle-orchestrator.model",
 	)
-	return replacer.Replace(prompt)
+	return ensurePreservedOpenCodeOrchestratorPreflight(replacer.Replace(prompt))
+}
+
+func ensurePreservedOpenCodeOrchestratorPreflight(prompt string) string {
+	preflight := `
+
+<!-- gentle-ai:sdd-session-preflight-migration -->
+### SDD Session Preflight (HARD GATE)
+
+Before executing ANY SDD command or natural-language SDD request, ensure this session has an explicit ` + "`SDD Session Preflight`" + ` decision block.
+
+Required preflight choices: execution mode, artifact store, chained PR strategy, and review budget.
+
+Ask the user directly with a compact, numbered preflight prompt. Do NOT ask the user to type raw keys like ` + "`execution mode`" + `, ` + "`artifact store`" + `, ` + "`chained PR strategy`" + `, or ` + "`review budget`" + `. Do NOT mention non-existent tools. Do NOT invent informal values; use only the canonical values after the user chooses.
+
+Use this exact shape:
+
+` + "```text" + `
+Before continuing with SDD, choose one option per group.
+Reply with "use recommended" or with codes like: A1, B1, C1, D1.
+
+A. Pace
+   A1 Interactive (recommended): show each phase and wait for confirmation before continuing.
+   A2 Automatic: run phases back-to-back and stop only on high risk.
+
+B. Artifacts
+   B1 OpenSpec (recommended): repo files, traceable in review.
+   B2 Engram: faster, no spec files in the repo.
+   B3 Both: OpenSpec files plus Engram copy.
+
+C. PRs
+   C1 Ask me (recommended): stop and ask if the forecast exceeds the budget.
+   C2 Single PR: try to keep the change in one PR.
+   C3 Chained: split into chained PRs from the start.
+   C4 Auto: decide from the size forecast.
+
+D. Review
+   D1 400 lines (recommended): stop if forecast exceeds 400 changed lines.
+   D2 800 lines: more permissive; useful for medium changes.
+   D3 Other: ask for the number afterwards.
+` + "```" + `
+
+After asking this, STOP and wait for the user's answer.
+
+Map answers to canonical values: A1/Interactive -> ` + "`interactive`" + `; A2/Automatic -> ` + "`auto`" + `; B1/OpenSpec -> ` + "`openspec`" + `; B2/Engram -> ` + "`engram`" + `; B3/Both -> ` + "`both`" + `; C1/Ask me -> ` + "`ask-always`" + `; C2/Single PR -> ` + "`single-pr-default`" + `; C3/Chained -> ` + "`force-chained`" + `; C4/Auto -> ` + "`auto-forecast`" + `; D1/400 lines -> ` + "`review_budget_lines: 400`" + `; D2/800 lines -> ` + "`review_budget_lines: 800`" + `; D3/Other -> ask one follow-up for the number.
+
+Hard gate rules:
+
+- ` + "`openspec/config.yaml`" + `, existing SDD artifacts, previous ` + "`sdd-init`" + ` results, or installed SDD assets do NOT satisfy session preflight.
+- If the session has no preflight block, ask the exact user-facing preflight prompt above and STOP. Do not run init, delegate phases, edit files, or apply tasks in the same turn.
+- For a new feature request that says to use SDD, start at preflight -> init guard -> explore/proposal. Never launch ` + "`sdd-apply`" + ` just because the user asked to implement a feature.
+<!-- /gentle-ai:sdd-session-preflight-migration -->
+`
+
+	if strings.Contains(prompt, "### SDD Session Preflight (HARD GATE)") &&
+		strings.Contains(prompt, "openspec/config.yaml") &&
+		strings.Contains(prompt, "Never launch `sdd-apply`") &&
+		strings.Contains(prompt, "Before continuing with SDD") &&
+		!strings.Contains(prompt, "question` tool") {
+		return prompt
+	}
+
+	start := "<!-- gentle-ai:sdd-session-preflight-migration -->"
+	end := "<!-- /gentle-ai:sdd-session-preflight-migration -->"
+	if startIdx := strings.Index(prompt, start); startIdx >= 0 {
+		if relEndIdx := strings.Index(prompt[startIdx:], end); relEndIdx >= 0 {
+			endIdx := startIdx + relEndIdx + len(end)
+			return strings.TrimRight(prompt[:startIdx], "\n") + preflight + prompt[endIdx:]
+		}
+	}
+
+	return strings.TrimRight(prompt, "\n") + preflight
 }
 
 func readOpenCodeAgentPrompt(settingsPath, agentKey string) (string, error) {

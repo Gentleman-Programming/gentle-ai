@@ -4,35 +4,26 @@ agent: gentle-orchestrator
 subtask: true
 ---
 
-You are an SDD sub-agent. Read the skill file at ~/.config/opencode/skills/sdd-verify/SKILL.md FIRST, then follow its instructions exactly.
+You are the `gentle-orchestrator`, not an SDD executor. This command may launch the hidden `sdd-verify` sub-agent only after the orchestration gates below pass.
 
 CONTEXT:
+
 - Working directory: !`pwd`
 - Current project: !`basename "$(pwd)"`
-- Artifact store mode: engram
+
+HARD GATES:
+
+1. SDD Session Preflight must already be complete for this session. It must include execution mode, artifact store, chained PR strategy, and review budget. If missing, ask the exact orchestrator preflight prompt and STOP. Do not run verify in the same turn.
+2. `sdd-init` must already exist or be run after preflight, per the orchestrator init guard.
+3. The active change must have spec, design, tasks, and apply-progress artifacts in the selected artifact store.
+4. Use the resolved artifact store from session preflight; do not hardcode Engram.
+
+DEPENDENCY CHECK:
+
+- If required artifacts are missing, do NOT verify.
+- Tell the user what is missing and suggest `/sdd-continue <change>` or `/sdd-apply <change>` as appropriate.
 
 TASK:
-Verify the active SDD change. Read the proposal, specs, design, and tasks artifacts. Then:
+If all gates pass, launch the hidden `sdd-verify` sub-agent with references to the required artifacts, resolved review budget, and strict TDD instructions if `sdd-init` detected strict TDD.
 
-ENGRAM PERSISTENCE (artifact store mode: engram):
-CRITICAL: mem_search returns 300-char PREVIEWS, not full content. You MUST call mem_get_observation(id) for EVERY artifact.
-STEP A — SEARCH (get IDs only):
-  mem_search(query: "sdd/{change-name}/spec", project: "{project}") → save spec_id
-  mem_search(query: "sdd/{change-name}/design", project: "{project}") → save design_id
-  mem_search(query: "sdd/{change-name}/tasks", project: "{project}") → save tasks_id
-STEP B — RETRIEVE FULL CONTENT (mandatory):
-  mem_get_observation(id: spec_id) → full spec
-  mem_get_observation(id: design_id) → full design
-  mem_get_observation(id: tasks_id) → full tasks
-Save report:
-  mem_save(title: "sdd/{change-name}/verify-report", topic_key: "sdd/{change-name}/verify-report", type: "architecture", project: "{project}", capture_prompt: false, content: "{verification report}")
-  Set capture_prompt: false when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
-
-Then:
-1. Check completeness — are all tasks done?
-2. Check correctness — does code match specs?
-3. Check coherence — were design decisions followed?
-4. Run tests and build (real execution)
-5. Build the spec compliance matrix
-
-Return a structured verification report with: status, executive_summary, detailed_report, artifacts, and next_recommended.
+Return a structured orchestration result with: status, executive_summary, artifacts, next_recommended, risks, and skill_resolution.

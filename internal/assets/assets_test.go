@@ -237,6 +237,74 @@ func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 	}
 }
 
+func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
+	content := MustRead("opencode/sdd-orchestrator.md")
+
+	for _, required := range []string{
+		"### SDD Session Preflight (HARD GATE)",
+		"Before executing ANY SDD command or natural-language SDD request",
+		"Execution mode",
+		"Artifact store",
+		"Chained PR strategy",
+		"Review budget",
+		"`openspec/config.yaml`, existing SDD artifacts, previous `sdd-init` results, or installed SDD assets do NOT satisfy session preflight",
+		"ask the exact user-facing preflight prompt above and STOP",
+		"Ask the user directly with a compact, numbered preflight prompt",
+		"Do NOT mention non-existent tools",
+		"A1, B1, C1, D1",
+		"### SDD Entry Routing (MANDATORY)",
+		"Never launch `sdd-apply` just because the user asked to implement a feature",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("opencode/sdd-orchestrator.md missing required preflight wording %q", required)
+		}
+	}
+}
+
+func TestOpenCodeSDDCommandsAreOrchestratorGuarded(t *testing.T) {
+	entries, err := FS.ReadDir("opencode/commands")
+	if err != nil {
+		t.Fatalf("ReadDir(opencode/commands) error = %v", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "sdd-") {
+			continue
+		}
+		path := "opencode/commands/" + entry.Name()
+		content := MustRead(path)
+
+		for _, forbidden := range []string{
+			"You are an SDD sub-agent",
+			"Artifact store mode: engram",
+		} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("%s must not bypass orchestration with %q", path, forbidden)
+			}
+		}
+
+		for _, required := range []string{
+			"SDD Session Preflight must already be complete",
+			"If missing, ask the exact orchestrator preflight prompt and STOP",
+		} {
+			if !strings.Contains(content, required) {
+				t.Fatalf("%s missing orchestration guard wording %q", path, required)
+			}
+		}
+	}
+
+	applyContent := MustRead("opencode/commands/sdd-apply.md")
+	for _, required := range []string{
+		"You are the `gentle-orchestrator`, not an SDD executor",
+		"If spec, design, or tasks are missing, do NOT implement",
+		"do not hardcode Engram",
+	} {
+		if !strings.Contains(applyContent, required) {
+			t.Fatalf("opencode/commands/sdd-apply.md missing apply guard wording %q", required)
+		}
+	}
+}
+
 func TestClaudeSDDOrchestratorChainStrategy(t *testing.T) {
 	content := MustRead("claude/sdd-orchestrator.md")
 
