@@ -710,8 +710,43 @@ func TestCommandsDoNotUseEchoNPwd(t *testing.T) {
 			path := dir + "/" + entry.Name()
 			content := MustRead(path)
 			if strings.Contains(content, forbidden) {
-				t.Errorf("%s contains banned pattern %q — use !`pwd` or !`basename \"$(pwd)\"` instead", path, forbidden)
+				t.Errorf("%s contains banned pattern %q — use a safer detection mechanism instead", path, forbidden)
 			}
+		}
+	}
+}
+
+// TestOpenCodeCommandsDetectWorkspaceAgentSide guards against parse-time shell
+// interpolation for the working directory in OpenCode command files. In
+// OpenCode Desktop (Electron), patterns like !pwd and !basename $(pwd) evaluate
+// against the Electron app data directory rather than the project workspace
+// (issue #74). Command files must instruct the agent to detect the workspace
+// via its bash tool (e.g. git rev-parse --show-toplevel) and treat that
+// returned path as authoritative.
+func TestOpenCodeCommandsDetectWorkspaceAgentSide(t *testing.T) {
+	forbiddenPatterns := []string{
+		"!`pwd`",
+		"!`basename \"$(pwd)\"`",
+	}
+	const requiredHint = "git rev-parse --show-toplevel"
+
+	entries, err := FS.ReadDir("opencode/commands")
+	if err != nil {
+		t.Fatalf("ReadDir(opencode/commands) error = %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		path := "opencode/commands/" + entry.Name()
+		content := MustRead(path)
+		for _, pat := range forbiddenPatterns {
+			if strings.Contains(content, pat) {
+				t.Errorf("%s contains banned shell interpolation %q — detect the workspace via the agent's bash tool instead (see #74)", path, pat)
+			}
+		}
+		if strings.Contains(content, "Working directory:") && !strings.Contains(content, requiredHint) {
+			t.Errorf("%s mentions \"Working directory:\" without the agent-side detection hint %q (see #74)", path, requiredHint)
 		}
 	}
 }
