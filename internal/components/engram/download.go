@@ -135,8 +135,9 @@ func fetchLatestEngramVersionRequest(token string) (string, int, error) {
 
 	// Older tests and non-GitHub-compatible mocks may omit assets entirely; in
 	// that case keep the historical latest-release behavior. GitHub returns an
-	// explicit assets array, so skip releases that do not publish engram binaries
-	// (for example pi-v* package releases in the same repository).
+	// explicit assets array, so skip releases that do not publish core engram
+	// binaries (for example pi-v* gentle-engram package releases, which are
+	// separate from core engram binary releases).
 	if release.Assets != nil && !hasEngramBinaryAsset(*release.Assets) {
 		fallbackVersion, fallbackStatus, err := fetchLatestEngramVersionWithAssets(token)
 		if err == nil {
