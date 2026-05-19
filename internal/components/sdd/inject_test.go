@@ -441,7 +441,9 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"Bind this to the dedicated `gentle-orchestrator` agent only.",
 		"agent.gentle-orchestrator.model",
 		"### SDD Session Preflight (HARD GATE)",
-		"ask the exact user-facing preflight prompt above and STOP",
+		"ask the localized user-facing preflight prompt above and STOP",
+		"Match the user's current language",
+		"pause after each delegated phase returns",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 	} {
 		if !strings.Contains(text, wanted) {
@@ -487,8 +489,11 @@ func TestInjectOpenCodeMigratesPartialPreflightPrompt(t *testing.T) {
 	for _, wanted := range []string{
 		"# Custom prompt",
 		"Before continuing with SDD, choose one option per group.",
+		"Antes de continuar con SDD, elegí una opción por grupo.",
 		"### SDD Session Preflight (HARD GATE)",
 		"openspec/config.yaml",
+		"Match the user's current language",
+		"pause after each delegated phase returns",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 	} {
 		if !strings.Contains(text, wanted) {

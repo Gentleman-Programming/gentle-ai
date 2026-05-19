@@ -832,9 +832,9 @@ Before executing ANY SDD command or natural-language SDD request, ensure this se
 
 Required preflight choices: execution mode, artifact store, chained PR strategy, and review budget.
 
-Ask the user directly with a compact, numbered preflight prompt. Do NOT ask the user to type raw keys like ` + "`execution mode`" + `, ` + "`artifact store`" + `, ` + "`chained PR strategy`" + `, or ` + "`review budget`" + `. Do NOT mention non-existent tools. Do NOT invent informal values; use only the canonical values after the user chooses.
+Ask the user directly with a compact, numbered preflight prompt. Match the user's current language for all user-facing prose. If the user writes Spanish, ask the preflight in Spanish. Keep option codes (` + "`A1`" + `, ` + "`B1`" + `, ` + "`C1`" + `, ` + "`D1`" + `) and canonical values unchanged. Do NOT ask the user to type raw keys like ` + "`execution mode`" + `, ` + "`artifact store`" + `, ` + "`chained PR strategy`" + `, or ` + "`review budget`" + `. Do NOT mention non-existent tools. Do NOT invent informal values; use only the canonical values after the user chooses.
 
-Use this exact shape:
+Use this shape; translate user-facing prose to the user's current language while preserving option codes:
 
 ` + "```text" + `
 Before continuing with SDD, choose one option per group.
@@ -863,19 +863,49 @@ D. Review
 
 After asking this, STOP and wait for the user's answer.
 
+If the user's current language is Spanish, use this localized shape:
+
+` + "```text" + `
+Antes de continuar con SDD, elegí una opción por grupo.
+Respondé con "usar recomendado" o con códigos como: A1, B1, C1, D1.
+
+A. Ritmo
+   A1 Interactivo (recomendado): mostrar cada fase y esperar confirmación antes de continuar.
+   A2 Automático: ejecutar las fases seguidas y frenar solo ante riesgo alto.
+
+B. Artefactos
+   B1 OpenSpec (recomendado): archivos en el repo, trazables en revisión.
+   B2 Engram: más rápido, sin archivos de especificación en el repo.
+   B3 Ambos: archivos OpenSpec más copia en Engram.
+
+C. PRs
+   C1 Preguntarme (recomendado): frenar y preguntar si la estimación supera el presupuesto.
+   C2 Un solo PR: intentar mantener el cambio en un PR.
+   C3 Encadenados: separar en PRs encadenados desde el inicio.
+   C4 Auto: decidir según la estimación de tamaño.
+
+D. Revisión
+   D1 400 líneas (recomendado): frenar si la estimación supera 400 líneas cambiadas.
+   D2 800 líneas: más permisivo; útil para cambios medianos.
+   D3 Otro: preguntar el número después.
+` + "```" + `
+
 Map answers to canonical values: A1/Interactive -> ` + "`interactive`" + `; A2/Automatic -> ` + "`auto`" + `; B1/OpenSpec -> ` + "`openspec`" + `; B2/Engram -> ` + "`engram`" + `; B3/Both -> ` + "`both`" + `; C1/Ask me -> ` + "`ask-always`" + `; C2/Single PR -> ` + "`single-pr-default`" + `; C3/Chained -> ` + "`force-chained`" + `; C4/Auto -> ` + "`auto-forecast`" + `; D1/400 lines -> ` + "`review_budget_lines: 400`" + `; D2/800 lines -> ` + "`review_budget_lines: 800`" + `; D3/Other -> ask one follow-up for the number.
 
 Hard gate rules:
 
 - ` + "`openspec/config.yaml`" + `, existing SDD artifacts, previous ` + "`sdd-init`" + ` results, or installed SDD assets do NOT satisfy session preflight.
-- If the session has no preflight block, ask the exact user-facing preflight prompt above and STOP. Do not run init, delegate phases, edit files, or apply tasks in the same turn.
+- If the session has no preflight block, ask the localized user-facing preflight prompt above and STOP. Do not run init, delegate phases, edit files, or apply tasks in the same turn.
 - For a new feature request that says to use SDD, start at preflight -> init guard -> explore/proposal. Never launch ` + "`sdd-apply`" + ` just because the user asked to implement a feature.
+- In ` + "`interactive`" + ` mode, pause after each delegated phase returns, summarize the phase, ask before launching the next phase, and STOP. Match the user's language; for Spanish ask: "¿Querés ajustar algo o continuamos?". Do not run /sdd-ff phases back-to-back unless execution mode is ` + "`auto`" + `.
 <!-- /gentle-ai:sdd-session-preflight-migration -->
 `
 
 	if strings.Contains(prompt, "### SDD Session Preflight (HARD GATE)") &&
 		strings.Contains(prompt, "openspec/config.yaml") &&
 		strings.Contains(prompt, "Never launch `sdd-apply`") &&
+		strings.Contains(prompt, "Match the user's current language") &&
+		strings.Contains(prompt, "pause after each delegated phase returns") &&
 		strings.Contains(prompt, "Before continuing with SDD") &&
 		!strings.Contains(prompt, "question` tool") {
 		return prompt

@@ -9,14 +9,17 @@ HARD GATE:
 SDD Session Preflight must already be complete for this session. It must include execution mode, artifact store, chained PR strategy, and review budget. If missing, ask the exact orchestrator preflight prompt and STOP. Do not launch planning sub-agents in the same turn.
 
 WORKFLOW:
-Run these sub-agents in sequence:
+Honor the cached execution mode from SDD Session Preflight.
+
+Planning phases:
 
 1. sdd-propose — create the proposal
 2. sdd-spec — write specifications
 3. sdd-design — create technical design
 4. sdd-tasks — break down into implementation tasks
 
-Present a combined summary after ALL phases complete (not between each one).
+- In `interactive` mode: run only the next planning phase, present its summary and artifact path(s), ask whether to adjust or continue, then STOP. Do not launch the following phase until the user confirms.
+- In `auto` mode: run all planning phases back-to-back and present a combined summary after all phases complete.
 
 CONTEXT:
 

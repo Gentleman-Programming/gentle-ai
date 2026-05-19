@@ -248,15 +248,65 @@ func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 		"Chained PR strategy",
 		"Review budget",
 		"`openspec/config.yaml`, existing SDD artifacts, previous `sdd-init` results, or installed SDD assets do NOT satisfy session preflight",
-		"ask the exact user-facing preflight prompt above and STOP",
+		"ask the localized user-facing preflight prompt above and STOP",
 		"Ask the user directly with a compact, numbered preflight prompt",
+		"Match the user's current language",
+		"translate user-facing prose to the user's current language",
+		"¿Querés ajustar algo o continuamos?",
+		"B. Artefactos",
+		"D. Revisión",
+		"la estimación supera el presupuesto",
 		"Do NOT mention non-existent tools",
 		"A1, B1, C1, D1",
 		"### SDD Entry Routing (MANDATORY)",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
+		"In **Interactive** mode, between phases",
+		"Ask before launching the next phase",
 	} {
 		if !strings.Contains(content, required) {
 			t.Fatalf("opencode/sdd-orchestrator.md missing required preflight wording %q", required)
+		}
+	}
+}
+
+func TestOpenCodeSDDOrchestratorSpanishPreflightIsLocalized(t *testing.T) {
+	content := MustRead("opencode/sdd-orchestrator.md")
+	start := strings.Index(content, "Antes de continuar con SDD")
+	if start < 0 {
+		t.Fatal("opencode/sdd-orchestrator.md missing Spanish preflight block")
+	}
+	end := strings.Index(content[start:], "Map answers to canonical values")
+	if end < 0 {
+		t.Fatal("opencode/sdd-orchestrator.md missing end of Spanish preflight block")
+	}
+	spanishBlock := content[start : start+end]
+
+	for _, forbidden := range []string{"B. Artifacts", "D. Review", "forecast", "budget"} {
+		if strings.Contains(spanishBlock, forbidden) {
+			t.Fatalf("Spanish preflight block should localize user-facing prose; found %q", forbidden)
+		}
+	}
+}
+
+func TestOpenCodeSDDFFHonorsInteractiveMode(t *testing.T) {
+	content := MustRead("opencode/commands/sdd-ff.md")
+
+	for _, forbidden := range []string{
+		"Present a combined summary after ALL phases complete (not between each one).",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("opencode/commands/sdd-ff.md must not contain unqualified back-to-back planning instruction %q", forbidden)
+		}
+	}
+
+	for _, required := range []string{
+		"Honor the cached execution mode from SDD Session Preflight",
+		"In `interactive` mode: run only the next planning phase",
+		"Do not launch the following phase until the user confirms",
+		"In `auto` mode: run all planning phases back-to-back",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("opencode/commands/sdd-ff.md missing interactive/auto guard wording %q", required)
 		}
 	}
 }

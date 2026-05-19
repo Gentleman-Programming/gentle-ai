@@ -94,9 +94,9 @@ Required preflight choices:
 
 User-facing preflight question format:
 
-Ask the user directly with a compact, numbered preflight prompt. Do NOT ask the user to type raw keys like `execution mode`, `artifact store`, `chained PR strategy`, or `review budget`. Do NOT mention non-existent tools. Do NOT invent informal values; use only the canonical values after the user chooses.
+Ask the user directly with a compact, numbered preflight prompt. Match the user's current language for all user-facing prose. If the user writes Spanish, ask the preflight in Spanish. Keep option codes (`A1`, `B1`, `C1`, `D1`) and canonical values unchanged. Do NOT ask the user to type raw keys like `execution mode`, `artifact store`, `chained PR strategy`, or `review budget`. Do NOT mention non-existent tools. Do NOT invent informal values; use only the canonical values after the user chooses.
 
-Use this exact shape:
+Use this shape; translate user-facing prose to the user's current language while preserving option codes:
 
 ```text
 Before continuing with SDD, choose one option per group.
@@ -125,6 +125,33 @@ D. Review
 
 After asking this, STOP and wait for the user's answer.
 
+If the user's current language is Spanish, use this localized shape:
+
+```text
+Antes de continuar con SDD, elegí una opción por grupo.
+Respondé con "usar recomendado" o con códigos como: A1, B1, C1, D1.
+
+A. Ritmo
+   A1 Interactivo (recomendado): mostrar cada fase y esperar confirmación antes de continuar.
+   A2 Automático: ejecutar las fases seguidas y frenar solo ante riesgo alto.
+
+B. Artefactos
+   B1 OpenSpec (recomendado): archivos en el repo, trazables en revisión.
+   B2 Engram: más rápido, sin archivos de especificación en el repo.
+   B3 Ambos: archivos OpenSpec más copia en Engram.
+
+C. PRs
+   C1 Preguntarme (recomendado): frenar y preguntar si la estimación supera el presupuesto.
+   C2 Un solo PR: intentar mantener el cambio en un PR.
+   C3 Encadenados: separar en PRs encadenados desde el inicio.
+   C4 Auto: decidir según la estimación de tamaño.
+
+D. Revisión
+   D1 400 líneas (recomendado): frenar si la estimación supera 400 líneas cambiadas.
+   D2 800 líneas: más permisivo; útil para cambios medianos.
+   D3 Otro: preguntar el número después.
+```
+
 Map answers to canonical values:
 
 - Pace: A1/Interactive -> `interactive`; A2/Automatic -> `auto`.
@@ -135,7 +162,7 @@ Map answers to canonical values:
 Hard gate rules:
 
 - `openspec/config.yaml`, existing SDD artifacts, previous `sdd-init` results, or installed SDD assets do NOT satisfy session preflight.
-- If the session has no preflight block, ask the exact user-facing preflight prompt above and STOP. Do not run init, delegate phases, edit files, or apply tasks in the same turn.
+- If the session has no preflight block, ask the localized user-facing preflight prompt above and STOP. Do not run init, delegate phases, edit files, or apply tasks in the same turn.
 - Cache the choices for this session and include them in later phase prompts.
 - If the user explicitly provided all four choices in the current conversation, summarize them as the session preflight block and continue.
 
@@ -173,6 +200,15 @@ This is collected by `SDD Session Preflight`. If missing, enforce the hard gate 
 
 - **Automatic** (`auto`): Run all phases back-to-back without pausing. Show the final result only.
 - **Interactive** (`interactive`): After each phase completes, show the result summary and ASK: "Want to adjust anything or continue?" before proceeding.
+
+In **Interactive** mode, between phases:
+
+1. Wait for the delegated phase to return.
+2. Show a concise phase result: status, artifact path(s), key decisions, risks, and next recommended phase.
+3. Ask before launching the next phase. Match the user's language (for Spanish: "¿Querés ajustar algo o continuamos?").
+4. STOP and wait for the user's answer. Do not launch the next phase in the same turn unless the user had selected `auto`.
+
+Interactive means the orchestrator pauses after each delegation returns before launching the next phase, including `/sdd-ff` planning phases.
 
 If the user doesn't specify, default to **Interactive**.
 
