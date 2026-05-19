@@ -1208,14 +1208,15 @@ func TestRunSyncWithProfilesIntegration(t *testing.T) {
 		"sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
 	}
 	// Verify the opencode.json file references mention the correct prompt directory.
-	slashPromptDir := filepath.ToSlash(promptDir)
-	if !strings.Contains(settingsStr, slashPromptDir) {
-		t.Errorf("opencode.json should reference prompt directory %q", slashPromptDir)
+	settingsPathText := filepath.ToSlash(settingsStr)
+	promptDir = filepath.ToSlash(promptDir)
+	if !strings.Contains(settingsPathText, promptDir) {
+		t.Errorf("opencode.json should reference prompt directory %q", promptDir)
 	}
 	// Verify all phase prompt file references appear in the settings.
 	for _, phase := range promptPhases {
 		promptRef := filepath.ToSlash(filepath.Join(promptDir, phase+".md"))
-		if !strings.Contains(settingsStr, promptRef) {
+		if !strings.Contains(settingsPathText, promptRef) {
 			t.Errorf("opencode.json should contain prompt file reference for %q", promptRef)
 		}
 	}
