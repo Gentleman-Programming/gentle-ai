@@ -1,7 +1,8 @@
 package cli
 
 import (
-	"runtime"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -11,15 +12,9 @@ import (
 func TestExecuteCommandQuietModeIncludesCapturedOutputOnFailure(t *testing.T) {
 	restore := SetCommandOutputStreaming(false)
 	defer restore()
+	t.Setenv("GO_WANT_EXECUTE_COMMAND_HELPER_PROCESS", "1")
 
-	shell := "bash"
-	args := []string{"-c", "echo boom && exit 1"}
-	if runtime.GOOS == "windows" {
-		shell = "cmd"
-		args = []string{"/c", "echo boom && exit 1"}
-	}
-
-	err := executeCommand(shell, args...)
+	err := executeCommand(os.Args[0], "-test.run=TestExecuteCommandHelperProcess", "--")
 	if err == nil {
 		t.Fatal("executeCommand() error = nil, want non-nil")
 	}
@@ -27,6 +22,14 @@ func TestExecuteCommandQuietModeIncludesCapturedOutputOnFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("executeCommand() error = %q, want captured output", err.Error())
 	}
+}
+
+func TestExecuteCommandHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_EXECUTE_COMMAND_HELPER_PROCESS") != "1" {
+		return
+	}
+	fmt.Fprintln(os.Stdout, "boom")
+	os.Exit(1)
 }
 
 func TestSetCommandOutputStreamingRestore(t *testing.T) {

@@ -14,6 +14,12 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 )
 
+func isolateWindowsAppConfig(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+}
+
 // ─── Phase 1: ParseSyncFlags ───────────────────────────────────────────────
 
 func TestParseSyncFlagsDefaults(t *testing.T) {
@@ -328,6 +334,7 @@ func TestDiscoverAgentsReturnsAgentsWithConfigDirPresent(t *testing.T) {
 
 func TestDiscoverAgentsReturnsEmptyWhenNoConfigDirsPresent(t *testing.T) {
 	home := t.TempDir()
+	isolateWindowsAppConfig(t, home)
 	// Empty home dir — no agent config dirs exist.
 
 	discovered := DiscoverAgents(home)
@@ -394,6 +401,7 @@ func TestDiscoverAgentsMultiplePresent(t *testing.T) {
 //   - produce the same set as agents.DiscoverInstalled for the same homeDir
 func TestDiscoverAgentsDelegatesCanonicalDiscovery(t *testing.T) {
 	home := t.TempDir()
+	isolateWindowsAppConfig(t, home)
 
 	// Create only the codex config dir — a less-common agent that would be
 	// absent from a minimal stale hardcoded list if someone forgot to update it.
@@ -834,6 +842,7 @@ func TestRunSyncIsIdempotent(t *testing.T) {
 // files and reports that no managed sync actions were needed."
 func TestRunSyncNoOpWhenNoAgentsDiscovered(t *testing.T) {
 	home := t.TempDir()
+	isolateWindowsAppConfig(t, home)
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
