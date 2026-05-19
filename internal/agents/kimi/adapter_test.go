@@ -199,8 +199,6 @@ func TestAdapter_Detect_FallbackPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-
-
 	a := &Adapter{
 		lookPath: func(string) (string, error) {
 			return "", os.ErrNotExist // Not in PATH
@@ -226,6 +224,34 @@ func TestAdapter_Detect_FallbackPaths(t *testing.T) {
 	}
 	if binaryPath != filepath.Join(tmpDir, ".local", "bin", binaryName()) {
 		t.Fatalf("Detect() binaryPath = %q, want fallback path", binaryPath)
+	}
+}
+
+func TestAdapter_DetectFallbackUsesProvidedHome(t *testing.T) {
+	homeDir := t.TempDir()
+	realHome := t.TempDir()
+
+	a := &Adapter{
+		lookPath: func(string) (string, error) {
+			return "", os.ErrNotExist
+		},
+		statPath: func(string) statResult {
+			return statResult{err: os.ErrNotExist}
+		},
+		pathExists: func(path string) bool {
+			return path == filepath.Join(realHome, ".local", "bin", binaryName())
+		},
+		userHomeDir: func() (string, error) {
+			return realHome, nil
+		},
+	}
+
+	installed, binaryPath, _, _, err := a.Detect(context.Background(), homeDir)
+	if err != nil {
+		t.Fatalf("Detect() error = %v", err)
+	}
+	if installed {
+		t.Fatalf("Detect() installed = true via user home fallback %q; want false for provided home %q", binaryPath, homeDir)
 	}
 }
 
@@ -266,27 +292,27 @@ func TestAdapter_PostInstallMessage(t *testing.T) {
 			if tt.os == "windows" {
 				homeDir = `C:\Users\test`
 			}
-			
+
 			msg := a.PostInstallMessage(homeDir)
 
 			// Construct expected path to verify against quoted output
 			gentlemanYaml := filepath.Join(homeDir, ".kimi", "agents", "gentleman.yaml")
-			
+
 			// Normalize the expected string to the current host's separator.
 			// Since the code uses filepath.Join, it will use \ on Windows and / on Linux.
 			// The test should expect the host's actual separator if we want it to PASS
 			// while running on that host.
 			normalizedExpected := filepath.FromSlash(tt.expected)
-			
+
 			// On Windows, if we are simulating we want backslashes.
-			// If we are on Windows and testing 'Unix paths' case, it will fail because 
+			// If we are on Windows and testing 'Unix paths' case, it will fail because
 			// the code (running on Windows) used \. This is expected.
-			// We skip the cross-platform check if it contradicts the host's logic, 
+			// We skip the cross-platform check if it contradicts the host's logic,
 			// or we only check the one matching the current host.
 			// On Windows, if we are simulating we want backslashes.
-			// If we are on Windows and testing 'Unix paths' case, it will fail because 
+			// If we are on Windows and testing 'Unix paths' case, it will fail because
 			// the code (running on Windows) used \. This is expected.
-			// We skip the cross-platform check if it contradicts the host's logic, 
+			// We skip the cross-platform check if it contradicts the host's logic,
 			// or we only check the one matching the current host.
 			if (runtime.GOOS == "windows" && tt.os == "windows") || (runtime.GOOS != "windows" && tt.os == "linux") {
 				// Verify path is present
@@ -302,5 +328,3 @@ func TestAdapter_PostInstallMessage(t *testing.T) {
 		})
 	}
 }
-
-

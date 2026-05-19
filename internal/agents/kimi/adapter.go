@@ -1,8 +1,8 @@
 // Package kimi provides Kimi Code CLI agent integration.
 //
 // Integration Note:
-// This adapter natively relies on Astral's `uv` package manager 
-// (`uv tool install kimi-cli`) to securely download and run Kimi CLI, 
+// This adapter natively relies on Astral's `uv` package manager
+// (`uv tool install kimi-cli`) to securely download and run Kimi CLI,
 // avoiding upstream's pipe-to-shell bootstrap scripts.
 package kimi
 
@@ -63,7 +63,7 @@ func (a *Adapter) Tier() model.SupportTier {
 func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, string, bool, error) {
 	configPath := ConfigPath(homeDir)
 
-	binaryPath, err := a.findKimi()
+	binaryPath, err := a.findKimi(homeDir)
 	installed := err == nil && binaryPath != ""
 
 	stat := a.statPath(configPath)
@@ -78,14 +78,18 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 }
 
 // findKimi searches for kimi in PATH and official fallback locations.
-func (a *Adapter) findKimi() (string, error) {
+func (a *Adapter) findKimi(homeDir string) (string, error) {
 	if path, err := a.lookPath("kimi"); err == nil {
 		return path, nil
 	}
 
-	home, err := a.userHomeDir()
-	if err != nil || home == "" {
-		return "", fmt.Errorf("kimi not found in PATH and home directory is unavailable")
+	home := homeDir
+	if home == "" {
+		var err error
+		home, err = a.userHomeDir()
+		if err != nil || home == "" {
+			return "", fmt.Errorf("kimi not found in PATH and home directory is unavailable")
+		}
 	}
 
 	fallbacks := []string{
@@ -242,7 +246,6 @@ Skills root:
   "%s"`, gentlemanYaml, skillsRoot)
 }
 
-
 // --- Helpers ---
 
 func defaultStat(path string) statResult {
@@ -271,7 +274,7 @@ func binaryName() string {
 }
 
 // BootstrapTemplate ensures the base KIMI.md template exists in the agent's config directory.
-// It is used by the installation pipeline to guarantee that modular components 
+// It is used by the installation pipeline to guarantee that modular components
 // (SDD, Engram) can be included even if the Persona component is not installed.
 func (a *Adapter) BootstrapTemplate(homeDir string) error {
 	kimiDir := a.GlobalConfigDir(homeDir)
@@ -280,9 +283,9 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 	}
 
 	skeletonPath := a.SystemPromptFile(homeDir)
-	
+
 	// We always write the skeleton to ensure any missing includes are restored.
-	// Since KIMI.md is the 'router' for modular Jinja components, it should 
+	// Since KIMI.md is the 'router' for modular Jinja components, it should
 	// remain managed by the framework.
 	content := assets.MustRead("kimi/KIMI.md")
 	if _, err := filemerge.WriteFileAtomic(skeletonPath, []byte(content), 0o644); err != nil {
@@ -300,5 +303,3 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 
 	return nil
 }
-
-

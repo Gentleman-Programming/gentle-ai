@@ -2101,6 +2101,9 @@ func TestRunInstallKimiMissingUVFailsBeforeExecutingInstallCommands(t *testing.T
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = missingBinaryLookPath
+	originalKimiLookPath := kimi.LookPathOverride
+	kimi.LookPathOverride = missingBinaryLookPath
+	t.Cleanup(func() { kimi.LookPathOverride = originalKimiLookPath })
 
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
