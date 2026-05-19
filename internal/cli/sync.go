@@ -611,6 +611,7 @@ func (s componentSyncStep) Run() error {
 				StrictTDD:                          s.selection.StrictTDD,
 				PreserveOpenCodeOrchestratorPrompt: profileStrategy == model.SDDProfileStrategyExternalSingleActive,
 				Profiles:                           profiles,
+				SkipOpenCodePluginPackageInstall:   skipOpenCodePluginPackageInstall,
 			}
 			res, err := sdd.Inject(targetDir, adapter, sddMode, opts)
 			if err != nil {

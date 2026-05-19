@@ -52,6 +52,11 @@ type InjectOptions struct {
 	// skills.InjectWithCapability will be called with empty capability
 	// (no section extraction, full content written).
 	Capability string
+
+	// SkipOpenCodePluginPackageInstall writes OpenCode plugin files but skips
+	// the package-manager dependency install. This is used by higher-level tests
+	// that verify CLI orchestration without depending on host npm/bun behavior.
+	SkipOpenCodePluginPackageInstall bool
 }
 
 // workflowInjector is an optional adapter capability: if an adapter
@@ -420,7 +425,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			mergedSettingsBytes = agentResult.merged
 
 			// Install OpenCode plugins (all SDD modes).
-			pluginResult, err := installOpenCodePlugins(homeDir, adapter)
+			pluginResult, err := installOpenCodePlugins(homeDir, adapter, opts.SkipOpenCodePluginPackageInstall)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -1102,7 +1107,7 @@ func claudeHookListContains(hookEntries []any, command string) bool {
 // npm/bun dependency into the agent's global config directory. Returns an error
 // with an actionable message if the package manager is present but the install
 // fails. If no package manager is available, the install is skipped (soft failure).
-func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+func installOpenCodePlugins(homeDir string, adapter agents.Adapter, skipPackageInstall bool) (InjectionResult, error) {
 	opencodeDir := adapter.GlobalConfigDir(homeDir)
 	pluginsDir := filepath.Join(opencodeDir, "plugins")
 
@@ -1133,6 +1138,9 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 	// If a package manager IS found and the install fails, surface the error.
 	depPkg := "unique-names-generator"
 	nmPath := filepath.Join(opencodeDir, "node_modules", depPkg)
+	if skipPackageInstall {
+		return InjectionResult{Changed: changed, Files: files}, nil
+	}
 
 	// Only run the install if the package is not already present.
 	pkgMissing := false
