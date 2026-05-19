@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -459,7 +460,9 @@ func assertTUIGolden(t *testing.T, name string, actual string) {
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", goldenPath, err)
 	}
-	if string(expected) != actual {
-		t.Fatalf("golden mismatch for %s\n\nexpected:\n%s\n\nactual:\n%s", name, string(expected), actual)
+	normalizedExpected := strings.ReplaceAll(string(expected), "\r\n", "\n")
+	normalizedActual := strings.ReplaceAll(actual, "\r\n", "\n")
+	if normalizedExpected != normalizedActual {
+		t.Fatalf("golden mismatch for %s\n\nexpected:\n%s\n\nactual:\n%s", name, normalizedExpected, normalizedActual)
 	}
 }

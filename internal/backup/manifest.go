@@ -135,6 +135,9 @@ func ReadManifest(path string) (Manifest, error) {
 
 // backupRoot returns the expected parent directory for all backups.
 func backupRoot() (string, error) {
+	if home := os.Getenv("HOME"); home != "" {
+		return filepath.Join(home, ".gentle-ai", "backups"), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home directory: %w", err)

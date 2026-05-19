@@ -363,8 +363,8 @@ func inject(configHomeDir, promptDir string, adapter agents.Adapter) (InjectionR
 		}
 		engramCmd := stableEngramCommandForMergedConfig(configPath, adapter.Agent())
 		withMCP := filemerge.UpsertCodexEngramBlock(existing, engramCmd)
-		withInstr := filemerge.UpsertTopLevelTOMLString(withMCP, "model_instructions_file", instructionsPath)
-		withCompact := filemerge.UpsertTopLevelTOMLString(withInstr, "experimental_compact_prompt_file", compactPath)
+		withInstr := filemerge.UpsertTopLevelTOMLString(withMCP, "model_instructions_file", filepath.ToSlash(instructionsPath))
+		withCompact := filemerge.UpsertTopLevelTOMLString(withInstr, "experimental_compact_prompt_file", filepath.ToSlash(compactPath))
 
 		tomlWrite, err := filemerge.WriteFileAtomic(configPath, []byte(withCompact), 0o644)
 		if err != nil {

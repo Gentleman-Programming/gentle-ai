@@ -178,6 +178,7 @@ func TestSelfUpdate_UpdateAvailable_CallsUpgradeAndReExec(t *testing.T) {
 	}
 
 	stubs := swapSelfUpdateDeps(t, checkResults, upgradeReport)
+	goOS = func() string { return "linux" }
 
 	var buf bytes.Buffer
 	err := selfUpdate(context.Background(), "1.7.0", stubProfile(), &buf)

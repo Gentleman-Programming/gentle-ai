@@ -694,7 +694,7 @@ func appendKnownEngramDir(dirs []string, dir string) []string {
 
 // ListBackups returns all backup manifests from the backup directory.
 func ListBackups() []backup.Manifest {
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := listBackupsHomeDir()
 	if err != nil {
 		return nil
 	}
@@ -729,6 +729,13 @@ func ListBackups() []backup.Manifest {
 	}
 
 	return manifests
+}
+
+func listBackupsHomeDir() (string, error) {
+	if home := os.Getenv("HOME"); home != "" {
+		return home, nil
+	}
+	return os.UserHomeDir()
 }
 
 // isExplicitUpdateFlow reports whether the current invocation is already in the

@@ -46,7 +46,7 @@ type InstallResult struct {
 }
 
 var (
-	osUserHomeDir       = os.UserHomeDir
+	osUserHomeDir       = defaultUserHomeDir
 	osSetenv            = os.Setenv
 	osStat              = os.Stat
 	runCommand          = executeCommand
@@ -67,6 +67,13 @@ var (
 	// Default "dev" matches the ldflags default in app.Version.
 	AppVersion = "dev"
 )
+
+func defaultUserHomeDir() (string, error) {
+	if home := os.Getenv("HOME"); home != "" {
+		return home, nil
+	}
+	return os.UserHomeDir()
+}
 
 // SetCommandOutputStreaming toggles whether command stdout/stderr is streamed
 // directly to the terminal. It returns a restore function.
