@@ -8,6 +8,7 @@ import (
 
 const stateDir = ".gentle-ai"
 const stateFile = "state.json"
+const maxEngramKnownDataDirs = 50
 
 // ModelAssignmentState is the JSON-serialisable form of a provider+model pair
 // used by OpenCode-style model assignments. It mirrors model.ModelAssignment
@@ -44,6 +45,14 @@ type InstallState struct {
 	// Empty for state files written before persona persistence was added —
 	// callers fall back to PersonaGentleman in that case.
 	Persona string `json:"persona,omitempty"`
+
+	// EngramDataDir is the filesystem path of the Engram data directory chosen
+	// by the user. When empty the default (~/.engram) is used.
+	EngramDataDir string `json:"engram_data_dir,omitempty"`
+
+	// EngramKnownDataDirs records non-active directories created or selected by
+	// data-dir management so users can later make a copied directory active.
+	EngramKnownDataDirs []string `json:"engram_known_data_dirs,omitempty"`
 }
 
 // Path returns the absolute path to the state file for the given home directory.
@@ -61,6 +70,9 @@ func Read(homeDir string) (InstallState, error) {
 	var s InstallState
 	if err := json.Unmarshal(data, &s); err != nil {
 		return InstallState{}, err
+	}
+	if len(s.EngramKnownDataDirs) > maxEngramKnownDataDirs {
+		s.EngramKnownDataDirs = s.EngramKnownDataDirs[len(s.EngramKnownDataDirs)-maxEngramKnownDataDirs:]
 	}
 	return s, nil
 }

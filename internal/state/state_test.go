@@ -1,6 +1,7 @@
 package state
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -23,6 +24,28 @@ func TestWriteAndRead(t *testing.T) {
 
 	if !reflect.DeepEqual(s.InstalledAgents, agents) {
 		t.Errorf("InstalledAgents = %v, want %v", s.InstalledAgents, agents)
+	}
+}
+
+func TestRead_CapsEngramKnownDataDirs(t *testing.T) {
+	home := t.TempDir()
+	var dirs []string
+	for i := 0; i < 55; i++ {
+		dirs = append(dirs, filepath.Join(home, "engram", fmt.Sprintf("%02d", i)))
+	}
+	if err := Write(home, InstallState{EngramKnownDataDirs: dirs}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.EngramKnownDataDirs) != maxEngramKnownDataDirs {
+		t.Fatalf("len(EngramKnownDataDirs) = %d, want %d", len(got.EngramKnownDataDirs), maxEngramKnownDataDirs)
+	}
+	if got.EngramKnownDataDirs[0] != dirs[5] {
+		t.Fatalf("first retained dir = %q, want %q", got.EngramKnownDataDirs[0], dirs[5])
 	}
 }
 
