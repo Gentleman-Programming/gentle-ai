@@ -15,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
@@ -127,6 +128,12 @@ type PipelineDoneMsg struct {
 // BackupRestoreMsg is sent when a backup restore completes.
 type BackupRestoreMsg struct {
 	Err error
+}
+
+type EngramDataDirDoneMsg struct {
+	Op         model.EngramDataDirOp
+	SnapshotID string
+	Err        error
 }
 
 // UpdateCheckResultMsg is sent when the background update check completes.
@@ -282,6 +289,10 @@ const (
 	ScreenAgentBuilderPreview
 	ScreenAgentBuilderInstalling
 	ScreenAgentBuilderComplete
+	ScreenEngramDataDir
+	ScreenEngramDataDirCustomPath
+	ScreenEngramDataDirConfirm
+	ScreenEngramDataDirResult
 )
 
 type Model struct {
@@ -291,6 +302,7 @@ type Model struct {
 	Height         int
 	Cursor         int
 	Version        string
+	HomeDir        string
 	SpinnerFrame   int
 
 	Selection         model.Selection
@@ -461,6 +473,18 @@ type Model struct {
 	// OpenCodePluginRegistrationResults and Err hold the dedicated shortcut result.
 	OpenCodePluginRegistrationResults []opencodeplugin.Result
 	OpenCodePluginRegistrationErr     error
+
+	EngramDataDir       string
+	EngramDetected      bool
+	EngramKnownDataDirs []string
+	EngramDataDirFn     func(op model.EngramDataDirOp, currentDir, dstDir string) (snapshotID string, err error)
+	EngramSpaceErr      string
+	engramDirLocations  []engram.Location
+	engramDirOp         model.EngramDataDirOp
+	engramDirDstIdx     int
+	engramDirCustomPath string
+	engramDirCustomPos  int
+	engramDirDoneMsg    *EngramDataDirDoneMsg
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -569,6 +593,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.OpenCodePluginRegistrationErr = msg.Err
 		m.setScreen(ScreenOpenCodePluginResult)
 		return m, nil
+	case EngramDataDirDoneMsg:
+		m.engramDirDoneMsg = &msg
+		if msg.Err == nil {
+			switch msg.Op {
+			case model.EngramDataDirOpMove, model.EngramDataDirOpSet:
+				if dst := m.selectedEngramDstDir(); dst != "" {
+					m.EngramDataDir = dst
+				}
+			case model.EngramDataDirOpDelete, model.EngramDataDirOpFresh:
+				m.EngramDataDir = ""
+			}
+		}
+		m.setScreen(ScreenEngramDataDirResult)
+		return m, nil
 	case StepProgressMsg:
 		return m.handleStepProgress(msg)
 	case PipelineDoneMsg:
@@ -629,6 +667,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.UpdateCheckDone = false
 		return m, m.Init()
 	case tea.KeyMsg:
+		if m.Screen == ScreenEngramDataDirCustomPath {
+			return m.handleEngramCustomPathInput(msg)
+		}
 		if m.Screen == ScreenRenameBackup {
 			return m.handleRenameInput(msg)
 		}
@@ -740,7 +781,7 @@ func (m Model) View() string {
 		if m.UpdateCheckDone && update.HasUpdates(m.UpdateResults) {
 			banner = "Updates available: " + update.UpdateSummaryLine(m.UpdateResults)
 		}
-		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
+		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.hasEngram())
 	case ScreenUpgrade:
 		return screens.RenderUpgrade(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenSync:
@@ -848,6 +889,18 @@ func (m Model) View() string {
 		return screens.RenderABInstalling(engineName, m.SpinnerFrame, m.AgentBuilder.InstallErr)
 	case ScreenAgentBuilderComplete:
 		return screens.RenderABComplete(m.AgentBuilder.Generated, m.AgentBuilder.InstallResults)
+	case ScreenEngramDataDir:
+		return screens.RenderEngramDataDir(m.Cursor, m.resolvedEngramDir(), m.engramDataDirSize(), m.engramDirLocations, m.engramDirOp, m.EngramSpaceErr)
+	case ScreenEngramDataDirCustomPath:
+		return screens.RenderEngramDataDirCustomPath(m.engramDirOp, m.resolvedEngramDir(), m.engramDirCustomPath, m.engramDirCustomPos, m.EngramSpaceErr)
+	case ScreenEngramDataDirConfirm:
+		return screens.RenderEngramDataDirConfirm(m.engramDirOp, m.resolvedEngramDir(), m.selectedEngramDstDir(), m.engramBackupRoot(), m.Cursor)
+	case ScreenEngramDataDirResult:
+		var done EngramDataDirDoneMsg
+		if m.engramDirDoneMsg != nil {
+			done = *m.engramDirDoneMsg
+		}
+		return screens.RenderEngramDataDirResult(done.Op, done.SnapshotID, m.engramBackupRoot(), done.Err)
 	default:
 		return ""
 	}
@@ -1188,6 +1241,14 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			if m.hasDetectedOpenCode() {
 				if m.Cursor == next {
 					m.setScreen(ScreenProfiles)
+					return m, nil
+				}
+				next++
+			}
+
+			if m.hasEngram() {
+				if m.Cursor == next {
+					m.enterEngramManagement()
 					return m, nil
 				}
 				next++
@@ -2013,6 +2074,56 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 	case ScreenAgentBuilderComplete:
 		m.setScreen(ScreenWelcome)
+	case ScreenEngramDataDir:
+		if screens.EngramDirOpNeedsLocation(m.engramDirOp) {
+			choices := screens.EngramDirLocationChoices(m.engramDirLocations, m.engramDirOp)
+			if m.Cursor >= len(choices) {
+				return m, nil
+			}
+			ch := choices[m.Cursor]
+			if ch.DstIdx == screens.EngramCustomPathDstIdx {
+				m.engramDirCustomPath = ""
+				m.engramDirCustomPos = 0
+				m.EngramSpaceErr = ""
+				m.setScreen(ScreenEngramDataDirCustomPath)
+				return m, nil
+			}
+			m.engramDirDstIdx = ch.DstIdx
+			m.setScreen(ScreenEngramDataDirConfirm)
+			return m, nil
+		}
+		choices := screens.EngramDirActionChoices()
+		if m.Cursor >= len(choices) {
+			return m, nil
+		}
+		ch := choices[m.Cursor]
+		m.engramDirOp = ch.Op
+		m.engramDirDstIdx = -1
+		if screens.EngramDirOpNeedsLocation(ch.Op) {
+			m.Cursor = 0
+			return m, nil
+		}
+		m.setScreen(ScreenEngramDataDirConfirm)
+		return m, nil
+	case ScreenEngramDataDirConfirm:
+		if m.Cursor == 1 {
+			m.setScreen(ScreenEngramDataDir)
+			return m, nil
+		}
+		op := m.engramDirOp
+		currentDir := m.resolvedEngramDir()
+		dstDir := m.selectedEngramDstDir()
+		fn := m.EngramDataDirFn
+		return m, func() tea.Msg {
+			if fn == nil {
+				return EngramDataDirDoneMsg{Op: op, Err: fmt.Errorf("EngramDataDirFn not configured")}
+			}
+			snapID, err := fn(op, currentDir, dstDir)
+			return EngramDataDirDoneMsg{Op: op, SnapshotID: snapID, Err: err}
+		}
+	case ScreenEngramDataDirResult:
+		m.enterEngramManagement()
+		return m, nil
 	}
 
 	return m, nil
@@ -2679,7 +2790,7 @@ func (m Model) handleRenameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) optionCount() int {
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines()))
+		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.hasEngram()))
 	case ScreenUpgrade:
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			return 1 // "return" option in results/error state
@@ -2785,6 +2896,17 @@ func (m Model) optionCount() int {
 		return 0 // no cursor navigation while installing
 	case ScreenAgentBuilderComplete:
 		return 1 // Done
+	case ScreenEngramDataDir:
+		if screens.EngramDirOpNeedsLocation(m.engramDirOp) {
+			return len(screens.EngramDirLocationChoices(m.engramDirLocations, m.engramDirOp))
+		}
+		return len(screens.EngramDirActionChoices())
+	case ScreenEngramDataDirCustomPath:
+		return 0
+	case ScreenEngramDataDirConfirm:
+		return 2
+	case ScreenEngramDataDirResult:
+		return 1
 	default:
 		return 0
 	}
@@ -3209,6 +3331,102 @@ func (m Model) hasDetectedOpenCode() bool {
 		}
 	}
 	return false
+}
+
+func (m Model) hasEngram() bool { return m.EngramDetected }
+
+func (m Model) resolvedHomeDir() string {
+	if m.HomeDir != "" {
+		return m.HomeDir
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return home
+	}
+	return ""
+}
+
+func (m Model) resolvedEngramDir() string {
+	if m.EngramDataDir != "" {
+		return m.EngramDataDir
+	}
+	return engram.DefaultDir(m.resolvedHomeDir())
+}
+
+func (m Model) engramBackupRoot() string {
+	return filepath.Join(m.resolvedHomeDir(), ".gentle-ai", "backups")
+}
+
+func (m Model) engramDataDirSize() int64 {
+	return engram.DataDirSize(m.resolvedEngramDir())
+}
+
+func (m *Model) enterEngramManagement() {
+	m.engramDirLocations = engram.SuggestLocationsWithKnown(m.resolvedHomeDir(), m.resolvedEngramDir(), m.EngramKnownDataDirs)
+	m.engramDirOp = model.EngramDataDirOpNone
+	m.engramDirDstIdx = -1
+	m.EngramSpaceErr = ""
+	m.engramDirDoneMsg = nil
+	m.setScreen(ScreenEngramDataDir)
+}
+
+func (m Model) selectedEngramDstDir() string {
+	if m.engramDirDstIdx >= 0 && m.engramDirDstIdx < len(m.engramDirLocations) {
+		return m.engramDirLocations[m.engramDirDstIdx].Path
+	}
+	return resolveEngramCustomPath(m.resolvedHomeDir(), m.engramDirCustomPath)
+}
+
+func resolveEngramCustomPath(homeDir, input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "~") {
+		trimmed = filepath.Join(homeDir, strings.TrimPrefix(strings.TrimPrefix(trimmed, "~"), string(filepath.Separator)))
+	}
+	clean := filepath.Clean(filepath.FromSlash(trimmed))
+	if !filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return clean
+}
+
+func (m Model) handleEngramCustomPathInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		dst := resolveEngramCustomPath(m.resolvedHomeDir(), m.engramDirCustomPath)
+		if dst == "" {
+			m.EngramSpaceErr = "Use an absolute path."
+			return m, nil
+		}
+		m.engramDirCustomPath = dst
+		m.engramDirCustomPos = len([]rune(dst))
+		m.setScreen(ScreenEngramDataDirConfirm)
+	case tea.KeyEsc:
+		m.setScreen(ScreenEngramDataDir)
+	case tea.KeyBackspace:
+		if m.engramDirCustomPos > 0 {
+			runes := []rune(m.engramDirCustomPath)
+			m.engramDirCustomPath = string(append(runes[:m.engramDirCustomPos-1], runes[m.engramDirCustomPos:]...))
+			m.engramDirCustomPos--
+		}
+	case tea.KeyRunes:
+		runes := []rune(m.engramDirCustomPath)
+		next := append([]rune{}, runes[:m.engramDirCustomPos]...)
+		next = append(next, msg.Runes...)
+		next = append(next, runes[m.engramDirCustomPos:]...)
+		m.engramDirCustomPath = string(next)
+		m.engramDirCustomPos += len(msg.Runes)
+	case tea.KeyLeft:
+		if m.engramDirCustomPos > 0 {
+			m.engramDirCustomPos--
+		}
+	case tea.KeyRight:
+		if m.engramDirCustomPos < len([]rune(m.engramDirCustomPath)) {
+			m.engramDirCustomPos++
+		}
+	}
+	return m, nil
 }
 
 func (m Model) shouldShowSDDModeScreen() bool {
