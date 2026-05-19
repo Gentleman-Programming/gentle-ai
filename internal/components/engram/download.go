@@ -121,7 +121,8 @@ func fetchLatestEngramVersionRequest(token string) (string, int, error) {
 	}
 
 	var release struct {
-		TagName string `json:"tag_name"`
+		TagName string             `json:"tag_name"`
+		Assets  *[]json.RawMessage `json:"assets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return "", resp.StatusCode, fmt.Errorf("decode release JSON: %w", err)
@@ -132,7 +133,89 @@ func fetchLatestEngramVersionRequest(token string) (string, int, error) {
 		return "", resp.StatusCode, fmt.Errorf("empty tag_name in GitHub release response")
 	}
 
+	// Older tests and non-GitHub-compatible mocks may omit assets entirely; in
+	// that case keep the historical latest-release behavior. GitHub returns an
+	// explicit assets array, so skip releases that do not publish engram binaries
+	// (for example pi-v* package releases in the same repository).
+	if release.Assets != nil && !hasEngramBinaryAsset(*release.Assets) {
+		fallbackVersion, fallbackStatus, err := fetchLatestEngramVersionWithAssets(token)
+		if err == nil {
+			return fallbackVersion, resp.StatusCode, nil
+		}
+		if token != "" && (fallbackStatus == http.StatusUnauthorized || fallbackStatus == http.StatusForbidden) {
+			fallbackVersion, _, retryErr := fetchLatestEngramVersionWithAssets("")
+			if retryErr == nil {
+				return fallbackVersion, resp.StatusCode, nil
+			}
+		}
+		return "", resp.StatusCode, err
+	}
+
 	return version, resp.StatusCode, nil
+}
+
+func hasEngramBinaryAsset(assets []json.RawMessage) bool {
+	for _, raw := range assets {
+		var asset struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &asset); err == nil && strings.HasPrefix(asset.Name, engramRepo+"_") {
+			return true
+		}
+	}
+	return false
+}
+
+func fetchLatestEngramVersionWithAssets(token string) (string, int, error) {
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=20",
+		engramAPIBaseURL(), engramOwner, engramRepo)
+
+	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	if err != nil {
+		return "", 0, fmt.Errorf("build releases request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := engramHTTPClient.Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("call GitHub releases API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", resp.StatusCode, fmt.Errorf("GitHub releases API returned HTTP %d", resp.StatusCode)
+	}
+
+	var releases []struct {
+		TagName    string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+		Assets     []struct {
+			Name string `json:"name"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return "", resp.StatusCode, fmt.Errorf("decode releases JSON: %w", err)
+	}
+
+	for _, release := range releases {
+		if release.Draft || release.Prerelease || len(release.Assets) == 0 {
+			continue
+		}
+		for _, asset := range release.Assets {
+			if strings.HasPrefix(asset.Name, engramRepo+"_") {
+				version := strings.TrimPrefix(release.TagName, "v")
+				if version != "" {
+					return version, resp.StatusCode, nil
+				}
+			}
+		}
+	}
+
+	return "", resp.StatusCode, fmt.Errorf("no engram release with downloadable binary assets found")
 }
 
 // githubToken returns a GitHub API token from the environment, if available.

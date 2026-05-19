@@ -327,6 +327,138 @@ func TestDownloadLatestBinaryAPIError(t *testing.T) {
 	}
 }
 
+func TestDownloadLatestBinarySkipsLatestReleaseWithoutBinaryAssets(t *testing.T) {
+	const binaryVersion = "1.15.13"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "releases/latest"):
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"tag_name": "pi-v0.1.7",
+				"assets":   []any{},
+			})
+		case strings.Contains(r.URL.Path, "releases") && r.URL.RawQuery == "per_page=20":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"tag_name":   "pi-v0.1.7",
+					"draft":      false,
+					"prerelease": false,
+					"assets":     []any{},
+				},
+				{
+					"tag_name":   "v" + binaryVersion,
+					"draft":      false,
+					"prerelease": false,
+					"assets": []map[string]string{
+						{"name": "checksums.txt"},
+						{"name": "engram_" + binaryVersion + "_linux_amd64.tar.gz"},
+					},
+				},
+			})
+		case strings.Contains(r.URL.Path, "/releases/download/v"+binaryVersion+"/engram_"+binaryVersion+"_linux_"):
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.WriteHeader(http.StatusOK)
+			w.Write(buildFakeTarGz(t, "engram"))
+		default:
+			t.Fatalf("unexpected request: %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+	}))
+	defer server.Close()
+
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+	})
+
+	tmpDir := t.TempDir()
+	origInstallDirFn := engramInstallDirFn
+	engramInstallDirFn = func(goos string) string { return tmpDir }
+	t.Cleanup(func() { engramInstallDirFn = origInstallDirFn })
+
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+	installedPath, err := DownloadLatestBinary(profile)
+	if err != nil {
+		t.Fatalf("DownloadLatestBinary() error = %v", err)
+	}
+
+	if _, err := os.Stat(installedPath); err != nil {
+		t.Fatalf("stat installed binary: %v", err)
+	}
+}
+
+func TestDownloadLatestBinaryReleaseListFallsBackToAnonymousWhenTokenGets403(t *testing.T) {
+	const fakeToken = "ci-token"
+	const binaryVersion = "1.15.13"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "releases/latest"):
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"tag_name": "pi-v0.1.7",
+				"assets":   []any{},
+			})
+		case strings.Contains(r.URL.Path, "releases") && r.URL.RawQuery == "per_page=20":
+			if r.Header.Get("Authorization") == "Bearer "+fakeToken {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"tag_name":   "v" + binaryVersion,
+					"draft":      false,
+					"prerelease": false,
+					"assets": []map[string]string{
+						{"name": "engram_" + binaryVersion + "_linux_amd64.tar.gz"},
+					},
+				},
+			})
+		case strings.Contains(r.URL.Path, "/releases/download/v"+binaryVersion+"/engram_"+binaryVersion+"_linux_"):
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.WriteHeader(http.StatusOK)
+			w.Write(buildFakeTarGz(t, "engram"))
+		default:
+			t.Fatalf("unexpected request: %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+	}))
+	defer server.Close()
+
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+	})
+
+	t.Setenv("GITHUB_TOKEN", fakeToken)
+	t.Setenv("GH_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	origInstallDirFn := engramInstallDirFn
+	engramInstallDirFn = func(goos string) string { return tmpDir }
+	t.Cleanup(func() { engramInstallDirFn = origInstallDirFn })
+
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+	installedPath, err := DownloadLatestBinary(profile)
+	if err != nil {
+		t.Fatalf("DownloadLatestBinary() error = %v", err)
+	}
+
+	if _, err := os.Stat(installedPath); err != nil {
+		t.Fatalf("stat installed binary: %v", err)
+	}
+}
+
 func TestDownloadLatestBinaryFallsBackToAnonymousWhenTokenGets403(t *testing.T) {
 	const fakeToken = "ci-token"
 	const version = "1.3.0"
