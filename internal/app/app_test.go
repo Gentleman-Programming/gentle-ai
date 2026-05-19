@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -666,6 +667,63 @@ func TestUnknownCommandSuggestsHelp(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "gentle-ai help") {
 		t.Error("unknown command error should suggest 'gentle-ai help'")
+	}
+}
+
+func TestAppendKnownEngramDir_CapsAt50(t *testing.T) {
+	var dirs []string
+	for i := 0; i < 55; i++ {
+		dirs = appendKnownEngramDir(dirs, filepath.Join("C:\\", "engram", fmt.Sprintf("%02d", i)))
+	}
+	if len(dirs) != 50 {
+		t.Fatalf("len = %d, want 50", len(dirs))
+	}
+	if !strings.HasSuffix(dirs[0], filepath.Join("engram", "05")) {
+		t.Fatalf("first retained dir = %q, want suffix 05", dirs[0])
+	}
+}
+
+func TestBuildEngramDataDirFn_CopyMoveDeleteState(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, "src")
+	dst := filepath.Join(home, "dst")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engram.DBPath(src), []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fn := buildEngramDataDirFn(home)
+	if _, err := fn(model.EngramDataDirOpCopy, src, dst); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.EngramKnownDataDirs) != 1 || s.EngramKnownDataDirs[0] != filepath.Clean(dst) {
+		t.Fatalf("known dirs after copy = %#v, want %q", s.EngramKnownDataDirs, filepath.Clean(dst))
+	}
+	if _, err := os.Stat(engram.DBPath(dst)); err != nil {
+		t.Fatalf("copied DB missing: %v", err)
+	}
+
+	dst2 := filepath.Join(home, "dst2")
+	if _, err := fn(model.EngramDataDirOpMove, dst, dst2); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	s, _ = state.Read(home)
+	if s.EngramDataDir != filepath.Clean(dst2) {
+		t.Fatalf("EngramDataDir after move = %q, want %q", s.EngramDataDir, filepath.Clean(dst2))
+	}
+
+	if _, err := fn(model.EngramDataDirOpDelete, dst2, ""); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	s, _ = state.Read(home)
+	if s.EngramDataDir != "" {
+		t.Fatalf("EngramDataDir after delete = %q, want empty", s.EngramDataDir)
 	}
 }
 

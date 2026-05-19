@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
@@ -108,6 +110,13 @@ func RunArgs(args []string, stdout io.Writer) error {
 		}
 
 		m := tui.NewModel(result, Version)
+		m.HomeDir = homeDir
+		if s, stateErr := state.Read(homeDir); stateErr == nil {
+			m.EngramDataDir = s.EngramDataDir
+			m.EngramKnownDataDirs = s.EngramKnownDataDirs
+		}
+		m.EngramDetected = engramIsPresent(homeDir)
+		m.EngramDataDirFn = buildEngramDataDirFn(homeDir)
 		m.ExecuteFn = tuiExecute
 		m.RestoreFn = tuiRestore
 		m.DeleteBackupFn = func(manifest backup.Manifest) error {
@@ -349,12 +358,15 @@ func tuiExecute(
 		for _, a := range selection.Agents {
 			agentIDs = append(agentIDs, string(a))
 		}
+		currentState, _ := state.Read(homeDir)
 		// Non-fatal: a state write failure must not break an otherwise successful install.
 		_ = state.Write(homeDir, state.InstallState{
 			InstalledAgents:        agentIDs,
 			ClaudeModelAssignments: claudeAliasesToStrings(selection.ClaudeModelAssignments),
 			ModelAssignments:       modelAssignmentsToState(selection.ModelAssignments),
 			Persona:                string(selection.Persona),
+			EngramDataDir:          currentState.EngramDataDir,
+			EngramKnownDataDirs:    currentState.EngramKnownDataDirs,
 		})
 	}
 
@@ -568,6 +580,75 @@ func modelAssignmentsToState(m map[string]model.ModelAssignment) map[string]stat
 		out[k] = state.ModelAssignmentState{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
 	}
 	return out
+}
+
+func engramIsPresent(homeDir string) bool {
+	if _, err := os.Stat(engram.DBPath(engram.DefaultDir(homeDir))); err == nil {
+		return true
+	}
+	if _, err := exec.LookPath("engram"); err == nil {
+		return true
+	}
+	return false
+}
+
+func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, currentDir, dstDir string) (snapshotID string, err error) {
+	return func(op model.EngramDataDirOp, currentDir, dstDir string) (string, error) {
+		svc := engram.NewDataDirService(homeDir)
+		var snapID string
+		var opErr error
+
+		switch op {
+		case model.EngramDataDirOpCopy:
+			manifest, err := svc.CopyTo(currentDir, dstDir)
+			snapID, opErr = manifest.ID, err
+		case model.EngramDataDirOpMove:
+			manifest, err := svc.MoveTo(currentDir, dstDir)
+			snapID, opErr = manifest.ID, err
+		case model.EngramDataDirOpSet:
+			opErr = nil
+		case model.EngramDataDirOpDelete, model.EngramDataDirOpFresh:
+			manifest, err := svc.Delete(currentDir)
+			snapID, opErr = manifest.ID, err
+		case model.EngramDataDirOpKeep:
+			return "", nil
+		default:
+			return "", fmt.Errorf("unknown op: %q", op)
+		}
+		if opErr != nil {
+			return snapID, opErr
+		}
+
+		current, _ := state.Read(homeDir)
+		switch op {
+		case model.EngramDataDirOpCopy:
+			current.EngramKnownDataDirs = appendKnownEngramDir(current.EngramKnownDataDirs, dstDir)
+		case model.EngramDataDirOpMove, model.EngramDataDirOpSet:
+			current.EngramDataDir = dstDir
+			current.EngramKnownDataDirs = appendKnownEngramDir(current.EngramKnownDataDirs, dstDir)
+		case model.EngramDataDirOpDelete, model.EngramDataDirOpFresh:
+			current.EngramDataDir = ""
+		}
+		_ = state.Write(homeDir, current)
+		return snapID, nil
+	}
+}
+
+func appendKnownEngramDir(dirs []string, dir string) []string {
+	if strings.TrimSpace(dir) == "" {
+		return dirs
+	}
+	clean := filepath.Clean(dir)
+	for _, existing := range dirs {
+		if filepath.Clean(existing) == clean {
+			return dirs
+		}
+	}
+	dirs = append(dirs, clean)
+	if len(dirs) > 50 {
+		dirs = dirs[len(dirs)-50:]
+	}
+	return dirs
 }
 
 // ListBackups returns all backup manifests from the backup directory.
