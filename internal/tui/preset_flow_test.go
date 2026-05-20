@@ -18,6 +18,7 @@ type flowAction struct {
 	key       tea.KeyMsg
 	cursor    int
 	setCursor bool
+	prepare   func(Model) Model
 }
 
 func TestPresetSelectionNextScreenFlowMatrix(t *testing.T) {
@@ -290,7 +291,18 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 			forwardActions: []flowAction{
 				{key: tea.KeyMsg{Type: tea.KeyEnter}},
 				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: sddMultiCursor(t), setCursor: true},
-				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: len(screens.ModelPickerRows()), setCursor: true},
+				{
+					key:       tea.KeyMsg{Type: tea.KeyEnter},
+					cursor:    len(screens.ModelPickerRows()),
+					setCursor: true,
+					prepare: func(state Model) Model {
+						// The round-trip under test is the ModelPicker navigation edge, not
+						// provider cache parsing. CI may not have a real OpenCode cache, so
+						// force the picker into its normal row+Continue mode deterministically.
+						state.ModelPicker.AvailableIDs = []string{"opencode"}
+						return state
+					},
+				},
 				{key: tea.KeyMsg{Type: tea.KeyEnter}},
 				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: continuePluginsCursor, setCursor: true},
 			},
@@ -408,6 +420,9 @@ func TestPiOnlyDependencyTreeBackRowReturnsToAgentSelection(t *testing.T) {
 
 func applyFlowAction(t *testing.T, state Model, action flowAction) Model {
 	t.Helper()
+	if action.prepare != nil {
+		state = action.prepare(state)
+	}
 	if action.setCursor {
 		state.Cursor = action.cursor
 	}
