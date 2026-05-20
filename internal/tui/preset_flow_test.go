@@ -193,6 +193,228 @@ func TestCustomPresetPostComponentFlowMatrix(t *testing.T) {
 	}
 }
 
+func TestInstallNavigationRoundTrips(t *testing.T) {
+	withModelCache := func(t *testing.T) {
+		t.Helper()
+		cacheFile := filepath.Join(t.TempDir(), "models.json")
+		if err := os.WriteFile(cacheFile, []byte(`{}`), 0o644); err != nil {
+			t.Fatalf("WriteFile(models cache) error = %v", err)
+		}
+
+		origStat := osStatModelCache
+		osStatModelCache = func(name string) (os.FileInfo, error) {
+			return os.Stat(cacheFile)
+		}
+		t.Cleanup(func() { osStatModelCache = origStat })
+	}
+
+	continuePluginsCursor := len(opencodepluginDefinitions()) * 2
+	tests := []struct {
+		name           string
+		setup          func(t *testing.T) Model
+		forwardActions []flowAction
+		forwardScreens []Screen
+		reverseScreens []Screen
+	}{
+		{
+			name: "Pi-only agents fast path returns to agent selection",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenAgents
+				m.Selection.Agents = []model.AgentID{model.AgentPi}
+				m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+				m.Cursor = len(screens.AgentOptions())
+				return m
+			},
+			forwardActions: []flowAction{{key: tea.KeyMsg{Type: tea.KeyEnter}}},
+			forwardScreens: []Screen{ScreenDependencyTree},
+			reverseScreens: []Screen{ScreenAgents},
+		},
+		{
+			name: "non-custom minimal without OpenCode returns from dependency plan to preset",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenPreset
+				m.Selection.Agents = []model.AgentID{model.AgentCursor}
+				m.Cursor = presetCursor(t, model.PresetMinimal)
+				return m
+			},
+			forwardActions: []flowAction{{key: tea.KeyMsg{Type: tea.KeyEnter}}},
+			forwardScreens: []Screen{ScreenDependencyTree},
+			reverseScreens: []Screen{ScreenPreset},
+		},
+		{
+			name: "non-custom minimal with OpenCode returns through plugins to preset",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenPreset
+				m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+				m.Cursor = presetCursor(t, model.PresetMinimal)
+				return m
+			},
+			forwardActions: []flowAction{
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: continuePluginsCursor, setCursor: true},
+			},
+			forwardScreens: []Screen{ScreenOpenCodePlugins, ScreenDependencyTree},
+			reverseScreens: []Screen{ScreenOpenCodePlugins, ScreenPreset},
+		},
+		{
+			name: "OpenCode SDD single returns through plugins strict TDD and SDD mode to preset",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenPreset
+				m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+				m.Cursor = presetCursor(t, model.PresetFullGentleman)
+				return m
+			},
+			forwardActions: []flowAction{
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: continuePluginsCursor, setCursor: true},
+			},
+			forwardScreens: []Screen{ScreenSDDMode, ScreenStrictTDD, ScreenOpenCodePlugins, ScreenDependencyTree},
+			reverseScreens: []Screen{ScreenOpenCodePlugins, ScreenStrictTDD, ScreenSDDMode, ScreenPreset},
+		},
+		{
+			name: "OpenCode SDD multi with model cache returns through plugins strict TDD model picker and SDD mode",
+			setup: func(t *testing.T) Model {
+				withModelCache(t)
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenPreset
+				m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+				m.Cursor = presetCursor(t, model.PresetFullGentleman)
+				return m
+			},
+			forwardActions: []flowAction{
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: sddMultiCursor(t), setCursor: true},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: len(screens.ModelPickerRows()), setCursor: true},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: continuePluginsCursor, setCursor: true},
+			},
+			forwardScreens: []Screen{ScreenSDDMode, ScreenModelPicker, ScreenStrictTDD, ScreenOpenCodePlugins, ScreenDependencyTree},
+			reverseScreens: []Screen{ScreenOpenCodePlugins, ScreenStrictTDD, ScreenModelPicker, ScreenSDDMode, ScreenPreset},
+		},
+		{
+			name: "non-OpenCode SDD returns through strict TDD to preset",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenPreset
+				m.Selection.Agents = []model.AgentID{model.AgentCursor}
+				m.Cursor = presetCursor(t, model.PresetFullGentleman)
+				return m
+			},
+			forwardActions: []flowAction{
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+			},
+			forwardScreens: []Screen{ScreenStrictTDD, ScreenDependencyTree},
+			reverseScreens: []Screen{ScreenStrictTDD, ScreenPreset},
+		},
+		{
+			name: "custom SDD skills returns from skill picker through strict TDD to component selector",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenDependencyTree
+				m.Selection.Preset = model.PresetCustom
+				m.Selection.Agents = []model.AgentID{model.AgentCursor}
+				m.Selection.Components = []model.ComponentID{model.ComponentSDD, model.ComponentSkills}
+				m.Cursor = len(screens.AllComponents())
+				return m
+			},
+			forwardActions: []flowAction{
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+			},
+			forwardScreens: []Screen{ScreenStrictTDD, ScreenSkillPicker},
+			reverseScreens: []Screen{ScreenStrictTDD, ScreenDependencyTree},
+		},
+		{
+			name: "custom OpenCode SDD skills returns from skill picker through strict TDD and SDD mode to component selector",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenDependencyTree
+				m.Selection.Preset = model.PresetCustom
+				m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+				m.Selection.Components = []model.ComponentID{model.ComponentSDD, model.ComponentSkills}
+				m.Cursor = len(screens.AllComponents())
+				return m
+			},
+			forwardActions: []flowAction{
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: continuePluginsCursor, setCursor: true},
+			},
+			forwardScreens: []Screen{ScreenSDDMode, ScreenStrictTDD, ScreenOpenCodePlugins, ScreenSkillPicker},
+			reverseScreens: []Screen{ScreenStrictTDD, ScreenSDDMode, ScreenDependencyTree},
+		},
+		{
+			name: "custom Engram only returns from review to component selector",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenDependencyTree
+				m.Selection.Preset = model.PresetCustom
+				m.Selection.Agents = []model.AgentID{model.AgentCursor}
+				m.Selection.Components = []model.ComponentID{model.ComponentEngram}
+				m.Cursor = len(screens.AllComponents())
+				return m
+			},
+			forwardActions: []flowAction{{key: tea.KeyMsg{Type: tea.KeyEnter}}},
+			forwardScreens: []Screen{ScreenReview},
+			reverseScreens: []Screen{ScreenDependencyTree},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := tt.setup(t)
+			for idx, action := range tt.forwardActions {
+				state = applyFlowAction(t, state, action)
+				if state.Screen != tt.forwardScreens[idx] {
+					t.Fatalf("forward step %d: screen = %v, want %v", idx+1, state.Screen, tt.forwardScreens[idx])
+				}
+			}
+
+			for idx, want := range tt.reverseScreens {
+				state = applyFlowAction(t, state, flowAction{key: tea.KeyMsg{Type: tea.KeyEsc}})
+				if state.Screen != want {
+					t.Fatalf("reverse step %d: screen = %v, want %v", idx+1, state.Screen, want)
+				}
+			}
+		})
+	}
+}
+
+func TestPiOnlyDependencyTreeBackRowReturnsToAgentSelection(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgents
+	m.Selection.Agents = []model.AgentID{model.AgentPi}
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+	m.Cursor = len(screens.AgentOptions())
+
+	state := applyFlowAction(t, m, flowAction{key: tea.KeyMsg{Type: tea.KeyEnter}})
+	if state.Screen != ScreenDependencyTree {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenDependencyTree)
+	}
+
+	state = applyFlowAction(t, state, flowAction{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: 1, setCursor: true})
+	if state.Screen != ScreenAgents {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenAgents)
+	}
+}
+
+func applyFlowAction(t *testing.T, state Model, action flowAction) Model {
+	t.Helper()
+	if action.setCursor {
+		state.Cursor = action.cursor
+	}
+	updated, _ := state.Update(action.key)
+	return updated.(Model)
+}
+
 func presetCursor(t *testing.T, preset model.PresetID) int {
 	t.Helper()
 	for idx, option := range screens.PresetOptions() {

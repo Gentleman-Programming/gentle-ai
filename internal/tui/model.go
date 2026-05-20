@@ -1802,7 +1802,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// NOTE: Back logic also in goBack() — keep in sync.
-		if m.shouldShowStrictTDDScreen() {
+		if isPiOnlyAgents(m.Selection.Agents) {
+			m.setScreen(ScreenAgents)
+		} else if m.shouldShowStrictTDDScreen() {
 			// StrictTDD screen is between ModelPicker/SDDMode and DependencyTree.
 			m.setScreen(ScreenStrictTDD)
 		} else if m.shouldShowSDDModeScreen() {
@@ -2434,6 +2436,10 @@ func (m Model) goBack() Model {
 	// going back should return to the preset screen (handled by linearRoutes).
 	// NOTE: DependencyTree back logic also in confirmSelection() — keep in sync.
 	if m.Screen == ScreenDependencyTree && m.Selection.Preset != model.PresetCustom {
+		if isPiOnlyAgents(m.Selection.Agents) {
+			m.setScreen(ScreenAgents)
+			return m
+		}
 		if m.shouldShowOpenCodePluginsScreen() {
 			m.setScreen(ScreenOpenCodePlugins)
 			return m
