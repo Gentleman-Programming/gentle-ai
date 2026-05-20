@@ -184,8 +184,12 @@ func TestModelVariantsPluginContract(t *testing.T) {
 	src := string(source)
 
 	// Atomic write: must import rename and write to a .tmp file before renaming.
+	// Must also unlink before rename for Windows compatibility.
 	if !strings.Contains(src, "rename") {
 		t.Errorf("model-variants.ts must use rename() for atomic write")
+	}
+	if !strings.Contains(src, "unlink") {
+		t.Errorf("model-variants.ts must unlink() before rename() for Windows compatibility")
 	}
 	if !strings.Contains(src, ".tmp") {
 		t.Errorf("model-variants.ts must write to a .tmp file before rename()")

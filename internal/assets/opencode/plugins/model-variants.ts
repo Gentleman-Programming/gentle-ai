@@ -9,7 +9,7 @@
  */
 
 import type { Plugin } from "@opencode-ai/plugin"
-import { writeFile, mkdir, rename } from "fs/promises"
+import { writeFile, mkdir, rename, unlink } from "fs/promises"
 import { homedir } from "os"
 import path from "path"
 
@@ -41,6 +41,13 @@ export const ModelVariantsPlugin: Plugin = async (input) => {
       const finalPath = path.join(cacheDir, "model-variants.json")
       const tmpPath = finalPath + ".tmp"
       await writeFile(tmpPath, JSON.stringify(variants, null, 2))
+      // On Windows, rename() cannot overwrite an existing file. Unlink first
+      // so the atomic rename always succeeds across platforms.
+      try {
+        await unlink(finalPath)
+      } catch (_) {
+        // file may not exist — safe to ignore
+      }
       await rename(tmpPath, finalPath)
     } catch (err) {
       console.error("[model-variants] cache refresh failed:", err)
