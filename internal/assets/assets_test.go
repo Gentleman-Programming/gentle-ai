@@ -251,6 +251,8 @@ func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 		"ask the localized user-facing preflight prompt above and STOP",
 		"Ask the user directly with a compact, numbered preflight prompt",
 		"Match the user's current language",
+		"Do NOT mix languages inside one preflight prompt",
+		"If the current language is Spanish, use the Spanish localized shape below verbatim",
 		"translate user-facing prose to the user's current language",
 		"¿Querés ajustar algo o continuamos?",
 		"B. Artefactos",

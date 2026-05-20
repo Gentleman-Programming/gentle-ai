@@ -834,7 +834,9 @@ Required preflight choices: execution mode, artifact store, chained PR strategy,
 
 Ask the user directly with a compact, numbered preflight prompt. Match the user's current language for all user-facing prose. If the user writes Spanish, ask the preflight in Spanish. Keep option codes (` + "`A1`" + `, ` + "`B1`" + `, ` + "`C1`" + `, ` + "`D1`" + `) and canonical values unchanged. Do NOT ask the user to type raw keys like ` + "`execution mode`" + `, ` + "`artifact store`" + `, ` + "`chained PR strategy`" + `, or ` + "`review budget`" + `. Do NOT mention non-existent tools. Do NOT invent informal values; use only the canonical values after the user chooses.
 
-Use this shape; translate user-facing prose to the user's current language while preserving option codes:
+Do NOT mix languages inside one preflight prompt: headings, option titles, descriptions, and follow-up text must all be in the user's current language. If the current language is Spanish, use the Spanish localized shape below verbatim; do not translate only the intro while keeping English labels like ` + "`Pace`" + `, ` + "`Artifacts`" + `, ` + "`Review`" + `, ` + "`recommended`" + `, ` + "`forecast`" + `, or ` + "`budget`" + `.
+
+Use this shape for English users, or translate user-facing prose to the user's current language while preserving option codes. Translation means the whole shape: headings, option titles, and descriptions together.
 
 ` + "```text" + `
 Before continuing with SDD, choose one option per group.
@@ -905,6 +907,8 @@ Hard gate rules:
 		strings.Contains(prompt, "openspec/config.yaml") &&
 		strings.Contains(prompt, "Never launch `sdd-apply`") &&
 		strings.Contains(prompt, "Match the user's current language") &&
+		strings.Contains(prompt, "Do NOT mix languages inside one preflight prompt") &&
+		strings.Contains(prompt, "If the current language is Spanish, use the Spanish localized shape below verbatim") &&
 		strings.Contains(prompt, "pause after each delegated phase returns") &&
 		strings.Contains(prompt, "Before continuing with SDD") &&
 		!strings.Contains(prompt, "question` tool") {

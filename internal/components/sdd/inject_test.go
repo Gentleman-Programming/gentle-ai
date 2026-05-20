@@ -443,6 +443,8 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"### SDD Session Preflight (HARD GATE)",
 		"ask the localized user-facing preflight prompt above and STOP",
 		"Match the user's current language",
+		"Do NOT mix languages inside one preflight prompt",
+		"If the current language is Spanish, use the Spanish localized shape below verbatim",
 		"pause after each delegated phase returns",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 	} {
@@ -493,6 +495,8 @@ func TestInjectOpenCodeMigratesPartialPreflightPrompt(t *testing.T) {
 		"### SDD Session Preflight (HARD GATE)",
 		"openspec/config.yaml",
 		"Match the user's current language",
+		"Do NOT mix languages inside one preflight prompt",
+		"If the current language is Spanish, use the Spanish localized shape below verbatim",
 		"pause after each delegated phase returns",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 	} {
