@@ -183,16 +183,13 @@ func TestModelVariantsPluginContract(t *testing.T) {
 	}
 	src := string(source)
 
-	// Atomic write: must import rename and write to a .tmp file before renaming.
-	// Must also unlink before rename for Windows compatibility.
-	if !strings.Contains(src, "rename") {
-		t.Errorf("model-variants.ts must use rename() for atomic write")
+	// Windows-safe write: must use writeFile for the cache, not rename().
+	// rename() is fragile on Windows with OneDrive-synced directories.
+	if !strings.Contains(src, "writeFile") {
+		t.Errorf("model-variants.ts must use writeFile() for cache persistence")
 	}
-	if !strings.Contains(src, "unlink") {
-		t.Errorf("model-variants.ts must unlink() before rename() for Windows compatibility")
-	}
-	if !strings.Contains(src, ".tmp") {
-		t.Errorf("model-variants.ts must write to a .tmp file before rename()")
+	if strings.Contains(src, "rename") {
+		t.Errorf("model-variants.ts must not use rename() — fragile on Windows with synced directories")
 	}
 
 	// Always-write semantics: the cache must be written unconditionally so an

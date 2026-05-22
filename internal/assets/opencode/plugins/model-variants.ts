@@ -9,7 +9,7 @@
  */
 
 import type { Plugin } from "@opencode-ai/plugin"
-import { writeFile, mkdir, rename, unlink } from "fs/promises"
+import { writeFile, mkdir } from "fs/promises"
 import { homedir } from "os"
 import path from "path"
 
@@ -34,21 +34,10 @@ export const ModelVariantsPlugin: Plugin = async (input) => {
       const cacheDir = path.join(homedir(), ".gentle-ai", "cache")
       await mkdir(cacheDir, { recursive: true })
 
-      // Atomic write: write to .tmp then rename. rename() is atomic on POSIX,
-      // so concurrent readers (e.g. `gentle-ai sync`) never see a partial JSON.
-      // Always write — even when empty — to avoid leaving a stale cache from
-      // a previous run alive after providers stop reporting variants.
-      const finalPath = path.join(cacheDir, "model-variants.json")
-      const tmpPath = finalPath + ".tmp"
-      await writeFile(tmpPath, JSON.stringify(variants, null, 2))
-      // On Windows, rename() cannot overwrite an existing file. Unlink first
-      // so the atomic rename always succeeds across platforms.
-      try {
-        await unlink(finalPath)
-      } catch (_) {
-        // file may not exist — safe to ignore
-      }
-      await rename(tmpPath, finalPath)
+      // Write directly. On Windows, rename() is fragile with OneDrive-synced
+      // directories — the .tmp file can vanish between write and rename.
+      // The Go-side reader already handles a missing/incomplete cache gracefully.
+      await writeFile(path.join(cacheDir, "model-variants.json"), JSON.stringify(variants, null, 2))
     } catch (err) {
       console.error("[model-variants] cache refresh failed:", err)
     }
