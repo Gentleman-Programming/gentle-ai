@@ -211,6 +211,31 @@ func TestModelVariantsPluginContract(t *testing.T) {
 	}
 }
 
+// TestBackgroundAgentsPluginPreservesAgentVariant verifies that background
+// delegation keeps OpenCode's config-level `variant` field when resolving an
+// agent model. OpenCode expects `variant` as a top-level session.prompt field,
+// not nested inside the model object.
+func TestBackgroundAgentsPluginPreservesAgentVariant(t *testing.T) {
+	source, err := Read("opencode/plugins/background-agents.ts")
+	if err != nil {
+		t.Fatalf("Read(background-agents.ts) error = %v", err)
+	}
+	src := string(source)
+
+	checks := map[string]string{
+		"agent config includes variant":  "agent?: Record<string, { model?: string; variant?: string }>",
+		"variant returned from resolver": "return { providerID, modelID, variant: agentConfig.variant }",
+		"model excludes variant":         "model: {\n              providerID: agentModel.providerID,\n              modelID: agentModel.modelID,\n            }",
+		"variant passed top-level":       "...(agentModel?.variant && { variant: agentModel.variant })",
+	}
+
+	for name, want := range checks {
+		if !strings.Contains(src, want) {
+			t.Errorf("background-agents.ts missing %s contract: %s", name, want)
+		}
+	}
+}
+
 func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 	entries, err := FS.ReadDir("claude")
 	if err != nil {

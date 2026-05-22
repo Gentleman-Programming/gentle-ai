@@ -471,19 +471,22 @@ async function parseAgentWriteCapability(
  * Resolve the model configured for a given agent.
  * Parses the "provider/model-id" format into the shape session.prompt() expects.
  * Returns undefined when no model is configured (caller falls back to default).
+ * The variant is sent separately because OpenCode's session.prompt API models
+ * it as a top-level parameter, not as part of the model object.
  */
 async function resolveAgentModel(
   client: OpencodeClient,
   agentName: string,
   log: Logger,
-): Promise<{ providerID: string; modelID: string } | undefined> {
+): Promise<{ providerID: string; modelID: string; variant?: string } | undefined> {
   try {
     const config = await client.config.get()
     const configData = config.data as {
-      agent?: Record<string, { model?: string }>
+      agent?: Record<string, { model?: string; variant?: string }>
     } | undefined
 
-    const modelStr = configData?.agent?.[agentName]?.model
+    const agentConfig = configData?.agent?.[agentName]
+    const modelStr = agentConfig?.model
     if (!modelStr) return undefined
 
     const slashIndex = modelStr.indexOf("/")
@@ -492,8 +495,10 @@ async function resolveAgentModel(
     const providerID = modelStr.substring(0, slashIndex)
     const modelID = modelStr.substring(slashIndex + 1)
 
-    await log.info(`resolveAgentModel: ${agentName} → ${providerID}/${modelID}`)
-    return { providerID, modelID }
+    await log.info(
+      `resolveAgentModel: ${agentName} → ${providerID}/${modelID}${agentConfig.variant ? ` (${agentConfig.variant})` : ""}`,
+    )
+    return { providerID, modelID, variant: agentConfig.variant }
   } catch {
     return undefined
   }
@@ -671,7 +676,13 @@ class DelegationManager {
         path: { id: delegation.sessionID },
         body: {
           agent: input.agent,
-          ...(agentModel && { model: agentModel }),
+          ...(agentModel && {
+            model: {
+              providerID: agentModel.providerID,
+              modelID: agentModel.modelID,
+            },
+          }),
+          ...(agentModel?.variant && { variant: agentModel.variant }),
           parts: [{ type: "text", text: input.prompt }],
           tools: {
             task: false,
