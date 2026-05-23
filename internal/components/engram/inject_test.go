@@ -35,11 +35,12 @@ func piAdapter() agents.Adapter { return pi.NewAdapter() }
 func TestSyncDataDirEnv_OpenCodeSetsAndClearsEnv(t *testing.T) {
 	home := t.TempDir()
 	dataDir := filepath.Join(home, "engram-data")
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	writeTestFile(t, settingsPath, `{"mcp":{"engram":{"command":["engram","mcp","--tools=agent"],"type":"local"}}}`)
 
 	if _, err := SyncDataDirEnv(home, opencodeAdapter(), dataDir); err != nil {
 		t.Fatalf("SyncDataDirEnv(set): %v", err)
 	}
-	settingsPath := opencodeAdapter().SettingsPath(home)
 	content, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q): %v", settingsPath, err)
@@ -74,14 +75,32 @@ func TestSyncDataDirEnv_OpenCodeSetsAndClearsEnv(t *testing.T) {
 	}
 }
 
+func TestSyncDataDirEnv_DoesNotCreateMissingEngramConfig(t *testing.T) {
+	home := t.TempDir()
+	dataDir := filepath.Join(home, "engram-data")
+
+	result, err := SyncDataDirEnv(home, opencodeAdapter(), dataDir)
+	if err != nil {
+		t.Fatalf("SyncDataDirEnv: %v", err)
+	}
+	if result.Changed || len(result.Files) != 0 {
+		t.Fatalf("SyncDataDirEnv result = %+v, want no-op", result)
+	}
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+		t.Fatalf("settings file should not be created for missing Engram config, stat err = %v", err)
+	}
+}
+
 func TestSyncDataDirEnv_AntigravityPluginDoesNotLeakMergeSentinel(t *testing.T) {
 	home := t.TempDir()
 	dataDir := filepath.Join(home, "engram-data")
+	pluginPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
+	writeTestFile(t, pluginPath, `{"mcpServers":{"engram":{"command":"engram","args":["mcp"]}}}`)
 
 	if _, err := SyncDataDirEnv(home, antigravityAdapter(), dataDir); err != nil {
 		t.Fatalf("SyncDataDirEnv: %v", err)
 	}
-	pluginPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
 	content, err := os.ReadFile(pluginPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q): %v", pluginPath, err)

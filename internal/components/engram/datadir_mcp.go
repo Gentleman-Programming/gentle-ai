@@ -3,6 +3,7 @@ package engram
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -18,6 +19,9 @@ func SyncDataDirEnv(homeDir string, adapter agents.Adapter, dataDir string) (Inj
 		return InjectionResult{}, nil
 	}
 	dataDir = cleanDataDirEnv(dataDir)
+	if !hasExistingEngramMCPConfig(homeDir, adapter) {
+		return InjectionResult{}, nil
+	}
 	files := make([]string, 0, 2)
 	changed := false
 
@@ -88,6 +92,68 @@ func SyncDataDirEnv(homeDir string, adapter agents.Adapter, dataDir string) (Inj
 	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+func hasExistingEngramMCPConfig(homeDir string, adapter agents.Adapter) bool {
+	switch adapter.MCPStrategy() {
+	case model.StrategySeparateMCPFiles:
+		return fileExists(adapter.MCPConfigPath(homeDir, "engram"))
+	case model.StrategyMergeIntoSettings:
+		return jsonFileHasEngramServer(adapter.SettingsPath(homeDir))
+	case model.StrategyMCPConfigFile:
+		if jsonFileHasEngramServer(adapter.MCPConfigPath(homeDir, "engram")) {
+			return true
+		}
+		if adapter.Agent() == model.AgentAntigravity {
+			pluginPath := filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
+			return jsonFileHasEngramServer(pluginPath)
+		}
+	case model.StrategyTOMLFile:
+		content, err := os.ReadFile(adapter.MCPConfigPath(homeDir, "engram"))
+		return err == nil && strings.Contains(string(content), "[mcp_servers.engram")
+	}
+	return false
+}
+
+func fileExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func jsonFileHasEngramServer(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var root any
+	if err := json.Unmarshal(content, &root); err != nil {
+		return strings.Contains(string(content), `"engram"`)
+	}
+	return jsonObjectHasKey(root, "engram")
+}
+
+func jsonObjectHasKey(v any, key string) bool {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, child := range x {
+			if k == key || jsonObjectHasKey(child, key) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range x {
+			if jsonObjectHasKey(child, key) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func engramServerJSONWithDataDir(cmd, dataDir string) []byte {

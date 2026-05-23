@@ -24,6 +24,8 @@ type DataDirService struct {
 	snapshotter snapshotter
 }
 
+var dataDirStabilityDelay = 100 * time.Millisecond
+
 // NewDataDirService creates a DataDirService with the default snapshotter.
 func NewDataDirService(homeDir string) DataDirService {
 	return DataDirService{
@@ -42,6 +44,9 @@ func (s DataDirService) CopyTo(currentDir, dst string) (backup.Manifest, error) 
 		return backup.Manifest{}, fmt.Errorf("copy destination %q is inside the current Engram data directory %q", dst, currentDir)
 	}
 	if err := requireEmptyDestination(dst); err != nil {
+		return backup.Manifest{}, err
+	}
+	if err := ensureDataDirStable(currentDir); err != nil {
 		return backup.Manifest{}, err
 	}
 	snap, err := s.snapshot(currentDir)
@@ -76,6 +81,9 @@ func (s DataDirService) RemoveSource(currentDir string) error {
 
 // Delete snapshots the current data directory, then removes it.
 func (s DataDirService) Delete(dataDir string) (backup.Manifest, error) {
+	if err := ensureDataDirStable(dataDir); err != nil {
+		return backup.Manifest{}, err
+	}
 	snap, err := s.Snapshot(dataDir)
 	if err != nil {
 		return backup.Manifest{}, fmt.Errorf("snapshot before delete: %w", err)
@@ -118,8 +126,12 @@ func (s DataDirService) snapshot(dataDir string) (backup.Manifest, error) {
 }
 
 func copyDataDir(srcDir, dstDir string) error {
+	before, err := engramFileSignatures(srcDir)
+	if err != nil {
+		return err
+	}
 	var copied []string
-	err := filepath.WalkDir(srcDir, func(path string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(srcDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -151,8 +163,22 @@ func copyDataDir(srcDir, dstDir string) error {
 		for _, copiedPath := range copied {
 			_ = os.Remove(copiedPath)
 		}
+		return err
 	}
-	return err
+	after, err := engramFileSignatures(srcDir)
+	if err != nil {
+		for _, copiedPath := range copied {
+			_ = os.Remove(copiedPath)
+		}
+		return err
+	}
+	if !sameFileSignatures(before, after) {
+		for _, copiedPath := range copied {
+			_ = os.Remove(copiedPath)
+		}
+		return fmt.Errorf("Engram data directory changed while copying; stop Engram and retry")
+	}
+	return nil
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
@@ -217,6 +243,62 @@ func regularFiles(dataDir string) ([]string, error) {
 		return nil, nil
 	}
 	return paths, err
+}
+
+type fileSignature struct {
+	size    int64
+	modTime int64
+}
+
+func ensureDataDirStable(dataDir string) error {
+	if dataDirStabilityDelay <= 0 {
+		return nil
+	}
+	before, err := engramFileSignatures(dataDir)
+	if err != nil {
+		return err
+	}
+	time.Sleep(dataDirStabilityDelay)
+	after, err := engramFileSignatures(dataDir)
+	if err != nil {
+		return err
+	}
+	if !sameFileSignatures(before, after) {
+		return fmt.Errorf("Engram data directory is changing; stop Engram and retry")
+	}
+	return nil
+}
+
+func engramFileSignatures(dataDir string) (map[string]fileSignature, error) {
+	paths, err := regularFiles(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]fileSignature, len(paths))
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		rel, err := filepath.Rel(dataDir, path)
+		if err != nil {
+			return nil, err
+		}
+		out[rel] = fileSignature{size: info.Size(), modTime: info.ModTime().UnixNano()}
+	}
+	return out, nil
+}
+
+func sameFileSignatures(a, b map[string]fileSignature) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for path, sig := range a {
+		if b[path] != sig {
+			return false
+		}
+	}
+	return true
 }
 
 func removeEngramFiles(dataDir string) error {

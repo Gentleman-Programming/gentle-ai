@@ -747,6 +747,7 @@ func TestBuildEngramDataDirFn_MoveAndDeleteSyncMCPDataDir(t *testing.T) {
 	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentClaudeCode)}}); err != nil {
 		t.Fatal(err)
 	}
+	writeClaudeEngramConfig(t, home, "")
 
 	fn := buildEngramDataDirFn(home)
 	if _, err := fn(model.EngramDataDirOpMove, src, dst); err != nil {
@@ -802,7 +803,11 @@ func TestBuildEngramDataDirFn_MoveMCPFailureKeepsStateAndSource(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	blockClaudeMCPDir(t, home)
+	originalSync := syncEngramMCPDataDirFn
+	syncEngramMCPDataDirFn = func(string, state.InstallState) error {
+		return fmt.Errorf("sync failed")
+	}
+	t.Cleanup(func() { syncEngramMCPDataDirFn = originalSync })
 
 	if _, err := buildEngramDataDirFn(home)(model.EngramDataDirOpMove, src, dst); err == nil {
 		t.Fatal("move with MCP write failure error = nil, want error")
@@ -834,7 +839,11 @@ func TestBuildEngramDataDirFn_DeleteMCPFailureKeepsStateAndData(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	blockClaudeMCPDir(t, home)
+	originalSync := syncEngramMCPDataDirFn
+	syncEngramMCPDataDirFn = func(string, state.InstallState) error {
+		return fmt.Errorf("sync failed")
+	}
+	t.Cleanup(func() { syncEngramMCPDataDirFn = originalSync })
 
 	if _, err := buildEngramDataDirFn(home)(model.EngramDataDirOpDelete, src, ""); err == nil {
 		t.Fatal("delete with MCP write failure error = nil, want error")
@@ -861,6 +870,7 @@ func TestBuildEngramDataDirFn_StateWriteFailureRollsBackMCPDataDir(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
+	writeClaudeEngramConfig(t, home, src)
 
 	originalWrite := stateWriteFn
 	stateWriteFn = func(string, state.InstallState) error {
@@ -872,6 +882,46 @@ func TestBuildEngramDataDirFn_StateWriteFailureRollsBackMCPDataDir(t *testing.T)
 		t.Fatal("set with state write failure error = nil, want error")
 	}
 	assertClaudeEngramDataDir(t, home, src)
+}
+
+func TestBuildEngramDataDirFn_RemoveSourceFailureRollsBackStateAndMCP(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, "src")
+	dst := filepath.Join(home, "dst")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engram.DBPath(src), []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{string(model.AgentClaudeCode)},
+		EngramDataDir:   src,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writeClaudeEngramConfig(t, home, src)
+
+	originalRemove := removeEngramSourceFn
+	removeEngramSourceFn = func(engram.DataDirService, string) error {
+		return fmt.Errorf("remove failed")
+	}
+	t.Cleanup(func() { removeEngramSourceFn = originalRemove })
+
+	if _, err := buildEngramDataDirFn(home)(model.EngramDataDirOpMove, src, dst); err == nil {
+		t.Fatal("move with remove-source failure error = nil, want error")
+	}
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.EngramDataDir != filepath.Clean(src) {
+		t.Fatalf("EngramDataDir = %q, want original %q", s.EngramDataDir, filepath.Clean(src))
+	}
+	assertClaudeEngramDataDir(t, home, src)
+	if _, err := os.Stat(engram.DBPath(src)); err != nil {
+		t.Fatalf("source DB should remain after rollback: %v", err)
+	}
 }
 
 func TestBuildEngramDataDirFn_InvalidStateDoesNotCopy(t *testing.T) {
@@ -1079,9 +1129,25 @@ func setupMockHome(t *testing.T, home string) {
 	os.Setenv("USERPROFILE", home)
 }
 
-func blockClaudeMCPDir(t *testing.T, home string) {
+func writeClaudeEngramConfig(t *testing.T, home, dataDir string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(home, ".claude"), []byte("not a directory"), 0o644); err != nil {
+	mcpPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := map[string]any{
+		"command": "engram",
+		"args":    []string{"mcp", "--tools=agent"},
+	}
+	if dataDir != "" {
+		cfg["env"] = map[string]string{engram.DataDirEnvVar: filepath.Clean(dataDir)}
+	}
+	content, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = append(content, '\n')
+	if err := os.WriteFile(mcpPath, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

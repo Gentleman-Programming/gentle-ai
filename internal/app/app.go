@@ -41,7 +41,11 @@ var (
 	detectSystem             = system.Detect
 	stateReadFn              = state.Read
 	stateWriteFn             = state.Write
-	runTUI                   = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
+	syncEngramMCPDataDirFn   = syncEngramMCPDataDir
+	removeEngramSourceFn     = func(svc engram.DataDirService, currentDir string) error {
+		return svc.RemoveSource(currentDir)
+	}
+	runTUI = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
 		p := tea.NewProgram(m, opts...)
 		return p.Run()
 	}
@@ -623,6 +627,7 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 		if err != nil {
 			return "", fmt.Errorf("read Engram data-dir state: %w", err)
 		}
+		previous := cloneInstallState(current)
 
 		svc := engram.NewDataDirService(homeDir)
 		var snapID string
@@ -666,7 +671,11 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 			return snapID, err
 		}
 		if op == model.EngramDataDirOpMove || op == model.EngramDataDirOpDelete || op == model.EngramDataDirOpFresh {
-			if err := svc.RemoveSource(currentDir); err != nil {
+			if err := removeEngramSourceFn(svc, currentDir); err != nil {
+				rollbackErr := commitEngramDataDirState(homeDir, previous)
+				if rollbackErr != nil {
+					return snapID, fmt.Errorf("remove source after %s: %w; rollback Engram data-dir state: %v", op, err, rollbackErr)
+				}
 				return snapID, fmt.Errorf("remove source after %s: %w", op, err)
 			}
 		}
@@ -679,11 +688,11 @@ func commitEngramDataDirState(homeDir string, next state.InstallState) error {
 	if err != nil {
 		return fmt.Errorf("read Engram data-dir state for rollback: %w", err)
 	}
-	if err := syncEngramMCPDataDir(homeDir, next); err != nil {
+	if err := syncEngramMCPDataDirFn(homeDir, next); err != nil {
 		return err
 	}
 	if err := stateWriteFn(homeDir, next); err != nil {
-		rollbackErr := syncEngramMCPDataDir(homeDir, current)
+		rollbackErr := syncEngramMCPDataDirFn(homeDir, current)
 		if rollbackErr != nil {
 			return fmt.Errorf("write Engram data-dir state: %w; rollback MCP data dir: %v", err, rollbackErr)
 		}
@@ -714,6 +723,37 @@ func readStateOrEmpty(homeDir string) (state.InstallState, error) {
 		return state.InstallState{}, nil
 	}
 	return state.InstallState{}, err
+}
+
+func cloneInstallState(s state.InstallState) state.InstallState {
+	s.InstalledAgents = append([]string(nil), s.InstalledAgents...)
+	s.ClaudeModelAssignments = cloneStringMap(s.ClaudeModelAssignments)
+	s.KiroModelAssignments = cloneStringMap(s.KiroModelAssignments)
+	s.ModelAssignments = cloneModelAssignmentStateMap(s.ModelAssignments)
+	s.EngramKnownDataDirs = append([]string(nil), s.EngramKnownDataDirs...)
+	return s
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneModelAssignmentStateMap(in map[string]state.ModelAssignmentState) map[string]state.ModelAssignmentState {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]state.ModelAssignmentState, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func appendKnownEngramDir(dirs []string, dir string) []string {
@@ -781,9 +821,6 @@ func ListBackups() []backup.Manifest {
 }
 
 func listBackupsHomeDir() (string, error) {
-	if home := os.Getenv("HOME"); home != "" {
-		return home, nil
-	}
 	return os.UserHomeDir()
 }
 
