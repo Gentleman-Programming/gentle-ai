@@ -87,6 +87,14 @@ func BuildConfig(provider string) []byte {
 	b.WriteString("\n")
 	b.WriteString("# Review timeout in seconds\n")
 	b.WriteString("TIMEOUT=\"300\"\n")
+	b.WriteString("\n")
+	b.WriteString("# OpenCode variant (reasoning effort: high, max, minimal, low, medium)\n")
+	b.WriteString("# Leave empty to use the default\n")
+	b.WriteString("OPENCODE_VARIANT=\"\"\n")
+	b.WriteString("\n")
+	b.WriteString("# OpenCode agent profile\n")
+	b.WriteString("# Leave empty to use the default agent\n")
+	b.WriteString("OPENCODE_AGENT=\"\"\n")
 	return []byte(b.String())
 }
 
