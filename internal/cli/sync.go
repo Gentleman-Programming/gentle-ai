@@ -492,6 +492,10 @@ func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model
 	paths := []string{}
 	for _, adapter := range adapters {
 		targetDir := componentInjectionDir(homeDir, workspaceDir, adapter)
+		if adapter.Agent() == model.AgentPi {
+			paths = append(paths, piPersonaConfigPaths(homeDir, workspaceDir)...)
+			continue
+		}
 		if adapter.Agent() == model.AgentOpenClaw {
 			paths = append(paths, filepath.Join(targetDir, "SOUL.md"))
 			continue
@@ -672,6 +676,14 @@ func (s componentSyncStep) Run() error {
 		// merge conflicts with SDD's writes to the same settings file and
 		// remains an install-only concern.
 		for _, adapter := range adapters {
+			if adapter.Agent() == model.AgentPi {
+				changed, err := writePiPersonaConfig(s.homeDir, s.workspaceDir, s.selection.Persona)
+				if err != nil {
+					return fmt.Errorf("sync persona for %q: %w", adapter.Agent(), err)
+				}
+				s.countChanged(boolToInt(changed))
+				continue
+			}
 			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
 			res, err := persona.InjectForSync(targetDir, adapter, s.selection.Persona)
 			if err != nil {

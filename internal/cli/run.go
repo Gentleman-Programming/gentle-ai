@@ -589,6 +589,12 @@ func (s componentApplyStep) Run() error {
 		return nil
 	case model.ComponentPersona:
 		for _, adapter := range adapters {
+			if adapter.Agent() == model.AgentPi {
+				if _, err := writePiPersonaConfig(s.homeDir, s.workspaceDir, s.selection.Persona); err != nil {
+					return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
+				}
+				continue
+			}
 			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
 			if _, err := persona.Inject(targetDir, adapter, s.selection.Persona); err != nil {
 				return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
@@ -991,6 +997,10 @@ func componentPathsWithWorkspace(homeDir, workspaceDir string, selection model.S
 			if selection.Persona == model.PersonaCustom {
 				break
 			}
+			if adapter.Agent() == model.AgentPi {
+				paths = append(paths, piPersonaConfigPaths(homeDir, workspaceDir)...)
+				break
+			}
 			if adapter.Agent() == model.AgentOpenClaw {
 				paths = append(paths, filepath.Join(targetDir, "SOUL.md"))
 				break
@@ -1047,6 +1057,41 @@ func componentInjectionDir(homeDir, workspaceDir string, adapter agents.Adapter)
 		return workspaceDir
 	}
 	return homeDir
+}
+
+func piPersonaConfigPaths(homeDir, workspaceDir string) []string {
+	paths := []string{filepath.Join(homeDir, ".pi", "gentle-ai", "persona.json")}
+	if strings.TrimSpace(workspaceDir) != "" && workspaceDir != homeDir {
+		paths = append(paths, filepath.Join(workspaceDir, ".pi", "gentle-ai", "persona.json"))
+	}
+	return paths
+}
+
+func writePiPersonaConfig(homeDir, workspaceDir string, personaID model.PersonaID) (bool, error) {
+	if personaID == model.PersonaCustom {
+		return false, nil
+	}
+	mode := string(personaID)
+	if mode == "" {
+		mode = string(model.PersonaGentleman)
+	}
+	content := []byte(fmt.Sprintf("{\n  \"mode\": \"%s\"\n}\n", mode))
+
+	changed := false
+	for _, path := range piPersonaConfigPaths(homeDir, workspaceDir) {
+		current, err := os.ReadFile(path)
+		if err == nil && string(current) == string(content) {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return changed, err
+		}
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			return changed, err
+		}
+		changed = true
+	}
+	return changed, nil
 }
 
 type openClawWorkspaceConfig struct {

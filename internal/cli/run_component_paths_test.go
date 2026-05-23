@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -122,6 +123,63 @@ func TestComponentPathsWithWorkspaceOpenClawSDDUsesWorkspaceScopedSkills(t *test
 	} {
 		if containsPath(paths, unwanted) {
 			t.Fatalf("componentPathsWithWorkspace(sdd,openclaw) must not include home-scoped SDD skill path %q\npaths=%v", unwanted, paths)
+		}
+	}
+}
+
+func TestComponentPersonaPiIncludesPersonaConfigPaths(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentPi})
+
+	paths := componentPathsWithWorkspace(home, workspace, model.Selection{Persona: model.PersonaNeutral}, adapters, model.ComponentPersona)
+
+	for _, want := range []string{
+		filepath.Join(home, ".pi", "gentle-ai", "persona.json"),
+		filepath.Join(workspace, ".pi", "gentle-ai", "persona.json"),
+	} {
+		if !containsPath(paths, want) {
+			t.Fatalf("componentPathsWithWorkspace(persona,pi) missing Pi persona path %q\npaths=%v", want, paths)
+		}
+	}
+}
+
+func TestSyncPersonaPathsPiIncludesPersonaConfigPaths(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentPi})
+
+	paths := syncPersonaPathsWithWorkspace(home, workspace, model.Selection{Persona: model.PersonaNeutral}, adapters)
+
+	for _, want := range []string{
+		filepath.Join(home, ".pi", "gentle-ai", "persona.json"),
+		filepath.Join(workspace, ".pi", "gentle-ai", "persona.json"),
+	} {
+		if !containsPath(paths, want) {
+			t.Fatalf("syncPersonaPathsWithWorkspace(pi) missing Pi persona path %q\npaths=%v", want, paths)
+		}
+	}
+}
+
+func TestWritePiPersonaConfigWritesNeutralMode(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	changed, err := writePiPersonaConfig(home, workspace, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("writePiPersonaConfig() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("writePiPersonaConfig() changed = false, want true")
+	}
+
+	for _, path := range piPersonaConfigPaths(home, workspace) {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error = %v", path, err)
+		}
+		if got, want := string(content), "{\n  \"mode\": \"neutral\"\n}\n"; got != want {
+			t.Fatalf("persona config %q = %q, want %q", path, got, want)
 		}
 	}
 }

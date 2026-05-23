@@ -232,7 +232,7 @@ func isPiOnlyAgents(agents []model.AgentID) bool {
 }
 
 func piOnlyComponents() []model.ComponentID {
-	return []model.ComponentID{model.ComponentEngram}
+	return []model.ComponentID{model.ComponentEngram, model.ComponentPersona}
 }
 
 func unique[T comparable](items []T) []T {
