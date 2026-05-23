@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
@@ -655,6 +656,9 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 		if err := state.Write(homeDir, current); err != nil {
 			return snapID, fmt.Errorf("write Engram data-dir state: %w", err)
 		}
+		if err := syncEngramMCPDataDir(homeDir, current); err != nil {
+			return snapID, err
+		}
 		if op == model.EngramDataDirOpMove {
 			if err := svc.RemoveSource(currentDir); err != nil {
 				return snapID, fmt.Errorf("remove source after move: %w", err)
@@ -662,6 +666,19 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 		}
 		return snapID, nil
 	}
+}
+
+func syncEngramMCPDataDir(homeDir string, s state.InstallState) error {
+	for _, agentID := range s.InstalledAgents {
+		adapter, err := agents.NewAdapter(model.AgentID(agentID))
+		if err != nil {
+			continue
+		}
+		if _, err := engram.SyncDataDirEnv(homeDir, adapter, s.EngramDataDir); err != nil {
+			return fmt.Errorf("sync Engram data-dir MCP for %q: %w", agentID, err)
+		}
+	}
+	return nil
 }
 
 func readStateOrEmpty(homeDir string) (state.InstallState, error) {

@@ -32,6 +32,74 @@ func antigravityAdapter() agents.Adapter {
 
 func piAdapter() agents.Adapter { return pi.NewAdapter() }
 
+func TestSyncDataDirEnv_OpenCodeSetsAndClearsEnv(t *testing.T) {
+	home := t.TempDir()
+	dataDir := filepath.Join(home, "engram-data")
+
+	if _, err := SyncDataDirEnv(home, opencodeAdapter(), dataDir); err != nil {
+		t.Fatalf("SyncDataDirEnv(set): %v", err)
+	}
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", settingsPath, err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", settingsPath, err)
+	}
+	engramServer := objectAtForTest(t, objectAtForTest(t, root, "mcp"), "engram")
+	env := objectAtForTest(t, engramServer, "env")
+	if got := env[DataDirEnvVar]; got != filepath.Clean(dataDir) {
+		t.Fatalf("ENGRAM_DATA_DIR = %v, want %q", got, filepath.Clean(dataDir))
+	}
+	if _, ok := engramServer["__replace__"]; ok {
+		t.Fatalf("merge sentinel leaked into config: %#v", engramServer)
+	}
+
+	if _, err := SyncDataDirEnv(home, opencodeAdapter(), ""); err != nil {
+		t.Fatalf("SyncDataDirEnv(clear): %v", err)
+	}
+	content, err = os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", settingsPath, err)
+	}
+	root = nil
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", settingsPath, err)
+	}
+	engramServer = objectAtForTest(t, objectAtForTest(t, root, "mcp"), "engram")
+	if _, ok := engramServer["env"]; ok {
+		t.Fatalf("env retained after clearing data dir: %#v", engramServer)
+	}
+}
+
+func TestSyncDataDirEnv_AntigravityPluginDoesNotLeakMergeSentinel(t *testing.T) {
+	home := t.TempDir()
+	dataDir := filepath.Join(home, "engram-data")
+
+	if _, err := SyncDataDirEnv(home, antigravityAdapter(), dataDir); err != nil {
+		t.Fatalf("SyncDataDirEnv: %v", err)
+	}
+	pluginPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
+	content, err := os.ReadFile(pluginPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", pluginPath, err)
+	}
+	if strings.Contains(string(content), "__replace__") {
+		t.Fatalf("merge sentinel leaked into Antigravity plugin config:\n%s", content)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", pluginPath, err)
+	}
+	engramServer := objectAtForTest(t, objectAtForTest(t, root, "mcpServers"), "engram")
+	env := objectAtForTest(t, engramServer, "env")
+	if got := env[DataDirEnvVar]; got != filepath.Clean(dataDir) {
+		t.Fatalf("ENGRAM_DATA_DIR = %v, want %q", got, filepath.Clean(dataDir))
+	}
+}
+
 // assertArgsHaveToolsAgent is a shared helper that validates a JSON file
 // contains the MCP "engram" entry with --tools=agent in args.
 func assertArgsHaveToolsAgent(t *testing.T, path string) {

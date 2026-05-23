@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -730,6 +731,58 @@ func TestBuildEngramDataDirFn_CopyMoveDeleteState(t *testing.T) {
 	s, _ = state.Read(home)
 	if s.EngramDataDir != "" {
 		t.Fatalf("EngramDataDir after delete = %q, want empty", s.EngramDataDir)
+	}
+}
+
+func TestBuildEngramDataDirFn_MoveAndDeleteSyncMCPDataDir(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, "src")
+	dst := filepath.Join(home, "dst")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engram.DBPath(src), []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentClaudeCode)}}); err != nil {
+		t.Fatal(err)
+	}
+
+	fn := buildEngramDataDirFn(home)
+	if _, err := fn(model.EngramDataDirOpMove, src, dst); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	mcpPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	content, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", mcpPath, err)
+	}
+	var cfg struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(content, &cfg); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", mcpPath, err)
+	}
+	if cfg.Env[engram.DataDirEnvVar] != filepath.Clean(dst) {
+		t.Fatalf("mcp ENGRAM_DATA_DIR = %q, want %q", cfg.Env[engram.DataDirEnvVar], filepath.Clean(dst))
+	}
+
+	if _, err := fn(model.EngramDataDirOpDelete, dst, ""); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	content, err = os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", mcpPath, err)
+	}
+	cfg = struct {
+		Env map[string]string `json:"env"`
+	}{}
+	if err := json.Unmarshal(content, &cfg); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", mcpPath, err)
+	}
+	if _, ok := cfg.Env[engram.DataDirEnvVar]; ok {
+		t.Fatalf("mcp config retained ENGRAM_DATA_DIR after delete; got:\n%s", content)
 	}
 }
 
