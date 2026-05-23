@@ -326,7 +326,7 @@ func TestInjectWithCapability_WritesExtractedSDDSkillWithFrontmatterAtStart(t *t
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if !strings.HasPrefix(string(content), "---\n") {
+	if !strings.HasPrefix(strings.ReplaceAll(string(content), "\r\n", "\n"), "---\n") {
 		t.Fatalf("extracted SDD skill must start with YAML frontmatter delimiter, got prefix %q", string(content[:min(len(content), 16)]))
 	}
 }

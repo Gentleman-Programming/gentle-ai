@@ -253,11 +253,18 @@ func TestConfigRootsForBackup_NilSafeOnEmptyRegistry(t *testing.T) {
 
 // ─── Integration: DefaultRegistry ────────────────────────────────────────
 
+func isolateAppConfig(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+}
+
 // TestDiscoverInstalled_WithDefaultRegistryAndRealFS verifies that DiscoverInstalled
 // works correctly with the real default registry and a real temp directory.
 // Only agents whose config dirs are created are returned.
 func TestDiscoverInstalled_WithDefaultRegistryAndRealFS(t *testing.T) {
 	home := t.TempDir()
+	isolateAppConfig(t, home)
 
 	// Create claude-code config dir only.
 	claudeDir := filepath.Join(home, ".claude")
@@ -288,6 +295,7 @@ func TestDiscoverInstalled_WithDefaultRegistryAndRealFS(t *testing.T) {
 // ConfigRootsForBackup returns exactly the dirs created on disk.
 func TestConfigRootsForBackup_WithDefaultRegistryCoversCreatedDirs(t *testing.T) {
 	home := t.TempDir()
+	isolateAppConfig(t, home)
 
 	// Create two agent config dirs.
 	dirs := []string{

@@ -39,6 +39,15 @@ func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
 func windsurfAdapter() agents.Adapter    { return windsurf.NewAdapter() }
 func kiroAdapter() agents.Adapter        { return kiro.NewAdapter() }
 
+func sddGoldenOptions(extra ...sdd.InjectOptions) []sdd.InjectOptions {
+	opts := sdd.InjectOptions{SkipOpenCodePluginPackageInstall: true}
+	if len(extra) > 0 {
+		opts = extra[0]
+		opts.SkipOpenCodePluginPackageInstall = true
+	}
+	return []sdd.InjectOptions{opts}
+}
+
 // ---------------------------------------------------------------------------
 // Existing golden tests (context7, presets, SDD command)
 // ---------------------------------------------------------------------------
@@ -125,7 +134,7 @@ func TestGoldenSDD_Claude(t *testing.T) {
 func TestGoldenSDD_OpenCode(t *testing.T) {
 	home := t.TempDir()
 
-	result, err := sdd.Inject(home, opencodeAdapter(), "")
+	result, err := sdd.Inject(home, opencodeAdapter(), "", sddGoldenOptions()...)
 	if err != nil {
 		t.Fatalf("sdd.Inject(opencode) error = %v", err)
 	}
@@ -158,7 +167,7 @@ func TestGoldenSDD_OpenCode(t *testing.T) {
 func TestGoldenSDD_OpenCode_Multi(t *testing.T) {
 	home := t.TempDir()
 
-	result, err := sdd.Inject(home, opencodeAdapter(), "multi")
+	result, err := sdd.Inject(home, opencodeAdapter(), "multi", sddGoldenOptions()...)
 	if err != nil {
 		t.Fatalf("sdd.Inject(opencode, multi) error = %v", err)
 	}
@@ -176,10 +185,11 @@ func TestGoldenSDD_OpenCode_Multi(t *testing.T) {
 	// Normalize the absolute home path in the settings JSON so the golden
 	// file remains stable across test runs (temp dirs change each run).
 	// Sub-agent prompts now use {file:/abs/path/...} references.
-	jsonStr := string(settingsJSON)
-	jsonStr = strings.ReplaceAll(jsonStr, home, "{{HOME}}")
-	jsonStr = strings.ReplaceAll(jsonStr, filepath.ToSlash(home), "{{HOME}}")
-	normalizedSettings := []byte(jsonStr)
+	settingsText := string(settingsJSON)
+	settingsText = strings.ReplaceAll(settingsText, strings.ReplaceAll(home, `\`, `\\`), "{{HOME}}")
+	settingsText = strings.ReplaceAll(settingsText, filepath.ToSlash(home), "{{HOME}}")
+	settingsText = strings.ReplaceAll(settingsText, home, "{{HOME}}")
+	normalizedSettings := []byte(settingsText)
 	assertGolden(t, "sdd-opencode-multi-settings.golden", normalizedSettings)
 
 	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
@@ -333,7 +343,7 @@ func TestGoldenSDD_Windsurf(t *testing.T) {
 		t.Fatalf("write go.mod marker: %v", err)
 	}
 
-	result, err := sdd.Inject(home, windsurfAdapter(), "", sdd.InjectOptions{WorkspaceDir: workspace})
+	result, err := sdd.Inject(home, windsurfAdapter(), "", sddGoldenOptions(sdd.InjectOptions{WorkspaceDir: workspace})...)
 	if err != nil {
 		t.Fatalf("sdd.Inject(windsurf) error = %v", err)
 	}
@@ -769,7 +779,7 @@ func TestGoldenCombined_Windsurf(t *testing.T) {
 	if _, err := persona.Inject(home, windsurfAdapter(), model.PersonaGentleman); err != nil {
 		t.Fatalf("persona.Inject(windsurf) error = %v", err)
 	}
-	if _, err := sdd.Inject(home, windsurfAdapter(), "", sdd.InjectOptions{WorkspaceDir: workspace}); err != nil {
+	if _, err := sdd.Inject(home, windsurfAdapter(), "", sddGoldenOptions(sdd.InjectOptions{WorkspaceDir: workspace})...); err != nil {
 		t.Fatalf("sdd.Inject(windsurf) error = %v", err)
 	}
 	if _, err := engram.Inject(home, windsurfAdapter()); err != nil {
@@ -905,6 +915,8 @@ func assertGolden(t *testing.T, name string, actual []byte) {
 		t.Fatalf("ReadFile(%q) error = %v\n\nRun with -update to generate golden files:\n  go test ./internal/components/ -run %s -update", goldenPath, err, t.Name())
 	}
 
+	actual = normalizeGoldenBytes(actual)
+	expected = normalizeGoldenBytes(expected)
 	if string(actual) != string(expected) {
 		// Show first difference for easier debugging.
 		diffIdx := firstDiffIndex(string(expected), string(actual))
@@ -921,6 +933,12 @@ func assertGolden(t *testing.T, name string, actual []byte) {
 			t.Name(),
 		)
 	}
+}
+
+func normalizeGoldenBytes(data []byte) []byte {
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	text = strings.ReplaceAll(text, `\r\n`, `\n`)
+	return []byte(text)
 }
 
 func firstDiffIndex(a, b string) int {

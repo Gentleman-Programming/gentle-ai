@@ -35,12 +35,13 @@ description: React patterns
 	if err != nil {
 		t.Fatalf("read registry: %v", err)
 	}
+	registryText := string(registry)
 	for _, want := range []string{"## Skills", "| `react` | React patterns | project |", filepath.Join(cwd, "skills", "react", "SKILL.md")} {
-		if !strings.Contains(string(registry), want) {
+		if !registryContains(registryText, want) {
 			t.Fatalf("registry missing %q:\n%s", want, registry)
 		}
 	}
-	if strings.Contains(string(registry), "Prefer composition") {
+	if strings.Contains(registryText, "Prefer composition") {
 		t.Fatalf("registry should index skill paths, not copy skill rules:\n%s", registry)
 	}
 	if _, err := os.Stat(filepath.Join(cwd, CacheRelPath)); err != nil {
@@ -95,7 +96,7 @@ description: project copy
 	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
 	projectPath := filepath.Join(cwd, "skills", "dup", "SKILL.md")
 	userPath := filepath.Join(home, ".claude", "skills", "dup", "SKILL.md")
-	if !strings.Contains(registry, projectPath) || strings.Contains(registry, userPath) || strings.Contains(registry, "Project rule") || strings.Contains(registry, "User rule") {
+	if !registryContains(registry, projectPath) || registryContains(registry, userPath) || strings.Contains(registry, "Project rule") || strings.Contains(registry, "User rule") {
 		t.Fatalf("project skill should win over user duplicate:\n%s", registry)
 	}
 }
@@ -130,12 +131,12 @@ description: project OpenCode copy
 		t.Fatalf("SkillCount = %d, want 1", result.SkillCount)
 	}
 	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
-	for _, want := range []string{filepath.FromSlash("- .opencode/skills"), filepath.Join(cwd, ".opencode", "skills", "dup", "SKILL.md")} {
-		if !strings.Contains(registry, want) {
+	for _, want := range []string{"- .opencode/skills", filepath.Join(cwd, ".opencode", "skills", "dup", "SKILL.md")} {
+		if !registryContains(registry, want) {
 			t.Fatalf("registry missing %q:\n%s", want, registry)
 		}
 	}
-	if strings.Contains(registry, filepath.Join(home, ".config", "opencode", "skills", "dup", "SKILL.md")) || strings.Contains(registry, "Global OpenCode rule") || strings.Contains(registry, "Project OpenCode rule") {
+	if registryContains(registry, filepath.Join(home, ".config", "opencode", "skills", "dup", "SKILL.md")) || strings.Contains(registry, "Global OpenCode rule") || strings.Contains(registry, "Project OpenCode rule") {
 		t.Fatalf("project .opencode skill should win over global duplicate:\n%s", registry)
 	}
 }
@@ -172,7 +173,7 @@ description: OpenCode copy
 	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
 	openCodePath := filepath.Join(home, ".config", "opencode", "skills", "dup", "SKILL.md")
 	claudePath := filepath.Join(home, ".claude", "skills", "dup", "SKILL.md")
-	if !strings.Contains(registry, openCodePath) || strings.Contains(registry, claudePath) || strings.Contains(registry, "OpenCode rule") || strings.Contains(registry, "Claude rule") {
+	if !registryContains(registry, openCodePath) || registryContains(registry, claudePath) || strings.Contains(registry, "OpenCode rule") || strings.Contains(registry, "Claude rule") {
 		t.Fatalf("user duplicate should respect UserSkillDirs source order:\n%s", registry)
 	}
 }
@@ -262,7 +263,7 @@ Use this for Go tests.
 	}
 	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
 	for _, want := range []string{"| `go-testing` | Trigger: Go tests. Apply focused Go testing patterns. | project |", filepath.Join(cwd, "skills", "go-testing", "SKILL.md"), "## Loading protocol"} {
-		if !strings.Contains(registry, want) {
+		if !registryContains(registry, want) {
 			t.Fatalf("registry missing %q:\n%s", want, registry)
 		}
 	}
@@ -298,7 +299,7 @@ license: Apache-2.0
 	}
 	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
 	for _, want := range []string{"Trigger: AI chat features, Vercel AI SDK 5, streaming UI. Use AI SDK 5 patterns and avoid v4 APIs.", filepath.Join(cwd, "skills", "ai-sdk-5", "SKILL.md")} {
-		if !strings.Contains(registry, want) {
+		if !registryContains(registry, want) {
 			t.Fatalf("registry missing %q:\n%s", want, registry)
 		}
 	}
@@ -368,6 +369,10 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func registryContains(registry, want string) bool {
+	return strings.Contains(filepath.ToSlash(registry), filepath.ToSlash(want))
 }
 
 func containsPath(paths []string, want string) bool {

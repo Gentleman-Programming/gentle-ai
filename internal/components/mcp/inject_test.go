@@ -230,6 +230,7 @@ func TestInjectCodexTOMLStrategyIsSkipped(t *testing.T) {
 
 func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 	adapter := vscode.NewAdapter()

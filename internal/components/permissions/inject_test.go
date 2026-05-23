@@ -176,6 +176,7 @@ func TestInjectGeminiCLIUsesAutoEditMode(t *testing.T) {
 
 func TestInjectVSCodeCopilotUsesAutoApprove(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 

@@ -223,7 +223,7 @@ func RenderRegistry(cwd string, sources []string, entries []SkillEntry) string {
 	lines = append(lines, "Last updated: "+time.Now().UTC().Format("2006-01-02"), "")
 	lines = append(lines, "## Sources scanned", "")
 	for _, src := range sources {
-		lines = append(lines, "- "+src)
+		lines = append(lines, "- "+filepath.ToSlash(src))
 	}
 	lines = append(lines, "", "## Contract", "")
 	lines = append(lines, "**Delegator use only.** This registry is an index, not a summary. Any agent that launches subagents reads it to select relevant skills, then passes exact `SKILL.md` paths for the subagent to read before work.", "")
@@ -236,7 +236,7 @@ func RenderRegistry(cwd string, sources []string, entries []SkillEntry) string {
 		if scope == "" {
 			scope = scopeForPath(cwd, entry.Path)
 		}
-		lines = append(lines, fmt.Sprintf("| `%s` | %s | %s | `%s` |", markdownCell(entry.Name), markdownCell(entry.Description), markdownCell(scope), markdownCell(entry.Path)))
+		lines = append(lines, fmt.Sprintf("| `%s` | %s | %s | `%s` |", markdownCell(entry.Name), markdownCell(entry.Description), markdownCell(scope), markdownCell(filepath.ToSlash(entry.Path))))
 	}
 	lines = append(lines, "", "## Loading protocol", "")
 	lines = append(lines, "1. Match task context and target files against the `Trigger / description` column.")

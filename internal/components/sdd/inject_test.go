@@ -27,6 +27,13 @@ func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func windsurfAdapter() agents.Adapter { return windsurfagent.NewAdapter() }
 
+func TestMain(m *testing.M) {
+	npmLookPath = func(string) (string, error) {
+		return "", fmt.Errorf("not found")
+	}
+	os.Exit(m.Run())
+}
+
 func mockNoPackageManager(t *testing.T) {
 	t.Helper()
 	orig := npmLookPath
@@ -3495,7 +3502,7 @@ func TestInjectCodexWritesSDDOrchestratorAndSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", extractedSkillPath, err)
 	}
-	if !strings.HasPrefix(string(extractedSkill), "---\n") {
+	if !strings.HasPrefix(strings.ReplaceAll(string(extractedSkill), "\r\n", "\n"), "---\n") {
 		t.Fatalf("Codex SDD skill must start with YAML frontmatter delimiter, got prefix %q", string(extractedSkill[:min(len(extractedSkill), 16)]))
 	}
 
