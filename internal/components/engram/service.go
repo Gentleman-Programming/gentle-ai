@@ -63,10 +63,15 @@ func (s DataDirService) MoveTo(currentDir, dst string) (backup.Manifest, error) 
 	if err != nil {
 		return snap, err
 	}
-	if err := removeEngramFiles(currentDir); err != nil {
+	if err := s.RemoveSource(currentDir); err != nil {
 		return snap, fmt.Errorf("remove source after move: %w", err)
 	}
 	return snap, nil
+}
+
+// RemoveSource removes only Engram-owned SQLite artifacts from a source dir.
+func (s DataDirService) RemoveSource(currentDir string) error {
+	return removeEngramFiles(currentDir)
 }
 
 // Delete snapshots the current data directory, then removes it.

@@ -693,6 +693,9 @@ func TestBuildEngramDataDirFn_CopyMoveDeleteState(t *testing.T) {
 	if err := os.WriteFile(engram.DBPath(src), []byte("db"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(src, "engram.db-wal"), []byte("wal"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	fn := buildEngramDataDirFn(home)
 	if _, err := fn(model.EngramDataDirOpCopy, src, dst); err != nil {
@@ -707,6 +710,9 @@ func TestBuildEngramDataDirFn_CopyMoveDeleteState(t *testing.T) {
 	}
 	if _, err := os.Stat(engram.DBPath(dst)); err != nil {
 		t.Fatalf("copied DB missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "engram.db-wal")); err != nil {
+		t.Fatalf("copied WAL missing: %v", err)
 	}
 
 	dst2 := filepath.Join(home, "dst2")
@@ -724,6 +730,80 @@ func TestBuildEngramDataDirFn_CopyMoveDeleteState(t *testing.T) {
 	s, _ = state.Read(home)
 	if s.EngramDataDir != "" {
 		t.Fatalf("EngramDataDir after delete = %q, want empty", s.EngramDataDir)
+	}
+}
+
+func TestBuildEngramDataDirFn_InvalidStateDoesNotCopy(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, "src")
+	dst := filepath.Join(home, "dst")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engram.DBPath(src), []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(state.Path(home)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(state.Path(home), []byte("{not-json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := buildEngramDataDirFn(home)(model.EngramDataDirOpCopy, src, dst)
+	if err == nil {
+		t.Fatal("copy with invalid state error = nil, want error")
+	}
+	if _, statErr := os.Stat(engram.DBPath(dst)); !os.IsNotExist(statErr) {
+		t.Fatalf("dst DB should not be copied when state is invalid, stat error = %v", statErr)
+	}
+}
+
+func TestBuildEngramDataDirFn_InvalidStateDoesNotMove(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, "src")
+	dst := filepath.Join(home, "dst")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engram.DBPath(src), []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(state.Path(home)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(state.Path(home), []byte("{not-json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := buildEngramDataDirFn(home)(model.EngramDataDirOpMove, src, dst)
+	if err == nil {
+		t.Fatal("move with invalid state error = nil, want error")
+	}
+	if _, statErr := os.Stat(engram.DBPath(src)); statErr != nil {
+		t.Fatalf("source DB should remain when state is invalid: %v", statErr)
+	}
+	if _, statErr := os.Stat(engram.DBPath(dst)); !os.IsNotExist(statErr) {
+		t.Fatalf("dst DB should not be copied when state is invalid, stat error = %v", statErr)
+	}
+}
+
+func TestEngramIsPresent_ChecksPersistedCustomDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PATH", "")
+	custom := filepath.Join(home, "custom-engram")
+	if err := os.MkdirAll(custom, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engram.DBPath(custom), []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{EngramDataDir: custom}); err != nil {
+		t.Fatal(err)
+	}
+
+	if !engramIsPresent(home) {
+		t.Fatal("engramIsPresent = false, want true for persisted custom data dir")
 	}
 }
 

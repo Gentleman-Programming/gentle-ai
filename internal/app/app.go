@@ -583,8 +583,18 @@ func modelAssignmentsToState(m map[string]model.ModelAssignment) map[string]stat
 }
 
 func engramIsPresent(homeDir string) bool {
-	if _, err := os.Stat(engram.DBPath(engram.DefaultDir(homeDir))); err == nil {
+	if engramDirHasDB(engram.DefaultDir(homeDir)) {
 		return true
+	}
+	if s, err := state.Read(homeDir); err == nil {
+		if engramDirHasDB(s.EngramDataDir) {
+			return true
+		}
+		for _, dir := range s.EngramKnownDataDirs {
+			if engramDirHasDB(dir) {
+				return true
+			}
+		}
 	}
 	if _, err := exec.LookPath("engram"); err == nil {
 		return true
@@ -592,8 +602,24 @@ func engramIsPresent(homeDir string) bool {
 	return false
 }
 
+func engramDirHasDB(dir string) bool {
+	if strings.TrimSpace(dir) == "" {
+		return false
+	}
+	_, err := os.Stat(engram.DBPath(dir))
+	return err == nil
+}
+
 func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, currentDir, dstDir string) (snapshotID string, err error) {
 	return func(op model.EngramDataDirOp, currentDir, dstDir string) (string, error) {
+		if op == model.EngramDataDirOpKeep {
+			return "", nil
+		}
+		current, err := readStateOrEmpty(homeDir)
+		if err != nil {
+			return "", fmt.Errorf("read Engram data-dir state: %w", err)
+		}
+
 		svc := engram.NewDataDirService(homeDir)
 		var snapID string
 		var opErr error
@@ -603,15 +629,13 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 			manifest, err := svc.CopyTo(currentDir, dstDir)
 			snapID, opErr = manifest.ID, err
 		case model.EngramDataDirOpMove:
-			manifest, err := svc.MoveTo(currentDir, dstDir)
+			manifest, err := svc.CopyTo(currentDir, dstDir)
 			snapID, opErr = manifest.ID, err
 		case model.EngramDataDirOpSet:
 			opErr = nil
 		case model.EngramDataDirOpDelete, model.EngramDataDirOpFresh:
 			manifest, err := svc.Delete(currentDir)
 			snapID, opErr = manifest.ID, err
-		case model.EngramDataDirOpKeep:
-			return "", nil
 		default:
 			return "", fmt.Errorf("unknown op: %q", op)
 		}
@@ -619,7 +643,6 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 			return snapID, opErr
 		}
 
-		current, _ := state.Read(homeDir)
 		switch op {
 		case model.EngramDataDirOpCopy:
 			current.EngramKnownDataDirs = appendKnownEngramDir(current.EngramKnownDataDirs, dstDir)
@@ -629,9 +652,27 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 		case model.EngramDataDirOpDelete, model.EngramDataDirOpFresh:
 			current.EngramDataDir = ""
 		}
-		_ = state.Write(homeDir, current)
+		if err := state.Write(homeDir, current); err != nil {
+			return snapID, fmt.Errorf("write Engram data-dir state: %w", err)
+		}
+		if op == model.EngramDataDirOpMove {
+			if err := svc.RemoveSource(currentDir); err != nil {
+				return snapID, fmt.Errorf("remove source after move: %w", err)
+			}
+		}
 		return snapID, nil
 	}
+}
+
+func readStateOrEmpty(homeDir string) (state.InstallState, error) {
+	s, err := state.Read(homeDir)
+	if err == nil {
+		return s, nil
+	}
+	if os.IsNotExist(err) {
+		return state.InstallState{}, nil
+	}
+	return state.InstallState{}, err
 }
 
 func appendKnownEngramDir(dirs []string, dir string) []string {
