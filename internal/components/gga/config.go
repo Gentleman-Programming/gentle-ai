@@ -87,6 +87,11 @@ func BuildConfig(provider string) []byte {
 	b.WriteString("\n")
 	b.WriteString("# Review timeout in seconds\n")
 	b.WriteString("TIMEOUT=\"300\"\n")
+	b.WriteString("\n")
+	b.WriteString("# Reasoning effort across all providers (minimal, low, medium, high, max)\n")
+	b.WriteString("# ✅ opencode, codex, ollama  ⚠️ github  ❌ claude, gemini\n")
+	b.WriteString("# Leave empty to use provider defaults\n")
+	b.WriteString("REASONING=\"\"\n")
 	return []byte(b.String())
 }
 
