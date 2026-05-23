@@ -10,11 +10,15 @@ import (
 )
 
 type stubSnapshotter struct {
-	err      error
-	manifest backup.Manifest
+	err       error
+	manifest  backup.Manifest
+	seenPaths *[]string
 }
 
-func (s stubSnapshotter) Create(_ string, _ []string) (backup.Manifest, error) {
+func (s stubSnapshotter) Create(_ string, paths []string) (backup.Manifest, error) {
+	if s.seenPaths != nil {
+		*s.seenPaths = append((*s.seenPaths)[:0], paths...)
+	}
 	return s.manifest, s.err
 }
 
@@ -41,6 +45,16 @@ func writeTestDB(t *testing.T, dir string) string {
 	return path
 }
 
+func writeTestFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDataDirService_CopyTo(t *testing.T) {
 	svc, home := newTestService(t)
 	src := filepath.Join(home, "src-data")
@@ -62,6 +76,91 @@ func TestDataDirService_CopyTo(t *testing.T) {
 	}
 }
 
+func TestDataDirService_CopyTo_CopiesDirectoryFiles(t *testing.T) {
+	svc, home := newTestService(t)
+	src := filepath.Join(home, "src-data")
+	dst := filepath.Join(home, "dst-data")
+	writeTestDB(t, src)
+	writeTestFile(t, filepath.Join(src, "engram.db-wal"), "wal")
+	writeTestFile(t, filepath.Join(src, "engram.db-shm"), "shm")
+
+	if _, err := svc.CopyTo(src, dst); err != nil {
+		t.Fatalf("CopyTo: %v", err)
+	}
+
+	for _, rel := range []string{"engram.db", "engram.db-wal", "engram.db-shm"} {
+		if _, err := os.Stat(filepath.Join(dst, rel)); err != nil {
+			t.Errorf("copied file %q missing: %v", rel, err)
+		}
+	}
+}
+
+func TestDataDirService_CopyTo_SnapshotsOnlyEngramFiles(t *testing.T) {
+	home := t.TempDir()
+	var seen []string
+	svc := DataDirService{
+		homeDir:     home,
+		backupRoot:  filepath.Join(home, ".gentle-ai", "backups"),
+		snapshotter: stubSnapshotter{manifest: backup.Manifest{ID: "snap-abc123"}, seenPaths: &seen},
+	}
+	src := filepath.Join(home, "src-data")
+	dst := filepath.Join(home, "dst-data")
+	writeTestDB(t, src)
+	writeTestFile(t, filepath.Join(src, "engram.db-wal"), "wal")
+	writeTestFile(t, filepath.Join(src, "engram.db-shm"), "shm")
+	writeTestFile(t, filepath.Join(src, "notes.txt"), "ignore")
+
+	if _, err := svc.CopyTo(src, dst); err != nil {
+		t.Fatalf("CopyTo: %v", err)
+	}
+	want := map[string]bool{
+		DBPath(src):                         true,
+		filepath.Join(src, "engram.db-wal"): true,
+		filepath.Join(src, "engram.db-shm"): true,
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("snapshot paths = %v, want %d Engram files", seen, len(want))
+	}
+	for _, path := range seen {
+		if !want[path] {
+			t.Fatalf("snapshot path %q should not be included; got %v", path, seen)
+		}
+	}
+}
+
+func TestDataDirService_CopyTo_RejectsSameDir(t *testing.T) {
+	svc, home := newTestService(t)
+	dir := filepath.Join(home, "data")
+	writeTestDB(t, dir)
+
+	if _, err := svc.CopyTo(dir, dir); err == nil {
+		t.Fatal("CopyTo same dir error = nil, want error")
+	}
+}
+
+func TestDataDirService_CopyTo_RejectsDestinationInsideSource(t *testing.T) {
+	svc, home := newTestService(t)
+	src := filepath.Join(home, "data")
+	dst := filepath.Join(src, "nested-copy")
+	writeTestDB(t, src)
+
+	if _, err := svc.CopyTo(src, dst); err == nil {
+		t.Fatal("CopyTo nested destination error = nil, want error")
+	}
+}
+
+func TestDataDirService_CopyTo_RejectsNonEmptyDestination(t *testing.T) {
+	svc, home := newTestService(t)
+	src := filepath.Join(home, "src")
+	dst := filepath.Join(home, "dst")
+	writeTestDB(t, src)
+	writeTestFile(t, filepath.Join(dst, "stale"), "old")
+
+	if _, err := svc.CopyTo(src, dst); err == nil {
+		t.Fatal("CopyTo non-empty destination error = nil, want error")
+	}
+}
+
 func TestDataDirService_MoveTo(t *testing.T) {
 	svc, home := newTestService(t)
 	src := filepath.Join(home, "src-data")
@@ -79,10 +178,24 @@ func TestDataDirService_MoveTo(t *testing.T) {
 	}
 }
 
+func TestDataDirService_MoveTo_RejectsSameDir(t *testing.T) {
+	svc, home := newTestService(t)
+	dir := filepath.Join(home, "data")
+	writeTestDB(t, dir)
+
+	if _, err := svc.MoveTo(dir, dir); err == nil {
+		t.Fatal("MoveTo same dir error = nil, want error")
+	}
+	if _, err := os.Stat(DBPath(dir)); err != nil {
+		t.Fatalf("source DB should remain after rejected move: %v", err)
+	}
+}
+
 func TestDataDirService_Delete(t *testing.T) {
 	svc, home := newTestService(t)
 	dir := filepath.Join(home, "data")
 	writeTestDB(t, dir)
+	writeTestFile(t, filepath.Join(dir, "engram.db-wal"), "wal")
 
 	snap, err := svc.Delete(dir)
 	if err != nil {
@@ -93,6 +206,39 @@ func TestDataDirService_Delete(t *testing.T) {
 	}
 	if _, err := os.Stat(DBPath(dir)); !os.IsNotExist(err) {
 		t.Error("DB should not exist after Delete")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "engram.db-wal")); !os.IsNotExist(err) {
+		t.Error("WAL should not exist after Delete")
+	}
+}
+
+func TestDataDirService_Delete_PreservesUnrelatedFiles(t *testing.T) {
+	svc, home := newTestService(t)
+	dir := filepath.Join(home, "data")
+	writeTestDB(t, dir)
+	writeTestFile(t, filepath.Join(dir, "notes.txt"), "keep me")
+
+	if _, err := svc.Delete(dir); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "notes.txt")); err != nil {
+		t.Fatalf("unrelated file should remain after Delete: %v", err)
+	}
+}
+
+func TestDataDirService_Delete_PreservesArtifactNamedDirectories(t *testing.T) {
+	svc, home := newTestService(t)
+	dir := filepath.Join(home, "data")
+	writeTestDB(t, dir)
+	if err := os.Mkdir(filepath.Join(dir, "engram.db-wal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.Delete(dir); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(dir, "engram.db-wal")); err != nil || !info.IsDir() {
+		t.Fatalf("artifact-named directory should remain after Delete, info=%v err=%v", info, err)
 	}
 }
 
