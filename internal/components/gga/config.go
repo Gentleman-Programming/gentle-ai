@@ -96,6 +96,11 @@ func BuildConfig(provider string) []byte {
 	b.WriteString("# ⚠️  Loads the agent's FULL system prompt. Keep it lightweight.\n")
 	b.WriteString("# Leave empty to use the default agent\n")
 	b.WriteString("OPENCODE_AGENT=\"\"\n")
+	b.WriteString("\n")
+	b.WriteString("# Reasoning effort across all providers (minimal, low, medium, high, max)\n")
+	b.WriteString("# ✅ opencode, codex, ollama  ⚠️ github  ❌ claude, gemini\n")
+	b.WriteString("# Leave empty to use provider defaults\n")
+	b.WriteString("REASONING=\"\"\n")
 	return []byte(b.String())
 }
 
