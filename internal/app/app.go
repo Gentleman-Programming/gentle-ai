@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -38,6 +39,8 @@ var (
 	selfUpdateFn             = selfUpdate
 	ensureCurrentOSSupported = system.EnsureCurrentOSSupported
 	detectSystem             = system.Detect
+	stateReadFn              = state.Read
+	stateWriteFn             = state.Write
 	runTUI                   = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
 		p := tea.NewProgram(m, opts...)
 		return p.Run()
@@ -635,7 +638,7 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 		case model.EngramDataDirOpSet:
 			opErr = nil
 		case model.EngramDataDirOpDelete, model.EngramDataDirOpFresh:
-			manifest, err := svc.Delete(currentDir)
+			manifest, err := svc.Snapshot(currentDir)
 			snapID, opErr = manifest.ID, err
 		default:
 			return "", fmt.Errorf("unknown op: %q", op)
@@ -653,19 +656,40 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 		case model.EngramDataDirOpDelete, model.EngramDataDirOpFresh:
 			current.EngramDataDir = ""
 		}
-		if err := state.Write(homeDir, current); err != nil {
-			return snapID, fmt.Errorf("write Engram data-dir state: %w", err)
+		if op == model.EngramDataDirOpCopy {
+			if err := stateWriteFn(homeDir, current); err != nil {
+				return snapID, fmt.Errorf("write Engram data-dir state: %w", err)
+			}
+			return snapID, nil
 		}
-		if err := syncEngramMCPDataDir(homeDir, current); err != nil {
+		if err := commitEngramDataDirState(homeDir, current); err != nil {
 			return snapID, err
 		}
-		if op == model.EngramDataDirOpMove {
+		if op == model.EngramDataDirOpMove || op == model.EngramDataDirOpDelete || op == model.EngramDataDirOpFresh {
 			if err := svc.RemoveSource(currentDir); err != nil {
-				return snapID, fmt.Errorf("remove source after move: %w", err)
+				return snapID, fmt.Errorf("remove source after %s: %w", op, err)
 			}
 		}
 		return snapID, nil
 	}
+}
+
+func commitEngramDataDirState(homeDir string, next state.InstallState) error {
+	current, err := readStateOrEmpty(homeDir)
+	if err != nil {
+		return fmt.Errorf("read Engram data-dir state for rollback: %w", err)
+	}
+	if err := syncEngramMCPDataDir(homeDir, next); err != nil {
+		return err
+	}
+	if err := stateWriteFn(homeDir, next); err != nil {
+		rollbackErr := syncEngramMCPDataDir(homeDir, current)
+		if rollbackErr != nil {
+			return fmt.Errorf("write Engram data-dir state: %w; rollback MCP data dir: %v", err, rollbackErr)
+		}
+		return fmt.Errorf("write Engram data-dir state: %w", err)
+	}
+	return nil
 }
 
 func syncEngramMCPDataDir(homeDir string, s state.InstallState) error {
@@ -682,7 +706,7 @@ func syncEngramMCPDataDir(homeDir string, s state.InstallState) error {
 }
 
 func readStateOrEmpty(homeDir string) (state.InstallState, error) {
-	s, err := state.Read(homeDir)
+	s, err := stateReadFn(homeDir)
 	if err == nil {
 		return s, nil
 	}
@@ -698,7 +722,7 @@ func appendKnownEngramDir(dirs []string, dir string) []string {
 	}
 	clean := filepath.Clean(dir)
 	for _, existing := range dirs {
-		if filepath.Clean(existing) == clean {
+		if engramPathKey(existing) == engramPathKey(clean) {
 			return dirs
 		}
 	}
@@ -707,6 +731,14 @@ func appendKnownEngramDir(dirs []string, dir string) []string {
 		dirs = dirs[len(dirs)-50:]
 	}
 	return dirs
+}
+
+func engramPathKey(path string) string {
+	clean := filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(clean)
+	}
+	return clean
 }
 
 // ListBackups returns all backup manifests from the backup directory.

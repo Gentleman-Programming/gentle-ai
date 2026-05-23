@@ -32,6 +32,32 @@ func TestNavigationWelcomeToDetection(t *testing.T) {
 	}
 }
 
+func TestEngramDataDirDoneMsgRefreshesPersistedDataDirs(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenEngramDataDirConfirm
+	m.EngramDataDir = "/old-engram"
+	m.EngramKnownDataDirs = []string{"/old-engram"}
+
+	updated, _ := m.Update(EngramDataDirDoneMsg{
+		Op:            model.EngramDataDirOpCopy,
+		DataDir:       "/active-engram",
+		KnownDataDirs: []string{"/active-engram", "/copied-engram"},
+		StateLoaded:   true,
+	})
+	got := updated.(Model)
+
+	if got.Screen != ScreenEngramDataDirResult {
+		t.Fatalf("screen = %v, want %v", got.Screen, ScreenEngramDataDirResult)
+	}
+	if got.EngramDataDir != "/active-engram" {
+		t.Fatalf("EngramDataDir = %q, want /active-engram", got.EngramDataDir)
+	}
+	wantKnown := []string{"/active-engram", "/copied-engram"}
+	if !reflect.DeepEqual(got.EngramKnownDataDirs, wantKnown) {
+		t.Fatalf("EngramKnownDataDirs = %#v, want %#v", got.EngramKnownDataDirs, wantKnown)
+	}
+}
+
 func TestSanitizeKnownModelEfforts_ValidKnownEffortPreserved(t *testing.T) {
 	assignments := map[string]model.ModelAssignment{
 		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "high"},

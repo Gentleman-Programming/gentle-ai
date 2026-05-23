@@ -701,12 +701,24 @@ func buildSeparateMCPContent(mcpPath string, defaultContent []byte) []byte {
 		"command": cmd,
 		"args":    []string{"mcp", "--tools=agent"},
 	}
+	if env := envFromServerJSON(defaultContent); len(env) > 0 {
+		rebuilt["env"] = env
+	}
 	encoded, err := json.MarshalIndent(rebuilt, "", "  ")
 	if err != nil {
 		// Should be impossible with a plain map — use the default as fallback.
 		return defaultContent
 	}
 	return append(encoded, '\n')
+}
+
+func envFromServerJSON(raw []byte) map[string]any {
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil
+	}
+	env, _ := cfg["env"].(map[string]any)
+	return env
 }
 
 // isEngramCommand reports whether cmd is either a relative "engram" command

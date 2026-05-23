@@ -76,7 +76,7 @@ func (s DataDirService) RemoveSource(currentDir string) error {
 
 // Delete snapshots the current data directory, then removes it.
 func (s DataDirService) Delete(dataDir string) (backup.Manifest, error) {
-	snap, err := s.snapshot(dataDir)
+	snap, err := s.Snapshot(dataDir)
 	if err != nil {
 		return backup.Manifest{}, fmt.Errorf("snapshot before delete: %w", err)
 	}
@@ -84,6 +84,11 @@ func (s DataDirService) Delete(dataDir string) (backup.Manifest, error) {
 		return snap, fmt.Errorf("delete: %w", err)
 	}
 	return snap, nil
+}
+
+// Snapshot creates a backup manifest without mutating data files.
+func (s DataDirService) Snapshot(dataDir string) (backup.Manifest, error) {
+	return s.snapshot(dataDir)
 }
 
 // DiskSpaceOK reports whether dst has enough free space for srcDB.

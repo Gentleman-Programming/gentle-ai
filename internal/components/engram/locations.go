@@ -3,6 +3,8 @@ package engram
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/storage"
 )
@@ -27,10 +29,11 @@ func SuggestLocationsWithKnown(homeDir, currentDir string, knownDirs []string) [
 
 	add := func(path string, isCurrent bool) {
 		clean := filepath.Clean(path)
-		if seen[clean] {
+		key := locationPathKey(clean)
+		if seen[key] {
 			return
 		}
-		seen[clean] = true
+		seen[key] = true
 		avail, err := storage.AvailableBytes(filepath.Dir(clean))
 		if err != nil {
 			avail = -1
@@ -48,12 +51,20 @@ func SuggestLocationsWithKnown(homeDir, currentDir string, knownDirs []string) [
 	}
 	add(DefaultDir(homeDir), currentDir == "")
 	for _, dir := range knownDirs {
-		add(dir, false)
+		add(dir, locationPathKey(dir) == locationPathKey(currentDir))
 	}
 	for _, vol := range platformVolumes() {
 		add(filepath.Join(vol, "Engram"), false)
 	}
 	return out
+}
+
+func locationPathKey(path string) string {
+	clean := filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(clean)
+	}
+	return clean
 }
 
 func buildLabel(path, homeDir string, available int64) string {

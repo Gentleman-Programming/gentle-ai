@@ -23,6 +23,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
@@ -131,9 +132,12 @@ type BackupRestoreMsg struct {
 }
 
 type EngramDataDirDoneMsg struct {
-	Op         model.EngramDataDirOp
-	SnapshotID string
-	Err        error
+	Op            model.EngramDataDirOp
+	SnapshotID    string
+	DataDir       string
+	KnownDataDirs []string
+	StateLoaded   bool
+	Err           error
 }
 
 // UpdateCheckResultMsg is sent when the background update check completes.
@@ -596,6 +600,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case EngramDataDirDoneMsg:
 		m.engramDirDoneMsg = &msg
 		if msg.Err == nil {
+			if msg.StateLoaded {
+				m.EngramDataDir = msg.DataDir
+				m.EngramKnownDataDirs = append([]string(nil), msg.KnownDataDirs...)
+				m.setScreen(ScreenEngramDataDirResult)
+				return m, nil
+			}
 			switch msg.Op {
 			case model.EngramDataDirOpMove, model.EngramDataDirOpSet:
 				if dst := m.selectedEngramDstDir(); dst != "" {
@@ -2119,7 +2129,15 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				return EngramDataDirDoneMsg{Op: op, Err: fmt.Errorf("EngramDataDirFn not configured")}
 			}
 			snapID, err := fn(op, currentDir, dstDir)
-			return EngramDataDirDoneMsg{Op: op, SnapshotID: snapID, Err: err}
+			msg := EngramDataDirDoneMsg{Op: op, SnapshotID: snapID, Err: err}
+			if err == nil {
+				if currentState, stateErr := state.Read(m.resolvedHomeDir()); stateErr == nil {
+					msg.DataDir = currentState.EngramDataDir
+					msg.KnownDataDirs = currentState.EngramKnownDataDirs
+					msg.StateLoaded = true
+				}
+			}
+			return msg
 		}
 	case ScreenEngramDataDirResult:
 		m.enterEngramManagement()

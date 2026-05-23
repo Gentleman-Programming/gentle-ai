@@ -2,6 +2,8 @@ package engram
 
 import (
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +49,26 @@ func TestSuggestLocationsWithKnown_NoDuplicates(t *testing.T) {
 		if count > 1 {
 			t.Errorf("path %q appears %d times, want 1", path, count)
 		}
+	}
+}
+
+func TestSuggestLocationsWithKnown_DedupesWindowsCase(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows paths are case-insensitive")
+	}
+	home := t.TempDir()
+	current := filepath.Join(home, "copied-engram")
+
+	locs := SuggestLocationsWithKnown(home, current, []string{strings.ToUpper(current)})
+
+	count := 0
+	for _, loc := range locs {
+		if strings.EqualFold(loc.Path, current) {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("case-variant current dir appears %d times, want 1: %+v", count, locs)
 	}
 }
 

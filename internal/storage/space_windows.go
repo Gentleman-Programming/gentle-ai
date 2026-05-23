@@ -29,6 +29,9 @@ func availableBytes(path string) (int64, error) {
 			}
 			break // found an existing directory
 		}
+		if !os.IsNotExist(err) {
+			return 0, fmt.Errorf("stat %q: %w", path, err)
+		}
 		parent := filepath.Dir(path)
 		if parent == path {
 			// Reached the filesystem root and it doesn't exist (e.g. unmounted drive).

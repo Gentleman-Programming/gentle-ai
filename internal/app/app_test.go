@@ -786,6 +786,94 @@ func TestBuildEngramDataDirFn_MoveAndDeleteSyncMCPDataDir(t *testing.T) {
 	}
 }
 
+func TestBuildEngramDataDirFn_MoveMCPFailureKeepsStateAndSource(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, "src")
+	dst := filepath.Join(home, "dst")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engram.DBPath(src), []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{string(model.AgentClaudeCode)},
+		EngramDataDir:   src,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blockClaudeMCPDir(t, home)
+
+	if _, err := buildEngramDataDirFn(home)(model.EngramDataDirOpMove, src, dst); err == nil {
+		t.Fatal("move with MCP write failure error = nil, want error")
+	}
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.EngramDataDir != filepath.Clean(src) {
+		t.Fatalf("EngramDataDir = %q, want original %q", s.EngramDataDir, filepath.Clean(src))
+	}
+	if _, err := os.Stat(engram.DBPath(src)); err != nil {
+		t.Fatalf("source DB should remain after failed move: %v", err)
+	}
+}
+
+func TestBuildEngramDataDirFn_DeleteMCPFailureKeepsStateAndData(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engram.DBPath(src), []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{string(model.AgentClaudeCode)},
+		EngramDataDir:   src,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blockClaudeMCPDir(t, home)
+
+	if _, err := buildEngramDataDirFn(home)(model.EngramDataDirOpDelete, src, ""); err == nil {
+		t.Fatal("delete with MCP write failure error = nil, want error")
+	}
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.EngramDataDir != filepath.Clean(src) {
+		t.Fatalf("EngramDataDir = %q, want original %q", s.EngramDataDir, filepath.Clean(src))
+	}
+	if _, err := os.Stat(engram.DBPath(src)); err != nil {
+		t.Fatalf("source DB should remain after failed delete: %v", err)
+	}
+}
+
+func TestBuildEngramDataDirFn_StateWriteFailureRollsBackMCPDataDir(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, "src")
+	dst := filepath.Join(home, "dst")
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{string(model.AgentClaudeCode)},
+		EngramDataDir:   src,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	originalWrite := stateWriteFn
+	stateWriteFn = func(string, state.InstallState) error {
+		return fmt.Errorf("write failed")
+	}
+	t.Cleanup(func() { stateWriteFn = originalWrite })
+
+	if _, err := buildEngramDataDirFn(home)(model.EngramDataDirOpSet, src, dst); err == nil {
+		t.Fatal("set with state write failure error = nil, want error")
+	}
+	assertClaudeEngramDataDir(t, home, src)
+}
+
 func TestBuildEngramDataDirFn_InvalidStateDoesNotCopy(t *testing.T) {
 	home := t.TempDir()
 	src := filepath.Join(home, "src")
@@ -989,4 +1077,29 @@ func setupMockHome(t *testing.T, home string) {
 	})
 	os.Setenv("HOME", home)
 	os.Setenv("USERPROFILE", home)
+}
+
+func blockClaudeMCPDir(t *testing.T, home string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(home, ".claude"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertClaudeEngramDataDir(t *testing.T, home, want string) {
+	t.Helper()
+	mcpPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	content, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", mcpPath, err)
+	}
+	var cfg struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(content, &cfg); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", mcpPath, err)
+	}
+	if cfg.Env[engram.DataDirEnvVar] != filepath.Clean(want) {
+		t.Fatalf("mcp ENGRAM_DATA_DIR = %q, want %q", cfg.Env[engram.DataDirEnvVar], filepath.Clean(want))
+	}
 }
