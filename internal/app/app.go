@@ -627,7 +627,7 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 		if err != nil {
 			return "", fmt.Errorf("read Engram data-dir state: %w", err)
 		}
-		previous := cloneInstallState(current)
+		previous := current
 
 		svc := engram.NewDataDirService(homeDir)
 		var snapID string
@@ -725,37 +725,6 @@ func readStateOrEmpty(homeDir string) (state.InstallState, error) {
 	return state.InstallState{}, err
 }
 
-func cloneInstallState(s state.InstallState) state.InstallState {
-	s.InstalledAgents = append([]string(nil), s.InstalledAgents...)
-	s.ClaudeModelAssignments = cloneStringMap(s.ClaudeModelAssignments)
-	s.KiroModelAssignments = cloneStringMap(s.KiroModelAssignments)
-	s.ModelAssignments = cloneModelAssignmentStateMap(s.ModelAssignments)
-	s.EngramKnownDataDirs = append([]string(nil), s.EngramKnownDataDirs...)
-	return s
-}
-
-func cloneStringMap(in map[string]string) map[string]string {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-func cloneModelAssignmentStateMap(in map[string]state.ModelAssignmentState) map[string]state.ModelAssignmentState {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]state.ModelAssignmentState, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
 func appendKnownEngramDir(dirs []string, dir string) []string {
 	if strings.TrimSpace(dir) == "" {
 		return dirs
@@ -766,11 +735,11 @@ func appendKnownEngramDir(dirs []string, dir string) []string {
 			return dirs
 		}
 	}
-	dirs = append(dirs, clean)
-	if len(dirs) > 50 {
-		dirs = dirs[len(dirs)-50:]
+	next := append(append([]string(nil), dirs...), clean)
+	if len(next) > 50 {
+		next = next[len(next)-50:]
 	}
-	return dirs
+	return next
 }
 
 func engramPathKey(path string) string {
