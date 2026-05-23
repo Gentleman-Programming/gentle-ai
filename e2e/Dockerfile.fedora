@@ -53,7 +53,8 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 # ---------------------------------------------------------------------------
 COPY e2e/lib.sh     /home/testuser/e2e/lib.sh
 COPY e2e/e2e_test.sh /home/testuser/e2e/e2e_test.sh
-RUN chmod +x /home/testuser/e2e/e2e_test.sh /home/testuser/e2e/lib.sh && \
+RUN sed -i 's/\r$//' /home/testuser/e2e/e2e_test.sh /home/testuser/e2e/lib.sh && \
+    chmod +x /home/testuser/e2e/e2e_test.sh /home/testuser/e2e/lib.sh && \
     chown -R testuser:testuser /home/testuser
 
 USER testuser
