@@ -860,6 +860,45 @@ func TestBuildEngramDataDirFn_DeleteMCPFailureKeepsStateAndData(t *testing.T) {
 	}
 }
 
+func TestBuildEngramDataDirFn_DeleteRemoveSourceFailureKeepsStateAndMCP(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engram.DBPath(src), []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{string(model.AgentClaudeCode)},
+		EngramDataDir:   src,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writeClaudeEngramConfig(t, home, src)
+
+	originalRemove := removeEngramSourceFn
+	removeEngramSourceFn = func(engram.DataDirService, string) error {
+		return fmt.Errorf("remove failed")
+	}
+	t.Cleanup(func() { removeEngramSourceFn = originalRemove })
+
+	if _, err := buildEngramDataDirFn(home)(model.EngramDataDirOpDelete, src, ""); err == nil {
+		t.Fatal("delete with remove-source failure error = nil, want error")
+	}
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.EngramDataDir != filepath.Clean(src) {
+		t.Fatalf("EngramDataDir = %q, want original %q", s.EngramDataDir, filepath.Clean(src))
+	}
+	assertClaudeEngramDataDir(t, home, src)
+	if _, err := os.Stat(engram.DBPath(src)); err != nil {
+		t.Fatalf("source DB should remain when delete cleanup fails: %v", err)
+	}
+}
+
 func TestBuildEngramDataDirFn_StateWriteFailureRollsBackMCPDataDir(t *testing.T) {
 	home := t.TempDir()
 	src := filepath.Join(home, "src")
@@ -884,7 +923,7 @@ func TestBuildEngramDataDirFn_StateWriteFailureRollsBackMCPDataDir(t *testing.T)
 	assertClaudeEngramDataDir(t, home, src)
 }
 
-func TestBuildEngramDataDirFn_RemoveSourceFailureRollsBackStateAndMCP(t *testing.T) {
+func TestBuildEngramDataDirFn_RemoveSourceFailureKeepsCommittedMoveStateAndMCP(t *testing.T) {
 	home := t.TempDir()
 	src := filepath.Join(home, "src")
 	dst := filepath.Join(home, "dst")
@@ -915,12 +954,15 @@ func TestBuildEngramDataDirFn_RemoveSourceFailureRollsBackStateAndMCP(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.EngramDataDir != filepath.Clean(src) {
-		t.Fatalf("EngramDataDir = %q, want original %q", s.EngramDataDir, filepath.Clean(src))
+	if s.EngramDataDir != filepath.Clean(dst) {
+		t.Fatalf("EngramDataDir = %q, want committed destination %q", s.EngramDataDir, filepath.Clean(dst))
 	}
-	assertClaudeEngramDataDir(t, home, src)
+	assertClaudeEngramDataDir(t, home, dst)
 	if _, err := os.Stat(engram.DBPath(src)); err != nil {
-		t.Fatalf("source DB should remain after rollback: %v", err)
+		t.Fatalf("source DB should remain when source cleanup fails: %v", err)
+	}
+	if _, err := os.Stat(engram.DBPath(dst)); err != nil {
+		t.Fatalf("destination DB should remain as committed data dir: %v", err)
 	}
 }
 

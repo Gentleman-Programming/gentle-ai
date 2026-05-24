@@ -36,6 +36,20 @@ func TestDataDirSize(t *testing.T) {
 	}
 }
 
+func TestDiskSpaceOKForDataDir_UsesOnlyEngramArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "engram.db"), []byte("abc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("ignored"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	needed := dataDirCopySize(dir)
+	if needed != 3 {
+		t.Fatalf("dataDirCopySize = %d, want only engram.db size 3", needed)
+	}
+}
+
 func TestDiskSpaceOKForDataDir_EmptySource(t *testing.T) {
 	ok, needed, avail, err := DiskSpaceOKForDataDir(t.TempDir(), t.TempDir())
 	if err != nil {

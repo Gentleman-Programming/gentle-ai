@@ -251,6 +251,23 @@ func TestDataDirService_Delete_AlreadyGone(t *testing.T) {
 	}
 }
 
+func TestDataDirService_SnapshotStable(t *testing.T) {
+	svc, home := newTestService(t)
+	dir := filepath.Join(home, "data")
+	writeTestDB(t, dir)
+
+	snap, err := svc.SnapshotStable(dir)
+	if err != nil {
+		t.Fatalf("SnapshotStable: %v", err)
+	}
+	if snap.ID != "snap-abc123" {
+		t.Errorf("snap.ID = %q, want snap-abc123", snap.ID)
+	}
+	if _, err := os.Stat(DBPath(dir)); err != nil {
+		t.Fatalf("SnapshotStable should not remove DB: %v", err)
+	}
+}
+
 func TestDataDirService_SnapshotError_Propagates(t *testing.T) {
 	home := t.TempDir()
 	svc := DataDirService{

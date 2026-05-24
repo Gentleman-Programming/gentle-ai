@@ -643,7 +643,7 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 		case model.EngramDataDirOpSet:
 			opErr = nil
 		case model.EngramDataDirOpDelete, model.EngramDataDirOpFresh:
-			manifest, err := svc.Snapshot(currentDir)
+			manifest, err := svc.SnapshotStable(currentDir)
 			snapID, opErr = manifest.ID, err
 		default:
 			return "", fmt.Errorf("unknown op: %q", op)
@@ -672,9 +672,11 @@ func buildEngramDataDirFn(homeDir string) func(op model.EngramDataDirOp, current
 		}
 		if op == model.EngramDataDirOpMove || op == model.EngramDataDirOpDelete || op == model.EngramDataDirOpFresh {
 			if err := removeEngramSourceFn(svc, currentDir); err != nil {
-				rollbackErr := commitEngramDataDirState(homeDir, previous)
-				if rollbackErr != nil {
-					return snapID, fmt.Errorf("remove source after %s: %w; rollback Engram data-dir state: %v", op, err, rollbackErr)
+				if op == model.EngramDataDirOpDelete || op == model.EngramDataDirOpFresh {
+					rollbackErr := commitEngramDataDirState(homeDir, previous)
+					if rollbackErr != nil {
+						return snapID, fmt.Errorf("remove source after %s: %w; rollback Engram data-dir state: %v", op, err, rollbackErr)
+					}
 				}
 				return snapID, fmt.Errorf("remove source after %s: %w", op, err)
 			}
@@ -702,16 +704,99 @@ func commitEngramDataDirState(homeDir string, next state.InstallState) error {
 }
 
 func syncEngramMCPDataDir(homeDir string, s state.InstallState) error {
+	var snapshots []fileSnapshot
 	for _, agentID := range s.InstalledAgents {
 		adapter, err := agents.NewAdapter(model.AgentID(agentID))
 		if err != nil {
 			continue
 		}
+		before, err := snapshotFiles(engramMCPConfigPaths(homeDir, adapter))
+		if err != nil {
+			return fmt.Errorf("snapshot Engram data-dir MCP for %q: %w", agentID, err)
+		}
 		if _, err := engram.SyncDataDirEnv(homeDir, adapter, s.EngramDataDir); err != nil {
+			rollbackErr := restoreFileSnapshots(append(snapshots, before...))
+			if rollbackErr != nil {
+				return fmt.Errorf("sync Engram data-dir MCP for %q: %w; rollback MCP files: %v", agentID, err, rollbackErr)
+			}
 			return fmt.Errorf("sync Engram data-dir MCP for %q: %w", agentID, err)
 		}
+		snapshots = append(snapshots, before...)
 	}
 	return nil
+}
+
+type fileSnapshot struct {
+	path    string
+	content []byte
+	mode    os.FileMode
+	exists  bool
+}
+
+func engramMCPConfigPaths(homeDir string, adapter agents.Adapter) []string {
+	switch adapter.MCPStrategy() {
+	case model.StrategySeparateMCPFiles:
+		return []string{adapter.MCPConfigPath(homeDir, "engram")}
+	case model.StrategyMergeIntoSettings:
+		return []string{adapter.SettingsPath(homeDir)}
+	case model.StrategyMCPConfigFile:
+		paths := []string{adapter.MCPConfigPath(homeDir, "engram")}
+		if adapter.Agent() == model.AgentAntigravity {
+			paths = append(paths, filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json"))
+		}
+		return paths
+	case model.StrategyTOMLFile:
+		return []string{adapter.MCPConfigPath(homeDir, "engram")}
+	default:
+		return nil
+	}
+}
+
+func snapshotFiles(paths []string) ([]fileSnapshot, error) {
+	snapshots := make([]fileSnapshot, 0, len(paths))
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				snapshots = append(snapshots, fileSnapshot{path: path})
+				continue
+			}
+			return nil, err
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("%q is a directory", path)
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		snapshots = append(snapshots, fileSnapshot{path: path, content: content, mode: info.Mode().Perm(), exists: true})
+	}
+	return snapshots, nil
+}
+
+func restoreFileSnapshots(snapshots []fileSnapshot) error {
+	var errs []error
+	for i := len(snapshots) - 1; i >= 0; i-- {
+		snapshot := snapshots[i]
+		if !snapshot.exists {
+			if err := os.Remove(snapshot.path); err != nil && !os.IsNotExist(err) {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(snapshot.path), 0o755); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := os.WriteFile(snapshot.path, snapshot.content, snapshot.mode); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func readStateOrEmpty(homeDir string) (state.InstallState, error) {

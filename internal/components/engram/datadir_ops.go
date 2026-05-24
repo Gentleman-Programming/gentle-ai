@@ -29,9 +29,23 @@ func DataDirSize(dataDir string) int64 {
 	return total
 }
 
+func dataDirCopySize(dataDir string) int64 {
+	var total int64
+	_ = filepath.WalkDir(dataDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !isEngramDataFile(dataDir, path) {
+			return nil
+		}
+		if info, infoErr := d.Info(); infoErr == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
 // DiskSpaceOKForDataDir reports whether dst has enough free bytes for dataDir.
 func DiskSpaceOKForDataDir(srcDataDir, dst string) (ok bool, needed, avail int64, err error) {
-	needed = DataDirSize(srcDataDir)
+	needed = dataDirCopySize(srcDataDir)
 	if needed == 0 {
 		return true, 0, 0, nil
 	}

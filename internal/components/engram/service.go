@@ -46,10 +46,12 @@ func (s DataDirService) CopyTo(currentDir, dst string) (backup.Manifest, error) 
 	if err := requireEmptyDestination(dst); err != nil {
 		return backup.Manifest{}, err
 	}
-	if err := ensureDataDirStable(currentDir); err != nil {
-		return backup.Manifest{}, err
+	if ok, needed, avail, err := DiskSpaceOKForDataDir(currentDir, dst); err != nil {
+		return backup.Manifest{}, fmt.Errorf("check copy destination free space: %w", err)
+	} else if !ok {
+		return backup.Manifest{}, fmt.Errorf("copy destination %q has insufficient free space: need %d bytes, available %d bytes", dst, needed, avail)
 	}
-	snap, err := s.snapshot(currentDir)
+	snap, err := s.SnapshotStable(currentDir)
 	if err != nil {
 		return backup.Manifest{}, fmt.Errorf("snapshot before copy: %w", err)
 	}
@@ -81,10 +83,7 @@ func (s DataDirService) RemoveSource(currentDir string) error {
 
 // Delete snapshots the current data directory, then removes it.
 func (s DataDirService) Delete(dataDir string) (backup.Manifest, error) {
-	if err := ensureDataDirStable(dataDir); err != nil {
-		return backup.Manifest{}, err
-	}
-	snap, err := s.Snapshot(dataDir)
+	snap, err := s.SnapshotStable(dataDir)
 	if err != nil {
 		return backup.Manifest{}, fmt.Errorf("snapshot before delete: %w", err)
 	}
@@ -96,6 +95,14 @@ func (s DataDirService) Delete(dataDir string) (backup.Manifest, error) {
 
 // Snapshot creates a backup manifest without mutating data files.
 func (s DataDirService) Snapshot(dataDir string) (backup.Manifest, error) {
+	return s.snapshot(dataDir)
+}
+
+// SnapshotStable creates a backup manifest after verifying the data dir is not changing.
+func (s DataDirService) SnapshotStable(dataDir string) (backup.Manifest, error) {
+	if err := ensureDataDirStable(dataDir); err != nil {
+		return backup.Manifest{}, err
+	}
 	return s.snapshot(dataDir)
 }
 
@@ -302,6 +309,7 @@ func sameFileSignatures(a, b map[string]fileSignature) bool {
 }
 
 func removeEngramFiles(dataDir string) error {
+	var paths []string
 	for _, name := range []string{"engram.db", "engram.db-wal", "engram.db-shm"} {
 		path := filepath.Join(dataDir, name)
 		info, err := os.Lstat(path)
@@ -314,12 +322,33 @@ func removeEngramFiles(dataDir string) error {
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		err = os.Remove(path)
-		if err != nil && !os.IsNotExist(err) {
+		paths = append(paths, path)
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	trashDir, err := os.MkdirTemp(dataDir, ".gentle-ai-delete-")
+	if err != nil {
+		return err
+	}
+	renamed := make(map[string]string, len(paths))
+	for _, path := range paths {
+		dst := filepath.Join(trashDir, filepath.Base(path))
+		if err := os.Rename(path, dst); err != nil {
+			restoreRenamedFiles(renamed)
+			_ = os.RemoveAll(trashDir)
 			return err
 		}
+		renamed[dst] = path
 	}
+	_ = os.RemoveAll(trashDir)
 	return nil
+}
+
+func restoreRenamedFiles(files map[string]string) {
+	for tmp, original := range files {
+		_ = os.Rename(tmp, original)
+	}
 }
 
 func requireEmptyDestination(dst string) error {
