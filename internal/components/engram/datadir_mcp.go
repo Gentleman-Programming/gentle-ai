@@ -42,7 +42,7 @@ func SyncDataDirEnv(homeDir string, adapter agents.Adapter, dataDir string) (Inj
 			break
 		}
 		cmd := stableEngramCommandForMergedConfig(settingsPath, adapter.Agent())
-		settingsWrite, err := mergeJSONFile(settingsPath, engramOverlayJSONWithDataDir(adapter.Agent(), cmd, dataDir))
+		settingsWrite, err := mergeJSONFile(settingsPath, engramOverlayJSONWithDataDir(settingsPath, adapter.Agent(), cmd, dataDir))
 		if err != nil {
 			return InjectionResult{}, err
 		}
@@ -54,9 +54,9 @@ func SyncDataDirEnv(homeDir string, adapter agents.Adapter, dataDir string) (Inj
 			break
 		}
 		cmd := stableEngramCommandForMergedConfig(mcpPath, adapter.Agent())
-		overlay := engramOverlayJSONWithDataDir(adapter.Agent(), cmd, dataDir)
+		overlay := engramOverlayJSONWithDataDir(mcpPath, adapter.Agent(), cmd, dataDir)
 		if adapter.Agent() == model.AgentVSCodeCopilot {
-			overlay = vsCodeEngramOverlayJSONWithDataDir(cmd, dataDir)
+			overlay = vsCodeEngramOverlayJSONWithDataDir(mcpPath, cmd, dataDir)
 		}
 		mcpWrite, err := mergeJSONFile(mcpPath, overlay)
 		if err != nil {
@@ -66,7 +66,7 @@ func SyncDataDirEnv(homeDir string, adapter agents.Adapter, dataDir string) (Inj
 		files = append(files, mcpPath)
 		if adapter.Agent() == model.AgentAntigravity {
 			pluginPath := filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
-			pluginWrite, err := filemerge.WriteFileAtomic(pluginPath, engramStandaloneOverlayJSONWithDataDir(model.AgentAntigravity, cmd, dataDir), 0o644)
+			pluginWrite, err := mergeJSONFile(pluginPath, engramOverlayJSONWithDataDir(pluginPath, model.AgentAntigravity, cmd, dataDir))
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -99,14 +99,14 @@ func hasExistingEngramMCPConfig(homeDir string, adapter agents.Adapter) bool {
 	case model.StrategySeparateMCPFiles:
 		return fileExists(adapter.MCPConfigPath(homeDir, "engram"))
 	case model.StrategyMergeIntoSettings:
-		return jsonFileHasEngramServer(adapter.SettingsPath(homeDir))
+		return jsonFileHasEngramServer(adapter.SettingsPath(homeDir), adapter.Agent())
 	case model.StrategyMCPConfigFile:
-		if jsonFileHasEngramServer(adapter.MCPConfigPath(homeDir, "engram")) {
+		if jsonFileHasEngramServer(adapter.MCPConfigPath(homeDir, "engram"), adapter.Agent()) {
 			return true
 		}
 		if adapter.Agent() == model.AgentAntigravity {
 			pluginPath := filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
-			return jsonFileHasEngramServer(pluginPath)
+			return jsonFileHasEngramServer(pluginPath, adapter.Agent())
 		}
 	case model.StrategyTOMLFile:
 		content, err := os.ReadFile(adapter.MCPConfigPath(homeDir, "engram"))
@@ -123,7 +123,7 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func jsonFileHasEngramServer(path string) bool {
+func jsonFileHasEngramServer(path string, agentID model.AgentID) bool {
 	if strings.TrimSpace(path) == "" {
 		return false
 	}
@@ -131,29 +131,8 @@ func jsonFileHasEngramServer(path string) bool {
 	if err != nil {
 		return false
 	}
-	var root any
-	if err := json.Unmarshal(content, &root); err != nil {
-		return strings.Contains(string(content), `"engram"`)
-	}
-	return jsonObjectHasKey(root, "engram")
-}
-
-func jsonObjectHasKey(v any, key string) bool {
-	switch x := v.(type) {
-	case map[string]any:
-		for k, child := range x {
-			if k == key || jsonObjectHasKey(child, key) {
-				return true
-			}
-		}
-	case []any:
-		for _, child := range x {
-			if jsonObjectHasKey(child, key) {
-				return true
-			}
-		}
-	}
-	return false
+	_, ok := existingMergedEngramServer(content, agentID)
+	return ok
 }
 
 func engramServerJSONWithDataDir(cmd, dataDir string) []byte {
@@ -162,15 +141,10 @@ func engramServerJSONWithDataDir(cmd, dataDir string) []byte {
 	return append(b, '\n')
 }
 
-func engramOverlayJSONWithDataDir(agentID model.AgentID, cmd, dataDir string) []byte {
-	server := engramServerConfig(cmd, dataDir)
+func engramOverlayJSONWithDataDir(path string, agentID model.AgentID, cmd, dataDir string) []byte {
+	server := engramServerConfigForPath(path, agentID, cmd, dataDir)
 	var cfg map[string]any
 	if agentID == model.AgentOpenCode || agentID == model.AgentKilocode {
-		server = map[string]any{
-			"command": []string{cmd, "mcp", "--tools=agent"},
-			"type":    "local",
-		}
-		addDataDirEnv(server, dataDir)
 		cfg = map[string]any{
 			"mcp": map[string]any{
 				"engram": map[string]any{"__replace__": server},
@@ -197,43 +171,10 @@ func engramOverlayJSONWithDataDir(agentID model.AgentID, cmd, dataDir string) []
 	return marshalJSON(cfg)
 }
 
-func engramStandaloneOverlayJSONWithDataDir(agentID model.AgentID, cmd, dataDir string) []byte {
-	server := engramServerConfig(cmd, dataDir)
-	if agentID == model.AgentOpenCode || agentID == model.AgentKilocode {
-		server = map[string]any{
-			"command": []string{cmd, "mcp", "--tools=agent"},
-			"type":    "local",
-		}
-		addDataDirEnv(server, dataDir)
-		return marshalJSON(map[string]any{
-			"mcp": map[string]any{
-				"engram": server,
-			},
-		})
-	}
-	if agentID == model.AgentOpenClaw {
-		return marshalJSON(map[string]any{
-			"mcp": map[string]any{
-				"servers": map[string]any{
-					"engram": server,
-				},
-			},
-		})
-	}
-	if agentID == model.AgentAntigravity {
-		server["args"] = []string{"mcp"}
-	}
-	return marshalJSON(map[string]any{
-		"mcpServers": map[string]any{
-			"engram": server,
-		},
-	})
-}
-
-func vsCodeEngramOverlayJSONWithDataDir(cmd, dataDir string) []byte {
+func vsCodeEngramOverlayJSONWithDataDir(path, cmd, dataDir string) []byte {
 	cfg := map[string]any{
 		"servers": map[string]any{
-			"engram": map[string]any{"__replace__": engramServerConfig(cmd, dataDir)},
+			"engram": map[string]any{"__replace__": engramServerConfigForPath(path, model.AgentVSCodeCopilot, cmd, dataDir)},
 		},
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
@@ -241,18 +182,59 @@ func vsCodeEngramOverlayJSONWithDataDir(cmd, dataDir string) []byte {
 }
 
 func engramServerConfig(cmd, dataDir string) map[string]any {
-	cfg := map[string]any{
-		"command": cmd,
-		"args":    []string{"mcp", "--tools=agent"},
+	return engramServerConfigFromExisting(nil, "", cmd, dataDir)
+}
+
+func engramServerConfigForPath(path string, agentID model.AgentID, cmd, dataDir string) map[string]any {
+	existing := map[string]any(nil)
+	if raw, err := osReadFile(path); err == nil {
+		existing, _ = existingMergedEngramServer(raw, agentID)
 	}
-	addDataDirEnv(cfg, dataDir)
+	return engramServerConfigFromExisting(existing, agentID, cmd, dataDir)
+}
+
+func engramServerConfigFromExisting(existing map[string]any, agentID model.AgentID, cmd, dataDir string) map[string]any {
+	cfg := cloneJSONMap(existing)
+	switch agentID {
+	case model.AgentOpenCode, model.AgentKilocode:
+		cfg["command"] = []string{cmd, "mcp", "--tools=agent"}
+		cfg["type"] = "local"
+		delete(cfg, "args")
+	case model.AgentAntigravity:
+		cfg["command"] = cmd
+		cfg["args"] = []string{"mcp"}
+	default:
+		cfg["command"] = cmd
+		cfg["args"] = []string{"mcp", "--tools=agent"}
+	}
+	upsertDataDirEnv(cfg, dataDir)
 	return cfg
 }
 
-func addDataDirEnv(cfg map[string]any, dataDir string) {
+func upsertDataDirEnv(cfg map[string]any, dataDir string) {
+	env, _ := cfg["env"].(map[string]any)
 	if dataDir != "" {
-		cfg["env"] = map[string]string{DataDirEnvVar: dataDir}
+		if env == nil {
+			env = map[string]any{}
+		}
+		env[DataDirEnvVar] = dataDir
+		cfg["env"] = env
+		return
 	}
+	if env != nil {
+		delete(env, DataDirEnvVar)
+		if len(env) == 0 {
+			delete(cfg, "env")
+		}
+	}
+}
+
+func cloneJSONMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in)+2)
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func cleanDataDirEnv(dataDir string) string {
@@ -269,6 +251,8 @@ func upsertCodexEngramBlockWithDataDir(content, engramCmd, dataDir string) strin
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	lines := strings.Split(content, "\n")
 	var kept []string
+	serverLines := codexEngramServerLines(lines)
+	envLines := codexEngramEnvLines(lines)
 	for i := 0; i < len(lines); {
 		trimmed := strings.TrimSpace(lines[i])
 		if trimmed == "[mcp_servers.engram]" || strings.HasPrefix(trimmed, "[mcp_servers.engram.") {
@@ -286,15 +270,73 @@ func upsertCodexEngramBlockWithDataDir(content, engramCmd, dataDir string) strin
 		i++
 	}
 
-	block := fmt.Sprintf("[mcp_servers.engram]\ncommand = %q\nargs = [\"mcp\", \"--tools=agent\"]\n", engramCmd)
-	if dataDir != "" {
-		block += fmt.Sprintf("\n[mcp_servers.engram.env]\n%s = %q\n", DataDirEnvVar, dataDir)
+	commandLine := fmt.Sprintf("command = %q", engramCmd)
+	for _, line := range serverLines {
+		if strings.HasPrefix(strings.TrimSpace(line), "command") {
+			commandLine = line
+			break
+		}
+	}
+	block := "[mcp_servers.engram]\n" + commandLine + "\nargs = [\"mcp\", \"--tools=agent\"]\n"
+	for _, line := range serverLines {
+		key := strings.TrimSpace(strings.SplitN(strings.TrimSpace(line), "=", 2)[0])
+		if key == "command" || key == "args" {
+			continue
+		}
+		block += line + "\n"
+	}
+	if dataDir != "" || len(envLines) > 0 {
+		block += "\n[mcp_servers.engram.env]\n"
+		for _, line := range envLines {
+			block += line + "\n"
+		}
+		if dataDir != "" {
+			block += fmt.Sprintf("%s = %q\n", DataDirEnvVar, dataDir)
+		}
 	}
 	base := strings.TrimSpace(strings.Join(kept, "\n"))
 	if base == "" {
 		return block
 	}
 	return base + "\n\n" + block
+}
+
+func codexEngramServerLines(lines []string) []string {
+	var out []string
+	inServer := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inServer = trimmed == "[mcp_servers.engram]"
+			continue
+		}
+		if !inServer || trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func codexEngramEnvLines(lines []string) []string {
+	var out []string
+	inEnv := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inEnv = trimmed == "[mcp_servers.engram.env]"
+			continue
+		}
+		if !inEnv || trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		key := strings.TrimSpace(strings.SplitN(trimmed, "=", 2)[0])
+		if key == DataDirEnvVar {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 func marshalJSON(cfg map[string]any) []byte {

@@ -576,58 +576,67 @@ func preferredStableEngramCommand() string {
 }
 
 func existingMergedEngramCommand(raw []byte, agentID model.AgentID) (string, bool) {
-	if len(raw) == 0 {
+	serverMap, ok := existingMergedEngramServer(raw, agentID)
+	if !ok {
 		return "", false
+	}
+
+	return executableFromCommandValue(serverMap["command"])
+}
+
+func existingMergedEngramServer(raw []byte, agentID model.AgentID) (map[string]any, bool) {
+	if len(raw) == 0 {
+		return nil, false
 	}
 
 	normalized, err := filemerge.MergeJSONObjects(raw, []byte("{}"))
 	if err != nil {
-		return "", false
+		return nil, false
 	}
 
 	var root map[string]any
 	if err := json.Unmarshal(normalized, &root); err != nil {
-		return "", false
+		return nil, false
 	}
 
 	var server any
 	switch agentID {
-	case model.AgentOpenCode:
+	case model.AgentOpenCode, model.AgentKilocode:
 		mcp, ok := root["mcp"].(map[string]any)
 		if !ok {
-			return "", false
+			return nil, false
 		}
 		server = mcp["engram"]
 	case model.AgentOpenClaw:
 		mcp, ok := root["mcp"].(map[string]any)
 		if !ok {
-			return "", false
+			return nil, false
 		}
 		servers, ok := mcp["servers"].(map[string]any)
 		if !ok {
-			return "", false
+			return nil, false
 		}
 		server = servers["engram"]
 	case model.AgentVSCodeCopilot:
 		servers, ok := root["servers"].(map[string]any)
 		if !ok {
-			return "", false
+			return nil, false
 		}
 		server = servers["engram"]
 	default:
 		mcpServers, ok := root["mcpServers"].(map[string]any)
 		if !ok {
-			return "", false
+			return nil, false
 		}
 		server = mcpServers["engram"]
 	}
 
 	serverMap, ok := server.(map[string]any)
 	if !ok {
-		return "", false
+		return nil, false
 	}
 
-	return executableFromCommandValue(serverMap["command"])
+	return serverMap, true
 }
 
 func executableFromCommandValue(command any) (string, bool) {
@@ -696,14 +705,7 @@ func buildSeparateMCPContent(mcpPath string, defaultContent []byte) []byte {
 	}
 	cmd = stableEngramCommandForExisting(cmd, "")
 
-	// Rebuild with the preserved command and the canonical args (["mcp", "--tools=agent"]).
-	rebuilt := map[string]any{
-		"command": cmd,
-		"args":    []string{"mcp", "--tools=agent"},
-	}
-	if env := envFromServerJSON(defaultContent); len(env) > 0 {
-		rebuilt["env"] = env
-	}
+	rebuilt := engramServerConfigFromExisting(existing, model.AgentClaudeCode, cmd, dataDirFromServerJSON(defaultContent))
 	encoded, err := json.MarshalIndent(rebuilt, "", "  ")
 	if err != nil {
 		// Should be impossible with a plain map — use the default as fallback.
@@ -712,13 +714,14 @@ func buildSeparateMCPContent(mcpPath string, defaultContent []byte) []byte {
 	return append(encoded, '\n')
 }
 
-func envFromServerJSON(raw []byte) map[string]any {
+func dataDirFromServerJSON(raw []byte) string {
 	var cfg map[string]any
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil
+		return ""
 	}
 	env, _ := cfg["env"].(map[string]any)
-	return env
+	dataDir, _ := env[DataDirEnvVar].(string)
+	return dataDir
 }
 
 // isEngramCommand reports whether cmd is either a relative "engram" command
