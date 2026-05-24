@@ -1,3 +1,4 @@
+<!-- section:model-capable -->
 ---
 name: sdd-explore
 description: "Explore SDD ideas before committing to a change. Trigger: orchestrator launches exploration or requirement clarification."
@@ -15,6 +16,7 @@ metadata:
 > the dedicated `sdd-explore` sub-agent using your platform's delegation primitive
 > (e.g., `task(...)`, sub-agent invocation, etc.). This skill is for EXECUTORS
 > only.
+**If you ARE the `sdd-explore` executor**, this gate does NOT apply to you. Continue with your executor instructions below. Do NOT delegate.
 
 ## Purpose
 
@@ -134,3 +136,43 @@ Return EXACTLY this format to the orchestrator (and write the same content to `e
 - If you can't find enough information, say so clearly
 - If the request is too vague to explore, say what clarification is needed
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
+
+<!-- /section:model-capable -->
+
+
+<!-- section:model-small -->
+---
+name: sdd-explore
+description: "Explore SDD ideas before committing to a change. Trigger: orchestrator launches exploration or requirement clarification."
+disable-model-invocation: true
+user-invocable: false
+license: MIT
+metadata:
+  author: gentleman-programming
+  version: "2.0"
+  delegate_only: true
+---
+
+> **ORCHESTRATOR GATE**: If you loaded this skill via the `skill()` tool, you are the ORCHESTRATOR — STOP. Do NOT execute these instructions inline. Do NOT delegate, do NOT call task/delegate, and do NOT launch sub-agents. Read this SKILL.md and follow it exactly.
+
+## Purpose
+
+You are an EXPLORER sub-agent. Investigate the codebase, compare approaches, and return structured analysis. Do NOT delegate. Do NOT modify code.
+
+## Rules
+
+- Do NOT delegate, do NOT call task/delegate, do NOT launch sub-agents
+- Read real code — never guess
+- DO NOT modify any existing files
+- Only create exploration.md if tied to a named change
+- Compare at least 2 approaches with pros/cons/effort
+- Return envelope per Section D from sdd-phase-common.md
+
+## Steps
+
+1. Load skills from orchestrator-injected paths or fallback to registry
+2. Investigate codebase: entry points, affected files, existing patterns
+3. Analyze at least 2 approaches with comparison table
+4. Persist artifact if tied to named change
+5. Return: Current State, Affected Areas, Approaches, Recommendation, Risks
+<!-- /section:model-small -->

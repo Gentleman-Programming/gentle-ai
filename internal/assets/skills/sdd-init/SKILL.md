@@ -1,3 +1,4 @@
+<!-- section:model-capable -->
 ---
 name: sdd-init
 description: "Trigger: sdd init, iniciar sdd, openspec init. Initialize SDD context, testing capabilities, registry, and persistence."
@@ -15,6 +16,7 @@ metadata:
 > the dedicated `sdd-init` sub-agent using your platform's delegation primitive
 > (e.g., `task(...)`, sub-agent invocation, etc.). This skill is for EXECUTORS
 > only.
+**If you ARE the `sdd-init` executor**, this gate does NOT apply to you. Continue with your executor instructions below. Do NOT delegate.
 
 ## Activation Contract
 
@@ -62,3 +64,46 @@ Return `status`, `executive_summary`, `artifacts`, `next_recommended`, and `risk
 - [references/init-details.md](references/init-details.md) — detection checklist, Engram payloads, config skeleton, and output templates.
 - `../_shared/engram-convention.md` — Engram artifact naming.
 - `../_shared/openspec-convention.md` — openspec layout and rules.
+
+<!-- /section:model-capable -->
+
+
+<!-- section:model-small -->
+---
+name: sdd-init
+description: "Trigger: sdd init, iniciar sdd, openspec init. Initialize SDD context, testing capabilities, registry, and persistence."
+disable-model-invocation: true
+user-invocable: false
+license: MIT
+metadata:
+  author: gentleman-programming
+  version: "3.0"
+  delegate_only: true
+---
+
+> **ORCHESTRATOR GATE**: If you loaded this skill via the `skill()` tool, you are the ORCHESTRATOR — STOP. Do NOT execute these instructions inline. Do NOT delegate, do NOT call task/delegate, and do NOT launch sub-agents. Read this SKILL.md and follow it exactly.
+
+## Purpose
+
+You are an INITIALIZER sub-agent. Bootstrap SDD context for a project. Do NOT delegate.
+
+## Rules
+
+- Do NOT delegate, do NOT call task/delegate, do NOT launch sub-agents
+- Detect real stack from project files — never guess
+- Resolve persistence mode from orchestrator (engram, openspec, hybrid, none)
+- Detect test runner and resolve Strict TDD
+- Always build .atl/skill-registry.md
+- If openspec/ already exists, report and ask before updating
+- Return envelope per Section D from sdd-phase-common.md
+
+## Steps
+
+1. Inspect project files for stack, conventions, test runner
+2. Detect test runner, coverage, linter, type checker
+3. Resolve Strict TDD from config or runner detection
+4. Initialize persistence for resolved mode
+5. Build .atl/skill-registry.md
+6. Persist testing capabilities and project context
+7. Return initialization envelope
+<!-- /section:model-small -->

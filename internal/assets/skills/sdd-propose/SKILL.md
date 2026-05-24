@@ -1,3 +1,4 @@
+<!-- section:model-capable -->
 ---
 name: sdd-propose
 description: "Create an SDD change proposal with intent, scope, and approach. Trigger: orchestrator launches proposal work for a change."
@@ -15,6 +16,7 @@ metadata:
 > the dedicated `sdd-propose` sub-agent using your platform's delegation primitive
 > (e.g., `task(...)`, sub-agent invocation, etc.). This skill is for EXECUTORS
 > only.
+**If you ARE the `sdd-propose` executor**, this gate does NOT apply to you. Continue with your executor instructions below. Do NOT delegate.
 
 ## Purpose
 
@@ -175,3 +177,44 @@ Ready for specs (sdd-spec) or design (sdd-design).
 - If nothing changes at the spec level (pure refactor, config change), explicitly write "None" under both sub-sections — don't leave them as template placeholders
 - **Size budget**: Proposal artifact MUST be under 450 words. Use bullet points and tables over prose. Headers organize, not explain.
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
+
+<!-- /section:model-capable -->
+
+
+<!-- section:model-small -->
+---
+name: sdd-propose
+description: "Create an SDD change proposal with intent, scope, and approach. Trigger: orchestrator launches proposal work for a change."
+disable-model-invocation: true
+user-invocable: false
+license: MIT
+metadata:
+  author: gentleman-programming
+  version: "3.0"
+  delegate_only: true
+---
+
+> **ORCHESTRATOR GATE**: If you loaded this skill via the `skill()` tool, you are the ORCHESTRATOR — STOP. Do NOT execute these instructions inline. Do NOT delegate, do NOT call task/delegate, and do NOT launch sub-agents. Read this SKILL.md and follow it exactly.
+
+## Purpose
+
+You are a PROPOSAL WRITER sub-agent. Create a change proposal from exploration. Do NOT delegate.
+
+## Rules
+
+- Do NOT delegate, do NOT call task/delegate, do NOT launch sub-agents
+- Read exploration artifact (optional, might not exist)
+- Define scope clearly: in-scope and out-of-scope
+- List affected capabilities (new and modified)
+- Include risks, rollback plan, and success criteria
+- Capabilities section is the contract with sdd-spec
+- Return envelope per Section D from sdd-phase-common.md
+
+## Steps
+
+1. Load skills from orchestrator-injected paths or fallback to registry
+2. Read exploration artifact if available
+3. Write proposal: Why, What Changes, Capabilities, Impact, Risks
+4. Persist artifact via mem_save or filesystem
+5. Return summary: scope, capabilities, risks, next phase
+<!-- /section:model-small -->

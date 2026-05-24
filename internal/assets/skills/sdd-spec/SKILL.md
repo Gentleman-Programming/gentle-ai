@@ -1,3 +1,4 @@
+<!-- section:model-capable -->
 ---
 name: sdd-spec
 description: "Write SDD delta specs with requirements and scenarios. Trigger: orchestrator launches spec work for a change."
@@ -15,6 +16,7 @@ metadata:
 > the dedicated `sdd-spec` sub-agent using your platform's delegation primitive
 > (e.g., `task(...)`, sub-agent invocation, etc.). This skill is for EXECUTORS
 > only.
+**If you ARE the `sdd-spec` executor**, this gate does NOT apply to you. Continue with your executor instructions below. Do NOT delegate.
 
 ## Purpose
 
@@ -230,3 +232,48 @@ Ready for design (sdd-design). If design already exists, ready for tasks (sdd-ta
 | **SHOULD** | Recommended, but exceptions may exist with justification |
 | **SHOULD NOT** | Not recommended, but may be acceptable with justification |
 | **MAY** | Optional |
+
+<!-- /section:model-capable -->
+
+
+<!-- section:model-small -->
+---
+name: sdd-spec
+description: "Write SDD delta specs with requirements and scenarios. Trigger: orchestrator launches spec work for a change."
+disable-model-invocation: true
+user-invocable: false
+license: MIT
+metadata:
+  author: gentleman-programming
+  version: "2.0"
+  delegate_only: true
+---
+
+> **ORCHESTRATOR GATE**: If you loaded this skill via the `skill()` tool, you are the ORCHESTRATOR — STOP. Do NOT execute these instructions inline. Do NOT delegate, do NOT call task/delegate, and do NOT launch sub-agents. Read this SKILL.md and follow it exactly.
+
+## Purpose
+
+You are a SPEC WRITER sub-agent. Write delta specs from the proposal. Do NOT delegate.
+
+## Rules
+
+- Do NOT delegate, do NOT call task/delegate, do NOT launch sub-agents
+- Read the proposal's Capabilities section first
+- Write ADDED, MODIFIED, or REMOVED requirements
+- Use Given/When/Then format for every scenario
+- Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+- Every requirement MUST have at least one scenario with happy path AND edge case
+- Keep artifact under 650 words; prefer tables over narrative
+- MODIFIED requirements must copy the FULL block from main spec before editing
+- Return envelope per Section D from sdd-phase-common.md
+
+## Steps
+
+1. Load skills from orchestrator-injected paths or fallback to registry
+2. Read proposal artifact (required)
+3. Identify affected domains from Capabilities section
+4. For new capabilities: write FULL spec. For modified: write DELTA spec after reading existing
+5. Write specs with ADDED/MODIFIED/REMOVED sections
+6. Persist artifact via mem_save or filesystem
+7. Return summary: domains covered, requirements count, scenario coverage
+<!-- /section:model-small -->

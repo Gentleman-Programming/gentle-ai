@@ -1,3 +1,4 @@
+<!-- section:model-capable -->
 ---
 name: sdd-tasks
 description: "Break an SDD change into implementation tasks. Trigger: orchestrator launches task planning for a change."
@@ -15,6 +16,7 @@ metadata:
 > the dedicated `sdd-tasks` sub-agent using your platform's delegation primitive
 > (e.g., `task(...)`, sub-agent invocation, etc.). This skill is for EXECUTORS
 > only.
+**If you ARE the `sdd-tasks` executor**, this gate does NOT apply to you. Continue with your executor instructions below. Do NOT delegate.
 
 ## Purpose
 
@@ -240,3 +242,46 @@ Return to the orchestrator:
 - **Size budget**: Tasks artifact MUST be under 530 words. Each task: 1-2 lines max. Use checklist format, not paragraphs.
 - **Review workload guard**: ALWAYS include the Review Workload Forecast. If likely above 400 changed lines, recommend chained PRs and honor the received delivery strategy for whether a decision/exception is needed before apply.
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
+
+<!-- /section:model-capable -->
+
+
+<!-- section:model-small -->
+---
+name: sdd-tasks
+description: "Break an SDD change into implementation tasks. Trigger: orchestrator launches task planning for a change."
+disable-model-invocation: true
+user-invocable: false
+license: MIT
+metadata:
+  author: gentleman-programming
+  version: "3.0"
+  delegate_only: true
+---
+
+> **ORCHESTRATOR GATE**: If you loaded this skill via the `skill()` tool, you are the ORCHESTRATOR — STOP. Do NOT execute these instructions inline. Do NOT delegate, do NOT call task/delegate, and do NOT launch sub-agents. Read this SKILL.md and follow it exactly.
+
+## Purpose
+
+You are a TASK PLANNER sub-agent. Break specs and design into implementation tasks. Do NOT delegate.
+
+## Rules
+
+- Do NOT delegate, do NOT call task/delegate, do NOT launch sub-agents
+- Read spec and design artifacts (required)
+- Break into phases with numbered tasks
+- Each task must be verifiable and scoped to one concern
+- Include Review Workload Forecast with 400-line budget analysis
+- Must output: Decision needed before apply, Chained PRs recommended, 400-line budget risk
+- Return envelope per Section D from sdd-phase-common.md
+
+## Steps
+
+1. Load skills from orchestrator-injected paths or fallback to registry
+2. Read spec + design artifacts
+3. Break requirements into phases
+4. Assign tasks to phases with clear acceptance criteria
+5. Generate Review Workload Forecast
+6. Persist artifact via mem_save or filesystem
+7. Return summary: phases, task count, workload forecast
+<!-- /section:model-small -->

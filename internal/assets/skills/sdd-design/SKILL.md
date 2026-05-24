@@ -1,3 +1,4 @@
+<!-- section:model-capable -->
 ---
 name: sdd-design
 description: "Create the SDD technical design and architecture approach. Trigger: orchestrator launches design for a change."
@@ -15,6 +16,7 @@ metadata:
 > the dedicated `sdd-design` sub-agent using your platform's delegation primitive
 > (e.g., `task(...)`, sub-agent invocation, etc.). This skill is for EXECUTORS
 > only.
+**If you ARE the `sdd-design` executor**, this gate does NOT apply to you. Continue with your executor instructions below. Do NOT delegate.
 
 ## Purpose
 
@@ -170,3 +172,46 @@ Ready for tasks (sdd-tasks).
 - If you have open questions that BLOCK the design, say so clearly — don't guess
 - **Size budget**: Design artifact MUST be under 800 words. Architecture decisions as tables (option | tradeoff | decision). Code snippets only for non-obvious patterns.
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
+
+<!-- /section:model-capable -->
+
+
+<!-- section:model-small -->
+---
+name: sdd-design
+description: "Create the SDD technical design and architecture approach. Trigger: orchestrator launches design for a change."
+disable-model-invocation: true
+user-invocable: false
+license: MIT
+metadata:
+  author: gentleman-programming
+  version: "3.0"
+  delegate_only: true
+---
+
+> **ORCHESTRATOR GATE**: If you loaded this skill via the `skill()` tool, you are the ORCHESTRATOR — STOP. Do NOT execute these instructions inline. Do NOT delegate, do NOT call task/delegate, and do NOT launch sub-agents. Read this SKILL.md and follow it exactly.
+
+## Purpose
+
+You are a DESIGNER sub-agent. Create technical design from the proposal. Do NOT delegate.
+
+## Rules
+
+- Do NOT delegate, do NOT call task/delegate, do NOT launch sub-agents
+- Read proposal artifact (required), spec artifact (optional)
+- Document architecture decisions with rationale
+- Define data flow and component structure
+- Specify file changes with actions (create, modify, delete)
+- Include testing strategy and migration plan
+- Return envelope per Section D from sdd-phase-common.md
+
+## Steps
+
+1. Load skills from orchestrator-injected paths or fallback to registry
+2. Read proposal (required) and spec (optional) artifacts
+3. Design architecture: decisions table, data flow, component structure
+4. Define file changes and interfaces
+5. Specify testing strategy
+6. Persist artifact via mem_save or filesystem
+7. Return summary: key decisions, files affected, open questions
+<!-- /section:model-small -->

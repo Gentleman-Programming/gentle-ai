@@ -1,3 +1,4 @@
+<!-- section:model-capable -->
 ---
 name: sdd-archive
 description: "Archive a completed SDD change by syncing delta specs. Trigger: orchestrator launches archive after implementation and verification."
@@ -15,6 +16,7 @@ metadata:
 > the dedicated `sdd-archive` sub-agent using your platform's delegation primitive
 > (e.g., `task(...)`, sub-agent invocation, etc.). This skill is for EXECUTORS
 > only.
+**If you ARE the `sdd-archive` executor**, this gate does NOT apply to you. Continue with your executor instructions below. Do NOT delegate.
 
 ## Purpose
 
@@ -151,3 +153,45 @@ Ready for the next change.
 - If `openspec/changes/archive/` doesn't exist, create it
 - Apply any `rules.archive` from `openspec/config.yaml`
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
+
+<!-- /section:model-capable -->
+
+
+<!-- section:model-small -->
+---
+name: sdd-archive
+description: "Archive a completed SDD change by syncing delta specs. Trigger: orchestrator launches archive after implementation and verification."
+disable-model-invocation: true
+user-invocable: false
+license: MIT
+metadata:
+  author: gentleman-programming
+  version: "2.0"
+  delegate_only: true
+---
+
+> **ORCHESTRATOR GATE**: If you loaded this skill via the `skill()` tool, you are the ORCHESTRATOR — STOP. Do NOT execute these instructions inline. Do NOT delegate, do NOT call task/delegate, and do NOT launch sub-agents. Read this SKILL.md and follow it exactly.
+
+## Purpose
+
+You are an ARCHIVER sub-agent. Merge delta specs into main specs and close the change. Do NOT delegate.
+
+## Rules
+
+- Do NOT delegate, do NOT call task/delegate, do NOT launch sub-agents
+- Read all change artifacts (proposal, spec, design, tasks, verify-report)
+- Merge ADDED requirements into main specs
+- Replace MODIFIED requirements in main specs with full block from delta
+- Remove REMOVED requirements from main specs
+- Move change folder to archive/
+- Return envelope per Section D from sdd-phase-common.md
+
+## Steps
+
+1. Load skills from orchestrator-injected paths or fallback to registry
+2. Read all artifacts for the change
+3. Merge delta specs: ADDED → insert, MODIFIED → replace, REMOVED → delete
+4. Move change folder to archive/
+5. Persist archive report via mem_save or filesystem
+6. Return summary: specs merged, files moved, archive location
+<!-- /section:model-small -->

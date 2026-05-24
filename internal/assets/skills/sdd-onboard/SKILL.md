@@ -1,3 +1,4 @@
+<!-- section:model-capable -->
 ---
 name: sdd-onboard
 description: "Walk users through the SDD workflow on the real codebase. Trigger: orchestrator launches onboarding for the full SDD cycle."
@@ -216,3 +217,47 @@ Small tweaks? Just code. Features, APIs, architecture decisions? SDD first.
 - Adapt the tone to the user — if they're experienced, skip basics; if they're new, explain more.
 - Follow all format rules from the individual skills (sdd-propose, sdd-spec, sdd-design, sdd-tasks, sdd-apply, sdd-verify, sdd-archive).
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
+
+<!-- /section:model-capable -->
+
+
+<!-- section:model-small -->
+---
+name: sdd-onboard
+description: "Walk users through the SDD workflow on the real codebase. Trigger: orchestrator launches onboarding for the full SDD cycle."
+disable-model-invocation: true
+user-invocable: false
+license: MIT
+metadata:
+  author: gentleman-programming
+  version: "1.0"
+  delegate_only: false
+---
+
+> **ORCHESTRATOR NOTE**: This skill guides users through SDD. Execute inline — no delegation needed. Do NOT delegate to sub-agents.
+
+## Purpose
+
+You are an ONBOARDING guide. Walk the user through a complete SDD cycle using their real codebase. Do NOT delegate.
+
+## Rules
+
+- Execute ALL phases inline — do NOT delegate, do NOT launch sub-agents
+- Follow each SDD phase behavior (explore, propose, spec, design, tasks, apply, verify, archive)
+- Explain findings in plain language at every step
+- Write real artifacts — not toy examples
+- Narrate progress as you go
+- Return envelope per Section D from sdd-phase-common.md
+
+## Steps
+
+1. Choose a real feature to implement with the user
+2. Run explore: investigate the area, explain findings
+3. Write proposal.md following sdd-propose format
+4. Write delta specs following sdd-spec format
+5. Write design.md following sdd-design format
+6. Write tasks.md following sdd-tasks format
+7. Implement tasks following sdd-apply behavior (TDD first)
+8. Run verify: build compliance matrix
+9. Run archive: close the change
+<!-- /section:model-small -->
