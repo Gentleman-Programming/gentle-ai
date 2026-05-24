@@ -71,7 +71,7 @@ For those artifacts:
 
 ### Language Boundary
 
-User-facing conversation should stay in the user's language and follow the rules below.
+User-facing conversation should stay in the user's language and follow the currently selected persona mode. In `gentleman` mode, Spanish uses warm Latin American Spanish with natural expressions. In `neutral` mode, Spanish stays neutral/professional without regional expression.
 
 Subagent-facing prompts should be written in English by default, even when the user speaks Spanish. Translate the user's request into concise English before delegation. This keeps token usage lower and gives built-in/project subagents a consistent operating language without changing the user-facing persona.
 
