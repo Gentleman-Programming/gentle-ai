@@ -117,7 +117,7 @@ func (s DataDirService) DiskSpaceOK(srcDB, dst string) (bool, int64, int64, erro
 		return false, 0, 0, fmt.Errorf("check available space at %q: %w", dst, err)
 	}
 	needed := info.Size()
-	return avail > needed, needed, avail, nil
+	return hasEnoughSpace(avail, needed), needed, avail, nil
 }
 
 func (s DataDirService) snapshot(dataDir string) (backup.Manifest, error) {

@@ -53,5 +53,9 @@ func DiskSpaceOKForDataDir(srcDataDir, dst string) (ok bool, needed, avail int64
 	if err != nil {
 		return false, needed, 0, err
 	}
-	return avail > needed, needed, avail, nil
+	return hasEnoughSpace(avail, needed), needed, avail, nil
+}
+
+func hasEnoughSpace(avail, needed int64) bool {
+	return avail >= needed
 }

@@ -59,3 +59,24 @@ func TestDiskSpaceOKForDataDir_EmptySource(t *testing.T) {
 		t.Fatalf("got ok=%v needed=%d avail=%d, want true/0/0", ok, needed, avail)
 	}
 }
+
+func TestHasEnoughSpace(t *testing.T) {
+	tests := []struct {
+		name   string
+		avail  int64
+		needed int64
+		want   bool
+	}{
+		{name: "more than needed", avail: 11, needed: 10, want: true},
+		{name: "exact fit", avail: 10, needed: 10, want: true},
+		{name: "less than needed", avail: 9, needed: 10, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasEnoughSpace(tt.avail, tt.needed); got != tt.want {
+				t.Fatalf("hasEnoughSpace(%d, %d) = %v, want %v", tt.avail, tt.needed, got, tt.want)
+			}
+		})
+	}
+}
