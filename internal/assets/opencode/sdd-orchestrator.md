@@ -49,6 +49,23 @@ These are parent-orchestrator stop rules. Once any trigger fires, the orchestrat
 - Use fresh reviewers after implementation, conflict resolution, or incidents because their value is independent judgment, not token saving.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
+#### Delegation Visibility
+
+Before every `delegate` or `task` call, output one line so Desktop and TUI users see progress:
+
+```
+⏳ Delegating {phase} to {agent-name}...
+```
+
+After the call returns, output one line with the outcome:
+
+```
+✅ {agent-name} completed — {status from envelope}
+⚠️ {agent-name} returned {status} — {executive_summary}
+```
+
+Keep each message ≤15 tokens (pre) and ≤25 tokens (post). Do not add multi-line output, structured blocks, or emoji beyond the prefixes shown above.
+
 ## SDD Workflow (Spec-Driven Development)
 
 SDD is the structured planning layer for substantial changes.

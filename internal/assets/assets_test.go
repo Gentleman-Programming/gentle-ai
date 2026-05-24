@@ -616,8 +616,39 @@ func TestPersonasContainContextualSkillLoadingDirective(t *testing.T) {
 	}
 }
 
-// TestMustReadPanicsOnMissingFile verifies that MustRead panics for a
-// nonexistent file, confirming the safety mechanism works.
+// TestOpenCodeSDDOrchestratorDelegationVisibility verifies that the OpenCode
+// SDD orchestrator prompt instructs the orchestrator to emit one-line status
+// messages before and after each delegate/task call so Desktop users see
+// progress in the conversation.
+func TestOpenCodeSDDOrchestratorDelegationVisibility(t *testing.T) {
+	content := MustRead("opencode/sdd-orchestrator.md")
+
+	for _, required := range []string{
+		"#### Delegation Visibility",
+		"`delegate` or `task`",
+		"Delegating",
+		"completed",
+		"⏳",
+		"✅",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("opencode/sdd-orchestrator.md missing delegation visibility wording %q", required)
+		}
+	}
+
+	// Triangulate: token budget constraint must be present to satisfy spec
+	// requirement that messages stay ≤15 tokens pre, ≤25 tokens post.
+	if !strings.Contains(content, "tokens") {
+		t.Fatal("opencode/sdd-orchestrator.md delegation visibility section must mention token constraint")
+	}
+
+	visibilityIndex := strings.Index(content, "#### Delegation Visibility")
+	workflowIndex := strings.Index(content, "## SDD Workflow")
+	if visibilityIndex == -1 || workflowIndex == -1 || visibilityIndex > workflowIndex {
+		t.Fatal("opencode/sdd-orchestrator.md delegation visibility section must appear before SDD workflow")
+	}
+}
+
 func TestMustReadPanicsOnMissingFile(t *testing.T) {
 	defer func() {
 		r := recover()
