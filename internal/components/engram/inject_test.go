@@ -75,6 +75,72 @@ func TestSyncDataDirEnv_OpenCodeSetsAndClearsEnv(t *testing.T) {
 	}
 }
 
+func TestSyncDataDirEnv_PreservesExistingEnvAndFields(t *testing.T) {
+	tests := []struct {
+		name       string
+		adapter    agents.Adapter
+		configPath func(string) string
+		existing   string
+		serverPath []string
+	}{
+		{
+			name:       "opencode",
+			adapter:    opencodeAdapter(),
+			configPath: func(home string) string { return opencodeAdapter().SettingsPath(home) },
+			existing:   `{"mcp":{"engram":{"command":["engram","mcp","--tools=agent"],"type":"local","env":{"KEEP":"yes","ENGRAM_DATA_DIR":"old"},"custom":"preserve","args":["stale"]}}}`,
+			serverPath: []string{"mcp", "engram"},
+		},
+		{
+			name:       "claude separate mcp",
+			adapter:    claudeAdapter(),
+			configPath: func(home string) string { return claudeAdapter().MCPConfigPath(home, "engram") },
+			existing:   `{"command":"engram","args":["mcp","--tools=agent"],"env":{"KEEP":"yes","ENGRAM_DATA_DIR":"old"},"custom":"preserve"}`,
+			serverPath: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			dataDir := filepath.Join(home, "engram-data")
+			configPath := tt.configPath(home)
+			writeTestFile(t, configPath, tt.existing)
+
+			if _, err := SyncDataDirEnv(home, tt.adapter, dataDir); err != nil {
+				t.Fatalf("SyncDataDirEnv(set): %v", err)
+			}
+			server := readEngramServerForTest(t, configPath, tt.serverPath...)
+			env := objectAtForTest(t, server, "env")
+			if got := env["KEEP"]; got != "yes" {
+				t.Fatalf("KEEP env = %v, want preserved yes", got)
+			}
+			if got := env[DataDirEnvVar]; got != filepath.Clean(dataDir) {
+				t.Fatalf("ENGRAM_DATA_DIR = %v, want %q", got, filepath.Clean(dataDir))
+			}
+			if got := server["custom"]; got != "preserve" {
+				t.Fatalf("custom field = %v, want preserved", got)
+			}
+			if tt.name == "opencode" {
+				if _, ok := server["args"]; ok {
+					t.Fatalf("OpenCode stale args should be removed, got %#v", server["args"])
+				}
+			}
+
+			if _, err := SyncDataDirEnv(home, tt.adapter, ""); err != nil {
+				t.Fatalf("SyncDataDirEnv(clear): %v", err)
+			}
+			server = readEngramServerForTest(t, configPath, tt.serverPath...)
+			env = objectAtForTest(t, server, "env")
+			if got := env["KEEP"]; got != "yes" {
+				t.Fatalf("KEEP env after clear = %v, want preserved yes", got)
+			}
+			if _, ok := env[DataDirEnvVar]; ok {
+				t.Fatalf("ENGRAM_DATA_DIR retained after clear: %#v", env)
+			}
+		})
+	}
+}
+
 func TestSyncDataDirEnv_DoesNotCreateMissingEngramConfig(t *testing.T) {
 	home := t.TempDir()
 	dataDir := filepath.Join(home, "engram-data")
@@ -117,6 +183,135 @@ func TestSyncDataDirEnv_AntigravityPluginDoesNotLeakMergeSentinel(t *testing.T) 
 	if got := env[DataDirEnvVar]; got != filepath.Clean(dataDir) {
 		t.Fatalf("ENGRAM_DATA_DIR = %v, want %q", got, filepath.Clean(dataDir))
 	}
+}
+
+func TestSyncDataDirEnv_DoesNotTreatUnrelatedEngramKeyAsConfig(t *testing.T) {
+	home := t.TempDir()
+	dataDir := filepath.Join(home, "engram-data")
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	writeTestFile(t, settingsPath, `{"settings":{"engram":{"enabled":true}}}`)
+
+	result, err := SyncDataDirEnv(home, opencodeAdapter(), dataDir)
+	if err != nil {
+		t.Fatalf("SyncDataDirEnv: %v", err)
+	}
+	if result.Changed {
+		t.Fatalf("SyncDataDirEnv changed unrelated config, result=%+v", result)
+	}
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", settingsPath, err)
+	}
+	if strings.Contains(string(content), DataDirEnvVar) {
+		t.Fatalf("unrelated config received ENGRAM_DATA_DIR:\n%s", content)
+	}
+}
+
+func TestSyncDataDirEnv_DoesNotTreatMalformedUnrelatedEngramKeyAsConfig(t *testing.T) {
+	home := t.TempDir()
+	dataDir := filepath.Join(home, "engram-data")
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	writeTestFile(t, settingsPath, `{"settings":{"engram":true},`)
+
+	result, err := SyncDataDirEnv(home, opencodeAdapter(), dataDir)
+	if err != nil {
+		t.Fatalf("SyncDataDirEnv: %v", err)
+	}
+	if result.Changed {
+		t.Fatalf("SyncDataDirEnv changed malformed unrelated config, result=%+v", result)
+	}
+}
+
+func TestSyncDataDirEnv_HandlesJSONCConfig(t *testing.T) {
+	home := t.TempDir()
+	dataDir := filepath.Join(home, "engram-data")
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	writeTestFile(t, settingsPath, `{
+  // JSONC-style settings.
+  "mcp": {
+    "engram": {
+      "command": ["engram", "mcp", "--tools=agent"],
+      "type": "local",
+    },
+  },
+}`)
+
+	if _, err := SyncDataDirEnv(home, opencodeAdapter(), dataDir); err != nil {
+		t.Fatalf("SyncDataDirEnv: %v", err)
+	}
+	server := readEngramServerForTest(t, settingsPath, "mcp", "engram")
+	env := objectAtForTest(t, server, "env")
+	if got := env[DataDirEnvVar]; got != filepath.Clean(dataDir) {
+		t.Fatalf("ENGRAM_DATA_DIR = %v, want %q", got, filepath.Clean(dataDir))
+	}
+}
+
+func TestSyncDataDirEnv_CodexTOMLPreservesCommandAndCustomFields(t *testing.T) {
+	home := t.TempDir()
+	dataDir := filepath.Join(home, "engram-data")
+	configPath := codexAdapter().MCPConfigPath(home, "engram")
+	writeTestFile(t, configPath, `[mcp_servers.engram]
+command = "/custom/bin/engram"
+args = ["mcp", "--tools=agent"]
+startup_timeout_sec = 30
+
+[mcp_servers.engram.env]
+KEEP = "yes"
+ENGRAM_DATA_DIR = "old"
+`)
+
+	if _, err := SyncDataDirEnv(home, codexAdapter(), dataDir); err != nil {
+		t.Fatalf("SyncDataDirEnv(set): %v", err)
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", configPath, err)
+	}
+	text := string(content)
+	for _, want := range []string{
+		`command = "/custom/bin/engram"`,
+		`startup_timeout_sec = 30`,
+		`KEEP = "yes"`,
+		fmt.Sprintf(`%s = %q`, DataDirEnvVar, filepath.Clean(dataDir)),
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("config missing %q after set; got:\n%s", want, text)
+		}
+	}
+
+	if _, err := SyncDataDirEnv(home, codexAdapter(), ""); err != nil {
+		t.Fatalf("SyncDataDirEnv(clear): %v", err)
+	}
+	content, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", configPath, err)
+	}
+	text = string(content)
+	if strings.Contains(text, DataDirEnvVar) {
+		t.Fatalf("config retained ENGRAM_DATA_DIR after clear; got:\n%s", text)
+	}
+	for _, want := range []string{`command = "/custom/bin/engram"`, `startup_timeout_sec = 30`, `KEEP = "yes"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("config missing %q after clear; got:\n%s", want, text)
+		}
+	}
+}
+
+func readEngramServerForTest(t *testing.T, path string, keys ...string) map[string]any {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", path, err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", path, err)
+	}
+	current := root
+	for _, key := range keys {
+		current = objectAtForTest(t, current, key)
+	}
+	return current
 }
 
 // assertArgsHaveToolsAgent is a shared helper that validates a JSON file
