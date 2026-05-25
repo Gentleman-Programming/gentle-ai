@@ -5,8 +5,6 @@ package storage
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"syscall"
 	"unsafe"
 )
@@ -17,29 +15,14 @@ var (
 )
 
 func availableBytes(path string) (int64, error) {
-	// GetDiskFreeSpaceExW requires an existing directory. Walk up to the nearest
-	// existing ancestor so callers can pass a not-yet-created destination directory
-	// (e.g. the copy target during a data-dir management operation).
-	for {
-		info, err := os.Stat(path)
-		if err == nil {
-			if !info.IsDir() {
-				path = filepath.Dir(path)
-				continue
-			}
-			break // found an existing directory
-		}
-		parent := filepath.Dir(path)
-		if parent == path {
-			// Reached the filesystem root and it doesn't exist (e.g. unmounted drive).
-			return 0, fmt.Errorf("no existing ancestor found for %q", path)
-		}
-		path = parent
+	dir, err := nearestExistingDir(path)
+	if err != nil {
+		return 0, err
 	}
 
-	pathPtr, err := syscall.UTF16PtrFromString(path)
+	pathPtr, err := syscall.UTF16PtrFromString(dir)
 	if err != nil {
-		return 0, fmt.Errorf("encode path %q: %w", path, err)
+		return 0, fmt.Errorf("encode path %q: %w", dir, err)
 	}
 
 	var avail, total, free uint64
@@ -51,9 +34,9 @@ func availableBytes(path string) (int64, error) {
 	)
 	if r == 0 {
 		if errors.Is(lastErr, syscall.ERROR_ACCESS_DENIED) {
-			return 0, fmt.Errorf("permission denied checking space at %q", path)
+			return 0, fmt.Errorf("permission denied checking space at %q", dir)
 		}
-		return 0, fmt.Errorf("GetDiskFreeSpaceExW %q: %w", path, lastErr)
+		return 0, fmt.Errorf("GetDiskFreeSpaceExW %q: %w", dir, lastErr)
 	}
 	return int64(avail), nil
 }

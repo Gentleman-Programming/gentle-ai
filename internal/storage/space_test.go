@@ -65,7 +65,7 @@ func TestAvailableBytes_PermissionDenied(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(restricted, 0o755) }) // allow cleanup
 
-	_, err := storage.AvailableBytes(restricted)
+	_, err := storage.AvailableBytes(filepath.Join(restricted, "child"))
 	if err == nil {
 		t.Fatal("expected permission error, got nil")
 	}
