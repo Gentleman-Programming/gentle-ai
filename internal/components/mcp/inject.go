@@ -145,16 +145,14 @@ func injectMCPConfigFile(homeDir string, adapter agents.Adapter) (InjectionResul
 	}
 
 	overlay := DefaultContext7OverlayJSON()
-	if adapter.Agent() == model.AgentVSCodeCopilot {
+	switch adapter.Agent() {
+	case model.AgentVSCodeCopilot:
 		overlay = VSCodeContext7OverlayJSON()
-	}
-	if adapter.Agent() == model.AgentAntigravity {
+	case model.AgentAntigravity:
 		overlay = AntigravityContext7OverlayJSON()
-	}
-	if adapter.Agent() == model.AgentKimi {
+	case model.AgentKimi:
 		overlay = KimiContext7OverlayJSON()
-	}
-	if adapter.Agent() == model.AgentCopilotCLI {
+	case model.AgentCopilotCLI:
 		overlay = CopilotCLIMCPConfigJSON()
 	}
 

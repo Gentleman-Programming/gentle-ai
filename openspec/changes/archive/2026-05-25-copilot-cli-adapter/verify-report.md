@@ -32,13 +32,11 @@ go build ./... — compiled successfully, no errors
 | `internal/components/mcp` | 13 | ✅ 13 passed |
 | `internal/model` | — | ✅ passes (no copilot-cli-specific tests needed; constant verified via adapter tests) |
 
-**Tests (full suite)**: ❌ 1 pre-existing regression unrelated to adapter logic
+**Tests (full suite)**: ✅ All pass
 
 | Package | Result | Detail |
 |---------|--------|--------|
-| `internal/cli` | ❌ FAIL | `TestNormalizeInstallFlagsDefaults` — expected agent list missing `copilot-cli` |
-
-All other packages pass. The `internal/cli` failure is a **regression introduced by this change** — the test hardcodes the expected default agent list and does not include `model.AgentCopilotCLI`.
+| `internal/cli` | ✅ PASS | `TestNormalizeInstallFlagsDefaults` — `model.AgentCopilotCLI` added to expected agent list in this PR |
 
 **Coverage**: ➖ Not available (no coverage threshold configured)
 
