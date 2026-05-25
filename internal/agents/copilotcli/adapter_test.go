@@ -140,8 +140,8 @@ func TestCapabilities(t *testing.T) {
 		t.Fatal("SupportsSkills() = false, want true")
 	}
 
-	if got := a.SupportsSubAgents(); got {
-		t.Fatal("SupportsSubAgents() = true, want false")
+	if got := a.SupportsSubAgents(); !got {
+		t.Fatal("SupportsSubAgents() = false, want true")
 	}
 
 	if got := a.SupportsMCP(); !got {
@@ -150,6 +150,19 @@ func TestCapabilities(t *testing.T) {
 
 	if got := a.SupportsSystemPrompt(); !got {
 		t.Fatal("SupportsSystemPrompt() = false, want true")
+	}
+}
+
+func TestSubAgentPaths(t *testing.T) {
+	a := NewAdapter()
+	home := "/tmp/home"
+
+	if got := a.SubAgentsDir(home); got != filepath.Join(home, ".copilot", "agents") {
+		t.Fatalf("SubAgentsDir() = %q, want %q", got, filepath.Join(home, ".copilot", "agents"))
+	}
+
+	if got := a.EmbeddedSubAgentsDir(); got != "copilotcli/agents" {
+		t.Fatalf("EmbeddedSubAgentsDir() = %q, want %q", got, "copilotcli/agents")
 	}
 }
 
