@@ -63,3 +63,35 @@ func TestIsSupportedAgentAcceptsPi(t *testing.T) {
 		t.Fatalf("IsSupportedAgent(%q) = false, want true", model.AgentPi)
 	}
 }
+
+func TestAllAgentsIncludesCopilotCLI(t *testing.T) {
+	agents := AllAgents()
+
+	for _, agent := range agents {
+		if agent.ID != model.AgentCopilotCLI {
+			continue
+		}
+
+		if agent.Name != "Copilot CLI" {
+			t.Fatalf("Copilot CLI Name = %q, want Copilot CLI", agent.Name)
+		}
+
+		if agent.Tier != model.TierFull {
+			t.Fatalf("Copilot CLI Tier = %q, want %q", agent.Tier, model.TierFull)
+		}
+
+		if agent.ConfigPath != "~/.copilot" {
+			t.Fatalf("Copilot CLI ConfigPath = %q, want ~/.copilot", agent.ConfigPath)
+		}
+
+		return
+	}
+
+	t.Fatalf("AllAgents() missing %s", model.AgentCopilotCLI)
+}
+
+func TestIsSupportedAgentAcceptsCopilotCLI(t *testing.T) {
+	if !IsSupportedAgent(model.AgentCopilotCLI) {
+		t.Fatalf("IsSupportedAgent(%q) = false, want true", model.AgentCopilotCLI)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/copilotcli"
 	cursoradapter "github.com/gentleman-programming/gentle-ai/internal/agents/cursor"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
@@ -35,6 +36,7 @@ var defaultAgentIDs = []model.AgentID{
 	model.AgentKiroIDE,
 	model.AgentOpenClaw,
 	model.AgentPi,
+	model.AgentCopilotCLI,
 }
 
 func NewAdapter(agent model.AgentID) (Adapter, error) {
@@ -67,6 +69,8 @@ func NewAdapter(agent model.AgentID) (Adapter, error) {
 		return openclaw.NewAdapter(), nil
 	case model.AgentPi:
 		return pi.NewAdapter(), nil
+	case model.AgentCopilotCLI:
+		return copilotcli.NewAdapter(), nil
 	default:
 		return nil, AgentNotSupportedError{Agent: agent}
 	}

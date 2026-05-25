@@ -72,6 +72,7 @@ func TestDefaultRegistrySupportedAgentsMatchesFactoryAgents(t *testing.T) {
 		model.AgentAntigravity,
 		model.AgentClaudeCode,
 		model.AgentCodex,
+		model.AgentCopilotCLI,
 		model.AgentCursor,
 		model.AgentGeminiCLI,
 		model.AgentKilocode,
@@ -98,5 +99,32 @@ func TestFactoryRejectsUnsupportedOpenClawLookalike(t *testing.T) {
 
 	if !errors.Is(err, ErrAgentNotSupported) {
 		t.Fatalf("NewAdapter() error = %v, want ErrAgentNotSupported", err)
+	}
+}
+
+func TestFactoryResolvesCopilotCLIAdapter(t *testing.T) {
+	adapter, err := NewAdapter(model.AgentCopilotCLI)
+	if err != nil {
+		t.Fatalf("NewAdapter(%q) returned error: %v", model.AgentCopilotCLI, err)
+	}
+
+	if got := adapter.Agent(); got != model.AgentCopilotCLI {
+		t.Fatalf("adapter.Agent() = %q, want %q", got, model.AgentCopilotCLI)
+	}
+}
+
+func TestDefaultRegistryIncludesCopilotCLI(t *testing.T) {
+	registry, err := NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("NewDefaultRegistry() returned error: %v", err)
+	}
+
+	adapter, ok := registry.Get(model.AgentCopilotCLI)
+	if !ok {
+		t.Fatalf("registry missing %s adapter", model.AgentCopilotCLI)
+	}
+
+	if got := adapter.Agent(); got != model.AgentCopilotCLI {
+		t.Fatalf("registry adapter.Agent() = %q, want %q", got, model.AgentCopilotCLI)
 	}
 }

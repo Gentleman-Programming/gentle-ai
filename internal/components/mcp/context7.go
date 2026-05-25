@@ -30,6 +30,11 @@ var antigravityContext7OverlayJSON = []byte("{\n  \"mcpServers\": {\n    \"conte
 // config format", using mcpServers + explicit http transport for Context7.
 var kimiContext7OverlayJSON = []byte("{\n  \"mcpServers\": {\n    \"context7\": {\n      \"transport\": \"http\",\n      \"url\": \"https://mcp.context7.com/mcp\"\n    }\n  }\n}\n")
 
+// copilotCLIMCPConfigJSON uses the stdio mcpServers schema for Copilot CLI.
+// Copilot CLI runs locally and executes MCP servers via npx (same pattern as
+// Claude Code and Cursor).
+var copilotCLIMCPConfigJSON = []byte(fmt.Sprintf("{\n  \"mcpServers\": {\n    \"context7\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"-y\",\n        \"--package=@upstash/context7-mcp@%s\",\n        \"--\",\n        \"context7-mcp\"\n      ]\n    }\n  }\n}\n", versions.Context7MCP))
+
 func DefaultContext7ServerJSON() []byte {
 	content := make([]byte, len(defaultContext7ServerJSON))
 	copy(content, defaultContext7ServerJSON)
@@ -69,5 +74,13 @@ func AntigravityContext7OverlayJSON() []byte {
 func KimiContext7OverlayJSON() []byte {
 	content := make([]byte, len(kimiContext7OverlayJSON))
 	copy(content, kimiContext7OverlayJSON)
+	return content
+}
+
+// CopilotCLIMCPConfigJSON returns the Context7 MCP config overlay for Copilot CLI.
+// Uses mcpServers key with stdio transport (npx-based local execution).
+func CopilotCLIMCPConfigJSON() []byte {
+	content := make([]byte, len(copilotCLIMCPConfigJSON))
+	copy(content, copilotCLIMCPConfigJSON)
 	return content
 }

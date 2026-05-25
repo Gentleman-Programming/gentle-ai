@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/copilotcli"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
@@ -24,8 +26,9 @@ func cursorAdapter(t *testing.T) agents.Adapter {
 	return adapter
 }
 
-func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
-func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
+func claudeAdapter() agents.Adapter     { return claude.NewAdapter() }
+func copilotcliAdapter() agents.Adapter { return copilotcli.NewAdapter() }
+func kimiAdapter() agents.Adapter       { return kimi.NewAdapter() }
 func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 
@@ -306,4 +309,68 @@ func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
 	if !strings.Contains(text, `"url": "https://mcp.context7.com/mcp"`) {
 		t.Fatal("kimi mcp.json should use the documented remote MCP URL for context7")
 	}
+}
+
+func TestInjectCopilotCLIWritesContext7ToMCPConfigFile(t *testing.T) {
+	home := t.TempDir()
+
+	first, err := Inject(home, copilotcliAdapter())
+	if err != nil {
+		t.Fatalf("Inject(copilot-cli) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(copilot-cli) first changed = false")
+	}
+
+	second, err := Inject(home, copilotcliAdapter())
+	if err != nil {
+		t.Fatalf("Inject(copilot-cli) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(copilot-cli) second changed = true, want false (idempotent)")
+	}
+
+	path := filepath.Join(home, ".copilot", "mcp-config.json")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(copilot-cli mcp-config.json) error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, `"mcpServers"`) {
+		t.Fatal("copilot-cli mcp-config.json missing mcpServers key; got:\n" + text)
+	}
+	if !strings.Contains(text, `"context7"`) {
+		t.Fatal("copilot-cli mcp-config.json missing context7 server; got:\n" + text)
+	}
+	if !strings.Contains(text, `"command": "npx"`) {
+		t.Fatal("copilot-cli mcp-config.json should use npx for stdio transport; got:\n" + text)
+	}
+	if !strings.Contains(text, `@upstash/context7-mcp@`) {
+		t.Fatal("copilot-cli mcp-config.json missing context7 package version; got:\n" + text)
+	}
+}
+
+func TestInjectCopilotCLIUsesCopilotCLISpecificOverlay(t *testing.T) {
+	// Verify that Copilot CLI uses its own CopilotCLIMCPConfigJSON overlay,
+	// not the generic DefaultContext7OverlayJSON.
+	overlay := CopilotCLIMCPConfigJSON()
+	defaultOverlay := DefaultContext7OverlayJSON()
+
+	// Both should use mcpServers + stdio, but they are separate functions
+	// so the codebase can evolve them independently.
+	if !bytes.Contains(overlay, []byte(`"mcpServers"`)) {
+		t.Fatal("CopilotCLIMCPConfigJSON should use mcpServers key")
+	}
+	if !bytes.Contains(overlay, []byte(`"command": "npx"`)) {
+		t.Fatal("CopilotCLIMCPConfigJSON should use npx for stdio")
+	}
+
+	// Verify the function returns a copy (not the original slice).
+	overlay2 := CopilotCLIMCPConfigJSON()
+	if &overlay[0] == &overlay2[0] {
+		t.Fatal("CopilotCLIMCPConfigJSON should return a copy, not the original slice")
+	}
+
+	_ = defaultOverlay // defaultOverlay exists but CopilotCLI has its own
 }

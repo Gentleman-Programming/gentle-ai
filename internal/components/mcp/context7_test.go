@@ -28,3 +28,23 @@ func TestVSCodeContext7OverlayUsesServersKey(t *testing.T) {
 		t.Fatalf("VSCodeContext7OverlayJSON() should not include mcpServers key")
 	}
 }
+
+func TestCopilotCLIMCPConfigJSONUsesMCPServersKey(t *testing.T) {
+	content := CopilotCLIMCPConfigJSON()
+	if !bytes.Contains(content, []byte(`"mcpServers"`)) {
+		t.Fatalf("CopilotCLIMCPConfigJSON() should include mcpServers key")
+	}
+	if !bytes.Contains(content, []byte(`"context7"`)) {
+		t.Fatalf("CopilotCLIMCPConfigJSON() should include context7 server name")
+	}
+}
+
+func TestCopilotCLIMCPConfigJSONUsesStdioTransport(t *testing.T) {
+	content := CopilotCLIMCPConfigJSON()
+	if !bytes.Contains(content, []byte(`"command": "npx"`)) {
+		t.Fatalf("CopilotCLIMCPConfigJSON() should use npx command for stdio transport")
+	}
+	if !bytes.Contains(content, []byte(`@upstash/context7-mcp@`)) {
+		t.Fatalf("CopilotCLIMCPConfigJSON() should include context7 package with version")
+	}
+}

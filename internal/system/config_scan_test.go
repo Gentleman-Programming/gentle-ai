@@ -25,9 +25,9 @@ func TestScanConfigs_ReturnsAllKnownAgentsWithExistsFlag(t *testing.T) {
 	configs := ScanConfigs(home)
 
 	// Must return at least as many entries as the registry has adapters with
-	// a non-empty GlobalConfigDir. Currently 14 agents are supported.
-	if len(configs) < 14 {
-		t.Fatalf("ScanConfigs() returned %d entries, want >= 14; got %v", len(configs), configs)
+	// a non-empty GlobalConfigDir. Currently 15 agents are supported.
+	if len(configs) < 15 {
+		t.Fatalf("ScanConfigs() returned %d entries, want >= 15; got %v", len(configs), configs)
 	}
 
 	// Find claude — must be Exists=true.
@@ -83,6 +83,7 @@ func TestScanConfigs_AgentFieldMatchesModelAgentID(t *testing.T) {
 		"kiro-ide":       false,
 		"openclaw":       false,
 		"pi":             false,
+		"copilot-cli":    false,
 	}
 
 	for _, c := range configs {
@@ -162,6 +163,37 @@ func TestScanConfigs_IsDirectorySetForExistingDirs(t *testing.T) {
 	}
 	if !opencodeFound {
 		t.Error("ScanConfigs() missing opencode entry")
+	}
+}
+
+func TestScanConfigs_CopilotCLIPathUsesDotCopilot(t *testing.T) {
+	home := t.TempDir()
+
+	// Create ~/.copilot dir.
+	copilotDir := filepath.Join(home, ".copilot")
+	if err := os.MkdirAll(copilotDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	configs := ScanConfigs(home)
+
+	var state *ConfigState
+	for i := range configs {
+		if configs[i].Agent == "copilot-cli" {
+			state = &configs[i]
+			break
+		}
+	}
+	if state == nil {
+		t.Fatalf("ScanConfigs() missing copilot-cli entry; got agents: %v", agentNames(configs))
+	}
+
+	wantPath := filepath.Join(home, ".copilot")
+	if state.Path != wantPath {
+		t.Errorf("copilot-cli Path = %q, want %q", state.Path, wantPath)
+	}
+	if !state.Exists {
+		t.Errorf("copilot-cli Exists = false, want true (dir was created)")
 	}
 }
 
