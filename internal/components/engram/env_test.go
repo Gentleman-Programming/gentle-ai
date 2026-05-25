@@ -17,6 +17,7 @@ func TestDataDirRef_Resolve(t *testing.T) {
 		{DataDirRef(DefaultDir(home)), DefaultDir(home)},
 		{DataDirRef(custom), custom},
 		{DataDirRef(custom + string(filepath.Separator)), custom},
+		{DataDirRef("relative-data"), filepath.Join(home, "relative-data")},
 	}
 	for _, tt := range tests {
 		got := tt.ref.Resolve(home)

@@ -7,14 +7,19 @@ import (
 	"path/filepath"
 )
 
-// CopyDB copies the Engram SQLite database from src to dst.
-//
-// It writes to a temp file first, verifies the byte count, then renames the
-// temp file into place so dst is never left with a partial copy.
+// CopyDB copies a quiesced Engram SQLite database from src to dst.
+// It refuses to copy when SQLite sidecar files exist because a raw file copy
+// cannot prove WAL-mode consistency for a live database.
 func CopyDB(src, dst string) error {
 	srcInfo, err := os.Stat(src)
 	if err != nil {
 		return fmt.Errorf("stat source %q: %w", src, err)
+	}
+	if !srcInfo.Mode().IsRegular() {
+		return fmt.Errorf("source %q is not a regular file", src)
+	}
+	if err := requireQuiescedDB(src); err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -22,30 +27,38 @@ func CopyDB(src, dst string) error {
 	}
 
 	tmp := dst + ".tmp"
-	dstFile, err := os.Create(tmp)
-	if err != nil {
-		return fmt.Errorf("create temp file %q: %w", tmp, err)
-	}
 
 	srcFile, err := os.Open(src)
 	if err != nil {
-		dstFile.Close()
-		os.Remove(tmp)
 		return fmt.Errorf("open source %q: %w", src, err)
 	}
 
+	dstFile, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode().Perm())
+	if err != nil {
+		srcFile.Close()
+		return fmt.Errorf("create temp file %q: %w", tmp, err)
+	}
+
 	_, copyErr := io.Copy(dstFile, srcFile)
-	srcFile.Close()
+	srcCloseErr := srcFile.Close()
 	syncErr := dstFile.Sync()
-	dstFile.Close()
+	dstCloseErr := dstFile.Close()
 
 	if copyErr != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("copy %q to %q: %w", src, dst, copyErr)
 	}
+	if srcCloseErr != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close source %q: %w", src, srcCloseErr)
+	}
 	if syncErr != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("sync %q: %w", tmp, syncErr)
+	}
+	if dstCloseErr != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close temp file %q: %w", tmp, dstCloseErr)
 	}
 
 	dstInfo, err := os.Stat(tmp)
@@ -61,6 +74,18 @@ func CopyDB(src, dst string) error {
 	if err := os.Rename(tmp, dst); err != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("rename %q to %q: %w", tmp, dst, err)
+	}
+	return nil
+}
+
+func requireQuiescedDB(src string) error {
+	for _, suffix := range []string{"-wal", "-shm"} {
+		sidecar := src + suffix
+		if _, err := os.Stat(sidecar); err == nil {
+			return fmt.Errorf("copy %q requires a quiesced SQLite database; sidecar %q exists", src, sidecar)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat SQLite sidecar %q: %w", sidecar, err)
+		}
 	}
 	return nil
 }

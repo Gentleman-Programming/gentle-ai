@@ -3,6 +3,8 @@ package engram
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -72,19 +74,19 @@ func TestCopyDB_SourceNotExist(t *testing.T) {
 	}
 }
 
-func TestCopyDB_Idempotent(t *testing.T) {
+func TestCopyDB_OverwritesExistingDestination(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "engram.db")
 	dst := filepath.Join(t.TempDir(), "engram.db")
-	content := []byte("idempotent copy test")
+	content := []byte("fresh sqlite content")
 
 	if err := os.WriteFile(src, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
-
-	for i := 0; i < 2; i++ {
-		if err := CopyDB(src, dst); err != nil {
-			t.Fatalf("CopyDB iteration %d: %v", i, err)
-		}
+	if err := os.WriteFile(dst, []byte("stale content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CopyDB(src, dst); err != nil {
+		t.Fatalf("CopyDB: %v", err)
 	}
 
 	got, err := os.ReadFile(dst)
@@ -92,6 +94,52 @@ func TestCopyDB_Idempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != string(content) {
-		t.Errorf("content mismatch after second copy")
+		t.Errorf("destination content = %q, want %q", got, content)
+	}
+}
+
+func TestCopyDB_PreservesSourcePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file permission bits are not meaningful on Windows")
+	}
+	src := filepath.Join(t.TempDir(), "engram.db")
+	dst := filepath.Join(t.TempDir(), "engram.db")
+
+	if err := os.WriteFile(src, []byte("private memory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CopyDB(src, dst); err != nil {
+		t.Fatalf("CopyDB: %v", err)
+	}
+
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("dst mode = %o, want 0600", got)
+	}
+}
+
+func TestCopyDB_RejectsSQLiteSidecars(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "engram.db")
+	dst := filepath.Join(t.TempDir(), "engram.db")
+
+	if err := os.WriteFile(src, []byte("db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src+"-wal", []byte("pending writes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := CopyDB(src, dst)
+	if err == nil {
+		t.Fatal("expected error for live SQLite sidecar, got nil")
+	}
+	if !strings.Contains(err.Error(), "quiesced SQLite database") {
+		t.Fatalf("error = %q, want quiesced SQLite message", err)
+	}
+	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
+		t.Fatalf("dst should not exist after sidecar rejection, stat err = %v", statErr)
 	}
 }

@@ -4,6 +4,7 @@ import "path/filepath"
 
 // DataDirRef is the persisted reference to an Engram data directory.
 // Currently resolves to a local filesystem path.
+// Future URI schemes can be added inside Resolve without changing the JSON format.
 type DataDirRef string
 
 // Resolve returns the effective local filesystem path for the data directory.
@@ -12,7 +13,11 @@ func (r DataDirRef) Resolve(homeDir string) string {
 	if r == "" {
 		return DefaultDir(homeDir)
 	}
-	return filepath.Clean(filepath.FromSlash(string(r)))
+	path := filepath.Clean(filepath.FromSlash(string(r)))
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(homeDir, path)
 }
 
 // DefaultDir returns the default Engram data directory path (~/.engram).
