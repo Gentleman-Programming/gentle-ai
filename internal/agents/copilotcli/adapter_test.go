@@ -92,8 +92,8 @@ func TestDetectionMissingConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Detect() error = %v", err)
 	}
-	if !installed {
-		t.Fatal("Detect() installed = false, want true (binary found)")
+	if installed {
+		t.Fatal("Detect() installed = true, want false (config missing)")
 	}
 	if configFound {
 		t.Fatal("Detect() configFound = true, want false (config missing)")

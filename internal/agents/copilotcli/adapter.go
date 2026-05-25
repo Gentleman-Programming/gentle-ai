@@ -43,17 +43,17 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 	configPath := filepath.Join(homeDir, ".copilot")
 
 	binaryPath, err := a.lookPath("copilot")
-	installed := err == nil
+	binaryFound := err == nil
 
 	stat := a.statPath(filepath.Join(configPath, "config.json"))
 	if stat.err != nil {
 		if os.IsNotExist(stat.err) {
-			return installed, binaryPath, configPath, false, nil
+			return false, binaryPath, configPath, false, nil
 		}
 		return false, "", "", false, stat.err
 	}
 
-	return installed, binaryPath, configPath, stat.exists, nil
+	return binaryFound && stat.exists, binaryPath, configPath, stat.exists, nil
 }
 
 // --- Installation ---
