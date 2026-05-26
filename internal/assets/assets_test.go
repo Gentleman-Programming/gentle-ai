@@ -24,6 +24,8 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"claude/commands/sdd-new.md",
 		"claude/commands/sdd-onboard.md",
 		"claude/commands/sdd-verify.md",
+		"claude/agents/sdd-init.md",
+		"claude/agents/sdd-onboard.md",
 
 		// OpenCode agent files
 		"opencode/persona-gentleman.md",
@@ -225,7 +227,7 @@ func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 		seen[entry.Name()] = true
 	}
 
-	for _, name := range []string{"commands", "engram-protocol.md", "persona-gentleman.md", "sdd-orchestrator.md"} {
+	for _, name := range []string{"agents", "commands", "engram-protocol.md", "persona-gentleman.md", "sdd-orchestrator.md"} {
 		if !seen[name] {
 			t.Fatalf("claude embedded assets missing %q", name)
 		}
@@ -237,6 +239,14 @@ func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 	}
 	if len(commandEntries) != 9 {
 		t.Fatalf("claude commands count = %d, want 9", len(commandEntries))
+	}
+
+	agentEntries, err := FS.ReadDir("claude/agents")
+	if err != nil {
+		t.Fatalf("ReadDir(claude/agents) error = %v", err)
+	}
+	if len(agentEntries) != 10 {
+		t.Fatalf("claude agents count = %d, want 10", len(agentEntries))
 	}
 }
 
