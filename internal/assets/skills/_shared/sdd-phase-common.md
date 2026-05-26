@@ -68,6 +68,8 @@ Return result inline only. Do not write any files or call `mem_save`.
 
 ## D. Return Envelope
 
+> **CRITICAL — Response ordering**: Your FINAL output MUST be text (the return envelope), NOT a tool call. If you need to save to Engram (`mem_save`), do it BEFORE your final text response. Do NOT call `mem_session_summary` — that's for top-level agents only. **Why**: When a sub-agent's last action is a tool call, the parent agent receives only the tool result — your text response (the actual analysis) is lost.
+
 Every phase MUST return a structured envelope to the orchestrator:
 
 - `status`: `success`, `partial`, or `blocked`
