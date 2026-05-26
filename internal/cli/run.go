@@ -151,13 +151,25 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	for _, a := range input.Selection.Agents {
 		agentIDs = append(agentIDs, string(a))
 	}
-	// Non-fatal: a state write failure must not break an otherwise successful install.
-	_ = state.Write(homeDir, state.InstallState{
+
+	// When the user ran `gentle-ai install --agent X` (explicit agent flag),
+	// merge into the existing state so that previously installed agents and
+	// model assignments are preserved. A full install (no --agent flag) keeps
+	// overwrite semantics so the TUI selection is the source of truth.
+	newState := state.InstallState{
 		InstalledAgents:        agentIDs,
 		ClaudeModelAssignments: claudeAliasesToStrings(input.Selection.ClaudeModelAssignments),
 		ModelAssignments:       modelAssignmentsToState(input.Selection.ModelAssignments),
 		Persona:                string(input.Selection.Persona),
-	})
+	}
+	if len(flags.Agents) > 0 {
+		existing, readErr := state.Read(homeDir)
+		if readErr == nil {
+			newState = state.MergeAgents(existing, agentIDs)
+		}
+	}
+	// Non-fatal: a state write failure must not break an otherwise successful install.
+	_ = state.Write(homeDir, newState)
 
 	return result, nil
 }

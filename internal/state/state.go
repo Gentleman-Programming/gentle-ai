@@ -65,6 +65,42 @@ func Read(homeDir string) (InstallState, error) {
 	return s, nil
 }
 
+// MergeAgents returns a new InstallState that combines existing with the
+// provided newAgents. The new agents are appended to existing.InstalledAgents
+// with deduplication. All other fields (ModelAssignments,
+// ClaudeModelAssignments, KiroModelAssignments, Persona) are taken from
+// existing and are never overwritten.
+//
+// This is the correct operation for an incremental `--agent X` install: the
+// caller loads the persisted state, calls MergeAgents, and writes the result
+// back. A full TUI install should use Write directly so that the TUI selection
+// is the source of truth.
+func MergeAgents(existing InstallState, newAgents []string) InstallState {
+	seen := make(map[string]struct{}, len(existing.InstalledAgents))
+	merged := make([]string, 0, len(existing.InstalledAgents)+len(newAgents))
+
+	for _, a := range existing.InstalledAgents {
+		if _, ok := seen[a]; !ok {
+			seen[a] = struct{}{}
+			merged = append(merged, a)
+		}
+	}
+	for _, a := range newAgents {
+		if _, ok := seen[a]; !ok {
+			seen[a] = struct{}{}
+			merged = append(merged, a)
+		}
+	}
+
+	return InstallState{
+		InstalledAgents:        merged,
+		ModelAssignments:       existing.ModelAssignments,
+		ClaudeModelAssignments: existing.ClaudeModelAssignments,
+		KiroModelAssignments:   existing.KiroModelAssignments,
+		Persona:                existing.Persona,
+	}
+}
+
 // Write persists the full install state to disk under the given home directory.
 // It creates the .gentle-ai directory if it does not already exist.
 func Write(homeDir string, s InstallState) error {
