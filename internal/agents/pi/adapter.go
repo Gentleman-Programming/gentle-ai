@@ -87,7 +87,7 @@ func (a *Adapter) InstallCommand(system.PlatformProfile) ([][]string, error) {
 
 func (a *Adapter) engramInitCommand() []string {
 	if _, err := a.lookPath("pnpm"); err == nil {
-		return []string{"pnpm", "dlx", "--package", "gentle-engram@" + versions.GentleEngram, "pi-engram", "init"}
+		return []string{"pnpm", "dlx", "gentle-engram@" + versions.GentleEngram, "pi-engram", "init"}
 	}
 	return []string{"npm", "exec", "--yes", "--package", "gentle-engram@" + versions.GentleEngram, "--", "pi-engram", "init"}
 }

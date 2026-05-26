@@ -49,7 +49,7 @@ func stringSliceContains(items []string, want string) bool {
 
 func engramInitCommandForTest() string {
 	if _, err := exec.LookPath("pnpm"); err == nil {
-		return fmt.Sprintf("pnpm dlx --package gentle-engram@%s pi-engram init", versions.GentleEngram)
+		return fmt.Sprintf("pnpm dlx gentle-engram@%s pi-engram init", versions.GentleEngram)
 	}
 	return fmt.Sprintf("npm exec --yes --package gentle-engram@%s -- pi-engram init", versions.GentleEngram)
 }
@@ -109,7 +109,7 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
 		// Simulate pi-engram init writing mcp.json with the new schema.
 		isNpmEngramInit := name == "npm" && len(args) >= 7 && args[5] == "pi-engram" && args[6] == "init"
-		isPnpmEngramInit := name == "pnpm" && len(args) >= 5 && args[3] == "pi-engram" && args[4] == "init"
+		isPnpmEngramInit := name == "pnpm" && len(args) >= 4 && args[2] == "pi-engram" && args[3] == "init"
 		if isNpmEngramInit || isPnpmEngramInit {
 			mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
 			if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
@@ -142,7 +142,7 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 		t.Fatalf("commands missing %q; got %v", "pi install npm:pi-mcp-adapter", commands)
 	}
 	if !stringSliceContains(commands, fmt.Sprintf("npm exec --yes --package gentle-engram@%s -- pi-engram init", versions.GentleEngram)) &&
-		!stringSliceContains(commands, fmt.Sprintf("pnpm dlx --package gentle-engram@%s pi-engram init", versions.GentleEngram)) {
+		!stringSliceContains(commands, fmt.Sprintf("pnpm dlx gentle-engram@%s pi-engram init", versions.GentleEngram)) {
 		t.Fatalf("commands missing Engram init command; got %v", commands)
 	}
 }
