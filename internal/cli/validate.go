@@ -11,6 +11,7 @@ import (
 
 type InstallInput struct {
 	Selection model.Selection
+	Scope     InstallScope
 	DryRun    bool
 }
 
@@ -57,7 +58,12 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	}
 	selection.SDDMode = sddMode
 
-	return InstallInput{Selection: selection, DryRun: flags.DryRun}, nil
+	scope, err := ResolveInstallScope(flags.Scope)
+	if err != nil {
+		return InstallInput{}, err
+	}
+
+	return InstallInput{Selection: selection, Scope: scope, DryRun: flags.DryRun}, nil
 }
 
 func normalizePersona(value string) (model.PersonaID, error) {

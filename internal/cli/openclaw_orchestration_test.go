@@ -179,7 +179,7 @@ func TestInstallRuntimeOpenClawUsesConfiguredActiveWorkspace(t *testing.T) {
 		Agents:            []model.AgentID{model.AgentOpenClaw},
 		OrderedComponents: selection.Components,
 	}
-	rt, err := newInstallRuntime(home, selection, resolved, system.PlatformProfile{PackageManager: "brew"})
+	rt, err := newInstallRuntime(home, ScopeGlobal, selection, resolved, system.PlatformProfile{PackageManager: "brew"})
 	if err != nil {
 		t.Fatalf("newInstallRuntime() error = %v", err)
 	}
