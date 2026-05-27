@@ -740,8 +740,11 @@ func TestClaudeModelPickerBalancedSelectionStoresAssignments(t *testing.T) {
 	if state.Screen != ScreenStrictTDD {
 		t.Fatalf("screen = %v, want %v (ClaudeCode + SDD goes to StrictTDD first)", state.Screen, ScreenStrictTDD)
 	}
-	if _, exists := state.Selection.ClaudeModelAssignments["orchestrator"]; exists {
-		t.Fatalf("orchestrator should not be configurable by Claude model picker: %v", state.Selection.ClaudeModelAssignments)
+	// Orchestrator is present in the balanced preset (injected as part of the model
+	// assignment table). The Claude picker shows sub-agents and default; orchestrator
+	// is carried through for injection but is not user-editable in the picker UI.
+	if got := state.Selection.ClaudeModelAssignments["orchestrator"]; got != model.ClaudeModelOpus {
+		t.Fatalf("orchestrator = %q, want %q", got, model.ClaudeModelOpus)
 	}
 	if got := state.Selection.ClaudeModelAssignments["default"]; got != model.ClaudeModelSonnet {
 		t.Fatalf("default = %q, want %q", got, model.ClaudeModelSonnet)
@@ -2271,9 +2274,11 @@ func TestModelConfig_ClaudePickerTriggersSyncScreen(t *testing.T) {
 		t.Fatalf("step2: PendingSyncOverrides.ClaudeModelAssignments should be non-empty, got: %v",
 			state.PendingSyncOverrides.ClaudeModelAssignments)
 	}
-	// Balanced preset configures sub-agents/default only; Claude controls the main orchestrator model.
-	if _, exists := state.PendingSyncOverrides.ClaudeModelAssignments["orchestrator"]; exists {
-		t.Errorf("step2: orchestrator should not be configurable by Claude model picker: %v", state.PendingSyncOverrides.ClaudeModelAssignments)
+	// Orchestrator is present in the balanced preset (injected as part of the model
+	// assignment table). The Claude picker shows sub-agents and default; orchestrator
+	// is carried through for injection but is not user-editable in the picker UI.
+	if got := state.PendingSyncOverrides.ClaudeModelAssignments["orchestrator"]; got != model.ClaudeModelOpus {
+		t.Errorf("step2: orchestrator = %q, want %q", got, model.ClaudeModelOpus)
 	}
 }
 

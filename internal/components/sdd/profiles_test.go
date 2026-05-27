@@ -10,6 +10,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
 func TestResolveProfileStrategy_ExplicitWins(t *testing.T) {
@@ -472,9 +473,10 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 	tests := []struct {
 		name      string
 		assetPath string
+		multi     bool
 	}{
-		{name: "single", assetPath: "opencode/sdd-overlay-single.json"},
-		{name: "multi", assetPath: "opencode/sdd-overlay-multi.json"},
+		{name: "single", assetPath: "opencode/sdd-overlay-single.json", multi: false},
+		{name: "multi", assetPath: "opencode/sdd-overlay-multi.json", multi: true},
 	}
 
 	for _, tt := range tests {
@@ -494,7 +496,13 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 				t.Fatal("task block must use __replace__ sentinel to discard stale wildcards on sync")
 			}
 
-			assertExactTaskPermissions(t, taskMap, expectedTaskPermissions(""))
+			expected := expectedTaskPermissions("")
+			if tt.multi {
+				for _, phase := range opencode.JDPhases() {
+					expected[phase] = "allow"
+				}
+			}
+			assertExactTaskPermissions(t, taskMap, expected)
 		})
 	}
 }

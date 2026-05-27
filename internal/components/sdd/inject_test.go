@@ -1349,9 +1349,9 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Multi overlay must contain gentle-orchestrator + 10 sub-agents = 11 agents.
-	if len(agentMap) != 11 {
-		t.Fatalf("agent count = %d, want 11", len(agentMap))
+	// Multi overlay must contain gentle-orchestrator + 10 sub-agents + 3 JD agents = 14 agents.
+	if len(agentMap) != 14 {
+		t.Fatalf("agent count = %d, want 14", len(agentMap))
 	}
 
 	// Verify gentle-orchestrator is present.

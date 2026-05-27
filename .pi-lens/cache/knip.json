@@ -1,0 +1,31 @@
+{
+  "success": true,
+  "issues": [
+    {
+      "type": "file",
+      "name": "internal/assets/opencode/plugins/background-agents.ts",
+      "file": "internal/assets/opencode/plugins/background-agents.ts"
+    },
+    {
+      "type": "file",
+      "name": "internal/assets/opencode/plugins/model-variants.ts",
+      "file": "internal/assets/opencode/plugins/model-variants.ts"
+    }
+  ],
+  "unusedExports": [],
+  "unusedFiles": [
+    {
+      "type": "file",
+      "name": "internal/assets/opencode/plugins/background-agents.ts",
+      "file": "internal/assets/opencode/plugins/background-agents.ts"
+    },
+    {
+      "type": "file",
+      "name": "internal/assets/opencode/plugins/model-variants.ts",
+      "file": "internal/assets/opencode/plugins/model-variants.ts"
+    }
+  ],
+  "unusedDeps": [],
+  "unlistedDeps": [],
+  "summary": "Found 2 issues"
+}
