@@ -1,0 +1,2576 @@
+{
+  "success": true,
+  "clones": [
+    {
+      "fileA": "internal/update/upgrade/symlink_test.go",
+      "startA": 160,
+      "fileB": "internal/update/upgrade/symlink_test.go",
+      "startB": 118,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/update/upgrade/strategy.go",
+      "startA": 490,
+      "fileB": "internal/update/upgrade/strategy.go",
+      "startB": 411,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/update/upgrade/executor.go",
+      "startA": 506,
+      "fileB": "internal/update/upgrade/executor.go",
+      "startB": 493,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/update/upgrade/download.go",
+      "startA": 169,
+      "fileB": "internal/update/upgrade/download.go",
+      "startB": 135,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/upgrade.go",
+      "startA": 131,
+      "fileB": "internal/tui/screens/upgrade_sync.go",
+      "startB": 131,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/uninstall.go",
+      "startA": 160,
+      "fileB": "internal/tui/screens/uninstall.go",
+      "startB": 118,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/review_test.go",
+      "startA": 63,
+      "fileB": "internal/tui/screens/review_test.go",
+      "startB": 17,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/review_test.go",
+      "startA": 89,
+      "fileB": "internal/tui/screens/review_test.go",
+      "startB": 17,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/model_picker_test.go",
+      "startA": 509,
+      "fileB": "internal/tui/screens/model_picker_test.go",
+      "startB": 472,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/model_picker_test.go",
+      "startA": 541,
+      "fileB": "internal/tui/screens/model_picker_test.go",
+      "startB": 509,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/model_picker_test.go",
+      "startA": 562,
+      "fileB": "internal/tui/screens/model_picker_test.go",
+      "startB": 469,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/model_picker_test.go",
+      "startA": 565,
+      "fileB": "internal/tui/screens/model_picker_test.go",
+      "startB": 541,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/model_picker_test.go",
+      "startA": 586,
+      "fileB": "internal/tui/screens/model_picker_test.go",
+      "startB": 538,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/model_picker_test.go",
+      "startA": 862,
+      "fileB": "internal/tui/screens/model_picker_test.go",
+      "startB": 834,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/model_picker_test.go",
+      "startA": 887,
+      "fileB": "internal/tui/screens/model_picker_test.go",
+      "startB": 834,
+      "lines": 17,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/model_picker_test.go",
+      "startA": 932,
+      "fileB": "internal/tui/screens/model_picker_test.go",
+      "startB": 404,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/kiro_model_picker.go",
+      "startA": 99,
+      "fileB": "internal/tui/screens/model_picker.go",
+      "startB": 647,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/dependency_tree_test.go",
+      "startA": 77,
+      "fileB": "internal/tui/screens/dependency_tree_test.go",
+      "startB": 32,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/common.go",
+      "startA": 43,
+      "fileB": "internal/tui/screens/common.go",
+      "startB": 26,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/claude_model_picker.go",
+      "startA": 260,
+      "fileB": "internal/tui/screens/kiro_model_picker.go",
+      "startB": 64,
+      "lines": 19,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/claude_model_picker.go",
+      "startA": 281,
+      "fileB": "internal/tui/screens/kiro_model_picker.go",
+      "startB": 85,
+      "lines": 27,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/backups.go",
+      "startA": 116,
+      "fileB": "internal/tui/screens/backups.go",
+      "startB": 89,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/backups.go",
+      "startA": 126,
+      "fileB": "internal/tui/screens/uninstall.go",
+      "startB": 371,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/backups.go",
+      "startA": 147,
+      "fileB": "internal/tui/screens/backups.go",
+      "startB": 86,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/backups.go",
+      "startA": 179,
+      "fileB": "internal/tui/screens/backups.go",
+      "startB": 89,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/backups.go",
+      "startA": 186,
+      "fileB": "internal/tui/screens/backups.go",
+      "startB": 123,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/backups.go",
+      "startA": 209,
+      "fileB": "internal/tui/screens/backups.go",
+      "startB": 86,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/screens/agent_builder_generating.go",
+      "startA": 21,
+      "fileB": "internal/tui/screens/agent_builder_installing.go",
+      "startB": 21,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/service_test.go",
+      "startA": 168,
+      "fileB": "internal/components/uninstall/service_test.go",
+      "startB": 73,
+      "lines": 29,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/service_test.go",
+      "startA": 214,
+      "fileB": "internal/components/uninstall/service_test.go",
+      "startB": 128,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/service_test.go",
+      "startA": 242,
+      "fileB": "internal/components/uninstall/service_test.go",
+      "startB": 73,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/service_test.go",
+      "startA": 295,
+      "fileB": "internal/components/uninstall/service_test.go",
+      "startB": 73,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/service_test.go",
+      "startA": 356,
+      "fileB": "internal/components/uninstall/service_test.go",
+      "startB": 73,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/service_test.go",
+      "startA": 395,
+      "fileB": "internal/components/uninstall/service_test.go",
+      "startB": 73,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/service_test.go",
+      "startA": 425,
+      "fileB": "internal/components/uninstall/service_test.go",
+      "startB": 73,
+      "lines": 19,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/service_test.go",
+      "startA": 457,
+      "fileB": "internal/components/uninstall/service_test.go",
+      "startB": 414,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/service_test.go",
+      "startA": 481,
+      "fileB": "internal/components/uninstall/service_test.go",
+      "startB": 73,
+      "lines": 31,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/service_test.go",
+      "startA": 511,
+      "fileB": "internal/components/uninstall/service_test.go",
+      "startB": 455,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/service_test.go",
+      "startA": 540,
+      "fileB": "internal/components/uninstall/service_test.go",
+      "startB": 73,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/service_test.go",
+      "startA": 579,
+      "fileB": "internal/components/uninstall/service_test.go",
+      "startB": 203,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/cleaners_test.go",
+      "startA": 180,
+      "fileB": "internal/components/uninstall/cleaners_test.go",
+      "startB": 131,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/uninstall/cleaners.go",
+      "startA": 369,
+      "fileB": "internal/components/uninstall/cleaners.go",
+      "startB": 319,
+      "lines": 23,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/skills/presets.go",
+      "startA": 6,
+      "fileB": "internal/tui/screens/skill_picker.go",
+      "startB": 12,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/read_assignments_test.go",
+      "startA": 81,
+      "fileB": "internal/components/sdd/read_assignments_test.go",
+      "startB": 23,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/read_assignments_test.go",
+      "startA": 103,
+      "fileB": "internal/components/sdd/read_assignments_test.go",
+      "startB": 23,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/read_assignments_test.go",
+      "startA": 128,
+      "fileB": "internal/components/sdd/read_assignments_test.go",
+      "startB": 23,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/read_assignments_test.go",
+      "startA": 163,
+      "fileB": "internal/components/sdd/read_assignments_test.go",
+      "startB": 23,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/read_assignments_test.go",
+      "startA": 197,
+      "fileB": "internal/components/sdd/read_assignments_test.go",
+      "startB": 23,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/read_assignments_test.go",
+      "startA": 231,
+      "fileB": "internal/components/sdd/read_assignments_test.go",
+      "startB": 23,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/read_assignments_test.go",
+      "startA": 266,
+      "fileB": "internal/components/sdd/read_assignments_test.go",
+      "startB": 23,
+      "lines": 16,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/read_assignments_test.go",
+      "startA": 283,
+      "fileB": "internal/components/sdd/read_assignments_test.go",
+      "startB": 39,
+      "lines": 17,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/prompts_test.go",
+      "startA": 216,
+      "fileB": "internal/components/sdd/prompts_test.go",
+      "startB": 188,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/profiles_test.go",
+      "startA": 33,
+      "fileB": "internal/components/sdd/profiles_test.go",
+      "startB": 16,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/profiles_test.go",
+      "startA": 159,
+      "fileB": "internal/components/sdd/profiles_test.go",
+      "startB": 127,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/profiles_test.go",
+      "startA": 236,
+      "fileB": "internal/components/sdd/profiles_test.go",
+      "startB": 201,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/profiles_test.go",
+      "startA": 304,
+      "fileB": "internal/components/sdd/profiles_test.go",
+      "startB": 201,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/profiles_test.go",
+      "startA": 431,
+      "fileB": "internal/components/sdd/profiles_test.go",
+      "startB": 358,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/profiles_test.go",
+      "startA": 510,
+      "fileB": "internal/components/sdd/profiles_test.go",
+      "startB": 358,
+      "lines": 16,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/profiles_test.go",
+      "startA": 575,
+      "fileB": "internal/components/sdd/profiles_test.go",
+      "startB": 358,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/profiles_test.go",
+      "startA": 803,
+      "fileB": "internal/components/sdd/profiles_test.go",
+      "startB": 361,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/profiles_test.go",
+      "startA": 831,
+      "fileB": "internal/components/sdd/profiles_test.go",
+      "startB": 799,
+      "lines": 17,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/sdd/profiles.go",
+      "startA": 386,
+      "fileB": "internal/components/skills/inject.go",
+      "startB": 131,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/persona/inject.go",
+      "startA": 136,
+      "fileB": "internal/components/persona/inject.go",
+      "startB": 103,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/persona/inject.go",
+      "startA": 197,
+      "fileB": "internal/components/persona/inject.go",
+      "startB": 162,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/persona/inject.go",
+      "startA": 256,
+      "fileB": "internal/components/persona/inject.go",
+      "startB": 103,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/persona/inject.go",
+      "startA": 480,
+      "fileB": "internal/components/theme/inject.go",
+      "startB": 74,
+      "lines": 27,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/persona/inject.go",
+      "startA": 663,
+      "fileB": "internal/components/persona/inject.go",
+      "startB": 621,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/persona/inject.go",
+      "startA": 696,
+      "fileB": "internal/components/persona/inject.go",
+      "startB": 647,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/permissions/inject_test.go",
+      "startA": 110,
+      "fileB": "internal/components/permissions/inject_test.go",
+      "startB": 73,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/permissions/inject_test.go",
+      "startA": 150,
+      "fileB": "internal/components/permissions/inject_test.go",
+      "startB": 117,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/permissions/inject_test.go",
+      "startA": 191,
+      "fileB": "internal/components/permissions/inject_test.go",
+      "startB": 117,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/permissions/inject_test.go",
+      "startA": 213,
+      "fileB": "internal/components/permissions/inject_test.go",
+      "startB": 177,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/permissions/inject_test.go",
+      "startA": 244,
+      "fileB": "internal/components/permissions/inject_test.go",
+      "startB": 118,
+      "lines": 16,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/permissions/inject.go",
+      "startA": 128,
+      "fileB": "internal/components/theme/inject.go",
+      "startB": 73,
+      "lines": 28,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/opencodeplugin/plugin_test.go",
+      "startA": 139,
+      "fileB": "internal/components/opencodeplugin/plugin_test.go",
+      "startB": 25,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/mcp/inject_test.go",
+      "startA": 108,
+      "fileB": "internal/components/mcp/inject_test.go",
+      "startB": 60,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/mcp/inject_test.go",
+      "startA": 165,
+      "fileB": "internal/components/permissions/inject_test.go",
+      "startB": 29,
+      "lines": 20,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/mcp/inject_test.go",
+      "startA": 326,
+      "fileB": "internal/components/mcp/inject_test.go",
+      "startB": 280,
+      "lines": 21,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/mcp/inject_test.go",
+      "startA": 346,
+      "fileB": "internal/components/mcp/inject_test.go",
+      "startB": 300,
+      "lines": 25,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/mcp/inject_test.go",
+      "startA": 370,
+      "fileB": "internal/components/mcp/inject_test.go",
+      "startB": 278,
+      "lines": 24,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/mcp/inject_test.go",
+      "startA": 436,
+      "fileB": "internal/components/theme/inject_test.go",
+      "startB": 27,
+      "lines": 17,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/mcp/inject_test.go",
+      "startA": 645,
+      "fileB": "internal/components/mcp/inject_test.go",
+      "startB": 563,
+      "lines": 17,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/mcp/inject.go",
+      "startA": 164,
+      "fileB": "internal/components/theme/inject.go",
+      "startB": 73,
+      "lines": 28,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/gga/runtime_test.go",
+      "startA": 228,
+      "fileB": "internal/components/gga/runtime_test.go",
+      "startB": 90,
+      "lines": 21,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/filemerge/writer_test.go",
+      "startA": 175,
+      "fileB": "internal/components/filemerge/writer_test.go",
+      "startB": 43,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/filemerge/writer_test.go",
+      "startA": 188,
+      "fileB": "internal/components/filemerge/writer_test.go",
+      "startB": 155,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/filemerge/toml.go",
+      "startA": 34,
+      "fileB": "internal/components/uninstall/cleaners.go",
+      "startB": 156,
+      "lines": 16,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/filemerge/json_merge_test.go",
+      "startA": 47,
+      "fileB": "internal/components/filemerge/json_merge_test.go",
+      "startB": 10,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/filemerge/json_merge_test.go",
+      "startA": 121,
+      "fileB": "internal/components/filemerge/json_merge_test.go",
+      "startB": 10,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/filemerge/json_merge_test.go",
+      "startA": 156,
+      "fileB": "internal/components/filemerge/json_merge_test.go",
+      "startB": 10,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/filemerge/json_merge_test.go",
+      "startA": 182,
+      "fileB": "internal/components/filemerge/json_merge_test.go",
+      "startB": 10,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/filemerge/json_merge_test.go",
+      "startA": 284,
+      "fileB": "internal/components/filemerge/json_merge_test.go",
+      "startB": 10,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/filemerge/json_merge_test.go",
+      "startA": 360,
+      "fileB": "internal/components/filemerge/json_merge_test.go",
+      "startB": 10,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/filemerge/json_merge.go",
+      "startA": 48,
+      "fileB": "internal/components/uninstall/cleaners.go",
+      "startB": 285,
+      "lines": 128,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/install_test.go",
+      "startA": 41,
+      "fileB": "internal/components/gga/install_test.go",
+      "startB": 107,
+      "lines": 22,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/inject.go",
+      "startA": 418,
+      "fileB": "internal/components/engram/inject.go",
+      "startB": 380,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/inject.go",
+      "startA": 435,
+      "fileB": "internal/components/persona/inject.go",
+      "startB": 389,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/inject.go",
+      "startA": 503,
+      "fileB": "internal/components/theme/inject.go",
+      "startB": 73,
+      "lines": 30,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/inject.go",
+      "startA": 530,
+      "fileB": "internal/components/persona/inject.go",
+      "startB": 535,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download_test.go",
+      "startA": 80,
+      "fileB": "internal/components/engram/download_test.go",
+      "startB": 50,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download_test.go",
+      "startA": 416,
+      "fileB": "internal/components/engram/download_test.go",
+      "startB": 305,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download_test.go",
+      "startA": 428,
+      "fileB": "internal/components/engram/download_test.go",
+      "startB": 273,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download_test.go",
+      "startA": 449,
+      "fileB": "internal/components/engram/download_test.go",
+      "startB": 374,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download_test.go",
+      "startA": 475,
+      "fileB": "internal/components/engram/download_test.go",
+      "startB": 402,
+      "lines": 27,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download_test.go",
+      "startA": 502,
+      "fileB": "internal/components/engram/download_test.go",
+      "startB": 426,
+      "lines": 19,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download_test.go",
+      "startA": 540,
+      "fileB": "internal/components/engram/download_test.go",
+      "startB": 86,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download_test.go",
+      "startA": 547,
+      "fileB": "internal/components/engram/download_test.go",
+      "startB": 487,
+      "lines": 29,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download_test.go",
+      "startA": 645,
+      "fileB": "internal/components/engram/download_test.go",
+      "startB": 544,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download_test.go",
+      "startA": 648,
+      "fileB": "internal/components/engram/download_test.go",
+      "startB": 414,
+      "lines": 21,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download_test.go",
+      "startA": 737,
+      "fileB": "internal/components/engram/download_test.go",
+      "startB": 677,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download.go",
+      "startA": 224,
+      "fileB": "internal/components/engram/download.go",
+      "startB": 154,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download.go",
+      "startA": 332,
+      "fileB": "internal/update/upgrade/download.go",
+      "startB": 135,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download.go",
+      "startA": 337,
+      "fileB": "internal/update/upgrade/download.go",
+      "startB": 140,
+      "lines": 28,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download.go",
+      "startA": 366,
+      "fileB": "internal/update/upgrade/download.go",
+      "startB": 169,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download.go",
+      "startA": 366,
+      "fileB": "internal/components/engram/download.go",
+      "startB": 332,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download.go",
+      "startA": 371,
+      "fileB": "internal/update/upgrade/download.go",
+      "startB": 174,
+      "lines": 17,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download.go",
+      "startA": 391,
+      "fileB": "internal/update/upgrade/download.go",
+      "startB": 194,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download.go",
+      "startA": 474,
+      "fileB": "internal/update/upgrade/download.go",
+      "startB": 215,
+      "lines": 16,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download.go",
+      "startA": 489,
+      "fileB": "internal/update/upgrade/download.go",
+      "startB": 230,
+      "lines": 19,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download.go",
+      "startA": 518,
+      "fileB": "internal/components/engram/download.go",
+      "startB": 468,
+      "lines": 17,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/engram/download.go",
+      "startA": 540,
+      "fileB": "internal/components/engram/download.go",
+      "startB": 404,
+      "lines": 20,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/vscode/adapter.go",
+      "startA": 115,
+      "fileB": "internal/agents/windsurf/adapter.go",
+      "startB": 136,
+      "lines": 45,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/trae/adapter_test.go",
+      "startA": 3,
+      "fileB": "internal/agents/windsurf/adapter_test.go",
+      "startB": 3,
+      "lines": 28,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/trae/adapter_test.go",
+      "startA": 44,
+      "fileB": "internal/agents/windsurf/adapter_test.go",
+      "startB": 37,
+      "lines": 40,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/trae/adapter.go",
+      "startA": 49,
+      "fileB": "internal/agents/windsurf/adapter.go",
+      "startB": 48,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/trae/adapter.go",
+      "startA": 136,
+      "fileB": "internal/agents/vscode/adapter.go",
+      "startB": 113,
+      "lines": 25,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/trae/adapter.go",
+      "startA": 151,
+      "fileB": "internal/agents/windsurf/adapter.go",
+      "startB": 164,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/qwen/adapter_test.go",
+      "startA": 43,
+      "fileB": "internal/agents/windsurf/adapter_test.go",
+      "startB": 37,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/qwen/adapter_test.go",
+      "startA": 64,
+      "fileB": "internal/agents/windsurf/adapter_test.go",
+      "startB": 52,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/qwen/adapter_test.go",
+      "startA": 220,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 174,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/qwen/adapter_test.go",
+      "startA": 249,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 199,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/qwen/adapter.go",
+      "startA": 141,
+      "fileB": "internal/agents/windsurf/adapter.go",
+      "startB": 143,
+      "lines": 27,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/pi/adapter.go",
+      "startA": 59,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 55,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/pi/adapter.go",
+      "startA": 77,
+      "fileB": "internal/agents/pi/adapter_test.go",
+      "startB": 161,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/opencode/adapter_test.go",
+      "startA": 42,
+      "fileB": "internal/agents/windsurf/adapter_test.go",
+      "startB": 37,
+      "lines": 57,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/opencode/adapter_test.go",
+      "startA": 134,
+      "fileB": "internal/components/gga/install_test.go",
+      "startB": 114,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/opencode/adapter.go",
+      "startA": 39,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 41,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/opencode/adapter.go",
+      "startA": 50,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 52,
+      "lines": 22,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/opencode/adapter.go",
+      "startA": 98,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 101,
+      "lines": 16,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/opencode/adapter.go",
+      "startA": 134,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 140,
+      "lines": 35,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/openclaw/adapter_test.go",
+      "startA": 125,
+      "fileB": "internal/agents/windsurf/adapter_test.go",
+      "startB": 37,
+      "lines": 21,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/openclaw/adapter_test.go",
+      "startA": 147,
+      "fileB": "internal/agents/windsurf/adapter_test.go",
+      "startB": 52,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/openclaw/adapter.go",
+      "startA": 21,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 25,
+      "lines": 16,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/openclaw/adapter.go",
+      "startA": 37,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 41,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/openclaw/adapter.go",
+      "startA": 48,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 52,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/openclaw/adapter.go",
+      "startA": 59,
+      "fileB": "internal/agents/windsurf/adapter.go",
+      "startB": 57,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/openclaw/adapter.go",
+      "startA": 107,
+      "fileB": "internal/agents/windsurf/adapter.go",
+      "startB": 135,
+      "lines": 53,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kiro/adapter_test.go",
+      "startA": 97,
+      "fileB": "internal/agents/kiro/adapter_test.go",
+      "startB": 65,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kimi/adapter_test.go",
+      "startA": 168,
+      "fileB": "internal/agents/kimi/adapter_test.go",
+      "startB": 133,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kimi/adapter_test.go",
+      "startA": 195,
+      "fileB": "internal/agents/kimi/adapter_test.go",
+      "startB": 120,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kimi/adapter.go",
+      "startA": 55,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 41,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kimi/adapter.go",
+      "startA": 66,
+      "fileB": "internal/agents/pi/adapter.go",
+      "startB": 56,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kimi/adapter.go",
+      "startA": 109,
+      "fileB": "internal/agents/opencode/adapter.go",
+      "startB": 62,
+      "lines": 20,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kimi/adapter.go",
+      "startA": 175,
+      "fileB": "internal/agents/windsurf/adapter.go",
+      "startB": 135,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kilocode/adapter_test.go",
+      "startA": 3,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 3,
+      "lines": 27,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kilocode/adapter_test.go",
+      "startA": 61,
+      "fileB": "internal/agents/windsurf/adapter_test.go",
+      "startB": 37,
+      "lines": 50,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kilocode/adapter_test.go",
+      "startA": 226,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 118,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kilocode/adapter.go",
+      "startA": 3,
+      "fileB": "internal/agents/opencode/adapter.go",
+      "startB": 3,
+      "lines": 36,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kilocode/adapter.go",
+      "startA": 39,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 41,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kilocode/adapter.go",
+      "startA": 50,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 52,
+      "lines": 33,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kilocode/adapter.go",
+      "startA": 98,
+      "fileB": "internal/agents/opencode/adapter.go",
+      "startB": 98,
+      "lines": 17,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kilocode/adapter.go",
+      "startA": 116,
+      "fileB": "internal/agents/opencode/adapter.go",
+      "startB": 116,
+      "lines": 19,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/kilocode/adapter.go",
+      "startA": 134,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 140,
+      "lines": 35,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/gemini/adapter_test.go",
+      "startA": 3,
+      "fileB": "internal/agents/opencode/adapter_test.go",
+      "startB": 3,
+      "lines": 27,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/gemini/adapter_test.go",
+      "startA": 42,
+      "fileB": "internal/agents/windsurf/adapter_test.go",
+      "startB": 37,
+      "lines": 61,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/gemini/adapter_test.go",
+      "startA": 102,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 103,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/gemini/adapter_test.go",
+      "startA": 107,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 108,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/gemini/adapter_test.go",
+      "startA": 117,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 118,
+      "lines": 23,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/gemini/adapter.go",
+      "startA": 12,
+      "fileB": "internal/agents/openclaw/adapter.go",
+      "startB": 12,
+      "lines": 25,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/gemini/adapter.go",
+      "startA": 37,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 41,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/gemini/adapter.go",
+      "startA": 48,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 52,
+      "lines": 22,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/gemini/adapter.go",
+      "startA": 72,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 76,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/gemini/adapter.go",
+      "startA": 97,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 101,
+      "lines": 17,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/gemini/adapter.go",
+      "startA": 113,
+      "fileB": "internal/agents/windsurf/adapter.go",
+      "startB": 135,
+      "lines": 53,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/cursor/adapter_test.go",
+      "startA": 14,
+      "fileB": "internal/agents/windsurf/adapter_test.go",
+      "startB": 17,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/cursor/adapter_test.go",
+      "startA": 34,
+      "fileB": "internal/agents/windsurf/adapter_test.go",
+      "startB": 37,
+      "lines": 19,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/cursor/adapter_test.go",
+      "startA": 52,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 64,
+      "lines": 27,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/cursor/adapter_test.go",
+      "startA": 93,
+      "fileB": "internal/agents/kilocode/adapter_test.go",
+      "startB": 163,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/cursor/adapter.go",
+      "startA": 31,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 41,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/cursor/adapter.go",
+      "startA": 40,
+      "fileB": "internal/agents/windsurf/adapter.go",
+      "startB": 49,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/cursor/adapter.go",
+      "startA": 100,
+      "fileB": "internal/agents/kimi/adapter.go",
+      "startB": 175,
+      "lines": 22,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/cursor/adapter.go",
+      "startA": 115,
+      "fileB": "internal/agents/kiro/adapter.go",
+      "startB": 187,
+      "lines": 17,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/cursor/adapter.go",
+      "startA": 117,
+      "fileB": "internal/agents/vscode/adapter.go",
+      "startB": 143,
+      "lines": 26,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/codex/adapter_test.go",
+      "startA": 3,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 3,
+      "lines": 28,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/codex/adapter_test.go",
+      "startA": 43,
+      "fileB": "internal/agents/windsurf/adapter_test.go",
+      "startB": 37,
+      "lines": 61,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/codex/adapter_test.go",
+      "startA": 103,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 103,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/codex/adapter_test.go",
+      "startA": 108,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 108,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/codex/adapter_test.go",
+      "startA": 118,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 118,
+      "lines": 23,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/codex/adapter.go",
+      "startA": 3,
+      "fileB": "internal/agents/gemini/adapter.go",
+      "startB": 3,
+      "lines": 34,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/codex/adapter.go",
+      "startA": 37,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 41,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/codex/adapter.go",
+      "startA": 48,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 52,
+      "lines": 22,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/codex/adapter.go",
+      "startA": 72,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 76,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/codex/adapter.go",
+      "startA": 116,
+      "fileB": "internal/agents/windsurf/adapter.go",
+      "startB": 135,
+      "lines": 42,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/codex/adapter.go",
+      "startA": 158,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 163,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/claude/adapter_test.go",
+      "startA": 3,
+      "fileB": "internal/agents/opencode/adapter_test.go",
+      "startB": 3,
+      "lines": 27,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/claude/adapter_test.go",
+      "startA": 49,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 48,
+      "lines": 45,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/claude/adapter_test.go",
+      "startA": 132,
+      "fileB": "internal/agents/qwen/adapter_test.go",
+      "startB": 118,
+      "lines": 19,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/claude/adapter.go",
+      "startA": 3,
+      "fileB": "internal/agents/opencode/adapter.go",
+      "startB": 3,
+      "lines": 36,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/claude/adapter.go",
+      "startA": 39,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 41,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/claude/adapter.go",
+      "startA": 50,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 52,
+      "lines": 33,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/antigravity/adapter_test.go",
+      "startA": 77,
+      "fileB": "internal/agents/antigravity/adapter_test.go",
+      "startB": 31,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/antigravity/adapter_test.go",
+      "startA": 137,
+      "fileB": "internal/agents/windsurf/adapter_test.go",
+      "startB": 52,
+      "lines": 25,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/antigravity/adapter.go",
+      "startA": 41,
+      "fileB": "internal/agents/qwen/adapter.go",
+      "startB": 41,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/antigravity/adapter.go",
+      "startA": 50,
+      "fileB": "internal/agents/windsurf/adapter.go",
+      "startB": 49,
+      "lines": 21,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/antigravity/adapter.go",
+      "startA": 76,
+      "fileB": "internal/agents/gemini/adapter.go",
+      "startB": 81,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/antigravity/adapter.go",
+      "startA": 108,
+      "fileB": "internal/agents/windsurf/adapter.go",
+      "startB": 135,
+      "lines": 46,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/update/detect.go",
+      "startA": 104,
+      "fileB": "internal/update/upgrade/strategy.go",
+      "startB": 174,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/preset_flow_test.go",
+      "startA": 140,
+      "fileB": "internal/tui/preset_flow_test.go",
+      "startB": 128,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/preset_flow_test.go",
+      "startA": 264,
+      "fileB": "internal/tui/preset_flow_test.go",
+      "startB": 248,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/preset_flow_test.go",
+      "startA": 285,
+      "fileB": "internal/tui/preset_flow_test.go",
+      "startB": 266,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/preset_flow_test.go",
+      "startA": 313,
+      "fileB": "internal/tui/preset_flow_test.go",
+      "startB": 235,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/preset_flow_test.go",
+      "startA": 317,
+      "fileB": "internal/tui/preset_flow_test.go",
+      "startB": 268,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/preset_flow_test.go",
+      "startA": 336,
+      "fileB": "internal/tui/preset_flow_test.go",
+      "startB": 318,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/preset_flow_test.go",
+      "startA": 347,
+      "fileB": "internal/tui/preset_flow_test.go",
+      "startB": 329,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/preset_flow_test.go",
+      "startA": 352,
+      "fileB": "internal/tui/preset_flow_test.go",
+      "startB": 334,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/preset_flow_test.go",
+      "startA": 354,
+      "fileB": "internal/tui/preset_flow_test.go",
+      "startB": 269,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/preset_flow_test.go",
+      "startA": 367,
+      "fileB": "internal/tui/preset_flow_test.go",
+      "startB": 329,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/tui/preset_flow_test.go",
+      "startA": 403,
+      "fileB": "internal/tui/preset_flow_test.go",
+      "startB": 222,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/system/deps_test.go",
+      "startA": 282,
+      "fileB": "internal/system/deps_test.go",
+      "startB": 246,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/system/deps.go",
+      "startA": 117,
+      "fileB": "internal/system/deps_test.go",
+      "startB": 161,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/system/deps.go",
+      "startA": 206,
+      "fileB": "internal/update/check.go",
+      "startB": 183,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/state/state_test.go",
+      "startA": 297,
+      "fileB": "internal/state/state_test.go",
+      "startB": 266,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/skillregistry/registry_test.go",
+      "startA": 163,
+      "fileB": "internal/skillregistry/registry_test.go",
+      "startB": 123,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/skillregistry/registry_test.go",
+      "startA": 254,
+      "fileB": "internal/skillregistry/registry_test.go",
+      "startB": 123,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/skillregistry/registry_test.go",
+      "startA": 290,
+      "fileB": "internal/skillregistry/registry_test.go",
+      "startB": 123,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/skillregistry/registry_test.go",
+      "startA": 340,
+      "fileB": "internal/skillregistry/registry_test.go",
+      "startB": 123,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/skillregistry/registry.go",
+      "startA": 61,
+      "fileB": "internal/skillregistry/registry_test.go",
+      "startB": 185,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/skillregistry/registry.go",
+      "startA": 82,
+      "fileB": "internal/skillregistry/registry_test.go",
+      "startB": 214,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/planner/review_test.go",
+      "startA": 226,
+      "fileB": "internal/planner/review_test.go",
+      "startB": 176,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/planner/resolver_test.go",
+      "startA": 101,
+      "fileB": "internal/planner/resolver_test.go",
+      "startB": 40,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/opencode/models_test.go",
+      "startA": 260,
+      "fileB": "internal/opencode/models_test.go",
+      "startB": 220,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/opencode/models_test.go",
+      "startA": 727,
+      "fileB": "internal/opencode/models_test.go",
+      "startB": 220,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/opencode/models_test.go",
+      "startA": 759,
+      "fileB": "internal/opencode/models_test.go",
+      "startB": 220,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/installcmd/resolver_test.go",
+      "startA": 49,
+      "fileB": "internal/installcmd/resolver_test.go",
+      "startB": 38,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/installcmd/resolver_test.go",
+      "startA": 60,
+      "fileB": "internal/installcmd/resolver_test.go",
+      "startB": 38,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/installcmd/resolver_test.go",
+      "startA": 82,
+      "fileB": "internal/installcmd/resolver_test.go",
+      "startB": 38,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/installcmd/resolver_test.go",
+      "startA": 92,
+      "fileB": "internal/installcmd/resolver_test.go",
+      "startB": 38,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/openclaw_integration_test.go",
+      "startA": 103,
+      "fileB": "internal/components/openclaw_integration_test.go",
+      "startB": 25,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/golden_test.go",
+      "startA": 249,
+      "fileB": "internal/components/golden_test.go",
+      "startB": 216,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/golden_test.go",
+      "startA": 258,
+      "fileB": "internal/components/permissions/inject_test.go",
+      "startB": 177,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/golden_test.go",
+      "startA": 287,
+      "fileB": "internal/components/golden_test.go",
+      "startB": 216,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/golden_test.go",
+      "startA": 320,
+      "fileB": "internal/components/golden_test.go",
+      "startB": 216,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/golden_test.go",
+      "startA": 354,
+      "fileB": "internal/components/golden_test.go",
+      "startB": 216,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/golden_test.go",
+      "startA": 548,
+      "fileB": "internal/components/golden_test.go",
+      "startB": 368,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/golden_test.go",
+      "startA": 711,
+      "fileB": "internal/components/golden_test.go",
+      "startB": 368,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/components/golden_test.go",
+      "startA": 816,
+      "fileB": "internal/components/golden_test.go",
+      "startB": 216,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/uninstall.go",
+      "startA": 70,
+      "fileB": "internal/cli/uninstall.go",
+      "startB": 58,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/sync.go",
+      "startA": 898,
+      "fileB": "internal/cli/sync.go",
+      "startB": 883,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/run_preflight_test.go",
+      "startA": 42,
+      "fileB": "internal/cli/run_preflight_test.go",
+      "startB": 18,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/run_path_guidance_test.go",
+      "startA": 116,
+      "fileB": "internal/cli/run_path_guidance_test.go",
+      "startB": 80,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/run_engram_download_test.go",
+      "startA": 108,
+      "fileB": "internal/cli/run_engram_download_test.go",
+      "startB": 16,
+      "lines": 17,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/run_engram_download_test.go",
+      "startA": 143,
+      "fileB": "internal/cli/run_engram_download_test.go",
+      "startB": 41,
+      "lines": 16,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/run_engram_download_test.go",
+      "startA": 164,
+      "fileB": "internal/cli/run_engram_download_test.go",
+      "startB": 16,
+      "lines": 17,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/run_component_paths_test.go",
+      "startA": 65,
+      "fileB": "internal/cli/run_component_paths_test.go",
+      "startB": 51,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/run_component_paths_test.go",
+      "startA": 214,
+      "fileB": "internal/cli/run_component_paths_test.go",
+      "startB": 101,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/openclaw_orchestration_test.go",
+      "startA": 111,
+      "fileB": "internal/cli/openclaw_orchestration_test.go",
+      "startB": 38,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/openclaw_orchestration_test.go",
+      "startA": 136,
+      "fileB": "internal/cli/openclaw_orchestration_test.go",
+      "startB": 68,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/openclaw_orchestration_test.go",
+      "startA": 204,
+      "fileB": "internal/cli/openclaw_orchestration_test.go",
+      "startB": 172,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/openclaw_orchestration_test.go",
+      "startA": 212,
+      "fileB": "internal/cli/openclaw_orchestration_test.go",
+      "startB": 184,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/install.go",
+      "startA": 23,
+      "fileB": "internal/cli/uninstall.go",
+      "startB": 28,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/gga_install_fix_test.go",
+      "startA": 124,
+      "fileB": "internal/cli/gga_install_fix_test.go",
+      "startB": 58,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/gga_install_fix_test.go",
+      "startA": 132,
+      "fileB": "internal/cli/gga_install_fix_test.go",
+      "startB": 67,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/gga_available_test.go",
+      "startA": 65,
+      "fileB": "internal/cli/gga_available_test.go",
+      "startB": 36,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/gga_available_test.go",
+      "startA": 128,
+      "fileB": "internal/cli/gga_available_test.go",
+      "startB": 98,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/gga_available_test.go",
+      "startA": 150,
+      "fileB": "internal/cli/gga_available_test.go",
+      "startB": 98,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/dryrun.go",
+      "startA": 38,
+      "fileB": "internal/tui/screens/review.go",
+      "startB": 75,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/dryrun.go",
+      "startA": 50,
+      "fileB": "internal/tui/screens/review.go",
+      "startB": 75,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/dedup_prune_test.go",
+      "startA": 84,
+      "fileB": "internal/cli/dedup_prune_test.go",
+      "startB": 18,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/dedup_prune_test.go",
+      "startA": 96,
+      "fileB": "internal/cli/dedup_prune_test.go",
+      "startB": 32,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/dedup_prune_test.go",
+      "startA": 118,
+      "fileB": "internal/cli/dedup_prune_test.go",
+      "startB": 50,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/dedup_prune_test.go",
+      "startA": 152,
+      "fileB": "internal/cli/dedup_prune_test.go",
+      "startB": 18,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/dedup_prune_test.go",
+      "startA": 220,
+      "fileB": "internal/cli/dedup_prune_test.go",
+      "startB": 18,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/cli/backup_metadata_test.go",
+      "startA": 35,
+      "fileB": "internal/cli/dedup_prune_test.go",
+      "startB": 232,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/snapshot_test.go",
+      "startA": 190,
+      "fileB": "internal/backup/snapshot_test.go",
+      "startB": 135,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/retention_test.go",
+      "startA": 190,
+      "fileB": "internal/backup/retention_test.go",
+      "startB": 169,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/retention_test.go",
+      "startA": 225,
+      "fileB": "internal/backup/retention_test.go",
+      "startB": 169,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/retention_test.go",
+      "startA": 367,
+      "fileB": "internal/backup/retention_test.go",
+      "startB": 331,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/retention_test.go",
+      "startA": 468,
+      "fileB": "internal/backup/retention_test.go",
+      "startB": 331,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/restore_test.go",
+      "startA": 145,
+      "fileB": "internal/backup/restore_test.go",
+      "startB": 10,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/restore_test.go",
+      "startA": 286,
+      "fileB": "internal/backup/restore_test.go",
+      "startB": 197,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/restore_test.go",
+      "startA": 304,
+      "fileB": "internal/backup/restore_test.go",
+      "startB": 115,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/restore.go",
+      "startA": 107,
+      "fileB": "internal/backup/restore.go",
+      "startB": 85,
+      "lines": 18,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/manifest_test.go",
+      "startA": 206,
+      "fileB": "internal/backup/manifest_test.go",
+      "startB": 113,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/manifest_test.go",
+      "startA": 246,
+      "fileB": "internal/backup/manifest_test.go",
+      "startB": 146,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/manifest_test.go",
+      "startA": 269,
+      "fileB": "internal/backup/manifest_test.go",
+      "startB": 113,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/manifest_test.go",
+      "startA": 309,
+      "fileB": "internal/backup/manifest_test.go",
+      "startB": 146,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/manifest_test.go",
+      "startA": 512,
+      "fileB": "internal/backup/manifest_test.go",
+      "startB": 487,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/manifest_test.go",
+      "startA": 649,
+      "fileB": "internal/backup/manifest_test.go",
+      "startB": 616,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/manifest_test.go",
+      "startA": 742,
+      "fileB": "internal/backup/manifest_test.go",
+      "startB": 146,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/manifest_test.go",
+      "startA": 769,
+      "fileB": "internal/backup/manifest_test.go",
+      "startB": 113,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/compression_test.go",
+      "startA": 260,
+      "fileB": "internal/backup/compression_test.go",
+      "startB": 151,
+      "lines": 16,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/compression_test.go",
+      "startA": 286,
+      "fileB": "internal/backup/compression_test.go",
+      "startB": 175,
+      "lines": 16,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/compression_test.go",
+      "startA": 303,
+      "fileB": "internal/backup/compression_test.go",
+      "startB": 151,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/backup/compression_test.go",
+      "startA": 308,
+      "fileB": "internal/backup/compression_test.go",
+      "startB": 209,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/selfupdate_test.go",
+      "startA": 132,
+      "fileB": "internal/app/selfupdate_test.go",
+      "startB": 117,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/selfupdate_test.go",
+      "startA": 149,
+      "fileB": "internal/app/selfupdate_test.go",
+      "startB": 102,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/selfupdate_test.go",
+      "startA": 260,
+      "fileB": "internal/app/selfupdate_test.go",
+      "startB": 162,
+      "lines": 17,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/selfupdate_test.go",
+      "startA": 293,
+      "fileB": "internal/app/selfupdate_test.go",
+      "startB": 162,
+      "lines": 21,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/selfupdate_test.go",
+      "startA": 402,
+      "fileB": "internal/app/selfupdate_test.go",
+      "startB": 164,
+      "lines": 19,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/selfupdate_test.go",
+      "startA": 447,
+      "fileB": "internal/app/selfupdate_test.go",
+      "startB": 399,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/selfupdate_test.go",
+      "startA": 492,
+      "fileB": "internal/app/selfupdate_test.go",
+      "startB": 164,
+      "lines": 19,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/selfupdate_test.go",
+      "startA": 511,
+      "fileB": "internal/app/selfupdate_test.go",
+      "startB": 421,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/parity_test.go",
+      "startA": 281,
+      "fileB": "internal/app/parity_test.go",
+      "startB": 133,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/parity_test.go",
+      "startA": 343,
+      "fileB": "internal/app/parity_test.go",
+      "startB": 281,
+      "lines": 16,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/app_test.go",
+      "startA": 85,
+      "fileB": "internal/app/app_test.go",
+      "startB": 43,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/app_test.go",
+      "startA": 235,
+      "fileB": "internal/app/app_test.go",
+      "startB": 83,
+      "lines": 19,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/app_test.go",
+      "startA": 321,
+      "fileB": "internal/app/app_test.go",
+      "startB": 306,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/app_test.go",
+      "startA": 726,
+      "fileB": "internal/app/app_test.go",
+      "startB": 680,
+      "lines": 16,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/app.go",
+      "startA": 495,
+      "fileB": "internal/cli/sync.go",
+      "startB": 801,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/app.go",
+      "startA": 512,
+      "fileB": "internal/cli/sync.go",
+      "startB": 811,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/app.go",
+      "startA": 585,
+      "fileB": "internal/cli/restore.go",
+      "startB": 193,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/app/app.go",
+      "startA": 606,
+      "fileB": "internal/cli/restore.go",
+      "startB": 213,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/discovery_test.go",
+      "startA": 175,
+      "fileB": "internal/agents/discovery_test.go",
+      "startB": 70,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agents/discovery_test.go",
+      "startA": 277,
+      "fileB": "internal/agents/discovery_test.go",
+      "startB": 87,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agentbuilder/sdd_test.go",
+      "startA": 112,
+      "fileB": "internal/agentbuilder/sdd_test.go",
+      "startB": 80,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agentbuilder/sdd_test.go",
+      "startA": 141,
+      "fileB": "internal/agentbuilder/sdd_test.go",
+      "startB": 80,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agentbuilder/sdd_test.go",
+      "startA": 151,
+      "fileB": "internal/agentbuilder/sdd_test.go",
+      "startB": 62,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agentbuilder/sdd_test.go",
+      "startA": 192,
+      "fileB": "internal/agentbuilder/sdd_test.go",
+      "startB": 80,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agentbuilder/installer_test.go",
+      "startA": 23,
+      "fileB": "internal/agentbuilder/integration_test.go",
+      "startB": 84,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "internal/agentbuilder/installer_test.go",
+      "startA": 34,
+      "fileB": "internal/agentbuilder/integration_test.go",
+      "startB": 97,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "e2e/lib.sh",
+      "startA": 330,
+      "fileB": "e2e/lib.sh",
+      "startB": 308,
+      "lines": 8,
+      "tokens": 0
+    }
+  ],
+  "duplicatedLines": 4667,
+  "totalLines": 58402,
+  "percentage": 7.99
+}
