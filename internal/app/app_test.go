@@ -356,7 +356,7 @@ func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tuiSync Claude model config error: %v", err)
 	}
-	if changed == 0 {
+	if len(changed) == 0 {
 		t.Fatal("tuiSync Claude model config changed 0 files, want Claude assets written")
 	}
 
