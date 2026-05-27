@@ -335,7 +335,7 @@ func TestRenderModelPickerShowsSetAllPhasesEffort(t *testing.T) {
 	}
 
 	output := RenderModelPicker(nil, state, 1)
-	if !strings.Contains(output, "Set all phases") || !strings.Contains(output, "Anthropic / Claude Opus 4 [high]") {
+	if !strings.Contains(output, "Set all SDD phases") || !strings.Contains(output, "Anthropic / Claude Opus 4 [high]") {
 		t.Fatalf("RenderModelPicker() missing Set all phases effort label; got:\n%s", output)
 	}
 }

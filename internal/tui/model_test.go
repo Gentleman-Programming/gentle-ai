@@ -121,7 +121,7 @@ func TestProfileCreateContinueSanitizesStaleEffort(t *testing.T) {
 	m.Screen = ScreenProfileCreate
 	m.ProfileCreateStep = 1
 	m.ProfileDraft = model.Profile{Name: "work"}
-	m.Cursor = len(screens.ModelPickerRows())
+	m.Cursor = len(screens.ModelPickerRowsForProfile())
 	m.ModelPicker = screens.ModelPickerState{
 		SDDModels: map[string][]opencode.Model{
 			"anthropic": {{ID: "claude-sonnet-4", Variants: []string{"low", "medium"}}},
@@ -149,7 +149,7 @@ func TestProfileEditContinueSanitizesStaleEffort(t *testing.T) {
 	m.ProfileCreateStep = 1
 	m.ProfileEditMode = true
 	m.ProfileDraft = model.Profile{Name: "work"}
-	m.Cursor = len(screens.ModelPickerRows())
+	m.Cursor = len(screens.ModelPickerRowsForProfile())
 	m.ModelPicker = screens.ModelPickerState{
 		SDDModels: map[string][]opencode.Model{
 			"anthropic": {{ID: "claude-sonnet-4", Variants: []string{"low", "medium"}}},
@@ -176,7 +176,7 @@ func TestProfileCreateContinuePreservesEffortWhenVariantDataUnknown(t *testing.T
 	m.Screen = ScreenProfileCreate
 	m.ProfileCreateStep = 1
 	m.ProfileDraft = model.Profile{Name: "work"}
-	m.Cursor = len(screens.ModelPickerRows())
+	m.Cursor = len(screens.ModelPickerRowsForProfile())
 	m.ModelPicker = screens.ModelPickerState{SDDModels: map[string][]opencode.Model{}}
 	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
 		screens.SDDOrchestratorPhase: {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
