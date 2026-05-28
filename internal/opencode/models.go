@@ -361,6 +361,7 @@ func SDDPhases() []string {
 		"sdd-apply",
 		"sdd-verify",
 		"sdd-archive",
+		"sdd-onboard",
 	}
 }
 
