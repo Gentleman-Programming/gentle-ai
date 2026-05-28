@@ -2719,7 +2719,7 @@ func TestPreselectedAgents_AllSixAgentsMappedCorrectly(t *testing.T) {
 func TestAgentsToManage_StateTakesPriorityOverDetection(t *testing.T) {
 	tests := []struct {
 		name        string
-		stateAgents []string       // InstalledAgents from state.json
+		stateAgents []string        // InstalledAgents from state.json
 		detectedIDs []model.AgentID // agents detected on filesystem
 		want        []model.AgentID
 		desc        string
@@ -3925,11 +3925,11 @@ func TestPinErrClearedOnScreenReentry(t *testing.T) {
 // ComponentPersona when persona != PersonaCustom and excludes it for PersonaCustom.
 func TestComponentsForPreset_PersonaMatrix(t *testing.T) {
 	tests := []struct {
-		name          string
-		preset        model.PresetID
-		persona       model.PersonaID
-		wantPersona   bool
-		wantNil       bool
+		name        string
+		preset      model.PresetID
+		persona     model.PersonaID
+		wantPersona bool
+		wantNil     bool
 	}{
 		{
 			name:        "full-gentleman + gentleman includes persona",

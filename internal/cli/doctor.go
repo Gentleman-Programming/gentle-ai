@@ -40,9 +40,9 @@ type DoctorReport struct {
 var knownTools = []string{"gentle-ai", "engram", "gga", "claude", "opencode"}
 
 const (
-	engramHealthEnvVar    = "ENGRAM_BASE_URL"
-	diskWarnThreshold     = int64(100 * 1024 * 1024) // 100 MB
-	diskFailThreshold     = int64(10 * 1024 * 1024)  // 10 MB
+	engramHealthEnvVar = "ENGRAM_BASE_URL"
+	diskWarnThreshold  = int64(100 * 1024 * 1024) // 100 MB
+	diskFailThreshold  = int64(10 * 1024 * 1024)  // 10 MB
 )
 
 // Overridable for testing.

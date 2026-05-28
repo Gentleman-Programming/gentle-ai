@@ -38,6 +38,7 @@ Release artifacts are produced by CI, but Windows users should install through S
 | Cursor | `%USERPROFILE%\.cursor\` |
 | VS Code Copilot | `%APPDATA%\Code\User\` (settings, MCP, prompts) + `%USERPROFILE%\.copilot\` (skills) |
 | Codex | `%USERPROFILE%\.codex\` |
+| Hermes | `%USERPROFILE%\.hermes\` |
 | Windsurf | `%USERPROFILE%\.codeium\windsurf\` (skills, MCP, rules) + `%APPDATA%\Windsurf\User\` (settings) |
 | Kimi | `%USERPROFILE%\.kimi\` (includes `config.toml`, system prompt, agents, MCP) |
 | Antigravity | `%USERPROFILE%\.gemini\antigravity\` |

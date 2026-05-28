@@ -321,11 +321,11 @@ func TestExpectedChecksumFor(t *testing.T) {
 	content := "abc123  gentle-ai_1.0.0_darwin_arm64.tar.gz\ndef456  gentle-ai_1.0.0_linux_amd64.tar.gz\n"
 
 	tests := []struct {
-		name      string
-		content   string
-		filename  string
-		want      string
-		wantErr   bool
+		name     string
+		content  string
+		filename string
+		want     string
+		wantErr  bool
 	}{
 		{
 			name:     "found first entry",

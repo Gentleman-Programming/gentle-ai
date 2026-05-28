@@ -58,7 +58,7 @@ func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 	}
 
 	want := model.Selection{
-		Agents:  []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKilocode, model.AgentGeminiCLI, model.AgentCodex, model.AgentCursor, model.AgentVSCodeCopilot, model.AgentAntigravity, model.AgentWindsurf, model.AgentKimi, model.AgentQwenCode, model.AgentKiroIDE, model.AgentOpenClaw, model.AgentPi, model.AgentTrae},
+		Agents:  []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKilocode, model.AgentGeminiCLI, model.AgentCodex, model.AgentCursor, model.AgentVSCodeCopilot, model.AgentAntigravity, model.AgentWindsurf, model.AgentKimi, model.AgentQwenCode, model.AgentKiroIDE, model.AgentOpenClaw, model.AgentPi, model.AgentTrae, model.AgentHermes},
 		Persona: model.PersonaGentleman,
 		Preset:  model.PresetFullGentleman,
 		Components: []model.ComponentID{

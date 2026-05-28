@@ -27,7 +27,7 @@ gentle-ai CLI / Bubbletea TUI
   +--> verification reports readiness
   |
   v
-Agent config roots (~/.claude, ~/.config/opencode, ~/.cursor, ...)
+Agent config roots (~/.claude, ~/.config/opencode, ~/.cursor, ~/.hermes, ...)
   |
   v
 External tools and agents: Engram, Context7, GGA, supported AI CLIs/IDEs

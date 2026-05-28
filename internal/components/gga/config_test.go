@@ -238,10 +238,10 @@ func TestGGAConfigDirDarwin(t *testing.T) {
 
 func TestGGAConfigDirWindows(t *testing.T) {
 	tests := []struct {
-		name        string
-		homeDir     string
-		appDataEnv  string
-		wantSuffix  string
+		name       string
+		homeDir    string
+		appDataEnv string
+		wantSuffix string
 	}{
 		{
 			name:       "APPDATA set to standard roaming path",

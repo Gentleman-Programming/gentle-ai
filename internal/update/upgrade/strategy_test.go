@@ -1289,5 +1289,3 @@ func TestRunStrategy_ScriptUpgradeExecFailure(t *testing.T) {
 		t.Errorf("expected error when install.sh execution fails, got nil")
 	}
 }
-
-

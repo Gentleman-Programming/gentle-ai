@@ -12,6 +12,7 @@
 | OpenCode        | `opencode`       | Yes          | Yes | Full (multi-mode overlay)        | No            | Yes            | `~/.config/opencode`                |
 | Kilo Code       | `kilocode`       | Yes          | Yes | Full (multi-mode overlay)        | No            | Yes            | `~/.config/kilo`                    |
 | Gemini CLI      | `gemini-cli`     | Yes          | Yes | Full (experimental)              | No            | No             | `~/.gemini`                         |
+| Hermes          | `hermes`         | Yes          | Yes | Solo-agent                       | No            | No             | `~/.hermes`                         |
 | Cursor          | `cursor`         | Yes          | Yes | Full (native subagents)          | No            | No             | `~/.cursor`                         |
 | VS Code Copilot | `vscode-copilot` | Yes          | Yes | Full (runSubagent)               | No            | No             | `~/.copilot` + VS Code User profile |
 | Codex           | `codex`          | Yes          | Yes | Solo-agent                       | No            | No             | `~/.codex`                          |
@@ -33,7 +34,7 @@ Most agents receive the **full SDD orchestrator** policy, plus skill files writt
 | Model                 | How It Works                                                                                                                                                                                       | Agents                                                                                                    |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation, package-managed subagents, or an OpenCode-compatible overlay. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Kimi Code, Kiro IDE, Qwen Code, Pi |
-| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence.                                                                     | Codex, Windsurf, Antigravity, OpenClaw, Trae                                                              |
+| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence.                                                                     | Codex, Windsurf, Antigravity, OpenClaw, Trae, Hermes                                                      |
 
 ### Cursor Native Subagents
 
@@ -68,11 +69,11 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 
 ## SDD Mode Support
 
-| Feature          | Claude Code | OpenCode | Kilo Code | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE | Qwen Code | OpenClaw | Trae |   Pi    |
-| ---------------- | :---------: | :------: | :-------: | :--------: | :----: | :-------------: | :---: | :------: | :---------: | :------: | :-------: | :------: | :--: | :-----: |
-| SDD orchestrator |     Yes     |   Yes    |    Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     |   Yes    |    Yes    |   Yes    | Yes  |   Yes   |
-| Single-mode SDD  |     Yes     |   Yes    |    Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     |   Yes    |    Yes    |   Yes    | Yes  |   Yes   |
-| Multi-mode SDD   |      —      |   Yes    |    Yes    |     —      |   —    |        —        |   —   |    —     |      —      |  Yes\*   |     —     |    —     |  —   | Yes\*\* |
+| Feature          | Claude Code | OpenCode | Kilo Code | Gemini CLI | Hermes | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE | Qwen Code | OpenClaw | Trae |   Pi    |
+| ---------------- | :---------: | :------: | :-------: | :--------: | :----: | :----: | :-------------: | :---: | :------: | :---------: | :------: | :-------: | :------: | :--: | :-----: |
+| SDD orchestrator |     Yes     |   Yes    |    Yes    |    Yes     |  Yes   |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     |   Yes    |    Yes    |   Yes    | Yes  |   Yes   |
+| Single-mode SDD  |     Yes     |   Yes    |    Yes    |    Yes     |  Yes   |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     |   Yes    |    Yes    |   Yes    | Yes  |   Yes   |
+| Multi-mode SDD   |      —      |   Yes    |    Yes    |     —      |   —    |   —    |        —        |   —   |    —     |      —      |  Yes\*   |     —     |    —     |  —   | Yes\*\* |
 
 **Multi-mode** (assigning different AI models to each SDD phase) is supported by **OpenCode** and **Kilo Code** through the OpenCode-compatible multi-mode overlay, and by **Kiro IDE** through native subagent `model:` frontmatter. All other agents run in **single-mode** — the orchestrator manages everything using whatever model the agent is already running.
 
@@ -230,3 +231,12 @@ For the full Pi command and package reference, see [Pi Agent](pi.md).
 - **`@juicesharp/rpiv-ask-user-question` package**: lets Pi child agents ask the active user session for clarification when they need human input.
 - **Pi companion packages**: `pi-web-access`, `pi-lens`, `@juicesharp/rpiv-todo`, and `pi-btw` add web access, context inspection, todo tracking, and companion workflow support.
 - **Pi-only flow**: when Pi is the only selected agent, gentle-ai skips persona, ecosystem component selection, and Strict TDD prompts because those behaviors are provided by `gentle-pi`.
+
+### Hermes
+
+- **Detection**: gentle-ai detects Hermes from the `hermes` binary on `PATH` and its config root at `~/.hermes`.
+- **Global config root**: `~/.hermes/` (cross-platform)
+- **Skills**: `~/.hermes/skills/`
+- **System prompt / rules**: appended to `~/.hermes/SOUL.md` (Strategy `model.StrategyAppendToFile`) so we do not overwrite the user's base persona
+- **MCP config**: Cursor-compatible `~/.hermes/mcp.json` config file
+- **Install**: manual only — install Hermes first, then run `gentle-ai install --agent hermes` or compile/use from AUR (`paru -S hermes-agent-git`)

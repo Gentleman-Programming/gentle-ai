@@ -28,10 +28,10 @@ const (
 
 // Package-level vars for testability.
 var (
-	engramHTTPClient       = &http.Client{Timeout: 5 * time.Minute}
-	engramGitHubBaseURL    = "https://github.com"
-	engramInstallDirFn     = engramInstallDir
-	engramChecksumURLFn    = engramChecksumURL
+	engramHTTPClient    = &http.Client{Timeout: 5 * time.Minute}
+	engramGitHubBaseURL = "https://github.com"
+	engramInstallDirFn  = engramInstallDir
+	engramChecksumURLFn = engramChecksumURL
 )
 
 // DownloadLatestBinary fetches the latest engram release from GitHub and
