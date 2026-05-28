@@ -47,6 +47,12 @@ func TestRenderSync_ResultWithFilesChanged(t *testing.T) {
 	if !strings.Contains(lower, "sync") {
 		t.Errorf("RenderSync(result) should mention 'sync'; got:\n%s", out)
 	}
+	// Verify individual file paths are rendered.
+	for _, f := range files {
+		if !strings.Contains(out, f) {
+			t.Errorf("RenderSync should render file path %q in output; got:\n%s", f, out)
+		}
+	}
 }
 
 // TestRenderSync_ResultWithError verifies that a failed sync shows the error
@@ -99,5 +105,28 @@ func TestRenderSync_ZeroFilesChangedWithNoError(t *testing.T) {
 	if !strings.Contains(lower, "sync complete") && !strings.Contains(lower, "complete") &&
 		!strings.Contains(lower, "no agents") {
 		t.Errorf("RenderSync(0 files, no error) should show completion; got:\n%s", out)
+	}
+}
+
+// TestRenderSync_TruncatesLargeFileList verifies that when more than
+// maxFilesToShow files changed, the output shows a truncation indicator.
+func TestRenderSync_TruncatesLargeFileList(t *testing.T) {
+	files := make([]string, maxFilesToShow+5)
+	for i := range files {
+		files[i] = fmt.Sprintf("file-%d.txt", i)
+	}
+	out := RenderSync(files, nil, false, true /*hasSyncRun*/, 0)
+
+	// First file should be rendered.
+	if !strings.Contains(out, "file-0.txt") {
+		t.Errorf("RenderSync should render first file; got:\n%s", out)
+	}
+	// Last fully rendered file (index maxFilesToShow-1).
+	if !strings.Contains(out, fmt.Sprintf("file-%d.txt", maxFilesToShow-1)) {
+		t.Errorf("RenderSync should render file at index %d; got:\n%s", maxFilesToShow-1, out)
+	}
+	// Truncation message.
+	if !strings.Contains(out, "and 5 more") {
+		t.Errorf("RenderSync should show truncation message; got:\n%s", out)
 	}
 }

@@ -187,10 +187,7 @@ func renderUpgradeSyncResult(report *upgrade.UpgradeReport, syncFiles []string, 
 	} else {
 		b.WriteString("  " + styles.SuccessStyle.Render("✓") + "  " + fmt.Sprintf("%s synchronized", styles.HeadingStyle.Render(fmt.Sprintf("%d file(s)", len(syncFiles)))))
 		b.WriteString("\n")
-		for _, f := range syncFiles {
-			b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("    - %s", f)))
-			b.WriteString("\n")
-		}
+		b.WriteString(renderChangedFiles(syncFiles))
 	}
 
 	b.WriteString("\n\n")

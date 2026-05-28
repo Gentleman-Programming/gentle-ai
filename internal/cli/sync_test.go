@@ -2427,3 +2427,26 @@ func TestDedupPathsNilOnEmpty(t *testing.T) {
 		t.Errorf("dedupPaths([]) = %v, want nil", got)
 	}
 }
+
+func TestDedupPathsFiltersEmptyStrings(t *testing.T) {
+	input := []string{
+		"/home/user/.config/opencode/AGENTS.md",
+		"",
+		"/home/user/.config/opencode/settings.json",
+		"   ",
+		"",
+	}
+	got := dedupPaths(input)
+	want := []string{
+		"/home/user/.config/opencode/AGENTS.md",
+		"/home/user/.config/opencode/settings.json",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("dedupPaths: got %d paths, want %d", len(got), len(want))
+	}
+	for i, p := range got {
+		if p != want[i] {
+			t.Errorf("dedupPaths[%d] = %q, want %q", i, p, want[i])
+		}
+	}
+}

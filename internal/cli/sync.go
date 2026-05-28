@@ -659,10 +659,10 @@ func (s componentSyncStep) Run() error {
 		// Count GGA files changed based on individual Changed flags.
 		total := boolToInt(res.ConfigChanged) + boolToInt(res.AgentsChanged)
 		var ggaFiles []string
-		if res.ConfigChanged {
+		if res.ConfigChanged && res.ConfigFile != "" {
 			ggaFiles = append(ggaFiles, res.ConfigFile)
 		}
-		if res.AgentsChanged {
+		if res.AgentsChanged && res.AgentsFile != "" {
 			ggaFiles = append(ggaFiles, res.AgentsFile)
 		}
 		s.countChanged(total, ggaFiles...)
@@ -720,7 +720,7 @@ func (s componentSyncStep) countChanged(n int, files ...string) {
 	}
 }
 
-// dedupPaths removes duplicate paths while preserving first-seen order.
+// dedupPaths removes duplicate and empty paths while preserving first-seen order.
 func dedupPaths(paths []string) []string {
 	if len(paths) == 0 {
 		return nil
@@ -728,6 +728,9 @@ func dedupPaths(paths []string) []string {
 	seen := make(map[string]struct{}, len(paths))
 	out := make([]string, 0, len(paths))
 	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
 		if _, ok := seen[p]; !ok {
 			seen[p] = struct{}{}
 			out = append(out, p)

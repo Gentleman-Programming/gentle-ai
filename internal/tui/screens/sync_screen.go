@@ -41,6 +41,23 @@ func RenderSync(files []string, syncErr error, operationRunning bool, hasSyncRun
 	return b.String()
 }
 
+const maxFilesToShow = 15
+
+func renderChangedFiles(files []string) string {
+	var b strings.Builder
+	for i, f := range files {
+		if i >= maxFilesToShow {
+			remaining := len(files) - maxFilesToShow
+			b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("  ...and %d more", remaining)))
+			b.WriteString("\n")
+			break
+		}
+		b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("  - %s", f)))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 func renderSyncConfirm() string {
 	var b strings.Builder
 
@@ -83,10 +100,7 @@ func renderSyncResult(files []string, syncErr error) string {
 		b.WriteString("\n\n")
 		b.WriteString(fmt.Sprintf("%s %s", styles.HeadingStyle.Render(fmt.Sprintf("%d file(s)", len(files))), styles.UnselectedStyle.Render("synchronized")))
 		b.WriteString("\n")
-		for _, f := range files {
-			b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("  - %s", f)))
-			b.WriteString("\n")
-		}
+		b.WriteString(renderChangedFiles(files))
 	}
 
 	b.WriteString("\n\n")

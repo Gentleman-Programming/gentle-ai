@@ -89,6 +89,12 @@ func TestRenderUpgradeSync_CombinedResult(t *testing.T) {
 	if !strings.Contains(out, "3") {
 		t.Errorf("RenderUpgradeSync(combined) should show sync file count '3'; got:\n%s", out)
 	}
+	// Verify individual sync file paths are rendered.
+	for _, f := range syncFiles {
+		if !strings.Contains(out, f) {
+			t.Errorf("RenderUpgradeSync should render sync file path %q in output; got:\n%s", f, out)
+		}
+	}
 }
 
 // TestRenderUpgradeSync_CombinedResultEmptyUpgradeReport verifies that the
@@ -180,5 +186,28 @@ func TestRenderUpgradeSync_CheckingState(t *testing.T) {
 	lower := strings.ToLower(out)
 	if !strings.Contains(lower, "check") {
 		t.Errorf("RenderUpgradeSync(!updateCheckDone) should show 'check'; got:\n%s", out)
+	}
+}
+
+// TestRenderUpgradeSync_TruncatesLargeFileList verifies that when more than
+// maxFilesToShow sync files changed, the output shows a truncation indicator.
+func TestRenderUpgradeSync_TruncatesLargeFileList(t *testing.T) {
+	report := &upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{ToolName: "gentle-ai", OldVersion: "v1.0.0", NewVersion: "v2.0.0", Status: upgrade.UpgradeSucceeded},
+		},
+	}
+	files := make([]string, maxFilesToShow+3)
+	for i := range files {
+		files[i] = fmt.Sprintf("file-%d.txt", i)
+	}
+
+	out := RenderUpgradeSync(nil, report, files, nil, nil, false, true, 0, 0)
+
+	if !strings.Contains(out, "file-0.txt") {
+		t.Errorf("should render first file; got:\n%s", out)
+	}
+	if !strings.Contains(out, "and 3 more") {
+		t.Errorf("should show truncation message; got:\n%s", out)
 	}
 }
