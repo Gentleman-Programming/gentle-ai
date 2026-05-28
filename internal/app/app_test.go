@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
@@ -760,6 +761,50 @@ func TestRunArgs_UpgradeSkipsSelfUpdate(t *testing.T) {
 	}
 	if selfUpdateCalled != 0 {
 		t.Fatalf("selfUpdate should be skipped for explicit upgrade flow; got %d call(s)", selfUpdateCalled)
+	}
+}
+
+func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
+	// NOTE: modifies package-level vars; must not run in parallel.
+	origSelfUpdate := selfUpdateFn
+	origDetect := detectSystem
+	origEnsure := ensureCurrentOSSupported
+	origRunTUI := runTUI
+	t.Cleanup(func() {
+		selfUpdateFn = origSelfUpdate
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+		runTUI = origRunTUI
+	})
+
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
+
+	// Return the same model to avoid nil dereference if RunArgs inspects it.
+	tuiCalled := 0
+	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
+		tuiCalled++
+		return m, nil
+	}
+
+	selfUpdateCalled := 0
+	selfUpdateFn = func(context.Context, string, system.PlatformProfile, io.Writer) error {
+		selfUpdateCalled++
+		return nil
+	}
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{}, &buf)
+	if err != nil {
+		t.Fatalf("RunArgs(empty args) error = %v", err)
+	}
+	if selfUpdateCalled != 0 {
+		t.Fatalf("selfUpdate should be skipped for TUI flow; got %d call(s)", selfUpdateCalled)
+	}
+	if tuiCalled != 1 {
+		t.Fatalf("runTUI should be called exactly once for TUI flow; got %d call(s)", tuiCalled)
 	}
 }
 
