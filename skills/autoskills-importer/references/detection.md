@@ -75,6 +75,7 @@ If version cannot be resolved, mark as `unknown` and treat as medium confidence.
 | Config file found | high |
 | `dependencies` with explicit version | high |
 | `dependencies` with `*` or `latest` | medium |
+| `dependencies` with version `unknown` | medium |
 | `devDependencies` only, no config file | low |
 
 Fetch skills for `high` and `medium`. For `low`, list them separately and

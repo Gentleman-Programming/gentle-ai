@@ -43,7 +43,8 @@ separates imported skills from manually authored ones.
 
 When a manually authored skill exists with the same name as an import:
 - Do not overwrite it
-- Add the import under a different name: `[skill-name]-imported`
+- Write the imported skill files to `skills/[skill-name]-imported/` (not `skills/[skill-name]/`)
+- Register the import as `[skill-name]-imported` pointing to `skills/[skill-name]-imported/SKILL.md`
 - Report the conflict in the final output so the user can decide
 
 ---

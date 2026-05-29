@@ -94,6 +94,8 @@ compact_rules:
   - rule 3
 ```
 
+> `problem`, `references`, `rules`, `negative`, and `example_prompts` are Stage 1 intermediate working fields. They are used to drive Stage 2 synthesis and the self-check, but they are NOT part of this output schema and are not written to the generated skill files.
+
 Full source content goes in `references/[skill-name].md`.
 Add a pointer in compact rules only if the agent needs to know where to find
 extended detail.

@@ -30,9 +30,9 @@ Load when the user runs `/autoskills-import` or asks to import, fetch, or instal
 | Skill already registered, hash unchanged | Skip — already up to date; report as `✓ already installed` |
 | Skill already registered, hash changed | Report `[skill] has upstream changes — run with --refresh to update`; do NOT overwrite |
 | Skill already registered + `--refresh` passed | Re-run full conversion and overwrite |
+| Validation self-check fails after Stage 2 | Revise compact rules before writing files |
 
 > **`content_hash`** is computed over the raw fetched skills.sh source content, before any conversion. Hash the exact bytes returned by the HTTP response (UTF-8). This ensures two independent runs over the same upstream version always produce the same hash.
-| Validation self-check fails after Stage 2 | Revise compact rules before writing files |
 
 ## Flags
 
@@ -46,19 +46,20 @@ Load when the user runs `/autoskills-import` or asks to import, fetch, or instal
 
 1. Load `references/detection.md`. Check `autoskills/ignore/{project}` in Engram and remove any excluded technologies before presenting results. Read project files, produce detection output schema. If `pending_user_confirmation: true`, wait for user. Apply `--only` / `--skip` flags if present.
 2. Fetch the live skills.sh index. For each detected technology, validate its mapped key exists. Keys not in the index go to gaps.
-3. For each validated key: check Engram for an existing import record (`source_url`, `fetched_at`, `content_hash`). Compare hash against fresh fetch. If unchanged and `--refresh` not passed, skip. Otherwise: fetch raw content → Stage 1 decompose → Stage 2 synthesize → self-check → write `skills/[name]/SKILL.md` + `skills/[name]/references/[name].md`. Use `assets/skill-template.md` as base.
+3. For each validated key: check Engram for an existing import record (`source_url`, `fetched_at`, `content_hash`). Compare hash against fresh fetch. If unchanged and `--refresh` not passed, skip. Otherwise: fetch raw content → Stage 1 decompose → Stage 2 synthesize → self-check → write skill files. Normal case: `skills/[name]/SKILL.md` + `skills/[name]/references/[name].md`. Conflict case (manually authored skill exists): write to `skills/[name]-imported/SKILL.md` + `skills/[name]-imported/references/[name].md`. Use `assets/skill-template.md` as base.
 4. Update `.atl/skill-registry.md` per `references/registry.md`.
 5. Save to Engram per skill: `source_url`, `fetched_at`, `content_hash`, imported version, gaps, replacements.
-6. Report imported, already-up-to-date, upstream-changed, gaps, and skipped items.
+6. Report imported, already-up-to-date, upstream-changed, conflicts, gaps, and skipped items.
 
 ## Output Contract
 
 ```
-✓ Imported:        [skill@version, ...]
+✓ Imported:          [skill@version, ...]
 ✓ Already installed: [skill@version, ...]
-⚠ Upstream changed: [skill — run with --refresh to update]
-⚠ Gaps:            [techs with no skills.sh key]
-⚠ Skipped:         [low-confidence techs the user declined]
+⚠ Upstream changed:  [skill — run with --refresh to update]
+⚠ Conflicts:         [skill → written as skill-imported (manually authored skill preserved)]
+⚠ Gaps:              [techs with no skills.sh key]
+⚠ Skipped:           [low-confidence techs the user declined]
 ```
 
 ## References
