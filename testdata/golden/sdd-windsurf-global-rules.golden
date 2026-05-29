@@ -260,6 +260,17 @@ Approve to proceed with implementation?
 - ❌ **"No" / "Wait" / "Change X"** → Revise plan, present again
 - ⏸️ **No response** → DO NOT proceed. Wait.
 
+### Phase Execution Deduplication (MANDATORY)
+
+Before starting any SDD phase inline, check your in-session execution log:
+
+- Maintain a session-scoped list of `(phase, task-fingerprint)` pairs already executed this turn.
+- The task fingerprint is a short hash or normalized summary of the phase goal (phase name + key artifact references).
+- If the same `(phase, task-fingerprint)` already appears in the list, **do NOT execute again**. Perform exactly one execution per distinct task.
+- After completing the phase, append the pair to the list.
+
+This prevents redundant inline phase repetitions that cause "File X has been modified since it was last read" conflicts and waste tokens.
+
 ### Skill Resolver Protocol
 
 Since Cascade is a solo-agent, skill resolution runs inline before each phase. Do this ONCE per session (or after compaction):

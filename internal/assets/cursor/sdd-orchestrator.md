@@ -191,6 +191,17 @@ Read this table at session start (or before first delegation), cache it for the 
 
 <!-- /gentle-ai:sdd-model-assignments -->
 
+### Sub-Agent Launch Deduplication (MANDATORY)
+
+Before invoking any subagent, check your in-session launch log:
+
+- Maintain a session-scoped list of `(phase, task-fingerprint)` pairs already invoked this turn.
+- The task fingerprint is a short hash or normalized summary of the instruction text (phase name + key artifact references).
+- If the same `(phase, task-fingerprint)` already appears in the list, **do NOT invoke again**. Emit exactly one invocation per distinct task.
+- After invoking, append the pair to the list.
+
+This prevents duplicate subagent invocations that cause "File X has been modified since it was last read" conflicts and waste tokens.
+
 ### Sub-Agent Launch Pattern
 
 ALL sub-agent invocations that involve reading, writing, or reviewing code MUST include pre-resolved **skill paths** from the skill registry. Follow the **Skill Resolver Protocol** (see `_shared/skill-resolver.md` in the skills directory).

@@ -281,6 +281,17 @@ Kiro's `.kiro/steering/*.md` files provide persistent workspace context that app
 
 Gentle AI writes to the global steering file (`~/.kiro/steering/gentle-ai.md`) — treat it as your active working context alongside your project steering files.
 
+### Phase Launch Deduplication (MANDATORY)
+
+Before invoking any Kiro subagent for a phase, check your in-session launch log:
+
+- Maintain a session-scoped list of `(phase, task-fingerprint)` pairs already invoked this turn.
+- The task fingerprint is a short hash or normalized summary of the instruction text (phase name + key artifact references).
+- If the same `(phase, task-fingerprint)` already appears in the list, **do NOT invoke again**. Emit exactly one invocation per distinct task.
+- After invoking, append the pair to the list.
+
+This prevents duplicate phase invocations that cause "File X has been modified since it was last read" conflicts and waste tokens.
+
 ### Skill Resolver Protocol
 
 Skill resolution runs inline before each phase. Do this ONCE per session (or after compaction):

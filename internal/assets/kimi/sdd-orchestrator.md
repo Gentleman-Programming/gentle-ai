@@ -151,6 +151,17 @@ Automatic mode does not override this guard. Always pass the resolved `delivery_
 
 When launching `/skill:sdd-apply` through `multiagent:Task`, always include the resolved `delivery_strategy`, `chain_strategy`, and any chosen PR boundary/exception in the custom-agent prompt.
 
+### Sub-Agent Launch Deduplication (MANDATORY)
+
+Before invoking any Kimi custom agent via `multiagent:Task`, check your in-session launch log:
+
+- Maintain a session-scoped list of `(phase, task-fingerprint)` pairs already invoked this turn.
+- The task fingerprint is a short hash or normalized summary of the instruction text (phase name + key artifact references).
+- If the same `(phase, task-fingerprint)` already appears in the list, **do NOT invoke again**. Emit exactly one invocation per distinct task.
+- After invoking, append the pair to the list.
+
+This prevents duplicate agent invocations that cause "File X has been modified since it was last read" conflicts and waste tokens.
+
 ### Sub-Agent Launch Pattern
 
 ALL Kimi sub-agent launches that involve reading, writing, or reviewing code MUST include pre-resolved **skill paths** from the skill registry. Follow the **Skill Resolver Protocol** in `~/.config/agents/skills/_shared/skill-resolver.md`.

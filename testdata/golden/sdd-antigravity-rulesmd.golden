@@ -202,6 +202,17 @@ Read this table at session start. Antigravity supports multiple models via Missi
 
 <!-- /gentle-ai:sdd-model-assignments -->
 
+### Dynamic Subagent Launch Deduplication (MANDATORY)
+
+Before invoking any dynamic phase subagent via `invoke_subagent`, check your in-session launch log:
+
+- Maintain a session-scoped list of `(phase, task-fingerprint)` pairs already invoked this turn.
+- The task fingerprint is a short hash or normalized summary of the instruction text (phase name + key artifact references).
+- If the same `(phase, task-fingerprint)` already appears in the list, **do NOT invoke again**. Emit exactly one invocation per distinct task.
+- After invoking, append the pair to the list.
+
+This prevents duplicate dynamic subagent invocations that cause "File X has been modified since it was last read" conflicts and waste tokens.
+
 ### Skill Resolver Protocol
 
 Skill resolution is orchestrator-owned before each dynamic phase invocation. Do this ONCE per session (or after compaction):
