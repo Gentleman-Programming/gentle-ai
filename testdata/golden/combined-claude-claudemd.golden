@@ -342,6 +342,21 @@ When launching `sdd-apply` or `sdd-verify` sub-agents, the orchestrator MUST:
 
 The orchestrator resolves TDD status ONCE per session (at first apply/verify launch) and caches it.
 
+#### Workflow agent() Governance (MANDATORY)
+
+When you author a Workflow whose `agent()` / `parallel()` / `pipeline()` calls do real work (writing or reviewing code, running SDD phases, or touching engram) — whether under ultracode/xhigh or when the Workflow tool is opted into for a task (e.g. via the `workflow` keyword) — you MUST load the `workflow-governance` skill FIRST and route every such call through its `launchSubagent(role, task, ...)` helper. A bare `agent()` for substantive work is invalid.
+
+The controls in this document are NOT scoped to the Agent tool alone — they apply to **every delegation, whether via the Agent/Task tool OR a Workflow `agent()` call**:
+
+- **Model gate**: resolve `opts.model` from the Model Assignments table per role. A bare `agent()` silently inherits the session model (Opus under xhigh), inverting the cost tiering.
+- **agentType**: for SDD/judgment roles set `opts.agentType` to the registered agent (`sdd-apply`, `sdd-verify`, ...) so the phase SKILL.md hard-gates (strict TDD, delivery hard-stop, engram read/write) are inherited.
+- **Skill injection**: inject the resolved `## Skills to load before work` paths (populate from `.atl/skill-registry.md`).
+- **Engram**: pin a BACKED project (resolve via `mem_current_project`; pass an explicit project or add `.engram/config.json` when cwd is ambiguous) and inject the `mem_save`-before-returning + topic_key MERGE contract. The MAIN agent still runs `mem_save_prompt` + `mem_session_summary` over returned results.
+- **Strict TDD**: when strict TDD is active, inject the `STRICT TDD MODE IS ACTIVE. Test runner: {cmd}` block for `sdd-apply` / `sdd-verify`.
+- **Assert**: gate the deterministic JS with `assertGoverned` and FAIL the workflow on any missing model / skill / engram / TDD control.
+
+Delegation stays model-driven: the Mandatory Delegation Triggers still decide WHEN to author a Workflow — do NOT wrap trivial one-file fixes, quick state checks, or already-understood mechanical edits.
+
 #### Apply-Progress Continuity (MANDATORY)
 
 When launching `sdd-apply` for a continuation batch (not the first batch):
