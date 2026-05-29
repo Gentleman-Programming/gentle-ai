@@ -467,20 +467,27 @@ async function parseAgentWriteCapability(
   }
 }
 
+interface AgentModelResolution {
+  providerID: string
+  modelID: string
+  variant?: string
+}
+
 /**
- * Resolve the model configured for a given agent.
+ * Resolve the model and variant configured for a given agent.
  * Parses the "provider/model-id" format into the shape session.prompt() expects.
+ * Also reads the optional "variant" (effort level) field from the agent config.
  * Returns undefined when no model is configured (caller falls back to default).
  */
 async function resolveAgentModel(
   client: OpencodeClient,
   agentName: string,
   log: Logger,
-): Promise<{ providerID: string; modelID: string } | undefined> {
+): Promise<AgentModelResolution | undefined> {
   try {
     const config = await client.config.get()
     const configData = config.data as {
-      agent?: Record<string, { model?: string }>
+      agent?: Record<string, { model?: string; variant?: string }>
     } | undefined
 
     const modelStr = configData?.agent?.[agentName]?.model
@@ -492,8 +499,10 @@ async function resolveAgentModel(
     const providerID = modelStr.substring(0, slashIndex)
     const modelID = modelStr.substring(slashIndex + 1)
 
-    await log.info(`resolveAgentModel: ${agentName} → ${providerID}/${modelID}`)
-    return { providerID, modelID }
+    const variant = configData?.agent?.[agentName]?.variant || undefined
+
+    await log.info(`resolveAgentModel: ${agentName} → ${providerID}/${modelID}${variant ? ` (variant: ${variant})` : ""}`)
+    return { providerID, modelID, variant }
   } catch {
     return undefined
   }
@@ -671,7 +680,8 @@ class DelegationManager {
         path: { id: delegation.sessionID },
         body: {
           agent: input.agent,
-          ...(agentModel && { model: agentModel }),
+          ...(agentModel && { model: { providerID: agentModel.providerID, modelID: agentModel.modelID } }),
+          ...(agentModel?.variant && { variant: agentModel.variant }),
           parts: [{ type: "text", text: input.prompt }],
           tools: {
             task: false,

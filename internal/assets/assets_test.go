@@ -216,6 +216,48 @@ func TestModelVariantsPluginContract(t *testing.T) {
 	}
 }
 
+// TestBackgroundAgentsVariantForwarding verifies that background-agents.ts reads
+// the "variant" field from the agent config and forwards it as a top-level
+// sibling of "model" in the session.prompt body (issue #606).
+//
+// Contract rules:
+//  1. resolveAgentModel must read variant from the agent config entry.
+//  2. The session.prompt call must spread variant at the body's top level,
+//     NOT nest it inside the model object.
+//  3. The model object must only contain providerID and modelID.
+func TestBackgroundAgentsVariantForwarding(t *testing.T) {
+	source, err := Read("opencode/plugins/background-agents.ts")
+	if err != nil {
+		t.Fatalf("Read(background-agents.ts) error = %v", err)
+	}
+	src := string(source)
+
+	// resolveAgentModel must read variant from the agent config object.
+	if !strings.Contains(src, `variant?: string`) {
+		t.Errorf("background-agents.ts resolveAgentModel must declare variant in the agent config type")
+	}
+	if !strings.Contains(src, `variant`) {
+		t.Errorf("background-agents.ts must reference variant")
+	}
+
+	// The return type of resolveAgentModel must carry variant.
+	if !strings.Contains(src, "AgentModelResolution") {
+		t.Errorf("background-agents.ts must use a named resolution type (AgentModelResolution) that includes variant")
+	}
+
+	// variant must be forwarded at the TOP LEVEL of the session.prompt body,
+	// not nested inside the model object.
+	if !strings.Contains(src, `variant: agentModel.variant`) {
+		t.Errorf("background-agents.ts must spread variant as a top-level body field (variant: agentModel.variant)")
+	}
+
+	// The model object in session.prompt must only contain providerID and modelID —
+	// variant must NOT be nested inside it.
+	if strings.Contains(src, `model: agentModel`) {
+		t.Errorf("background-agents.ts must not spread agentModel directly into model — variant must remain top-level, not nested in model")
+	}
+}
+
 func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 	entries, err := FS.ReadDir("claude")
 	if err != nil {
