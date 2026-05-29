@@ -38,8 +38,11 @@ $ErrorActionPreference = "Stop"
 
 # Ensure UTF-8 output so Unicode characters render correctly on all terminals.
 # chcp 65001 sets the console code page; OutputEncoding makes .NET match it.
+# Wrapped in try/catch: under ErrorActionPreference=Stop the .NET setter can
+# throw IOException ("handle is invalid") in non-console hosts (ISE, remoting,
+# some CI pipelines) and abort the whole install. Safe to swallow.
 $null = & chcp 65001 2>$null
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 $GITHUB_OWNER = "Gentleman-Programming"
 $GITHUB_REPO = "gentle-ai"
@@ -271,15 +274,31 @@ function Install-ViaBinary {
         Write-Success "Installed $BINARY_NAME to $destPath"
 
         # Persist install dir to the User PATH if not already present.
+        # NOTE: [Environment]::GetEnvironmentVariable reads the registry value
+        # after Windows expands any embedded %VAR% references, so REG_EXPAND_SZ
+        # variables (e.g. %USERPROFILE%) are flattened to their current values.
+        # This is a Windows API limitation when using the managed .NET accessor;
+        # a fully lossless round-trip would require the Win32 Registry class with
+        # GetValue(..., DoNotExpandEnvironmentNames). We accept the trade-off here
+        # because user PATH entries that rely on unexpanded refs are uncommon and
+        # we only ever append — we never rewrite the whole value.
         $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-        if ($userPath -notlike "*$installDir*") {
+
+        # Split on ';' and compare entries case-insensitively so wildcard chars
+        # in the path do not break the match and sibling directories with a
+        # shared prefix do not trigger a false-positive.
+        $pathEntries = if ($userPath) { $userPath -split ';' | Where-Object { $_ -ne '' } } else { @() }
+        $alreadyPresent = $pathEntries | Where-Object { $_.TrimEnd('\') -ieq $installDir.TrimEnd('\') }
+        if (-not $alreadyPresent) {
             $newUserPath = if ($userPath) { "$userPath;$installDir" } else { $installDir }
             [Environment]::SetEnvironmentVariable("PATH", $newUserPath, "User")
             Write-Success "Added $installDir to your PATH (takes effect in new shells)"
         }
 
         # Also update the current session's PATH so Test-Installation can find the binary.
-        if ($env:PATH -notlike "*$installDir*") {
+        $sessionEntries = $env:PATH -split ';' | Where-Object { $_ -ne '' }
+        $sessionPresent = $sessionEntries | Where-Object { $_.TrimEnd('\') -ieq $installDir.TrimEnd('\') }
+        if (-not $sessionPresent) {
             $env:PATH = "$env:PATH;$installDir"
         }
     } finally {
@@ -316,7 +335,7 @@ function Test-Installation {
         # pure version read even if the binary is older.
         $env:GENTLE_AI_NO_SELF_UPDATE = "1"
         $versionOutput = & $loc --version 2>&1
-        $env:GENTLE_AI_NO_SELF_UPDATE = $null
+        Remove-Item Env:GENTLE_AI_NO_SELF_UPDATE -ErrorAction SilentlyContinue
 
         Write-Success "$BINARY_NAME installed at $loc`: $versionOutput"
 
