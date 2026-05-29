@@ -1432,6 +1432,147 @@ func TestInstallMethodFieldsOnRegistry(t *testing.T) {
 	}
 }
 
+// TestBuildExecCmd_Ps1UsesPoershellFile verifies that buildExecCmd wraps a .ps1
+// binary via "powershell -NoProfile -File <path> <args>" instead of passing the
+// .ps1 path as argv[0]. This is a regression test for the Windows gga detection
+// bug (issue #177): exec.Command("gga.ps1", "--version") fails on Windows because
+// CreateProcess cannot launch a .ps1 file directly — it is not an executable image.
+// A regression to direct .ps1 exec causes detectInstalledVersion to always return ""
+// for gga on Windows even when the file exists on disk.
+func TestBuildExecCmd_Ps1UsesPoershellFile(t *testing.T) {
+	ps1Path := `C:\Users\test\bin\gga.ps1`
+
+	gotBin, gotArgs := buildExecCmd(ps1Path, []string{"--version"})
+
+	if gotBin == ps1Path {
+		t.Fatalf("buildExecCmd returned the .ps1 path as argv[0]: %q — "+
+			"exec.Command cannot launch .ps1 directly on Windows (CreateProcess rejects non-PE images). "+
+			"Must be wrapped via powershell -NoProfile -File.", gotBin)
+	}
+
+	// The binary must be the powershell host (or the testable override).
+	// We don't hard-code the exact powershell binary name to allow CI overrides,
+	// but it must NOT be the .ps1 path itself.
+	wantArgs := []string{"-NoProfile", "-File", ps1Path, "--version"}
+	if len(gotArgs) != len(wantArgs) {
+		t.Fatalf("buildExecCmd args len = %d, want %d; args = %v", len(gotArgs), len(wantArgs), gotArgs)
+	}
+	for i, want := range wantArgs {
+		if gotArgs[i] != want {
+			t.Fatalf("buildExecCmd args[%d] = %q, want %q; full args = %v", i, gotArgs[i], want, gotArgs)
+		}
+	}
+}
+
+// TestBuildExecCmd_NonPs1Passthrough verifies that non-.ps1 binaries (real
+// executables, shell scripts on Linux/macOS) are passed through unchanged.
+func TestBuildExecCmd_NonPs1Passthrough(t *testing.T) {
+	cases := []struct {
+		binary string
+		args   []string
+	}{
+		{"/usr/local/bin/engram", []string{"version"}},
+		{`C:\Users\user\AppData\Local\engram\bin\engram.exe`, []string{"version"}},
+		{"/home/user/.local/bin/gga", []string{"--version"}},
+	}
+
+	for _, c := range cases {
+		gotBin, gotArgs := buildExecCmd(c.binary, c.args)
+		if gotBin != c.binary {
+			t.Errorf("buildExecCmd(%q) binary = %q, want passthrough %q", c.binary, gotBin, c.binary)
+		}
+		if len(gotArgs) != len(c.args) {
+			t.Errorf("buildExecCmd(%q) args = %v, want %v", c.binary, gotArgs, c.args)
+			continue
+		}
+		for i := range c.args {
+			if gotArgs[i] != c.args[i] {
+				t.Errorf("buildExecCmd(%q) args[%d] = %q, want %q", c.binary, i, gotArgs[i], c.args[i])
+			}
+		}
+	}
+}
+
+// TestDetectInstalledVersionPs1FallbackInvokesViaPowershell verifies the full
+// integration path: when LookPath fails for gga, the fallback finds a .ps1
+// file on disk, and detectInstalledVersion builds the exec as
+// "powershell -NoProfile -File <path> --version" — NOT as "<path> --version".
+// This is the regression test for issue #177 gga half: the prior implementation
+// passed gga.ps1 as argv[0] to exec.Command which always errors on Windows.
+func TestDetectInstalledVersionPs1FallbackInvokesViaPowershell(t *testing.T) {
+	tmpDir := t.TempDir()
+	ps1Path := filepath.Join(tmpDir, "gga.ps1")
+	if err := os.WriteFile(ps1Path, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := ToolInfo{
+		Name:      "gga",
+		DetectCmd: []string{"gga", "--version"},
+		FallbackPaths: func(homeDir, localAppData string) []string {
+			return []string{ps1Path}
+		},
+	}
+
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	origOsStat := osStat
+	origUserHomeDir := userHomeDir
+	origPowershellPath := powershellPath
+	t.Cleanup(func() {
+		lookPath = origLookPath
+		execCommand = origExecCommand
+		osStat = origOsStat
+		userHomeDir = origUserHomeDir
+		powershellPath = origPowershellPath
+	})
+
+	// Simulate stale PATH: gga not found via LookPath.
+	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	osStat = os.Stat // real stat so the .ps1 file is found
+	userHomeDir = func() (string, error) { return t.TempDir(), nil }
+	powershellPath = "echo" // replace powershell with echo so the cmd succeeds and outputs "gga 1.2.3"
+
+	// Capture the binary and args that execCommand was called with.
+	var capturedBinary string
+	var capturedArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		capturedBinary = name
+		capturedArgs = append([]string{}, args...)
+		// Return a command that outputs a fake version so detectInstalledVersion succeeds.
+		return mockCmd("echo", "gga 1.2.3")
+	}
+
+	got := detectInstalledVersion(context.Background(), tool, "")
+
+	// Primary assertion: the binary must NOT be the .ps1 path itself.
+	if capturedBinary == ps1Path {
+		t.Fatalf("execCommand was called with the .ps1 path as binary (%q) — "+
+			"this WILL fail on Windows (CreateProcess cannot exec .ps1). "+
+			"Must be wrapped via powershell -NoProfile -File.", capturedBinary)
+	}
+
+	// The first arg must be -NoProfile (powershell wrapping).
+	if len(capturedArgs) == 0 || capturedArgs[0] != "-NoProfile" {
+		t.Fatalf("execCommand args[0] = %q, want \"-NoProfile\"; full args = %v", func() string {
+			if len(capturedArgs) > 0 {
+				return capturedArgs[0]
+			}
+			return "(empty)"
+		}(), capturedArgs)
+	}
+
+	// The -File flag must point to the .ps1 path.
+	if len(capturedArgs) < 3 || capturedArgs[1] != "-File" || capturedArgs[2] != ps1Path {
+		t.Fatalf("expected args [-NoProfile, -File, %q, ...], got %v", ps1Path, capturedArgs)
+	}
+
+	// The version must still be extracted from output.
+	if got != "1.2.3" {
+		t.Fatalf("detectInstalledVersion() = %q, want \"1.2.3\"", got)
+	}
+}
+
 // --- helpers ---
 
 // testTransport redirects all requests to the test server.

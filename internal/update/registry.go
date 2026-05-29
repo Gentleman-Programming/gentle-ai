@@ -41,6 +41,10 @@ var Tools = []ToolInfo{
 			// Windows: %LOCALAPPDATA%\engram\bin\engram.exe
 			if localAppData != "" {
 				paths = append(paths, filepath.Join(localAppData, "engram", "bin", "engram.exe"))
+			} else if homeDir != "" {
+				// LOCALAPPDATA is not set (e.g. restricted environment or CI on Windows).
+				// Derive the standard path from homeDir for parity with the installer.
+				paths = append(paths, filepath.Join(homeDir, "AppData", "Local", "engram", "bin", "engram.exe"))
 			}
 			// Linux/macOS: ~/.local/bin/engram (when /usr/local/bin is not writable,
 			// the binary installer places it here, which may not be in PATH yet).
