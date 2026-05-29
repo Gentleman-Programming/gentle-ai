@@ -65,3 +65,5 @@ Load when the user runs `/autoskills-import` or asks to import, fetch, or instal
 - [references/conversion.md](references/conversion.md) — two-stage compact rules extraction and validation self-check.
 - [references/registry.md](references/registry.md) — how to read, update, and validate `.atl/skill-registry.md`.
 - [assets/skill-template.md](assets/skill-template.md) — base template for generated skills.
+
+> **Engram** is the persistent memory layer used by Gentleman AI agents. Write to it via `mem_save` (MCP tool). Keys used by this skill: `autoskills/ignore/{project}` (exclusion list) and one record per imported skill with `source_url`, `fetched_at`, `content_hash`.

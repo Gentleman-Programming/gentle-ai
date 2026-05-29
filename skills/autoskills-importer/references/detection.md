@@ -30,7 +30,7 @@ Signal strength: config file > `dependencies` > `devDependencies`
 - `bun.lockb` → bun
 
 ### Framework config files (high confidence)
-- `next.config.{js,ts,mjs}` → nextjs
+- `next.config.{js,ts,mjs}` → nextjs  ← package name is `next`; normalized to `nextjs` for detection and mapping table
 - `vite.config.{js,ts}` → vite
 - `astro.config.{mjs,ts}` → astro
 - `nuxt.config.{ts,js}` → nuxt
@@ -108,6 +108,8 @@ against the live index before fetching (Step 2 in SKILL.md).
 
 If no mapping exists for a detected technology, skip it and log it as a gap.
 Do not guess or approximate a key — missing mappings belong in this table.
+
+> **Maintenance note**: this table must be updated whenever skills.sh adds a new versioned skill (e.g., `react-20`, `nextjs-16`). The live index validation in SKILL.md Step 2 catches missing keys at runtime, but the table is the authoritative source for which versions are supported.
 
 ---
 

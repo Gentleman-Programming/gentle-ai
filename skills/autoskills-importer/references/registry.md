@@ -30,7 +30,7 @@ The description comes from the `description:` field generated there.
 2. Check for an existing entry with the same skill name
 3. **Not found** → append under `## Imported (skills.sh)`
 4. **Found and previously imported** → replace the existing line in place
-5. **Found and manually authored** → do NOT replace; log a conflict and report to the user
+5. **Found and manually authored** → do NOT replace; register the import under `[skill-name]-imported` instead, and report the conflict (see Conflict Handling below)
 
 Create the `## Imported (skills.sh)` section if it doesn't exist. This
 separates imported skills from manually authored ones.
@@ -52,5 +52,4 @@ After writing, verify:
 1. The entry path resolves to a real `SKILL.md` file
 2. The trigger field is non-empty
 3. No two entries share the same skill name
-4. Line length stays under 150 characters — truncate description if needed,
-   never truncate the path or trigger
+4. Line length stays under 150 characters. Truncation priority (never cut these): path, skill name. Truncation order: description first (append `…`), then trigger keywords from the end (append `…`). Example: if trigger is `React 19, hooks, RSC, concurrent, streaming` and total line exceeds 150, shorten to `React 19, hooks, RSC…`

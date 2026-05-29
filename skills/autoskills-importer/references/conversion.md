@@ -65,7 +65,7 @@ frontend question — meaningless as a registry trigger.
 - Prefer useTransition over useState for non-urgent state updates in React 19
 - Server Components cannot use hooks or browser APIs — move those to Client Components
 - use() replaces useContext and async data fetching patterns
-- Avoid createRoot in favor of hydrateRoot only for SSR
+- Use `hydrateRoot` for SSR hydration; use `createRoot` for client-only rendering
 ```
 Why good: each rule changes agent behavior. Scoped, non-overlapping, actionable.
 
