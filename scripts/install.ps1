@@ -36,6 +36,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Ensure UTF-8 output so Unicode characters render correctly on all terminals.
+# chcp 65001 sets the console code page; OutputEncoding makes .NET match it.
+$null = & chcp 65001 2>$null
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 $GITHUB_OWNER = "Gentleman-Programming"
 $GITHUB_REPO = "gentle-ai"
 $BINARY_NAME = "gentle-ai"
@@ -265,13 +270,17 @@ function Install-ViaBinary {
 
         Write-Success "Installed $BINARY_NAME to $destPath"
 
-        # Check if install dir is in PATH
+        # Persist install dir to the User PATH if not already present.
+        $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+        if ($userPath -notlike "*$installDir*") {
+            $newUserPath = if ($userPath) { "$userPath;$installDir" } else { $installDir }
+            [Environment]::SetEnvironmentVariable("PATH", $newUserPath, "User")
+            Write-Success "Added $installDir to your PATH (takes effect in new shells)"
+        }
+
+        # Also update the current session's PATH so Test-Installation can find the binary.
         if ($env:PATH -notlike "*$installDir*") {
-            Write-Warn "$installDir is not in your PATH"
-            Write-Host ""
-            Write-Warn "Run this to add it permanently:"
-            Write-Host "  [Environment]::SetEnvironmentVariable('PATH', `$env:PATH + ';$installDir', 'User')" -ForegroundColor DarkGray
-            Write-Host ""
+            $env:PATH = "$env:PATH;$installDir"
         }
     } finally {
         Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -285,17 +294,9 @@ function Install-ViaBinary {
 function Test-Installation {
     Write-Step "Verifying installation"
 
-    # Refresh PATH for current session
-    $env:PATH = [Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [Environment]::GetEnvironmentVariable("PATH", "User")
-
-    $cmd = Get-Command $BINARY_NAME -ErrorAction SilentlyContinue
-    if ($cmd) {
-        $versionOutput = & $BINARY_NAME version 2>&1
-        Write-Success "$BINARY_NAME is installed: $versionOutput"
-        return
-    }
-
-    # Check common locations
+    # Build the list of candidate absolute paths to check, most-specific first.
+    # We intentionally probe by absolute path rather than searching the current
+    # session PATH so the check is deterministic and immune to stale PATH state.
     $gopath = $null
     if (Get-Command "go" -ErrorAction SilentlyContinue) {
         $gopath = & go env GOPATH 2>$null
@@ -308,12 +309,24 @@ function Test-Installation {
     }
 
     foreach ($loc in $locations) {
-        if ($loc -and (Test-Path $loc)) {
-            $versionOutput = & $loc version 2>&1
-            Write-Success "Found $BINARY_NAME at $loc`: $versionOutput"
-            Write-Warn "Binary location is not in your PATH. Add it to use '$BINARY_NAME' directly."
-            return
+        if (-not ($loc -and (Test-Path $loc))) { continue }
+
+        # Use --version (fast, no system detection, no self-update) and suppress
+        # self-update explicitly via GENTLE_AI_NO_SELF_UPDATE so the check is a
+        # pure version read even if the binary is older.
+        $env:GENTLE_AI_NO_SELF_UPDATE = "1"
+        $versionOutput = & $loc --version 2>&1
+        $env:GENTLE_AI_NO_SELF_UPDATE = $null
+
+        Write-Success "$BINARY_NAME installed at $loc`: $versionOutput"
+
+        # Inform the user if the binary is not yet reachable by name.
+        $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+        $binaryDir = [System.IO.Path]::GetDirectoryName($loc)
+        if ($userPath -notlike "*$binaryDir*") {
+            Write-Warn "Binary location is not in your PATH. Open a new shell or add it manually."
         }
+        return
     }
 
     Write-Warn "Could not verify installation. You may need to restart your terminal."
