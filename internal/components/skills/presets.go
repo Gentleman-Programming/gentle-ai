@@ -29,6 +29,7 @@ var foundationSkills = []model.SkillID{
 	model.SkillCognitiveDoc,
 	model.SkillCommentWriter,
 	model.SkillWorkUnitCommits,
+	model.SkillWorkflowGovernance,
 }
 
 // SkillsForPreset returns which skills should be installed for a given preset.

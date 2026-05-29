@@ -644,11 +644,12 @@ test_cc_skills_full() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # Full preset = 22 files: 10 SDD + judgment-day + 10 foundation + _shared/SKILL.md
-        assert_file_count "$skills_dir" "SKILL.md" 22 "Full preset: 22 skill files"
+        # Full preset = 23 files: 10 SDD + judgment-day + 11 foundation (incl workflow-governance) + _shared/SKILL.md
+        assert_file_count "$skills_dir" "SKILL.md" 23 "Full preset: 23 skill files"
 
         # Verify foundation skills exist
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
+        assert_file_exists "$skills_dir/workflow-governance/SKILL.md" "workflow-governance SKILL.md"
         assert_file_exists "$skills_dir/skill-creator/SKILL.md" "skill-creator SKILL.md"
         assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md"
         assert_file_exists "$skills_dir/issue-creation/SKILL.md" "issue-creation SKILL.md"
@@ -673,13 +674,14 @@ test_cc_skills_ecosystem() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # ecosystem-only = 22 files: 10 SDD + judgment-day + 10 foundation + _shared/SKILL.md
-        assert_file_count "$skills_dir" "SKILL.md" 22 "Ecosystem preset: 22 skill files"
+        # ecosystem-only = 23 files: 10 SDD + judgment-day + 11 foundation (incl workflow-governance) + _shared/SKILL.md
+        assert_file_count "$skills_dir" "SKILL.md" 23 "Ecosystem preset: 23 skill files"
 
         # SDD skills present
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "SDD skills present"
         # Foundation skills present
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "Foundation skills present"
+        assert_file_exists "$skills_dir/workflow-governance/SKILL.md" "workflow-governance SKILL.md"
         assert_file_exists "$skills_dir/skill-creator/SKILL.md" "skill-creator present"
         assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr present in ecosystem"
         assert_file_exists "$skills_dir/issue-creation/SKILL.md" "issue-creation present in ecosystem"
@@ -905,8 +907,9 @@ test_oc_skills_full() {
     if $BINARY install --agent opencode --component skills --preset full-gentleman --persona neutral 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 22 "Full preset: 22 skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 23 "Full preset: 23 skill files"
         assert_file_exists "$skill_dir/go-testing/SKILL.md" "go-testing skill"
+        assert_file_exists "$skill_dir/workflow-governance/SKILL.md" "workflow-governance SKILL.md"
         assert_file_exists "$skill_dir/skill-creator/SKILL.md" "skill-creator skill"
         assert_file_exists "$skill_dir/branch-pr/SKILL.md" "branch-pr skill"
         assert_file_exists "$skill_dir/issue-creation/SKILL.md" "issue-creation skill"

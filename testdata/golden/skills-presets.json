@@ -22,7 +22,8 @@
       "chained-pr",
       "cognitive-doc-design",
       "comment-writer",
-      "work-unit-commits"
+      "work-unit-commits",
+      "workflow-governance"
     ]
   },
   {
@@ -48,7 +49,8 @@
       "chained-pr",
       "cognitive-doc-design",
       "comment-writer",
-      "work-unit-commits"
+      "work-unit-commits",
+      "workflow-governance"
     ]
   },
   {
