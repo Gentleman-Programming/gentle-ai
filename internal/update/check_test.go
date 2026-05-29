@@ -122,6 +122,110 @@ func TestDetectInstalledVersion(t *testing.T) {
 	}
 }
 
+// TestDetectInstalledVersionFallbackPaths verifies that detectInstalledVersion
+// reports a version when LookPath fails but the binary is present at a known
+// fallback path (the Windows post-install stale-PATH scenario, issue #177).
+func TestDetectInstalledVersionFallbackPaths(t *testing.T) {
+	// Create a real executable in a temp dir to serve as the "known install dir".
+	tmpDir := t.TempDir()
+	binaryName := "mytool"
+	binaryPath := filepath.Join(tmpDir, binaryName)
+	if err := os.WriteFile(binaryPath, []byte("placeholder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := ToolInfo{
+		Name:          "mytool",
+		DetectCmd:     []string{binaryName, "--version"},
+		FallbackPaths: func(homeDir, localAppData string) []string {
+			return []string{filepath.Join(tmpDir, binaryName)}
+		},
+	}
+
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	origOsStat := osStat
+	origUserHomeDir := userHomeDir
+	t.Cleanup(func() {
+		lookPath = origLookPath
+		execCommand = origExecCommand
+		osStat = origOsStat
+		userHomeDir = origUserHomeDir
+	})
+
+	// Simulate stale PATH: LookPath always fails.
+	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+
+	// Simulate the detect command succeeding when run with the full binary path.
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == binaryPath {
+			return mockCmd("echo", "mytool 1.2.3")
+		}
+		return mockCmd("false")
+	}
+
+	// osStat must be real so the fallback path check finds the file.
+	osStat = os.Stat
+
+	userHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	got := detectInstalledVersion(context.Background(), tool, "")
+	if got != "1.2.3" {
+		t.Fatalf("detectInstalledVersion() = %q, want %q (LookPath failed but binary at fallback path)", got, "1.2.3")
+	}
+}
+
+// TestDetectInstalledVersionFallbackPathsNotFoundStillNotInstalled verifies
+// that when LookPath fails AND the binary is not at any fallback path,
+// detectInstalledVersion correctly returns "" (not installed).
+func TestDetectInstalledVersionFallbackPathsNotFoundStillNotInstalled(t *testing.T) {
+	tool := ToolInfo{
+		Name:      "mytool",
+		DetectCmd: []string{"mytool", "--version"},
+		FallbackPaths: func(homeDir, localAppData string) []string {
+			return []string{"/nonexistent/path/to/mytool"}
+		},
+	}
+
+	origLookPath := lookPath
+	origOsStat := osStat
+	origUserHomeDir := userHomeDir
+	t.Cleanup(func() {
+		lookPath = origLookPath
+		osStat = origOsStat
+		userHomeDir = origUserHomeDir
+	})
+
+	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	osStat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+	userHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	got := detectInstalledVersion(context.Background(), tool, "")
+	if got != "" {
+		t.Fatalf("detectInstalledVersion() = %q, want empty when binary not at any fallback path", got)
+	}
+}
+
+// TestDetectInstalledVersionFallbackPathsNoFallbackDefined verifies backward
+// compatibility: when FallbackPaths is nil, the original behavior is preserved.
+func TestDetectInstalledVersionFallbackPathsNoFallbackDefined(t *testing.T) {
+	tool := ToolInfo{
+		Name:          "mytool",
+		DetectCmd:     []string{"mytool", "--version"},
+		FallbackPaths: nil,
+	}
+
+	origLookPath := lookPath
+	t.Cleanup(func() { lookPath = origLookPath })
+
+	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+
+	got := detectInstalledVersion(context.Background(), tool, "")
+	if got != "" {
+		t.Fatalf("detectInstalledVersion() = %q, want empty when LookPath fails and no fallback defined", got)
+	}
+}
+
 func TestDetectInstalledVersionFromOpenCodeNodeModulePackageJSON(t *testing.T) {
 	home := t.TempDir()
 	pkgDir := filepath.Join(home, ".config", "opencode", "node_modules", "opencode-sdd-engram-manage")

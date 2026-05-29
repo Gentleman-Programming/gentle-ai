@@ -16,6 +16,8 @@ var (
 	execCommand = exec.Command
 	lookPath    = exec.LookPath
 	userHomeDir = os.UserHomeDir
+	osStat      = os.Stat
+	osGetenv    = os.Getenv
 )
 
 // versionRegexp extracts a semver-like version from command output.
@@ -44,7 +46,16 @@ func detectInstalledVersion(ctx context.Context, tool ToolInfo, currentBuildVers
 
 	binary := tool.DetectCmd[0]
 	if _, err := lookPath(binary); err != nil {
-		return "" // binary not found
+		// LookPath failed — the running process PATH may be stale (common on
+		// Windows immediately after install when AddToUserPath updates the
+		// registry but has not yet been picked up by the current process).
+		// Fall back to checking known install locations on disk.
+		fullPath := findFallbackBinary(tool)
+		if fullPath == "" {
+			return "" // binary not found anywhere
+		}
+		// Use the full filesystem path to invoke the binary directly, bypassing PATH.
+		binary = fullPath
 	}
 
 	// Apply a bounded timeout so a hanging binary (e.g. engram stuck on DB
@@ -52,7 +63,7 @@ func detectInstalledVersion(ctx context.Context, tool ToolInfo, currentBuildVers
 	detectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	cmd := execCommand(tool.DetectCmd[0], tool.DetectCmd[1:]...)
+	cmd := execCommand(binary, tool.DetectCmd[1:]...)
 
 	// Kill the subprocess when the context fires. We use a goroutine because
 	// the testable execCommand var returns a plain *exec.Cmd (not CommandContext).
@@ -74,6 +85,24 @@ func detectInstalledVersion(ctx context.Context, tool ToolInfo, currentBuildVers
 	}
 
 	return parseVersionFromOutput(strings.TrimSpace(string(out)))
+}
+
+// findFallbackBinary checks the tool's FallbackPaths for a binary that exists
+// on disk. It returns the first path that stat succeeds on, or "" if none found.
+// This is used when exec.LookPath fails due to a stale process PATH (e.g.,
+// Windows immediately after install).
+func findFallbackBinary(tool ToolInfo) string {
+	if tool.FallbackPaths == nil {
+		return ""
+	}
+	homeDir, _ := userHomeDir()
+	localAppData := osGetenv("LOCALAPPDATA")
+	for _, path := range tool.FallbackPaths(homeDir, localAppData) {
+		if _, err := osStat(path); err == nil {
+			return path
+		}
+	}
+	return ""
 }
 
 func detectNpmPackageVersion(pkg string) string {
