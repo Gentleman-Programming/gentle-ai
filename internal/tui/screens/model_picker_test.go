@@ -31,8 +31,8 @@ func makeTestState(phaseIdx int) *ModelPickerState {
 
 func TestModelPickerRows_Count(t *testing.T) {
 	rows := ModelPickerRows()
-	// 1 orchestrator + 1 "Set all" + 9 sub-agents + 1 separator + 3 JD agents = 15
-	want := 15
+	// 1 orchestrator + 1 "Set all" + 10 sub-agents + 1 separator + 3 JD agents = 16
+	want := 16
 	if len(rows) != want {
 		t.Fatalf("ModelPickerRows() len = %d, want %d; rows = %v", len(rows), want, rows)
 	}
@@ -116,7 +116,7 @@ func TestHandleModelNav_SetAllPhasesRow_SetsOnlySubAgents(t *testing.T) {
 		t.Fatal("handleModelNav should return handled=true on enter")
 	}
 
-	// All 9 sub-agents must be assigned
+	// All 10 sub-agents must be assigned
 	phases := opencode.SDDPhases()
 	for _, phase := range phases {
 		a, ok := updated[phase]
@@ -779,7 +779,7 @@ func TestHandleModelPickerNav_DispatchesToEffortNav(t *testing.T) {
 
 // TestHandleEffortNav_SetAllPhasesUpdatesAllPhasesModelAndAllSubAgents verifies
 // that when the effort picker is confirmed via the "Set all phases" row
-// (SelectedPhaseIdx==1), ALL 9 SDD sub-agent phases receive the effort assignment
+// (SelectedPhaseIdx==1), ALL 10 SDD sub-agent phases receive the effort assignment
 // AND state.AllPhasesModel is updated to reflect the chosen effort.
 //
 // This covers the interaction between the effort picker and the "Set all phases"
@@ -798,7 +798,7 @@ func TestHandleEffortNav_SetAllPhasesUpdatesAllPhasesModelAndAllSubAgents(t *tes
 
 	newState, updated := handleEffortNav("enter", state, assignments)
 
-	// All 9 sub-agent phases must carry the effort.
+	// All 10 sub-agent phases must carry the effort.
 	for _, phase := range phases {
 		a, ok := updated[phase]
 		if !ok {
@@ -1247,7 +1247,7 @@ func TestHandleModelNav_JDLastRow(t *testing.T) {
 
 func TestModelPickerRowsForProfile_Count(t *testing.T) {
 	rows := ModelPickerRowsForProfile()
-	// 1 orchestrator + 1 "Set all SDD phases" + 9 sub-agents = 11
+	// 1 orchestrator + 1 "Set all SDD phases" + 10 sub-agents = 12
 	want := 2 + len(opencode.SDDPhases())
 	if len(rows) != want {
 		t.Fatalf("ModelPickerRowsForProfile() len = %d, want %d; rows = %v", len(rows), want, rows)

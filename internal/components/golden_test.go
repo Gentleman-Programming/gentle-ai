@@ -212,6 +212,7 @@ func TestGoldenSDD_Cursor(t *testing.T) {
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
 		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".cursor", "skills")
 	for _, name := range expectedSkills {
@@ -245,6 +246,7 @@ func TestGoldenSDD_Gemini(t *testing.T) {
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
 		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".gemini", "skills")
 	for _, name := range expectedSkills {
@@ -283,6 +285,7 @@ func TestGoldenSDD_VSCode(t *testing.T) {
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
 		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".copilot", "skills")
 	for _, name := range expectedSkills {
@@ -316,6 +319,7 @@ func TestGoldenSDD_Codex(t *testing.T) {
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
 		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".codex", "skills")
 	for _, name := range expectedSkills {
@@ -350,6 +354,7 @@ func TestGoldenSDD_Windsurf(t *testing.T) {
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
 		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".codeium", "windsurf", "skills")
 	for _, name := range expectedSkills {
@@ -812,6 +817,7 @@ func TestGoldenSDD_Antigravity(t *testing.T) {
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
 		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".gemini", "antigravity-cli", "skills")
 	for _, name := range expectedSkills {

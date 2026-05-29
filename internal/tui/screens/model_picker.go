@@ -123,7 +123,7 @@ const SDDOrchestratorPhase = "gentle-orchestrator"
 
 // ModelPickerRows returns the row labels for the model picker screen.
 // Row 0 is "gentle-orchestrator" (coordinator), row 1 is "Set all phases",
-// rows 2-10 are the 9 SDD sub-agent phases, then a separator and JD agents.
+// rows 2-11 are the 10 SDD sub-agent phases, then a separator and JD agents.
 func ModelPickerRows() []string {
 	rows := make([]string, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases()))
 	rows = append(rows, SDDOrchestratorPhase)
@@ -466,7 +466,7 @@ func formatAssignmentLabel(row, provName, modelName, effort string) string {
 
 // applyAssignment applies the given assignment to the assignments map based on
 // the currently selected phase index in state. When SelectedPhaseIdx is 1 ("Set
-// all phases"), the assignment is applied to all 9 SDD sub-agent phases and
+// all phases"), the assignment is applied to all 10 SDD sub-agent phases and
 // callers should mirror the assignment into state.AllPhasesModel if needed.
 // When SelectedPhaseIdx is 0, only the orchestrator phase is set. Otherwise,
 // the single sub-agent phase matching the index is set.
