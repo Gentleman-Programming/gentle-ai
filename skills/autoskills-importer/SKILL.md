@@ -30,14 +30,16 @@ Load when the user runs `/autoskills-import` or asks to import, fetch, or instal
 | Skill already registered, hash unchanged | Skip — already up to date; report as `✓ already installed` |
 | Skill already registered, hash changed | Report `[skill] has upstream changes — run with --refresh to update`; do NOT overwrite |
 | Skill already registered + `--refresh` passed | Re-run full conversion and overwrite |
+
+> **`content_hash`** is computed over the raw fetched skills.sh source content, before any conversion. Hash the exact bytes returned by the HTTP response (UTF-8). This ensures two independent runs over the same upstream version always produce the same hash.
 | Validation self-check fails after Stage 2 | Revise compact rules before writing files |
 
 ## Flags
 
 | Flag | Behavior |
 |---|---|
-| `--only react-19,typescript` | Import only the specified skills; ignore the rest of the detected list |
-| `--skip jest` | Exclude a technology from this run |
+| `--only react,typescript` | Import only the specified technologies; ignore the rest of the detected list. Values are **detected technology names** (e.g., `react`, `nextjs`), not skills.sh keys |
+| `--skip jest` | Exclude a technology from this run. Same namespace: detected technology names |
 | `--refresh` | Re-import already installed skills if upstream changes are detected |
 
 ## Execution Steps

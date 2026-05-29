@@ -29,8 +29,10 @@ The description comes from the `description:` field generated there.
 1. Read `.atl/skill-registry.md`
 2. Check for an existing entry with the same skill name
 3. **Not found** → append under `## Imported (skills.sh)`
-4. **Found and previously imported** → replace the existing line in place
-5. **Found and manually authored** → do NOT replace; register the import under `[skill-name]-imported` instead, and report the conflict (see Conflict Handling below)
+4. **Found under `## Imported (skills.sh)`** (previously imported) → replace the existing line in place
+5. **Found outside `## Imported (skills.sh)`** (manually authored) → do NOT replace; register the import under `[skill-name]-imported` in `## Imported (skills.sh)` instead, and report the conflict (see Conflict Handling below)
+
+Section membership is the authoritative signal: an entry is "previously imported" if and only if it lives under the `## Imported (skills.sh)` heading. Everything else is considered manually authored.
 
 Create the `## Imported (skills.sh)` section if it doesn't exist. This
 separates imported skills from manually authored ones.

@@ -27,14 +27,14 @@ Signal strength: config file > `dependencies` > `devDependencies`
 - `package-lock.json` → npm
 - `yarn.lock` → yarn
 - `pnpm-lock.yaml` → pnpm
-- `bun.lockb` → bun
+- `bun.lockb` or `bun.lock` → bun  ← `bun.lockb` is the legacy binary format; `bun.lock` is the text format introduced in newer Bun versions
 
 ### Framework config files (high confidence)
 - `next.config.{js,ts,mjs}` → nextjs  ← package name is `next`; normalized to `nextjs` for detection and mapping table
 - `vite.config.{js,ts}` → vite
 - `astro.config.{mjs,ts}` → astro
 - `nuxt.config.{ts,js}` → nuxt
-- `svelte.config.js` → sveltekit
+- `svelte.config.js` → sveltekit **only if** `@sveltejs/kit` is present in `package.json` dependencies; otherwise → `svelte`
 - `remix.config.{js,cjs}` → remix
 - `angular.json` → angular
 
