@@ -73,6 +73,7 @@ func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 // VS Code Copilot reads .instructions.md files from the VS Code User prompts folder.
 // Skills are loaded from ~/.copilot/skills/ (global), .github/skills/ (workspace),
 // ~/.claude/skills/, and .claude/skills/. We target ~/.copilot/skills/ for global reach.
+// Native agent files are installed globally under ~/.copilot/agents/.
 
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
 	return filepath.Join(homeDir, ".copilot")
@@ -149,15 +150,15 @@ func (a *Adapter) CommandsDir(_ string) string {
 }
 
 func (a *Adapter) SupportsSubAgents() bool {
-	return false
+	return true
 }
 
-func (a *Adapter) SubAgentsDir(_ string) string {
-	return ""
+func (a *Adapter) SubAgentsDir(homeDir string) string {
+	return filepath.Join(homeDir, ".copilot", "agents")
 }
 
 func (a *Adapter) EmbeddedSubAgentsDir() string {
-	return ""
+	return "vscode/agents"
 }
 
 func (a *Adapter) SupportsSkills() bool {

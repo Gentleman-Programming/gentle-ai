@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -131,5 +132,27 @@ func TestMCPConfigPathUsesVSCodeUserProfile(t *testing.T) {
 		if path != want {
 			t.Fatalf("MCPConfigPath() = %q, want %q", path, want)
 		}
+	}
+}
+
+func TestSubAgentSupportUsesCopilotUserAgentsDir(t *testing.T) {
+	a := NewAdapter()
+	home := "/tmp/home"
+
+	if !a.SupportsSubAgents() {
+		t.Fatal("VS Code adapter must advertise native sub-agent support")
+	}
+
+	got := a.SubAgentsDir(home)
+	want := filepath.Join(home, ".copilot", "agents")
+	if got != want {
+		t.Fatalf("SubAgentsDir() = %q, want %q", got, want)
+	}
+	if got == filepath.Join(home, ".github", "agents") || strings.Contains(got, string(filepath.Separator)+".github"+string(filepath.Separator)) {
+		t.Fatalf("SubAgentsDir() must not target workspace .github/agents, got %q", got)
+	}
+
+	if got := a.EmbeddedSubAgentsDir(); got != "vscode/agents" {
+		t.Fatalf("EmbeddedSubAgentsDir() = %q, want %q", got, "vscode/agents")
 	}
 }

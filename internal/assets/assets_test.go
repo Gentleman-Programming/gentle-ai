@@ -695,6 +695,143 @@ func TestFourRReviewAgentAssets(t *testing.T) {
 	}
 }
 
+var vscodeSDDPhaseAgents = []string{
+	"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design",
+	"sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
+}
+
+func TestVSCodeNativeAgentAssetsFrontmatter(t *testing.T) {
+	coordinatorPath := "vscode/agents/sdd-orchestrator.agent.md"
+	coordinator := readFrontmatterBlock(t, coordinatorPath)
+	requireFrontmatterLine(t, coordinator, "target: vscode")
+	requireFrontmatterLine(t, coordinator, "user-invocable: true")
+	requireFrontmatterLine(t, coordinator, "disable-model-invocation: true")
+	requireInlineTool(t, coordinator, "agent")
+	requireNoDeprecatedVSCodeTools(t, coordinator)
+	requireAgentsAllowlist(t, coordinator, vscodeSDDPhaseAgents)
+	requireFrontmatterKeyAbsent(t, coordinator, "model")
+	requireFrontmatterKeyAbsent(t, coordinator, "infer")
+	requireAssetBodyContains(t, coordinatorPath, "## Agent Teams Orchestrator", "## SDD Workflow", "### Review Workload Guard")
+	requireAssetBodyNotContains(t, coordinatorPath, "## Model Assignments", "model parameter")
+
+	for _, phase := range vscodeSDDPhaseAgents {
+		t.Run(phase, func(t *testing.T) {
+			path := "vscode/agents/" + phase + ".agent.md"
+			frontmatter := readFrontmatterBlock(t, path)
+			requireFrontmatterLine(t, frontmatter, "target: vscode")
+			requireFrontmatterLine(t, frontmatter, "user-invocable: false")
+			requireFrontmatterKeyAbsent(t, frontmatter, "model")
+			requireFrontmatterKeyAbsent(t, frontmatter, "infer")
+			requireNoDeprecatedVSCodeTools(t, frontmatter)
+			if strings.Contains(frontmatterKeyLine(frontmatter, "tools"), "agent") {
+				t.Fatalf("%s must not include coordinator-only agent tool", phase)
+			}
+			for _, tool := range expectedVSCodePhaseTools(phase) {
+				requireInlineTool(t, frontmatter, tool)
+			}
+			requireAssetBodyContains(t, path, "## Instructions", "## Engram Save", "## Result Contract")
+		})
+	}
+}
+
+func expectedVSCodePhaseTools(phase string) []string {
+	switch phase {
+	case "sdd-explore":
+		return []string{"read", "search", "web"}
+	case "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive":
+		return []string{"read", "search", "edit"}
+	case "sdd-verify":
+		return []string{"read", "search", "execute"}
+	default:
+		return []string{"read", "search", "edit", "execute"}
+	}
+}
+
+func requireNoDeprecatedVSCodeTools(t *testing.T, frontmatter string) {
+	t.Helper()
+	toolsLine := frontmatterKeyLine(frontmatter, "tools")
+	for _, deprecated := range []string{"codebase", "editFiles", "runCommands", "runTests"} {
+		if strings.Contains(toolsLine, deprecated) {
+			t.Fatalf("tools line %q uses deprecated VS Code tool alias %q", toolsLine, deprecated)
+		}
+	}
+}
+
+func requireAssetBodyContains(t *testing.T, path string, required ...string) {
+	t.Helper()
+	content := strings.ReplaceAll(MustRead(path), "\r\n", "\n")
+	for _, want := range required {
+		if !strings.Contains(content, want) {
+			t.Fatalf("%s missing body content %q", path, want)
+		}
+	}
+}
+
+func requireAssetBodyNotContains(t *testing.T, path string, forbidden ...string) {
+	t.Helper()
+	content := strings.ReplaceAll(MustRead(path), "\r\n", "\n")
+	for _, nope := range forbidden {
+		if strings.Contains(content, nope) {
+			t.Fatalf("%s contains out-of-scope body content %q", path, nope)
+		}
+	}
+}
+
+func readFrontmatterBlock(t *testing.T, path string) string {
+	t.Helper()
+	content := strings.ReplaceAll(MustRead(path), "\r\n", "\n")
+	if !strings.HasPrefix(content, "---\n") {
+		t.Fatalf("%s missing YAML frontmatter", path)
+	}
+	rest := content[len("---\n"):]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		t.Fatalf("%s missing YAML frontmatter close", path)
+	}
+	return "\n" + rest[:end] + "\n"
+}
+
+func requireFrontmatterLine(t *testing.T, frontmatter, line string) {
+	t.Helper()
+	if !strings.Contains(frontmatter, "\n"+line+"\n") {
+		t.Fatalf("frontmatter missing line %q:\n%s", line, frontmatter)
+	}
+}
+
+func requireFrontmatterKeyAbsent(t *testing.T, frontmatter, key string) {
+	t.Helper()
+	if frontmatterKeyLine(frontmatter, key) != "" {
+		t.Fatalf("frontmatter must not include %q", key)
+	}
+}
+
+func requireInlineTool(t *testing.T, frontmatter, tool string) {
+	t.Helper()
+	line := frontmatterKeyLine(frontmatter, "tools")
+	if !strings.Contains(line, tool) {
+		t.Fatalf("tools line %q missing %q", line, tool)
+	}
+}
+
+func requireAgentsAllowlist(t *testing.T, frontmatter string, want []string) {
+	t.Helper()
+	if strings.Count(frontmatter, "\n  - ") != len(want) {
+		t.Fatalf("coordinator agents allowlist must contain only %v:\n%s", want, frontmatter)
+	}
+	for _, agent := range want {
+		requireFrontmatterLine(t, frontmatter, "  - "+agent)
+	}
+}
+
+func frontmatterKeyLine(frontmatter, key string) string {
+	for _, line := range strings.Split(frontmatter, "\n") {
+		if strings.HasPrefix(line, key+":") {
+			return line
+		}
+	}
+	return ""
+}
+
 func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 	content := MustRead("opencode/sdd-orchestrator.md")
 

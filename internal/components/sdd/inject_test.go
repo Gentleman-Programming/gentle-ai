@@ -5008,6 +5008,105 @@ func assertNativeAgentFile(t *testing.T, path string, contains string) {
 	}
 }
 
+func TestInjectVSCodeWritesNativeAgentFiles(t *testing.T) {
+	home := t.TempDir()
+	isolateDesktopConfig(t, home)
+
+	adapter, err := agents.NewAdapter(model.AgentVSCodeCopilot)
+	if err != nil {
+		t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+	}
+
+	result, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(vscode) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(vscode) first changed = false")
+	}
+
+	agentsDir := filepath.Join(home, ".copilot", "agents")
+	for _, name := range vscodeAgentAssetNames() {
+		path := filepath.Join(agentsDir, name)
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("expected VS Code agent file %q: %v", name, readErr)
+		}
+		if !strings.Contains(string(content), "target: vscode") {
+			t.Fatalf("%s missing target: vscode", name)
+		}
+	}
+	second, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("second Inject(vscode) error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Inject(vscode) changed = true; expected idempotent sync")
+	}
+
+	entries, err := os.ReadDir(agentsDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s) error = %v", agentsDir, err)
+	}
+	agentFiles := 0
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".agent.md") {
+			agentFiles++
+		}
+	}
+	if agentFiles != len(vscodeAgentAssetNames()) {
+		t.Fatalf("VS Code agent file count = %d, want %d", agentFiles, len(vscodeAgentAssetNames()))
+	}
+}
+
+func TestInjectNativeSubAgentExtensionsRemainAdapterSpecific(t *testing.T) {
+	tests := []struct {
+		name       string
+		agentID    model.AgentID
+		required   string
+		forbidden  string
+		customOpts InjectOptions
+	}{
+		{name: "cursor", agentID: model.AgentCursor, required: filepath.Join(".cursor", "agents", "sdd-apply.md"), forbidden: filepath.Join(".cursor", "agents", "sdd-apply.agent.md")},
+		{name: "kiro", agentID: model.AgentKiroIDE, required: filepath.Join(".kiro", "agents", "sdd-apply.md"), forbidden: filepath.Join(".kiro", "agents", "sdd-apply.agent.md")},
+		{name: "claude", agentID: model.AgentClaudeCode, required: filepath.Join(".claude", "agents", "sdd-apply.md"), forbidden: filepath.Join(".claude", "agents", "sdd-apply.agent.md")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			isolateDesktopConfig(t, home)
+			adapter, err := agents.NewAdapter(tt.agentID)
+			if err != nil {
+				t.Fatalf("NewAdapter(%s) error = %v", tt.agentID, err)
+			}
+			if _, err := Inject(home, adapter, "", tt.customOpts); err != nil {
+				t.Fatalf("Inject(%s) error = %v", tt.agentID, err)
+			}
+			if _, err := os.Stat(filepath.Join(home, tt.required)); err != nil {
+				t.Fatalf("required native sub-agent %q missing: %v", tt.required, err)
+			}
+			if _, err := os.Stat(filepath.Join(home, tt.forbidden)); !os.IsNotExist(err) {
+				t.Fatalf("adapter %s must not write VS Code .agent.md path %q; stat err = %v", tt.agentID, tt.forbidden, err)
+			}
+		})
+	}
+}
+
+func vscodeAgentAssetNames() []string {
+	names := []string{"sdd-orchestrator.agent.md"}
+	for _, phase := range []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"} {
+		names = append(names, phase+".agent.md")
+	}
+	return names
+}
+
+func isolateDesktopConfig(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+}
+
 // TestInjectKiroFallsBackToClaudeModelAssignmentsWhenKiroMapUnset verifies that
 // when KiroModelAssignments is nil, the injector falls back to ClaudeModelAssignments
 // for Kiro phase model resolution (legacy backward-compatible path).

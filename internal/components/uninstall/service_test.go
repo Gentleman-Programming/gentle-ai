@@ -11,6 +11,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
@@ -672,6 +673,71 @@ func TestComponentOperationsSDD_ClaudeRemovesManagedCommandFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(customPath); err != nil {
 		t.Fatalf("custom command should be preserved, stat err = %v", err)
+	}
+}
+
+func TestComponentOperationsSDD_VSCodeRemovesOnlyManagedAgentFiles(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
+	t.Setenv("APPDATA", filepath.Join(homeDir, "AppData", "Roaming"))
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentVSCodeCopilot)
+	if !ok {
+		t.Fatal("vscode adapter not found in registry")
+	}
+
+	agentsDir := adapter.SubAgentsDir(homeDir)
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(agents dir) error = %v", err)
+	}
+
+	entries, err := assets.FS.ReadDir("vscode/agents")
+	if err != nil {
+		t.Fatalf("ReadDir(vscode/agents) error = %v", err)
+	}
+	managedFiles := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(agentsDir, entry.Name())
+		managedFiles = append(managedFiles, path)
+		if err := os.WriteFile(path, []byte("managed"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", entry.Name(), err)
+		}
+	}
+
+	customPath := filepath.Join(agentsDir, "custom.agent.md")
+	if err := os.WriteFile(customPath, []byte("user authored"), 0o644); err != nil {
+		t.Fatalf("WriteFile(custom.agent.md) error = %v", err)
+	}
+
+	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	for _, op := range ops {
+		if op.path != agentsDir && !strings.HasPrefix(op.path, agentsDir+string(filepath.Separator)) {
+			continue
+		}
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("op.apply(%q) error = %v", op.path, err)
+		}
+	}
+
+	for _, path := range managedFiles {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("managed VS Code agent %q should be removed; stat err = %v", path, err)
+		}
+	}
+	if _, err := os.Stat(customPath); err != nil {
+		t.Fatalf("custom VS Code agent should be preserved, stat err = %v", err)
 	}
 }
 
