@@ -492,6 +492,23 @@ func renderProfileModelAssignmentsSection(profile model.Profile) string {
 		reason := phaseReasons[phase]
 		b.WriteString(fmt.Sprintf("| %s | %s | %s |\n", phase, phaseModel, reason))
 	}
+
+	// JD agents are global (not profile-scoped), but the orchestrator must
+	// know their configured model when delegating judgment-day tasks.
+	jdReasons := map[string]string{
+		"jd-judge-a":   "Adversarial review — blind judge A",
+		"jd-judge-b":   "Adversarial review — blind judge B",
+		"jd-fix-agent": "Surgical fixes from confirmed issues",
+	}
+	for _, jd := range opencode.JDPhases() {
+		jdModel := "global (not profile-scoped)"
+		if m, ok := profile.PhaseAssignments[jd]; ok && m.ProviderID != "" {
+			jdModel = m.FullID()
+		}
+		reason := jdReasons[jd]
+		b.WriteString(fmt.Sprintf("| %s | %s | %s |\n", jd, jdModel, reason))
+	}
+
 	b.WriteString("\n")
 	return b.String()
 }

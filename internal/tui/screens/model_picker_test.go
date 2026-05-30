@@ -913,6 +913,38 @@ func TestRenderPhaseList_NoEffortAnnotationWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestRenderPhaseList_JDAgentEffortAnnotation(t *testing.T) {
+	const providerID = "test-provider"
+	state := ModelPickerState{
+		Providers: map[string]opencode.Provider{
+			providerID: {ID: providerID, Name: "TestProv", Models: map[string]opencode.Model{
+				"model-x": {ID: "model-x", Name: "Model X"},
+			}},
+		},
+		AvailableIDs: []string{providerID},
+		SDDModels: map[string][]opencode.Model{
+			providerID: {{ID: "model-x", Name: "Model X"}},
+		},
+		Mode: ModePhaseList,
+	}
+	jdPhases := opencode.JDPhases()
+	assignments := map[string]model.ModelAssignment{
+		jdPhases[0]: {ProviderID: providerID, ModelID: "model-x", Effort: "max"},
+		jdPhases[1]: {ProviderID: providerID, ModelID: "model-x", Effort: "low"},
+		jdPhases[2]: {ProviderID: providerID, ModelID: "model-x", Effort: ""},
+	}
+
+	rendered := RenderModelPicker(assignments, state, 0)
+
+	// JD agent rows must show effort annotation when set
+	if !strings.Contains(rendered, "[max]") {
+		t.Errorf("rendered JD agent row should contain '[max]' for jd-judge-a; got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "[low]") {
+		t.Errorf("rendered JD agent row should contain '[low]' for jd-judge-b; got:\n%s", rendered)
+	}
+}
+
 // ─── TestIndividualPhaseSelectionDoesNotSetAllPhasesModel (unchanged) ──────
 
 // TestIndividualPhaseSelectionDoesNotSetAllPhasesModel verifies that selecting

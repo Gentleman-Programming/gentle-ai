@@ -710,7 +710,7 @@ func renderPhaseList(
 				assignment, ok := assignments[phase]
 				if ok && assignment.ProviderID != "" {
 					provName, modelName := resolveNames(assignment, state)
-					label = fmt.Sprintf("%-20s %s / %s", row, provName, modelName)
+					label = formatAssignmentLabel(row, provName, modelName, assignment.Effort)
 				} else {
 					label = fmt.Sprintf("%-20s (default)", row)
 				}

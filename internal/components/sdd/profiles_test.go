@@ -615,6 +615,30 @@ func TestGenerateProfileOverlay_OrchestratorPromptSuffixed(t *testing.T) {
 	}
 }
 
+func TestGenerateProfileOverlay_OrchestratorPromptIncludesJDAgents(t *testing.T) {
+	home := t.TempDir()
+
+	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home)
+	if err != nil {
+		t.Fatalf("GenerateProfileOverlay() error = %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(overlay, &root); err != nil {
+		t.Fatalf("overlay is not valid JSON: %v", err)
+	}
+	agentMap := root["agent"].(map[string]any)
+	orch := agentMap["sdd-orchestrator-cheap"].(map[string]any)
+	prompt, _ := orch["prompt"].(string)
+
+	// The profile orchestrator prompt model assignment table must include JD agents
+	for _, jd := range []string{"jd-judge-a", "jd-judge-b", "jd-fix-agent"} {
+		if !strings.Contains(prompt, "| "+jd+" |") {
+			t.Errorf("profile orchestrator prompt model assignment table missing JD agent %q; prompt snippet: %q", jd, prompt[:min(500, len(prompt))])
+		}
+	}
+}
+
 // ─── RemoveProfileAgents ─────────────────────────────────────────────────
 
 func buildSettingsWithProfiles(t *testing.T) (path string) {
