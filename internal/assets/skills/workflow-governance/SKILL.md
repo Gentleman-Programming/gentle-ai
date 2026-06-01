@@ -1,6 +1,6 @@
 ---
 name: workflow-governance
-description: "Trigger: authoring a Workflow under ultracode/xhigh, dynamic orchestration, code fan-out. Carry Agent-tool governance onto the Workflow agent() surface."
+description: "Trigger: authoring a Workflow (ultracode/xhigh or workflow keyword), code/SDD/engram fan-out. Carry Agent-tool governance onto the Workflow agent() surface."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
@@ -9,7 +9,7 @@ metadata:
 
 ## Activation Contract
 
-Apply when ultracode/xhigh (dynamic workflow orchestration) is ON and you are about to author a Workflow whose `agent()` calls do real work: writing or reviewing code, running SDD phases, or touching engram. Skip for read-only exploration fan-out and trivial probes.
+Apply when you are about to author a Workflow whose `agent()` / `parallel()` / `pipeline()` calls do real work (writing or reviewing code, running SDD phases, or touching engram) — whether ultracode/xhigh is active OR the Workflow tool is opted into for a task (e.g. via the `workflow` keyword). Skip for read-only exploration fan-out and trivial probes.
 
 ## Hard Rules
 
