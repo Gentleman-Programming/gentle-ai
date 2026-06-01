@@ -79,6 +79,8 @@ type SyncResult struct {
 	// processed during this sync. Paths appear once even when multiple
 	// components touch the same file. It is nil when no files changed.
 	ChangedFiles []string
+	// Warnings contains non-fatal sync warnings that should be surfaced to users.
+	Warnings []string
 }
 
 // ParseSyncFlags parses the CLI arguments for the sync subcommand.
@@ -430,8 +432,13 @@ type syncRuntime struct {
 	agentIDs     []model.AgentID
 	backupRoot   string
 	state        *runtimeState
+<<<<<<< HEAD
 	managedPaths []string
 	changedFiles []string // accumulates candidate paths reported by component injectors
+=======
+	changedFiles []string // accumulates absolute paths of files that actually changed
+	warnings     []string
+>>>>>>> 034c7a43 (feat(vscode): agrega asignaciones de modelo)
 }
 
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
@@ -485,6 +492,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			agents:       r.agentIDs,
 			selection:    r.selection,
 			changedFiles: &r.changedFiles,
+			warnings:     &r.warnings,
 		})
 	}
 
@@ -623,6 +631,7 @@ type componentSyncStep struct {
 	agents       []model.AgentID
 	selection    model.Selection
 	changedFiles *[]string // accumulates absolute paths of files that actually changed
+	warnings     *[]string
 }
 
 type codeGraphGuidanceSyncStep struct {
@@ -824,6 +833,7 @@ func (s componentSyncStep) Run() error {
 			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments:           s.selection.ModelAssignments,
+				VSCodeModelAssignments:             s.selection.VSCodeModelAssignments,
 				ClaudeModelAssignments:             s.selection.ClaudeModelAssignments,
 				ClaudePhaseAssignments:             s.selection.ClaudePhaseAssignments,
 				KiroModelAssignments:               s.selection.KiroModelAssignments,
@@ -841,6 +851,7 @@ func (s componentSyncStep) Run() error {
 				return fmt.Errorf("sync sdd for %q: %w", adapter.Agent(), err)
 			}
 			s.countChanged(boolToInt(res.Changed), res.Files...)
+			s.addWarnings(res.Warnings...)
 		}
 		return nil
 
@@ -954,6 +965,13 @@ func (s componentSyncStep) countChanged(n int, files ...string) {
 	}
 }
 
+func (s componentSyncStep) addWarnings(warnings ...string) {
+	if s.warnings == nil || len(warnings) == 0 {
+		return
+	}
+	*s.warnings = append(*s.warnings, warnings...)
+}
+
 // dedupPaths removes duplicate and empty paths while preserving first-seen order.
 func dedupPaths(paths []string) []string {
 	if len(paths) == 0 {
@@ -973,6 +991,7 @@ func dedupPaths(paths []string) []string {
 	return out
 }
 
+<<<<<<< HEAD
 type syncFileSnapshot struct {
 	exists       bool
 	data         []byte
@@ -1145,6 +1164,36 @@ func changedSyncFiles(candidates []string, before map[string]syncFileSnapshot) (
 	return changed, nil
 }
 
+func dedupStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func stateModelAssignmentsToModel(m map[string]state.ModelAssignmentState) map[string]model.ModelAssignment {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]model.ModelAssignment, len(m))
+	for k, v := range m {
+		out[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
+	}
+	return out
+}
+
 // boolToInt converts a boolean to 0 or 1.
 func boolToInt(b bool) int {
 	if b {
@@ -1239,6 +1288,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 		return result, err
 	}
 	result.FilesChanged = len(result.ChangedFiles)
+	result.Warnings = dedupStrings(rt.warnings)
 
 	// True no-op: agents were discovered but all managed assets were already
 	// current — no file was written or updated. Per spec scenario:
@@ -1342,6 +1392,13 @@ func RunSync(args []string) (SyncResult, error) {
 		selection.CodexOrchestratorAssignment = codexOrchestratorFromState(persistedState.CodexOrchestratorAssignment)
 	}
 
+	if len(selection.VSCodeModelAssignments) == 0 && len(persistedState.VSCodeModelAssignments) > 0 {
+		m := make(map[string]model.ModelAssignment, len(persistedState.VSCodeModelAssignments))
+		for k, v := range persistedState.VSCodeModelAssignments {
+			m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
+		}
+		selection.VSCodeModelAssignments = m
+	}
 	// Restore Codex effort and carril model assignments from state so that
 	// `gentle-ai sync` preserves the user's per-phase effort and per-carril
 	// model choices instead of falling back to canonical defaults every time.
@@ -1454,6 +1511,7 @@ func RenderSyncReport(result SyncResult) string {
 			fmt.Fprintf(&b, "Agents: %s\n", joinAgentIDs(result.Agents))
 			fmt.Fprintln(&b, "All managed assets are already up to date. No files changed.")
 		}
+		appendSyncWarnings(&b, result.Warnings)
 		return strings.TrimRight(b.String(), "\n")
 	}
 
@@ -1495,6 +1553,8 @@ func RenderSyncReport(result SyncResult) string {
 		}
 	}
 
+	appendSyncWarnings(&b, result.Warnings)
+
 	if !result.Verify.Ready {
 		fmt.Fprintln(&b, "")
 		fmt.Fprintln(&b, "Post-sync verification:")
@@ -1502,6 +1562,17 @@ func RenderSyncReport(result SyncResult) string {
 	}
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func appendSyncWarnings(b *strings.Builder, warnings []string) {
+	if len(warnings) == 0 {
+		return
+	}
+	fmt.Fprintln(b, "")
+	fmt.Fprintln(b, "Warnings:")
+	for _, warning := range warnings {
+		fmt.Fprintf(b, "  - %s\n", warning)
+	}
 }
 
 // runPostSyncVerification verifies that managed files exist after sync.

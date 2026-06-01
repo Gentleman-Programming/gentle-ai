@@ -62,6 +62,21 @@ func TestModelAssignmentsToStatePreservesEffort(t *testing.T) {
 	}
 }
 
+func TestModelAssignmentsToStateSupportsVSCodeAssignments(t *testing.T) {
+	assignments := map[string]model.ModelAssignment{
+		"sdd-orchestrator": {ProviderID: "github-copilot", ModelID: "gpt-4.1"},
+		"sdd-apply":        {ProviderID: "github-copilot", ModelID: "claude-sonnet-4", Effort: "low"},
+	}
+
+	got := modelAssignmentsToState(assignments)
+	if got["sdd-orchestrator"].ProviderID != "github-copilot" {
+		t.Fatalf("ProviderID = %q, want github-copilot", got["sdd-orchestrator"].ProviderID)
+	}
+	if got["sdd-apply"].Effort != "low" {
+		t.Fatalf("Effort = %q, want low", got["sdd-apply"].Effort)
+	}
+}
+
 func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 	input, err := NormalizeInstallFlags(InstallFlags{}, system.DetectionResult{})
 	if err != nil {

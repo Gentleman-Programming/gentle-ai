@@ -217,6 +217,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		CodexCarrilModelAssignments: input.Selection.CodexCarrilModelAssignments,
 		CodexPhaseModelAssignments:  input.Selection.CodexPhaseModelAssignments,
 		ModelAssignments:            modelAssignmentsToState(input.Selection.ModelAssignments),
+		VSCodeModelAssignments:      modelAssignmentsToState(input.Selection.VSCodeModelAssignments),
 		Persona:                     string(input.Selection.Persona),
 	}
 	newState.SetSelection(input.Selection)
@@ -1089,6 +1090,7 @@ func (s componentApplyStep) Run() error {
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments:    s.selection.ModelAssignments,
+				VSCodeModelAssignments:      s.selection.VSCodeModelAssignments,
 				ClaudeModelAssignments:      s.selection.ClaudeModelAssignments,
 				ClaudePhaseAssignments:      s.selection.ClaudePhaseAssignments,
 				KiroModelAssignments:        s.selection.KiroModelAssignments,

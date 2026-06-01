@@ -5059,6 +5059,124 @@ func TestInjectVSCodeWritesNativeAgentFiles(t *testing.T) {
 	}
 }
 
+func TestInjectVSCodeRendersResolvedModelAssignment(t *testing.T) {
+	home := t.TempDir()
+	isolateDesktopConfig(t, home)
+
+	adapter, err := agents.NewAdapter(model.AgentVSCodeCopilot)
+	if err != nil {
+		t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+	}
+	cachePath := writeVSCodeModelCache(t, "gpt-4.1", "GPT-4.1", true)
+	opts := InjectOptions{
+		VSCodeModelAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "github-copilot", ModelID: "gpt-4.1"},
+		},
+		VSCodeModelCachePath: cachePath,
+	}
+
+	if _, err := Inject(home, adapter, "", opts); err != nil {
+		t.Fatalf("Inject(vscode) error = %v", err)
+	}
+
+	applyPath := filepath.Join(home, ".copilot", "agents", "sdd-apply.agent.md")
+	applyContent, err := os.ReadFile(applyPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", applyPath, err)
+	}
+	if !strings.Contains(string(applyContent), `model: "GPT-4.1"`) {
+		t.Fatalf("sdd-apply.agent.md missing resolved model line; got:\n%s", applyContent)
+	}
+
+	verifyPath := filepath.Join(home, ".copilot", "agents", "sdd-verify.agent.md")
+	verifyContent, err := os.ReadFile(verifyPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", verifyPath, err)
+	}
+	if strings.Contains(string(verifyContent), "model:") {
+		t.Fatalf("unassigned VS Code agent should inherit parent model; got:\n%s", verifyContent)
+	}
+
+	second, err := Inject(home, adapter, "", opts)
+	if err != nil {
+		t.Fatalf("second Inject(vscode) error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Inject(vscode) changed = true; expected idempotent model rendering")
+	}
+}
+
+func TestInjectVSCodeDefaultModelCacheUsesInjectedHome(t *testing.T) {
+	home := t.TempDir()
+	processHome := t.TempDir()
+	isolateDesktopConfig(t, home)
+	t.Setenv("HOME", processHome)
+	t.Setenv("USERPROFILE", processHome)
+
+	adapter, err := agents.NewAdapter(model.AgentVSCodeCopilot)
+	if err != nil {
+		t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+	}
+	cacheDir := filepath.Join(home, ".cache", "opencode")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", cacheDir, err)
+	}
+	cachePath := filepath.Join(cacheDir, "models.json")
+	cache := `{"github-copilot":{"id":"github-copilot","name":"GitHub Copilot","models":{"gpt-4.1":{"id":"gpt-4.1","name":"GPT-4.1","tool_call":true}}}}`
+	if err := os.WriteFile(cachePath, []byte(cache), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", cachePath, err)
+	}
+
+	opts := InjectOptions{VSCodeModelAssignments: map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "github-copilot", ModelID: "gpt-4.1"},
+	}}
+	if _, err := Inject(home, adapter, "", opts); err != nil {
+		t.Fatalf("Inject(vscode) error = %v", err)
+	}
+
+	applyPath := filepath.Join(home, ".copilot", "agents", "sdd-apply.agent.md")
+	applyContent, err := os.ReadFile(applyPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", applyPath, err)
+	}
+	if !strings.Contains(string(applyContent), `model: "GPT-4.1"`) {
+		t.Fatalf("default cache path should use injected home, not process home; got:\n%s", applyContent)
+	}
+}
+
+func TestInjectVSCodeMissingModelCacheWarnsWithoutModelLine(t *testing.T) {
+	home := t.TempDir()
+	isolateDesktopConfig(t, home)
+
+	adapter, err := agents.NewAdapter(model.AgentVSCodeCopilot)
+	if err != nil {
+		t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+	}
+	opts := InjectOptions{
+		VSCodeModelAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "github-copilot", ModelID: "gpt-4.1"},
+		},
+		VSCodeModelCachePath: filepath.Join(t.TempDir(), "missing-models.json"),
+	}
+
+	result, err := Inject(home, adapter, "", opts)
+	if err != nil {
+		t.Fatalf("Inject(vscode) error = %v", err)
+	}
+	if !containsWarning(result.Warnings, "models cache") {
+		t.Fatalf("Warnings = %v, want missing cache warning", result.Warnings)
+	}
+
+	applyPath := filepath.Join(home, ".copilot", "agents", "sdd-apply.agent.md")
+	content, err := os.ReadFile(applyPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", applyPath, err)
+	}
+	if strings.Contains(string(content), "model:") {
+		t.Fatalf("unresolved VS Code assignment should omit model line; got:\n%s", content)
+	}
+}
+
 func TestInjectNativeSubAgentExtensionsRemainAdapterSpecific(t *testing.T) {
 	tests := []struct {
 		name       string

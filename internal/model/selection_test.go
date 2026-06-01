@@ -69,3 +69,24 @@ func TestSyncOverridesCodexModelPreset(t *testing.T) {
 		t.Fatal("SyncOverrides.CodexModelAssignments should be non-nil after assignment")
 	}
 }
+
+func TestSelectionAndSyncOverridesHaveVSCodeModelAssignments(t *testing.T) {
+	assignment := ModelAssignment{ProviderID: "github-copilot", ModelID: "gpt-4.1"}
+
+	selection := Selection{
+		ModelAssignments:       map[string]ModelAssignment{"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4"}},
+		VSCodeModelAssignments: map[string]ModelAssignment{"sdd-apply": assignment},
+	}
+
+	if got := selection.VSCodeModelAssignments["sdd-apply"]; got != assignment {
+		t.Fatalf("Selection.VSCodeModelAssignments[sdd-apply] = %+v, want %+v", got, assignment)
+	}
+	if got := selection.ModelAssignments["sdd-apply"].ProviderID; got != "anthropic" {
+		t.Fatalf("Selection.ModelAssignments was affected by VS Code assignments: provider = %q", got)
+	}
+
+	overrides := SyncOverrides{VSCodeModelAssignments: map[string]ModelAssignment{"sdd-verify": assignment}}
+	if got := overrides.VSCodeModelAssignments["sdd-verify"]; got != assignment {
+		t.Fatalf("SyncOverrides.VSCodeModelAssignments[sdd-verify] = %+v, want %+v", got, assignment)
+	}
+}

@@ -21,12 +21,16 @@ import (
 const legacyMandatoryWording = "TOTALMENTE " + "obligatorio"
 
 type InjectionResult struct {
-	Changed bool
-	Files   []string
+	Changed  bool
+	Files    []string
+	Warnings []string
 }
 
 type InjectOptions struct {
 	OpenCodeModelAssignments map[string]model.ModelAssignment
+	VSCodeModelAssignments  map[string]model.ModelAssignment
+	VSCodeModelCachePath    string
+	VSCodeModelVariantsPath string
 	// ClaudeModelAssignments is the legacy model-only Claude assignment map.
 	// Prefer ClaudePhaseAssignments for new callers that need per-phase effort.
 	ClaudeModelAssignments      map[string]model.ClaudeModelAlias
@@ -241,8 +245,12 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if len(options) > 0 {
 		opts = options[0]
 	}
+	if adapter.Agent() == model.AgentVSCodeCopilot {
+		opts = withDefaultVSCodeModelPaths(opts, homeDir)
+	}
 
 	files := make([]string, 0)
+	warnings := make([]string, 0)
 	changed := false
 
 	// 1. Inject SDD orchestrator into the global system prompt for agents that
@@ -723,6 +731,11 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				contentStr = injectCodeGraphToolGrantIntoPrompt(contentStr, adapter.Agent(), opts.CodeGraphGuidanceMarkdown)
 				contentStr = injectCodeGraphGuidanceIntoPrompt(contentStr, opts.CodeGraphGuidanceMarkdown)
 			}
+			if adapter.Agent() == model.AgentVSCodeCopilot {
+				resolved, modelWarnings := renderVSCodeAgentModelAssignment(contentStr, entry.Name(), opts)
+				contentStr = resolved
+				warnings = append(warnings, modelWarnings...)
+			}
 			outPath := filepath.Join(agentsDir, entry.Name())
 			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
 			if err != nil {
@@ -842,7 +855,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 	}
 
-	return InjectionResult{Changed: changed, Files: files}, nil
+	return InjectionResult{Changed: changed, Files: files, Warnings: dedupWarnings(warnings)}, nil
 }
 
 func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {

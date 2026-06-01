@@ -11,6 +11,7 @@ type Selection struct {
 	StrictTDD                        bool
 	CodexMultiAgent                  bool                             // deprecated: Codex now always writes features.multi_agent = true; retained for state/back-compat
 	ModelAssignments                 map[string]ModelAssignment       // key = sub-agent name (e.g., "sdd-init")
+	VSCodeModelAssignments           map[string]ModelAssignment       // key = VS Code agent name (e.g., "sdd-apply")
 	ClaudeModelAssignments           map[string]ClaudeModelAlias      // key = phase name; value = fable|opus|sonnet|haiku
 	ClaudePhaseAssignments           map[string]ClaudePhaseAssignment // key = phase name; value = Claude model+effort
 	KiroModelAssignments             map[string]KiroModelAlias        // key = phase name; value = Kiro-native model alias
@@ -65,6 +66,7 @@ type SyncOverrides struct {
 	// model/profile configurators, where the user picked a concrete target agent.
 	TargetAgents                     []AgentID
 	ModelAssignments                 map[string]ModelAssignment       // nil = no override; empty map = reset to defaults
+	VSCodeModelAssignments           map[string]ModelAssignment       // nil = no override; empty map = reset to defaults
 	ClaudeModelAssignments           map[string]ClaudeModelAlias      // nil = no override; empty map = reset to defaults
 	ClaudePhaseAssignments           map[string]ClaudePhaseAssignment // nil = no override; empty map = reset to defaults
 	KiroModelAssignments             map[string]KiroModelAlias        // nil = no override; empty map = reset to defaults

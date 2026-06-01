@@ -549,6 +549,7 @@ func tuiExecute(
 			CodexCarrilModelAssignments: selection.CodexCarrilModelAssignments,
 			CodexPhaseModelAssignments:  selection.CodexPhaseModelAssignments,
 			ModelAssignments:            modelAssignmentsToState(selection.ModelAssignments),
+			VSCodeModelAssignments:      modelAssignmentsToState(selection.VSCodeModelAssignments),
 			Persona:                     string(selection.Persona),
 		}
 		installState.SetSelection(selection)
@@ -690,6 +691,9 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.ModelAssignments != nil {
 		selection.ModelAssignments = overrides.ModelAssignments
 	}
+	if overrides.VSCodeModelAssignments != nil {
+		selection.VSCodeModelAssignments = overrides.VSCodeModelAssignments
+	}
 	if overrides.ClaudeModelAssignments != nil {
 		selection.ClaudeModelAssignments = overrides.ClaudeModelAssignments
 	}
@@ -805,6 +809,9 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 		}
 		selection.ModelAssignments = m
 	}
+	if len(selection.VSCodeModelAssignments) == 0 && len(s.VSCodeModelAssignments) > 0 {
+		selection.VSCodeModelAssignments = stateModelAssignmentsToModel(s.VSCodeModelAssignments)
+	}
 }
 
 // persistAssignments writes the model assignments from selection back to
@@ -820,12 +827,13 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 		selection.ClaudePhaseAssignments != nil ||
 		selection.KiroModelAssignments != nil ||
 		selection.ModelAssignments != nil ||
+		selection.VSCodeModelAssignments != nil ||
 		selection.CodexModelAssignments != nil ||
 		selection.CodexOrchestratorAssignment != nil ||
 		selection.ClearCodexOrchestratorAssignment ||
 		selection.CodexCarrilModelAssignments != nil ||
 		selection.CodexPhaseModelAssignments != nil
-	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasAssignmentSignal {
+	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.VSCodeModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasAssignmentSignal {
 		return nil
 	}
 	current, err := state.Read(homeDir)
@@ -893,7 +901,21 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 			current.ModelAssignments = nil
 		}
 	}
+	if len(selection.VSCodeModelAssignments) > 0 {
+		current.VSCodeModelAssignments = modelAssignmentsToState(selection.VSCodeModelAssignments)
+	}
 	return state.Write(homeDir, current)
+}
+
+func stateModelAssignmentsToModel(m map[string]state.ModelAssignmentState) map[string]model.ModelAssignment {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]model.ModelAssignment, len(m))
+	for k, v := range m {
+		out[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
+	}
+	return out
 }
 
 // claudeAliasesToStrings converts a typed ClaudeModelAlias map to plain strings

@@ -2969,6 +2969,9 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		},
+		VSCodeModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "github-copilot", ModelID: "gpt-4.1"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("state.Write: %v", err)
@@ -3000,6 +3003,39 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 	ma := result.Selection.ModelAssignments["sdd-init"]
 	if ma.ProviderID != "anthropic" || ma.ModelID != "claude-sonnet-4" {
 		t.Errorf("ModelAssignments[sdd-init] = %+v, want anthropic/claude-sonnet-4", ma)
+	}
+	vs := result.Selection.VSCodeModelAssignments["sdd-apply"]
+	if vs.ProviderID != "github-copilot" || vs.ModelID != "gpt-4.1" {
+		t.Errorf("VSCodeModelAssignments[sdd-apply] = %+v, want github-copilot/gpt-4.1", vs)
+	}
+}
+
+func TestRunSyncWithSelectionPropagatesVSCodeModelWarnings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentVSCodeCopilot},
+		Components: []model.ComponentID{model.ComponentSDD},
+		VSCodeModelAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "github-copilot", ModelID: "gpt-4.1"},
+		},
+	}
+
+	result, err := RunSyncWithSelection(home, selection)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+	if !containsSubstring(result.Warnings, "models cache") {
+		t.Fatalf("Warnings = %v, want missing cache warning", result.Warnings)
+	}
+
+	content, err := os.ReadFile(filepath.Join(home, ".copilot", "agents", "sdd-apply.agent.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(sdd-apply.agent.md): %v", err)
+	}
+	if strings.Contains(string(content), "model:") {
+		t.Fatalf("missing cache should omit model line; got:\n%s", content)
 	}
 }
 
@@ -3967,4 +4003,13 @@ func TestRunSync_RestoresCodexPhaseModelAssignments(t *testing.T) {
 	if strings.Contains(text, "| `sdd-strong` |") {
 		t.Fatalf("AGENTS.md rendered carril table instead of Custom per-phase table; got:\n%s", text)
 	}
+}
+
+func containsSubstring(values []string, want string) bool {
+	for _, value := range values {
+		if strings.Contains(value, want) {
+			return true
+		}
+	}
+	return false
 }

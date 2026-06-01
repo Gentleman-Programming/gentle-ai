@@ -483,6 +483,34 @@ func TestTuiSyncSDDProfileStrategyEmptyOverrideNoChange(t *testing.T) {
 	}
 }
 
+func TestApplyOverridesVSCodeModelAssignments(t *testing.T) {
+	selection := model.Selection{
+		VSCodeModelAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "github-copilot", ModelID: "gpt-4.1"},
+		},
+		ModelAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4"},
+		},
+	}
+	overrides := &model.SyncOverrides{
+		VSCodeModelAssignments: map[string]model.ModelAssignment{
+			"sdd-design": {ProviderID: "github-copilot", ModelID: "claude-sonnet-4"},
+		},
+	}
+
+	applyOverrides(&selection, overrides)
+
+	if _, exists := selection.VSCodeModelAssignments["sdd-apply"]; exists {
+		t.Fatal("VSCodeModelAssignments should be replaced as a whole map, not merged key-by-key")
+	}
+	if got := selection.VSCodeModelAssignments["sdd-design"].ProviderID; got != "github-copilot" {
+		t.Fatalf("VSCodeModelAssignments[sdd-design].ProviderID = %q, want github-copilot", got)
+	}
+	if got := selection.ModelAssignments["sdd-apply"].ProviderID; got != "anthropic" {
+		t.Fatalf("OpenCode ModelAssignments changed after VS Code override: provider = %q", got)
+	}
+}
+
 func boolPtr(b bool) *bool { return &b }
 
 func TestTuiSyncTargetAgentsOverridePersistedInstallState(t *testing.T) {
@@ -945,6 +973,9 @@ func TestLoadPersistedAssignmentsPopulatesEmptySelection(t *testing.T) {
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		},
+		VSCodeModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "github-copilot", ModelID: "gpt-4.1"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("state.Write: %v", err)
@@ -969,6 +1000,10 @@ func TestLoadPersistedAssignmentsPopulatesEmptySelection(t *testing.T) {
 	if ma.ProviderID != "anthropic" || ma.ModelID != "claude-sonnet-4" {
 		t.Errorf("ModelAssignments[sdd-init] = %+v, want anthropic/claude-sonnet-4", ma)
 	}
+	vs := selection.VSCodeModelAssignments["sdd-apply"]
+	if vs.ProviderID != "github-copilot" || vs.ModelID != "gpt-4.1" {
+		t.Errorf("VSCodeModelAssignments[sdd-apply] = %+v, want github-copilot/gpt-4.1", vs)
+	}
 }
 
 // TestLoadPersistedAssignmentsDoesNotOverrideExisting verifies that when the
@@ -983,6 +1018,9 @@ func TestLoadPersistedAssignmentsDoesNotOverrideExisting(t *testing.T) {
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"sdd-init": {ProviderID: "google", ModelID: "gemini-pro"},
 		},
+		VSCodeModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "github-copilot", ModelID: "old-model"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("state.Write: %v", err)
@@ -996,6 +1034,9 @@ func TestLoadPersistedAssignmentsDoesNotOverrideExisting(t *testing.T) {
 		ModelAssignments: map[string]model.ModelAssignment{
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		},
+		VSCodeModelAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "github-copilot", ModelID: "new-model"},
+		},
 	}
 	loadPersistedAssignments(home, &selection)
 
@@ -1006,6 +1047,9 @@ func TestLoadPersistedAssignmentsDoesNotOverrideExisting(t *testing.T) {
 	ma := selection.ModelAssignments["sdd-init"]
 	if ma.ProviderID != "anthropic" {
 		t.Errorf("ModelAssignments[sdd-init].ProviderID = %q, want %q (should not be overwritten)", ma.ProviderID, "anthropic")
+	}
+	if got := selection.VSCodeModelAssignments["sdd-apply"].ModelID; got != "new-model" {
+		t.Errorf("VSCodeModelAssignments[sdd-apply].ModelID = %q, want new-model (should not be overwritten)", got)
 	}
 }
 
@@ -1203,6 +1247,28 @@ func TestPersistAndLoadKiroModelAssignments(t *testing.T) {
 	}
 	if got := loaded.KiroModelAssignments["default"]; got != model.KiroModelAuto {
 		t.Errorf("round-trip KiroModelAssignments[default] = %q, want %q", got, model.KiroModelAuto)
+	}
+}
+
+func TestPersistAndLoadVSCodeModelAssignments(t *testing.T) {
+	home := t.TempDir()
+
+	selection := model.Selection{
+		VSCodeModelAssignments: map[string]model.ModelAssignment{
+			"sdd-orchestrator": {ProviderID: "github-copilot", ModelID: "gpt-4.1"},
+			"sdd-apply":        {ProviderID: "github-copilot", ModelID: "claude-sonnet-4", Effort: "low"},
+		},
+	}
+	persistAssignments(home, selection)
+
+	loaded := model.Selection{}
+	loadPersistedAssignments(home, &loaded)
+
+	if got := loaded.VSCodeModelAssignments["sdd-orchestrator"].ModelID; got != "gpt-4.1" {
+		t.Fatalf("VSCodeModelAssignments[sdd-orchestrator].ModelID = %q, want gpt-4.1", got)
+	}
+	if got := loaded.VSCodeModelAssignments["sdd-apply"].Effort; got != "low" {
+		t.Fatalf("VSCodeModelAssignments[sdd-apply].Effort = %q, want low", got)
 	}
 }
 

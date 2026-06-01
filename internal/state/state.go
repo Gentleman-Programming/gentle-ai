@@ -92,6 +92,9 @@ type InstallState struct {
 	// ModelAssignments maps sub-agent names to provider/model pairs (OpenCode).
 	ModelAssignments map[string]ModelAssignmentState `json:"model_assignments,omitempty"`
 
+	// VSCodeModelAssignments maps VS Code Copilot native agent names to provider/model pairs.
+	VSCodeModelAssignments map[string]ModelAssignmentState `json:"vscode_model_assignments,omitempty"`
+
 	// Persona records the persona the user installed ("gentleman", "neutral",
 	// "custom"). Persisted so that `gentle-ai sync` regenerates the same persona
 	// the user originally chose instead of defaulting to Gentleman every time.
@@ -188,6 +191,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		CommunityTools:              existing.CommunityTools,
 		CommunityToolsConfigured:    existing.CommunityToolsConfigured,
 		ModelAssignments:            existing.ModelAssignments,
+		VSCodeModelAssignments:      existing.VSCodeModelAssignments,
 		ClaudeModelAssignments:      existing.ClaudeModelAssignments,
 		ClaudePhaseAssignments:      existing.ClaudePhaseAssignments,
 		KiroModelAssignments:        existing.KiroModelAssignments,

@@ -17,6 +17,9 @@ func TestMergeAgents(t *testing.T) {
 	existingAssignments := map[string]ModelAssignmentState{
 		"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 	}
+	existingVSCode := map[string]ModelAssignmentState{
+		"sdd-apply": {ProviderID: "github-copilot", ModelID: "gpt-4.1"},
+	}
 	existingClaude := map[string]string{"sdd-explore": "sonnet", "sdd-archive": "haiku"}
 	existingKiro := map[string]string{"sdd-design": "opus"}
 	existingCommunityTools := []string{"codegraph"}
@@ -58,6 +61,7 @@ func TestMergeAgents(t *testing.T) {
 				CommunityTools:           existingCommunityTools,
 				CommunityToolsConfigured: true,
 				ModelAssignments:         existingAssignments,
+				VSCodeModelAssignments:   existingVSCode,
 				ClaudeModelAssignments:   existingClaude,
 				KiroModelAssignments:     existingKiro,
 				Persona:                  "gentleman",
@@ -78,6 +82,9 @@ func TestMergeAgents(t *testing.T) {
 			// Verify all preserved fields are unchanged.
 			if !reflect.DeepEqual(got.ModelAssignments, tt.existing.ModelAssignments) {
 				t.Errorf("ModelAssignments not preserved: got %v, want %v", got.ModelAssignments, tt.existing.ModelAssignments)
+			}
+			if !reflect.DeepEqual(got.VSCodeModelAssignments, tt.existing.VSCodeModelAssignments) {
+				t.Errorf("VSCodeModelAssignments not preserved: got %v, want %v", got.VSCodeModelAssignments, tt.existing.VSCodeModelAssignments)
 			}
 			if !reflect.DeepEqual(got.ClaudeModelAssignments, tt.existing.ClaudeModelAssignments) {
 				t.Errorf("ClaudeModelAssignments not preserved: got %v, want %v", got.ClaudeModelAssignments, tt.existing.ClaudeModelAssignments)
@@ -342,6 +349,9 @@ func TestModelAssignmentsRoundTrip(t *testing.T) {
 		ModelAssignments: map[string]ModelAssignmentState{
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		},
+		VSCodeModelAssignments: map[string]ModelAssignmentState{
+			"sdd-apply": {ProviderID: "github-copilot", ModelID: "gpt-4.1"},
+		},
 	}
 
 	if err := Write(home, want); err != nil {
@@ -361,6 +371,9 @@ func TestModelAssignmentsRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.ModelAssignments, want.ModelAssignments) {
 		t.Errorf("ModelAssignments = %v, want %v", got.ModelAssignments, want.ModelAssignments)
+	}
+	if !reflect.DeepEqual(got.VSCodeModelAssignments, want.VSCodeModelAssignments) {
+		t.Errorf("VSCodeModelAssignments = %v, want %v", got.VSCodeModelAssignments, want.VSCodeModelAssignments)
 	}
 }
 
@@ -467,6 +480,9 @@ func TestBackwardCompatNoAssignments(t *testing.T) {
 	}
 	if s.ModelAssignments != nil {
 		t.Errorf("ModelAssignments = %v, want nil", s.ModelAssignments)
+	}
+	if s.VSCodeModelAssignments != nil {
+		t.Errorf("VSCodeModelAssignments = %v, want nil", s.VSCodeModelAssignments)
 	}
 }
 
