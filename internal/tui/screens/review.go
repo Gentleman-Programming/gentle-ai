@@ -60,6 +60,15 @@ func RenderReview(payload planner.ReviewPayload, cursor int) string {
 		b.WriteString("\n")
 	}
 
+	if len(payload.AgentNotes) > 0 {
+		b.WriteString(styles.HeadingStyle.Render("Notes"))
+		b.WriteString("\n")
+		for agentID, note := range payload.AgentNotes {
+			b.WriteString("  " + styles.UnselectedStyle.Render(string(agentID)) + ": " + styles.SubtextStyle.Render(note) + "\n")
+		}
+		b.WriteString("\n")
+	}
+
 	if len(payload.UnsupportedAgents) > 0 {
 		b.WriteString(styles.WarningStyle.Render("Unsupported agents: " + joinIDs(payload.UnsupportedAgents)))
 		b.WriteString("\n\n")
