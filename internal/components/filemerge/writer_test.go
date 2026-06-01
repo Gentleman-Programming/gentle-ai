@@ -1,6 +1,7 @@
 package filemerge
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -125,7 +126,7 @@ func TestWriteFileAtomicRejectsOversizedExistingFile(t *testing.T) {
 	}
 }
 
-func TestWriteFileAtomicRejectsSymlinkParentDirectory(t *testing.T) {
+func TestWriteFileAtomicFollowsSymlinkParentDirectory(t *testing.T) {
 	base := t.TempDir()
 	realDir := filepath.Join(base, "real")
 	if err := os.Mkdir(realDir, 0o755); err != nil {
@@ -142,10 +143,23 @@ func TestWriteFileAtomicRejectsSymlinkParentDirectory(t *testing.T) {
 		t.Fatalf("Symlink(linkDir) error = %v", err)
 	}
 
+	// Writing through a symlinked parent (e.g. ~/.claude/agents → dotfiles repo)
+	// must succeed: the file lands in the real directory.
+	content := []byte("value\n")
 	path := filepath.Join(linkDir, "config.txt")
-	_, err := WriteFileAtomic(path, []byte("value\n"), 0o644)
-	if err == nil {
-		t.Fatal("WriteFileAtomic() error = nil, want symlink parent rejection")
+	_, err := WriteFileAtomic(path, content, 0o644)
+	if err != nil {
+		t.Fatalf("WriteFileAtomic() via symlink parent error = %v, want success", err)
+	}
+
+	// Verify the file was written to the real directory.
+	realPath := filepath.Join(realDir, "config.txt")
+	got, readErr := os.ReadFile(realPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile(realPath) error = %v", readErr)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("content = %q, want %q", got, content)
 	}
 }
 

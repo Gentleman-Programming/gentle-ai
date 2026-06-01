@@ -150,7 +150,17 @@ func ensureAtomicParentDir(dir, path string) error {
 		return fmt.Errorf("stat parent directory for %q: %w", path, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing symlink parent directory %q for %q", dir, path)
+		// Parent is a symlink (e.g. ~/.claude/agents → dotfiles repo).
+		// Resolve the target and continue checks against the real directory.
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			return fmt.Errorf("resolving symlink parent %q for %q: %w", dir, path, err)
+		}
+		info, err = os.Stat(resolved)
+		if err != nil {
+			return fmt.Errorf("stat symlink target %q for %q: %w", resolved, path, err)
+		}
+		dir = resolved
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("parent path %q for %q is not a directory", dir, path)
