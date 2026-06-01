@@ -1,6 +1,9 @@
 package planner
 
-import "github.com/gentleman-programming/gentle-ai/internal/model"
+import (
+	"github.com/gentleman-programming/gentle-ai/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
+)
 
 func BuildReviewPayload(selection model.Selection, resolved ResolvedPlan) ReviewPayload {
 	autoAdded := make(map[model.ComponentID]struct{}, len(resolved.AddedDependencies))
@@ -21,6 +24,8 @@ func BuildReviewPayload(selection model.Selection, resolved ResolvedPlan) Review
 		components = append(components, ComponentAction{ID: component, Action: action})
 	}
 
+	agentNotes := buildAgentNotes(resolved.Agents)
+
 	return ReviewPayload{
 		Agents:            resolved.Agents,
 		UnsupportedAgents: resolved.UnsupportedAgents,
@@ -32,7 +37,30 @@ func BuildReviewPayload(selection model.Selection, resolved ResolvedPlan) Review
 		// Issue #145: pass skills from selection.
 		Skills: selection.Skills,
 		// Issue #149: pass StrictTDD and whether SDD is in plan.
-		StrictTDD: selection.StrictTDD,
-		HasSDD:    hasSDD,
+		StrictTDD:  selection.StrictTDD,
+		HasSDD:     hasSDD,
+		AgentNotes: agentNotes,
 	}
+}
+
+// buildAgentNotes collects catalog notes for the selected agents.
+// Only agents that carry a Note in the catalog are included.
+func buildAgentNotes(agents []model.AgentID) map[model.AgentID]string {
+	notesByID := map[model.AgentID]string{}
+	for _, a := range catalog.AllAgents() {
+		if a.Note != "" {
+			notesByID[a.ID] = a.Note
+		}
+	}
+
+	result := map[model.AgentID]string{}
+	for _, id := range agents {
+		if note, ok := notesByID[id]; ok {
+			result[id] = note
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }

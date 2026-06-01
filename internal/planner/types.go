@@ -37,6 +37,10 @@ type ReviewPayload struct {
 	// HasSDD is true when the SDD component is present in the resolved plan (Issue #149).
 	// Controls whether the Strict TDD row is shown in the review screen.
 	HasSDD bool
+
+	// AgentNotes holds informational notes for selected agents that have special
+	// behavior (e.g. Conductor inheriting config from Claude Code).
+	AgentNotes map[model.AgentID]string
 }
 
 type PlatformDecision struct {
