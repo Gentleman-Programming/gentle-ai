@@ -12,6 +12,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
@@ -22,6 +23,7 @@ import (
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
+func kilocodeAdapter() agents.Adapter { return kilocode.NewAdapter() }
 func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
 func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
@@ -34,6 +36,79 @@ func mockNoPackageManager(t *testing.T) {
 		return "", fmt.Errorf("not found")
 	}
 	t.Cleanup(func() { npmLookPath = orig })
+}
+
+func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
+	tests := []struct {
+		agent model.AgentID
+		want  string
+	}{
+		{model.AgentClaudeCode, "claude/sdd-orchestrator.md"},
+		{model.AgentOpenCode, "opencode/sdd-orchestrator.md"},
+		{model.AgentKilocode, "opencode/sdd-orchestrator.md"},
+		{model.AgentGeminiCLI, "gemini/sdd-orchestrator.md"},
+		{model.AgentCursor, "cursor/sdd-orchestrator.md"},
+		{model.AgentVSCodeCopilot, "generic/sdd-orchestrator.md"},
+		{model.AgentCodex, "codex/sdd-orchestrator.md"},
+		{model.AgentAntigravity, "antigravity/sdd-orchestrator.md"},
+		{model.AgentWindsurf, "windsurf/sdd-orchestrator.md"},
+		{model.AgentKimi, "kimi/sdd-orchestrator.md"},
+		{model.AgentQwenCode, "qwen/sdd-orchestrator.md"},
+		{model.AgentKiroIDE, "kiro/sdd-orchestrator.md"},
+		{model.AgentOpenClaw, "generic/sdd-orchestrator.md"},
+		{model.AgentPi, "generic/sdd-orchestrator.md"},
+		{model.AgentTrae, "generic/sdd-orchestrator.md"},
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.agent), func(t *testing.T) {
+			if got := sddOrchestratorAsset(tc.agent); got != tc.want {
+				t.Fatalf("sddOrchestratorAsset(%q) = %q, want %q", tc.agent, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestInjectOpenCodeAndKilocodeLanguageContractOutputs(t *testing.T) {
+	tests := []struct {
+		name    string
+		adapter agents.Adapter
+	}{
+		{name: "opencode", adapter: opencodeAdapter()},
+		{name: "kilocode", adapter: kilocodeAdapter()},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			mockNoPackageManager(t)
+
+			if _, err := Inject(home, tc.adapter, model.SDDModeMulti); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+
+			settingsPath := tc.adapter.SettingsPath(home)
+			content, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+			}
+			text := string(content)
+
+			for _, required := range []string{
+				"Generated technical artifacts default to English",
+				"Public/contextual comments follow the target context language",
+			} {
+				if !strings.Contains(text, required) {
+					t.Fatalf("%s generated settings missing language contract %q", tc.name, required)
+				}
+			}
+			for _, leak := range []string{"elegí", "Respondé", "¿Querés ajustar algo o continuamos?"} {
+				if strings.Contains(text, leak) {
+					t.Fatalf("%s generated settings contains language leak %q", tc.name, leak)
+				}
+			}
+		})
+	}
 }
 
 func TestInjectClaudeWritesSectionMarkers(t *testing.T) {
@@ -444,7 +519,8 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"ask the localized user-facing preflight prompt above and STOP",
 		"Match the user's current language",
 		"Do NOT mix languages inside one preflight prompt",
-		"If the current language is Spanish, use the Spanish localized shape below verbatim",
+		"If the current language is Spanish, use the Spanish localized shape below as the neutral fallback",
+		"adapt only user-facing prose to that persona",
 		"pause after each delegated phase returns",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 	} {
@@ -491,17 +567,94 @@ func TestInjectOpenCodeMigratesPartialPreflightPrompt(t *testing.T) {
 	for _, wanted := range []string{
 		"# Custom prompt",
 		"Before continuing with SDD, choose one option per group.",
-		"Antes de continuar con SDD, elegí una opción por grupo.",
+		"Antes de continuar con SDD, elija una opción por grupo.",
 		"### SDD Session Preflight (HARD GATE)",
 		"openspec/config.yaml",
 		"Match the user's current language",
 		"Do NOT mix languages inside one preflight prompt",
-		"If the current language is Spanish, use the Spanish localized shape below verbatim",
+		"If the current language is Spanish, use the Spanish localized shape below as the neutral fallback",
+		"adapt only user-facing prose to that persona",
 		"pause after each delegated phase returns",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated partial prompt content %q", wanted)
+		}
+	}
+}
+
+func TestInjectOpenCodeReplacesFullyFormedStalePreflightPrompt(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+
+	stalePrompt := `# Custom prompt
+
+<!-- gentle-ai:sdd-session-preflight-migration -->
+### SDD Session Preflight (HARD GATE)
+
+Before executing ANY SDD command or natural-language SDD request, ensure this session has an explicit preflight.
+
+Match the user's current language.
+Do NOT mix languages inside one preflight prompt.
+If the current language is Spanish, use the Spanish localized shape below verbatim.
+Before continuing with SDD, choose one option per group.
+Antes de continuar con SDD, elegí una opción por grupo.
+Respondé con "usar recomendado" o con códigos como: A1, B1, C1, D1.
+Hard gate rules:
+- openspec/config.yaml does NOT satisfy session preflight.
+- Never launch ` + "`sdd-apply`" + ` just because the user asked to implement a feature.
+- In interactive mode, pause after each delegated phase returns and ask: "¿Querés ajustar algo o continuamos?".
+<!-- /gentle-ai:sdd-session-preflight-migration -->
+`
+	seed := `{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "prompt": ` + strconv.Quote(stalePrompt) + `
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		PreserveOpenCodeOrchestratorPrompt: true,
+	})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	text := string(settingsBytes)
+	for _, leak := range []string{
+		"elegí",
+		"Respondé",
+		"¿Querés ajustar algo o continuamos?",
+		"If the current language is Spanish, use the Spanish localized shape below verbatim",
+	} {
+		if strings.Contains(text, leak) {
+			t.Fatalf("opencode.json retained stale preserved prompt leak %q", leak)
+		}
+	}
+	for _, wanted := range []string{
+		"# Custom prompt",
+		"If the current language is Spanish, use the Spanish localized shape below as the neutral fallback",
+		"adapt only user-facing prose to that persona",
+		"Antes de continuar con SDD, elija una opción por grupo.",
+		"Responda con",
+		"for Spanish neutral fallback ask",
+	} {
+		if !strings.Contains(text, wanted) {
+			t.Fatalf("opencode.json missing refreshed preserved prompt content %q", wanted)
 		}
 	}
 }
@@ -3507,8 +3660,9 @@ func TestSDDOrchestratorAssetSelection(t *testing.T) {
 		{agent: model.AgentWindsurf, want: "windsurf/sdd-orchestrator.md"},
 		{agent: model.AgentCursor, want: "cursor/sdd-orchestrator.md"},
 		{agent: model.AgentQwenCode, want: "qwen/sdd-orchestrator.md"},
-		{agent: model.AgentClaudeCode, want: "generic/sdd-orchestrator.md"},
+		{agent: model.AgentClaudeCode, want: "claude/sdd-orchestrator.md"},
 		{agent: model.AgentOpenCode, want: "opencode/sdd-orchestrator.md"},
+		{agent: model.AgentKilocode, want: "opencode/sdd-orchestrator.md"},
 		{agent: model.AgentVSCodeCopilot, want: "generic/sdd-orchestrator.md"},
 	}
 

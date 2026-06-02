@@ -2719,7 +2719,7 @@ func TestPreselectedAgents_AllSixAgentsMappedCorrectly(t *testing.T) {
 func TestAgentsToManage_StateTakesPriorityOverDetection(t *testing.T) {
 	tests := []struct {
 		name        string
-		stateAgents []string       // InstalledAgents from state.json
+		stateAgents []string        // InstalledAgents from state.json
 		detectedIDs []model.AgentID // agents detected on filesystem
 		want        []model.AgentID
 		desc        string
@@ -3925,11 +3925,11 @@ func TestPinErrClearedOnScreenReentry(t *testing.T) {
 // ComponentPersona when persona != PersonaCustom and excludes it for PersonaCustom.
 func TestComponentsForPreset_PersonaMatrix(t *testing.T) {
 	tests := []struct {
-		name          string
-		preset        model.PresetID
-		persona       model.PersonaID
-		wantPersona   bool
-		wantNil       bool
+		name        string
+		preset      model.PresetID
+		persona     model.PersonaID
+		wantPersona bool
+		wantNil     bool
 	}{
 		{
 			name:        "full-gentleman + gentleman includes persona",
@@ -4034,8 +4034,8 @@ func TestPersonaScreenRecomputesComponentsWhenPresetAlreadySet(t *testing.T) {
 		t.Fatal("setup: expected ComponentPersona in initial components")
 	}
 
-	// Move cursor to PersonaCustom (index 2) and confirm.
-	m.Cursor = 2 // PersonaOptions() = [Gentleman, Neutral, Custom]
+	// Move cursor to PersonaCustom and confirm.
+	m.Cursor = len(screens.PersonaOptions()) - 1
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 

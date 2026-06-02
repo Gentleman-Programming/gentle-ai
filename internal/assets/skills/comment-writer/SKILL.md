@@ -27,7 +27,7 @@ Use it for:
 | Keep it short | Prefer 1 to 3 short paragraphs or a tight bullet list. |
 | Explain why | Give the technical reason when asking for a change. |
 | Avoid pile-ons | Comment on the highest-value issue, not every tiny preference. |
-| Match thread language | Write in the same language the thread uses. For regional tone and style, defer to the active persona — do not inject regional expressions (e.g. voseo) on your own. |
+| Match target context language | Write in the target context language by default: Spanish issue/thread -> Spanish comment, English issue/thread -> English comment, mixed context -> target message language. If the user explicitly requests a language or tone, follow that request. For Spanish comments, use neutral/professional Spanish by default unless the user or target context clearly calls for regional tone. |
 | No em dashes | Use commas, periods, or parentheses instead. |
 
 ## Comment Formula

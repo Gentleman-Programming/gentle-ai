@@ -91,9 +91,10 @@ const (
 type PersonaID string
 
 const (
-	PersonaGentleman PersonaID = "gentleman"
-	PersonaNeutral   PersonaID = "neutral"
-	PersonaCustom    PersonaID = "custom"
+	PersonaGentleman                 PersonaID = "gentleman"
+	PersonaGentlemanNeutralArtifacts PersonaID = "gentleman-neutral-artifacts"
+	PersonaNeutral                   PersonaID = "neutral"
+	PersonaCustom                    PersonaID = "custom"
 )
 
 // SystemPromptStrategy defines how an agent's system prompt file is managed.

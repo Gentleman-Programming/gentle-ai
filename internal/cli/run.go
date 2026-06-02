@@ -1027,7 +1027,7 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			if adapter.SupportsSystemPrompt() && adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
 				paths = append(paths, adapter.SystemPromptFile(targetDir))
 			}
-			if selection.Persona == model.PersonaGentleman {
+			if isGentlemanConversationPersona(selection.Persona) {
 				if adapter.SupportsOutputStyles() {
 					paths = append(paths, adapter.OutputStyleDir(targetDir)+"/gentleman.md")
 					if p := adapter.SettingsPath(targetDir); p != "" {

@@ -135,6 +135,44 @@ func TestWriteSharedPromptFilesContent(t *testing.T) {
 	}
 }
 
+func TestWriteSharedPromptFilesLanguageContract(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := WriteSharedPromptFiles(home, nil); err != nil {
+		t.Fatalf("WriteSharedPromptFiles() error = %v", err)
+	}
+
+	for _, fileName := range []string{
+		"sdd-init.md",
+		"sdd-explore.md",
+		"sdd-propose.md",
+		"sdd-spec.md",
+		"sdd-design.md",
+		"sdd-tasks.md",
+		"sdd-apply.md",
+		"sdd-verify.md",
+		"sdd-archive.md",
+		"sdd-onboard.md",
+	} {
+		t.Run(fileName, func(t *testing.T) {
+			path := filepath.Join(SharedPromptDir(home), fileName)
+			content, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile(%q) error = %v", path, err)
+			}
+			text := string(content)
+			for _, required := range []string{
+				"Generated technical artifacts default to English",
+				"If Spanish technical artifacts are explicitly requested, use neutral/professional Spanish",
+			} {
+				if !strings.Contains(text, required) {
+					t.Fatalf("%s missing delegated prompt language contract %q", fileName, required)
+				}
+			}
+		})
+	}
+}
+
 // TestWriteSharedPromptFilesWithCapabilities verifies that prompt file content
 // differs based on model capability (small vs capable).
 func TestWriteSharedPromptFilesWithCapabilities(t *testing.T) {

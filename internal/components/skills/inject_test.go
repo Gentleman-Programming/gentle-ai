@@ -18,6 +18,38 @@ import (
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 
+func TestInjectCommentWriterLanguageContractForOpenCode(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, opencodeAdapter(), []model.SkillID{model.SkillCommentWriter})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject() first changed = false")
+	}
+
+	path := filepath.Join(home, ".config", "opencode", "skills", "comment-writer", "SKILL.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	for _, required := range []string{
+		"target context language",
+		"explicitly requests a language",
+		"neutral/professional Spanish by default",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("installed comment-writer missing language contract %q", required)
+		}
+	}
+	if strings.Contains(text, "If writing in Spanish, use Rioplatense Spanish/voseo") {
+		t.Fatal("installed comment-writer still forces Rioplatense Spanish for all Spanish comments")
+	}
+}
+
 func TestInjectWritesSkillFilesForOpenCode(t *testing.T) {
 	home := t.TempDir()
 

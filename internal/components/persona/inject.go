@@ -290,7 +290,7 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 		// Module 2: output-style (Gentleman only; empty file for neutral keeps the
 		// include harmless via "ignore missing" in the template).
 		outputStyleContent := ""
-		if persona == model.PersonaGentleman {
+		if isGentlemanConversationPersona(persona) {
 			outputStyleContent = assets.MustRead("kimi/output-style-gentleman.md")
 		}
 		outputStylePath := filepath.Join(configDir, "output-style.md")
@@ -310,7 +310,7 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 	if !syncManaged && (adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode) && persona != model.PersonaCustom {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
-			if persona == model.PersonaGentleman {
+			if isGentlemanConversationPersona(persona) {
 				agentResult, err := mergeJSONFile(settingsPath, openCodeAgentOverlayJSON)
 				if err != nil {
 					return InjectionResult{}, err
@@ -334,7 +334,7 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 	}
 
 	// 3. Gentleman-only: write output style + merge into settings (if agent supports it).
-	if persona == model.PersonaGentleman && adapter.Agent() != model.AgentOpenClaw && adapter.SupportsOutputStyles() {
+	if isGentlemanConversationPersona(persona) && adapter.Agent() != model.AgentOpenClaw && adapter.SupportsOutputStyles() {
 		outputStyleDir := adapter.OutputStyleDir(homeDir)
 		if outputStyleDir != "" {
 			outputStylePath := outputStyleDir + "/gentleman.md"
@@ -362,7 +362,7 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 
 	// 3b. Non-gentleman cleanup: remove residual Gentleman output-style artifacts
 	// left by a previous install when the user switches away from the gentleman persona.
-	if persona != model.PersonaGentleman && adapter.Agent() != model.AgentOpenClaw && adapter.SupportsOutputStyles() {
+	if !isGentlemanConversationPersona(persona) && adapter.Agent() != model.AgentOpenClaw && adapter.SupportsOutputStyles() {
 		outputStyleDir := adapter.OutputStyleDir(homeDir)
 		if outputStyleDir != "" {
 			outputStylePath := outputStyleDir + "/gentleman.md"
@@ -452,6 +452,10 @@ func shouldStripManagedLegacyPersona(existing string) bool {
 	return strings.Contains(existing, "<!-- gentle-ai:persona -->")
 }
 
+func isGentlemanConversationPersona(persona model.PersonaID) bool {
+	return persona == model.PersonaGentleman || persona == model.PersonaGentlemanNeutralArtifacts
+}
+
 func personaContent(agent model.AgentID, persona model.PersonaID) string {
 	switch persona {
 	case model.PersonaNeutral:
@@ -511,7 +515,7 @@ var osReadFile = func(path string) ([]byte, error) {
 // persona text before them. Returns ("", false) when no preservation is needed
 // (empty file, Gentleman persona, or no managed markers found).
 func preserveManagedSections(existing, newPersona string, persona model.PersonaID) (string, bool) {
-	if existing == "" || persona == model.PersonaGentleman {
+	if existing == "" || isGentlemanConversationPersona(persona) {
 		return "", false
 	}
 

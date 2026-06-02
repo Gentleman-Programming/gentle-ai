@@ -508,7 +508,7 @@ func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model
 		if adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
 			paths = append(paths, adapter.SystemPromptFile(targetDir))
 		}
-		if selection.Persona == model.PersonaGentleman && adapter.SupportsOutputStyles() {
+		if isGentlemanConversationPersona(selection.Persona) && adapter.SupportsOutputStyles() {
 			paths = append(paths, adapter.OutputStyleDir(targetDir)+"/gentleman.md")
 			if p := adapter.SettingsPath(targetDir); p != "" {
 				paths = append(paths, p)

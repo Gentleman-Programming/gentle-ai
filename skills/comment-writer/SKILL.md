@@ -27,7 +27,7 @@ Use it for:
 | Keep it short | Prefer 1 to 3 short paragraphs or a tight bullet list. |
 | Explain why | Give the technical reason when asking for a change. |
 | Avoid pile-ons | Comment on the highest-value issue, not every tiny preference. |
-| Match thread language | Write in the thread/user language. If writing in Spanish, use Rioplatense Spanish/voseo: `podés`, `tenés`, `fijate`, `dale`. |
+| Match target context language | Write in the target context language by default: Spanish issue/thread -> Spanish comment, English issue/thread -> English comment, mixed context -> target message language. If the user explicitly requests a language or tone, follow that request. For Spanish comments, use neutral/professional Spanish by default unless the user or target context clearly calls for regional tone. |
 | No em dashes | Use commas, periods, or parentheses instead. |
 
 ## Comment Formula
@@ -45,25 +45,25 @@ Use it for:
 ### Request change
 
 ```markdown
-Buenísimo el enfoque. Acá separaría este cambio en otro commit porque mezcla la validación con el wiring de UI.
+Good approach overall. I'd split this into a separate commit because it mixes validation logic with UI wiring.
 
-Eso le baja carga al reviewer y hace que el rollback sea más claro si falla la integración.
+That keeps the reviewer's focus narrower and makes rollback cleaner if the integration fails.
 ```
 
 ### Approve with a note
 
 ```markdown
-Está bien encaminado y el scope se entiende rápido.
+Approved. The scope is clear and the change is well-contained.
 
-Dejo aprobado. Para el próximo PR, agregá el link al anterior y al siguiente así la cadena queda navegable.
+For the next PR, add links to the previous and following PRs so the chain stays navigable.
 ```
 
 ### Ask for split
 
 ```markdown
-Este PR supera el presupuesto de 400 líneas cambiadas, así que necesitamos dividirlo o justificar `size:exception`.
+This PR exceeds the 400-line budget, so we need to split it or justify `size:exception`.
 
-Mi sugerencia: primero foundation + tests, después integración, después docs. Así cada review tiene inicio y fin claros.
+Suggested order: foundation + tests first, then integration, then docs. That gives each review a clear start and end.
 ```
 
 ## Commands

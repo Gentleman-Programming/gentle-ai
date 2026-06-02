@@ -832,7 +832,7 @@ Required preflight choices: execution mode, artifact store, chained PR strategy,
 
 Ask the user directly with a compact, numbered preflight prompt. Match the user's current language for all user-facing prose. If the user writes Spanish, ask the preflight in Spanish. Keep option codes (` + "`A1`" + `, ` + "`B1`" + `, ` + "`C1`" + `, ` + "`D1`" + `) and canonical values unchanged. Do NOT ask the user to type raw keys like ` + "`execution mode`" + `, ` + "`artifact store`" + `, ` + "`chained PR strategy`" + `, or ` + "`review budget`" + `. Do NOT mention non-existent tools. Do NOT invent informal values; use only the canonical values after the user chooses.
 
-Do NOT mix languages inside one preflight prompt: headings, option titles, descriptions, and follow-up text must all be in the user's current language. If the current language is Spanish, use the Spanish localized shape below verbatim; do not translate only the intro while keeping English labels like ` + "`Pace`" + `, ` + "`Artifacts`" + `, ` + "`Review`" + `, ` + "`recommended`" + `, ` + "`forecast`" + `, or ` + "`budget`" + `.
+Do NOT mix languages inside one preflight prompt: headings, option titles, descriptions, and follow-up text must all be in the user's current language. If the current language is Spanish, use the Spanish localized shape below as the neutral fallback; if an active persona defines a direct-conversation Spanish style, adapt only user-facing prose to that persona while preserving option codes and canonical values. Do not translate only the intro while keeping English labels like ` + "`Pace`" + `, ` + "`Artifacts`" + `, ` + "`Review`" + `, ` + "`recommended`" + `, ` + "`forecast`" + `, or ` + "`budget`" + `.
 
 Use this shape for English users, or translate user-facing prose to the user's current language while preserving option codes. Translation means the whole shape: headings, option titles, and descriptions together.
 
@@ -866,8 +866,8 @@ After asking this, STOP and wait for the user's answer.
 If the user's current language is Spanish, use this localized shape:
 
 ` + "```text" + `
-Antes de continuar con SDD, elegí una opción por grupo.
-Respondé con "usar recomendado" o con códigos como: A1, B1, C1, D1.
+Antes de continuar con SDD, elija una opción por grupo.
+Responda con "usar recomendado" o con códigos como: A1, B1, C1, D1.
 
 A. Ritmo
    A1 Interactivo (recomendado): mostrar cada fase y esperar confirmación antes de continuar.
@@ -897,7 +897,7 @@ Hard gate rules:
 - ` + "`openspec/config.yaml`" + `, existing SDD artifacts, previous ` + "`sdd-init`" + ` results, or installed SDD assets do NOT satisfy session preflight.
 - If the session has no preflight block, ask the localized user-facing preflight prompt above and STOP. Do not run init, delegate phases, edit files, or apply tasks in the same turn.
 - For a new feature request that says to use SDD, start at preflight -> init guard -> explore/proposal. Never launch ` + "`sdd-apply`" + ` just because the user asked to implement a feature.
-- In ` + "`interactive`" + ` mode, pause after each delegated phase returns, summarize the phase, ask before launching the next phase, and STOP. Match the user's language; for Spanish ask: "¿Querés ajustar algo o continuamos?". Do not run /sdd-ff phases back-to-back unless execution mode is ` + "`auto`" + `.
+- In ` + "`interactive`" + ` mode, pause after each delegated phase returns, summarize the phase, ask before launching the next phase, and STOP. Match the user's language and active persona for direct conversation only; for Spanish neutral fallback ask: "¿Quiere ajustar algo o continuamos?". Do not run /sdd-ff phases back-to-back unless execution mode is ` + "`auto`" + `.
 <!-- /gentle-ai:sdd-session-preflight-migration -->
 `
 
@@ -906,10 +906,11 @@ Hard gate rules:
 		strings.Contains(prompt, "Never launch `sdd-apply`") &&
 		strings.Contains(prompt, "Match the user's current language") &&
 		strings.Contains(prompt, "Do NOT mix languages inside one preflight prompt") &&
-		strings.Contains(prompt, "If the current language is Spanish, use the Spanish localized shape below verbatim") &&
+		strings.Contains(prompt, "Spanish localized shape below as the neutral fallback") &&
 		strings.Contains(prompt, "pause after each delegated phase returns") &&
 		strings.Contains(prompt, "Before continuing with SDD") &&
-		!strings.Contains(prompt, "question` tool") {
+		!strings.Contains(prompt, "question` tool") &&
+		!containsOpenCodeOrchestratorLanguageLeak(prompt) {
 		return prompt
 	}
 
@@ -923,6 +924,20 @@ Hard gate rules:
 	}
 
 	return strings.TrimRight(prompt, "\n") + preflight
+}
+
+func containsOpenCodeOrchestratorLanguageLeak(prompt string) bool {
+	for _, leak := range []string{
+		"elegí",
+		"Respondé",
+		"¿Querés ajustar algo o continuamos?",
+		"If the current language is Spanish, use the Spanish localized shape below verbatim",
+	} {
+		if strings.Contains(prompt, leak) {
+			return true
+		}
+	}
+	return false
 }
 
 func readOpenCodeAgentPrompt(settingsPath, agentKey string) (string, error) {
@@ -1461,6 +1476,8 @@ func hasSDDOrchestrator(content string) bool {
 // content based on the agent. Agent-specific assets take priority; generic is fallback.
 func sddOrchestratorAsset(agent model.AgentID) string {
 	switch agent {
+	case model.AgentClaudeCode:
+		return "claude/sdd-orchestrator.md"
 	case model.AgentGeminiCLI:
 		return "gemini/sdd-orchestrator.md"
 	case model.AgentCodex:
@@ -1477,7 +1494,7 @@ func sddOrchestratorAsset(agent model.AgentID) string {
 		return "qwen/sdd-orchestrator.md"
 	case model.AgentKiroIDE:
 		return "kiro/sdd-orchestrator.md"
-	case model.AgentOpenCode:
+	case model.AgentOpenCode, model.AgentKilocode:
 		return "opencode/sdd-orchestrator.md"
 	default:
 		return "generic/sdd-orchestrator.md"
@@ -1696,8 +1713,8 @@ func stripBareOrchestratorSection(content string) string {
 
 func injectMarkdownSections(homeDir string, adapter agents.Adapter, assignments map[string]model.ClaudeModelAlias) (InjectionResult, error) {
 	promptPath := adapter.SystemPromptFile(homeDir)
-	content := assets.MustRead("claude/sdd-orchestrator.md")
-	if len(assignments) > 0 {
+	content := assets.MustRead(sddOrchestratorAsset(adapter.Agent()))
+	if adapter.Agent() == model.AgentClaudeCode && len(assignments) > 0 {
 		var err error
 		content, err = injectClaudeModelAssignments(content, assignments)
 		if err != nil {
