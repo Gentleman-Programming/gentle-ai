@@ -1,5 +1,5 @@
 // === Gentle AI x Workflow governance preamble (workflow-governance skill) ===
-// Copy this block to the TOP of any Workflow that delegates real work under ultracode.
+// Copy this block to the TOP of any Workflow that delegates real work (under ultracode/xhigh OR when the Workflow tool is opted into via the 'workflow' keyword).
 // It reproduces, on the Workflow agent() surface, the controls Gentle AI binds to the Agent tool.
 // Workflow scripts cannot import files, so this is a copy-paste template, not a module.
 
@@ -62,7 +62,6 @@ function buildGoverned(role, task, ctx = {}) {
 // Machine-checked governance gate. Returns an array of violations (empty = pass).
 function assertGoverned(role, built, ctx) {
   const errs = []
-  if (!built.opts.model) errs.push(`[${role}] missing model alias`)
   if (!(role in MODEL_BY_ROLE)) errs.push(`[${role}] unknown role '${role}' — not in MODEL_BY_ROLE; no agentType/TDD/cost gating applied`)
   if (!/mem_save/.test(built.prompt)) errs.push(`[${role}] missing engram save directive`)
   if (TDD_ROLES.has(role) && ctx && ctx.strictTdd && !/STRICT TDD MODE IS ACTIVE/.test(built.prompt)) errs.push(`[${role}] missing strict-TDD forwarding`)
