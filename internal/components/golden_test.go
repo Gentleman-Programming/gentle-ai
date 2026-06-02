@@ -176,7 +176,10 @@ func TestGoldenSDD_OpenCode_Multi(t *testing.T) {
 	// Normalize the absolute home path in the settings JSON so the golden
 	// file remains stable across test runs (temp dirs change each run).
 	// Sub-agent prompts now use {file:/abs/path/...} references.
-	normalizedSettings := []byte(strings.ReplaceAll(string(settingsJSON), home, "{{HOME}}"))
+	jsonStr := string(settingsJSON)
+	jsonStr = strings.ReplaceAll(jsonStr, home, "{{HOME}}")
+	jsonStr = strings.ReplaceAll(jsonStr, filepath.ToSlash(home), "{{HOME}}")
+	normalizedSettings := []byte(jsonStr)
 	assertGolden(t, "sdd-opencode-multi-settings.golden", normalizedSettings)
 
 	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
@@ -209,6 +212,7 @@ func TestGoldenSDD_Cursor(t *testing.T) {
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
 		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".cursor", "skills")
 	for _, name := range expectedSkills {
@@ -242,6 +246,7 @@ func TestGoldenSDD_Gemini(t *testing.T) {
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
 		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".gemini", "skills")
 	for _, name := range expectedSkills {
@@ -255,6 +260,7 @@ func TestGoldenSDD_Gemini(t *testing.T) {
 func TestGoldenSDD_VSCode(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 
 	adapter := vscodeAdapter()
 
@@ -279,6 +285,7 @@ func TestGoldenSDD_VSCode(t *testing.T) {
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
 		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".copilot", "skills")
 	for _, name := range expectedSkills {
@@ -300,8 +307,8 @@ func TestGoldenSDD_Codex(t *testing.T) {
 		t.Fatalf("sdd.Inject(codex) changed = false")
 	}
 
-	// Codex writes SDD orchestrator to ~/.codex/agents.md.
-	agentsMD := readTestFile(t, filepath.Join(home, ".codex", "agents.md"))
+	// Codex writes SDD orchestrator to ~/.codex/AGENTS.md.
+	agentsMD := readTestFile(t, filepath.Join(home, ".codex", "AGENTS.md"))
 	assertGolden(t, "sdd-codex-agentsmd.golden", agentsMD)
 
 	// Golden-check a representative SDD skill file.
@@ -312,6 +319,7 @@ func TestGoldenSDD_Codex(t *testing.T) {
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
 		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".codex", "skills")
 	for _, name := range expectedSkills {
@@ -346,6 +354,7 @@ func TestGoldenSDD_Windsurf(t *testing.T) {
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
 		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".codeium", "windsurf", "skills")
 	for _, name := range expectedSkills {
@@ -801,15 +810,16 @@ func TestGoldenSDD_Antigravity(t *testing.T) {
 	assertGolden(t, "sdd-antigravity-rulesmd.golden", rulesFile)
 
 	// Golden-check a representative SDD skill file.
-	skillInit := readTestFile(t, filepath.Join(home, ".gemini", "antigravity", "skills", "sdd-init", "SKILL.md"))
+	skillInit := readTestFile(t, filepath.Join(home, ".gemini", "antigravity-cli", "skills", "sdd-init", "SKILL.md"))
 	assertGolden(t, "sdd-antigravity-skill-sdd-init.golden", skillInit)
 
 	// Verify ALL expected SDD skill files exist.
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
 		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-onboard",
 	}
-	skillsDir := filepath.Join(home, ".gemini", "antigravity", "skills")
+	skillsDir := filepath.Join(home, ".gemini", "antigravity-cli", "skills")
 	for _, name := range expectedSkills {
 		path := filepath.Join(skillsDir, name, "SKILL.md")
 		if _, err := os.Stat(path); err != nil {
@@ -846,8 +856,8 @@ func TestGoldenEngram_Antigravity(t *testing.T) {
 		t.Fatalf("engram.Inject(antigravity) changed = false")
 	}
 
-	// MCP config written to ~/.gemini/antigravity/mcp_config.json.
-	mcpJSON := readTestFile(t, filepath.Join(home, ".gemini", "antigravity", "mcp_config.json"))
+	// MCP config written to ~/.gemini/antigravity-cli/mcp_config.json.
+	mcpJSON := readTestFile(t, filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json"))
 	assertGolden(t, "engram-antigravity-mcp.golden", mcpJSON)
 
 	// GEMINI.md must contain the engram-protocol section.

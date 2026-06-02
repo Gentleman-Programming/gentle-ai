@@ -6,38 +6,44 @@
 
 ## Agent Matrix
 
-| Agent           | ID               | Skills       | MCP | Delegation                   | Output Styles | Slash Commands | Config Path                         |
-| --------------- | ---------------- | ------------ | --- | ---------------------------- | ------------- | -------------- | ----------------------------------- |
-| Claude Code     | `claude-code`    | Yes          | Yes | Full (Task tool)             | Yes           | No             | `~/.claude`                         |
-| OpenCode        | `opencode`       | Yes          | Yes | Full (multi-mode overlay)    | No            | Yes            | `~/.config/opencode`                |
-| Gemini CLI      | `gemini-cli`     | Yes          | Yes | Full (experimental)          | No            | No             | `~/.gemini`                         |
-| Cursor          | `cursor`         | Yes          | Yes | Full (native subagents)      | No            | No             | `~/.cursor`                         |
-| VS Code Copilot | `vscode-copilot` | Yes          | Yes | Full (runSubagent)           | No            | No             | `~/.copilot` + VS Code User profile |
-| Codex           | `codex`          | Yes          | Yes | Solo-agent                   | No            | No             | `~/.codex`                          |
-| Windsurf        | `windsurf`       | Yes (native) | Yes | Solo-agent                   | No            | No             | `~/.codeium/windsurf`               |
-| Antigravity     | `antigravity`    | Yes (native) | Yes | Solo-agent + Mission Control | No            | No             | `~/.gemini/antigravity`             |
-| Kimi            | `kimi`           | Yes          | Yes | Full (native custom agents)  | No            | No             | `~/.kimi`                           |
-| Qwen Code       | `qwen-code`      | Yes          | Yes | Full (native sub-agents)     | No            | Yes            | `~/.qwen`                           |
-| Kiro IDE        | `kiro-ide`       | Yes          | Yes | Full (native subagents)      | No            | No             | `~/.kiro`                           |
+| Agent           | ID               | Skills       | MCP | Delegation                       | Output Styles | Slash Commands | Config Path                         |
+| --------------- | ---------------- | ------------ | --- | -------------------------------- | ------------- | -------------- | ----------------------------------- |
+| Claude Code     | `claude-code`    | Yes          | Yes | Full (Task tool)                 | Yes           | No             | `~/.claude`                         |
+| OpenCode        | `opencode`       | Yes          | Yes | Full (multi-mode overlay)        | No            | Yes            | `~/.config/opencode`                |
+| Kilo Code       | `kilocode`       | Yes          | Yes | Full (multi-mode overlay)        | No            | Yes            | `~/.config/kilo`                    |
+| Gemini CLI      | `gemini-cli`     | Yes          | Yes | Full (experimental)              | No            | No             | `~/.gemini`                         |
+| Cursor          | `cursor`         | Yes          | Yes | Full (native subagents)          | No            | No             | `~/.cursor`                         |
+| VS Code Copilot | `vscode-copilot` | Yes          | Yes | Full (runSubagent)               | No            | No             | `~/.copilot` + VS Code User profile |
+| Codex           | `codex`          | Yes          | Yes | Solo-agent                       | No            | No             | `~/.codex`                          |
+| Windsurf        | `windsurf`       | Yes (native) | Yes | Solo-agent                       | No            | No             | `~/.codeium/windsurf`               |
+| Antigravity     | `antigravity`    | Yes (native) | Yes | Solo-agent + Mission Control     | No            | No             | `~/.gemini/antigravity`             |
+| Kimi Code       | `kimi`           | Yes          | Yes | Full (native custom agents)      | No            | No             | `~/.kimi`                           |
+| Qwen Code       | `qwen-code`      | Yes          | Yes | Full (native sub-agents)         | No            | Yes            | `~/.qwen`                           |
+| Kiro IDE        | `kiro-ide`       | Yes          | Yes | Full (native subagents)          | No            | No             | `~/.kiro`                           |
+| OpenClaw        | `openclaw`       | Yes          | Yes | Solo-agent                       | No            | No             | `~/.openclaw`                       |
+| Trae            | `trae-ide`       | Yes          | Yes | Solo-agent                       | No            | No             | `~/.trae`                           |
+| Pi              | `pi`             | Yes          | Yes | Full (package-managed subagents) | No            | Yes            | `~/.pi`                             |
 
-All agents receive the **full SDD orchestrator** injected into their system prompt, plus skill files written to their skills directory. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
+Most agents receive the **full SDD orchestrator** policy, plus skill files written to their skills directory. Most receive it through their system prompt; OpenCode and Kilo Code receive it through the OpenCode-compatible `opencode.json` agent overlay. Pi is the exception: Gentle AI installs Pi packages, and `gentle-pi` owns Pi skills, prompts, SDD agents, and chains at runtime. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
+
+`gentle-ai install --scope=workspace` is supported across selected agents for agent-scoped files, not only Claude Code. In workspace scope, Gentle AI writes system prompts, skills, SDD agents, and persona files into the current project root when the agent supports project-local configuration. Global-only integrations, such as package installs or settings that the agent only reads from its global config, remain global by design.
 
 ---
 
 ## Delegation Models
 
-| Model                 | How It Works                                                                                                                         | Agents                                                           |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Gemini CLI, Cursor, VS Code Copilot, Kimi, Kiro IDE, Qwen Code |
-| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence.       | Codex, Windsurf, Antigravity                                     |
+| Model                 | How It Works                                                                                                                                                                                       | Agents                                                                                                    |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation, package-managed subagents, or an OpenCode-compatible overlay. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Kimi Code, Kiro IDE, Qwen Code, Pi |
+| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence.                                                                     | Codex, Windsurf, Antigravity, OpenClaw, Trae                                                              |
 
 ### Cursor Native Subagents
 
 Cursor uses its built-in `.cursor/agents/` system. `gentle-ai` writes 10 agent files to `~/.cursor/agents/sdd-{phase}.md` — one per SDD phase. Cursor's Agent auto-delegates to the correct subagent based on the `description` field in each file's YAML frontmatter.
 
-- `sdd-explore` and `sdd-verify` run with `readonly: true`
+- `sdd-explore` and `sdd-verify` run with `readonly: false` so they can inspect the codebase and execute verification commands
 - Each subagent gets its own context window (fresh context, no pollution)
-- The orchestrator resolves compact rules from the skill registry and passes them in the invocation message
+- The orchestrator resolves skill paths from the skill registry and passes exact `SKILL.md` files in the invocation message
 
 ### Windsurf Cascade
 
@@ -64,15 +70,17 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 
 ## SDD Mode Support
 
-| Feature | Claude Code | OpenCode | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE | Qwen Code |
-|---------|:-----------:|:--------:|:----------:|:------:|:---------------:|:-----:|:--------:|:-----------:|:--------:|:---------:|
-| SDD orchestrator | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Single-mode SDD | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Multi-mode SDD | — | Yes | — | — | — | — | — | — | Yes* | — |
+| Feature          | Claude Code | OpenCode | Kilo Code | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE | Qwen Code | OpenClaw | Trae |   Pi    |
+| ---------------- | :---------: | :------: | :-------: | :--------: | :----: | :-------------: | :---: | :------: | :---------: | :------: | :-------: | :------: | :--: | :-----: |
+| SDD orchestrator |     Yes     |   Yes    |    Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     |   Yes    |    Yes    |   Yes    | Yes  |   Yes   |
+| Single-mode SDD  |     Yes     |   Yes    |    Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     |   Yes    |    Yes    |   Yes    | Yes  |   Yes   |
+| Multi-mode SDD   |      —      |   Yes    |    Yes    |     —      |   —    |        —        |   —   |    —     |      —      |  Yes\*   |     —     |    —     |  —   | Yes\*\* |
 
-**Multi-mode** (assigning different AI models to each SDD phase) is natively supported by **OpenCode** (via its provider system) and **Kiro IDE** (via native subagent `model:` frontmatter — each phase agent runs with its own model ID). All other agents run in **single-mode** — the orchestrator manages everything using whatever model the agent is already running.
+**Multi-mode** (assigning different AI models to each SDD phase) is supported by **OpenCode** and **Kilo Code** through the OpenCode-compatible multi-mode overlay, and by **Kiro IDE** through native subagent `model:` frontmatter. All other agents run in **single-mode** — the orchestrator manages everything using whatever model the agent is already running.
 
-> \* **Kiro multi-mode** assigns models per phase through `KiroModelAssignments` (configured via *Configure Models → Configure Kiro models* in the TUI). The selected alias (`opus|sonnet|haiku`) is resolved to a Kiro-native model ID and stamped into each `~/.kiro/agents/sdd-{phase}.md` at sync time.
+> \* **Kiro multi-mode** assigns models per phase through `KiroModelAssignments` (configured via _Configure Models → Configure Kiro models_ in the TUI). The selected alias (`opus|sonnet|haiku`) is resolved to a Kiro-native model ID and stamped into each `~/.kiro/agents/sdd-{phase}.md` at sync time.
+
+> \*\* **Pi multi-mode** is owned by the Pi packages. `gentle-pi` installs SDD agent and chain assets into `.pi/agents/` and `.pi/chains/`; model overrides live in those Pi-managed files or chain steps.
 
 ---
 
@@ -87,10 +95,22 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 
 ### OpenCode
 
-- Full multi-agent overlay with 12 named agents in `opencode.json`
+- Full multi-agent overlay with 11 named agents in `opencode.json` (`gentle-orchestrator` plus 10 SDD phase agents)
 - Slash commands for SDD phases (`/sdd-new`, `/sdd-explore`, etc.)
 - Background-agents plugin for parallel execution
+- The TUI model picker includes providers and models discovered from the local `opencode.json`, including custom providers
+- Custom models from `opencode.json` must set `tool_call: true` explicitly to appear as selectable SDD-capable options in the model picker
 - Multi-mode prerequisite: connect your AI providers first, then run `opencode models --refresh`
+- Gentle AI sets OpenCode SDD agent sharing to `disabled` by default for privacy; existing user-managed `share` values such as `manual` or `auto` are preserved.
+- OpenCode Desktop SDD commands resolve the project with `git rev-parse --show-toplevel || pwd` before acting, avoiding Electron current-working-directory drift.
+
+### Kilo Code
+
+- **Detection**: gentle-ai detects Kilo Code from `~/.config/kilo` and checks for the `kilo` binary on `PATH`
+- Uses the OpenCode-compatible adapter: `AGENTS.md`, `skills/`, `commands/`, and `opencode.json` live under `~/.config/kilo`
+- Full SDD delegation is provided by the merged multi-agent overlay in `~/.config/kilo/opencode.json`, not by a separate native sub-agent directory
+- MCP servers are merged into `opencode.json`; Engram uses the OpenCode-style local MCP entry with `command` as an array
+- Auto-install is supported via npm: `npm install -g @kilocode/cli`
 
 ### Gemini CLI
 
@@ -98,6 +118,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 - Custom sub-agents defined as markdown files in `~/.gemini/agents/`
 
 ### Cursor
+
 - Native subagents via `~/.cursor/agents/sdd-{phase}.md` (10 files installed by gentle-ai)
 - Skills at `~/.cursor/skills/`
 - System prompt in `~/.cursor/rules/gentle-ai.mdc`
@@ -114,7 +135,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 
 - CLI-native agent with TOML config at `~/.codex/config.toml`
 - Skills at `~/.codex/skills/`
-- System prompt at `~/.codex/agents.md`
+- System prompt at `~/.codex/AGENTS.md`
 - Engram instruction files at `~/.codex/engram-instructions.md`
 
 ### Windsurf
@@ -132,7 +153,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 - Mission Control handles built-in sub-agent delegation (Browser, Terminal) automatically
 - Settings managed via the IDE's Agent settings UI, not via `settings.json`
 
-### Kimi
+### Kimi Code
 
 - Installation requires the `uv` Python package manager (`uv tool install kimi-cli`).
 - Root custom agent at `~/.kimi/agents/gentleman.yaml` with `system_prompt_path: ../KIMI.md`
@@ -142,7 +163,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 
 ### Kiro IDE
 
-- **Detection**: gentle-ai detects Kiro from its config root (`~/.kiro`) during install/TUI discovery — `~/.kiro` must exist (created on first Kiro launch). `kiro` on `PATH` is also checked for sync/upgrade flows but is not required for install auto-detection
+- **Detection**: gentle-ai detects Kiro from the `kiro` binary on `PATH`; when the binary is present, it also reports whether `~/.kiro` already exists. A config directory alone does not mark Kiro as installed.
 - **Steering file** (all platforms): `~/.kiro/steering/gentle-ai.md` with frontmatter `inclusion: always`
 - Native subagents at `~/.kiro/agents/sdd-{phase}.md` (10 files)
 - Skills (all platforms) at `~/.kiro/skills/`
@@ -152,6 +173,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 - See [docs/kiro.md](kiro.md) for full path reference and SDD behavior details
 
 ### Qwen Code
+
 - **Detection**: gentle-ai detects Qwen Code from its config root (`~/.qwen`) and checks for `qwen` binary on `PATH`
 - **Config root**: `~/.qwen/` (cross-platform)
 - **System prompt**: `~/.qwen/QWEN.md` (managed via `StrategyFileReplace`)
@@ -162,3 +184,53 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 - **Install**: via npm — `npm install -g @qwen-code/qwen-code@latest`
 - **Engram slug**: `"qwen-code"` for `engram setup` integration
 - **SDD orchestrator**: `internal/assets/qwen/sdd-orchestrator.md` with Qwen-specific path references
+
+### OpenClaw
+
+- **Detection**: gentle-ai detects OpenClaw from the `openclaw` binary on `PATH` and its config root at `~/.openclaw`.
+- **Install**: manual only — install OpenClaw first, then run `gentle-ai install --agent openclaw`.
+- **Active workspace**: gentle-ai reads `agents.defaults.workspace` from `~/.openclaw/openclaw.json` and writes instruction files there.
+- **Instructions**: Engram and SDD protocols are injected into workspace `AGENTS.md`; persona is injected into workspace `SOUL.md`.
+- **MCP config**: Engram and Context7 are merged into global `~/.openclaw/openclaw.json` under `mcp.servers`; legacy root `mcpServers` entries are migrated.
+- **Skills**: SDD phase skills are workspace-scoped at `<workspace>/.openclaw/skills/sdd-*`; portable skills remain global at `~/.openclaw/skills/`.
+
+### Trae
+
+- **Detection**: gentle-ai detects Trae from `~/.trae` (desktop app — no binary on PATH)
+- **Global config root**: `~/.trae/` (cross-platform)
+- **Skills**: `~/.trae/skills/`
+- **System prompt / rules**: injected via `StrategyMarkdownSections` into the OS-specific `user_rules.md`
+  - macOS: `~/Library/Application Support/Trae/User/user_rules.md`
+  - Linux: `~/.config/Trae/User/user_rules.md` (respects `XDG_CONFIG_HOME`)
+  - Windows: `%APPDATA%\Trae\User\user_rules.md`
+- **MCP config**: same OS-specific dir → `mcp.json` (Cursor-compatible `mcpServers` object format)
+- **Install**: desktop app only — manual install required; no `--auto-install` support
+
+### Pi
+
+For the full Pi command and package reference, see [Pi Agent](pi.md).
+
+- **Detection**: gentle-ai detects Pi from the `pi` binary on `PATH` and its config root at `~/.pi`.
+- **Install**: Pi must already be installed. gentle-ai then installs the full Pi support stack with:
+  - `pi install npm:gentle-pi`
+  - `pi install npm:gentle-engram`
+  - `pi install npm:pi-mcp-adapter`
+  - `npm exec --yes --package gentle-engram@0.1.4 -- pi-engram init`
+  - `pi install npm:pi-subagents`
+  - `pi install npm:pi-intercom`
+  - `pi install npm:@juicesharp/rpiv-ask-user-question`
+  - `pi install npm:pi-web-access`
+  - `pi install npm:pi-lens`
+  - `pi install npm:@juicesharp/rpiv-todo`
+  - `pi install npm:pi-btw`
+- **`gentle-pi` package**: adds the Gentleman harness for Pi: SDD/OpenSpec workflow, strict TDD guidance, safety defaults, `/gentle-ai:*` commands, skill assets, prompts, SDD agents, and SDD chains. On normal `session_start`, it copies project assets into `.pi/agents/`, `.pi/chains/`, and `.pi/gentle-ai/support/` without overwriting local files unless the Pi recovery command uses `--force`. Starting Pi with `pi -ns` skips startup skill loading/hooks, so that automatic refresh does not run in that mode.
+- **Package metadata**: latest verified `gentle-pi` version is `0.2.6`; npm lists `alan_buscaglia` as maintainer, with source at [Gentleman-Programming/gentle-pi](https://github.com/Gentleman-Programming/gentle-pi) and package docs at [npm: gentle-pi](https://www.npmjs.com/package/gentle-pi).
+- **Persona command**: `gentle-pi` owns Pi persona switching through `/gentleman:persona` (`/gentle-ai:persona` remains a compatibility alias). It switches between `gentleman` and `neutral`, saves `.pi/gentle-ai/persona.json`, and may require `/reload` or a new Pi session for the active prompt to refresh.
+- **Model assignment command**: `gentle-pi` owns Pi model selection through `/gentleman:models` (`/gentle-ai:models` remains a compatibility alias). It opens a Pi-native modal for project, user, and built-in agents, prioritizes SDD agents, saves `.pi/gentle-ai/models.json`, and applies overrides into `.pi/agents/*.md` or `.pi/settings.json`.
+- **`gentle-engram` package**: adds persistent Engram memory for Pi. It captures sessions, exposes Engram MCP tools through `pi-mcp-adapter`, and degrades safely when the local `engram` binary is missing.
+- **MCP adapter wiring**: ComponentEngram declares `npm:pi-mcp-adapter` in `.pi/agent/settings.json` packages and adds `pi-mcp-adapter` `^2.6.0` to `.pi/npm/package.json` without removing unrelated user entries. `pi-engram init` owns the Pi Engram MCP config schema and is run during installation.
+- **`pi-subagents` package**: discovers and runs SDD agents from `.pi/agents/`.
+- **`pi-intercom` package**: lets Pi child agents ask the parent session for decisions while a chain is running.
+- **`@juicesharp/rpiv-ask-user-question` package**: lets Pi child agents ask the active user session for clarification when they need human input.
+- **Pi companion packages**: `pi-web-access`, `pi-lens`, `@juicesharp/rpiv-todo`, and `pi-btw` add web access, context inspection, todo tracking, and companion workflow support.
+- **Pi-only flow**: when Pi is the only selected agent, gentle-ai skips persona, ecosystem component selection, and Strict TDD prompts because those behaviors are provided by `gentle-pi`.

@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,36 @@ import (
 
 // TestSnapshotterCreatesCompressedBackup verifies that Create() produces a
 // snapshot.tar.gz archive and sets Manifest.Compressed = true.
+func TestSnapshotterSkipsUnixSockets(t *testing.T) {
+	home := t.TempDir()
+	regularFile := filepath.Join(home, "settings.json")
+	if err := os.WriteFile(regularFile, []byte(`{"ok":true}`), 0o644); err != nil {
+		t.Fatalf("WriteFile regularFile: %v", err)
+	}
+
+	socketPath := filepath.Join(home, "broker.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Skipf("unix sockets unavailable on this platform: %v", err)
+	}
+	defer listener.Close()
+
+	snapshotDir := filepath.Join(home, "snap")
+	manifest, err := NewSnapshotter().Create(snapshotDir, []string{regularFile, socketPath})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if manifest.FileCount != 1 {
+		t.Fatalf("manifest.FileCount = %d, want 1; entries=%+v", manifest.FileCount, manifest.Entries)
+	}
+	if len(manifest.Entries) != 2 {
+		t.Fatalf("len(manifest.Entries) = %d, want 2", len(manifest.Entries))
+	}
+	if manifest.Entries[1].Existed {
+		t.Errorf("socket manifest entry Existed = true, want false so special files are skipped")
+	}
+}
+
 func TestSnapshotterCreatesCompressedBackup(t *testing.T) {
 	home := t.TempDir()
 

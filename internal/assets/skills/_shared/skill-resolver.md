@@ -1,114 +1,72 @@
 # Skill Resolver — Universal Protocol
 
-Any agent that **delegates work to sub-agents** MUST follow this protocol to resolve and inject relevant skills. This applies to the ATL orchestrator, judgment-day, pr-review, and ANY future skill or workflow that launches sub-agents.
+Any agent that **delegates work to sub-agents** MUST use this protocol to resolve relevant skills and pass them safely.
 
 ## Why This Exists
 
-Sub-agents are born with NO context about what skills exist. Without skill injection, a judge reviewing a Next.js project won't know React 19 patterns, a fix agent won't follow project conventions, and a PR creator won't use the project's PR template.
+Sub-agents start with no project skill context. The registry gives delegators a cheap index of available skills without rewriting or summarizing those skills.
 
 ## When to Apply
 
-Before EVERY sub-agent launch that involves **reading, writing, or reviewing code**. Skip only for purely mechanical delegations (e.g., "run this test command").
+Before every sub-agent launch that involves reading, writing, reviewing, testing, documenting, or creating project artifacts. Skip only for purely mechanical commands.
 
 ## The Protocol
 
-### Step 1: Obtain the Skill Registry (once per session)
+### Step 1: Obtain the Skill Registry
 
-The registry contains a **Compact Rules** section with pre-digested rules per skill (5-15 lines each). This is what you inject — NOT full SKILL.md paths.
+The registry is an **index** of skill names, triggers, scopes, and exact `SKILL.md` paths. It is not a compact-rules bundle.
 
 Resolution order:
-1. Already cached from earlier in this session? → use cache
-2. `mem_search(query: "skill-registry", project: "{project}")` → `mem_get_observation(id)` for full content
-3. Fallback: read `.atl/skill-registry.md` from the project root if it exists
-4. No registry found? → proceed without skills (but warn the user: "No skill registry found — sub-agents will work without project-specific standards. Run `skill-registry` to fix this.")
+1. Use the session cache if present.
+2. `mem_search(query: "skill-registry", project: "{project}")` → `mem_get_observation(id)` for full content.
+3. Fallback: read `.atl/skill-registry.md` from the project root.
+4. No registry found → proceed without project skills and warn the user to run `gentle-ai skill-registry refresh`.
 
 ### Step 2: Match Relevant Skills
 
-Match skills on TWO dimensions:
+Match on two dimensions:
 
-**A. Code Context** — what files will the sub-agent touch or review?
+| Context | Match against |
+| --- | --- |
+| Code/files | Registry trigger/description mentions the language, framework, tool, or path context |
+| Task/action | Registry trigger/description mentions actions like PR, review, docs, tests, Jira, comments, release |
 
-Map file patterns to skills from the registry (common examples — always defer to the registry's Trigger field as the source of truth):
-- `.tsx`, `.jsx` → react skills
-- `.ts` → typescript skills
-- `app/**`, `pages/**` → nextjs/angular/framework skills
-- `.py` → python/django skills
-- `.go` → go skills
-- `*.test.*`, `*.spec.*` → testing skills
-- Style files → tailwind/css skills
+Prefer the smallest useful set. If more than five skills match, keep the five most relevant and prioritize code context over task context.
 
-Use the `Trigger` field in the registry's User Skills table to match. Skills whose triggers mention the relevant technology or file type are matches.
+### Step 3: Pass Skill Paths
 
-**B. Task Context** — what ACTIONS will the sub-agent perform?
+Inject paths, not summaries:
 
-| Sub-agent action | Match skills with triggers mentioning... |
-|-----------------|------------------------------------------|
-| Create a PR | "PR", "pull request" |
-| Write/review code | The specific framework/language |
-| Create Jira tickets | "Jira", "epic", "task" |
-| Write Notion docs | "Notion", "RFC", "PRD" |
-| Write comments | "comment" |
-| Run tests | "test", "vitest", "pytest", "playwright" |
+```markdown
+## Skills to load before work
 
-### Step 3: Inject into Sub-Agent Prompt
+Read these exact files before reading, writing, reviewing, testing, or creating artifacts:
 
-From the registry's **Compact Rules** section, copy the matching skill blocks directly into the sub-agent's prompt:
-
-```
-## Project Standards (auto-resolved)
-
-{paste compact rules blocks for each matching skill}
+- /absolute/path/to/skills/go-testing/SKILL.md
+- /absolute/path/to/skills/typescript/SKILL.md
 ```
 
-This goes BEFORE the sub-agent's task-specific instructions, so standards are loaded before work begins.
+The sub-agent MUST read those files before task-specific work. `SKILL.md` is the runtime contract and source of truth.
 
-**Key rule**: inject the COMPACT RULES text, not paths. The sub-agent should NOT read any SKILL.md files — the rules arrive pre-digested in its prompt.
+### Step 4: Report Resolution
 
-### Step 4: Include Project Conventions
+Sub-agents MUST report `skill_resolution`:
 
-If the registry has a **Project Conventions** section, and the sub-agent will work on the project's code, also add:
+- `paths-injected` — received exact skill paths from the delegator and loaded them.
+- `fallback-registry` — no paths received, self-loaded paths from the registry.
+- `fallback-path` — loaded an explicit fallback path outside the registry.
+- `none` — no skills loaded.
 
-```
-## Project Conventions
-Read these files for project-specific patterns:
-- {path1} — {notes}
-- {path2} — {notes}
-```
-
-Project conventions are short references (paths + notes), so passing them is cheap. The sub-agent reads them only if relevant to its task.
-
-## Token Budget
-
-The compact rules section should add **50-150 tokens per skill** to a sub-agent's prompt. For a typical delegation matching 3-4 skills, that's ~400-600 tokens — negligible compared to the code the sub-agent will read.
-
-If more than **5 skill blocks** match, keep only the 5 most relevant (prioritize code context matches over task context matches).
+If a sub-agent reports anything other than `paths-injected`, the orchestrator MUST re-read the registry before the next delegation.
 
 ## Compaction Safety
 
-This protocol is compaction-safe because:
-- The registry lives in engram/filesystem, not in the orchestrator's memory
-- Each delegation re-reads the registry if needed (Step 1 handles cache miss)
-- Compact rules are copied into each sub-agent's prompt at launch time — even if the orchestrator forgets, the sub-agents already have the rules
-
-## Feedback Loop
-
-Sub-agents MUST report their skill resolution status in their return envelope:
-
-- `injected` — received `## Project Standards (auto-resolved)` from the orchestrator (ideal path)
-- `fallback-registry` — no standards received, self-loaded from skill registry
-- `fallback-path` — no standards received, loaded via `SKILL: Load` path
-- `none` — no skills loaded at all
-
-**Orchestrator self-correction rule**: if a sub-agent reports anything other than `injected`, the orchestrator MUST:
-1. Re-read the skill registry immediately (it may have been lost to compaction)
-2. Ensure ALL subsequent delegations include `## Project Standards (auto-resolved)`
-3. Log a warning to the user: "Skill cache miss detected — reloaded registry for future delegations."
-
-This prevents silent degradation where the orchestrator forgets skills after compaction and all subsequent sub-agents work without standards.
+- The registry persists in Engram and `.atl/skill-registry.md`.
+- Delegators can recover selected paths after compaction by re-reading the registry.
+- Sub-agents receive exact files to read, so skill meaning is not degraded by generated summaries.
 
 ## Integration Points
 
-- **ATL Orchestrator**: follows this protocol for ALL delegations (SDD and non-SDD)
-- **judgment-day**: follows this protocol before launching Judge A, Judge B, and Fix Agent
-- **pr-review**: already has internal skill loading — should migrate to this protocol for consistency
-- **Any future skill that delegates**: MUST reference this protocol
+- **ATL Orchestrator**: resolves paths for all SDD and non-SDD delegations.
+- **judgment-day**: resolves paths before Judge A, Judge B, and Fix Agent.
+- **pr-review and future delegators**: use this protocol when launching sub-agents.

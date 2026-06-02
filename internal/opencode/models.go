@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -56,6 +57,7 @@ type Model struct {
 	Reasoning bool       `json:"reasoning"`
 	Cost      ModelCost  `json:"cost"`
 	Limit     ModelLimit `json:"limit"`
+	Variants  []string   `json:"-"` // populated by EnrichWithVariants from plugin cache
 }
 
 // Provider represents a model provider with its env vars and model catalog.
@@ -92,6 +94,19 @@ func LoadModels(cachePath string) (map[string]Provider, error) {
 	return providers, nil
 }
 
+// LoadModelsOrEmpty parses the OpenCode models cache when it exists and falls
+// back to an empty provider set when OpenCode has not populated the cache yet.
+func LoadModelsOrEmpty(cachePath string) (map[string]Provider, error) {
+	providers, err := LoadModels(cachePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]Provider{}, nil
+		}
+		return nil, err
+	}
+	return providers, nil
+}
+
 // loadAuthProviders reads the OpenCode auth.json and returns authenticated provider IDs.
 func loadAuthProviders(authPath string) map[string]bool {
 	data, err := os.ReadFile(authPath)
@@ -124,12 +139,23 @@ var authPath = DefaultAuthPath
 //  3. The "opencode" provider is always included if present (built-in subscription)
 //
 // Results are sorted alphabetically.
-func DetectAvailableProviders(providers map[string]Provider) []string {
+func DetectAvailableProviders(providers map[string]Provider, customProviderIDs ...string) []string {
 	authProviders := loadAuthProviders(authPath())
+
+	customSet := make(map[string]bool, len(customProviderIDs))
+	for _, id := range customProviderIDs {
+		customSet[id] = true
+	}
 
 	var available []string
 	for id, provider := range providers {
 		if !hasToolCallModel(provider) {
+			continue
+		}
+
+		// Check: explicitly configured custom provider (always available).
+		if customSet[id] {
+			available = append(available, id)
 			continue
 		}
 
@@ -191,6 +217,138 @@ func FilterModelsForSDD(provider Provider) []Model {
 	return models
 }
 
+// EffortLevels returns the available reasoning effort levels for this model.
+// Returns nil if the model has no variants (effort picker should be skipped).
+func (m Model) EffortLevels() []string {
+	if len(m.Variants) == 0 {
+		return nil
+	}
+	return m.Variants
+}
+
+// DefaultVariantsCachePath returns the path to the plugin-generated model variants file.
+func DefaultVariantsCachePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".gentle-ai", "cache", "model-variants.json")
+}
+
+// LoadVariants reads the plugin-generated model-variants.json file.
+func LoadVariants(variantsPath string) (map[string]map[string][]string, error) {
+	data, err := os.ReadFile(variantsPath)
+	if err != nil {
+		return nil, err
+	}
+	var variants map[string]map[string][]string
+	if err := json.Unmarshal(data, &variants); err != nil {
+		return nil, err
+	}
+	return variants, nil
+}
+
+// EnrichWithVariants merges variant data from the plugin cache file into
+// cache-loaded providers. If the file is missing or invalid, models keep nil Variants.
+func EnrichWithVariants(cached map[string]Provider, variantsPath string) {
+	variants, err := LoadVariants(variantsPath)
+	if err != nil {
+		return
+	}
+	for provID, models := range variants {
+		cachedProv, ok := cached[provID]
+		if !ok {
+			continue
+		}
+		for modelID, levels := range models {
+			if cachedModel, ok := cachedProv.Models[modelID]; ok {
+				cachedModel.Variants = levels
+				cachedProv.Models[modelID] = cachedModel
+			}
+		}
+		cached[provID] = cachedProv
+	}
+}
+
+// ConfigModel represents a model entry in the opencode.json provider section.
+type ConfigModel struct {
+	Name     string `json:"name"`
+	ToolCall bool   `json:"tool_call"`
+}
+
+// ConfigProvider represents a custom provider defined in opencode.json.
+type ConfigProvider struct {
+	Name   string                 `json:"name"`
+	Models map[string]ConfigModel `json:"models"`
+}
+
+// LoadConfigProviders reads the provider section from an opencode.json settings file.
+// Returns an empty map with nil error if the file is missing or has no provider key.
+func LoadConfigProviders(path string) (map[string]ConfigProvider, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]ConfigProvider{}, nil
+		}
+		return map[string]ConfigProvider{}, err
+	}
+
+	var raw struct {
+		Provider map[string]ConfigProvider `json:"provider"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return map[string]ConfigProvider{}, fmt.Errorf("parse opencode settings %q: %w", path, err)
+	}
+	if raw.Provider == nil {
+		return map[string]ConfigProvider{}, nil
+	}
+	return raw.Provider, nil
+}
+
+// MergeCustomProviders merges custom providers from opencode.json into the cache-loaded
+// providers map. Custom models use the tool_call value from opencode.json, defaulting to false
+// when omitted. Custom entries win on ID collision (user-managed beats cached catalog).
+// Returns the original providers map unchanged when config is empty; otherwise returns a
+// merged copy without mutating the input.
+func MergeCustomProviders(providers map[string]Provider, config map[string]ConfigProvider) map[string]Provider {
+	if len(config) == 0 {
+		return providers
+	}
+
+	merged := make(map[string]Provider, len(providers)+len(config))
+	for id, p := range providers {
+		clone := Provider{ID: p.ID, Name: p.Name, Env: append([]string(nil), p.Env...), Models: make(map[string]Model, len(p.Models))}
+		for mid, m := range p.Models {
+			clone.Models[mid] = m
+		}
+		merged[id] = clone
+	}
+
+	for id, cp := range config {
+		// Provider-level collision: when a provider ID already exists in the cache,
+		// we keep the cache's Name/Env and merge in the config's models below.
+		// The config's provider Name is silently ignored in that case.
+		existing, ok := merged[id]
+		if !ok {
+			existing = Provider{ID: id, Name: cp.Name, Models: make(map[string]Model, len(cp.Models))}
+		}
+		if existing.Models == nil {
+			existing.Models = make(map[string]Model, len(cp.Models))
+		}
+		for mid, cm := range cp.Models {
+			// Custom entry wins on model ID collision (user-managed beats cached catalog).
+			name := cm.Name
+			if name == "" {
+				name = mid
+			}
+			existing.Models[mid] = Model{ID: mid, Name: name, ToolCall: cm.ToolCall}
+		}
+		merged[id] = existing
+	}
+
+	return merged
+}
+
 // SDDPhases returns the ordered list of SDD phase sub-agent names.
 func SDDPhases() []string {
 	return []string{
@@ -203,5 +361,29 @@ func SDDPhases() []string {
 		"sdd-apply",
 		"sdd-verify",
 		"sdd-archive",
+		"sdd-onboard",
 	}
+}
+
+// JDPhases returns the ordered list of judgment-day sub-agent names.
+// These are workflow-level agents (not SDD phases) used by the
+// judgment-day skill for parallel adversarial review.
+// They support independent model configuration for diversity of perspective.
+func JDPhases() []string {
+	return []string{
+		"jd-judge-a",
+		"jd-judge-b",
+		"jd-fix-agent",
+	}
+}
+
+// ConfigurableAgentPhases returns all agent names that support per-agent
+// model configuration. This includes SDD phases + JD agents.
+// Used by the inject model assignment table builder and the configurable agent set
+// in ReadCurrentModelAssignments. The TUI model picker uses SDDPhases() and
+// JDPhases() separately for row layout control.
+func ConfigurableAgentPhases() []string {
+	phases := SDDPhases()
+	phases = append(phases, JDPhases()...)
+	return phases
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
 
 func TestValidateGoForModuleInstall(t *testing.T) {
@@ -301,31 +302,31 @@ func TestResolveAgentInstall(t *testing.T) {
 			name:    "claude-code on darwin uses npm without sudo",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
 			agent:   model.AgentClaudeCode,
-			want:    CommandSequence{{"npm", "install", "-g", "@anthropic-ai/claude-code"}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@" + versions.ClaudeCode}},
 		},
 		{
 			name:    "claude-code on linux system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
 			agent:   model.AgentClaudeCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "@anthropic-ai/claude-code"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@" + versions.ClaudeCode}},
 		},
 		{
 			name:    "claude-code on linux nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", NpmWritable: true},
 			agent:   model.AgentClaudeCode,
-			want:    CommandSequence{{"npm", "install", "-g", "@anthropic-ai/claude-code"}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@" + versions.ClaudeCode}},
 		},
 		{
 			name:    "claude-code on arch system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
 			agent:   model.AgentClaudeCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "@anthropic-ai/claude-code"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@" + versions.ClaudeCode}},
 		},
 		{
 			name:    "claude-code on fedora nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", NpmWritable: true},
 			agent:   model.AgentClaudeCode,
-			want:    CommandSequence{{"npm", "install", "-g", "@anthropic-ai/claude-code"}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@" + versions.ClaudeCode}},
 		},
 		{
 			name:    "opencode on darwin uses official anomalyco brew tap",
@@ -337,31 +338,31 @@ func TestResolveAgentInstall(t *testing.T) {
 			name:    "opencode on ubuntu system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "opencode-ai"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
 		},
 		{
 			name:    "opencode on ubuntu nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", NpmWritable: true},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "opencode-ai"}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
 		},
 		{
 			name:    "opencode on arch system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "opencode-ai"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
 		},
 		{
 			name:    "opencode on fedora system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "opencode-ai"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
 		},
 		{
 			name:    "opencode on fedora nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", NpmWritable: true},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "opencode-ai"}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
 		},
 		{
 			name:    "opencode on opensuse system npm uses sudo",
@@ -373,13 +374,13 @@ func TestResolveAgentInstall(t *testing.T) {
 			name:    "claude-code on windows uses npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", NpmWritable: true},
 			agent:   model.AgentClaudeCode,
-			want:    CommandSequence{{"npm", "install", "-g", "@anthropic-ai/claude-code"}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@" + versions.ClaudeCode}},
 		},
 		{
 			name:    "opencode on windows uses npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "opencode-ai"}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
 		},
 		{
 			name:    "kimi on windows uses uv to strictly enforce secure package installation",
@@ -478,6 +479,31 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 			lookPath: func(file string) (string, error) {
 				if file == "uv" {
 					return "/usr/bin/uv", nil
+				}
+				return "", fmt.Errorf("not found")
+			},
+			wantErr: false,
+		},
+		{
+			name:    "pi missing binary returns actionable remediation",
+			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true},
+			agent:   model.AgentPi,
+			lookPath: func(file string) (string, error) {
+				if file == "pi" {
+					return "", fmt.Errorf("not found")
+				}
+				return "/usr/bin/" + file, nil
+			},
+			wantErr:     true,
+			errContains: "Pi requires the `pi` executable",
+		},
+		{
+			name:    "pi with binary present passes preflight",
+			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true},
+			agent:   model.AgentPi,
+			lookPath: func(file string) (string, error) {
+				if file == "pi" {
+					return "/usr/bin/pi", nil
 				}
 				return "", fmt.Errorf("not found")
 			},

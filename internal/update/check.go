@@ -58,6 +58,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 	// Run local detection and remote fetch concurrently.
 	var wg sync.WaitGroup
 	var localVersion string
+	var pluginRegistered bool
 	var release githubRelease
 	var fetchErr error
 
@@ -65,12 +66,16 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 
 	go func() {
 		defer wg.Done()
+		if strings.TrimSpace(tool.NpmPackage) != "" {
+			localVersion, pluginRegistered = detectOpenCodePluginPackage(tool.NpmPackage)
+			return
+		}
 		localVersion = detectInstalledVersion(ctx, tool, currentBuildVersion)
 	}()
 
 	go func() {
 		defer wg.Done()
-		release, fetchErr = fetchLatestRelease(ctx, tool.Owner, tool.Repo)
+		release, fetchErr = fetchLatestReleaseForTool(ctx, tool)
 	}()
 
 	wg.Wait()
@@ -91,6 +96,11 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 	// Determine status based on local version.
 	if localVersion == "" {
 		if strings.TrimSpace(tool.NpmPackage) != "" {
+			if pluginRegistered {
+				result.Status = RegisteredNotMaterialized
+				result.UpdateHint = openCodeRegisteredNotMaterializedHint(tool)
+				return result
+			}
 			result.Status = NotInstalled
 			return result
 		}
@@ -124,6 +134,13 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 	// Compare versions.
 	result.Status = compareVersions(normalizedLocal, result.LatestVersion)
 	return result
+}
+
+func fetchLatestReleaseForTool(ctx context.Context, tool ToolInfo) (githubRelease, error) {
+	if pattern := strings.TrimSpace(tool.ReleaseTagPattern); pattern != "" {
+		return fetchLatestReleaseMatchingPattern(ctx, tool.Owner, tool.Repo, pattern)
+	}
+	return fetchLatestRelease(ctx, tool.Owner, tool.Repo)
 }
 
 // normalizeVersion strips a leading "v" and extracts a semver pattern.

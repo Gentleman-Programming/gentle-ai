@@ -27,7 +27,23 @@ var claudeCodeOverlayJSON = []byte(`{
       "Read(.env)",
       "Read(.env.*)",
       "Edit(.env)",
-      "Edit(.env.*)"
+      "Edit(.env.*)",
+      "Read(.ssh/*)",
+      "Edit(.ssh/*)",
+      "Read(.credentials/*)",
+      "Edit(.credentials/*)",
+      "Read(Library/Keychains/*)",
+      "Edit(Library/Keychains/*)",
+      "Read(.aws/credentials)",
+      "Edit(.aws/credentials)",
+      "Read(.config/gh/hosts.yml)",
+      "Edit(.config/gh/hosts.yml)",
+      "Read(**/*.pem)",
+      "Edit(**/*.pem)",
+      "Read(**/*.key)",
+      "Edit(**/*.key)",
+      "Read(**/secrets/*)",
+      "Edit(**/secrets/*)"
     ]
   }
 }
@@ -52,7 +68,14 @@ var openCodeOverlayJSON = []byte(`{
       "**/.env": "deny",
       "**/.env.*": "deny",
       "**/secrets/**": "deny",
-      "**/credentials.json": "deny"
+      "**/credentials.json": "deny",
+      "**/.ssh/**": "deny",
+      "**/.credentials/**": "deny",
+      "**/Library/Keychains/**": "deny",
+      "**/.aws/credentials": "deny",
+      "**/.config/gh/hosts.yml": "deny",
+      "**/*.pem": "deny",
+      "**/*.key": "deny"
     }
   }
 }

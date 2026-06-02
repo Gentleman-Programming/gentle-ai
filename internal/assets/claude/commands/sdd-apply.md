@@ -8,8 +8,8 @@ Otherwise, read the skill file at `~/.claude/skills/sdd-apply/SKILL.md` FIRST, t
 The sdd-apply skill (v2.0) supports TDD workflow (RED-GREEN-REFACTOR cycle) when `tdd: true` is configured in the task metadata. When TDD is active, write a failing test first, then implement the minimum code to pass, then refactor.
 
 CONTEXT:
-- Working directory: !`echo -n "$(pwd)"`
-- Current project: !`echo -n "$(basename $(pwd))"`
+- Working directory: !`pwd`
+- Current project: !`basename "$(pwd)"`
 - Artifact store mode: engram
 
 TASK:
@@ -32,7 +32,8 @@ STEP B — RETRIEVE FULL CONTENT (mandatory):
 Update tasks as you complete them:
   mem_update(id: {tasks-observation-id}, content: "{updated tasks with [x] marks}")
 Save progress:
-  mem_save(title: "sdd/{change-name}/apply-progress", topic_key: "sdd/{change-name}/apply-progress", type: "architecture", project: "{project}", content: "{progress report}")
+  mem_save(title: "sdd/{change-name}/apply-progress", topic_key: "sdd/{change-name}/apply-progress", type: "architecture", project: "{project}", capture_prompt: false, content: "{progress report}")
+  Set capture_prompt: false when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
 
 For each task:
 1. Read the relevant spec scenarios (acceptance criteria)

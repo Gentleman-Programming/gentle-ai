@@ -27,7 +27,8 @@ func TestEngramPathGuidanceZsh(t *testing.T) {
 
 func TestEngramPathGuidanceDefault(t *testing.T) {
 	msg := engramPathGuidance("")
-	if want := "go/bin"; !strings.Contains(msg, want) {
+	want := filepath.Join("go", "bin")
+	if !strings.Contains(msg, want) {
 		t.Fatalf("engramPathGuidance(default) missing %q: %s", want, msg)
 	}
 }
@@ -76,7 +77,7 @@ func TestWithGoInstallPathNoteAddsNoteWhenNotInPATH(t *testing.T) {
 	t.Setenv("GOBIN", "")
 	t.Setenv("GOPATH", "")
 	// Set PATH to something that does NOT contain ~/go/bin.
-	t.Setenv("PATH", "/usr/bin:/usr/local/bin")
+	t.Setenv("PATH", "/usr/bin"+string(os.PathListSeparator)+"/usr/local/bin")
 
 	report := verify.Report{Ready: true, FinalNote: "You're ready."}
 	resolved := planner.ResolvedPlan{
@@ -88,8 +89,9 @@ func TestWithGoInstallPathNoteAddsNoteWhenNotInPATH(t *testing.T) {
 	if !strings.Contains(updated.FinalNote, "go install") {
 		t.Fatalf("FinalNote should contain go install guidance, got: %q", updated.FinalNote)
 	}
-	if !strings.Contains(updated.FinalNote, "go/bin") {
-		t.Fatalf("FinalNote should reference go/bin dir, got: %q", updated.FinalNote)
+	want := filepath.Join("go", "bin")
+	if !strings.Contains(updated.FinalNote, want) {
+		t.Fatalf("FinalNote should reference %s dir, got: %q", want, updated.FinalNote)
 	}
 }
 

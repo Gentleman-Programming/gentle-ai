@@ -13,7 +13,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/qwen"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 )
@@ -23,9 +25,12 @@ func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func codexAdapter() agents.Adapter    { return codex.NewAdapter() }
 func geminiAdapter() agents.Adapter   { return gemini.NewAdapter() }
 func qwenAdapter() agents.Adapter     { return qwen.NewAdapter() }
+func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func antigravityAdapter() agents.Adapter {
 	return antigravity.NewAdapter()
 }
+
+func piAdapter() agents.Adapter { return pi.NewAdapter() }
 
 // assertArgsHaveToolsAgent is a shared helper that validates a JSON file
 // contains the MCP "engram" entry with --tools=agent in args.
@@ -215,6 +220,86 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInjectPiProvisioningCreatesMissingMCPAdapterFiles(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject() changed = false")
+	}
+
+	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
+	assertNestedStrings(t, settings, []string{"npm:pi-mcp-adapter"}, "packages")
+
+	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "npm", "package.json"))
+	assertNestedString(t, npmPackage, "^2.6.0", "dependencies", "pi-mcp-adapter")
+}
+
+func TestInjectPiProvisioningPreservesUnrelatedContent(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{"theme":"kanagawa","packages":["npm:other@1.0.0"]}`)
+	writeFile(t, filepath.Join(home, ".pi", "npm", "package.json"), `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0"},"devDependencies":{"vitest":"^1.0.0"}}`)
+
+	_, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
+	assertNestedString(t, settings, "kanagawa", "theme")
+	assertNestedStringsUnordered(t, settings, []string{"npm:other@1.0.0", "npm:pi-mcp-adapter"}, "packages")
+
+	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "npm", "package.json"))
+	assertNestedString(t, npmPackage, "pi-user", "name")
+	assertNestedString(t, npmPackage, "^1.0.0", "dependencies", "left-pad")
+	assertNestedString(t, npmPackage, "^2.6.0", "dependencies", "pi-mcp-adapter")
+	assertNestedString(t, npmPackage, "^1.0.0", "devDependencies", "vitest")
+}
+
+func TestInjectPiProvisioningCanonicalizesExistingEntriesAndIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{"packages":["npm:pi-mcp-adapter@2.0.0"]}`)
+	writeFile(t, filepath.Join(home, ".pi", "npm", "package.json"), `{"dependencies":{"pi-mcp-adapter":"^2.0.0"}}`)
+
+	first, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject() first changed = false")
+	}
+
+	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
+	assertNestedStrings(t, settings, []string{"npm:pi-mcp-adapter"}, "packages")
+	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "npm", "package.json"))
+	assertNestedString(t, npmPackage, "^2.6.0", "dependencies", "pi-mcp-adapter")
+
+	second, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject() second changed = true")
+	}
+}
+
+func TestInjectPiProvisioningMigratesLegacyObjectPackages(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{"theme":"kanagawa","packages":{"npm:other":"1.0.0","npm:pi-mcp-adapter":"2.0.0"}}`)
+
+	_, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
+	assertNestedString(t, settings, "kanagawa", "theme")
+	assertNestedStringsUnordered(t, settings, []string{"npm:other@1.0.0", "npm:pi-mcp-adapter"}, "packages")
+}
+
 // TestInjectOpenCodeMigratesFromOldFormat verifies that when a user's
 // opencode.json contains the old v1.11.3 format (separate "args" key),
 // Inject() replaces mcp.engram atomically so that "args" is absent and
@@ -401,6 +486,7 @@ func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
 func TestInjectVSCodeMergesEngramToMCPConfigFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 	adapter := vscode.NewAdapter()
 
 	result, err := Inject(home, adapter)
@@ -465,16 +551,8 @@ func TestInjectGeminiToolsFlagPresent(t *testing.T) {
 	}
 }
 
-func TestInjectAntigravityCopiesGeminiSettingsAfterEngramSetup(t *testing.T) {
+func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 	home := t.TempDir()
-	sourcePath := filepath.Join(home, ".gemini", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(sourcePath), err)
-	}
-	want := []byte("{\"theme\":\"dark\"}\n")
-	if err := os.WriteFile(sourcePath, want, 0o644); err != nil {
-		t.Fatalf("WriteFile(%q) error = %v", sourcePath, err)
-	}
 
 	result, err := Inject(home, antigravityAdapter())
 	if err != nil {
@@ -484,17 +562,60 @@ func TestInjectAntigravityCopiesGeminiSettingsAfterEngramSetup(t *testing.T) {
 		t.Fatalf("Inject(antigravity) changed = false")
 	}
 
-	settingsPath := filepath.Join(home, ".gemini", "antigravity", "settings.json")
-	got, err := os.ReadFile(settingsPath)
+	cliMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json")
+	content, err := os.ReadFile(cliMCPPath)
 	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+		t.Fatalf("ReadFile(%q) error = %v", cliMCPPath, err)
 	}
-	if string(got) != string(want) {
-		t.Fatalf("antigravity settings = %q, want %q", got, want)
+	text := string(content)
+	if !strings.Contains(text, `"args": [`) || !strings.Contains(text, `"mcp"`) {
+		t.Fatalf("Antigravity MCP config must launch Engram MCP; got:\n%s", text)
+	}
+	if strings.Contains(text, `--tools=`) {
+		t.Fatalf("Antigravity should use Engram's default MCP invocation without tool-profile flags; got:\n%s", text)
 	}
 
-	mcpPath := filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")
-	assertArgsHaveToolsAgent(t, mcpPath)
+	pluginPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "plugin.json")
+	if _, err := os.Stat(pluginPath); err != nil {
+		t.Fatalf("Antigravity Engram plugin manifest missing: %v", err)
+	}
+
+	pluginMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
+	pluginMCPContent, err := os.ReadFile(pluginMCPPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", pluginMCPPath, err)
+	}
+	pluginMCPText := string(pluginMCPContent)
+	if !strings.Contains(pluginMCPText, `"mcp"`) || strings.Contains(pluginMCPText, `--tools=`) {
+		t.Fatalf("Antigravity Engram plugin MCP config should expose default Engram MCP tools; got:\n%s", pluginMCPText)
+	}
+
+	hooksPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "hooks.json")
+	hooksContent, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", hooksPath, err)
+	}
+	hooksText := string(hooksContent)
+	for _, want := range []string{
+		"PreInvocation",
+		"injectSteps",
+		"mem_save",
+		"mem_search",
+		"mem_context",
+		"mem_session_summary",
+		"mem_get_observation",
+		"mem_current_project",
+		"mem_judge",
+	} {
+		if !strings.Contains(hooksText, want) {
+			t.Fatalf("Antigravity Engram hook missing %q; got:\n%s", want, hooksText)
+		}
+	}
+
+	desktopMCPPath := filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")
+	if _, err := os.Stat(desktopMCPPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy desktop MCP path %q should not be written for antigravity; stat err = %v", desktopMCPPath, err)
+	}
 }
 
 func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T) {
@@ -508,7 +629,7 @@ func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T
 		t.Fatalf("Inject(antigravity) first changed = false")
 	}
 
-	settingsPath := filepath.Join(home, ".gemini", "antigravity", "settings.json")
+	settingsPath := filepath.Join(home, ".gemini", "antigravity-cli", "settings.json")
 	got, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
@@ -621,7 +742,9 @@ func TestInjectCodexInjectsTOMLKeys(t *testing.T) {
 	if !strings.Contains(text, `model_instructions_file`) {
 		t.Fatalf("config.toml missing model_instructions_file key; got:\n%s", text)
 	}
-	if !strings.Contains(text, instructionsPath) {
+	normText := strings.ReplaceAll(strings.ReplaceAll(text, "\\\\", "/"), "\\", "/")
+	normInstrPath := filepath.ToSlash(instructionsPath)
+	if !strings.Contains(normText, normInstrPath) {
 		t.Fatalf("config.toml model_instructions_file does not reference %q; got:\n%s", instructionsPath, text)
 	}
 
@@ -629,7 +752,8 @@ func TestInjectCodexInjectsTOMLKeys(t *testing.T) {
 	if !strings.Contains(text, `experimental_compact_prompt_file`) {
 		t.Fatalf("config.toml missing experimental_compact_prompt_file key; got:\n%s", text)
 	}
-	if !strings.Contains(text, compactPath) {
+	normCompactPath := filepath.ToSlash(compactPath)
+	if !strings.Contains(normText, normCompactPath) {
 		t.Fatalf("config.toml experimental_compact_prompt_file does not reference %q; got:\n%s", compactPath, text)
 	}
 }
@@ -846,6 +970,125 @@ func mockEngramLookPath(t *testing.T, result string, errMsg string) {
 		return result, nil
 	}
 	t.Cleanup(func() { EngramLookPath = orig })
+}
+
+func writeFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func readJSONFile(t *testing.T, path string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v; content:\n%s", path, err, raw)
+	}
+	return parsed
+}
+
+func nestedValue(t *testing.T, root map[string]any, path ...string) (any, bool) {
+	t.Helper()
+	var current any = root
+	for _, key := range path {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[key]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func assertNestedString(t *testing.T, root map[string]any, want string, path ...string) {
+	t.Helper()
+	got, ok := nestedValue(t, root, path...)
+	if !ok {
+		t.Fatalf("missing JSON path %v in %#v", path, root)
+	}
+	if got != want {
+		t.Fatalf("JSON path %v = %#v, want %q", path, got, want)
+	}
+}
+
+func assertNestedStrings(t *testing.T, root map[string]any, want []string, path ...string) {
+	t.Helper()
+	got, ok := nestedValue(t, root, path...)
+	if !ok {
+		t.Fatalf("missing JSON path %v in %#v", path, root)
+	}
+	items, ok := got.([]any)
+	if !ok {
+		t.Fatalf("JSON path %v = %#v, want string array", path, got)
+	}
+	if len(items) != len(want) {
+		t.Fatalf("JSON path %v length = %d, want %d (%#v)", path, len(items), len(want), got)
+	}
+	for i, wantItem := range want {
+		if items[i] != wantItem {
+			t.Fatalf("JSON path %v[%d] = %#v, want %q", path, i, items[i], wantItem)
+		}
+	}
+}
+
+func assertNestedStringsUnordered(t *testing.T, root map[string]any, want []string, path ...string) {
+	t.Helper()
+	got, ok := nestedValue(t, root, path...)
+	if !ok {
+		t.Fatalf("missing JSON path %v in %#v", path, root)
+	}
+	items, ok := got.([]any)
+	if !ok {
+		t.Fatalf("JSON path %v = %#v, want string array", path, got)
+	}
+	if len(items) != len(want) {
+		t.Fatalf("JSON path %v length = %d, want %d (%#v)", path, len(items), len(want), got)
+	}
+	remaining := make(map[string]int, len(want))
+	for _, item := range want {
+		remaining[item]++
+	}
+	for _, item := range items {
+		itemString, ok := item.(string)
+		if !ok {
+			t.Fatalf("JSON path %v contains non-string item %#v", path, item)
+		}
+		remaining[itemString]--
+	}
+	for item, count := range remaining {
+		if count != 0 {
+			t.Fatalf("JSON path %v missing/extra %q count delta %d; got %#v", path, item, count, got)
+		}
+	}
+}
+
+func assertNestedBool(t *testing.T, root map[string]any, want bool, path ...string) {
+	t.Helper()
+	got, ok := nestedValue(t, root, path...)
+	if !ok {
+		t.Fatalf("missing JSON path %v in %#v", path, root)
+	}
+	if got != want {
+		t.Fatalf("JSON path %v = %#v, want %v", path, got, want)
+	}
+}
+
+func assertNestedMissing(t *testing.T, root map[string]any, path ...string) {
+	t.Helper()
+	if got, ok := nestedValue(t, root, path...); ok {
+		t.Fatalf("JSON path %v present = %#v, want missing", path, got)
+	}
 }
 
 // TestEngramInjectUsesAbsolutePathWhenAvailable verifies that when engram is
@@ -1087,4 +1330,270 @@ func TestQwenEngramIdempotency(t *testing.T) {
 	if string(content1) != string(content2) {
 		t.Errorf("Idempotency failure! Settings changed between runs despite engram command being stable-relative.\nRun 1:\n%s\nRun 2:\n%s", string(content1), string(content2))
 	}
+}
+
+func TestInjectOpenClawMergesEngramIntoMCPServersPreservingStdioAndRemoteFields(t *testing.T) {
+	mockEngramLookPath(t, "engram", "")
+
+	home := t.TempDir()
+	adapter := openclawAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	existing := `{
+  "mcp": {
+    "sessionIdleTtlMs": 120000,
+    "servers": {
+      "filesystem": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+        "env": {"ROOT": "/workspace"},
+        "unknownStdioField": true
+      },
+      "linear": {
+        "url": "https://mcp.linear.app/sse",
+        "transport": "sse",
+        "headers": {"Authorization": "Bearer existing-token"},
+        "unknownRemoteField": "preserve-me"
+      }
+    }
+  },
+  "theme": "kanagawa"
+}`
+	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(openclaw.json) error = %v", err)
+	}
+
+	result, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(openclaw) changed = false")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(openclaw.json) error = %v", err)
+	}
+	root := unmarshalObjectForTest(t, content)
+	mcp := objectAtForTest(t, root, "mcp")
+	if got := mcp["sessionIdleTtlMs"]; got != float64(120000) {
+		t.Fatalf("mcp.sessionIdleTtlMs = %v, want preserved 120000", got)
+	}
+	servers := objectAtForTest(t, mcp, "servers")
+
+	filesystem := objectAtForTest(t, servers, "filesystem")
+	if got := filesystem["command"]; got != "npx" {
+		t.Fatalf("filesystem.command = %v, want npx", got)
+	}
+	if got := filesystem["unknownStdioField"]; got != true {
+		t.Fatalf("filesystem.unknownStdioField = %v, want true", got)
+	}
+	args, ok := filesystem["args"].([]any)
+	if !ok || len(args) != 2 || args[1] != "@modelcontextprotocol/server-filesystem" {
+		t.Fatalf("filesystem.args = %#v, want preserved stdio args", filesystem["args"])
+	}
+
+	linear := objectAtForTest(t, servers, "linear")
+	if got := linear["url"]; got != "https://mcp.linear.app/sse" {
+		t.Fatalf("linear.url = %v, want preserved remote url", got)
+	}
+	if got := linear["transport"]; got != "sse" {
+		t.Fatalf("linear.transport = %v, want sse", got)
+	}
+	headers := objectAtForTest(t, linear, "headers")
+	if got := headers["Authorization"]; got != "Bearer existing-token" {
+		t.Fatalf("linear Authorization header = %v, want preserved token", got)
+	}
+	if got := linear["unknownRemoteField"]; got != "preserve-me" {
+		t.Fatalf("linear.unknownRemoteField = %v, want preserve-me", got)
+	}
+
+	engram := objectAtForTest(t, servers, "engram")
+	if got := engram["command"]; got != "engram" {
+		t.Fatalf("engram.command = %v, want engram", got)
+	}
+	engramArgs, ok := engram["args"].([]any)
+	if !ok || len(engramArgs) != 2 || engramArgs[0] != "mcp" || engramArgs[1] != "--tools=agent" {
+		t.Fatalf("engram.args = %#v, want [mcp --tools=agent]", engram["args"])
+	}
+	if _, hasMCPServers := root["mcpServers"]; hasMCPServers {
+		t.Fatal("OpenClaw config must use mcp.servers, not top-level mcpServers")
+	}
+}
+
+func TestInjectOpenClawHandlesJSON5ConfigAndMissingConfigPath(t *testing.T) {
+	t.Run("preserves JSON5 compatible config content as normalized JSON", func(t *testing.T) {
+		home := t.TempDir()
+		adapter := openclawAdapter()
+		configPath := adapter.SettingsPath(home)
+		if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+
+		existing := `{
+  // OpenClaw user config with JSON5-style comments.
+  "ui": {
+    "theme": "kanagawa", // trailing comma survives via normalization
+  },
+  "mcp": {
+    "servers": {
+      "remoteDocs": {
+        "url": "https://docs.example/mcp",
+        "transport": "http",
+      },
+    },
+  },
+}`
+		if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+			t.Fatalf("WriteFile(openclaw.json) error = %v", err)
+		}
+
+		if _, err := Inject(home, adapter); err != nil {
+			t.Fatalf("Inject(openclaw) error = %v", err)
+		}
+
+		content, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("ReadFile(openclaw.json) error = %v", err)
+		}
+		root := unmarshalObjectForTest(t, content)
+		ui := objectAtForTest(t, root, "ui")
+		if got := ui["theme"]; got != "kanagawa" {
+			t.Fatalf("ui.theme = %v, want preserved kanagawa", got)
+		}
+		servers := objectAtForTest(t, objectAtForTest(t, root, "mcp"), "servers")
+		remoteDocs := objectAtForTest(t, servers, "remoteDocs")
+		if got := remoteDocs["transport"]; got != "http" {
+			t.Fatalf("remoteDocs.transport = %v, want preserved http", got)
+		}
+		if _, ok := servers["engram"]; !ok {
+			t.Fatal("mcp.servers.engram missing after JSON5 merge")
+		}
+	})
+
+	t.Run("creates canonical OpenClaw config when missing", func(t *testing.T) {
+		home := t.TempDir()
+		adapter := openclawAdapter()
+		configPath := filepath.Join(home, ".openclaw", "openclaw.json")
+
+		if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+			t.Fatalf("expected missing OpenClaw config before inject, got err=%v", err)
+		}
+		if _, err := Inject(home, adapter); err != nil {
+			t.Fatalf("Inject(openclaw) error = %v", err)
+		}
+		content, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("ReadFile(created openclaw.json) error = %v", err)
+		}
+		servers := objectAtForTest(t, objectAtForTest(t, unmarshalObjectForTest(t, content), "mcp"), "servers")
+		if _, ok := servers["engram"]; !ok {
+			t.Fatal("created OpenClaw config missing mcp.servers.engram")
+		}
+	})
+}
+
+func TestInjectOpenClawWritesEngramProtocolToWorkspaceAgentsOnly(t *testing.T) {
+	workspace := t.TempDir()
+	adapter := openclawAdapter()
+	toolsPath := filepath.Join(workspace, "TOOLS.md")
+	if err := os.WriteFile(toolsPath, []byte("# Tool guidance\n\nUser-owned tool notes.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(TOOLS.md) error = %v", err)
+	}
+
+	first, err := Inject(workspace, adapter)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(openclaw) first changed = false")
+	}
+
+	agentsPath := filepath.Join(workspace, "AGENTS.md")
+	agentsContent, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
+	}
+	agentsText := string(agentsContent)
+	for _, want := range []string{
+		"<!-- gentle-ai:engram-protocol -->",
+		"<!-- /gentle-ai:engram-protocol -->",
+		"mem_save",
+	} {
+		if !strings.Contains(agentsText, want) {
+			t.Fatalf("OpenClaw AGENTS.md missing Engram protocol content %q; got:\n%s", want, agentsText)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".openclaw", "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("OpenClaw Engram injection must not write global .openclaw/AGENTS.md; stat err=%v", err)
+	}
+
+	toolsContent, err := os.ReadFile(toolsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(TOOLS.md) error = %v", err)
+	}
+	toolsText := string(toolsContent)
+	if strings.Contains(toolsText, "gentle-ai:engram-protocol") || strings.Contains(toolsText, "mem_save") {
+		t.Fatalf("TOOLS.md must not receive Engram protocol sections; got:\n%s", toolsText)
+	}
+	if !strings.Contains(toolsText, "User-owned tool notes.") {
+		t.Fatalf("TOOLS.md user content was modified; got:\n%s", toolsText)
+	}
+
+	second, err := Inject(workspace, adapter)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("OpenClaw Engram injection should be idempotent")
+	}
+	updated, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md) second error = %v", err)
+	}
+	if count := strings.Count(string(updated), "<!-- gentle-ai:engram-protocol -->"); count != 1 {
+		t.Fatalf("AGENTS.md has %d Engram protocol markers, want exactly 1", count)
+	}
+}
+
+func TestInjectOpenClawRejectsAmbiguousWorkspacePath(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	result, err := Inject("", openclawAdapter())
+	if err == nil {
+		t.Fatalf("Inject(openclaw, empty workspace) error = nil, want deterministic ambiguity error; result=%+v", result)
+	}
+	if _, statErr := os.Stat(filepath.Join(cwd, ".openclaw", "openclaw.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("ambiguous OpenClaw workspace must not create relative config; stat err=%v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(cwd, "AGENTS.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("ambiguous OpenClaw workspace must not create relative AGENTS.md; stat err=%v", statErr)
+	}
+}
+
+func unmarshalObjectForTest(t *testing.T, content []byte) map[string]any {
+	t.Helper()
+	var root map[string]any
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal JSON error = %v; content:\n%s", err, content)
+	}
+	return root
+}
+
+func objectAtForTest(t *testing.T, root map[string]any, key string) map[string]any {
+	t.Helper()
+	value, ok := root[key]
+	if !ok {
+		t.Fatalf("missing object key %q in %#v", key, root)
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("key %q has type %T, want object", key, value)
+	}
+	return object
 }

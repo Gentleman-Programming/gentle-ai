@@ -30,6 +30,7 @@ After completing work, call `mem_save` with:
 - topic_key: `"sdd-onboard/{project}"`
 - type: `"architecture"`
 - project: `{project-name from context}`
+- capture_prompt: `false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
 
 ## Result Contract
 
@@ -39,4 +40,4 @@ Return a structured result with these fields:
 - `artifacts`: list of paths or topic_keys written
 - `next_recommended`: `sdd-new` (to start a real change independently)
 - `risks`: any warnings about the onboarding session
-- `skill_resolution`: `injected` if compact rules were provided in invocation message, otherwise `none`
+- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`

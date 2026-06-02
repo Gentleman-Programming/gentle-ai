@@ -1,7 +1,7 @@
-# Antigravity IDE: SDD Single-Agent Workaround
+# Antigravity: SDD Single-Agent Workaround
 
 ## El Problema
-Antigravity IDE actualmente no soporta la invocación nativa de subagentes en background (multi-threading de LLMs). Todas las fases de Spec-Driven Development (SDD) deben ejecutarse secuencialmente en el mismo hilo de conversación.
+Antigravity (CLI y Desktop) actualmente no soporta la invocación nativa de subagentes en background (multi-threading de LLMs). Todas las fases de Spec-Driven Development (SDD) deben ejecutarse secuencialmente en el mismo hilo de conversación.
 Esto genera un alto riesgo de **degradación de contexto y alucinaciones**, ya que el LLM empieza a mezclar instrucciones de skills anteriores y pierde el hilo de la arquitectura.
 
 ## La Solución: Artifact-Driven State Machine

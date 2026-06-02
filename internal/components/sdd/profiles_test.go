@@ -10,6 +10,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
 func TestResolveProfileStrategy_ExplicitWins(t *testing.T) {
@@ -400,7 +401,8 @@ func TestGenerateProfileOverlay_Structure(t *testing.T) {
 		t.Errorf("sdd-orchestrator-cheap prompt does not contain orchestrator content; got: %q", prompt[:min(100, len(prompt))])
 	}
 
-	// Sub-agent checks — each phase should be hidden subagent with file ref
+	// Sub-agent checks — cheap profiles use slim prompts for apply/verify and
+	// shared prompt file refs for the remaining phases.
 	for _, phase := range subAgentPhaseOrder {
 		key := phase + "-cheap"
 		agentRaw, ok := agentMap[key]
@@ -471,9 +473,10 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 	tests := []struct {
 		name      string
 		assetPath string
+		includeJD bool // multi overlay includes JD agents; single does not
 	}{
-		{name: "single", assetPath: "opencode/sdd-overlay-single.json"},
-		{name: "multi", assetPath: "opencode/sdd-overlay-multi.json"},
+		{name: "single", assetPath: "opencode/sdd-overlay-single.json", includeJD: false},
+		{name: "multi", assetPath: "opencode/sdd-overlay-multi.json", includeJD: true},
 	}
 
 	for _, tt := range tests {
@@ -484,7 +487,7 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 			}
 
 			agentMap := root["agent"].(map[string]any)
-			orch := agentMap["sdd-orchestrator"].(map[string]any)
+			orch := agentMap["gentle-orchestrator"].(map[string]any)
 			permission := orch["permission"].(map[string]any)
 			taskWrapper := permission["task"].(map[string]any)
 
@@ -493,7 +496,14 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 				t.Fatal("task block must use __replace__ sentinel to discard stale wildcards on sync")
 			}
 
-			assertExactTaskPermissions(t, taskMap, expectedTaskPermissions(""))
+			expected := expectedTaskPermissions("")
+			if !tt.includeJD {
+				// Single overlay does not include JD agent permissions.
+				for _, jd := range opencode.JDPhases() {
+					delete(expected, jd)
+				}
+			}
+			assertExactTaskPermissions(t, taskMap, expected)
 		})
 	}
 }
@@ -556,7 +566,7 @@ func TestGenerateProfileOverlay_SubAgentFileRefs(t *testing.T) {
 		key := phase + "-cheap"
 		agent := agentMap[key].(map[string]any)
 		prompt, _ := agent["prompt"].(string)
-		expectedRef := "{file:" + filepath.Join(promptDir, phase+".md") + "}"
+		expectedRef := "{file:" + filepath.ToSlash(filepath.Join(promptDir, phase+".md")) + "}"
 		if prompt != expectedRef {
 			t.Errorf("sub-agent %q prompt = %q, want %q", key, prompt, expectedRef)
 		}
@@ -741,7 +751,123 @@ func expectedTaskPermissions(suffix string) map[string]any {
 	for _, phase := range profilePhaseOrder {
 		permissions[phase+suffix] = "allow"
 	}
+	// JD agents are global (not profile-scoped) — always unsuffixed.
+	for _, jd := range opencode.JDPhases() {
+		permissions[jd] = "allow"
+	}
 	return permissions
+}
+
+// ─── Effort propagation through profiles ─────────────────────────────────
+
+// TestExtractModelFromAgent_ReadsVariant verifies that extractModelFromAgent
+// populates Effort from the "variant" key in the agent map.
+func TestExtractModelFromAgent_ReadsVariant(t *testing.T) {
+	agentMap := map[string]any{
+		"model":   "anthropic:claude-opus-4",
+		"variant": "high",
+	}
+	got := extractModelFromAgent(agentMap)
+	if got.Effort != "high" {
+		t.Errorf("extractModelFromAgent Effort = %q, want %q", got.Effort, "high")
+	}
+	if got.ProviderID != "anthropic" {
+		t.Errorf("extractModelFromAgent ProviderID = %q, want %q", got.ProviderID, "anthropic")
+	}
+	if got.ModelID != "claude-opus-4" {
+		t.Errorf("extractModelFromAgent ModelID = %q, want %q", got.ModelID, "claude-opus-4")
+	}
+}
+
+// TestExtractModelFromAgent_NoVariantDefaultsEmpty verifies that a missing
+// "variant" key results in Effort="".
+func TestExtractModelFromAgent_NoVariantDefaultsEmpty(t *testing.T) {
+	agentMap := map[string]any{
+		"model": "anthropic:claude-sonnet-4",
+	}
+	got := extractModelFromAgent(agentMap)
+	if got.Effort != "" {
+		t.Errorf("extractModelFromAgent Effort = %q, want empty string", got.Effort)
+	}
+}
+
+// TestGenerateProfileOverlay_VariantInjected verifies that a profile
+// phase assignment with Effort="medium" results in "variant":"medium"
+// in the generated overlay JSON.
+func TestGenerateProfileOverlay_VariantInjected(t *testing.T) {
+	home := t.TempDir()
+
+	profile := model.Profile{
+		Name:              "reasoning",
+		OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-opus-4"},
+		PhaseAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "medium"},
+		},
+	}
+
+	overlay, err := GenerateProfileOverlay(profile, home)
+	if err != nil {
+		t.Fatalf("GenerateProfileOverlay() error = %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(overlay, &root); err != nil {
+		t.Fatalf("overlay is not valid JSON: %v", err)
+	}
+
+	agentMap := root["agent"].(map[string]any)
+	applyAgent := agentMap["sdd-apply-reasoning"].(map[string]any)
+	if re, _ := applyAgent["variant"].(string); re != "medium" {
+		t.Errorf("sdd-apply-reasoning variant = %q, want %q", re, "medium")
+	}
+}
+
+// TestGenerateProfileOverlay_EmptyEffortClearsVariant verifies that a profile
+// phase assignment with Effort="" produces variant:"" so the deep merge clears
+// any stale variant value left over from a previous profile. Mirrors the
+// inject.go behavior — see PR #440 review.
+func TestGenerateProfileOverlay_EmptyEffortClearsVariant(t *testing.T) {
+	home := t.TempDir()
+
+	profile := model.Profile{
+		Name:              "cheap",
+		OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"},
+		PhaseAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-haiku-3-5", Effort: ""},
+		},
+	}
+
+	overlay, err := GenerateProfileOverlay(profile, home)
+	if err != nil {
+		t.Fatalf("GenerateProfileOverlay() error = %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(overlay, &root); err != nil {
+		t.Fatalf("overlay is not valid JSON: %v", err)
+	}
+
+	agentMap := root["agent"].(map[string]any)
+
+	applyAgent := agentMap["sdd-apply-cheap"].(map[string]any)
+	variant, hasKey := applyAgent["variant"]
+	if !hasKey {
+		t.Fatal("variant key must be present (set to \"\") so the deep merge clears stale values")
+	}
+	if got := variant.(string); got != "" {
+		t.Errorf("sdd-apply-cheap variant = %q, want empty string", got)
+	}
+
+	// Orchestrator should follow the same rule.
+	orchKey := "sdd-orchestrator-cheap"
+	orchAgent := agentMap[orchKey].(map[string]any)
+	orchVariant, orchHasKey := orchAgent["variant"]
+	if !orchHasKey {
+		t.Fatalf("orchestrator %q variant key must be present (set to \"\")", orchKey)
+	}
+	if got := orchVariant.(string); got != "" {
+		t.Errorf("%s variant = %q, want empty string", orchKey, got)
+	}
 }
 
 func assertExactTaskPermissions(t *testing.T, got, want map[string]any) {

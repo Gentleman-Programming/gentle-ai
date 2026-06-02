@@ -17,6 +17,8 @@ Every time you run `gentle-ai install`, `sync`, or `upgrade`, the system:
 - `snapshot.tar.gz` — compressed archive of all backed-up files
 - For paths that did not exist before the operation, the manifest tracks `existed=false`
 
+> **Backup scope**: pre-upgrade and pre-sync snapshots cover only the agents listed in `state.InstalledAgents` (`~/.gentle-ai/state.json`). Config directories for agents you installed outside of gentle-ai are not included in the snapshot.
+
 Legacy (pre-v1.16) backups use a `files/` directory with plain copies instead of a tar.gz archive. Both formats are fully supported for restore.
 
 ## Retention policy

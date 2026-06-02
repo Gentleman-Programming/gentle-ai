@@ -2,6 +2,7 @@ package agentbuilder
 
 import (
 	"fmt"
+	"html"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -43,41 +44,49 @@ func ComposePrompt(userInput string, sddConfig *SDDIntegration, installedAgents 
 
 	// Installed agents context.
 	if len(installedAgents) > 0 {
-		sb.WriteString("## Installed Agents Context\n")
+		sb.WriteString("<installed_agents>\n")
 		sb.WriteString("This skill will be installed for the following agents:\n")
 		for _, a := range installedAgents {
-			sb.WriteString(fmt.Sprintf("- %s\n", string(a)))
+			sb.WriteString(fmt.Sprintf("- %s\n", promptEscape(string(a))))
 		}
-		sb.WriteString("\n")
+		sb.WriteString("</installed_agents>\n\n")
 	}
 
 	// SDD integration context (conditional).
 	if sddConfig != nil && sddConfig.Mode != SDDStandalone {
-		sb.WriteString("## SDD Integration Context\n")
+		sb.WriteString("<sdd_context>\n")
 		switch sddConfig.Mode {
 		case SDDPhaseSupport:
+			targetPhase := promptEscape(sddConfig.TargetPhase)
 			sb.WriteString(fmt.Sprintf(
 				"This skill provides support for the existing SDD phase: %s\n"+
 					"It must reference and complement the existing phase without replacing it.\n"+
 					"Include a section explaining how it interacts with `sdd-%s` triggers.\n",
-				sddConfig.TargetPhase, sddConfig.TargetPhase,
+				targetPhase, targetPhase,
 			))
 		case SDDNewPhase:
+			phaseName := promptEscape(sddConfig.PhaseName)
 			sb.WriteString(fmt.Sprintf(
 				"This skill introduces a NEW SDD phase named: %s\n"+
 					"It must integrate with the SDD dependency graph as a first-class phase.\n"+
 					"Include a Trigger that follows the pattern: When the orchestrator launches you for the %s phase.\n"+
 					"The phase name to use in triggers: %s\n",
-				sddConfig.PhaseName, sddConfig.PhaseName, sddConfig.PhaseName,
+				phaseName, phaseName, phaseName,
 			))
 		}
-		sb.WriteString("\n")
+		sb.WriteString("</sdd_context>\n\n")
 	}
 
-	// User's intent.
-	sb.WriteString("## User Request\n")
-	sb.WriteString(userInput)
-	sb.WriteString("\n")
+	// User's intent. Keep volatile user-provided data inside an explicit
+	// wrapper so it is easier for the generation model to distinguish from
+	// authoritative system instructions above.
+	sb.WriteString("<user_request>\n")
+	sb.WriteString(promptEscape(userInput))
+	sb.WriteString("\n</user_request>\n")
 
 	return sb.String()
+}
+
+func promptEscape(value string) string {
+	return html.EscapeString(value)
 }

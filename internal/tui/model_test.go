@@ -12,8 +12,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
@@ -28,6 +30,167 @@ func TestNavigationWelcomeToDetection(t *testing.T) {
 
 	if state.Screen != ScreenDetection {
 		t.Fatalf("screen = %v, want %v", state.Screen, ScreenDetection)
+	}
+}
+
+func TestSanitizeKnownModelEfforts_ValidKnownEffortPreserved(t *testing.T) {
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "high"},
+	}
+	sddModels := map[string][]opencode.Model{
+		"anthropic": {{ID: "claude-opus-4", Variants: []string{"low", "medium", "high"}}},
+	}
+
+	got := sanitizeKnownModelEfforts(assignments, sddModels)
+
+	if got["sdd-apply"].Effort != "high" {
+		t.Fatalf("Effort = %q, want high", got["sdd-apply"].Effort)
+	}
+}
+
+func TestSanitizeKnownModelEfforts_InvalidKnownEffortCleared(t *testing.T) {
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "high"},
+	}
+	sddModels := map[string][]opencode.Model{
+		"anthropic": {{ID: "claude-opus-4", Variants: []string{"low", "medium"}}},
+	}
+
+	got := sanitizeKnownModelEfforts(assignments, sddModels)
+
+	if got["sdd-apply"].Effort != "" {
+		t.Fatalf("Effort = %q, want empty for invalid known effort", got["sdd-apply"].Effort)
+	}
+}
+
+func TestSanitizeKnownModelEfforts_KnownNonReasoningModelClearsEffort(t *testing.T) {
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+	}
+	sddModels := map[string][]opencode.Model{
+		"anthropic": {{ID: "claude-sonnet-4", Reasoning: false}},
+	}
+
+	got := sanitizeKnownModelEfforts(assignments, sddModels)
+
+	if got["sdd-apply"].Effort != "" {
+		t.Fatalf("Effort = %q, want empty for known non-reasoning model", got["sdd-apply"].Effort)
+	}
+}
+
+func TestSanitizeKnownModelEfforts_UnknownModelDataPreservesStoredEffort(t *testing.T) {
+	tests := []struct {
+		name      string
+		sddModels map[string][]opencode.Model
+	}{
+		{
+			name:      "provider missing",
+			sddModels: map[string][]opencode.Model{},
+		},
+		{
+			name:      "model missing",
+			sddModels: map[string][]opencode.Model{"anthropic": {{ID: "other-model", Variants: []string{"low"}}}},
+		},
+		{
+			name:      "nil variants",
+			sddModels: map[string][]opencode.Model{"anthropic": {{ID: "claude-opus-4", Reasoning: true}}},
+		},
+		{
+			name:      "empty variants",
+			sddModels: map[string][]opencode.Model{"anthropic": {{ID: "claude-opus-4", Reasoning: true, Variants: []string{}}}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assignments := map[string]model.ModelAssignment{
+				"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "high"},
+			}
+
+			got := sanitizeKnownModelEfforts(assignments, tt.sddModels)
+
+			if got["sdd-apply"].Effort != "high" {
+				t.Fatalf("Effort = %q, want high when variants are unknown", got["sdd-apply"].Effort)
+			}
+		})
+	}
+}
+
+func TestProfileCreateContinueSanitizesStaleEffort(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenProfileCreate
+	m.ProfileCreateStep = 1
+	m.ProfileDraft = model.Profile{Name: "work"}
+	m.Cursor = len(screens.ModelPickerRowsForProfile())
+	m.ModelPicker = screens.ModelPickerState{
+		SDDModels: map[string][]opencode.Model{
+			"anthropic": {{ID: "claude-sonnet-4", Variants: []string{"low", "medium"}}},
+		},
+	}
+	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
+		screens.SDDOrchestratorPhase: {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+		"sdd-apply":                  {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if got := state.ProfileDraft.OrchestratorModel.Effort; got != "" {
+		t.Fatalf("orchestrator Effort = %q, want empty for stale known effort", got)
+	}
+	if got := state.ProfileDraft.PhaseAssignments["sdd-apply"].Effort; got != "" {
+		t.Fatalf("sdd-apply Effort = %q, want empty for stale known effort", got)
+	}
+}
+
+func TestProfileEditContinueSanitizesStaleEffort(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenProfileCreate
+	m.ProfileCreateStep = 1
+	m.ProfileEditMode = true
+	m.ProfileDraft = model.Profile{Name: "work"}
+	m.Cursor = len(screens.ModelPickerRowsForProfile())
+	m.ModelPicker = screens.ModelPickerState{
+		SDDModels: map[string][]opencode.Model{
+			"anthropic": {{ID: "claude-sonnet-4", Variants: []string{"low", "medium"}}},
+		},
+	}
+	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
+		screens.SDDOrchestratorPhase: {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+		"sdd-apply":                  {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if got := state.ProfileDraft.OrchestratorModel.Effort; got != "" {
+		t.Fatalf("orchestrator Effort = %q, want empty for stale known effort", got)
+	}
+	if got := state.ProfileDraft.PhaseAssignments["sdd-apply"].Effort; got != "" {
+		t.Fatalf("sdd-apply Effort = %q, want empty for stale known effort", got)
+	}
+}
+
+func TestProfileCreateContinuePreservesEffortWhenVariantDataUnknown(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenProfileCreate
+	m.ProfileCreateStep = 1
+	m.ProfileDraft = model.Profile{Name: "work"}
+	m.Cursor = len(screens.ModelPickerRowsForProfile())
+	m.ModelPicker = screens.ModelPickerState{SDDModels: map[string][]opencode.Model{}}
+	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
+		screens.SDDOrchestratorPhase: {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+		"sdd-apply":                  {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if got := state.ProfileDraft.OrchestratorModel.Effort; got != "high" {
+		t.Fatalf("orchestrator Effort = %q, want high when variant data is unknown", got)
+	}
+	if got := state.ProfileDraft.PhaseAssignments["sdd-apply"].Effort; got != "high" {
+		t.Fatalf("sdd-apply Effort = %q, want high when variant data is unknown", got)
 	}
 }
 
@@ -70,6 +233,157 @@ func TestAgentSelectionToggleAndContinue(t *testing.T) {
 
 	if state.Screen != ScreenPersona {
 		t.Fatalf("screen = %v, want %v", state.Screen, ScreenPersona)
+	}
+}
+
+func TestPiOnlyAgentContinueSkipsPromptsAndIncludesEngram(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgents
+	m.Selection.Agents = []model.AgentID{model.AgentPi}
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
+	m.Cursor = len(screensAgentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenDependencyTree {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenDependencyTree)
+	}
+	wantComponents := []model.ComponentID{model.ComponentEngram}
+	if !reflect.DeepEqual(state.Selection.Components, wantComponents) {
+		t.Fatalf("components = %v, want %v", state.Selection.Components, wantComponents)
+	}
+	if !reflect.DeepEqual(state.DependencyPlan.Agents, []model.AgentID{model.AgentPi}) {
+		t.Fatalf("dependency agents = %v, want [pi]", state.DependencyPlan.Agents)
+	}
+	if !reflect.DeepEqual(state.DependencyPlan.OrderedComponents, wantComponents) {
+		t.Fatalf("dependency components = %v, want %v", state.DependencyPlan.OrderedComponents, wantComponents)
+	}
+}
+
+func TestNewModelPiOnlyDetectionDefaultsToEngramOnly(t *testing.T) {
+	detection := system.DetectionResult{Configs: []system.ConfigState{{
+		Agent:       string(model.AgentPi),
+		Path:        "/tmp/fake/pi",
+		Exists:      true,
+		IsDirectory: true,
+	}}}
+
+	m := NewModel(detection, "dev")
+
+	wantAgents := []model.AgentID{model.AgentPi}
+	if !reflect.DeepEqual(m.Selection.Agents, wantAgents) {
+		t.Fatalf("agents = %v, want %v", m.Selection.Agents, wantAgents)
+	}
+	wantComponents := []model.ComponentID{model.ComponentEngram}
+	if !reflect.DeepEqual(m.Selection.Components, wantComponents) {
+		t.Fatalf("components = %v, want %v", m.Selection.Components, wantComponents)
+	}
+}
+
+func TestPiCombinedWithOtherAgentKeepsGenericFlow(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgents
+	m.Selection.Agents = []model.AgentID{model.AgentPi, model.AgentOpenCode}
+	m.Cursor = len(screensAgentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenPersona {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenPersona)
+	}
+}
+
+func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgents
+	m.Selection.Agents = []model.AgentID{model.AgentPi, model.AgentOpenCode, model.AgentClaudeCode}
+	m.Cursor = len(screensAgentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenPersona {
+		t.Fatalf("after agents screen = %v, want %v", state.Screen, ScreenPersona)
+	}
+
+	state.Cursor = 0
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenPreset {
+		t.Fatalf("after persona screen = %v, want %v", state.Screen, ScreenPreset)
+	}
+
+	state.Cursor = 2 // Minimal preset: Engram only, no SDD/model detours.
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenOpenCodePlugins {
+		t.Fatalf("after preset screen = %v, want %v", state.Screen, ScreenOpenCodePlugins)
+	}
+
+	state.Cursor = len(opencodepluginDefinitions()) * 2 // Continue without optional plugins.
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenDependencyTree {
+		t.Fatalf("after OpenCode plugins screen = %v, want %v", state.Screen, ScreenDependencyTree)
+	}
+
+	wantAgents := []model.AgentID{model.AgentPi, model.AgentOpenCode, model.AgentClaudeCode}
+	if !reflect.DeepEqual(state.DependencyPlan.Agents, wantAgents) {
+		t.Fatalf("dependency agents = %v, want %v", state.DependencyPlan.Agents, wantAgents)
+	}
+	// Minimal preset + Gentleman persona now includes ComponentPersona (persona is the source of truth).
+	wantComponents := []model.ComponentID{model.ComponentPersona, model.ComponentEngram}
+	if !reflect.DeepEqual(state.DependencyPlan.OrderedComponents, wantComponents) {
+		t.Fatalf("dependency components = %v, want %v", state.DependencyPlan.OrderedComponents, wantComponents)
+	}
+
+	state.Cursor = 0
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenReview {
+		t.Fatalf("after dependency tree screen = %v, want %v", state.Screen, ScreenReview)
+	}
+
+	var gotSelection model.Selection
+	var gotPlan planner.ResolvedPlan
+	state.ExecuteFn = func(selection model.Selection, resolved planner.ResolvedPlan, _ system.DetectionResult, _ pipeline.ProgressFunc) pipeline.ExecutionResult {
+		gotSelection = selection
+		gotPlan = resolved
+		return pipeline.ExecutionResult{
+			Prepare: pipeline.StageResult{Success: true},
+			Apply:   pipeline.StageResult{Success: true},
+		}
+	}
+
+	updated, cmd := state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenInstalling {
+		t.Fatalf("after review screen = %v, want %v", state.Screen, ScreenInstalling)
+	}
+	if cmd == nil {
+		t.Fatal("start installing command = nil")
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, innerCmd := range batch {
+			if innerCmd == nil {
+				continue
+			}
+			if _, ok := innerCmd().(PipelineDoneMsg); ok {
+				break
+			}
+		}
+	}
+
+	if !reflect.DeepEqual(gotSelection.Agents, wantAgents) {
+		t.Fatalf("execute selection agents = %v, want %v", gotSelection.Agents, wantAgents)
+	}
+	if !reflect.DeepEqual(gotPlan.Agents, wantAgents) {
+		t.Fatalf("execute plan agents = %v, want %v", gotPlan.Agents, wantAgents)
+	}
+	if !reflect.DeepEqual(gotPlan.OrderedComponents, wantComponents) {
+		t.Fatalf("execute plan components = %v, want %v", gotPlan.OrderedComponents, wantComponents)
 	}
 }
 
@@ -426,6 +740,9 @@ func TestClaudeModelPickerBalancedSelectionStoresAssignments(t *testing.T) {
 	if state.Screen != ScreenStrictTDD {
 		t.Fatalf("screen = %v, want %v (ClaudeCode + SDD goes to StrictTDD first)", state.Screen, ScreenStrictTDD)
 	}
+	// Orchestrator is present in the balanced preset (injected as part of the model
+	// assignment table). The Claude picker shows sub-agents and default; orchestrator
+	// is carried through for injection but is not user-editable in the picker UI.
 	if got := state.Selection.ClaudeModelAssignments["orchestrator"]; got != model.ClaudeModelOpus {
 		t.Fatalf("orchestrator = %q, want %q", got, model.ClaudeModelOpus)
 	}
@@ -451,16 +768,13 @@ func sddMultiCursor(t *testing.T) int {
 	return -1
 }
 
-// TestSDDModeMultiSkipModelPickerWhenCacheMissing verifies that when SDDModeMulti
-// is selected and the OpenCode model cache does NOT exist on disk, the TUI skips
-// the model picker and goes to ScreenStrictTDD (the new next step after SDDMode).
-// This is the "fresh install" path where OpenCode has not been run yet.
-func TestSDDModeMultiSkipModelPickerWhenCacheMissing(t *testing.T) {
-	origStat := osStatModelCache
-	osStatModelCache = func(name string) (os.FileInfo, error) {
-		return nil, os.ErrNotExist
-	}
-	t.Cleanup(func() { osStatModelCache = origStat })
+// TestSDDModeMultiShowsModelPickerWhenCacheMissing verifies that selecting
+// SDDModeMulti still opens the model picker when the OpenCode model cache has
+// not been populated yet. The picker can still load custom providers from
+// opencode.json and otherwise shows its explicit empty state instead of silently
+// skipping model assignment.
+func TestSDDModeMultiShowsModelPickerWhenCacheMissing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenSDDMode
@@ -471,12 +785,38 @@ func TestSDDModeMultiSkipModelPickerWhenCacheMissing(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	// New flow: SDDMode → ScreenStrictTDD (cache missing → skip model picker, then ask strict TDD)
-	if state.Screen != ScreenStrictTDD {
-		t.Fatalf("screen = %v, want ScreenStrictTDD (cache missing → skip model picker, show strict TDD)", state.Screen)
+	if state.Screen != ScreenModelPicker {
+		t.Fatalf("screen = %v, want ScreenModelPicker (cache missing → still offer model picker)", state.Screen)
 	}
 	if len(state.ModelPicker.AvailableIDs) != 0 {
 		t.Fatalf("ModelPicker.AvailableIDs should be empty when cache missing, got: %v", state.ModelPicker.AvailableIDs)
+	}
+}
+
+func TestSDDModeMultiEmptyModelPickerCanContinueWithDefaults(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenSDDMode
+	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+	m.Cursor = sddMultiCursor(t)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenModelPicker {
+		t.Fatalf("screen = %v, want ScreenModelPicker", state.Screen)
+	}
+
+	state.Cursor = 0 // Continue with defaults
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+
+	if state.Screen != ScreenStrictTDD {
+		t.Fatalf("screen = %v, want ScreenStrictTDD after continuing with defaults", state.Screen)
+	}
+	if state.Selection.ModelAssignments != nil {
+		t.Fatalf("ModelAssignments = %v, want nil defaults", state.Selection.ModelAssignments)
 	}
 }
 
@@ -1219,12 +1559,12 @@ func TestUninstallConfirm_CleanInstallRunsSyncAfterUninstall(t *testing.T) {
 		uninstallCalled = true
 		return componentuninstall.Result{RemovedFiles: []string{"/tmp/managed-file"}}, nil
 	}
-	m.SyncFn = func(overrides *model.SyncOverrides) (int, error) {
+	m.SyncFn = func(overrides *model.SyncOverrides) ([]string, error) {
 		syncCalled = true
 		if overrides != nil {
 			t.Fatalf("clean-install sync overrides = %+v, want nil", overrides)
 		}
-		return 7, nil
+		return []string{"a", "b", "c", "d", "e", "f", "g"}, nil
 	}
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1249,8 +1589,8 @@ func TestUninstallConfirm_CleanInstallRunsSyncAfterUninstall(t *testing.T) {
 	if uninstallMsg.SyncErr != nil {
 		t.Fatalf("unexpected clean-install sync error: %v", uninstallMsg.SyncErr)
 	}
-	if uninstallMsg.SyncFilesChanged != 7 {
-		t.Fatalf("SyncFilesChanged = %d, want 7", uninstallMsg.SyncFilesChanged)
+	if len(uninstallMsg.SyncFiles) != 7 {
+		t.Fatalf("SyncFiles len = %d, want 7", len(uninstallMsg.SyncFiles))
 	}
 
 	updated, _ = state.Update(*uninstallMsg)
@@ -1258,8 +1598,8 @@ func TestUninstallConfirm_CleanInstallRunsSyncAfterUninstall(t *testing.T) {
 	if state.Screen != ScreenUninstallResult {
 		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallResult)
 	}
-	if state.SyncCleanInstallFilesChanged != 7 {
-		t.Fatalf("SyncCleanInstallFilesChanged = %d, want 7", state.SyncCleanInstallFilesChanged)
+	if len(state.SyncCleanInstallFiles) != 7 {
+		t.Fatalf("SyncCleanInstallFiles len = %d, want 7", len(state.SyncCleanInstallFiles))
 	}
 	if state.SyncCleanInstallErr != nil {
 		t.Fatalf("unexpected SyncCleanInstallErr: %v", state.SyncCleanInstallErr)
@@ -1545,7 +1885,7 @@ func TestKiroPickerEscNonCustomWithClaudeGoesToClaudePicker(t *testing.T) {
 	m.Selection.Preset = model.PresetFullGentleman // non-custom
 	// Simulate both Kiro and Claude being selected.
 	m.Selection.Agents = []model.AgentID{model.AgentKiroIDE, model.AgentClaudeCode}
-	m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
 	m.KiroModelPicker = screens.NewKiroModelPickerState()
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -1567,7 +1907,7 @@ func TestKiroPickerEscNonCustomWithoutClaudeGoesToPreset(t *testing.T) {
 	m.Selection.Preset = model.PresetFullGentleman
 	// Only Kiro — no Claude.
 	m.Selection.Agents = []model.AgentID{model.AgentKiroIDE}
-	m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
 	m.KiroModelPicker = screens.NewKiroModelPickerState()
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -1878,7 +2218,7 @@ func TestDeleteResult_EnterRefreshesAndReturnsToBackups(t *testing.T) {
 // detection-driven TUI preselection silently dropped it.
 func TestPreselectedAgents_CodexIsIncludedWhenPresent(t *testing.T) {
 	detection := makeDetectionWithAgents("codex")
-	selected := preselectedAgents(detection)
+	selected := preselectedAgents(detection, state.InstallState{})
 
 	found := false
 	for _, id := range selected {
@@ -1927,19 +2267,48 @@ func TestModelConfig_ClaudePickerTriggersSyncScreen(t *testing.T) {
 	if state.PendingSyncOverrides == nil {
 		t.Fatalf("step2: PendingSyncOverrides should be non-nil after Claude model selection")
 	}
+	if got := state.PendingSyncOverrides.TargetAgents; len(got) != 1 || got[0] != model.AgentClaudeCode {
+		t.Fatalf("step2: TargetAgents = %v, want [%s]", got, model.AgentClaudeCode)
+	}
 	if len(state.PendingSyncOverrides.ClaudeModelAssignments) == 0 {
 		t.Fatalf("step2: PendingSyncOverrides.ClaudeModelAssignments should be non-empty, got: %v",
 			state.PendingSyncOverrides.ClaudeModelAssignments)
 	}
-	// Balanced preset: orchestrator → opus, sdd-archive → haiku.
+	// Orchestrator is present in the balanced preset (injected as part of the model
+	// assignment table). The Claude picker shows sub-agents and default; orchestrator
+	// is carried through for injection but is not user-editable in the picker UI.
 	if got := state.PendingSyncOverrides.ClaudeModelAssignments["orchestrator"]; got != model.ClaudeModelOpus {
-		t.Errorf("step2: ClaudeModelAssignments[orchestrator] = %q, want %q", got, model.ClaudeModelOpus)
+		t.Errorf("step2: orchestrator = %q, want %q", got, model.ClaudeModelOpus)
 	}
 }
 
 // TestModelConfig_OpenCodePickerContinueTriggersSyncScreen verifies that pressing
 // "Continue" from ScreenModelPicker while in ModelConfigMode navigates to ScreenSync
 // and populates PendingSyncOverrides with ModelAssignments and SDDMode=multi.
+func TestModelConfig_ProfileSaveTargetsOpenCode(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenProfileCreate
+	m.ProfileCreateStep = 2
+	m.Cursor = 0
+	m.ProfileDraft = model.Profile{Name: "free"}
+
+	updated, _ := m.confirmProfileCreate()
+	state := updated.(Model)
+
+	if state.Screen != ScreenSync {
+		t.Fatalf("screen = %v, want ScreenSync", state.Screen)
+	}
+	if state.PendingSyncOverrides == nil {
+		t.Fatalf("PendingSyncOverrides should be non-nil after profile Save & Sync")
+	}
+	if got := state.PendingSyncOverrides.TargetAgents; len(got) != 1 || got[0] != model.AgentOpenCode {
+		t.Fatalf("TargetAgents = %v, want [%s]", got, model.AgentOpenCode)
+	}
+	if got := state.PendingSyncOverrides.Profiles; len(got) != 1 || got[0].Name != "free" {
+		t.Fatalf("Profiles = %v, want profile named free", got)
+	}
+}
+
 func TestModelConfig_OpenCodePickerContinueTriggersSyncScreen(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelPicker
@@ -1948,11 +2317,14 @@ func TestModelConfig_OpenCodePickerContinueTriggersSyncScreen(t *testing.T) {
 	// Populate AvailableIDs so ModelPicker shows rows (not just "Back").
 	m.ModelPicker = screens.ModelPickerState{
 		AvailableIDs: []string{"anthropic"},
+		SDDModels: map[string][]opencode.Model{
+			"anthropic": {{ID: "claude-sonnet-4", Variants: []string{"low", "medium"}}},
+		},
 	}
 
 	// Set some model assignments so we can verify they're captured.
 	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
-		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
 	}
 
 	// cursor == len(ModelPickerRows()) is the "Continue" option.
@@ -1971,6 +2343,9 @@ func TestModelConfig_OpenCodePickerContinueTriggersSyncScreen(t *testing.T) {
 	if state.PendingSyncOverrides == nil {
 		t.Fatalf("PendingSyncOverrides should be non-nil after OpenCode model selection")
 	}
+	if got := state.PendingSyncOverrides.TargetAgents; len(got) != 1 || got[0] != model.AgentOpenCode {
+		t.Fatalf("TargetAgents = %v, want [%s]", got, model.AgentOpenCode)
+	}
 	if got := state.PendingSyncOverrides.SDDMode; got != model.SDDModeMulti {
 		t.Errorf("PendingSyncOverrides.SDDMode = %q, want %q", got, model.SDDModeMulti)
 	}
@@ -1980,6 +2355,9 @@ func TestModelConfig_OpenCodePickerContinueTriggersSyncScreen(t *testing.T) {
 	}
 	if got := state.PendingSyncOverrides.ModelAssignments["sdd-apply"]; got.ProviderID != "anthropic" {
 		t.Errorf("ModelAssignments[sdd-apply].ProviderID = %q, want %q", got.ProviderID, "anthropic")
+	}
+	if got := state.PendingSyncOverrides.ModelAssignments["sdd-apply"]; got.Effort != "" {
+		t.Errorf("ModelAssignments[sdd-apply].Effort = %q, want empty for invalid known effort", got.Effort)
 	}
 }
 
@@ -1992,16 +2370,15 @@ func TestModelConfig_SyncPassesOverridesToSyncFn(t *testing.T) {
 
 	testOverrides := &model.SyncOverrides{
 		ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
-			"orchestrator": model.ClaudeModelOpus,
-			"default":      model.ClaudeModelSonnet,
+			"default": model.ClaudeModelSonnet,
 		},
 	}
 	m.PendingSyncOverrides = testOverrides
 
 	var capturedOverrides *model.SyncOverrides
-	m.SyncFn = func(overrides *model.SyncOverrides) (int, error) {
+	m.SyncFn = func(overrides *model.SyncOverrides) ([]string, error) {
 		capturedOverrides = overrides
-		return 3, nil
+		return []string{"a", "b", "c"}, nil
 	}
 
 	// Press enter on ScreenSync to start the sync.
@@ -2028,15 +2405,15 @@ func TestModelConfig_SyncPassesOverridesToSyncFn(t *testing.T) {
 	if syncMsg.Err != nil {
 		t.Fatalf("unexpected sync error: %v", syncMsg.Err)
 	}
-	if syncMsg.FilesChanged != 3 {
-		t.Fatalf("FilesChanged = %d, want 3", syncMsg.FilesChanged)
+	if len(syncMsg.Files) != 3 {
+		t.Fatalf("Files len = %d, want 3", len(syncMsg.Files))
 	}
 
 	if capturedOverrides == nil {
 		t.Fatalf("SyncFn was not called with overrides — capturedOverrides is nil")
 	}
-	if got := capturedOverrides.ClaudeModelAssignments["orchestrator"]; got != model.ClaudeModelOpus {
-		t.Errorf("captured ClaudeModelAssignments[orchestrator] = %q, want %q", got, model.ClaudeModelOpus)
+	if got := capturedOverrides.ClaudeModelAssignments["default"]; got != model.ClaudeModelSonnet {
+		t.Errorf("captured ClaudeModelAssignments[default] = %q, want %q", got, model.ClaudeModelSonnet)
 	}
 
 	// Feed SyncDoneMsg back through Update to verify end-to-end state cleanup.
@@ -2123,11 +2500,11 @@ func TestSyncDoneMsg_ClearsPendingOverrides(t *testing.T) {
 	}{
 		{
 			name:     "success clears overrides",
-			syncDone: SyncDoneMsg{FilesChanged: 5, Err: nil},
+			syncDone: SyncDoneMsg{Files: []string{"a", "b", "c", "d", "e"}, Err: nil},
 		},
 		{
 			name:     "error also clears overrides",
-			syncDone: SyncDoneMsg{FilesChanged: 0, Err: fmt.Errorf("sync failed")},
+			syncDone: SyncDoneMsg{Files: nil, Err: fmt.Errorf("sync failed")},
 		},
 	}
 
@@ -2176,7 +2553,7 @@ func TestSyncDoneMsg_CursorClampedAfterProfileListRefresh(t *testing.T) {
 	// Cursor was at 5 (pointing at a profile that no longer exists after sync).
 	m.Cursor = 5
 
-	updated, _ := m.Update(SyncDoneMsg{FilesChanged: 1, Err: nil})
+	updated, _ := m.Update(SyncDoneMsg{Files: []string{"a"}, Err: nil})
 	state := updated.(Model)
 
 	// After refresh, ProfileList has 2 items; cursor must be clamped to 1 (len-1).
@@ -2208,11 +2585,11 @@ func TestSyncDoneMsg_ClearsPendingOverrides_WithReadProfilesStub(t *testing.T) {
 	}{
 		{
 			name:     "success clears overrides",
-			syncDone: SyncDoneMsg{FilesChanged: 5, Err: nil},
+			syncDone: SyncDoneMsg{Files: []string{"a", "b", "c", "d", "e"}, Err: nil},
 		},
 		{
 			name:     "error also clears overrides",
-			syncDone: SyncDoneMsg{FilesChanged: 0, Err: fmt.Errorf("sync failed")},
+			syncDone: SyncDoneMsg{Files: nil, Err: fmt.Errorf("sync failed")},
 		},
 	}
 
@@ -2313,7 +2690,7 @@ func TestPreselectedAgents_AllSixAgentsMappedCorrectly(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.configAgent, func(t *testing.T) {
 			detection := makeDetectionWithAgents(tt.configAgent)
-			selected := preselectedAgents(detection)
+			selected := preselectedAgents(detection, state.InstallState{})
 
 			found := false
 			for _, id := range selected {
@@ -2332,6 +2709,113 @@ func TestPreselectedAgents_AllSixAgentsMappedCorrectly(t *testing.T) {
 					len(selected), tt.configAgent, selected)
 			}
 		})
+	}
+}
+
+// ─── agentsToManage / preselectedAgents — state wins over detection ─────────
+
+// TestAgentsToManage_StateTakesPriorityOverDetection verifies the core contract:
+// when state.json is populated, it overrides filesystem detection for TUI pre-selection.
+func TestAgentsToManage_StateTakesPriorityOverDetection(t *testing.T) {
+	tests := []struct {
+		name        string
+		stateAgents []string        // InstalledAgents from state.json
+		detectedIDs []model.AgentID // agents detected on filesystem
+		want        []model.AgentID
+		desc        string
+	}{
+		{
+			name:        "empty state falls back to filesystem detection",
+			stateAgents: nil,
+			detectedIDs: []model.AgentID{model.AgentClaudeCode, model.AgentGeminiCLI},
+			want:        []model.AgentID{model.AgentClaudeCode, model.AgentGeminiCLI},
+			desc:        "first-time install: state.json absent, filesystem detection is the source",
+		},
+		{
+			name:        "state with 2 agents wins when filesystem has 5",
+			stateAgents: []string{string(model.AgentClaudeCode), string(model.AgentOpenCode)},
+			detectedIDs: []model.AgentID{
+				model.AgentClaudeCode,
+				model.AgentOpenCode,
+				model.AgentGeminiCLI,
+				model.AgentCursor,
+				model.AgentCodex,
+			},
+			want: []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode},
+			desc: "state.json wins: only persisted agents are returned, not all 5 detected",
+		},
+		{
+			name:        "explicit empty installed_agents produces empty list",
+			stateAgents: []string{},
+			detectedIDs: []model.AgentID{model.AgentClaudeCode, model.AgentGeminiCLI},
+			want:        []model.AgentID{model.AgentClaudeCode, model.AgentGeminiCLI},
+			desc:        "empty slice in state.json is treated as no state (falls back to detection)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			installState := state.InstallState{InstalledAgents: tt.stateAgents}
+			got := agentsToManage(installState, tt.detectedIDs)
+
+			if len(got) != len(tt.want) {
+				t.Fatalf("%s\nagentsToManage() returned %d agents, want %d\ngot:  %v\nwant: %v",
+					tt.desc, len(got), len(tt.want), got, tt.want)
+			}
+			wantSet := make(map[model.AgentID]bool, len(tt.want))
+			for _, id := range tt.want {
+				wantSet[id] = true
+			}
+			for _, id := range got {
+				if !wantSet[id] {
+					t.Errorf("%s\nagentsToManage() returned unexpected agent %q; want %v",
+						tt.desc, id, tt.want)
+				}
+			}
+		})
+	}
+}
+
+// TestPreselectedAgents_StateWinsOverDetection verifies that when a populated
+// InstallState is passed to preselectedAgents, it returns only the persisted
+// agents — not all detected config dirs.
+func TestPreselectedAgents_StateWinsOverDetection(t *testing.T) {
+	// 5 agents "detected" on filesystem.
+	detection := makeDetectionWithAgents("claude-code", "opencode", "gemini-cli", "cursor", "codex")
+
+	// state.json only lists 1 agent (the user's deliberate selection).
+	installState := state.InstallState{
+		InstalledAgents: []string{string(model.AgentClaudeCode)},
+	}
+
+	selected := preselectedAgents(detection, installState)
+
+	if len(selected) != 1 {
+		t.Fatalf("preselectedAgents() returned %d agents with populated state, want 1; got %v", len(selected), selected)
+	}
+	if selected[0] != model.AgentClaudeCode {
+		t.Errorf("preselectedAgents() returned %q, want %q", selected[0], model.AgentClaudeCode)
+	}
+}
+
+// TestNewModel_StateAgentsArePreselected verifies that NewModel uses the
+// supplied InstallState for pre-selection instead of detection.
+func TestNewModel_StateAgentsArePreselected(t *testing.T) {
+	// Filesystem: 3 agents detected.
+	detection := makeDetectionWithAgents("claude-code", "gemini-cli", "cursor")
+
+	// state.json: only 1 agent.
+	installState := state.InstallState{
+		InstalledAgents: []string{string(model.AgentGeminiCLI)},
+	}
+
+	m := NewModel(detection, "dev", installState)
+
+	if len(m.Selection.Agents) != 1 {
+		t.Fatalf("NewModel Selection.Agents = %v, want [%s]", m.Selection.Agents, model.AgentGeminiCLI)
+	}
+	if m.Selection.Agents[0] != model.AgentGeminiCLI {
+		t.Errorf("Selection.Agents[0] = %q, want %q", m.Selection.Agents[0], model.AgentGeminiCLI)
 	}
 }
 
@@ -3137,8 +3621,8 @@ func TestNoWrapAroundUpOnBackupScreen(t *testing.T) {
 func TestModelConfigOpenCodePrePopulatesAssignments(t *testing.T) {
 	// Pre-existing assignments that should be read from settings
 	preExisting := map[string]model.ModelAssignment{
-		"sdd-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
-		"sdd-apply":        {ProviderID: "openai", ModelID: "gpt-4o"},
+		"gentle-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
+		"sdd-apply":           {ProviderID: "openai", ModelID: "gpt-4o"},
 	}
 
 	// Override the read function to return pre-existing assignments
@@ -3171,10 +3655,10 @@ func TestModelConfigOpenCodePrePopulatesAssignments(t *testing.T) {
 	if state.Selection.ModelAssignments == nil {
 		t.Fatal("ModelAssignments should be pre-populated, got nil")
 	}
-	got := state.Selection.ModelAssignments["sdd-orchestrator"]
-	want := preExisting["sdd-orchestrator"]
+	got := state.Selection.ModelAssignments["gentle-orchestrator"]
+	want := preExisting["gentle-orchestrator"]
 	if got != want {
-		t.Errorf("sdd-orchestrator assignment = %+v, want %+v", got, want)
+		t.Errorf("gentle-orchestrator assignment = %+v, want %+v", got, want)
 	}
 	got2 := state.Selection.ModelAssignments["sdd-apply"]
 	want2 := preExisting["sdd-apply"]
@@ -3192,7 +3676,7 @@ func TestModelConfigOpenCodeDoesNotOverwriteExistingSessionAssignments(t *testin
 	orig := readCurrentAssignmentsFn
 	readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
 		return map[string]model.ModelAssignment{
-			"sdd-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
+			"gentle-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
 		}, nil
 	}
 	t.Cleanup(func() { readCurrentAssignmentsFn = orig })
@@ -3206,14 +3690,14 @@ func TestModelConfigOpenCodeDoesNotOverwriteExistingSessionAssignments(t *testin
 	m.Cursor = 1
 	// Pre-populate Selection.ModelAssignments in the current session
 	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
-		"sdd-orchestrator": sessionAssignment,
+		"gentle-orchestrator": sessionAssignment,
 	}
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	// The session assignment must be preserved, not overwritten by file contents
-	got := state.Selection.ModelAssignments["sdd-orchestrator"]
+	got := state.Selection.ModelAssignments["gentle-orchestrator"]
 	if got != sessionAssignment {
 		t.Errorf("session assignment overwritten: got %+v, want %+v", got, sessionAssignment)
 	}
@@ -3434,5 +3918,154 @@ func TestPinErrClearedOnScreenReentry(t *testing.T) {
 	// PinErr must be cleared on re-entry.
 	if afterReturn.PinErr != nil {
 		t.Fatalf("PinErr should be nil after returning to ScreenBackups, got: %v", afterReturn.PinErr)
+	}
+}
+
+// TestComponentsForPreset_PersonaMatrix verifies that componentsForPreset includes
+// ComponentPersona when persona != PersonaCustom and excludes it for PersonaCustom.
+func TestComponentsForPreset_PersonaMatrix(t *testing.T) {
+	tests := []struct {
+		name        string
+		preset      model.PresetID
+		persona     model.PersonaID
+		wantPersona bool
+		wantNil     bool
+	}{
+		{
+			name:        "full-gentleman + gentleman includes persona",
+			preset:      model.PresetFullGentleman,
+			persona:     model.PersonaGentleman,
+			wantPersona: true,
+		},
+		{
+			name:        "full-gentleman + custom does not include persona",
+			preset:      model.PresetFullGentleman,
+			persona:     model.PersonaCustom,
+			wantPersona: false,
+		},
+		{
+			name:        "minimal + gentleman includes persona",
+			preset:      model.PresetMinimal,
+			persona:     model.PersonaGentleman,
+			wantPersona: true,
+		},
+		{
+			name:        "minimal + custom does not include persona",
+			preset:      model.PresetMinimal,
+			persona:     model.PersonaCustom,
+			wantPersona: false,
+		},
+		{
+			name:        "ecosystem-only + neutral includes persona",
+			preset:      model.PresetEcosystemOnly,
+			persona:     model.PersonaNeutral,
+			wantPersona: true,
+		},
+		{
+			name:        "ecosystem-only + custom does not include persona",
+			preset:      model.PresetEcosystemOnly,
+			persona:     model.PersonaCustom,
+			wantPersona: false,
+		},
+		{
+			name:    "custom preset returns nil regardless of persona (gentleman)",
+			preset:  model.PresetCustom,
+			persona: model.PersonaGentleman,
+			wantNil: true,
+		},
+		{
+			name:    "custom preset returns nil regardless of persona (custom)",
+			preset:  model.PresetCustom,
+			persona: model.PersonaCustom,
+			wantNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := componentsForPreset(tt.preset, tt.persona)
+
+			if tt.wantNil {
+				if got != nil {
+					t.Fatalf("componentsForPreset(%v, %v) = %v, want nil", tt.preset, tt.persona, got)
+				}
+				return
+			}
+
+			hasPersona := false
+			for _, c := range got {
+				if c == model.ComponentPersona {
+					hasPersona = true
+					break
+				}
+			}
+
+			if tt.wantPersona && !hasPersona {
+				t.Fatalf("componentsForPreset(%v, %v) missing ComponentPersona; got: %v", tt.preset, tt.persona, got)
+			}
+			if !tt.wantPersona && hasPersona {
+				t.Fatalf("componentsForPreset(%v, %v) should not include ComponentPersona; got: %v", tt.preset, tt.persona, got)
+			}
+		})
+	}
+}
+
+// TestPersonaScreenRecomputesComponentsWhenPresetAlreadySet verifies that changing
+// the persona on the Persona screen recomputes the component list when a non-custom
+// preset has already been selected.
+func TestPersonaScreenRecomputesComponentsWhenPresetAlreadySet(t *testing.T) {
+	// Start with a model that has already picked full-gentleman preset and
+	// gentleman persona (the default), then go back to Persona screen and pick custom.
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPersona
+	m.Selection.Preset = model.PresetFullGentleman
+	m.Selection.Persona = model.PersonaGentleman
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
+
+	// Confirm that persona currently includes ComponentPersona.
+	hasPersonaBefore := false
+	for _, c := range m.Selection.Components {
+		if c == model.ComponentPersona {
+			hasPersonaBefore = true
+			break
+		}
+	}
+	if !hasPersonaBefore {
+		t.Fatal("setup: expected ComponentPersona in initial components")
+	}
+
+	// Move cursor to PersonaCustom and confirm.
+	m.Cursor = len(screens.PersonaOptions()) - 1
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Selection.Persona != model.PersonaCustom {
+		t.Fatalf("Persona = %v, want %v", state.Selection.Persona, model.PersonaCustom)
+	}
+
+	// ComponentPersona must be removed after recompute.
+	for _, c := range state.Selection.Components {
+		if c == model.ComponentPersona {
+			t.Fatalf("ComponentPersona must not be in components after switching to PersonaCustom; got: %v", state.Selection.Components)
+		}
+	}
+}
+
+// TestPersonaScreenDoesNotRecomputeForCustomPreset verifies that changing persona
+// does NOT recompute (and wipe) the nil component list when preset is custom.
+func TestPersonaScreenDoesNotRecomputeForCustomPreset(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPersona
+	m.Selection.Preset = model.PresetCustom
+	m.Selection.Persona = model.PersonaGentleman
+	m.Selection.Components = nil
+
+	m.Cursor = 0 // PersonaGentleman
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	// Components must remain nil for custom preset.
+	if state.Selection.Components != nil {
+		t.Fatalf("components should stay nil for custom preset; got: %v", state.Selection.Components)
 	}
 }

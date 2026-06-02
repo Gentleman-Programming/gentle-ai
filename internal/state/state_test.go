@@ -7,6 +7,84 @@ import (
 	"testing"
 )
 
+// TestMergeAgents verifies that MergeAgents appends new agents to existing
+// installed_agents with deduplication and preserves all other fields.
+func TestMergeAgents(t *testing.T) {
+	existingAssignments := map[string]ModelAssignmentState{
+		"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+	}
+	existingClaude := map[string]string{"sdd-explore": "sonnet", "sdd-archive": "haiku"}
+	existingKiro := map[string]string{"sdd-design": "opus"}
+
+	tests := []struct {
+		name      string
+		existing  InstallState
+		newAgents []string
+		wantIDs   []string
+	}{
+		{
+			name:      "empty existing state gets new agent",
+			existing:  InstallState{},
+			newAgents: []string{"pi"},
+			wantIDs:   []string{"pi"},
+		},
+		{
+			name:      "existing single agent plus new agent appended",
+			existing:  InstallState{InstalledAgents: []string{"claude-code"}},
+			newAgents: []string{"opencode"},
+			wantIDs:   []string{"claude-code", "opencode"},
+		},
+		{
+			name:      "duplicate agent is deduped",
+			existing:  InstallState{InstalledAgents: []string{"opencode", "vscode-copilot", "codex"}},
+			newAgents: []string{"opencode"},
+			wantIDs:   []string{"opencode", "vscode-copilot", "codex"},
+		},
+		{
+			name:      "existing multiple agents plus new agent appended",
+			existing:  InstallState{InstalledAgents: []string{"opencode", "vscode-copilot", "codex"}},
+			newAgents: []string{"pi"},
+			wantIDs:   []string{"opencode", "vscode-copilot", "codex", "pi"},
+		},
+		{
+			name: "model_assignments preserved across merge",
+			existing: InstallState{
+				InstalledAgents:        []string{"opencode"},
+				ModelAssignments:       existingAssignments,
+				ClaudeModelAssignments: existingClaude,
+				KiroModelAssignments:   existingKiro,
+				Persona:                "gentleman",
+			},
+			newAgents: []string{"pi"},
+			wantIDs:   []string{"opencode", "pi"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MergeAgents(tt.existing, tt.newAgents)
+
+			if !reflect.DeepEqual(got.InstalledAgents, tt.wantIDs) {
+				t.Errorf("InstalledAgents = %v, want %v", got.InstalledAgents, tt.wantIDs)
+			}
+
+			// Verify all preserved fields are unchanged.
+			if !reflect.DeepEqual(got.ModelAssignments, tt.existing.ModelAssignments) {
+				t.Errorf("ModelAssignments not preserved: got %v, want %v", got.ModelAssignments, tt.existing.ModelAssignments)
+			}
+			if !reflect.DeepEqual(got.ClaudeModelAssignments, tt.existing.ClaudeModelAssignments) {
+				t.Errorf("ClaudeModelAssignments not preserved: got %v, want %v", got.ClaudeModelAssignments, tt.existing.ClaudeModelAssignments)
+			}
+			if !reflect.DeepEqual(got.KiroModelAssignments, tt.existing.KiroModelAssignments) {
+				t.Errorf("KiroModelAssignments not preserved: got %v, want %v", got.KiroModelAssignments, tt.existing.KiroModelAssignments)
+			}
+			if got.Persona != tt.existing.Persona {
+				t.Errorf("Persona not preserved: got %q, want %q", got.Persona, tt.existing.Persona)
+			}
+		})
+	}
+}
+
 // TestWriteAndRead writes state and reads it back, verifying agents match.
 func TestWriteAndRead(t *testing.T) {
 	home := t.TempDir()
@@ -23,6 +101,49 @@ func TestWriteAndRead(t *testing.T) {
 
 	if !reflect.DeepEqual(s.InstalledAgents, agents) {
 		t.Errorf("InstalledAgents = %v, want %v", s.InstalledAgents, agents)
+	}
+}
+
+// TestPersonaRoundTrip verifies the Persona field round-trips through
+// Write/Read. Both `gentle-ai install` (CLI in run.go) and the TUI app
+// (internal/app/app.go) write this field after a successful install so that
+// `gentle-ai sync` regenerates the persona the user actually selected — not a
+// hard-coded default.
+func TestPersonaRoundTrip(t *testing.T) {
+	for _, persona := range []string{"gentleman", "neutral", "custom"} {
+		t.Run(persona, func(t *testing.T) {
+			home := t.TempDir()
+			if err := Write(home, InstallState{
+				InstalledAgents: []string{"claude-code"},
+				Persona:         persona,
+			}); err != nil {
+				t.Fatalf("Write() error = %v", err)
+			}
+			s, err := Read(home)
+			if err != nil {
+				t.Fatalf("Read() error = %v", err)
+			}
+			if s.Persona != persona {
+				t.Errorf("Persona = %q, want %q", s.Persona, persona)
+			}
+		})
+	}
+}
+
+// TestPersonaBackwardCompat verifies that state files written before persona
+// persistence (no `persona` JSON field) still read cleanly with an empty
+// Persona, allowing the sync fallback to take over.
+func TestPersonaBackwardCompat(t *testing.T) {
+	home := t.TempDir()
+	if err := Write(home, InstallState{InstalledAgents: []string{"claude-code"}}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	s, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if s.Persona != "" {
+		t.Errorf("Persona = %q, want empty for pre-feature state", s.Persona)
 	}
 }
 
@@ -163,6 +284,57 @@ func TestModelAssignmentsRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.ModelAssignments, want.ModelAssignments) {
 		t.Errorf("ModelAssignments = %v, want %v", got.ModelAssignments, want.ModelAssignments)
+	}
+}
+
+// TestModelAssignmentStateEffortRoundTrip verifies that Effort field survives
+// a JSON serialization round-trip.
+func TestModelAssignmentStateEffortRoundTrip(t *testing.T) {
+	home := t.TempDir()
+
+	want := InstallState{
+		ModelAssignments: map[string]ModelAssignmentState{
+			"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "high"},
+		},
+	}
+
+	if err := Write(home, want); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	a := got.ModelAssignments["sdd-apply"]
+	if a.Effort != "high" {
+		t.Errorf("Effort after round-trip = %q, want %q", a.Effort, "high")
+	}
+}
+
+// TestModelAssignmentStateEffortLegacyMissing verifies that a state.json file
+// with no "effort" key in a phase assignment deserializes to Effort="" with no error.
+func TestModelAssignmentStateEffortLegacyMissing(t *testing.T) {
+	home := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(home, stateDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	// Legacy format: no effort field
+	legacy := `{"installed_agents":["opencode"],"model_assignments":{"sdd-apply":{"provider_id":"anthropic","model_id":"claude-opus-4"}}}` + "\n"
+	if err := os.WriteFile(Path(home), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	s, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	a := s.ModelAssignments["sdd-apply"]
+	if a.Effort != "" {
+		t.Errorf("legacy missing effort field: got %q, want empty string", a.Effort)
 	}
 }
 

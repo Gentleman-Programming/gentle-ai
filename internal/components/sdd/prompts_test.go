@@ -21,7 +21,7 @@ func TestSharedPromptDir(t *testing.T) {
 func TestWriteSharedPromptFilesCreates10Files(t *testing.T) {
 	home := t.TempDir()
 
-	changed, err := WriteSharedPromptFiles(home)
+	changed, err := WriteSharedPromptFiles(home, nil)
 	if err != nil {
 		t.Fatalf("WriteSharedPromptFiles() error = %v", err)
 	}
@@ -61,7 +61,7 @@ func TestWriteSharedPromptFilesCreates10Files(t *testing.T) {
 func TestWriteSharedPromptFilesIdempotent(t *testing.T) {
 	home := t.TempDir()
 
-	first, err := WriteSharedPromptFiles(home)
+	first, err := WriteSharedPromptFiles(home, nil)
 	if err != nil {
 		t.Fatalf("WriteSharedPromptFiles() first error = %v", err)
 	}
@@ -69,7 +69,7 @@ func TestWriteSharedPromptFilesIdempotent(t *testing.T) {
 		t.Fatal("WriteSharedPromptFiles() first call changed = false, want true")
 	}
 
-	second, err := WriteSharedPromptFiles(home)
+	second, err := WriteSharedPromptFiles(home, nil)
 	if err != nil {
 		t.Fatalf("WriteSharedPromptFiles() second error = %v", err)
 	}
@@ -83,7 +83,7 @@ func TestWriteSharedPromptFilesIdempotent(t *testing.T) {
 func TestWriteSharedPromptFilesContent(t *testing.T) {
 	home := t.TempDir()
 
-	if _, err := WriteSharedPromptFiles(home); err != nil {
+	if _, err := WriteSharedPromptFiles(home, nil); err != nil {
 		t.Fatalf("WriteSharedPromptFiles() error = %v", err)
 	}
 
@@ -120,12 +120,103 @@ func TestWriteSharedPromptFilesContent(t *testing.T) {
 			t.Errorf("prompt file %q missing phase %q in content", tc.file, tc.phase)
 		}
 
-		// Each file must contain the key executor-scoped markers.
-		for _, marker := range []string{"not the orchestrator", "Do NOT delegate", "Do NOT launch sub-agents"} {
-			if !strings.Contains(content, marker) {
-				t.Errorf("prompt file %q missing required marker %q", tc.file, marker)
-			}
+		// Each file must have substantial content (not the old one-liner).
+		if len(content) < 200 {
+			t.Errorf("prompt file %q content too short (%d bytes), want >= 200", tc.file, len(content))
 		}
+
+		// Each file must contain the ORCHESTRATOR gate/note (present in all skill files)
+		// or "do not delegate" (present in some skill files).
+		hasGate := strings.Contains(content, "ORCHESTRATOR GATE") || strings.Contains(content, "ORCHESTRATOR NOTE")
+		hasDoNotDelegate := strings.Contains(strings.ToLower(content), "do not delegate")
+		if !hasGate && !hasDoNotDelegate {
+			t.Errorf("prompt file %q missing expected skill content (ORCHESTRATOR GATE/NOTE or do not delegate)", tc.file)
+		}
+	}
+}
+
+func TestWriteSharedPromptFilesLanguageContract(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := WriteSharedPromptFiles(home, nil); err != nil {
+		t.Fatalf("WriteSharedPromptFiles() error = %v", err)
+	}
+
+	for _, fileName := range []string{
+		"sdd-init.md",
+		"sdd-explore.md",
+		"sdd-propose.md",
+		"sdd-spec.md",
+		"sdd-design.md",
+		"sdd-tasks.md",
+		"sdd-apply.md",
+		"sdd-verify.md",
+		"sdd-archive.md",
+		"sdd-onboard.md",
+	} {
+		t.Run(fileName, func(t *testing.T) {
+			path := filepath.Join(SharedPromptDir(home), fileName)
+			content, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile(%q) error = %v", path, err)
+			}
+			text := string(content)
+			for _, required := range []string{
+				"Generated technical artifacts default to English",
+				"If Spanish technical artifacts are explicitly requested, use neutral/professional Spanish",
+			} {
+				if !strings.Contains(text, required) {
+					t.Fatalf("%s missing delegated prompt language contract %q", fileName, required)
+				}
+			}
+		})
+	}
+}
+
+// TestWriteSharedPromptFilesWithCapabilities verifies that prompt file content
+// differs based on model capability (small vs capable).
+func TestWriteSharedPromptFilesWithCapabilities(t *testing.T) {
+	home := t.TempDir()
+
+	// Write with "capable" for sdd-apply.
+	capableMap := map[string]string{"sdd-apply": "capable"}
+	_, err := WriteSharedPromptFiles(home, capableMap)
+	if err != nil {
+		t.Fatalf("WriteSharedPromptFiles(capable) error = %v", err)
+	}
+
+	capablePath := filepath.Join(SharedPromptDir(home), "sdd-apply.md")
+	capableContent, err := os.ReadFile(capablePath)
+	if err != nil {
+		t.Fatalf("ReadFile(capable) error = %v", err)
+	}
+
+	// Now write with "small" for sdd-apply.
+	smallMap := map[string]string{"sdd-apply": "small"}
+	_, err = WriteSharedPromptFiles(home, smallMap)
+	if err != nil {
+		t.Fatalf("WriteSharedPromptFiles(small) error = %v", err)
+	}
+
+	smallPath := filepath.Join(SharedPromptDir(home), "sdd-apply.md")
+	smallContent, err := os.ReadFile(smallPath)
+	if err != nil {
+		t.Fatalf("ReadFile(small) error = %v", err)
+	}
+
+	// The two contents should differ (different skill sections).
+	if string(capableContent) == string(smallContent) {
+		t.Fatal("sdd-apply.md content should differ between 'capable' and 'small' sections")
+	}
+
+	// Small section should mention "max 3 files" (small model constraint).
+	if !strings.Contains(string(smallContent), "max 3 files") {
+		t.Error("small section should contain 'max 3 files'")
+	}
+
+	// Capable section should NOT mention "max 3 files" (no such constraint).
+	if strings.Contains(string(capableContent), "max 3 files") {
+		t.Error("capable section should NOT contain 'max 3 files'")
 	}
 }
 

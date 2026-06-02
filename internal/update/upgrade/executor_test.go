@@ -8,10 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 )
@@ -80,7 +83,7 @@ func TestExecute_DevBuildOnlyNoBackupCreated(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not be called")
+		return mockCmd("echo", "should not be called")
 	}
 
 	results := []update.UpdateResult{
@@ -132,6 +135,62 @@ func TestExecute_VersionUnknownIsSurfacedAsSkipped(t *testing.T) {
 	}
 }
 
+func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
+	origExecCommand := execCommand
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	origSnapshotCreator := snapshotCreator
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+		snapshotCreator = origSnapshotCreator
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "npm" {
+			return "/usr/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest, error) {
+		return backup.Manifest{ID: "backup-test"}, nil
+	}
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return mockCmd("true")
+	}
+
+	result := makeResult("opencode-sdd-engram-manage", update.RegisteredNotMaterialized, "", "1.2.0", update.InstallOpenCodePlugin)
+	result.Tool.NpmPackage = "opencode-sdd-engram-manage"
+	result.UpdateHint = "Restart or reload OpenCode; check OpenCode logs for package or peer dependency errors."
+
+	report := Execute(context.Background(), []update.UpdateResult{result}, linuxProfile(), home, false)
+
+	if !execCalled {
+		t.Fatal("registered-pending OpenCode plugins should execute npm dependency upgrade")
+	}
+	if len(report.Results) != 1 {
+		t.Fatalf("len(Results) = %d, want 1", len(report.Results))
+	}
+	if report.Results[0].Status != UpgradeSucceeded {
+		t.Fatalf("status = %q, want %q", report.Results[0].Status, UpgradeSucceeded)
+	}
+	if report.BackupID == "" {
+		t.Fatal("BackupID should be populated before executing registered-pending plugin upgrade")
+	}
+}
+
 // --- TestRenderUpgradeReport_DryRunManualHintNotCountedAsPending ---
 
 func TestRenderUpgradeReport_DryRunManualHintNotCountedAsPending(t *testing.T) {
@@ -166,7 +225,7 @@ func TestExecute_BackupBeforeExecution(t *testing.T) {
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		calls = append(calls, name)
 		// Return a real passing command (echo) so exec succeeds.
-		return exec.Command("echo", "ok")
+		return mockCmd("echo", "ok")
 	}
 
 	results := []update.UpdateResult{
@@ -187,6 +246,45 @@ func TestExecute_BackupBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestExecuteProgressDoesNotIncludeBackupExclusionDiagnostics(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return mockCmd("echo", "ok")
+	}
+
+	home := t.TempDir()
+	configFile := filepath.Join(home, ".claude", "CLAUDE.md")
+	excludedFile := filepath.Join(home, ".claude", "projects", "session.json")
+	for _, f := range []string{configFile, excludedFile} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	results := []update.UpdateResult{
+		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
+	}
+	results[0].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
+
+	var progress bytes.Buffer
+	report := Execute(context.Background(), results, linuxProfile(), home, false, &progress)
+	if report.BackupID == "" {
+		t.Fatal("BackupID should be populated before upgrade execution")
+	}
+
+	got := progress.String()
+	if strings.Contains(got, "backup: excluding directory") {
+		t.Fatalf("progress output leaked backup exclusion diagnostics:\n%s", got)
+	}
+	if !strings.Contains(got, "Creating pre-upgrade backup") {
+		t.Fatalf("progress output should still show user-visible backup progress, got:\n%s", got)
+	}
+}
+
 // --- TestExecute_DryRunNeverExecs ---
 
 // TestExecute_DryRunNeverExecs verifies that when dryRun=true, no exec is called
@@ -198,7 +296,7 @@ func TestExecute_DryRunNeverExecs(t *testing.T) {
 	called := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		called = true
-		return exec.Command("echo", "should not run")
+		return mockCmd("echo", "should not run")
 	}
 
 	results := []update.UpdateResult{
@@ -237,10 +335,10 @@ func TestExecute_PerToolSuccessAndFailure(t *testing.T) {
 		// engram go install succeeds, gga curl/download attempt fails — we simulate
 		// the failure by having execCommand return false for "gga" detection.
 		if name == "go" {
-			return exec.Command("echo", "go install ok")
+			return mockCmd("echo", "go install ok")
 		}
 		// Any other exec attempt fails.
-		return exec.Command("false")
+		return mockCmd("false")
 	}
 
 	results := []update.UpdateResult{
@@ -270,7 +368,7 @@ func TestExecute_DevBuildIsSkipped(t *testing.T) {
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "ok")
+		return mockCmd("echo", "ok")
 	}
 
 	results := []update.UpdateResult{
@@ -324,7 +422,7 @@ func TestExecute_FailureDoesNotImplyConfigLoss(t *testing.T) {
 
 	// Force all exec to fail.
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false")
+		return mockCmd("false")
 	}
 
 	results := []update.UpdateResult{
@@ -366,7 +464,7 @@ func TestExecute_DevBuildSurfacedAsSkipped(t *testing.T) {
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "ok")
+		return mockCmd("echo", "ok")
 	}
 
 	results := []update.UpdateResult{
@@ -426,7 +524,7 @@ func TestExecute_ManualFallbackSurfacedAsSkippedNotFailed(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not be called")
+		return mockCmd("echo", "should not be called")
 	}
 
 	// Windows profile → binaryUpgrade returns a manual fallback error.
@@ -495,7 +593,7 @@ func TestExecute_ConfigNotMutatedDuringUpgrade(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		// Simulate a successful upgrade (no-op shell command).
-		return exec.Command("echo", "upgrade ok")
+		return mockCmd("echo", "upgrade ok")
 	}
 
 	results := []update.UpdateResult{
@@ -545,23 +643,22 @@ func TestToolUpgradeResult_ErrorWrapping(t *testing.T) {
 
 // --- Upgrade Backup Hardening Tests ---
 
-// TestConfigPathsForBackup_CoversAgentDirectories verifies that configPathsForBackup
-// returns files from all expected agent config directories, not just 4 hardcoded paths.
-// This tests the G5 gap fix: computed paths aligned with ScanConfigs directories.
-func TestConfigPathsForBackup_CoversAgentDirectories(t *testing.T) {
+// TestConfigPathsForBackup_CoversManagedAgentPaths verifies that upgrade
+// backups include Gentle AI-managed files for installed agents, without treating
+// every file in an agent config directory as backup-owned.
+func TestConfigPathsForBackup_CoversManagedAgentPaths(t *testing.T) {
 	homeDir := t.TempDir()
 
-	// Create files in each agent config directory to verify they are discovered.
-	agentFiles := map[string]string{
-		".claude/CLAUDE.md":              "# Claude",
-		".claude/extra_rule.md":          "# extra rule",
-		".config/opencode/config.json":   `{"model":"claude"}`,
-		".config/opencode/settings.json": `{"theme":"dark"}`,
-		".gemini/GEMINI.md":              "# Gemini",
-		".cursor/rules":                  "# Cursor rules",
+	managedFiles := map[string]string{
+		".claude/CLAUDE.md":             "# Claude",
+		".config/opencode/AGENTS.md":    "# OpenCode",
+		".config/opencode/opencode.json": `{"model":"claude"}`,
+		".gemini/GEMINI.md":                "# Gemini",
+		".cursor/rules/gentle-ai.mdc":       "# Cursor rules",
 	}
+	unmanagedFile := filepath.Join(homeDir, ".claude", "conversation-transcript.md")
 
-	for relPath, content := range agentFiles {
+	for relPath, content := range managedFiles {
 		full := filepath.Join(homeDir, relPath)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", relPath, err)
@@ -570,20 +667,24 @@ func TestConfigPathsForBackup_CoversAgentDirectories(t *testing.T) {
 			t.Fatalf("write %s: %v", relPath, err)
 		}
 	}
+	if err := os.WriteFile(unmanagedFile, []byte("runtime data"), 0o644); err != nil {
+		t.Fatalf("write unmanaged file: %v", err)
+	}
 
 	paths := configPathsForBackup(homeDir)
-
-	// Must include at least the files we created.
 	pathSet := make(map[string]struct{}, len(paths))
 	for _, p := range paths {
 		pathSet[p] = struct{}{}
 	}
 
-	for relPath := range agentFiles {
+	for relPath := range managedFiles {
 		full := filepath.Join(homeDir, relPath)
 		if _, ok := pathSet[full]; !ok {
-			t.Errorf("configPathsForBackup missing %q — computed paths must cover all files in agent dirs", relPath)
+			t.Errorf("configPathsForBackup missing managed file %q", relPath)
 		}
+	}
+	if _, ok := pathSet[unmanagedFile]; ok {
+		t.Errorf("configPathsForBackup included unmanaged file %q", unmanagedFile)
 	}
 }
 
@@ -623,7 +724,7 @@ func TestExecute_ForcedSnapshotFailureSurfacesWarningEndToEnd(t *testing.T) {
 
 	// Stub exec so the upgrade itself succeeds (we're only testing the backup path).
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "upgrade ok")
+		return mockCmd("echo", "upgrade ok")
 	}
 
 	// Force snapshot creation to fail.
@@ -686,7 +787,7 @@ func TestExecute_UpgradeBackupManifestHasUpgradeMetadata(t *testing.T) {
 		AppVersion = origAppVersion
 	})
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "ok")
+		return mockCmd("echo", "ok")
 	}
 	AppVersion = "3.0.0"
 
@@ -745,7 +846,7 @@ func TestExecute_SuccessfulSnapshotHasNoWarning(t *testing.T) {
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "ok")
+		return mockCmd("echo", "ok")
 	}
 	// snapshotCreator is intentionally left at its real default.
 
@@ -772,16 +873,15 @@ func TestExecute_SuccessfulSnapshotHasNoWarning(t *testing.T) {
 // --- Phase 3: Adapter-driven configPathsForBackup ---
 
 // TestConfigPathsForBackup_CoversRegistryAgentsNotInOldList verifies that
-// configPathsForBackup covers agents from the full registry, not just the
-// previous hardcoded 4-agent list (claude, opencode, gemini, cursor).
-//
-// codex (~/.codex) was NOT in the old hardcoded list. After wiring to
-// agents.ConfigRootsForBackup, it must be covered automatically.
+// configPathsForBackup covers managed paths for agents from the full registry,
+// not just the previous hardcoded 4-agent list (claude, opencode, gemini,
+// cursor). codex (~/.codex) was NOT in the old hardcoded list.
 func TestConfigPathsForBackup_CoversRegistryAgentsNotInOldList(t *testing.T) {
 	homeDir := t.TempDir()
 
 	// Create a file under codex config dir — not in old hardcoded list.
-	codexFile := filepath.Join(homeDir, ".codex", "agents.md")
+	// Use uppercase AGENTS.md to match the codex CLI convention (fix for #299).
+	codexFile := filepath.Join(homeDir, ".codex", "AGENTS.md")
 	if err := os.MkdirAll(filepath.Dir(codexFile), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -797,7 +897,7 @@ func TestConfigPathsForBackup_CoversRegistryAgentsNotInOldList(t *testing.T) {
 	}
 
 	if _, ok := pathSet[codexFile]; !ok {
-		t.Errorf("configPathsForBackup() missing codex config file %q — must cover all registry agents, not just old hardcoded 4; got paths: %v", codexFile, paths)
+		t.Errorf("configPathsForBackup() missing codex managed file %q — must cover registry agents, not just old hardcoded 4; got paths: %v", codexFile, paths)
 	}
 }
 
@@ -1015,9 +1115,43 @@ func TestEnumerateFilesInDir_NilExcludesWalksEverything(t *testing.T) {
 	}
 }
 
-// TestConfigPathsForBackup_ExcludesRuntimeDirs verifies that the production
-// backupExcludeSubdirs list prevents configPathsForBackup from walking into
-// large runtime directories across ALL agents: Claude, Gemini, OpenCode.
+// TestConfigPathsForBackup_ExcludesRuntimeDirs verifies that upgrade backup
+// target selection ignores runtime directories across agents. Upgrade backups
+// must stay limited to Gentle AI-managed files, not conversations or caches.
+func TestConfigPathsForBackup_ExcludesPiRuntimeFiles(t *testing.T) {
+	homeDir := t.TempDir()
+
+	managedPiSettings := filepath.Join(homeDir, ".pi", "agent", "settings.json")
+	managedPiMCP := filepath.Join(homeDir, ".pi", "agent", "mcp.json")
+	runtimeSocket := filepath.Join(homeDir, ".pi", "agent", "intercom", "broker.sock")
+	runtimeSession := filepath.Join(homeDir, ".pi", "agent", "sessions", "session.jsonl")
+	for _, path := range []string{managedPiSettings, managedPiMCP, runtimeSocket, runtimeSession} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", path, err)
+		}
+	}
+
+	paths := configPathsForBackup(homeDir)
+	pathSet := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		pathSet[p] = struct{}{}
+	}
+
+	for _, managed := range []string{managedPiSettings, managedPiMCP} {
+		if _, ok := pathSet[managed]; !ok {
+			t.Errorf("configPathsForBackup missing Pi managed file %q", managed)
+		}
+	}
+	for _, runtime := range []string{runtimeSocket, runtimeSession} {
+		if _, ok := pathSet[runtime]; ok {
+			t.Errorf("configPathsForBackup included Pi runtime file %q", runtime)
+		}
+	}
+}
+
 func TestConfigPathsForBackup_ExcludesRuntimeDirs(t *testing.T) {
 	homeDir := t.TempDir()
 
@@ -1043,8 +1177,8 @@ func TestConfigPathsForBackup_ExcludesRuntimeDirs(t *testing.T) {
 
 	geminiExcludes := []string{"browser_recordings", "brain", "conversations"}
 
-	// --- OpenCode: config file (keep) + node_modules (exclude) ---
-	openCodeConfig := filepath.Join(homeDir, ".config", "opencode", "config.json")
+	// --- OpenCode: managed config file (keep) + node_modules (exclude) ---
+	openCodeConfig := filepath.Join(homeDir, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(openCodeConfig), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -1123,7 +1257,7 @@ func TestExecute_SkippedUpgradeDoesNotRenderFailureMarker(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "should not run")
+		return mockCmd("echo", "should not run")
 	}
 
 	// Windows profile → binary self-update returns manual fallback → UpgradeSkipped.
@@ -1286,3 +1420,122 @@ func TestEnumerateFilesInDir_CaseInsensitiveExclude(t *testing.T) {
 		t.Errorf("mixed-case 'Cache' dir should be excluded by lowercase 'cache' key: %q", mixedDir)
 	}
 }
+
+// --- Phase 4: state.json-driven backup scope (issues #114, #354) ---
+
+// TestConfigPathsForBackup_StateWinsOverFilesystem verifies that when state.json
+// lists a subset of agents, configPathsForBackup backs up only those agents'
+// config paths — NOT all detected config dirs.
+//
+// Scenario: state.json has 1 agent (claude-code); filesystem also has gemini-cli.
+// Backup must include claude-code paths but NOT gemini-cli paths.
+func TestConfigPathsForBackup_StateWinsOverFilesystem(t *testing.T) {
+	homeDir := t.TempDir()
+
+	// Create both agent config dirs on disk (simulates filesystem detection).
+	claudeDir := filepath.Join(homeDir, ".claude")
+	geminiDir := filepath.Join(homeDir, ".gemini")
+	for _, dir := range []string{claudeDir, geminiDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	// Write a managed claude-code config file that should be backed up.
+	claudeSettings := filepath.Join(claudeDir, "settings.json")
+	if err := os.WriteFile(claudeSettings, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write %s: %v", claudeSettings, err)
+	}
+	// Write a gemini config file that should NOT be backed up (not in state).
+	geminiSettings := filepath.Join(geminiDir, "settings.json")
+	if err := os.WriteFile(geminiSettings, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write %s: %v", geminiSettings, err)
+	}
+
+	// Write state.json with only claude-code — this is the user's explicit selection.
+	if err := state.Write(homeDir, state.InstallState{
+		InstalledAgents: []string{string(model.AgentClaudeCode)},
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	paths := configPathsForBackup(homeDir)
+	pathSet := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		pathSet[p] = struct{}{}
+	}
+
+	// Gemini settings must NOT appear in backup — not in state.json.
+	if _, ok := pathSet[geminiSettings]; ok {
+		t.Errorf("configPathsForBackup included gemini-cli settings %q which is not in state.json; state.json should be the source of truth", geminiSettings)
+	}
+}
+
+// TestConfigPathsForBackup_FallsBackToFilesystemWhenNoState verifies that when
+// state.json does not exist, configPathsForBackup falls back to filesystem
+// detection — preserving the first-time install behavior.
+func TestConfigPathsForBackup_FallsBackToFilesystemWhenNoState(t *testing.T) {
+	homeDir := t.TempDir()
+
+	// Create a claude config dir on disk — no state.json.
+	claudeDir := filepath.Join(homeDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", claudeDir, err)
+	}
+	claudeSettings := filepath.Join(claudeDir, "settings.json")
+	if err := os.WriteFile(claudeSettings, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write %s: %v", claudeSettings, err)
+	}
+
+	// No state.json written — simulates fresh install.
+	paths := configPathsForBackup(homeDir)
+
+	// Result must not be nil (empty slice is fine, but nil would panic callers).
+	if paths == nil {
+		t.Error("configPathsForBackup returned nil when state.json missing, want non-nil")
+	}
+}
+
+// TestConfigPathsForBackup_EmptyStateAgentsFallsBackToFilesystem verifies that
+// state.json with an empty InstalledAgents list is treated the same as a missing
+// state.json — filesystem detection is used as fallback.
+func TestConfigPathsForBackup_EmptyStateAgentsFallsBackToFilesystem(t *testing.T) {
+	homeDir := t.TempDir()
+
+	// Write state.json with an empty agent list.
+	if err := state.Write(homeDir, state.InstallState{
+		InstalledAgents: []string{},
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	// Create a claude config dir on disk.
+	claudeDir := filepath.Join(homeDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", claudeDir, err)
+	}
+	claudeSettings := filepath.Join(claudeDir, "settings.json")
+	if err := os.WriteFile(claudeSettings, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write %s: %v", claudeSettings, err)
+	}
+
+	paths := configPathsForBackup(homeDir)
+	if paths == nil {
+		t.Error("configPathsForBackup returned nil, want non-nil")
+	}
+}
+
+func mockCmd(name string, args ...string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		if name == "echo" {
+			return exec.Command("cmd", "/c", "echo "+strings.Join(args, " "))
+		}
+		if name == "true" {
+			return exec.Command("cmd", "/c", "exit 0")
+		}
+		if name == "false" {
+			return exec.Command("cmd", "/c", "exit 1")
+		}
+	}
+	return exec.Command(name, args...)
+}
+

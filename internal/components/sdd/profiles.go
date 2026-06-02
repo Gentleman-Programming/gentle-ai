@@ -12,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
 // profileNameRegex matches valid profile name slugs: lowercase alphanumeric + hyphens,
@@ -19,10 +20,18 @@ import (
 var profileNameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 // reservedProfileNames are names that may not be used as profile names.
-var reservedProfileNames = map[string]bool{
-	"default":          true,
-	"sdd-orchestrator": true,
-}
+// JD agent names are derived from opencode.JDPhases() to avoid drift
+// when agents are renamed or added.
+var reservedProfileNames = func() map[string]bool {
+	names := map[string]bool{
+		"default":          true,
+		"sdd-orchestrator": true,
+	}
+	for _, name := range opencode.JDPhases() {
+		names[name] = true
+	}
+	return names
+}()
 
 // ValidateProfileName returns an error if the profile name is not a valid
 // slug (lowercase alphanumeric + hyphens, no underscores, no spaces, non-empty,
@@ -195,8 +204,9 @@ func DetectProfiles(settingsPath string) ([]model.Profile, error) {
 	return profiles, nil
 }
 
-// extractModelFromAgent reads the "model" field from an agent definition map
-// and parses it into a ModelAssignment. Returns zero-value if missing or malformed.
+// extractModelFromAgent reads the "model" and optional "variant" fields
+// from an agent definition map and parses them into a ModelAssignment.
+// Returns zero-value if missing or malformed.
 func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 	if agentMap == nil {
 		return model.ModelAssignment{}
@@ -219,7 +229,8 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 	if modelID == "" {
 		return model.ModelAssignment{}
 	}
-	return model.ModelAssignment{ProviderID: providerID, ModelID: modelID}
+	effort, _ := agentMap["variant"].(string)
+	return model.ModelAssignment{ProviderID: providerID, ModelID: modelID, Effort: effort}
 }
 
 // GenerateProfileOverlay builds an OpenCode agent overlay JSON for the given
@@ -253,6 +264,11 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 	for _, phase := range profilePhaseOrder {
 		taskPerms[phase+suffix] = "allow"
 	}
+	// Add JD agent permissions (global, not profile-scoped).
+	// JD agents are workflow-level and shared across profiles.
+	for _, jd := range opencode.JDPhases() {
+		taskPerms[jd] = "allow"
+	}
 
 	orchEntry := map[string]any{
 		"mode":        "primary",
@@ -275,6 +291,13 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 	}
 	if profile.OrchestratorModel.ProviderID != "" && profile.OrchestratorModel.ModelID != "" {
 		orchEntry["model"] = profile.OrchestratorModel.FullID()
+		// Always write variant (even "") so the deep merge clears any stale
+		// effort from a previous profile. Mirrors inject.go (case 1).
+		if profile.OrchestratorModel.Effort != "" {
+			orchEntry["variant"] = profile.OrchestratorModel.Effort
+		} else {
+			orchEntry["variant"] = ""
+		}
 	}
 	agentMap[orchestratorKey] = orchEntry
 
@@ -295,11 +318,12 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 
 	for _, phase := range profilePhaseOrder {
 		key := phase + suffix
+		prompt := "{file:" + filepath.ToSlash(filepath.Join(promptDir, phase+".md")) + "}"
 		entry := map[string]any{
 			"mode":        "subagent",
 			"hidden":      true,
 			"description": phaseDescriptions[phase],
-			"prompt":      "{file:" + filepath.Join(promptDir, phase+".md") + "}",
+			"prompt":      prompt,
 			"tools": map[string]any{
 				"read":  true,
 				"write": true,
@@ -309,6 +333,13 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 		}
 		if assignment, ok := profile.PhaseAssignments[phase]; ok && assignment.ProviderID != "" && assignment.ModelID != "" {
 			entry["model"] = assignment.FullID()
+			// Always write variant (even "") so the deep merge clears any stale
+			// effort from a previous profile. Mirrors inject.go (case 1).
+			if assignment.Effort != "" {
+				entry["variant"] = assignment.Effort
+			} else {
+				entry["variant"] = ""
+			}
 		}
 		agentMap[key] = entry
 	}
@@ -327,11 +358,19 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 // buildProfileOrchestratorPrompt constructs the orchestrator prompt for a named
 // profile. It:
 //  1. Reads the base OpenCode-specific orchestrator asset
-//  2. Injects a model assignments table reflecting the profile's models
-//  3. Replaces bare sub-agent references (e.g. sdd-init) with suffixed ones
+//  2. Extracts the section matching the orchestrator's model capability (capable or small)
+//  3. Injects a model assignments table reflecting the profile's models
+//  4. Replaces bare sub-agent references (e.g. sdd-init) with suffixed ones
 //     (e.g. sdd-init-{name}) in the prompt text
 func buildProfileOrchestratorPrompt(profile model.Profile) (string, error) {
 	base := assets.MustRead(sddOrchestratorAsset(model.AgentOpenCode))
+
+	// Extract section based on model capability (derived from model name).
+	capability := "capable"
+	if profile.OrchestratorModel.ModelID != "" {
+		capability = model.ModelCapability(profile.OrchestratorModel.ModelID)
+	}
+	base = extractModelSection(base, capability)
 
 	// Inject model assignments table.
 	const openMarker = "<!-- gentle-ai:sdd-model-assignments -->"
@@ -358,6 +397,22 @@ func buildProfileOrchestratorPrompt(profile model.Profile) (string, error) {
 	base = replacePhaseRef(base, "sdd-orchestrator", "sdd-orchestrator"+suffix)
 
 	return base, nil
+}
+
+// extractModelSection extracts the section matching the given capability
+// ("capable" or "small") from content containing <!-- section:model-capable -->
+// and <!-- section:model-small --> markers. If no matching section is found,
+// the full content is returned.
+func extractModelSection(content, capability string) string {
+	openMarker := "<!-- section:model-" + capability + " -->"
+	closeMarker := "<!-- /section:model-" + capability + " -->"
+	start := strings.Index(content, openMarker)
+	end := strings.Index(content, closeMarker)
+	if start == -1 || end == -1 || end <= start {
+		return content
+	}
+	afterOpen := start + len(openMarker)
+	return strings.TrimLeft(content[afterOpen:end], " \t\r\n")
 }
 
 // replacePhaseRef replaces occurrences of 'from' with 'to' in content.

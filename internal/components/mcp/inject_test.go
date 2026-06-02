@@ -1,15 +1,19 @@
 package mcp
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 )
@@ -23,9 +27,140 @@ func cursorAdapter(t *testing.T) agents.Adapter {
 	return adapter
 }
 
-func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
-func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
-func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
+func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
+func claudeAdapter() agents.Adapter      { return claude.NewAdapter() }
+func kilocodeAdapter() agents.Adapter    { return kilocode.NewAdapter() }
+func kimiAdapter() agents.Adapter        { return kimi.NewAdapter() }
+func openclawAdapter() agents.Adapter    { return openclaw.NewAdapter() }
+func opencodeAdapter() agents.Adapter    { return opencode.NewAdapter() }
+
+func assertOnlyKeys(t *testing.T, path string, object map[string]any, keys ...string) {
+	t.Helper()
+
+	want := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		want[key] = struct{}{}
+	}
+
+	for _, key := range keys {
+		if _, exists := object[key]; !exists {
+			t.Fatalf("%q missing expected key %q; got %#v", path, key, object)
+		}
+	}
+
+	for key := range object {
+		if _, expected := want[key]; !expected {
+			t.Fatalf("%q contains unexpected key %q; want only %v; got %#v", path, key, keys, object)
+		}
+	}
+}
+
+// readOpenCodeContext7Entry reads the mcp.context7 object from an OpenCode/KiloCode
+// opencode.json config file. Navigates parsed["mcp"]["context7"].
+func readOpenCodeContext7Entry(t *testing.T, path string) map[string]any {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", path, err)
+	}
+
+	mcp, ok := parsed["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing object key mcp; got %#v", path, parsed["mcp"])
+	}
+
+	context7, ok := mcp["context7"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing object key mcp.context7; got %#v", path, mcp["context7"])
+	}
+
+	return context7
+}
+
+// assertOpenCodeRemoteContext7Schema asserts the mcp.context7 entry in an
+// OpenCode/KiloCode opencode.json is a valid remote entry with no legacy local keys.
+func assertOpenCodeRemoteContext7Schema(t *testing.T, path string) {
+	t.Helper()
+
+	context7 := readOpenCodeContext7Entry(t, path)
+
+	if got := context7["type"]; got != "remote" {
+		t.Fatalf("%q mcp.context7.type = %#v; want %q", path, got, "remote")
+	}
+	if got := context7["url"]; got != "https://mcp.context7.com/mcp" {
+		t.Fatalf("%q mcp.context7.url = %#v; want context7 remote URL", path, got)
+	}
+	if got := context7["enabled"]; got != true {
+		t.Fatalf("%q mcp.context7.enabled = %#v; want true", path, got)
+	}
+
+	assertOnlyKeys(t, path, context7, "type", "url", "enabled")
+}
+
+// readMCPServersContext7Entry reads the mcpServers.context7 object used by
+// agents that store Context7 under an mcpServers-based config file.
+func readMCPServersContext7Entry(t *testing.T, path string) map[string]any {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", path, err)
+	}
+
+	mcpServers, ok := parsed["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing object key mcpServers; got %#v", path, parsed["mcpServers"])
+	}
+
+	context7, ok := mcpServers["context7"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing object key mcpServers.context7; got %#v", path, mcpServers["context7"])
+	}
+
+	return context7
+}
+
+// assertAntigravityContext7Schema asserts the mcpServers.context7 entry in an
+// Antigravity mcp_config.json is a valid remote entry with no legacy local keys.
+func assertAntigravityContext7Schema(t *testing.T, path string) {
+	t.Helper()
+
+	context7 := readMCPServersContext7Entry(t, path)
+
+	if got := context7["serverUrl"]; got != "https://mcp.context7.com/mcp" {
+		t.Fatalf("%q mcpServers.context7.serverUrl = %#v; want context7 remote URL", path, got)
+	}
+
+	assertOnlyKeys(t, path, context7, "serverUrl")
+}
+
+// assertKimiContext7Schema asserts the mcpServers.context7 entry in a Kimi
+// mcp.json is the documented remote HTTP config with no legacy local keys.
+func assertKimiContext7Schema(t *testing.T, path string) {
+	t.Helper()
+
+	context7 := readMCPServersContext7Entry(t, path)
+
+	if got := context7["transport"]; got != "http" {
+		t.Fatalf("%q mcpServers.context7.transport = %#v; want %q", path, got, "http")
+	}
+	if got := context7["url"]; got != "https://mcp.context7.com/mcp" {
+		t.Fatalf("%q mcpServers.context7.url = %#v; want context7 remote URL", path, got)
+	}
+
+	assertOnlyKeys(t, path, context7, "transport", "url")
+}
 
 func TestInjectOpenCodeMergesContext7AndIsIdempotent(t *testing.T) {
 	home := t.TempDir()
@@ -56,6 +191,8 @@ func TestInjectOpenCodeMergesContext7AndIsIdempotent(t *testing.T) {
 		t.Fatalf("opencode.json is empty")
 	}
 
+	assertOpenCodeRemoteContext7Schema(t, configPath)
+
 	text := string(config)
 	if !strings.Contains(text, `"mcp"`) {
 		t.Fatal("opencode.json missing mcp key")
@@ -65,6 +202,231 @@ func TestInjectOpenCodeMergesContext7AndIsIdempotent(t *testing.T) {
 	}
 	if strings.Contains(text, `"mcpServers"`) {
 		t.Fatal("opencode.json should use 'mcp' key, not 'mcpServers'")
+	}
+}
+
+func TestInjectOpenClawMergesContext7UnderMCPDotServersAndMigratesLegacyMCPServers(t *testing.T) {
+	home := t.TempDir()
+	adapter := openclawAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(openclaw config dir) error = %v", err)
+	}
+
+	existing := `{
+  "mcpServers": {
+    "legacyDocs": {
+      "command": "legacy-docs"
+    },
+    "context7": {
+      "command": "old-context7"
+    }
+  },
+  "mcp": {
+    "sessionIdleTtlMs": 120000,
+    "servers": {
+      "context7": {
+        "command": "npx",
+        "args": ["-y", "@upstash/context7-mcp"]
+      }
+    }
+  },
+  "theme": "kanagawa"
+}`
+	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(openclaw.json) error = %v", err)
+	}
+
+	first, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(openclaw) first changed = false")
+	}
+
+	second, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(openclaw) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(openclaw) second changed = true")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(openclaw.json) error = %v", err)
+	}
+	text := string(content)
+	if strings.Contains(text, `"mcpServers"`) {
+		t.Fatalf("openclaw.json must use mcp.servers, not root mcpServers; got:\n%s", text)
+	}
+	if !strings.Contains(text, `"mcp"`) || !strings.Contains(text, `"servers"`) {
+		t.Fatalf("openclaw.json missing mcp.servers; got:\n%s", text)
+	}
+	if !strings.Contains(text, `"legacyDocs"`) {
+		t.Fatalf("openclaw.json should migrate legacy mcpServers entries into mcp.servers; got:\n%s", text)
+	}
+	if !strings.Contains(text, `"sessionIdleTtlMs": 120000`) {
+		t.Fatalf("openclaw.json should preserve existing mcp fields; got:\n%s", text)
+	}
+	if !strings.Contains(text, `"context7"`) || !strings.Contains(text, `@upstash/context7-mcp@`) {
+		t.Fatalf("openclaw.json missing context7 under mcp.servers; got:\n%s", text)
+	}
+}
+
+func TestInjectOpenCodeReplacesLegacyContext7LocalConfig(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	legacy := `{
+	  "mcp": {
+	    "context7": {
+	      "type": "local",
+	      "command": ["npx", "-y", "@upstash/context7-mcp"],
+	      "args": ["legacy"],
+	      "env": {"TOKEN": "x"},
+	      "environment": {"TOKEN": "y"},
+	      "headers": {"Authorization": "Bearer old"},
+	      "enabled": false
+	    }
+	  }
+	}`
+	if err := os.WriteFile(configPath, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	first, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject() first changed = false; expected migration to rewrite legacy context7")
+	}
+
+	assertOpenCodeRemoteContext7Schema(t, configPath)
+
+	second, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject() second changed = true; expected idempotent context7 rewrite")
+	}
+
+	assertOpenCodeRemoteContext7Schema(t, configPath)
+}
+
+func TestInjectKilocodeReplacesLegacyContext7LocalConfig(t *testing.T) {
+	home := t.TempDir()
+	adapter := kilocodeAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	legacy := `{
+	  "mcp": {
+	    "context7": {
+	      "type": "local",
+	      "command": ["npx", "-y", "@upstash/context7-mcp"],
+	      "args": ["legacy"],
+	      "env": {"TOKEN": "x"},
+	      "environment": {"TOKEN": "y"},
+	      "headers": {"Authorization": "Bearer old"},
+	      "enabled": false
+	    }
+	  }
+	}`
+	if err := os.WriteFile(configPath, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile(kilo opencode.json) error = %v", err)
+	}
+
+	first, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject() first changed = false; expected migration to rewrite legacy context7")
+	}
+
+	assertOpenCodeRemoteContext7Schema(t, configPath)
+
+	second, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject() second changed = true; expected idempotent context7 rewrite")
+	}
+
+	assertOpenCodeRemoteContext7Schema(t, configPath)
+}
+
+func TestInjectOpenCodePreservesOtherMCPEntriesWhenReplacingContext7(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	legacy := `{
+	  "mcp": {
+	    "context7": {
+	      "type": "local",
+	      "command": ["npx", "-y", "@upstash/context7-mcp"],
+	      "args": ["legacy"],
+	      "env": {"TOKEN": "x"},
+	      "enabled": false
+	    },
+	    "engram": {
+	      "type": "local",
+	      "command": ["engram-server"],
+	      "args": ["--port", "9000"]
+	    }
+	  }
+	}`
+	if err := os.WriteFile(configPath, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	_, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	assertOpenCodeRemoteContext7Schema(t, configPath)
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+
+	mcp, ok := parsed["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("opencode.json missing object key mcp; got %#v", parsed["mcp"])
+	}
+
+	engram, ok := mcp["engram"].(map[string]any)
+	if !ok {
+		t.Fatalf("opencode.json mcp.engram missing after inject; got %#v", mcp["engram"])
+	}
+	if engram["type"] != "local" {
+		t.Fatalf("mcp.engram.type = %#v; want %q", engram["type"], "local")
+	}
+	cmd, _ := engram["command"].([]any)
+	if len(cmd) == 0 || cmd[0] != "engram-server" {
+		t.Fatalf("mcp.engram.command = %#v; want [engram-server ...]", engram["command"])
 	}
 }
 
@@ -159,6 +521,7 @@ func TestInjectCodexTOMLStrategyIsSkipped(t *testing.T) {
 func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 	adapter := vscode.NewAdapter()
 
 	first, err := Inject(home, adapter)
@@ -193,6 +556,48 @@ func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 	if strings.Contains(text, `"mcpServers"`) {
 		t.Fatal("mcp.json should use 'servers' key, not 'mcpServers'")
 	}
+}
+
+func TestInjectAntigravityReplacesLegacyContext7LocalConfig(t *testing.T) {
+	home := t.TempDir()
+	adapter := antigravityAdapter()
+	configPath := adapter.MCPConfigPath(home, "context7")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	legacy := `{
+	  "mcpServers": {
+	    "context7": {
+	      "command": "npx",
+	      "args": ["-y", "@upstash/context7-mcp"],
+	      "env": {"TOKEN": "x"}
+	    }
+	  }
+	}`
+	if err := os.WriteFile(configPath, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile(mcp_config.json) error = %v", err)
+	}
+
+	first, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject() first changed = false; expected migration to rewrite legacy context7")
+	}
+
+	assertAntigravityContext7Schema(t, configPath)
+
+	second, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject() second changed = true; expected idempotent context7 rewrite")
+	}
+
+	assertAntigravityContext7Schema(t, configPath)
 }
 
 func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
@@ -233,4 +638,46 @@ func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
 	if !strings.Contains(text, `"url": "https://mcp.context7.com/mcp"`) {
 		t.Fatal("kimi mcp.json should use the documented remote MCP URL for context7")
 	}
+}
+
+func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
+	home := t.TempDir()
+	adapter := kimiAdapter()
+	configPath := adapter.MCPConfigPath(home, "context7")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	legacy := `{
+	  "mcpServers": {
+	    "context7": {
+	      "command": "npx",
+	      "args": ["-y", "@upstash/context7-mcp"],
+	      "env": {"TOKEN": "x"}
+	    }
+	  }
+	}`
+	if err := os.WriteFile(configPath, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile(kimi mcp.json) error = %v", err)
+	}
+
+	first, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(kimi) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(kimi) first changed = false; expected migration to rewrite legacy context7")
+	}
+
+	assertKimiContext7Schema(t, configPath)
+
+	second, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(kimi) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(kimi) second changed = true; expected idempotent context7 rewrite")
+	}
+
+	assertKimiContext7Schema(t, configPath)
 }

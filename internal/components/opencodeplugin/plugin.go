@@ -48,6 +48,71 @@ var definitions = []Definition{
 	},
 }
 
+const gentleLogoPluginFile = "gentle-logo.tsx"
+
+const gentleLogoPluginSource = `// @ts-nocheck
+/** @jsxImportSource @opentui/solid */
+import type { TuiPlugin, TuiThemeCurrent } from "@opencode-ai/plugin/tui"
+import { useTerminalDimensions } from "@opentui/solid"
+import { createMemo } from "solid-js"
+
+const id = "gentle-logo"
+
+const roseArt = [
+  "             ⣠⣾⣷⣶⣦⣤⣤⣄⣠⣄⣀  ⢀⣀⣀",
+  "          ⢀⣴⣿⣿⠿⣋⣭⣭⣯⣭⣍⣭⣿⣟⠛⠛⠿⠿⣿⣷⣄",
+  "      ⢀⣴⣾⡟⢻⣿⡟⠁⣼⣿⠏⣵⢻⣿⣻⣿⣿⢿⡻⣿⣿⣶⡌⢿⣿⣷⣦⣤⡄",
+  "   ⣤⣶⣾⣿⣿⠏ ⠈⢿⣄ ⢹⣏⠠⠟⣾⣿⣿⣿⣿⣿⠷⣏⣼⠟⢡⣿⡟⠋⢻⣿⣿⡄",
+  "   ⠈⣿⣿⣿⣿⡆   ⣽⢧⡘⠈⠳⣦⣍⠛⠛⢦⣉⣴⣛⣫⣭⣴⡟⠋  ⣾⣿⣿⡿",
+  "   ⢀⠹⣿⣿⣿⣷⣤⡄ ⠋ ⠙⢆ ⣠⠴⠟⠛⣛⣛⣛⠟⠋⠁⠺⡇ ⣀⣴⣿⣿⡟⠁",
+  "   ⠈⣀⠈⠛⠷⠿⣿⣿⣷⣤⣀ ⢠⠋   ⠈⠉⠉    ⣠⣴⣥⠾⠛⠉⣰⣿⣷",
+  "          ⠹⣯⣝⠛⠛⠷⢶⣤⣤⣀   ⢀⡠⠖⠋⠉⢉⣀⣀⣴⣾⣿⠿⠟⠃ ⠠⠦",
+  "⠁       ⠖  ⠘⠻⢿⣦⣄⡀  ⠉⠛⢦⠠⢊⠤⠴⢒⣛⣛⣩⣽⡿⠟⠁⢀⡀",
+  "⠲⠶⣦⠴⠶⠶⠶⠶⡶⠶⢶⣤⣄⡀⠨⠭⠽⠟⣓⢦⣀⠈⢇⡥⠖⠛⠋⠉⠉⠉    ⠈  ⢠⡤",
+  "  ⠈⢷ ⠐⠂⢤⣽⣄ ⠰⡎⠙⠳⣄⡀ ⠈⢣⠘⢦⠋⣀⡬⠟⠛⠛⠉⢀⣀⣀⣠⡤⠄⠃",
+  "   ⠈⢳⣀⡒⠉⠉⣉⠙⡲⣽⣄ ⣏⠳⡄ ⠘⡇ ⡾⠁ ⢀⡤⠖⣻⣿⡏⢡⡎ ⠰⠄",
+  "     ⠛⠻⢦⣄⣉⡁⣀⣀⣈⣙⣺⣌⡇⢠⢀⡇⡾  ⣴⣿⡷⠊ ⢲⣠⠟",
+  "          ⠈⠉    ⠈⠳⡄⣸⢱⠇⢀⣰⣯⣭⣥⠭⠾⠛⠃",
+  "                  ⡷⠡⡯⢖⠉   ⢠⠤",
+  "                ⡠⢊⡴⠤⠂⠃ ⠒",
+  "             ⢀⡴⢪⠔⣉⠔⠋",
+  "               ⠐⠈",
+]
+
+const compactArt = ["✦ Gentle AI ✦"]
+
+const Logo = (props: { theme: TuiThemeCurrent }) => {
+  const dim = useTerminalDimensions()
+  const lines = createMemo(() => {
+    const term = dim()
+    return term.height >= roseArt.length + 6 && term.width >= 64 ? roseArt : compactArt
+  })
+
+  return (
+    <box flexDirection="column" alignItems="center">
+      {lines().map((line) => (
+        <text fg={props.theme.accent}>{line}</text>
+      ))}
+    </box>
+  )
+}
+
+const tui: TuiPlugin = async (api) => {
+  api.slots.register({
+    id,
+    order: 100,
+    slots: {
+      home_logo(ctx) {
+        return <Logo theme={ctx.theme.current} />
+      },
+    },
+  })
+}
+
+const plugin = { id: "gentle-logo", tui }
+export default plugin
+`
+
 func Definitions() []Definition {
 	out := make([]Definition, len(definitions))
 	copy(out, definitions)
@@ -64,6 +129,10 @@ func DefinitionFor(id model.OpenCodeCommunityPluginID) (Definition, bool) {
 }
 
 func Install(homeDir string, id model.OpenCodeCommunityPluginID) (Result, error) {
+	if id == model.OpenCodePluginGentleLogo {
+		return installGentleLogo(homeDir)
+	}
+
 	def, ok := DefinitionFor(id)
 	if !ok {
 		return Result{}, fmt.Errorf("unknown OpenCode community plugin %q", id)
@@ -81,6 +150,27 @@ func Install(homeDir string, id model.OpenCodeCommunityPluginID) (Result, error)
 	}
 
 	return Result{Changed: written, Files: []string{tuiPath}}, nil
+}
+
+func installGentleLogo(homeDir string) (Result, error) {
+	opencodeDir := filepath.Join(homeDir, ".config", "opencode")
+	pluginDir := filepath.Join(opencodeDir, "tui-plugins")
+	pluginPath := filepath.Join(pluginDir, gentleLogoPluginFile)
+	tuiPath := filepath.Join(opencodeDir, "tui.json")
+
+	pluginWrite, err := filemerge.WriteFileAtomic(pluginPath, []byte(gentleLogoPluginSource), 0o644)
+	if err != nil {
+		return Result{}, fmt.Errorf("write Gentle Logo TUI plugin: %w", err)
+	}
+	tuiChanged, err := ensureTUIPlugin(tuiPath, pluginPath)
+	if err != nil {
+		return Result{}, err
+	}
+
+	return Result{
+		Changed: pluginWrite.Changed || tuiChanged,
+		Files:   []string{pluginPath, tuiPath},
+	}, nil
 }
 
 func ensureTUIPlugin(path, pkg string) (bool, error) {

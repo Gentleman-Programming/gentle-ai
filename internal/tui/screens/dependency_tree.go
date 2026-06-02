@@ -8,6 +8,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
 
 func DependencyTreeOptions() []string {
@@ -26,17 +27,20 @@ func RenderDependencyTree(plan planner.ResolvedPlan, selection model.Selection, 
 		return renderCustomPicker(selection, cursor)
 	}
 
-	return renderPresetPlan(plan, cursor)
+	return renderPresetPlan(plan, selection, cursor)
 }
 
-func renderPresetPlan(plan planner.ResolvedPlan, cursor int) string {
+func renderPresetPlan(plan planner.ResolvedPlan, selection model.Selection, cursor int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Install Plan"))
 	b.WriteString("\n\n")
 
 	if len(plan.OrderedComponents) == 0 {
-		b.WriteString(styles.WarningStyle.Render("No components selected yet."))
+		if !hasPiAgentInInstallPlan(plan, selection) {
+			b.WriteString(styles.WarningStyle.Render("No components selected yet."))
+			b.WriteString("\n")
+		}
 		b.WriteString("\n\n")
 	} else {
 		b.WriteString(styles.HeadingStyle.Render("Components to install"))
@@ -64,10 +68,60 @@ func renderPresetPlan(plan planner.ResolvedPlan, cursor int) string {
 		b.WriteString("\n")
 	}
 
+	if hasPiAgentInInstallPlan(plan, selection) {
+		b.WriteString(renderPiInstallPlan())
+		b.WriteString("\n")
+	}
+
 	b.WriteString(renderOptions(DependencyTreeOptions(), cursor))
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
 
+	return b.String()
+}
+
+func hasPiAgentInInstallPlan(plan planner.ResolvedPlan, selection model.Selection) bool {
+	agents := selection.Agents
+	if len(agents) == 0 {
+		agents = plan.Agents
+	}
+
+	for _, agent := range agents {
+		if agent == model.AgentPi {
+			return true
+		}
+	}
+	return false
+}
+
+func piInstallCommands() []string {
+	return []string{
+		"pi install npm:gentle-pi",
+		"pi install npm:gentle-engram",
+		"pi install npm:pi-mcp-adapter",
+		fmt.Sprintf("npm exec --yes --package gentle-engram@%s -- pi-engram init", versions.GentleEngram),
+		"pi install npm:pi-subagents",
+		"pi install npm:pi-intercom",
+		"pi install npm:@juicesharp/rpiv-ask-user-question",
+		"pi install npm:pi-web-access",
+		"pi install npm:pi-lens",
+		"pi install npm:@juicesharp/rpiv-todo",
+		"pi install npm:pi-btw",
+	}
+}
+
+func renderPiInstallPlan() string {
+	var b strings.Builder
+	b.WriteString(styles.SuccessStyle.Render("Pi agent support will be installed."))
+	b.WriteString("\n")
+	b.WriteString(styles.SubtextStyle.Render("  • Engram component will be installed/provisioned."))
+	b.WriteString("\n")
+	b.WriteString(styles.SubtextStyle.Render("  • Pi package stack will be installed:"))
+	b.WriteString("\n")
+	for _, command := range piInstallCommands() {
+		b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("    - %s", command)))
+		b.WriteString("\n")
+	}
 	return b.String()
 }
 

@@ -16,7 +16,7 @@ import (
 //  1. operationRunning → "Syncing configurations..." with spinner
 //  2. hasSyncRun && (filesChanged > 0 || syncErr != nil) → show result
 //  3. Otherwise → show confirmation screen
-func RenderSync(filesChanged int, syncErr error, operationRunning bool, hasSyncRun bool, spinnerFrame int) string {
+func RenderSync(files []string, syncErr error, operationRunning bool, hasSyncRun bool, spinnerFrame int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Sync Configurations"))
@@ -32,12 +32,29 @@ func RenderSync(filesChanged int, syncErr error, operationRunning bool, hasSyncR
 
 	// State 2: sync has run — show result
 	if hasSyncRun {
-		b.WriteString(renderSyncResult(filesChanged, syncErr))
+		b.WriteString(renderSyncResult(files, syncErr))
 		return b.String()
 	}
 
 	// State 3: confirmation screen
 	b.WriteString(renderSyncConfirm())
+	return b.String()
+}
+
+const maxFilesToShow = 15
+
+func renderChangedFiles(files []string) string {
+	var b strings.Builder
+	for i, f := range files {
+		if i >= maxFilesToShow {
+			remaining := len(files) - maxFilesToShow
+			b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("  ...and %d more", remaining)))
+			b.WriteString("\n")
+			break
+		}
+		b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("  - %s", f)))
+		b.WriteString("\n")
+	}
 	return b.String()
 }
 
@@ -65,7 +82,7 @@ func renderSyncConfirm() string {
 	return b.String()
 }
 
-func renderSyncResult(filesChanged int, syncErr error) string {
+func renderSyncResult(files []string, syncErr error) string {
 	var b strings.Builder
 
 	if syncErr != nil {
@@ -74,14 +91,16 @@ func renderSyncResult(filesChanged int, syncErr error) string {
 		b.WriteString(styles.SubtextStyle.Render(syncErr.Error()))
 		b.WriteString("\n\n")
 		b.WriteString(styles.HelpStyle.Render("Check your configuration and try again."))
-	} else if filesChanged == 0 {
+	} else if len(files) == 0 {
 		b.WriteString(styles.SuccessStyle.Render("✓ Sync complete"))
 		b.WriteString("\n\n")
 		b.WriteString(styles.SubtextStyle.Render("No agents detected or no files needed updating."))
 	} else {
 		b.WriteString(styles.SuccessStyle.Render("✓ Sync complete"))
 		b.WriteString("\n\n")
-		b.WriteString(fmt.Sprintf("%s %s", styles.HeadingStyle.Render(fmt.Sprintf("%d file(s)", filesChanged)), styles.UnselectedStyle.Render("synchronized")))
+		b.WriteString(fmt.Sprintf("%s %s", styles.HeadingStyle.Render(fmt.Sprintf("%d file(s)", len(files))), styles.UnselectedStyle.Render("synchronized")))
+		b.WriteString("\n")
+		b.WriteString(renderChangedFiles(files))
 	}
 
 	b.WriteString("\n\n")

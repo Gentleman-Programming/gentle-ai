@@ -13,6 +13,15 @@ import (
 
 // runtimeGOOS and syncDirFn are package-level vars so tests can override them
 // without spawning a real Windows process.
+//
+// Background: Windows/NTFS does not support fsyncing a directory file
+// descriptor. Calling (*os.File).Sync() on a directory handle returns
+// ERROR_ACCESS_DENIED (syscall 5) regardless of user privileges — even as
+// Administrator. FlushFileBuffers requires GENERIC_WRITE access on the handle,
+// which Windows refuses for directories. The ErrPermission from syncDirFn is
+// therefore silently tolerated when runtimeGOOS() == "windows". On Linux and
+// macOS the full error is propagated so unexpected failures are still surfaced.
+// See issues #293 and #294.
 var runtimeGOOS = func() string { return runtime.GOOS }
 var syncDirFn = func(dir string) error {
 	fd, err := os.Open(dir)

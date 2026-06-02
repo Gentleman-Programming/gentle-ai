@@ -14,7 +14,7 @@ func TestRenderUninstallResultIncludesManualCleanup(t *testing.T) {
 		ManualActions: []string{
 			"Remove manually if no longer needed: /tmp/skills (directory still contains non-managed files)",
 		},
-	}, nil, "", nil, model.EngramUninstallScopeGlobal, false, 0, nil)
+	}, nil, "", nil, model.EngramUninstallScopeGlobal, false, nil, nil)
 
 	if !strings.Contains(out, "Manual cleanup required") {
 		t.Fatalf("RenderUninstallResult() should include manual cleanup heading; got:\n%s", out)
@@ -70,7 +70,7 @@ func TestRenderUninstallConfirmIncludesEngramProjectScopeDetails(t *testing.T) {
 }
 
 func TestRenderUninstallResultIncludesSelectedProfiles(t *testing.T) {
-	out := RenderUninstallResult(componentuninstall.Result{}, nil, model.UninstallModePartial, []string{"cheap", "fast"}, model.EngramUninstallScopeGlobal, false, 0, nil)
+	out := RenderUninstallResult(componentuninstall.Result{}, nil, model.UninstallModePartial, []string{"cheap", "fast"}, model.EngramUninstallScopeGlobal, false, nil, nil)
 
 	if !strings.Contains(out, "Profiles removed") {
 		t.Fatalf("RenderUninstallResult() should include profile summary heading; got:\n%s", out)
@@ -83,7 +83,7 @@ func TestRenderUninstallResultIncludesSelectedProfiles(t *testing.T) {
 func TestRenderUninstallResultIncludesEngramScopeSummary(t *testing.T) {
 	out := RenderUninstallResult(componentuninstall.Result{
 		RemovedDirectories: []string{"/tmp/workspace/.engram"},
-	}, nil, model.UninstallModePartial, nil, model.EngramUninstallScopeProject, true, 0, nil)
+	}, nil, model.UninstallModePartial, nil, model.EngramUninstallScopeProject, true, nil, nil)
 
 	if !strings.Contains(out, "Engram scope: Project-only") {
 		t.Fatalf("RenderUninstallResult() should include Engram project scope summary; got:\n%s", out)

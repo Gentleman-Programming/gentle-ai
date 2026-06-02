@@ -17,11 +17,20 @@ Format for mem_save:
 - **type**: bugfix | decision | architecture | discovery | pattern | config | preference
 - **scope**: project (default) | personal
 - **topic_key** (optional, recommended for evolving decisions): stable key like architecture/auth-model
+- **capture_prompt**: optional; default true. Do not set it for normal human/proactive saves. Set false only for automated artifacts such as SDD proposal/spec/design/tasks/apply/verify/archive/init reports, testing-capabilities caches, onboarding/state artifacts, or skill-registry output.
 - **content**:
   - **What**: One sentence — what was done
   - **Why**: What motivated it (user request, bug, performance, etc.)
   - **Where**: Files or paths affected
   - **Learned**: Gotchas, edge cases, things that surprised you (omit if none)
+
+Prompt capture behavior (Engram v1.15.3+):
+- mem_save captures the user prompt best-effort when the MCP process already has prompt context for the same project + session_id.
+- mem_save never invents prompt text. If no prompt context exists, the save still succeeds without prompt capture.
+- mem_save_prompt records the prompt and feeds SessionActivity so later mem_save calls can capture and dedupe it.
+- If an agent/plugin hook can observe the user's prompt before derived memory saves happen, it should call mem_save_prompt first.
+- Do not decide prompt capture by type; SDD artifacts also use architecture, and human decisions can too. Use explicit capture_prompt=false for automated artifacts.
+- If an older Engram tool schema does not expose capture_prompt, omit the field rather than failing.
 
 Topic update rules:
 - Different topics must not overwrite each other
@@ -31,7 +40,7 @@ Topic update rules:
 
 ### WHEN TO SEARCH MEMORY
 
-On any variation of "remember", "recall", "what did we do", "how did we solve", "recordar", "qué hicimos", or references to past work:
+On any variation of "remember", "recall", "what did we do", "how did we solve", or references to past work (in any language the user writes in):
 1. Call mem_context — checks recent session history (fast, cheap)
 2. If not found, call mem_search with relevant keywords
 3. If found, use mem_get_observation for full untruncated content
@@ -43,7 +52,7 @@ Also search PROACTIVELY when:
 
 ### SESSION CLOSE PROTOCOL (mandatory)
 
-Before ending a session or saying "done" / "listo" / "that's it", call mem_session_summary:
+Before ending a session or saying "done" / "that's it" (or the equivalent in the user's language), call mem_session_summary:
 
 ## Goal
 [What we were working on this session]

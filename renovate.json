@@ -1,0 +1,21 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": ["^internal/versions/versions\\.go$"],
+      "matchStrings": [
+        "// renovate: datasource=(?<datasource>.*?) depName=(?<depName>.*?)\\s+const \\w+ = \"(?<currentValue>.*?)\""
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["internal/versions/versions.go"],
+      "groupName": "pinned npm packages",
+      "labels": ["dependencies", "security"]
+    }
+  ]
+}

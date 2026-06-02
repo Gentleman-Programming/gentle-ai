@@ -15,7 +15,17 @@ go run ./cmd/gentle-ai install [flags]
 - `--skill`, `--skills`: comma-separated and repeatable.
 - `--persona`: explicit persona id.
 - `--preset`: explicit preset id.
+- `--sdd-mode`: `single` or `multi`.
+- `--scope`: `global` (default, writes to each selected agent's global config directory) or `workspace` (writes agent-scoped files to the current project root `./`).
 - `--dry-run`: render plan without executing.
+
+## Environment variables
+
+| Variable | Values | Description |
+|----------|--------|-------------|
+| `GENTLE_AI_INSTALL_SCOPE` | `global` \| `workspace` | Sets the install scope without a flag. Useful in CI. Equivalent to `--scope`. Default: `global`. |
+
+`workspace` scope is not Claude-only: it applies to the selected agents' agent-scoped files such as system prompts, skills, SDD agents, and persona files. Global-only integrations, like package installs or agent settings that must live in the tool's global config, remain global.
 
 ## Platform behavior
 

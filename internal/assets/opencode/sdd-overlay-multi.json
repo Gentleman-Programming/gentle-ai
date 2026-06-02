@@ -1,8 +1,8 @@
 {
   "agent": {
-    "sdd-orchestrator": {
+    "gentle-orchestrator": {
       "mode": "primary",
-      "description": "SDD Orchestrator - coordinates sub-agents, never does work inline",
+      "description": "Gentle AI SDD Orchestrator - coordinates sub-agents, never does work inline",
       "prompt": "{file:./AGENTS.md}",
       "permission": {
         "task": {
@@ -17,7 +17,10 @@
             "sdd-apply": "allow",
             "sdd-verify": "allow",
             "sdd-archive": "allow",
-            "sdd-onboard": "allow"
+            "sdd-onboard": "allow",
+            "jd-judge-a": "allow",
+            "jd-judge-b": "allow",
+            "jd-fix-agent": "allow"
           }
         }
       },
@@ -150,6 +153,27 @@
         "edit": true,
         "bash": true
       }
+    },
+    "jd-judge-a": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Adversarial code reviewer — blind judge A for judgment-day protocol",
+      "prompt": "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the delegate prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
+      "tools": { "read": true, "bash": true }
+    },
+    "jd-judge-b": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Adversarial code reviewer — blind judge B for judgment-day protocol",
+      "prompt": "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the delegate prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
+      "tools": { "read": true, "bash": true }
+    },
+    "jd-fix-agent": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Surgical fix agent for judgment-day protocol",
+      "prompt": "You are a judgment-day surgical fix agent. Execute the fix instructions provided in the delegate prompt exactly. Do NOT delegate further. Fix ONLY the confirmed issues listed — do NOT refactor beyond what is strictly needed.",
+      "tools": { "read": true, "write": true, "edit": true, "bash": true }
     }
   }
 }

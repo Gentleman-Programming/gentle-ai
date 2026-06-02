@@ -61,7 +61,7 @@ func renderKiroPresetList(state KiroModelPickerState, cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("Kiro Model Assignments"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose how Kiro models are assigned to each SDD execution phase (explore → apply → archive + orchestrator):"))
+	b.WriteString(styles.SubtextStyle.Render("Choose how Kiro models are assigned to each SDD execution phase (explore → apply → archive):"))
 	b.WriteString("\n\n")
 
 	for idx, preset := range claudePresetOrder {

@@ -90,6 +90,10 @@ func swapSelfUpdateDeps(t *testing.T, checkResult []update.UpdateResult, upgrade
 		return nil
 	}
 
+	goOS = func() string {
+		return "darwin"
+	}
+
 	return stubs
 }
 
@@ -387,6 +391,232 @@ func TestSelfUpdate_BrewInstallMethod_PassedToUpgradeExecutor(t *testing.T) {
 	}
 	if capturedProfile.PackageManager != "brew" {
 		t.Errorf("PackageManager passed to upgradeExecute = %q, want %q", capturedProfile.PackageManager, "brew")
+	}
+}
+
+// TestSelfUpdate_ConfirmUpdate_UserAccepts verifies that when GENTLE_AI_CONFIRM_UPDATE=1
+// and the user accepts, the upgrade runs and re-exec is called.
+func TestSelfUpdate_ConfirmUpdate_UserAccepts(t *testing.T) {
+	unsetEnv(t, envNoSelfUpdate)
+	unsetEnv(t, envSelfUpdateDone)
+	setEnv(t, envConfirmUpdate, "1")
+
+	checkResults := []update.UpdateResult{
+		{
+			Tool:             update.ToolInfo{Name: "gentle-ai"},
+			InstalledVersion: "1.7.0",
+			LatestVersion:    "1.8.0",
+			Status:           update.UpdateAvailable,
+		},
+	}
+	upgradeReport := upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "1.8.0"},
+		},
+	}
+
+	stubs := swapSelfUpdateDeps(t, checkResults, upgradeReport)
+
+	// Inject a promptFn that simulates user accepting.
+	origPrompt := promptFn
+	t.Cleanup(func() { promptFn = origPrompt })
+	var promptCalled int
+	promptFn = func(_ io.Writer, _ io.Reader, _, _ string) (bool, error) {
+		promptCalled++
+		return true, nil
+	}
+
+	var buf bytes.Buffer
+	err := selfUpdate(context.Background(), "1.7.0", stubProfile(), &buf)
+	if err != nil {
+		t.Fatalf("selfUpdate returned error: %v", err)
+	}
+	if promptCalled != 1 {
+		t.Errorf("promptCalled = %d, want 1", promptCalled)
+	}
+	if stubs.upgradeCalled != 1 {
+		t.Errorf("upgradeCalled = %d, want 1 (user accepted)", stubs.upgradeCalled)
+	}
+	if stubs.reExecCalled != 1 {
+		t.Errorf("reExecCalled = %d, want 1 (user accepted)", stubs.reExecCalled)
+	}
+}
+
+// TestSelfUpdate_ConfirmUpdate_UserDeclines verifies that when GENTLE_AI_CONFIRM_UPDATE=1
+// and the user declines, the upgrade is skipped.
+func TestSelfUpdate_ConfirmUpdate_UserDeclines(t *testing.T) {
+	unsetEnv(t, envNoSelfUpdate)
+	unsetEnv(t, envSelfUpdateDone)
+	setEnv(t, envConfirmUpdate, "1")
+
+	checkResults := []update.UpdateResult{
+		{
+			Tool:             update.ToolInfo{Name: "gentle-ai"},
+			InstalledVersion: "1.7.0",
+			LatestVersion:    "1.8.0",
+			Status:           update.UpdateAvailable,
+		},
+	}
+
+	stubs := swapSelfUpdateDeps(t, checkResults, upgrade.UpgradeReport{})
+
+	// Inject a promptFn that simulates user declining.
+	origPrompt := promptFn
+	t.Cleanup(func() { promptFn = origPrompt })
+	var promptCalled int
+	promptFn = func(_ io.Writer, _ io.Reader, _, _ string) (bool, error) {
+		promptCalled++
+		return false, nil
+	}
+
+	err := selfUpdate(context.Background(), "1.7.0", stubProfile(), io.Discard)
+	if err != nil {
+		t.Fatalf("selfUpdate returned error: %v", err)
+	}
+	if promptCalled != 1 {
+		t.Errorf("promptCalled = %d, want 1", promptCalled)
+	}
+	if stubs.upgradeCalled != 0 {
+		t.Errorf("upgradeCalled = %d, want 0 (user declined)", stubs.upgradeCalled)
+	}
+	if stubs.reExecCalled != 0 {
+		t.Errorf("reExecCalled = %d, want 0 (user declined)", stubs.reExecCalled)
+	}
+}
+
+// TestSelfUpdate_ConfirmUpdate_EnvUnset verifies that when GENTLE_AI_CONFIRM_UPDATE is
+// not set, the existing auto-apply behaviour is preserved (no prompt shown).
+func TestSelfUpdate_ConfirmUpdate_EnvUnset(t *testing.T) {
+	unsetEnv(t, envNoSelfUpdate)
+	unsetEnv(t, envSelfUpdateDone)
+	unsetEnv(t, envConfirmUpdate)
+
+	checkResults := []update.UpdateResult{
+		{
+			Tool:             update.ToolInfo{Name: "gentle-ai"},
+			InstalledVersion: "1.7.0",
+			LatestVersion:    "1.8.0",
+			Status:           update.UpdateAvailable,
+		},
+	}
+	upgradeReport := upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "1.8.0"},
+		},
+	}
+
+	stubs := swapSelfUpdateDeps(t, checkResults, upgradeReport)
+
+	// Inject a promptFn that should NOT be called.
+	origPrompt := promptFn
+	t.Cleanup(func() { promptFn = origPrompt })
+	var promptCalled int
+	promptFn = func(_ io.Writer, _ io.Reader, _, _ string) (bool, error) {
+		promptCalled++
+		return true, nil
+	}
+
+	err := selfUpdate(context.Background(), "1.7.0", stubProfile(), io.Discard)
+	if err != nil {
+		t.Fatalf("selfUpdate returned error: %v", err)
+	}
+	if promptCalled != 0 {
+		t.Errorf("promptCalled = %d, want 0 (auto-apply when env unset)", promptCalled)
+	}
+	if stubs.upgradeCalled != 1 {
+		t.Errorf("upgradeCalled = %d, want 1 (auto-apply)", stubs.upgradeCalled)
+	}
+	if stubs.reExecCalled != 1 {
+		t.Errorf("reExecCalled = %d, want 1 (auto-apply)", stubs.reExecCalled)
+	}
+}
+
+// TestSelfUpdate_ConfirmUpdateTable exercises the three confirmation paths in a
+// table-driven style using the promptFn injection point.
+func TestSelfUpdate_ConfirmUpdateTable(t *testing.T) {
+	checkResults := []update.UpdateResult{
+		{
+			Tool:             update.ToolInfo{Name: "gentle-ai"},
+			InstalledVersion: "1.7.0",
+			LatestVersion:    "1.8.0",
+			Status:           update.UpdateAvailable,
+		},
+	}
+	successReport := upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "1.8.0"},
+		},
+	}
+
+	tests := []struct {
+		name            string
+		confirmEnv      string // "" means unset
+		promptReply     bool
+		wantUpgrade     int
+		wantReExec      int
+		wantPromptCalls int
+	}{
+		{
+			name:            "env unset → auto-apply (no prompt)",
+			confirmEnv:      "",
+			promptReply:     false,
+			wantUpgrade:     1,
+			wantReExec:      1,
+			wantPromptCalls: 0,
+		},
+		{
+			name:            "env set + accept → upgrade runs",
+			confirmEnv:      "1",
+			promptReply:     true,
+			wantUpgrade:     1,
+			wantReExec:      1,
+			wantPromptCalls: 1,
+		},
+		{
+			name:            "env set + decline → upgrade skipped",
+			confirmEnv:      "1",
+			promptReply:     false,
+			wantUpgrade:     0,
+			wantReExec:      0,
+			wantPromptCalls: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			unsetEnv(t, envNoSelfUpdate)
+			unsetEnv(t, envSelfUpdateDone)
+			if tc.confirmEnv != "" {
+				setEnv(t, envConfirmUpdate, tc.confirmEnv)
+			} else {
+				unsetEnv(t, envConfirmUpdate)
+			}
+
+			stubs := swapSelfUpdateDeps(t, checkResults, successReport)
+
+			origPrompt := promptFn
+			t.Cleanup(func() { promptFn = origPrompt })
+			var promptCalled int
+			reply := tc.promptReply
+			promptFn = func(_ io.Writer, _ io.Reader, _, _ string) (bool, error) {
+				promptCalled++
+				return reply, nil
+			}
+
+			err := selfUpdate(context.Background(), "1.7.0", stubProfile(), io.Discard)
+			if err != nil {
+				t.Fatalf("selfUpdate returned error: %v", err)
+			}
+			if promptCalled != tc.wantPromptCalls {
+				t.Errorf("promptCalled = %d, want %d", promptCalled, tc.wantPromptCalls)
+			}
+			if stubs.upgradeCalled != tc.wantUpgrade {
+				t.Errorf("upgradeCalled = %d, want %d", stubs.upgradeCalled, tc.wantUpgrade)
+			}
+			if stubs.reExecCalled != tc.wantReExec {
+				t.Errorf("reExecCalled = %d, want %d", stubs.reExecCalled, tc.wantReExec)
+			}
+		})
 	}
 }
 
