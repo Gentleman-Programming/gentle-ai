@@ -93,7 +93,7 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 		return WriteResult{}, fmt.Errorf("close temp file for %q: %w", path, err)
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := replaceFileAtomic(tmpPath, path); err != nil {
 		return WriteResult{}, fmt.Errorf("replace %q atomically: %w", path, err)
 	}
 

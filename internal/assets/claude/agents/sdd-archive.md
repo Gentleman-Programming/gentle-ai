@@ -6,6 +6,7 @@ description: >
   and persists the final archive report. Completes the SDD cycle.
 model: {{CLAUDE_MODEL}}
 {{CLAUDE_EFFORT_FRONTMATTER}}
+user-invocable: false
 tools: Read, Edit, Write, Glob, mcp__plugin_engram_engram__mem_search, mcp__plugin_engram_engram__mem_get_observation, mcp__plugin_engram_engram__mem_save
 ---
 

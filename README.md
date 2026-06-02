@@ -205,6 +205,14 @@ After creating a profile, open OpenCode and press **Tab** to switch between `gen
 
 **Full guide**: [OpenCode SDD Profiles](docs/opencode-profiles.md)
 
+### VS Code Copilot SDD Agents
+
+Gentle-AI installs three VS Code layers: global instructions/rules in `Code/User/prompts/gentle-ai.instructions.md`, native custom agents in `~/.copilot/agents`, and SDD skills/shared conventions in `~/.copilot/skills`.
+
+When a VS Code model assignment is missing, invalid, or unvalidated, generated agents omit `model` and inherit the parent chat model instead of failing sync.
+
+If VS Code also discovers Gentle-AI's Claude-format internal agents, sync marks those managed `sdd-*` and `jd-*` files `user-invocable: false` so the visible picker stays focused on `sdd-orchestrator`.
+
 ### Engram (Persistent Memory)
 
 Your AI agent automatically remembers decisions, bugs, and context across sessions. You don't need to do anything -- but when you do:

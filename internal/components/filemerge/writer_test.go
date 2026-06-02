@@ -86,6 +86,62 @@ func TestWriteFileAtomicCreatesAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestWriteFileAtomicUpdatesExistingFileWithDifferentContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sdd-apply.agent.md")
+	oldContent := []byte("old agent content\n")
+	newContent := []byte("new agent content\n")
+
+	if err := os.WriteFile(path, oldContent, 0o644); err != nil {
+		t.Fatalf("WriteFile(old) error = %v", err)
+	}
+
+	result, err := WriteFileAtomic(path, newContent, 0o644)
+	if err != nil {
+		t.Fatalf("WriteFileAtomic() error = %v, want successful replacement", err)
+	}
+	if !result.Changed || result.Created {
+		t.Fatalf("WriteFileAtomic() result = %+v, want Changed=true Created=false", result)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(got) != string(newContent) {
+		t.Fatalf("file content = %q, want %q", string(got), string(newContent))
+	}
+}
+
+func TestReplaceFileAtomicUpdatesExistingDestination(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, ".gentle-ai-source.tmp")
+	destinationPath := filepath.Join(dir, "sdd-explore.agent.md")
+	replacementContent := []byte("replacement agent content\n")
+
+	if err := os.WriteFile(sourcePath, replacementContent, 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	if err := os.WriteFile(destinationPath, []byte("existing agent content\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(destination) error = %v", err)
+	}
+
+	if err := replaceFileAtomic(sourcePath, destinationPath); err != nil {
+		t.Fatalf("replaceFileAtomic() error = %v, want successful replacement", err)
+	}
+
+	got, err := os.ReadFile(destinationPath)
+	if err != nil {
+		t.Fatalf("ReadFile(destination) error = %v", err)
+	}
+	if string(got) != string(replacementContent) {
+		t.Fatalf("destination content = %q, want %q", string(got), string(replacementContent))
+	}
+	if _, err := os.Stat(sourcePath); !os.IsNotExist(err) {
+		t.Fatalf("source stat error = %v, want source moved away", err)
+	}
+}
+
 func TestWriteFileAtomicRejectsExistingSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.txt")

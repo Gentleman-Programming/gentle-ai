@@ -130,10 +130,13 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 
 ### VS Code Copilot
 
-- Uses the `runSubagent` tool with support for parallel execution
-- Skills at `~/.copilot/skills/`
-- System prompt at `Code/User/prompts/gentle-ai.instructions.md`
+- Native custom agents at `~/.copilot/agents/*.agent.md`: one user-invocable `sdd-orchestrator` coordinator plus hidden SDD phase agents
+- Delegates through VS Code Copilot's native sub-agent / `runSubagent` flow
+- Skills and shared SDD conventions at `~/.copilot/skills/`
+- Global instructions/rules at `Code/User/prompts/gentle-ai.instructions.md`
 - MCP config at `Code/User/mcp.json`
+- Missing, invalid, or unvalidated model assignments omit `model` and inherit the parent chat model
+- VS Code may also discover Claude-format agents in `~/.claude/agents`; Gentle-AI marks its managed internal `sdd-*` and `jd-*` Claude agents `user-invocable: false` so the picker stays focused on `sdd-orchestrator`
 
 ### Codex
 

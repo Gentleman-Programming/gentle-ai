@@ -430,6 +430,10 @@ Convention files under the agent's global skills directory (global) or `.agent/s
 - `engram` → `mem_search(...)` → `mem_get_observation(...)`
 - `openspec` → read `openspec/changes/*/state.yaml`
 - `none` → state not persisted — explain to user
+
+### VS Code Copilot Support Layers
+
+Gentle AI installs three VS Code support layers: global instructions/rules at `Code/User/prompts/gentle-ai.instructions.md`, native custom agents in `~/.copilot/agents`, and SDD skills plus shared conventions in `~/.copilot/skills`.
 <!-- /gentle-ai:sdd-orchestrator -->
 
 <!-- gentle-ai:trigger-rules -->

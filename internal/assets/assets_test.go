@@ -733,6 +733,7 @@ func TestVSCodeNativeAgentAssetsFrontmatter(t *testing.T) {
 			frontmatter := readFrontmatterBlock(t, path)
 			requireFrontmatterLine(t, frontmatter, "target: vscode")
 			requireFrontmatterLine(t, frontmatter, "user-invocable: false")
+			requireFrontmatterKeyAbsent(t, frontmatter, "disable-model-invocation")
 			requireFrontmatterKeyAbsent(t, frontmatter, "model")
 			requireFrontmatterKeyAbsent(t, frontmatter, "infer")
 			requireNoDeprecatedVSCodeTools(t, frontmatter)
@@ -745,6 +746,32 @@ func TestVSCodeNativeAgentAssetsFrontmatter(t *testing.T) {
 			requireAssetBodyContains(t, path, "## Required skill", "## Required artifacts", "## Result Contract")
 		})
 	}
+}
+
+func TestClaudeInternalAgentAssetsAreHiddenFromVSCodePicker(t *testing.T) {
+	entries, err := FS.ReadDir("claude/agents")
+	if err != nil {
+		t.Fatalf("ReadDir(claude/agents) error = %v", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSuffix(entry.Name(), ".md")
+		if !isClaudeInternalAgentName(name) {
+			continue
+		}
+
+		path := "claude/agents/" + entry.Name()
+		frontmatter := readFrontmatterBlock(t, path)
+		requireFrontmatterLine(t, frontmatter, "user-invocable: false")
+		requireFrontmatterKeyAbsent(t, frontmatter, "disable-model-invocation")
+	}
+}
+
+func isClaudeInternalAgentName(name string) bool {
+	return strings.HasPrefix(name, "sdd-") || strings.HasPrefix(name, "jd-")
 }
 
 func expectedVSCodePhaseTools(phase string) []string {

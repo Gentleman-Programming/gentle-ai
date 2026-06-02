@@ -50,12 +50,12 @@ func withDefaultVSCodeModelPaths(opts InjectOptions, homeDir string) InjectOptio
 // native VS Code agent file. Unresolved assignments are intentionally rendered
 // without a model line so Copilot safely inherits the parent session model.
 func renderVSCodeAgentModelAssignment(content, fileName string, opts InjectOptions) (string, []string) {
-	if opts.VSCodeModelAssignments == nil {
-		return content, nil
-	}
 	agentKey, ok := vscodeAgentKey(fileName)
 	if !ok {
 		return content, nil
+	}
+	if opts.VSCodeModelAssignments == nil {
+		return injectVSCodeModelLine(content, ""), nil
 	}
 
 	modelLabel, warnings := resolveVSCodeModelAssignment(

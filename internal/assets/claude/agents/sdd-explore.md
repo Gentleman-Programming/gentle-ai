@@ -6,6 +6,7 @@ description: >
   clarify requirements — before any proposal or spec is written.
 model: {{CLAUDE_MODEL}}
 {{CLAUDE_EFFORT_FRONTMATTER}}
+user-invocable: false
 tools: Read, Grep, Glob, WebFetch, WebSearch, mcp__plugin_engram_engram__mem_save
 ---
 

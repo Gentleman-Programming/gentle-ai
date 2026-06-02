@@ -6,6 +6,7 @@ description: >
   correctness, edge cases, security, performance, and project standards.
 model: {{CLAUDE_MODEL}}
 {{CLAUDE_EFFORT_FRONTMATTER}}
+user-invocable: false
 tools: Read, Glob, Grep, mcp__plugin_engram_engram__mem_search, mcp__plugin_engram_engram__mem_get_observation
 ---
 

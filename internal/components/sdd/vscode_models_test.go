@@ -119,6 +119,52 @@ func TestResolveVSCodeModelAssignmentEffortMetadata(t *testing.T) {
 	}
 }
 
+func TestRenderVSCodeAgentModelAssignmentStripsStaleModelPlaceholdersWithoutValidAssignment(t *testing.T) {
+	staleContent := strings.Join([]string{
+		"---",
+		"name: sdd-orchestrator",
+		"target: vscode",
+		"user-invocable: true",
+		"model: {{VSC_MODEL}}",
+		"---",
+		"",
+		"Body",
+	}, "\n")
+
+	tests := []struct {
+		name        string
+		opts        InjectOptions
+		wantWarning string
+	}{
+		{
+			name: "missing assignments strips placeholder",
+			opts: InjectOptions{},
+		},
+		{
+			name: "invalid provider strips placeholder",
+			opts: InjectOptions{VSCodeModelAssignments: map[string]model.ModelAssignment{
+				"sdd-orchestrator": {ProviderID: "anthropic", ModelID: "claude-opus-4"},
+			}},
+			wantWarning: "github-copilot",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, warnings := renderVSCodeAgentModelAssignment(staleContent, "sdd-orchestrator.agent.md", tt.opts)
+			if strings.Contains(got, "{{VSC_MODEL}}") {
+				t.Fatalf("rendered VS Code agent leaked raw placeholder:\n%s", got)
+			}
+			if strings.Contains(got, "model:") {
+				t.Fatalf("rendered VS Code agent should inherit parent model without model frontmatter:\n%s", got)
+			}
+			if tt.wantWarning != "" && !containsWarning(warnings, tt.wantWarning) {
+				t.Fatalf("warnings = %v, want substring %q", warnings, tt.wantWarning)
+			}
+		})
+	}
+}
+
 // writeVSCodeModelCache creates the smallest OpenCode-compatible model cache
 // needed to test Copilot label resolution and tool-call filtering.
 func writeVSCodeModelCache(t *testing.T, modelID, name string, toolCall bool) string {

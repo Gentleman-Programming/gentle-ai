@@ -761,6 +761,14 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				return InjectionResult{}, fmt.Errorf("post-check: sub-agent %q not written correctly (missing or truncated)", phase)
 			}
 		}
+		if adapter.Agent() == model.AgentVSCodeCopilot {
+			visibilityResult, err := hideManagedClaudeInternalAgentsForVSCode(homeDir)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || visibilityResult.Changed
+			files = append(files, visibilityResult.Files...)
+		}
 	}
 
 	// 4. Install skill-registry startup automation for agents with runtime hooks.
@@ -2012,7 +2020,6 @@ func injectFileAppend(homeDir string, adapter agents.Adapter, opts InjectOptions
 		existing = steeringFrontmatter
 	}
 
-	// Use agent-specific SDD orchestrator content when available; fall back to generic.
 	content := renderSDDOrchestratorAsset(adapter.Agent())
 
 	// Codex-only: substitute {{CODEX_PHASE_EFFORTS}} with a rendered per-phase
@@ -2054,6 +2061,18 @@ func injectFileAppend(homeDir string, adapter agents.Adapter, opts InjectOptions
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
 }
+
+func sddOrchestratorContent(agent model.AgentID) string {
+	content := assets.MustRead(sddOrchestratorAsset(agent))
+	if agent != model.AgentVSCodeCopilot {
+		return content
+	}
+
+	return strings.TrimRight(content, "\n") + "\n\n" + vscodeCopilotSupportLayers + "\n"
+}
+
+const vscodeCopilotSupportLayers = "### VS Code Copilot Support Layers\n\n" +
+	"Gentle AI installs three VS Code support layers: global instructions/rules at `Code/User/prompts/gentle-ai.instructions.md`, native custom agents in `~/.copilot/agents`, and SDD skills plus shared conventions in `~/.copilot/skills`."
 
 func hasLegacyBareOrchestrator(content string) bool {
 	markedIdx := strings.Index(content, "<!-- gentle-ai:sdd-orchestrator -->")

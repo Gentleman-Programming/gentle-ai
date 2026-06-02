@@ -1741,6 +1741,7 @@ func TestInjectQwenCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
 
 func TestInjectVSCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 
 	vscodeAdapter, err := agents.NewAdapter("vscode-copilot")
@@ -1759,14 +1760,40 @@ func TestInjectVSCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
 
 	// Verify SDD orchestrator was injected into the VS Code instructions file.
 	promptPath := vscodeAdapter.SystemPromptFile(home)
+	if !strings.HasSuffix(promptPath, filepath.Join("Code", "User", "prompts", "gentle-ai.instructions.md")) {
+		t.Fatalf("SystemPromptFile() = %q, want VS Code User prompts gentle-ai.instructions.md path", promptPath)
+	}
+
 	content, readErr := os.ReadFile(promptPath)
 	if readErr != nil {
 		t.Fatalf("ReadFile(%q) error = %v", promptPath, readErr)
 	}
 
 	text := string(content)
-	if !strings.Contains(text, "Spec-Driven Development") {
-		t.Fatal("VS Code system prompt missing SDD orchestrator content")
+	expectedInstructionMarkers := []string{
+		"Code/User/prompts/gentle-ai.instructions.md",
+		"Spec-Driven Development",
+		"Artifact Store Policy",
+		"mem_search(query:",
+		"## Skills to load before work",
+	}
+	for _, marker := range expectedInstructionMarkers {
+		if !strings.Contains(text, marker) {
+			t.Fatalf("VS Code instructions file missing %q", marker)
+		}
+	}
+
+	// Should also write native VS Code Copilot agent files under ~/.copilot/agents/.
+	agentFiles := []string{
+		"sdd-orchestrator.agent.md",
+		"sdd-apply.agent.md",
+		"sdd-verify.agent.md",
+	}
+	for _, fileName := range agentFiles {
+		agentPath := filepath.Join(home, ".copilot", "agents", fileName)
+		if _, err := os.Stat(agentPath); err != nil {
+			t.Fatalf("expected VS Code Copilot agent file %q: %v", agentPath, err)
+		}
 	}
 
 	// Should also write SDD skill files under ~/.copilot/skills/.
@@ -1775,9 +1802,22 @@ func TestInjectVSCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
 		t.Fatalf("expected SDD skill file %q: %v", skillPath, err)
 	}
 
-	sharedPath := filepath.Join(home, ".copilot", "skills", "_shared", "engram-convention.md")
-	if _, err := os.Stat(sharedPath); err != nil {
-		t.Fatalf("expected shared SDD convention file %q: %v", sharedPath, err)
+	sharedFiles := []string{
+		"persistence-contract.md",
+		"engram-convention.md",
+		"openspec-convention.md",
+		"sdd-phase-common.md",
+		"skill-resolver.md",
+	}
+	for _, fileName := range sharedFiles {
+		sharedPath := filepath.Join(home, ".copilot", "skills", "_shared", fileName)
+		info, err := os.Stat(sharedPath)
+		if err != nil {
+			t.Fatalf("expected shared SDD convention file %q: %v", sharedPath, err)
+		}
+		if info.Size() == 0 {
+			t.Fatalf("expected shared SDD convention file %q to be non-empty", sharedPath)
+		}
 	}
 }
 
@@ -5174,6 +5214,73 @@ func TestInjectVSCodeMissingModelCacheWarnsWithoutModelLine(t *testing.T) {
 	}
 	if strings.Contains(string(content), "model:") {
 		t.Fatalf("unresolved VS Code assignment should omit model line; got:\n%s", content)
+	}
+}
+
+func TestInjectVSCodeHidesExistingManagedClaudeInternalAgents(t *testing.T) {
+	home := t.TempDir()
+	isolateDesktopConfig(t, home)
+
+	claudeAgentsDir := filepath.Join(home, ".claude", "agents")
+	if err := os.MkdirAll(claudeAgentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", claudeAgentsDir, err)
+	}
+	managedPhasePath := filepath.Join(claudeAgentsDir, "sdd-apply.md")
+	managedJudgePath := filepath.Join(claudeAgentsDir, "jd-judge-a.md")
+	unrelatedPath := filepath.Join(claudeAgentsDir, "sdd-custom.md")
+	managedPhase := "---\nname: sdd-apply\nmodel: sonnet\ntools: Read, Edit, Bash\n---\nBody\n"
+	managedJudge := "---\nname: jd-judge-a\nmodel: opus\ntools: Read, Grep\n---\nBody\n"
+	unrelated := "---\nname: sdd-custom\nmodel: sonnet\ntools: Read\n---\nUser-authored body\n"
+	for path, content := range map[string]string{
+		managedPhasePath: managedPhase,
+		managedJudgePath: managedJudge,
+		unrelatedPath:    unrelated,
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", path, err)
+		}
+	}
+
+	adapter, err := agents.NewAdapter(model.AgentVSCodeCopilot)
+	if err != nil {
+		t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+	}
+	result, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(vscode) error = %v", err)
+	}
+
+	for _, path := range []string{managedPhasePath, managedJudgePath} {
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("ReadFile(%s): %v", path, readErr)
+		}
+		text := string(content)
+		if !strings.Contains(text, "\nuser-invocable: false\n") {
+			t.Fatalf("managed Claude internal agent %s should be hidden from VS Code picker:\n%s", filepath.Base(path), text)
+		}
+		if strings.Contains(text, "disable-model-invocation") {
+			t.Fatalf("managed Claude internal agent %s must remain subagent-invocable:\n%s", filepath.Base(path), text)
+		}
+		if !containsString(result.Files, path) {
+			t.Fatalf("result.Files missing patched Claude agent %s in %v", path, result.Files)
+		}
+	}
+
+	unrelatedContent, err := os.ReadFile(unrelatedPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", unrelatedPath, err)
+	}
+	if string(unrelatedContent) != unrelated {
+		t.Fatalf("unrelated Claude-format user agent was modified:\n%s", unrelatedContent)
+	}
+
+	second, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("second Inject(vscode) error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("second Inject(vscode) changed = true after Claude visibility patch; files = %v", second.Files)
 	}
 }
 
