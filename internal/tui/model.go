@@ -189,6 +189,21 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
+func installStateModelAssignmentsToModel(assignments map[string]state.ModelAssignmentState) map[string]model.ModelAssignment {
+	if len(assignments) == 0 {
+		return nil
+	}
+	converted := make(map[string]model.ModelAssignment, len(assignments))
+	for key, assignment := range assignments {
+		converted[key] = model.ModelAssignment{
+			ProviderID: assignment.ProviderID,
+			ModelID:    assignment.ModelID,
+			Effort:     assignment.Effort,
+		}
+	}
+	return converted
+}
+
 // TickMsg drives the spinner animation on the installing screen.
 type TickMsg time.Time
 
@@ -1178,7 +1193,7 @@ func (m Model) View() string {
 	case ScreenCommunityToolResult:
 		return screens.RenderCommunityToolResult(m.CommunityToolResults, m.CommunityToolErr)
 	case ScreenModelPicker:
-		return screens.RenderModelPicker(m.Selection.ModelAssignments, m.ModelPicker, m.Cursor)
+		return screens.RenderModelPicker(m.activeModelPickerAssignments(), m.ModelPicker, m.Cursor)
 	case ScreenDependencyTree:
 		return screens.RenderDependencyTree(m.DependencyPlan, m.Selection, m.Cursor)
 	case ScreenSkillPicker:
@@ -1240,14 +1255,37 @@ func (m Model) View() string {
 	}
 }
 
+func (m Model) activeModelPickerAssignments() map[string]model.ModelAssignment {
+	if m.ModelPicker.ForVSCode {
+		return m.Selection.VSCodeModelAssignments
+	}
+	return m.Selection.ModelAssignments
+}
+
+func (m Model) withActiveModelPickerAssignments(assignments map[string]model.ModelAssignment) Model {
+	if m.ModelPicker.ForVSCode {
+		m.Selection.VSCodeModelAssignments = assignments
+		return m
+	}
+	m.Selection.ModelAssignments = assignments
+	return m
+}
+
+func (m Model) modelPickerRows() []string {
+	if m.ModelPicker.ForVSCode {
+		return screens.ModelPickerRowsForVSCode()
+	}
+	return screens.ModelPickerRows()
+}
+
 func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyStr := key.String()
 
 	// When the model picker is in a sub-mode, delegate navigation there first.
 	if m.Screen == ScreenModelPicker && m.ModelPicker.Mode != screens.ModePhaseList {
-		handled, updated := screens.HandleModelPickerNav(keyStr, &m.ModelPicker, m.Selection.ModelAssignments)
+		handled, updated := screens.HandleModelPickerNav(keyStr, &m.ModelPicker, m.activeModelPickerAssignments())
 		if handled {
-			m.Selection.ModelAssignments = updated
+			m = m.withActiveModelPickerAssignments(updated)
 			return m, nil
 		}
 	}
@@ -2021,7 +2059,16 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.ModelConfigMode = true
 			m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
 			m.setScreen(ScreenCodexModelPicker)
-		case 4: // Back
+		case 4: // Configure VS Code Copilot SDD models
+			m.ModelConfigMode = true
+			m.ModelPicker = screens.NewVSCodeModelPickerState(opencode.DefaultCachePath())
+			if m.Selection.VSCodeModelAssignments == nil {
+				if persisted, err := state.Read(homeDir()); err == nil {
+					m.Selection.VSCodeModelAssignments = installStateModelAssignmentsToModel(persisted.VSCodeModelAssignments)
+				}
+			}
+			m.setScreen(ScreenModelPicker)
+		default: // Back
 			m.setScreen(ScreenWelcome)
 		}
 		return m, nil
@@ -2074,10 +2121,6 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.applyPickerEntry(next)
 				return m, nil
 			}
-			// No picker/SDDMode/StrictTDD applies. CommunityTools and OpenCodePlugins
-			// are NOT in the slice (OpenCode's predicate reads m.Screen); optional
-			// setup screens are offered before the dependency tree. The community
-			// tools guard must stay AFTER pickerNextScreen so SDD reaches SDDMode first.
 			if m.shouldShowCommunityToolsScreen() {
 				m.setScreen(ScreenCommunityTools)
 				return m, nil
@@ -2159,6 +2202,28 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// When no providers are detected the screen offers Continue with defaults
 		// and Back. Handle that before the normal row logic.
 		if len(m.ModelPicker.AvailableIDs) == 0 {
+			if m.ModelPicker.ForVSCode {
+				if m.Cursor == 1 {
+					if prev, ok := m.pickerPreviousScreen(); ok {
+						m.applyPickerEntry(prev)
+					}
+					return m, nil
+				}
+				if m.ModelConfigMode {
+					m.ModelConfigMode = false
+					m.PendingSyncOverrides = &model.SyncOverrides{
+						TargetAgents:           []model.AgentID{model.AgentVSCodeCopilot},
+						VSCodeModelAssignments: map[string]model.ModelAssignment{},
+					}
+					m = m.withResetSyncState()
+					m.setScreen(ScreenSync)
+					return m, nil
+				}
+				if next, ok := m.pickerNextScreen(); ok {
+					m.advanceToNextPickerScreen(next)
+				}
+				return m, nil
+			}
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
 				m.setScreen(ScreenModelConfig)
@@ -2196,7 +2261,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		rows := screens.ModelPickerRows()
+		rows := m.modelPickerRows()
 		if m.Cursor < len(rows) {
 			// Skip separator row — it is not actionable.
 			if screens.IsModelPickerSeparatorRow(rows[m.Cursor]) {
@@ -2211,6 +2276,22 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		// After the rows: Continue (cursor == len(rows)), Back (cursor == len(rows)+1).
 		if m.Cursor == len(rows) {
+			if m.ModelPicker.ForVSCode {
+				if m.ModelConfigMode {
+					m.ModelConfigMode = false
+					m.PendingSyncOverrides = &model.SyncOverrides{
+						TargetAgents:           []model.AgentID{model.AgentVSCodeCopilot},
+						VSCodeModelAssignments: m.Selection.VSCodeModelAssignments,
+					}
+					m = m.withResetSyncState()
+					m.setScreen(ScreenSync)
+					return m, nil
+				}
+				if next, ok := m.pickerNextScreen(); ok {
+					m.advanceToNextPickerScreen(next)
+				}
+				return m, nil
+			}
 			// In ModelConfigMode, persist model assignments via sync.
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
@@ -3611,7 +3692,7 @@ func (m Model) optionCount() int {
 		if len(m.ModelPicker.AvailableIDs) == 0 {
 			return 2 // Continue with defaults + Back
 		}
-		return len(screens.ModelPickerRows()) + 2 // rows + Continue + Back
+		return len(m.modelPickerRows()) + 2 // rows + Continue + Back
 	case ScreenDependencyTree:
 		if m.Selection.Preset == model.PresetCustom {
 			return len(screens.AllComponents()) + len(screens.DependencyTreeOptions())
@@ -4322,7 +4403,6 @@ func (m Model) shouldShowCodexModelPickerScreen() bool {
 }
 
 // pickerFlowSlice returns the ordered conditional picker chain for the current
-// Selection, filtered by shouldShow* predicates. ScreenPreset is always the
 // first anchor. In non-custom mode ScreenDependencyTree is always the last
 // anchor. In custom mode ScreenDependencyTree is the second element (component
 // selector precedes pickers). The slice is rebuilt per call (≤8 elements —
@@ -4346,6 +4426,9 @@ func (m Model) pickerFlowSlice() []Screen {
 	}
 	if m.shouldShowCodexModelPickerScreen() {
 		s = append(s, ScreenCodexModelPicker)
+	}
+	if m.shouldShowVSCodeModelPickerScreen() {
+		s = append(s, ScreenModelPicker)
 	}
 	if m.shouldShowSDDModeScreen() {
 		s = append(s, ScreenSDDMode)
@@ -4422,9 +4505,27 @@ func (m *Model) applyPickerEntry(next Screen) {
 	case ScreenCodexModelPicker:
 		m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
 	case ScreenModelPicker:
-		m.ModelPicker = screens.NewModelPickerState(opencode.DefaultCachePath(), opencode.DefaultSettingsPath())
+		if m.Selection.HasAgent(model.AgentVSCodeCopilot) {
+			m.initVSCodeModelPicker()
+		} else {
+			m.ModelPicker = screens.NewModelPickerState(opencode.DefaultCachePath(), opencode.DefaultSettingsPath())
+		}
 	}
 	m.setScreen(next)
+}
+
+func (m Model) shouldShowVSCodeModelPickerScreen() bool {
+	return m.Selection.HasAgent(model.AgentVSCodeCopilot) &&
+		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
+}
+
+func (m *Model) initVSCodeModelPicker() {
+	m.ModelPicker = screens.NewVSCodeModelPickerState(opencode.DefaultCachePath())
+	if m.Selection.VSCodeModelAssignments == nil {
+		if persisted, err := state.Read(homeDir()); err == nil {
+			m.Selection.VSCodeModelAssignments = installStateModelAssignmentsToModel(persisted.VSCodeModelAssignments)
+		}
+	}
 }
 
 func componentsForPreset(preset model.PresetID, persona model.PersonaID) []model.ComponentID {

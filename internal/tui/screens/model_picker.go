@@ -76,6 +76,10 @@ type ModelPickerState struct {
 	// When true, the row list still includes optional profile-scoped Judgment Day
 	// agents alongside SDD rows.
 	ForProfile bool
+
+	// ForVSCode is true when the picker assigns GitHub Copilot models to native
+	// VS Code Copilot SDD `.agent.md` files instead of OpenCode agents.
+	ForVSCode bool
 }
 
 // NewModelPickerState initializes the picker state from the models cache,
@@ -122,6 +126,44 @@ func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState
 // SDDOrchestratorPhase is the key used for the base OpenCode SDD coordinator model assignment.
 const SDDOrchestratorPhase = "gentle-orchestrator"
 
+const githubCopilotProviderID = "github-copilot"
+
+// VSCodeCoordinatorPhase is the native VS Code Copilot SDD coordinator agent key.
+const VSCodeCoordinatorPhase = "sdd-orchestrator"
+
+// NewVSCodeModelPickerState initializes a VS Code-specific model picker from the
+// dynamic OpenCode model cache, filtered to GitHub Copilot tool-capable models.
+func NewVSCodeModelPickerState(cachePath string) ModelPickerState {
+	providers, err := opencode.LoadModelsOrEmpty(cachePath)
+	if err != nil {
+		return ModelPickerState{ForVSCode: true, ConfigWarning: fmt.Sprintf("Could not load GitHub Copilot models: %v", err)}
+	}
+	opencode.EnrichWithVariants(providers, opencode.DefaultVariantsCachePath())
+
+	available, sddModels := filterVSCodeCopilotModels(providers)
+	return ModelPickerState{
+		Providers:    providers,
+		AvailableIDs: available,
+		SDDModels:    sddModels,
+		Mode:         ModePhaseList,
+		ForVSCode:    true,
+	}
+}
+
+func filterVSCodeCopilotModels(providers map[string]opencode.Provider) ([]string, map[string][]opencode.Model) {
+	provider, ok := providers[githubCopilotProviderID]
+	if !ok {
+		return nil, map[string][]opencode.Model{}
+	}
+
+	models := opencode.FilterModelsForSDD(provider)
+	if len(models) == 0 {
+		return nil, map[string][]opencode.Model{}
+	}
+
+	return []string{githubCopilotProviderID}, map[string][]opencode.Model{githubCopilotProviderID: models}
+}
+
 // ModelPickerRows returns the row labels for the model picker screen.
 // Row 0 is "gentle-orchestrator" (coordinator), row 1 is "Set all phases",
 // rows 2-11 are the 10 SDD sub-agent phases, followed by workflow agent sections.
@@ -154,6 +196,32 @@ func ModelPickerRowsForProfile() []string {
 
 func IsModelPickerSeparatorRow(row string) bool {
 	return strings.HasPrefix(row, "--- ")
+}
+
+// ModelPickerRowsForVSCode returns native VS Code Copilot SDD agent assignment rows.
+func ModelPickerRowsForVSCode() []string {
+	phases := VSCodeSDDPhases()
+	rows := make([]string, 0, 2+len(phases))
+	rows = append(rows, VSCodeCoordinatorPhase)
+	rows = append(rows, "Set all SDD phase agents")
+	rows = append(rows, phases...)
+	return rows
+}
+
+// VSCodeSDDPhases returns the native VS Code SDD phase executor keys.
+func VSCodeSDDPhases() []string {
+	return []string{
+		"sdd-init",
+		"sdd-explore",
+		"sdd-propose",
+		"sdd-spec",
+		"sdd-design",
+		"sdd-tasks",
+		"sdd-apply",
+		"sdd-verify",
+		"sdd-archive",
+		"sdd-onboard",
+	}
 }
 
 // SeparatorRowIdx returns the index of the "--- Judgment Day ---" separator
@@ -284,6 +352,19 @@ func handleModelNav(
 		}
 
 		if effortLevels := selected.EffortLevels(); len(effortLevels) > 0 {
+			if state.ForVSCode {
+				assignments = applyAssignmentPreservingMatchingEffort(*state, assignments, assignment, false)
+				if state.SelectedPhaseIdx == 1 {
+					state.AllPhasesModel = assignment
+				}
+				state.Mode = ModePhaseList
+				state.ModelCursor = 0
+				state.ModelScroll = 0
+				state.ModelSearch = ""
+				state.ProviderCursor = 0
+				state.ProviderScroll = 0
+				return true, assignments
+			}
 			state.PendingAssignment = assignment
 			state.SelectedModelEffortLevels = effortLevels
 			state.Mode = ModeEffortSelect
@@ -433,6 +514,9 @@ func compareVersionKeys(left, right []int) int {
 
 func applyAssignmentPreservingMatchingEffort(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment, preserveEffort bool) map[string]model.ModelAssignment {
 	phases := opencode.SDDPhases()
+	if state.ForVSCode {
+		phases = VSCodeSDDPhases()
+	}
 	switch {
 	case state.SelectedPhaseIdx == 1:
 		for _, phase := range phases {
@@ -491,6 +575,9 @@ func formatAssignmentLabel(row, provName, modelName, effort string) string {
 // the single sub-agent phase matching the index is set.
 func applyAssignment(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment) map[string]model.ModelAssignment {
 	phases := opencode.SDDPhases()
+	if state.ForVSCode {
+		phases = VSCodeSDDPhases()
+	}
 	switch {
 	case state.SelectedPhaseIdx == 1:
 		for _, phase := range phases {
@@ -506,7 +593,9 @@ func applyAssignment(state ModelPickerState, assignments map[string]model.ModelA
 
 func selectedModelPickerAgent(state ModelPickerState) string {
 	rows := ModelPickerRows()
-	if state.ForProfile {
+	if state.ForVSCode {
+		rows = ModelPickerRowsForVSCode()
+	} else if state.ForProfile {
 		rows = ModelPickerRowsForProfile()
 	}
 	if state.SelectedPhaseIdx < 0 || state.SelectedPhaseIdx >= len(rows) {
@@ -517,6 +606,13 @@ func selectedModelPickerAgent(state ModelPickerState) string {
 		return ""
 	}
 	return row
+}
+
+func modelPickerCoordinatorPhase(state ModelPickerState) string {
+	if state.ForVSCode {
+		return VSCodeCoordinatorPhase
+	}
+	return SDDOrchestratorPhase
 }
 
 // effortOptionsFromLevels returns the effort picker options in display order.
@@ -655,7 +751,9 @@ func renderPhaseList(
 	var b strings.Builder
 
 	title := "Assign Models to SDD, JD & Review Agents"
-	if state.ForProfile {
+	if state.ForVSCode {
+		title = "Assign GitHub Copilot Models to VS Code Copilot SDD Agents"
+	} else if state.ForProfile {
 		title = "Assign Models to SDD Phases & JD Agents"
 	}
 	b.WriteString(styles.TitleStyle.Render(title))
@@ -666,6 +764,18 @@ func renderPhaseList(
 	}
 
 	if len(state.AvailableIDs) == 0 {
+		if state.ForVSCode {
+			b.WriteString(styles.WarningStyle.Render("GitHub Copilot model data is unavailable."))
+			b.WriteString("\n")
+			b.WriteString(styles.SubtextStyle.Render("Sync can continue by omitting frontmatter model so VS Code uses the parent model."))
+			b.WriteString("\n\n")
+			b.WriteString(renderVSCodeModelPrecedence())
+			b.WriteString("\n\n")
+			b.WriteString(renderOptions([]string{"Continue with inherited parent model", "← Back"}, cursor))
+			b.WriteString("\n")
+			b.WriteString(styles.HelpStyle.Render("enter: confirm • esc: back"))
+			return b.String()
+		}
 		b.WriteString(styles.WarningStyle.Render("OpenCode has not been run yet — model cache not found."))
 		b.WriteString("\n")
 		b.WriteString(styles.SubtextStyle.Render("Run 'opencode' once, then re-run 'gentle-ai sync' to assign models."))
@@ -682,11 +792,22 @@ func renderPhaseList(
 		return b.String()
 	}
 
+	if state.ForVSCode {
+		b.WriteString(renderVSCodeModelPrecedence())
+		b.WriteString("\n\n")
+		if hasAnyModelAssignment(assignments) {
+			b.WriteString(styles.WarningStyle.Render("Warning: gentle-ai cannot validate Copilot cost tier metadata; selected frontmatter model entries may be omitted during sync."))
+			b.WriteString("\n\n")
+		}
+	}
+
 	b.WriteString(styles.SubtextStyle.Render("Current assignments:"))
 	b.WriteString("\n\n")
 
 	var rows []string
-	if state.ForProfile {
+	if state.ForVSCode {
+		rows = ModelPickerRowsForVSCode()
+	} else if state.ForProfile {
 		rows = ModelPickerRowsForProfile()
 	} else {
 		rows = ModelPickerRows()
@@ -706,8 +827,8 @@ func renderPhaseList(
 		var label string
 		switch {
 		case idx == 0:
-			// "gentle-orchestrator" row — coordinator, individual assignment only
-			assignment, ok := assignments[SDDOrchestratorPhase]
+			// Coordinator row — OpenCode and VS Code use different persisted keys.
+			assignment, ok := assignments[modelPickerCoordinatorPhase(state)]
 			if ok && assignment.ProviderID != "" {
 				provName, modelName := resolveNames(assignment, state)
 				label = formatAssignmentLabel(row+" (coordinator)", provName, modelName, assignment.Effort)
@@ -732,6 +853,7 @@ func renderPhaseList(
 				b.WriteString(styles.SubtextStyle.Render("  "+row) + "\n")
 			}
 			continue
+
 		default:
 			assignment, ok := assignments[row]
 			if ok && assignment.ProviderID != "" {
@@ -763,6 +885,26 @@ func renderPhaseList(
 	b.WriteString(styles.HelpStyle.Render(help))
 
 	return b.String()
+}
+
+func modelPickerPhaseRows(state ModelPickerState) []string {
+	if state.ForVSCode {
+		return VSCodeSDDPhases()
+	}
+	return opencode.SDDPhases()
+}
+
+func renderVSCodeModelPrecedence() string {
+	return styles.SubtextStyle.Render("Priority: runSubagent model parameter → frontmatter model → parent model fallback.")
+}
+
+func hasAnyModelAssignment(assignments map[string]model.ModelAssignment) bool {
+	for _, assignment := range assignments {
+		if assignment.ProviderID != "" && assignment.ModelID != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func renderProviderSelect(state ModelPickerState) string {

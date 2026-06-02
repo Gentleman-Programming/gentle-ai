@@ -8,21 +8,21 @@ import (
 // ─── ModelConfigOptions ────────────────────────────────────────────────────
 
 // TestModelConfigOptions_Count verifies that ModelConfigOptions returns exactly
-// 5 items: Claude, OpenCode, Kiro, Codex, and Back.
+// 6 items: Claude, OpenCode, Kiro, Codex, VS Code Copilot, and Back.
 func TestModelConfigOptions_Count(t *testing.T) {
 	opts := ModelConfigOptions()
-	if len(opts) != 5 {
-		t.Fatalf("ModelConfigOptions() len = %d, want 5; got %v", len(opts), opts)
+	if len(opts) != 6 {
+		t.Fatalf("ModelConfigOptions() len = %d, want 6; got %v", len(opts), opts)
 	}
 }
 
 // TestModelConfigOptions_Order verifies the exact order of options:
-// Claude → OpenCode → Kiro → Codex → Back.
+// Claude → OpenCode → Kiro → Codex → VS Code Copilot → Back.
 func TestModelConfigOptions_Order(t *testing.T) {
 	opts := ModelConfigOptions()
 
 	// wantKeywords defines the expected order by a unique keyword per option.
-	wantKeywords := []string{"Claude", "OpenCode", "Kiro", "Codex", "Back"}
+	wantKeywords := []string{"Claude", "OpenCode", "Kiro", "Codex", "VS Code Copilot", "Back"}
 
 	if len(opts) != len(wantKeywords) {
 		t.Fatalf("ModelConfigOptions() len = %d, want %d; got %v", len(opts), len(wantKeywords), opts)
@@ -35,17 +35,21 @@ func TestModelConfigOptions_Order(t *testing.T) {
 	}
 }
 
-// TestModelConfigOptions_ContainsCodex verifies Codex is at index 3 and Back at index 4.
+// TestModelConfigOptions_ContainsCodex verifies Codex is at index 3, VS Code at
+// index 4, and Back at index 5.
 func TestModelConfigOptions_ContainsCodex(t *testing.T) {
 	opts := ModelConfigOptions()
-	if len(opts) < 5 {
-		t.Fatalf("ModelConfigOptions() len = %d, want at least 5", len(opts))
+	if len(opts) < 6 {
+		t.Fatalf("ModelConfigOptions() len = %d, want at least 6", len(opts))
 	}
 	if !strings.Contains(opts[3], "Codex") {
 		t.Errorf("ModelConfigOptions()[3] = %q, want option containing 'Codex'", opts[3])
 	}
-	if !strings.Contains(opts[4], "Back") {
-		t.Errorf("ModelConfigOptions()[4] = %q, want 'Back'", opts[4])
+	if !strings.Contains(opts[4], "VS Code Copilot") {
+		t.Errorf("ModelConfigOptions()[4] = %q, want option containing 'VS Code Copilot'", opts[4])
+	}
+	if !strings.Contains(opts[5], "Back") {
+		t.Errorf("ModelConfigOptions()[5] = %q, want 'Back'", opts[5])
 	}
 }
 

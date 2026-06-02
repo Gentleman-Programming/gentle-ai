@@ -55,31 +55,20 @@ If you want the project-level OpenSpec config convention SDD phases use for conv
 
 ---
 
-## Multi-mode SDD -- Use It When Your Agent Supports It
+## Multi-mode SDD (Model Assignments)
 
-Multi-mode lets you assign different AI models to different SDD phases -- for example, a powerful model for design and a faster one for implementation.
+Multi-mode lets you assign different AI models to different SDD phases -- for example, a powerful model for design and a faster one for implementation. Most users can ignore this; the default parent model fallback is safe.
 
-Support depends on the agent:
+| Agent | How to configure it |
+| ----- | ------------------- |
+| OpenCode / Kilo Code | Create an **OpenCode SDD Profile** from the TUI or CLI (`--profile`). Named profiles generate `sdd-orchestrator-{name}` plus suffixed sub-agents. |
+| VS Code Copilot | Use _Configure Models → Configure VS Code Copilot SDD models_. Gentle-AI writes one managed coordinator/phase assignment map into native `~/.copilot/agents/*.agent.md` files. |
+| Kiro IDE | Use _Configure Models → Configure Kiro models_; aliases are resolved into native Kiro agent `model:` frontmatter. |
+| Pi | Use `/gentleman:models`; Pi packages own those assignments. |
 
-| Agent | How multi-mode works |
-| ----- | -------------------- |
-| **OpenCode** | SDD Profiles generate `gentle-orchestrator` plus phase sub-agents in `opencode.json` |
-| **Kilo Code** | OpenCode-compatible SDD profile overlay in `~/.config/kilo` |
-| **Kiro IDE** | Native phase agents with per-agent `model:` frontmatter |
-| **Pi** | Owned by `gentle-pi` through Pi-managed agents, chains, and model overrides |
-| **Others** | Single-mode SDD; one active model handles all phases |
+For agents not listed here, SDD runs in single-mode automatically. One model handles everything, and that works perfectly fine.
 
-Single-mode is not a downgrade. It is the simpler default and works well. Multi-mode is useful when you deliberately want cost, speed, or reasoning tradeoffs per phase.
-
-If you want OpenCode profiles:
-
-1. Connect your AI providers in OpenCode first
-2. Create a profile via gentle-ai TUI ("OpenCode SDD Profiles") or CLI (`--profile` flag)
-3. The base/default SDD conductor is `gentle-orchestrator`
-4. Named profiles generate `sdd-orchestrator-{name}` + suffixed sub-agents, each assigned to your chosen model
-5. In OpenCode, press **Tab** to switch between `gentle-orchestrator` and custom profiles
-
-You can create multiple profiles (e.g., "cheap" for experimentation, "premium" for production) and switch between them freely.
+For VS Code Copilot, the picker uses dynamic `github-copilot` model data. If the cache is missing, the selected model is invalid, or the cost tier cannot be validated, generated agents omit `model` and inherit the parent chat model instead of failing sync. Gentle-AI does not generate named/suffixed VS Code profiles.
 
 If you prefer a **runtime profile manager** that keeps profiles outside `opencode.json`, gentle-ai supports that too. During sync, OpenCode can auto-detect external profile files under `~/.config/opencode/profiles/*.json` and switch to a safer compatibility path that preserves the active `gentle-orchestrator` prompt instead of overwriting it.
 

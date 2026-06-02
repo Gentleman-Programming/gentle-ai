@@ -34,7 +34,7 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 | **Kilo Code**       |    Full (multi-mode overlay)     | OpenCode-compatible config in `~/.config/kilo`                  |
 | **Gemini CLI**      |       Full (experimental)        | Custom agents in `~/.gemini/agents/`                            |
 | **Cursor**          |     Full (native subagents)      | 10 SDD agents in `~/.cursor/agents/`                            |
-| **VS Code Copilot** |        Full (runSubagent)        | Parallel execution                                              |
+| **VS Code Copilot** |     Full (native subagents)      | `~/.copilot/agents` SDD agents with model fallback              |
 | **Codex**           |            Solo-agent            | CLI-native, TOML config                                         |
 | **Windsurf**        |            Solo-agent            | Plan Mode, Code Mode, native workflows                          |
 | **Antigravity**     |   Solo-agent + Mission Control   | Built-in Browser/Terminal sub-agents                            |
@@ -209,7 +209,7 @@ After creating a profile, open OpenCode and press **Tab** to switch between `gen
 
 Gentle-AI installs three VS Code layers: global instructions/rules in the VS Code user prompts folder (e.g. `%APPDATA%/Code/User/prompts/gentle-ai.instructions.md` on Windows, `~/Library/Application Support/Code/User/prompts/gentle-ai.instructions.md` on macOS, or `~/.config/Code/User/prompts/gentle-ai.instructions.md` on Linux), native custom agents in `~/.copilot/agents`, and SDD skills/shared conventions in `~/.copilot/skills`.
 
-When a VS Code model assignment is missing, invalid, or unvalidated, generated agents omit `model` and inherit the parent chat model instead of failing sync.
+You can assign GitHub Copilot models per coordinator or SDD phase from the TUI. If a model cache is missing, invalid, or unvalidated, generated agents omit `model` and inherit the parent chat model instead of failing sync.
 
 If VS Code also discovers Gentle-AI's Claude-format internal agents, sync marks those managed `sdd-*` and `jd-*` files `user-invocable: false` so the visible picker stays focused on `sdd-orchestrator`.
 

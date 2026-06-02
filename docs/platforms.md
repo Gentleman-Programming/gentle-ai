@@ -41,7 +41,7 @@ Release artifacts are produced by CI. Windows users should install through the P
 | OpenCode | `%USERPROFILE%\.config\opencode\` |
 | Gemini CLI | `%USERPROFILE%\.gemini\` |
 | Cursor | `%USERPROFILE%\.cursor\` |
-| VS Code Copilot | `%APPDATA%\Code\User\` (settings, MCP, prompts) + `%USERPROFILE%\.copilot\` (skills) |
+| VS Code Copilot | `%APPDATA%\Code\User\` (settings, MCP, prompts) + `%USERPROFILE%\.copilot\agents\` (native SDD agents) + `%USERPROFILE%\.copilot\skills\` (skills) |
 | Codex | `%USERPROFILE%\.codex\` |
 | Windsurf | `%USERPROFILE%\.codeium\windsurf\` (skills, MCP, rules) + `%APPDATA%\Windsurf\User\` (settings) |
 | Kimi | `%USERPROFILE%\.kimi\` (includes `config.toml`, system prompt, agents, MCP) |

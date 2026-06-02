@@ -976,7 +976,9 @@ func sddMultiCursor(t *testing.T) int {
 // opencode.json and otherwise shows its explicit empty state instead of silently
 // skipping model assignment.
 func TestSDDModeMultiShowsModelPickerWhenCacheMissing(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenSDDMode
@@ -996,7 +998,9 @@ func TestSDDModeMultiShowsModelPickerWhenCacheMissing(t *testing.T) {
 }
 
 func TestSDDModeMultiEmptyModelPickerCanContinueWithDefaults(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenSDDMode
@@ -2370,19 +2374,19 @@ func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
 	}
 }
 
-// TestModelConfig_BackNavigation verifies that selecting cursor 4 (Back) from
-// ScreenModelConfig returns to ScreenWelcome.
-// Index 3 is now "Configure Codex models"; Back moved to index 4.
+// TestModelConfig_BackNavigation verifies that selecting Back from
+// ScreenModelConfig returns to ScreenWelcome. Back is the last option
+// (after Codex and VS Code Copilot).
 func TestModelConfig_BackNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelConfig
-	m.Cursor = 4 // Back is now at index 4
+	m.Cursor = len(screens.ModelConfigOptions()) - 1
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenWelcome {
-		t.Fatalf("ModelConfig cursor=4 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
+		t.Fatalf("ModelConfig Back: screen = %v, want %v", state.Screen, ScreenWelcome)
 	}
 }
 
@@ -3096,6 +3100,94 @@ func TestModelConfig_OpenCodePickerContinueTriggersSyncScreen(t *testing.T) {
 	}
 	if got := state.PendingSyncOverrides.ModelAssignments["sdd-apply"]; got.Effort != "" {
 		t.Errorf("ModelAssignments[sdd-apply].Effort = %q, want empty for invalid known effort", got.Effort)
+	}
+}
+
+func TestModelConfig_VSCodeOptionOpensCopilotPicker(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Cursor = 4 // Claude(0) OpenCode(1) Kiro(2) Codex(3) VS Code Copilot(4)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelPicker {
+		t.Fatalf("screen = %v, want ScreenModelPicker", state.Screen)
+	}
+	if !state.ModelConfigMode {
+		t.Fatalf("ModelConfigMode should be true after entering VS Code picker from ModelConfig")
+	}
+	if !state.ModelPicker.ForVSCode {
+		t.Fatalf("ModelPicker.ForVSCode = false, want true")
+	}
+}
+
+func TestModelConfig_VSCodePickerContinueTargetsVSCodeCopilot(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelPicker
+	m.ModelConfigMode = true
+	m.ModelPicker = screens.ModelPickerState{
+		ForVSCode:    true,
+		AvailableIDs: []string{"github-copilot"},
+		SDDModels: map[string][]opencode.Model{
+			"github-copilot": {{ID: "gpt-4.1", Name: "GPT-4.1", ToolCall: true}},
+		},
+	}
+	m.Selection.VSCodeModelAssignments = map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "github-copilot", ModelID: "gpt-4.1"},
+	}
+	m.Cursor = len(screens.ModelPickerRowsForVSCode())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenSync {
+		t.Fatalf("screen = %v, want ScreenSync", state.Screen)
+	}
+	if state.PendingSyncOverrides == nil {
+		t.Fatalf("PendingSyncOverrides should be non-nil after VS Code model selection")
+	}
+	if got := state.PendingSyncOverrides.TargetAgents; len(got) != 1 || got[0] != model.AgentVSCodeCopilot {
+		t.Fatalf("TargetAgents = %v, want [%s]", got, model.AgentVSCodeCopilot)
+	}
+	if got := state.PendingSyncOverrides.VSCodeModelAssignments["sdd-apply"]; got.ProviderID != "github-copilot" || got.ModelID != "gpt-4.1" {
+		t.Fatalf("VSCodeModelAssignments[sdd-apply] = %+v, want github-copilot/gpt-4.1", got)
+	}
+	if state.PendingSyncOverrides.ModelAssignments != nil {
+		t.Fatalf("OpenCode ModelAssignments should stay nil for VS Code flow, got %v", state.PendingSyncOverrides.ModelAssignments)
+	}
+}
+
+func TestPresetFlowShowsVSCodeModelPickerWhenVSCodeSDDSelected(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPreset
+	m.Selection.Agents = []model.AgentID{model.AgentVSCodeCopilot}
+	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+	m.Cursor = 0
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelPicker {
+		t.Fatalf("screen = %v, want ScreenModelPicker", state.Screen)
+	}
+	if !state.ModelPicker.ForVSCode {
+		t.Fatalf("ModelPicker.ForVSCode = false, want true")
+	}
+}
+
+func TestPresetFlowSkipsVSCodeModelPickerWithoutVSCodeAgent(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPreset
+	m.Selection.Agents = []model.AgentID{model.AgentCodex}
+	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+	m.Cursor = 0
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen == ScreenModelPicker {
+		t.Fatalf("screen = ScreenModelPicker without VS Code agent; want a later non-VS Code flow screen")
 	}
 }
 
@@ -6651,7 +6743,10 @@ func TestPickerFlowSlice(t *testing.T) {
 		{
 			name: "non-custom all agents SDDMode Multi cache absent excludes ModelPicker",
 			setup: func(t *testing.T) Model {
-				t.Setenv("HOME", t.TempDir()) // guarantees cache path resolves to missing file
+				orig := osStatModelCache
+				osStatModelCache = func(name string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+				t.Cleanup(func() { osStatModelCache = orig })
+
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Selection.Preset = model.PresetFullGentleman
 				m.Selection.Agents = allPickerAgents
@@ -7413,6 +7508,7 @@ func TestStrictTDDForward(t *testing.T) {
 				t.Fatalf("screen = %v, want %v", got.Screen, tt.wantScreen)
 			}
 		})
+	}
 }
 
 func TestCodexAndVSCodeCopilotPresetFlowTransitionsToVSCodePickerAfterCodex(t *testing.T) {
