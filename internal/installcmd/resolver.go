@@ -174,6 +174,8 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 		return CommandSequence{{"sudo", "dnf", "install", "-y", dependency}}, nil
 	case "winget":
 		return CommandSequence{{"winget", "install", "--id", dependency, "-e", "--accept-source-agreements", "--accept-package-agreements"}}, nil
+	case "pkg":
+		return CommandSequence{{"pkg", "install", "-y", dependency}}, nil
 	default:
 		return nil, fmt.Errorf(
 			"unsupported package manager %q for os=%q distro=%q",
@@ -194,7 +196,7 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 		return CommandSequence{
 			{"brew", "install", "anomalyco/tap/opencode"},
 		}, nil
-	case "apt", "pacman", "dnf":
+	case "apt", "pacman", "dnf", "pkg":
 		pkg := "opencode-ai@" + versions.OpenCode
 		if profile.NpmWritable {
 			return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
@@ -221,8 +223,8 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 			{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
 			{"brew", "reinstall", "gga"},
 		}, nil
-	case "apt", "pacman", "dnf":
-		const tmpDir = "/tmp/gentleman-guardian-angel"
+	case "apt", "pacman", "dnf", "pkg":
+		tmpDir := filepath.Join(os.TempDir(), "gentleman-guardian-angel")
 		return CommandSequence{
 			{"rm", "-rf", tmpDir},
 			{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tmpDir},
