@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
@@ -145,4 +146,142 @@ func TestInstallCommand(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAdapterIdentityAndCapabilities(t *testing.T) {
+	a := NewAdapter()
+
+	if a.Agent() != model.AgentOpenCode {
+		t.Errorf("Agent() = %q, want %q", a.Agent(), model.AgentOpenCode)
+	}
+
+	if a.Tier() != model.TierFull {
+		t.Errorf("Tier() = %q, want %q", a.Tier(), model.TierFull)
+	}
+
+	if !a.SupportsAutoInstall() {
+		t.Error("SupportsAutoInstall() should be true")
+	}
+
+	if !a.SupportsSkills() {
+		t.Error("SupportsSkills() should be true")
+	}
+
+	if !a.SupportsSystemPrompt() {
+		t.Error("SupportsSystemPrompt() should be true")
+	}
+
+	if !a.SupportsMCP() {
+		t.Error("SupportsMCP() should be true")
+	}
+
+	if a.SupportsOutputStyles() {
+		t.Error("SupportsOutputStyles() should be false")
+	}
+
+	if a.OutputStyleDir("") != "" {
+		t.Error("OutputStyleDir() should be empty")
+	}
+
+	if !a.SupportsSlashCommands() {
+		t.Error("SupportsSlashCommands() should be true")
+	}
+
+	if a.SupportsSubAgents() {
+		t.Error("SupportsSubAgents() should be false")
+	}
+
+	if a.SubAgentsDir("") != "" {
+		t.Error("SubAgentsDir() should be empty")
+	}
+
+	if a.EmbeddedSubAgentsDir() != "" {
+		t.Error("EmbeddedSubAgentsDir() should be empty")
+	}
+}
+
+func TestAdapterConfigPathsAndStrategies(t *testing.T) {
+	a := NewAdapter()
+	home := "/home/user"
+
+	if got := a.GlobalConfigDir(home); got != filepath.Join(home, ".config", "opencode") {
+		t.Errorf("GlobalConfigDir = %q, want %q", got, filepath.Join(home, ".config", "opencode"))
+	}
+
+	if got := a.SystemPromptDir(home); got != filepath.Join(home, ".config", "opencode") {
+		t.Errorf("SystemPromptDir = %q, want %q", got, filepath.Join(home, ".config", "opencode"))
+	}
+
+	if got := a.SystemPromptFile(home); got != filepath.Join(home, ".config", "opencode", "AGENTS.md") {
+		t.Errorf("SystemPromptFile = %q, want %q", got, filepath.Join(home, ".config", "opencode", "AGENTS.md"))
+	}
+
+	if got := a.SkillsDir(home); got != filepath.Join(home, ".config", "opencode", "skills") {
+		t.Errorf("SkillsDir = %q, want %q", got, filepath.Join(home, ".config", "opencode", "skills"))
+	}
+
+	if got := a.SettingsPath(home); got != filepath.Join(home, ".config", "opencode", "opencode.json") {
+		t.Errorf("SettingsPath = %q, want %q", got, filepath.Join(home, ".config", "opencode", "opencode.json"))
+	}
+
+	if got := a.MCPConfigPath(home, "server"); got != filepath.Join(home, ".config", "opencode", "opencode.json") {
+		t.Errorf("MCPConfigPath = %q, want %q", got, filepath.Join(home, ".config", "opencode", "opencode.json"))
+	}
+
+	if got := a.CommandsDir(home); got != filepath.Join(home, ".config", "opencode", "commands") {
+		t.Errorf("CommandsDir = %q, want %q", got, filepath.Join(home, ".config", "opencode", "commands"))
+	}
+
+	if got := a.SystemPromptStrategy(); got != model.StrategyFileReplace {
+		t.Errorf("SystemPromptStrategy = %v, want %v", got, model.StrategyFileReplace)
+	}
+
+	if got := a.MCPStrategy(); got != model.StrategyMergeIntoSettings {
+		t.Errorf("MCPStrategy = %v, want %v", got, model.StrategyMergeIntoSettings)
+	}
+}
+
+func TestConfigPathHelper(t *testing.T) {
+	home := "/home/user"
+	got := ConfigPath(home)
+	want := filepath.Join(home, ".config", "opencode")
+	if got != want {
+		t.Errorf("ConfigPath = %q, want %q", got, want)
+	}
+}
+
+func TestAdapterInstallCommand_NilResolver(t *testing.T) {
+	a := &Adapter{
+		resolver: nil,
+	}
+
+	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew"}
+	got, err := a.InstallCommand(profile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := [][]string{{"brew", "install", "anomalyco/tap/opencode"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("InstallCommand with nil resolver = %v, want %v", got, want)
+	}
+}
+
+func TestDefaultStat(t *testing.T) {
+	t.Run("non-existent file", func(t *testing.T) {
+		res := defaultStat("/nonexistent/file/path")
+		if res.err == nil {
+			t.Error("expected error for non-existent file")
+		}
+	})
+
+	t.Run("existing directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		res := defaultStat(tmpDir)
+		if res.err != nil {
+			t.Fatalf("unexpected error: %v", res.err)
+		}
+		if !res.isDir {
+			t.Error("expected isDir to be true")
+		}
+	})
 }
