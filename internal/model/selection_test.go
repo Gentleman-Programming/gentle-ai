@@ -38,3 +38,55 @@ func TestSyncOverridesHasStrictTDDPointer(t *testing.T) {
 		t.Fatal("SyncOverrides.StrictTDD pointer set to false but read back incorrectly")
 	}
 }
+
+func TestSelection_HasAgent(t *testing.T) {
+	s := Selection{
+		Agents: []AgentID{AgentClaudeCode, AgentOpenCode, AgentAntigravity},
+	}
+
+	tests := []struct {
+		agent AgentID
+		want  bool
+	}{
+		{AgentClaudeCode, true},
+		{AgentOpenCode, true},
+		{AgentAntigravity, true},
+		{AgentCursor, false},
+		{"unknown-agent", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.agent), func(t *testing.T) {
+			if got := s.HasAgent(tt.agent); got != tt.want {
+				t.Errorf("Selection.HasAgent(%q) = %t, want %t", tt.agent, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSelection_HasComponent(t *testing.T) {
+	s := Selection{
+		Components: []ComponentID{ComponentEngram, ComponentSDD, ComponentSkills},
+	}
+
+	tests := []struct {
+		component ComponentID
+		want      bool
+	}{
+		{ComponentEngram, true},
+		{ComponentSDD, true},
+		{ComponentSkills, true},
+		{ComponentPersona, false},
+		{"unknown-component", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.component), func(t *testing.T) {
+			if got := s.HasComponent(tt.component); got != tt.want {
+				t.Errorf("Selection.HasComponent(%q) = %t, want %t", tt.component, got, tt.want)
+			}
+		})
+	}
+}
