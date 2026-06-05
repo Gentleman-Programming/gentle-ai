@@ -521,6 +521,22 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 		msg := fmt.Sprintf("Upgrading %s via %s (%s → %s)", r.Tool.Name, method, r.InstalledVersion, r.LatestVersion)
 		sp := NewSpinner(pw, msg)
 		toolResult := executeOne(ctx, r, profile, dryRun)
+
+		// Check if the upgrade succeeded but requires immediate exit (Windows self-replace).
+		// This must be handled BEFORE calling sp.Finish() so the spinner can terminate properly.
+		if toolResult.Status == UpgradeSucceeded && toolResult.ExitRequested {
+			// Finish the spinner with success before exiting.
+			sp.Finish(true)
+			toolResults = append(toolResults, toolResult)
+			return UpgradeReport{
+				BackupID:      backupID,
+				BackupWarning: backupWarning,
+				Results:       toolResults,
+				DryRun:        dryRun,
+				ExitRequested: true,
+			}
+		}
+
 		switch toolResult.Status {
 		case UpgradeSucceeded:
 			sp.Finish(true)
@@ -564,7 +580,7 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 		return base
 	}
 
-	err := runStrategy(ctx, r, profile)
+	exitReq, err := runStrategy(ctx, r, profile)
 	if err != nil {
 		// Distinguish manual fallback (informational skip) from real failures.
 		if hint, ok := AsManualFallback(err); ok {
@@ -577,19 +593,22 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 		}
 	} else {
 		base.Status = UpgradeSucceeded
+		base.ExitRequested = exitReq
 	}
 
 	return base
 }
 
 // effectiveMethod resolves the actual upgrade strategy for a tool on a given platform.
-// Priority order matches the documented install hierarchy: brew → go-install → binary.
+// Priority order matches the documented install hierarchy: plugin → brew → Windows installer → go-install → declared method.
 //
 //  1. OpenCode plugins are always handled by their own method — never overridden.
 //  2. Brew-managed platforms always use brew regardless of the tool's declared method.
-//  3. When Go is available on PATH and the tool has a GoImportPath, go-install is
+//  3. gentle-ai on Windows uses the installer so the running binary can exit before replacement.
+//  4. gentle-ai on Android/Termux uses go-install because no compatible release assets exist.
+//  5. When Go is available on PATH and the tool has a GoImportPath, go-install is
 //     preferred over a direct binary download.
-//  4. Otherwise the tool's declared InstallMethod is used as-is.
+//  6. Otherwise the tool's declared InstallMethod is used as-is.
 func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
 	if tool.InstallMethod == update.InstallOpenCodePlugin {
 		return update.InstallOpenCodePlugin
@@ -597,7 +616,18 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 	if profile.PackageManager == "brew" {
 		return update.InstallBrew
 	}
-	if profile.GoAvailable && tool.GoImportPath != "" {
+	// Use installer method for gentle-ai on Windows (launches PowerShell installer).
+	if profile.OS == "windows" && tool.Name == "gentle-ai" {
+		return update.InstallInstaller
+	}
+	// Android/Termux has no compatible release assets for gentle-ai, so source
+	// installation with PIE flags is the supported self-upgrade route.
+	if profile.OS == "android" && tool.Name == "gentle-ai" && tool.GoImportPath != "" {
+		return update.InstallGoInstall
+	}
+	// Keep gentle-ai on the binary path for standard Linux even when Go is
+	// installed; release binaries are the preferred non-Android self-upgrade path.
+	if profile.GoAvailable && tool.GoImportPath != "" && tool.Name != "gentle-ai" {
 		return update.InstallGoInstall
 	}
 	return tool.InstallMethod

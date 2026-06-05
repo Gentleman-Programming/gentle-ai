@@ -169,6 +169,9 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network", "enabled", "true")
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network.domains", `"*"`, `"allow"`)
 
+	merged = filemerge.UpsertTOMLTableKey(merged, `permissions.gentle-dev.filesystem.":root"`, `"."`, `"write"`)
+	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.workspace_roots", fmt.Sprintf("%q", homeDir), "true")
+
 	workspaceRootsSection := `permissions.gentle-dev.filesystem.":workspace_roots"`
 	for _, pattern := range []string{
 		`"**/.env"`,

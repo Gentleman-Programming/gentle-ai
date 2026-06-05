@@ -46,22 +46,24 @@ const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 //   - brew profile → brewUpgrade (regardless of tool's declared method)
 //   - go-install method + apt/pacman/other → goInstallUpgrade
 //   - binary method + linux/darwin → binaryUpgrade
-//   - binary method + windows → manualFallback (Phase 1: self-replace deferred)
+//   - binary method + windows → manualFallback (gentle-ai on Windows uses installerUpgrade instead)
 //   - script method + linux/darwin + gga → ggaScriptUpgrade (git clone approach)
 //   - script method + linux/darwin + other → scriptUpgrade (curl | bash install.sh)
 //   - script method + windows → manualFallback
 //   - OpenCode plugin method → update materialized package in ~/.config/opencode when possible
 //   - unknown method → manualFallback with explicit message
-func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
+func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) (bool, error) {
 	method := effectiveMethod(r.Tool, profile)
 
 	switch method {
 	case update.InstallBrew:
-		return brewUpgrade(ctx, r.Tool.Name)
+		return false, brewUpgrade(ctx, r.Tool.Name)
 	case update.InstallGoInstall:
-		return goInstallUpgrade(ctx, r.Tool, r.LatestVersion, profile)
+		return false, goInstallUpgrade(ctx, r.Tool, r.LatestVersion, profile)
 	case update.InstallBinary:
-		return binaryUpgrade(ctx, r, profile)
+		return false, binaryUpgrade(ctx, r, profile)
+	case update.InstallInstaller:
+		return installerUpgrade(ctx, r.Tool, r.ReleaseURL)
 	case update.InstallScript:
 		// GGA's install.sh expects to run from within a cloned repo — it references
 		// $SCRIPT_DIR/bin/gga and $SCRIPT_DIR/lib/*.sh. The generic scriptUpgrade
@@ -69,13 +71,13 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 		// breaks because those relative paths don't exist. Use the git clone approach
 		// (same as the initial install resolver) for GGA specifically.
 		if r.Tool.Name == "gga" {
-			return ggaScriptUpgrade(ctx, r)
+			return false, ggaScriptUpgrade(ctx, r)
 		}
-		return scriptUpgrade(ctx, r, profile)
+		return false, scriptUpgrade(ctx, r, profile)
 	case update.InstallOpenCodePlugin:
-		return opencodePluginUpgrade(ctx, r)
+		return false, opencodePluginUpgrade(ctx, r)
 	default:
-		return &ManualFallbackError{
+		return false, &ManualFallbackError{
 			Hint: fmt.Sprintf("upgrade %q: unsupported install method %q — please update manually. See: https://github.com/Gentleman-Programming/%s",
 				r.Tool.Name, method, r.Tool.Repo),
 		}
@@ -342,9 +344,9 @@ func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion s
 // binaryUpgrade handles binary-release upgrades via GitHub Releases asset download.
 //
 // engram has its own cross-platform binary downloader (DownloadLatestBinary) that
-// works on all platforms including Windows. For all other tools on Windows,
-// self-replace of a running binary is deferred (Phase 1) — a ManualFallbackError
-// is returned so the executor surfaces it as UpgradeSkipped with an actionable hint.
+// works on all platforms including Windows. For tools besides engram and gentle-ai
+// on Windows, a ManualFallbackError is returned so the executor surfaces it as
+// UpgradeSkipped with an actionable hint. (gentle-ai uses InstallInstaller).
 func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
 	// engram: always use its dedicated binary downloader regardless of platform
 	// (except brew, which is handled by effectiveMethod before we get here).
@@ -353,7 +355,7 @@ func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 	}
 
 	if profile.OS == "windows" {
-		// Phase 1: Windows binary self-replace is deferred for non-engram tools.
+		// Windows binary auto-upgrade is not supported for generic tools yet.
 		// Return a ManualFallbackError so the executor surfaces this as UpgradeSkipped
 		// with an actionable hint — NOT as UpgradeFailed.
 		hint := r.UpdateHint
@@ -367,6 +369,74 @@ func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 
 	// For Linux/macOS binary installs: delegate to the download package.
 	return downloadAndReplace(ctx, r, profile)
+}
+
+// installerUpgrade launches the PowerShell installer (install.ps1) for gentle-ai on Windows.
+// This is used for the Windows self-replace workaround — the running process
+// exits immediately after launching the installer, which then replaces the binary.
+func installerUpgrade(ctx context.Context, tool update.ToolInfo, releaseURL string) (bool, error) {
+	if runtime.GOOS != "windows" {
+		return false, fmt.Errorf("installer upgrade is only supported on Windows")
+	}
+
+	scriptURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/scripts/install.ps1", tool.Owner, tool.Repo)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, scriptURL, nil)
+	if err != nil {
+		return false, fmt.Errorf("download install.ps1: build request: %w", err)
+	}
+
+	resp, err := scriptHTTPClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("download install.ps1: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("download install.ps1: HTTP %d from %s", resp.StatusCode, scriptURL)
+	}
+
+	scriptBody, err := io.ReadAll(io.LimitReader(resp.Body, maxScriptSize+1))
+	if err != nil {
+		return false, fmt.Errorf("download install.ps1: read body: %w", err)
+	}
+	if int64(len(scriptBody)) > maxScriptSize {
+		return false, fmt.Errorf("download install.ps1: response body exceeds %d bytes limit", maxScriptSize)
+	}
+
+	// Write to a temporary file instead of passing it to iex directly
+	tmpFile, err := os.CreateTemp("", "gentle-ai-install-*.ps1")
+	if err != nil {
+		return false, fmt.Errorf("create temp script: %w", err)
+	}
+	if _, err := tmpFile.Write(scriptBody); err != nil {
+		tmpFile.Close()
+		return false, fmt.Errorf("write temp script: %w", err)
+	}
+	tmpFile.Close()
+
+	cmd := execCommand(
+		"cmd",
+		"/C",
+		"start",
+		"",
+		"powershell",
+		"-NoProfile",
+		"-NoExit",
+		"-ExecutionPolicy", "Bypass",
+		"-File", tmpFile.Name(),
+	)
+
+	fmt.Printf("\nLaunching installer for %s...\n", tool.Name)
+	fmt.Println("gentle-ai will now exit so the installer can replace the binary.")
+
+	if err := cmd.Start(); err != nil {
+		return false, fmt.Errorf("failed to start installer: %w", err)
+	}
+
+	// Mark that we need to exit after the spinner is handled by the caller.
+	// This allows the executor to call sp.Finish(true) before we actually exit.
+	return true, nil
 }
 
 // engramBinaryUpgrade downloads the latest engram binary using its dedicated

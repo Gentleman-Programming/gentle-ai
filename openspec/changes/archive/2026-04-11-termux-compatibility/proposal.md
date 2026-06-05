@@ -34,8 +34,8 @@ To ensure zero impact on existing platforms (Windows, macOS, standard Linux):
 ## Approach
 Implement a hybrid approach:
 1.  **Detection**: Update `internal/system/detect.go` so `GOOS=android` resolves to the Android/Termux profile.
-2.  **Resolución de Rutas**: Crear un helper `system.PrefixPath(path string)` que devuelva la ruta correcta según el `$PREFIX`.
-3.  **Compilación**: Configurar `LDFLAGS` en el proceso de actualización para incluir `-extldflags=-pie` en Android.
+2.  **Path Resolution**: Create a helper that returns the correct path for the active `$PREFIX`.
+3.  **Compilation**: Configure update-time Go install flags to include `-extldflags=-pie` on Android.
 4.  **Installation**: Adjust `AddToUserPath` to append PATH exports to shell configuration files when the platform profile is Android/Termux.
 
 ## Affected Areas

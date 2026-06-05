@@ -562,7 +562,12 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		}
 		if path := adapter.SettingsPath(homeDir); path != "" && adapter.Agent() == model.AgentClaudeCode {
 			targets = append(targets, path)
-			ops = append(ops, rewriteClaudeSkillRegistryHook(path))
+			ops = append(ops, rewriteSkillRegistryHook(path))
+		}
+		if adapter.Agent() == model.AgentCodex {
+			path := filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")
+			targets = append(targets, path)
+			ops = append(ops, rewriteSkillRegistryHook(path))
 		}
 		if path := adapter.SettingsPath(homeDir); path != "" && adapter.Agent() == model.AgentOpenCode {
 			targets = append(targets, path)
@@ -822,7 +827,7 @@ func rewriteJSONFile(path string, jsonPaths ...jsonPath) operation {
 	}
 }
 
-func rewriteClaudeSkillRegistryHook(path string) operation {
+func rewriteSkillRegistryHook(path string) operation {
 	return operation{
 		typeID: opRewriteFile,
 		path:   path,
@@ -832,11 +837,11 @@ func rewriteClaudeSkillRegistryHook(path string) operation {
 				if os.IsNotExist(err) {
 					return false, false, nil
 				}
-				return false, false, fmt.Errorf("read Claude settings %q: %w", path, err)
+				return false, false, fmt.Errorf("read skill-registry hook config %q: %w", path, err)
 			}
-			updated, changed, err := removeClaudeSkillRegistryHook(raw)
+			updated, changed, err := removeSkillRegistryHook(raw)
 			if err != nil {
-				return false, false, fmt.Errorf("clean Claude skill-registry hook %q: %w", path, err)
+				return false, false, fmt.Errorf("clean skill-registry hook %q: %w", path, err)
 			}
 			if !changed {
 				return false, false, nil
@@ -856,7 +861,7 @@ func rewriteClaudeSkillRegistryHook(path string) operation {
 	}
 }
 
-func removeClaudeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
+func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 	root := map[string]any{}
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return nil, false, err

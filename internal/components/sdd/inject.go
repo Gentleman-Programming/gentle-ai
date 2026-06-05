@@ -1034,6 +1034,14 @@ func readMisnamedOpenCodeGentlemanSDDPrompt(settingsPath string) (string, error)
 }
 
 func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	if adapter.Agent() == model.AgentCodex {
+		hooksPath := filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")
+		changed, err := ensureCodexSkillRegistryHook(hooksPath)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("install Codex skill-registry hook: %w", err)
+		}
+		return InjectionResult{Changed: changed, Files: []string{hooksPath}}, nil
+	}
 	if adapter.Agent() != model.AgentClaudeCode {
 		return InjectionResult{}, nil
 	}
@@ -1046,6 +1054,64 @@ func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (Inj
 		return InjectionResult{}, fmt.Errorf("install Claude skill-registry hook: %w", err)
 	}
 	return InjectionResult{Changed: changed, Files: []string{settingsPath}}, nil
+}
+
+func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
+	root := map[string]any{}
+	if data, err := os.ReadFile(hooksPath); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		if err := json.Unmarshal(data, &root); err != nil {
+			return false, fmt.Errorf("parse Codex hooks %q: %w", hooksPath, err)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true`
+	if claudeHookExists(root, command) {
+		return false, nil
+	}
+
+	hooksRaw, hasHooks := root["hooks"]
+	hooksMap, _ := hooksRaw.(map[string]any)
+	if hasHooks && hooksMap == nil {
+		return false, fmt.Errorf("Codex hooks %q has unsupported hooks shape: want object", hooksPath)
+	}
+	if hooksMap == nil {
+		hooksMap = map[string]any{}
+	}
+
+	sessionRaw, hasSessionStart := hooksMap["SessionStart"]
+	sessionStart, _ := sessionRaw.([]any)
+	if hasSessionStart && sessionStart == nil {
+		return false, fmt.Errorf("Codex hooks %q has unsupported hooks.SessionStart shape: want array", hooksPath)
+	}
+	sessionStart = append(sessionStart, map[string]any{
+		"matcher": "startup|resume|clear|compact",
+		"hooks": []any{
+			map[string]any{
+				"type":          "command",
+				"command":       command,
+				"timeout":       30,
+				"statusMessage": "Refreshing skill registry",
+			},
+		},
+	})
+	hooksMap["SessionStart"] = sessionStart
+	root["hooks"] = hooksMap
+
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	out = append(out, '\n')
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
+		return false, err
+	}
+	wr, err := filemerge.WriteFileAtomic(hooksPath, out, 0o644)
+	if err != nil {
+		return false, err
+	}
+	return wr.Changed, nil
 }
 
 func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {

@@ -1778,7 +1778,8 @@ test_codex_context7_in_toml() {
     local config_toml="$HOME/.codex/config.toml"
     assert_file_exists "$config_toml" "Codex config.toml created by context7"
     assert_file_contains "$config_toml" "[mcp_servers.context7]" "Codex config.toml has [mcp_servers.context7] block"
-    assert_file_contains "$config_toml" "context7-mcp" "Codex context7 block references context7-mcp package"
+    assert_file_contains "$config_toml" "https://mcp.context7.com/mcp" "Codex context7 block uses remote MCP URL"
+    assert_file_not_contains "$config_toml" "context7-mcp" "Codex context7 block does not use local npx package"
 
     # Idempotent: re-running must not duplicate the block.
     $BINARY install --agent codex --component context7 --persona neutral 2>&1 || true

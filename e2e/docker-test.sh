@@ -25,9 +25,9 @@ NC='\033[0m'
 # Pre-flight: Docker must be available
 # ---------------------------------------------------------------------------
 if ! command -v docker &>/dev/null; then
-    printf "${RED}[ORCH]${NC} docker is not installed or not in PATH.\n"
-    printf "${RED}[ORCH]${NC} E2E tests require Docker. On platforms without Docker support\n"
-    printf "${RED}[ORCH]${NC} (e.g. Android/Termux), these tests cannot run.\n"
+    printf '%s[ORCH]%s docker is not installed or not in PATH.\n' "$RED" "$NC"
+    printf '%s[ORCH]%s E2E tests require Docker. On platforms without Docker support\n' "$RED" "$NC"
+    printf '%s[ORCH]%s (e.g. Android/Termux), these tests cannot run.\n' "$RED" "$NC"
     exit 1
 fi
 

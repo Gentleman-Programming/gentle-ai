@@ -2,6 +2,7 @@ package permissions
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -314,6 +315,10 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 		`enabled = true`,
 		`[permissions.gentle-dev.network.domains]`,
 		`"*" = "allow"`,
+		`[permissions.gentle-dev.filesystem.":root"]`,
+		`"." = "write"`,
+		`[permissions.gentle-dev.workspace_roots]`,
+		fmt.Sprintf("%q = true", home),
 		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
 		`"**/.env" = "deny"`,
 		`"**/.env.local" = "deny"`,
@@ -412,6 +417,8 @@ args = ["mcp", "--tools=agent"]
 		"[permissions.gentle-dev]",
 		"[permissions.gentle-dev.network]",
 		"[permissions.gentle-dev.network.domains]",
+		`[permissions.gentle-dev.filesystem.":root"]`,
+		"[permissions.gentle-dev.workspace_roots]",
 		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
 	} {
 		if count := strings.Count(text, section); count != 1 {

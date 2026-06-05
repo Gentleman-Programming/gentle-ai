@@ -5120,6 +5120,62 @@ func TestEnsureClaudeSkillRegistryHookRejectsUnexpectedHookSchema(t *testing.T) 
 	}
 }
 
+func TestEnsureCodexSkillRegistryHookWritesSessionStartHookIdempotently(t *testing.T) {
+	home := t.TempDir()
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := `{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": "echo keep"}
+        ]
+      }
+    ]
+  }
+}`
+	if err := os.WriteFile(hooksPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := ensureCodexSkillRegistryHook(hooksPath)
+	if err != nil {
+		t.Fatalf("ensureCodexSkillRegistryHook() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("first call changed = false, want true")
+	}
+	changed, err = ensureCodexSkillRegistryHook(hooksPath)
+	if err != nil {
+		t.Fatalf("second ensureCodexSkillRegistryHook() error = %v", err)
+	}
+	if changed {
+		t.Fatal("second call changed = true, want false")
+	}
+
+	data, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Count(text, "gentle-ai skill-registry refresh") != 1 {
+		t.Fatalf("hook command count mismatch:\n%s", text)
+	}
+	if !strings.Contains(text, `"SessionStart"`) {
+		t.Fatalf("Codex hook should use SessionStart, got:\n%s", text)
+	}
+	if !strings.Contains(text, `startup|resume|clear|compact`) {
+		t.Fatalf("Codex SessionStart hook should cover supported startup sources, got:\n%s", text)
+	}
+	if !strings.Contains(text, "echo keep") {
+		t.Fatalf("existing hooks not preserved:\n%s", text)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Codex inject tests (T3.1)
 // ---------------------------------------------------------------------------
@@ -5132,6 +5188,15 @@ func codexInjectAdapter() agents.Adapter {
 		panic("agents.NewAdapter(codex): " + err.Error())
 	}
 	return a
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, path := range paths {
+		if path == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestInject_CodexSubstitutesPhaseEfforts(t *testing.T) {
@@ -5169,6 +5234,32 @@ func TestInject_CodexSubstitutesPhaseEfforts(t *testing.T) {
 	}
 }
 
+func TestInject_CodexOrchestratorUsesSkillRegistry(t *testing.T) {
+	home := t.TempDir()
+	adapter := codexInjectAdapter()
+
+	if _, err := Inject(home, adapter, ""); err != nil {
+		t.Fatalf("Inject(codex) error = %v", err)
+	}
+
+	agentsMD, readErr := os.ReadFile(filepath.Join(home, ".codex", "AGENTS.md"))
+	if readErr != nil {
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", readErr)
+	}
+	text := string(agentsMD)
+	for _, want := range []string{
+		"Skill Resolver Protocol",
+		`mem_search(query: "skill-registry"`,
+		".atl/skill-registry.md",
+		"## Skills to load before work",
+		"skill_resolution",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("Codex orchestrator missing skill-registry contract %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestInject_CodexNoAssignmentsUsesRecommended(t *testing.T) {
 	home := t.TempDir()
 	adapter := codexInjectAdapter()
@@ -5189,6 +5280,31 @@ func TestInject_CodexNoAssignmentsUsesRecommended(t *testing.T) {
 	text := string(agentsMD)
 	if strings.Contains(text, "{{") {
 		t.Errorf("AGENTS.md contains unresolved '{{' with nil assignments:\n%s", text)
+	}
+}
+
+func TestInject_CodexInstallsSkillRegistryHook(t *testing.T) {
+	home := t.TempDir()
+	adapter := codexInjectAdapter()
+
+	result, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(codex) error = %v", err)
+	}
+
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if _, err := os.Stat(hooksPath); err != nil {
+		t.Fatalf("Codex hooks.json not installed: %v", err)
+	}
+	if !containsPath(result.Files, hooksPath) {
+		t.Fatalf("result.Files missing Codex hooks path %q: %v", hooksPath, result.Files)
+	}
+	data, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "gentle-ai skill-registry refresh") {
+		t.Fatalf("Codex hooks.json missing skill-registry refresh:\n%s", data)
 	}
 }
 

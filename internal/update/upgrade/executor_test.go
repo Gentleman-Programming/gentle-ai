@@ -512,58 +512,6 @@ func TestExecute_DevBuildSurfacedAsSkipped(t *testing.T) {
 	}
 }
 
-// --- TestExecute_ManualFallbackSurfacedAsSkippedNotFailed ---
-
-// TestExecute_ManualFallbackSurfacedAsSkippedNotFailed verifies the spec gap:
-// When runStrategy returns a manual fallback error (e.g. Windows binary self-replace),
-// the ToolUpgradeResult must be UpgradeSkipped (not UpgradeFailed) and ManualHint
-// must be populated from the error message so RenderUpgradeReport can display it.
-func TestExecute_ManualFallbackSurfacedAsSkippedNotFailed(t *testing.T) {
-	origExecCommand := execCommand
-	t.Cleanup(func() { execCommand = origExecCommand })
-
-	execCalled := false
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		execCalled = true
-		return mockCmd("echo", "should not be called")
-	}
-
-	// Windows profile → binaryUpgrade returns a manual fallback error.
-	windowsProfile := system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true}
-
-	results := []update.UpdateResult{
-		makeResult("gentle-ai", update.UpdateAvailable, "1.0.0", "1.5.0", update.InstallBinary),
-	}
-	results[0].UpdateHint = "See https://github.com/Gentleman-Programming/gentle-ai/releases"
-
-	report := Execute(context.Background(), results, windowsProfile, t.TempDir(), false)
-
-	if execCalled {
-		t.Errorf("execCommand should not be called for Windows binary manual fallback")
-	}
-
-	if len(report.Results) != 1 {
-		t.Fatalf("len(Results) = %d, want 1", len(report.Results))
-	}
-
-	r := report.Results[0]
-
-	// Must be UpgradeSkipped (not UpgradeFailed) — this is a manual action, not a failure.
-	if r.Status != UpgradeSkipped {
-		t.Errorf("Windows binary fallback Status = %q, want UpgradeSkipped (not UpgradeFailed)", r.Status)
-	}
-
-	// ManualHint must be populated.
-	if r.ManualHint == "" {
-		t.Errorf("Windows binary fallback ManualHint must be non-empty")
-	}
-
-	// Err should be nil for a manual skip (it is not a failure).
-	if r.Err != nil {
-		t.Errorf("Windows binary fallback Err = %v, want nil (manual skips are not errors)", r.Err)
-	}
-}
-
 // --- TestExecute_ConfigNotMutatedDuringUpgrade ---
 
 // TestExecute_ConfigNotMutatedDuringUpgrade provides direct evidence that upgrade
@@ -1242,48 +1190,6 @@ func TestConfigPathsForBackup_ExcludesRuntimeDirs(t *testing.T) {
 		if _, ok := pathSet[f]; ok {
 			t.Errorf("configPathsForBackup should exclude runtime file %q", f)
 		}
-	}
-}
-
-// --- TestExecute_SkippedUpgradeDoesNotRenderFailureMarker ---
-
-// TestExecute_SkippedUpgradeDoesNotRenderFailureMarker verifies that when a tool
-// upgrade is intentionally skipped (e.g. Windows manual fallback), the progress
-// output shown to the user does NOT contain the ✗ failure marker.
-//
-// RED: This test must fail before the fix because the executor calls Finish(false)
-// for any non-success result, which renders ✗ for skipped/manual outcomes.
-func TestExecute_SkippedUpgradeDoesNotRenderFailureMarker(t *testing.T) {
-	origExecCommand := execCommand
-	t.Cleanup(func() { execCommand = origExecCommand })
-
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		return mockCmd("echo", "should not run")
-	}
-
-	// Windows profile → binary self-update returns manual fallback → UpgradeSkipped.
-	windowsProfile := system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true}
-
-	results := []update.UpdateResult{
-		makeResult("gentle-ai", update.UpdateAvailable, "1.0.0", "1.5.0", update.InstallBinary),
-	}
-	results[0].UpdateHint = "See https://github.com/Gentleman-Programming/gentle-ai/releases"
-
-	// Capture the progress output written to the progress writer.
-	var progressBuf bytes.Buffer
-
-	Execute(context.Background(), results, windowsProfile, t.TempDir(), false, &progressBuf)
-
-	got := progressBuf.String()
-
-	// The spinner output for a skipped/manual tool must NOT show ✗.
-	if strings.Contains(got, "✗") {
-		t.Errorf("Execute() progress output for skipped upgrade contains '✗' (failure marker):\n%s\nWant skip marker '--' or '⊘' instead", got)
-	}
-
-	// The spinner output for a skipped/manual tool should show a skip marker.
-	if !strings.Contains(got, "--") && !strings.Contains(got, "⊘") {
-		t.Errorf("Execute() progress output for skipped upgrade = %q, want skip marker '--' or '⊘'", got)
 	}
 }
 
