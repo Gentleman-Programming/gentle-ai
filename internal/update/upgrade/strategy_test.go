@@ -3,6 +3,8 @@ package upgrade
 import (
 	"context"
 	"errors"
+	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/internal/update"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,8 +13,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
 )
 
 // --- TestRunStrategy_BrewUpgrade ---
@@ -209,11 +209,16 @@ func TestEffectiveMethod_GentleAIOnWindowsUsesInstaller(t *testing.T) {
 			tool: update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallInstaller},
 			want: update.InstallInstaller,
 		},
+		{
+			name: "go available still uses installer",
+			tool: update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/Gentleman-Programming/gentle-ai/cmd/gentle-ai"},
+			want: update.InstallInstaller,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
+			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true}
 			method := effectiveMethod(tc.tool, profile)
 			if method != tc.want {
 				t.Errorf("effectiveMethod(%q) = %q, want %q", tc.tool.Name, method, tc.want)
@@ -252,7 +257,7 @@ func TestEffectiveMethod_NonGentleAIToolsOnWindowsUseBinary(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
+			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true}
 			method := effectiveMethod(tc.tool, profile)
 			if method != tc.want {
 				t.Errorf("effectiveMethod(%q) = %q, want %q", tc.tool.Name, method, tc.want)

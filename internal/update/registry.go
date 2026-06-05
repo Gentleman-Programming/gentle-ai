@@ -20,8 +20,8 @@ var Tools = []ToolInfo{
 		Repo:          "gentle-ai",
 		DetectCmd:     nil, // version comes from build-time ldflags (app.Version)
 		VersionPrefix: "v",
-		// gentle-ai: brew on macOS, binary release download on Linux/Windows.
-		// Self-upgrade of the running binary on Windows is deferred to Phase 2.
+		// gentle-ai: brew on macOS, binary release download on Linux.
+		// Windows self-upgrade uses the PowerShell installer so the running binary can exit before replacement.
 		InstallMethod: InstallBinary,
 	},
 	{
