@@ -12,6 +12,7 @@ func ModelConfigOptions() []string {
 		"Configure Claude models",
 		"Configure OpenCode models",
 		"Configure Kiro models",
+		"Configure Codex models",
 		"Back",
 	}
 }

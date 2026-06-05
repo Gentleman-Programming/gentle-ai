@@ -57,6 +57,22 @@ Main specs: openspec/specs/{domain}/spec.md
 - If the change directory already exists with artifacts, the change is being CONTINUED
 - Use `openspec/config.yaml` `rules` section for project-specific constraints per phase
 
+## Delta Spec Sections
+
+Delta specs MAY include these sections:
+
+```markdown
+## ADDED Requirements
+## MODIFIED Requirements
+## REMOVED Requirements
+## RENAMED Requirements
+```
+
+- `ADDED` appends new requirements to the main spec.
+- `MODIFIED` replaces the full matching requirement block in the main spec. The delta MUST contain the entire updated requirement, including unchanged scenarios that must be preserved.
+- `REMOVED` deletes the matching requirement from the main spec. Each removed requirement MUST include `(Reason: ...)` and SHOULD include `(Migration: ...)` when consumers or persisted behavior are affected.
+- `RENAMED` changes a requirement heading/name without changing behavior unless the delta also includes a `MODIFIED` block for the new requirement. Each rename MUST state old and new names explicitly.
+
 ## Config File Reference
 
 ```yaml

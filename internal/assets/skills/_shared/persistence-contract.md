@@ -57,10 +57,12 @@ The orchestrator persists DAG state after each phase transition to enable SDD re
 
 | Mode | Persist State | Recover State |
 |------|--------------|---------------|
-| `engram` | `mem_save(topic_key: "sdd/{change-name}/state")` | `mem_search("sdd/*/state")` → `mem_get_observation(id)` |
+| `engram` | `mem_save(topic_key: "sdd/{change-name}/state", capture_prompt: false*)` | `mem_search("sdd/*/state")` → `mem_get_observation(id)` |
 | `openspec` | Write `openspec/changes/{change-name}/state.yaml` | Read `openspec/changes/{change-name}/state.yaml` |
 | `hybrid` | Both: `mem_save` AND write `state.yaml` | Engram first; filesystem fallback |
 | `none` | Not possible — warn user | Not possible |
+
+*For state automated artifacts, set `capture_prompt: false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
 
 ## Common Rules
 
@@ -110,6 +112,7 @@ After completing your work, you MUST call:
     topic_key: "sdd/{change-name}/{artifact-type}",
     type: "architecture",
     project: "{project}",
+    capture_prompt: false,
     content: "{your full artifact markdown}"
   )
 If you return without calling mem_save, the next phase CANNOT find your artifact and the pipeline BREAKS.
@@ -126,18 +129,29 @@ After completing your work, you MUST call:
     topic_key: "sdd/{change-name}/{artifact-type}",
     type: "architecture",
     project: "{project}",
+    capture_prompt: false,
     content: "{your full artifact markdown}"
   )
 If you return without calling mem_save, the next phase CANNOT find your artifact and the pipeline BREAKS.
 ```
 
+For SDD artifacts, `capture_prompt: false` is explicit and mandatory when the Engram tool schema supports it. Engram v1.15.3 defaults `capture_prompt` to true for normal human/proactive saves, but automated pipeline artifacts must not capture the user's prompt. Do not infer this from `type` because SDD artifacts and real human architecture decisions both use `architecture`. If an older schema rejects or does not expose `capture_prompt`, omit it rather than failing.
+
+## Sub-Agent Response Ordering
+
+When a sub-agent persists artifacts (via `mem_save` or file writes), the persistence call MUST happen BEFORE the final text response. The sub-agent's absolute last output must be text, never a tool call.
+
+**Why**: The Task tool returns the sub-agent's final output to the parent. If the sub-agent ends with a tool call, the parent receives only the tool result (e.g., `"Observation saved"`) — the sub-agent's text analysis is lost. Always: do your work → save → respond with text envelope.
+
+Sub-agents must NOT call `mem_session_summary` — that's reserved for top-level agents only.
+
 ## Skill Registry
 
-The orchestrator pre-resolves compact rules from the skill registry and injects them as `## Project Standards (auto-resolved)` in your launch prompt. Sub-agents do NOT read the registry or individual SKILL.md files — rules arrive pre-digested.
+The orchestrator pre-resolves skill paths from the skill registry and injects them as `## Skills to load before work` in your launch prompt. Sub-agents read those exact `SKILL.md` files before task-specific work.
 
 To generate/update: run the `skill-registry` skill, or run `sdd-init`.
 
-Sub-agent skill loading: check for a `## Project Standards (auto-resolved)` block in your prompt — if present, follow those rules. If not present, check for `SKILL: Load` instructions as a fallback. If neither exists, proceed without — this is not an error.
+Sub-agent skill loading: check for a `## Skills to load before work` block in your prompt — if present, read those exact files. If not present, check for `SKILL: Load` instructions as a fallback. If neither exists, proceed without — this is not an error.
 
 ## Detail Level
 

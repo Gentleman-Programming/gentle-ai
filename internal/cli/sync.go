@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/internal/components/mcp"
 	"github.com/gentleman-programming/gentle-ai/internal/components/permissions"
+	"github.com/gentleman-programming/gentle-ai/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/internal/components/theme"
@@ -57,9 +58,15 @@ type SyncResult struct {
 	// either no agents were discovered/provided, or all managed assets
 	// were already current (idempotent re-sync).
 	NoOp bool
-	// FilesChanged is the number of managed files actually written or updated
-	// during this sync. Zero means all assets were already current.
+	// FilesChanged is the number of deduplicated managed file paths
+	// processed during this sync. A file is counted when at least one
+	// component reports it as part of its injection result.
+	// Zero means all assets were already current.
 	FilesChanged int
+	// ChangedFiles lists deduplicated absolute paths of managed files
+	// processed during this sync. Paths appear once even when multiple
+	// components touch the same file. It is nil when no files changed.
+	ChangedFiles []string
 }
 
 // ParseSyncFlags parses the CLI arguments for the sync subcommand.
@@ -263,14 +270,26 @@ func parseModelSpec(spec string) (model.ModelAssignment, error) {
 
 // BuildSyncSelection builds a model.Selection for the sync command.
 //
-// Default sync scope: SDD, Engram, Context7, GGA, Skills.
-// Excluded by default: Persona, Permissions, Theme (user-config-adjacent).
+// Default sync scope: SDD, Engram, Context7, GGA, Skills, Persona.
+// Excluded by default: Permissions, Theme (no markers; managed via JSON
+// overlays where user customization cannot be safely diff-merged).
 // Permissions and Theme can be opted-in via flags.
+//
+// Persona is included because its content lives between
+// <!-- gentle-ai:persona --> markers — that block is harness-managed and
+// must propagate embedded-asset changes across versions. Content outside
+// the markers (user-authored sections) is preserved by InjectMarkdownSection.
 //
 // This is the reusable managed-asset sync contract. A future `upgrade --sync`
 // flow can call this function to get the same managed-only selection semantics.
 func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selection {
+	// Order matters: Persona must run BEFORE SDD/Engram/MCP because those
+	// components inject content with substrings (e.g. "## Personality",
+	// "Senior Architect") that overlap with persona's legacy-block fingerprints.
+	// Running persona last would cause its StripLegacyPersonaBlock pass to
+	// detect the just-written managed sections as legacy and strip them.
 	components := []model.ComponentID{
+		model.ComponentPersona,
 		model.ComponentSDD,
 		model.ComponentEngram,
 		model.ComponentContext7,
@@ -303,6 +322,11 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 		// Preset is set to full-gentleman so selectedSkillIDs() returns the
 		// correct default skill set when no explicit skills are provided.
 		Preset: model.PresetFullGentleman,
+		// Persona is left as zero-value here. RunSync resolves it from
+		// state.json (the user's installed choice); only when state has no
+		// recorded persona — i.e. an old install — does it fall back to
+		// PersonaGentleman. This avoids regenerating a Gentleman persona on
+		// top of a user who installed neutral.
 	}
 }
 
@@ -358,7 +382,7 @@ type syncRuntime struct {
 	agentIDs     []model.AgentID
 	backupRoot   string
 	state        *runtimeState
-	filesChanged int // accumulates changed-file count across all component steps
+	changedFiles []string // accumulates absolute paths of files that actually changed
 }
 
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
@@ -368,6 +392,7 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 	}
 
 	workspaceDir, _ := os.Getwd()
+	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, selection.Agents)
 
 	return &syncRuntime{
 		homeDir:      homeDir,
@@ -381,7 +406,7 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 
 func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	adapters := resolveAdapters(r.agentIDs)
-	targets := syncBackupTargets(r.homeDir, r.selection, adapters)
+	targets := syncBackupTargets(r.homeDir, r.workspaceDir, r.selection, adapters)
 
 	prepare := []pipeline.Step{
 		prepareBackupStep{
@@ -409,7 +434,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			workspaceDir: r.workspaceDir,
 			agents:       r.agentIDs,
 			selection:    r.selection,
-			filesChanged: &r.filesChanged,
+			changedFiles: &r.changedFiles,
 		})
 	}
 
@@ -417,11 +442,13 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 }
 
 // syncBackupTargets returns the file paths that need to be backed up
-// before sync executes. Uses the same componentPaths logic as install.
-func syncBackupTargets(homeDir string, selection model.Selection, adapters []agents.Adapter) []string {
+// before sync executes. Uses syncComponentPaths so that the backup/verify
+// contract matches the actual files sync touches (which differ from install
+// for ComponentPersona — see syncComponentPaths).
+func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) []string {
 	paths := map[string]struct{}{}
 	for _, component := range selection.Components {
-		for _, path := range componentPaths(homeDir, selection, adapters, component) {
+		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
 	}
@@ -433,13 +460,72 @@ func syncBackupTargets(homeDir string, selection model.Selection, adapters []age
 	return targets
 }
 
+// syncComponentPaths declares the file paths sync writes for a given component.
+//
+// For most components the contract is identical to install (componentPaths).
+// ComponentPersona is the exception: sync calls persona.InjectForSync which
+// skips the OpenCode/Kilocode agent definition in opencode.json (those JSON
+// merges remain install-only because they conflict with SDD's writes to the
+// same file). Sync therefore must NOT declare those JSON paths or the post-sync
+// verification will look for files sync never promised to write.
+func syncComponentPaths(homeDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
+	return syncComponentPathsWithWorkspace(homeDir, "", selection, adapters, component)
+}
+
+func syncComponentPathsWithWorkspace(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
+	if component == model.ComponentPersona {
+		return syncPersonaPathsWithWorkspace(homeDir, workspaceDir, selection, adapters)
+	}
+	return componentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component)
+}
+
+// syncPersonaPaths returns the file paths that ComponentPersona writes during
+// sync. Mirrors persona.InjectForSync:
+//   - Step 1: SystemPromptFile (the marker-bound markdown block — CLAUDE.md /
+//     AGENTS.md / equivalent).
+//   - Step 3: Gentleman output-style overlay (only when the agent supports it).
+//
+// Step 2 (OpenCode/Kilocode agent definition in opencode.json) is install-only
+// and intentionally NOT declared here.
+func syncPersonaPaths(homeDir string, selection model.Selection, adapters []agents.Adapter) []string {
+	return syncPersonaPathsWithWorkspace(homeDir, "", selection, adapters)
+}
+
+func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) []string {
+	if selection.Persona == model.PersonaCustom {
+		return nil
+	}
+	paths := []string{}
+	for _, adapter := range adapters {
+		targetDir := componentInjectionDir(homeDir, workspaceDir, adapter)
+		if adapter.Agent() == model.AgentOpenClaw {
+			paths = append(paths, filepath.Join(targetDir, "SOUL.md"))
+			continue
+		}
+		if !adapter.SupportsSystemPrompt() {
+			continue
+		}
+		if adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
+			paths = append(paths, adapter.SystemPromptFile(targetDir))
+		}
+		if isGentlemanConversationPersona(selection.Persona) && adapter.SupportsOutputStyles() {
+			paths = append(paths, adapter.OutputStyleDir(targetDir)+"/gentleman.md")
+			if p := adapter.SettingsPath(targetDir); p != "" {
+				paths = append(paths, p)
+			}
+		}
+	}
+	return paths
+}
+
 // componentSyncStep is the sync-specific apply step.
 // Unlike componentApplyStep, it ONLY calls inject functions —
 // no binary install, no engram setup, no persona injection.
 //
-// filesChanged is a shared counter pointer. Each step increments it by the
-// number of files that were actually written (i.e., whose content changed).
-// This lets RunSync detect a true no-op when all assets are already current.
+// changedFiles is a shared slice pointer. Each step appends the file
+// paths from its InjectionResult.Files when InjectionResult.Changed
+// is true. Paths may contain duplicates across components; the caller
+// (RunSync) deduplicates before exposing them via SyncResult.
 type componentSyncStep struct {
 	id           string
 	component    model.ComponentID
@@ -447,7 +533,7 @@ type componentSyncStep struct {
 	workspaceDir string
 	agents       []model.AgentID
 	selection    model.Selection
-	filesChanged *int
+	changedFiles *[]string // accumulates absolute paths of files that actually changed
 }
 
 func (s componentSyncStep) ID() string {
@@ -462,11 +548,18 @@ func (s componentSyncStep) Run() error {
 		// Sync: inject MCP config + system prompt protocol only.
 		// NO binary install. NO engram setup.
 		for _, adapter := range adapters {
-			res, err := engram.Inject(s.homeDir, adapter)
+			var res engram.InjectionResult
+			var err error
+			if adapter.Agent() == model.AgentOpenClaw {
+				res, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
+			} else {
+				targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+				res, err = engram.Inject(targetDir, adapter)
+			}
 			if err != nil {
 				return fmt.Errorf("sync engram for %q: %w", adapter.Agent(), err)
 			}
-			s.countChanged(boolToInt(res.Changed))
+			s.countChanged(boolToInt(res.Changed), res.Files...)
 		}
 		return nil
 
@@ -476,7 +569,7 @@ func (s componentSyncStep) Run() error {
 			if err != nil {
 				return fmt.Errorf("sync context7 for %q: %w", adapter.Agent(), err)
 			}
-			s.countChanged(boolToInt(res.Changed))
+			s.countChanged(boolToInt(res.Changed), res.Files...)
 		}
 		return nil
 
@@ -516,20 +609,22 @@ func (s componentSyncStep) Run() error {
 		}
 
 		for _, adapter := range adapters {
+			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments:           s.selection.ModelAssignments,
 				ClaudeModelAssignments:             s.selection.ClaudeModelAssignments,
 				KiroModelAssignments:               s.selection.KiroModelAssignments,
+				CodexModelAssignments:              s.selection.CodexModelAssignments,
 				WorkspaceDir:                       s.workspaceDir,
 				StrictTDD:                          s.selection.StrictTDD,
 				PreserveOpenCodeOrchestratorPrompt: profileStrategy == model.SDDProfileStrategyExternalSingleActive,
 				Profiles:                           profiles,
 			}
-			res, err := sdd.Inject(s.homeDir, adapter, sddMode, opts)
+			res, err := sdd.Inject(targetDir, adapter, sddMode, opts)
 			if err != nil {
 				return fmt.Errorf("sync sdd for %q: %w", adapter.Agent(), err)
 			}
-			s.countChanged(boolToInt(res.Changed))
+			s.countChanged(boolToInt(res.Changed), res.Files...)
 		}
 		return nil
 
@@ -543,7 +638,7 @@ func (s componentSyncStep) Run() error {
 			if err != nil {
 				return fmt.Errorf("sync skills for %q: %w", adapter.Agent(), err)
 			}
-			s.countChanged(boolToInt(res.Changed))
+			s.countChanged(boolToInt(res.Changed), res.Files...)
 		}
 		return nil
 
@@ -563,7 +658,15 @@ func (s componentSyncStep) Run() error {
 			return fmt.Errorf("sync gga config: %w", err)
 		}
 		// Count GGA files changed based on individual Changed flags.
-		s.countChanged(boolToInt(res.ConfigChanged) + boolToInt(res.AgentsChanged))
+		total := boolToInt(res.ConfigChanged) + boolToInt(res.AgentsChanged)
+		var ggaFiles []string
+		if res.ConfigChanged && res.ConfigFile != "" {
+			ggaFiles = append(ggaFiles, res.ConfigFile)
+		}
+		if res.AgentsChanged && res.AgentsFile != "" {
+			ggaFiles = append(ggaFiles, res.AgentsFile)
+		}
+		s.countChanged(total, ggaFiles...)
 		return nil
 
 	case model.ComponentPermission:
@@ -573,7 +676,24 @@ func (s componentSyncStep) Run() error {
 			if err != nil {
 				return fmt.Errorf("sync permissions for %q: %w", adapter.Agent(), err)
 			}
-			s.countChanged(boolToInt(res.Changed))
+			s.countChanged(boolToInt(res.Changed), res.Files...)
+		}
+		return nil
+
+	case model.ComponentPersona:
+		// Sync regenerates the persona block between
+		// <!-- gentle-ai:persona --> markers and (when supported) refreshes
+		// the Gentleman output-style overlay. We deliberately skip the
+		// OpenCode/Kilocode agent definition in opencode.json — that JSON
+		// merge conflicts with SDD's writes to the same settings file and
+		// remains an install-only concern.
+		for _, adapter := range adapters {
+			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+			res, err := persona.InjectForSync(targetDir, adapter, s.selection.Persona)
+			if err != nil {
+				return fmt.Errorf("sync persona for %q: %w", adapter.Agent(), err)
+			}
+			s.countChanged(boolToInt(res.Changed), res.Files...)
 		}
 		return nil
 
@@ -584,7 +704,7 @@ func (s componentSyncStep) Run() error {
 			if err != nil {
 				return fmt.Errorf("sync theme for %q: %w", adapter.Agent(), err)
 			}
-			s.countChanged(boolToInt(res.Changed))
+			s.countChanged(boolToInt(res.Changed), res.Files...)
 		}
 		return nil
 
@@ -594,11 +714,30 @@ func (s componentSyncStep) Run() error {
 	}
 }
 
-// countChanged adds n to the shared filesChanged counter (nil-safe).
-func (s componentSyncStep) countChanged(n int) {
-	if s.filesChanged != nil && n > 0 {
-		*s.filesChanged += n
+// countChanged records the file paths that were actually changed (nil-safe).
+func (s componentSyncStep) countChanged(n int, files ...string) {
+	if s.changedFiles != nil && n > 0 {
+		*s.changedFiles = append(*s.changedFiles, files...)
 	}
+}
+
+// dedupPaths removes duplicate and empty paths while preserving first-seen order.
+func dedupPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		if _, ok := seen[p]; !ok {
+			seen[p] = struct{}{}
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // boolToInt converts a boolean to 0 or 1.
@@ -644,7 +783,10 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	}
 
 	// Capture how many managed assets were actually changed.
-	result.FilesChanged = rt.filesChanged
+	// Deduplicate paths — multiple components may touch the same file
+	// (e.g. Engram and Context7 both merge into settings.json).
+	result.ChangedFiles = dedupPaths(rt.changedFiles)
+	result.FilesChanged = len(result.ChangedFiles)
 
 	// True no-op: agents were discovered but all managed assets were already
 	// current — no file was written or updated. Per spec scenario:
@@ -655,7 +797,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	}
 
 	// Post-apply verification reuses the same component paths as install.
-	result.Verify = runPostSyncVerification(homeDir, selection)
+	result.Verify = runPostSyncVerification(homeDir, rt.workspaceDir, selection)
 	if !result.Verify.Ready {
 		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
@@ -688,27 +830,47 @@ func RunSync(args []string) (SyncResult, error) {
 
 	selection := BuildSyncSelection(flags, agentIDs)
 
-	// Load persisted model assignments from state when not provided via flags.
-	// This is the key fix: without this, every CLI sync falls back to the
-	// "balanced" preset and silently overwrites the user's model choices.
-	if len(selection.ClaudeModelAssignments) == 0 || len(selection.ModelAssignments) == 0 {
+	// Load persisted model assignments and persona from state when not provided
+	// via flags. Without this, every CLI sync falls back to defaults and would
+	// silently overwrite the user's model choices and persona selection.
+	if len(selection.ClaudeModelAssignments) == 0 || len(selection.KiroModelAssignments) == 0 || len(selection.ModelAssignments) == 0 || selection.Persona == "" {
 		s, readErr := state.Read(homeDir)
 		if readErr == nil {
 			if len(selection.ClaudeModelAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
 				m := make(map[string]model.ClaudeModelAlias, len(s.ClaudeModelAssignments))
 				for k, v := range s.ClaudeModelAssignments {
+					// Claude Code controls the main session/orchestrator model itself.
+					// Keep persisted assignments scoped to Agent tool calls only.
+					if k == "orchestrator" {
+						continue
+					}
 					m[k] = model.ClaudeModelAlias(v)
 				}
 				selection.ClaudeModelAssignments = m
 			}
+			if len(selection.KiroModelAssignments) == 0 && len(s.KiroModelAssignments) > 0 {
+				m := make(map[string]model.KiroModelAlias, len(s.KiroModelAssignments))
+				for k, v := range s.KiroModelAssignments {
+					m[k] = model.KiroModelAlias(v)
+				}
+				selection.KiroModelAssignments = m
+			}
 			if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
 				m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
 				for k, v := range s.ModelAssignments {
-					m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID}
+					m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
 				}
 				selection.ModelAssignments = m
 			}
+			if selection.Persona == "" && s.Persona != "" {
+				selection.Persona = model.PersonaID(s.Persona)
+			}
 		}
+	}
+	// Backward-compat fallback: state files written before persona persistence
+	// have no Persona field. Default to Gentleman so sync still has a target.
+	if selection.Persona == "" {
+		selection.Persona = model.PersonaGentleman
 	}
 
 	if flags.DryRun {
@@ -793,6 +955,12 @@ func RenderSyncReport(result SyncResult) string {
 	// above handles that case). A non-zero value here reflects real writes.
 	fmt.Fprintf(&b, "Sync actions executed: %d files changed\n", result.FilesChanged)
 
+	if len(result.ChangedFiles) > 0 {
+		for _, path := range result.ChangedFiles {
+			fmt.Fprintf(&b, "  - %s\n", path)
+		}
+	}
+
 	if !result.Verify.Ready {
 		fmt.Fprintln(&b, "")
 		fmt.Fprintln(&b, "Post-sync verification:")
@@ -803,12 +971,12 @@ func RenderSyncReport(result SyncResult) string {
 }
 
 // runPostSyncVerification verifies that managed files exist after sync.
-func runPostSyncVerification(homeDir string, selection model.Selection) verify.Report {
+func runPostSyncVerification(homeDir, workspaceDir string, selection model.Selection) verify.Report {
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(selection.Agents)
 
 	for _, component := range selection.Components {
-		for _, path := range componentPaths(homeDir, selection, adapters, component) {
+		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
 			currentPath := path
 			checks = append(checks, verify.Check{
 				ID:          "verify:sync:file:" + currentPath,

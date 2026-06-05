@@ -329,6 +329,47 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 	}
 }
 
+// TestGoAvailableInPlatformProfile asserts that GoAvailable in PlatformProfile
+// reflects whether `go` is present in the tools map. This is the detection signal
+// used by effectiveMethod to implement the brew → go-install → binary auto-detect order.
+func TestGoAvailableInPlatformProfile(t *testing.T) {
+	tests := []struct {
+		name         string
+		tools        map[string]ToolStatus
+		wantGoAvail  bool
+	}{
+		{
+			name:        "go in tools and installed → GoAvailable true",
+			tools:       map[string]ToolStatus{"go": {Name: "go", Installed: true}},
+			wantGoAvail: true,
+		},
+		{
+			name:        "go in tools but not installed → GoAvailable false",
+			tools:       map[string]ToolStatus{"go": {Name: "go", Installed: false}},
+			wantGoAvail: false,
+		},
+		{
+			name:        "go not in tools map → GoAvailable false",
+			tools:       map[string]ToolStatus{"brew": {Name: "brew", Installed: true}},
+			wantGoAvail: false,
+		},
+		{
+			name:        "nil tools map → GoAvailable false",
+			tools:       nil,
+			wantGoAvail: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := resolvePlatformProfile("linux", "ID=ubuntu\nID_LIKE=debian\n", tc.tools)
+			if profile.GoAvailable != tc.wantGoAvail {
+				t.Fatalf("GoAvailable = %v, want %v", profile.GoAvailable, tc.wantGoAvail)
+			}
+		})
+	}
+}
+
 func TestDetectFromInputsShellDefaultsToUnknown(t *testing.T) {
 	result := detectFromInputs("darwin", "arm64", "", "", nil, nil)
 	if result.System.Shell != "unknown" {

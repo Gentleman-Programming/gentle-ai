@@ -4,10 +4,14 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -18,23 +22,48 @@ import (
 
 // --- test helpers ---
 
+// sha256Hex returns the SHA256 hex digest of data.
+func sha256Hex(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
+// makeChecksumsTxt returns a BSD-style checksums.txt entry for the given filename and data.
+func makeChecksumsTxt(filename string, data []byte) string {
+	return fmt.Sprintf("%s  %s\n", sha256Hex(data), filename)
+}
+
 // makeServerWithFakeTarGz returns an httptest.Server that serves:
-//   - GET /releases/latest  → GitHub API JSON with the given version
-//   - GET /releases/download/…  → a real .tar.gz containing "engram" binary
+//   - GET /releases/latest       → GitHub API JSON with the given version
+//   - GET /releases/download/…   → a real .tar.gz containing "engram" binary
+//   - GET /…/checksums.txt       → a valid checksums.txt covering all arches
 func makeServerWithFakeTarGz(t *testing.T, version string) *httptest.Server {
 	t.Helper()
 	tarContent := buildFakeTarGz(t, "engram")
+	// Pre-build a checksums.txt that covers linux/darwin for both amd64 and arm64
+	// so the test is not sensitive to the host architecture.
+	checksums := ""
+	for _, goos := range []string{"linux", "darwin"} {
+		for _, goarch := range []string{"amd64", "arm64"} {
+			name := engramArchiveName(version, goos, goarch)
+			checksums += makeChecksumsTxt(name, tarContent)
+		}
+	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "releases/latest") {
+		switch {
+		case strings.Contains(r.URL.Path, "releases/latest"):
 			payload := map[string]string{"tag_name": "v" + version}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(payload)
-			return
+		case strings.HasSuffix(r.URL.Path, "checksums.txt"):
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(w, checksums)
+		default:
+			// Binary asset
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.WriteHeader(http.StatusOK)
+			w.Write(tarContent)
 		}
-		// All other requests → binary asset
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.WriteHeader(http.StatusOK)
-		w.Write(tarContent)
 	}))
 }
 
@@ -43,16 +72,27 @@ func makeServerWithFakeTarGz(t *testing.T, version string) *httptest.Server {
 func makeServerWithFakeZip(t *testing.T, version string) *httptest.Server {
 	t.Helper()
 	zipContent := buildFakeZip(t, "engram.exe")
+	// Pre-build a checksums.txt that covers windows for both amd64 and arm64
+	// so the test is not sensitive to the host architecture.
+	checksums := ""
+	for _, goarch := range []string{"amd64", "arm64"} {
+		name := engramArchiveName(version, "windows", goarch)
+		checksums += makeChecksumsTxt(name, zipContent)
+	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "releases/latest") {
+		switch {
+		case strings.Contains(r.URL.Path, "releases/latest"):
 			payload := map[string]string{"tag_name": "v" + version}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(payload)
-			return
+		case strings.HasSuffix(r.URL.Path, "checksums.txt"):
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(w, checksums)
+		default:
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.WriteHeader(http.StatusOK)
+			w.Write(zipContent)
 		}
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.WriteHeader(http.StatusOK)
-		w.Write(zipContent)
 	}))
 }
 
@@ -332,25 +372,288 @@ func TestDownloadLatestBinaryAPIError(t *testing.T) {
 	}
 }
 
-func TestDownloadLatestBinaryFallsBackToAnonymousWhenTokenGets403(t *testing.T) {
-	const fakeToken = "ci-token"
+func TestDownloadLatestBinaryAndroidInstallsVersionedSourceWithPIE(t *testing.T) {
 	const version = "1.3.0"
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "releases/latest") {
+		if !strings.Contains(r.URL.Path, "releases/latest") {
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v" + version})
+	}))
+	defer server.Close()
+
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	origExecCommand := engramExecCommand
+	origGetenv := engramGetenv
+	origUserHomeDir := engramUserHomeDir
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+		engramExecCommand = origExecCommand
+		engramGetenv = origGetenv
+		engramUserHomeDir = origUserHomeDir
+	})
+
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+
+	var gotName string
+	var gotArgs []string
+	engramExecCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = append([]string{}, args...)
+		cmd := exec.Command(os.Args[0], "-test.run=TestEngramCommandHelper", "--")
+		cmd.Env = append(os.Environ(), "ENGRAM_HELPER_PROCESS=1")
+		return cmd
+	}
+
+	gobin := filepath.Join(t.TempDir(), "go-bin")
+	engramGetenv = func(key string) string {
+		if key == "GOBIN" {
+			return gobin
+		}
+		return ""
+	}
+	engramUserHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	profile := system.PlatformProfile{OS: "android", LinuxDistro: system.LinuxDistroTermux, PackageManager: "apt"}
+	installedPath, err := DownloadLatestBinary(profile)
+	if err != nil {
+		t.Fatalf("DownloadLatestBinary() error = %v", err)
+	}
+
+	wantArgs := []string{"install", "-ldflags=-extldflags=-pie", "github.com/Gentleman-Programming/engram/cmd/engram@v" + version}
+	if gotName != "go" {
+		t.Fatalf("exec name = %q, want go", gotName)
+	}
+	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
+		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
+	}
+	if installedPath != filepath.Join(gobin, engramName) {
+		t.Fatalf("installedPath = %q, want %q", installedPath, filepath.Join(gobin, engramName))
+	}
+}
+
+func TestGoInstallDestinationDefaultsToManagedAndroidDir(t *testing.T) {
+	origGetenv := engramGetenv
+	origInstallDirFn := engramInstallDirFn
+	t.Cleanup(func() {
+		engramGetenv = origGetenv
+		engramInstallDirFn = origInstallDirFn
+	})
+
+	installDir := filepath.Join(t.TempDir(), ".local", "bin")
+	engramGetenv = func(string) string { return "" }
+	engramInstallDirFn = func(goos string) string {
+		if goos != "android" {
+			t.Fatalf("engramInstallDirFn called with %q, want android", goos)
+		}
+		return installDir
+	}
+
+	gotDir, gotEnv, err := goInstallDestination()
+	if err != nil {
+		t.Fatalf("goInstallDestination() error = %v", err)
+	}
+	if gotDir != installDir {
+		t.Fatalf("dir = %q, want %q", gotDir, installDir)
+	}
+	wantEnv := "GOBIN=" + installDir
+	if len(gotEnv) != 1 || gotEnv[0] != wantEnv {
+		t.Fatalf("env = %v, want [%q]", gotEnv, wantEnv)
+	}
+}
+
+func TestEngramCommandHelper(t *testing.T) {
+	if os.Getenv("ENGRAM_HELPER_PROCESS") != "1" {
+		return
+	}
+	os.Exit(0)
+}
+
+func TestDownloadLatestBinarySkipsLatestReleaseWithoutBinaryAssets(t *testing.T) {
+	const binaryVersion = "1.15.13"
+
+	tarContent := buildFakeTarGz(t, "engram")
+	// Build checksums.txt covering all linux arches so the test is arch-agnostic.
+	checksums := ""
+	for _, goarch := range []string{"amd64", "arm64"} {
+		checksums += makeChecksumsTxt(engramArchiveName(binaryVersion, "linux", goarch), tarContent)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "releases/latest"):
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"tag_name": "pi-v0.1.7",
+				"assets":   []any{},
+			})
+		case strings.Contains(r.URL.Path, "releases") && r.URL.RawQuery == "per_page=20":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"tag_name":   "pi-v0.1.7",
+					"draft":      false,
+					"prerelease": false,
+					"assets":     []any{},
+				},
+				{
+					"tag_name":   "v" + binaryVersion,
+					"draft":      false,
+					"prerelease": false,
+					"assets": []map[string]string{
+						{"name": "checksums.txt"},
+						{"name": "engram_" + binaryVersion + "_linux_amd64.tar.gz"},
+					},
+				},
+			})
+		case strings.HasSuffix(r.URL.Path, "checksums.txt"):
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(w, checksums)
+		case strings.Contains(r.URL.Path, "/releases/download/v"+binaryVersion+"/engram_"+binaryVersion+"_linux_"):
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.WriteHeader(http.StatusOK)
+			w.Write(tarContent)
+		default:
+			t.Fatalf("unexpected request: %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+	}))
+	defer server.Close()
+
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+	})
+
+	tmpDir := t.TempDir()
+	origInstallDirFn := engramInstallDirFn
+	engramInstallDirFn = func(goos string) string { return tmpDir }
+	t.Cleanup(func() { engramInstallDirFn = origInstallDirFn })
+
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+	installedPath, err := DownloadLatestBinary(profile)
+	if err != nil {
+		t.Fatalf("DownloadLatestBinary() error = %v", err)
+	}
+
+	if _, err := os.Stat(installedPath); err != nil {
+		t.Fatalf("stat installed binary: %v", err)
+	}
+}
+
+func TestDownloadLatestBinaryReleaseListFallsBackToAnonymousWhenTokenGets403(t *testing.T) {
+	const fakeToken = "ci-token"
+	const binaryVersion = "1.15.13"
+
+	tarContent := buildFakeTarGz(t, "engram")
+	checksums := ""
+	for _, goarch := range []string{"amd64", "arm64"} {
+		checksums += makeChecksumsTxt(engramArchiveName(binaryVersion, "linux", goarch), tarContent)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "releases/latest"):
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"tag_name": "pi-v0.1.7",
+				"assets":   []any{},
+			})
+		case strings.Contains(r.URL.Path, "releases") && r.URL.RawQuery == "per_page=20":
 			if r.Header.Get("Authorization") == "Bearer "+fakeToken {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"tag_name": "v" + version})
-			return
+			json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"tag_name":   "v" + binaryVersion,
+					"draft":      false,
+					"prerelease": false,
+					"assets": []map[string]string{
+						{"name": "engram_" + binaryVersion + "_linux_amd64.tar.gz"},
+					},
+				},
+			})
+		case strings.HasSuffix(r.URL.Path, "checksums.txt"):
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(w, checksums)
+		case strings.Contains(r.URL.Path, "/releases/download/v"+binaryVersion+"/engram_"+binaryVersion+"_linux_"):
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.WriteHeader(http.StatusOK)
+			w.Write(tarContent)
+		default:
+			t.Fatalf("unexpected request: %s?%s", r.URL.Path, r.URL.RawQuery)
 		}
+	}))
+	defer server.Close()
 
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.WriteHeader(http.StatusOK)
-		w.Write(buildFakeTarGz(t, "engram"))
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+	})
+
+	t.Setenv("GITHUB_TOKEN", fakeToken)
+	t.Setenv("GH_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	origInstallDirFn := engramInstallDirFn
+	engramInstallDirFn = func(goos string) string { return tmpDir }
+	t.Cleanup(func() { engramInstallDirFn = origInstallDirFn })
+
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+	installedPath, err := DownloadLatestBinary(profile)
+	if err != nil {
+		t.Fatalf("DownloadLatestBinary() error = %v", err)
+	}
+
+	if _, err := os.Stat(installedPath); err != nil {
+		t.Fatalf("stat installed binary: %v", err)
+	}
+}
+
+func TestDownloadLatestBinaryFallsBackToAnonymousWhenTokenGets403(t *testing.T) {
+	const fakeToken = "ci-token"
+	const version = "1.3.0"
+
+	tarContent := buildFakeTarGz(t, "engram")
+	checksums := ""
+	for _, goos := range []string{"linux", "darwin"} {
+		for _, goarch := range []string{"amd64", "arm64"} {
+			checksums += makeChecksumsTxt(engramArchiveName(version, goos, goarch), tarContent)
+		}
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "releases/latest"):
+			if r.Header.Get("Authorization") == "Bearer "+fakeToken {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"tag_name": "v" + version})
+		case strings.HasSuffix(r.URL.Path, "checksums.txt"):
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(w, checksums)
+		default:
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.WriteHeader(http.StatusOK)
+			w.Write(tarContent)
+		}
 	}))
 	defer server.Close()
 
@@ -383,5 +686,177 @@ func TestDownloadLatestBinaryFallsBackToAnonymousWhenTokenGets403(t *testing.T) 
 
 	if _, err := os.Stat(installedPath); err != nil {
 		t.Fatalf("stat installed binary: %v", err)
+	}
+}
+
+// --- TestEngramChecksumVerification ---
+//
+// Table-driven tests covering all checksum verification paths:
+//
+//   - success: valid checksums.txt with correct digest → install succeeds
+//   - missing checksums.txt: server returns 404 → fail closed
+//   - digest mismatch: checksums.txt lists wrong digest → fail closed
+//   - malformed checksums.txt: content has no parseable entries → fail closed
+func TestEngramChecksumVerification(t *testing.T) {
+	const version = "1.0.0"
+
+	// tarContent is a real .tar.gz archive used across sub-tests.
+	tarContent := buildFakeTarGz(t, "engram")
+	correctDigest := sha256Hex(tarContent)
+	archiveName := engramArchiveName(version, "linux", normalizeArch(runtime.GOARCH))
+
+	tests := []struct {
+		name          string
+		checksumBody  string // content served at /…/checksums.txt; empty = serve 404
+		checksumCode  int    // HTTP status for checksums.txt (0 → use 200 when body set)
+		wantErrSubstr string // expected substring in error; empty = success
+	}{
+		{
+			name:         "success: valid checksum passes",
+			checksumBody: fmt.Sprintf("%s  %s\n", correctDigest, archiveName),
+		},
+		{
+			name:          "missing checksums.txt: 404 fails closed",
+			checksumCode:  http.StatusNotFound,
+			wantErrSubstr: "checksums.txt unavailable",
+		},
+		{
+			name:          "digest mismatch: wrong hash fails closed",
+			checksumBody:  fmt.Sprintf("%s  %s\n", strings.Repeat("a", 64), archiveName),
+			wantErrSubstr: "checksum mismatch",
+		},
+		{
+			name:          "malformed checksums.txt: no matching entry fails closed",
+			checksumBody:  "thisisnotavalidchecksumline\n",
+			wantErrSubstr: "not listed in checksums.txt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.Contains(r.URL.Path, "releases/latest"):
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]string{"tag_name": "v" + version})
+
+				case strings.HasSuffix(r.URL.Path, "checksums.txt"):
+					code := tt.checksumCode
+					if code == 0 {
+						code = http.StatusOK
+					}
+					w.WriteHeader(code)
+					if tt.checksumBody != "" {
+						fmt.Fprint(w, tt.checksumBody)
+					}
+
+				default:
+					w.Header().Set("Content-Type", "application/octet-stream")
+					w.WriteHeader(http.StatusOK)
+					w.Write(tarContent)
+				}
+			}))
+			defer server.Close()
+
+			origClient := engramHTTPClient
+			origBaseURL := engramGitHubBaseURL
+			engramHTTPClient = server.Client()
+			engramGitHubBaseURL = server.URL
+			t.Cleanup(func() {
+				engramHTTPClient = origClient
+				engramGitHubBaseURL = origBaseURL
+			})
+
+			tmpDir := t.TempDir()
+			origInstallDirFn := engramInstallDirFn
+			engramInstallDirFn = func(goos string) string { return tmpDir }
+			t.Cleanup(func() { engramInstallDirFn = origInstallDirFn })
+
+			profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+			_, err := DownloadLatestBinary(profile)
+
+			if tt.wantErrSubstr == "" {
+				if err != nil {
+					t.Fatalf("expected success, got error: %v", err)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErrSubstr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErrSubstr) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), tt.wantErrSubstr)
+			}
+		})
+	}
+}
+
+// --- TestEngramExpectedChecksumFor ---
+//
+// Table-driven unit tests for the BSD-style checksums.txt parser.
+func TestEngramExpectedChecksumFor(t *testing.T) {
+	tests := []struct {
+		name          string
+		content       string
+		filename      string
+		wantDigest    string
+		wantErrSubstr string
+	}{
+		{
+			name:       "exact match returns digest",
+			content:    "abc123  engram_1.0.0_linux_amd64.tar.gz\n",
+			filename:   "engram_1.0.0_linux_amd64.tar.gz",
+			wantDigest: "abc123",
+		},
+		{
+			name: "finds correct entry among multiple",
+			content: "aaa111  engram_1.0.0_linux_amd64.tar.gz\n" +
+				"bbb222  engram_1.0.0_linux_arm64.tar.gz\n" +
+				"ccc333  engram_1.0.0_windows_amd64.zip\n",
+			filename:   "engram_1.0.0_linux_arm64.tar.gz",
+			wantDigest: "bbb222",
+		},
+		{
+			name:          "missing filename returns error",
+			content:       "abc123  engram_1.0.0_linux_amd64.tar.gz\n",
+			filename:      "engram_1.0.0_darwin_arm64.tar.gz",
+			wantErrSubstr: "not listed in checksums.txt",
+		},
+		{
+			name:          "empty content returns error",
+			content:       "",
+			filename:      "engram_1.0.0_linux_amd64.tar.gz",
+			wantErrSubstr: "not listed in checksums.txt",
+		},
+		{
+			name:          "malformed lines (single field) are skipped",
+			content:       "justonefield\n",
+			filename:      "justonefield",
+			wantErrSubstr: "not listed in checksums.txt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := engramExpectedChecksumFor(tt.content, tt.filename)
+
+			if tt.wantErrSubstr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErrSubstr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErrSubstr) {
+					t.Errorf("error = %q, want it to contain %q", err.Error(), tt.wantErrSubstr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.wantDigest {
+				t.Errorf("got digest %q, want %q", got, tt.wantDigest)
+			}
+		})
 	}
 }

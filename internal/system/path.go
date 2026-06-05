@@ -67,7 +67,7 @@ func AddToUserPath(dir string) error {
 }
 
 // escapePowerShellString escapes a string for safe use inside a PowerShell
-// single-quoted string literal by replacing each ' with '' (PowerShell's escape
+// single-quoted string literal by replacing each ' with ” (PowerShell's escape
 // sequence for a literal single quote within single-quoted strings).
 func escapePowerShellString(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
@@ -92,7 +92,7 @@ func addToProcessPath(dir string) error {
 }
 
 func isTermux() bool {
-	return os.Getenv("TERMUX_VERSION") != ""
+	return pathGOOS == "android"
 }
 
 func persistPathTermux(dir string) error {

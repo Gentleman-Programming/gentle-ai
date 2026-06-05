@@ -4,12 +4,17 @@ import "testing"
 
 func TestKiroModelID(t *testing.T) {
 	tests := []struct {
-		alias ClaudeModelAlias
+		alias KiroModelAlias
 		want  string
 	}{
-		{ClaudeModelOpus, "claude-opus-4.6"},
-		{ClaudeModelSonnet, "claude-sonnet-4.6"},
-		{ClaudeModelHaiku, "claude-haiku-4.5"},
+		{KiroModelAuto, "auto"},
+		{KiroModelOpus, "claude-opus-4.8"},
+		{KiroModelSonnet, "claude-sonnet-4.6"},
+		{KiroModelHaiku, "claude-haiku-4.5"},
+		{KiroModelMiniMax, "minimax-m2.5"},
+		{KiroModelGLM, "glm-5"},
+		{KiroModelDeepSeek, "deepseek-3.2"},
+		{KiroModelQwen, "qwen3-coder-next"},
 		{"unknown", "claude-sonnet-4.6"},
 		{"", "claude-sonnet-4.6"},
 	}

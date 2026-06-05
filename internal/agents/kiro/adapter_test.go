@@ -234,12 +234,17 @@ func TestAdapter_EmbeddedSubAgentsDir(t *testing.T) {
 func TestAdapter_KiroModelID(t *testing.T) {
 	adapter := NewAdapter()
 	tests := []struct {
-		alias model.ClaudeModelAlias
+		alias model.KiroModelAlias
 		want  string
 	}{
-		{model.ClaudeModelOpus, "claude-opus-4.6"},
-		{model.ClaudeModelSonnet, "claude-sonnet-4.6"},
-		{model.ClaudeModelHaiku, "claude-haiku-4.5"},
+		{model.KiroModelAuto, "auto"},
+		{model.KiroModelOpus, "claude-opus-4.8"},
+		{model.KiroModelSonnet, "claude-sonnet-4.6"},
+		{model.KiroModelHaiku, "claude-haiku-4.5"},
+		{model.KiroModelMiniMax, "minimax-m2.5"},
+		{model.KiroModelGLM, "glm-5"},
+		{model.KiroModelDeepSeek, "deepseek-3.2"},
+		{model.KiroModelQwen, "qwen3-coder-next"},
 		{"unknown", "claude-sonnet-4.6"},
 	}
 	for _, tt := range tests {

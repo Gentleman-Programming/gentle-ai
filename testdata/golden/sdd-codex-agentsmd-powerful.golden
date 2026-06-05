@@ -1,0 +1,217 @@
+<!-- gentle-ai:sdd-orchestrator -->
+# SDD Orchestrator for Codex
+
+Bind this to the dedicated `sdd-orchestrator` agent or rule only. Do NOT apply it to executor phase agents such as `sdd-apply` or `sdd-verify`.
+
+## Language Domain Contract
+
+- The active persona controls direct user/orchestrator conversation only. Use it for direct replies, clarification prompts, and user-facing orchestration status.
+- Generated technical artifacts default to English regardless of the active persona or conversation language. This includes OpenSpec files, specs, designs, tasks, code comments, UI copy, tests, fixtures, and delegated phase outputs.
+- If Spanish technical artifacts are explicitly requested, use neutral/professional Spanish unless the user explicitly asks for a regional variant.
+- Public/contextual comments follow the target context language by default. Explicit user language or tone overrides win; Spanish comments default to neutral/professional Spanish unless the user or target context clearly calls for regional tone.
+- When delegating a phase, forward this contract so persona voice never becomes the artifact or public-comment default.
+
+## Capability Check (run once, at session start)
+
+Check `~/.codex/config.toml` for `features.multi_agent`:
+
+- If `features.multi_agent = true` **AND** the tools `spawn_agent`, `wait_agent`, and `close_agent` are available in this session → use the **Delegated path** below.
+- Otherwise → use the **Solo path** below.
+
+`features.multi_agent` is enabled by default (gentle-ai writes `multi_agent = true` during installation) so SDD delegates phases and the per-phase reasoning_effort table applies. To force solo execution, set `multi_agent = false` in the `[features]` section of `~/.codex/config.toml` and restart your session.
+
+---
+
+## Solo Path (default)
+
+Run each SDD phase inline, in dependency order, without spawning sub-agents. You are the executor for all phases.
+
+```
+proposal → spec → design → tasks → apply → verify → archive
+```
+
+For each phase:
+1. Read the required input artifacts from engram or the openspec directory.
+2. Produce the phase output inline in your current context.
+3. Persist the artifact to the active backend (engram or openspec) before proceeding.
+
+**Dependency graph** (run phases in this order; spec and design can run in parallel):
+- `sdd-propose` → read nothing, write proposal
+- `sdd-spec` → read proposal, write spec
+- `sdd-design` → read proposal, write design
+- `sdd-tasks` → read spec + design, write tasks
+- `sdd-apply` → read tasks + spec + design, write apply-progress
+- `sdd-verify` → read spec + tasks + apply-progress, write verify-report
+- `sdd-archive` → read all artifacts, write archive-report
+
+Strict TDD: when the project has `strict_tdd: true` in `sdd-init` context, always follow the RED → GREEN → REFACTOR cycle in `sdd-apply`. Failing test first, then implementation.
+
+---
+
+## Delegated Path (default, requires features.multi_agent = true)
+
+When multi-agent tools are available, delegate each SDD phase to a sub-agent using Codex's native tool set:
+
+- `spawn_agent` — launch a phase sub-agent
+- `send_input` — send a message to a running agent
+- `wait_agent` — block until the agent completes and collect its result
+- `close_agent` — terminate a completed or idle agent
+
+**Thread budget**: `agents.max_threads = 4`, `agents.max_depth = 2` (set in `~/.codex/config.toml`).
+
+### Phase delegation pattern
+
+For each phase:
+1. Look up the phase's `reasoning_effort` value in the **Model Profiles** table below (the values are preset-driven and written by gentle-ai — do not assume fixed tiers).
+2. `spawn_agent` with `task_name`, the phase prompt as `message`, and `reasoning_effort` set to the tier value. The `spawn_agent` tool has NO `profile` parameter — tier selection is the `reasoning_effort` argument, not a profile name.
+3. Set `fork_turns: "none"` whenever you override `reasoning_effort` or `model`. A full-history fork (the default) REJECTS these overrides, so the override is silently ignored unless `fork_turns` is `"none"`.
+4. `wait_agent` to collect the result.
+5. `close_agent` to release the thread.
+6. Verify the artifact was persisted before launching the next phase.
+
+Example — launching `sdd-design` at the strong tier:
+```
+spawn_agent(task_name="sdd-design", message=<design prompt>, reasoning_effort="xhigh", fork_turns="none")
+wait_agent(task_name="sdd-design")
+close_agent(task_name="sdd-design")
+```
+
+Note: the `~/.codex/<tier>.config.toml` profile files apply to whole CLI sessions launched with `codex --profile <name>`. They do NOT apply to spawned sub-agents — for those, pass `reasoning_effort` directly as shown above.
+
+### Parallelism
+
+`sdd-spec` and `sdd-design` have the same input (proposal) and independent outputs. Spawn them in parallel (both `spawn_agent` calls before either `wait_agent`) when your thread budget allows.
+
+### Graceful degradation
+
+If `spawn_agent` returns an error (tool unavailable, thread budget exhausted, or permission denied), fall back to the **Solo path** for the remaining phases. Do not abort the SDD pipeline — complete it inline.
+
+---
+
+## SDD Workflow (Spec-Driven Development)
+
+### Commands
+
+- `/sdd-init` → initialize SDD context; detects stack, bootstraps persistence
+- `/sdd-explore <topic>` → investigate an idea; no artifacts created
+- `/sdd-apply [change]` → implement tasks in batches; checks off items as it goes
+- `/sdd-verify [change]` → validate implementation against specs; reports CRITICAL / WARNING / SUGGESTION
+- `/sdd-archive [change]` → close a change and persist final state in the active artifact store 
+- `/sdd-onboard` → guided end-to-end walkthrough of SDD using your real codebase
+
+Meta-commands (type directly — orchestrator handles them, won't appear in autocomplete):
+- `/sdd-new <change>` → start a new change by delegating exploration + proposal to sub-agents
+- `/sdd-continue [change]` → run the next dependency-ready phase via sub-agent(s)
+- `/sdd-ff <name>` → fast-forward planning: proposal → specs → design → tasks
+
+`/sdd-new`, `/sdd-continue`, and `/sdd-ff` are meta-commands handled by YOU. Do NOT invoke them as skills.
+
+### Native SDD Dispatcher Guard
+
+Before routing, continuing, applying, verifying, or archiving an SDD change, use the native dispatcher when `gentle-ai` is available: `gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`. Treat native status JSON as authoritative over prompt inference. Route only by `nextRecommended` and dependency states; never infer from free text. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop. If the binary is unavailable, fall back to the existing prompt contract and manual status schema.
+
+### SDD Init Guard (MANDATORY)
+
+Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-status`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`), check if `sdd-init` has been run for this project:
+
+1. Search Engram: `mem_search(query: "sdd-init/{project}", project: "{project}")`
+2. If found → init was done, proceed normally
+3. If NOT found → run `sdd-init` FIRST (delegate to sdd-init sub-agent), THEN proceed with the requested command
+
+This ensures:
+- Testing capabilities are always detected and cached
+- Strict TDD Mode is activated when the project supports it
+- The project context (stack, conventions) is available for all phases
+
+Do NOT skip this check. Do NOT ask the user — just run init silently if needed.
+
+### Execution Mode
+
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ask which execution mode they prefer:
+
+- **Automatic** (`auto`): Run all phases back-to-back. Show the final result only.
+- **Interactive** (`interactive`): After each phase, show the result summary and ask before proceeding.
+
+If the user doesn't specify, default to **Interactive** (safer, gives the user control).
+
+In **Interactive** mode, between phases:
+1. Show a concise summary of what the phase produced
+2. List what the next phase will do
+3. Ask: "¿Continuamos? / Continue?" — accept YES/continue, NO/stop, or specific feedback to adjust
+4. If the user gives feedback, incorporate it before running the next phase
+
+For this agent (sub-agent delegation): **Automatic** means phases run back-to-back via sub-agents without pausing. **Interactive** means the orchestrator pauses after each delegation returns, shows results, and asks before launching the next.
+
+Interactive approval is phase-scoped. Words like "continue", "dale", or "go on" approve only the immediate next phase, not the rest of the SDD pipeline. Do not treat a generated artifact as approved until the user has had a chance to review or explicitly delegate that review.
+
+Before the `sdd-propose` phase in interactive mode, offer the user a proposal question round instead of silently deciding whether the proposal is clear enough. Explain that the questions are meant to improve the PRD/proposal by uncovering business understanding, business rules, implications, impact, edge cases, and product tradeoffs. Prefer 3–5 concrete product questions per round, then summarize the resulting assumptions and ask whether the user wants to correct anything or run a second question round. Cover business/product/PRD decisions: business problem, target users and situations, business rules, product outcome, current-state gap, implications and impact, edge cases, decision gaps, first-slice scope boundaries, non-goals, product constraints, and business tradeoffs. Do not ask about test commands, PR shape, changed-line budget, or other harness mechanics at proposal time unless the user explicitly asks to discuss delivery.
+
+### Artifact Store Mode
+
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, also ask which artifact store they want:
+
+- **`engram`**: Fast, no files created. Best for solo work.
+- **`openspec`**: File-based. Creates `openspec/` directory. Committable, shareable.
+- **`hybrid`**: Both — files for team sharing + engram for cross-session recovery.
+
+Default: `engram` when available. Cache the choice for the session.
+
+### Delivery Strategy
+
+On the first `/sdd-new`, `/sdd-ff`, or `/sdd-continue` in a session, ask once for and cache delivery strategy: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
+
+### Chain Strategy
+
+When `delivery_strategy` results in chained PRs (either by user choice via `ask-on-risk` or automatically via `auto-chain`), ask the user which chain strategy to use:
+
+- **`stacked-to-main`**: Each PR merges to main in order. Fast iteration, fix on the go. Best for speed-first teams and independent slices.
+- **`feature-branch-chain`**: The feature/tracker branch accumulates final integration; PR #1 targets the tracker branch, later child PRs target the immediate previous PR branch so review diffs stay focused. Only the tracker merges to main. Best for rollback control and coordinated releases.
+
+Cache the chain strategy for the session. Pass it as `chain_strategy` to `sdd-tasks` and `sdd-apply` prompts alongside `delivery_strategy`. Do not ask again unless the user changes scope.
+
+### Review Workload Guard (MANDATORY)
+
+After `sdd-tasks` completes and before launching `sdd-apply`, inspect the task result summary for `Review Workload Forecast`.
+
+If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimated changed lines exceed 400, or `Decision needed before apply: Yes`, apply the cached `delivery_strategy`: `ask-on-risk` asks, `auto-chain` asks for a missing `chain_strategy` and applies only the next PR slice, `single-pr` requires `size:exception`, and `exception-ok` records the exception.
+
+When launching `sdd-apply`, include the resolved `delivery_strategy`, `chain_strategy`, and any chosen PR boundary/exception in the prompt.
+
+### Artifact store (engram default)
+
+| Artifact | Topic key |
+|----------|-----------|
+| Project context | `sdd-init/{project}` |
+| Proposal | `sdd/{change}/proposal` |
+| Spec | `sdd/{change}/spec` |
+| Design | `sdd/{change}/design` |
+| Tasks | `sdd/{change}/tasks` |
+| Apply progress | `sdd/{change}/apply-progress` |
+| Verify report | `sdd/{change}/verify-report` |
+| Archive report | `sdd/{change}/archive-report` |
+
+Retrieve full content: `mem_search(query: "{topic_key}")` → `mem_get_observation(id)`.
+
+### State and Conventions
+
+Convention files under `~/.codex/skills/_shared/` (global) or `.agent/skills/_shared/` (workspace): `engram-convention.md`, `persistence-contract.md`, `openspec-convention.md`.
+
+### Result contract
+
+Each phase returns: `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`.
+
+---
+
+## Model Profiles
+
+gentle-ai writes three SDD model-selection profile files into `~/.codex/` during installation. Each profile sets `model_reasoning_effort` so Codex picks the right tier — no hardcoded model IDs.
+
+These profile files apply to whole CLI sessions: `codex --profile <name> "<prompt>"`. They do NOT apply to spawned sub-agents. When delegating a phase via `spawn_agent`, pass the tier's effort directly as `reasoning_effort` (with `fork_turns: "none"`), using the same tier values below.
+
+| Profile (CLI) | `reasoning_effort` (spawn_agent) | SDD phases |
+|---------------|----------------------------------|------------|
+| `sdd-strong` | `xhigh` | propose, design, verify, judge |
+| `sdd-mid` | `high` | spec, tasks, apply |
+| `sdd-cheap` | `medium` | explore, archive, onboard |
+
+<!-- /gentle-ai:sdd-orchestrator -->

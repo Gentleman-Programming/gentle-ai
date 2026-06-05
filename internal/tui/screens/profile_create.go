@@ -175,7 +175,7 @@ func ProfileCreateOptionCount(step int, picker ModelPickerState) int {
 		if len(picker.AvailableIDs) == 0 {
 			return 1 // only "Back"
 		}
-		return len(ModelPickerRows()) + 2 // rows + Continue + Back
+		return len(ModelPickerRowsForProfile()) + 2 // rows + Continue + Back (JD excluded for profiles)
 	default:
 		return 2 // "Create & Sync" / "Save & Sync" + "Cancel"
 	}

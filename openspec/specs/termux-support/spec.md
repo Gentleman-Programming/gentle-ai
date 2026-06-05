@@ -15,16 +15,16 @@ The system MUST identify when it is running inside Termux to apply the correct e
 - AND `PlatformProfile.Supported` SHALL be `true`
 
 ### Requirement: Prefix-Aware Path Resolution
-The system SHALL dynamically resolve system paths by prepending the Termux `$PREFIX` when running in the Termux distro.
+The system SHALL dynamically resolve system paths by prepending the Termux `$PREFIX` when running with the Android/Termux platform profile.
 
 #### Scenario: Resolve shell path in Termux
-- GIVEN the system distro is `termux`
+- GIVEN the platform profile OS is `android`
 - AND the environment variable `PREFIX` is `/data/data/com.termux/files/usr`
 - WHEN the system resolves the path for `bash`
 - THEN the result SHALL be `/data/data/com.termux/files/usr/bin/bash`
 
 #### Scenario: Fallback to standard path on non-Termux Linux
-- GIVEN the system distro is `ubuntu`
+- GIVEN the platform profile OS is `linux`
 - WHEN the system resolves the path for `bash`
 - THEN the result SHALL be `/usr/bin/bash` (no prefix added)
 
@@ -32,7 +32,7 @@ The system SHALL dynamically resolve system paths by prepending the Termux `$PRE
 The system MUST persist the installation directory to the user's PATH by modifying Termux-specific shell configuration files.
 
 #### Scenario: Add to PATH in .bashrc
-- GIVEN the system distro is `termux`
+- GIVEN the platform profile OS is `android`
 - AND the shell is `bash`
 - WHEN `AddToUserPath` is called with `/data/data/com.termux/files/home/.gentle-ai/bin`
 - THEN the system SHALL append the export command to `~/.bashrc`

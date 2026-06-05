@@ -4,7 +4,7 @@ import "testing"
 
 func TestOpenCodeCommandsIncludesCoreWorkflow(t *testing.T) {
 	commands := OpenCodeCommands()
-	if len(commands) != 9 {
+	if len(commands) != 10 {
 		t.Fatalf("OpenCodeCommands() length = %d", len(commands))
 	}
 
@@ -18,7 +18,7 @@ func TestOpenCodeCommandsIncludesCoreWorkflow(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		"sdd-init", "sdd-new", "sdd-continue", "sdd-explore", "sdd-ff",
+		"sdd-init", "sdd-new", "sdd-continue", "sdd-status", "sdd-explore", "sdd-ff",
 		"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
 	} {
 		if !seen[name] {

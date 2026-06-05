@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -92,5 +93,60 @@ func TestInstallDoesNotRunPackageManager(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "node_modules")); !os.IsNotExist(err) {
 		t.Fatalf("Install() should not create node_modules; stat err = %v", err)
+	}
+}
+
+func TestInstallGentleLogoWritesLocalTUIPluginAndRegistersAbsolutePath(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Install(home, model.OpenCodePluginGentleLogo)
+	if err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Install() changed = false, want true")
+	}
+
+	pluginPath := filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
+	configPath := filepath.Join(home, ".config", "opencode", "tui.json")
+	wantFiles := map[string]bool{pluginPath: true, configPath: true}
+	for _, file := range result.Files {
+		delete(wantFiles, file)
+	}
+	if len(wantFiles) != 0 {
+		t.Fatalf("Install() files = %#v, missing %#v", result.Files, wantFiles)
+	}
+
+	pluginData, err := os.ReadFile(pluginPath)
+	if err != nil {
+		t.Fatalf("ReadFile(plugin) error = %v", err)
+	}
+	pluginContent := string(pluginData)
+	for _, snippet := range []string{
+		`id = "gentle-logo"`,
+		`home_logo`,
+		`const plugin = { id: "gentle-logo", tui }`,
+		`export default plugin`,
+	} {
+		if !strings.Contains(pluginContent, snippet) {
+			t.Fatalf("plugin missing snippet %q", snippet)
+		}
+	}
+	if strings.Contains(pluginContent, "server") {
+		t.Fatalf("plugin must not export or define server shape")
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(tui.json) error = %v", err)
+	}
+	var root struct {
+		Plugin []string `json:"plugin"`
+	}
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatalf("Unmarshal(tui.json) error = %v", err)
+	}
+	if len(root.Plugin) != 1 || root.Plugin[0] != pluginPath || !filepath.IsAbs(root.Plugin[0]) {
+		t.Fatalf("plugin registration = %#v, want absolute %q", root.Plugin, pluginPath)
 	}
 }

@@ -15,9 +15,14 @@
       "judgment-day",
       "go-testing",
       "skill-creator",
+      "skill-improver",
       "branch-pr",
       "issue-creation",
-      "skill-registry"
+      "skill-registry",
+      "chained-pr",
+      "cognitive-doc-design",
+      "comment-writer",
+      "work-unit-commits"
     ]
   },
   {
@@ -36,9 +41,14 @@
       "judgment-day",
       "go-testing",
       "skill-creator",
+      "skill-improver",
       "branch-pr",
       "issue-creation",
-      "skill-registry"
+      "skill-registry",
+      "chained-pr",
+      "cognitive-doc-design",
+      "comment-writer",
+      "work-unit-commits"
     ]
   },
   {

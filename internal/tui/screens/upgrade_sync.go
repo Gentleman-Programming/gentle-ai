@@ -16,7 +16,7 @@ import (
 //  2. operationRunning && (upgradeReport != nil || upgradeErr != nil) → "Syncing configurations..." with spinner
 //  3. !operationRunning && (upgradeReport != nil || upgradeErr != nil) → show combined results
 //  4. Otherwise → show confirmation screen
-func RenderUpgradeSync(results []update.UpdateResult, upgradeReport *upgrade.UpgradeReport, syncFilesChanged int, upgradeErr error, syncErr error, operationRunning bool, updateCheckDone bool, cursor int, spinnerFrame int) string {
+func RenderUpgradeSync(results []update.UpdateResult, upgradeReport *upgrade.UpgradeReport, syncFiles []string, upgradeErr error, syncErr error, operationRunning bool, updateCheckDone bool, cursor int, spinnerFrame int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Upgrade + Sync"))
@@ -51,7 +51,7 @@ func RenderUpgradeSync(results []update.UpdateResult, upgradeReport *upgrade.Upg
 	// State 3: both operations done — show combined results
 	// Triggered when not running and either upgrade report or upgrade error is present.
 	if !operationRunning && (upgradeReport != nil || upgradeErr != nil) {
-		b.WriteString(renderUpgradeSyncResult(upgradeReport, syncFilesChanged, upgradeErr, syncErr))
+		b.WriteString(renderUpgradeSyncResult(upgradeReport, syncFiles, upgradeErr, syncErr))
 		return b.String()
 	}
 
@@ -107,7 +107,7 @@ func renderUpgradeSyncConfirm(results []update.UpdateResult, updateCheckDone boo
 	return b.String()
 }
 
-func renderUpgradeSyncResult(report *upgrade.UpgradeReport, syncFilesChanged int, upgradeErr error, syncErr error) string {
+func renderUpgradeSyncResult(report *upgrade.UpgradeReport, syncFiles []string, upgradeErr error, syncErr error) string {
 	var b strings.Builder
 
 	// --- Upgrade section ---
@@ -180,12 +180,18 @@ func renderUpgradeSyncResult(report *upgrade.UpgradeReport, syncFilesChanged int
 	b.WriteString(styles.HeadingStyle.Render("Sync Results"))
 	b.WriteString("\n\n")
 
-	if syncErr != nil {
+	if reportUpgradedGentleAI(report) {
+		b.WriteString("  " + styles.WarningStyle.Render("⚠ Sync skipped because gentle-ai was upgraded."))
+		b.WriteString("\n")
+		b.WriteString("  " + styles.SubtextStyle.Render("Restart gentle-ai, then run sync with the new binary."))
+	} else if syncErr != nil {
 		b.WriteString("  " + styles.ErrorStyle.Render("✗ Sync failed: "+syncErr.Error()))
-	} else if syncFilesChanged == 0 {
+	} else if len(syncFiles) == 0 {
 		b.WriteString("  " + styles.SubtextStyle.Render("No files needed updating"))
 	} else {
-		b.WriteString("  " + styles.SuccessStyle.Render("✓") + "  " + fmt.Sprintf("%s synchronized", styles.HeadingStyle.Render(fmt.Sprintf("%d file(s)", syncFilesChanged))))
+		b.WriteString("  " + styles.SuccessStyle.Render("✓") + "  " + fmt.Sprintf("%s synchronized", styles.HeadingStyle.Render(fmt.Sprintf("%d file(s)", len(syncFiles)))))
+		b.WriteString("\n")
+		b.WriteString(renderChangedFiles(syncFiles))
 	}
 
 	b.WriteString("\n\n")

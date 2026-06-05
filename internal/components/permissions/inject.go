@@ -27,7 +27,23 @@ var claudeCodeOverlayJSON = []byte(`{
       "Read(.env)",
       "Read(.env.*)",
       "Edit(.env)",
-      "Edit(.env.*)"
+      "Edit(.env.*)",
+      "Read(.ssh/*)",
+      "Edit(.ssh/*)",
+      "Read(.credentials/*)",
+      "Edit(.credentials/*)",
+      "Read(Library/Keychains/*)",
+      "Edit(Library/Keychains/*)",
+      "Read(.aws/credentials)",
+      "Edit(.aws/credentials)",
+      "Read(.config/gh/hosts.yml)",
+      "Edit(.config/gh/hosts.yml)",
+      "Read(**/*.pem)",
+      "Edit(**/*.pem)",
+      "Read(**/*.key)",
+      "Edit(**/*.key)",
+      "Read(**/secrets/*)",
+      "Edit(**/secrets/*)"
     ]
   }
 }
@@ -52,7 +68,14 @@ var openCodeOverlayJSON = []byte(`{
       "**/.env": "deny",
       "**/.env.*": "deny",
       "**/secrets/**": "deny",
-      "**/credentials.json": "deny"
+      "**/credentials.json": "deny",
+      "**/.ssh/**": "deny",
+      "**/.credentials/**": "deny",
+      "**/Library/Keychains/**": "deny",
+      "**/.aws/credentials": "deny",
+      "**/.config/gh/hosts.yml": "deny",
+      "**/*.pem": "deny",
+      "**/*.key": "deny"
     }
   }
 }
@@ -110,6 +133,10 @@ func agentOverlay(id model.AgentID) []byte {
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	if adapter.Agent() == model.AgentCodex {
+		return injectCodexPermissions(homeDir, adapter)
+	}
+
 	settingsPath := adapter.SettingsPath(homeDir)
 	if settingsPath == "" {
 		return InjectionResult{}, nil
@@ -126,6 +153,40 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	}
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
+}
+
+func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	configPath := adapter.MCPConfigPath(homeDir, "")
+	baseTOML, err := osReadFile(configPath)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	merged := filemerge.UpsertTopLevelTOMLString(string(baseTOML), "approval_policy", "on-request")
+	merged = filemerge.UpsertTopLevelTOMLString(merged, "default_permissions", "gentle-dev")
+	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev", "description", `"Comfortable local development profile with workspace writes, network access, and secret-file protections."`)
+	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev", "extends", `":workspace"`)
+	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network", "enabled", "true")
+	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network.domains", `"*"`, `"allow"`)
+
+	workspaceRootsSection := `permissions.gentle-dev.filesystem.":workspace_roots"`
+	for _, pattern := range []string{
+		`"**/.env"`,
+		`"**/.env.local"`,
+		`"**/.env.*.local"`,
+		`"**/*.pem"`,
+		`"**/*.key"`,
+		`"**/secrets/*"`,
+	} {
+		merged = filemerge.UpsertTOMLTableKey(merged, workspaceRootsSection, pattern, `"deny"`)
+	}
+
+	writeResult, err := filemerge.WriteFileAtomic(configPath, []byte(merged), 0o644)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	return InjectionResult{Changed: writeResult.Changed, Files: []string{configPath}}, nil
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {

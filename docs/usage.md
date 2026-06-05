@@ -6,11 +6,11 @@
 
 ## Persona Modes
 
-| Persona | ID | Description |
-|---------|-----|-------------|
+| Persona   | ID          | Description                                                                       |
+| --------- | ----------- | --------------------------------------------------------------------------------- |
 | Gentleman | `gentleman` | Teaching-oriented mentor persona — pushes back on bad practices, explains the why |
-| Neutral | `neutral` | Same teacher, same philosophy, no regional language — warm and professional |
-| Custom | `custom` | Keep your existing persona/config unmanaged — gentle-ai does not inject a persona |
+| Neutral   | `neutral`   | Same teacher, same philosophy, no regional language — warm and professional       |
+| Custom    | `custom`    | Keep your existing persona/config unmanaged — gentle-ai does not inject a persona |
 
 `custom` is a compatibility/ownership choice, not a persona editor. Use it when you already have your own persona instructions and want gentle-ai to leave them alone.
 
@@ -38,7 +38,7 @@ Before any managed file is modified, `gentle-ai` creates a backup snapshot so th
 
 ### install
 
-First-time setup — detects your tools, configures agents, injects all components:
+First-time setup — detects your tools, configures agents, injects all components. When installing a single agent with `--agent X`, gentle-ai **merges** the new agent into the existing `installed_agents` list in `state.json` and **preserves** any existing `model_assignments` — it does not overwrite the full state.
 
 ```bash
 # Full ecosystem for multiple agents
@@ -50,6 +50,11 @@ gentle-ai install \
 gentle-ai install \
   --agent cursor \
   --preset minimal
+
+# OpenClaw setup after installing OpenClaw manually
+gentle-ai install \
+  --agent openclaw \
+  --preset full-gentleman
 
 # Pick specific components and skills
 gentle-ai install \
@@ -64,24 +69,53 @@ gentle-ai install --dry-run \
   --preset full-gentleman
 ```
 
+### skill-registry refresh
+
+Refresh the project-local skill registry used by orchestrators before they delegate work:
+
+```bash
+gentle-ai skill-registry refresh
+gentle-ai skill-registry refresh --force
+gentle-ai skill-registry refresh --cwd /path/to/project --quiet
+```
+
+The command scans project skills first (`skills/`, `.opencode/skills/`, `.claude/skills/`, `.github/skills/`, and other supported workspace skill roots), then global agent skill directories. Project-local skills win over same-name global skills.
+
+The command writes `.atl/skill-registry.md` and `.atl/.skill-registry.cache.json`. The cache fingerprint includes schema version plus each discovered `SKILL.md` file path, mtime, and size, so normal startup is a cheap cache-hit when skills have not changed.
+
+Claude Code and OpenCode installs wire this command into startup/plugin hooks. Pi gets the equivalent behavior from `gentle-pi`; keep that extension's scan roots in sync when changing these discovery rules.
+
+See [Skill Registry](skill-registry.md) for the full index-first flow and diagrams.
+
 ### sync
 
 Refresh managed assets to the current version. Use after `brew upgrade gentle-ai` or when you want your local configs aligned with the latest release. Does NOT reinstall binaries (engram, GGA) — only updates prompt content, skills, MCP configs, and SDD orchestrators.
 
+> **Important:** `gentle-ai sync` updates the agents recorded as installed by Gentle AI, not every AI agent config directory on your machine.
+>
+> Gentle AI stores your selected install targets in `~/.gentle-ai/state.json`. Future `sync` runs use that stored selection so Gentle AI does not accidentally write into tools you did not choose to manage. If you rerun install and select only one agent, that new selection becomes the default sync scope.
+>
+> Before syncing, you can preview the active scope with `gentle-ai sync --dry-run`. If you want to sync agents outside the stored selection, pass them explicitly with `--agent`.
+
 ```bash
-# Sync all installed agents
+# Preview which agents sync will update
+gentle-ai sync --dry-run
+
+# Sync the agents currently registered in ~/.gentle-ai/state.json
 gentle-ai sync
 
 # Sync specific agents only
-gentle-ai sync --agent cursor --agent windsurf
+gentle-ai sync --agent claude-code --agent opencode
 
-# Sync a specific component
-gentle-ai sync --component sdd
-gentle-ai sync --component skills
-gentle-ai sync --component engram
+# Refresh OpenClaw workspace instructions and MCP config
+gentle-ai sync --agent openclaw
 ```
 
-Sync is safe and idempotent — running it twice produces no changes the second time.
+Sync is safe and idempotent — running it twice produces no changes the second time. When files change, the summary reports the changed file count and lists the changed file paths.
+
+`sync` refreshes the managed component set for the selected agents. It does not support `--component`; use `--include-permissions` or `--include-theme` for the opt-in components that are excluded from the default sync scope.
+
+For OpenClaw, sync reads the active workspace from `~/.openclaw/openclaw.json` (`agents.defaults.workspace`). It writes `AGENTS.md` / `SOUL.md` into that workspace, while MCP servers stay in the global OpenClaw config under `mcp.servers`.
 
 ### uninstall
 
@@ -111,7 +145,7 @@ If no `--component` flag is provided for a partial uninstall, `gentle-ai` remove
 
 ### update / upgrade
 
-Check for and install new versions of `gentle-ai` itself:
+Check for and install new versions of `gentle-ai` itself. The pre-upgrade backup snapshot covers only the agents recorded in `state.InstalledAgents` (`~/.gentle-ai/state.json`) — not every agent config directory that exists on your machine.
 
 ```bash
 # Check if a newer version is available
@@ -125,6 +159,33 @@ After upgrading, run `gentle-ai sync` to refresh all managed assets to the new v
 
 If GitHub rate-limits update checks, export `GITHUB_TOKEN` or `GH_TOKEN` before running `gentle-ai update`/`upgrade`.
 
+Set `GENTLE_AI_CONFIRM_UPDATE=1` to have `gentle-ai` prompt for confirmation (`y/N`) before applying a self-update. Default behavior (no env var) applies the update without an interactive prompt.
+
+Set `GENTLE_AI_NO_SELF_UPDATE=1` to skip the automatic self-update check entirely. `GENTLE_AI_SELF_UPDATE_DONE` is an internal loop guard used after re-exec and should not be set manually.
+
+### model assignment
+
+The TUI **Configure Models** screen can assign different models to SDD phases, `sdd-onboard`, and Judgment Day agents (`jd-judge-a`, `jd-judge-b`, `jd-fix-agent`) when the selected agent supports those slots. This lets you keep review or apply phases on stronger models while routing cheaper phases to faster models.
+
+### doctor
+
+Read-only ecosystem health diagnostics — no changes made to your configuration:
+
+```bash
+gentle-ai doctor
+```
+
+Checks performed:
+
+| Check | What it verifies |
+|-------|-----------------|
+| Tool binaries | Required tools present on `PATH`; shadow detection (wrong binary resolves first) |
+| `state.json` validity | Parses `~/.gentle-ai/state.json` and reports any schema/corruption issues |
+| Engram MCP reachability | Confirms the Engram MCP server responds |
+| Disk space | Warns when available space is critically low |
+
+Each check reports **pass**, **warn**, or **fail** with an optional remedy hint. Run `doctor` first when troubleshooting an unexpected install or sync result.
+
 ### version
 
 ```bash
@@ -137,26 +198,31 @@ gentle-ai -v
 
 ## CLI Flags (install)
 
-| Flag | Description |
-|------|-------------|
-| `--agent`, `--agents` | Agents to configure (comma-separated) |
-| `--component`, `--components` | Components to install (comma-separated) |
-| `--skill`, `--skills` | Skills to install (comma-separated) |
-| `--persona` | Persona mode: `gentleman`, `neutral`, `custom` (`custom` keeps your existing persona unmanaged) |
-| `--preset` | Preset: `full-gentleman`, `ecosystem-only`, `minimal`, `custom` (`custom` means manual component/skill selection) |
-| `--dry-run` | Preview the install plan without applying changes |
+| Flag                          | Description                                                                                                       |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `--agent`, `--agents`         | Agents to configure (comma-separated)                                                                             |
+| `--component`, `--components` | Components to install (comma-separated)                                                                           |
+| `--skill`, `--skills`         | Skills to install (comma-separated)                                                                               |
+| `--persona`                   | Persona mode: `gentleman`, `neutral`, `custom` (`custom` keeps your existing persona unmanaged)                   |
+| `--preset`                    | Preset: `full-gentleman`, `ecosystem-only`, `minimal`, `custom` (`custom` means manual component/skill selection) |
+| `--sdd-mode`                  | SDD orchestrator mode: `single` or `multi`                                                                        |
+| `--scope`                     | Install scope for agent-scoped files: `global` (default, writes to each selected agent's global config directory) or `workspace` (writes to the current project root). Also settable via `GENTLE_AI_INSTALL_SCOPE` env var for CI/non-interactive use. |
+| `--dry-run`                   | Preview the install plan without applying changes                                                                 |
 
 ## CLI Flags (sync)
 
-| Flag | Description |
-|------|-------------|
-| `--agent`, `--agents` | Agents to sync (defaults to all installed agents) |
-| `--component` | Sync a specific component only: `sdd`, `engram`, `context7`, `skills`, `gga`, `permissions`, `theme` |
-| `--profile` | Create or update an SDD profile: `name:provider/model` (sets the default model for all phases) |
-| `--profile-phase` | Override a specific phase in a profile: `name:phase:provider/model` |
-| `--sdd-profile-strategy` | OpenCode profile sync strategy: `generated-multi` or `external-single-active` |
-| `--include-permissions` | Include permissions sync (opt-in) |
-| `--include-theme` | Include theme sync (opt-in) |
+| Flag                     | Description                                                                                          |
+| ------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `--agent`, `--agents`    | Agents to sync (defaults to all installed agents)                                                    |
+| `--skill`, `--skills`    | Skills to sync (comma-separated; defaults to selected preset skills)                                  |
+| `--sdd-mode`             | SDD orchestrator mode: `single` or `multi`                                                           |
+| `--strict-tdd`           | Enable Strict TDD Mode for SDD agents                                                                |
+| `--profile`              | Create or update an SDD profile: `name:provider/model` (sets the default model for all phases)       |
+| `--profile-phase`        | Override a specific phase in a profile: `name:phase:provider/model`                                  |
+| `--sdd-profile-strategy` | OpenCode profile sync strategy: `generated-multi` or `external-single-active`                        |
+| `--include-permissions`  | Include permissions sync (opt-in)                                                                    |
+| `--include-theme`        | Include theme sync (opt-in)                                                                          |
+| `--dry-run`              | Preview the sync plan without applying changes                                                       |
 
 **Profile examples:**
 
@@ -180,12 +246,12 @@ See [OpenCode SDD Profiles](opencode-profiles.md) for the full guide.
 
 ## CLI Flags (uninstall)
 
-| Flag | Description |
-|------|-------------|
-| `--agent`, `--agents` | Agents to uninstall managed config from (required unless using `--all`) |
-| `--component`, `--components` | Managed components to remove only from the selected agents |
-| `--all` | Remove managed configuration from all supported agents |
-| `--yes`, `-y` | Skip the confirmation prompt |
+| Flag                          | Description                                                             |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| `--agent`, `--agents`         | Agents to uninstall managed config from (required unless using `--all`) |
+| `--component`, `--components` | Managed components to remove only from the selected agents              |
+| `--all`                       | Remove managed configuration from all supported agents                  |
+| `--yes`, `-y`                 | Skip the confirmation prompt                                            |
 
 ---
 

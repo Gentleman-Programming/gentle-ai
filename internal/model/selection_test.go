@@ -1,6 +1,8 @@
 package model
 
-import "testing"
+import (
+	"testing"
+)
 
 // TestSelectionHasStrictTDDField verifies that the Selection struct has a
 // StrictTDD bool field.
@@ -36,5 +38,34 @@ func TestSyncOverridesHasStrictTDDPointer(t *testing.T) {
 	o.StrictTDD = &disabled
 	if o.StrictTDD == nil || *o.StrictTDD {
 		t.Fatal("SyncOverrides.StrictTDD pointer set to false but read back incorrectly")
+	}
+}
+
+// TestSelectionHasCodexModelAssignments verifies that the Selection struct has a
+// CodexModelAssignments map field.
+func TestSelectionHasCodexModelAssignments(t *testing.T) {
+	s := Selection{}
+	// Zero value is nil.
+	if s.CodexModelAssignments != nil {
+		t.Fatal("Selection.CodexModelAssignments zero value should be nil")
+	}
+
+	s.CodexModelAssignments = map[string]CodexEffort{"sdd-apply": CodexEffortHigh}
+	if s.CodexModelAssignments["sdd-apply"] != CodexEffortHigh {
+		t.Fatal("Selection.CodexModelAssignments not accessible after assignment")
+	}
+}
+
+// TestSyncOverridesCodexModelPreset verifies that SyncOverrides has a
+// CodexModelAssignments map field (nil = no override semantics).
+func TestSyncOverridesCodexModelPreset(t *testing.T) {
+	o := SyncOverrides{}
+	if o.CodexModelAssignments != nil {
+		t.Fatal("SyncOverrides.CodexModelAssignments zero value should be nil")
+	}
+
+	o.CodexModelAssignments = map[string]CodexEffort{"default": CodexEffortMedium}
+	if o.CodexModelAssignments == nil {
+		t.Fatal("SyncOverrides.CodexModelAssignments should be non-nil after assignment")
 	}
 }

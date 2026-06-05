@@ -1,8 +1,8 @@
 # Tasks: termux-compatibility
 
 ## Phase 1: Infrastructure & Platform Detection (TDD)
-- [ ] 1.1 **RED**: Add failing unit test in `internal/system/detect_test.go` to simulate Termux environment via `TERMUX_VERSION`.
-- [ ] 1.2 **GREEN**: Update `internal/system/detect.go` to recognize `TERMUX_VERSION` and assign `LinuxDistroTermux`.
+- [ ] 1.1 **RED**: Add failing unit test in `internal/system/detect_test.go` to simulate `GOOS=android`.
+- [ ] 1.2 **GREEN**: Update `internal/system/detect.go` to resolve Android as the supported Termux platform profile.
 - [ ] 1.3 **REFACTOR**: Ensure `detectFromInputs` remains clean and platform-agnostic.
 - [ ] 1.4 **VERIFY**: Run `go test ./internal/system/...` and confirm 100% pass for all distros.
 
@@ -16,7 +16,7 @@
 - [ ] 3.1 **RED**: Add integration test in `internal/system/path_test.go` for `AddToUserPath` in Termux mode (mocking `.bashrc`).
 - [ ] 3.2 **GREEN**: Update `internal/system/path.go` to append PATH exports to shell config files in Termux.
 - [ ] 3.3 **RED**: Add unit test in `internal/update/upgrade/strategy_test.go` to verify `-extldflags=-pie` for Android builds.
-- [ ] 3.4 **GREEN**: Update `internal/update/upgrade/strategy.go` to include PIE flags when `GOOS=android`.
+- [ ] 3.4 **GREEN**: Update `internal/update/upgrade/strategy.go` to include PIE flags when the platform profile is Android.
 
 ## Phase 4: Integration & Verification
 - [ ] 4.1 Update `internal/installcmd/resolver.go` to use `system.Resolver` for sub-agent installation paths.

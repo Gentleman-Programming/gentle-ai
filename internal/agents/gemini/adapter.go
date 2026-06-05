@@ -8,6 +8,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
 
 var LookPathOverride = exec.LookPath
@@ -65,11 +66,13 @@ func (a *Adapter) SupportsAutoInstall() bool {
 }
 
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
-	// Gemini CLI installs via npm on all platforms.
+	// Gemini CLI installs via npm on all platforms. Version is pinned and
+	// postinstall scripts are blocked to mitigate supply-chain risk.
+	pkg := "@google/gemini-cli@" + versions.GeminiCLI
 	if profile.OS == "linux" && !profile.NpmWritable {
-		return [][]string{{"sudo", "npm", "install", "-g", "@google/gemini-cli"}}, nil
+		return [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 	}
-	return [][]string{{"npm", "install", "-g", "@google/gemini-cli"}}, nil
+	return [][]string{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 }
 
 // --- Config paths ---

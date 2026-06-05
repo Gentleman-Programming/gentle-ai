@@ -1,0 +1,27 @@
+Select Skills
+
+Toggle skills with enter or space. All are pre-selected by default.
+
+SDD Skills
+▸ [x] SDD Init
+  [x] SDD Explore
+  [x] SDD Propose
+  [x] SDD Spec
+  [x] SDD Design
+  [x] SDD Tasks
+  [x] SDD Apply
+  [x] SDD Verify
+  [x] SDD Archive
+  [x] SDD Onboard
+  [x] Judgment Day
+
+Foundation Skills
+  [x] Go Testing
+  [x] Skill Creator
+  [x] Branch & PR
+  [x] Issue Creation
+
+  Continue
+  Back
+
+j/k: navigate • space/enter: toggle • esc: back

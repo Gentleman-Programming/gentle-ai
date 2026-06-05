@@ -181,23 +181,99 @@ func TestInjectIsIdempotent(t *testing.T) {
 }
 
 func TestConfigPath(t *testing.T) {
+	// On non-Windows hosts the path follows XDG convention.
 	path := ConfigPath("/home/testuser")
-	expected := filepath.Join("/home/testuser", ".config", "gga", "config")
-	if path != expected {
-		t.Fatalf("ConfigPath() = %q, want %q", path, expected)
-	}
 
 	// Must NOT have .json extension (shell-sourced, no extension).
 	if strings.HasSuffix(path, ".json") {
 		t.Error("ConfigPath() should NOT end with .json")
 	}
+	// Must end with the filename "config".
+	if filepath.Base(path) != "config" {
+		t.Fatalf("ConfigPath() base = %q, want \"config\"", filepath.Base(path))
+	}
 }
 
 func TestAgentsTemplatePath(t *testing.T) {
 	path := AgentsTemplatePath("/home/testuser")
-	expected := filepath.Join("/home/testuser", ".config", "gga", "AGENTS.md")
-	if path != expected {
-		t.Fatalf("AgentsTemplatePath() = %q, want %q", path, expected)
+	if filepath.Base(path) != "AGENTS.md" {
+		t.Fatalf("AgentsTemplatePath() base = %q, want \"AGENTS.md\"", filepath.Base(path))
+	}
+}
+
+func TestGGAConfigDirLinux(t *testing.T) {
+	tests := []struct {
+		name    string
+		homeDir string
+		want    string
+	}{
+		{
+			name:    "standard home dir",
+			homeDir: "/home/user",
+			want:    filepath.Join("/home/user", ".config", "gga"),
+		},
+		{
+			name:    "root home dir",
+			homeDir: "/root",
+			want:    filepath.Join("/root", ".config", "gga"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ggaConfigDir(tt.homeDir, "linux")
+			if got != tt.want {
+				t.Fatalf("ggaConfigDir(%q, \"linux\") = %q, want %q", tt.homeDir, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGGAConfigDirDarwin(t *testing.T) {
+	got := ggaConfigDir("/Users/testuser", "darwin")
+	want := filepath.Join("/Users/testuser", ".config", "gga")
+	if got != want {
+		t.Fatalf("ggaConfigDir(%q, \"darwin\") = %q, want %q", "/Users/testuser", got, want)
+	}
+}
+
+func TestGGAConfigDirWindows(t *testing.T) {
+	tests := []struct {
+		name        string
+		homeDir     string
+		appDataEnv  string
+		wantSuffix  string
+	}{
+		{
+			name:       "APPDATA set to standard roaming path",
+			homeDir:    `C:\Users\testuser`,
+			appDataEnv: `C:\Users\testuser\AppData\Roaming`,
+			wantSuffix: filepath.Join(`C:\Users\testuser\AppData\Roaming`, "gga"),
+		},
+		{
+			name:       "APPDATA set to custom path",
+			homeDir:    `C:\Users\other`,
+			appDataEnv: `D:\custom\appdata`,
+			wantSuffix: filepath.Join(`D:\custom\appdata`, "gga"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("APPDATA", tt.appDataEnv)
+			got := ggaConfigDir(tt.homeDir, "windows")
+			if got != tt.wantSuffix {
+				t.Fatalf("ggaConfigDir(%q, \"windows\") = %q, want %q", tt.homeDir, got, tt.wantSuffix)
+			}
+		})
+	}
+}
+
+func TestGGAConfigDirWindowsNoAPPDATA(t *testing.T) {
+	// When APPDATA is unset, the fallback must be derived from homeDir.
+	t.Setenv("APPDATA", "")
+	got := ggaConfigDir(`C:\Users\testuser`, "windows")
+	want := filepath.Join(`C:\Users\testuser`, "AppData", "Roaming", "gga")
+	if got != want {
+		t.Fatalf("ggaConfigDir fallback = %q, want %q", got, want)
 	}
 }
 

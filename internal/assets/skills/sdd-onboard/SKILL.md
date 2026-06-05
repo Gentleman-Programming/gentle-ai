@@ -1,13 +1,31 @@
 ---
 name: sdd-onboard
-description: >
-  Guided end-to-end walkthrough of the SDD workflow using the real codebase.
-  Trigger: When the orchestrator launches you to onboard a user through the full SDD cycle.
+description: "Walk users through the SDD workflow on the real codebase. Trigger: orchestrator launches onboarding for the full SDD cycle."
+disable-model-invocation: true
+user-invocable: false
 license: MIT
 metadata:
   author: gentleman-programming
   version: "1.0"
+  delegate_only: false
 ---
+
+> **ORCHESTRATOR NOTE**: This skill is designed to be executed INLINE by the
+> orchestrator. It is an interactive walkthrough — no sub-agent delegation
+> needed.
+
+## Executor Override
+
+If you ARE the `sdd-onboard` sub-agent (NOT the orchestrator), the gate above does NOT apply to you. Continue with the phase work below. Do NOT delegate. Do NOT call the Skill tool. You are the executor — execute.
+
+
+## Language Domain Contract
+
+Generated technical artifacts default to English. Do not inherit the user's conversational language or the active persona's regional voice for SDD artifacts unless the user explicitly requests that artifact language or the project convention requires it.
+
+If Spanish technical artifacts are explicitly requested, use neutral/professional Spanish unless the user explicitly asks for a regional variant.
+
+Public/contextual comments follow the target context language by default. Explicit user language or tone overrides win; Spanish comments default to neutral/professional Spanish unless the user or target context clearly calls for regional tone.
 
 ## Purpose
 

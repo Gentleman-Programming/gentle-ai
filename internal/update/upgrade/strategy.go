@@ -291,6 +291,15 @@ func openCodePluginRegisteredPendingHint(pkg string) string {
 // network), the upgrade is still attempted using the existing cache — a stale
 // cache is better than no upgrade at all.
 func brewUpgrade(ctx context.Context, toolName string) error {
+	// Ensure the Gentleman-Programming homebrew tap is present before upgrading.
+	// Non-fatal: brew tap is a no-op when already present; if it fails for any other
+	// reason, the subsequent brew upgrade will surface the real error. See issue #455:
+	// without this, a lost tap (untap, machine swap, brew cleanup) makes upgrades fail
+	// with "No available formula" for engram/gga/gentle-ai.
+	tapCmd := execCommand("brew", "tap", "Gentleman-Programming/homebrew-tap")
+	tapCmd.Stdin = nil
+	_ = tapCmd.Run()
+
 	// Update Homebrew formula cache before upgrading.
 	// Non-fatal: if update fails (e.g. no network), attempt upgrade with existing cache.
 	updateCmd := execCommand("brew", "update")
@@ -313,12 +322,11 @@ func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion s
 
 	// Pin to the exact release version.
 	target := fmt.Sprintf("%s@v%s", tool.GoImportPath, latestVersion)
-	
+
 	args := []string{"install"}
-	// Android requires Position Independent Executables (PIE).
-	// Detect via profile.LinuxDistro == "termux" (for linux + ID=termux) or
-	// GOOS == "android" (for native Android detection).
-	if profile.LinuxDistro == system.LinuxDistroTermux || runtime.GOOS == "android" {
+	// Android/Termux requires Position Independent Executables (PIE). Termux is
+	// represented exclusively by profile.OS == "android" in platform detection.
+	if profile.OS == "android" {
 		args = append(args, "-ldflags=-extldflags=-pie")
 	}
 	args = append(args, target)
@@ -384,16 +392,21 @@ func downloadAndReplace(ctx context.Context, r update.UpdateResult, profile syst
 	return Download(ctx, r, profile)
 }
 
-// installScriptURLFn builds the raw GitHub URL for the project's install.sh.
+// installScriptURLFn builds the raw GitHub URL for the project's install.sh,
+// pinned to the given release tag (e.g. "1.31.0" → ref "v1.31.0").
 // Package-level var for testability.
-var installScriptURLFn = func(owner, repo string) string {
-	return fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/install.sh",
-		owner, repo)
+var installScriptURLFn = func(owner, repo, version string) (string, error) {
+	if strings.TrimSpace(version) == "" {
+		return "", fmt.Errorf("install script URL: target version must not be empty")
+	}
+	return fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/v%s/install.sh",
+		owner, repo, version), nil
 }
 
-// installScriptURL builds the raw GitHub URL for the project's install.sh.
-func installScriptURL(owner, repo string) string {
-	return installScriptURLFn(owner, repo)
+// installScriptURL builds the raw GitHub URL for the project's install.sh,
+// pinned to the given release tag so the upgrade path never pulls from main.
+func installScriptURL(owner, repo, version string) (string, error) {
+	return installScriptURLFn(owner, repo, version)
 }
 
 // scriptUpgrade downloads and executes the project's install.sh via curl | bash.
@@ -414,7 +427,11 @@ func scriptUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 		}
 	}
 
-	url := installScriptURL(r.Tool.Owner, r.Tool.Repo)
+	url, err := installScriptURL(r.Tool.Owner, r.Tool.Repo, r.LatestVersion)
+	if err != nil {
+		return fmt.Errorf("download install.sh: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "INFO: downloading install script from %s\n", url)
 
 	// Download install.sh content.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -496,9 +513,13 @@ func ggaScriptUpgradeForOS(ctx context.Context, r update.UpdateResult, osName st
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Clone the full repository — install.sh needs the entire repo context.
+	// Clone the full repository at the target release tag so the install.sh
+	// executed here matches the version the user is upgrading TO, not whatever
+	// is on main at the moment of the upgrade. This prevents a race where a
+	// commit lands on main between the release and the user's upgrade run.
+	targetTag := "v" + r.LatestVersion
 	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", r.Tool.Owner, r.Tool.Repo)
-	cloneCmd := execCommand("git", "clone", repoURL, tmpDir)
+	cloneCmd := execCommand("git", "clone", "--depth=1", "--branch", targetTag, repoURL, tmpDir)
 	cloneCmd.Stdin = nil
 	if out, err := cloneCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git clone %s: %w (output: %s)", r.Tool.Repo, err, strings.TrimSpace(string(out)))

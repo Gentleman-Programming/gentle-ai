@@ -1,13 +1,33 @@
 ---
 name: sdd-archive
-description: >
-  Sync delta specs to main specs and archive a completed change.
-  Trigger: When the orchestrator launches you to archive a change after implementation and verification.
+description: "Archive a completed SDD change by syncing delta specs. Trigger: orchestrator launches archive after implementation and verification."
+disable-model-invocation: true
+user-invocable: false
 license: MIT
 metadata:
   author: gentleman-programming
   version: "2.0"
+  delegate_only: true
 ---
+
+> **ORCHESTRATOR GATE**: If you loaded this skill via the `skill()` tool, you are
+> the ORCHESTRATOR — STOP. Do NOT execute these instructions inline. Delegate to
+> the dedicated `sdd-archive` sub-agent using your platform's delegation primitive
+> (e.g., `task(...)`, sub-agent invocation, etc.). This skill is for EXECUTORS
+> only.
+
+## Executor Override
+
+If you ARE the `sdd-archive` sub-agent (NOT the orchestrator), the gate above does NOT apply to you. Continue with the phase work below. Do NOT delegate. Do NOT call the Skill tool. You are the executor — execute.
+
+
+## Language Domain Contract
+
+Generated technical artifacts default to English. Do not inherit the user's conversational language or the active persona's regional voice for SDD artifacts unless the user explicitly requests that artifact language or the project convention requires it.
+
+If Spanish technical artifacts are explicitly requested, use neutral/professional Spanish unless the user explicitly asks for a regional variant.
+
+Public/contextual comments follow the target context language by default. Explicit user language or tone overrides win; Spanish comments default to neutral/professional Spanish unless the user or target context clearly calls for regional tone.
 
 ## Purpose
 
@@ -18,6 +38,8 @@ You are a sub-agent responsible for ARCHIVING. You merge delta specs into the ma
 From the orchestrator:
 - Change name
 - Artifact store mode (`engram | openspec | hybrid | none`)
+- Structured status from `skills/_shared/sdd-status-contract.md`, including artifact paths, task progress, dependency states, and actionContext
+- Any explicit intentional archive override text from the user/orchestrator
 
 ## Execution and Persistence Contract
 
@@ -28,12 +50,45 @@ From the orchestrator:
 - **hybrid**: Follow BOTH conventions — persist archive report to Engram (with observation IDs) AND perform filesystem merge + archive folder moves.
 - **none**: Return closure summary only. Do not perform archive file operations.
 
+### Task Completion Gate
+
+`sdd-apply` is responsible for marking completed tasks in the persisted tasks artifact. `sdd-archive` is responsible for validating that the persisted artifact reflects the final state before closing the cycle.
+
+Before syncing specs or moving any archive folder, inspect the tasks artifact:
+
+- **engram**: read the full `sdd/{change-name}/tasks` observation.
+- **openspec/hybrid**: read `openspec/changes/{change-name}/tasks.md`.
+
+If any implementation task remains unchecked (`- [ ]`):
+
+1. STOP and return `blocked`; do not sync specs, move the change folder, or claim the SDD cycle is complete.
+2. Report that `sdd-apply` must be rerun or corrected so it marks completed tasks in the persisted tasks artifact.
+3. Only proceed if the orchestrator explicitly instructs you to reconcile stale checkboxes and `apply-progress`/`verify-report` prove every unchecked task is complete. If you do this exceptional repair, record the exact reconciliation reason in the archive report.
+
+The archived audit trail MUST NOT contain stale unchecked tasks for completed work. Internal todo state is not enough; the persisted SDD task artifact is the source of truth for completion visibility.
+
+### Strict-vs-OpenSpec Archive Policy
+
+OpenSpec permits archiving with incomplete artifacts or tasks after a user confirmation. gentle-ai is stricter by default:
+
+- Incomplete implementation tasks block archive unless they are stale checkboxes and apply-progress/verify-report prove completion.
+- CRITICAL issues in `verify-report` always block archive. Do not accept an override for CRITICAL verification issues.
+- `sdd-archive` does not own normal task completion. `sdd-apply` owns checkbox completion; archive may only perform exceptional mechanical reconciliation with proof from apply-progress and verify-report.
+- Missing proposal/spec/design artifacts should be reported. Archive may continue only when the user explicitly chooses an intentional partial archive and the archive report records what was missing.
+
+### Action Context Guard
+
+- If structured status reports `actionContext.mode: workspace-planning`, STOP. Do not move workspace changes into repo-local archives or edit linked repos.
+- If `allowedEditRoots` is present, archive operations must stay inside those roots.
+
 ## What to Do
 
 ### Step 1: Load Skills
 Follow **Section A** from `skills/_shared/sdd-phase-common.md`.
 
 ### Step 2: Sync Delta Specs to Main Specs
+
+Do not start this step until the **Task Completion Gate** above passes.
 
 **IF mode is `engram`:** Skip filesystem sync — artifacts live in Engram only. The archive report (Step 5) records all observation IDs for traceability.
 
@@ -49,13 +104,16 @@ Read the existing main spec and apply the delta:
 FOR EACH SECTION in delta spec:
 ├── ADDED Requirements → Append to main spec's Requirements section
 ├── MODIFIED Requirements → Replace the matching requirement in main spec
-└── REMOVED Requirements → Delete the matching requirement from main spec
+├── REMOVED Requirements → Delete the matching requirement from main spec after recording Reason/Migration
+└── RENAMED Requirements → Rename the matching requirement while preserving scenarios unless the delta also modifies them
 ```
 
 **Merge carefully:**
 - Match requirements by name (e.g., "### Requirement: Session Expiration")
 - Preserve all OTHER requirements that aren't in the delta
 - Maintain proper Markdown formatting and heading hierarchy
+- For REMOVED requirements, require `(Reason: ...)` and `(Migration: ...)` notes in the delta before deleting from main specs
+- For RENAMED requirements, require the old and new requirement names to be explicit
 
 #### If Main Spec Does NOT Exist
 
@@ -88,9 +146,10 @@ Use today's date in ISO format (e.g., `2026-02-16`).
 - [ ] Main specs updated correctly
 - [ ] Change folder moved to archive
 - [ ] Archive contains all artifacts (proposal, specs, design, tasks)
+- [ ] Archived `tasks.md` has no unchecked implementation tasks, unless the orchestrator explicitly approved archive-time stale-checkbox reconciliation backed by apply-progress/verify-report proof
 - [ ] Active changes directory no longer has this change
 
-**IF mode is `engram`:** Confirm all artifact observation IDs are recorded in the archive report.
+**IF mode is `engram`:** Confirm all artifact observation IDs are recorded in the archive report and the tasks observation has no unchecked implementation tasks unless the orchestrator explicitly approved archive-time stale-checkbox reconciliation backed by apply-progress/verify-report proof.
 
 **IF mode is `none`:** Skip verification — no persisted artifacts.
 
@@ -136,6 +195,8 @@ Ready for the next change.
 ## Rules
 
 - NEVER archive a change that has CRITICAL issues in its verification report
+- If the user explicitly approves a non-critical partial archive or stale-checkbox reconciliation, record the exact reason in the archive report and mark the archive as intentional-with-warnings
+- NEVER archive completed work while `tasks.md` / the tasks observation still shows stale unchecked implementation tasks
 - ALWAYS sync delta specs BEFORE moving to archive
 - When merging into existing specs, PRESERVE requirements not mentioned in the delta
 - Use ISO date format (YYYY-MM-DD) for archive folder prefix

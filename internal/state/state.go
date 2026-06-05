@@ -12,9 +12,12 @@ const stateFile = "state.json"
 // ModelAssignmentState is the JSON-serialisable form of a provider+model pair
 // used by OpenCode-style model assignments. It mirrors model.ModelAssignment
 // but lives in the state package to avoid an import cycle.
+// Effort is the reasoning effort level ("" | "low" | "medium" | "high");
+// omitempty ensures backward-compatibility with existing state files.
 type ModelAssignmentState struct {
 	ProviderID string `json:"provider_id"`
 	ModelID    string `json:"model_id"`
+	Effort     string `json:"effort,omitempty"`
 }
 
 // InstallState holds the persisted user selections from the last install run.
@@ -27,13 +30,25 @@ type InstallState struct {
 	// back to the "balanced" preset every time.
 	ClaudeModelAssignments map[string]string `json:"claude_model_assignments,omitempty"`
 
-	// KiroModelAssignments maps SDD phase names to a Claude model alias for
-	// Kiro IDE specifically. Persisted independently from ClaudeModelAssignments
-	// so Kiro and Claude Code model choices survive across sync runs.
+	// KiroModelAssignments maps SDD phase names to a Kiro-native model alias.
+	// Values like "opus", "sonnet", and "haiku" remain valid for state files
+	// written before Kiro had its own picker options.
 	KiroModelAssignments map[string]string `json:"kiro_model_assignments,omitempty"`
+
+	// CodexModelAssignments maps SDD phase names to a Codex reasoning_effort value
+	// (low|medium|high|xhigh). Persisted so that `gentle-ai sync` preserves the
+	// user's per-phase effort preset instead of falling back to Recommended.
+	CodexModelAssignments map[string]string `json:"codexModelAssignments,omitempty"`
 
 	// ModelAssignments maps sub-agent names to provider/model pairs (OpenCode).
 	ModelAssignments map[string]ModelAssignmentState `json:"model_assignments,omitempty"`
+
+	// Persona records the persona the user installed ("gentleman", "neutral",
+	// "custom"). Persisted so that `gentle-ai sync` regenerates the same persona
+	// the user originally chose instead of defaulting to Gentleman every time.
+	// Empty for state files written before persona persistence was added —
+	// callers fall back to PersonaGentleman in that case.
+	Persona string `json:"persona,omitempty"`
 }
 
 // Path returns the absolute path to the state file for the given home directory.
@@ -53,6 +68,43 @@ func Read(homeDir string) (InstallState, error) {
 		return InstallState{}, err
 	}
 	return s, nil
+}
+
+// MergeAgents returns a new InstallState that combines existing with the
+// provided newAgents. The new agents are appended to existing.InstalledAgents
+// with deduplication. All other fields (ModelAssignments,
+// ClaudeModelAssignments, KiroModelAssignments, Persona) are taken from
+// existing and are never overwritten.
+//
+// This is the correct operation for an incremental `--agent X` install: the
+// caller loads the persisted state, calls MergeAgents, and writes the result
+// back. A full TUI install should use Write directly so that the TUI selection
+// is the source of truth.
+func MergeAgents(existing InstallState, newAgents []string) InstallState {
+	seen := make(map[string]struct{}, len(existing.InstalledAgents))
+	merged := make([]string, 0, len(existing.InstalledAgents)+len(newAgents))
+
+	for _, a := range existing.InstalledAgents {
+		if _, ok := seen[a]; !ok {
+			seen[a] = struct{}{}
+			merged = append(merged, a)
+		}
+	}
+	for _, a := range newAgents {
+		if _, ok := seen[a]; !ok {
+			seen[a] = struct{}{}
+			merged = append(merged, a)
+		}
+	}
+
+	return InstallState{
+		InstalledAgents:        merged,
+		ModelAssignments:       existing.ModelAssignments,
+		ClaudeModelAssignments: existing.ClaudeModelAssignments,
+		KiroModelAssignments:   existing.KiroModelAssignments,
+		CodexModelAssignments:  existing.CodexModelAssignments,
+		Persona:                existing.Persona,
+	}
 }
 
 // Write persists the full install state to disk under the given home directory.

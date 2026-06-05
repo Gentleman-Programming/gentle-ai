@@ -15,6 +15,7 @@ const (
 	ClaudePresetBalanced    ClaudeModelPreset = "balanced"
 	ClaudePresetPerformance ClaudeModelPreset = "performance"
 	ClaudePresetEconomy     ClaudeModelPreset = "economy"
+	ClaudePresetDiversity   ClaudeModelPreset = "diversity"
 	ClaudePresetCustom      ClaudeModelPreset = "custom"
 )
 
@@ -23,7 +24,8 @@ var claudePresetDescriptions = map[ClaudeModelPreset]string{
 	ClaudePresetBalanced:    "Smart defaults: opus for architecture, sonnet for most phases, haiku for archiving",
 	ClaudePresetPerformance: "Maximum quality: opus for architecture, planning & verification phases",
 	ClaudePresetEconomy:     "Cost-optimised: sonnet for all phases, haiku for archiving",
-	ClaudePresetCustom:      "Pick the model alias for each SDD phase individually",
+	ClaudePresetDiversity:   "Diversity: Opus for Judge A, Haiku for Judge B, Sonnet for fixes",
+	ClaudePresetCustom:      "Pick the model alias for each SDD phase, JD agent, and general delegation entry individually",
 }
 
 // claudePresetOrder is the display order for presets.
@@ -31,12 +33,12 @@ var claudePresetOrder = []ClaudeModelPreset{
 	ClaudePresetBalanced,
 	ClaudePresetPerformance,
 	ClaudePresetEconomy,
+	ClaudePresetDiversity,
 	ClaudePresetCustom,
 }
 
 // claudePhases is the ordered list of model-assignment keys shown in custom mode.
 var claudePhases = []string{
-	"orchestrator",
 	"sdd-explore",
 	"sdd-propose",
 	"sdd-spec",
@@ -45,12 +47,16 @@ var claudePhases = []string{
 	"sdd-apply",
 	"sdd-verify",
 	"sdd-archive",
+	"sdd-onboard",
+	"jd-judge-a",
+	"jd-judge-b",
+	"jd-fix-agent",
 	"default",
 }
 
-// claudePhaseLabels are the human-readable labels for each SDD phase.
+// claudePhaseLabels are the human-readable labels for each configurable
+// agent phase (SDD phases, JD agents, and the general delegation row).
 var claudePhaseLabels = map[string]string{
-	"orchestrator": "Orchestrator",
 	"sdd-explore":  "Explore",
 	"sdd-propose":  "Propose",
 	"sdd-spec":     "Spec",
@@ -59,6 +65,10 @@ var claudePhaseLabels = map[string]string{
 	"sdd-apply":    "Apply",
 	"sdd-verify":   "Verify",
 	"sdd-archive":  "Archive",
+	"sdd-onboard":  "Onboard",
+	"jd-judge-a":   "JD Judge A",
+	"jd-judge-b":   "JD Judge B",
+	"jd-fix-agent": "JD Fix Agent",
 	"default":      "General delegation",
 }
 
@@ -92,11 +102,58 @@ func NewClaudeModelPickerState() ClaudeModelPickerState {
 	}
 }
 
+// NewClaudeModelPickerStateFromAssignments returns the picker state initialized
+// from previously persisted Claude model assignments. If the assignments match
+// a known preset (Balanced/Performance/Economy), that preset is preselected.
+// Otherwise the picker opens in Custom mode preserving the user's exact assignments.
+// When assignments is empty or nil, it falls back to the balanced default.
+func NewClaudeModelPickerStateFromAssignments(assignments map[string]model.ClaudeModelAlias) ClaudeModelPickerState {
+	if len(assignments) == 0 {
+		return NewClaudeModelPickerState()
+	}
+	for preset, constructor := range presetConstructors {
+		if assignmentsEqual(constructor(), assignments) {
+			return ClaudeModelPickerState{
+				Preset:            preset,
+				CustomAssignments: copyAssignments(assignments),
+				InCustomMode:      false,
+			}
+		}
+	}
+	// Doesn't match any built-in preset → custom.
+	return ClaudeModelPickerState{
+		Preset:            ClaudePresetCustom,
+		CustomAssignments: copyAssignments(assignments),
+		InCustomMode:      false,
+	}
+}
+
+func assignmentsEqual(a, b map[string]model.ClaudeModelAlias) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func copyAssignments(m map[string]model.ClaudeModelAlias) map[string]model.ClaudeModelAlias {
+	out := make(map[string]model.ClaudeModelAlias, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
 // presetConstructors maps preset IDs to their constructor functions.
 var presetConstructors = map[ClaudeModelPreset]func() map[string]model.ClaudeModelAlias{
 	ClaudePresetBalanced:    model.ClaudeModelPresetBalanced,
 	ClaudePresetPerformance: model.ClaudeModelPresetPerformance,
 	ClaudePresetEconomy:     model.ClaudeModelPresetEconomy,
+	ClaudePresetDiversity:   model.ClaudeModelPresetDiversity,
 }
 
 // HandleClaudeModelPickerNav processes a key press on the Claude model picker screen.
@@ -210,6 +267,8 @@ func renderPresetList(state ClaudeModelPickerState, cursor int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Claude Model Assignments"))
+	b.WriteString("\n")
+	b.WriteString(styles.SubtextStyle.Render("Current: " + string(state.Preset)))
 	b.WriteString("\n\n")
 	b.WriteString(styles.SubtextStyle.Render("Choose how Claude models are assigned to each SDD phase:"))
 	b.WriteString("\n\n")

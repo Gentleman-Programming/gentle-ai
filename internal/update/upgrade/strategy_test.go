@@ -26,7 +26,7 @@ func TestRunStrategy_BrewUpgrade(t *testing.T) {
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = args
-		return exec.Command("echo", "Upgraded engram")
+		return mockCmd("echo", "Upgraded engram")
 	}
 
 	r := update.UpdateResult{
@@ -62,7 +62,7 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = args
-		return exec.Command("echo", "go install ok")
+		return mockCmd("echo", "go install ok")
 	}
 
 	r := update.UpdateResult{
@@ -99,8 +99,7 @@ func TestRunStrategy_GoInstallAndroidPIE(t *testing.T) {
 		if name == "go" {
 			gotArgs = args
 		}
-		// Use "go version" as a fast, valid command that exists in test environments.
-		return exec.Command("go", "version")
+		return mockCmd("true")
 	}
 
 	r := update.UpdateResult{
@@ -177,7 +176,7 @@ func TestRunStrategy_BrewUpgradeFailure(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false") // always fails
+		return mockCmd("false") // always fails
 	}
 
 	r := update.UpdateResult{
@@ -202,7 +201,7 @@ func TestRunStrategy_GoInstallFailure(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false")
+		return mockCmd("false")
 	}
 
 	r := update.UpdateResult{
@@ -233,7 +232,7 @@ func TestRunStrategy_BinaryWindowsSelfUpdateSkipped(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not run")
+		return mockCmd("echo", "should not run")
 	}
 
 	r := update.UpdateResult{
@@ -308,6 +307,31 @@ func TestEffectiveMethod(t *testing.T) {
 			profile: system.PlatformProfile{PackageManager: "brew"},
 			want:    update.InstallOpenCodePlugin,
 		},
+		// Auto-detect order: brew → go-install → binary (issue #246).
+		{
+			name:    "auto-detect: brew available → brew wins regardless of GoImportPath",
+			tool:    update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: "github.com/example/mytool/cmd/mytool"},
+			profile: system.PlatformProfile{PackageManager: "brew", GoAvailable: true},
+			want:    update.InstallBrew,
+		},
+		{
+			name:    "auto-detect: brew missing + go available + GoImportPath set → go-install",
+			tool:    update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: "github.com/example/mytool/cmd/mytool"},
+			profile: system.PlatformProfile{PackageManager: "apt", GoAvailable: true},
+			want:    update.InstallGoInstall,
+		},
+		{
+			name:    "auto-detect: brew missing + go missing + GoImportPath set → binary fallback",
+			tool:    update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: "github.com/example/mytool/cmd/mytool"},
+			profile: system.PlatformProfile{PackageManager: "apt", GoAvailable: false},
+			want:    update.InstallBinary,
+		},
+		{
+			name:    "auto-detect: go available but GoImportPath empty → binary (no upgrade)",
+			tool:    update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: ""},
+			profile: system.PlatformProfile{PackageManager: "apt", GoAvailable: true},
+			want:    update.InstallBinary,
+		},
 	}
 
 	for _, tc := range tests {
@@ -335,7 +359,7 @@ func TestRunStrategyOpenCodePluginManualFallback(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not run")
+		return mockCmd("echo", "should not run")
 	}
 
 	err := runStrategy(context.Background(), update.UpdateResult{
@@ -488,7 +512,7 @@ func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = append([]string(nil), args...)
-		return exec.Command("true")
+		return mockCmd("true")
 	}
 
 	err := runStrategy(context.Background(), update.UpdateResult{
@@ -533,7 +557,7 @@ func TestRunStrategyOpenCodePluginFallsBackWithoutPackageManager(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not run")
+		return mockCmd("echo", "should not run")
 	}
 
 	err := runStrategy(context.Background(), update.UpdateResult{
@@ -653,7 +677,7 @@ func TestBrewUpgrade_RunsUpdateBeforeUpgrade(t *testing.T) {
 		if name == "brew" && len(args) > 0 {
 			callOrder = append(callOrder, args[0]) // "update" or "upgrade"
 		}
-		return exec.Command("go", "version")
+		return mockCmd("echo", "ok")
 	}
 
 	err := brewUpgrade(context.Background(), "gentle-ai")
@@ -661,15 +685,15 @@ func TestBrewUpgrade_RunsUpdateBeforeUpgrade(t *testing.T) {
 		t.Fatalf("brewUpgrade: unexpected error: %v", err)
 	}
 
-	// Must have called brew update AND brew upgrade — in that order.
-	if len(callOrder) < 2 {
-		t.Fatalf("expected 2 brew calls (update, upgrade), got %d: %v", len(callOrder), callOrder)
+	// Must have called brew tap, brew update AND brew upgrade — in that order.
+	if len(callOrder) < 3 {
+		t.Fatalf("expected 3 brew calls (tap, update, upgrade), got %d: %v", len(callOrder), callOrder)
 	}
-	if callOrder[0] != "update" {
-		t.Errorf("first brew call = %q, want %q", callOrder[0], "update")
+	if callOrder[1] != "update" {
+		t.Errorf("second brew call = %q, want %q", callOrder[1], "update")
 	}
-	if callOrder[1] != "upgrade" {
-		t.Errorf("second brew call = %q, want %q", callOrder[1], "upgrade")
+	if callOrder[2] != "upgrade" {
+		t.Errorf("third brew call = %q, want %q", callOrder[2], "upgrade")
 	}
 }
 
@@ -687,11 +711,11 @@ func TestBrewUpgrade_UpdateFailureIsNonFatal(t *testing.T) {
 			callArgs = append(callArgs, args[0])
 			if args[0] == "update" {
 				// brew update fails (e.g. no network).
-				return exec.Command("false")
+				return mockCmd("false")
 			}
 		}
 		// brew upgrade succeeds.
-		return exec.Command("echo", "Upgraded gentle-ai")
+		return mockCmd("echo", "Upgraded gentle-ai")
 	}
 
 	err := brewUpgrade(context.Background(), "gentle-ai")
@@ -700,15 +724,62 @@ func TestBrewUpgrade_UpdateFailureIsNonFatal(t *testing.T) {
 		t.Errorf("expected success when brew update fails but brew upgrade succeeds, got: %v", err)
 	}
 
-	// Both brew update and brew upgrade must have been called.
-	if len(callArgs) < 2 {
-		t.Fatalf("expected 2 brew calls, got %d: %v", len(callArgs), callArgs)
+	// Both brew update and brew upgrade must have been called (after the tap).
+	if len(callArgs) < 3 {
+		t.Fatalf("expected 3 brew calls, got %d: %v", len(callArgs), callArgs)
 	}
-	if callArgs[0] != "update" {
-		t.Errorf("first brew call = %q, want %q", callArgs[0], "update")
+	if callArgs[1] != "update" {
+		t.Errorf("second brew call = %q, want %q", callArgs[1], "update")
 	}
-	if callArgs[1] != "upgrade" {
-		t.Errorf("second brew call = %q, want %q", callArgs[1], "upgrade")
+	if callArgs[2] != "upgrade" {
+		t.Errorf("third brew call = %q, want %q", callArgs[2], "upgrade")
+	}
+}
+
+// --- TestBrewUpgrade_TapsBeforeUpdateAndUpgrade ---
+
+// TestBrewUpgrade_TapsBeforeUpdateAndUpgrade verifies that brewUpgrade calls
+// `brew tap Gentleman-Programming/homebrew-tap` BEFORE `brew update` and
+// `brew upgrade <toolName>`. This makes the upgrade idempotent when a user
+// has lost the tap (untap, machine swap, brew cleanup). See issue #455.
+func TestBrewUpgrade_TapsBeforeUpdateAndUpgrade(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	type call struct {
+		subcommand string
+		arg        string
+	}
+	var calls []call
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "brew" && len(args) > 0 {
+			c := call{subcommand: args[0]}
+			if len(args) > 1 {
+				c.arg = args[1]
+			}
+			calls = append(calls, c)
+		}
+		return mockCmd("echo", "ok")
+	}
+
+	if err := brewUpgrade(context.Background(), "engram"); err != nil {
+		t.Fatalf("brewUpgrade: unexpected error: %v", err)
+	}
+
+	if len(calls) < 3 {
+		t.Fatalf("expected 3 brew calls (tap, update, upgrade), got %d: %+v", len(calls), calls)
+	}
+	if calls[0].subcommand != "tap" {
+		t.Errorf("first brew call subcommand = %q, want %q", calls[0].subcommand, "tap")
+	}
+	if calls[0].arg != "Gentleman-Programming/homebrew-tap" {
+		t.Errorf("first brew call arg = %q, want %q", calls[0].arg, "Gentleman-Programming/homebrew-tap")
+	}
+	if calls[1].subcommand != "update" {
+		t.Errorf("second brew call = %q, want %q", calls[1].subcommand, "update")
+	}
+	if calls[2].subcommand != "upgrade" {
+		t.Errorf("third brew call = %q, want %q", calls[2].subcommand, "upgrade")
 	}
 }
 
@@ -718,7 +789,7 @@ func TestRunStrategy_ExecErrorWrapped(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false")
+		return mockCmd("false")
 	}
 
 	r := update.UpdateResult{
@@ -770,8 +841,8 @@ func TestRunStrategy_ScriptUpgradeSuccess(t *testing.T) {
 	scriptHTTPClient = server.Client()
 
 	// Override installScriptURL to point to our test server.
-	installScriptURLFn = func(owner, repo string) string {
-		return server.URL + "/install.sh"
+	installScriptURLFn = func(owner, repo, version string) (string, error) {
+		return server.URL + "/install.sh", nil
 	}
 
 	var gotScriptContent string
@@ -780,7 +851,7 @@ func TestRunStrategy_ScriptUpgradeSuccess(t *testing.T) {
 		if name == "bash" && len(args) >= 2 && args[0] == "-c" {
 			gotScriptContent = args[1]
 		}
-		return exec.Command("go", "version")
+		return mockCmd("echo", "ok")
 	}
 
 	r := update.UpdateResult{
@@ -820,8 +891,8 @@ func TestRunStrategy_ScriptUpgradeDownloadFailure(t *testing.T) {
 	}))
 	defer server.Close()
 	scriptHTTPClient = server.Client()
-	installScriptURLFn = func(owner, repo string) string {
-		return server.URL + "/install.sh"
+	installScriptURLFn = func(owner, repo, version string) (string, error) {
+		return server.URL + "/install.sh", nil
 	}
 
 	r := update.UpdateResult{
@@ -850,7 +921,7 @@ func TestRunStrategy_ScriptUpgradeWindowsManualFallback(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not run")
+		return mockCmd("echo", "should not run")
 	}
 
 	r := update.UpdateResult{
@@ -877,9 +948,11 @@ func TestRunStrategy_ScriptUpgradeWindowsManualFallback(t *testing.T) {
 // --- TestGGAScriptUpgradeUsesGitClone ---
 
 // TestGGAScriptUpgradeUsesGitClone verifies that ggaScriptUpgrade:
-// 1. First calls `git clone <repo-url> /tmp/gentleman-guardian-angel`
-// 2. Then calls `bash /tmp/gentleman-guardian-angel/install.sh`
+// 1. First calls `git clone --depth=1 --branch v<version> <repo-url> <tmpDir>`
+// 2. Then calls `bash <path-to-install.sh>`
 // — not `bash -c <script-content>` like the generic scriptUpgrade.
+// The clone is pinned to the target release tag so that install.sh matches the
+// version being upgraded to, not whatever is on main at upgrade time.
 func TestGGAScriptUpgradeUsesGitClone(t *testing.T) {
 	origExecCommand := execCommand
 	origDetectOS := detectOS
@@ -897,7 +970,7 @@ func TestGGAScriptUpgradeUsesGitClone(t *testing.T) {
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		calls = append(calls, call{name: name, args: args})
-		return exec.Command("go", "version")
+		return mockCmd("echo", "ok")
 	}
 
 	r := update.UpdateResult{
@@ -927,17 +1000,23 @@ func TestGGAScriptUpgradeUsesGitClone(t *testing.T) {
 	if len(calls[0].args) == 0 || calls[0].args[0] != "clone" {
 		t.Errorf("first exec args[0] = %q, want %q", calls[0].args[0], "clone")
 	}
-	// The clone URL must reference the correct repo.
+	// The clone args must include the target tag via --branch.
 	cloneArgs := calls[0].args
 	foundRepoURL := false
-	for _, a := range cloneArgs {
+	foundTag := false
+	for i, a := range cloneArgs {
 		if containsAny(a, "gentleman-guardian-angel") {
 			foundRepoURL = true
-			break
+		}
+		if a == "--branch" && i+1 < len(cloneArgs) && cloneArgs[i+1] == "v2.8.0" {
+			foundTag = true
 		}
 	}
 	if !foundRepoURL {
 		t.Errorf("git clone args %v should include the repo URL (gentleman-guardian-angel)", cloneArgs)
+	}
+	if !foundTag {
+		t.Errorf("git clone args %v should include --branch v2.8.0 to pin to the release tag", cloneArgs)
 	}
 
 	// Second call must be `bash <path-to-install.sh>` (not bash -c <content>).
@@ -968,7 +1047,7 @@ func TestGGAScriptUpgradeWindowsManualFallback(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not run")
+		return mockCmd("echo", "should not run")
 	}
 
 	r := update.UpdateResult{
@@ -1016,7 +1095,7 @@ func TestRunStrategy_GGAUsesGitClone(t *testing.T) {
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		calls = append(calls, call{name: name, args: args})
-		return exec.Command("go", "version")
+		return mockCmd("echo", "ok")
 	}
 
 	r := update.UpdateResult{
@@ -1047,9 +1126,67 @@ func TestRunStrategy_GGAUsesGitClone(t *testing.T) {
 // --- TestInstallScriptURL ---
 
 func TestInstallScriptURL(t *testing.T) {
-	url := installScriptURL("Gentleman-Programming", "gentleman-guardian-angel")
-	if url != "https://raw.githubusercontent.com/Gentleman-Programming/gentleman-guardian-angel/main/install.sh" {
-		t.Errorf("installScriptURL = %q, want correct raw GitHub URL", url)
+	tests := []struct {
+		name        string
+		owner       string
+		repo        string
+		version     string
+		wantURL     string
+		wantErr     bool
+		wantContain string
+	}{
+		{
+			name:        "pins to release tag",
+			owner:       "Gentleman-Programming",
+			repo:        "gentleman-guardian-angel",
+			version:     "1.31.0",
+			wantURL:     "https://raw.githubusercontent.com/Gentleman-Programming/gentleman-guardian-angel/v1.31.0/install.sh",
+			wantContain: "v1.31.0",
+		},
+		{
+			name:    "empty version returns error",
+			owner:   "Gentleman-Programming",
+			repo:    "gentle-ai",
+			version: "",
+			wantErr: true,
+		},
+		{
+			name:    "whitespace-only version returns error",
+			owner:   "Gentleman-Programming",
+			repo:    "gentle-ai",
+			version: "   ",
+			wantErr: true,
+		},
+		{
+			name:        "does not reference main",
+			owner:       "Gentleman-Programming",
+			repo:        "gentle-ai",
+			version:     "2.0.0",
+			wantContain: "v2.0.0",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			url, err := installScriptURL(tc.owner, tc.repo, tc.version)
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("installScriptURL(%q, %q, %q): want error, got nil (url=%q)", tc.owner, tc.repo, tc.version, url)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("installScriptURL(%q, %q, %q): unexpected error: %v", tc.owner, tc.repo, tc.version, err)
+			}
+			if tc.wantURL != "" && url != tc.wantURL {
+				t.Errorf("installScriptURL = %q, want %q", url, tc.wantURL)
+			}
+			if tc.wantContain != "" && !containsAny(url, tc.wantContain) {
+				t.Errorf("installScriptURL = %q, want it to contain %q", url, tc.wantContain)
+			}
+			if containsAny(url, "/main/") {
+				t.Errorf("installScriptURL = %q must NOT reference /main/", url)
+			}
+		})
 	}
 }
 
@@ -1069,7 +1206,7 @@ func TestEngramUpgradeUsesDownloadNotGoInstall(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not be called")
+		return mockCmd("echo", "should not be called")
 	}
 
 	downloadCalled := false
@@ -1118,7 +1255,7 @@ func TestEngramUpgradeLinuxUsesDownload(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not be called")
+		return mockCmd("echo", "should not be called")
 	}
 
 	downloadCalled := false
@@ -1169,12 +1306,12 @@ func TestRunStrategy_ScriptUpgradeExecFailure(t *testing.T) {
 	}))
 	defer server.Close()
 	scriptHTTPClient = server.Client()
-	installScriptURLFn = func(owner, repo string) string {
-		return server.URL + "/install.sh"
+	installScriptURLFn = func(owner, repo, version string) (string, error) {
+		return server.URL + "/install.sh", nil
 	}
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false")
+		return mockCmd("false")
 	}
 
 	r := update.UpdateResult{

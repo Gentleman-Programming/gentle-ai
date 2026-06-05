@@ -288,4 +288,14 @@ func restoreHomeDir(t *testing.T, dir string) {
 	orig := os.Getenv("HOME")
 	t.Cleanup(func() { os.Setenv("HOME", orig) })
 	os.Setenv("HOME", dir)
+
+	// Mock function pointers to isolate home directory completely.
+	rOSHome := osUserHomeDir
+	rBackup := backup.UserHomeDirFn
+	t.Cleanup(func() {
+		osUserHomeDir = rOSHome
+		backup.UserHomeDirFn = rBackup
+	})
+	osUserHomeDir = func() (string, error) { return dir, nil }
+	backup.UserHomeDirFn = func() (string, error) { return dir, nil }
 }

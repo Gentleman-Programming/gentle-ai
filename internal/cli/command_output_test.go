@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -11,7 +12,14 @@ func TestExecuteCommandQuietModeIncludesCapturedOutputOnFailure(t *testing.T) {
 	restore := SetCommandOutputStreaming(false)
 	defer restore()
 
-	err := executeCommand("bash", "-c", "echo boom && exit 1")
+	shell := "bash"
+	args := []string{"-c", "echo boom && exit 1"}
+	if runtime.GOOS == "windows" {
+		shell = "cmd"
+		args = []string{"/c", "echo boom && exit 1"}
+	}
+
+	err := executeCommand(shell, args...)
 	if err == nil {
 		t.Fatal("executeCommand() error = nil, want non-nil")
 	}

@@ -3,29 +3,19 @@ package sdd
 import (
 	"path/filepath"
 
+	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 )
+
+// readSkillContent reads the embedded skill content for the given phase.
+func readSkillContent(phase string) (string, error) {
+	return assets.Read("skills/" + phase + "/SKILL.md")
+}
 
 // SharedPromptDir returns the directory where shared SDD prompt files are stored.
 // The path is {homeDir}/.config/opencode/prompts/sdd.
 func SharedPromptDir(homeDir string) string {
 	return filepath.Join(homeDir, ".config", "opencode", "prompts", "sdd")
-}
-
-// subAgentPromptContent contains the inline prompt string for each SDD sub-agent phase.
-// These are the executor-scoped prompts that tell each sub-agent to read its skill file
-// and execute the phase work directly (not delegate).
-var subAgentPromptContent = map[string]string{
-	"sdd-init":    "You are an SDD executor for the init phase, not the orchestrator. Do this phase's work yourself. Do NOT delegate, Do NOT call task/delegate, and Do NOT launch sub-agents. Read your skill file at ~/.config/opencode/skills/sdd-init/SKILL.md and follow it exactly.",
-	"sdd-explore": "You are an SDD executor for the explore phase, not the orchestrator. Do this phase's work yourself. Do NOT delegate, Do NOT call task/delegate, and Do NOT launch sub-agents. Read your skill file at ~/.config/opencode/skills/sdd-explore/SKILL.md and follow it exactly.",
-	"sdd-propose": "You are an SDD executor for the propose phase, not the orchestrator. Do this phase's work yourself. Do NOT delegate, Do NOT call task/delegate, and Do NOT launch sub-agents. Read your skill file at ~/.config/opencode/skills/sdd-propose/SKILL.md and follow it exactly.",
-	"sdd-spec":    "You are an SDD executor for the spec phase, not the orchestrator. Do this phase's work yourself. Do NOT delegate, Do NOT call task/delegate, and Do NOT launch sub-agents. Read your skill file at ~/.config/opencode/skills/sdd-spec/SKILL.md and follow it exactly.",
-	"sdd-design":  "You are an SDD executor for the design phase, not the orchestrator. Do this phase's work yourself. Do NOT delegate, Do NOT call task/delegate, and Do NOT launch sub-agents. Read your skill file at ~/.config/opencode/skills/sdd-design/SKILL.md and follow it exactly.",
-	"sdd-tasks":   "You are an SDD executor for the tasks phase, not the orchestrator. Do this phase's work yourself. Do NOT delegate, Do NOT call task/delegate, and Do NOT launch sub-agents. Read your skill file at ~/.config/opencode/skills/sdd-tasks/SKILL.md and follow it exactly.",
-	"sdd-apply":   "You are an SDD executor for the apply phase, not the orchestrator. Do this phase's work yourself. Do NOT delegate, Do NOT call task/delegate, and Do NOT launch sub-agents. Read your skill file at ~/.config/opencode/skills/sdd-apply/SKILL.md and follow it exactly.",
-	"sdd-verify":  "You are an SDD executor for the verify phase, not the orchestrator. Do this phase's work yourself. Do NOT delegate, Do NOT call task/delegate, and Do NOT launch sub-agents. Read your skill file at ~/.config/opencode/skills/sdd-verify/SKILL.md and follow it exactly.",
-	"sdd-archive": "You are an SDD executor for the archive phase, not the orchestrator. Do this phase's work yourself. Do NOT delegate, Do NOT call task/delegate, and Do NOT launch sub-agents. Read your skill file at ~/.config/opencode/skills/sdd-archive/SKILL.md and follow it exactly.",
-	"sdd-onboard": "You are an SDD executor for the onboard phase, not the orchestrator. Do this phase's work yourself. Do NOT delegate, Do NOT call task/delegate, and Do NOT launch sub-agents. Read your skill file at ~/.config/opencode/skills/sdd-onboard/SKILL.md and follow it exactly.",
 }
 
 // subAgentPhaseOrder is an alias for profilePhaseOrder (defined in profiles.go),
@@ -41,18 +31,41 @@ func SharedPromptPhases() []string {
 }
 
 // WriteSharedPromptFiles writes the 10 SDD sub-agent prompt files to
-// {homeDir}/.config/opencode/prompts/sdd/. Returns (true, nil) if any file
-// was created or changed, (false, nil) if all files already match (idempotent).
-// Uses WriteFileAtomic so the operation is safe to repeat.
-func WriteSharedPromptFiles(homeDir string) (bool, error) {
+// {homeDir}/.config/opencode/prompts/sdd/. The content for each phase is extracted
+// from the embedded skill file, filtered to the section matching the phase's
+// model capability ("capable" or "small").
+//
+// The phaseCapabilities map controls which section is extracted per phase:
+//   - "capable" sections are used for high-capability models
+//   - "small" sections are used for small/fast models (e.g., flash, mini)
+//   - If a phase is missing from the map, "capable" is used as default
+//
+// Returns (true, nil) if any file was created or changed, (false, nil) if all
+// files already match (idempotent). Uses WriteFileAtomic so the operation is
+// safe to repeat.
+func WriteSharedPromptFiles(homeDir string, phaseCapabilities map[string]string) (bool, error) {
 	promptDir := SharedPromptDir(homeDir)
 	anyChanged := false
 
 	for _, phase := range subAgentPhaseOrder {
-		content, ok := subAgentPromptContent[phase]
-		if !ok {
-			continue
+		// Read the embedded skill content for this phase.
+		skillContent, err := readSkillContent(phase)
+		if err != nil {
+			return false, err
 		}
+
+		// Determine which section to extract based on model capability.
+		capability := "capable"
+		if phaseCapabilities != nil {
+			if cap, ok := phaseCapabilities[phase]; ok && cap != "" {
+				capability = cap
+			}
+		}
+
+		// Extract the section matching the capability (falls back to full content
+		// if no matching section marker is found — correct behavior for phases
+		// that don't yet have conditional sections).
+		content := extractModelSection(skillContent, capability)
 
 		path := filepath.Join(promptDir, phase+".md")
 		result, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)

@@ -237,6 +237,7 @@ Native SDD entrypoints:
   /skill:sdd-apply
   /skill:sdd-verify
   /skill:sdd-archive
+  /skill:sdd-onboard
 
 Skills root:
   "%s"`, gentlemanYaml, skillsRoot)

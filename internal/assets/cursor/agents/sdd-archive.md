@@ -36,6 +36,7 @@ After completing work, call `mem_save` with:
 - topic_key: `"sdd/{change-name}/archive-report"`
 - type: `"architecture"`
 - project: `{project-name from context}`
+- capture_prompt: `false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
 
 ## Result Contract
 
@@ -45,4 +46,4 @@ Return a structured result with these fields:
 - `artifacts`: topic_keys or file paths written (e.g. `sdd/{change-name}/archive-report`, archived folder path)
 - `next_recommended`: `none` (change is complete) or a new `/sdd-new` if follow-up is needed
 - `risks`: any artifacts that could not be merged or archived cleanly
-- `skill_resolution`: `injected` if compact rules were provided in invocation message, otherwise `none`
+- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`

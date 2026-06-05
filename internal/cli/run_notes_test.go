@@ -23,9 +23,11 @@ func TestWithPostInstallNotesAddsGGANextSteps(t *testing.T) {
 }
 
 func TestWithPostInstallNotesDoesNotChangeNonGGA(t *testing.T) {
-	// Set GOBIN to a directory already in PATH so that withGoInstallPathNote
-	// does not append a PATH guidance note for the Engram component.
-	t.Setenv("GOBIN", "/usr/local/bin")
+	// Set GOBIN and PATH to the same directory so that withGoInstallPathNote
+	// detects that GOBIN is already in PATH and does not append a guidance note.
+	gobin := "/usr/local/bin"
+	t.Setenv("GOBIN", gobin)
+	t.Setenv("PATH", gobin)
 
 	report := verify.Report{Ready: true, FinalNote: "You're ready."}
 	resolved := planner.ResolvedPlan{OrderedComponents: []model.ComponentID{model.ComponentEngram}}

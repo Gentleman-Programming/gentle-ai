@@ -6,8 +6,8 @@ If the native `sdd-explore` sub-agent is available, delegate this command to it.
 Otherwise, read the skill file at `~/.claude/skills/sdd-explore/SKILL.md` FIRST, then follow its instructions exactly inline.
 
 CONTEXT:
-- Working directory: !`echo -n "$(pwd)"`
-- Current project: !`echo -n "$(basename $(pwd))"`
+- Working directory: !`pwd`
+- Current project: !`basename "$(pwd)"`
 - Topic to explore: $ARGUMENTS
 - Artifact store mode: engram
 
@@ -18,7 +18,8 @@ ENGRAM PERSISTENCE (artifact store mode: engram):
 Read project context (optional):
   mem_search(query: "sdd-init/{project}", project: "{project}") → if found, mem_get_observation(id) for full content
 Save exploration:
-  mem_save(title: "sdd/$ARGUMENTS/explore", topic_key: "sdd/$ARGUMENTS/explore", type: "architecture", project: "{project}", content: "{exploration}")
+  mem_save(title: "sdd/$ARGUMENTS/explore", topic_key: "sdd/$ARGUMENTS/explore", type: "architecture", project: "{project}", capture_prompt: false, content: "{exploration}")
+  Set capture_prompt: false when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
 
 This is an exploration only — do NOT create any files or modify code. Just research and return your analysis.
 

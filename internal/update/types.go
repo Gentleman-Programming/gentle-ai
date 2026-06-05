@@ -37,14 +37,25 @@ const (
 
 // ToolInfo describes a managed tool that can be checked for updates.
 type ToolInfo struct {
-	Name          string        // human-readable name (e.g., "gentle-ai")
-	Owner         string        // GitHub repository owner
-	Repo          string        // GitHub repository name
-	DetectCmd     []string      // command to detect installed version; nil = use build var
-	VersionPrefix string        // prefix to strip from version output (e.g., "v")
-	InstallMethod InstallMethod // how this tool is installed (used by upgrade executor)
-	GoImportPath  string        // for go-install tools (e.g. "github.com/.../cmd/engram")
-	NpmPackage    string        // for OpenCode community plugins installed in ~/.config/opencode/node_modules
+	Name              string        // human-readable name (e.g., "gentle-ai")
+	Owner             string        // GitHub repository owner
+	Repo              string        // GitHub repository name
+	DetectCmd         []string      // command to detect installed version; nil = use build var
+	VersionPrefix     string        // prefix to strip from version output (e.g., "v")
+	ReleaseTagPattern string        // optional regexp for selecting the correct GitHub release channel
+	InstallMethod     InstallMethod // how this tool is installed (used by upgrade executor)
+	GoImportPath      string        // for go-install tools (e.g. "github.com/.../cmd/engram")
+	NpmPackage        string        // for OpenCode community plugins installed in ~/.config/opencode/node_modules
+
+	// FallbackPaths returns a list of absolute paths to check when exec.LookPath
+	// fails. This covers the Windows scenario where AddToUserPath updates the
+	// registry but the running process PATH is stale after install. When a path
+	// is found on disk, detectInstalledVersion runs the detect command using that
+	// full path rather than the bare binary name.
+	//
+	// The function receives the user home directory and the value of LOCALAPPDATA
+	// (empty on non-Windows). May be nil when no fallback is needed.
+	FallbackPaths func(homeDir, localAppData string) []string
 }
 
 // UpdateResult holds the result of checking a single tool for updates.

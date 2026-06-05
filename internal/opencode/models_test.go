@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -154,6 +155,16 @@ func TestLoadModelsFileNotFound(t *testing.T) {
 	_, err := LoadModels("/nonexistent/models.json")
 	if err == nil {
 		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestLoadModelsOrEmptyFileNotFound(t *testing.T) {
+	providers, err := LoadModelsOrEmpty("/nonexistent/models.json")
+	if err != nil {
+		t.Fatalf("LoadModelsOrEmpty() error = %v", err)
+	}
+	if len(providers) != 0 {
+		t.Fatalf("providers = %v, want empty map", providers)
 	}
 }
 
@@ -331,5 +342,440 @@ func TestLoadAuthProvidersMissingFile(t *testing.T) {
 	result := loadAuthProviders("/nonexistent/auth.json")
 	if result != nil {
 		t.Fatalf("expected nil for missing file, got %v", result)
+	}
+}
+
+func TestModel_EffortLevels(t *testing.T) {
+	tests := []struct {
+		name     string
+		variants []string
+		want     []string
+	}{
+		{"no variants", nil, nil},
+		{"claude style", []string{"high", "low", "medium"}, []string{"high", "low", "medium"}},
+		{"openai style", []string{"high", "low", "medium", "none", "xhigh"}, []string{"high", "low", "medium", "none", "xhigh"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := Model{Variants: tt.variants}
+			got := m.EffortLevels()
+			if len(got) != len(tt.want) {
+				t.Fatalf("EffortLevels() = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("EffortLevels()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestDefaultVariantsCachePath(t *testing.T) {
+	got := DefaultVariantsCachePath()
+	if got == "" {
+		t.Fatal("DefaultVariantsCachePath() returned empty string")
+	}
+	if !strings.HasSuffix(got, filepath.Join(".gentle-ai", "cache", "model-variants.json")) {
+		t.Fatalf("expected path suffix .gentle-ai/cache/model-variants.json, got %q", got)
+	}
+	legacy := filepath.Join(".cache", "gentle-ai")
+	if strings.Contains(got, legacy) {
+		t.Fatalf("path must not contain legacy %s, got %q", legacy, got)
+	}
+}
+
+func TestLoadVariants(t *testing.T) {
+	t.Run("valid file", func(t *testing.T) {
+		tmp := t.TempDir()
+		p := tmp + "/variants.json"
+		data := `{"openai":{"gpt-5":["high","low","medium"]}}`
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := LoadVariants(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if levels := got["openai"]["gpt-5"]; len(levels) != 3 || levels[0] != "high" {
+			t.Errorf("unexpected levels: %v", levels)
+		}
+	})
+
+	t.Run("missing file", func(t *testing.T) {
+		_, err := LoadVariants("/nonexistent/variants.json")
+		if err == nil {
+			t.Fatal("expected error for missing file")
+		}
+	})
+
+	t.Run("invalid json", func(t *testing.T) {
+		tmp := t.TempDir()
+		p := tmp + "/variants.json"
+		if err := os.WriteFile(p, []byte("not json"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadVariants(p)
+		if err == nil {
+			t.Fatal("expected error for invalid json")
+		}
+	})
+}
+
+func TestEnrichWithVariants(t *testing.T) {
+	providers := map[string]Provider{
+		"openai": {
+			ID:   "openai",
+			Name: "OpenAI",
+			Models: map[string]Model{
+				"gpt-5": {ID: "gpt-5", Name: "GPT-5", ToolCall: true, Reasoning: true},
+			},
+		},
+	}
+
+	t.Run("merges variants from file", func(t *testing.T) {
+		tmp := t.TempDir()
+		p := tmp + "/variants.json"
+		data := `{"openai":{"gpt-5":["high","low","medium","none","xhigh"]}}`
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		EnrichWithVariants(providers, p)
+		m := providers["openai"].Models["gpt-5"]
+		if len(m.Variants) != 5 {
+			t.Fatalf("expected 5 variants, got %v", m.Variants)
+		}
+	})
+
+	t.Run("missing file leaves models unchanged", func(t *testing.T) {
+		clean := map[string]Provider{
+			"openai": {ID: "openai", Models: map[string]Model{
+				"gpt-5": {ID: "gpt-5"},
+			}},
+		}
+		EnrichWithVariants(clean, "/nonexistent/variants.json")
+		if clean["openai"].Models["gpt-5"].Variants != nil {
+			t.Fatal("expected nil variants for missing file")
+		}
+	})
+
+	t.Run("non-matching provider ignored", func(t *testing.T) {
+		tmp := t.TempDir()
+		p := tmp + "/variants.json"
+		data := `{"unknown-provider":{"model-x":["low","high"]}}`
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		clean := map[string]Provider{
+			"openai": {ID: "openai", Models: map[string]Model{
+				"gpt-5": {ID: "gpt-5"},
+			}},
+		}
+		EnrichWithVariants(clean, p)
+		if clean["openai"].Models["gpt-5"].Variants != nil {
+			t.Fatal("expected nil variants for non-matching provider")
+		}
+	})
+}
+
+// ─── LoadConfigProviders ──────────────────────────────────────────────────────
+
+func writeConfigFixture(t *testing.T, content string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "opencode.json")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config fixture: %v", err)
+	}
+	return path
+}
+
+func TestLoadConfigProviders(t *testing.T) {
+	path := writeConfigFixture(t, `{
+		"provider": {
+			"lmstudio": {
+				"npm": "@ai-sdk/openai-compatible",
+				"name": "LM Studio (local)",
+				"options": {"baseURL": "http://localhost:1234/v1"},
+				"models": {
+					"qwen/qwen3.5-35b-a3b": {"name": "qwen3.5-35b-a3b", "tool_call": true}
+				}
+			}
+		}
+	}`)
+
+	config, err := LoadConfigProviders(path)
+	if err != nil {
+		t.Fatalf("LoadConfigProviders() error = %v", err)
+	}
+	if len(config) != 1 {
+		t.Fatalf("config provider count = %d, want 1", len(config))
+	}
+
+	lm, ok := config["lmstudio"]
+	if !ok {
+		t.Fatal("missing lmstudio provider")
+	}
+	if lm.Name != "LM Studio (local)" {
+		t.Fatalf("lmstudio name = %q, want %q", lm.Name, "LM Studio (local)")
+	}
+	if len(lm.Models) != 1 {
+		t.Fatalf("lmstudio model count = %d, want 1", len(lm.Models))
+	}
+	if _, ok := lm.Models["qwen/qwen3.5-35b-a3b"]; !ok {
+		t.Fatal("missing model qwen/qwen3.5-35b-a3b")
+	}
+	if !lm.Models["qwen/qwen3.5-35b-a3b"].ToolCall {
+		t.Fatal("expected tool_call metadata to be loaded from config")
+	}
+}
+
+func TestLoadConfigProvidersMissingFile(t *testing.T) {
+	config, err := LoadConfigProviders("/nonexistent/opencode.json")
+	if err != nil {
+		t.Fatalf("LoadConfigProviders() error = %v", err)
+	}
+	if len(config) != 0 {
+		t.Fatalf("expected empty map for missing file, got %v", config)
+	}
+}
+
+func TestLoadConfigProvidersNoProviderKey(t *testing.T) {
+	path := writeConfigFixture(t, `{"agent": {"foo": {}}}`)
+	config, err := LoadConfigProviders(path)
+	if err != nil {
+		t.Fatalf("LoadConfigProviders() error = %v", err)
+	}
+	if len(config) != 0 {
+		t.Fatalf("expected empty map when no provider key, got %v", config)
+	}
+}
+
+func TestLoadConfigProvidersInvalidJSON(t *testing.T) {
+	path := writeConfigFixture(t, `{"provider":`)
+	config, err := LoadConfigProviders(path)
+	if err == nil {
+		t.Fatal("expected parse error for invalid JSON")
+	}
+	if !strings.Contains(err.Error(), filepath.Base(path)) {
+		t.Fatalf("expected parse error to include file name %q, got %v", filepath.Base(path), err)
+	}
+	if len(config) != 0 {
+		t.Fatalf("expected empty map on parse error, got %v", config)
+	}
+}
+
+// MergeCustomProviders
+
+func TestMergeCustomProvidersNewProvider(t *testing.T) {
+	providers := map[string]Provider{
+		"openai": {ID: "openai", Name: "OpenAI", Models: map[string]Model{
+			"gpt-4o": {ID: "gpt-4o", Name: "GPT-4o", ToolCall: true},
+		}},
+	}
+	config := map[string]ConfigProvider{
+		"lmstudio": {Name: "LM Studio", Models: map[string]ConfigModel{
+			"qwen/qwen3.5": {Name: "Qwen 3.5", ToolCall: true},
+		}},
+	}
+
+	merged := MergeCustomProviders(providers, config)
+
+	if len(merged) != 2 {
+		t.Fatalf("merged count = %d, want 2", len(merged))
+	}
+	lm, ok := merged["lmstudio"]
+	if !ok {
+		t.Fatal("missing lmstudio in merged")
+	}
+	if lm.Name != "LM Studio" {
+		t.Fatalf("lmstudio name = %q", lm.Name)
+	}
+	m, ok := lm.Models["qwen/qwen3.5"]
+	if !ok {
+		t.Fatal("missing model qwen/qwen3.5")
+	}
+	if !m.ToolCall {
+		t.Fatal("custom model should have ToolCall=true")
+	}
+	if m.Name != "Qwen 3.5" {
+		t.Fatalf("model name = %q, want %q", m.Name, "Qwen 3.5")
+	}
+}
+
+func TestMergeCustomProvidersExistingProviderNewModel(t *testing.T) {
+	providers := map[string]Provider{
+		"lmstudio": {ID: "lmstudio", Name: "LMStudio", Env: []string{"LMSTUDIO_API_KEY"}, Models: map[string]Model{
+			"gpt-oss-20b": {ID: "gpt-oss-20b", Name: "GPT OSS 20B", ToolCall: true, Cost: ModelCost{Input: 1.0}},
+		}},
+	}
+	config := map[string]ConfigProvider{
+		"lmstudio": {Name: "LM Studio (local)", Models: map[string]ConfigModel{
+			"qwen/qwen3.5": {Name: "Qwen 3.5", ToolCall: true},
+		}},
+	}
+
+	merged := MergeCustomProviders(providers, config)
+	lm := merged["lmstudio"]
+
+	if len(lm.Models) != 2 {
+		t.Fatalf("model count = %d, want 2", len(lm.Models))
+	}
+	// Cache model preserved
+	if lm.Models["gpt-oss-20b"].Cost.Input != 1.0 {
+		t.Fatal("cache model metadata should be preserved")
+	}
+	// New model added with explicit ToolCall=true from config
+	if !lm.Models["qwen/qwen3.5"].ToolCall {
+		t.Fatal("new custom model should have ToolCall=true")
+	}
+}
+
+func TestMergeCustomProvidersDefaultsToolCallToFalse(t *testing.T) {
+	providers := map[string]Provider{}
+	config := map[string]ConfigProvider{
+		"lmstudio": {Name: "LM Studio", Models: map[string]ConfigModel{
+			"qwen/qwen3.5": {Name: "Qwen 3.5"},
+		}},
+	}
+
+	merged := MergeCustomProviders(providers, config)
+	if merged["lmstudio"].Models["qwen/qwen3.5"].ToolCall {
+		t.Fatal("custom model should default to ToolCall=false when omitted in config")
+	}
+}
+
+func TestMergeCustomProvidersModelCollisionCustomWins(t *testing.T) {
+	providers := map[string]Provider{
+		"lmstudio": {ID: "lmstudio", Name: "LMStudio", Models: map[string]Model{
+			"shared-model": {ID: "shared-model", Name: "Cache Name", ToolCall: false, Cost: ModelCost{Input: 5.0}},
+		}},
+	}
+	config := map[string]ConfigProvider{
+		"lmstudio": {Models: map[string]ConfigModel{
+			"shared-model": {Name: "Config Name", ToolCall: true},
+		}},
+	}
+
+	merged := MergeCustomProviders(providers, config)
+	m := merged["lmstudio"].Models["shared-model"]
+	if m.Name != "Config Name" {
+		t.Fatalf("model name = %q, want %q (custom should win)", m.Name, "Config Name")
+	}
+	if !m.ToolCall {
+		t.Fatal("custom ToolCall=true should win over cache ToolCall=false on collision")
+	}
+}
+
+func TestMergeCustomProvidersEmptyConfig(t *testing.T) {
+	providers := map[string]Provider{
+		"openai": {ID: "openai", Name: "OpenAI", Models: map[string]Model{}},
+	}
+
+	merged := MergeCustomProviders(providers, nil)
+	if len(merged) != 1 {
+		t.Fatalf("expected unchanged providers, got %d", len(merged))
+	}
+}
+
+func TestMergeCustomProvidersDoesNotMutateInput(t *testing.T) {
+	providers := map[string]Provider{
+		"openai": {ID: "openai", Name: "OpenAI", Models: map[string]Model{
+			"gpt-4o": {ID: "gpt-4o", ToolCall: true},
+		}},
+	}
+	config := map[string]ConfigProvider{
+		"lmstudio": {Name: "LM Studio", Models: map[string]ConfigModel{
+			"local-model": {Name: "Local"},
+		}},
+	}
+
+	_ = MergeCustomProviders(providers, config)
+
+	if _, ok := providers["lmstudio"]; ok {
+		t.Fatal("MergeCustomProviders mutated the input map")
+	}
+}
+
+func TestMergeCustomProvidersDoesNotAliasEnvSlice(t *testing.T) {
+	providers := map[string]Provider{
+		"openai": {ID: "openai", Name: "OpenAI", Env: []string{"OPENAI_API_KEY"}, Models: map[string]Model{}},
+	}
+
+	merged := MergeCustomProviders(providers, map[string]ConfigProvider{"lmstudio": {Name: "LM Studio", Models: map[string]ConfigModel{}}})
+	merged["openai"].Env[0] = "CHANGED"
+
+	if providers["openai"].Env[0] != "OPENAI_API_KEY" {
+		t.Fatal("MergeCustomProviders aliased the input Env slice")
+	}
+}
+
+func TestMergeCustomProvidersDefaultsEmptyModelNameToID(t *testing.T) {
+	merged := MergeCustomProviders(map[string]Provider{}, map[string]ConfigProvider{
+		"lmstudio": {Name: "LM Studio", Models: map[string]ConfigModel{
+			"qwen/qwen3.5": {ToolCall: true},
+		}},
+	})
+
+	if got := merged["lmstudio"].Models["qwen/qwen3.5"].Name; got != "qwen/qwen3.5" {
+		t.Fatalf("merged model name = %q, want fallback to model ID", got)
+	}
+}
+
+// ─── DetectAvailableProviders with custom IDs ─────────────────────────────────
+
+func TestDetectAvailableProvidersWithCustomIDs(t *testing.T) {
+	path := writeFixture(t)
+	providers, err := LoadModels(path)
+	if err != nil {
+		t.Fatalf("LoadModels() error = %v", err)
+	}
+
+	cleanup := withNoAuth(t)
+	defer cleanup()
+
+	original := envLookup
+	defer func() { envLookup = original }()
+	envLookup = func(string) string { return "" }
+
+	// Pass "anthropic" as custom — should be available without auth/env
+	available := DetectAvailableProviders(providers, "anthropic")
+
+	found := make(map[string]bool)
+	for _, id := range available {
+		found[id] = true
+	}
+	if !found["anthropic"] {
+		t.Fatal("expected anthropic (custom provider ID)")
+	}
+	if !found["opencode"] {
+		t.Fatal("expected opencode (always included)")
+	}
+	if found["openai"] {
+		t.Fatal("openai should NOT be available (not custom, no auth, no env)")
+	}
+}
+
+func TestDetectAvailableProvidersCustomStillNeedsToolCall(t *testing.T) {
+	path := writeFixture(t)
+	providers, err := LoadModels(path)
+	if err != nil {
+		t.Fatalf("LoadModels() error = %v", err)
+	}
+
+	cleanup := withNoAuth(t)
+	defer cleanup()
+
+	original := envLookup
+	defer func() { envLookup = original }()
+	envLookup = func(string) string { return "" }
+
+	// "notools" has no tool_call models — custom ID should not bypass that check
+	available := DetectAvailableProviders(providers, "notools")
+
+	for _, id := range available {
+		if id == "notools" {
+			t.Fatal("notools should NOT be available even as custom (no tool_call models)")
+		}
 	}
 }

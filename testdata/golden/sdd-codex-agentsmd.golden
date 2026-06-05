@@ -1,50 +1,99 @@
 <!-- gentle-ai:sdd-orchestrator -->
-# Agent Teams Lite — Orchestrator Rule for Codex
+# SDD Orchestrator for Codex
 
 Bind this to the dedicated `sdd-orchestrator` agent or rule only. Do NOT apply it to executor phase agents such as `sdd-apply` or `sdd-verify`.
 
-## Agent Teams Orchestrator
+## Language Domain Contract
 
-You are a COORDINATOR, not an executor. Maintain one thin conversation thread, delegate ALL real work to sub-agents, synthesize results.
+- The active persona controls direct user/orchestrator conversation only. Use it for direct replies, clarification prompts, and user-facing orchestration status.
+- Generated technical artifacts default to English regardless of the active persona or conversation language. This includes OpenSpec files, specs, designs, tasks, code comments, UI copy, tests, fixtures, and delegated phase outputs.
+- If Spanish technical artifacts are explicitly requested, use neutral/professional Spanish unless the user explicitly asks for a regional variant.
+- Public/contextual comments follow the target context language by default. Explicit user language or tone overrides win; Spanish comments default to neutral/professional Spanish unless the user or target context clearly calls for regional tone.
+- When delegating a phase, forward this contract so persona voice never becomes the artifact or public-comment default.
 
-### Delegation Rules
+## Capability Check (run once, at session start)
 
-Core principle: **does this inflate my context without need?** If yes → delegate. If no → do it inline.
+Check `~/.codex/config.toml` for `features.multi_agent`:
 
-| Action | Inline | Delegate |
-|--------|--------|----------|
-| Read to decide/verify (1-3 files) | ✅ | — |
-| Read to explore/understand (4+ files) | — | ✅ |
-| Read as preparation for writing | — | ✅ together with the write |
-| Write atomic (one file, mechanical, you already know what) | ✅ | — |
-| Write with analysis (multiple files, new logic) | — | ✅ |
-| Bash for state (git, gh) | ✅ | — |
-| Bash for execution (test, build, install) | — | ✅ |
+- If `features.multi_agent = true` **AND** the tools `spawn_agent`, `wait_agent`, and `close_agent` are available in this session → use the **Delegated path** below.
+- Otherwise → use the **Solo path** below.
 
-delegate (async) is the default for delegated work. Use task (sync) only when you need the result before your next action.
+`features.multi_agent` is enabled by default (gentle-ai writes `multi_agent = true` during installation) so SDD delegates phases and the per-phase reasoning_effort table applies. To force solo execution, set `multi_agent = false` in the `[features]` section of `~/.codex/config.toml` and restart your session.
 
-Anti-patterns — these ALWAYS inflate context without need:
-- Reading 4+ files to "understand" the codebase inline → delegate an exploration
-- Writing a feature across multiple files inline → delegate
-- Running tests or builds inline → delegate
-- Reading files as preparation for edits, then editing → delegate the whole thing together
+---
+
+## Solo Path (default)
+
+Run each SDD phase inline, in dependency order, without spawning sub-agents. You are the executor for all phases.
+
+```
+proposal → spec → design → tasks → apply → verify → archive
+```
+
+For each phase:
+1. Read the required input artifacts from engram or the openspec directory.
+2. Produce the phase output inline in your current context.
+3. Persist the artifact to the active backend (engram or openspec) before proceeding.
+
+**Dependency graph** (run phases in this order; spec and design can run in parallel):
+- `sdd-propose` → read nothing, write proposal
+- `sdd-spec` → read proposal, write spec
+- `sdd-design` → read proposal, write design
+- `sdd-tasks` → read spec + design, write tasks
+- `sdd-apply` → read tasks + spec + design, write apply-progress
+- `sdd-verify` → read spec + tasks + apply-progress, write verify-report
+- `sdd-archive` → read all artifacts, write archive-report
+
+Strict TDD: when the project has `strict_tdd: true` in `sdd-init` context, always follow the RED → GREEN → REFACTOR cycle in `sdd-apply`. Failing test first, then implementation.
+
+---
+
+## Delegated Path (default, requires features.multi_agent = true)
+
+When multi-agent tools are available, delegate each SDD phase to a sub-agent using Codex's native tool set:
+
+- `spawn_agent` — launch a phase sub-agent
+- `send_input` — send a message to a running agent
+- `wait_agent` — block until the agent completes and collect its result
+- `close_agent` — terminate a completed or idle agent
+
+**Thread budget**: `agents.max_threads = 4`, `agents.max_depth = 2` (set in `~/.codex/config.toml`).
+
+### Phase delegation pattern
+
+For each phase:
+1. Look up the phase's `reasoning_effort` value in the **Model Profiles** table below (the values are preset-driven and written by gentle-ai — do not assume fixed tiers).
+2. `spawn_agent` with `task_name`, the phase prompt as `message`, and `reasoning_effort` set to the tier value. The `spawn_agent` tool has NO `profile` parameter — tier selection is the `reasoning_effort` argument, not a profile name.
+3. Set `fork_turns: "none"` whenever you override `reasoning_effort` or `model`. A full-history fork (the default) REJECTS these overrides, so the override is silently ignored unless `fork_turns` is `"none"`.
+4. `wait_agent` to collect the result.
+5. `close_agent` to release the thread.
+6. Verify the artifact was persisted before launching the next phase.
+
+Example — launching `sdd-design` at the strong tier:
+```
+spawn_agent(task_name="sdd-design", message=<design prompt>, reasoning_effort="xhigh", fork_turns="none")
+wait_agent(task_name="sdd-design")
+close_agent(task_name="sdd-design")
+```
+
+Note: the `~/.codex/<tier>.config.toml` profile files apply to whole CLI sessions launched with `codex --profile <name>`. They do NOT apply to spawned sub-agents — for those, pass `reasoning_effort` directly as shown above.
+
+### Parallelism
+
+`sdd-spec` and `sdd-design` have the same input (proposal) and independent outputs. Spawn them in parallel (both `spawn_agent` calls before either `wait_agent`) when your thread budget allows.
+
+### Graceful degradation
+
+If `spawn_agent` returns an error (tool unavailable, thread budget exhausted, or permission denied), fall back to the **Solo path** for the remaining phases. Do not abort the SDD pipeline — complete it inline.
+
+---
 
 ## SDD Workflow (Spec-Driven Development)
 
-SDD is the structured planning layer for substantial changes.
-
-### Artifact Store Policy
-
-- `engram` — default when available; persistent memory across sessions
-- `openspec` — file-based artifacts; use only when user explicitly requests
-- `hybrid` — both backends; cross-session recovery + local files; more tokens per op
-- `none` — return results inline only; recommend enabling engram or openspec
-
 ### Commands
 
-Skills (appear in autocomplete):
 - `/sdd-init` → initialize SDD context; detects stack, bootstraps persistence
-- `/sdd-explore <topic>` → investigate an idea; reads codebase, compares approaches; no files created
+- `/sdd-explore <topic>` → investigate an idea; no artifacts created
 - `/sdd-apply [change]` → implement tasks in batches; checks off items as it goes
 - `/sdd-verify [change]` → validate implementation against specs; reports CRITICAL / WARNING / SUGGESTION
 - `/sdd-archive [change]` → close a change and persist final state in the active artifact store 
@@ -57,9 +106,13 @@ Meta-commands (type directly — orchestrator handles them, won't appear in auto
 
 `/sdd-new`, `/sdd-continue`, and `/sdd-ff` are meta-commands handled by YOU. Do NOT invoke them as skills.
 
+### Native SDD Dispatcher Guard
+
+Before routing, continuing, applying, verifying, or archiving an SDD change, use the native dispatcher when `gentle-ai` is available: `gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`. Treat native status JSON as authoritative over prompt inference. Route only by `nextRecommended` and dependency states; never infer from free text. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop. If the binary is unavailable, fall back to the existing prompt contract and manual status schema.
+
 ### SDD Init Guard (MANDATORY)
 
-Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`), check if `sdd-init` has been run for this project:
+Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-status`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`), check if `sdd-init` has been run for this project:
 
 1. Search Engram: `mem_search(query: "sdd-init/{project}", project: "{project}")`
 2. If found → init was done, proceed normally
@@ -74,14 +127,12 @@ Do NOT skip this check. Do NOT ask the user — just run init silently if needed
 
 ### Execution Mode
 
-When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ASK which execution mode they prefer:
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ask which execution mode they prefer:
 
-- **Automatic** (`auto`): Run all phases back-to-back without pausing. Show the final result only. Use this when the user wants speed and trusts the process.
-- **Interactive** (`interactive`): After each phase completes, show the result summary and ASK: "Want to adjust anything or continue?" before proceeding to the next phase. Use this when the user wants to review and steer each step.
+- **Automatic** (`auto`): Run all phases back-to-back. Show the final result only.
+- **Interactive** (`interactive`): After each phase, show the result summary and ask before proceeding.
 
 If the user doesn't specify, default to **Interactive** (safer, gives the user control).
-
-Cache the mode choice for the session — don't ask again unless the user explicitly requests a mode change.
 
 In **Interactive** mode, between phases:
 1. Show a concise summary of what the phase produced
@@ -91,134 +142,76 @@ In **Interactive** mode, between phases:
 
 For this agent (sub-agent delegation): **Automatic** means phases run back-to-back via sub-agents without pausing. **Interactive** means the orchestrator pauses after each delegation returns, shows results, and asks before launching the next.
 
+Interactive approval is phase-scoped. Words like "continue", "dale", or "go on" approve only the immediate next phase, not the rest of the SDD pipeline. Do not treat a generated artifact as approved until the user has had a chance to review or explicitly delegate that review.
+
+Before the `sdd-propose` phase in interactive mode, offer the user a proposal question round instead of silently deciding whether the proposal is clear enough. Explain that the questions are meant to improve the PRD/proposal by uncovering business understanding, business rules, implications, impact, edge cases, and product tradeoffs. Prefer 3–5 concrete product questions per round, then summarize the resulting assumptions and ask whether the user wants to correct anything or run a second question round. Cover business/product/PRD decisions: business problem, target users and situations, business rules, product outcome, current-state gap, implications and impact, edge cases, decision gaps, first-slice scope boundaries, non-goals, product constraints, and business tradeoffs. Do not ask about test commands, PR shape, changed-line budget, or other harness mechanics at proposal time unless the user explicitly asks to discuss delivery.
+
 ### Artifact Store Mode
 
-When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ALSO ASK which artifact store they want for this change:
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, also ask which artifact store they want:
 
-- **`engram`**: Fast, no files created. Artifacts live in engram only. Best for solo work and quick iteration. Note: re-running a phase overwrites the previous version (no history).
-- **`openspec`**: File-based. Creates `openspec/` directory with full artifact trail. Committable, shareable with team, full git history.
-- **`hybrid`**: Both — files for team sharing + engram for cross-session recovery. Higher token cost.
+- **`engram`**: Fast, no files created. Best for solo work.
+- **`openspec`**: File-based. Creates `openspec/` directory. Committable, shareable.
+- **`hybrid`**: Both — files for team sharing + engram for cross-session recovery.
 
-If the user doesn't specify, detect: if engram is available → default to `engram`. Otherwise → `none`.
+Default: `engram` when available. Cache the choice for the session.
 
-Cache the artifact store choice for the session. Pass it as `artifact_store.mode` to every sub-agent launch.
+### Delivery Strategy
 
-### Dependency Graph
-```
-proposal -> specs --> tasks -> apply -> verify -> archive
-             ^
-             |
-           design
-```
+On the first `/sdd-new`, `/sdd-ff`, or `/sdd-continue` in a session, ask once for and cache delivery strategy: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
 
-### Result Contract
-Each phase returns: `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, `skill_resolution`.
+### Chain Strategy
 
-### Sub-Agent Launch Pattern
+When `delivery_strategy` results in chained PRs (either by user choice via `ask-on-risk` or automatically via `auto-chain`), ask the user which chain strategy to use:
 
-ALL sub-agent launch prompts that involve reading, writing, or reviewing code MUST include pre-resolved **compact rules** from the skill registry. Follow the **Skill Resolver Protocol** (see `_shared/skill-resolver.md` in the skills directory).
+- **`stacked-to-main`**: Each PR merges to main in order. Fast iteration, fix on the go. Best for speed-first teams and independent slices.
+- **`feature-branch-chain`**: The feature/tracker branch accumulates final integration; PR #1 targets the tracker branch, later child PRs target the immediate previous PR branch so review diffs stay focused. Only the tracker merges to main. Best for rollback control and coordinated releases.
 
-The orchestrator resolves skills from the registry ONCE (at session start or first delegation), caches the compact rules, and injects matching rules into each sub-agent's prompt.
+Cache the chain strategy for the session. Pass it as `chain_strategy` to `sdd-tasks` and `sdd-apply` prompts alongside `delivery_strategy`. Do not ask again unless the user changes scope.
 
-Orchestrator skill resolution (do once per session):
-1. `mem_search(query: "skill-registry", project: "{project}")` → `mem_get_observation(id)` for full registry content
-2. Fallback: read `.atl/skill-registry.md` if engram not available
-3. Cache the **Compact Rules** section and the **User Skills** trigger table
-4. If no registry exists, warn user and proceed without project-specific standards
+### Review Workload Guard (MANDATORY)
 
-For each sub-agent launch:
-1. Match relevant skills by **code context** (file extensions/paths the sub-agent will touch) AND **task context** (what actions it will perform — review, PR creation, testing, etc.)
-2. Copy matching compact rule blocks into the sub-agent prompt as `## Project Standards (auto-resolved)`
-3. Inject BEFORE the sub-agent's task-specific instructions
+After `sdd-tasks` completes and before launching `sdd-apply`, inspect the task result summary for `Review Workload Forecast`.
 
-**Key rule**: inject compact rules TEXT, not paths. Sub-agents do NOT read SKILL.md files or the registry — rules arrive pre-digested. This is compaction-safe because each delegation re-reads the registry if the cache is lost.
+If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimated changed lines exceed 400, or `Decision needed before apply: Yes`, apply the cached `delivery_strategy`: `ask-on-risk` asks, `auto-chain` asks for a missing `chain_strategy` and applies only the next PR slice, `single-pr` requires `size:exception`, and `exception-ok` records the exception.
 
-### Skill Resolution Feedback
+When launching `sdd-apply`, include the resolved `delivery_strategy`, `chain_strategy`, and any chosen PR boundary/exception in the prompt.
 
-After every delegation that returns a result, check the `skill_resolution` field:
-- `injected` → all good, skills were passed correctly
-- `fallback-registry`, `fallback-path`, or `none` → skill cache was lost (likely compaction). Re-read the registry immediately and inject compact rules in all subsequent delegations.
+### Artifact store (engram default)
 
-This is a self-correction mechanism. Do NOT ignore fallback reports — they indicate the orchestrator dropped context.
-
-### Sub-Agent Context Protocol
-
-Sub-agents get a fresh context with NO memory. The orchestrator controls context access.
-
-#### Non-SDD Tasks (general delegation)
-
-- Read context: orchestrator searches engram (`mem_search`) for relevant prior context and passes it in the sub-agent prompt. Sub-agent does NOT search engram itself.
-- Write context: sub-agent MUST save significant discoveries, decisions, or bug fixes to engram via `mem_save` before returning. Sub-agent has full detail — save before returning, not after.
-- Always add to sub-agent prompt: `"If you make important discoveries, decisions, or fix bugs, save them to engram via mem_save with project: '{project}'."`
-- Skills: orchestrator resolves compact rules from the registry and injects them as `## Project Standards (auto-resolved)` in the sub-agent prompt. Sub-agents do NOT read SKILL.md files or the registry — they receive rules pre-digested.
-
-#### SDD Phases
-
-Each phase has explicit read/write rules:
-
-| Phase | Reads | Writes |
-|-------|-------|--------|
-| `sdd-explore` | nothing | `explore` |
-| `sdd-propose` | exploration (optional) | `proposal` |
-| `sdd-spec` | proposal (required) | `spec` |
-| `sdd-design` | proposal (required) | `design` |
-| `sdd-tasks` | spec + design (required) | `tasks` |
-| `sdd-apply` | tasks + spec + design + **apply-progress (if exists)** | `apply-progress` |
-| `sdd-verify` | spec + tasks + **apply-progress** | `verify-report` |
-| `sdd-archive` | all artifacts | `archive-report` |
-
-For phases with required dependencies, sub-agent reads directly from the backend — orchestrator passes artifact references (topic keys or file paths), NOT content itself.
-
-#### Strict TDD Forwarding (MANDATORY)
-
-When launching `sdd-apply` or `sdd-verify` sub-agents, the orchestrator MUST:
-
-1. Search for testing capabilities: `mem_search(query: "sdd-init/{project}", project: "{project}")`
-2. If the result contains `strict_tdd: true`:
-   - Add to the sub-agent prompt: `"STRICT TDD MODE IS ACTIVE. Test runner: {test_command}. You MUST follow strict-tdd.md. Do NOT fall back to Standard Mode."`
-   - This is NON-NEGOTIABLE. Do not rely on the sub-agent discovering this independently.
-3. If the search fails or `strict_tdd` is not found, do NOT add the TDD instruction (sub-agent uses Standard Mode).
-
-The orchestrator resolves TDD status ONCE per session (at first apply/verify launch) and caches it.
-
-#### Apply-Progress Continuity (MANDATORY)
-
-When launching `sdd-apply` for a continuation batch (not the first batch):
-
-1. Search for existing apply-progress: `mem_search(query: "sdd/{change-name}/apply-progress", project: "{project}")`
-2. If found, add to the sub-agent prompt: `"PREVIOUS APPLY-PROGRESS EXISTS at topic_key 'sdd/{change-name}/apply-progress'. You MUST read it first via mem_search + mem_get_observation, merge your new progress with the existing progress, and save the combined result. Do NOT overwrite — MERGE."`
-3. If not found (first batch), no special instruction needed.
-
-This prevents progress loss across batches. The sub-agent is responsible for read-merge-write, but the orchestrator MUST tell it that previous progress exists.
-
-#### Engram Topic Key Format
-
-When launching sub-agents for SDD phases with engram mode, pass these exact topic_keys as artifact references:
-
-| Artifact | Topic Key |
+| Artifact | Topic key |
 |----------|-----------|
 | Project context | `sdd-init/{project}` |
-| Exploration | `sdd/{change-name}/explore` |
-| Proposal | `sdd/{change-name}/proposal` |
-| Spec | `sdd/{change-name}/spec` |
-| Design | `sdd/{change-name}/design` |
-| Tasks | `sdd/{change-name}/tasks` |
-| Apply progress | `sdd/{change-name}/apply-progress` |
-| Verify report | `sdd/{change-name}/verify-report` |
-| Archive report | `sdd/{change-name}/archive-report` |
-| DAG state | `sdd/{change-name}/state` |
+| Proposal | `sdd/{change}/proposal` |
+| Spec | `sdd/{change}/spec` |
+| Design | `sdd/{change}/design` |
+| Tasks | `sdd/{change}/tasks` |
+| Apply progress | `sdd/{change}/apply-progress` |
+| Verify report | `sdd/{change}/verify-report` |
+| Archive report | `sdd/{change}/archive-report` |
 
-Sub-agents retrieve full content via two steps:
-1. `mem_search(query: "{topic_key}", project: "{project}")` → get observation ID
-2. `mem_get_observation(id: {id})` → full content (REQUIRED — search results are truncated)
+Retrieve full content: `mem_search(query: "{topic_key}")` → `mem_get_observation(id)`.
 
 ### State and Conventions
 
 Convention files under `~/.codex/skills/_shared/` (global) or `.agent/skills/_shared/` (workspace): `engram-convention.md`, `persistence-contract.md`, `openspec-convention.md`.
 
-### Recovery Rule
+### Result contract
 
-- `engram` → `mem_search(...)` → `mem_get_observation(...)`
-- `openspec` → read `openspec/changes/*/state.yaml`
-- `none` → state not persisted — explain to user
+Each phase returns: `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`.
+
+---
+
+## Model Profiles
+
+gentle-ai writes three SDD model-selection profile files into `~/.codex/` during installation. Each profile sets `model_reasoning_effort` so Codex picks the right tier — no hardcoded model IDs.
+
+These profile files apply to whole CLI sessions: `codex --profile <name> "<prompt>"`. They do NOT apply to spawned sub-agents. When delegating a phase via `spawn_agent`, pass the tier's effort directly as `reasoning_effort` (with `fork_turns: "none"`), using the same tier values below.
+
+| Profile (CLI) | `reasoning_effort` (spawn_agent) | SDD phases |
+|---------------|----------------------------------|------------|
+| `sdd-strong` | `high` | propose, design, verify, judge |
+| `sdd-mid` | `high` | spec, tasks, apply |
+| `sdd-cheap` | `low` | explore, archive, onboard |
+
 <!-- /gentle-ai:sdd-orchestrator -->

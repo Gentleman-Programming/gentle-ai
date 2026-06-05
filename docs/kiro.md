@@ -96,7 +96,7 @@ Kiro SDD phase agents are generated with YAML frontmatter including:
 - `model`
 - `includeMcpJson: true`
 
-The `model` value is injected during sync from Claude alias assignments (`opus|sonnet|haiku`) to Kiro-native model IDs.
+The `model` value is injected during sync from Kiro model assignments (`auto|opus|sonnet|haiku|minimax|glm|deepseek|qwen`) to Kiro-native model IDs.
 
 ---
 

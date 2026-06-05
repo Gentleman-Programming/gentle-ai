@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -161,6 +162,12 @@ func TestGuardFlowLinuxDryRunPropagatesDecision(t *testing.T) {
 }
 
 func TestRunArgsNoCommandLaunchesTUI(t *testing.T) {
+	origRunTUI := runTUI
+	t.Cleanup(func() { runTUI = origRunTUI })
+	runTUI = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
+		return nil, errors.New("mock TUI error: no TTY")
+	}
+
 	var buf bytes.Buffer
 	err := RunArgs(nil, &buf)
 	// With no args, RunArgs now launches the TUI via Bubbletea.
@@ -170,7 +177,7 @@ func TestRunArgsNoCommandLaunchesTUI(t *testing.T) {
 		// If no error, we're somehow in a TTY — that's fine too.
 		return
 	}
-	if !strings.Contains(err.Error(), "TTY") && !strings.Contains(err.Error(), "tty") {
+	if !strings.Contains(err.Error(), "TTY") && !strings.Contains(err.Error(), "tty") && !strings.Contains(err.Error(), "mock TUI") {
 		t.Fatalf("RunArgs(nil) unexpected error = %v; want TTY-related error or nil", err)
 	}
 }

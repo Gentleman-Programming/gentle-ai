@@ -453,12 +453,12 @@ curl -sL get.gentleman.ai/ai | sh
      ┌─────────────────────────────────┐
      │  Select Ecosystem Preset         │
      │                                  │
-     │  ★ Full Gentleman                │  ← Everything: Engram + SDD + Skills
+     │  ★ Dev Stack + Polish             │  ← Everything: Engram + SDD + Skills
      │     (Engram + SDD + All Skills   │     + MCP + Theme + Permissions
      │      + MCP + Theme)              │
      │                                  │
-     │  ○ Ecosystem Only                │  ← Tools without persona
-     │  ○ Minimal                       │  ← Just Engram + basics
+     │  ○ Dev Stack                     │  ← Tools without persona
+     │  ○ Memory Only                   │  ← Just Engram + basics
      │  ○ Custom                        │  ← Pick each component
      └──────────┬──────────────────────┘
                 │
@@ -557,7 +557,7 @@ gentle-ai install \
 | System Detection | Show detected OS, existing tools, existing configs, installed dependencies |
 | Agent Selection | Multi-select AI agents to install/configure |
 | Persona Selection | "Your own Gentleman!" / Neutral / Custom |
-| Preset Selection | Full Gentleman / Ecosystem Only / Minimal / Custom |
+| Preset Selection | Dev Stack + Polish / Dev Stack / Memory Only / Custom |
 | MCP Server Selection | Which MCP integrations to enable (Custom mode) |
 | Skills Selection | Which coding skills to install (Custom mode) |
 | Config Customization | Theme, permissions, editor mode (Custom mode) |
@@ -1081,8 +1081,8 @@ gentle-ai/
 │   │   ├── skills.go               # Skills library install
 │   │   └── config.go               # Persona, theme, permissions, etc.
 │   ├── presets/
-│   │   ├── gentleman.go            # Full Gentleman preset definition
-│   │   ├── minimal.go              # Minimal preset definition
+│   │   ├── gentleman.go            # Dev Stack + Polish preset definition (`full-gentleman`)
+│   │   ├── minimal.go              # Memory Only preset definition (`minimal`)
 │   │   └── preset.go               # Preset interface
 │   ├── backup/
 │   │   └── backup.go               # Config backup & restore
@@ -1166,12 +1166,14 @@ type Preset struct {
 
 **Predefined presets:**
 
-| Preset | What's Included | Persona | Description |
-|--------|----------------|---------|-------------|
-| `full-gentleman` | All agents detected + Engram + SDD + all skills + MCP + theme | "Your own Gentleman!" | The complete experience. Everything configured, Gentleman persona, dark theme, the works. |
-| `ecosystem-only` | Engram + SDD + skills + MCP for selected agents | Neutral (no persona) | All the tools and workflow, zero personality. For developers who want the ecosystem but prefer their agent's default behavior. |
-| `minimal` | Engram + basic skills for selected agents | Neutral | Just memory and essential skills. Quick and lean. |
-| `custom` | User picks each component | User picks | Full control over every aspect. |
+Persona is selected separately on the Persona screen and applied independently of the preset.
+
+| Preset | Display Label | What's Included | Description |
+|--------|--------------|-----------------|-------------|
+| `full-gentleman` | Dev Stack + Polish | All agents detected + Engram + SDD + all skills + MCP + theme | The complete experience. Everything configured, dark theme, the works. |
+| `ecosystem-only` | Dev Stack | Engram + SDD + skills + MCP for selected agents | All the tools and workflow. For developers who want the ecosystem without opinionated defaults. |
+| `minimal` | Memory Only | Engram + basic skills for selected agents | Just memory and essential skills. Quick and lean. |
+| `custom` | Custom | User picks each component | Full control over every aspect. |
 
 ---
 
@@ -1232,7 +1234,7 @@ type Preset struct {
 
 ### 11.1 What the User Gets After Installation
 
-When the installer completes with "Full Gentleman" preset + Claude Code + OpenCode:
+When the installer completes with "Dev Stack + Polish" (`full-gentleman`) preset + Claude Code + OpenCode:
 
 **Claude Code:**
 - `~/.claude/CLAUDE.md` — Gentleman persona with SDD orchestrator
@@ -1383,10 +1385,10 @@ These are NOT requirements for v1 but should inform architectural decisions:
 ## Appendix B: Example Non-Interactive Commands
 
 ```bash
-# Full Gentleman preset with Claude Code + OpenCode
+# Dev Stack + Polish preset with Claude Code + OpenCode
 gentle-ai install --preset gentleman --agents claude-code,opencode
 
-# Minimal setup, just Claude Code with basic security
+# Memory Only setup, just Claude Code with basic security
 gentle-ai install --preset minimal --agents claude-code
 
 # Team provisioning from shared profile

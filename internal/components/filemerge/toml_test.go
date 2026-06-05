@@ -170,3 +170,282 @@ command = "engram"
 		t.Fatalf("UpsertTopLevelTOMLString is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
 	}
 }
+
+// ─── UpsertCodexMCPServerBlock ────────────────────────────────────────────────
+
+func TestUpsertCodexMCPServerBlock_Empty(t *testing.T) {
+	result := UpsertCodexMCPServerBlock("", "context7", "npx", []string{"-y", "--package=@upstash/context7-mcp@2.2.5", "--", "context7-mcp"})
+
+	if !strings.Contains(result, "[mcp_servers.context7]") {
+		t.Fatalf("result missing [mcp_servers.context7]; got:\n%s", result)
+	}
+	if !strings.Contains(result, `command = "npx"`) {
+		t.Fatalf("result missing command = \"npx\"; got:\n%s", result)
+	}
+	if !strings.Contains(result, `"--package=@upstash/context7-mcp@2.2.5"`) {
+		t.Fatalf("result missing pinned version arg; got:\n%s", result)
+	}
+	if !strings.HasSuffix(result, "\n") {
+		t.Fatalf("result does not end with newline; got:\n%q", result)
+	}
+}
+
+func TestUpsertCodexMCPServerBlock_ReplacesExisting(t *testing.T) {
+	input := `[other_section]
+key = "value"
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp@1.0.0"]
+
+[another_section]
+foo = "bar"
+`
+	result := UpsertCodexMCPServerBlock(input, "context7", "npx", []string{"-y", "--package=@upstash/context7-mcp@2.2.5", "--", "context7-mcp"})
+
+	count := strings.Count(result, "[mcp_servers.context7]")
+	if count != 1 {
+		t.Fatalf("expected 1 [mcp_servers.context7] block, got %d; result:\n%s", count, result)
+	}
+
+	if strings.Contains(result, "@upstash/context7-mcp@1.0.0") {
+		t.Fatalf("result still contains stale args; got:\n%s", result)
+	}
+	if !strings.Contains(result, "[other_section]") {
+		t.Fatalf("result missing [other_section]; got:\n%s", result)
+	}
+	if !strings.Contains(result, "[another_section]") {
+		t.Fatalf("result missing [another_section]; got:\n%s", result)
+	}
+}
+
+func TestUpsertCodexMCPServerBlock_Idempotent(t *testing.T) {
+	input := `[other]
+key = "val"
+`
+	args := []string{"-y", "--package=@upstash/context7-mcp@2.2.5", "--", "context7-mcp"}
+	first := UpsertCodexMCPServerBlock(input, "context7", "npx", args)
+	second := UpsertCodexMCPServerBlock(first, "context7", "npx", args)
+
+	if first != second {
+		t.Fatalf("UpsertCodexMCPServerBlock is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+
+	count := strings.Count(second, "[mcp_servers.context7]")
+	if count != 1 {
+		t.Fatalf("after two runs: expected 1 [mcp_servers.context7] block, got %d; result:\n%s", count, second)
+	}
+}
+
+func TestUpsertCodexMCPServerBlock_PreservesEngramBlock(t *testing.T) {
+	input := `[mcp_servers.engram]
+command = "engram"
+args = ["mcp", "--tools=agent"]
+`
+	result := UpsertCodexMCPServerBlock(input, "context7", "npx", []string{"-y", "--package=@upstash/context7-mcp@2.2.5", "--", "context7-mcp"})
+
+	if !strings.Contains(result, "[mcp_servers.engram]") {
+		t.Fatalf("result missing [mcp_servers.engram] after context7 upsert; got:\n%s", result)
+	}
+	if !strings.Contains(result, `command = "engram"`) {
+		t.Fatalf("result missing engram command after context7 upsert; got:\n%s", result)
+	}
+	if !strings.Contains(result, "[mcp_servers.context7]") {
+		t.Fatalf("result missing [mcp_servers.context7]; got:\n%s", result)
+	}
+
+	engramCount := strings.Count(result, "[mcp_servers.engram]")
+	if engramCount != 1 {
+		t.Fatalf("expected 1 [mcp_servers.engram] block, got %d; result:\n%s", engramCount, result)
+	}
+}
+
+func TestUpsertCodexMCPServerBlock_EscapesBackslashes(t *testing.T) {
+	// Windows-style path in command must have backslashes doubled in TOML double-quoted strings.
+	winCmd := `C:\Users\PERC\AppData\Roaming\npm\npx.cmd`
+	result := UpsertCodexMCPServerBlock("", "context7", winCmd, []string{`C:\some\arg\path`})
+
+	wantCmd := `command = "C:\\Users\\PERC\\AppData\\Roaming\\npm\\npx.cmd"`
+	if !strings.Contains(result, wantCmd) {
+		t.Fatalf("result missing properly escaped Windows command;\nwant substring: %s\ngot:\n%s", wantCmd, result)
+	}
+
+	wantArg := `"C:\\some\\arg\\path"`
+	if !strings.Contains(result, wantArg) {
+		t.Fatalf("result missing properly escaped Windows arg;\nwant substring: %s\ngot:\n%s", wantArg, result)
+	}
+}
+
+func TestUpsertCodexRemoteMCPServerBlock_ReplacesLegacyLocalBlock(t *testing.T) {
+	input := `[mcp_servers.context7]
+command = "npx"
+args = ["-y", "--package=@upstash/context7-mcp@2.2.5", "--", "context7-mcp"]
+
+[mcp_servers.engram]
+command = "engram"
+args = ["mcp", "--tools=agent"]
+`
+	result := UpsertCodexRemoteMCPServerBlock(input, "context7", "https://mcp.context7.com/mcp")
+
+	if count := strings.Count(result, "[mcp_servers.context7]"); count != 1 {
+		t.Fatalf("expected 1 [mcp_servers.context7], got %d; result:\n%s", count, result)
+	}
+	if !strings.Contains(result, `url = "https://mcp.context7.com/mcp"`) {
+		t.Fatalf("result missing remote Context7 URL; got:\n%s", result)
+	}
+	if strings.Contains(result, `command = "npx"`) || strings.Contains(result, "context7-mcp") {
+		t.Fatalf("legacy local Context7 config survived migration; got:\n%s", result)
+	}
+	if !strings.Contains(result, "[mcp_servers.engram]") {
+		t.Fatalf("result missing [mcp_servers.engram]; got:\n%s", result)
+	}
+}
+
+func TestUpsertCodexRemoteMCPServerBlock_Idempotent(t *testing.T) {
+	input := `[other]
+key = "value"
+`
+	first := UpsertCodexRemoteMCPServerBlock(input, "context7", "https://mcp.context7.com/mcp")
+	second := UpsertCodexRemoteMCPServerBlock(first, "context7", "https://mcp.context7.com/mcp")
+
+	if first != second {
+		t.Fatalf("UpsertCodexRemoteMCPServerBlock is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+// ─── UpsertTOMLTableKey ───────────────────────────────────────────────────────
+
+func TestUpsertTOMLTableKey_CreatesSection(t *testing.T) {
+	// When the [features] section does not exist, it must be appended with the key.
+	result := UpsertTOMLTableKey("", "features", "multi_agent", "false")
+
+	count := strings.Count(result, "[features]")
+	if count != 1 {
+		t.Fatalf("expected 1 [features] header, got %d; result:\n%s", count, result)
+	}
+	if !strings.Contains(result, "multi_agent = false") {
+		t.Fatalf("result missing multi_agent = false; got:\n%s", result)
+	}
+	if !strings.HasSuffix(result, "\n") {
+		t.Fatalf("result does not end with newline; got:\n%q", result)
+	}
+}
+
+func TestUpsertTOMLTableKey_ReplacesKeyInSection(t *testing.T) {
+	input := "[features]\nmulti_agent = true\n"
+	result := UpsertTOMLTableKey(input, "features", "multi_agent", "false")
+
+	count := strings.Count(result, "[features]")
+	if count != 1 {
+		t.Fatalf("expected 1 [features] header, got %d; result:\n%s", count, result)
+	}
+	if !strings.Contains(result, "multi_agent = false") {
+		t.Fatalf("result missing multi_agent = false; got:\n%s", result)
+	}
+	if strings.Contains(result, "multi_agent = true") {
+		t.Fatalf("result still has old value multi_agent = true; got:\n%s", result)
+	}
+	count2 := strings.Count(result, "multi_agent")
+	if count2 != 1 {
+		t.Fatalf("expected 1 multi_agent key, got %d; result:\n%s", count2, result)
+	}
+}
+
+func TestUpsertTOMLTableKey_PreservesOtherTables(t *testing.T) {
+	// Upserting [features].multi_agent must not disturb [agents] or top-level keys.
+	input := `model = "gpt-4o"
+
+[agents]
+max_threads = 4
+max_depth = 2
+`
+	result := UpsertTOMLTableKey(input, "features", "multi_agent", "false")
+
+	if !strings.Contains(result, `model = "gpt-4o"`) {
+		t.Fatalf("result missing top-level model key; got:\n%s", result)
+	}
+	if !strings.Contains(result, "[agents]") {
+		t.Fatalf("result missing [agents] section; got:\n%s", result)
+	}
+	if !strings.Contains(result, "max_threads = 4") {
+		t.Fatalf("result missing max_threads; got:\n%s", result)
+	}
+	if !strings.Contains(result, "[features]") {
+		t.Fatalf("result missing new [features] section; got:\n%s", result)
+	}
+	if !strings.Contains(result, "multi_agent = false") {
+		t.Fatalf("result missing multi_agent; got:\n%s", result)
+	}
+}
+
+func TestUpsertTOMLTableKey_Idempotent(t *testing.T) {
+	input := "[agents]\nmax_threads = 2\n"
+	first := UpsertTOMLTableKey(input, "agents", "max_threads", "4")
+	second := UpsertTOMLTableKey(first, "agents", "max_threads", "4")
+
+	if first != second {
+		t.Fatalf("UpsertTOMLTableKey is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+	count := strings.Count(second, "max_threads")
+	if count != 1 {
+		t.Fatalf("after two runs: expected 1 max_threads key, got %d; result:\n%s", count, second)
+	}
+}
+
+func TestUpsertTOMLTableKey_BareValues(t *testing.T) {
+	// Boolean and integer rawValues must be written unquoted.
+	r1 := UpsertTOMLTableKey("", "features", "multi_agent", "false")
+	if !strings.Contains(r1, "multi_agent = false") {
+		t.Fatalf("bool false must be bare (no quotes); got:\n%s", r1)
+	}
+	if strings.Contains(r1, `"false"`) {
+		t.Fatalf("bool false must NOT be quoted; got:\n%s", r1)
+	}
+
+	r2 := UpsertTOMLTableKey("", "agents", "max_threads", "4")
+	if !strings.Contains(r2, "max_threads = 4") {
+		t.Fatalf("integer 4 must be bare (no quotes); got:\n%s", r2)
+	}
+	if strings.Contains(r2, `"4"`) {
+		t.Fatalf("integer 4 must NOT be quoted; got:\n%s", r2)
+	}
+}
+
+func TestUpsertTOMLTableKey_MultipleKeysInSection(t *testing.T) {
+	// Upserting a second key to an existing section keeps the first key intact.
+	input := "[agents]\nmax_threads = 4\n"
+	result := UpsertTOMLTableKey(input, "agents", "max_depth", "2")
+
+	if !strings.Contains(result, "max_threads = 4") {
+		t.Fatalf("result missing original max_threads key; got:\n%s", result)
+	}
+	if !strings.Contains(result, "max_depth = 2") {
+		t.Fatalf("result missing new max_depth key; got:\n%s", result)
+	}
+	count := strings.Count(result, "[agents]")
+	if count != 1 {
+		t.Fatalf("expected 1 [agents] header, got %d; result:\n%s", count, result)
+	}
+}
+
+func TestUpsertTOMLTableKey_ScopedToTargetSection(t *testing.T) {
+	// A same-named key in [other] must NOT be touched when upserting into [agents].
+	input := `[other]
+max_threads = 99
+
+[agents]
+max_threads = 2
+`
+	result := UpsertTOMLTableKey(input, "agents", "max_threads", "4")
+
+	// [agents].max_threads updated; [other].max_threads untouched.
+	if strings.Count(result, "max_threads = 99") != 1 {
+		t.Fatalf("[other].max_threads=99 must be preserved exactly once; got:\n%s", result)
+	}
+	if strings.Count(result, "max_threads = 4") != 1 {
+		t.Fatalf("[agents].max_threads=4 must appear exactly once; got:\n%s", result)
+	}
+	if strings.Contains(result, "max_threads = 2") {
+		t.Fatalf("old [agents].max_threads=2 must be removed; got:\n%s", result)
+	}
+}

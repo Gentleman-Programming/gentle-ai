@@ -71,12 +71,16 @@ These are the tools the AI agent uses behind the scenes. You never call them dir
 
 | Tool | What it does |
 |------|--------------|
-| `mem_save` | Saves a decision, bug fix, discovery, or convention to memory |
+| `mem_save` | Saves a decision, bug fix, discovery, or convention to memory. Engram v1.15.3+ captures the user prompt best-effort by default when prompt context was already fed for the same project/session |
 | `mem_search` | Searches memory by keywords -- returns matching observations |
 | `mem_context` | Gets recent session history (called at session start) |
 | `mem_session_summary` | Saves an end-of-session summary so the next session has context |
 | `mem_get_observation` | Retrieves full untruncated content of a specific observation by ID |
-| `mem_save_prompt` | Saves the user's prompt for additional context |
+| `mem_save_prompt` | Saves the user's prompt and feeds session activity so a later `mem_save` can capture/dedupe it |
+
+`mem_save` accepts optional `capture_prompt`. Leave it unset for normal human/proactive saves. Use `capture_prompt: false` only for automated artifacts such as SDD proposal/spec/design/tasks/apply/verify/archive/init reports, testing-capabilities caches, onboarding/state artifacts, or skill-registry output. If the MCP server has no prompt context, `mem_save` still succeeds and does not invent prompt text.
+
+Agents or plugin hooks that can observe the user's prompt should call `mem_save_prompt` before any derived `mem_save` calls so Engram can attach and dedupe the real prompt context.
 
 ### Advanced Tools
 

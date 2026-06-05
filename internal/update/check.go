@@ -75,7 +75,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 
 	go func() {
 		defer wg.Done()
-		release, fetchErr = fetchLatestRelease(ctx, tool.Owner, tool.Repo)
+		release, fetchErr = fetchLatestReleaseForTool(ctx, tool)
 	}()
 
 	wg.Wait()
@@ -134,6 +134,13 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 	// Compare versions.
 	result.Status = compareVersions(normalizedLocal, result.LatestVersion)
 	return result
+}
+
+func fetchLatestReleaseForTool(ctx context.Context, tool ToolInfo) (githubRelease, error) {
+	if pattern := strings.TrimSpace(tool.ReleaseTagPattern); pattern != "" {
+		return fetchLatestReleaseMatchingPattern(ctx, tool.Owner, tool.Repo, pattern)
+	}
+	return fetchLatestRelease(ctx, tool.Owner, tool.Repo)
 }
 
 // normalizeVersion strips a leading "v" and extracts a semver pattern.

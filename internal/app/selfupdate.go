@@ -1,14 +1,18 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/mattn/go-isatty"
 
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
@@ -22,7 +26,30 @@ var lookPathFn = exec.LookPath
 const (
 	envNoSelfUpdate   = "GENTLE_AI_NO_SELF_UPDATE"
 	envSelfUpdateDone = "GENTLE_AI_SELF_UPDATE_DONE"
+	envConfirmUpdate  = "GENTLE_AI_CONFIRM_UPDATE"
 )
+
+// promptFn is swappable for tests — asks the user whether to apply the update.
+// Returns true if the user confirms, false to skip.
+var promptFn = defaultPromptForUpdate
+
+// defaultPromptForUpdate prints the version delta and reads a y/N answer from stdin.
+// If stdin is not a TTY, it defaults to false (decline) so scripts and CI are unaffected.
+func defaultPromptForUpdate(stdout io.Writer, stdin io.Reader, currentVersion, latestVersion string) (bool, error) {
+	// Require a TTY; non-interactive environments silently decline.
+	if f, ok := stdin.(*os.File); !ok || !isatty.IsTerminal(f.Fd()) {
+		return false, nil
+	}
+
+	_, _ = fmt.Fprintf(stdout, "Update available: %s → %s. Apply now? [y/N]: ", currentVersion, latestVersion)
+
+	scanner := bufio.NewScanner(stdin)
+	if !scanner.Scan() {
+		return false, scanner.Err()
+	}
+	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
+	return answer == "y" || answer == "yes", nil
+}
 
 // selfUpdateTimeout is the maximum time allowed for the update check + upgrade.
 const selfUpdateTimeout = 7 * time.Second
@@ -80,6 +107,14 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 		return nil
 	}
 
+	// Guard: if GENTLE_AI_CONFIRM_UPDATE=1, prompt the user before applying.
+	if os.Getenv(envConfirmUpdate) == "1" {
+		ok, err := promptFn(stdout, os.Stdin, version, target.LatestVersion)
+		if err != nil || !ok {
+			return nil
+		}
+	}
+
 	// Run upgrade (backup + strategy execution).
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -103,9 +138,23 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 		return nil
 	}
 
+	return restartAfterGentleAIUpgrade(target.LatestVersion, stdout)
+}
+
+func gentleAIUpgradeSucceeded(report upgrade.UpgradeReport) (string, bool) {
+	for _, r := range report.Results {
+		if r.ToolName == "gentle-ai" && r.Status == upgrade.UpgradeSucceeded {
+			return strings.TrimPrefix(r.NewVersion, "v"), true
+		}
+	}
+	return "", false
+}
+
+func restartAfterGentleAIUpgrade(latestVersion string, stdout io.Writer) error {
+	latestVersion = strings.TrimPrefix(latestVersion, "v")
 	// Re-exec on Unix; print message on Windows.
 	if goOS() == "windows" {
-		_, _ = fmt.Fprintf(stdout, "Updated to v%s — please restart.\n", target.LatestVersion)
+		_, _ = fmt.Fprintf(stdout, "Updated to v%s — please restart.\n", latestVersion)
 		return nil
 	}
 
@@ -129,7 +178,7 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 	// Set loop guard env var before re-exec.
 	os.Setenv(envSelfUpdateDone, "1")
 
-	_, _ = fmt.Fprintf(stdout, "Updated to v%s, restarting...\n", target.LatestVersion)
+	_, _ = fmt.Fprintf(stdout, "Updated to v%s, restarting...\n", latestVersion)
 
 	return reExec(executable, os.Args, os.Environ())
 }

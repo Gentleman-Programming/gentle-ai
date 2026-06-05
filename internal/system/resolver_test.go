@@ -8,7 +8,7 @@ import (
 
 func TestDefaultResolver_Resolve(t *testing.T) {
 	resolver := &DefaultResolver{}
-	
+
 	tests := []struct {
 		name string
 		path string
@@ -32,7 +32,7 @@ func TestDefaultResolver_Resolve(t *testing.T) {
 func TestTermuxResolver_Resolve(t *testing.T) {
 	prefix := "/data/data/com.termux/files/usr"
 	resolver := &TermuxResolver{Prefix: prefix}
-	
+
 	tests := []struct {
 		name string
 		path string
@@ -113,13 +113,13 @@ func TestTermuxResolver_Resolve(t *testing.T) {
 func TestNewResolverForDistro(t *testing.T) {
 	prefix := "/data/data/com.termux/files/usr"
 	t.Setenv("PREFIX", prefix)
-	
+
 	tests := []struct {
 		name   string
 		distro string
 		want   string // Type name as string for comparison
 	}{
-		{name: "termux returns TermuxResolver", distro: LinuxDistroTermux, want: "*system.TermuxResolver"},
+		{name: "termux distro returns DefaultResolver to avoid half-detection", distro: LinuxDistroTermux, want: "*system.DefaultResolver"},
 		{name: "ubuntu returns DefaultResolver", distro: LinuxDistroUbuntu, want: "*system.DefaultResolver"},
 		{name: "unknown returns DefaultResolver", distro: LinuxDistroUnknown, want: "*system.DefaultResolver"},
 	}
@@ -131,12 +131,37 @@ func TestNewResolverForDistro(t *testing.T) {
 			if typeName != tc.want {
 				t.Fatalf("NewResolverForDistro(%q) returned %s, want %s", tc.distro, typeName, tc.want)
 			}
-			
-			if tc.distro == LinuxDistroTermux {
-				tr := resolver.(*TermuxResolver)
-				if tr.Prefix != prefix {
-					t.Fatalf("TermuxResolver.Prefix = %q, want %q", tr.Prefix, prefix)
-				}
+
+		})
+	}
+}
+
+func TestNewResolverForProfileUsesAndroidAsTermuxBoundary(t *testing.T) {
+	prefix := "/data/data/com.termux/files/usr"
+	t.Setenv("PREFIX", prefix)
+
+	tests := []struct {
+		name    string
+		profile PlatformProfile
+		want    string
+	}{
+		{
+			name:    "android profile returns TermuxResolver",
+			profile: PlatformProfile{OS: "android", LinuxDistro: LinuxDistroTermux},
+			want:    "*system.TermuxResolver",
+		},
+		{
+			name:    "linux profile with termux distro does not create half-detected Termux",
+			profile: PlatformProfile{OS: "linux", LinuxDistro: LinuxDistroTermux},
+			want:    "*system.DefaultResolver",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resolver := NewResolverForProfile(tc.profile)
+			if got := fmt.Sprintf("%T", resolver); got != tc.want {
+				t.Fatalf("NewResolverForProfile(%+v) = %s, want %s", tc.profile, got, tc.want)
 			}
 		})
 	}

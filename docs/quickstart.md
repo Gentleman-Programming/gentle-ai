@@ -7,7 +7,7 @@
 - Homebrew installed and available in PATH.
 - `git` available.
 
-### Ubuntu/Debian (and derivatives like Linux Mint, Pop!_OS)
+### Ubuntu/Debian (and derivatives like Linux Mint, Pop!\_OS)
 
 - `apt-get` available (standard on these distros).
 - `sudo` access for package installs.
@@ -30,6 +30,11 @@
 
 - Go 1.24+ (for building from source).
 - Node.js / npm if installing Claude Code (agent is installed via `npm install -g`).
+- Pi installed and available as `pi` on `PATH` if you select the Pi agent.
+
+### Windows
+
+- Scoop installed. Gentle AI recommends Scoop as the Windows install path.
 
 ## Run
 
@@ -49,11 +54,42 @@ The installer detects your platform automatically — no flags needed to select 
 
 After completion, verify that agent configs and selected components were installed to their expected paths.
 
+The agents you select during install become the default scope for future `gentle-ai sync` runs. Gentle AI records that selection in `~/.gentle-ai/state.json` and does not automatically sync every agent config directory that exists on your machine. To check what will be updated after an upgrade, run:
+
+```bash
+gentle-ai sync --dry-run
+```
+
+To update a different set explicitly, pass every target agent:
+
+```bash
+gentle-ai sync --agent claude-code --agent opencode
+```
+
 ## Verification outcome
 
 When checks pass, installer reports:
 
 `You're ready. Run 'claude' or 'opencode' and start building.`
+
+If something looks wrong after install, run `gentle-ai doctor` for a read-only health check. It verifies tool binaries, `state.json` validity, Engram MCP reachability, and disk space — each check reports pass/warn/fail with a remedy hint.
+
+For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi`, `gentle-engram`, and `pi-mcp-adapter`, runs `pi-engram init` through the pinned `gentle-engram` package, then installs `pi-subagents`, `pi-intercom`, `@juicesharp/rpiv-ask-user-question`, `pi-web-access`, `pi-lens`, `@juicesharp/rpiv-todo`, and `pi-btw`.
+
+## Hardening recommendations for users
+
+Gentle AI pins versions and disables postinstall scripts on every npm install it generates. When you install the `permissions` component, a sensitive-paths deny list is applied to Claude Code and OpenCode blocking access to `~/.ssh/*`, `**/*.pem`, `**/*.key`, `**/.env*`, `~/.aws/credentials`, and other credential paths. See [Components](../docs/components.md) for the full list.
+
+For broader protection across npm packages you install yourself, set these once on your machine:
+
+- `npm config set ignore-scripts true` — blocks postinstall scripts globally; the primary supply-chain attack vector.
+- `npm config set min-release-age 3` — skip packages published in the last 3 days; catches malicious typosquats before you install them.
+- `npm config set allow-git none` — block git: dependencies, which can be moving targets.
+
+Optional wrapper tools for extra defense:
+
+- [`npq`](https://github.com/lirantal/npq) — audits a package against several heuristics before it installs.
+- [`sfw`](https://socket.dev/) (Socket Firewall) — runtime guard that intercepts suspicious behavior at install/run time.
 
 ## Unsupported platforms
 

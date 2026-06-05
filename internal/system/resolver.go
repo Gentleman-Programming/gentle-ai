@@ -55,15 +55,29 @@ func (r *TermuxResolver) Resolve(path string) string {
 	return path
 }
 
-// NewResolverForDistro returns the appropriate PathResolver for the given distro.
-func NewResolverForDistro(distro string) PathResolver {
-	if distro == LinuxDistroTermux {
-		prefix := os.Getenv("PREFIX")
-		if prefix == "" {
-			// Fallback to default Termux prefix if env var is missing.
-			prefix = "/data/data/com.termux/files/usr"
-		}
-		return &TermuxResolver{Prefix: prefix}
+// NewResolverForProfile returns the appropriate PathResolver for a resolved
+// platform profile. Termux is a first-class Android OS profile, not a Linux
+// distro detected through /etc/os-release.
+func NewResolverForProfile(profile PlatformProfile) PathResolver {
+	if profile.OS == "android" {
+		return newTermuxResolver()
 	}
 	return &DefaultResolver{}
+}
+
+// NewResolverForDistro returns the appropriate PathResolver for the given distro.
+// Prefer NewResolverForProfile at platform call sites. Termux is intentionally
+// not resolved from a Linux distro string because Android is the canonical
+// Termux platform boundary.
+func NewResolverForDistro(distro string) PathResolver {
+	return &DefaultResolver{}
+}
+
+func newTermuxResolver() PathResolver {
+	prefix := os.Getenv("PREFIX")
+	if prefix == "" {
+		// Fallback to default Termux prefix if env var is missing.
+		prefix = "/data/data/com.termux/files/usr"
+	}
+	return &TermuxResolver{Prefix: prefix}
 }

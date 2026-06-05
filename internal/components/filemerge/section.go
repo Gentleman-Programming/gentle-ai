@@ -204,15 +204,71 @@ func closeMarker(sectionID string) string {
 	return closePrefix + sectionID + markerSuffix
 }
 
+// stripOrphanMarkers removes unpaired opening or closing markers for the given
+// sectionID from content before injection logic runs.
+//
+// An orphan closer is a closing marker that appears with no preceding opening
+// marker, OR that appears BEFORE the opening marker in the file. Without this
+// cleanup the main injection loop would fall through to append mode, producing
+// a duplicate block on every sync call (the root cause of issue #301).
+//
+// An orphan opener is an opening marker with no subsequent closing marker; it
+// is also stripped so the caller can safely append a fresh, well-formed block.
+//
+// All occurrences of orphan markers are removed — not just the first — so that
+// files already corrupted with 20+ duplicate blocks are fully collapsed to a
+// clean state after a single sync run.
+func stripOrphanMarkers(content, open, close string) string {
+	for {
+		openIdx := strings.Index(content, open)
+		closeIdx := strings.Index(content, close)
+
+		switch {
+		case openIdx < 0 && closeIdx < 0:
+			// Neither marker present — nothing to strip.
+			return content
+
+		case openIdx < 0 && closeIdx >= 0:
+			// Orphan closer: closing marker exists but no opener before it.
+			// Remove this closer and loop to catch any remaining orphans.
+			content = content[:closeIdx] + content[closeIdx+len(close):]
+
+		case openIdx >= 0 && closeIdx < 0:
+			// Orphan opener: opening marker exists but no closer follows.
+			// Remove the orphan opener so the caller appends a fresh block.
+			content = content[:openIdx] + content[openIdx+len(open):]
+
+		case closeIdx < openIdx:
+			// Closer appears before opener — the closer is an orphan.
+			// Remove it and loop; the opener may then form a valid pair or
+			// become an orphan opener that gets cleaned up in the next iteration.
+			content = content[:closeIdx] + content[closeIdx+len(close):]
+
+		default:
+			// Both markers present and opener precedes closer — valid pair found.
+			// Stop; the main injection logic will handle the replacement.
+			return content
+		}
+	}
+}
+
 // InjectMarkdownSection replaces or appends a marked section in a markdown file.
 // Markers use HTML comments: <!-- gentle-ai:SECTION_ID --> ... <!-- /gentle-ai:SECTION_ID -->
 // If the section already exists, its content is replaced.
 // If it doesn't exist, it's appended at the end.
 // Content outside markers is never touched.
 // If content is empty, the section (including markers) is removed.
+//
+// Before injection, orphan markers (an unpaired closer or opener) are stripped
+// so that a file corrupted by a previous buggy sync run is repaired in place
+// rather than having another duplicate block appended.
 func InjectMarkdownSection(existing, sectionID, content string) string {
 	open := openMarker(sectionID)
 	close := closeMarker(sectionID)
+
+	// Repair any orphan markers left by previous (buggy) sync runs before
+	// attempting replacement. This is the core fix for issue #301.
+	existing = stripOrphanMarkers(existing, open, close)
 
 	openIdx := strings.Index(existing, open)
 	closeIdx := strings.Index(existing, close)

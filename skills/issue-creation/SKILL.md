@@ -1,8 +1,6 @@
 ---
 name: gentle-ai-issue-creation
-description: >
-  Issue creation workflow for Gentle AI following the issue-first enforcement system.
-  Trigger: When creating a GitHub issue, reporting a bug, or requesting a feature.
+description: "Create Gentle AI issues with issue-first checks. Trigger: creating GitHub issues, bug reports, or feature requests."
 license: Apache-2.0
 metadata:
   author: gentleman-programming

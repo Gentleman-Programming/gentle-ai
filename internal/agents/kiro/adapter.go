@@ -124,9 +124,9 @@ func (a *Adapter) EmbeddedSubAgentsDir() string {
 	return "kiro/agents"
 }
 
-// KiroModelID resolves a ClaudeModelAlias to a Kiro-native model identifier.
+// KiroModelID resolves a KiroModelAlias to a Kiro-native model identifier.
 // Used by the SDD injector to stamp the `model:` field in agent frontmatter.
-func (a *Adapter) KiroModelID(alias model.ClaudeModelAlias) string {
+func (a *Adapter) KiroModelID(alias model.KiroModelAlias) string {
 	return model.KiroModelID(alias)
 }
 

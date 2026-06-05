@@ -21,6 +21,7 @@ import * as crypto from "node:crypto"
 import * as fs from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
+import { execFile } from "node:child_process"
 import { stat } from "node:fs/promises"
 import { type Plugin, type ToolContext, tool } from "@opencode-ai/plugin"
 import type { createOpencodeClient } from "@opencode-ai/sdk"
@@ -33,6 +34,24 @@ const { adjectives, animals, colors, uniqueNamesGenerator } = ung
 // ==========================================
 
 export type OpencodeClient = ReturnType<typeof createOpencodeClient>
+
+async function refreshSkillRegistry(directory: string, log: (level: "info" | "warn" | "error", message: string) => void): Promise<void> {
+  await new Promise<void>((resolve) => {
+    execFile(
+      "gentle-ai",
+      ["skill-registry", "refresh", "--quiet", "--no-gitignore", "--cwd", directory],
+      { timeout: 10_000 },
+      (error) => {
+        if (error) {
+          log("warn", `skill-registry refresh skipped: ${error.message}`)
+        } else {
+          log("info", "skill-registry refresh completed")
+        }
+        resolve()
+      },
+    )
+  })
+}
 
 // ==========================================
 // INLINED: kdco-primitives/with-timeout
@@ -448,20 +467,27 @@ async function parseAgentWriteCapability(
   }
 }
 
+interface AgentModelResolution {
+  providerID: string
+  modelID: string
+  variant?: string
+}
+
 /**
- * Resolve the model configured for a given agent.
+ * Resolve the model and variant configured for a given agent.
  * Parses the "provider/model-id" format into the shape session.prompt() expects.
+ * Also reads the optional "variant" (effort level) field from the agent config.
  * Returns undefined when no model is configured (caller falls back to default).
  */
 async function resolveAgentModel(
   client: OpencodeClient,
   agentName: string,
   log: Logger,
-): Promise<{ providerID: string; modelID: string } | undefined> {
+): Promise<AgentModelResolution | undefined> {
   try {
     const config = await client.config.get()
     const configData = config.data as {
-      agent?: Record<string, { model?: string }>
+      agent?: Record<string, { model?: string; variant?: string }>
     } | undefined
 
     const modelStr = configData?.agent?.[agentName]?.model
@@ -473,8 +499,10 @@ async function resolveAgentModel(
     const providerID = modelStr.substring(0, slashIndex)
     const modelID = modelStr.substring(slashIndex + 1)
 
-    await log.info(`resolveAgentModel: ${agentName} → ${providerID}/${modelID}`)
-    return { providerID, modelID }
+    const variant = configData?.agent?.[agentName]?.variant || undefined
+
+    await log.info(`resolveAgentModel: ${agentName} → ${providerID}/${modelID}${variant ? ` (variant: ${variant})` : ""}`)
+    return { providerID, modelID, variant }
   } catch {
     return undefined
   }
@@ -652,7 +680,8 @@ class DelegationManager {
         path: { id: delegation.sessionID },
         body: {
           agent: input.agent,
-          ...(agentModel && { model: agentModel }),
+          ...(agentModel && { model: { providerID: agentModel.providerID, modelID: agentModel.modelID } }),
+          ...(agentModel?.variant && { variant: agentModel.variant }),
           parts: [{ type: "text", text: input.prompt }],
           tools: {
             task: false,
@@ -1373,6 +1402,14 @@ export const BackgroundAgents: Plugin = async (ctx) => {
   const manager = new DelegationManager(client as OpencodeClient, baseDir, log)
 
   await manager.debugLog("BackgroundAgents initialized with delegation system")
+  let skillRegistryRefreshStarted = false
+  const refreshSkillRegistryOnce = async () => {
+    if (skillRegistryRefreshStarted) return
+    skillRegistryRefreshStarted = true
+    await refreshSkillRegistry(directory, (level, message) => {
+      manager.debugLog(`[${level}] ${message}`).catch(() => {})
+    })
+  }
 
   return {
     tool: {
@@ -1387,6 +1424,7 @@ export const BackgroundAgents: Plugin = async (ctx) => {
 
     // Inject delegation rules into system prompt
     "experimental.chat.system.transform": async (_input: SystemTransformInput, output) => {
+      await refreshSkillRegistryOnce()
       const combined = [...output.system, DELEGATION_RULES].join("\n\n---\n\n")
       output.system = [combined]
     },

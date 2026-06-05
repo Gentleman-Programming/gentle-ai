@@ -9,16 +9,18 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
-// sddPhaseSet is the set of valid SDD phase agent names that may appear in
-// opencode.json. It includes the sub-agent phases plus the orchestrator.
-var sddPhaseSet = buildSDDPhaseSet()
+// configurableAgentSet is the set of valid agent names that may appear in
+// opencode.json. It includes SDD phases, JD agents, and the gentle-orchestrator coordinator.
+var configurableAgentSet = buildConfigurableAgentSet()
 
-func buildSDDPhaseSet() map[string]bool {
-	phases := opencode.SDDPhases()
+func buildConfigurableAgentSet() map[string]bool {
+	phases := opencode.ConfigurableAgentPhases() // SDD + JD phases
 	set := make(map[string]bool, len(phases)+1)
 	for _, p := range phases {
 		set[p] = true
 	}
+	set["gentle-orchestrator"] = true
+	// Backward-compatible read alias for configs that have not been synced yet.
 	set["sdd-orchestrator"] = true
 	return set
 }
@@ -31,11 +33,11 @@ func ReadCurrentProfiles(settingsPath string) ([]model.Profile, error) {
 }
 
 // ReadCurrentModelAssignments reads the agent definitions from opencode.json
-// at settingsPath and extracts the "model" field for each SDD phase agent.
+// at settingsPath and extracts the "model" field for each configurable agent.
 //
-// Only agents whose names match an SDD phase (from opencode.SDDPhases()) or
-// "sdd-orchestrator" are included. Agents without a "model" field, or with a
-// malformed model value (not in "provider:model-id" format), are silently
+// Only agents whose names match a configurable agent phase (SDD phases, JD agents
+// via opencode.ConfigurableAgentPhases()) or "gentle-orchestrator" are included.
+// Agents without a "model" field, or with a malformed model value, are silently
 // skipped.
 //
 // Returns an empty map (no error) when the file does not exist, contains no
@@ -66,7 +68,7 @@ func ReadCurrentModelAssignments(settingsPath string) (map[string]model.ModelAss
 
 	result := make(map[string]model.ModelAssignment)
 	for name, defRaw := range agentMap {
-		if !sddPhaseSet[name] {
+		if !configurableAgentSet[name] {
 			continue
 		}
 		defMap, ok := defRaw.(map[string]any)
@@ -92,9 +94,18 @@ func ReadCurrentModelAssignments(settingsPath string) (map[string]model.ModelAss
 		if modelID == "" {
 			continue
 		}
-		result[name] = model.ModelAssignment{
+		assignmentKey := name
+		if name == "sdd-orchestrator" {
+			assignmentKey = "gentle-orchestrator"
+			if _, hasGentleOrchestrator := result[assignmentKey]; hasGentleOrchestrator {
+				continue
+			}
+		}
+		effort, _ := defMap["variant"].(string)
+		result[assignmentKey] = model.ModelAssignment{
 			ProviderID: providerID,
 			ModelID:    modelID,
+			Effort:     effort,
 		}
 	}
 

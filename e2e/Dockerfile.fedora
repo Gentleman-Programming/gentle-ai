@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Dockerfile.fedora — E2E test image for gentle-ai on Fedora 43
 # Builds the binary from source and runs the E2E test suite as a non-root user.
 FROM fedora:43
@@ -22,7 +23,7 @@ RUN curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash - && \
 # ---------------------------------------------------------------------------
 # Install Go (match go.mod version)
 # ---------------------------------------------------------------------------
-ARG GO_VERSION=1.24.2
+ARG GO_VERSION=1.25.10
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
     | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}"
@@ -38,9 +39,13 @@ RUN useradd -m -s /bin/bash testuser && \
 # ---------------------------------------------------------------------------
 WORKDIR /build
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/root/go/pkg/mod \
+    go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/root/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -o /usr/local/bin/gentle-ai ./cmd/gentle-ai
 
 # ---------------------------------------------------------------------------

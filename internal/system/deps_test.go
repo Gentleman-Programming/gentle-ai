@@ -2,6 +2,7 @@ package system
 
 import (
 	"context"
+	"runtime"
 	"testing"
 )
 
@@ -243,16 +244,21 @@ func TestRenderDependencyReportMissing(t *testing.T) {
 }
 
 func TestDetectSingleDepWithEchoTrue(t *testing.T) {
-	// This test uses "echo" which should be on PATH everywhere.
+	binary := "echo"
+	args := []string{"v1.0.0"}
+	if runtime.GOOS == "windows" {
+		binary = "cmd"
+		args = []string{"/c", "echo v1.0.0"}
+	}
 	dep := Dependency{
-		Name:      "echo",
+		Name:      binary,
 		Required:  true,
-		DetectCmd: []string{"echo", "v1.0.0"},
+		DetectCmd: append([]string{binary}, args...),
 	}
 
 	result := detectSingleDep(context.Background(), dep)
 	if !result.Installed {
-		t.Fatalf("expected echo to be detected as installed")
+		t.Fatalf("expected %s to be detected as installed", binary)
 	}
 
 	if result.Version != "1.0.0" {
@@ -274,12 +280,17 @@ func TestDetectSingleDepNonExistentBinary(t *testing.T) {
 }
 
 func TestDetectSingleDepMinVersionFail(t *testing.T) {
-	// Use echo to produce a version below the minimum.
+	binary := "echo"
+	args := []string{"v1.0.0"}
+	if runtime.GOOS == "windows" {
+		binary = "cmd"
+		args = []string{"/c", "echo v1.0.0"}
+	}
 	dep := Dependency{
-		Name:       "echo",
+		Name:       binary,
 		Required:   true,
 		MinVersion: "99.0.0",
-		DetectCmd:  []string{"echo", "v1.0.0"},
+		DetectCmd:  append([]string{binary}, args...),
 	}
 
 	result := detectSingleDep(context.Background(), dep)

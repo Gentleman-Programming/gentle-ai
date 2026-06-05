@@ -176,8 +176,25 @@ func renderUpgradeResult(b *strings.Builder, report *upgrade.UpgradeReport) stri
 		b.WriteString(styles.WarningStyle.Render("⚠ Backup warning: " + report.BackupWarning))
 	}
 
+	if reportUpgradedGentleAI(report) {
+		b.WriteString("\n")
+		b.WriteString(styles.WarningStyle.Render("⚠ gentle-ai was upgraded. Restart gentle-ai before running sync or continuing."))
+	}
+
 	b.WriteString("\n\n")
 	b.WriteString(styles.HelpStyle.Render("enter: return • esc: back • q: quit"))
 
 	return b.String()
+}
+
+func reportUpgradedGentleAI(report *upgrade.UpgradeReport) bool {
+	if report == nil {
+		return false
+	}
+	for _, result := range report.Results {
+		if result.ToolName == "gentle-ai" && result.Status == upgrade.UpgradeSucceeded {
+			return true
+		}
+	}
+	return false
 }

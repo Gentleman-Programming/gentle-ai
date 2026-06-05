@@ -21,6 +21,7 @@ type PlatformProfile struct {
 	LinuxDistro    string
 	PackageManager string
 	NpmWritable    bool // true when npm global prefix is user-writable (nvm/fnm/volta)
+	GoAvailable    bool // true when `go` is found on PATH (used for auto-detect: brew → go-install → binary)
 	Supported      bool
 }
 
@@ -50,7 +51,7 @@ func Detect(ctx context.Context) (DetectionResult, error) {
 		return DetectionResult{}, err
 	}
 
-	tools := DetectTools(ctx, []string{"git", "curl", "brew", "node"})
+	tools := DetectTools(ctx, []string{"git", "curl", "brew", "node", "go"})
 	configs := ScanConfigs(homeDir)
 	osReleaseContent, _ := osReleaseContent(runtime.GOOS)
 
@@ -116,6 +117,11 @@ func osReleaseContent(goos string) (string, error) {
 
 func resolvePlatformProfile(goos, linuxOSRelease string, tools map[string]ToolStatus) PlatformProfile {
 	profile := PlatformProfile{OS: goos}
+
+	// Detect Go availability for the brew → go-install → binary auto-detect order.
+	if go_, ok := tools["go"]; ok && go_.Installed {
+		profile.GoAvailable = true
+	}
 
 	switch goos {
 	case "android":

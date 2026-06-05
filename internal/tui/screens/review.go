@@ -86,11 +86,14 @@ func joinIDs[T ~string](values []T) string {
 }
 
 func reviewPersonaLabel(persona model.PersonaID) string {
-	if persona == model.PersonaCustom {
+	switch persona {
+	case model.PersonaCustom:
 		return "keep existing persona unmanaged"
+	case model.PersonaGentlemanNeutralArtifacts:
+		return "Gentleman conversation, neutral artifacts"
+	default:
+		return string(persona)
 	}
-
-	return string(persona)
 }
 
 func reviewPresetLabel(preset model.PresetID) string {

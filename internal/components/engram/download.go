@@ -4,6 +4,9 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,29 +32,39 @@ var (
 	engramHTTPClient    = &http.Client{Timeout: 5 * time.Minute}
 	engramGitHubBaseURL = "https://github.com"
 	engramInstallDirFn  = engramInstallDir
+	engramChecksumURLFn = engramChecksumURL
+	engramExecCommand   = exec.Command
+	engramGetenv        = os.Getenv
+	engramUserHomeDir   = os.UserHomeDir
 )
 
 // DownloadLatestBinary fetches the latest engram release from GitHub and
 // installs it to the appropriate directory for the given platform.
 // It returns the full path to the installed binary.
 //
+// Checksum verification is mandatory: the install fails if checksums.txt is
+// unavailable, if the archive is not listed, or if the digest does not match.
+//
 // This is the non-brew installation method for Linux and Windows.
 // On macOS, brew handles engram transitively and this should not be called.
 func DownloadLatestBinary(profile system.PlatformProfile) (string, error) {
-	if profile.OS == "android" {
-		return installViaGo(profile)
-	}
+	ctx := context.Background()
 
 	// 1. Fetch the latest version tag from GitHub API.
 	version, err := fetchLatestEngramVersion()
 	if err != nil {
 		return "", fmt.Errorf("fetch latest engram version: %w", err)
 	}
+	if profile.OS == "android" {
+		return installViaGo(version)
+	}
 
 	// 2. Determine binary name and archive URL.
 	goos := profile.OS
 	goarch := normalizeArch(runtime.GOARCH)
 	assetURL := engramAssetURL(engramGitHubBaseURL, version, goos, goarch)
+	archiveName := engramArchiveName(version, goos, goarch)
+	checksumURL := engramChecksumURLFn(engramGitHubBaseURL, version)
 
 	// 3. Determine install directory.
 	installDir := engramInstallDirFn(goos)
@@ -59,56 +72,114 @@ func DownloadLatestBinary(profile system.PlatformProfile) (string, error) {
 		return "", fmt.Errorf("create engram install dir %q: %w", installDir, err)
 	}
 
-	// 4. Download and extract binary.
+	// 4. Download archive to a temp dir so we can verify before extracting.
 	binaryName := engramName
 	if goos == "windows" {
 		binaryName = engramName + ".exe"
 	}
 	outPath := filepath.Join(installDir, binaryName)
 
+	tmpDir, err := os.MkdirTemp("", "gentle-ai-engram-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	archivePath := filepath.Join(tmpDir, archiveName)
+	actualDigest, err := engramDownloadToFile(ctx, assetURL, archivePath)
+	if err != nil {
+		return "", fmt.Errorf("download engram archive: %w", err)
+	}
+
+	// 5. Verify checksum — fail closed if checksums.txt is unavailable or mismatched.
+	checksumsContent, err := engramFetchChecksums(ctx, checksumURL)
+	if err != nil {
+		return "", fmt.Errorf("checksum verification failed: checksums.txt unavailable: %w", err)
+	}
+	expectedDigest, err := engramExpectedChecksumFor(checksumsContent, archiveName)
+	if err != nil {
+		return "", fmt.Errorf("checksum verification failed: %w", err)
+	}
+	if actualDigest != expectedDigest {
+		return "", fmt.Errorf("checksum mismatch for %s:\n  expected: %s\n  got:      %s",
+			archiveName, expectedDigest, actualDigest)
+	}
+
+	// 6. Extract the verified binary.
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return "", fmt.Errorf("open archive: %w", err)
+	}
+	defer f.Close()
+
 	if strings.HasSuffix(assetURL, ".zip") {
-		if err := downloadAndExtractZip(assetURL, binaryName, outPath); err != nil {
-			return "", fmt.Errorf("download engram zip: %w", err)
+		data, err := io.ReadAll(f)
+		if err != nil {
+			return "", fmt.Errorf("read zip archive: %w", err)
+		}
+		if err := extractZipBinary(data, binaryName, outPath); err != nil {
+			return "", fmt.Errorf("extract engram zip: %w", err)
 		}
 	} else {
-		if err := downloadAndExtractTarGz(assetURL, engramName, outPath); err != nil {
-			return "", fmt.Errorf("download engram tar.gz: %w", err)
+		if err := extractBinaryFromTarGz(f, engramName, outPath); err != nil {
+			return "", fmt.Errorf("extract engram tar.gz: %w", err)
 		}
 	}
 
 	return outPath, nil
 }
 
-// installViaGo compiles engram from source using 'go install' for platforms
-// like Android (Termux) where pre-built Linux binaries may be incompatible.
-func installViaGo(profile system.PlatformProfile) (string, error) {
-	// Use go install to compile from source.
-	// We use @latest to get the latest version as a compatible fallback.
-	// Android (Bionic libc) requires Position Independent Executables (PIE).
-	cmd := exec.Command("go", "install", "-ldflags=-extldflags=-pie", "github.com/Gentleman-Programming/engram/cmd/engram@latest")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("go install engram failed: %w (output: %s)", err, string(out))
+// installViaGo compiles engram from source for Android/Termux, where release
+// binaries built against glibc are incompatible with Android's Bionic libc.
+func installViaGo(version string) (string, error) {
+	if strings.TrimSpace(version) == "" {
+		return "", fmt.Errorf("go install engram: version is required")
 	}
 
-	// Determine where go install placed the binary.
-	// Default: ~/go/bin/engram (on Unix/Termux)
-	home, err := os.UserHomeDir()
+	installDir, extraEnv, err := goInstallDestination()
 	if err != nil {
-		return "", fmt.Errorf("find home dir: %w", err)
+		return "", err
+	}
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		return "", fmt.Errorf("create engram install dir %q: %w", installDir, err)
 	}
 
+	target := fmt.Sprintf("github.com/Gentleman-Programming/engram/cmd/engram@v%s", version)
+	args := []string{"install", "-ldflags=-extldflags=-pie", target}
+	cmd := engramExecCommand("go", args...)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("go %v: %w (output: %s)", args, err, string(out))
+	}
+
+	return filepath.Join(installDir, engramName), nil
+}
+
+func goInstallDestination() (string, []string, error) {
 	// Priority 1: GOBIN environment variable.
-	if gobin := os.Getenv("GOBIN"); gobin != "" {
-		return filepath.Join(gobin, engramName), nil
+	if gobin := engramGetenv("GOBIN"); gobin != "" {
+		return gobin, nil, nil
 	}
 
 	// Priority 2: GOPATH/bin
-	if gopath := os.Getenv("GOPATH"); gopath != "" {
-		return filepath.Join(gopath, "bin", engramName), nil
+	if gopath := engramGetenv("GOPATH"); gopath != "" {
+		return filepath.Join(gopath, "bin"), nil, nil
 	}
 
-	// Default fallback for Termux/Go.
-	return filepath.Join(home, "go", "bin", engramName), nil
+	installDir := engramInstallDirFn("android")
+	if strings.TrimSpace(installDir) == "" {
+		home, err := engramUserHomeDir()
+		if err != nil {
+			return "", nil, fmt.Errorf("find home dir: %w", err)
+		}
+		installDir = filepath.Join(home, ".local", "bin")
+	}
+
+	// Go installs to GOBIN when set; without GOBIN and GOPATH it defaults to
+	// ~/go/bin, which is less predictable for a managed installer.
+	return installDir, []string{"GOBIN=" + installDir}, nil
 }
 
 // fetchLatestEngramVersion queries the GitHub Releases API for the latest engram
@@ -158,7 +229,8 @@ func fetchLatestEngramVersionRequest(token string) (string, int, error) {
 	}
 
 	var release struct {
-		TagName string `json:"tag_name"`
+		TagName string             `json:"tag_name"`
+		Assets  *[]json.RawMessage `json:"assets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return "", resp.StatusCode, fmt.Errorf("decode release JSON: %w", err)
@@ -169,7 +241,90 @@ func fetchLatestEngramVersionRequest(token string) (string, int, error) {
 		return "", resp.StatusCode, fmt.Errorf("empty tag_name in GitHub release response")
 	}
 
+	// Older tests and non-GitHub-compatible mocks may omit assets entirely; in
+	// that case keep the historical latest-release behavior. GitHub returns an
+	// explicit assets array, so skip releases that do not publish core engram
+	// binaries (for example pi-v* gentle-engram package releases, which are
+	// separate from core engram binary releases).
+	if release.Assets != nil && !hasEngramBinaryAsset(*release.Assets) {
+		fallbackVersion, fallbackStatus, err := fetchLatestEngramVersionWithAssets(token)
+		if err == nil {
+			return fallbackVersion, resp.StatusCode, nil
+		}
+		if token != "" && (fallbackStatus == http.StatusUnauthorized || fallbackStatus == http.StatusForbidden) {
+			fallbackVersion, _, retryErr := fetchLatestEngramVersionWithAssets("")
+			if retryErr == nil {
+				return fallbackVersion, resp.StatusCode, nil
+			}
+		}
+		return "", resp.StatusCode, err
+	}
+
 	return version, resp.StatusCode, nil
+}
+
+func hasEngramBinaryAsset(assets []json.RawMessage) bool {
+	for _, raw := range assets {
+		var asset struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &asset); err == nil && strings.HasPrefix(asset.Name, engramRepo+"_") {
+			return true
+		}
+	}
+	return false
+}
+
+func fetchLatestEngramVersionWithAssets(token string) (string, int, error) {
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=20",
+		engramAPIBaseURL(), engramOwner, engramRepo)
+
+	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	if err != nil {
+		return "", 0, fmt.Errorf("build releases request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := engramHTTPClient.Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("call GitHub releases API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", resp.StatusCode, fmt.Errorf("GitHub releases API returned HTTP %d", resp.StatusCode)
+	}
+
+	var releases []struct {
+		TagName    string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+		Assets     []struct {
+			Name string `json:"name"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return "", resp.StatusCode, fmt.Errorf("decode releases JSON: %w", err)
+	}
+
+	for _, release := range releases {
+		if release.Draft || release.Prerelease || len(release.Assets) == 0 {
+			continue
+		}
+		for _, asset := range release.Assets {
+			if strings.HasPrefix(asset.Name, engramRepo+"_") {
+				version := strings.TrimPrefix(release.TagName, "v")
+				if version != "" {
+					return version, resp.StatusCode, nil
+				}
+			}
+		}
+	}
+
+	return "", resp.StatusCode, fmt.Errorf("no engram release with downloadable binary assets found")
 }
 
 // githubToken returns a GitHub API token from the environment, if available.
@@ -207,25 +362,131 @@ func engramAPIBaseURL() string {
 	return "https://api.github.com"
 }
 
-// engramAssetURL constructs the download URL for the engram release asset.
-func engramAssetURL(baseURL, version, goos, goarch string) string {
+// engramArchiveName returns the GoReleaser archive filename for the given
+// version/os/arch combination.
+//
+// Convention: engram_{version}_{os}_{arch}.tar.gz (or .zip on Windows)
+func engramArchiveName(version, goos, goarch string) string {
 	ext := ".tar.gz"
 	if goos == "windows" {
 		ext = ".zip"
 	}
-	// Note: Android (Termux) never reaches this function — DownloadLatestBinary
-	// returns early via installViaGo(). Only linux/darwin/windows are valid here.
-	filename := fmt.Sprintf("%s_%s_%s_%s%s", engramRepo, version, goos, goarch, ext)
+	return fmt.Sprintf("%s_%s_%s_%s%s", engramRepo, version, goos, goarch, ext)
+}
+
+// engramAssetURL constructs the download URL for the engram release asset.
+func engramAssetURL(baseURL, version, goos, goarch string) string {
+	// Android/Termux intentionally bypasses release assets in DownloadLatestBinary
+	// and compiles from source because Linux glibc binaries do not run on Bionic.
+	filename := engramArchiveName(version, goos, goarch)
 	return fmt.Sprintf("%s/%s/%s/releases/download/v%s/%s",
 		baseURL, engramOwner, engramRepo, version, filename)
+}
+
+// engramChecksumURL constructs the GitHub Releases URL for checksums.txt.
+func engramChecksumURL(baseURL, version string) string {
+	return fmt.Sprintf("%s/%s/%s/releases/download/v%s/checksums.txt",
+		baseURL, engramOwner, engramRepo, version)
+}
+
+// engramDownloadToFile downloads the resource at url to outPath and returns
+// the SHA256 hex digest of the downloaded content.
+func engramDownloadToFile(ctx context.Context, url string, outPath string) (hexDigest string, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	resp, err := engramHTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("download %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return "", fmt.Errorf("create dir: %w", err)
+	}
+	f, err := os.Create(outPath)
+	if err != nil {
+		return "", fmt.Errorf("create %s: %w", outPath, err)
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
+		return "", fmt.Errorf("write %s: %w", outPath, err)
+	}
+
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// engramFetchChecksums downloads checksums.txt from url and returns its content.
+// Returns an error if the file cannot be fetched or the server returns non-200.
+func engramFetchChecksums(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	resp, err := engramHTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch checksums.txt: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("checksums.txt: HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read checksums.txt: %w", err)
+	}
+	return string(data), nil
+}
+
+// engramExpectedChecksumFor parses checksums.txt content and returns the SHA256
+// hex digest for filename. Returns an error if the filename is not listed.
+//
+// GoReleaser produces BSD-style checksums.txt: "<digest>  <filename>" per line.
+func engramExpectedChecksumFor(content, filename string) (string, error) {
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[1] == filename {
+			return fields[0], nil
+		}
+	}
+	return "", fmt.Errorf("%q not listed in checksums.txt", filename)
+}
+
+// extractZipBinary extracts the binary named binaryName from the zip data
+// and writes it to outPath.
+func extractZipBinary(data []byte, binaryName, outPath string) error {
+	zr, err := zip.NewReader(&byteReaderAt{data: data}, int64(len(data)))
+	if err != nil {
+		return fmt.Errorf("open zip: %w", err)
+	}
+
+	for _, f := range zr.File {
+		if filepath.Base(f.Name) == binaryName && !f.FileInfo().IsDir() {
+			rc, err := f.Open()
+			if err != nil {
+				return fmt.Errorf("open zip entry %q: %w", f.Name, err)
+			}
+			defer rc.Close()
+			return writeExecutable(rc, outPath)
+		}
+	}
+
+	return fmt.Errorf("binary %q not found in zip archive", binaryName)
 }
 
 // engramInstallDir returns the directory where the engram binary should be installed
 // for the given OS.
 //   - Linux/macOS: /usr/local/bin (fallback: ~/.local/bin if not writable)
 //   - Windows: %LOCALAPPDATA%\engram\bin
-//   - Android: ~/.local/bin (defensive — currently unused because installViaGo
-//     writes to GOBIN/GOPATH, but kept for future install-path unification).
+//   - Android: ~/.local/bin when GOBIN/GOPATH are not already configured.
 func engramInstallDir(goos string) string {
 	if goos == "windows" {
 		localAppData := os.Getenv("LOCALAPPDATA")
