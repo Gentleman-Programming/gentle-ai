@@ -67,8 +67,11 @@ Options:
 
 Install methods (auto-detected in priority order):
   1. brew    — Homebrew tap (recommended)
-  2. go      — go install from source
-  3. binary  — Pre-built binary from GitHub Releases
+  2. binary  — Pre-built binary from GitHub Releases
+  3. go      — go install from source
+
+Android (Termux) always uses go install from source with PIE flags because
+Linux release binaries are built for glibc, not Android's Bionic libc.
 
 Examples:
   curl -sL https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/main/scripts/install.sh | bash
@@ -249,7 +252,9 @@ install_brew() {
 install_go() {
     step "Installing via go install"
 
-    local go_package="github.com/${GITHUB_OWNER,,}/${GITHUB_REPO}/cmd/${BINARY_NAME}@latest"
+    get_latest_version
+
+    local go_package="github.com/${GITHUB_OWNER,,}/${GITHUB_REPO}/cmd/${BINARY_NAME}@${LATEST_VERSION}"
 
     # Android (Bionic libc) requires Position Independent Executables (PIE).
     local go_flags=()
