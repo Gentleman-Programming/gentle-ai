@@ -2346,6 +2346,181 @@ func TestRunSyncFallsBackToGentlemanWhenStateLacksPersona(t *testing.T) {
 	}
 }
 
+// ─── TUI path: RunSyncWithSelection persona resolution from state ───────────
+
+// TestRunSyncWithSelection_PersonaResolvesFromStateNeutral verifies that when
+// the TUI calls RunSyncWithSelection with an empty persona, the persisted
+// persona from state.json is used — not the Gentleman default.
+func TestRunSyncWithSelection_PersonaResolvesFromStateNeutral(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		Persona:         "neutral",
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	// TUI path: empty persona — must be resolved from state.
+	sel := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    "", // empty — the bug scenario
+	}
+
+	result, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	if got, want := result.Selection.Persona, model.PersonaNeutral; got != want {
+		t.Errorf("result.Selection.Persona = %q, want %q (should be resolved from state.json)", got, want)
+	}
+}
+
+// TestRunSyncWithSelection_PersonaResolvesFromStateCustom verifies that a
+// "custom" persona persisted in state is restored on the TUI sync path.
+func TestRunSyncWithSelection_PersonaResolvesFromStateCustom(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		Persona:         "custom",
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	sel := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    "",
+	}
+
+	result, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	if got, want := result.Selection.Persona, model.PersonaCustom; got != want {
+		t.Errorf("result.Selection.Persona = %q, want %q (should be resolved from state.json)", got, want)
+	}
+}
+
+// TestRunSyncWithSelection_PersonaFallsBackToGentlemanWhenStateHasNone verifies
+// the backward-compat fallback: old state files without a Persona field still
+// result in the Gentleman persona (not empty / not panic).
+func TestRunSyncWithSelection_PersonaFallsBackToGentlemanWhenStateHasNone(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// State with no Persona field — old install before persona persistence.
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	sel := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    "",
+	}
+
+	result, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	if got, want := result.Selection.Persona, model.PersonaGentleman; got != want {
+		t.Errorf("result.Selection.Persona = %q, want %q (fallback for pre-feature state)", got, want)
+	}
+}
+
+// TestRunSyncWithSelection_ExplicitPersonaWinsOverState verifies that when the
+// caller provides a non-empty persona (e.g. the user just picked one in the
+// ModelConfig TUI step), that explicit choice is preserved even if state says
+// something different.
+func TestRunSyncWithSelection_ExplicitPersonaWinsOverState(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// State says "gentleman" but the caller explicitly chose "neutral".
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		Persona:         "gentleman",
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	sel := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    model.PersonaNeutral, // explicit — must not be overridden by state
+	}
+
+	result, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	if got, want := result.Selection.Persona, model.PersonaNeutral; got != want {
+		t.Errorf("result.Selection.Persona = %q, want %q (explicit selection must win over state)", got, want)
+	}
+}
+
+// TestRunSyncWithSelection_UnknownPersistedPersonaFallsBackToGentleman documents
+// the normalizePersona contract for unrecognized persisted values: an unknown or
+// misspelled persona string (e.g. "Gentleman" capitalized, or "bogus") must NOT
+// silently propagate as a PersonaID — it must fall back to PersonaGentleman.
+func TestRunSyncWithSelection_UnknownPersistedPersonaFallsBackToGentleman(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// Write a state with an unrecognized persona value (wrong capitalization).
+	// normalizePersona does a case-sensitive switch, so "Gentleman" != "gentleman"
+	// and must return an error, triggering the Gentleman fallback.
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		Persona:         "Gentleman", // capitalized — not a valid PersonaID
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	sel := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    "", // empty — resolution from state must happen
+	}
+
+	result, err := RunSyncWithSelection(home, sel)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	// normalizePersona returns an error for "Gentleman" (unknown); applyResolvedPersona
+	// must fall through to the Gentleman fallback, not propagate the raw bad string.
+	if got, want := result.Selection.Persona, model.PersonaGentleman; got != want {
+		t.Errorf("result.Selection.Persona = %q, want %q (unknown persisted value must fall back to Gentleman)", got, want)
+	}
+}
+
 // ─── Changed file path reporting ────────────────────────────────────────────
 
 // TestRenderSyncReportIncludesChangedFilePaths verifies that RenderSyncReport
@@ -2435,6 +2610,92 @@ func TestDedupPathsNilOnEmpty(t *testing.T) {
 	got = dedupPaths([]string{})
 	if got != nil {
 		t.Errorf("dedupPaths([]) = %v, want nil", got)
+	}
+}
+
+// ─── Dry-run persona resolution ───────────────────────────────────────────────
+
+// TestRunSyncDryRunResolvesPersonaFromState verifies that --dry-run mode
+// resolves the persona from state.json instead of leaving it empty.
+// This is a regression test: the dry-run branch returns early and never calls
+// RunSyncWithSelection, so without an explicit resolvePersonaFromState call the
+// persona is never populated.
+func TestRunSyncDryRunResolvesPersonaFromState(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// Write state with persona "neutral" and the model-assignment maps populated
+	// to exercise a realistic dry-run scenario. RunSync reads state once
+	// unconditionally and resolves persona before the dry-run early return, so
+	// result.Selection.Persona must reflect the persisted value regardless of
+	// whether the model-assignment maps are empty or full.
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		Persona:         "neutral",
+		ClaudeModelAssignments: map[string]string{
+			"sdd-apply": "sonnet",
+		},
+		KiroModelAssignments: map[string]string{
+			"default": "auto",
+		},
+		ModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		},
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	result, err := RunSync([]string{"--agents", "claude-code", "--dry-run"})
+	if err != nil {
+		t.Fatalf("RunSync() --dry-run error = %v", err)
+	}
+	if !result.DryRun {
+		t.Fatalf("DryRun = false, want true")
+	}
+	if got, want := result.Selection.Persona, model.PersonaNeutral; got != want {
+		t.Errorf("dry-run: Selection.Persona = %q, want %q (should be resolved from state.json)", got, want)
+	}
+}
+
+// TestRunSyncDryRunFallsBackToGentlemanWhenStateLacksPersona verifies that
+// --dry-run mode falls back to Gentleman when state has no recorded persona
+// (backward-compat: old installs without persona persistence).
+func TestRunSyncDryRunFallsBackToGentlemanWhenStateLacksPersona(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// State with all model maps populated but no Persona field (old install).
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		// No Persona field — pre-persona-persistence install.
+		ClaudeModelAssignments: map[string]string{
+			"sdd-apply": "sonnet",
+		},
+		KiroModelAssignments: map[string]string{
+			"default": "auto",
+		},
+		ModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		},
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	result, err := RunSync([]string{"--agents", "claude-code", "--dry-run"})
+	if err != nil {
+		t.Fatalf("RunSync() --dry-run error = %v", err)
+	}
+	if !result.DryRun {
+		t.Fatalf("DryRun = false, want true")
+	}
+	if got, want := result.Selection.Persona, model.PersonaGentleman; got != want {
+		t.Errorf("dry-run fallback: Selection.Persona = %q, want %q (Gentleman fallback for pre-feature state)", got, want)
 	}
 }
 

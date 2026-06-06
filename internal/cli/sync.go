@@ -748,12 +748,51 @@ func boolToInt(b bool) int {
 	return 0
 }
 
+// applyResolvedPersona fills selection.Persona when it was not explicitly set.
+// It accepts the already-loaded persisted persona string (from state.json)
+// so no disk I/O happens inside this function.
+//
+// Resolution order:
+//  1. Explicit: if selection.Persona is non-empty, it is left untouched.
+//  2. Persisted: the persisted string is normalized via normalizePersona;
+//     on error (unknown/misspelled value) the fallback is used instead.
+//  3. Fallback: PersonaGentleman for backward-compat (old installs that
+//     have no Persona field in state.json).
+func applyResolvedPersona(selection *model.Selection, persisted string) {
+	if selection.Persona != "" {
+		return
+	}
+	if persisted != "" {
+		if id, err := normalizePersona(persisted); err == nil {
+			selection.Persona = id
+			return
+		}
+		// Unknown/misspelled persisted value — fall through to Gentleman.
+	}
+	// Backward-compat fallback: state files written before persona persistence
+	// have no Persona field. Default to Gentleman so sync still has a target.
+	selection.Persona = model.PersonaGentleman
+}
+
 // RunSyncWithSelection is the programmatic entry point for sync.
 // It skips flag parsing and agent discovery — the caller provides the homeDir
 // and a fully-built Selection (agents + components + options).
 // This is the function the TUI calls directly to avoid CLI flag parsing.
 func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult, error) {
 	agentIDs := selection.Agents
+
+	// Resolve persona from persisted state when the caller has not provided one.
+	// RunSync already resolves persona before delegating here, so on the CLI path
+	// selection.Persona is already set and applyResolvedPersona early-returns with
+	// no disk read. On the TUI path the Selection has an empty Persona field, so
+	// we read state once here and apply the persisted value (or Gentleman fallback).
+	if selection.Persona == "" {
+		var persistedPersona string
+		if s, err := state.Read(homeDir); err == nil {
+			persistedPersona = s.Persona
+		}
+		applyResolvedPersona(&selection, persistedPersona)
+	}
 
 	result := SyncResult{
 		Agents:    agentIDs,
@@ -830,48 +869,46 @@ func RunSync(args []string) (SyncResult, error) {
 
 	selection := BuildSyncSelection(flags, agentIDs)
 
-	// Load persisted model assignments and persona from state when not provided
-	// via flags. Without this, every CLI sync falls back to defaults and would
-	// silently overwrite the user's model choices and persona selection.
-	if len(selection.ClaudeModelAssignments) == 0 || len(selection.KiroModelAssignments) == 0 || len(selection.ModelAssignments) == 0 || selection.Persona == "" {
-		s, readErr := state.Read(homeDir)
-		if readErr == nil {
-			if len(selection.ClaudeModelAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
-				m := make(map[string]model.ClaudeModelAlias, len(s.ClaudeModelAssignments))
-				for k, v := range s.ClaudeModelAssignments {
-					// Claude Code controls the main session/orchestrator model itself.
-					// Keep persisted assignments scoped to Agent tool calls only.
-					if k == "orchestrator" {
-						continue
-					}
-					m[k] = model.ClaudeModelAlias(v)
-				}
-				selection.ClaudeModelAssignments = m
+	// Read state once for both model-assignment restoration and persona resolution.
+	// On error (e.g. state.json absent), treat persisted values as empty — model
+	// maps stay as-is and persona falls back to Gentleman.
+	persistedState, _ := state.Read(homeDir)
+
+	// Load persisted model assignments from state when not provided via flags.
+	// Without this, every CLI sync falls back to defaults and would silently
+	// overwrite the user's model choices.
+	if len(selection.ClaudeModelAssignments) == 0 && len(persistedState.ClaudeModelAssignments) > 0 {
+		m := make(map[string]model.ClaudeModelAlias, len(persistedState.ClaudeModelAssignments))
+		for k, v := range persistedState.ClaudeModelAssignments {
+			// Claude Code controls the main session/orchestrator model itself.
+			// Keep persisted assignments scoped to Agent tool calls only.
+			if k == "orchestrator" {
+				continue
 			}
-			if len(selection.KiroModelAssignments) == 0 && len(s.KiroModelAssignments) > 0 {
-				m := make(map[string]model.KiroModelAlias, len(s.KiroModelAssignments))
-				for k, v := range s.KiroModelAssignments {
-					m[k] = model.KiroModelAlias(v)
-				}
-				selection.KiroModelAssignments = m
-			}
-			if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
-				m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
-				for k, v := range s.ModelAssignments {
-					m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
-				}
-				selection.ModelAssignments = m
-			}
-			if selection.Persona == "" && s.Persona != "" {
-				selection.Persona = model.PersonaID(s.Persona)
-			}
+			m[k] = model.ClaudeModelAlias(v)
 		}
+		selection.ClaudeModelAssignments = m
 	}
-	// Backward-compat fallback: state files written before persona persistence
-	// have no Persona field. Default to Gentleman so sync still has a target.
-	if selection.Persona == "" {
-		selection.Persona = model.PersonaGentleman
+	if len(selection.KiroModelAssignments) == 0 && len(persistedState.KiroModelAssignments) > 0 {
+		m := make(map[string]model.KiroModelAlias, len(persistedState.KiroModelAssignments))
+		for k, v := range persistedState.KiroModelAssignments {
+			m[k] = model.KiroModelAlias(v)
+		}
+		selection.KiroModelAssignments = m
 	}
+	if len(selection.ModelAssignments) == 0 && len(persistedState.ModelAssignments) > 0 {
+		m := make(map[string]model.ModelAssignment, len(persistedState.ModelAssignments))
+		for k, v := range persistedState.ModelAssignments {
+			m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
+		}
+		selection.ModelAssignments = m
+	}
+
+	// Resolve persona from the already-read state. This covers both the dry-run
+	// branch (which returns early) and the normal path (which delegates to
+	// RunSyncWithSelection — that function's early-return guard prevents a second
+	// disk read on the CLI path).
+	applyResolvedPersona(&selection, persistedState.Persona)
 
 	if flags.DryRun {
 		// Build the plan for inspection, skip execution.
