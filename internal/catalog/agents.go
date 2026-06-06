@@ -7,6 +7,7 @@ type Agent struct {
 	Name       string
 	Tier       model.SupportTier
 	ConfigPath string
+	Note       string
 }
 
 var allAgents = []Agent{
@@ -25,6 +26,13 @@ var allAgents = []Agent{
 	{ID: model.AgentOpenClaw, Name: "OpenClaw", Tier: model.TierFull, ConfigPath: "~/.openclaw"},
 	{ID: model.AgentPi, Name: "Pi", Tier: model.TierFull, ConfigPath: "~/.pi"},
 	{ID: model.AgentTrae, Name: "Trae IDE", Tier: model.TierFull, ConfigPath: "~/.trae"},
+	{
+		ID:         model.AgentConductor,
+		Name:       "Conductor",
+		Tier:       model.TierFull,
+		ConfigPath: "~/.conductor",
+		Note:       "Conductor workspaces inherit Claude Code config (~/.claude). No additional files are written for this agent.",
+	},
 }
 
 // mvpAgents are the original MVP agents (Claude Code, OpenCode).
