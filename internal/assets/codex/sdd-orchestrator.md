@@ -10,40 +10,60 @@ Bind this to the dedicated `sdd-orchestrator` agent or rule only. Do NOT apply i
 - Public/contextual comments follow the target context language by default. Explicit user language or tone overrides win; Spanish comments default to neutral/professional Spanish unless the user or target context clearly calls for regional tone.
 - When delegating a phase, forward this contract so persona voice never becomes the artifact or public-comment default.
 
+## General Delegation Rules (Always Active)
+
+These rules apply to **all non-trivial work**, not only SDD phases. Delegation is context compression: keep the main conversation thin, delegate heavy reading/writing/testing/review work, and synthesize results for the user.
+
+Core principle: **does this inflate my context without need?** If yes -> delegate. If no -> do it inline.
+
+| Action | Inline | Delegate |
+|--------|--------|----------|
+| Read to decide/verify (1-3 files) | Yes | No |
+| Read to explore/understand (4+ files) | No | Yes |
+| Read as preparation for writing | No | Yes, together with the write |
+| Write atomic (one file, mechanical, already understood) | Yes | No |
+| Write with analysis (multiple files, new logic) | No | Yes |
+| Bash for state (`git`, `gh`) | Yes | No |
+| Bash for execution (`test`, `build`, `install`, external tooling) | No | Yes |
+
+Anti-patterns that always inflate context without need:
+
+- Reading 4+ files to understand the codebase inline -> delegate a narrow exploration.
+- Writing a feature across multiple files inline -> delegate a writer.
+- Running tests/builds/installers inline -> delegate verification when tooling permits.
+- Reading files as preparation for edits, then editing -> delegate the whole thing together.
+
+### Mandatory Delegation Triggers (Non-Skippable)
+
+These gates are **non-skippable hard gates**, not recommendations. They are TOTALMENTE obligatorio: do not skip them, do not weaken them, and do not replace delegation-required gates with inline execution. Tool unavailability is not a waiver; document it, stop the blocked delegated work, and perform the closest fresh-context audit only where the fired rule calls for review/audit.
+
+Semantic guard: **delegate** means using Codex's native sub-agent mechanism (`spawn_agent`/`wait_agent`/`close_agent`). Running local scripts, Python, or Bash inline is execution, not delegation.
+
+Do not pass these rules to child agents as permission to spawn more agents; children receive concrete role work and must not orchestrate.
+
+1. **4-file rule**: if understanding requires reading 4+ files, delegate a narrow exploration/mapping task. If sub-agent tooling is unavailable, document the blocker and stop the exploration instead of reading everything inline.
+2. **Multi-file write rule**: if implementation will touch 2+ non-trivial files, delegate one writer. If sub-agent tooling is unavailable, document the blocker and stop the implementation; a fresh review is required after delegated implementation, not a substitute for delegation.
+3. **PR rule**: before commit, push, or PR after code changes, run a fresh-context review unless the diff is trivial docs/text.
+4. **Incident rule**: after wrong `cwd`, accidental repo/worktree mutation, merge recovery, confusing test command, or environment workaround, stop and run a fresh audit before continuing.
+5. **Long-session rule**: after roughly 20 tool calls, 5 exploratory file reads, or 2 non-mechanical edits without delegation and growing complexity, pause and delegate the remaining work instead of silently continuing monolithically. If sub-agent tooling is unavailable, document the blocker and stop the complex work.
+6. **Fresh review rule**: use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents; use continuity/forked context only for implementation work that needs inherited state.
+
+### Cost and Context Balance
+
+- Use exploration sub-agents to compress broad repo reading into a short handoff.
+- Use a single writer thread for implementation; do not run parallel writers unless isolated worktrees are explicitly approved.
+- Use fresh reviewers after implementation, conflict resolution, or incidents because their value is independent judgment, not token saving.
+- Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
+- If Codex's sub-agent tool policy blocks automatic spawning, stop and tell the user that the hard gate requires delegation before continuing.
+
 ## Capability Check (run once, at session start)
 
 Check `~/.codex/config.toml` for `features.multi_agent`:
 
-- If `features.multi_agent = true` **AND** the tools `spawn_agent`, `wait_agent`, and `close_agent` are available in this session → use the **Delegated path** below.
-- Otherwise → use the **Solo path** below.
+- If `features.multi_agent = true` **AND** the tools `spawn_agent`, `wait_agent`, and `close_agent` are available in this session → use the **Delegated Path** below.
+- Otherwise → use the **Graceful Degradation Path** below.
 
-`features.multi_agent` is enabled by default (gentle-ai writes `multi_agent = true` during installation) so SDD delegates phases and the per-phase reasoning_effort table applies. To force solo execution, set `multi_agent = false` in the `[features]` section of `~/.codex/config.toml` and restart your session.
-
----
-
-## Solo Path (default)
-
-Run each SDD phase inline, in dependency order, without spawning sub-agents. You are the executor for all phases.
-
-```
-proposal → spec → design → tasks → apply → verify → archive
-```
-
-For each phase:
-1. Read the required input artifacts from engram or the openspec directory.
-2. Produce the phase output inline in your current context.
-3. Persist the artifact to the active backend (engram or openspec) before proceeding.
-
-**Dependency graph** (run phases in this order; spec and design can run in parallel):
-- `sdd-propose` → read nothing, write proposal
-- `sdd-spec` → read proposal, write spec
-- `sdd-design` → read proposal, write design
-- `sdd-tasks` → read spec + design, write tasks
-- `sdd-apply` → read tasks + spec + design, write apply-progress
-- `sdd-verify` → read spec + tasks + apply-progress, write verify-report
-- `sdd-archive` → read all artifacts, write archive-report
-
-Strict TDD: when the project has `strict_tdd: true` in `sdd-init` context, always follow the RED → GREEN → REFACTOR cycle in `sdd-apply`. Failing test first, then implementation.
+`features.multi_agent` is enabled by default (gentle-ai writes `multi_agent = true` during installation) so SDD delegates phases and the per-phase reasoning_effort table applies. Setting `multi_agent = false` disables the normal delegated path; it does not make monolithic SDD execution the default.
 
 ---
 
@@ -83,7 +103,24 @@ Note: the `~/.codex/<tier>.config.toml` profile files apply to whole CLI session
 
 ### Graceful degradation
 
-If `spawn_agent` returns an error (tool unavailable, thread budget exhausted, or permission denied), fall back to the **Solo path** for the remaining phases. Do not abort the SDD pipeline — complete it inline.
+If `spawn_agent` returns an error (tool unavailable, thread budget exhausted, or permission denied), switch to the **Graceful Degradation Path**. Do not present inline monolithic execution as normal SDD behavior.
+
+---
+
+## Graceful Degradation Path (tooling unavailable only)
+
+This path exists only when Codex sub-agent tooling is unavailable or blocked. It is not the default and it is not a bypass for hard gates.
+
+When a delegation-required gate fires and sub-agent tooling is unavailable:
+
+1. Stop the delegated work that triggered the gate.
+2. Document the unavailable tool or blocker in the user-facing status and any relevant artifact.
+3. Perform the closest fresh-context audit only where the fired rule calls for review/audit.
+4. Ask the user to enable sub-agent tooling or narrow the task below the hard-gate threshold before implementation continues.
+
+For SDD phase commands, do not run the full phase pipeline inline as a normal fallback. You may do read-only status checks, preserve already-created artifacts, and report the next blocked delegated phase.
+
+Strict TDD still applies when implementation resumes through a valid delegated executor: when the project has `strict_tdd: true` in `sdd-init` context, `sdd-apply` follows RED → GREEN → REFACTOR with a failing test first.
 
 ---
 

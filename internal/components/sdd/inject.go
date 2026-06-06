@@ -830,7 +830,55 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 		"agent.sdd-orchestrator.model",
 		"agent.gentle-orchestrator.model",
 	)
-	return ensurePreservedOpenCodeOrchestratorPreflight(replacer.Replace(prompt))
+	return ensurePreservedOpenCodeDelegationHardGates(ensurePreservedOpenCodeOrchestratorPreflight(replacer.Replace(prompt)))
+}
+
+func ensurePreservedOpenCodeDelegationHardGates(prompt string) string {
+	delegation := `
+
+<!-- gentle-ai:delegation-hard-gates-migration -->
+### Mandatory Delegation Triggers (Non-Skippable)
+
+These gates are non-skippable hard gates, not recommendations. They are TOTALMENTE obligatorio: do not skip them, do not weaken them, and do not replace delegation-required gates with inline execution. Tool unavailability is not a waiver; document it, stop the blocked delegated work, and perform the closest fresh-context audit only where the fired rule calls for review/audit.
+
+Semantic guard: **delegate** means using OpenCode's native sub-agent mechanism (` + "`delegate`" + `/` + "`task`" + `). Running local scripts, Python, or Bash inline is execution, not delegation.
+
+Do not pass these rules to child agents as permission to spawn more agents; children receive concrete role work and must not orchestrate.
+
+1. **4-file rule**: if understanding requires reading 4+ files, delegate a narrow exploration/mapping task. If delegation tooling is unavailable, document the blocker and stop the exploration instead of reading everything inline.
+2. **Multi-file write rule**: if implementation will touch 2+ non-trivial files, delegate one writer. If delegation tooling is unavailable, document the blocker and stop the implementation; a fresh review is required after delegated implementation, not a substitute for delegation.
+3. **PR rule**: before commit, push, or PR after code changes, run a fresh-context review unless the diff is trivial docs/text.
+4. **Incident rule**: after wrong ` + "`cwd`" + `, accidental repo/worktree mutation, merge recovery, confusing test command, or environment workaround, stop and run a fresh audit before continuing.
+5. **Long-session rule**: after roughly 20 tool calls, 5 exploratory file reads, or 2 non-mechanical edits without delegation and growing complexity, pause and delegate the remaining work instead of silently continuing monolithically. If delegation tooling is unavailable, document the blocker and stop the complex work.
+6. **Fresh review rule**: use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents; use continuity/forked context only for implementation work that needs inherited state.
+<!-- /gentle-ai:delegation-hard-gates-migration -->
+`
+
+	if strings.Contains(prompt, "Mandatory Delegation Triggers") &&
+		strings.Contains(prompt, "non-skippable hard gates") &&
+		strings.Contains(prompt, "TOTALMENTE obligatorio") &&
+		strings.Contains(prompt, "4-file rule") &&
+		strings.Contains(prompt, "Multi-file write rule") &&
+		strings.Contains(prompt, "PR rule") &&
+		strings.Contains(prompt, "Incident rule") &&
+		strings.Contains(prompt, "Long-session rule") &&
+		strings.Contains(prompt, "Fresh review rule") &&
+		strings.Contains(prompt, "Semantic guard") &&
+		strings.Contains(prompt, "execution, not delegation") &&
+		strings.Contains(prompt, "fresh review is required after delegated implementation, not a substitute for delegation") {
+		return prompt
+	}
+
+	start := "<!-- gentle-ai:delegation-hard-gates-migration -->"
+	end := "<!-- /gentle-ai:delegation-hard-gates-migration -->"
+	if startIdx := strings.Index(prompt, start); startIdx >= 0 {
+		if relEndIdx := strings.Index(prompt[startIdx:], end); relEndIdx >= 0 {
+			endIdx := startIdx + relEndIdx + len(end)
+			return strings.TrimRight(prompt[:startIdx], "\n") + delegation + prompt[endIdx:]
+		}
+	}
+
+	return strings.TrimRight(prompt, "\n") + delegation
 }
 
 func ensurePreservedOpenCodeOrchestratorPreflight(prompt string) string {

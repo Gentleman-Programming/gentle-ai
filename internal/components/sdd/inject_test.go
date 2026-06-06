@@ -465,8 +465,21 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 	if err != nil {
 		t.Fatalf("ReadFile(opencode.json) error = %v", err)
 	}
-	if !strings.Contains(string(settingsBytes), customPrompt) {
+	text := string(settingsBytes)
+	if !strings.Contains(text, customPrompt) {
 		t.Fatalf("expected preserved custom orchestrator prompt %q in opencode.json", customPrompt)
+	}
+	for _, wanted := range []string{
+		"### SDD Session Preflight (HARD GATE)",
+		"### Mandatory Delegation Triggers (Non-Skippable)",
+		"TOTALMENTE obligatorio",
+		"Semantic guard",
+		"execution, not delegation",
+		"not a substitute for delegation",
+	} {
+		if !strings.Contains(text, wanted) {
+			t.Fatalf("opencode.json missing migrated preserved prompt hard gate %q", wanted)
+		}
 	}
 }
 
@@ -526,6 +539,17 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"proposal question round",
 		"business rules, implications, impact, edge cases",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
+		"### Mandatory Delegation Triggers (Non-Skippable)",
+		"TOTALMENTE obligatorio",
+		"4-file rule",
+		"Multi-file write rule",
+		"PR rule",
+		"Incident rule",
+		"Long-session rule",
+		"Fresh review rule",
+		"Semantic guard",
+		"execution, not delegation",
+		"not a substitute for delegation",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated preserved prompt reference %q", wanted)

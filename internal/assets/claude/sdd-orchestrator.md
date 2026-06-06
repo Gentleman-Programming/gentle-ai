@@ -42,13 +42,17 @@ Delegation is not optional once complexity appears. If a task crosses a trigger 
 
 #### Mandatory Delegation Triggers
 
-These are parent-orchestrator stop rules. Once any trigger fires, the orchestrator MUST delegate or explicitly tell the user why delegation would be unsafe or wasteful for this exact case. Do not pass these rules to child agents as permission to spawn more agents; children receive concrete role work and must not orchestrate.
+These gates are **non-skippable hard gates**, not recommendations. They are TOTALMENTE obligatorio: do not skip them, do not weaken them, and do not replace delegation-required gates with inline execution. Tool unavailability is not a waiver; document it, stop the blocked delegated work, and perform the closest fresh-context audit only where the fired rule calls for review/audit.
 
-1. **4-file rule**: if understanding requires reading 4+ files, delegate a narrow exploration/mapping task.
-2. **Multi-file write rule**: if implementation will touch 2+ non-trivial files, delegate one writer or continue inline only if a fresh review will audit before completion.
+Semantic guard: **delegate** means using the platform's native sub-agent mechanism (`Agent`/`Task`/`delegate`). Running local scripts, Python, or Bash inline is execution, not delegation.
+
+These are parent-orchestrator stop rules. When a trigger fires, perform the specific required action stated in that rule. Rules that say **delegate** require native sub-agent delegation. Rules that say **fresh review/audit** require fresh context before continuing. Do not pass these rules to child agents as permission to spawn more agents; children receive concrete role work and must not orchestrate.
+
+1. **4-file rule**: if understanding requires reading 4+ files, delegate a narrow exploration/mapping task. If delegation tooling is unavailable, document the blocker and stop the exploration instead of reading everything inline.
+2. **Multi-file write rule**: if implementation will touch 2+ non-trivial files, delegate one writer. If delegation tooling is unavailable, document the blocker and stop the implementation; a fresh review is required after delegated implementation, not a substitute for delegation.
 3. **PR rule**: before commit, push, or PR after code changes, run a fresh-context review unless the diff is trivial docs/text.
 4. **Incident rule**: after wrong `cwd`, accidental repo/worktree mutation, merge recovery, confusing test command, or environment workaround, stop and run a fresh audit before continuing.
-5. **Long-session rule**: after roughly 20 tool calls, 5 exploratory file reads, or 2 non-mechanical edits without delegation and growing complexity, pause and delegate instead of silently continuing monolithically.
+5. **Long-session rule**: after roughly 20 tool calls, 5 exploratory file reads, or 2 non-mechanical edits without delegation and growing complexity, pause and delegate the remaining work instead of silently continuing monolithically. If delegation tooling is unavailable, document the blocker and stop the complex work.
 6. **Fresh review rule**: use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents; use continuity/forked context only for implementation work that needs inherited state.
 
 #### Cost and Context Balance

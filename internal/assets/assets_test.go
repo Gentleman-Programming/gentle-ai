@@ -6,6 +6,106 @@ import (
 	"testing"
 )
 
+func TestOrchestratorsRequireNonSkippableGeneralDelegationTriggers(t *testing.T) {
+	paths := []string{
+		"claude/sdd-orchestrator.md",
+		"opencode/sdd-orchestrator.md",
+		"codex/sdd-orchestrator.md",
+	}
+	required := []string{
+		"Mandatory Delegation Triggers",
+		"non-skippable hard gates",
+		"TOTALMENTE obligatorio",
+		"4-file rule",
+		"Multi-file write rule",
+		"PR rule",
+		"Incident rule",
+		"Long-session rule",
+		"Fresh review rule",
+		"Semantic guard",
+		"execution, not delegation",
+		"not a substitute for delegation",
+	}
+	for _, path := range paths {
+		content := MustRead(path)
+		for _, want := range required {
+			if !strings.Contains(content, want) {
+				t.Fatalf("%s missing non-skippable delegation guard %q", path, want)
+			}
+		}
+	}
+}
+
+func TestOrchestratorsRejectDelegationBypassLanguage(t *testing.T) {
+	contents := map[string]string{
+		"claude/sdd-orchestrator.md":   MustRead("claude/sdd-orchestrator.md"),
+		"opencode/sdd-orchestrator.md": MustRead("opencode/sdd-orchestrator.md"),
+		"codex/sdd-orchestrator.md":    MustRead("codex/sdd-orchestrator.md"),
+	}
+	for path, content := range contents {
+		for _, forbidden := range []string{
+			"MUST delegate, complete the required fresh review/audit",
+			"why delegation would be unsafe or wasteful",
+			"delegate one writer or continue inline only if",
+			"pause and delegate instead of silently continuing monolithically",
+			"delegate a writer, or require a fresh review",
+		} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("%s contains delegation bypass wording %q", path, forbidden)
+			}
+		}
+
+		contentWords := normalizedWords(content)
+		for _, forbidden := range []string{
+			"delegate a writer or require a fresh review",
+		} {
+			if strings.Contains(contentWords, normalizedWords(forbidden)) {
+				t.Fatalf("%s contains equivalent delegation bypass wording %q", path, forbidden)
+			}
+		}
+	}
+
+	codex := contents["codex/sdd-orchestrator.md"]
+	for _, forbidden := range []string{
+		"## Solo Path (default)",
+		"Run each SDD phase inline, in dependency order, without spawning sub-agents",
+		"fall back to the **Solo path**",
+		"complete it inline",
+	} {
+		if strings.Contains(codex, forbidden) {
+			t.Fatalf("codex/sdd-orchestrator.md contains solo-path bypass wording %q", forbidden)
+		}
+	}
+	for _, want := range []string{
+		"## Delegated Path (default",
+		"## Graceful Degradation Path (tooling unavailable only)",
+		"do not run the full phase pipeline inline as a normal fallback",
+	} {
+		if !strings.Contains(codex, want) {
+			t.Fatalf("codex/sdd-orchestrator.md missing guarded degradation wording %q", want)
+		}
+	}
+}
+
+func normalizedWords(s string) string {
+	var b strings.Builder
+	lastWasSpace := true
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastWasSpace = false
+			continue
+		}
+
+		if !lastWasSpace {
+			b.WriteByte(' ')
+			lastWasSpace = true
+		}
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
 // TestAllEmbeddedAssetsAreReadable verifies that every expected embedded file
 // can be loaded via Read() without error. This catches missing/misnamed files
 // at test time rather than at runtime.
