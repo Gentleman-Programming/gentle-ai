@@ -91,7 +91,53 @@ func LoadModels(cachePath string) (map[string]Provider, error) {
 		providers[id] = p
 	}
 
+	FixOpenRouterModels(providers)
+
 	return providers, nil
+}
+
+// FixOpenRouterModels remaps OpenRouter models that OpenCode incorrectly catalogs
+// under its own "opencode" provider back to the "openrouter" provider.
+func FixOpenRouterModels(providers map[string]Provider) {
+	opencodeProv, ok := providers["opencode"]
+	if !ok {
+		return
+	}
+
+	// Mappings: opencode model ID -> openrouter model ID
+	openRouterMappings := map[string]string{
+		"qwen3.6-plus-free": "qwen/qwen3.6-plus:free",
+	}
+
+	var hasMoves bool
+	for opencodeID, openRouterID := range openRouterMappings {
+		m, ok := opencodeProv.Models[opencodeID]
+		if !ok {
+			continue
+		}
+		
+		hasMoves = true
+		delete(opencodeProv.Models, opencodeID)
+		
+		m.ID = openRouterID
+		
+		openrouterProv, ok := providers["openrouter"]
+		if !ok {
+			openrouterProv = Provider{
+				ID:     "openrouter",
+				Name:   "OpenRouter",
+				Models: make(map[string]Model),
+			}
+		} else if openrouterProv.Models == nil {
+			openrouterProv.Models = make(map[string]Model)
+		}
+		openrouterProv.Models[m.ID] = m
+		providers["openrouter"] = openrouterProv
+	}
+
+	if hasMoves {
+		providers["opencode"] = opencodeProv
+	}
 }
 
 // LoadModelsOrEmpty parses the OpenCode models cache when it exists and falls

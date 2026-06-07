@@ -779,3 +779,48 @@ func TestDetectAvailableProvidersCustomStillNeedsToolCall(t *testing.T) {
 		}
 	}
 }
+
+func TestFixOpenRouterModels(t *testing.T) {
+	providers := map[string]Provider{
+		"opencode": {
+			ID:   "opencode",
+			Name: "OpenCode Zen",
+			Models: map[string]Model{
+				"qwen3.6-plus-free": {
+					ID:       "qwen3.6-plus-free",
+					Name:     "Qwen3.6 Plus Free",
+					ToolCall: true,
+				},
+				"other-model": {
+					ID:       "other-model",
+					Name:     "Other Model",
+					ToolCall: true,
+				},
+			},
+		},
+	}
+
+	FixOpenRouterModels(providers)
+
+	// opencode provider should still have "other-model"
+	if _, ok := providers["opencode"].Models["other-model"]; !ok {
+		t.Errorf("opencode should still have other-model")
+	}
+
+	// opencode provider should NO LONGER have "qwen3.6-plus-free"
+	if _, ok := providers["opencode"].Models["qwen3.6-plus-free"]; ok {
+		t.Errorf("opencode should not have qwen3.6-plus-free")
+	}
+
+	// openrouter provider should be created and have "qwen/qwen3.6-plus:free"
+	orProv, ok := providers["openrouter"]
+	if !ok {
+		t.Fatalf("openrouter provider should be created")
+	}
+
+	if m, ok := orProv.Models["qwen/qwen3.6-plus:free"]; !ok {
+		t.Errorf("openrouter should have qwen/qwen3.6-plus:free")
+	} else if m.ID != "qwen/qwen3.6-plus:free" {
+		t.Errorf("expected ID qwen/qwen3.6-plus:free, got %s", m.ID)
+	}
+}
