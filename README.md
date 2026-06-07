@@ -64,20 +64,49 @@ The goal is not ceremony. The goal is to avoid accidental chaos while preserving
 
 ---
 
-## Quick Start
+## Install
 
 ### macOS / Linux
 
 ```bash
+# Recommended method
+brew tap Gentleman-Programming/homebrew-tap
+brew install gentle-ai
+
+# Alternative option
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
 ```
 
+
 ### Windows
+
+Use Scoop on Windows. It is the supported install path for keeping Gentle AI updated cleanly:
 
 ```powershell
 scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
 scoop install gentle-ai
 ```
+
+<details>
+<summary><strong>Other install methods</strong> (Go install)</summary>
+
+### Go install (any platform with Go 1.24+)
+
+```bash
+go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest
+```
+
+</details>
+
+By default, `gentle-ai install` writes agent-scoped files to each selected agent's global config directory. To keep the Gentleman stack isolated to one project, run:
+
+```bash
+gentle-ai install --scope=workspace
+```
+
+Workspace scope is not Claude-only; it applies to selected agents for agent-scoped files such as system prompts, skills, SDD agents, and persona files. Global-only integrations remain global by design.
+
+---
 
 ### After install: project-level setup
 
@@ -91,50 +120,6 @@ Once your agents are configured, open your AI agent in a project and run these t
 These are **not required** for basic usage. The SDD orchestrator runs `/sdd-init` automatically if it detects no context. Startup hooks normally keep the skill registry fresh for agents that support hooks, including Codex, Claude Code, OpenCode, and Pi through `gentle-pi`. If you start Pi with `pi -ns`, startup skill loading/hooks are skipped, so run the registry refresh manually when you need updated project rules.
 
 Run `gentle-ai doctor` at any time for a read-only health check of your ecosystem (tool binaries, `state.json`, Engram reachability, disk space).
-
----
-
-## Install
-
-### Recommended
-
-```bash
-# macOS / Linux
-brew tap Gentleman-Programming/homebrew-tap
-brew install gentle-ai
-
-# Windows
-scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
-scoop install gentle-ai
-```
-
-<details>
-<summary><strong>Other install methods</strong> (Go install)</summary>
-
-#### Go install (any platform with Go 1.24+)
-
-```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest
-```
-
-#### Windows
-
-Use Scoop on Windows. It is the supported install path for keeping Gentle AI updated cleanly:
-
-```powershell
-scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
-scoop install gentle-ai
-```
-
-</details>
-
-By default, `gentle-ai install` writes agent-scoped files to each selected agent's global config directory. To keep the Gentleman stack isolated to one project, run:
-
-```bash
-gentle-ai install --scope=workspace
-```
-
-Workspace scope is not Claude-only; it applies to selected agents for agent-scoped files such as system prompts, skills, SDD agents, and persona files. Global-only integrations remain global by design.
 
 ---
 
