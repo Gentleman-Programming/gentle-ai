@@ -131,11 +131,6 @@ func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 		}
 	} else {
 		args := []string{"mcp", "--tools=agent"}
-		if agentID == model.AgentAntigravity {
-			// Antigravity should launch the default Engram MCP server without
-			// narrowing the exposed tool set.
-			args = []string{"mcp"}
-		}
 		cfg = map[string]any{
 			"mcpServers": map[string]any{
 				"engram": map[string]any{
@@ -252,14 +247,6 @@ func installAntigravityEngramPlugin(homeDir, engramCommand string) (bool, []stri
 	}
 	changed = changed || pluginWrite.Changed
 	files = append(files, pluginPath)
-
-	pluginMCPPath := filepath.Join(pluginDir, "mcp_config.json")
-	mcpWrite, err := filemerge.WriteFileAtomic(pluginMCPPath, engramOverlayJSON(model.AgentAntigravity, engramCommand), 0o644)
-	if err != nil {
-		return false, nil, fmt.Errorf("write Antigravity Engram plugin MCP config: %w", err)
-	}
-	changed = changed || mcpWrite.Changed
-	files = append(files, pluginMCPPath)
 
 	hooksPath := filepath.Join(pluginDir, "hooks.json")
 	hooksWrite, err := filemerge.WriteFileAtomic(hooksPath, antigravityEngramHooksJSON(), 0o644)
@@ -824,5 +811,5 @@ func isVersionedHomebrewCellarPath(path string) bool {
 
 func isStableHomebrewEngramPath(path string) bool {
 	clean := filepath.ToSlash(filepath.Clean(path))
-	return (clean == "/opt/homebrew/bin/engram" || clean == "/usr/local/bin/engram") && isEngramCommand(clean)
+	return (clean == "/opt/homebrew/bin/engram" || clean == "/usr/local/bin/engram" || clean == "/home/linuxbrew/.linuxbrew/bin/engram") && isEngramCommand(clean)
 }
