@@ -10,6 +10,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
@@ -20,6 +21,7 @@ import (
 
 func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
 func claudeAdapter() agents.Adapter      { return claude.NewAdapter() }
+func hermesAdapter() agents.Adapter      { return hermes.NewAdapter() }
 func kimiAdapter() agents.Adapter        { return kimi.NewAdapter() }
 func kilocodeAdapter() agents.Adapter    { return kilocode.NewAdapter() }
 func openclawAdapter() agents.Adapter    { return openclaw.NewAdapter() }
@@ -1799,5 +1801,195 @@ func TestInjectForSync_ClaudeGentlemanToNeutral_CleansOutputStyle(t *testing.T) 
 	}
 	if strings.Contains(string(afterRaw), `"outputStyle"`) {
 		t.Fatal("settings.json still has outputStyle key after InjectForSync(neutral) — residue not cleaned")
+	}
+}
+
+// --- Hermes persona tests (T-29, T-30) ---
+
+// availableSkillsIsAuthoritative is the pattern from the generic persona assets
+// that must NOT appear in Hermes personas (Hermes uses ~/.hermes/skills/ natively,
+// not the Claude-style <available_skills> injection mechanism).
+const availableSkillsIsAuthoritative = "block in your system prompt is authoritative"
+
+// TestPersonaContentHermesGentleman verifies that personaContent returns the
+// Hermes-specific gentleman asset with the skill-loading block rewritten for
+// Hermes's native skill model (no <available_skills> injection mechanism).
+func TestPersonaContentHermesGentleman(t *testing.T) {
+	tests := []struct {
+		name    string
+		persona model.PersonaID
+	}{
+		{"gentleman", model.PersonaGentleman},
+		{"gentleman-neutral-artifacts", model.PersonaGentlemanNeutralArtifacts},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := personaContent(model.AgentHermes, tt.persona)
+			if content == "" {
+				t.Fatal("personaContent(hermes, gentleman) returned empty string")
+			}
+			// The generic <available_skills> "is authoritative" block must be absent.
+			if strings.Contains(content, availableSkillsIsAuthoritative) {
+				t.Fatal("hermes gentleman persona still has the generic <available_skills> instruction — skill-loading block not rewritten")
+			}
+			// Should reference ~/.hermes/skills/ (Hermes-native skill loading).
+			if !strings.Contains(content, "~/.hermes/skills/") {
+				t.Fatal("hermes gentleman persona missing ~/.hermes/skills/ reference")
+			}
+			// Must be distinct from generic asset.
+			generic := assets.MustRead("generic/persona-gentleman.md")
+			if content == generic {
+				t.Fatal("hermes gentleman persona is byte-identical to generic — Hermes-specific asset not used")
+			}
+		})
+	}
+}
+
+// TestPersonaContentHermesNeutral verifies that personaContent returns the
+// Hermes-specific neutral asset with the skill-loading block rewritten for
+// Hermes's native skill model.
+func TestPersonaContentHermesNeutral(t *testing.T) {
+	content := personaContent(model.AgentHermes, model.PersonaNeutral)
+	if content == "" {
+		t.Fatal("personaContent(hermes, neutral) returned empty string")
+	}
+	// The generic <available_skills> "is authoritative" block must be absent.
+	if strings.Contains(content, availableSkillsIsAuthoritative) {
+		t.Fatal("hermes neutral persona still has the generic <available_skills> instruction — skill-loading block not rewritten")
+	}
+	if !strings.Contains(content, "~/.hermes/skills/") {
+		t.Fatal("hermes neutral persona missing ~/.hermes/skills/ reference")
+	}
+	// Must be distinct from generic neutral.
+	generic := assets.MustRead("generic/persona-neutral.md")
+	if content == generic {
+		t.Fatal("hermes neutral persona is byte-identical to generic — Hermes-specific asset not used")
+	}
+}
+
+// TestPersonaContentHermesCustom verifies that PersonaCustom returns empty string
+// for Hermes (no persona injected — user keeps their own config).
+func TestPersonaContentHermesCustom(t *testing.T) {
+	content := personaContent(model.AgentHermes, model.PersonaCustom)
+	if content != "" {
+		t.Fatalf("personaContent(hermes, custom) = %q, want empty string", content)
+	}
+}
+
+// TestPersonaContentNonHermesNeutralUnchanged is a regression test verifying that
+// non-Hermes agents still receive the byte-identical generic/persona-neutral.md
+// when PersonaNeutral is selected. This ensures the refactor is additive-only.
+func TestPersonaContentNonHermesNeutralUnchanged(t *testing.T) {
+	genericNeutral := assets.MustRead("generic/persona-neutral.md")
+	if genericNeutral == "" {
+		t.Fatal("generic/persona-neutral.md asset is empty")
+	}
+
+	agentIDs := []model.AgentID{
+		model.AgentClaudeCode,
+		model.AgentOpenCode,
+		model.AgentGeminiCLI,
+		model.AgentCursor,
+		model.AgentCodex,
+	}
+	for _, agent := range agentIDs {
+		t.Run(string(agent), func(t *testing.T) {
+			got := personaContent(agent, model.PersonaNeutral)
+			if got != genericNeutral {
+				t.Fatalf("personaContent(%q, neutral) is no longer byte-identical to generic/persona-neutral.md — regression", agent)
+			}
+		})
+	}
+}
+
+// TestInjectHermesGentlemanWritesSOULMD verifies that Inject writes the Hermes
+// gentleman persona into ~/.hermes/SOUL.md with <!-- gentle-ai:persona --> markers.
+func TestInjectHermesGentlemanWritesSOULMD(t *testing.T) {
+	home := t.TempDir()
+	adapter := hermesAdapter()
+
+	result, err := Inject(home, adapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(hermes, gentleman) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(hermes, gentleman) changed = false")
+	}
+
+	soulPath := filepath.Join(home, ".hermes", "SOUL.md")
+	content, err := os.ReadFile(soulPath)
+	if err != nil {
+		t.Fatalf("ReadFile(SOUL.md) error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("SOUL.md missing <!-- gentle-ai:persona --> open marker")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:persona -->") {
+		t.Fatal("SOUL.md missing <!-- /gentle-ai:persona --> close marker")
+	}
+	if strings.Contains(text, availableSkillsIsAuthoritative) {
+		t.Fatal("SOUL.md contains the generic <available_skills> instruction — Hermes-specific asset not used")
+	}
+	if !strings.Contains(text, "~/.hermes/skills/") {
+		t.Fatal("SOUL.md missing ~/.hermes/skills/ reference")
+	}
+}
+
+// TestInjectHermesNeutralWritesSOULMD verifies that neutral persona injection into
+// SOUL.md uses the Hermes-specific neutral asset, not the generic one.
+func TestInjectHermesNeutralWritesSOULMD(t *testing.T) {
+	home := t.TempDir()
+	adapter := hermesAdapter()
+
+	result, err := Inject(home, adapter, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(hermes, neutral) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(hermes, neutral) changed = false")
+	}
+
+	soulPath := filepath.Join(home, ".hermes", "SOUL.md")
+	content, err := os.ReadFile(soulPath)
+	if err != nil {
+		t.Fatalf("ReadFile(SOUL.md) error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("SOUL.md missing <!-- gentle-ai:persona --> open marker")
+	}
+	if strings.Contains(text, availableSkillsIsAuthoritative) {
+		t.Fatal("SOUL.md contains the generic <available_skills> instruction — generic neutral used instead of Hermes-specific")
+	}
+}
+
+// TestHermesPersonaAssetsContainIdentitySection verifies that both Hermes persona
+// assets include an explicit ## Identity section that names "Gentle AI" and "Hermes".
+// This ensures that when a user asks "who are you?" the agent does not fall back to a
+// generic assistant identity — it answers as Gentle AI running on Hermes Agent.
+func TestHermesPersonaAssetsContainIdentitySection(t *testing.T) {
+	paths := []string{
+		"hermes/persona-gentleman.md",
+		"hermes/persona-neutral.md",
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			content := assets.MustRead(path)
+
+			if !strings.Contains(content, "## Identity") {
+				t.Fatalf("%s missing ## Identity section", path)
+			}
+			if !strings.Contains(content, "Gentle AI") {
+				t.Fatalf("%s ## Identity section must mention \"Gentle AI\"", path)
+			}
+			if !strings.Contains(content, "Hermes") {
+				t.Fatalf("%s ## Identity section must mention \"Hermes\"", path)
+			}
+		})
 	}
 }

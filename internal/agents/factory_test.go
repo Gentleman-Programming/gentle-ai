@@ -74,6 +74,7 @@ func TestDefaultRegistrySupportedAgentsMatchesFactoryAgents(t *testing.T) {
 		model.AgentCodex,
 		model.AgentCursor,
 		model.AgentGeminiCLI,
+		model.AgentHermes,
 		model.AgentKilocode,
 		model.AgentKimi,
 		model.AgentKiroIDE,
@@ -88,6 +89,33 @@ func TestDefaultRegistrySupportedAgentsMatchesFactoryAgents(t *testing.T) {
 
 	if got := registry.SupportedAgents(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("SupportedAgents() = %v, want %v", got, want)
+	}
+}
+
+func TestFactoryResolvesHermesAdapter(t *testing.T) {
+	adapter, err := NewAdapter(model.AgentHermes)
+	if err != nil {
+		t.Fatalf("NewAdapter(%q) returned error: %v", model.AgentHermes, err)
+	}
+
+	if got := adapter.Agent(); got != model.AgentHermes {
+		t.Fatalf("adapter.Agent() = %q, want %q", got, model.AgentHermes)
+	}
+}
+
+func TestDefaultRegistryIncludesHermes(t *testing.T) {
+	registry, err := NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("NewDefaultRegistry() returned error: %v", err)
+	}
+
+	adapter, ok := registry.Get(model.AgentHermes)
+	if !ok {
+		t.Fatalf("registry missing %s adapter", model.AgentHermes)
+	}
+
+	if got := adapter.Agent(); got != model.AgentHermes {
+		t.Fatalf("registry adapter.Agent() = %q, want %q", got, model.AgentHermes)
 	}
 }
 

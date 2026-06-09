@@ -459,7 +459,15 @@ func isGentlemanConversationPersona(persona model.PersonaID) bool {
 func personaContent(agent model.AgentID, persona model.PersonaID) string {
 	switch persona {
 	case model.PersonaNeutral:
-		return assets.MustRead("generic/persona-neutral.md")
+		// Per-agent neutral selection: Hermes uses its own neutral asset with
+		// the skill-loading block rewritten for ~/.hermes/skills/ (Decision 5).
+		// All other agents receive the byte-identical generic/persona-neutral.md.
+		switch agent {
+		case model.AgentHermes:
+			return assets.MustRead("hermes/persona-neutral.md")
+		default:
+			return assets.MustRead("generic/persona-neutral.md")
+		}
 	case model.PersonaCustom:
 		return ""
 	default:
@@ -475,6 +483,8 @@ func personaContent(agent model.AgentID, persona model.PersonaID) string {
 			// Kiro uses a steering-file based persona. The asset is identical to
 			// generic today but kept separate so it can diverge independently.
 			return assets.MustRead("kiro/persona-gentleman.md")
+		case model.AgentHermes:
+			return assets.MustRead("hermes/persona-gentleman.md")
 		default:
 			// Generic persona includes Gentleman personality + skills table + SDD orchestrator.
 			// Used by Gemini CLI, Cursor, VS Code Copilot, and any future agents.

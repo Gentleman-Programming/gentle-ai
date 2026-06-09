@@ -12,6 +12,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
@@ -23,6 +24,7 @@ import (
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
+func hermesAdapter() agents.Adapter   { return hermes.NewAdapter() }
 func kilocodeAdapter() agents.Adapter { return kilocode.NewAdapter() }
 func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
 func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
@@ -58,6 +60,7 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 		{model.AgentOpenClaw, "generic/sdd-orchestrator.md"},
 		{model.AgentPi, "generic/sdd-orchestrator.md"},
 		{model.AgentTrae, "generic/sdd-orchestrator.md"},
+		{model.AgentHermes, "hermes/sdd-orchestrator.md"},
 	}
 
 	for _, tc := range tests {
@@ -66,6 +69,86 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				t.Fatalf("sddOrchestratorAsset(%q) = %q, want %q", tc.agent, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestInjectHermesWritesSDDOrchestratorToSOULMD verifies that sdd.Inject writes
+// the Hermes-specific SDD orchestrator content into ~/.hermes/SOUL.md via
+// StrategyMarkdownSections markers. Content is preserved across re-runs.
+func TestInjectHermesWritesSDDOrchestratorToSOULMD(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	adapter := hermesAdapter()
+
+	result, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(hermes) first error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(hermes) first run: changed = false, want true")
+	}
+
+	soulPath := filepath.Join(home, ".hermes", "SOUL.md")
+	content, err := os.ReadFile(soulPath)
+	if err != nil {
+		t.Fatalf("ReadFile(SOUL.md) error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("SOUL.md missing <!-- gentle-ai:sdd-orchestrator --> open marker")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("SOUL.md missing <!-- /gentle-ai:sdd-orchestrator --> close marker")
+	}
+	// Verify the Hermes-specific content is present (references ~/.hermes/skills/).
+	if !strings.Contains(text, "~/.hermes/skills/") {
+		t.Fatal("SOUL.md missing ~/.hermes/skills/ reference — wrong orchestrator asset loaded")
+	}
+
+	// Add user content outside markers and verify it is preserved on re-run.
+	userContent := "\n\n# My custom Hermes rules\nAlways be concise.\n"
+	if err := os.WriteFile(soulPath, []byte(text+userContent), 0o644); err != nil {
+		t.Fatalf("WriteFile(SOUL.md user content) error = %v", err)
+	}
+
+	_, err = Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(hermes) second error = %v", err)
+	}
+	afterContent, err := os.ReadFile(soulPath)
+	if err != nil {
+		t.Fatalf("ReadFile(SOUL.md) after second inject error = %v", err)
+	}
+	if !strings.Contains(string(afterContent), "My custom Hermes rules") {
+		t.Fatal("Inject(hermes) second run clobbered user content outside markers")
+	}
+}
+
+// TestInjectHermesSDDIdempotent verifies that Inject for the Hermes adapter writes
+// the SDD orchestrator markdown into ~/.hermes/SOUL.md via markdown-section injection,
+// and that a second Inject call converges to Changed=false (idempotent).
+func TestInjectHermesSDDIdempotent(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	adapter := hermesAdapter()
+
+	first, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(hermes) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(hermes) first changed = false")
+	}
+
+	second, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(hermes) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("Inject(hermes) second changed = true (not idempotent)")
 	}
 }
 

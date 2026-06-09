@@ -8,6 +8,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	cursoradapter "github.com/gentleman-programming/gentle-ai/internal/agents/cursor"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kiro"
@@ -37,6 +38,7 @@ var defaultAgentIDs = []model.AgentID{
 	model.AgentOpenClaw,
 	model.AgentPi,
 	model.AgentTrae,
+	model.AgentHermes,
 }
 
 func NewAdapter(agent model.AgentID) (Adapter, error) {
@@ -71,6 +73,8 @@ func NewAdapter(agent model.AgentID) (Adapter, error) {
 		return pi.NewAdapter(), nil
 	case model.AgentTrae:
 		return trae.NewAdapter(), nil
+	case model.AgentHermes:
+		return hermes.NewAdapter(), nil
 	default:
 		return nil, AgentNotSupportedError{Agent: agent}
 	}

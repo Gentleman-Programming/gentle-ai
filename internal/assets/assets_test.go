@@ -213,6 +213,11 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/_shared/sdd-phase-common.md",
 		"skills/_shared/sdd-status-contract.md",
 
+		// Hermes agent files
+		"hermes/sdd-orchestrator.md",
+		"hermes/persona-gentleman.md",
+		"hermes/persona-neutral.md",
+
 		// Foundation skills
 		"skills/go-testing/SKILL.md",
 		"skills/go-testing/references/examples.md",

@@ -14,6 +14,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/cursor"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -26,6 +27,30 @@ func cursorAdapter() agents.Adapter      { return cursor.NewAdapter() }
 func vscodeAdapter() agents.Adapter      { return vscode.NewAdapter() }
 func codexAdapter() agents.Adapter       { return codex.NewAdapter() }
 func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
+func hermesAdapter() agents.Adapter      { return hermes.NewAdapter() }
+
+// TestInjectHermesSkipsPermissions verifies that Hermes returns nil (no file written)
+// because Hermes permission format is undocumented — §14 of spec.
+func TestInjectHermesSkipsPermissions(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, hermesAdapter())
+	if err != nil {
+		t.Fatalf("Inject(hermes) error = %v", err)
+	}
+	if result.Changed {
+		t.Fatal("Inject(hermes) changed = true, want false (no file should be written)")
+	}
+	if len(result.Files) != 0 {
+		t.Fatalf("Inject(hermes) files = %v, want [] (no file should be written)", result.Files)
+	}
+
+	// Confirm no config.yaml or settings file was created.
+	hermesDir := filepath.Join(home, ".hermes")
+	if _, err := os.Stat(hermesDir); err == nil {
+		t.Fatal("Inject(hermes) created ~/.hermes directory, want no files written")
+	}
+}
 
 func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	home := t.TempDir()

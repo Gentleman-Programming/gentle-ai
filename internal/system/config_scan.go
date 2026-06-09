@@ -44,6 +44,7 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "openclaw", Path: filepath.Join(homeDir, ".openclaw")},
 		{Agent: "pi", Path: filepath.Join(homeDir, ".pi")},
 		{Agent: "trae-ide", Path: filepath.Join(homeDir, ".trae")},
+		{Agent: "hermes", Path: filepath.Join(homeDir, ".hermes")},
 	}
 }
 

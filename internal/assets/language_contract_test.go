@@ -67,6 +67,7 @@ func TestSupportedAgentSDDLanguageMatrix(t *testing.T) {
 		{agent: "openclaw", path: "generic/sdd-orchestrator.md"},
 		{agent: "pi", path: "generic/sdd-orchestrator.md"},
 		{agent: "trae-ide", path: "generic/sdd-orchestrator.md"},
+		{agent: "hermes", path: "hermes/sdd-orchestrator.md"},
 	}
 
 	for _, tc := range tests {

@@ -127,6 +127,9 @@ func agentOverlay(id model.AgentID) []byte {
 	case model.AgentCodex:
 		// Codex has no known settings.json path; permissions are skipped.
 		return nil
+	case model.AgentHermes:
+		// Hermes permission format is undocumented — no overlay is injected (§14).
+		return nil
 	default:
 		return nil
 	}
