@@ -576,6 +576,7 @@ func TestNonClaudeSDDOrchestratorChainStrategyParity(t *testing.T) {
 		{path: "antigravity/sdd-orchestrator.md", propagationScope: "dynamic subagent context"},
 		{path: "cursor/sdd-orchestrator.md", propagationScope: "prompt"},
 		{path: "opencode/sdd-orchestrator.md", propagationScope: "prompt"},
+		{path: "hermes/sdd-orchestrator.md", propagationScope: "prompt"},
 	}
 
 	for _, tc := range tests {
