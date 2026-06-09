@@ -1124,7 +1124,7 @@ func TestInjectKimiKiroWindsurfAntigravityPreserveNativeChainStrategyWording(t *
 			promptPath: func(home string, _ agents.Adapter) string {
 				return filepath.Join(home, ".kimi", "sdd-orchestrator.md")
 			},
-			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "/skill:sdd-*", "multiagent:Task", "custom-agent prompt"},
+			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "/skill:sdd-*", "multiagent:Task", "custom-agent prompt", "treat `chained-pr` (registry skill `gentle-ai-chained-pr`) as a required skill match"},
 			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation"},
 		},
 		{
@@ -1133,7 +1133,7 @@ func TestInjectKimiKiroWindsurfAntigravityPreserveNativeChainStrategyWording(t *
 			promptPath: func(home string, adapter agents.Adapter) string {
 				return adapter.SystemPromptFile(home)
 			},
-			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "Kiro phase context", "native Kiro subagent context"},
+			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "Kiro phase context", "native Kiro subagent context", "treat `chained-pr` (registry skill `gentle-ai-chained-pr`) as a required skill match"},
 			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation"},
 		},
 		{
@@ -1142,7 +1142,7 @@ func TestInjectKimiKiroWindsurfAntigravityPreserveNativeChainStrategyWording(t *
 			promptPath: func(home string, adapter agents.Adapter) string {
 				return adapter.SystemPromptFile(home)
 			},
-			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "inline phase context", "There are no sub-agents"},
+			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "inline phase context", "There are no sub-agents", "treat `chained-pr` (registry skill `gentle-ai-chained-pr`) as a required skill match"},
 			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation", "custom sub-agent prompts"},
 		},
 		{
@@ -1151,7 +1151,7 @@ func TestInjectKimiKiroWindsurfAntigravityPreserveNativeChainStrategyWording(t *
 			promptPath: func(home string, adapter agents.Adapter) string {
 				return adapter.SystemPromptFile(home)
 			},
-			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "dynamic subagent context", "define_subagent", "invoke_subagent"},
+			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "dynamic subagent context", "define_subagent", "invoke_subagent", "treat `chained-pr` (registry skill `gentle-ai-chained-pr`) as a required skill match"},
 			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation", "inline phase context"},
 		},
 	}
