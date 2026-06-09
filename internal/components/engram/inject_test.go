@@ -582,8 +582,8 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 	if !strings.Contains(text, `"args": [`) || !strings.Contains(text, `"mcp"`) {
 		t.Fatalf("Antigravity MCP config must launch Engram MCP; got:\n%s", text)
 	}
-	if strings.Contains(text, `--tools=`) {
-		t.Fatalf("Antigravity should use Engram's default MCP invocation without tool-profile flags; got:\n%s", text)
+	if !strings.Contains(text, `"--tools=agent"`) {
+		t.Fatalf("Antigravity should use Engram's agent MCP invocation with tool-profile flags; got:\n%s", text)
 	}
 
 	pluginPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "plugin.json")
@@ -592,13 +592,8 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 	}
 
 	pluginMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
-	pluginMCPContent, err := os.ReadFile(pluginMCPPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", pluginMCPPath, err)
-	}
-	pluginMCPText := string(pluginMCPContent)
-	if !strings.Contains(pluginMCPText, `"mcp"`) || strings.Contains(pluginMCPText, `--tools=`) {
-		t.Fatalf("Antigravity Engram plugin MCP config should expose default Engram MCP tools; got:\n%s", pluginMCPText)
+	if _, err := os.Stat(pluginMCPPath); !os.IsNotExist(err) {
+		t.Fatalf("Antigravity Engram plugin MCP config should NOT be written: %v", err)
 	}
 
 	hooksPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "hooks.json")
