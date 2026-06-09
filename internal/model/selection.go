@@ -11,7 +11,7 @@ type Selection struct {
 	StrictTDD              bool
 	CodexMultiAgent        bool                        // deprecated: Codex now always writes features.multi_agent = true; retained for state/back-compat
 	ModelAssignments       map[string]ModelAssignment  // key = sub-agent name (e.g., "sdd-init")
-	ClaudeModelAssignments map[string]ClaudeModelAlias // key = phase name; value = opus|sonnet|haiku
+	ClaudeModelAssignments map[string]ClaudeModelAlias // key = phase name; value = fable|opus|sonnet|haiku
 	KiroModelAssignments   map[string]KiroModelAlias   // key = phase name; value = Kiro-native model alias
 	CodexModelAssignments  map[string]CodexEffort      // key = phase name; value = low|medium|high|xhigh
 	Profiles               []Profile                   // named SDD profiles to generate/update during sync

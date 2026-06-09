@@ -255,6 +255,7 @@ func TestModelAssignmentsRoundTrip(t *testing.T) {
 		ClaudeModelAssignments: map[string]string{
 			"orchestrator": "opus",
 			"sdd-explore":  "sonnet",
+			"sdd-propose":  "fable",
 			"sdd-archive":  "haiku",
 		},
 		KiroModelAssignments: map[string]string{

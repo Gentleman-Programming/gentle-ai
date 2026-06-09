@@ -74,6 +74,7 @@ var claudePhaseLabels = map[string]string{
 
 // claudeAliasOrder defines the cycling order when pressing Enter on a phase row.
 var claudeAliasOrder = []model.ClaudeModelAlias{
+	model.ClaudeModelFable,
 	model.ClaudeModelOpus,
 	model.ClaudeModelSonnet,
 	model.ClaudeModelHaiku,
@@ -245,7 +246,7 @@ func handleCustomPhaseNav(
 	return false, nil
 }
 
-// nextAlias cycles through opus → sonnet → haiku → opus.
+// nextAlias cycles through fable → opus → sonnet → haiku → fable.
 func nextAlias(current model.ClaudeModelAlias) model.ClaudeModelAlias {
 	for i, a := range claudeAliasOrder {
 		if a == current {
@@ -293,7 +294,7 @@ func renderCustomPhaseList(state ClaudeModelPickerState, cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("Custom Model Assignments"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Press enter on a phase to cycle: opus → sonnet → haiku"))
+	b.WriteString(styles.SubtextStyle.Render("Press enter on a phase to cycle: fable → opus → sonnet → haiku"))
 	b.WriteString("\n\n")
 
 	for idx, phase := range claudePhases {
@@ -325,6 +326,8 @@ func renderCustomPhaseList(state ClaudeModelPickerState, cursor int) string {
 // aliasTag returns a styled badge for the alias value.
 func aliasTag(alias model.ClaudeModelAlias) string {
 	switch alias {
+	case model.ClaudeModelFable:
+		return styles.TitleStyle.Render("[fable]")
 	case model.ClaudeModelOpus:
 		return styles.WarningStyle.Render("[opus]")
 	case model.ClaudeModelHaiku:

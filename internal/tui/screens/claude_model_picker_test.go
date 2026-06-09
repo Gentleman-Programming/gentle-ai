@@ -73,6 +73,79 @@ func TestNewClaudeModelPickerStateFromAssignments_CopiesMap(t *testing.T) {
 	}
 }
 
+// TestNextAliasCyclesThroughAllAliases verifies the fable → opus → sonnet →
+// haiku cycle order and the sonnet fallback for unknown aliases.
+func TestNextAliasCyclesThroughAllAliases(t *testing.T) {
+	cases := []struct {
+		name    string
+		current model.ClaudeModelAlias
+		want    model.ClaudeModelAlias
+	}{
+		{"fable → opus", model.ClaudeModelFable, model.ClaudeModelOpus},
+		{"opus → sonnet", model.ClaudeModelOpus, model.ClaudeModelSonnet},
+		{"sonnet → haiku", model.ClaudeModelSonnet, model.ClaudeModelHaiku},
+		{"haiku → fable", model.ClaudeModelHaiku, model.ClaudeModelFable},
+		{"unknown falls back to sonnet", model.ClaudeModelAlias("bogus"), model.ClaudeModelSonnet},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nextAlias(tc.current); got != tc.want {
+				t.Errorf("nextAlias(%q) = %q, want %q", tc.current, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHandleCustomPhaseNav_CycleReachesEveryAlias drives the picker's nav
+// handler through a full cycle on one phase and verifies every alias is
+// reachable and the cycle returns to its starting alias.
+func TestHandleCustomPhaseNav_CycleReachesEveryAlias(t *testing.T) {
+	state := NewClaudeModelPickerState()
+	state.InCustomMode = true
+	phase := claudePhases[0]
+	start := state.CustomAssignments[phase]
+
+	seen := map[model.ClaudeModelAlias]bool{start: true}
+	for i := 0; i < len(claudeAliasOrder); i++ {
+		handled, assignments := HandleClaudeModelPickerNav("enter", &state, 0)
+		if !handled {
+			t.Fatal("enter on a phase row should be handled")
+		}
+		if assignments != nil {
+			t.Fatal("cycling a phase should not confirm the screen")
+		}
+		seen[state.CustomAssignments[phase]] = true
+	}
+
+	for _, alias := range claudeAliasOrder {
+		if !seen[alias] {
+			t.Errorf("cycling never reached alias %q", alias)
+		}
+	}
+	if state.CustomAssignments[phase] != start {
+		t.Errorf("after a full cycle, alias = %q, want starting alias %q", state.CustomAssignments[phase], start)
+	}
+}
+
+// TestRenderClaudeModelPicker_CustomModeRendersFable verifies that custom
+// mode renders the [fable] badge for a fable-assigned phase and that the help
+// text advertises the four-alias cycle.
+func TestRenderClaudeModelPicker_CustomModeRendersFable(t *testing.T) {
+	state := NewClaudeModelPickerStateFromAssignments(map[string]model.ClaudeModelAlias{
+		"sdd-propose": model.ClaudeModelFable,
+	})
+	state.InCustomMode = true
+
+	out := RenderClaudeModelPicker(state, 0)
+	if !strings.Contains(out, "[fable]") {
+		t.Errorf("expected [fable] tag in custom mode render, got:\n%s", out)
+	}
+	if !strings.Contains(out, "fable → opus → sonnet → haiku") {
+		t.Errorf("expected cycle help text to include fable, got:\n%s", out)
+	}
+}
+
 func TestRenderClaudeModelPicker_ShowsCurrentPreset(t *testing.T) {
 	cases := []struct {
 		name        string
