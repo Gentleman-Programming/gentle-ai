@@ -3305,7 +3305,6 @@ func TestInjectOpenCodeMultiWritesPlugin(t *testing.T) {
 }
 
 func TestInjectOpenCodeSingleWritesPlugin(t *testing.T) {
-	skipIfNoPkgManager(t)
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -3427,7 +3426,6 @@ func TestInjectOpenCodePluginBunPreferredOverNpm(t *testing.T) {
 }
 
 func TestInjectOpenCodePluginIdempotent(t *testing.T) {
-	skipIfNoPkgManager(t)
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
