@@ -36,18 +36,6 @@ func skipIfNoPkgManager(t *testing.T) {
 	}
 }
 
-// disablePluginInstall mocks out the package manager lookup so that the plugin
-// dependency install is a soft no-op. Use this in tests that exercise SDD
-// injection logic but do not specifically test the plugin install path.
-func disablePluginInstall(t *testing.T) {
-	t.Helper()
-	orig := npmLookPath
-	npmLookPath = func(string) (string, error) {
-		return "", fmt.Errorf("skipped in test")
-	}
-	t.Cleanup(func() { npmLookPath = orig })
-}
-
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func hermesAdapter() agents.Adapter   { return hermes.NewAdapter() }
 func kilocodeAdapter() agents.Adapter { return kilocode.NewAdapter() }
@@ -422,7 +410,7 @@ func TestInjectClaudeCustomModelAssignmentsIsIdempotent(t *testing.T) {
 }
 
 func TestInjectOpenCodeWritesCommandFiles(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 
 	result, err := Inject(home, opencodeAdapter(), "")
@@ -482,7 +470,7 @@ func TestInjectOpenCodeWritesCommandFiles(t *testing.T) {
 }
 
 func TestInjectOpenCodeIsIdempotent(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 
 	first, err := Inject(home, opencodeAdapter(), "")
@@ -1025,7 +1013,7 @@ func TestInjectOpenCodeOverwritesOrchestratorPromptByDefault(t *testing.T) {
 }
 
 func TestInjectOpenCodeMigratesLegacyAgentsKey(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
@@ -1615,7 +1603,7 @@ You are a COORDINATOR, not an executor.
 }
 
 func TestInjectOpenCodeMultiMode(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 
 	result, err := Inject(home, opencodeAdapter(), "multi")
@@ -1710,7 +1698,7 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 }
 
 func TestInjectOpenCodeMultiModeIdempotent(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 
 	first, err := Inject(home, opencodeAdapter(), "multi")
@@ -1859,7 +1847,7 @@ func TestInjectOpenCodeSubagentPromptsStayExecutorScoped(t *testing.T) {
 }
 
 func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 
 	result, err := Inject(home, opencodeAdapter(), "")
@@ -1964,7 +1952,7 @@ func TestInjectClaudeIgnoresSDDMode(t *testing.T) {
 }
 
 func TestInjectOpenCodeSingleToMultiSwitch(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 
 	// First: inject single mode.
@@ -2255,7 +2243,7 @@ func TestInjectOpenClawRejectsAmbiguousWorkspacePath(t *testing.T) {
 }
 
 func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -2318,7 +2306,7 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 }
 
 func TestInjectOpenCodeMultiModeNoAssignmentsNoModel(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -2357,7 +2345,7 @@ func TestInjectOpenCodeMultiModeNoAssignmentsNoModel(t *testing.T) {
 }
 
 func TestInjectSingleModeIgnoresModelAssignments(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -2745,7 +2733,7 @@ func TestInjectOpenCodeMultiModeExistingAgentWithNoModelIsNotTouched(t *testing.
 // actually written to the agent's skills/_shared/ directory during Inject().
 // This is a disk-level test; assets_test.go only checks the embedded FS.
 func TestInjectWritesAllSharedFilesToDisk(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 
 	result, err := Inject(home, opencodeAdapter(), "")
@@ -2794,7 +2782,7 @@ func TestInjectWritesAllSharedFilesToDisk(t *testing.T) {
 // TestInjectSharedDirCreatedWithAllFiles verifies that Inject() creates the
 // _shared directory when it does not exist and writes all shared files into it.
 func TestInjectSharedDirCreatedWithAllFiles(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 
 	// Sanity: _shared dir must not exist yet.
@@ -3003,7 +2991,7 @@ func TestInjectStrictTDDIsIdempotent(t *testing.T) {
 // Specifically, sdd-apply/strict-tdd.md and sdd-verify/strict-tdd-verify.md
 // must be written to disk alongside their SKILL.md files.
 func TestInjectCopiesAllFilesFromSkillDirectory(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 
 	result, err := Inject(home, opencodeAdapter(), "")
@@ -3040,7 +3028,7 @@ func TestInjectCopiesAllFilesFromSkillDirectory(t *testing.T) {
 }
 
 func TestInjectCopiesNestedSDDSkillReferences(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 
 	result, err := Inject(home, opencodeAdapter(), "")
@@ -3083,7 +3071,7 @@ func assertNonEmptyFile(t *testing.T, path string) {
 // TestInjectCopiesAllFilesReportedInResult verifies that all skill files
 // (including extra files beyond SKILL.md) are included in result.Files.
 func TestInjectCopiesAllFilesReportedInResult(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 
 	result, err := Inject(home, opencodeAdapter(), "")
@@ -3989,7 +3977,7 @@ func TestInjectCodexIsIdempotent(t *testing.T) {
 // which could see stale content on Windows/WSL2. The fix validates against
 // the in-memory merged bytes returned by mergeJSONFile instead.
 func TestInjectOpenCodeMultiModeWithPreExistingMinimalConfig(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -4049,7 +4037,7 @@ func TestInjectOpenCodeMultiModeWithPreExistingMinimalConfig(t *testing.T) {
 // provider settings, etc.) is correctly merged with the multi-mode overlay
 // and passes the post-check without any disk re-read race.
 func TestInjectOpenCodeMultiModeWithPreExistingFullConfig(t *testing.T) {
-	disablePluginInstall(t)
+	mockNoPackageManager(t)
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
