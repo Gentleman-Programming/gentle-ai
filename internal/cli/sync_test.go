@@ -2248,6 +2248,51 @@ func TestSyncPersonaPathsExcludeOpenCodeAgentJson(t *testing.T) {
 	}
 }
 
+func TestSyncPersonaPathsDeclareManagedClaudeOutputStyle(t *testing.T) {
+	home := t.TempDir()
+	reg, _ := agents.NewDefaultRegistry()
+	a, _ := reg.Get(model.AgentClaudeCode)
+
+	tests := []struct {
+		name       string
+		persona    model.PersonaID
+		wantStyle  string
+		unwanted   string
+		wantConfig string
+	}{
+		{
+			name:       "gentleman",
+			persona:    model.PersonaGentleman,
+			wantStyle:  filepath.Join(home, ".claude", "output-styles", "gentleman.md"),
+			unwanted:   filepath.Join(home, ".claude", "output-styles", "neutral.md"),
+			wantConfig: filepath.Join(home, ".claude", "settings.json"),
+		},
+		{
+			name:       "neutral",
+			persona:    model.PersonaNeutral,
+			wantStyle:  filepath.Join(home, ".claude", "output-styles", "neutral.md"),
+			unwanted:   filepath.Join(home, ".claude", "output-styles", "gentleman.md"),
+			wantConfig: filepath.Join(home, ".claude", "settings.json"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			paths := syncPersonaPaths(home, model.Selection{Persona: tt.persona}, []agents.Adapter{a})
+
+			if !containsPath(paths, tt.wantStyle) {
+				t.Fatalf("syncPersonaPaths(%q) missing managed style %q; got %v", tt.persona, tt.wantStyle, paths)
+			}
+			if !containsPath(paths, tt.wantConfig) {
+				t.Fatalf("syncPersonaPaths(%q) missing settings path %q; got %v", tt.persona, tt.wantConfig, paths)
+			}
+			if containsPath(paths, tt.unwanted) {
+				t.Fatalf("syncPersonaPaths(%q) included wrong managed style %q; got %v", tt.persona, tt.unwanted, paths)
+			}
+		})
+	}
+}
+
 // TestRunSyncRegeneratesPersonaBlockBetweenMarkers verifies the core fix:
 // when an old persona block lives between markers, sync replaces it with the
 // embedded asset for the current version.
@@ -2320,10 +2365,10 @@ func TestRunSyncReadsPersonaFromState(t *testing.T) {
 	}
 }
 
-// TestRunSyncFallsBackToGentlemanWhenStateLacksPersona verifies the backward
-// compatibility path: state files written before persona persistence still
-// produce a working sync.
-func TestRunSyncFallsBackToGentlemanWhenStateLacksPersona(t *testing.T) {
+// TestRunSyncFallsBackToNeutralWhenStateLacksPersona verifies missing persona
+// state resolves to neutral/default-safe behavior instead of reactivating
+// Gentleman regional voice.
+func TestRunSyncFallsBackToNeutralWhenStateLacksPersona(t *testing.T) {
 	home := t.TempDir()
 	setSyncTestHome(t, home)
 
@@ -2341,8 +2386,8 @@ func TestRunSyncFallsBackToGentlemanWhenStateLacksPersona(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSync() error = %v", err)
 	}
-	if got, want := res.Selection.Persona, model.PersonaGentleman; got != want {
-		t.Errorf("Selection.Persona = %q, want %q (fallback for pre-feature state)", got, want)
+	if got, want := res.Selection.Persona, model.PersonaNeutral; got != want {
+		t.Errorf("Selection.Persona = %q, want %q (safe fallback for missing state persona)", got, want)
 	}
 }
 
@@ -2414,10 +2459,9 @@ func TestRunSyncWithSelection_PersonaResolvesFromStateCustom(t *testing.T) {
 	}
 }
 
-// TestRunSyncWithSelection_PersonaFallsBackToGentlemanWhenStateHasNone verifies
-// the backward-compat fallback: old state files without a Persona field still
-// result in the Gentleman persona (not empty / not panic).
-func TestRunSyncWithSelection_PersonaFallsBackToGentlemanWhenStateHasNone(t *testing.T) {
+// TestRunSyncWithSelection_PersonaFallsBackToNeutralWhenStateHasNone verifies
+// missing state persona resolves to neutral/default-safe behavior.
+func TestRunSyncWithSelection_PersonaFallsBackToNeutralWhenStateHasNone(t *testing.T) {
 	home := t.TempDir()
 	setSyncTestHome(t, home)
 
@@ -2442,8 +2486,8 @@ func TestRunSyncWithSelection_PersonaFallsBackToGentlemanWhenStateHasNone(t *tes
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
 
-	if got, want := result.Selection.Persona, model.PersonaGentleman; got != want {
-		t.Errorf("result.Selection.Persona = %q, want %q (fallback for pre-feature state)", got, want)
+	if got, want := result.Selection.Persona, model.PersonaNeutral; got != want {
+		t.Errorf("result.Selection.Persona = %q, want %q (safe fallback for missing state persona)", got, want)
 	}
 }
 
@@ -2482,11 +2526,10 @@ func TestRunSyncWithSelection_ExplicitPersonaWinsOverState(t *testing.T) {
 	}
 }
 
-// TestRunSyncWithSelection_UnknownPersistedPersonaFallsBackToGentleman documents
+// TestRunSyncWithSelection_UnknownPersistedPersonaFallsBackToNeutral documents
 // the normalizePersona contract for unrecognized persisted values: an unknown or
-// misspelled persona string (e.g. "Gentleman" capitalized, or "bogus") must NOT
-// silently propagate as a PersonaID — it must fall back to PersonaGentleman.
-func TestRunSyncWithSelection_UnknownPersistedPersonaFallsBackToGentleman(t *testing.T) {
+// misspelled persona string must NOT silently propagate or reactivate Gentleman.
+func TestRunSyncWithSelection_UnknownPersistedPersonaFallsBackToNeutral(t *testing.T) {
 	home := t.TempDir()
 	setSyncTestHome(t, home)
 
@@ -2495,7 +2538,7 @@ func TestRunSyncWithSelection_UnknownPersistedPersonaFallsBackToGentleman(t *tes
 	}
 	// Write a state with an unrecognized persona value (wrong capitalization).
 	// normalizePersona does a case-sensitive switch, so "Gentleman" != "gentleman"
-	// and must return an error, triggering the Gentleman fallback.
+	// and must return an error, triggering the neutral fallback.
 	if err := state.Write(home, state.InstallState{
 		InstalledAgents: []string{"claude-code"},
 		Persona:         "Gentleman", // capitalized — not a valid PersonaID
@@ -2514,10 +2557,8 @@ func TestRunSyncWithSelection_UnknownPersistedPersonaFallsBackToGentleman(t *tes
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
 
-	// normalizePersona returns an error for "Gentleman" (unknown); applyResolvedPersona
-	// must fall through to the Gentleman fallback, not propagate the raw bad string.
-	if got, want := result.Selection.Persona, model.PersonaGentleman; got != want {
-		t.Errorf("result.Selection.Persona = %q, want %q (unknown persisted value must fall back to Gentleman)", got, want)
+	if got, want := result.Selection.Persona, model.PersonaNeutral; got != want {
+		t.Errorf("result.Selection.Persona = %q, want %q (unknown persisted value must fall back to neutral)", got, want)
 	}
 }
 
@@ -2660,10 +2701,10 @@ func TestRunSyncDryRunResolvesPersonaFromState(t *testing.T) {
 	}
 }
 
-// TestRunSyncDryRunFallsBackToGentlemanWhenStateLacksPersona verifies that
-// --dry-run mode falls back to Gentleman when state has no recorded persona
-// (backward-compat: old installs without persona persistence).
-func TestRunSyncDryRunFallsBackToGentlemanWhenStateLacksPersona(t *testing.T) {
+// TestRunSyncDryRunFallsBackToNeutralWhenStateLacksPersona verifies that
+// --dry-run mode falls back to neutral/default-safe behavior when state has no
+// recorded persona.
+func TestRunSyncDryRunFallsBackToNeutralWhenStateLacksPersona(t *testing.T) {
 	home := t.TempDir()
 	setSyncTestHome(t, home)
 
@@ -2694,8 +2735,8 @@ func TestRunSyncDryRunFallsBackToGentlemanWhenStateLacksPersona(t *testing.T) {
 	if !result.DryRun {
 		t.Fatalf("DryRun = false, want true")
 	}
-	if got, want := result.Selection.Persona, model.PersonaGentleman; got != want {
-		t.Errorf("dry-run fallback: Selection.Persona = %q, want %q (Gentleman fallback for pre-feature state)", got, want)
+	if got, want := result.Selection.Persona, model.PersonaNeutral; got != want {
+		t.Errorf("dry-run fallback: Selection.Persona = %q, want %q (safe fallback for missing state persona)", got, want)
 	}
 }
 

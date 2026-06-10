@@ -322,11 +322,9 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 		// Preset is set to full-gentleman so selectedSkillIDs() returns the
 		// correct default skill set when no explicit skills are provided.
 		Preset: model.PresetFullGentleman,
-		// Persona is left as zero-value here. RunSync resolves it from
-		// state.json (the user's installed choice); only when state has no
-		// recorded persona — i.e. an old install — does it fall back to
-		// PersonaGentleman. This avoids regenerating a Gentleman persona on
-		// top of a user who installed neutral.
+		// Persona is left as zero-value here. RunSync resolves it from state.json
+		// when present. Missing or invalid persisted persona resolves to neutral
+		// so sync does not silently reactivate regional persona behavior.
 	}
 }
 
@@ -483,7 +481,7 @@ func syncComponentPathsWithWorkspace(homeDir, workspaceDir string, selection mod
 // sync. Mirrors persona.InjectForSync:
 //   - Step 1: SystemPromptFile (the marker-bound markdown block — CLAUDE.md /
 //     AGENTS.md / equivalent).
-//   - Step 3: Gentleman output-style overlay (only when the agent supports it).
+//   - Step 3: managed output-style overlay (only when the agent supports it).
 //
 // Step 2 (OpenCode/Kilocode agent definition in opencode.json) is install-only
 // and intentionally NOT declared here.
@@ -508,14 +506,36 @@ func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model
 		if adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
 			paths = append(paths, adapter.SystemPromptFile(targetDir))
 		}
-		if isGentlemanConversationPersona(selection.Persona) && adapter.SupportsOutputStyles() {
-			paths = append(paths, adapter.OutputStyleDir(targetDir)+"/gentleman.md")
+		if managedOutputStyleName(selection.Persona) != "" && adapter.SupportsOutputStyles() {
+			paths = append(paths, filepath.Join(adapter.OutputStyleDir(targetDir), managedOutputStyleFile(selection.Persona)))
 			if p := adapter.SettingsPath(targetDir); p != "" {
 				paths = append(paths, p)
 			}
 		}
 	}
 	return paths
+}
+
+func managedOutputStyleName(persona model.PersonaID) string {
+	switch {
+	case isGentlemanConversationPersona(persona):
+		return "Gentleman"
+	case persona == model.PersonaNeutral:
+		return "Neutral"
+	default:
+		return ""
+	}
+}
+
+func managedOutputStyleFile(persona model.PersonaID) string {
+	switch managedOutputStyleName(persona) {
+	case "Gentleman":
+		return "gentleman.md"
+	case "Neutral":
+		return "neutral.md"
+	default:
+		return ""
+	}
 }
 
 // componentSyncStep is the sync-specific apply step.
@@ -756,8 +776,8 @@ func boolToInt(b bool) int {
 //  1. Explicit: if selection.Persona is non-empty, it is left untouched.
 //  2. Persisted: the persisted string is normalized via normalizePersona;
 //     on error (unknown/misspelled value) the fallback is used instead.
-//  3. Fallback: PersonaGentleman for backward-compat (old installs that
-//     have no Persona field in state.json).
+//  3. Fallback: PersonaNeutral for default-safe behavior when persisted state is
+//     missing, empty, unreadable, or invalid.
 func applyResolvedPersona(selection *model.Selection, persisted string) {
 	if selection.Persona != "" {
 		return
@@ -767,11 +787,12 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 			selection.Persona = id
 			return
 		}
-		// Unknown/misspelled persisted value — fall through to Gentleman.
+		// Unknown/misspelled persisted value — fall through to neutral.
 	}
-	// Backward-compat fallback: state files written before persona persistence
-	// have no Persona field. Default to Gentleman so sync still has a target.
-	selection.Persona = model.PersonaGentleman
+	// Default-safe fallback: state files written before persona persistence have
+	// no Persona field, and unreadable/invalid state must not implicitly restore
+	// regional persona behavior.
+	selection.Persona = model.PersonaNeutral
 }
 
 // RunSyncWithSelection is the programmatic entry point for sync.
@@ -785,7 +806,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	// RunSync already resolves persona before delegating here, so on the CLI path
 	// selection.Persona is already set and applyResolvedPersona early-returns with
 	// no disk read. On the TUI path the Selection has an empty Persona field, so
-	// we read state once here and apply the persisted value (or Gentleman fallback).
+	// we read state once here and apply the persisted value (or neutral fallback).
 	if selection.Persona == "" {
 		var persistedPersona string
 		if s, err := state.Read(homeDir); err == nil {
@@ -871,7 +892,7 @@ func RunSync(args []string) (SyncResult, error) {
 
 	// Read state once for both model-assignment restoration and persona resolution.
 	// On error (e.g. state.json absent), treat persisted values as empty — model
-	// maps stay as-is and persona falls back to Gentleman.
+	// maps stay as-is and persona falls back to neutral.
 	persistedState, _ := state.Read(homeDir)
 
 	// Load persisted model assignments from state when not provided via flags.

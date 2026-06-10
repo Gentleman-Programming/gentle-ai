@@ -113,6 +113,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 	expectedFiles := []string{
 		// Claude agent files
 		"claude/engram-protocol.md",
+		"claude/output-style-neutral.md",
 		"claude/persona-gentleman.md",
 		"claude/sdd-orchestrator.md",
 		"claude/commands/sdd-apply.md",
@@ -169,6 +170,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		// Kimi agent files
 		"kimi/persona-gentleman.md",
 		"kimi/output-style-gentleman.md",
+		"kimi/output-style-neutral.md",
 		"kimi/sdd-orchestrator.md",
 		"kimi/KIMI.md",
 		"kimi/agents/gentleman.yaml",
