@@ -78,11 +78,23 @@ func TestOrchestratorsRejectDelegationBypassLanguage(t *testing.T) {
 	}
 	for _, want := range []string{
 		"## Delegated Path (default",
+		"### Blocking Delegation Contract",
+		"Codex sub-agents MUST be treated as waited handoffs, not fire-and-forget background jobs.",
+		"You MAY launch more than one independent sub-agent when useful",
+		"`wait_agent` for every spawned agent in that batch",
+		"Parallel does not mean background",
 		"## Graceful Degradation Path (tooling unavailable only)",
 		"do not run the full phase pipeline inline as a normal fallback",
 	} {
 		if !strings.Contains(codex, want) {
 			t.Fatalf("codex/sdd-orchestrator.md missing guarded degradation wording %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"both `spawn_agent` calls before either `wait_agent`",
+	} {
+		if strings.Contains(codex, forbidden) {
+			t.Fatalf("codex/sdd-orchestrator.md contains fire-and-forget delegation wording %q", forbidden)
 		}
 	}
 }
