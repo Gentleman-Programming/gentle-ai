@@ -4,11 +4,11 @@ import "testing"
 
 func TestSplitProviderModel(t *testing.T) {
 	tests := []struct {
-		name       string
-		spec       string
-		wantProv   string
-		wantModel  string
-		wantOK     bool
+		name      string
+		spec      string
+		wantProv  string
+		wantModel string
+		wantOK    bool
 	}{
 		{
 			name:      "colon separator",
