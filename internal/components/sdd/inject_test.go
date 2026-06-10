@@ -2245,7 +2245,6 @@ func TestInjectOpenClawRejectsAmbiguousWorkspacePath(t *testing.T) {
 func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()
-	mockNoPackageManager(t)
 
 	assignments := map[string]model.ModelAssignment{
 		"sdd-init":  {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
@@ -2308,7 +2307,6 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 func TestInjectOpenCodeMultiModeNoAssignmentsNoModel(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()
-	mockNoPackageManager(t)
 
 	// Pass nil assignments — no model fields should be injected.
 	result, err := Inject(home, opencodeAdapter(), "multi")
@@ -2347,7 +2345,6 @@ func TestInjectOpenCodeMultiModeNoAssignmentsNoModel(t *testing.T) {
 func TestInjectSingleModeIgnoresModelAssignments(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()
-	mockNoPackageManager(t)
 
 	// Even if assignments are provided, single mode should ignore them.
 	assignments := map[string]model.ModelAssignment{
@@ -3977,7 +3974,6 @@ func TestInjectCodexIsIdempotent(t *testing.T) {
 func TestInjectOpenCodeMultiModeWithPreExistingMinimalConfig(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()
-	mockNoPackageManager(t)
 
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
@@ -4037,7 +4033,6 @@ func TestInjectOpenCodeMultiModeWithPreExistingMinimalConfig(t *testing.T) {
 func TestInjectOpenCodeMultiModeWithPreExistingFullConfig(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()
-	mockNoPackageManager(t)
 
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
