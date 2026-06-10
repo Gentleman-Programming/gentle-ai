@@ -11,7 +11,7 @@ type Selection struct {
 	StrictTDD              bool
 	CodexMultiAgent        bool                        // deprecated: Codex now always writes features.multi_agent = true; retained for state/back-compat
 	ModelAssignments       map[string]ModelAssignment  // key = sub-agent name (e.g., "sdd-init")
-	ClaudeModelAssignments map[string]ClaudeModelAlias // key = phase name; value = opus|sonnet|haiku
+	ClaudeModelAssignments map[string]ClaudeModelAlias // key = phase name; value = opus|sonnet|haiku|fable
 	KiroModelAssignments   map[string]KiroModelAlias   // key = phase name; value = Kiro-native model alias
 	CodexModelAssignments  map[string]CodexEffort      // key = phase name; value = low|medium|high|xhigh
 	Profiles               []Profile                   // named SDD profiles to generate/update during sync
@@ -50,7 +50,7 @@ type SyncOverrides struct {
 	// model/profile configurators, where the user picked a concrete target agent.
 	TargetAgents           []AgentID
 	ModelAssignments       map[string]ModelAssignment  // nil = no override; empty map = reset to defaults
-	ClaudeModelAssignments map[string]ClaudeModelAlias // nil = no override; empty map = reset to defaults
+	ClaudeModelAssignments map[string]ClaudeModelAlias // nil = no override; empty map = reset to defaults; values = opus|sonnet|haiku|fable
 	KiroModelAssignments   map[string]KiroModelAlias   // nil = no override; empty map = reset to defaults
 	CodexModelAssignments  map[string]CodexEffort      // nil = no override; empty map = reset to defaults
 	SDDMode                SDDModeID                   // "" = no override; when non-empty, overrides the sync's default SDD mode

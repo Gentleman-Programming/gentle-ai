@@ -77,6 +77,7 @@ var claudeAliasOrder = []model.ClaudeModelAlias{
 	model.ClaudeModelOpus,
 	model.ClaudeModelSonnet,
 	model.ClaudeModelHaiku,
+	model.ClaudeModelFable,
 }
 
 // ClaudeModelPickerState holds navigation state for the Claude model picker screen.
@@ -293,7 +294,7 @@ func renderCustomPhaseList(state ClaudeModelPickerState, cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("Custom Model Assignments"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Press enter on a phase to cycle: opus → sonnet → haiku"))
+	b.WriteString(styles.SubtextStyle.Render("Press enter on a phase to cycle: opus → sonnet → haiku → fable"))
 	b.WriteString("\n\n")
 
 	for idx, phase := range claudePhases {
@@ -329,6 +330,8 @@ func aliasTag(alias model.ClaudeModelAlias) string {
 		return styles.WarningStyle.Render("[opus]")
 	case model.ClaudeModelHaiku:
 		return styles.SubtextStyle.Render("[haiku]")
+	case model.ClaudeModelFable:
+		return styles.WarningStyle.Render("[fable]")
 	default:
 		return styles.SuccessStyle.Render("[sonnet]")
 	}

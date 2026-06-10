@@ -111,3 +111,37 @@ func TestRenderClaudeModelPicker_ShowsCurrentPreset(t *testing.T) {
 		})
 	}
 }
+
+func TestNextAliasIncludesFable(t *testing.T) {
+	// Verify fable is reachable and cycles correctly.
+	cases := []struct {
+		current model.ClaudeModelAlias
+		want    model.ClaudeModelAlias
+	}{
+		{model.ClaudeModelOpus, model.ClaudeModelSonnet},
+		{model.ClaudeModelSonnet, model.ClaudeModelHaiku},
+		{model.ClaudeModelHaiku, model.ClaudeModelFable},
+		{model.ClaudeModelFable, model.ClaudeModelOpus},
+		// Unknown aliases fall back to sonnet (nextAlias default).
+		{model.ClaudeModelAlias("unknown"), model.ClaudeModelSonnet},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.current), func(t *testing.T) {
+			got := nextAlias(tc.current)
+			if got != tc.want {
+				t.Errorf("nextAlias(%q) = %q, want %q", tc.current, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAliasTagFable(t *testing.T) {
+	// fable should produce a non-empty tag string, not fall through to sonnet default.
+	tag := aliasTag(model.ClaudeModelFable)
+	if tag == "" {
+		t.Error("aliasTag(ClaudeModelFable) returned empty string")
+	}
+	if strings.Contains(tag, "sonnet") {
+		t.Errorf("aliasTag(ClaudeModelFable) = %q, should not fall back to sonnet tag", tag)
+	}
+}

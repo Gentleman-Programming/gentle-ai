@@ -2,10 +2,10 @@ package model
 
 import "maps"
 
-// ClaudeModelAlias represents one of the three Claude model tiers used for
+// ClaudeModelAlias represents one of the known Claude model tiers used for
 // per-phase model assignments in the SDD orchestrator.
 //
-// Only three values are valid: ClaudeModelOpus, ClaudeModelSonnet, ClaudeModelHaiku.
+// Valid values: ClaudeModelOpus, ClaudeModelSonnet, ClaudeModelHaiku, ClaudeModelFable.
 type ClaudeModelAlias string
 
 const (
@@ -20,6 +20,11 @@ const (
 	// ClaudeModelHaiku is the lightweight tier, ideal for mechanical tasks like
 	// archiving or simple copy work. Maps to the current claude-haiku-* family.
 	ClaudeModelHaiku ClaudeModelAlias = "haiku"
+
+	// ClaudeModelFable is Anthropic's top-tier reasoning model (claude-fable-* family),
+	// released 2026-06-09. Use it for phases that benefit from deep multi-step reasoning
+	// at the cost of higher latency and token spend.
+	ClaudeModelFable ClaudeModelAlias = "fable"
 )
 
 // String returns the string representation of the alias.
@@ -27,10 +32,10 @@ func (a ClaudeModelAlias) String() string {
 	return string(a)
 }
 
-// Valid reports whether the alias is one of the three known Claude model tiers.
+// Valid reports whether the alias is one of the known Claude model tiers.
 func (a ClaudeModelAlias) Valid() bool {
 	switch a {
-	case ClaudeModelOpus, ClaudeModelSonnet, ClaudeModelHaiku:
+	case ClaudeModelOpus, ClaudeModelSonnet, ClaudeModelHaiku, ClaudeModelFable:
 		return true
 	default:
 		return false
