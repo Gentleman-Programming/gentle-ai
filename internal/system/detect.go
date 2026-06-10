@@ -31,6 +31,7 @@ const (
 	LinuxDistroDebian  = "debian"
 	LinuxDistroArch    = "arch"
 	LinuxDistroFedora  = "fedora"
+	LinuxDistroTermux  = "termux"
 )
 
 type DetectionResult struct {
@@ -41,7 +42,7 @@ type DetectionResult struct {
 }
 
 func IsSupportedOS(goos string) bool {
-	return goos == "darwin" || goos == "linux" || goos == "windows"
+	return goos == "darwin" || goos == "linux" || goos == "windows" || goos == "android"
 }
 
 func Detect(ctx context.Context) (DetectionResult, error) {
@@ -123,6 +124,11 @@ func resolvePlatformProfile(goos, linuxOSRelease string, tools map[string]ToolSt
 	}
 
 	switch goos {
+	case "android":
+		profile.LinuxDistro = LinuxDistroTermux
+		profile.PackageManager = "apt"
+		profile.Supported = true
+		return profile
 	case "darwin":
 		profile.PackageManager = "brew"
 		profile.Supported = true
@@ -203,6 +209,9 @@ func detectLinuxDistro(linuxOSRelease string) string {
 	if isFedoraLike(id, idLike) {
 		return LinuxDistroFedora
 	}
+
+	// Note: Termux is NOT detected via os-release ID. GOOS=android handles
+	// Termux detection exclusively via the "android" case in resolvePlatformProfile.
 
 	return LinuxDistroUnknown
 }

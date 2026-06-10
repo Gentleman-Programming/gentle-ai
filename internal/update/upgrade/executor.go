@@ -605,9 +605,10 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 //  1. OpenCode plugins are always handled by their own method — never overridden.
 //  2. Brew-managed platforms always use brew regardless of the tool's declared method.
 //  3. gentle-ai on Windows uses the installer so the running binary can exit before replacement.
-//  4. When Go is available on PATH and the tool has a GoImportPath, go-install is
+//  4. gentle-ai on Android/Termux uses go-install because no compatible release assets exist.
+//  5. When Go is available on PATH and the tool has a GoImportPath, go-install is
 //     preferred over a direct binary download.
-//  5. Otherwise the tool's declared InstallMethod is used as-is.
+//  6. Otherwise the tool's declared InstallMethod is used as-is.
 func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
 	if tool.InstallMethod == update.InstallOpenCodePlugin {
 		return update.InstallOpenCodePlugin
@@ -619,7 +620,14 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 	if profile.OS == "windows" && tool.Name == "gentle-ai" {
 		return update.InstallInstaller
 	}
-	if profile.GoAvailable && tool.GoImportPath != "" {
+	// Android/Termux has no compatible release assets for gentle-ai, so source
+	// installation with PIE flags is the supported self-upgrade route.
+	if profile.OS == "android" && tool.Name == "gentle-ai" && tool.GoImportPath != "" {
+		return update.InstallGoInstall
+	}
+	// Keep gentle-ai on the binary path for standard Linux even when Go is
+	// installed; release binaries are the preferred non-Android self-upgrade path.
+	if profile.GoAvailable && tool.GoImportPath != "" && tool.Name != "gentle-ai" {
 		return update.InstallGoInstall
 	}
 	return tool.InstallMethod

@@ -90,6 +90,83 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 	}
 }
 
+func TestRunStrategy_GoInstallAndroidPIE(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	var gotArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "go" {
+			gotArgs = args
+		}
+		return mockCmd("true")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "engram",
+			InstallMethod: update.InstallGoInstall,
+			GoImportPath:  "github.com/Gentleman-Programming/engram/cmd/engram",
+		},
+		LatestVersion: "0.4.0",
+	}
+	// Simulate Android/Termux environment — GOOS=android is the canonical path.
+	profile := system.PlatformProfile{OS: "android", LinuxDistro: system.LinuxDistroTermux}
+
+	_, err := runStrategy(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("runStrategy: %v", err)
+	}
+
+	// Should contain -ldflags="-extldflags=-pie"
+	foundPIE := false
+	for _, arg := range gotArgs {
+		if strings.Contains(arg, "-extldflags=-pie") {
+			foundPIE = true
+			break
+		}
+	}
+	if !foundPIE {
+		t.Errorf("expected PIE flags in go install args for Android, got: %v", gotArgs)
+	}
+}
+
+func TestRunStrategy_GentleAIAndroidSelfUpgradeUsesGoInstallWithPIE(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	var gotName string
+	var gotArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		return mockCmd("true")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gentle-ai",
+			InstallMethod: update.InstallBinary,
+			GoImportPath:  "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai",
+		},
+		LatestVersion: "1.36.4",
+	}
+	profile := system.PlatformProfile{OS: "android", LinuxDistro: system.LinuxDistroTermux, PackageManager: "apt", GoAvailable: true}
+
+	_, err := runStrategy(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("runStrategy: %v", err)
+	}
+
+	wantArgs := []string{"install", "-ldflags=-extldflags=-pie", "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.36.4"}
+	if gotName != "go" {
+		t.Fatalf("exec name = %q, want go", gotName)
+	}
+	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
+		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
+	}
+}
+
 // --- TestRunStrategy_GoInstallMissingImportPath ---
 
 func TestRunStrategy_GoInstallMissingImportPath(t *testing.T) {
@@ -340,6 +417,18 @@ func TestEffectiveMethod(t *testing.T) {
 			name:    "auto-detect: go available but GoImportPath empty → binary (no upgrade)",
 			tool:    update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: ""},
 			profile: system.PlatformProfile{PackageManager: "apt", GoAvailable: true},
+			want:    update.InstallBinary,
+		},
+		{
+			name:    "gentle-ai on Android uses go-install because no release asset exists",
+			tool:    update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai"},
+			profile: system.PlatformProfile{OS: "android", PackageManager: "apt", GoAvailable: true},
+			want:    update.InstallGoInstall,
+		},
+		{
+			name:    "gentle-ai on Linux keeps binary even when go is available",
+			tool:    update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai"},
+			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt", GoAvailable: true},
 			want:    update.InstallBinary,
 		},
 	}

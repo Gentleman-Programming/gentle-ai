@@ -89,10 +89,25 @@ detect_platform() {
     uname_os="$(uname -s)"
     uname_arch="$(uname -m)"
 
+    # Distinguish between Standard Linux and Android/Termux.
+    # Termux provides a Unix-like environment on Android, but requires
+    # specific handling (PIE binaries, different path prefixes, no sudo).
     case "$uname_os" in
         Darwin) OS="darwin"; OS_LABEL="macOS"; GORELEASER_OS="darwin" ;;
-        Linux)  OS="linux";  OS_LABEL="Linux"; GORELEASER_OS="linux" ;;
-        *)      fatal "Unsupported OS: $uname_os. Only macOS and Linux are supported." ;;
+        Linux)
+            if [ "$(uname -o 2>/dev/null)" = "Android" ] || [ -n "${TERMUX_VERSION:-}" ]; then
+                OS="android"
+                OS_LABEL="Android (Termux)"
+                # No GoReleaser assets exist for android — compilation from
+                # source via 'go install' is the only supported method.
+                GORELEASER_OS=""
+            else
+                OS="linux"
+                OS_LABEL="Linux"
+                GORELEASER_OS="linux"
+            fi
+            ;;
+        *)      fatal "Unsupported OS: $uname_os. Supported: macOS, Linux, Android (Termux)." ;;
     esac
 
     case "$uname_arch" in
@@ -151,11 +166,18 @@ check_prerequisites() {
 # ============================================================================
 
 detect_install_method() {
-    if [ -n "${FORCE_METHOD:-}" ]; then
-        case "$FORCE_METHOD" in
-            brew|go|binary) INSTALL_METHOD="$FORCE_METHOD" ;;
-            *) fatal "Unknown install method: $FORCE_METHOD. Use: brew, go, or binary" ;;
-        esac
+	if [ -n "${FORCE_METHOD:-}" ]; then
+		case "$FORCE_METHOD" in
+			brew|go|binary) INSTALL_METHOD="$FORCE_METHOD" ;;
+			*) fatal "Unknown install method: $FORCE_METHOD. Use: brew, go, or binary" ;;
+		esac
+
+		# Android has no compatible release assets or Homebrew flow — source
+		# compilation with PIE is mandatory.
+		if [ "${OS:-}" = "android" ] && [ "$INSTALL_METHOD" != "go" ]; then
+			fatal "Only go install is supported on Android (Termux). Pre-built glibc binaries and Homebrew installs are not supported on Bionic libc. Use: --method go"
+		fi
+
         info "Using forced method: $INSTALL_METHOD"
         return
     fi
@@ -168,12 +190,23 @@ detect_install_method() {
     # go install is last resort because the Go module proxy can lag
     # behind new tags for up to 30 minutes, causing @latest to install
     # a stale version.
-    if command -v brew &>/dev/null; then
-        INSTALL_METHOD="brew"
-        success "Homebrew found — will install via brew tap"
-    else
-        INSTALL_METHOD="binary"
-        info "Will download pre-built binary from GitHub Releases"
+    #
+    # Exception: on Android/Termux, go install is mandatory (no release
+    # assets exist and glibc binaries are incompatible with Bionic libc).
+	if [ "${OS:-}" = "android" ]; then
+		# Android (Bionic libc) requires Position Independent Executables.
+		# No pre-built release assets exist — source compilation is mandatory.
+		if ! command -v go &>/dev/null; then
+			fatal "Go is required to install on Android (Termux). Install it with: pkg install golang"
+		fi
+		INSTALL_METHOD="go"
+		success "Android (Termux) + Go detected — using 'go install' for PIE compatibility"
+	elif command -v brew &>/dev/null; then
+		INSTALL_METHOD="brew"
+		success "Homebrew found — will install via brew tap"
+	else
+		INSTALL_METHOD="binary"
+		info "Will download pre-built binary from GitHub Releases"
     fi
 }
 
@@ -218,8 +251,14 @@ install_go() {
 
     local go_package="github.com/${GITHUB_OWNER,,}/${GITHUB_REPO}/cmd/${BINARY_NAME}@latest"
 
-    info "Running: go install ${go_package}"
-    if ! go install "$go_package"; then
+    # Android (Bionic libc) requires Position Independent Executables (PIE).
+    local go_flags=()
+    if [ "${OS:-}" = "android" ]; then
+        go_flags=("-ldflags=-extldflags=-pie")
+    fi
+
+    info "Running: go install ${go_flags[*]} ${go_package}"
+    if ! go install "${go_flags[@]}" "$go_package"; then
         fatal "Failed to install via go install. Make sure Go is properly configured."
     fi
 
@@ -273,6 +312,12 @@ get_latest_version() {
 
 install_binary() {
     step "Installing pre-built binary"
+
+    # Safety net: binary download requires a known GoReleaser OS target.
+    # Android has no release assets — this should never be reached, but guard anyway.
+    if [ -z "${GORELEASER_OS:-}" ]; then
+        fatal "No pre-built binary available for ${OS_LABEL}. Use 'go install' instead (--method go)."
+    fi
 
     get_latest_version
 

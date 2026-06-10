@@ -10,11 +10,24 @@
 | Linux (Ubuntu/Debian) | apt | Supported |
 | Linux (Arch) | pacman | Supported |
 | Linux (Fedora/RHEL family) | dnf | Supported |
+| Android (Termux) | apt | Supported |
 | Windows 10/11 | Scoop | Supported |
 
-Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, CentOS Stream, Rocky Linux, AlmaLinux, etc.).
+Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, CentOS Stream, Rocky Linux, AlmaLinux, etc.). Termux is detected as Android/`GOOS=android` in the Go application; the shell installer also recognizes the Termux environment.
 
-Release artifacts are produced by CI, but Windows users should install through Scoop so upgrades stay consistent.
+Release binaries are built for `linux`, `darwin`, and `windows` on both `amd64` and `arm64`. Android (Termux) is supported via source compilation (`go install`) since pre-built glibc binaries are incompatible with Android's Bionic libc.
+
+Windows release artifacts are produced by CI, but Windows users should install through Scoop so upgrades stay consistent.
+
+---
+
+## Termux (Android) Notes
+
+- **apt** is used as the default package manager within Termux.
+- **Prefix Awareness**: gentle-ai automatically detects the Termux `$PREFIX` and adjusts system paths accordingly (e.g., using `$PREFIX/bin/bash` instead of `/bin/bash`).
+- **PATH Persistence**: When installing tools, gentle-ai will automatically append the appropriate `export PATH` commands to your `~/.bashrc` or `~/.zshrc`.
+- **PIE Requirement**: All binaries updated via `gentle-ai self-update` on Termux are automatically compiled as Position Independent Executables (PIE), as required by Android.
+- **Sub-agents**: Sub-agents like GGA are installed into `$PREFIX/tmp` during the setup process to ensure execution permissions.
 
 ---
 

@@ -166,6 +166,12 @@ func TestResolveDependencyInstall(t *testing.T) {
 			want:    CommandSequence{{"sudo", "apt-get", "install", "-y", "somepkg"}},
 		},
 		{
+			name:    "android termux resolves apt command without sudo",
+			profile: system.PlatformProfile{OS: "android", LinuxDistro: system.LinuxDistroTermux, PackageManager: "apt"},
+			dep:     "somepkg",
+			want:    CommandSequence{{"apt-get", "install", "-y", "somepkg"}},
+		},
+		{
 			name:    "arch resolves pacman command",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
 			dep:     "somepkg",
@@ -341,6 +347,12 @@ func TestResolveAgentInstall(t *testing.T) {
 			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
 		},
 		{
+			name:    "opencode on android termux skips sudo",
+			profile: system.PlatformProfile{OS: "android", LinuxDistro: system.LinuxDistroTermux, PackageManager: "apt"},
+			agent:   model.AgentOpenCode,
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+		},
+		{
 			name:    "opencode on arch system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
 			agent:   model.AgentOpenCode,
@@ -412,6 +424,33 @@ func TestResolveAgentInstall(t *testing.T) {
 				t.Fatalf("ResolveAgentInstall() = %v, want %v", command, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveGGAInstallAndroidUsesTermuxPrefix(t *testing.T) {
+	prefix := "/data/data/com.termux/files/usr"
+	t.Setenv("PREFIX", prefix)
+
+	command, err := NewResolver().ResolveComponentInstall(
+		system.PlatformProfile{OS: "android", LinuxDistro: system.LinuxDistroTermux, PackageManager: "apt"},
+		model.ComponentGGA,
+	)
+	if err != nil {
+		t.Fatalf("ResolveComponentInstall() error = %v", err)
+	}
+
+	wantDir := prefix + "/tmp/gentleman-guardian-angel"
+	if len(command) != 3 {
+		t.Fatalf("ResolveComponentInstall() returned %d commands, want 3: %v", len(command), command)
+	}
+	if got := filepath.ToSlash(command[0][2]); got != wantDir {
+		t.Fatalf("cleanup dir = %q, want %q", got, wantDir)
+	}
+	if got := filepath.ToSlash(command[1][3]); got != wantDir {
+		t.Fatalf("clone dir = %q, want %q", got, wantDir)
+	}
+	if got := filepath.ToSlash(command[2][1]); got != wantDir+"/install.sh" {
+		t.Fatalf("install script = %q, want %q", got, wantDir+"/install.sh")
 	}
 }
 

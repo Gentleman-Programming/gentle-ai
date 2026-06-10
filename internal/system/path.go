@@ -9,17 +9,30 @@ import (
 	"strings"
 )
 
-// AddToUserPath adds a directory to the Windows user PATH persistently.
-// Uses PowerShell to modify the user-scoped environment variable in the registry,
-// which survives terminal restarts without requiring admin privileges.
+var pathGOOS = runtime.GOOS
+
+// AddToUserPath adds a directory to the user PATH persistently.
 //
-// On non-Windows platforms this is a no-op (returns nil immediately after adding
-// to the current process PATH). This is safe to call on all platforms since the
-// binary is cross-compiled — build tags are NOT used.
+// On Windows, it modifies the user-scoped PATH in the registry via PowerShell,
+// surviving terminal restarts without admin privileges.
+//
+// On non-Windows platforms, the directory is added to the current process PATH.
+// On Termux (Android), it is also persisted to ~/.bashrc or ~/.zshrc.
+//
+// This is safe to call on all platforms — build tags are NOT used.
 func AddToUserPath(dir string) error {
-	if runtime.GOOS != "windows" {
+	if pathGOOS != "windows" {
 		// Still add to the current process PATH on non-Windows (harmless for callers).
-		return addToProcessPath(dir)
+		if err := addToProcessPath(dir); err != nil {
+			return err
+		}
+
+		// Handle Termux persistence
+		if isTermux() {
+			return persistPathTermux(dir)
+		}
+
+		return nil
 	}
 
 	// Check whether dir is already present in PATH (case-insensitive on Windows).
@@ -76,4 +89,54 @@ func addToProcessPath(dir string) error {
 		return os.Setenv("PATH", dir)
 	}
 	return os.Setenv("PATH", dir+string(os.PathListSeparator)+currentPath)
+}
+
+func isTermux() bool {
+	return pathGOOS == "android"
+}
+
+func persistPathTermux(dir string) error {
+	// Reject shell-unsafe characters to prevent rc file corruption.
+	// Only checks for characters that could cause injection in a POSIX shell context.
+	if strings.ContainsAny(dir, "`\"'$\n") {
+		return fmt.Errorf("refusing to write unsafe dir %q to rc file", dir)
+	}
+
+	home := os.Getenv("HOME")
+	if home == "" {
+		return fmt.Errorf("HOME environment variable not set")
+	}
+
+	shell := os.Getenv("SHELL")
+	var rcFile string
+	if strings.Contains(shell, "zsh") {
+		rcFile = filepath.Join(home, ".zshrc")
+	} else {
+		rcFile = filepath.Join(home, ".bashrc")
+	}
+
+	// Check if already present in file
+	content, err := os.ReadFile(rcFile)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if strings.Contains(string(content), dir) {
+		return nil
+	}
+
+	// Avoid leading blank line when writing to a new (empty) rc file.
+	prefix := "\n"
+	if len(content) == 0 {
+		prefix = ""
+	}
+	exportCmd := fmt.Sprintf("%sexport PATH=\"%s:$PATH\"\n", prefix, dir)
+
+	f, err := os.OpenFile(rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = f.WriteString(exportCmd)
+	return err
 }

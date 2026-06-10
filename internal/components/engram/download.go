@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -28,10 +29,13 @@ const (
 
 // Package-level vars for testability.
 var (
-	engramHTTPClient       = &http.Client{Timeout: 5 * time.Minute}
-	engramGitHubBaseURL    = "https://github.com"
-	engramInstallDirFn     = engramInstallDir
-	engramChecksumURLFn    = engramChecksumURL
+	engramHTTPClient    = &http.Client{Timeout: 5 * time.Minute}
+	engramGitHubBaseURL = "https://github.com"
+	engramInstallDirFn  = engramInstallDir
+	engramChecksumURLFn = engramChecksumURL
+	engramExecCommand   = exec.Command
+	engramGetenv        = os.Getenv
+	engramUserHomeDir   = os.UserHomeDir
 )
 
 // DownloadLatestBinary fetches the latest engram release from GitHub and
@@ -50,6 +54,9 @@ func DownloadLatestBinary(profile system.PlatformProfile) (string, error) {
 	version, err := fetchLatestEngramVersion()
 	if err != nil {
 		return "", fmt.Errorf("fetch latest engram version: %w", err)
+	}
+	if profile.OS == "android" {
+		return installViaGo(version)
 	}
 
 	// 2. Determine binary name and archive URL.
@@ -120,6 +127,59 @@ func DownloadLatestBinary(profile system.PlatformProfile) (string, error) {
 	}
 
 	return outPath, nil
+}
+
+// installViaGo compiles engram from source for Android/Termux, where release
+// binaries built against glibc are incompatible with Android's Bionic libc.
+func installViaGo(version string) (string, error) {
+	if strings.TrimSpace(version) == "" {
+		return "", fmt.Errorf("go install engram: version is required")
+	}
+
+	installDir, extraEnv, err := goInstallDestination()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		return "", fmt.Errorf("create engram install dir %q: %w", installDir, err)
+	}
+
+	target := fmt.Sprintf("github.com/Gentleman-Programming/engram/cmd/engram@v%s", version)
+	args := []string{"install", "-ldflags=-extldflags=-pie", target}
+	cmd := engramExecCommand("go", args...)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("go %v: %w (output: %s)", args, err, string(out))
+	}
+
+	return filepath.Join(installDir, engramName), nil
+}
+
+func goInstallDestination() (string, []string, error) {
+	// Priority 1: GOBIN environment variable.
+	if gobin := engramGetenv("GOBIN"); gobin != "" {
+		return gobin, nil, nil
+	}
+
+	// Priority 2: GOPATH/bin
+	if gopath := engramGetenv("GOPATH"); gopath != "" {
+		return filepath.Join(gopath, "bin"), nil, nil
+	}
+
+	installDir := engramInstallDirFn("android")
+	if strings.TrimSpace(installDir) == "" {
+		home, err := engramUserHomeDir()
+		if err != nil {
+			return "", nil, fmt.Errorf("find home dir: %w", err)
+		}
+		installDir = filepath.Join(home, ".local", "bin")
+	}
+
+	// Go installs to GOBIN when set; without GOBIN and GOPATH it defaults to
+	// ~/go/bin, which is less predictable for a managed installer.
+	return installDir, []string{"GOBIN=" + installDir}, nil
 }
 
 // fetchLatestEngramVersion queries the GitHub Releases API for the latest engram
@@ -316,6 +376,8 @@ func engramArchiveName(version, goos, goarch string) string {
 
 // engramAssetURL constructs the download URL for the engram release asset.
 func engramAssetURL(baseURL, version, goos, goarch string) string {
+	// Android/Termux intentionally bypasses release assets in DownloadLatestBinary
+	// and compiles from source because Linux glibc binaries do not run on Bionic.
 	filename := engramArchiveName(version, goos, goarch)
 	return fmt.Sprintf("%s/%s/%s/releases/download/v%s/%s",
 		baseURL, engramOwner, engramRepo, version, filename)
@@ -424,6 +486,7 @@ func extractZipBinary(data []byte, binaryName, outPath string) error {
 // for the given OS.
 //   - Linux/macOS: /usr/local/bin (fallback: ~/.local/bin if not writable)
 //   - Windows: %LOCALAPPDATA%\engram\bin
+//   - Android: ~/.local/bin when GOBIN/GOPATH are not already configured.
 func engramInstallDir(goos string) string {
 	if goos == "windows" {
 		localAppData := os.Getenv("LOCALAPPDATA")
@@ -432,6 +495,16 @@ func engramInstallDir(goos string) string {
 			localAppData = filepath.Join(home, "AppData", "Local")
 		}
 		return filepath.Join(localAppData, "engram", "bin")
+	}
+
+	if goos == "android" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return filepath.Join(home, ".local", "bin")
+		}
+		if home := os.Getenv("HOME"); home != "" {
+			return filepath.Join(home, ".local", "bin")
+		}
+		return "/data/data/com.termux/files/home/.local/bin"
 	}
 
 	// Linux/macOS: try /usr/local/bin first.

@@ -22,6 +22,16 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # ---------------------------------------------------------------------------
+# Pre-flight: Docker must be available
+# ---------------------------------------------------------------------------
+if ! command -v docker &>/dev/null; then
+    printf '%s[ORCH]%s docker is not installed or not in PATH.\n' "$RED" "$NC"
+    printf '%s[ORCH]%s E2E tests require Docker. On platforms without Docker support\n' "$RED" "$NC"
+    printf '%s[ORCH]%s (e.g. Android/Termux), these tests cannot run.\n' "$RED" "$NC"
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -61,10 +61,7 @@ func (profileResolver) ResolveAgentInstall(profile system.PlatformProfile, agent
 // for npm packages. The version is pinned to avoid pulling a tampered "latest" tag.
 func resolveClaudeCodeInstall(profile system.PlatformProfile) CommandSequence {
 	pkg := "@anthropic-ai/claude-code@" + versions.ClaudeCode
-	if profile.OS == "linux" && !profile.NpmWritable {
-		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}
-	}
-	return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}
+	return CommandSequence{npmGlobalInstallCommand(profile, pkg)}
 }
 
 // resolveKilocodeInstall returns the npm install command sequence for Kilocode.
@@ -72,10 +69,7 @@ func resolveClaudeCodeInstall(profile system.PlatformProfile) CommandSequence {
 // On Windows and macOS, sudo is never needed.
 func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
 	pkg := "@kilocode/cli@" + versions.Kilocode
-	if profile.OS == "linux" && !profile.NpmWritable {
-		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}
-	}
-	return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}
+	return CommandSequence{npmGlobalInstallCommand(profile, pkg)}
 }
 
 // resolveKimiInstall returns the official Kimi install command sequence.
@@ -135,6 +129,9 @@ func uvInstallHint(profile system.PlatformProfile) string {
 	case "brew":
 		return "brew install uv"
 	case "apt":
+		if isAndroidTermux(profile) {
+			return "apt-get install -y uv (or see https://docs.astral.sh/uv/getting-started/installation/)"
+		}
 		return "sudo apt-get install -y uv (or see https://docs.astral.sh/uv/getting-started/installation/)"
 	case "pacman":
 		return "sudo pacman -S --noconfirm uv"
@@ -158,6 +155,27 @@ func (profileResolver) ResolveComponentInstall(profile system.PlatformProfile, c
 	}
 }
 
+// withSudo prepends "sudo" to a command unless the profile is Android/Termux,
+// which is rootless and does not provide sudo.
+func withSudo(profile system.PlatformProfile, cmd []string) []string {
+	if isAndroidTermux(profile) {
+		return cmd
+	}
+	return append([]string{"sudo"}, cmd...)
+}
+
+func npmGlobalInstallCommand(profile system.PlatformProfile, pkg string) []string {
+	cmd := []string{"npm", "install", "-g", "--ignore-scripts", pkg}
+	if profile.OS == "linux" && !profile.NpmWritable {
+		return withSudo(profile, cmd)
+	}
+	return cmd
+}
+
+func isAndroidTermux(profile system.PlatformProfile) bool {
+	return profile.OS == "android"
+}
+
 func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, dependency string) (CommandSequence, error) {
 	if dependency == "" {
 		return nil, fmt.Errorf("dependency name is required")
@@ -167,11 +185,11 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 	case "brew":
 		return CommandSequence{{"brew", "install", dependency}}, nil
 	case "apt":
-		return CommandSequence{{"sudo", "apt-get", "install", "-y", dependency}}, nil
+		return CommandSequence{withSudo(profile, []string{"apt-get", "install", "-y", dependency})}, nil
 	case "pacman":
-		return CommandSequence{{"sudo", "pacman", "-S", "--noconfirm", dependency}}, nil
+		return CommandSequence{withSudo(profile, []string{"pacman", "-S", "--noconfirm", dependency})}, nil
 	case "dnf":
-		return CommandSequence{{"sudo", "dnf", "install", "-y", dependency}}, nil
+		return CommandSequence{withSudo(profile, []string{"dnf", "install", "-y", dependency})}, nil
 	case "winget":
 		return CommandSequence{{"winget", "install", "--id", dependency, "-e", "--accept-source-agreements", "--accept-package-agreements"}}, nil
 	default:
@@ -196,10 +214,7 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 		}, nil
 	case "apt", "pacman", "dnf":
 		pkg := "opencode-ai@" + versions.OpenCode
-		if profile.NpmWritable {
-			return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
-		}
-		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
+		return CommandSequence{npmGlobalInstallCommand(profile, pkg)}, nil
 	case "winget":
 		// On Windows, npm global installs do not require sudo.
 		return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}}, nil
@@ -215,6 +230,8 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 // - darwin: brew tap + brew install (via Gentleman-Programming/homebrew-tap)
 // - linux: git clone + install.sh (GGA is a pure Bash project, NOT a Go module)
 func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) {
+	resolver := system.NewResolverForProfile(profile)
+
 	switch profile.PackageManager {
 	case "brew":
 		return CommandSequence{
@@ -222,7 +239,7 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 			{"brew", "reinstall", "gga"},
 		}, nil
 	case "apt", "pacman", "dnf":
-		const tmpDir = "/tmp/gentleman-guardian-angel"
+		tmpDir := resolver.Resolve("/tmp/gentleman-guardian-angel")
 		return CommandSequence{
 			{"rm", "-rf", tmpDir},
 			{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tmpDir},

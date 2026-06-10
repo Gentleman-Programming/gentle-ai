@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -237,6 +238,11 @@ func TestEngramInstallDir(t *testing.T) {
 			goos:       "darwin",
 			wantSubstr: "bin",
 		},
+		{
+			name:       "android returns ~/.local/bin",
+			goos:       "android",
+			wantSubstr: filepath.Join(".local", "bin"),
+		},
 	}
 
 	for _, tt := range tests {
@@ -364,6 +370,108 @@ func TestDownloadLatestBinaryAPIError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when GitHub API returns 500, got nil")
 	}
+}
+
+func TestDownloadLatestBinaryAndroidInstallsVersionedSourceWithPIE(t *testing.T) {
+	const version = "1.3.0"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "releases/latest") {
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v" + version})
+	}))
+	defer server.Close()
+
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	origExecCommand := engramExecCommand
+	origGetenv := engramGetenv
+	origUserHomeDir := engramUserHomeDir
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+		engramExecCommand = origExecCommand
+		engramGetenv = origGetenv
+		engramUserHomeDir = origUserHomeDir
+	})
+
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+
+	var gotName string
+	var gotArgs []string
+	engramExecCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = append([]string{}, args...)
+		cmd := exec.Command(os.Args[0], "-test.run=TestEngramCommandHelper", "--")
+		cmd.Env = append(os.Environ(), "ENGRAM_HELPER_PROCESS=1")
+		return cmd
+	}
+
+	gobin := filepath.Join(t.TempDir(), "go-bin")
+	engramGetenv = func(key string) string {
+		if key == "GOBIN" {
+			return gobin
+		}
+		return ""
+	}
+	engramUserHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	profile := system.PlatformProfile{OS: "android", LinuxDistro: system.LinuxDistroTermux, PackageManager: "apt"}
+	installedPath, err := DownloadLatestBinary(profile)
+	if err != nil {
+		t.Fatalf("DownloadLatestBinary() error = %v", err)
+	}
+
+	wantArgs := []string{"install", "-ldflags=-extldflags=-pie", "github.com/Gentleman-Programming/engram/cmd/engram@v" + version}
+	if gotName != "go" {
+		t.Fatalf("exec name = %q, want go", gotName)
+	}
+	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
+		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
+	}
+	if installedPath != filepath.Join(gobin, engramName) {
+		t.Fatalf("installedPath = %q, want %q", installedPath, filepath.Join(gobin, engramName))
+	}
+}
+
+func TestGoInstallDestinationDefaultsToManagedAndroidDir(t *testing.T) {
+	origGetenv := engramGetenv
+	origInstallDirFn := engramInstallDirFn
+	t.Cleanup(func() {
+		engramGetenv = origGetenv
+		engramInstallDirFn = origInstallDirFn
+	})
+
+	installDir := filepath.Join(t.TempDir(), ".local", "bin")
+	engramGetenv = func(string) string { return "" }
+	engramInstallDirFn = func(goos string) string {
+		if goos != "android" {
+			t.Fatalf("engramInstallDirFn called with %q, want android", goos)
+		}
+		return installDir
+	}
+
+	gotDir, gotEnv, err := goInstallDestination()
+	if err != nil {
+		t.Fatalf("goInstallDestination() error = %v", err)
+	}
+	if gotDir != installDir {
+		t.Fatalf("dir = %q, want %q", gotDir, installDir)
+	}
+	wantEnv := "GOBIN=" + installDir
+	if len(gotEnv) != 1 || gotEnv[0] != wantEnv {
+		t.Fatalf("env = %v, want [%q]", gotEnv, wantEnv)
+	}
+}
+
+func TestEngramCommandHelper(t *testing.T) {
+	if os.Getenv("ENGRAM_HELPER_PROCESS") != "1" {
+		return
+	}
+	os.Exit(0)
 }
 
 func TestDownloadLatestBinarySkipsLatestReleaseWithoutBinaryAssets(t *testing.T) {

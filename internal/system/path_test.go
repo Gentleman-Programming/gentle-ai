@@ -84,3 +84,59 @@ func TestAddToUserPathNoOpOnNonWindows(t *testing.T) {
 		t.Fatalf("AddToUserPath should be a no-op on non-Windows but returned error: %v", err)
 	}
 }
+
+func TestAddToUserPathInTermux(t *testing.T) {
+	// Mock Termux environment
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	oldTermuxVersion := os.Getenv("TERMUX_VERSION")
+	oldShell := os.Getenv("SHELL")
+	oldGOOS := pathGOOS
+
+	t.Cleanup(func() {
+		os.Setenv("HOME", oldHome)
+		os.Setenv("TERMUX_VERSION", oldTermuxVersion)
+		os.Setenv("SHELL", oldShell)
+		pathGOOS = oldGOOS
+	})
+
+	os.Setenv("HOME", home)
+	os.Unsetenv("TERMUX_VERSION")
+	os.Setenv("SHELL", "/data/data/com.termux/files/usr/bin/bash")
+	pathGOOS = "android"
+
+	targetDir := filepath.Join(home, ".gentle-ai", "bin")
+
+	// Verify the Termux configuration is persisted for future shells.
+	err := AddToUserPath(targetDir)
+	if err != nil {
+		t.Fatalf("AddToUserPath returned unexpected error: %v", err)
+	}
+
+	// Check if .bashrc was created and contains the export
+	bashrcPath := filepath.Join(home, ".bashrc")
+	data, err := os.ReadFile(bashrcPath)
+	if err != nil {
+		t.Fatalf("expected .bashrc to be created in Termux, got error: %v", err)
+	}
+
+	if !strings.Contains(string(data), targetDir) {
+		t.Fatalf(".bashrc does not contain the target directory: %s", string(data))
+	}
+}
+
+func TestIsTermuxUsesAndroidGOOS(t *testing.T) {
+	oldTermuxVersion := os.Getenv("TERMUX_VERSION")
+	oldGOOS := pathGOOS
+	t.Cleanup(func() {
+		os.Setenv("TERMUX_VERSION", oldTermuxVersion)
+		pathGOOS = oldGOOS
+	})
+
+	os.Unsetenv("TERMUX_VERSION")
+	pathGOOS = "android"
+
+	if !isTermux() {
+		t.Fatal("isTermux() = false, want true for android GOOS")
+	}
+}
