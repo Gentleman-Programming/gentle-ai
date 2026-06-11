@@ -44,6 +44,7 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 | **OpenClaw**        |            Solo-agent            | Workspace-first `AGENTS.md` / `SOUL.md` with global MCP config  |
 | **Trae**            |            Solo-agent            | Desktop app by ByteDance; `~/.trae/skills/` + OS-specific rules |
 | **Pi**              | Full (package-managed subagents) | `gentle-pi` harness with persona/model commands + Engram memory |
+| **Hermes**          |         Detect-only              | YAML MCP config, SOUL.md persona; install manually first        |
 
 > **Note**: This project supersedes [Agent Teams Lite](https://github.com/Gentleman-Programming/agent-teams-lite) (now archived). Everything ATL provided is included here with better installation, automatic updates, and persistent memory.
 

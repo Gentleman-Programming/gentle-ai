@@ -449,3 +449,52 @@ max_threads = 2
 		t.Fatalf("old [agents].max_threads=2 must be removed; got:\n%s", result)
 	}
 }
+
+// ─── RemoveTOMLTableKeys ─────────────────────────────────────────────────────
+
+func TestRemoveTOMLTableKeys_RemovesOnlyTargetSectionKeys(t *testing.T) {
+	input := `model = "gpt-5"
+
+[permissions.gentle-dev.filesystem.":workspace_roots"]
+"**/.git" = "write"
+"**/.git/**" = "write"
+".git/**" = "write"
+"**/.env" = "deny"
+
+[other]
+"**/.git" = "write"
+`
+	result := RemoveTOMLTableKeys(input, `permissions.gentle-dev.filesystem.":workspace_roots"`, []string{
+		`"**/.git"`,
+		`"**/.git/**"`,
+	})
+
+	if strings.Count(result, `"**/.git" = "write"`) != 1 {
+		t.Fatalf("same key outside target section should be preserved once; got:\n%s", result)
+	}
+	if strings.Contains(result, `"**/.git/**" = "write"`) {
+		t.Fatalf("result still has invalid target section key; got:\n%s", result)
+	}
+	if !strings.Contains(result, `".git/**" = "write"`) {
+		t.Fatalf("result removed valid git rule; got:\n%s", result)
+	}
+	if !strings.Contains(result, `"**/.env" = "deny"`) {
+		t.Fatalf("result removed env deny rule; got:\n%s", result)
+	}
+	if !strings.Contains(result, `[other]`) {
+		t.Fatalf("result removed other section; got:\n%s", result)
+	}
+}
+
+func TestRemoveTOMLTableKeys_Idempotent(t *testing.T) {
+	input := `[permissions.gentle-dev.filesystem.":workspace_roots"]
+"**/.git" = "write"
+".git/**" = "write"
+`
+	first := RemoveTOMLTableKeys(input, `permissions.gentle-dev.filesystem.":workspace_roots"`, []string{`"**/.git"`})
+	second := RemoveTOMLTableKeys(first, `permissions.gentle-dev.filesystem.":workspace_roots"`, []string{`"**/.git"`})
+
+	if first != second {
+		t.Fatalf("RemoveTOMLTableKeys is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}

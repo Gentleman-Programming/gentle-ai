@@ -167,7 +167,7 @@ func (a *Adapter) EmbeddedSubAgentsDir() string {
 
 // ClaudeModelID resolves a ClaudeModelAlias to the string Claude Code accepts
 // in the `model:` frontmatter field of a sub-agent file. Claude Code uses the
-// aliases ("opus", "sonnet", "haiku") verbatim, so this is an identity over
+// aliases ("fable", "opus", "sonnet", "haiku") verbatim, so this is an identity over
 // alias.String(). Implemented as a method so the SDD injector's
 // claudeModelResolver type assertion fires for this adapter.
 func (a *Adapter) ClaudeModelID(alias model.ClaudeModelAlias) string {

@@ -1,0 +1,11 @@
+# Normalize line endings to LF for all text files
+* text=auto eol=lf
+
+# Explicit overrides for binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.tar.gz binary

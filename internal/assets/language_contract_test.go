@@ -67,6 +67,7 @@ func TestSupportedAgentSDDLanguageMatrix(t *testing.T) {
 		{agent: "openclaw", path: "generic/sdd-orchestrator.md"},
 		{agent: "pi", path: "generic/sdd-orchestrator.md"},
 		{agent: "trae-ide", path: "generic/sdd-orchestrator.md"},
+		{agent: "hermes", path: "hermes/sdd-orchestrator.md"},
 	}
 
 	for _, tc := range tests {
@@ -204,6 +205,74 @@ func TestGentlemanPersonaKeepsDirectConversationVoice(t *testing.T) {
 			for _, required := range []string{"Rioplatense", "voseo", "Passionate teacher"} {
 				if !strings.Contains(content, required) {
 					t.Fatalf("%s missing Gentleman direct-conversation voice marker %q", path, required)
+				}
+			}
+		})
+	}
+}
+
+func TestNeutralPersonaAssetsProvideMentorParityWithoutRegionalVoice(t *testing.T) {
+	for _, path := range []string{
+		"generic/persona-neutral.md",
+		"hermes/persona-neutral.md",
+	} {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			for _, required := range []string{
+				"Response-length contract",
+				"minimum useful response",
+				"Ask at most one question at a time",
+				"STOP and wait",
+				"Do not present option menus",
+				"verification",
+				"CONCEPTS > CODE",
+				"Generated technical artifacts default to English",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing neutral parity contract %q", path, required)
+				}
+			}
+
+			for _, banned := range []string{
+				"Rioplatense",
+				"voseo",
+				"Gentleman regional voice",
+				"When replying to the user in Spanish, use warm natural Rioplatense Spanish",
+			} {
+				if strings.Contains(content, banned) {
+					t.Fatalf("%s contains banned regional neutral wording %q", path, banned)
+				}
+			}
+		})
+	}
+}
+
+func TestNeutralOutputStyleAssetsProvideMeaningfulContract(t *testing.T) {
+	for _, path := range []string{
+		"claude/output-style-neutral.md",
+		"kimi/output-style-neutral.md",
+	} {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			if strings.TrimSpace(content) == "" {
+				t.Fatalf("%s is empty", path)
+			}
+			for _, required := range []string{
+				"Neutral Output Style",
+				"minimum useful response",
+				"Ask at most one question at a time",
+				"STOP",
+				"Do not offer option menus",
+				"verify",
+				"Generated technical artifacts default to English",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing output-style contract %q", path, required)
+				}
+			}
+			for _, banned := range []string{"Rioplatense", "voseo", "Gentleman Output Style"} {
+				if strings.Contains(content, banned) {
+					t.Fatalf("%s contains banned neutral output-style wording %q", path, banned)
 				}
 			}
 		})

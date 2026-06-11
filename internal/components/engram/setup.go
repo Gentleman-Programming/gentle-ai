@@ -65,6 +65,10 @@ func SetupAgentSlug(agent model.AgentID) (string, bool) {
 		// Qwen uses direct settings.json injection only. The engram binary does
 		// not currently expose a native `qwen-code` setup target.
 		return "", false
+	case model.AgentHermes:
+		// Hermes MCP is injected directly via YAML helpers (UpsertHermesEngramBlock).
+		// The engram binary does not expose a native Hermes setup target.
+		return "", false
 	default:
 		return "", false
 	}

@@ -214,6 +214,8 @@ func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentI
 			agents = append(agents, model.AgentPi)
 		case string(model.AgentTrae):
 			agents = append(agents, model.AgentTrae)
+		case string(model.AgentHermes):
+			agents = append(agents, model.AgentHermes)
 		}
 	}
 

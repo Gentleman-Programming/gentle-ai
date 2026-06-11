@@ -127,6 +127,9 @@ func agentOverlay(id model.AgentID) []byte {
 	case model.AgentCodex:
 		// Codex has no known settings.json path; permissions are skipped.
 		return nil
+	case model.AgentHermes:
+		// Hermes permission format is undocumented — no overlay is injected (§14).
+		return nil
 	default:
 		return nil
 	}
@@ -173,6 +176,12 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.workspace_roots", fmt.Sprintf("%q", homeDir), "true")
 
 	workspaceRootsSection := `permissions.gentle-dev.filesystem.":workspace_roots"`
+	merged = filemerge.RemoveTOMLTableKeys(merged, workspaceRootsSection, []string{
+		`"**/.git"`,
+		`"**/.git/**"`,
+	})
+	merged = filemerge.UpsertTOMLTableKey(merged, workspaceRootsSection, `".git/**"`, `"write"`)
+
 	for _, pattern := range []string{
 		`"**/.env"`,
 		`"**/.env.local"`,

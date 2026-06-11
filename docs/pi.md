@@ -34,7 +34,6 @@ pi install npm:pi-subagents
 pi install npm:pi-intercom
 pi install npm:@juicesharp/rpiv-ask-user-question
 pi install npm:pi-web-access
-pi install npm:pi-lens
 pi install npm:@juicesharp/rpiv-todo
 pi install npm:pi-btw
 ```
@@ -49,7 +48,6 @@ pi install npm:pi-btw
 | `pi-intercom`                                            | Lets child agents ask the parent Pi session for decisions while chains run.                                               |
 | `@juicesharp/rpiv-ask-user-question`                     | Lets Pi child agents ask the active user session for clarification when they need human input.                            |
 | `pi-web-access`                                          | Adds web access tools for Pi.                                                                                             |
-| `pi-lens`                                                | Adds Pi visual/context inspection support.                                                                                |
 | `@juicesharp/rpiv-todo`                                  | Adds todo/task tracking support for Pi sessions.                                                                          |
 | `pi-btw`                                                 | Adds BTW companion workflow support for Pi.                                                                               |
 

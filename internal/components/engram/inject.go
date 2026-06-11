@@ -358,6 +358,23 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			files = append(files, pluginFiles...)
 		}
 
+	case model.StrategyMergeIntoYAML:
+		// Hermes: upsert the engram MCP server block under mcp_servers: in
+		// ~/.hermes/config.yaml via the comment-preserving YAML string helpers.
+		configPath := adapter.MCPConfigPath(configHomeDir, "engram")
+		existing, readErr := readFileOrEmpty(configPath)
+		if readErr != nil {
+			return InjectionResult{}, readErr
+		}
+		engramCmd := stableEngramCommandForMergedConfig(configPath, adapter.Agent())
+		updated := filemerge.UpsertHermesEngramBlock(existing, engramCmd)
+		yamlWrite, writeErr := filemerge.WriteFileAtomic(configPath, []byte(updated), 0o644)
+		if writeErr != nil {
+			return InjectionResult{}, fmt.Errorf("write Hermes engram YAML %q: %w", configPath, writeErr)
+		}
+		changed = changed || yamlWrite.Changed
+		files = append(files, configPath)
+
 	case model.StrategyTOMLFile:
 		// Codex: upsert [mcp_servers.engram] block and instruction-file keys
 		// in ~/.codex/config.toml, then write instruction files.
@@ -644,6 +661,14 @@ func existingMergedEngramCommand(raw []byte, agentID model.AgentID) (string, boo
 		return "", false
 	}
 
+	// YAML recovery early branch for Hermes: placed before MergeJSONObjects
+	// (which would fail on YAML input). ReadYAMLMCPServerCommand scans the
+	// ~/.hermes/config.yaml content for the named server's command — no
+	// external YAML dependency, read-only. (Decision 9)
+	if agentID == model.AgentHermes {
+		return filemerge.ReadYAMLMCPServerCommand(string(raw), "engram")
+	}
+
 	normalized, err := filemerge.MergeJSONObjects(raw, []byte("{}"))
 	if err != nil {
 		return "", false
@@ -717,7 +742,7 @@ func executableFromCommandValue(command any) (string, bool) {
 
 func isStandardAgent(id model.AgentID) bool {
 	switch id {
-	case model.AgentOpenCode, model.AgentQwenCode, model.AgentCodex, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentClaudeCode, model.AgentOpenClaw:
+	case model.AgentOpenCode, model.AgentQwenCode, model.AgentCodex, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentClaudeCode, model.AgentOpenClaw, model.AgentHermes:
 		return true
 	default:
 		return false

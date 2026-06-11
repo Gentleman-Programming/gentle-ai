@@ -238,6 +238,56 @@ func UpsertTOMLTableKey(content, section, key, rawValue string) string {
 	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
 }
 
+// RemoveTOMLTableKeys removes simple single-line keys from the named [section]
+// table while preserving every other top-level key and table verbatim.
+//
+// It intentionally matches only exact TOML keys in the target section. This is
+// useful for cleaning up previously generated entries without disturbing
+// unrelated user configuration.
+func RemoveTOMLTableKeys(content, section string, keys []string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	if len(keys) == 0 {
+		return strings.TrimSpace(content) + "\n"
+	}
+
+	removeKeys := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		removeKeys[key] = true
+	}
+
+	header := "[" + section + "]"
+	lines := strings.Split(content, "\n")
+	inSection := false
+	var out []string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == header {
+			inSection = true
+			out = append(out, line)
+			continue
+		}
+		if inSection && strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inSection = false
+		}
+		if inSection {
+			removeLine := false
+			for key := range removeKeys {
+				if strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=") {
+					removeLine = true
+					break
+				}
+			}
+			if removeLine {
+				continue
+			}
+		}
+		out = append(out, line)
+	}
+
+	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
+}
+
 // UpsertTopLevelTOMLString inserts or replaces a top-level key = "value" pair
 // in TOML content. The key is placed before the first [section] header so it
 // remains a top-level (non-table) setting. Existing occurrences of the key are

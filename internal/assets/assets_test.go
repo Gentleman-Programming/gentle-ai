@@ -78,11 +78,23 @@ func TestOrchestratorsRejectDelegationBypassLanguage(t *testing.T) {
 	}
 	for _, want := range []string{
 		"## Delegated Path (default",
+		"### Blocking Delegation Contract",
+		"Codex sub-agents MUST be treated as waited handoffs, not fire-and-forget background jobs.",
+		"You MAY launch more than one independent sub-agent when useful",
+		"`wait_agent` for every spawned agent in that batch",
+		"Parallel does not mean background",
 		"## Graceful Degradation Path (tooling unavailable only)",
 		"do not run the full phase pipeline inline as a normal fallback",
 	} {
 		if !strings.Contains(codex, want) {
 			t.Fatalf("codex/sdd-orchestrator.md missing guarded degradation wording %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"both `spawn_agent` calls before either `wait_agent`",
+	} {
+		if strings.Contains(codex, forbidden) {
+			t.Fatalf("codex/sdd-orchestrator.md contains fire-and-forget delegation wording %q", forbidden)
 		}
 	}
 }
@@ -113,6 +125,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 	expectedFiles := []string{
 		// Claude agent files
 		"claude/engram-protocol.md",
+		"claude/output-style-neutral.md",
 		"claude/persona-gentleman.md",
 		"claude/sdd-orchestrator.md",
 		"claude/commands/sdd-apply.md",
@@ -169,6 +182,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		// Kimi agent files
 		"kimi/persona-gentleman.md",
 		"kimi/output-style-gentleman.md",
+		"kimi/output-style-neutral.md",
 		"kimi/sdd-orchestrator.md",
 		"kimi/KIMI.md",
 		"kimi/agents/gentleman.yaml",
@@ -212,6 +226,11 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/_shared/openspec-convention.md",
 		"skills/_shared/sdd-phase-common.md",
 		"skills/_shared/sdd-status-contract.md",
+
+		// Hermes agent files
+		"hermes/sdd-orchestrator.md",
+		"hermes/persona-gentleman.md",
+		"hermes/persona-neutral.md",
 
 		// Foundation skills
 		"skills/go-testing/SKILL.md",
@@ -538,6 +557,7 @@ func TestClaudeSDDOrchestratorChainStrategy(t *testing.T) {
 		"When launching `sdd-apply`, always include the resolved `delivery_strategy`, `chain_strategy`, and any chosen PR boundary/exception in the prompt.",
 		"Claude Code's native Agent/Task mechanism",
 		"results are not persisted by OpenCode's background-agent plugin",
+		"treat `chained-pr` (registry skill `gentle-ai-chained-pr`) as a required skill match",
 	} {
 		if !strings.Contains(content, required) {
 			t.Fatalf("claude/sdd-orchestrator.md missing required SDD chain/delegation wording %q", required)
@@ -568,6 +588,9 @@ func TestNonClaudeSDDOrchestratorChainStrategyParity(t *testing.T) {
 		{path: "kiro/sdd-orchestrator.md", propagationScope: "Kiro phase context"},
 		{path: "windsurf/sdd-orchestrator.md", propagationScope: "inline phase context"},
 		{path: "antigravity/sdd-orchestrator.md", propagationScope: "dynamic subagent context"},
+		{path: "cursor/sdd-orchestrator.md", propagationScope: "prompt"},
+		{path: "opencode/sdd-orchestrator.md", propagationScope: "prompt"},
+		{path: "hermes/sdd-orchestrator.md", propagationScope: "prompt"},
 	}
 
 	for _, tc := range tests {
@@ -583,6 +606,7 @@ func TestNonClaudeSDDOrchestratorChainStrategyParity(t *testing.T) {
 				"sdd-tasks",
 				"sdd-apply",
 				tc.propagationScope,
+				"treat `chained-pr` (registry skill `gentle-ai-chained-pr`) as a required skill match",
 			} {
 				if !strings.Contains(content, required) {
 					t.Fatalf("%s missing required chain strategy wording %q", tc.path, required)

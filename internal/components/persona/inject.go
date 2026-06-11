@@ -25,8 +25,11 @@ type bootstrapper interface {
 	BootstrapTemplate(homeDir string) error
 }
 
-// outputStyleOverlayJSON is the settings.json overlay to enable the Gentleman output style.
-var outputStyleOverlayJSON = []byte("{\n  \"outputStyle\": \"Gentleman\"\n}\n")
+// outputStyleOverlayJSON is the settings.json overlay to enable the selected
+// managed Claude Code output style.
+func outputStyleOverlayJSON(name string) []byte {
+	return []byte(fmt.Sprintf("{\n  \"outputStyle\": %q\n}\n", name))
+}
 
 // openCodeAgentOverlayJSON defines the Tab-switchable persona agent for OpenCode.
 // SDD is installed separately by the SDD component as "gentle-orchestrator";
@@ -287,11 +290,15 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 		changed = changed || wr1.Changed
 		files = append(files, personaPath)
 
-		// Module 2: output-style (Gentleman only; empty file for neutral keeps the
-		// include harmless via "ignore missing" in the template).
+		// Module 2: output-style. Neutral gets a meaningful output-style module
+		// rather than an empty include so Kimi receives the same behavior contract
+		// across both persona and output-style instruction layers.
 		outputStyleContent := ""
-		if isGentlemanConversationPersona(persona) {
+		switch {
+		case isGentlemanConversationPersona(persona):
 			outputStyleContent = assets.MustRead("kimi/output-style-gentleman.md")
+		case persona == model.PersonaNeutral:
+			outputStyleContent = assets.MustRead("kimi/output-style-neutral.md")
 		}
 		outputStylePath := filepath.Join(configDir, "output-style.md")
 		wr2, err := filemerge.WriteFileAtomic(outputStylePath, []byte(outputStyleContent), 0o644)
@@ -303,20 +310,22 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 	}
 
 	// 2. OpenCode/Kilocode agent definitions — Tab-switchable agents in settings.
-	// Skipped under syncManaged because this overlay shares the "agent" key in
-	// opencode.json with SDD's gentle-orchestrator overlay; running both in the
-	// same sync (in either order) makes them clobber each other's entries and
-	// breaks idempotency. Install handles this overlay once at install time.
-	if !syncManaged && (adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode) && persona != model.PersonaCustom {
+	// Gentleman overlay creation remains install-only because this overlay shares
+	// the "agent" key in opencode.json with SDD's gentle-orchestrator overlay.
+	// Non-gentleman sync may still do a narrow cleanup of only agent.gentleman so
+	// neutral sync does not leave regional persona state behind.
+	if (adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode) && persona != model.PersonaCustom {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
 			if isGentlemanConversationPersona(persona) {
-				agentResult, err := mergeJSONFile(settingsPath, openCodeAgentOverlayJSON)
-				if err != nil {
-					return InjectionResult{}, err
+				if !syncManaged {
+					agentResult, err := mergeJSONFile(settingsPath, openCodeAgentOverlayJSON)
+					if err != nil {
+						return InjectionResult{}, err
+					}
+					changed = changed || agentResult.Changed
+					files = append(files, settingsPath)
 				}
-				changed = changed || agentResult.Changed
-				files = append(files, settingsPath)
 			} else {
 				// Non-gentleman: remove any residual agent.gentleman key left by a
 				// previous gentleman install. Only the "gentleman" sub-key is removed
@@ -351,7 +360,34 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 		// Merge "outputStyle": "Gentleman" into settings.
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
-			settingsResult, err := mergeJSONFile(settingsPath, outputStyleOverlayJSON)
+			settingsResult, err := mergeJSONFile(settingsPath, outputStyleOverlayJSON("Gentleman"))
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || settingsResult.Changed
+			files = append(files, settingsPath)
+		}
+	}
+
+	// 3a. Neutral: write the Neutral output-style twin and make it the selected
+	// managed outputStyle for Claude Code.
+	if persona == model.PersonaNeutral && adapter.Agent() != model.AgentOpenClaw && adapter.SupportsOutputStyles() {
+		outputStyleDir := adapter.OutputStyleDir(homeDir)
+		if outputStyleDir != "" {
+			outputStylePath := filepath.Join(outputStyleDir, "neutral.md")
+			outputStyleContent := assets.MustRead("claude/output-style-neutral.md")
+
+			styleResult, err := filemerge.WriteFileAtomic(outputStylePath, []byte(outputStyleContent), 0o644)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || styleResult.Changed
+			files = append(files, outputStylePath)
+		}
+
+		settingsPath := adapter.SettingsPath(homeDir)
+		if settingsPath != "" {
+			settingsResult, err := mergeJSONFileToleratingMalformed(settingsPath, outputStyleOverlayJSON("Neutral"))
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -459,7 +495,15 @@ func isGentlemanConversationPersona(persona model.PersonaID) bool {
 func personaContent(agent model.AgentID, persona model.PersonaID) string {
 	switch persona {
 	case model.PersonaNeutral:
-		return assets.MustRead("generic/persona-neutral.md")
+		// Per-agent neutral selection: Hermes uses its own neutral asset with
+		// the skill-loading block rewritten for ~/.hermes/skills/ (Decision 5).
+		// All other agents receive the byte-identical generic/persona-neutral.md.
+		switch agent {
+		case model.AgentHermes:
+			return assets.MustRead("hermes/persona-neutral.md")
+		default:
+			return assets.MustRead("generic/persona-neutral.md")
+		}
 	case model.PersonaCustom:
 		return ""
 	default:
@@ -475,6 +519,8 @@ func personaContent(agent model.AgentID, persona model.PersonaID) string {
 			// Kiro uses a steering-file based persona. The asset is identical to
 			// generic today but kept separate so it can diverge independently.
 			return assets.MustRead("kiro/persona-gentleman.md")
+		case model.AgentHermes:
+			return assets.MustRead("hermes/persona-gentleman.md")
 		default:
 			// Generic persona includes Gentleman personality + skills table + SDD orchestrator.
 			// Used by Gemini CLI, Cursor, VS Code Copilot, and any future agents.
@@ -495,6 +541,17 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 	}
 
 	return filemerge.WriteFileAtomic(path, merged, 0o644)
+}
+
+func mergeJSONFileToleratingMalformed(path string, overlay []byte) (filemerge.WriteResult, error) {
+	result, err := mergeJSONFile(path, overlay)
+	if err == nil {
+		return result, nil
+	}
+	if strings.Contains(err.Error(), "invalid character") || strings.Contains(err.Error(), "unexpected end of JSON") {
+		return filemerge.WriteResult{}, nil
+	}
+	return filemerge.WriteResult{}, err
 }
 
 var osReadFile = func(path string) ([]byte, error) {

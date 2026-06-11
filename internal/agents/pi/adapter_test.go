@@ -163,7 +163,6 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 		{"pi", "install", "npm:pi-intercom"},
 		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
 		{"pi", "install", "npm:pi-web-access"},
-		{"pi", "install", "npm:pi-lens"},
 		{"pi", "install", "npm:@juicesharp/rpiv-todo"},
 		{"pi", "install", "npm:pi-btw"},
 	}
