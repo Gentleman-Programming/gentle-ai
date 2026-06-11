@@ -4413,3 +4413,63 @@ func TestCodexPresetSelection_PopulatesPendingSyncOverrides(t *testing.T) {
 		t.Fatal("Selection.CodexCarrilModelAssignments = nil, want non-nil after preset selection")
 	}
 }
+
+// ─── FIX W-1: Codex custom sub-mode cursor reset ─────────────────────────────
+
+// ─── FIX W-2: CustomConfirmed reset on preset selection ──────────────────────
+
+// TestCodexModelPickerPresetClearsCustomState verifies that selecting a preset
+// after a prior Custom confirm resets CustomConfirmed to false and clears
+// CodexPhaseModelAssignments so the inject layer uses the carril table.
+func TestCodexModelPickerPresetClearsCustomState(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCodexModelPicker
+	m.CodexModelPicker = screens.NewCodexModelPickerState()
+
+	// Simulate a previously confirmed Custom flow.
+	m.CodexModelPicker.CustomConfirmed = true
+	m.Selection.CodexPhaseModelAssignments = map[string]string{
+		"sdd-propose": "gpt-5.4",
+	}
+
+	// Select the Recommended preset (cursor index 1).
+	m.Cursor = 1
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	// CustomConfirmed must be reset.
+	if state.CodexModelPicker.CustomConfirmed {
+		t.Error("CodexModelPicker.CustomConfirmed = true after preset selection, want false")
+	}
+	// CodexPhaseModelAssignments must be nil — inject layer should use carril table.
+	if state.Selection.CodexPhaseModelAssignments != nil {
+		t.Errorf("Selection.CodexPhaseModelAssignments = %v after preset selection, want nil",
+			state.Selection.CodexPhaseModelAssignments)
+	}
+}
+
+// ─── FIX W-1: Codex custom sub-mode cursor reset ─────────────────────────────
+
+// TestCodexModelPickerCustomModeEscResetsCursor verifies that after entering
+// the Codex custom sub-mode and pressing Esc, the outer cursor is reset to 0.
+func TestCodexModelPickerCustomModeEscResetsCursor(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCodexModelPicker
+	m.CodexModelPicker = screens.NewCodexModelPickerState()
+	// Enter the Custom sub-mode (index 3).
+	m.CodexModelPicker.CustomMode = screens.CodexCustomModePhaseList
+	m.Cursor = 7 // simulate user navigated down in custom phase list
+
+	// Press Esc — should exit the Custom sub-mode and reset the outer cursor to 0.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	// Custom mode must be off.
+	if state.CodexModelPicker.CustomMode != screens.CodexCustomModeNone {
+		t.Fatalf("CodexModelPicker.CustomMode = %v, want CodexCustomModeNone after Esc", state.CodexModelPicker.CustomMode)
+	}
+	// Outer cursor must be reset to 0.
+	if state.Cursor != 0 {
+		t.Fatalf("Cursor = %d, want 0 after Esc from Codex custom sub-mode (cursor not reset)", state.Cursor)
+	}
+}

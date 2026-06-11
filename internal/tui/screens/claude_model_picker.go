@@ -221,9 +221,9 @@ func HandleClaudeModelPickerNav(
 	}
 	switch state.Mode {
 	case ClaudeModeModelSelect:
-		return handleCustomModelSelectNav(key, state, cursor)
+		return handleClaudeCustomModelSelectNav(key, state, cursor)
 	case ClaudeModeEffortSelect:
-		return handleCustomEffortSelectNav(key, state, cursor)
+		return handleClaudeCustomEffortSelectNav(key, state, cursor)
 	default:
 		return handleCustomPhaseNav(key, state, cursor)
 	}
@@ -298,7 +298,7 @@ func handleCustomPhaseNav(
 	return false, nil
 }
 
-func handleCustomModelSelectNav(
+func handleClaudeCustomModelSelectNav(
 	key string,
 	state *ClaudeModelPickerState,
 	cursor int,
@@ -329,7 +329,7 @@ func handleCustomModelSelectNav(
 	return false, nil
 }
 
-func handleCustomEffortSelectNav(
+func handleClaudeCustomEffortSelectNav(
 	key string,
 	state *ClaudeModelPickerState,
 	cursor int,
@@ -362,33 +362,6 @@ func nextAlias(current model.ClaudeModelAlias) model.ClaudeModelAlias {
 		}
 	}
 	return model.ClaudeModelSonnet
-}
-
-func nextClaudeEffort(alias model.ClaudeModelAlias, current model.ClaudeEffort) model.ClaudeEffort {
-	return cycleClaudeEffort(alias, current, 1)
-}
-
-func previousClaudeEffort(alias model.ClaudeModelAlias, current model.ClaudeEffort) model.ClaudeEffort {
-	return cycleClaudeEffort(alias, current, -1)
-}
-
-func cycleClaudeEffort(alias model.ClaudeModelAlias, current model.ClaudeEffort, delta int) model.ClaudeEffort {
-	levels := model.ClaudeEffortsForModel(alias)
-	if len(levels) == 0 {
-		return model.ClaudeEffortDefault
-	}
-	idx := 0
-	for i, level := range levels {
-		if level == current {
-			idx = i
-			break
-		}
-	}
-	next := (idx + delta) % len(levels)
-	if next < 0 {
-		next += len(levels)
-	}
-	return levels[next]
 }
 
 // RenderClaudeModelPicker renders the Claude model picker screen.

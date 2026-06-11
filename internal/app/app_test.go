@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -501,6 +502,49 @@ func TestTuiSyncClaudePhaseAssignmentsPersistAndGenerateEffort(t *testing.T) {
 	}
 	if strings.Contains(string(body), "effort:") {
 		t.Fatalf("default-effort sdd-archive agent should omit effort frontmatter; got:\n%s", body)
+	}
+
+	beforeState := persisted.ClaudePhaseAssignments
+	beforeApply, err := os.ReadFile(applyAgent)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", applyAgent, err)
+	}
+	beforeArchive, err := os.ReadFile(archiveAgent)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", archiveAgent, err)
+	}
+
+	changed, err = tuiSync(home)(&model.SyncOverrides{
+		TargetAgents:           []model.AgentID{model.AgentClaudeCode},
+		ClaudePhaseAssignments: phaseAssignments,
+	})
+	if err != nil {
+		t.Fatalf("second tuiSync Claude phase config error: %v", err)
+	}
+	if len(changed) == 0 {
+		t.Log("second tuiSync reported no file changes")
+	}
+
+	persisted, err = state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read after second sync: %v", err)
+	}
+	if !reflect.DeepEqual(persisted.ClaudePhaseAssignments, beforeState) {
+		t.Fatalf("ClaudePhaseAssignments changed after second sync: got %#v want %#v", persisted.ClaudePhaseAssignments, beforeState)
+	}
+	afterApply, err := os.ReadFile(applyAgent)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) after second sync: %v", applyAgent, err)
+	}
+	if !bytes.Equal(afterApply, beforeApply) {
+		t.Fatalf("sdd-apply agent changed after idempotent sync")
+	}
+	afterArchive, err := os.ReadFile(archiveAgent)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) after second sync: %v", archiveAgent, err)
+	}
+	if !bytes.Equal(afterArchive, beforeArchive) {
+		t.Fatalf("sdd-archive agent changed after idempotent sync")
 	}
 }
 
@@ -1115,6 +1159,106 @@ func TestPersistAssignments_CodexCarrilModels(t *testing.T) {
 	}
 	if s.CodexCarrilModelAssignments["sdd-strong"] != "gpt-5.5" {
 		t.Errorf("state.CodexCarrilModelAssignments[sdd-strong] = %q, want gpt-5.5", s.CodexCarrilModelAssignments["sdd-strong"])
+	}
+}
+
+// ─── BUG-1: Custom→preset via sync path does not clear CodexPhaseModelAssignments ───
+
+// TestPresetSyncClearsCodexPhaseModelAssignments is the RED→GREEN regression test.
+// It simulates:
+//  1. A previous Custom per-phase sync that persisted CodexPhaseModelAssignments to state.json.
+//  2. The user then picks a preset (e.g. Recommended) — the sync carries an empty-map
+//     clear signal for CodexPhaseModelAssignments.
+//
+// After the fix: state.json must NOT contain codexPhaseModelAssignments (or it must be empty).
+// Against current (unfixed) code this test FAILS (stale value survives).
+func TestPresetSyncClearsCodexPhaseModelAssignments(t *testing.T) {
+	home := t.TempDir()
+
+	// Step 1 — persist stale per-phase assignments (as if a previous Custom sync ran).
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"codex"},
+		CodexPhaseModelAssignments: map[string]string{
+			"sdd-apply":   "o3",
+			"sdd-explore": "gpt-4o-mini",
+			"default":     "o3",
+		},
+	}); err != nil {
+		t.Fatalf("state.Write (seed): %v", err)
+	}
+
+	// Step 2 — simulate a preset sync: overrides carry an empty-map clear signal.
+	// model.go sets CodexPhaseModelAssignments to map[string]string{} (non-nil empty)
+	// when the user picks a preset. Nil means "not provided"; empty means "clear".
+	presetCarril := model.DefaultCarrilModels()
+	overrides := &model.SyncOverrides{
+		TargetAgents:                []model.AgentID{model.AgentCodex},
+		CodexModelAssignments:       model.CodexModelPresetRecommended(),
+		CodexCarrilModelAssignments: presetCarril,
+		CodexPhaseModelAssignments:  map[string]string{}, // explicit clear signal
+	}
+
+	selection := model.Selection{}
+	loadPersistedAssignments(home, &selection)
+	applyOverrides(&selection, overrides)
+	persistAssignments(home, selection)
+
+	// Assert: state must no longer contain per-phase assignments.
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if len(s.CodexPhaseModelAssignments) > 0 {
+		t.Fatalf("state.CodexPhaseModelAssignments = %v, want empty after preset sync (stale per-phase map was NOT cleared)", s.CodexPhaseModelAssignments)
+	}
+
+	// Assert: selection must also be cleared.
+	if len(selection.CodexPhaseModelAssignments) > 0 {
+		t.Fatalf("selection.CodexPhaseModelAssignments = %v, want empty after preset sync", selection.CodexPhaseModelAssignments)
+	}
+}
+
+// TestPartialSyncDoesNotWipeCodexPhaseModelAssignments is the guard test.
+// A partial sync that does NOT set CodexPhaseModelAssignments on the override
+// (nil = not provided) must NOT wipe an existing per-phase map from state.
+func TestPartialSyncDoesNotWipeCodexPhaseModelAssignments(t *testing.T) {
+	home := t.TempDir()
+
+	// Seed state with per-phase assignments.
+	existingPhaseAssignments := map[string]string{
+		"sdd-apply":   "o3",
+		"sdd-explore": "gpt-4o-mini",
+		"default":     "o3",
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:            []string{"codex"},
+		CodexPhaseModelAssignments: existingPhaseAssignments,
+	}); err != nil {
+		t.Fatalf("state.Write (seed): %v", err)
+	}
+
+	// Partial sync that only updates Claude model assignments — no Codex override.
+	overrides := &model.SyncOverrides{
+		ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
+			"sdd-apply": model.ClaudeModelHaiku,
+		},
+	}
+
+	selection := model.Selection{}
+	loadPersistedAssignments(home, &selection)
+	applyOverrides(&selection, overrides)
+	persistAssignments(home, selection)
+
+	// The per-phase assignments must survive an unrelated partial sync.
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if s.CodexPhaseModelAssignments["sdd-apply"] != "o3" {
+		t.Fatalf("state.CodexPhaseModelAssignments[sdd-apply] = %q, want %q (wiped by unrelated partial sync)", s.CodexPhaseModelAssignments["sdd-apply"], "o3")
+	}
+	if s.CodexPhaseModelAssignments["default"] != "o3" {
+		t.Fatalf("state.CodexPhaseModelAssignments[default] = %q, want %q", s.CodexPhaseModelAssignments["default"], "o3")
 	}
 }
 

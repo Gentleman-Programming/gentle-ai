@@ -2762,12 +2762,17 @@ func TestDedupPathsFiltersEmptyStrings(t *testing.T) {
 // setupCodexSyncHome creates a temp home with a state.json containing the codex
 // agent and the provided carril model map, returning the home directory.
 func setupCodexSyncHome(t *testing.T, carrilModels map[string]string, effortAssignments map[string]string) string {
+	return setupCodexSyncHomeWithPhaseModels(t, carrilModels, effortAssignments, nil)
+}
+
+func setupCodexSyncHomeWithPhaseModels(t *testing.T, carrilModels map[string]string, effortAssignments map[string]string, phaseModels map[string]string) string {
 	t.Helper()
 	home := t.TempDir()
 	s := state.InstallState{
 		InstalledAgents:             []string{"codex"},
 		CodexModelAssignments:       effortAssignments,
 		CodexCarrilModelAssignments: carrilModels,
+		CodexPhaseModelAssignments:  phaseModels,
 	}
 	if err := state.Write(home, s); err != nil {
 		t.Fatalf("state.Write() error = %v", err)
@@ -2855,5 +2860,61 @@ func TestRunSync_RestoresCodexEffortAssignments(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "xhigh") {
 		t.Errorf("sdd-strong.config.toml: expected xhigh effort; got:\n%s", content)
+	}
+}
+
+// TestRunSync_RestoresCodexPhaseModelAssignments verifies that plain
+// `gentle-ai sync` preserves Custom per-phase Codex model assignments from
+// state.json and renders the per-phase model table into AGENTS.md.
+func TestRunSync_RestoresCodexPhaseModelAssignments(t *testing.T) {
+	efforts := map[string]string{
+		"sdd-propose": "xhigh", "sdd-design": "xhigh", "sdd-verify": "xhigh",
+		"jd-judge-a": "xhigh", "jd-judge-b": "xhigh", "default": "xhigh",
+		"sdd-apply": "high", "jd-fix-agent": "high",
+		"sdd-explore": "low", "sdd-spec": "low", "sdd-tasks": "low",
+		"sdd-archive": "low", "sdd-onboard": "low",
+	}
+	phaseModels := map[string]string{
+		"default":     "gpt-5.4-mini",
+		"sdd-propose": "gpt-5.5",
+		"sdd-apply":   "o3",
+	}
+	home := setupCodexSyncHomeWithPhaseModels(t, nil, efforts, phaseModels)
+
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	_, err := RunSync([]string{"--agents", "codex"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+
+	agentsMD := filepath.Join(home, ".codex", "AGENTS.md")
+	content, readErr := os.ReadFile(agentsMD)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q) error = %v", agentsMD, readErr)
+	}
+	text := string(content)
+	if !strings.Contains(text, "| Phase | Model |") {
+		t.Fatalf("AGENTS.md missing per-phase Model table header; got:\n%s", text)
+	}
+	if !strings.Contains(text, "| `sdd-propose` | `gpt-5.5` | `xhigh` |") {
+		t.Fatalf("AGENTS.md missing custom sdd-propose model row; got:\n%s", text)
+	}
+	if !strings.Contains(text, "| `sdd-apply` | `o3` | `high` |") {
+		t.Fatalf("AGENTS.md missing custom sdd-apply model row; got:\n%s", text)
+	}
+	if strings.Contains(text, "| `sdd-strong` |") {
+		t.Fatalf("AGENTS.md rendered carril table instead of Custom per-phase table; got:\n%s", text)
 	}
 }

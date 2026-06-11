@@ -339,6 +339,154 @@ func TestRenderCodexPhaseEfforts_NonDefaultModel(t *testing.T) {
 	checkCarrilRowModel(t, out, "sdd-cheap", "gpt-5.4-mini")
 }
 
+// ─── WU-1: CodexAvailableModels + FilterCodexModels ─────────────────────────
+
+func TestCodexAvailableModels_Contents(t *testing.T) {
+	models := model.CodexAvailableModels()
+	want := []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2-codex", "gpt-5.3-codex"}
+	if len(models) != len(want) {
+		t.Fatalf("CodexAvailableModels() len = %d, want %d", len(models), len(want))
+	}
+	for i, w := range want {
+		if models[i] != w {
+			t.Errorf("CodexAvailableModels()[%d] = %q, want %q", i, models[i], w)
+		}
+	}
+}
+
+func TestFilterCodexModels_EmptyQuery(t *testing.T) {
+	// Empty query returns all models.
+	result := model.FilterCodexModels("")
+	all := model.CodexAvailableModels()
+	if len(result) != len(all) {
+		t.Errorf("FilterCodexModels(\"\") len = %d, want %d", len(result), len(all))
+	}
+	for i, m := range all {
+		if result[i] != m {
+			t.Errorf("FilterCodexModels(\"\")[%d] = %q, want %q", i, result[i], m)
+		}
+	}
+}
+
+func TestFilterCodexModels_Match(t *testing.T) {
+	tests := []struct {
+		query    string
+		wantAny  []string
+		wantNone []string
+	}{
+		{
+			query:    "gpt-5.5",
+			wantAny:  []string{"gpt-5.5"},
+			wantNone: []string{"gpt-5.4-mini", "gpt-5.2-codex"},
+		},
+		{
+			query:    "codex",
+			wantAny:  []string{"gpt-5.2-codex", "gpt-5.3-codex"},
+			wantNone: []string{"gpt-5.5", "gpt-5.4"},
+		},
+		{
+			query:    "CODEX", // case-insensitive
+			wantAny:  []string{"gpt-5.2-codex", "gpt-5.3-codex"},
+			wantNone: []string{"gpt-5.5"},
+		},
+		{
+			query:    "mini",
+			wantAny:  []string{"gpt-5.4-mini"},
+			wantNone: []string{"gpt-5.5", "gpt-5.4"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.query, func(t *testing.T) {
+			result := model.FilterCodexModels(tc.query)
+			resultSet := make(map[string]bool, len(result))
+			for _, r := range result {
+				resultSet[r] = true
+			}
+			for _, want := range tc.wantAny {
+				if !resultSet[want] {
+					t.Errorf("FilterCodexModels(%q): expected %q in result %v", tc.query, want, result)
+				}
+			}
+			for _, noWant := range tc.wantNone {
+				if resultSet[noWant] {
+					t.Errorf("FilterCodexModels(%q): unexpected %q in result %v", tc.query, noWant, result)
+				}
+			}
+		})
+	}
+}
+
+func TestFilterCodexModels_NoMatch(t *testing.T) {
+	result := model.FilterCodexModels("zzz-no-match")
+	if len(result) != 0 {
+		t.Errorf("FilterCodexModels(no match) = %v, want empty", result)
+	}
+}
+
+// ─── WU-4 RED: RenderCodexPhaseEffortsByPhase ────────────────────────────────
+
+// TestRenderCodexPhaseEffortsByPhase_AllPhasesPresent verifies that when a
+// per-phase model map is provided, the output contains all 13 phases.
+func TestRenderCodexPhaseEffortsByPhase_AllPhasesPresent(t *testing.T) {
+	phaseModels := map[string]string{
+		"sdd-propose": "gpt-5.5",
+		"sdd-apply":   "gpt-5.4",
+	}
+	efforts := model.CodexModelPresetRecommended()
+	out := model.RenderCodexPhaseEffortsByPhase(phaseModels, efforts)
+
+	phases := []string{
+		"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
+		"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
+		"jd-judge-a", "jd-judge-b", "jd-fix-agent", "default",
+	}
+	for _, phase := range phases {
+		if !strings.Contains(out, phase) {
+			t.Errorf("RenderCodexPhaseEffortsByPhase missing phase %q; output:\n%s", phase, out)
+		}
+	}
+}
+
+// TestRenderCodexPhaseEffortsByPhase_CustomModelShown verifies that the specific
+// phase row shows the exact custom model ID, not just a substring match that would
+// pass trivially because gpt-5.4-mini contains "gpt-5.4".
+func TestRenderCodexPhaseEffortsByPhase_CustomModelShown(t *testing.T) {
+	phaseModels := map[string]string{
+		"sdd-propose": "gpt-5.4",
+	}
+	efforts := model.CodexModelPresetRecommended()
+	out := model.RenderCodexPhaseEffortsByPhase(phaseModels, efforts)
+
+	// The sdd-propose row must contain exactly | `sdd-propose` | `gpt-5.4` |
+	// (not gpt-5.4-mini or any other model that happens to contain "gpt-5.4").
+	wantRow := "| `sdd-propose` | `gpt-5.4` |"
+	if !strings.Contains(out, wantRow) {
+		t.Errorf("RenderCodexPhaseEffortsByPhase: sdd-propose row missing exact custom model cell %q; output:\n%s", wantRow, out)
+	}
+}
+
+// TestRenderCodexPhaseEffortsByPhase_UnassignedUsesDefaultModel verifies that
+// phases without a custom model assignment fall back to DefaultCarrilModels.
+func TestRenderCodexPhaseEffortsByPhase_UnassignedUsesDefaultModel(t *testing.T) {
+	// No custom models — all phases should use carril defaults.
+	efforts := model.CodexModelPresetRecommended()
+	out := model.RenderCodexPhaseEffortsByPhase(nil, efforts)
+
+	// sdd-explore is in sdd-cheap carril → gpt-5.4-mini.
+	if !strings.Contains(out, "gpt-5.4-mini") {
+		t.Errorf("RenderCodexPhaseEffortsByPhase(nil models): sdd-cheap phases should show gpt-5.4-mini; output:\n%s", out)
+	}
+}
+
+// TestRenderCodexPhaseEffortsByPhase_HeaderPresent verifies the table has a
+// Phase column header.
+func TestRenderCodexPhaseEffortsByPhase_HeaderPresent(t *testing.T) {
+	out := model.RenderCodexPhaseEffortsByPhase(nil, model.CodexModelPresetRecommended())
+	if !strings.Contains(out, "Phase") {
+		t.Errorf("RenderCodexPhaseEffortsByPhase: missing 'Phase' header; output:\n%s", out)
+	}
+}
+
 // checkCarrilRowModel verifies that the table row for profile contains wantModel
 // in the model cell. Format: "| `profile` | `model` | `effort` | phases |"
 func checkCarrilRowModel(t *testing.T, table string, profile string, wantModel string) {

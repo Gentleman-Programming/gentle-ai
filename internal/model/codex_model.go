@@ -5,6 +5,42 @@ import (
 	"strings"
 )
 
+// codexAvailableModels is the curated list of Codex model IDs available for
+// per-phase custom assignments. Order is intentional: newest/most-capable first.
+var codexAvailableModels = []string{
+	"gpt-5.5",
+	"gpt-5.4",
+	"gpt-5.4-mini",
+	"gpt-5.2-codex",
+	"gpt-5.3-codex",
+}
+
+// CodexAvailableModels returns the curated list of Codex model IDs that can be
+// assigned per-phase in the Custom picker. The slice is a copy — mutations do
+// not affect the canonical list.
+func CodexAvailableModels() []string {
+	out := make([]string, len(codexAvailableModels))
+	copy(out, codexAvailableModels)
+	return out
+}
+
+// FilterCodexModels returns the subset of CodexAvailableModels whose ID contains
+// query as a case-insensitive substring. An empty query returns all models.
+func FilterCodexModels(query string) []string {
+	all := CodexAvailableModels()
+	if strings.TrimSpace(query) == "" {
+		return all
+	}
+	q := strings.ToLower(query)
+	out := make([]string, 0, len(all))
+	for _, m := range all {
+		if strings.Contains(strings.ToLower(m), q) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // CodexEffort represents an OpenAI reasoning_effort level used for Codex
 // per-phase delegation via spawn_agent.
 type CodexEffort string
@@ -230,6 +266,71 @@ func RenderCodexPhaseEfforts(assignments map[string]CodexEffort, carrilModels ma
 			effort,
 			phases,
 		))
+	}
+
+	return sb.String()
+}
+
+// codexPhaseOrder is the canonical phase ordering for the per-phase table,
+// matching codexTierGroups phase groupings.
+var codexPhaseOrder = []string{
+	"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
+	"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
+	"jd-judge-a", "jd-judge-b", "jd-fix-agent", "default",
+}
+
+// phaseToCarrilModel returns the default model id for a phase by looking up its
+// carril via codexTierGroups.
+func phaseToCarrilModel(phase string, carrilModels map[string]string) string {
+	for _, tier := range codexTierGroups {
+		for _, p := range tier.Phases {
+			if p == phase {
+				if m := carrilModels[tier.Profile]; m != "" {
+					return m
+				}
+				return tier.Model
+			}
+		}
+	}
+	return "gpt-5.5" // ultimate fallback
+}
+
+// RenderCodexPhaseEffortsByPhase renders a per-phase Markdown table for the
+// Codex sdd-orchestrator.md asset when Custom per-phase model assignments are
+// active. Each row shows: phase | model | reasoning_effort.
+//
+// phaseModels maps phase names to custom model IDs. Phases not present in
+// phaseModels fall back to the carril default model. efforts maps phase names to
+// CodexEffort values (typically from a preset + user overrides). When efforts is
+// nil, CodexModelPresetRecommended is used.
+//
+// The output is deterministic: phases are always rendered in codexPhaseOrder.
+func RenderCodexPhaseEffortsByPhase(phaseModels map[string]string, efforts map[string]CodexEffort) string {
+	if len(efforts) == 0 {
+		efforts = CodexModelPresetRecommended()
+	}
+	carrilModels := DefaultCarrilModels()
+
+	var sb strings.Builder
+	sb.WriteString("| Phase | Model | `reasoning_effort` |\n")
+	sb.WriteString("|-------|-------|--------------------|\n")
+
+	for _, phase := range codexPhaseOrder {
+		// Resolve model: custom per-phase override takes priority over carril default.
+		modelID := ""
+		if phaseModels != nil {
+			modelID = phaseModels[phase]
+		}
+		if modelID == "" {
+			modelID = phaseToCarrilModel(phase, carrilModels)
+		}
+
+		effort := efforts[phase]
+		if effort == "" {
+			effort = CodexEffortMedium // safe fallback
+		}
+
+		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | `%s` |\n", phase, modelID, effort))
 	}
 
 	return sb.String()
