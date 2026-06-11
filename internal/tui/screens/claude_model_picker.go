@@ -155,10 +155,6 @@ func NewClaudeModelPickerStateFromPhaseAssignments(assignments map[string]model.
 	}
 }
 
-func assignmentsEqual(a, b map[string]model.ClaudeModelAlias) bool {
-	return phaseAssignmentsEqual(model.ClaudePhaseAssignmentsFromLegacy(a), model.ClaudePhaseAssignmentsFromLegacy(b))
-}
-
 func phaseAssignmentsEqual(a, b map[string]model.ClaudePhaseAssignment) bool {
 	if len(a) != len(b) {
 		return false
@@ -169,14 +165,6 @@ func phaseAssignmentsEqual(a, b map[string]model.ClaudePhaseAssignment) bool {
 		}
 	}
 	return true
-}
-
-func copyAssignments(m map[string]model.ClaudeModelAlias) map[string]model.ClaudeModelAlias {
-	out := make(map[string]model.ClaudeModelAlias, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
 }
 
 func copyPhaseAssignments(m map[string]model.ClaudePhaseAssignment) map[string]model.ClaudePhaseAssignment {
