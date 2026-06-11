@@ -58,7 +58,7 @@ name: {skill-name}
 description: "Trigger: {essential trigger words users or agents will say}. {What this skill does}."
 license: Apache-2.0
 metadata:
-  author: gentleman-programming
+  author: "{your-github-username}"
   version: "1.0"
 ---
 ```

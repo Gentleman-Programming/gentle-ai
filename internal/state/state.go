@@ -25,7 +25,7 @@ type InstallState struct {
 	InstalledAgents []string `json:"installed_agents"`
 
 	// ClaudeModelAssignments maps SDD phase names (e.g. "sdd-explore") to a
-	// Claude model alias ("opus", "sonnet", "haiku"). Persisted so that
+	// Claude model alias ("fable", "opus", "sonnet", "haiku"). Persisted so that
 	// `gentle-ai sync` preserves the user's model choices instead of falling
 	// back to the "balanced" preset every time.
 	ClaudeModelAssignments map[string]string `json:"claude_model_assignments,omitempty"`

@@ -78,6 +78,15 @@ When multi-agent tools are available, delegate each SDD phase to a sub-agent usi
 
 **Thread budget**: `agents.max_threads = 4`, `agents.max_depth = 2` (set in `~/.codex/config.toml`).
 
+### Blocking Delegation Contract
+
+Codex sub-agents MUST be treated as waited handoffs, not fire-and-forget background jobs.
+You MAY launch more than one independent sub-agent when useful, but before reporting
+progress, asking the user a follow-up question, or launching a dependent phase, you MUST
+`wait_agent` for every spawned agent in that batch and then `close_agent` each completed
+agent. Do not tell the user a sub-agent is "running in the background" unless the user
+explicitly requested background execution.
+
 ### Phase delegation pattern
 
 For each phase:
@@ -99,7 +108,10 @@ Note: the `~/.codex/<tier>.config.toml` profile files apply to whole CLI session
 
 ### Parallelism
 
-`sdd-spec` and `sdd-design` have the same input (proposal) and independent outputs. Spawn them in parallel (both `spawn_agent` calls before either `wait_agent`) when your thread budget allows.
+Independent phases such as `sdd-spec` and `sdd-design` MAY be spawned in parallel when the
+thread budget allows. Parallel does not mean background: after launching the batch, call
+`wait_agent` for all spawned agents, then `close_agent` for each completed agent, and only
+then summarize results or continue to the next dependent phase.
 
 ### Graceful degradation
 

@@ -83,8 +83,8 @@ type kiroModelResolver interface {
 
 // claudeModelResolver is an optional adapter capability. When implemented,
 // the subagent copy loop stamps the resolved ClaudeModelAlias into the agent
-// frontmatter sentinel {{CLAUDE_MODEL}}. Claude Code accepts "opus", "sonnet",
-// and "haiku" directly as model values, so the resolver is effectively an
+// frontmatter sentinel {{CLAUDE_MODEL}}. Claude Code accepts "fable", "opus",
+// "sonnet", and "haiku" directly as model values, so the resolver is effectively an
 // identity function on the alias string — but the interface keeps the opt-in
 // shape consistent with kiroModelResolver.
 type claudeModelResolver interface {

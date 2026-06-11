@@ -338,8 +338,9 @@ func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 	home := t.TempDir()
 
 	opts := InjectOptions{ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
-		"sdd-design": model.ClaudeModelSonnet,
-		"default":    model.ClaudeModelHaiku,
+		"sdd-design":  model.ClaudeModelSonnet,
+		"sdd-propose": model.ClaudeModelFable,
+		"default":     model.ClaudeModelHaiku,
 	}}
 
 	result, err := Inject(home, claudeAdapter(), "", opts)
@@ -361,6 +362,7 @@ func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 	}
 	for _, want := range []string{
 		"| sdd-design | sonnet | Architecture decisions |",
+		"| sdd-propose | fable | Architectural decisions |",
 		"| default | haiku | Non-SDD general delegation |",
 		"Gentle AI does not configure the main orchestrator model",
 	} {
@@ -4947,6 +4949,7 @@ func TestInjectClaudeSubAgentsResolveModels(t *testing.T) {
 
 	assignments := map[string]model.ClaudeModelAlias{
 		"sdd-design":  model.ClaudeModelOpus,
+		"sdd-propose": model.ClaudeModelFable,
 		"sdd-archive": model.ClaudeModelHaiku,
 		"default":     model.ClaudeModelSonnet,
 	}
@@ -4964,6 +4967,7 @@ func TestInjectClaudeSubAgentsResolveModels(t *testing.T) {
 		want  string
 	}{
 		{phase: "sdd-design", want: "model: opus"},
+		{phase: "sdd-propose", want: "model: fable"},
 		{phase: "sdd-archive", want: "model: haiku"},
 		{phase: "sdd-spec", want: "model: sonnet"},
 	}

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -307,11 +308,14 @@ func TestDownloadLatestBinaryWindows(t *testing.T) {
 
 	origClient := engramHTTPClient
 	origBaseURL := engramGitHubBaseURL
+	origStopProcessesFn := engramStopProcessesFn
 	engramHTTPClient = server.Client()
 	engramGitHubBaseURL = server.URL
+	engramStopProcessesFn = func() error { return nil }
 	t.Cleanup(func() {
 		engramHTTPClient = origClient
 		engramGitHubBaseURL = origBaseURL
+		engramStopProcessesFn = origStopProcessesFn
 	})
 
 	tmpDir := t.TempDir()
@@ -514,6 +518,83 @@ func TestDownloadLatestBinaryReleaseListFallsBackToAnonymousWhenTokenGets403(t *
 
 	if _, err := os.Stat(installedPath); err != nil {
 		t.Fatalf("stat installed binary: %v", err)
+	}
+}
+
+func TestDownloadLatestBinaryWindowsStopsEngramBeforeReplace(t *testing.T) {
+	const version = "1.4.0"
+	server := makeServerWithFakeZip(t, version)
+	defer server.Close()
+
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	origInstallDirFn := engramInstallDirFn
+	origStopProcessesFn := engramStopProcessesFn
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+		engramInstallDirFn = origInstallDirFn
+		engramStopProcessesFn = origStopProcessesFn
+	})
+
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+	installDir := t.TempDir()
+	engramInstallDirFn = func(goos string) string { return installDir }
+
+	stopCalls := 0
+	engramStopProcessesFn = func() error {
+		stopCalls++
+		return nil
+	}
+
+	installedPath, err := DownloadLatestBinary(system.PlatformProfile{OS: "windows", PackageManager: "winget"})
+	if err != nil {
+		t.Fatalf("DownloadLatestBinary(windows) error = %v", err)
+	}
+
+	if stopCalls != 1 {
+		t.Fatalf("stop calls = %d, want 1", stopCalls)
+	}
+	if filepath.Base(installedPath) != "engram.exe" {
+		t.Fatalf("installed path = %q, want engram.exe", installedPath)
+	}
+	if _, err := os.Stat(installedPath); err != nil {
+		t.Fatalf("stat installed binary: %v", err)
+	}
+}
+
+func TestDownloadLatestBinaryWindowsStopFailureAbortsBeforeReplace(t *testing.T) {
+	const version = "1.4.1"
+	server := makeServerWithFakeZip(t, version)
+	defer server.Close()
+
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	origInstallDirFn := engramInstallDirFn
+	origStopProcessesFn := engramStopProcessesFn
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+		engramInstallDirFn = origInstallDirFn
+		engramStopProcessesFn = origStopProcessesFn
+	})
+
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+	installDir := t.TempDir()
+	engramInstallDirFn = func(goos string) string { return installDir }
+	engramStopProcessesFn = func() error { return errors.New("stop denied") }
+
+	_, err := DownloadLatestBinary(system.PlatformProfile{OS: "windows", PackageManager: "winget"})
+	if err == nil {
+		t.Fatal("expected stop failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "stop running engram processes before upgrade") {
+		t.Fatalf("error = %q, want stop context", err.Error())
+	}
+	if _, err := os.Stat(filepath.Join(installDir, "engram.exe")); !os.IsNotExist(err) {
+		t.Fatalf("engram.exe should not be written after stop failure, stat err: %v", err)
 	}
 }
 

@@ -2,13 +2,19 @@ package model
 
 import "maps"
 
-// ClaudeModelAlias represents one of the three Claude model tiers used for
+// ClaudeModelAlias represents one of the Claude model tiers used for
 // per-phase model assignments in the SDD orchestrator.
 //
-// Only three values are valid: ClaudeModelOpus, ClaudeModelSonnet, ClaudeModelHaiku.
+// Only four values are valid: ClaudeModelFable, ClaudeModelOpus,
+// ClaudeModelSonnet, ClaudeModelHaiku.
 type ClaudeModelAlias string
 
 const (
+	// ClaudeModelFable is the highest-reasoning tier, above opus, for the most
+	// demanding architectural and review work. Maps to the current
+	// claude-fable-* family.
+	ClaudeModelFable ClaudeModelAlias = "fable"
+
 	// ClaudeModelOpus is the high-capability tier, best for architectural decisions
 	// and orchestration. Maps to the current claude-opus-* family.
 	ClaudeModelOpus ClaudeModelAlias = "opus"
@@ -27,10 +33,10 @@ func (a ClaudeModelAlias) String() string {
 	return string(a)
 }
 
-// Valid reports whether the alias is one of the three known Claude model tiers.
+// Valid reports whether the alias is one of the known Claude model tiers.
 func (a ClaudeModelAlias) Valid() bool {
 	switch a {
-	case ClaudeModelOpus, ClaudeModelSonnet, ClaudeModelHaiku:
+	case ClaudeModelFable, ClaudeModelOpus, ClaudeModelSonnet, ClaudeModelHaiku:
 		return true
 	default:
 		return false

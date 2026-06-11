@@ -78,11 +78,23 @@ func TestOrchestratorsRejectDelegationBypassLanguage(t *testing.T) {
 	}
 	for _, want := range []string{
 		"## Delegated Path (default",
+		"### Blocking Delegation Contract",
+		"Codex sub-agents MUST be treated as waited handoffs, not fire-and-forget background jobs.",
+		"You MAY launch more than one independent sub-agent when useful",
+		"`wait_agent` for every spawned agent in that batch",
+		"Parallel does not mean background",
 		"## Graceful Degradation Path (tooling unavailable only)",
 		"do not run the full phase pipeline inline as a normal fallback",
 	} {
 		if !strings.Contains(codex, want) {
 			t.Fatalf("codex/sdd-orchestrator.md missing guarded degradation wording %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"both `spawn_agent` calls before either `wait_agent`",
+	} {
+		if strings.Contains(codex, forbidden) {
+			t.Fatalf("codex/sdd-orchestrator.md contains fire-and-forget delegation wording %q", forbidden)
 		}
 	}
 }
@@ -113,6 +125,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 	expectedFiles := []string{
 		// Claude agent files
 		"claude/engram-protocol.md",
+		"claude/output-style-neutral.md",
 		"claude/persona-gentleman.md",
 		"claude/sdd-orchestrator.md",
 		"claude/commands/sdd-apply.md",
@@ -169,6 +182,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		// Kimi agent files
 		"kimi/persona-gentleman.md",
 		"kimi/output-style-gentleman.md",
+		"kimi/output-style-neutral.md",
 		"kimi/sdd-orchestrator.md",
 		"kimi/KIMI.md",
 		"kimi/agents/gentleman.yaml",
