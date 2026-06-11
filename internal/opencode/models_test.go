@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -781,46 +782,177 @@ func TestDetectAvailableProvidersCustomStillNeedsToolCall(t *testing.T) {
 }
 
 func TestFixOpenRouterModels(t *testing.T) {
-	providers := map[string]Provider{
-		"opencode": {
-			ID:   "opencode",
-			Name: "OpenCode Zen",
-			Models: map[string]Model{
-				"qwen3.6-plus-free": {
-					ID:       "qwen3.6-plus-free",
-					Name:     "Qwen3.6 Plus Free",
-					ToolCall: true,
-				},
-				"other-model": {
-					ID:       "other-model",
-					Name:     "Other Model",
-					ToolCall: true,
+	const sourceID = "qwen3.6-plus-free"
+	const targetID = "qwen/qwen3.6-plus:free"
+
+	t.Run("existing openrouter provider is preserved", func(t *testing.T) {
+		providers := map[string]Provider{
+			"opencode": {
+				ID:   "opencode",
+				Name: "OpenCode Zen",
+				Models: map[string]Model{
+					sourceID: {
+						ID:       sourceID,
+						Name:     "Qwen3.6 Plus Free",
+						ToolCall: true,
+					},
 				},
 			},
-		},
-	}
+			"openrouter": {
+				ID:   "openrouter",
+				Name: "Custom OpenRouter",
+				Env:  []string{"OPENROUTER_API_KEY"},
+				Models: map[string]Model{
+					"existing-model": {
+						ID:   "existing-model",
+						Name: "Existing Model",
+					},
+				},
+			},
+		}
 
-	FixOpenRouterModels(providers)
+		FixOpenRouterModels(providers)
 
-	// opencode provider should still have "other-model"
-	if _, ok := providers["opencode"].Models["other-model"]; !ok {
-		t.Errorf("opencode should still have other-model")
-	}
+		openrouter := providers["openrouter"]
+		if openrouter.Name != "Custom OpenRouter" {
+			t.Fatalf("openrouter name = %q, want Custom OpenRouter", openrouter.Name)
+		}
+		if len(openrouter.Env) != 1 || openrouter.Env[0] != "OPENROUTER_API_KEY" {
+			t.Fatalf("openrouter env = %v, want [OPENROUTER_API_KEY]", openrouter.Env)
+		}
+		if _, ok := openrouter.Models["existing-model"]; !ok {
+			t.Fatal("existing openrouter model was removed")
+		}
+		if _, ok := openrouter.Models[targetID]; !ok {
+			t.Fatalf("openrouter missing remapped model %q", targetID)
+		}
+	})
 
-	// opencode provider should NO LONGER have "qwen3.6-plus-free"
-	if _, ok := providers["opencode"].Models["qwen3.6-plus-free"]; ok {
-		t.Errorf("opencode should not have qwen3.6-plus-free")
-	}
+	t.Run("target collision does not overwrite existing target", func(t *testing.T) {
+		existingTarget := Model{
+			ID:       targetID,
+			Name:     "Authoritative OpenRouter Model",
+			ToolCall: false,
+		}
+		source := Model{
+			ID:       sourceID,
+			Name:     "Misfiled OpenCode Model",
+			ToolCall: true,
+		}
+		providers := map[string]Provider{
+			"opencode": {
+				ID: "opencode",
+				Models: map[string]Model{
+					sourceID: source,
+				},
+			},
+			"openrouter": {
+				ID: "openrouter",
+				Models: map[string]Model{
+					targetID: existingTarget,
+				},
+			},
+		}
 
-	// openrouter provider should be created and have "qwen/qwen3.6-plus:free"
-	orProv, ok := providers["openrouter"]
-	if !ok {
-		t.Fatalf("openrouter provider should be created")
-	}
+		FixOpenRouterModels(providers)
 
-	if m, ok := orProv.Models["qwen/qwen3.6-plus:free"]; !ok {
-		t.Errorf("openrouter should have qwen/qwen3.6-plus:free")
-	} else if m.ID != "qwen/qwen3.6-plus:free" {
-		t.Errorf("expected ID qwen/qwen3.6-plus:free, got %s", m.ID)
-	}
+		if got := providers["openrouter"].Models[targetID]; !reflect.DeepEqual(got, existingTarget) {
+			t.Fatalf("openrouter target = %+v, want %+v", got, existingTarget)
+		}
+		if got := providers["opencode"].Models[sourceID]; !reflect.DeepEqual(got, source) {
+			t.Fatalf("opencode source = %+v, want %+v", got, source)
+		}
+	})
+
+	t.Run("missing opencode provider is no-op", func(t *testing.T) {
+		providers := map[string]Provider{
+			"openrouter": {
+				ID:   "openrouter",
+				Name: "OpenRouter",
+				Models: map[string]Model{
+					"existing-model": {ID: "existing-model"},
+				},
+			},
+		}
+
+		FixOpenRouterModels(providers)
+
+		if _, ok := providers["opencode"]; ok {
+			t.Fatal("opencode provider should not be created")
+		}
+		if len(providers["openrouter"].Models) != 1 {
+			t.Fatalf("openrouter model count = %d, want 1", len(providers["openrouter"].Models))
+		}
+	})
+
+	t.Run("missing source model is no-op", func(t *testing.T) {
+		providers := map[string]Provider{
+			"opencode": {
+				ID: "opencode",
+				Models: map[string]Model{
+					"other-model": {ID: "other-model"},
+				},
+			},
+		}
+
+		FixOpenRouterModels(providers)
+
+		if _, ok := providers["openrouter"]; ok {
+			t.Fatal("openrouter provider should not be created")
+		}
+		if _, ok := providers["opencode"].Models["other-model"]; !ok {
+			t.Fatal("opencode other-model was removed")
+		}
+	})
+
+	t.Run("remap preserves model fields", func(t *testing.T) {
+		source := Model{
+			ID:        sourceID,
+			Name:      "Qwen3.6 Plus Free",
+			Family:    "qwen",
+			ToolCall:  true,
+			Reasoning: true,
+			Cost: ModelCost{
+				Input:  0.1,
+				Output: 0.2,
+			},
+			Limit: ModelLimit{
+				Context: 128000,
+				Output:  8192,
+			},
+			Variants: []string{"free", "latest"},
+		}
+		providers := map[string]Provider{
+			"opencode": {
+				ID: "opencode",
+				Models: map[string]Model{
+					sourceID:      source,
+					"other-model": {ID: "other-model"},
+				},
+			},
+		}
+
+		FixOpenRouterModels(providers)
+
+		if _, ok := providers["opencode"].Models[sourceID]; ok {
+			t.Fatalf("opencode should not have %q after remap", sourceID)
+		}
+		if _, ok := providers["opencode"].Models["other-model"]; !ok {
+			t.Fatal("opencode should still have other-model")
+		}
+
+		got := providers["openrouter"].Models[targetID]
+		if got.ID != targetID {
+			t.Fatalf("remapped ID = %q, want %q", got.ID, targetID)
+		}
+		if got.Name != source.Name || got.Family != source.Family || got.ToolCall != source.ToolCall || got.Reasoning != source.Reasoning {
+			t.Fatalf("remapped model metadata = %+v, want fields from %+v", got, source)
+		}
+		if got.Cost != source.Cost || got.Limit != source.Limit {
+			t.Fatalf("remapped model pricing/limits = cost %+v limit %+v, want cost %+v limit %+v", got.Cost, got.Limit, source.Cost, source.Limit)
+		}
+		if len(got.Variants) != 2 || got.Variants[0] != "free" || got.Variants[1] != "latest" {
+			t.Fatalf("remapped variants = %v, want [free latest]", got.Variants)
+		}
+	})
 }

@@ -109,10 +109,24 @@ func FixOpenRouterModels(providers map[string]Provider) {
 		"qwen3.6-plus-free": "qwen/qwen3.6-plus:free",
 	}
 
+	openrouterProv, ok := providers["openrouter"]
+	if !ok {
+		openrouterProv = Provider{
+			ID:     "openrouter",
+			Name:   "OpenRouter",
+			Models: make(map[string]Model),
+		}
+	} else if openrouterProv.Models == nil {
+		openrouterProv.Models = make(map[string]Model)
+	}
+
 	var hasMoves bool
 	for opencodeID, openRouterID := range openRouterMappings {
 		m, ok := opencodeProv.Models[opencodeID]
 		if !ok {
+			continue
+		}
+		if _, exists := openrouterProv.Models[openRouterID]; exists {
 			continue
 		}
 
@@ -120,23 +134,12 @@ func FixOpenRouterModels(providers map[string]Provider) {
 		delete(opencodeProv.Models, opencodeID)
 
 		m.ID = openRouterID
-
-		openrouterProv, ok := providers["openrouter"]
-		if !ok {
-			openrouterProv = Provider{
-				ID:     "openrouter",
-				Name:   "OpenRouter",
-				Models: make(map[string]Model),
-			}
-		} else if openrouterProv.Models == nil {
-			openrouterProv.Models = make(map[string]Model)
-		}
 		openrouterProv.Models[m.ID] = m
-		providers["openrouter"] = openrouterProv
 	}
 
 	if hasMoves {
 		providers["opencode"] = opencodeProv
+		providers["openrouter"] = openrouterProv
 	}
 }
 
