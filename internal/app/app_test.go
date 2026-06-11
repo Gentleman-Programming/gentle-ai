@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -513,6 +514,7 @@ func TestTuiSyncClaudePhaseAssignmentsPersistAndGenerateEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(%s): %v", archiveAgent, err)
 	}
+	beforeAgentFiles := filesUnder(t, filepath.Join(home, ".claude", "agents"))
 
 	changed, err = tuiSync(home)(&model.SyncOverrides{
 		TargetAgents:           []model.AgentID{model.AgentClaudeCode},
@@ -523,6 +525,10 @@ func TestTuiSyncClaudePhaseAssignmentsPersistAndGenerateEffort(t *testing.T) {
 	}
 	if len(changed) == 0 {
 		t.Log("second tuiSync reported no file changes")
+	}
+	afterAgentFiles := filesUnder(t, filepath.Join(home, ".claude", "agents"))
+	if !reflect.DeepEqual(afterAgentFiles, beforeAgentFiles) {
+		t.Fatalf("Claude agent file set changed after second sync: got %#v want %#v", afterAgentFiles, beforeAgentFiles)
 	}
 
 	persisted, err = state.Read(home)
@@ -551,6 +557,30 @@ func TestTuiSyncClaudePhaseAssignmentsPersistAndGenerateEffort(t *testing.T) {
 // TestApplyOverrides_KiroModelAssignments verifies that a non-nil KiroModelAssignments
 // override replaces the entire KiroModelAssignments map in the selection (same
 // replacement semantics as ClaudeModelAssignments — not a key-level merge).
+func filesUnder(t *testing.T, root string) []string {
+	t.Helper()
+
+	var files []string
+	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, rel)
+		return nil
+	}); err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	sort.Strings(files)
+	return files
+}
+
 func TestApplyOverrides_KiroModelAssignments(t *testing.T) {
 	selection := model.Selection{
 		KiroModelAssignments: map[string]model.KiroModelAlias{"sdd-apply": model.KiroModelSonnet},
