@@ -1,6 +1,7 @@
 package sdd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -5600,6 +5601,21 @@ func TestInject_CodexPerPhaseModelAssignments_InjectsPerPhaseTable(t *testing.T)
 	// No unresolved placeholders.
 	if strings.Contains(text, "{{") {
 		t.Errorf("AGENTS.md contains unresolved placeholder '{{' after Inject:\n%s", text)
+	}
+
+	second, err := Inject(home, adapter, "", opts)
+	if err != nil {
+		t.Fatalf("second Inject(codex, per-phase opts) error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Inject(codex, per-phase opts) changed = true, want false")
+	}
+	afterAgentsMD, readErr := os.ReadFile(filepath.Join(home, ".codex", "AGENTS.md"))
+	if readErr != nil {
+		t.Fatalf("ReadFile(AGENTS.md) after second inject error = %v", readErr)
+	}
+	if !bytes.Equal(afterAgentsMD, agentsMD) {
+		t.Fatal("AGENTS.md changed after idempotent per-phase Codex inject")
 	}
 }
 

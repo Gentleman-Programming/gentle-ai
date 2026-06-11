@@ -166,12 +166,15 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	// overwrite semantics so the TUI selection is the source of truth.
 	claudePhaseState := claudePhaseAssignmentsToState(input.Selection.ClaudePhaseAssignments)
 	newState := state.InstallState{
-		InstalledAgents:        agentIDs,
-		ClaudeModelAssignments: claudeLegacyAssignmentsForState(input.Selection.ClaudeModelAssignments, claudePhaseState),
-		ClaudePhaseAssignments: claudePhaseState,
-		KiroModelAssignments:   kiroAliasesToStrings(input.Selection.KiroModelAssignments),
-		ModelAssignments:       modelAssignmentsToState(input.Selection.ModelAssignments),
-		Persona:                string(input.Selection.Persona),
+		InstalledAgents:             agentIDs,
+		ClaudeModelAssignments:      claudeLegacyAssignmentsForState(input.Selection.ClaudeModelAssignments, claudePhaseState),
+		ClaudePhaseAssignments:      claudePhaseState,
+		KiroModelAssignments:        kiroAliasesToStrings(input.Selection.KiroModelAssignments),
+		CodexModelAssignments:       codexEffortsToStrings(input.Selection.CodexModelAssignments),
+		CodexCarrilModelAssignments: input.Selection.CodexCarrilModelAssignments,
+		CodexPhaseModelAssignments:  input.Selection.CodexPhaseModelAssignments,
+		ModelAssignments:            modelAssignmentsToState(input.Selection.ModelAssignments),
+		Persona:                     string(input.Selection.Persona),
 	}
 	if len(flags.Agents) > 0 {
 		existing, readErr := state.Read(homeDir)
@@ -1418,6 +1421,19 @@ func claudePhaseAssignmentsToState(m map[string]model.ClaudePhaseAssignment) map
 // kiroAliasesToStrings converts a typed KiroModelAlias map to plain strings
 // for JSON serialisation in state.json.
 func kiroAliasesToStrings(m map[string]model.KiroModelAlias) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = string(v)
+	}
+	return out
+}
+
+// codexEffortsToStrings converts a typed CodexEffort map to plain strings
+// for JSON serialisation in state.json.
+func codexEffortsToStrings(m map[string]model.CodexEffort) map[string]string {
 	if len(m) == 0 {
 		return nil
 	}

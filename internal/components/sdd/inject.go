@@ -30,7 +30,7 @@ type InjectOptions struct {
 	KiroModelAssignments        map[string]model.KiroModelAlias
 	CodexModelAssignments       map[string]model.CodexEffort
 	CodexCarrilModelAssignments map[string]string // carril→model-id; nil = use defaults
-	CodexPhaseModelAssignments  map[string]string // phase→model-id; non-nil = Custom per-phase mode
+	CodexPhaseModelAssignments  map[string]string // phase→model-id; non-empty = Custom per-phase mode; nil/empty = preset/carril mode
 
 	// WorkspaceDir is the root of the current workspace (e.g. os.Getwd()).
 	// When non-empty and the adapter implements workflowInjector, native

@@ -723,6 +723,85 @@ func TestPersistAssignmentsPreservesInstalledAgents(t *testing.T) {
 	}
 }
 
+func TestPersistAssignmentsClearsNonPhaseAssignmentMaps(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"opencode", "codex", "kiro", "claude-code"},
+		ClaudeModelAssignments: map[string]string{
+			"sdd-apply": "sonnet",
+		},
+		KiroModelAssignments: map[string]string{
+			"sdd-design": "auto",
+		},
+		CodexModelAssignments: map[string]string{
+			"sdd-apply": "high",
+		},
+		CodexCarrilModelAssignments: map[string]string{
+			"sdd-strong": "gpt-5.4",
+		},
+		ModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		},
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	persistAssignments(home, model.Selection{
+		ClaudeModelAssignments:      map[string]model.ClaudeModelAlias{},
+		KiroModelAssignments:        map[string]model.KiroModelAlias{},
+		CodexModelAssignments:       map[string]model.CodexEffort{},
+		CodexCarrilModelAssignments: map[string]string{},
+		ModelAssignments:            map[string]model.ModelAssignment{},
+	})
+
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if got.ClaudeModelAssignments != nil {
+		t.Fatalf("ClaudeModelAssignments = %#v, want nil", got.ClaudeModelAssignments)
+	}
+	if got.KiroModelAssignments != nil {
+		t.Fatalf("KiroModelAssignments = %#v, want nil", got.KiroModelAssignments)
+	}
+	if got.CodexModelAssignments != nil {
+		t.Fatalf("CodexModelAssignments = %#v, want nil", got.CodexModelAssignments)
+	}
+	if got.CodexCarrilModelAssignments != nil {
+		t.Fatalf("CodexCarrilModelAssignments = %#v, want nil", got.CodexCarrilModelAssignments)
+	}
+	if got.ModelAssignments != nil {
+		t.Fatalf("ModelAssignments = %#v, want nil", got.ModelAssignments)
+	}
+	if len(got.InstalledAgents) != 4 {
+		t.Fatalf("InstalledAgents = %#v, want preserved agents", got.InstalledAgents)
+	}
+}
+
+func TestPersistAssignmentsSkipsCorruptState(t *testing.T) {
+	home := t.TempDir()
+	statePath := state.Path(home)
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	original := []byte("{not valid json\n")
+	if err := os.WriteFile(statePath, original, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	persistAssignments(home, model.Selection{
+		CodexPhaseModelAssignments: map[string]string{},
+	})
+
+	got, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("state.json was overwritten after corrupt-state read error:\n%s", got)
+	}
+}
+
 func TestPersistAssignmentsClearsClaudePhaseAssignments(t *testing.T) {
 	home := t.TempDir()
 	if err := state.Write(home, state.InstallState{

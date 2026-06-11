@@ -598,20 +598,31 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 //   - non-nil, len > 0: new per-phase assignments — write them.
 //   - non-nil, len == 0: explicit clear signal (preset selected) — delete the key.
 func persistAssignments(homeDir string, selection model.Selection) {
-	// Non-nil but empty phase assignment maps are explicit clear signals and
-	// must not be skipped by the early-exit guard.
-	hasClaudePhaseAssignmentSignal := selection.ClaudePhaseAssignments != nil
-	hasCodexPhaseAssignmentSignal := selection.CodexPhaseModelAssignments != nil
-	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasClaudePhaseAssignmentSignal && !hasCodexPhaseAssignmentSignal {
+	hasAssignmentSignal := selection.ClaudeModelAssignments != nil ||
+		selection.ClaudePhaseAssignments != nil ||
+		selection.KiroModelAssignments != nil ||
+		selection.ModelAssignments != nil ||
+		selection.CodexModelAssignments != nil ||
+		selection.CodexCarrilModelAssignments != nil ||
+		selection.CodexPhaseModelAssignments != nil
+	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasAssignmentSignal {
 		return
 	}
 	current, err := state.Read(homeDir)
 	if err != nil {
-		// State file may not exist yet (e.g. pre-state users).
+		// State file may not exist yet (e.g. pre-state users). Other read
+		// failures, such as invalid JSON, must not overwrite existing state.
+		if !errors.Is(err, os.ErrNotExist) {
+			return
+		}
 		current = state.InstallState{}
 	}
-	if len(selection.ClaudeModelAssignments) > 0 {
-		current.ClaudeModelAssignments = claudeAliasesToStrings(selection.ClaudeModelAssignments)
+	if selection.ClaudeModelAssignments != nil {
+		if len(selection.ClaudeModelAssignments) > 0 {
+			current.ClaudeModelAssignments = claudeAliasesToStrings(selection.ClaudeModelAssignments)
+		} else {
+			current.ClaudeModelAssignments = nil
+		}
 	}
 	if selection.ClaudePhaseAssignments != nil {
 		if len(selection.ClaudePhaseAssignments) > 0 {
@@ -621,14 +632,26 @@ func persistAssignments(homeDir string, selection model.Selection) {
 		}
 		current.ClaudeModelAssignments = nil
 	}
-	if len(selection.KiroModelAssignments) > 0 {
-		current.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+	if selection.KiroModelAssignments != nil {
+		if len(selection.KiroModelAssignments) > 0 {
+			current.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+		} else {
+			current.KiroModelAssignments = nil
+		}
 	}
-	if len(selection.CodexModelAssignments) > 0 {
-		current.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
+	if selection.CodexModelAssignments != nil {
+		if len(selection.CodexModelAssignments) > 0 {
+			current.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
+		} else {
+			current.CodexModelAssignments = nil
+		}
 	}
-	if len(selection.CodexCarrilModelAssignments) > 0 {
-		current.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
+	if selection.CodexCarrilModelAssignments != nil {
+		if len(selection.CodexCarrilModelAssignments) > 0 {
+			current.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
+		} else {
+			current.CodexCarrilModelAssignments = nil
+		}
 	}
 	// non-nil, len > 0 → write; non-nil, len == 0 → clear (explicit preset signal); nil → leave untouched.
 	if selection.CodexPhaseModelAssignments != nil {
@@ -638,8 +661,12 @@ func persistAssignments(homeDir string, selection model.Selection) {
 			current.CodexPhaseModelAssignments = nil
 		}
 	}
-	if len(selection.ModelAssignments) > 0 {
-		current.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+	if selection.ModelAssignments != nil {
+		if len(selection.ModelAssignments) > 0 {
+			current.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+		} else {
+			current.ModelAssignments = nil
+		}
 	}
 	_ = state.Write(homeDir, current)
 }
