@@ -115,12 +115,12 @@ func FixOpenRouterModels(providers map[string]Provider) {
 		if !ok {
 			continue
 		}
-		
+
 		hasMoves = true
 		delete(opencodeProv.Models, opencodeID)
-		
+
 		m.ID = openRouterID
-		
+
 		openrouterProv, ok := providers["openrouter"]
 		if !ok {
 			openrouterProv = Provider{
