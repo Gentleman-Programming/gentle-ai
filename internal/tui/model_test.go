@@ -4473,3 +4473,46 @@ func TestCodexModelPickerCustomModeEscResetsCursor(t *testing.T) {
 		t.Fatalf("Cursor = %d, want 0 after Esc from Codex custom sub-mode (cursor not reset)", state.Cursor)
 	}
 }
+
+func TestGentleAIUpgradeVersionDetectsSucceededGentleAI(t *testing.T) {
+	report := upgrade.UpgradeReport{Results: []upgrade.ToolUpgradeResult{
+		{ToolName: "engram", Status: upgrade.UpgradeSucceeded, NewVersion: "1.0.0"},
+		{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "v1.40.0"},
+	}}
+	m := Model{UpgradeReport: &report}
+	got, ok := m.GentleAIUpgradeVersion()
+	if !ok {
+		t.Fatal("GentleAIUpgradeVersion() ok = false, want true")
+	}
+	if got != "1.40.0" {
+		t.Fatalf("GentleAIUpgradeVersion() = %q, want %q", got, "1.40.0")
+	}
+}
+
+func TestUpgradeResultEnterQuitsWhenGentleAIWasUpgraded(t *testing.T) {
+	report := upgrade.UpgradeReport{Results: []upgrade.ToolUpgradeResult{
+		{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "v1.40.0"},
+	}}
+	m := Model{Screen: ScreenUpgrade, UpgradeReport: &report}
+	_, cmd := m.confirmSelection()
+	if cmd == nil {
+		t.Fatal("confirmSelection() cmd = nil, want tea.Quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("confirmSelection() command returned %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestUpgradeSyncResultEscQuitsWhenGentleAIWasUpgraded(t *testing.T) {
+	report := upgrade.UpgradeReport{Results: []upgrade.ToolUpgradeResult{
+		{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "v1.40.0"},
+	}}
+	m := Model{Screen: ScreenUpgradeSync, UpgradeReport: &report, HasSyncRun: true}
+	_, cmd := m.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("handleKeyPress(esc) cmd = nil, want tea.Quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("handleKeyPress(esc) command returned %T, want tea.QuitMsg", cmd())
+	}
+}

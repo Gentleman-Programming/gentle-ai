@@ -674,15 +674,18 @@ func TestBrewUpgrade_RunsUpdateBeforeUpgrade(t *testing.T) {
 		t.Fatalf("brewUpgrade: unexpected error: %v", err)
 	}
 
-	// Must have called brew tap, brew update AND brew upgrade — in that order.
-	if len(callOrder) < 3 {
-		t.Fatalf("expected 3 brew calls (tap, update, upgrade), got %d: %v", len(callOrder), callOrder)
+	// Must have called brew tap, scoped trust, brew update AND brew upgrade — in that order.
+	if len(callOrder) < 4 {
+		t.Fatalf("expected 4 brew calls (tap, trust, update, upgrade), got %d: %v", len(callOrder), callOrder)
 	}
-	if callOrder[1] != "update" {
-		t.Errorf("second brew call = %q, want %q", callOrder[1], "update")
+	if callOrder[1] != "trust" {
+		t.Errorf("second brew call = %q, want %q", callOrder[1], "trust")
 	}
-	if callOrder[2] != "upgrade" {
-		t.Errorf("third brew call = %q, want %q", callOrder[2], "upgrade")
+	if callOrder[2] != "update" {
+		t.Errorf("third brew call = %q, want %q", callOrder[2], "update")
+	}
+	if callOrder[3] != "upgrade" {
+		t.Errorf("fourth brew call = %q, want %q", callOrder[3], "upgrade")
 	}
 }
 
@@ -713,39 +716,39 @@ func TestBrewUpgrade_UpdateFailureIsNonFatal(t *testing.T) {
 		t.Errorf("expected success when brew update fails but brew upgrade succeeds, got: %v", err)
 	}
 
-	// Both brew update and brew upgrade must have been called (after the tap).
-	if len(callArgs) < 3 {
-		t.Fatalf("expected 3 brew calls, got %d: %v", len(callArgs), callArgs)
+	// Brew trust, update, and upgrade must have been called (after the tap).
+	if len(callArgs) < 4 {
+		t.Fatalf("expected 4 brew calls, got %d: %v", len(callArgs), callArgs)
 	}
-	if callArgs[1] != "update" {
-		t.Errorf("second brew call = %q, want %q", callArgs[1], "update")
+	if callArgs[1] != "trust" {
+		t.Errorf("second brew call = %q, want %q", callArgs[1], "trust")
 	}
-	if callArgs[2] != "upgrade" {
-		t.Errorf("third brew call = %q, want %q", callArgs[2], "upgrade")
+	if callArgs[2] != "update" {
+		t.Errorf("third brew call = %q, want %q", callArgs[2], "update")
+	}
+	if callArgs[3] != "upgrade" {
+		t.Errorf("fourth brew call = %q, want %q", callArgs[3], "upgrade")
 	}
 }
 
 // --- TestBrewUpgrade_TapsBeforeUpdateAndUpgrade ---
 
-// TestBrewUpgrade_TapsBeforeUpdateAndUpgrade verifies that brewUpgrade calls
-// `brew tap Gentleman-Programming/homebrew-tap` BEFORE `brew update` and
-// `brew upgrade <toolName>`. This makes the upgrade idempotent when a user
-// has lost the tap (untap, machine swap, brew cleanup). See issue #455.
-func TestBrewUpgrade_TapsBeforeUpdateAndUpgrade(t *testing.T) {
+// TestBrewUpgrade_TapsAndTrustsBeforeUpdateAndUpgrade verifies that brewUpgrade calls
+// `brew tap Gentleman-Programming/homebrew-tap` and scoped formula trust BEFORE
+// `brew update` and `brew upgrade <toolName>`. This makes the upgrade idempotent
+// when a user has lost the tap and works with Homebrew tap trust enforcement.
+func TestBrewUpgrade_TapsAndTrustsBeforeUpdateAndUpgrade(t *testing.T) {
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	type call struct {
 		subcommand string
-		arg        string
+		args       []string
 	}
 	var calls []call
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		if name == "brew" && len(args) > 0 {
-			c := call{subcommand: args[0]}
-			if len(args) > 1 {
-				c.arg = args[1]
-			}
+			c := call{subcommand: args[0], args: append([]string(nil), args[1:]...)}
 			calls = append(calls, c)
 		}
 		return mockCmd("echo", "ok")
@@ -755,20 +758,60 @@ func TestBrewUpgrade_TapsBeforeUpdateAndUpgrade(t *testing.T) {
 		t.Fatalf("brewUpgrade: unexpected error: %v", err)
 	}
 
-	if len(calls) < 3 {
-		t.Fatalf("expected 3 brew calls (tap, update, upgrade), got %d: %+v", len(calls), calls)
+	if len(calls) < 4 {
+		t.Fatalf("expected 4 brew calls (tap, trust, update, upgrade), got %d: %+v", len(calls), calls)
 	}
 	if calls[0].subcommand != "tap" {
 		t.Errorf("first brew call subcommand = %q, want %q", calls[0].subcommand, "tap")
 	}
-	if calls[0].arg != "Gentleman-Programming/homebrew-tap" {
-		t.Errorf("first brew call arg = %q, want %q", calls[0].arg, "Gentleman-Programming/homebrew-tap")
+	if len(calls[0].args) != 1 || calls[0].args[0] != "Gentleman-Programming/homebrew-tap" {
+		t.Errorf("first brew call args = %v, want [Gentleman-Programming/homebrew-tap]", calls[0].args)
 	}
-	if calls[1].subcommand != "update" {
-		t.Errorf("second brew call = %q, want %q", calls[1].subcommand, "update")
+	if calls[1].subcommand != "trust" {
+		t.Errorf("second brew call = %q, want %q", calls[1].subcommand, "trust")
 	}
-	if calls[2].subcommand != "upgrade" {
-		t.Errorf("third brew call = %q, want %q", calls[2].subcommand, "upgrade")
+	if len(calls[1].args) != 2 || calls[1].args[0] != "--formula" || calls[1].args[1] != "gentleman-programming/tap/engram" {
+		t.Errorf("second brew call args = %v, want [--formula gentleman-programming/tap/engram]", calls[1].args)
+	}
+	if calls[2].subcommand != "update" {
+		t.Errorf("third brew call = %q, want %q", calls[2].subcommand, "update")
+	}
+	if calls[3].subcommand != "upgrade" {
+		t.Errorf("fourth brew call = %q, want %q", calls[3].subcommand, "upgrade")
+	}
+}
+
+func TestHomebrewFailureAdviceTapTrust(t *testing.T) {
+	output := `Error: Refusing to load formula gentleman-programming/tap/gentle-ai from untrusted tap.
+Run brew trust --formula gentleman-programming/tap/gentle-ai to trust it.`
+	advice := homebrewFailureAdvice("gentle-ai", output)
+	for _, want := range []string{
+		"brew trust --formula gentleman-programming/tap/gentle-ai",
+		"brew upgrade gentle-ai",
+	} {
+		if !strings.Contains(advice, want) {
+			t.Fatalf("tap trust advice missing %q:\n%s", want, advice)
+		}
+	}
+}
+
+func TestHomebrewFailureAdviceBubblewrap(t *testing.T) {
+	output := `Error: Bubblewrap is installed but cannot create a rootless sandbox.
+Homebrew's Linux sandbox requires rootless Bubblewrap and unprivileged user namespaces.`
+	advice := homebrewFailureAdvice("gentle-ai", output)
+	if strings.Contains(strings.ToLower(advice), "preferred fix") {
+		t.Fatalf("bubblewrap advice must not frame host policy changes as preferred defaults:\n%s", advice)
+	}
+	for _, want := range []string{
+		"explicit admin/security decision",
+		"sudo sysctl -w kernel.unprivileged_userns_clone=1",
+		"sudo sysctl -w user.max_user_namespaces=28633",
+		"sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true",
+		"HOMEBREW_NO_SANDBOX_LINUX=1 brew upgrade gentle-ai",
+	} {
+		if !strings.Contains(advice, want) {
+			t.Fatalf("bubblewrap advice missing %q:\n%s", want, advice)
+		}
 	}
 }
 

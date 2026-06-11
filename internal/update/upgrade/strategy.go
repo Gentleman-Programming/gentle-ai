@@ -3,6 +3,7 @@ package upgrade
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -302,6 +303,15 @@ func brewUpgrade(ctx context.Context, toolName string) error {
 	tapCmd.Stdin = nil
 	_ = tapCmd.Run()
 
+	// Trust only the Gentleman Programming formula being upgraded. Homebrew 6 can
+	// require explicit trust for non-official taps; this is intentionally scoped to
+	// our formula, not the whole tap or third-party taps. Older Homebrew versions
+	// may not support `brew trust`, so this is non-fatal and the upgrade output
+	// below remains the source of truth.
+	trustCmd := execCommand("brew", "trust", "--formula", gentlemanProgrammingFormulaRef(toolName))
+	trustCmd.Stdin = nil
+	_ = trustCmd.Run()
+
 	// Update Homebrew formula cache before upgrading.
 	// Non-fatal: if update fails (e.g. no network), attempt upgrade with existing cache.
 	updateCmd := execCommand("brew", "update")
@@ -311,9 +321,38 @@ func brewUpgrade(ctx context.Context, toolName string) error {
 	upgradeCmd := execCommand("brew", "upgrade", toolName)
 	upgradeCmd.Stdin = nil
 	if out, err := upgradeCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("brew upgrade %s: %w (output: %s)", toolName, err, string(out))
+		return formatBrewUpgradeError(toolName, err, string(out))
 	}
 	return nil
+}
+
+func gentlemanProgrammingFormulaRef(toolName string) string {
+	return "gentleman-programming/tap/" + strings.TrimSpace(toolName)
+}
+
+func formatBrewUpgradeError(toolName string, err error, output string) error {
+	message := fmt.Sprintf("brew upgrade %s: %v (output: %s)", toolName, err, output)
+	if advice := homebrewFailureAdvice(toolName, output); advice != "" {
+		message += "\n\n" + advice
+	}
+	return errors.New(message)
+}
+
+func homebrewFailureAdvice(toolName string, output string) string {
+	lower := strings.ToLower(output)
+	formula := gentlemanProgrammingFormulaRef(toolName)
+
+	if strings.Contains(lower, "untrusted tap") || strings.Contains(lower, "tap trust is required") || strings.Contains(lower, "homebrew_require_tap_trust") {
+		return fmt.Sprintf("Homebrew requires explicit trust for external taps. Trust only this Gentle AI formula, then retry:\n  brew trust --formula %s\n  brew upgrade %s", formula, toolName)
+	}
+
+	if strings.Contains(lower, "bubblewrap is installed but cannot create a rootless sandbox") ||
+		strings.Contains(lower, "rootless sandbox") ||
+		strings.Contains(lower, "homebrew_no_sandbox_linux") {
+		return "Homebrew on Linux could not create its Bubblewrap rootless sandbox. This requires an explicit admin/security decision: enabling unprivileged user namespaces lets Homebrew use its sandbox but changes host kernel/AppArmor policy. If acceptable, run:\n  sudo sysctl -w kernel.unprivileged_userns_clone=1\n  sudo sysctl -w user.max_user_namespaces=28633\n  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true\n\nFinal workaround if your distro policy forbids this sandbox:\n  HOMEBREW_NO_SANDBOX_LINUX=1 brew upgrade " + toolName
+	}
+
+	return ""
 }
 
 // goInstallUpgrade runs `go install <importPath>@v<version>`.

@@ -18,6 +18,7 @@ GITHUB_OWNER="Gentleman-Programming"
 GITHUB_REPO="gentle-ai"
 BINARY_NAME="gentle-ai"
 BREW_TAP="Gentleman-Programming/homebrew-tap"
+BREW_FORMULA_REF="gentleman-programming/tap/${BINARY_NAME}"
 
 # ============================================================================
 # Color support
@@ -48,6 +49,38 @@ warn()    { echo -e "${YELLOW}[warn]${NC}    $*"; }
 error()   { echo -e "${RED}[error]${NC}   $*" >&2; }
 fatal()   { error "$@"; exit 1; }
 step()    { echo -e "\n${CYAN}${BOLD}==>${NC} ${BOLD}$*${NC}"; }
+
+homebrew_trust_gentle_ai_formula() {
+    if brew help trust &>/dev/null; then
+        info "Trusting ${BREW_FORMULA_REF} for Homebrew tap-trust enforcement"
+        brew trust --formula "$BREW_FORMULA_REF" &>/dev/null || true
+    fi
+}
+
+print_homebrew_failure_help() {
+    local output="$1"
+    local lower
+    lower="$(printf '%s' "$output" | tr '[:upper:]' '[:lower:]')"
+
+    if [[ "$lower" == *"untrusted tap"* || "$lower" == *"tap trust is required"* || "$lower" == *"homebrew_require_tap_trust"* ]]; then
+        warn "Homebrew requires explicit trust for external taps."
+        echo "Trust only the Gentle AI formula, then retry:" >&2
+        echo "  brew trust --formula ${BREW_FORMULA_REF}" >&2
+        echo "  brew upgrade ${BINARY_NAME}" >&2
+    fi
+
+    if [[ "$lower" == *"bubblewrap is installed but cannot create a rootless sandbox"* || "$lower" == *"rootless sandbox"* || "$lower" == *"homebrew_no_sandbox_linux"* ]]; then
+        warn "Homebrew on Linux could not create its Bubblewrap rootless sandbox."
+        echo "This requires an explicit admin/security decision: enabling unprivileged user namespaces lets Homebrew use its sandbox but changes host kernel/AppArmor policy." >&2
+        echo "If acceptable, run:" >&2
+        echo "  sudo sysctl -w kernel.unprivileged_userns_clone=1" >&2
+        echo "  sudo sysctl -w user.max_user_namespaces=28633" >&2
+        echo "  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true" >&2
+        echo >&2
+        echo "Final workaround if your distro policy forbids this sandbox:" >&2
+        echo "  HOMEBREW_NO_SANDBOX_LINUX=1 brew upgrade ${BINARY_NAME}" >&2
+    fi
+}
 
 # ============================================================================
 # Help
@@ -191,19 +224,28 @@ install_brew() {
         fatal "Failed to tap $BREW_TAP"
     fi
 
+    homebrew_trust_gentle_ai_formula
+
     if brew list "$BINARY_NAME" &>/dev/null; then
         info "Already installed, upgrading ${BINARY_NAME}..."
-        if brew upgrade "$BINARY_NAME" 2>/dev/null; then
+        local output
+        if output="$(brew upgrade "$BINARY_NAME" 2>&1)"; then
             success "Upgraded ${BINARY_NAME} via Homebrew"
-        else
-            # "already up-to-date" also exits non-zero on some brew versions
+        elif printf '%s' "$output" | grep -Eiq 'already.*(up-to-date|installed)|not outdated'; then
             success "${BINARY_NAME} is already at the latest version"
+        else
+            printf '%s\n' "$output" >&2
+            print_homebrew_failure_help "$output"
+            fatal "Failed to upgrade ${BINARY_NAME} via Homebrew"
         fi
     else
         info "Installing ${BINARY_NAME}..."
-        if brew install "$BINARY_NAME"; then
+        local output
+        if output="$(brew install "$BINARY_NAME" 2>&1)"; then
             success "Installed ${BINARY_NAME} via Homebrew"
         else
+            printf '%s\n' "$output" >&2
+            print_homebrew_failure_help "$output"
             fatal "Failed to install ${BINARY_NAME} via Homebrew"
         fi
     fi

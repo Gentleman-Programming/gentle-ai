@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/internal/tui"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
 )
@@ -1156,5 +1157,63 @@ func writeAppSDDStatusFile(t *testing.T, path string, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile(%s): %v", path, err)
+	}
+}
+
+func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
+	origDetect := detectSystem
+	origEnsure := ensureCurrentOSSupported
+	origRunTUI := runTUI
+	origReExec := reExec
+	origLookPath := lookPathFn
+	origGoOS := goOS
+	t.Cleanup(func() {
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+		runTUI = origRunTUI
+		reExec = origReExec
+		lookPathFn = origLookPath
+		goOS = origGoOS
+		unsetEnv(t, envSelfUpdateDone)
+	})
+	unsetEnv(t, envSelfUpdateDone)
+
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, nil
+	}
+	goOS = func() string { return "darwin" }
+	lookPathFn = func(string) (string, error) { return "/usr/local/bin/gentle-ai", nil }
+
+	report := upgrade.UpgradeReport{Results: []upgrade.ToolUpgradeResult{
+		{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "v1.40.0"},
+	}}
+	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
+		model := m.(tui.Model)
+		model.UpgradeReport = &report
+		return model, nil
+	}
+
+	var reExecCalled int
+	reExec = func(argv0 string, _ []string, envv []string) error {
+		reExecCalled++
+		if argv0 != "/usr/local/bin/gentle-ai" {
+			t.Fatalf("reExec argv0 = %q, want PATH gentle-ai", argv0)
+		}
+		if !envContains(envv, envSelfUpdateDone+"=1") {
+			t.Fatalf("reExec env missing %s=1", envSelfUpdateDone)
+		}
+		return nil
+	}
+
+	var buf bytes.Buffer
+	if err := RunArgs(nil, &buf); err != nil {
+		t.Fatalf("RunArgs(TUI) error = %v", err)
+	}
+	if reExecCalled != 1 {
+		t.Fatalf("reExecCalled = %d, want 1", reExecCalled)
+	}
+	if !strings.Contains(buf.String(), "Updated to v1.40.0, restarting") {
+		t.Fatalf("output missing restart notice:\n%s", buf.String())
 	}
 }

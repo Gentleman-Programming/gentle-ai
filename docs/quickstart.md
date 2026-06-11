@@ -6,12 +6,14 @@
 
 - Homebrew installed and available in PATH.
 - `git` available.
+- If Homebrew requires tap trust, run `brew trust --formula gentleman-programming/tap/gentle-ai` once.
 
 ### Ubuntu/Debian (and derivatives like Linux Mint, Pop!\_OS)
 
 - `apt-get` available (standard on these distros).
 - `sudo` access for package installs.
 - `git` available.
+- If using Homebrew on Linux, Bubblewrap may require unprivileged user namespaces; see `docs/usage.md#homebrew-upgrade-troubleshooting`.
 
 ### Arch Linux (and derivatives like Manjaro, EndeavourOS)
 

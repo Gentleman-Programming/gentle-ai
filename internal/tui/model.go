@@ -1229,6 +1229,9 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.Screen == ScreenInstalling && m.pipelineRunning {
 			return m, nil
 		}
+		if _, ok := m.GentleAIUpgradeVersion(); ok {
+			return m, tea.Quit
+		}
 		return m.goBack(), nil
 	case " ":
 		switch m.Screen {
@@ -1507,6 +1510,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		if m.OperationRunning {
 			return m, nil
 		}
+		// If gentle-ai itself was upgraded, leave the TUI so the app layer can restart
+		// or ask for restart using the platform-specific restart helper.
+		if _, ok := m.GentleAIUpgradeVersion(); ok {
+			return m, tea.Quit
+		}
 		// If showing results (UpgradeReport != nil or UpgradeErr != nil), return to welcome.
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			m = m.withResetOperationState()
@@ -1545,6 +1553,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Guard: don't re-launch while running.
 		if m.OperationRunning {
 			return m, nil
+		}
+		// If gentle-ai itself was upgraded, leave the TUI so the app layer can restart
+		// or ask for restart using the platform-specific restart helper.
+		if _, ok := m.GentleAIUpgradeVersion(); ok {
+			return m, tea.Quit
 		}
 		// If operations are done, return to welcome.
 		if m.HasSyncRun || m.UpgradeReport != nil || m.UpgradeErr != nil {
@@ -2520,6 +2533,20 @@ func reportUpgradedGentleAI(report upgrade.UpgradeReport) bool {
 		}
 	}
 	return false
+}
+
+// GentleAIUpgradeVersion returns the upgraded gentle-ai version when the current
+// TUI result requires restarting the app before continuing with config sync.
+func (m Model) GentleAIUpgradeVersion() (string, bool) {
+	if m.UpgradeReport == nil {
+		return "", false
+	}
+	for _, result := range m.UpgradeReport.Results {
+		if result.ToolName == "gentle-ai" && result.Status == upgrade.UpgradeSucceeded {
+			return strings.TrimPrefix(result.NewVersion, "v"), true
+		}
+	}
+	return "", false
 }
 
 // restoreBackup triggers a backup restore in a goroutine.

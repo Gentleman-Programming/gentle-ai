@@ -138,8 +138,14 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.SyncFn = tuiSync(homeDir)
 		m.UninstallFn = tuiUninstall(homeDir)
 		m.UninstallWithProfilesFn = tuiUninstallWithProfiles(homeDir)
-		_, err = runTUI(m, tea.WithAltScreen())
-		return err
+		finalModel, err := runTUI(m, tea.WithAltScreen())
+		if err != nil {
+			return err
+		}
+		if latestVersion, ok := gentleAIUpgradeVersionFromTUI(finalModel); ok {
+			return restartAfterGentleAIUpgrade(latestVersion, stdout)
+		}
+		return nil
 	}
 
 	switch args[0] {
@@ -188,6 +194,20 @@ func RunArgs(args []string, stdout io.Writer) error {
 		return cli.RunDoctor(context.Background(), stdout)
 	default:
 		return fmt.Errorf("unknown command %q — run 'gentle-ai help' for available commands", args[0])
+	}
+}
+
+func gentleAIUpgradeVersionFromTUI(finalModel tea.Model) (string, bool) {
+	switch m := finalModel.(type) {
+	case tui.Model:
+		return m.GentleAIUpgradeVersion()
+	case *tui.Model:
+		if m == nil {
+			return "", false
+		}
+		return m.GentleAIUpgradeVersion()
+	default:
+		return "", false
 	}
 }
 
