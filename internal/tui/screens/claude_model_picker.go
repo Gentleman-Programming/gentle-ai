@@ -259,8 +259,8 @@ func handlePresetNav(
 	// Named preset — build assignments and signal that the screen is done.
 	constructor := presetConstructors[selected]
 	assignments := model.ClaudePhaseAssignmentsFromModelPreset(constructor())
-	state.CustomAssignments = assignments
-	return true, assignments
+	state.CustomAssignments = copyPhaseAssignments(assignments)
+	return true, copyPhaseAssignments(assignments)
 }
 
 func handleCustomPhaseNav(
@@ -285,7 +285,7 @@ func handleCustomPhaseNav(
 
 		// "Confirm" row (cursor == len(claudePhases)) — done.
 		if cursor == len(claudePhases) {
-			return true, state.CustomAssignments
+			return true, copyPhaseAssignments(state.CustomAssignments)
 		}
 
 		// "Back" row — exit custom mode.
