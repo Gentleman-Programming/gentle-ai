@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -177,15 +178,54 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		Persona:                     string(input.Selection.Persona),
 	}
 	if len(flags.Agents) > 0 {
-		existing, readErr := state.Read(homeDir)
-		if readErr == nil {
-			newState = state.MergeAgents(existing, agentIDs)
+		merged, ok := mergeExplicitAgentInstallState(homeDir, newState, agentIDs)
+		if !ok {
+			return result, nil
 		}
+		newState = merged
 	}
 	// Non-fatal: a state write failure must not break an otherwise successful install.
 	_ = state.Write(homeDir, newState)
 
 	return result, nil
+}
+
+func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState, agentIDs []string) (state.InstallState, bool) {
+	existing, readErr := state.Read(homeDir)
+	if readErr != nil {
+		if errors.Is(readErr, os.ErrNotExist) {
+			return newState, true
+		}
+		return newState, false
+	}
+
+	merged := state.MergeAgents(existing, agentIDs)
+	if newState.ModelAssignments != nil {
+		merged.ModelAssignments = newState.ModelAssignments
+	}
+	if newState.ClaudeModelAssignments != nil {
+		merged.ClaudeModelAssignments = newState.ClaudeModelAssignments
+	}
+	if newState.ClaudePhaseAssignments != nil {
+		merged.ClaudePhaseAssignments = newState.ClaudePhaseAssignments
+		merged.ClaudeModelAssignments = nil
+	}
+	if newState.KiroModelAssignments != nil {
+		merged.KiroModelAssignments = newState.KiroModelAssignments
+	}
+	if newState.CodexModelAssignments != nil {
+		merged.CodexModelAssignments = newState.CodexModelAssignments
+	}
+	if newState.CodexCarrilModelAssignments != nil {
+		merged.CodexCarrilModelAssignments = newState.CodexCarrilModelAssignments
+	}
+	if newState.CodexPhaseModelAssignments != nil {
+		merged.CodexPhaseModelAssignments = newState.CodexPhaseModelAssignments
+	}
+	if merged.Persona == "" && newState.Persona != "" {
+		merged.Persona = newState.Persona
+	}
+	return merged, true
 }
 
 func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan) verify.Report {

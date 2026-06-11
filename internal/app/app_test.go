@@ -778,6 +778,26 @@ func TestPersistAssignmentsClearsNonPhaseAssignmentMaps(t *testing.T) {
 	}
 }
 
+func TestApplyOverridesClaudePhaseAssignmentsClearsLegacyAssignments(t *testing.T) {
+	selection := model.Selection{
+		ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
+			"sdd-apply": model.ClaudeModelOpus,
+		},
+	}
+	overrides := &model.SyncOverrides{
+		ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{},
+	}
+
+	applyOverrides(&selection, overrides)
+
+	if selection.ClaudeModelAssignments != nil {
+		t.Fatalf("ClaudeModelAssignments = %#v, want nil when phase assignments are provided", selection.ClaudeModelAssignments)
+	}
+	if selection.ClaudePhaseAssignments == nil {
+		t.Fatal("ClaudePhaseAssignments = nil, want explicit override map")
+	}
+}
+
 func TestPersistAssignmentsSkipsCorruptState(t *testing.T) {
 	home := t.TempDir()
 	statePath := state.Path(home)

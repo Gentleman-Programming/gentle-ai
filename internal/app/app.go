@@ -488,6 +488,7 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	}
 	if overrides.ClaudePhaseAssignments != nil {
 		selection.ClaudePhaseAssignments = overrides.ClaudePhaseAssignments
+		selection.ClaudeModelAssignments = nil
 	}
 	if overrides.KiroModelAssignments != nil {
 		selection.KiroModelAssignments = overrides.KiroModelAssignments
