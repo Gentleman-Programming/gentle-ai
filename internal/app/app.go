@@ -598,10 +598,11 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 //   - non-nil, len > 0: new per-phase assignments — write them.
 //   - non-nil, len == 0: explicit clear signal (preset selected) — delete the key.
 func persistAssignments(homeDir string, selection model.Selection) {
-	// A non-nil but empty CodexPhaseModelAssignments is an explicit clear signal
-	// and must not be skipped by the early-exit guard.
-	hasPhaseAssignmentSignal := selection.CodexPhaseModelAssignments != nil
-	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasPhaseAssignmentSignal {
+	// Non-nil but empty phase assignment maps are explicit clear signals and
+	// must not be skipped by the early-exit guard.
+	hasClaudePhaseAssignmentSignal := selection.ClaudePhaseAssignments != nil
+	hasCodexPhaseAssignmentSignal := selection.CodexPhaseModelAssignments != nil
+	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasClaudePhaseAssignmentSignal && !hasCodexPhaseAssignmentSignal {
 		return
 	}
 	current, err := state.Read(homeDir)
@@ -612,8 +613,12 @@ func persistAssignments(homeDir string, selection model.Selection) {
 	if len(selection.ClaudeModelAssignments) > 0 {
 		current.ClaudeModelAssignments = claudeAliasesToStrings(selection.ClaudeModelAssignments)
 	}
-	if len(selection.ClaudePhaseAssignments) > 0 {
-		current.ClaudePhaseAssignments = claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
+	if selection.ClaudePhaseAssignments != nil {
+		if len(selection.ClaudePhaseAssignments) > 0 {
+			current.ClaudePhaseAssignments = claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
+		} else {
+			current.ClaudePhaseAssignments = nil
+		}
 		current.ClaudeModelAssignments = nil
 	}
 	if len(selection.KiroModelAssignments) > 0 {

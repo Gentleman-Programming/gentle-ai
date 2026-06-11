@@ -693,6 +693,39 @@ func TestPersistAssignmentsPreservesInstalledAgents(t *testing.T) {
 	}
 }
 
+func TestPersistAssignmentsClearsClaudePhaseAssignments(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{string(model.AgentClaudeCode)},
+		ClaudeModelAssignments: map[string]string{
+			"sdd-apply": "haiku",
+		},
+		ClaudePhaseAssignments: map[string]state.ClaudePhaseAssignmentState{
+			"sdd-apply": {Model: "sonnet", Effort: "max"},
+		},
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	persistAssignments(home, model.Selection{
+		ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{},
+	})
+
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if got.ClaudePhaseAssignments != nil {
+		t.Fatalf("ClaudePhaseAssignments = %#v, want nil after explicit clear", got.ClaudePhaseAssignments)
+	}
+	if got.ClaudeModelAssignments != nil {
+		t.Fatalf("ClaudeModelAssignments = %#v, want nil after explicit phase clear", got.ClaudeModelAssignments)
+	}
+	if len(got.InstalledAgents) != 1 || got.InstalledAgents[0] != string(model.AgentClaudeCode) {
+		t.Fatalf("InstalledAgents = %#v, want preserved claude-code", got.InstalledAgents)
+	}
+}
+
 // TestPersistAndLoadKiroModelAssignments verifies that KiroModelAssignments
 // survive a persist/load round-trip via state.json.
 func TestPersistAndLoadKiroModelAssignments(t *testing.T) {

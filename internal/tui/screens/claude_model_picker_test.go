@@ -73,30 +73,6 @@ func TestNewClaudeModelPickerStateFromAssignments_CopiesMap(t *testing.T) {
 	}
 }
 
-// TestNextAliasCyclesThroughAllAliases verifies the fable → opus → sonnet →
-// haiku cycle order and the sonnet fallback for unknown aliases.
-func TestNextAliasCyclesThroughAllAliases(t *testing.T) {
-	cases := []struct {
-		name    string
-		current model.ClaudeModelAlias
-		want    model.ClaudeModelAlias
-	}{
-		{"fable → opus", model.ClaudeModelFable, model.ClaudeModelOpus},
-		{"opus → sonnet", model.ClaudeModelOpus, model.ClaudeModelSonnet},
-		{"sonnet → haiku", model.ClaudeModelSonnet, model.ClaudeModelHaiku},
-		{"haiku → fable", model.ClaudeModelHaiku, model.ClaudeModelFable},
-		{"unknown falls back to sonnet", model.ClaudeModelAlias("bogus"), model.ClaudeModelSonnet},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := nextAlias(tc.current); got != tc.want {
-				t.Errorf("nextAlias(%q) = %q, want %q", tc.current, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestHandleCustomPhaseNav_EnterPhaseOpensModelSelect(t *testing.T) {
 	state := NewClaudeModelPickerState()
 	state.InCustomMode = true

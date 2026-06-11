@@ -72,7 +72,7 @@ var claudePhaseLabels = map[string]string{
 	"default":      "General delegation",
 }
 
-// claudeAliasOrder defines the cycling order when pressing Enter on a phase row.
+// claudeAliasOrder defines the display order in the model selection screen.
 var claudeAliasOrder = []model.ClaudeModelAlias{
 	model.ClaudeModelFable,
 	model.ClaudeModelOpus,
@@ -202,7 +202,7 @@ var presetConstructors = map[ClaudeModelPreset]func() map[string]model.ClaudeMod
 //   - Enter on "custom" → enters custom mode, returns (true, nil) — screen stays open.
 //
 // In custom mode (InCustomMode == true):
-//   - Enter on a phase row → cycles the alias for that phase, returns (true, nil).
+//   - Enter on a phase row → opens model selection, then supported effort selection.
 //
 // Returns (true, assignments) when the user confirms a preset and the screen should advance.
 // Returns (true, nil) when handled but the screen should stay open.
@@ -352,16 +352,6 @@ func handleClaudeCustomEffortSelectNav(
 		return true, nil
 	}
 	return false, nil
-}
-
-// nextAlias cycles through fable → opus → sonnet → haiku → fable.
-func nextAlias(current model.ClaudeModelAlias) model.ClaudeModelAlias {
-	for i, a := range claudeAliasOrder {
-		if a == current {
-			return claudeAliasOrder[(i+1)%len(claudeAliasOrder)]
-		}
-	}
-	return model.ClaudeModelSonnet
 }
 
 // RenderClaudeModelPicker renders the Claude model picker screen.
