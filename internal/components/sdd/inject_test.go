@@ -1709,13 +1709,15 @@ func TestInjectOpenCodeMultiModeIdempotent(t *testing.T) {
 	if _, err := os.Stat(legacyPluginPath); !os.IsNotExist(err) {
 		t.Fatalf("legacy background-agents plugin should not be installed by default; stat err = %v", err)
 	}
-	modelVariantsPath := filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts")
-	content, err := os.ReadFile(modelVariantsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(model-variants.ts) error = %v", err)
-	}
-	if string(content) != assets.MustRead("opencode/plugins/model-variants.ts") {
-		t.Fatal("model-variants.ts changed after second multi inject")
+	for _, plugin := range []string{"model-variants.ts", "skill-registry.ts"} {
+		pluginPath := filepath.Join(home, ".config", "opencode", "plugins", plugin)
+		content, err := os.ReadFile(pluginPath)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", plugin, err)
+		}
+		if string(content) != assets.MustRead("opencode/plugins/"+plugin) {
+			t.Fatalf("%s changed after second multi inject", plugin)
+		}
 	}
 }
 
@@ -3359,7 +3361,7 @@ func TestInjectClaudeDoesNotStripMarkedSection(t *testing.T) {
 // OpenCode plugin tests
 // ---------------------------------------------------------------------------
 
-func TestInjectOpenCodeMultiWritesModelVariantsPluginOnly(t *testing.T) {
+func TestInjectOpenCodeMultiWritesStartupPlugins(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -3371,26 +3373,28 @@ func TestInjectOpenCodeMultiWritesModelVariantsPluginOnly(t *testing.T) {
 		t.Fatal("Inject(multi) changed = false")
 	}
 
-	modelVariantsPath := filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts")
-	content, err := os.ReadFile(modelVariantsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(model-variants.ts) error = %v", err)
-	}
-
-	expected := assets.MustRead("opencode/plugins/model-variants.ts")
-	if string(content) != expected {
-		t.Fatalf("plugin content mismatch: got %d bytes, want %d bytes", len(content), len(expected))
-	}
-
-	found := false
-	for _, f := range result.Files {
-		if f == modelVariantsPath {
-			found = true
-			break
+	for _, plugin := range []string{"model-variants.ts", "skill-registry.ts"} {
+		pluginPath := filepath.Join(home, ".config", "opencode", "plugins", plugin)
+		content, err := os.ReadFile(pluginPath)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", plugin, err)
 		}
-	}
-	if !found {
-		t.Fatalf("plugin path %q not reported in result.Files: %v", modelVariantsPath, result.Files)
+
+		expected := assets.MustRead("opencode/plugins/" + plugin)
+		if string(content) != expected {
+			t.Fatalf("%s content mismatch: got %d bytes, want %d", plugin, len(content), len(expected))
+		}
+
+		found := false
+		for _, f := range result.Files {
+			if f == pluginPath {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("plugin path %q not reported in result.Files: %v", pluginPath, result.Files)
+		}
 	}
 
 	legacyPluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
@@ -3399,7 +3403,7 @@ func TestInjectOpenCodeMultiWritesModelVariantsPluginOnly(t *testing.T) {
 	}
 }
 
-func TestInjectOpenCodeSingleWritesModelVariantsPluginOnly(t *testing.T) {
+func TestInjectOpenCodeSingleWritesStartupPlugins(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -3408,9 +3412,11 @@ func TestInjectOpenCodeSingleWritesModelVariantsPluginOnly(t *testing.T) {
 		t.Fatalf("Inject(single) error = %v", err)
 	}
 
-	modelVariantsPath := filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts")
-	if _, err := os.Stat(modelVariantsPath); err != nil {
-		t.Fatalf("model-variants plugin should exist in single mode: %v", err)
+	for _, plugin := range []string{"model-variants.ts", "skill-registry.ts"} {
+		pluginPath := filepath.Join(home, ".config", "opencode", "plugins", plugin)
+		if _, err := os.Stat(pluginPath); err != nil {
+			t.Fatalf("%s plugin should exist in single mode: %v", plugin, err)
+		}
 	}
 	legacyPluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
 	if _, err := os.Stat(legacyPluginPath); !os.IsNotExist(err) {
@@ -3426,9 +3432,11 @@ func TestInjectOpenCodePluginNoPkgManagerAvailable(t *testing.T) {
 		t.Fatalf("Inject(multi) with no package manager error = %v", err)
 	}
 
-	modelVariantsPath := filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts")
-	if _, err := os.Stat(modelVariantsPath); err != nil {
-		t.Fatalf("model-variants plugin should exist without package manager: %v", err)
+	for _, plugin := range []string{"model-variants.ts", "skill-registry.ts"} {
+		pluginPath := filepath.Join(home, ".config", "opencode", "plugins", plugin)
+		if _, err := os.Stat(pluginPath); err != nil {
+			t.Fatalf("%s plugin should exist without package manager: %v", plugin, err)
+		}
 	}
 
 	_ = result

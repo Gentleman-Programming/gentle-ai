@@ -312,8 +312,9 @@ func TestComponentOperationsSDD_OpenCodeRemovesManagedPluginSourcesAndModelVaria
 	}
 	backgroundAgentsPath := filepath.Join(pluginDir, "background-agents.ts")
 	modelVariantsPluginPath := filepath.Join(pluginDir, "model-variants.ts")
+	skillRegistryPluginPath := filepath.Join(pluginDir, "skill-registry.ts")
 	thirdPartyPluginPath := filepath.Join(pluginDir, "third-party.ts")
-	for _, path := range []string{backgroundAgentsPath, modelVariantsPluginPath} {
+	for _, path := range []string{backgroundAgentsPath, modelVariantsPluginPath, skillRegistryPluginPath} {
 		if err := os.WriteFile(path, []byte("managed"), 0o644); err != nil {
 			t.Fatalf("WriteFile(%q) error = %v", path, err)
 		}
@@ -337,7 +338,7 @@ func TestComponentOperationsSDD_OpenCodeRemovesManagedPluginSourcesAndModelVaria
 
 	applySDDOpenCodeOperations(t, svc, adapter)
 
-	for _, path := range []string{backgroundAgentsPath, modelVariantsPluginPath, modelVariantsCachePath, modelVariantsTempPath} {
+	for _, path := range []string{backgroundAgentsPath, modelVariantsPluginPath, skillRegistryPluginPath, modelVariantsCachePath, modelVariantsTempPath} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("managed file %q should be removed; stat err = %v", path, err)
 		}

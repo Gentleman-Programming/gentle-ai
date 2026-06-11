@@ -287,10 +287,10 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/plugins) error = %v", err)
 	}
-	if len(pluginEntries) != 1 {
-		t.Fatalf("opencode plugins count = %d, want 1", len(pluginEntries))
+	if len(pluginEntries) != 2 {
+		t.Fatalf("opencode plugins count = %d, want 2", len(pluginEntries))
 	}
-	wantPlugins := map[string]bool{"model-variants.ts": true}
+	wantPlugins := map[string]bool{"model-variants.ts": true, "skill-registry.ts": true}
 	for _, entry := range pluginEntries {
 		if !wantPlugins[entry.Name()] {
 			t.Fatalf("unexpected plugin entry = %q", entry.Name())
@@ -334,6 +334,34 @@ func TestModelVariantsPluginContract(t *testing.T) {
 	}
 	if !strings.Contains(src, "console.error") {
 		t.Errorf("model-variants.ts must log errors via console.error so users see failures")
+	}
+}
+
+func TestSkillRegistryPluginContract(t *testing.T) {
+	source, err := Read("opencode/plugins/skill-registry.ts")
+	if err != nil {
+		t.Fatalf("Read(skill-registry.ts) error = %v", err)
+	}
+	src := string(source)
+
+	for _, want := range []string{
+		"execFile",
+		"skill-registry",
+		"refresh",
+		"--quiet",
+		"--no-gitignore",
+		"--cwd",
+		"input.directory",
+		"input.worktree",
+		"timeout: 30_000",
+		"console.error",
+	} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("skill-registry.ts missing %q", want)
+		}
+	}
+	if strings.Contains(src, "exec(") {
+		t.Fatal("skill-registry.ts must use execFile, not shell exec")
 	}
 }
 

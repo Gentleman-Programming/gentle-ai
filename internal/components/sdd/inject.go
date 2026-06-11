@@ -1243,7 +1243,7 @@ func claudeHookListContains(hookEntries []any, command string) bool {
 
 // installOpenCodePlugins copies the OpenCode plugins that gentle-ai still
 // manages by default. Native OpenCode subagents replace the legacy
-// background-agents plugin, so only model-variants is installed here.
+// background-agents plugin, so only startup support plugins are installed here.
 func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	opencodeDir := adapter.GlobalConfigDir(homeDir)
 	pluginsDir := filepath.Join(opencodeDir, "plugins")
@@ -1255,7 +1255,7 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 	var files []string
 	var changed bool
 
-	for _, name := range []string{"model-variants.ts"} {
+	for _, name := range []string{"model-variants.ts", "skill-registry.ts"} {
 		content := assets.MustRead("opencode/plugins/" + name)
 		pluginPath := filepath.Join(pluginsDir, name)
 
