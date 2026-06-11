@@ -20,6 +20,13 @@ type ModelAssignmentState struct {
 	Effort     string `json:"effort,omitempty"`
 }
 
+// ClaudePhaseAssignmentState is the JSON-serialisable form of a Claude
+// subagent model+effort assignment. Empty Effort means Claude Code default.
+type ClaudePhaseAssignmentState struct {
+	Model  string `json:"model"`
+	Effort string `json:"effort,omitempty"`
+}
+
 // InstallState holds the persisted user selections from the last install run.
 type InstallState struct {
 	InstalledAgents []string `json:"installed_agents"`
@@ -29,6 +36,10 @@ type InstallState struct {
 	// `gentle-ai sync` preserves the user's model choices instead of falling
 	// back to the "balanced" preset every time.
 	ClaudeModelAssignments map[string]string `json:"claude_model_assignments,omitempty"`
+
+	// ClaudePhaseAssignments maps SDD phase names to Claude model+effort assignments.
+	// It supersedes ClaudeModelAssignments while preserving backward compatibility.
+	ClaudePhaseAssignments map[string]ClaudePhaseAssignmentState `json:"claude_phase_assignments,omitempty"`
 
 	// KiroModelAssignments maps SDD phase names to a Kiro-native model alias.
 	// Values like "opus", "sonnet", and "haiku" remain valid for state files
@@ -108,6 +119,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		InstalledAgents:             merged,
 		ModelAssignments:            existing.ModelAssignments,
 		ClaudeModelAssignments:      existing.ClaudeModelAssignments,
+		ClaudePhaseAssignments:      existing.ClaudePhaseAssignments,
 		KiroModelAssignments:        existing.KiroModelAssignments,
 		CodexModelAssignments:       existing.CodexModelAssignments,
 		CodexCarrilModelAssignments: existing.CodexCarrilModelAssignments,

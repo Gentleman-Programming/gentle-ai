@@ -637,6 +637,7 @@ func (s componentSyncStep) Run() error {
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments:           s.selection.ModelAssignments,
 				ClaudeModelAssignments:             s.selection.ClaudeModelAssignments,
+				ClaudePhaseAssignments:             s.selection.ClaudePhaseAssignments,
 				KiroModelAssignments:               s.selection.KiroModelAssignments,
 				CodexModelAssignments:              s.selection.CodexModelAssignments,
 				CodexCarrilModelAssignments:        s.selection.CodexCarrilModelAssignments,
@@ -903,7 +904,20 @@ func RunSync(args []string) (SyncResult, error) {
 	// Load persisted model assignments from state when not provided via flags.
 	// Without this, every CLI sync falls back to defaults and would silently
 	// overwrite the user's model choices.
-	if len(selection.ClaudeModelAssignments) == 0 && len(persistedState.ClaudeModelAssignments) > 0 {
+	if len(selection.ClaudePhaseAssignments) == 0 && len(persistedState.ClaudePhaseAssignments) > 0 {
+		m := make(map[string]model.ClaudePhaseAssignment, len(persistedState.ClaudePhaseAssignments))
+		for k, v := range persistedState.ClaudePhaseAssignments {
+			if k == "orchestrator" {
+				continue
+			}
+			a := model.ClaudePhaseAssignment{Model: model.ClaudeModelAlias(v.Model), Effort: model.ClaudeEffort(v.Effort)}
+			if a.Valid() {
+				m[k] = a
+			}
+		}
+		selection.ClaudePhaseAssignments = m
+	}
+	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(persistedState.ClaudeModelAssignments) > 0 {
 		m := make(map[string]model.ClaudeModelAlias, len(persistedState.ClaudeModelAssignments))
 		for k, v := range persistedState.ClaudeModelAssignments {
 			// Claude Code controls the main session/orchestrator model itself.

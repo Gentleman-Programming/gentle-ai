@@ -5,6 +5,7 @@ description: >
   Triggered by the orchestrator when judgment-day is invoked. Reviews code for
   correctness, edge cases, security, performance, and project standards.
 model: {{CLAUDE_MODEL}}
+{{CLAUDE_EFFORT_FRONTMATTER}}
 tools: Read, Glob, Grep, Bash, mcp__plugin_engram_engram__mem_search, mcp__plugin_engram_engram__mem_get_observation
 ---
 

@@ -22,8 +22,11 @@ type InjectionResult struct {
 }
 
 type InjectOptions struct {
-	OpenCodeModelAssignments    map[string]model.ModelAssignment
+	OpenCodeModelAssignments map[string]model.ModelAssignment
+	// ClaudeModelAssignments is the legacy model-only Claude assignment map.
+	// Prefer ClaudePhaseAssignments for new callers that need per-phase effort.
 	ClaudeModelAssignments      map[string]model.ClaudeModelAlias
+	ClaudePhaseAssignments      map[string]model.ClaudePhaseAssignment
 	KiroModelAssignments        map[string]model.KiroModelAlias
 	CodexModelAssignments       map[string]model.CodexEffort
 	CodexCarrilModelAssignments map[string]string // carril→model-id; nil = use defaults
@@ -225,7 +228,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
 		switch adapter.SystemPromptStrategy() {
 		case model.StrategyMarkdownSections:
-			result, err := injectMarkdownSections(homeDir, adapter, opts.ClaudeModelAssignments)
+			result, err := injectMarkdownSections(homeDir, adapter, opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -597,8 +600,9 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// Non-Claude adapters don't implement claudeModelResolver and are unaffected.
 			if cmr, ok := adapter.(claudeModelResolver); ok {
 				phase := strings.TrimSuffix(entry.Name(), ".md")
-				alias := resolveClaudeModelAlias(opts.ClaudeModelAssignments, phase)
-				contentStr = strings.ReplaceAll(contentStr, "{{CLAUDE_MODEL}}", cmr.ClaudeModelID(alias))
+				assignment := resolveClaudePhaseAssignment(opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, phase)
+				contentStr = strings.ReplaceAll(contentStr, "{{CLAUDE_MODEL}}", cmr.ClaudeModelID(assignment.Model))
+				contentStr = injectClaudeEffortFrontmatter(contentStr, assignment)
 			}
 			outPath := filepath.Join(agentsDir, entry.Name())
 			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
@@ -1779,12 +1783,12 @@ func stripBareOrchestratorSection(content string) string {
 	return result
 }
 
-func injectMarkdownSections(homeDir string, adapter agents.Adapter, assignments map[string]model.ClaudeModelAlias) (InjectionResult, error) {
+func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment) (InjectionResult, error) {
 	promptPath := adapter.SystemPromptFile(homeDir)
 	content := assets.MustRead(sddOrchestratorAsset(adapter.Agent()))
-	if adapter.Agent() == model.AgentClaudeCode && len(assignments) > 0 {
+	if adapter.Agent() == model.AgentClaudeCode && (len(legacyAssignments) > 0 || len(phaseAssignments) > 0) {
 		var err error
-		content, err = injectClaudeModelAssignments(content, assignments)
+		content, err = injectClaudePhaseAssignments(content, legacyAssignments, phaseAssignments)
 		if err != nil {
 			return InjectionResult{}, err
 		}
@@ -1849,6 +1853,10 @@ var claudeModelAssignmentReasons = map[string]string{
 }
 
 func injectClaudeModelAssignments(content string, assignments map[string]model.ClaudeModelAlias) (string, error) {
+	return injectClaudePhaseAssignments(content, assignments, nil)
+}
+
+func injectClaudePhaseAssignments(content string, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment) (string, error) {
 	const openMarker = "<!-- gentle-ai:sdd-model-assignments -->"
 	const closeMarker = "<!-- /gentle-ai:sdd-model-assignments -->"
 
@@ -1858,10 +1866,13 @@ func injectClaudeModelAssignments(content string, assignments map[string]model.C
 		return "", fmt.Errorf("sdd orchestrator asset missing model assignment markers")
 	}
 
-	merged := model.ClaudeModelPresetBalanced()
-	for key, alias := range assignments {
-		if alias.Valid() {
-			merged[key] = alias
+	merged := defaultClaudePhaseAssignments()
+	for key, assignment := range model.ClaudePhaseAssignmentsFromLegacy(legacyAssignments) {
+		merged[key] = assignment
+	}
+	for key, assignment := range phaseAssignments {
+		if assignment.Valid() {
+			merged[key] = assignment
 		}
 	}
 
@@ -1870,37 +1881,70 @@ func injectClaudeModelAssignments(content string, assignments map[string]model.C
 	return content[:start] + "\n" + replacement + content[end:], nil
 }
 
+func defaultClaudePhaseAssignments() map[string]model.ClaudePhaseAssignment {
+	return model.ClaudePhaseAssignmentsFromLegacy(model.ClaudeModelPresetBalanced())
+}
+
 func resolveClaudeModelAlias(assignments map[string]model.ClaudeModelAlias, phase string) model.ClaudeModelAlias {
-	merged := model.ClaudeModelPresetBalanced()
-	for key, alias := range assignments {
-		if alias.Valid() {
-			merged[key] = alias
+	return resolveClaudePhaseAssignment(assignments, nil, phase).Model
+}
+
+func resolveClaudePhaseAssignment(legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment, phase string) model.ClaudePhaseAssignment {
+	merged := defaultClaudePhaseAssignments()
+	for key, assignment := range model.ClaudePhaseAssignmentsFromLegacy(legacyAssignments) {
+		merged[key] = assignment
+	}
+	for key, assignment := range phaseAssignments {
+		if assignment.Valid() {
+			merged[key] = assignment
 		}
 	}
 
-	if alias, ok := merged[phase]; ok && alias.Valid() {
-		return alias
+	if assignment, ok := merged[phase]; ok && assignment.Valid() {
+		return assignment
 	}
-	if alias, ok := merged["default"]; ok && alias.Valid() {
-		return alias
+	if assignment, ok := merged["default"]; ok && assignment.Valid() {
+		return assignment
 	}
-	return model.ClaudeModelSonnet
+	return model.ClaudePhaseAssignment{Model: model.ClaudeModelSonnet}
 }
 
-func renderClaudeModelAssignmentsSection(assignments map[string]model.ClaudeModelAlias) string {
+func injectClaudeEffortFrontmatter(content string, assignment model.ClaudePhaseAssignment) string {
+	const placeholder = "{{CLAUDE_EFFORT_FRONTMATTER}}"
+	line := renderClaudeEffortFrontmatter(assignment)
+	if line == "" {
+		content = strings.ReplaceAll(content, placeholder+"\r\n", "")
+		content = strings.ReplaceAll(content, placeholder+"\n", "")
+		return strings.ReplaceAll(content, placeholder, "")
+	}
+	return strings.ReplaceAll(content, placeholder, line)
+}
+
+func renderClaudeEffortFrontmatter(assignment model.ClaudePhaseAssignment) string {
+	if assignment.Effort == model.ClaudeEffortDefault || !model.ClaudeEffortAllowedForModel(assignment.Model, assignment.Effort) {
+		return ""
+	}
+	return "effort: " + string(assignment.Effort)
+}
+
+func renderClaudeModelAssignmentsSection(assignments map[string]model.ClaudePhaseAssignment) string {
 	var b strings.Builder
 	b.WriteString("## Model Assignments\n\n")
 	b.WriteString("Read this table at session start (or before first delegation), cache it for the session, and pass the mapped alias in every Agent tool call via the `model` parameter. If a phase is missing, use the `default` row. If you do not have access to the assigned model (for example, no Opus access), substitute `sonnet` and continue.\n\n")
 	b.WriteString("The Claude Code session model is controlled by Claude Code itself; Gentle AI does not configure the main orchestrator model. This table applies only to Agent tool calls for SDD phase sub-agents and general delegation.\n\n")
 	b.WriteString("**Mandatory model gate:** Every Agent tool call MUST include `model`. Calling Agent without `model` is invalid. Before each Agent call, resolve the target phase to an alias from this table; for general/non-SDD delegation use `default`. If you are about to call Agent and have not chosen a `model`, STOP and choose the mapped alias first.\n\n")
-	b.WriteString("| Phase | Default Model | Reason |\n")
-	b.WriteString("|-------|---------------|--------|\n")
+	b.WriteString("| Phase | Default Model | Effort | Reason |\n")
+	b.WriteString("|-------|---------------|--------|--------|\n")
 	for _, key := range claudeModelAssignmentRowOrder {
-		alias := assignments[key]
-		if !alias.Valid() {
-			alias = model.ClaudeModelSonnet
+		assignment := assignments[key]
+		if !assignment.Valid() {
+			assignment = model.ClaudePhaseAssignment{Model: model.ClaudeModelSonnet}
 		}
-		b.WriteString(fmt.Sprintf("| %s | %s | %s |\n", key, alias, claudeModelAssignmentReasons[key]))
+		effort := string(assignment.Effort)
+		if effort == "" {
+			effort = "default"
+		}
+		b.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n", key, assignment.Model, effort, claudeModelAssignmentReasons[key]))
 	}
 	b.WriteString("\n")
 	return b.String()

@@ -43,6 +43,92 @@ func (a ClaudeModelAlias) Valid() bool {
 	}
 }
 
+// ClaudeEffort represents a Claude Code subagent effort frontmatter value.
+// The empty value means inherit the session/model default and should not be
+// written as frontmatter.
+type ClaudeEffort string
+
+const (
+	ClaudeEffortDefault ClaudeEffort = ""
+	ClaudeEffortLow     ClaudeEffort = "low"
+	ClaudeEffortMedium  ClaudeEffort = "medium"
+	ClaudeEffortHigh    ClaudeEffort = "high"
+	ClaudeEffortXHigh   ClaudeEffort = "xhigh"
+	ClaudeEffortMax     ClaudeEffort = "max"
+)
+
+// Valid reports whether the effort is one of Claude Code's known effort values.
+func (e ClaudeEffort) Valid() bool {
+	switch e {
+	case ClaudeEffortDefault, ClaudeEffortLow, ClaudeEffortMedium, ClaudeEffortHigh, ClaudeEffortXHigh, ClaudeEffortMax:
+		return true
+	default:
+		return false
+	}
+}
+
+// ClaudeEffortsForModel returns the official Claude Code effort choices for a
+// model alias. The first entry is always the default/empty value.
+func ClaudeEffortsForModel(alias ClaudeModelAlias) []ClaudeEffort {
+	switch alias {
+	case ClaudeModelFable, ClaudeModelOpus:
+		return []ClaudeEffort{ClaudeEffortDefault, ClaudeEffortLow, ClaudeEffortMedium, ClaudeEffortHigh, ClaudeEffortXHigh, ClaudeEffortMax}
+	case ClaudeModelSonnet:
+		return []ClaudeEffort{ClaudeEffortDefault, ClaudeEffortLow, ClaudeEffortMedium, ClaudeEffortHigh, ClaudeEffortMax}
+	case ClaudeModelHaiku:
+		return []ClaudeEffort{ClaudeEffortDefault}
+	default:
+		return []ClaudeEffort{ClaudeEffortDefault}
+	}
+}
+
+// ClaudeEffortAllowedForModel reports whether effort is valid for alias.
+func ClaudeEffortAllowedForModel(alias ClaudeModelAlias, effort ClaudeEffort) bool {
+	if !effort.Valid() {
+		return false
+	}
+	for _, allowed := range ClaudeEffortsForModel(alias) {
+		if effort == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+// ClaudePhaseAssignment configures the Claude Code model and effort for one
+// SDD/JD phase subagent. Empty Effort means inherit the session/model default.
+type ClaudePhaseAssignment struct {
+	Model  ClaudeModelAlias `json:"model"`
+	Effort ClaudeEffort     `json:"effort,omitempty"`
+}
+
+// Valid reports whether the model is valid and the effort is supported by it.
+func (a ClaudePhaseAssignment) Valid() bool {
+	return a.Model.Valid() && ClaudeEffortAllowedForModel(a.Model, a.Effort)
+}
+
+// ClaudePhaseAssignmentsFromLegacy converts the historical model-only map into
+// model+effort assignments with default effort. Invalid aliases are ignored.
+func ClaudePhaseAssignmentsFromLegacy(assignments map[string]ClaudeModelAlias) map[string]ClaudePhaseAssignment {
+	if assignments == nil {
+		return nil
+	}
+	converted := make(map[string]ClaudePhaseAssignment, len(assignments))
+	for key, alias := range assignments {
+		if !alias.Valid() {
+			continue
+		}
+		converted[key] = ClaudePhaseAssignment{Model: alias, Effort: ClaudeEffortDefault}
+	}
+	return converted
+}
+
+// ClaudePhaseAssignmentsFromModelPreset converts a model-only preset to the new
+// assignment shape with default effort.
+func ClaudePhaseAssignmentsFromModelPreset(assignments map[string]ClaudeModelAlias) map[string]ClaudePhaseAssignment {
+	return ClaudePhaseAssignmentsFromLegacy(assignments)
+}
+
 // ClaudeModelPresetBalanced returns the default model assignment table.
 // It balances cost and capability for Claude sub-agents: architecture phases use opus;
 // implementation and validation use sonnet; archiving uses haiku.

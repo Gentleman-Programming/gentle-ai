@@ -425,13 +425,82 @@ func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
 		t.Fatalf("CLAUDE.md should not expose orchestrator as a configurable model row; got:\n%s", body)
 	}
 	for _, want := range []string{
-		"| sdd-apply | haiku | Implementation |",
-		"| default | haiku | Non-SDD general delegation |",
+		"| sdd-apply | haiku | default | Implementation |",
+		"| default | haiku | default | Non-SDD general delegation |",
 		"Gentle AI does not configure the main orchestrator model",
 	} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("CLAUDE.md missing %q; got:\n%s", want, body)
 		}
+	}
+}
+
+func TestTuiSyncClaudePhaseAssignmentsPersistAndGenerateEffort(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentPi)}}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	phaseAssignments := model.ClaudePhaseAssignmentsFromLegacy(map[string]model.ClaudeModelAlias{
+		"sdd-explore": model.ClaudeModelSonnet,
+		"sdd-propose": model.ClaudeModelSonnet,
+		"sdd-spec":    model.ClaudeModelSonnet,
+		"sdd-design":  model.ClaudeModelSonnet,
+		"sdd-tasks":   model.ClaudeModelSonnet,
+		"sdd-apply":   model.ClaudeModelSonnet,
+		"sdd-verify":  model.ClaudeModelSonnet,
+		"sdd-archive": model.ClaudeModelSonnet,
+		"default":     model.ClaudeModelSonnet,
+	})
+	phaseAssignments["sdd-apply"] = model.ClaudePhaseAssignment{
+		Model:  model.ClaudeModelSonnet,
+		Effort: model.ClaudeEffortMax,
+	}
+
+	changed, err := tuiSync(home)(&model.SyncOverrides{
+		TargetAgents:           []model.AgentID{model.AgentClaudeCode},
+		ClaudePhaseAssignments: phaseAssignments,
+	})
+	if err != nil {
+		t.Fatalf("tuiSync Claude phase config error: %v", err)
+	}
+	if len(changed) == 0 {
+		t.Fatal("tuiSync Claude phase config changed 0 files, want Claude assets written")
+	}
+
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	applyState, ok := persisted.ClaudePhaseAssignments["sdd-apply"]
+	if !ok {
+		t.Fatalf("persisted state missing claude_phase_assignments.sdd-apply: %#v", persisted.ClaudePhaseAssignments)
+	}
+	if applyState.Model != string(model.ClaudeModelSonnet) || applyState.Effort != string(model.ClaudeEffortMax) {
+		t.Fatalf("persisted sdd-apply = %#v, want sonnet/max", applyState)
+	}
+	if persisted.ClaudeModelAssignments != nil {
+		t.Fatalf("legacy claude_model_assignments should be cleared when phase assignments are persisted; got %#v", persisted.ClaudeModelAssignments)
+	}
+
+	applyAgent := filepath.Join(home, ".claude", "agents", "sdd-apply.md")
+	body, err := os.ReadFile(applyAgent)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", applyAgent, err)
+	}
+	for _, want := range []string{"model: sonnet", "effort: max"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("sdd-apply agent missing %q; got:\n%s", want, body)
+		}
+	}
+
+	archiveAgent := filepath.Join(home, ".claude", "agents", "sdd-archive.md")
+	body, err = os.ReadFile(archiveAgent)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", archiveAgent, err)
+	}
+	if strings.Contains(string(body), "effort:") {
+		t.Fatalf("default-effort sdd-archive agent should omit effort frontmatter; got:\n%s", body)
 	}
 }
 

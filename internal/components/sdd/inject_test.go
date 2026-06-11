@@ -343,9 +343,9 @@ func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 		t.Fatal("CLAUDE.md should not expose orchestrator as a configurable model row")
 	}
 	for _, want := range []string{
-		"| sdd-design | sonnet | Architecture decisions |",
-		"| sdd-propose | fable | Architectural decisions |",
-		"| default | haiku | Non-SDD general delegation |",
+		"| sdd-design | sonnet | default | Architecture decisions |",
+		"| sdd-propose | fable | default | Architectural decisions |",
+		"| default | haiku | default | Non-SDD general delegation |",
 		"Gentle AI does not configure the main orchestrator model",
 	} {
 		if !strings.Contains(text, want) {
@@ -4985,6 +4985,87 @@ func TestInjectClaudeSubAgentsResolveModels(t *testing.T) {
 				t.Fatalf("agent %s missing %q\n--- file ---\n%s", tt.phase, tt.want, text)
 			}
 		})
+	}
+}
+
+func TestInjectClaudeSubAgentsRenderConfiguredEffort(t *testing.T) {
+	home := t.TempDir()
+
+	assignments := map[string]model.ClaudePhaseAssignment{
+		"sdd-design":  {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortXHigh},
+		"sdd-propose": {Model: model.ClaudeModelFable, Effort: model.ClaudeEffortMax},
+		"sdd-spec":    {Model: model.ClaudeModelSonnet, Effort: model.ClaudeEffortMax},
+		"sdd-archive": {Model: model.ClaudeModelHaiku, Effort: model.ClaudeEffortHigh},
+	}
+
+	_, err := Inject(home, claudeAdapter(), "", InjectOptions{ClaudePhaseAssignments: assignments})
+	if err != nil {
+		t.Fatalf("Inject(claude, model+effort assignments) error = %v", err)
+	}
+
+	checks := []struct {
+		phase      string
+		wantModel  string
+		wantEffort string
+		denyEffort bool
+	}{
+		{phase: "sdd-design", wantModel: "model: opus", wantEffort: "effort: xhigh"},
+		{phase: "sdd-propose", wantModel: "model: fable", wantEffort: "effort: max"},
+		{phase: "sdd-spec", wantModel: "model: sonnet", wantEffort: "effort: max"},
+		// Haiku is not listed as effort-compatible in the official Claude Code matrix.
+		{phase: "sdd-archive", wantModel: "model: haiku", denyEffort: true},
+	}
+
+	for _, tt := range checks {
+		t.Run(tt.phase, func(t *testing.T) {
+			path := filepath.Join(home, ".claude", "agents", tt.phase+".md")
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatalf("ReadFile(%s) error = %v", tt.phase, readErr)
+			}
+			text := string(content)
+			if !strings.Contains(text, tt.wantModel) {
+				t.Fatalf("agent %s missing %q\n--- file ---\n%s", tt.phase, tt.wantModel, text)
+			}
+			if tt.denyEffort {
+				if strings.Contains(text, "effort:") {
+					t.Fatalf("agent %s should omit unsupported/default effort\n--- file ---\n%s", tt.phase, text)
+				}
+				return
+			}
+			if !strings.Contains(text, tt.wantEffort) {
+				t.Fatalf("agent %s missing %q\n--- file ---\n%s", tt.phase, tt.wantEffort, text)
+			}
+		})
+	}
+}
+
+func TestInjectClaudeSubAgentsDefaultEffortOmitted(t *testing.T) {
+	home := t.TempDir()
+
+	assignments := map[string]model.ClaudePhaseAssignment{
+		"sdd-design": {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortDefault},
+	}
+
+	_, err := Inject(home, claudeAdapter(), "", InjectOptions{ClaudePhaseAssignments: assignments})
+	if err != nil {
+		t.Fatalf("Inject(claude, default effort) error = %v", err)
+	}
+
+	path := filepath.Join(home, ".claude", "agents", "sdd-design.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(sdd-design) error = %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "model: opus") {
+		t.Fatalf("agent missing model: opus\n--- file ---\n%s", text)
+	}
+	if strings.Contains(text, "effort:") {
+		t.Fatalf("agent should omit default effort\n--- file ---\n%s", text)
+	}
+	if strings.Contains(text, "{{CLAUDE_EFFORT_FRONTMATTER}}") {
+		t.Fatalf("agent still contains unresolved effort placeholder\n--- file ---\n%s", text)
 	}
 }
 
