@@ -350,6 +350,28 @@ func TestTuiSyncStrictTDDNilOverrideNoChange(t *testing.T) {
 	}
 }
 
+func TestTuiSyncAppliesSDDProfileStrategyOverride(t *testing.T) {
+	overrides := &model.SyncOverrides{SDDProfileStrategy: model.SDDProfileStrategyExternalSingleActive}
+
+	selection := model.Selection{SDDProfileStrategy: model.SDDProfileStrategyGeneratedMulti}
+	applyOverrides(&selection, overrides)
+
+	if selection.SDDProfileStrategy != model.SDDProfileStrategyExternalSingleActive {
+		t.Fatalf("Selection.SDDProfileStrategy = %q, want %q", selection.SDDProfileStrategy, model.SDDProfileStrategyExternalSingleActive)
+	}
+}
+
+func TestTuiSyncSDDProfileStrategyEmptyOverrideNoChange(t *testing.T) {
+	overrides := &model.SyncOverrides{}
+
+	selection := model.Selection{SDDProfileStrategy: model.SDDProfileStrategyExternalSingleActive}
+	applyOverrides(&selection, overrides)
+
+	if selection.SDDProfileStrategy != model.SDDProfileStrategyExternalSingleActive {
+		t.Fatalf("Selection.SDDProfileStrategy changed unexpectedly to %q", selection.SDDProfileStrategy)
+	}
+}
+
 func boolPtr(b bool) *bool { return &b }
 
 func TestTuiSyncTargetAgentsOverridePersistedInstallState(t *testing.T) {

@@ -505,6 +505,9 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.SDDMode != "" {
 		selection.SDDMode = overrides.SDDMode
 	}
+	if overrides.SDDProfileStrategy != "" {
+		selection.SDDProfileStrategy = overrides.SDDProfileStrategy
+	}
 	if overrides.StrictTDD != nil {
 		selection.StrictTDD = *overrides.StrictTDD
 	}
