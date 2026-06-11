@@ -542,6 +542,100 @@ func TestMergeAgents_PreservesCodexCarrilAssignments(t *testing.T) {
 	}
 }
 
+// ─── WU-2 RED: CodexPhaseModelAssignments round-trip, omitempty, MergeAgents ──
+
+// TestCodexPhaseModelAssignments_RoundTrip verifies the new field round-trips
+// through Write/Read with JSON key "codexPhaseModelAssignments".
+func TestCodexPhaseModelAssignments_RoundTrip(t *testing.T) {
+	home := t.TempDir()
+
+	assignments := map[string]string{
+		"sdd-propose": "gpt-5.5",
+		"sdd-apply":   "gpt-5.4",
+		"sdd-explore": "gpt-5.4-mini",
+	}
+	s := InstallState{
+		InstalledAgents:            []string{"codex"},
+		CodexPhaseModelAssignments: assignments,
+	}
+
+	if err := Write(home, s); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(got.CodexPhaseModelAssignments, assignments) {
+		t.Errorf("CodexPhaseModelAssignments = %v, want %v", got.CodexPhaseModelAssignments, assignments)
+	}
+
+	// JSON key must be "codexPhaseModelAssignments"
+	data, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !contains(string(data), "codexPhaseModelAssignments") {
+		t.Errorf("JSON must contain key codexPhaseModelAssignments; got:\n%s", data)
+	}
+}
+
+// TestCodexPhaseModelAssignments_OmitEmpty verifies the field is absent from JSON
+// when nil/empty (omitempty).
+func TestCodexPhaseModelAssignments_OmitEmpty(t *testing.T) {
+	home := t.TempDir()
+	s := InstallState{InstalledAgents: []string{"codex"}}
+	if err := Write(home, s); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	data, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if contains(string(data), "codexPhaseModelAssignments") {
+		t.Error("JSON must not contain codexPhaseModelAssignments when empty")
+	}
+}
+
+// TestCodexPhaseModelAssignments_LegacyAbsent verifies that old state files
+// without the key read back with nil CodexPhaseModelAssignments.
+func TestCodexPhaseModelAssignments_LegacyAbsent(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, stateDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacy := `{"installed_agents":["codex"],"codexModelAssignments":{"sdd-apply":"high"}}` + "\n"
+	if err := os.WriteFile(Path(home), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	s, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if s.CodexPhaseModelAssignments != nil {
+		t.Errorf("CodexPhaseModelAssignments = %v, want nil for legacy state", s.CodexPhaseModelAssignments)
+	}
+}
+
+// TestMergeAgents_PreservesCodexPhaseModelAssignments verifies that MergeAgents
+// carries the field from the existing state into the merged result.
+func TestMergeAgents_PreservesCodexPhaseModelAssignments(t *testing.T) {
+	existing := InstallState{
+		InstalledAgents: []string{"codex"},
+		CodexPhaseModelAssignments: map[string]string{
+			"sdd-propose": "gpt-5.5",
+			"sdd-explore": "gpt-5.4-mini",
+		},
+	}
+	merged := MergeAgents(existing, []string{"opencode"})
+	if !reflect.DeepEqual(merged.CodexPhaseModelAssignments, existing.CodexPhaseModelAssignments) {
+		t.Errorf("MergeAgents did not preserve CodexPhaseModelAssignments: got %v, want %v",
+			merged.CodexPhaseModelAssignments, existing.CodexPhaseModelAssignments)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && findSub(s, substr)
 }

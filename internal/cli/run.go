@@ -640,6 +640,7 @@ func (s componentApplyStep) Run() error {
 				KiroModelAssignments:        s.selection.KiroModelAssignments,
 				CodexModelAssignments:       s.selection.CodexModelAssignments,
 				CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
+				CodexPhaseModelAssignments:  s.selection.CodexPhaseModelAssignments,
 				WorkspaceDir:                s.workspaceDir,
 				StrictTDD:                   s.selection.StrictTDD,
 			}

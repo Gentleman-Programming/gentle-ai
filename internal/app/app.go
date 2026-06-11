@@ -378,6 +378,7 @@ func tuiExecute(
 			KiroModelAssignments:        kiroAliasesToStrings(selection.KiroModelAssignments),
 			CodexModelAssignments:       codexEffortsToStrings(selection.CodexModelAssignments),
 			CodexCarrilModelAssignments: selection.CodexCarrilModelAssignments,
+			CodexPhaseModelAssignments:  selection.CodexPhaseModelAssignments,
 			ModelAssignments:            modelAssignmentsToState(selection.ModelAssignments),
 			Persona:                     string(selection.Persona),
 		})
@@ -492,6 +493,9 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.CodexCarrilModelAssignments != nil {
 		selection.CodexCarrilModelAssignments = overrides.CodexCarrilModelAssignments
 	}
+	if overrides.CodexPhaseModelAssignments != nil {
+		selection.CodexPhaseModelAssignments = overrides.CodexPhaseModelAssignments
+	}
 	if overrides.SDDMode != "" {
 		selection.SDDMode = overrides.SDDMode
 	}
@@ -551,6 +555,13 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 		}
 		selection.CodexCarrilModelAssignments = m
 	}
+	if len(selection.CodexPhaseModelAssignments) == 0 && len(s.CodexPhaseModelAssignments) > 0 {
+		m := make(map[string]string, len(s.CodexPhaseModelAssignments))
+		for k, v := range s.CodexPhaseModelAssignments {
+			m[k] = v
+		}
+		selection.CodexPhaseModelAssignments = m
+	}
 	if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
 		m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
 		for k, v := range s.ModelAssignments {
@@ -563,8 +574,16 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 // persistAssignments writes the model assignments from selection back to
 // state.json using a read-merge-write pattern so that other fields
 // (InstalledAgents) are not lost.
+//
+// For CodexPhaseModelAssignments the function distinguishes three states:
+//   - nil: not provided (partial sync) — leave the existing state value untouched.
+//   - non-nil, len > 0: new per-phase assignments — write them.
+//   - non-nil, len == 0: explicit clear signal (preset selected) — delete the key.
 func persistAssignments(homeDir string, selection model.Selection) {
-	if len(selection.ClaudeModelAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 {
+	// A non-nil but empty CodexPhaseModelAssignments is an explicit clear signal
+	// and must not be skipped by the early-exit guard.
+	hasPhaseAssignmentSignal := selection.CodexPhaseModelAssignments != nil
+	if len(selection.ClaudeModelAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasPhaseAssignmentSignal {
 		return
 	}
 	current, err := state.Read(homeDir)
@@ -583,6 +602,14 @@ func persistAssignments(homeDir string, selection model.Selection) {
 	}
 	if len(selection.CodexCarrilModelAssignments) > 0 {
 		current.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
+	}
+	// non-nil, len > 0 → write; non-nil, len == 0 → clear (explicit preset signal); nil → leave untouched.
+	if selection.CodexPhaseModelAssignments != nil {
+		if len(selection.CodexPhaseModelAssignments) > 0 {
+			current.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
+		} else {
+			current.CodexPhaseModelAssignments = nil
+		}
 	}
 	if len(selection.ModelAssignments) > 0 {
 		current.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)

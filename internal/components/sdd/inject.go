@@ -27,6 +27,7 @@ type InjectOptions struct {
 	KiroModelAssignments        map[string]model.KiroModelAlias
 	CodexModelAssignments       map[string]model.CodexEffort
 	CodexCarrilModelAssignments map[string]string // carril→model-id; nil = use defaults
+	CodexPhaseModelAssignments  map[string]string // phase→model-id; non-nil = Custom per-phase mode
 
 	// WorkspaceDir is the root of the current workspace (e.g. os.Getwd()).
 	// When non-empty and the adapter implements workflowInjector, native
@@ -1580,7 +1581,14 @@ func injectFileAppend(homeDir string, adapter agents.Adapter, opts InjectOptions
 	// effort table. Only fires when the adapter implements codexModelResolver.
 	// All other FileReplace adapters (Gemini, Cursor, etc.) are unaffected.
 	if cmr, ok := adapter.(codexModelResolver); ok {
-		rendered := cmr.RenderCodexPhaseEfforts(opts.CodexModelAssignments, opts.CodexCarrilModelAssignments)
+		var rendered string
+		if len(opts.CodexPhaseModelAssignments) > 0 {
+			// Custom per-phase mode: render a per-phase table (phase | model | effort).
+			rendered = model.RenderCodexPhaseEffortsByPhase(opts.CodexPhaseModelAssignments, opts.CodexModelAssignments)
+		} else {
+			// Preset / carril mode: render the standard per-carril table.
+			rendered = cmr.RenderCodexPhaseEfforts(opts.CodexModelAssignments, opts.CodexCarrilModelAssignments)
+		}
 		content = strings.ReplaceAll(content, "{{CODEX_PHASE_EFFORTS}}", rendered)
 		// Post-check: fail loudly if any placeholder token remains unresolved.
 		if strings.Contains(content, "{{") {

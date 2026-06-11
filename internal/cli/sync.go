@@ -640,6 +640,7 @@ func (s componentSyncStep) Run() error {
 				KiroModelAssignments:               s.selection.KiroModelAssignments,
 				CodexModelAssignments:              s.selection.CodexModelAssignments,
 				CodexCarrilModelAssignments:        s.selection.CodexCarrilModelAssignments,
+				CodexPhaseModelAssignments:         s.selection.CodexPhaseModelAssignments,
 				WorkspaceDir:                       s.workspaceDir,
 				StrictTDD:                          s.selection.StrictTDD,
 				PreserveOpenCodeOrchestratorPrompt: profileStrategy == model.SDDProfileStrategyExternalSingleActive,
@@ -946,6 +947,13 @@ func RunSync(args []string) (SyncResult, error) {
 			m[k] = v
 		}
 		selection.CodexCarrilModelAssignments = m
+	}
+	if len(selection.CodexPhaseModelAssignments) == 0 && len(persistedState.CodexPhaseModelAssignments) > 0 {
+		m := make(map[string]string, len(persistedState.CodexPhaseModelAssignments))
+		for k, v := range persistedState.CodexPhaseModelAssignments {
+			m[k] = v
+		}
+		selection.CodexPhaseModelAssignments = m
 	}
 
 	// Resolve persona from the already-read state. This covers both the dry-run

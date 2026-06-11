@@ -95,6 +95,25 @@ func sanitizeKnownModelEffort(assignment model.ModelAssignment, sddModels map[st
 	return assignment
 }
 
+// codexPhaseModelsFromCustomAssignments converts the TUI's CustomAssignments map
+// (phase → CodexCustomAssignment) to the state-layer map (phase → model id string)
+// used by Selection.CodexPhaseModelAssignments and state.InstallState.
+func codexPhaseModelsFromCustomAssignments(assignments map[string]screens.CodexCustomAssignment) map[string]string {
+	if len(assignments) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(assignments))
+	for phase, a := range assignments {
+		if a.ModelID != "" {
+			out[phase] = a.ModelID
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
@@ -1033,20 +1052,51 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.Screen == ScreenCodexModelPicker {
+		wasInCustomSubMode := m.CodexModelPicker.CustomMode != screens.CodexCustomModeNone
 		handled, assignments := screens.HandleCodexModelPickerNav(keyStr, &m.CodexModelPicker, m.Cursor)
 		if handled {
+			// Reset cursor when exiting the Custom sub-mode back to the main picker.
+			if wasInCustomSubMode && m.CodexModelPicker.CustomMode == screens.CodexCustomModeNone {
+				m.Cursor = 0
+			}
 			if assignments != nil {
 				m.Selection.CodexModelAssignments = assignments
 				// Derive carril model assignments from the selected preset (all
 				// current presets use canonical subscription models).
 				presetCarrilModels := model.DefaultCarrilModels()
 				m.Selection.CodexCarrilModelAssignments = presetCarrilModels
+
+				// When the user confirmed Custom per-phase assignments, also
+				// persist the per-phase model map so the inject layer can render
+				// a per-phase table instead of the carril table.
+				if m.CodexModelPicker.CustomConfirmed {
+					phaseModels := codexPhaseModelsFromCustomAssignments(m.CodexModelPicker.CustomAssignments)
+					m.Selection.CodexPhaseModelAssignments = phaseModels
+				} else {
+					// Preset selected — clear any stale custom per-phase state so a
+					// subsequent Custom flow starts clean and the inject layer uses
+					// the carril table, not leftover per-phase assignments.
+					m.Selection.CodexPhaseModelAssignments = nil
+					m.CodexModelPicker.CustomConfirmed = false
+				}
+
 				if m.ModelConfigMode {
 					m.ModelConfigMode = false
+					// When a preset is selected, m.Selection.CodexPhaseModelAssignments is nil
+					// (cleared above). The sync override must carry a non-nil empty map instead
+					// so that applyOverrides clears any stale per-phase map loaded from state,
+					// and persistAssignments deletes the key from state.json.
+					// When Custom is confirmed, m.Selection.CodexPhaseModelAssignments is a
+					// non-empty map and is forwarded directly.
+					phaseOverride := m.Selection.CodexPhaseModelAssignments
+					if phaseOverride == nil {
+						phaseOverride = map[string]string{} // explicit clear signal for the preset path
+					}
 					m.PendingSyncOverrides = &model.SyncOverrides{
 						TargetAgents:                []model.AgentID{model.AgentCodex},
 						CodexModelAssignments:       assignments,
 						CodexCarrilModelAssignments: presetCarrilModels,
+						CodexPhaseModelAssignments:  phaseOverride,
 					}
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
@@ -1711,7 +1761,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case ScreenCodexModelPicker:
-		if m.Cursor == screens.CodexModelPickerOptionCount()-1 {
+		if m.CodexModelPicker.CustomMode == screens.CodexCustomModeNone && m.Cursor == screens.CodexModelPickerOptionCount(m.CodexModelPicker)-1 {
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
 				m.setScreen(ScreenModelConfig)
@@ -2925,7 +2975,7 @@ func (m Model) optionCount() int {
 	case ScreenKiroModelPicker:
 		return screens.KiroModelPickerOptionCount(m.KiroModelPicker)
 	case ScreenCodexModelPicker:
-		return screens.CodexModelPickerOptionCount()
+		return screens.CodexModelPickerOptionCount(m.CodexModelPicker)
 	case ScreenSDDMode:
 		return len(screens.SDDModeOptions()) + 1
 	case ScreenStrictTDD:

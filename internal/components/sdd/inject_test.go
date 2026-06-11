@@ -5472,6 +5472,94 @@ func TestInject_CodexIdempotent(t *testing.T) {
 	}
 }
 
+// TestInject_CodexPerPhaseModelAssignments covers inject.go:1585 — the
+// CodexPhaseModelAssignments branch. When InjectOptions.CodexPhaseModelAssignments
+// is non-empty, the injected AGENTS.md must contain the per-phase table
+// (| Phase | Model | reasoning_effort |) with the custom model in the correct
+// phase row. When empty (carril/preset path), it must use the per-carril table.
+func TestInject_CodexPerPhaseModelAssignments_InjectsPerPhaseTable(t *testing.T) {
+	home := t.TempDir()
+	adapter := codexInjectAdapter()
+
+	// Custom per-phase: sdd-propose gets gpt-5.4.
+	opts := InjectOptions{
+		CodexModelAssignments: model.CodexModelPresetRecommended(),
+		CodexPhaseModelAssignments: map[string]string{
+			"sdd-propose": "gpt-5.4",
+		},
+	}
+
+	result, err := Inject(home, adapter, "", opts)
+	if err != nil {
+		t.Fatalf("Inject(codex, per-phase opts) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(codex, per-phase opts) changed = false, want true")
+	}
+
+	agentsMD, readErr := os.ReadFile(filepath.Join(home, ".codex", "AGENTS.md"))
+	if readErr != nil {
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", readErr)
+	}
+	text := string(agentsMD)
+
+	// The per-phase table header must be present (not the per-carril header).
+	if !strings.Contains(text, "| Phase | Model |") {
+		t.Error("AGENTS.md missing per-phase table header '| Phase | Model |'")
+	}
+	// The per-carril profile rows must NOT be present when per-phase mode is active.
+	if strings.Contains(text, "| `sdd-strong`") {
+		t.Error("AGENTS.md contains per-carril row '| `sdd-strong`' but per-phase mode is active")
+	}
+	// The custom model must appear in the sdd-propose row.
+	wantRow := "| `sdd-propose` | `gpt-5.4` |"
+	if !strings.Contains(text, wantRow) {
+		t.Errorf("AGENTS.md missing expected sdd-propose row %q:\n%s", wantRow, text)
+	}
+	// No unresolved placeholders.
+	if strings.Contains(text, "{{") {
+		t.Errorf("AGENTS.md contains unresolved placeholder '{{' after Inject:\n%s", text)
+	}
+}
+
+// TestInject_CodexNilPhaseModelAssignments_UsesCarrilTable verifies that when
+// CodexPhaseModelAssignments is empty/nil, the carril-level table is rendered.
+func TestInject_CodexNilPhaseModelAssignments_UsesCarrilTable(t *testing.T) {
+	home := t.TempDir()
+	adapter := codexInjectAdapter()
+
+	// No per-phase assignments → preset/carril path.
+	opts := InjectOptions{
+		CodexModelAssignments: model.CodexModelPresetRecommended(),
+	}
+
+	result, err := Inject(home, adapter, "", opts)
+	if err != nil {
+		t.Fatalf("Inject(codex, carril opts) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(codex, carril opts) changed = false, want true")
+	}
+
+	agentsMD, readErr := os.ReadFile(filepath.Join(home, ".codex", "AGENTS.md"))
+	if readErr != nil {
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", readErr)
+	}
+	text := string(agentsMD)
+
+	// The per-carril profile rows must be present.
+	for _, carril := range []string{"sdd-strong", "sdd-mid", "sdd-cheap"} {
+		needle := "| `" + carril + "`"
+		if !strings.Contains(text, needle) {
+			t.Errorf("AGENTS.md missing carril row %q in per-carril mode", needle)
+		}
+	}
+	// The per-phase table header must NOT be present.
+	if strings.Contains(text, "| Phase | Model |") {
+		t.Error("AGENTS.md contains per-phase table header '| Phase | Model |' but carril mode is active")
+	}
+}
+
 func TestInject_NonCodexAdapterUnaffected(t *testing.T) {
 	// Kiro, Cursor, and Gemini adapters must not be affected by CodexModelAssignments.
 	adapters := []struct {

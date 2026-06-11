@@ -47,6 +47,13 @@ type InstallState struct {
 	// Absent/empty = resolve to DefaultCarrilModels at runtime (backward-compat).
 	CodexCarrilModelAssignments map[string]string `json:"codexCarrilModelAssignments,omitempty"`
 
+	// CodexPhaseModelAssignments maps each of the 13 SDD phase names to the
+	// model id the user assigned in the Custom per-phase picker (e.g. "gpt-5.5").
+	// When non-nil, overrides the carril-level model selection for that phase.
+	// Absent/nil = not using custom per-phase assignments (preset/carril behavior
+	// unchanged for backward-compatibility).
+	CodexPhaseModelAssignments map[string]string `json:"codexPhaseModelAssignments,omitempty"`
+
 	// ModelAssignments maps sub-agent names to provider/model pairs (OpenCode).
 	ModelAssignments map[string]ModelAssignmentState `json:"model_assignments,omitempty"`
 
@@ -111,6 +118,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		KiroModelAssignments:        existing.KiroModelAssignments,
 		CodexModelAssignments:       existing.CodexModelAssignments,
 		CodexCarrilModelAssignments: existing.CodexCarrilModelAssignments,
+		CodexPhaseModelAssignments:  existing.CodexPhaseModelAssignments,
 		Persona:                     existing.Persona,
 	}
 }
