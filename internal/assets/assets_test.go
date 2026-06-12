@@ -140,6 +140,10 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"claude/commands/sdd-verify.md",
 		"claude/agents/sdd-init.md",
 		"claude/agents/sdd-onboard.md",
+		"claude/agents/review-risk.md",
+		"claude/agents/review-readability.md",
+		"claude/agents/review-reliability.md",
+		"claude/agents/review-resilience.md",
 
 		// OpenCode agent files
 		"opencode/persona-gentleman.md",
@@ -177,6 +181,16 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"cursor/agents/sdd-apply.md",
 		"cursor/agents/sdd-verify.md",
 		"cursor/agents/sdd-archive.md",
+		"cursor/agents/review-risk.md",
+		"cursor/agents/review-readability.md",
+		"cursor/agents/review-reliability.md",
+		"cursor/agents/review-resilience.md",
+
+		// Kiro agent files
+		"kiro/agents/review-risk.md",
+		"kiro/agents/review-readability.md",
+		"kiro/agents/review-reliability.md",
+		"kiro/agents/review-resilience.md",
 
 		// Kimi agent files
 		"kimi/persona-gentleman.md",
@@ -205,6 +219,14 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"kimi/agents/sdd-verify.md",
 		"kimi/agents/sdd-archive.md",
 		"kimi/agents/sdd-onboard.md",
+		"kimi/agents/review-risk.yaml",
+		"kimi/agents/review-readability.yaml",
+		"kimi/agents/review-reliability.yaml",
+		"kimi/agents/review-resilience.yaml",
+		"kimi/agents/review-risk.md",
+		"kimi/agents/review-readability.md",
+		"kimi/agents/review-reliability.md",
+		"kimi/agents/review-resilience.md",
 
 		// SDD skills
 		"skills/sdd-init/SKILL.md",
@@ -394,8 +416,83 @@ func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(claude/agents) error = %v", err)
 	}
-	if len(agentEntries) != 13 {
-		t.Fatalf("claude agents count = %d, want 13", len(agentEntries))
+	if len(agentEntries) != 17 {
+		t.Fatalf("claude agents count = %d, want 17", len(agentEntries))
+	}
+}
+
+func TestFourRReviewAgentAssets(t *testing.T) {
+	reviewAgents := []string{"review-risk", "review-readability", "review-reliability", "review-resilience"}
+	nativeDirs := []string{"claude/agents", "cursor/agents", "kiro/agents"}
+	agentRules := map[string][]string{
+		"review-risk": {
+			"Rule sources: ai-course-2 slides",
+			"Flag when secrets, tokens, API keys, JWT secrets, or DB URLs are hardcoded",
+			"Block when authz is enforced only in the frontend",
+			"Do not flag when React default escaping is used",
+		},
+		"review-readability": {
+			"Rule sources: ai-course-2 slides",
+			"Flag magic numbers that should be named constants",
+			"Flag long parameter lists that should be parameter objects",
+			"Do not flag a small helper or inline constant",
+		},
+		"review-reliability": {
+			"Rule sources: ai-course-2 slides",
+			"Block behavior changes without tests that assert externally visible contract",
+			"Block when CI can pass with `test.only`",
+			"Do not flag intentional reliance on built-in async waiting/trace visibility",
+		},
+		"review-resilience": {
+			"Rule sources: ai-course-2 slides",
+			"Flag failures with no fallback, retry, or graceful-degradation path",
+			"prod error rate > 1% investigate, > 2% emergency, > 5% all hands",
+			"Do not flag explicitly low-impact expected issues",
+		},
+	}
+
+	for _, dir := range nativeDirs {
+		for _, agent := range reviewAgents {
+			content := MustRead(dir + "/" + agent + ".md")
+			for _, want := range []string{"read-only reviewer", "severity: BLOCKER | CRITICAL | WARNING | SUGGESTION", "No findings."} {
+				if !strings.Contains(content, want) {
+					t.Fatalf("%s/%s.md missing %q", dir, agent, want)
+				}
+			}
+			for _, want := range agentRules[agent] {
+				if !strings.Contains(content, want) {
+					t.Fatalf("%s/%s.md missing concrete 4R rule %q", dir, agent, want)
+				}
+			}
+		}
+	}
+
+	for _, agent := range reviewAgents {
+		md := MustRead("kimi/agents/" + agent + ".md")
+		yaml := MustRead("kimi/agents/" + agent + ".yaml")
+		if !strings.Contains(md, "No findings.") || !strings.Contains(yaml, "system_prompt_path: ./"+agent+".md") {
+			t.Fatalf("kimi review agent %s missing prompt or YAML binding", agent)
+		}
+		for _, want := range agentRules[agent] {
+			if !strings.Contains(md, want) {
+				t.Fatalf("kimi review agent %s missing concrete 4R rule %q", agent, want)
+			}
+		}
+	}
+
+	for _, overlay := range []string{"opencode/sdd-overlay-single.json", "opencode/sdd-overlay-multi.json"} {
+		content := MustRead(overlay)
+		for _, agent := range reviewAgents {
+			if !strings.Contains(content, `"`+agent+`"`) || !strings.Contains(content, "No findings.") {
+				t.Fatalf("%s missing OpenCode review agent %s", overlay, agent)
+			}
+			for _, want := range agentRules[agent] {
+				want = strings.ReplaceAll(want, "`", "")
+				if !strings.Contains(content, want) {
+					t.Fatalf("%s review agent %s missing concrete 4R rule %q", overlay, agent, want)
+				}
+			}
+		}
 	}
 }
 

@@ -820,6 +820,11 @@ func expectedTaskPermissions(suffix string) map[string]any {
 	for _, phase := range profilePhaseOrder {
 		permissions[phase+suffix] = "allow"
 	}
+	// Review agents are global (not profile-scoped), so named profile
+	// orchestrators also need unsuffixed permissions to delegate to them.
+	for _, reviewAgent := range reviewAgentNames {
+		permissions[reviewAgent] = "allow"
+	}
 	// JD agents are global (not profile-scoped) — always unsuffixed.
 	for _, jd := range opencode.JDPhases() {
 		permissions[jd] = "allow"

@@ -1620,9 +1620,9 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Multi overlay must contain gentle-orchestrator + 10 sub-agents + 3 JD agents = 14 agents.
-	if len(agentMap) != 14 {
-		t.Fatalf("agent count = %d, want 14", len(agentMap))
+	// Multi overlay must contain gentle-orchestrator + 10 SDD sub-agents + 3 JD agents + 4 review agents = 18 agents.
+	if len(agentMap) != 18 {
+		t.Fatalf("agent count = %d, want 18", len(agentMap))
 	}
 
 	// Verify gentle-orchestrator is present.
@@ -1646,7 +1646,7 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	}
 
 	// Verify representative sub-agents are present.
-	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive"} {
+	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "review-risk", "review-readability", "review-reliability", "review-resilience"} {
 		if _, ok := agentMap[subAgent]; !ok {
 			t.Fatalf("missing sub-agent %q", subAgent)
 		}
@@ -1982,12 +1982,12 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Empty mode defaults to single — gentle-orchestrator + 10 sub-agents = 11 agents.
+	// Empty mode defaults to single — gentle-orchestrator + 10 SDD sub-agents + 4 review agents = 15 agents.
 	if _, ok := agentMap["gentle-orchestrator"]; !ok {
 		t.Fatal("missing gentle-orchestrator agent")
 	}
-	if len(agentMap) != 11 {
-		t.Fatalf("agent count = %d, want 11", len(agentMap))
+	if len(agentMap) != 15 {
+		t.Fatalf("agent count = %d, want 15", len(agentMap))
 	}
 
 	// Verify orchestrator mode is "primary".
@@ -2004,7 +2004,7 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 	}
 
 	// Verify sub-agents are present with mode "subagent".
-	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive"} {
+	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "review-risk", "review-readability", "review-reliability", "review-resilience"} {
 		raw, ok := agentMap[subAgent]
 		if !ok {
 			t.Fatalf("missing sub-agent %q", subAgent)
@@ -4385,7 +4385,7 @@ func TestInjectCursorWritesSubAgentFiles(t *testing.T) {
 	}
 
 	agentsDir := filepath.Join(home, ".cursor", "agents")
-	phases := []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive"}
+	phases := []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "review-risk", "review-readability", "review-reliability", "review-resilience"}
 
 	for _, phase := range phases {
 		agentPath := filepath.Join(agentsDir, phase+".md")
@@ -4432,6 +4432,88 @@ func TestInjectCursorWritesSubAgentFiles(t *testing.T) {
 		if strings.Contains(f, ".cursor/agents/") {
 			t.Fatalf("second inject should not report changed agent files, but got %s", f)
 		}
+	}
+}
+
+func TestInjectWritesNativeReviewAgentFiles(t *testing.T) {
+	tests := []struct {
+		name          string
+		adapter       agents.Adapter
+		agentsDir     func(home string) string
+		extraExts     []string
+		extraContains map[string]string
+	}{
+		{
+			name:      "claude",
+			adapter:   claudeAdapter(),
+			agentsDir: func(home string) string { return filepath.Join(home, ".claude", "agents") },
+		},
+		{
+			name:      "cursor",
+			adapter:   mustAdapter(t, "cursor"),
+			agentsDir: func(home string) string { return filepath.Join(home, ".cursor", "agents") },
+		},
+		{
+			name:      "kiro",
+			adapter:   mustAdapter(t, model.AgentKiroIDE),
+			agentsDir: func(home string) string { return filepath.Join(home, ".kiro", "agents") },
+		},
+		{
+			name:      "kimi",
+			adapter:   kimiAdapter(),
+			agentsDir: func(home string) string { return filepath.Join(home, ".kimi", "agents") },
+			extraExts: []string{".yaml"},
+			extraContains: map[string]string{
+				".yaml": "system_prompt_path: ./",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			result, err := Inject(home, tt.adapter, "")
+			if err != nil {
+				t.Fatalf("Inject(%s) error = %v", tt.name, err)
+			}
+			if !result.Changed {
+				t.Fatalf("Inject(%s) changed = false", tt.name)
+			}
+
+			for _, agent := range reviewAgentNames {
+				assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), agent+".md"), "No findings.")
+				for _, ext := range tt.extraExts {
+					want := tt.extraContains[ext]
+					if ext == ".yaml" {
+						want += agent + ".md"
+					}
+					assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), agent+ext), want)
+				}
+			}
+		})
+	}
+}
+
+func mustAdapter(t *testing.T, id model.AgentID) agents.Adapter {
+	t.Helper()
+	adapter, err := agents.NewAdapter(id)
+	if err != nil {
+		t.Fatalf("NewAdapter(%s) error = %v", id, err)
+	}
+	return adapter
+}
+
+func assertNativeAgentFile(t *testing.T, path string, contains string) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if len(content) < 50 {
+		t.Fatalf("native agent file %q is suspiciously short: %d bytes", path, len(content))
+	}
+	if !strings.Contains(string(content), contains) {
+		t.Fatalf("native agent file %q missing %q", path, contains)
 	}
 }
 

@@ -1,0 +1,9 @@
+version: "1"
+agent:
+  name: review-risk
+  extend: default
+  system_prompt_path: ./review-risk.md
+  exclude_tools:
+    - "kimi_cli.tools.multiagent:Task"
+    - "kimi_cli.tools.file:WriteFile"
+    - "kimi_cli.tools.file:StrReplaceFile"

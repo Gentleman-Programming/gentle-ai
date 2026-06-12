@@ -66,6 +66,13 @@ var profilePhaseOrder = []string{
 	"sdd-onboard",
 }
 
+var reviewAgentNames = []string{
+	"review-risk",
+	"review-readability",
+	"review-reliability",
+	"review-resilience",
+}
+
 // ProfilePhaseOrder returns the ordered list of SDD sub-agent phase names.
 // Use this instead of duplicating the slice in other packages.
 func ProfilePhaseOrder() []string {
@@ -268,6 +275,12 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 	// JD agents are workflow-level and shared across profiles.
 	for _, jd := range opencode.JDPhases() {
 		taskPerms[jd] = "allow"
+	}
+	// Add 4R review agent permissions (global, not profile-scoped).
+	// The base overlays define these shared review agents; named profiles only
+	// need permission to delegate to the unsuffixed global agent keys.
+	for _, reviewAgent := range reviewAgentNames {
+		taskPerms[reviewAgent] = "allow"
 	}
 
 	orchEntry := map[string]any{
