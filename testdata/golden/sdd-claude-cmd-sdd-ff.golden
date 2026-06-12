@@ -20,8 +20,8 @@ Planning phases:
 
 CONTEXT:
 
-- Working directory: !`pwd`
-- Current project: !`basename "$(pwd)"`
+- Working directory: Detect agent-side before proceeding by running `git rev-parse --show-toplevel` with the Bash tool; if that fails, run `pwd` with the Bash tool.
+- Current project: Derive agent-side from the detected working directory basename. Do not use slash-command shell interpolation for this value.
 - Change name: $ARGUMENTS
 - Execution mode: ask/cache per orchestrator
 - Artifact store mode: ask/cache per orchestrator

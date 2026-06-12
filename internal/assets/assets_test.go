@@ -1027,6 +1027,52 @@ func TestOpenCodeCommandsDetectWorkspaceAgentSide(t *testing.T) {
 	}
 }
 
+// TestClaudeCommandsDetectWorkspaceAgentSide guards against parse-time shell
+// interpolation for workspace/project context in Claude slash commands. Claude
+// Code performs static permission validation before running commands, so forms
+// like !`basename "$(pwd)"` can be rejected before the agent starts. Command
+// files must instruct the agent to detect the workspace from inside the session.
+func TestClaudeCommandsDetectWorkspaceAgentSide(t *testing.T) {
+	forbiddenPatterns := []string{
+		"!pwd",
+		"!`pwd`",
+		"!basename $(pwd)",
+		"!basename \"$(pwd)\"",
+		"!basename '$(pwd)'",
+		"!`basename $(pwd)`",
+		"!`basename \"$(pwd)\"`",
+		"!`basename '$(pwd)'`",
+		"!git rev-parse --show-toplevel",
+		"!`git rev-parse --show-toplevel`",
+	}
+	const requiredHint = "git rev-parse --show-toplevel"
+
+	entries, err := FS.ReadDir("claude/commands")
+	if err != nil {
+		t.Fatalf("ReadDir(claude/commands) error = %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		path := "claude/commands/" + entry.Name()
+		content := MustRead(path)
+		for _, pat := range forbiddenPatterns {
+			if strings.Contains(content, pat) {
+				t.Errorf("%s contains banned Claude parse-time shell interpolation %q — detect workspace/project context agent-side instead (see #837)", path, pat)
+			}
+		}
+		for _, line := range strings.Split(content, "\n") {
+			if (strings.Contains(line, "Working directory:") || strings.Contains(line, "Current project:")) && strings.Contains(line, "!") {
+				t.Errorf("%s contains parse-time shell interpolation in workspace/project context line %q — detect it agent-side instead (see #837)", path, line)
+			}
+		}
+		if strings.Contains(content, "Working directory:") && !strings.Contains(content, requiredHint) {
+			t.Errorf("%s mentions \"Working directory:\" without the agent-side detection hint %q (see #837)", path, requiredHint)
+		}
+	}
+}
+
 func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 	for _, assetPath := range []string{
 		"generic/sdd-orchestrator.md",

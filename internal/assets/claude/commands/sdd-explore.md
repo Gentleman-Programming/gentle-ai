@@ -6,8 +6,8 @@ If the native `sdd-explore` sub-agent is available, delegate this command to it.
 Otherwise, read the skill file at `~/.claude/skills/sdd-explore/SKILL.md` FIRST, then follow its instructions exactly inline.
 
 CONTEXT:
-- Working directory: !`pwd`
-- Current project: !`basename "$(pwd)"`
+- Working directory: Detect agent-side before proceeding by running `git rev-parse --show-toplevel` with the Bash tool; if that fails, run `pwd` with the Bash tool.
+- Current project: Derive agent-side from the detected working directory basename. Do not use slash-command shell interpolation for this value.
 - Topic to explore: $ARGUMENTS
 - Artifact store mode: engram
 
