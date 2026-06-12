@@ -51,10 +51,12 @@ Recovery: `mem_search("sdd/{change-name}/state")` → `mem_get_observation(id)` 
 ## Recovery Protocol (2 steps)
 
 Memory lifecycle rule (when Engram exposes lifecycle metadata/tooling):
-- active memories may be used normally.
-- needs_review memories are stale context, not trusted facts.
-- Surface needs_review context and verify it against current evidence before relying on it.
-- Do NOT mark memories reviewed automatically. Only mark reviewed after explicit user confirmation or through a dedicated memory maintenance command.
+- At session start or before architecture-sensitive work, call `mem_review` with action `list` for the current project when the tool is available.
+- If `mem_review` is unavailable, do not fail the task. Continue with normal `mem_context`/`mem_search`, and still apply lifecycle metadata from any returned observations when present.
+- `active` memories may be used normally.
+- `needs_review` memories are stale context, not trusted facts.
+- Surface `needs_review` context and verify it against current evidence before relying on it.
+- Do NOT call `mem_review` with action `mark_reviewed` automatically. Only call `mark_reviewed` after explicit user confirmation or through a dedicated memory maintenance command.
 
 ```
 Step 1: mem_search(query: "sdd/{change-name}/{artifact-type}", project: "{project}") → truncated preview + ID

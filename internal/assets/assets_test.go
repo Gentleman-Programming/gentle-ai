@@ -783,22 +783,23 @@ func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
 
 			required := []string{
 				"when Engram exposes lifecycle metadata/tooling",
+				"At session start or before architecture-sensitive work",
+				"mem_review",
+				"action `list`",
+				"current project",
+				"If `mem_review` is unavailable, do not fail the task",
+				"Continue with normal `mem_context`/`mem_search`",
+				"still apply lifecycle metadata from any returned observations when present",
 				"active memories may be used normally",
 				"needs_review",
 				"stale context",
 				"verify it against current evidence before relying on it",
-				"Do NOT mark memories reviewed automatically",
-				"explicit user confirmation or through a dedicated memory maintenance command",
+				"Do NOT call `mem_review` with action `mark_reviewed` automatically",
+				"Only call `mark_reviewed` after explicit user confirmation or through a dedicated memory maintenance command",
 			}
 			for _, want := range required {
-				if !strings.Contains(content, want) {
+				if !strings.Contains(content, want) && !strings.Contains(normalizedWords(content), normalizedWords(want)) {
 					t.Fatalf("%s missing memory lifecycle rule %q", path, want)
-				}
-			}
-
-			for _, forbidden := range []string{"mem_review", "mark_reviewed"} {
-				if strings.Contains(content, forbidden) {
-					t.Fatalf("%s must not mention blocked runtime lifecycle tooling %q", path, forbidden)
 				}
 			}
 		})

@@ -612,6 +612,8 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 		"mem_get_observation",
 		"mem_current_project",
 		"mem_judge",
+		"optional mem_review",
+		"if mem_review is unavailable",
 	} {
 		if !strings.Contains(hooksText, want) {
 			t.Fatalf("Antigravity Engram hook missing %q; got:\n%s", want, hooksText)
