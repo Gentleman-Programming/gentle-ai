@@ -30,7 +30,7 @@ func (a KiloModelAlias) Valid() bool {
 func KiloModelID(alias KiloModelAlias) string {
 	switch alias {
 	case KiloModelAuto:
-		return "auto"
+		return "kilo/kilo-auto/free"
 	case KiloModelSonnet:
 		return "anthropic/claude-sonnet-4-20250514"
 	case KiloModelOpus:
