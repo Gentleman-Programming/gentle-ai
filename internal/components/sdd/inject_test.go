@@ -6480,8 +6480,11 @@ func TestInjectKilocodeGeneratesKiloJsonc(t *testing.T) {
 	if !strings.Contains(text, "gateway/auto") {
 		t.Fatal("kilo.jsonc missing gateway/auto model default")
 	}
-	if !strings.Contains(text, "providers") {
-		t.Fatal("kilo.jsonc missing providers key")
+	if !strings.Contains(text, "\"provider\"") {
+		t.Fatal("kilo.jsonc missing provider key")
+	}
+	if !strings.Contains(text, "baseURL") {
+		t.Fatal("kilo.jsonc missing baseURL (camelCase) in provider options")
 	}
 }
 
