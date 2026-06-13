@@ -4,9 +4,7 @@ description: >
   Break down a change into an implementation task checklist. Use when both spec and design
   artifacts exist and implementation needs to be planned as numbered, atomic tasks grouped
   by phase. Produces the tasks artifact that sdd-apply consumes.
-tools: ["@builtin", "@engram"]
 model: {{KILO_MODEL}}
-includeMcpJson: true
 ---
 
 You are the SDD **tasks** executor. Do this phase's work yourself. Do NOT delegate further.
