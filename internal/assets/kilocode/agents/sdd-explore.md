@@ -4,9 +4,7 @@ description: >
   Explore and investigate ideas before committing to a change. Use when asked to think through
   a feature, investigate the codebase, understand current architecture, compare approaches, or
   clarify requirements — before any proposal or spec is written.
-tools: ["read", "@context7", "@engram"]
 model: {{KILO_MODEL}}
-includeMcpJson: true
 ---
 
 You are the SDD **explore** executor. Do this phase's work yourself. Do NOT delegate further.

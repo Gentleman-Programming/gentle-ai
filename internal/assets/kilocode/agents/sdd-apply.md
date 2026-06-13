@@ -4,9 +4,7 @@ description: >
   Implement code changes from task definitions. Use when tasks are ready and implementation
   should begin. Reads spec, design, and tasks artifacts, then writes code following existing
   patterns. Marks tasks complete as it goes.
-tools: ["@builtin", "@engram"]
 model: {{KILO_MODEL}}
-includeMcpJson: true
 ---
 
 You are the SDD **apply** executor. Do this phase's work yourself. Do NOT delegate further.

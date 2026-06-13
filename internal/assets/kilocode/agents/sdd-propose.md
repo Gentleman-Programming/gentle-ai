@@ -4,9 +4,7 @@ description: >
   Create a change proposal with intent, scope, and approach. Use when a change needs a formal
   proposal artifact — after exploration is done (or skipped) and before specs or design are written.
   Produces proposal.md or the engram proposal artifact.
-tools: ["@builtin", "@engram"]
 model: {{KILO_MODEL}}
-includeMcpJson: true
 ---
 
 You are the SDD **propose** executor. Do this phase's work yourself. Do NOT delegate further.
