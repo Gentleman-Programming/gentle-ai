@@ -10,19 +10,24 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
-// kiloConfig represents the structure of kilo.jsonc.
+// kiloConfig represents the structure of kilo.jsonc per the official schema.
+// Root-level key is "model" (singular), provider map key is "provider" (singular),
+// and each provider's options use "baseURL" (camelCase).
 type kiloConfig struct {
-	Providers map[string]providerConfig `json:"providers"`
-	Models    modelConfig               `json:"models"`
+	Model    string                    `json:"model,omitempty"`
+	Provider map[string]providerConfig `json:"provider,omitempty"`
 }
 
 type providerConfig struct {
-	BaseURL string `json:"baseUrl,omitempty"`
-	APIKey  string `json:"apiKey,omitempty"`
+	API     string            `json:"api,omitempty"`
+	Name    string            `json:"name,omitempty"`
+	Env     []string          `json:"env,omitempty"`
+	Options providerOptions   `json:"options,omitempty"`
 }
 
-type modelConfig struct {
-	Default string `json:"default"`
+type providerOptions struct {
+	APIKey string `json:"apiKey,omitempty"`
+	BaseURL string `json:"baseURL,omitempty"`
 }
 
 // Generate writes ~/.config/kilo/kilo.jsonc with Kilo Gateway provider config
@@ -43,16 +48,19 @@ func Generate(homeDir string, modelAssignments map[string]model.KiloModelAlias) 
 
 	configPath := filepath.Join(configDir, "kilo.jsonc")
 
-	// Build the overlay config.
+	// Build the overlay config matching Kilo Code's official schema.
 	overlay := kiloConfig{
-		Providers: map[string]providerConfig{
+		Model: "gateway/auto",
+		Provider: map[string]providerConfig{
 			"kilo-gateway": {
-				BaseURL: "https://api.kilocode.ai/v1",
-				APIKey:  "${KILO_API_KEY}",
+				API:  "openai",
+				Name: "Kilo Gateway",
+				Env:  []string{"KILO_API_KEY"},
+				Options: providerOptions{
+					APIKey:  "${KILO_API_KEY}",
+					BaseURL: "https://api.kilocode.ai/v1",
+				},
 			},
-		},
-		Models: modelConfig{
-			Default: "gateway/auto",
 		},
 	}
 
