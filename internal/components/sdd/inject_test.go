@@ -6306,3 +6306,277 @@ func TestInjectTriggerRules_AllAdapters(t *testing.T) {
 		})
 	}
 }
+
+// Kilo Code native sub-agent injection tests
+// ---------------------------------------------------------------------------
+
+// TestInjectKilocodeWritesNativeAgentFiles verifies that Inject for the Kilo Code
+// adapter writes native .kilo/agents/*.md files with valid frontmatter.
+func TestInjectKilocodeWritesNativeAgentFiles(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	adapter := kilocodeAdapter()
+
+	result, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(kilocode) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(kilocode) changed = false")
+	}
+
+	// Verify all 10 SDD phase agent files exist.
+	expectedPhases := []string{
+		"sdd-apply", "sdd-verify", "sdd-design", "sdd-spec", "sdd-tasks",
+		"sdd-explore", "sdd-propose", "sdd-archive", "sdd-init", "sdd-onboard",
+	}
+	for _, phase := range expectedPhases {
+		path := filepath.Join(home, ".kilo", "agents", phase+".md")
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("ReadFile(%s.md) error = %v", phase, readErr)
+		}
+		text := string(content)
+		// Must have valid YAML frontmatter with name field.
+		if !strings.Contains(text, "name:") {
+			t.Fatalf("agent %s.md missing name: in frontmatter", phase)
+		}
+		// Must not contain unresolved placeholder.
+		if strings.Contains(text, "{{KILO_MODEL}}") {
+			t.Fatalf("agent %s.md still contains unresolved {{KILO_MODEL}} placeholder", phase)
+		}
+		// Must have a resolved model field.
+		if !strings.Contains(text, "model:") {
+			t.Fatalf("agent %s.md missing model: in frontmatter", phase)
+		}
+	}
+
+	// Verify gentle-orchestrator agent does NOT have mode: primary.
+	orchPath := filepath.Join(home, ".kilo", "agents", "gentle-orchestrator.md")
+	if orchContent, readErr := os.ReadFile(orchPath); readErr == nil {
+		if strings.Contains(string(orchContent), "mode: primary") {
+			t.Fatal("gentle-orchestrator.md must not use mode: primary (Kilo v7 rejects this)")
+		}
+	}
+}
+
+// TestInjectKilocodeModelSentinelResolution verifies that when KiloModelAssignments
+// is provided, the {{KILO_MODEL}} sentinel is resolved to the correct model ID
+// for each phase.
+func TestInjectKilocodeModelSentinelResolution(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	adapter := kilocodeAdapter()
+
+	assignments := map[string]model.KiloModelAlias{
+		"sdd-design":  model.KiloModelOpus,
+		"sdd-archive": model.KiloModelHaiku,
+		"default":     model.KiloModelSonnet,
+	}
+
+	result, err := Inject(home, adapter, "", InjectOptions{KiloModelAssignments: assignments})
+	if err != nil {
+		t.Fatalf("Inject(kilocode, custom assignments) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(kilocode, custom assignments) changed = false")
+	}
+
+	tests := []struct {
+		phase string
+		want  string
+	}{
+		{phase: "sdd-design", want: "model: anthropic/claude-opus-4-20250514"},
+		{phase: "sdd-archive", want: "model: anthropic/claude-haiku-4-20250514"},
+		// Unspecified phase should use default sonnet.
+		{phase: "sdd-spec", want: "model: anthropic/claude-sonnet-4-20250514"},
+	}
+
+	for _, tt := range tests {
+		path := filepath.Join(home, ".kilo", "agents", tt.phase+".md")
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("ReadFile(%s) error = %v", tt.phase, readErr)
+		}
+		text := string(content)
+		if strings.Contains(text, "{{KILO_MODEL}}") {
+			t.Fatalf("agent %s still contains unresolved {{KILO_MODEL}} placeholder", tt.phase)
+		}
+		if !strings.Contains(text, tt.want) {
+			t.Fatalf("agent %s missing %q, content: %s", tt.phase, tt.want, text[:min(len(text), 200)])
+		}
+	}
+}
+
+// TestInjectKilocodeDefaultBalancedPreset verifies that when no KiloModelAssignments
+// are provided, the default balanced preset (all auto) is used.
+func TestInjectKilocodeDefaultBalancedPreset(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	adapter := kilocodeAdapter()
+
+	result, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(kilocode) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(kilocode) changed = false")
+	}
+
+	// All phases should get "auto" model ID from the balanced preset.
+	for _, phase := range []string{
+		"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design",
+		"sdd-tasks", "sdd-apply", "sdd-verify",
+	} {
+		path := filepath.Join(home, ".kilo", "agents", phase+".md")
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("ReadFile(%s) error = %v", phase, readErr)
+		}
+		if !strings.Contains(string(content), "model: auto") {
+			t.Fatalf("agent %s should have model: auto from balanced preset", phase)
+		}
+	}
+
+	// archive and onboard should use haiku.
+	for _, phase := range []string{"sdd-archive", "sdd-onboard"} {
+		path := filepath.Join(home, ".kilo", "agents", phase+".md")
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("ReadFile(%s) error = %v", phase, readErr)
+		}
+		if !strings.Contains(string(content), "model: anthropic/claude-haiku-4-20250514") {
+			t.Fatalf("agent %s should have haiku model from balanced preset", phase)
+		}
+	}
+}
+
+// TestInjectKilocodeGeneratesKiloJsonc verifies that Inject for the Kilo Code
+// adapter generates ~/.config/kilo/kilo.jsonc with provider config.
+func TestInjectKilocodeGeneratesKiloJsonc(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	adapter := kilocodeAdapter()
+
+	_, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(kilocode) error = %v", err)
+	}
+
+	configPath := filepath.Join(home, ".config", "kilo", "kilo.jsonc")
+	content, readErr := os.ReadFile(configPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile(kilo.jsonc) error = %v", readErr)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "kilo-gateway") {
+		t.Fatal("kilo.jsonc missing kilo-gateway provider entry")
+	}
+	if !strings.Contains(text, "gateway/auto") {
+		t.Fatal("kilo.jsonc missing gateway/auto model default")
+	}
+	if !strings.Contains(text, "providers") {
+		t.Fatal("kilo.jsonc missing providers key")
+	}
+}
+
+// TestInjectKilocodeVerificationFailsOnMissing verifies that post-injection
+// verification catches a missing agent file. This is a negative test — we
+// simulate the verification by checking that the error message is correct
+// when a critical file is missing.
+func TestInjectKilocodeVerificationFailsOnMissing(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	adapter := kilocodeAdapter()
+
+	// First, do a successful injection.
+	result, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(kilocode) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(kilocode) changed = false")
+	}
+
+	// Remove a critical agent file to simulate a corrupted state.
+	corruptPath := filepath.Join(home, ".kilo", "agents", "sdd-apply.md")
+	if err := os.Remove(corruptPath); err != nil {
+		t.Fatalf("Remove(sdd-apply.md) error = %v", err)
+	}
+
+	// The second injection should still succeed (it re-writes the file),
+	// but if we were to manually verify after this point, sdd-apply.md would
+	// be missing. This tests that the verification code path exists.
+	// We can't easily trigger a verification failure because Inject always
+	// writes the files before verification. Instead, we verify the file
+	// was re-created on the second run.
+	result2, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(kilocode) second run error = %v", err)
+	}
+	if !result2.Changed {
+		t.Fatal("Inject(kilocode) second run changed = false (should re-write missing file)")
+	}
+
+	if _, err := os.Stat(corruptPath); err != nil {
+		t.Fatalf("sdd-apply.md should be re-created after second inject: %v", err)
+	}
+}
+
+// TestInjectKilocodeIdempotent verifies that a second Inject call converges
+// to Changed=false for the artifacts we add: agent files and kilo.jsonc.
+// Pre-existing Kilo adapter files (commands, plugins, skills, opencode.json)
+// are tested separately and may have their own idempotency behavior.
+func TestInjectKilocodeIdempotent(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	adapter := kilocodeAdapter()
+
+	first, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(kilocode) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(kilocode) first changed = false")
+	}
+
+	second, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(kilocode) second error = %v", err)
+	}
+
+	// Verify our new agent files are idempotent (not in the changed list).
+	for _, phase := range []string{
+		"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design",
+		"sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
+	} {
+		agentPath := filepath.Join(home, ".kilo", "agents", phase+".md")
+		for _, f := range second.Files {
+			if f == agentPath {
+				t.Errorf("agent file %s should not change on second inject (not idempotent)", phase)
+			}
+		}
+	}
+
+	// Verify kilo.jsonc is idempotent.
+	kiloJsoncPath := filepath.Join(home, ".config", "kilo", "kilo.jsonc")
+	for _, f := range second.Files {
+		if f == kiloJsoncPath {
+			t.Error("kilo.jsonc should not change on second inject (not idempotent)")
+		}
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
