@@ -153,6 +153,7 @@ func TestCapabilities(t *testing.T) {
 		{"SupportsSlashCommands", a.SupportsSlashCommands, true},
 		{"SupportsOutputStyles", a.SupportsOutputStyles, false},
 		{"SupportsAutoInstall", a.SupportsAutoInstall, true},
+		{"SupportsSubAgents", a.SupportsSubAgents, true},
 	}
 
 	for _, tt := range tests {
@@ -240,3 +241,25 @@ func TestInstallCommand(t *testing.T) {
 		})
 	}
 }
+
+func TestSubAgentsDir(t *testing.T) {
+	a := NewAdapter()
+	want := filepath.Join("/home/user", ".kilo", "agents")
+	if got := a.SubAgentsDir("/home/user"); got != want {
+		t.Fatalf("SubAgentsDir() = %q, want %q", got, want)
+	}
+}
+
+func TestEmbeddedSubAgentsDir(t *testing.T) {
+	a := NewAdapter()
+	want := "kilocode/agents"
+	if got := a.EmbeddedSubAgentsDir(); got != want {
+		t.Fatalf("EmbeddedSubAgentsDir() = %q, want %q", got, want)
+	}
+}
+
+// Verify that *Adapter satisfies the kiloModelResolver interface at compile time.
+// The kiloModelResolver interface is defined in internal/components/sdd/inject.go.
+var _ interface {
+	KiloModelID(alias model.KiloModelAlias) string
+} = (*Adapter)(nil)

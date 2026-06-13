@@ -135,15 +135,21 @@ func (a *Adapter) CommandsDir(homeDir string) string {
 }
 
 func (a *Adapter) SupportsSubAgents() bool {
-	return false
+	return true
 }
 
-func (a *Adapter) SubAgentsDir(_ string) string {
-	return ""
+func (a *Adapter) SubAgentsDir(homeDir string) string {
+	return filepath.Join(homeDir, ".kilo", "agents")
 }
 
 func (a *Adapter) EmbeddedSubAgentsDir() string {
-	return ""
+	return "kilocode/agents"
+}
+
+// KiloModelID resolves a KiloModelAlias to a Kilo Gateway model identifier.
+// Used by the SDD injector to stamp the `model:` field in agent frontmatter.
+func (a *Adapter) KiloModelID(alias model.KiloModelAlias) string {
+	return model.KiloModelID(alias)
 }
 
 func (a *Adapter) SupportsSkills() bool {
