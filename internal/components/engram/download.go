@@ -431,18 +431,26 @@ func extractZipBinary(data []byte, binaryName, outPath string) error {
 }
 
 // stopEngramProcesses stops any running Engram process so Windows can replace
-// engram.exe during upgrade. Missing processes are not an error because
-// Get-Process uses SilentlyContinue.
+// engram.exe during upgrade. Missing processes are not an error; avoid piping
+// directly from Get-Process because Windows PowerShell 5.1 can still exit 1
+// when the process does not exist.
 func stopEngramProcesses() error {
+	return stopEngramProcessesNamed("engram")
+}
+
+func stopEngramProcessesNamed(processName string) error {
+	escapedProcessName := strings.ReplaceAll(processName, "'", "''")
+	script := fmt.Sprintf("$p = Get-Process -Name '%s' -ErrorAction SilentlyContinue; if ($p) { $p | Stop-Process -Force -ErrorAction Stop }; exit 0", escapedProcessName)
+
 	cmd := exec.Command("powershell.exe",
 		"-NoProfile",
 		"-NonInteractive",
 		"-Command",
-		"Get-Process -Name engram -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Stop",
+		script,
 	)
 	cmd.Stdin = nil
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("powershell Stop-Process engram: %w (output: %s)", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("powershell Stop-Process %s: %w (output: %s)", processName, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

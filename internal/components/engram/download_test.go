@@ -521,6 +521,17 @@ func TestDownloadLatestBinaryWindowsStopsEngramBeforeReplace(t *testing.T) {
 	}
 }
 
+func TestStopEngramProcessesWindowsNoProcessSucceeds(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell process handling is Windows-specific")
+	}
+
+	err := stopEngramProcessesNamed("gentle-ai-engram-test-definitely-missing")
+	if err != nil {
+		t.Fatalf("stopEngramProcessesNamed() with missing process error = %v, want nil", err)
+	}
+}
+
 func TestDownloadLatestBinaryWindowsStopFailureAbortsBeforeReplace(t *testing.T) {
 	version := versions.EngramCore
 	server := makeServerWithFakeZip(t, version)
