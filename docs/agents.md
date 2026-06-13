@@ -10,7 +10,7 @@
 | --------------- | ---------------- | ------------ | --- | -------------------------------- | ------------- | -------------- | ----------------------------------- |
 | Claude Code     | `claude-code`    | Yes          | Yes | Full (Task tool)                 | Yes           | No             | `~/.claude`                         |
 | OpenCode        | `opencode`       | Yes          | Yes | Full (multi-mode overlay)        | No            | Yes            | `~/.config/opencode`                |
-| Kilo Code       | `kilocode`       | Yes          | Yes | Full (multi-mode overlay)        | No            | Yes            | `~/.config/kilo`                    |
+| Kilo Code       | `kilocode`       | Yes          | Yes | Full (native subagents + overlay)| No            | Yes            | `~/.config/kilo` + `~/.kilo/agents`|
 | Gemini CLI      | `gemini-cli`     | Yes          | Yes | Full (experimental)              | No            | No             | `~/.gemini`                         |
 | Cursor          | `cursor`         | Yes          | Yes | Full (native subagents)          | No            | No             | `~/.cursor`                         |
 | VS Code Copilot | `vscode-copilot` | Yes          | Yes | Full (runSubagent)               | No            | No             | `~/.copilot` + VS Code User profile |
@@ -110,7 +110,10 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 
 - **Detection**: gentle-ai detects Kilo Code from `~/.config/kilo` and checks for the `kilo` binary on `PATH`
 - Uses the OpenCode-compatible adapter: `AGENTS.md`, `skills/`, `commands/`, and `opencode.json` live under `~/.config/kilo`
-- Full SDD delegation is provided by the merged multi-agent overlay in `~/.config/kilo/opencode.json`, not by a separate native sub-agent directory
+- **Native sub-agents**: gentle-ai writes 10 SDD phase agent files to `~/.kilo/agents/sdd-{phase}.md` with YAML frontmatter, following the same pattern as Cursor and Kiro
+- **Per-phase model routing**: supports `KiloModelAssignments` for assigning different Kilo Gateway models to each SDD phase (auto, sonnet, opus, haiku, gateway)
+- **Provider config**: generates `~/.config/kilo/kilo.jsonc` with Kilo Gateway provider settings (free models, no API key required for gateway/auto)
+- **Post-injection verification**: verifies all agent files exist, have valid frontmatter, and orchestrator does NOT use `mode: primary` (fixes #729)
 - MCP servers are merged into `opencode.json`; Engram uses the OpenCode-style local MCP entry with `command` as an array
 - Auto-install is supported via npm: `npm install -g @kilocode/cli`
 
