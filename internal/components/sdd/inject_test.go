@@ -6455,7 +6455,9 @@ func TestInjectKilocodeDefaultBalancedPreset(t *testing.T) {
 }
 
 // TestInjectKilocodeGeneratesKiloJsonc verifies that Inject for the Kilo Code
-// adapter generates ~/.config/kilo/kilo.jsonc with provider config.
+// adapter generates ~/.config/kilo/kilo.jsonc with $schema only.
+// Provider and model config are NOT injected — Kilo Code has built-in gateway
+// support and custom entries conflict with it.
 func TestInjectKilocodeGeneratesKiloJsonc(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
@@ -6474,17 +6476,14 @@ func TestInjectKilocodeGeneratesKiloJsonc(t *testing.T) {
 	}
 
 	text := string(content)
-	if !strings.Contains(text, "kilo-gateway") {
-		t.Fatal("kilo.jsonc missing kilo-gateway provider entry")
+	if !strings.Contains(text, "$schema") {
+		t.Fatal("kilo.jsonc missing $schema key")
 	}
-	if !strings.Contains(text, "gateway/auto") {
-		t.Fatal("kilo.jsonc missing gateway/auto model default")
+	if strings.Contains(text, "kilo-gateway") {
+		t.Fatal("kilo.jsonc should not contain custom provider entries")
 	}
-	if !strings.Contains(text, "\"provider\"") {
-		t.Fatal("kilo.jsonc missing provider key")
-	}
-	if !strings.Contains(text, "baseURL") {
-		t.Fatal("kilo.jsonc missing baseURL (camelCase) in provider options")
+	if strings.Contains(text, "gateway/auto") {
+		t.Fatal("kilo.jsonc should not contain model override")
 	}
 }
 

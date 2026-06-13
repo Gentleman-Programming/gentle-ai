@@ -11,23 +11,11 @@ import (
 )
 
 // kiloConfig represents the structure of kilo.jsonc per the official schema.
-// Root-level key is "model" (singular), provider map key is "provider" (singular),
-// and each provider's options use "baseURL" (camelCase).
+// We only inject the $schema key to ensure validity. Model routing and provider
+// config are handled natively by Kilo Code — injecting custom providers or model
+// overrides conflicts with its built-in gateway and causes server errors.
 type kiloConfig struct {
-	Model    string                    `json:"model,omitempty"`
-	Provider map[string]providerConfig `json:"provider,omitempty"`
-}
-
-type providerConfig struct {
-	API     string            `json:"api,omitempty"`
-	Name    string            `json:"name,omitempty"`
-	Env     []string          `json:"env,omitempty"`
-	Options providerOptions   `json:"options,omitempty"`
-}
-
-type providerOptions struct {
-	APIKey string `json:"apiKey,omitempty"`
-	BaseURL string `json:"baseURL,omitempty"`
+	Schema string `json:"$schema,omitempty"`
 }
 
 // Generate writes ~/.config/kilo/kilo.jsonc with Kilo Gateway provider config
@@ -48,20 +36,11 @@ func Generate(homeDir string, modelAssignments map[string]model.KiloModelAlias) 
 
 	configPath := filepath.Join(configDir, "kilo.jsonc")
 
-	// Build the overlay config matching Kilo Code's official schema.
+	// Build the overlay config — only inject $schema for validity.
+	// Kilo Code has built-in providers and model routing; injecting custom
+	// provider entries conflicts with its gateway and causes server errors.
 	overlay := kiloConfig{
-		Model: "gateway/auto",
-		Provider: map[string]providerConfig{
-			"kilo-gateway": {
-				API:  "openai",
-				Name: "Kilo Gateway",
-				Env:  []string{"KILO_API_KEY"},
-				Options: providerOptions{
-					APIKey:  "${KILO_API_KEY}",
-					BaseURL: "https://api.kilocode.ai/v1",
-				},
-			},
-		},
+		Schema: "https://app.kilo.ai/config.json",
 	}
 
 	overlayBytes, err := json.MarshalIndent(overlay, "", "  ")
