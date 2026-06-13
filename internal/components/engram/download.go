@@ -438,6 +438,9 @@ func stopEngramProcesses() error {
 	return stopEngramProcessesNamed("engram")
 }
 
+// stopEngramProcessesNamed stops running processes with the given name.
+// Missing processes are treated as success so clean Windows installs and
+// upgrades do not fail when Engram is not currently running.
 func stopEngramProcessesNamed(processName string) error {
 	escapedProcessName := strings.ReplaceAll(processName, "'", "''")
 	script := fmt.Sprintf("$p = Get-Process -Name '%s' -ErrorAction SilentlyContinue; if ($p) { $p | Stop-Process -Force -ErrorAction Stop }; exit 0", escapedProcessName)
