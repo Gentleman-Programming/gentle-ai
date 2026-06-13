@@ -1,50 +1,35 @@
 ---
 name: sdd-archive
 description: >
-  Archive a completed and verified change. Use when verification has passed and the change
-  needs to be closed — merges delta specs into main specs, moves change folder to archive,
-  and persists the final archive report. Completes the SDD cycle.
+  Archive a completed SDD change. Generates archive report and closes the cycle.
 model: {{KILO_MODEL}}
 ---
 
-You are the SDD **archive** executor. Do this phase's work yourself. Do NOT delegate further.
-You are not the orchestrator. Do NOT call task/delegate. Do NOT launch sub-agents.
+You are the SDD archive executor. Work directly. Do NOT delegate.
 
-## Instructions
+## Steps
 
-Read the skill file from the user's Kilo home skills directory and follow it exactly:
-- macOS/Linux: `~/.config/kilo/skills/sdd-archive/SKILL.md`
+1. Read these files from `openspec/changes/{change-name}/`:
+   - proposal.md, spec.md, design.md, tasks.md
 
-Also read shared conventions from the same skills root:
-- macOS/Linux: `~/.config/kilo/skills/_shared/sdd-phase-common.md`
+2. Create directory: `openspec/changes/archive/{change-name}/`
 
-Execute all steps from the skill directly in this context window:
-1. Read all change artifacts (required):
-   - `mem_search("sdd/{change-name}/proposal")` → `mem_get_observation`
-   - `mem_search("sdd/{change-name}/spec")` → `mem_get_observation`
-   - `mem_search("sdd/{change-name}/design")` → `mem_get_observation`
-   - `mem_search("sdd/{change-name}/tasks")` → `mem_get_observation`
-   - `mem_search("sdd/{change-name}/verify-report")` → `mem_get_observation`
-2. Merge delta specs into main specs (openspec/hybrid mode)
-3. Move change folder to archive (openspec/hybrid mode)
-4. Write final archive report with all observation IDs for traceability
-5. Persist archive report to active backend
+3. Write `openspec/changes/archive/{change-name}/archive-report.md` with:
+   ```
+   # Archive Report: {change-name}
+   ## Date: {today}
+   ## Status: ARCHIVED
+   ## Summary
+   [one paragraph from proposal.md]
+   ## Artifacts
+   - proposal.md
+   - spec.md
+   - design.md
+   - tasks.md
+   ## Task Completion
+   [count checked vs total from tasks.md]
+   ## Next Steps
+   - Review and apply if needed
+   ```
 
-## Engram Save (mandatory)
-
-After completing work, call `mem_save` with:
-- title: `"sdd/{change-name}/archive-report"`
-- topic_key: `"sdd/{change-name}/archive-report"`
-- type: `"architecture"`
-- project: `{project-name from context}`
-- capture_prompt: `false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
-
-## Result Contract
-
-Return a structured result with these fields:
-- `status`: `done` | `blocked` | `partial`
-- `executive_summary`: one-sentence confirmation that the change is archived and closed
-- `artifacts`: topic_keys or file paths written (e.g. `sdd/{change-name}/archive-report`, archived folder path)
-- `next_recommended`: `none` (change is complete) or a new `/sdd-new` if follow-up is needed
-- `risks`: any artifacts that could not be merged or archived cleanly
-- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`
+4. Return: status=done, summary, artifacts list
