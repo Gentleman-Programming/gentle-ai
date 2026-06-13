@@ -6426,7 +6426,7 @@ func TestInjectKilocodeDefaultBalancedPreset(t *testing.T) {
 		t.Fatal("Inject(kilocode) changed = false")
 	}
 
-	// All phases should get "auto" model ID from the balanced preset.
+	// All phases should get kilo/kilo-auto/free model ID from the balanced preset.
 	for _, phase := range []string{
 		"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design",
 		"sdd-tasks", "sdd-apply", "sdd-verify",
@@ -6436,8 +6436,8 @@ func TestInjectKilocodeDefaultBalancedPreset(t *testing.T) {
 		if readErr != nil {
 			t.Fatalf("ReadFile(%s) error = %v", phase, readErr)
 		}
-		if !strings.Contains(string(content), "model: auto") {
-			t.Fatalf("agent %s should have model: auto from balanced preset", phase)
+		if !strings.Contains(string(content), "model: kilo/kilo-auto/free") {
+			t.Fatalf("agent %s should have model: kilo/kilo-auto/free from balanced preset", phase)
 		}
 	}
 

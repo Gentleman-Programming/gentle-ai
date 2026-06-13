@@ -28,7 +28,7 @@ func TestKiloModelID(t *testing.T) {
 		alias KiloModelAlias
 		want  string
 	}{
-		{KiloModelAuto, "auto"},
+		{KiloModelAuto, "kilo/kilo-auto/free"},
 		{KiloModelSonnet, "anthropic/claude-sonnet-4-20250514"},
 		{KiloModelOpus, "anthropic/claude-opus-4-20250514"},
 		{KiloModelHaiku, "anthropic/claude-haiku-4-20250514"},
