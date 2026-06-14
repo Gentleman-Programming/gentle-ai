@@ -1012,7 +1012,7 @@ func TestFetchLatestEngramVersionWithAssetsPaginates(t *testing.T) {
 	t.Cleanup(func() { engramInstallDirFn = origInstallDirFn })
 
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
-	installedPath, err := DownloadLatestBinary(profile)
+	installedPath, err := DownloadLatestBinary(profile, false)
 	if err != nil {
 		t.Fatalf("DownloadLatestBinary() error = %v, want core engram v%s selected from page 2", err, binaryVersion)
 	}
