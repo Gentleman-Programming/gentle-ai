@@ -35,6 +35,23 @@ import (
 // Package-level var so tests can inject a deterministic clock.
 var tuiNowFn = time.Now
 
+// tuiOpenBrowserFn opens a URL in the default system browser.
+// Package-level var so tests can inject a stub without spawning a process.
+// Returns a non-nil error when the browser cannot be opened; callers fall back
+// to printing the URL to stdout.
+var tuiOpenBrowserFn = func(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = execCommandFn("open", url)
+	case "windows":
+		cmd = execCommandFn("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = execCommandFn("xdg-open", url)
+	}
+	return cmd.Start()
+}
+
 // advisoryFetchFn is the function used to fetch the advisory manifest.
 // Package-level var so tests can override without network calls.
 var advisoryFetchFn = update.FetchAdvisory
@@ -342,6 +359,10 @@ const (
 	ScreenAgentBuilderPreview
 	ScreenAgentBuilderInstalling
 	ScreenAgentBuilderComplete
+	// ScreenUpdatePrompt is shown BEFORE ScreenWelcome when an update is available
+	// at launch. No snooze or skip state is persisted — shown on every launch with
+	// a pending update. Keys: u=update+quit, c/Enter=keep→Welcome, v=view changes.
+	ScreenUpdatePrompt
 )
 
 type Model struct {
@@ -690,6 +711,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
 			return m, tickCmd()
 		}
+		// Keep spinner running on ScreenUpdatePrompt while the update check is
+		// still in-flight. Once UpdateCheckDone is true, the ticker is no longer
+		// needed for this screen and is intentionally not re-scheduled.
+		if m.Screen == ScreenUpdatePrompt && !m.UpdateCheckDone {
+			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
+			return m, tickCmd()
+		}
 		// Keep spinner running for agent builder generating/installing screens.
 		if m.AgentBuilder.Generating || m.AgentBuilder.Installing {
 			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
@@ -746,6 +774,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case UpdateCheckResultMsg:
 		m.UpdateResults = msg.Results
 		m.UpdateCheckDone = true
+		// Show the pre-Welcome update prompt only when the user is still on the
+		// initial Welcome screen. The update check is async (~10 s) so if the user
+		// has already navigated into a flow we must not interrupt them mid-action.
+		if update.HasUpdates(m.UpdateResults) && m.Screen == ScreenWelcome {
+			m.setScreen(ScreenUpdatePrompt)
+		}
 		return m, nil
 	case AdvisoryMsg:
 		// Store the advisory message for display on the Welcome screen.
@@ -1040,6 +1074,8 @@ func (m Model) View() string {
 		return screens.RenderABInstalling(engineName, m.SpinnerFrame, m.AgentBuilder.InstallErr)
 	case ScreenAgentBuilderComplete:
 		return screens.RenderABComplete(m.AgentBuilder.Generated, m.AgentBuilder.InstallResults)
+	case ScreenUpdatePrompt:
+		return screens.RenderUpdatePrompt(m.UpdateResults, m.Cursor, m.SpinnerFrame, m.UpdateCheckDone)
 	default:
 		return ""
 	}
@@ -1240,6 +1276,13 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+	}
+
+	// ScreenUpdatePrompt has its own dedicated key handlers that take priority
+	// over the generic navigation below. All three actions (u/v/c) are handled
+	// here so the generic enter/esc/up/down logic is bypassed for this screen.
+	if m.Screen == ScreenUpdatePrompt {
+		return m.handleUpdatePromptKey(keyStr)
 	}
 
 	switch keyStr {
@@ -2364,6 +2407,18 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 	case ScreenAgentBuilderComplete:
 		m.setScreen(ScreenWelcome)
+	case ScreenUpdatePrompt:
+		// Cursor maps to: 0=Update now, 1=View changes, 2=Keep current version.
+		// Enter always confirms the currently highlighted option.
+		// Direct key presses (u/v/c) are handled separately in handleUpdatePromptKey.
+		switch m.Cursor {
+		case 0: // Update now — route through startUpgrade so the result is surfaced.
+			return m, m.startUpgrade()
+		case 1: // View changes
+			return m.openUpdateReleaseURL()
+		default: // Keep current version (cursor=2) or any other position
+			m.setScreen(ScreenWelcome)
+		}
 	}
 
 	return m, nil
@@ -2463,6 +2518,71 @@ func (m Model) withResetUninstallState() Model {
 	m.OperationMode = ""
 	m.Cursor = 0
 	return m
+}
+
+// handleUpdatePromptKey processes key events on ScreenUpdatePrompt.
+//
+// Key bindings:
+//
+//	up / down → move cursor through the three options (wraps around)
+//	enter     → confirm the currently highlighted option (cursor-driven)
+//	u         → shortcut: run upgrade regardless of cursor position
+//	v         → shortcut: open release notes URL in browser; fallback: print URL; stay on screen
+//	c         → shortcut: keep current version (go to Welcome) regardless of cursor
+//	q, ctrl+c → quit
+func (m Model) handleUpdatePromptKey(keyStr string) (tea.Model, tea.Cmd) {
+	const optCount = 3
+	switch keyStr {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+	case "up":
+		if m.Cursor > 0 {
+			m.Cursor--
+		} else {
+			m.Cursor = optCount - 1
+		}
+		return m, nil
+	case "down":
+		if m.Cursor+1 < optCount {
+			m.Cursor++
+		} else {
+			m.Cursor = 0
+		}
+		return m, nil
+	case "enter":
+		// Confirm the highlighted option — same as confirmSelection() for this screen.
+		return m.confirmSelection()
+	case "u":
+		return m, m.startUpgrade()
+	case "v":
+		return m.openUpdateReleaseURL()
+	case "c":
+		m.setScreen(ScreenWelcome)
+		return m, nil
+	}
+	return m, nil
+}
+
+// openUpdateReleaseURL attempts to open the release notes URL for the first
+// available update result in the default system browser. When the browser cannot
+// be opened the URL is printed to stdout as a fallback. The screen stays on
+// ScreenUpdatePrompt in both cases (the user may still choose to update or keep).
+func (m Model) openUpdateReleaseURL() (tea.Model, tea.Cmd) {
+	var releaseURL string
+	for _, r := range m.UpdateResults {
+		if r.Status == update.UpdateAvailable && r.ReleaseURL != "" {
+			releaseURL = r.ReleaseURL
+			break
+		}
+	}
+	if releaseURL != "" {
+		if err := tuiOpenBrowserFn(releaseURL); err != nil {
+			// Fallback: print the URL so the user can open it manually.
+			fmt.Println("Release notes:", releaseURL)
+		}
+	}
+	// Stay on ScreenUpdatePrompt so the user can still choose to update or keep.
+	return m, nil
 }
 
 // startUpgrade launches the upgrade goroutine and returns a tea.Cmd.
@@ -2726,6 +2846,13 @@ func (m Model) goBack() Model {
 
 	// Block going back while agent installation is in progress.
 	if m.AgentBuilder.Installing {
+		return m
+	}
+
+	// Esc on the update prompt dismisses it and proceeds to Welcome
+	// (equivalent to "Keep current version").
+	if m.Screen == ScreenUpdatePrompt {
+		m.setScreen(ScreenWelcome)
 		return m
 	}
 
@@ -3014,6 +3141,11 @@ func (m *Model) setScreen(next Screen) {
 	m.PreviousScreen = m.Screen
 	m.Screen = next
 	m.Cursor = 0
+	// Safe default: start on "Keep current version" (index 2) so an accidental
+	// Enter press does not trigger an upgrade.
+	if next == ScreenUpdatePrompt {
+		m.Cursor = 2
+	}
 	if next == ScreenBackups {
 		m.BackupScroll = 0
 		m.PinErr = nil
@@ -3201,6 +3333,8 @@ func (m Model) optionCount() int {
 		return 0 // no cursor navigation while installing
 	case ScreenAgentBuilderComplete:
 		return 1 // Done
+	case ScreenUpdatePrompt:
+		return len(screens.UpdatePromptOptions()) // Update now / View changes / Keep current
 	default:
 		return 0
 	}
