@@ -39,6 +39,37 @@ var (
 	// engramGoInstallFn runs `go install <pkg>` and returns the path to the installed binary.
 	// Package-level var for testability — swapped in tests to avoid real go install calls.
 	engramGoInstallFn = engramGoInstallFromMain
+
+	// engramGoInstallCmdFn executes `go install <pkg>`. Package-level var for testability.
+	engramGoInstallCmdFn = func(pkg string) error {
+		cmd := exec.Command("go", "install", pkg)
+		cmd.Stdin = nil
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("go install %s: %w (output: %s)", pkg, err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+
+	// engramGoEnvFn queries the Go toolchain's effective environment for the
+	// given keys (e.g. "GOBIN", "GOPATH"). Package-level var for testability —
+	// swapped in tests to simulate values set via `go env -w` without mutating
+	// the real Go env file.
+	engramGoEnvFn = func(keys ...string) (map[string]string, error) {
+		args := append([]string{"env"}, keys...)
+		out, err := exec.Command("go", args...).Output()
+		if err != nil {
+			return nil, err
+		}
+		lines := strings.Split(strings.TrimRight(string(out), "\r\n"), "\n")
+		values := make(map[string]string, len(keys))
+		for i, key := range keys {
+			if i < len(lines) {
+				values[key] = strings.TrimSpace(lines[i])
+			}
+		}
+		return values, nil
+	}
 )
 
 // engramCoreTagPattern matches only plain semver tags (vX.Y.Z) that identify
@@ -715,16 +746,25 @@ func (b *byteReaderAt) ReadAt(p []byte, off int64) (int, error) {
 // engramGoInstallFromMain installs engram from the given Go package path (expected
 // to be "github.com/Gentleman-Programming/engram/cmd/engram@main") using `go install`.
 // It returns the path to the installed binary. This is the beta-channel upgrade path.
+//
+// The install directory is resolved via `go env GOBIN GOPATH` (the effective Go
+// environment) so that values set via `go env -w GOBIN=...` (stored in Go's env
+// file, NOT in shell env) are honored correctly. This mirrors the resolution done
+// by goInstallBinDirFromGoEnv in internal/cli/run.go.
 func engramGoInstallFromMain(pkg string) (string, error) {
-	cmd := exec.Command("go", "install", pkg)
-	cmd.Stdin = nil
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("go install %s: %w (output: %s)", pkg, err, strings.TrimSpace(string(out)))
+	if err := engramGoInstallCmdFn(pkg); err != nil {
+		return "", err
 	}
 
-	// Resolve the directory where `go install` placed the binary.
-	gopath := os.Getenv("GOPATH")
-	gobin := os.Getenv("GOBIN")
+	// Resolve the directory where `go install` placed the binary using the
+	// effective Go environment (honors `go env -w GOBIN=...`, not just shell env).
+	values, err := engramGoEnvFn("GOBIN", "GOPATH")
+	if err != nil {
+		return "", fmt.Errorf("resolve go install bin dir: %w", err)
+	}
+	gobin := strings.TrimSpace(values["GOBIN"])
+	gopath := strings.TrimSpace(values["GOPATH"])
+
 	if gobin == "" && gopath != "" {
 		gobin = filepath.Join(gopath, "bin")
 	}

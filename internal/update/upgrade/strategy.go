@@ -26,6 +26,14 @@ var engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
 	return engram.DownloadLatestBinary(profile, false)
 }
 
+// engramBetaInstallFn installs engram from HEAD via `go install @main` (beta channel).
+// It delegates to engram.DownloadLatestBinary(profile, true), which is the single
+// canonical beta path shared with the install-time flow. Package-level var for
+// testability — swapped in tests to avoid real go install/network calls.
+var engramBetaInstallFn = func(profile system.PlatformProfile) (string, error) {
+	return engram.DownloadLatestBinary(profile, true)
+}
+
 // execCommand is a package-level var declared in executor.go (same package).
 
 // scriptHTTPClient is the HTTP client used for downloading install.sh.
@@ -507,29 +515,15 @@ func engramBinaryUpgrade(profile system.PlatformProfile) error {
 
 	var binaryPath string
 	if channel.IsBeta() {
-		// Beta channel: install engram from HEAD using go install @main. This mirrors
-		// the installBetaEngramFromMain path used at install time in internal/cli/run.go.
-		const pkg = "github.com/Gentleman-Programming/engram/cmd/engram@main"
-		cmd := execCommand("go", "install", pkg)
-		cmd.Stdin = nil
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("go install %s: %w (output: %s)", pkg, err, strings.TrimSpace(string(out)))
+		// Beta channel: install engram from HEAD via engramBetaInstallFn, which
+		// delegates to engram.DownloadLatestBinary(profile, true). This is the
+		// single canonical beta path shared with the install-time flow in
+		// internal/cli/run.go (installBetaEngramFromMain). The previous inline
+		// `go install` block is removed — all beta logic lives in download.go.
+		binaryPath, err = engramBetaInstallFn(profile)
+		if err != nil {
+			return fmt.Errorf("install engram from main (beta): %w", err)
 		}
-		// Resolve the bin directory where go install placed the binary.
-		gopath := os.Getenv("GOPATH")
-		gobin := os.Getenv("GOBIN")
-		if gobin == "" && gopath != "" {
-			gobin = filepath.Join(gopath, "bin")
-		}
-		if gobin == "" {
-			home, _ := os.UserHomeDir()
-			gobin = filepath.Join(home, "go", "bin")
-		}
-		binaryName := "engram"
-		if runtime.GOOS == "windows" {
-			binaryName += ".exe"
-		}
-		binaryPath = filepath.Join(gobin, binaryName)
 	} else {
 		// Stable channel (default): download the latest release binary.
 		binaryPath, err = engramDownloadFn(profile)

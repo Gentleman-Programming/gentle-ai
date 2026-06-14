@@ -1165,3 +1165,49 @@ func TestDownloadLatestBinary_BetaChannelUsesGoInstallMain(t *testing.T) {
 		t.Error("expected non-empty installedPath for beta channel")
 	}
 }
+
+// TestEngramGoInstallFromMain_UsesGoEnvForBinDir verifies that
+// engramGoInstallFromMain resolves the install directory via `go env GOBIN GOPATH`
+// (the effective Go environment) rather than reading raw shell env vars.
+// This matters when GOBIN is set via `go env -w GOBIN=...` (stored in Go's
+// env file) but NOT exported into the shell environment.
+func TestEngramGoInstallFromMain_UsesGoEnvForBinDir(t *testing.T) {
+	const fakeInstallDir = "/custom/gobin/via/go-env"
+
+	origGoEnvFn := engramGoEnvFn
+	t.Cleanup(func() { engramGoEnvFn = origGoEnvFn })
+
+	// Simulate GOBIN set only via `go env -w` (not in shell env).
+	// The raw os.Getenv("GOBIN") would return "", but go env GOBIN returns
+	// the persisted value from the Go env file.
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", "")
+
+	engramGoEnvFn = func(keys ...string) (map[string]string, error) {
+		result := make(map[string]string, len(keys))
+		for _, k := range keys {
+			if k == "GOBIN" {
+				result[k] = fakeInstallDir
+			} else {
+				result[k] = ""
+			}
+		}
+		return result, nil
+	}
+
+	// Inject a fake go install that does nothing (no real network/build).
+	origGoInstallCmdFn := engramGoInstallCmdFn
+	t.Cleanup(func() { engramGoInstallCmdFn = origGoInstallCmdFn })
+	engramGoInstallCmdFn = func(pkg string) error { return nil }
+
+	binaryPath, err := engramGoInstallFromMain("github.com/Gentleman-Programming/engram/cmd/engram@main")
+	if err != nil {
+		t.Fatalf("engramGoInstallFromMain: unexpected error: %v", err)
+	}
+
+	wantDir := fakeInstallDir
+	gotDir := filepath.Dir(binaryPath)
+	if gotDir != wantDir {
+		t.Errorf("binary dir = %q, want %q (from go env GOBIN)", gotDir, wantDir)
+	}
+}

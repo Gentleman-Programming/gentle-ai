@@ -1583,29 +1583,29 @@ func TestEngramBinaryUpgrade_StableChannelCallsDownloadFn(t *testing.T) {
 }
 
 // TestEngramBinaryUpgrade_BetaChannelUsesGoInstallMain verifies that when
-// GENTLE_AI_CHANNEL=beta, engramBinaryUpgrade uses go install @main and does
-// NOT call engramDownloadFn.
+// GENTLE_AI_CHANNEL=beta, engramBinaryUpgrade delegates to
+// engramBetaInstallFn (the consolidated beta path, backed by
+// engram.DownloadLatestBinary(profile, true) in production). The stable
+// engramDownloadFn must NOT be called.
 func TestEngramBinaryUpgrade_BetaChannelUsesGoInstallMain(t *testing.T) {
 	t.Setenv("GENTLE_AI_CHANNEL", "beta")
 
 	origDownloadFn := engramDownloadFn
-	origExecCommand := execCommand
+	origBetaFn := engramBetaInstallFn
 	t.Cleanup(func() {
 		engramDownloadFn = origDownloadFn
-		execCommand = origExecCommand
+		engramBetaInstallFn = origBetaFn
 	})
 
 	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
-		t.Error("engramDownloadFn must NOT be called for beta channel")
+		t.Error("engramDownloadFn (stable path) must NOT be called for beta channel")
 		return "", nil
 	}
 
-	var gotGoInstallTarget string
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		if name == "go" && len(args) >= 2 && args[0] == "install" {
-			gotGoInstallTarget = args[1]
-		}
-		return mockCmd("true")
+	var betaCalled bool
+	engramBetaInstallFn = func(profile system.PlatformProfile) (string, error) {
+		betaCalled = true
+		return "/tmp/engram-beta", nil
 	}
 
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
@@ -1613,11 +1613,8 @@ func TestEngramBinaryUpgrade_BetaChannelUsesGoInstallMain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("engramBinaryUpgrade beta: unexpected error: %v", err)
 	}
-	if gotGoInstallTarget == "" {
-		t.Fatal("expected go install to be called for beta channel, but execCommand received no go install call")
-	}
-	if !strings.Contains(gotGoInstallTarget, "@main") {
-		t.Errorf("go install target = %q, want it to contain @main", gotGoInstallTarget)
+	if !betaCalled {
+		t.Fatal("expected engramBetaInstallFn (beta path) to be called, but it was not")
 	}
 }
 
