@@ -60,6 +60,9 @@ func RunArgs(args []string, stdout io.Writer) error {
 	cli.AppVersion = Version
 	upgrade.AppVersion = Version
 
+	// --yes as a global CLI flag for self-update is handled via GENTLE_AI_YES=1.
+	// Per-subcommand --yes flags (e.g. restore --yes) are parsed by each subcommand.
+
 	// Info commands: no system detection, no self-update, no platform validation.
 	if len(args) > 0 {
 		switch args[0] {

@@ -25,32 +25,45 @@ var selfUpdateNowFn = func() time.Time { return time.Now() }
 var selfUpdateHomeDirFn = os.UserHomeDir
 
 // Environment variable names for self-update control.
+// NOTE: GENTLE_AI_CONFIRM_UPDATE removed in slice 5 — prompt is now unconditional.
 const (
 	envNoSelfUpdate   = "GENTLE_AI_NO_SELF_UPDATE"
 	envSelfUpdateDone = "GENTLE_AI_SELF_UPDATE_DONE"
-	envConfirmUpdate  = "GENTLE_AI_CONFIRM_UPDATE"
+	envYesUpdate      = "GENTLE_AI_YES"
 )
+
+// isattyFn is a package-level var for TTY detection, injectable for tests.
+var isattyFn = func(fd uintptr) bool { return isatty.IsTerminal(fd) }
+
+// selfUpdateYesFn returns true when the caller wants the upgrade to proceed
+// without an interactive prompt. Set GENTLE_AI_YES=1 for scripted upgrades.
+// Injectable for tests.
+var selfUpdateYesFn = func() bool {
+	return os.Getenv(envYesUpdate) == "1"
+}
 
 // promptFn is swappable for tests — asks the user whether to apply the update.
 // Returns true if the user confirms, false to skip.
 var promptFn = defaultPromptForUpdate
 
-// defaultPromptForUpdate prints the version delta and reads a y/N answer from stdin.
-// If stdin is not a TTY, it defaults to false (decline) so scripts and CI are unaffected.
+// defaultPromptForUpdate prints the version delta and reads a Y/n answer from stdin.
+// Default answer is Y (Enter = accept). If stdin is not a TTY, it auto-declines so
+// scripts and CI are never blocked. Uses isattyFn for testability.
 func defaultPromptForUpdate(stdout io.Writer, stdin io.Reader, currentVersion, latestVersion string) (bool, error) {
 	// Require a TTY; non-interactive environments silently decline.
-	if f, ok := stdin.(*os.File); !ok || !isatty.IsTerminal(f.Fd()) {
+	if f, ok := stdin.(*os.File); !ok || !isattyFn(f.Fd()) {
 		return false, nil
 	}
 
-	_, _ = fmt.Fprintf(stdout, "Update available: %s → %s. Apply now? [y/N]: ", currentVersion, latestVersion)
+	_, _ = fmt.Fprintf(stdout, "Update available: %s → %s. Apply now? [Y/n]: ", currentVersion, latestVersion)
 
 	scanner := bufio.NewScanner(stdin)
 	if !scanner.Scan() {
 		return false, scanner.Err()
 	}
 	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
-	return answer == "y" || answer == "yes", nil
+	// Empty input (Enter) = accept default Y; "y"/"yes" explicit accept; anything else declines.
+	return answer == "" || answer == "y" || answer == "yes", nil
 }
 
 // selfUpdateTimeout is the maximum time allowed for the update check + upgrade.
@@ -115,12 +128,19 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 		return nil
 	}
 
-	// Guard: if GENTLE_AI_CONFIRM_UPDATE=1, prompt the user before applying.
-	if os.Getenv(envConfirmUpdate) == "1" {
-		ok, err := promptFn(stdout, os.Stdin, version, target.LatestVersion)
-		if err != nil || !ok {
-			return nil
+	// Prompt the user before applying — unconditional (GENTLE_AI_CONFIRM_UPDATE removed).
+	// When --yes / GENTLE_AI_YES=1, substitute an auto-accept stub so scripted
+	// upgrades work without a TTY. When stdin is not a TTY, defaultPromptForUpdate
+	// auto-declines, making non-interactive runs (CI, pipes) safe by default.
+	activePrmptFn := promptFn
+	if selfUpdateYesFn() {
+		activePrmptFn = func(_ io.Writer, _ io.Reader, _, _ string) (bool, error) {
+			return true, nil
 		}
+	}
+	ok, err := activePrmptFn(stdout, os.Stdin, version, target.LatestVersion)
+	if err != nil || !ok {
+		return nil
 	}
 
 	// Run upgrade (backup + strategy execution).
