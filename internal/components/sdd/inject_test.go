@@ -5956,3 +5956,205 @@ func TestInjectNonCodexAdapterCarrilUnaffected(t *testing.T) {
 		t.Fatalf("Inject(claude, carrilModels) should not error; got: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Unit 4 — Trigger-rules injection tests
+// ---------------------------------------------------------------------------
+
+// 4.1 — Inject for a system-prompt agent (claude) places trigger-rules markers.
+func TestInjectTriggerRules_SystemPromptAgent(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := Inject(home, claudeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject(claude) error = %v", err)
+	}
+
+	path := filepath.Join(home, ".claude", "CLAUDE.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(CLAUDE.md) error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "<!-- gentle-ai:trigger-rules -->") {
+		t.Error("CLAUDE.md missing <!-- gentle-ai:trigger-rules --> open marker")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:trigger-rules -->") {
+		t.Error("CLAUDE.md missing <!-- /gentle-ai:trigger-rules --> close marker")
+	}
+
+	// At least one rendered binding line must appear between the markers.
+	openIdx := strings.Index(text, "<!-- gentle-ai:trigger-rules -->")
+	closeIdx := strings.Index(text, "<!-- /gentle-ai:trigger-rules -->")
+	if openIdx < 0 || closeIdx < 0 || closeIdx <= openIdx {
+		t.Fatal("trigger-rules markers found but in wrong order")
+	}
+	between := text[openIdx : closeIdx+len("<!-- /gentle-ai:trigger-rules -->")]
+	if !strings.Contains(between, "pre-commit") {
+		t.Error("CLAUDE.md trigger-rules section does not contain binding content (expected 'pre-commit')")
+	}
+}
+
+// 4.2 — Inject is idempotent for trigger-rules (section appears exactly once after two calls).
+func TestInjectTriggerRules_Idempotent(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := Inject(home, claudeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject(claude) first error = %v", err)
+	}
+	_, err = Inject(home, claudeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject(claude) second error = %v", err)
+	}
+
+	path := filepath.Join(home, ".claude", "CLAUDE.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(CLAUDE.md) error = %v", err)
+	}
+	text := string(content)
+
+	openCount := strings.Count(text, "<!-- gentle-ai:trigger-rules -->")
+	if openCount != 1 {
+		t.Errorf("CLAUDE.md trigger-rules open marker count = %d, want 1 (idempotency)", openCount)
+	}
+	closeCount := strings.Count(text, "<!-- /gentle-ai:trigger-rules -->")
+	if closeCount != 1 {
+		t.Errorf("CLAUDE.md trigger-rules close marker count = %d, want 1 (idempotency)", closeCount)
+	}
+}
+
+// 4.3 — Inject for a JinjaModules agent (kimi) writes trigger-rules.md module.
+func TestInjectTriggerRules_JinjaModule(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := Inject(home, kimiAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject(kimi) error = %v", err)
+	}
+
+	modulePath := filepath.Join(home, ".kimi", "trigger-rules.md")
+	content, err := os.ReadFile(modulePath)
+	if err != nil {
+		t.Fatalf("ReadFile(trigger-rules.md) error = %v", err)
+	}
+	text := string(content)
+
+	// The module itself is the content (no markers — KIMI.md includes it via {% include %}).
+	if !strings.Contains(text, "pre-commit") {
+		t.Error("trigger-rules.md missing binding content (expected 'pre-commit')")
+	}
+	if !strings.Contains(text, "Agent Trigger Rules") {
+		t.Error("trigger-rules.md missing header 'Agent Trigger Rules'")
+	}
+	// The module must NOT contain markers (those are only for marker-based injection).
+	if strings.Contains(text, "<!-- gentle-ai:") {
+		t.Error("trigger-rules.md must not contain <!-- gentle-ai: markers (file is a Jinja module, not a marker-injected file)")
+	}
+}
+
+// 4.4 — Inject for OpenCode places trigger-rules content in the gentle-orchestrator prompt.
+func TestInjectTriggerRules_OpenCodePlacement(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := Inject(home, opencodeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject(opencode) error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	text := string(content)
+
+	// The trigger-rules section should appear in the gentle-orchestrator prompt scope.
+	if !strings.Contains(text, "trigger-rules") {
+		t.Error("opencode.json does not contain trigger-rules content in the gentle-orchestrator prompt")
+	}
+}
+
+// 4.5 — Inject for Kilocode places trigger-rules content in the gentle-orchestrator prompt.
+func TestInjectTriggerRules_KilocodePlacement(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := Inject(home, kilocodeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject(kilocode) error = %v", err)
+	}
+
+	settingsPath := kilocodeAdapter().SettingsPath(home)
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(kilocode settings) error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "trigger-rules") {
+		t.Error("kilocode settings does not contain trigger-rules content")
+	}
+}
+
+// 4.6 — All adapters receive trigger-rules content after Inject.
+func TestInjectTriggerRules_AllAdapters(t *testing.T) {
+	allAdapters := []struct {
+		name    string
+		adapter agents.Adapter
+		// getContent returns the primary system-prompt or orchestrator content.
+		getContent func(home string) (string, error)
+	}{
+		{
+			name:    "claude",
+			adapter: claudeAdapter(),
+			getContent: func(home string) (string, error) {
+				return readFileOrEmpty(filepath.Join(home, ".claude", "CLAUDE.md"))
+			},
+		},
+		{
+			name:    "kimi",
+			adapter: kimiAdapter(),
+			getContent: func(home string) (string, error) {
+				return readFileOrEmpty(filepath.Join(home, ".kimi", "trigger-rules.md"))
+			},
+		},
+		{
+			name:    "opencode",
+			adapter: opencodeAdapter(),
+			getContent: func(home string) (string, error) {
+				return readFileOrEmpty(opencodeAdapter().SettingsPath(home))
+			},
+		},
+		{
+			name:    "kilocode",
+			adapter: kilocodeAdapter(),
+			getContent: func(home string) (string, error) {
+				return readFileOrEmpty(kilocodeAdapter().SettingsPath(home))
+			},
+		},
+	}
+
+	for _, tc := range allAdapters {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			_, err := Inject(home, tc.adapter, "")
+			if err != nil {
+				t.Fatalf("Inject(%s) error = %v", tc.name, err)
+			}
+			content, err := tc.getContent(home)
+			if err != nil {
+				t.Fatalf("getContent(%s) error = %v", tc.name, err)
+			}
+			// Check for content that appears in the rendered trigger-rules block.
+			// System-prompt agents: markers contain "trigger-rules".
+			// Jinja module (kimi): file contains "Agent Trigger Rules" (header) and binding content.
+			hasTriggerRulesMarker := strings.Contains(content, "trigger-rules")
+			hasAgentTriggerRulesHeader := strings.Contains(content, "Agent Trigger Rules")
+			if !hasTriggerRulesMarker && !hasAgentTriggerRulesHeader {
+				t.Errorf("adapter %s: primary prompt/module does not contain trigger-rules content after Inject (checked for 'trigger-rules' and 'Agent Trigger Rules')", tc.name)
+			}
+		})
+	}
+}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -58,6 +59,12 @@ type InjectOptions struct {
 	// skills.InjectWithCapability will be called with empty capability
 	// (no section extraction, full content written).
 	Capability string
+
+	// triggerRulesContent is an internal field set by step 1c in Inject()
+	// for OpenCode/Kilocode adapters. It holds the rendered trigger-rules
+	// block so inlineOpenCodeSDDPrompts can append it to the gentle-orchestrator
+	// prompt content without re-computing the render.
+	triggerRulesContent string
 }
 
 // workflowInjector is an optional adapter capability: if an adapter
@@ -271,6 +278,71 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 	}
 
+	// sectionTriggerRules is the section ID used for marker-based injection.
+	// openMarker("trigger-rules") produces <!-- gentle-ai:trigger-rules -->.
+	// No new marker constant is needed — filemerge derives it from the section ID string.
+	const sectionTriggerRules = "trigger-rules"
+
+	// 1c. Inject the trigger-rules section into every agent's system prompt.
+	// Approach mirrors the strict-tdd-mode step (1b) with an additional path for
+	// OpenCode/Kilocode whose content lives in the gentle-orchestrator agent prompt
+	// (scoped to that agent only, not in a global AGENTS.md section).
+	//
+	// Decision (4.10): OpenCode and Kilocode deliver trigger-rules inside the
+	// gentle-orchestrator prompt where all existing SDD content lives — this keeps
+	// the rules in the always-loaded scope for those agents.
+	//
+	// Decision (4.11): Only Kimi uses StrategyJinjaModules today. If a future
+	// adapter adopts Jinja modules it must add its own {% include "trigger-rules.md" %}
+	// line and will be handled by the StrategyJinjaModules branch below.
+	{
+		rendered := RenderTriggerRules(catalog.DefaultTriggerRuleSet())
+
+		if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
+			// OpenCode / Kilocode: trigger-rules is appended to the gentle-orchestrator
+			// prompt content inside opencode.json (handled by inlineOpenCodeSDDPrompts
+			// via the triggerRulesContent variable set on InjectOptions — see below).
+			// We store the rendered content in opts so inlineOpenCodeSDDPrompts can pick it up.
+			opts.triggerRulesContent = rendered
+		} else if adapter.SystemPromptStrategy() == model.StrategyJinjaModules {
+			// Jinja agents (currently only Kimi): write the rendered block as a
+			// standalone module file. The static KIMI.md template includes it via
+			// {% include "trigger-rules.md" ignore missing %}.
+			configDir := adapter.GlobalConfigDir(homeDir)
+			modulePath := filepath.Join(configDir, "trigger-rules.md")
+			writeResult, err := filemerge.WriteFileAtomic(modulePath, []byte(rendered), 0o644)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || writeResult.Changed
+			files = append(files, modulePath)
+		} else {
+			// All other system-prompt agents: inject via marker-based section.
+			promptPath := adapter.SystemPromptFile(homeDir)
+			existing, readErr := readFileOrEmpty(promptPath)
+			if readErr != nil {
+				return InjectionResult{}, readErr
+			}
+			updated := filemerge.InjectMarkdownSection(existing, sectionTriggerRules, rendered)
+			writeResult, writeErr := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+			if writeErr != nil {
+				return InjectionResult{}, writeErr
+			}
+			changed = changed || writeResult.Changed
+			// Dedupe the path — it may already be present from step 1.
+			alreadyInFiles := false
+			for _, f := range files {
+				if f == promptPath {
+					alreadyInFiles = true
+					break
+				}
+			}
+			if !alreadyInFiles {
+				files = append(files, promptPath)
+			}
+		}
+	}
+
 	// 1b. If StrictTDD is enabled, inject the strict-tdd-mode marker section
 	// into the system prompt file so agents know Strict TDD is active.
 	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
@@ -388,7 +460,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				changed = changed || promptsChanged
 			}
 
-			overlayBytes, err = inlineOpenCodeSDDPrompts(overlayBytes, homeDir, settingsPath, opts.PreserveOpenCodeOrchestratorPrompt)
+			overlayBytes, err = inlineOpenCodeSDDPrompts(overlayBytes, homeDir, settingsPath, opts.PreserveOpenCodeOrchestratorPrompt, opts.triggerRulesContent)
 			if err != nil {
 				return InjectionResult{}, fmt.Errorf("inline OpenCode SDD prompts: %w", err)
 			}
@@ -734,7 +806,7 @@ func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) 
 	return nil
 }
 
-func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string, preserveExistingOrchestratorPrompt bool) ([]byte, error) {
+func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string, preserveExistingOrchestratorPrompt bool, triggerRulesContent string) ([]byte, error) {
 	var overlay map[string]any
 	if err := json.Unmarshal(overlayBytes, &overlay); err != nil {
 		return nil, fmt.Errorf("unmarshal OpenCode SDD overlay: %w", err)
@@ -783,6 +855,15 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 		}
 	} else {
 		orchestratorMap["prompt"] = assets.MustRead(sddOrchestratorAsset(model.AgentOpenCode))
+	}
+
+	// Append the trigger-rules section to the orchestrator prompt when provided.
+	// This keeps the rules in the always-loaded scope for OpenCode/Kilocode agents
+	// (the orchestrator prompt is the only per-agent content they read at session start).
+	if triggerRulesContent != "" {
+		if existingPrompt, ok := orchestratorMap["prompt"].(string); ok {
+			orchestratorMap["prompt"] = filemerge.InjectMarkdownSection(existingPrompt, "trigger-rules", triggerRulesContent)
+		}
 	}
 
 	// Replace sub-agent prompt placeholders with {file:<absolutePath>} references.
