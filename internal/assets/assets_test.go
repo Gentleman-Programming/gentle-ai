@@ -1251,6 +1251,9 @@ func TestClaudeCommandsDetectWorkspaceAgentSide(t *testing.T) {
 	}
 }
 
+// TestOrchestratorsRequireAutomaticGatekeeper asserts that every orchestrator
+// template carries the Automatic Mode Gatekeeper anchor phrases, so the
+// per-phase validation contract cannot silently drift out of any one template.
 func TestOrchestratorsRequireAutomaticGatekeeper(t *testing.T) {
 	paths := []string{
 		"antigravity/sdd-orchestrator.md",
