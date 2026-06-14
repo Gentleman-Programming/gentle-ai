@@ -24,6 +24,8 @@ Do NOT load this skill if you are already inside a delegated child task — you 
 - Use `delegate_task` for all complex work listed above. Do NOT execute it inline.
 - Workers are EPHEMERAL: each `delegate_task` call creates a fresh context. Do NOT request persistent agent files or profiles.
 - Pass a self-contained mission. Workers have no memory of the parent conversation.
+- Pass exact skill names and exact `SKILL.md` paths. Category, catalog, or section headings are not skills and must not be used as skill names.
+- Grant the smallest toolset that can complete the mission. Do not grant terminal, browser, file-write, or broad filesystem tools for pure reasoning, review, summarization, or planning unless the mission explicitly needs them.
 - Treat worker output as self-report: verify file writes, test pass/fail, URLs, and IDs before reporting success to the user.
 - Batch parallel calls only for INDEPENDENT workstreams. Sequential dependencies must run sequentially.
 
@@ -50,10 +52,21 @@ Do NOT load this skill if you are already inside a delegated child task — you 
    - Expected evidence to return (e.g., file written, test output, URL found)
    - Allowed toolsets/MCP/skills the worker should use
    - Any `SKILL.md` paths to load before work
+   - Tools intentionally withheld because they are not required
 3. Call `delegate_task` with that mission.
 4. Wait for the worker summary.
 5. Verify the claimed output (check file existence, test result, side effect).
 6. Synthesize the verified result into your orchestrator reply.
+
+## Mission Checklist
+
+Before calling `delegate_task`, confirm the mission answers:
+
+- What is the bounded goal, and what evidence must the worker return?
+- Which exact files, URLs, or targets are in scope?
+- Which exact `SKILL.md` paths must be read before task-specific work?
+- Which tools are allowed, and why is each necessary?
+- Which tools are intentionally not allowed for this mission?
 
 ## Output Contract
 

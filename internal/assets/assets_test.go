@@ -260,6 +260,8 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/skill-creator/SKILL.md",
 		"skills/skill-improver/SKILL.md",
 		"skills/chained-pr/references/chaining-details.md",
+		"skills/hermes-ephemeral-delegation/SKILL.md",
+		"skills/hermes-ephemeral-delegation/references/tuning-knobs.md",
 	}
 
 	for _, path := range expectedFiles {
