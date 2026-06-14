@@ -50,12 +50,11 @@ func unsetEnv(t *testing.T, key string) {
 
 // swapSelfUpdateDeps replaces all package-level dependency vars used by selfUpdate
 // and registers cleanup to restore them. Returns pointers to track call counts.
+// Note: reExec and goOS were removed in task 4.6 — restartAfterGentleAIUpgrade
+// now always prints the restart message and returns; no re-exec on any OS.
 type selfUpdateStubs struct {
 	checkCalled   int
 	upgradeCalled int
-	reExecCalled  int
-	reExecArgv0   string
-	reExecEnv     []string
 }
 
 func swapSelfUpdateDeps(t *testing.T, checkResult []update.UpdateResult, upgradeReport upgrade.UpgradeReport) *selfUpdateStubs {
@@ -65,8 +64,6 @@ func swapSelfUpdateDeps(t *testing.T, checkResult []update.UpdateResult, upgrade
 
 	origCheck := updateCheckFiltered
 	origUpgrade := upgradeExecute
-	origReExec := reExec
-	origGoOS := goOS
 	origHomeDir := selfUpdateHomeDirFn
 	origNow := selfUpdateNowFn
 
@@ -77,8 +74,6 @@ func swapSelfUpdateDeps(t *testing.T, checkResult []update.UpdateResult, upgrade
 	t.Cleanup(func() {
 		updateCheckFiltered = origCheck
 		upgradeExecute = origUpgrade
-		reExec = origReExec
-		goOS = origGoOS
 		selfUpdateHomeDirFn = origHomeDir
 		selfUpdateNowFn = origNow
 	})
@@ -95,17 +90,6 @@ func swapSelfUpdateDeps(t *testing.T, checkResult []update.UpdateResult, upgrade
 	upgradeExecute = func(_ context.Context, _ []update.UpdateResult, _ system.PlatformProfile, _ string, _ bool, _ ...io.Writer) upgrade.UpgradeReport {
 		stubs.upgradeCalled++
 		return upgradeReport
-	}
-
-	reExec = func(argv0 string, argv []string, envv []string) error {
-		stubs.reExecCalled++
-		stubs.reExecArgv0 = argv0
-		stubs.reExecEnv = envv
-		return nil
-	}
-
-	goOS = func() string {
-		return "darwin"
 	}
 
 	return stubs
@@ -204,13 +188,8 @@ func TestSelfUpdate_UpdateAvailable_CallsUpgradeAndRestart(t *testing.T) {
 	if stubs.upgradeCalled != 1 {
 		t.Errorf("upgradeCalled = %d, want 1", stubs.upgradeCalled)
 	}
-	// After task 4.6: restartAfterGentleAIUpgrade no longer re-execs on any OS.
-	// It always prints the "restart" message and returns. re-exec is gone.
-	if stubs.reExecCalled != 0 {
-		t.Errorf("reExecCalled = %d, want 0 (restart message printed instead)", stubs.reExecCalled)
-	}
 
-	// Output must contain the restart guidance message.
+	// Output must contain the restart guidance message (print-and-return path, no re-exec).
 	out := buf.String()
 	if !containsSubstring(out, "restart") {
 		t.Errorf("output = %q, want it to contain restart guidance", out)
@@ -289,14 +268,11 @@ func TestSelfUpdate_UpgradeError_ReturnsNil(t *testing.T) {
 		},
 	}
 
-	stubs := swapSelfUpdateDeps(t, checkResults, upgradeReport)
+	swapSelfUpdateDeps(t, checkResults, upgradeReport)
 
 	err := selfUpdate(context.Background(), "1.7.0", stubProfile(), io.Discard)
 	if err != nil {
 		t.Fatalf("selfUpdate should return nil on upgrade error, got: %v", err)
-	}
-	if stubs.reExecCalled != 0 {
-		t.Errorf("reExecCalled = %d, want 0 (upgrade failed)", stubs.reExecCalled)
 	}
 }
 
@@ -321,18 +297,16 @@ func TestSelfUpdate_PrintsRestartMessage(t *testing.T) {
 		},
 	}
 
-	for _, os := range []string{"darwin", "windows", "linux"} {
-		t.Run("os="+os, func(t *testing.T) {
+	// restartAfterGentleAIUpgrade is OS-agnostic after task 4.6 — prints and returns.
+	// No goOS swap needed; the behavior is identical on all platforms.
+	for _, osName := range []string{"darwin", "windows", "linux"} {
+		t.Run("os="+osName, func(t *testing.T) {
 			stubs := swapSelfUpdateDeps(t, checkResults, upgradeReport)
-			goOS = func() string { return os }
 
 			var buf bytes.Buffer
 			err := selfUpdate(context.Background(), "1.7.0", stubProfile(), &buf)
 			if err != nil {
 				t.Fatalf("selfUpdate returned error: %v", err)
-			}
-			if stubs.reExecCalled != 0 {
-				t.Errorf("reExecCalled = %d, want 0 on %s (restart message path)", stubs.reExecCalled, os)
 			}
 			if stubs.upgradeCalled != 1 {
 				t.Errorf("upgradeCalled = %d, want 1", stubs.upgradeCalled)
@@ -368,14 +342,12 @@ func TestSelfUpdate_BrewInstallMethod_PassedToUpgradeExecutor(t *testing.T) {
 
 	origCheck := updateCheckFiltered
 	origUpgrade := upgradeExecute
-	origReExec := reExec
 	origHomeDir := selfUpdateHomeDirFn
 	origNow := selfUpdateNowFn
 	tmpHome := t.TempDir()
 	t.Cleanup(func() {
 		updateCheckFiltered = origCheck
 		upgradeExecute = origUpgrade
-		reExec = origReExec
 		selfUpdateHomeDirFn = origHomeDir
 		selfUpdateNowFn = origNow
 	})
@@ -397,8 +369,6 @@ func TestSelfUpdate_BrewInstallMethod_PassedToUpgradeExecutor(t *testing.T) {
 			},
 		}
 	}
-
-	reExec = func(_ string, _ []string, _ []string) error { return nil }
 
 	brewProfile := system.PlatformProfile{OS: "darwin", PackageManager: "brew"}
 	err := selfUpdate(context.Background(), "1.7.0", brewProfile, io.Discard)
@@ -461,10 +431,6 @@ func TestSelfUpdate_ConfirmUpdate_UserAccepts(t *testing.T) {
 	if stubs.upgradeCalled != 1 {
 		t.Errorf("upgradeCalled = %d, want 1 (user accepted)", stubs.upgradeCalled)
 	}
-	// After task 4.6: no re-exec; restart message is printed instead.
-	if stubs.reExecCalled != 0 {
-		t.Errorf("reExecCalled = %d, want 0 (restart message path)", stubs.reExecCalled)
-	}
 }
 
 // TestSelfUpdate_ConfirmUpdate_UserDeclines verifies that when GENTLE_AI_CONFIRM_UPDATE=1
@@ -503,9 +469,6 @@ func TestSelfUpdate_ConfirmUpdate_UserDeclines(t *testing.T) {
 	}
 	if stubs.upgradeCalled != 0 {
 		t.Errorf("upgradeCalled = %d, want 0 (user declined)", stubs.upgradeCalled)
-	}
-	if stubs.reExecCalled != 0 {
-		t.Errorf("reExecCalled = %d, want 0 (user declined)", stubs.reExecCalled)
 	}
 }
 
@@ -551,10 +514,6 @@ func TestSelfUpdate_ConfirmUpdate_EnvUnset(t *testing.T) {
 	if stubs.upgradeCalled != 1 {
 		t.Errorf("upgradeCalled = %d, want 1 (auto-apply)", stubs.upgradeCalled)
 	}
-	// After task 4.6: restart message printed instead of re-exec.
-	if stubs.reExecCalled != 0 {
-		t.Errorf("reExecCalled = %d, want 0 (restart message path)", stubs.reExecCalled)
-	}
 }
 
 // TestSelfUpdate_ConfirmUpdateTable exercises the three confirmation paths in a
@@ -574,12 +533,12 @@ func TestSelfUpdate_ConfirmUpdateTable(t *testing.T) {
 		},
 	}
 
+	// wantReExec removed: restartAfterGentleAIUpgrade always prints and returns (task 4.6).
 	tests := []struct {
 		name            string
 		confirmEnv      string // "" means unset
 		promptReply     bool
 		wantUpgrade     int
-		wantReExec      int // always 0 after task 4.6 (restart message path)
 		wantPromptCalls int
 	}{
 		{
@@ -587,7 +546,6 @@ func TestSelfUpdate_ConfirmUpdateTable(t *testing.T) {
 			confirmEnv:      "",
 			promptReply:     false,
 			wantUpgrade:     1,
-			wantReExec:      0, // task 4.6: restart message instead of re-exec
 			wantPromptCalls: 0,
 		},
 		{
@@ -595,7 +553,6 @@ func TestSelfUpdate_ConfirmUpdateTable(t *testing.T) {
 			confirmEnv:      "1",
 			promptReply:     true,
 			wantUpgrade:     1,
-			wantReExec:      0, // task 4.6: restart message instead of re-exec
 			wantPromptCalls: 1,
 		},
 		{
@@ -603,7 +560,6 @@ func TestSelfUpdate_ConfirmUpdateTable(t *testing.T) {
 			confirmEnv:      "1",
 			promptReply:     false,
 			wantUpgrade:     0,
-			wantReExec:      0,
 			wantPromptCalls: 1,
 		},
 	}
@@ -639,9 +595,6 @@ func TestSelfUpdate_ConfirmUpdateTable(t *testing.T) {
 			if stubs.upgradeCalled != tc.wantUpgrade {
 				t.Errorf("upgradeCalled = %d, want %d", stubs.upgradeCalled, tc.wantUpgrade)
 			}
-			if stubs.reExecCalled != tc.wantReExec {
-				t.Errorf("reExecCalled = %d, want %d", stubs.reExecCalled, tc.wantReExec)
-			}
 		})
 	}
 }
@@ -670,13 +623,11 @@ func TestSelfUpdate_SetsPendingSyncOnSuccess(t *testing.T) {
 		},
 	}
 
-	stubs := swapSelfUpdateDeps(t, checkResults, upgradeReport)
-
-	// swapSelfUpdateDeps sets selfUpdateHomeDirFn to a temp dir; capture that dir.
+	// swapSelfUpdateDeps sets selfUpdateHomeDirFn to a temp dir; override with our own
+	// so we can read back the state after selfUpdate returns.
+	swapSelfUpdateDeps(t, checkResults, upgradeReport)
 	tmpHome := t.TempDir()
 	selfUpdateHomeDirFn = func() (string, error) { return tmpHome, nil }
-	// Prevent actual re-exec from racing with state write; stubs.reExecCalled tracks it.
-	_ = stubs
 
 	err := selfUpdate(context.Background(), "1.7.0", stubProfile(), io.Discard)
 	if err != nil {

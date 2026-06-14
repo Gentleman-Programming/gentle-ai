@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -4514,5 +4515,161 @@ func TestUpgradeSyncResultEscQuitsWhenGentleAIWasUpgraded(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatalf("handleKeyPress(esc) command returned %T, want tea.QuitMsg", cmd())
+	}
+}
+
+// ─── TUI-path PendingSync (task 4.8) ────────────────────────────────────────
+
+// executeUpgradeSyncSequence runs the tea.Sequence returned by startUpgradeSync
+// and collects the messages produced by each command in order.
+// tea.Sequence returns a Cmd whose result is an internal sequenceMsg (type []Cmd).
+// Since sequenceMsg is unexported we iterate via reflect.
+func executeUpgradeSyncSequence(t *testing.T, m Model) []tea.Msg {
+	t.Helper()
+
+	seqCmd := m.startUpgradeSync()
+	if seqCmd == nil {
+		t.Fatal("startUpgradeSync() returned nil cmd")
+	}
+
+	// Calling the outer cmd returns either:
+	//   a) the only element directly (when compactCmds collapses a single-cmd slice), or
+	//   b) a sequenceMsg (type []tea.Cmd) when there are 2+ cmds.
+	outerMsg := seqCmd()
+
+	// Try direct cast to known concrete types first.
+	if _, ok := outerMsg.(UpgradePhaseCompletedMsg); ok {
+		// Only one cmd was returned; no sequence wrapper.
+		return []tea.Msg{outerMsg}
+	}
+	if _, ok := outerMsg.(SyncDoneMsg); ok {
+		return []tea.Msg{outerMsg}
+	}
+
+	// sequenceMsg is type []tea.Cmd — use reflect to iterate without importing
+	// the unexported type.
+	v := reflect.ValueOf(outerMsg)
+	if v.Kind() != reflect.Slice {
+		t.Fatalf("startUpgradeSync outer msg kind = %v, want slice (sequenceMsg)", v.Kind())
+	}
+
+	var msgs []tea.Msg
+	for i := range v.Len() {
+		elem := v.Index(i).Interface()
+		innerCmd, ok := elem.(tea.Cmd)
+		if !ok || innerCmd == nil {
+			continue
+		}
+		msgs = append(msgs, innerCmd())
+	}
+	return msgs
+}
+
+// TestStartUpgradeSync_SetsPendingSyncWhenGentleAIUpgraded verifies that when
+// the UpgradeFn reports gentle-ai as upgraded, the syncCmd branch of
+// startUpgradeSync writes PendingSync=true to state.json before returning
+// SyncDoneMsg. This is the TUI-path equivalent of the selfupdate.go path tested
+// in TestSelfUpdate_SetsPendingSyncOnSuccess.
+func TestStartUpgradeSync_SetsPendingSyncWhenGentleAIUpgraded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpgradeSync
+	m.OperationRunning = true
+
+	// UpgradeFn reports gentle-ai as successfully upgraded.
+	m.UpgradeFn = func(_ context.Context, _ []update.UpdateResult) upgrade.UpgradeReport {
+		return upgrade.UpgradeReport{
+			Results: []upgrade.ToolUpgradeResult{
+				{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "1.8.0"},
+			},
+		}
+	}
+
+	msgs := executeUpgradeSyncSequence(t, m)
+
+	// Verify the sequence produced both expected messages.
+	var gotUpgradePhase bool
+	var gotSyncDone bool
+	for _, msg := range msgs {
+		if _, ok := msg.(UpgradePhaseCompletedMsg); ok {
+			gotUpgradePhase = true
+		}
+		if _, ok := msg.(SyncDoneMsg); ok {
+			gotSyncDone = true
+		}
+	}
+	if !gotUpgradePhase {
+		t.Errorf("sequence did not produce UpgradePhaseCompletedMsg; msgs = %v", msgs)
+	}
+	if !gotSyncDone {
+		t.Errorf("sequence did not produce SyncDoneMsg; msgs = %v", msgs)
+	}
+
+	// The key assertion: PendingSync=true must be written to state.json on disk.
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read(%q) error = %v (PendingSync was not written)", home, err)
+	}
+	if !s.PendingSync {
+		t.Errorf("PendingSync = false after gentle-ai self-upgrade in TUI flow, want true")
+	}
+}
+
+// TestStartUpgradeSync_DoesNotSetPendingSyncWhenGentleAINotUpgraded verifies
+// that when gentle-ai was NOT upgraded (e.g. only engram was upgraded), the
+// syncCmd branch does NOT set PendingSync, and sync proceeds normally via SyncFn.
+func TestStartUpgradeSync_DoesNotSetPendingSyncWhenGentleAINotUpgraded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpgradeSync
+	m.OperationRunning = true
+
+	// UpgradeFn reports only engram upgraded, not gentle-ai.
+	m.UpgradeFn = func(_ context.Context, _ []update.UpdateResult) upgrade.UpgradeReport {
+		return upgrade.UpgradeReport{
+			Results: []upgrade.ToolUpgradeResult{
+				{ToolName: "engram", Status: upgrade.UpgradeSucceeded, NewVersion: "1.16.4"},
+			},
+		}
+	}
+
+	var syncCalled bool
+	m.SyncFn = func(_ *model.SyncOverrides) ([]string, error) {
+		syncCalled = true
+		return []string{"file.json"}, nil
+	}
+
+	msgs := executeUpgradeSyncSequence(t, m)
+
+	// SyncFn must have been called (not the deferred-PendingSync path).
+	if !syncCalled {
+		t.Errorf("SyncFn was not called — expected normal sync when gentle-ai was not upgraded")
+	}
+
+	// PendingSync must NOT be set when gentle-ai was not upgraded.
+	// state.json may not exist at all if nothing wrote it; treat that as PendingSync=false.
+	s, readErr := state.Read(home)
+	if readErr == nil && s.PendingSync {
+		t.Errorf("PendingSync = true after non-gentle-ai upgrade, want false")
+	}
+
+	// Verify SyncDoneMsg arrived.
+	var gotSyncDone bool
+	for _, msg := range msgs {
+		if sd, ok := msg.(SyncDoneMsg); ok {
+			gotSyncDone = true
+			if sd.Err != nil {
+				t.Errorf("SyncDoneMsg.Err = %v, want nil", sd.Err)
+			}
+		}
+	}
+	if !gotSyncDone {
+		t.Errorf("sequence did not produce SyncDoneMsg; msgs = %v", msgs)
 	}
 }

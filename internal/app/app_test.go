@@ -1630,6 +1630,12 @@ func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
 		t.Fatalf("RunArgs(nil) error = %v (deferred sync failure must be non-fatal)", err)
 	}
 
+	// The warning must be printed to stdout so the user knows sync was skipped.
+	out := buf.String()
+	if !strings.Contains(out, "Warning: deferred sync failed:") {
+		t.Errorf("stdout = %q, want warning message for deferred sync failure", out)
+	}
+
 	// PendingSync must remain set so the next launch retries.
 	s, err := state.Read(home)
 	if err != nil {

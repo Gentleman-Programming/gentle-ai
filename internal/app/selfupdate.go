@@ -6,10 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/mattn/go-isatty"
@@ -19,9 +16,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
 )
-
-// lookPathFn is a package-level var for testability.
-var lookPathFn = exec.LookPath
 
 // selfUpdateNowFn returns the current time; injected for test determinism.
 var selfUpdateNowFn = func() time.Time { return time.Now() }
@@ -60,14 +54,6 @@ func defaultPromptForUpdate(stdout io.Writer, stdin io.Reader, currentVersion, l
 
 // selfUpdateTimeout is the maximum time allowed for the update check + upgrade.
 const selfUpdateTimeout = 7 * time.Second
-
-// reExec is swappable for testing — prevents actual syscall.Exec in tests.
-var reExec = func(argv0 string, argv []string, envv []string) error {
-	return syscall.Exec(argv0, argv, envv)
-}
-
-// goOS returns the current operating system name. Package-level var for testing.
-var goOS = func() string { return runtime.GOOS }
 
 // selfUpdate checks for and applies a gentle-ai update before normal dispatch.
 // Returns nil on success or skip; errors are non-fatal (caller logs and continues).

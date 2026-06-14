@@ -167,14 +167,16 @@ func envContains(values []string, needle string) bool {
 	return false
 }
 
+// TestRunUpgrade_DryRunDoesNotRestartAfterGentleAIUpgrade verifies that a dry-run
+// upgrade does not trigger the restart-guidance message (no actual upgrade occurred).
+// reExec was removed in task 4.6; restartAfterGentleAIUpgrade now prints+returns.
+// Dry-run skips that path entirely, so no restart message should appear.
 func TestRunUpgrade_DryRunDoesNotRestartAfterGentleAIUpgrade(t *testing.T) {
 	origCheckFiltered := updateCheckFiltered
 	origUpgradeExecuteWithOptions := upgradeExecuteWithOptions
-	origReExec := reExec
 	t.Cleanup(func() {
 		updateCheckFiltered = origCheckFiltered
 		upgradeExecuteWithOptions = origUpgradeExecuteWithOptions
-		reExec = origReExec
 	})
 
 	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult {
@@ -182,11 +184,6 @@ func TestRunUpgrade_DryRunDoesNotRestartAfterGentleAIUpgrade(t *testing.T) {
 	}
 	upgradeExecuteWithOptions = func(context.Context, []update.UpdateResult, system.PlatformProfile, string, bool, upgrade.ExecuteOptions) upgrade.UpgradeReport {
 		return upgrade.UpgradeReport{DryRun: true, Results: []upgrade.ToolUpgradeResult{{ToolName: "gentle-ai", NewVersion: "1.36.2", Status: upgrade.UpgradeSucceeded}}}
-	}
-
-	reExec = func(string, []string, []string) error {
-		t.Fatal("dry-run must not re-exec")
-		return nil
 	}
 
 	var buf bytes.Buffer
@@ -199,20 +196,18 @@ func TestRunUpgrade_DryRunDoesNotRestartAfterGentleAIUpgrade(t *testing.T) {
 	}
 }
 
+// TestTUIUpgrade_DoesNotRestartBeforeModelCanRenderReport verifies that the
+// TUI upgrade path returns the UpgradeReport without triggering any side-effects
+// (e.g. exit or restart) before the UI has a chance to render the result.
+// reExec was removed in task 4.6; tuiUpgrade must still return the report intact.
 func TestTUIUpgrade_DoesNotRestartBeforeModelCanRenderReport(t *testing.T) {
 	origUpgradeExecute := upgradeExecute
-	origReExec := reExec
 	t.Cleanup(func() {
 		upgradeExecute = origUpgradeExecute
-		reExec = origReExec
 	})
 
 	upgradeExecute = func(context.Context, []update.UpdateResult, system.PlatformProfile, string, bool, ...io.Writer) upgrade.UpgradeReport {
 		return upgrade.UpgradeReport{Results: []upgrade.ToolUpgradeResult{{ToolName: "gentle-ai", NewVersion: "1.36.2", Status: upgrade.UpgradeSucceeded}}}
-	}
-	reExec = func(string, []string, []string) error {
-		t.Fatal("TUI upgrade must not re-exec before rendering the upgrade report")
-		return nil
 	}
 
 	report := tuiUpgrade(system.PlatformProfile{OS: "darwin", PackageManager: "brew"}, os.TempDir())(context.Background(), nil)
