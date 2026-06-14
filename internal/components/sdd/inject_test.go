@@ -6099,61 +6099,209 @@ func TestInjectTriggerRules_KilocodePlacement(t *testing.T) {
 }
 
 // 4.6 — All adapters receive trigger-rules content after Inject.
+//
+// This test enumerates ALL adapters registered in agents.NewDefaultRegistry()
+// and asserts that Inject writes trigger-rules content for each one. A count
+// guard ensures that adding a new adapter to the factory without handling its
+// trigger-rules injection causes this test to fail immediately.
 func TestInjectTriggerRules_AllAdapters(t *testing.T) {
-	allAdapters := []struct {
+	// Build the canonical registry to get the exact registered adapter count.
+	// SupportedAgents() returns one entry per registered adapter.
+	registry, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("NewDefaultRegistry() error = %v", err)
+	}
+	registryLen := len(registry.SupportedAgents())
+
+	type adapterCase struct {
 		name    string
-		adapter agents.Adapter
-		// getContent returns the primary system-prompt or orchestrator content.
-		getContent func(home string) (string, error)
-	}{
+		agentID model.AgentID
+		// getContent returns the primary system-prompt, Jinja module, or orchestrator
+		// content where trigger-rules is expected to appear after Inject.
+		// nil means the adapter does not support system prompts (Pi) — only no-error
+		// is asserted.
+		getContent func(home string, adapter agents.Adapter) (string, error)
+		// injectOpts customizes Inject() for adapters that require special setup
+		// (e.g. OpenClaw uses workspaceDir = home).
+		injectOpts func(home string) InjectOptions
+	}
+
+	allAdapters := []adapterCase{
 		{
 			name:    "claude",
-			adapter: claudeAdapter(),
-			getContent: func(home string) (string, error) {
-				return readFileOrEmpty(filepath.Join(home, ".claude", "CLAUDE.md"))
-			},
-		},
-		{
-			name:    "kimi",
-			adapter: kimiAdapter(),
-			getContent: func(home string) (string, error) {
-				return readFileOrEmpty(filepath.Join(home, ".kimi", "trigger-rules.md"))
+			agentID: model.AgentClaudeCode,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SystemPromptFile(home))
 			},
 		},
 		{
 			name:    "opencode",
-			adapter: opencodeAdapter(),
-			getContent: func(home string) (string, error) {
-				return readFileOrEmpty(opencodeAdapter().SettingsPath(home))
+			agentID: model.AgentOpenCode,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SettingsPath(home))
 			},
 		},
 		{
 			name:    "kilocode",
-			adapter: kilocodeAdapter(),
-			getContent: func(home string) (string, error) {
-				return readFileOrEmpty(kilocodeAdapter().SettingsPath(home))
+			agentID: model.AgentKilocode,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SettingsPath(home))
+			},
+		},
+		{
+			name:    "gemini",
+			agentID: model.AgentGeminiCLI,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SystemPromptFile(home))
+			},
+		},
+		{
+			name:    "cursor",
+			agentID: model.AgentCursor,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SystemPromptFile(home))
+			},
+		},
+		{
+			name:    "vscode",
+			agentID: model.AgentVSCodeCopilot,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SystemPromptFile(home))
+			},
+		},
+		{
+			name:    "codex",
+			agentID: model.AgentCodex,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SystemPromptFile(home))
+			},
+		},
+		{
+			name:    "antigravity",
+			agentID: model.AgentAntigravity,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SystemPromptFile(home))
+			},
+		},
+		{
+			name:    "windsurf",
+			agentID: model.AgentWindsurf,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SystemPromptFile(home))
+			},
+		},
+		{
+			name:    "kimi",
+			agentID: model.AgentKimi,
+			getContent: func(home string, _ agents.Adapter) (string, error) {
+				// Kimi uses StrategyJinjaModules: trigger-rules is written as a
+				// standalone module file, not injected into the base template via markers.
+				return readFileOrEmpty(filepath.Join(home, ".kimi", "trigger-rules.md"))
+			},
+		},
+		{
+			name:    "qwencode",
+			agentID: model.AgentQwenCode,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SystemPromptFile(home))
+			},
+		},
+		{
+			name:    "kiroide",
+			agentID: model.AgentKiroIDE,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SystemPromptFile(home))
+			},
+		},
+		{
+			// OpenClaw is workspace-first: homeDir is the workspace path.
+			name:    "openclaw",
+			agentID: model.AgentOpenClaw,
+			getContent: func(home string, _ agents.Adapter) (string, error) {
+				// OpenClaw writes to AGENTS.md in the workspace root (= home in tests).
+				return readFileOrEmpty(filepath.Join(home, "AGENTS.md"))
+			},
+			injectOpts: func(home string) InjectOptions {
+				return InjectOptions{WorkspaceDir: home}
+			},
+		},
+		{
+			// Pi does not support system prompts (SupportsSystemPrompt = false).
+			// Inject() returns immediately with no error and no files written.
+			// We assert only that Inject does not error.
+			name:       "pi",
+			agentID:    model.AgentPi,
+			getContent: nil, // skip content check
+		},
+		{
+			name:    "trae",
+			agentID: model.AgentTrae,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SystemPromptFile(home))
+			},
+		},
+		{
+			name:    "hermes",
+			agentID: model.AgentHermes,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SystemPromptFile(home))
 			},
 		},
 	}
 
+	// Count guard: the test table must enumerate exactly as many adapters as the
+	// default registry. If a new adapter is added to factory.go without a
+	// corresponding entry here, this assertion catches it immediately.
+	if len(allAdapters) != registryLen {
+		t.Fatalf(
+			"TestInjectTriggerRules_AllAdapters: test table has %d adapters but agents.NewDefaultRegistry() returned %d. "+
+				"Add the missing adapter(s) to the allAdapters table and handle trigger-rules injection for them.",
+			len(allAdapters), registryLen,
+		)
+	}
+
 	for _, tc := range allAdapters {
+		tc := tc // capture
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			home := t.TempDir()
-			_, err := Inject(home, tc.adapter, "")
-			if err != nil {
-				t.Fatalf("Inject(%s) error = %v", tc.name, err)
+
+			adapter, newErr := agents.NewAdapter(tc.agentID)
+			if newErr != nil {
+				t.Fatalf("NewAdapter(%s) error = %v", tc.agentID, newErr)
 			}
-			content, err := tc.getContent(home)
-			if err != nil {
-				t.Fatalf("getContent(%s) error = %v", tc.name, err)
+
+			var opts InjectOptions
+			if tc.injectOpts != nil {
+				opts = tc.injectOpts(home)
 			}
-			// Check for content that appears in the rendered trigger-rules block.
-			// System-prompt agents: markers contain "trigger-rules".
-			// Jinja module (kimi): file contains "Agent Trigger Rules" (header) and binding content.
+
+			_, injectErr := Inject(home, adapter, "", opts)
+			if injectErr != nil {
+				t.Fatalf("Inject(%s) error = %v", tc.name, injectErr)
+			}
+
+			// Pi skips the content check — it returns early from Inject.
+			if tc.getContent == nil {
+				return
+			}
+
+			content, readErr := tc.getContent(home, adapter)
+			if readErr != nil {
+				t.Fatalf("getContent(%s) error = %v", tc.name, readErr)
+			}
+
+			// System-prompt agents: the marker string "trigger-rules" appears in the
+			// injected section or in the settings JSON key.
+			// Jinja module agents (kimi): the file contains "Agent Trigger Rules" header.
 			hasTriggerRulesMarker := strings.Contains(content, "trigger-rules")
 			hasAgentTriggerRulesHeader := strings.Contains(content, "Agent Trigger Rules")
 			if !hasTriggerRulesMarker && !hasAgentTriggerRulesHeader {
-				t.Errorf("adapter %s: primary prompt/module does not contain trigger-rules content after Inject (checked for 'trigger-rules' and 'Agent Trigger Rules')", tc.name)
+				t.Errorf(
+					"adapter %s: primary prompt/module does not contain trigger-rules content after Inject "+
+						"(checked for 'trigger-rules' and 'Agent Trigger Rules'); content len=%d",
+					tc.name, len(content),
+				)
 			}
 		})
 	}
