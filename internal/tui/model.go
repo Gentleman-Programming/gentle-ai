@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -37,6 +38,29 @@ var tuiNowFn = time.Now
 // advisoryFetchFn is the function used to fetch the advisory manifest.
 // Package-level var so tests can override without network calls.
 var advisoryFetchFn = update.FetchAdvisory
+
+// ansiEscapeRe matches ANSI/VT100 escape sequences (CSI sequences and bare ESC).
+// These must be stripped from remote-controlled content before it is rendered
+// in the TUI to prevent layout corruption or terminal injection attacks.
+var ansiEscapeRe = regexp.MustCompile(`\x1b(?:\[[0-9;]*[A-Za-z]|[^[]|)`)
+
+// sanitizeAdvisoryMessage removes ANSI escape sequences and ASCII control
+// characters from a remote-sourced advisory message, keeping only printable
+// characters (≥ 0x20, excluding DEL 0x7f) and the ASCII space (0x20).
+// The function is pure and allocation-minimal for typical short strings.
+func sanitizeAdvisoryMessage(s string) string {
+	// First pass: strip ANSI escape sequences.
+	s = ansiEscapeRe.ReplaceAllString(s, "")
+	// Second pass: remove remaining control characters (0x00–0x1f, 0x7f).
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r >= 0x20 && r != 0x7f {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // osStatModelCache is a package-level variable so tests can override it to
 // simulate a missing or present OpenCode model cache file.
@@ -726,7 +750,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case AdvisoryMsg:
 		// Store the advisory message for display on the Welcome screen.
 		// Empty Advisory.Message (no advisory or fetch failed) is a no-op.
-		m.AdvisoryMessage = msg.Advisory.Message
+		// Sanitize before storing: strip ANSI escape sequences and control
+		// characters so remote-controlled content cannot corrupt the TUI layout.
+		m.AdvisoryMessage = sanitizeAdvisoryMessage(msg.Advisory.Message)
 		return m, nil
 	case UpgradeDoneMsg:
 		m.OperationRunning = false

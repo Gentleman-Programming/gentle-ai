@@ -3,9 +3,16 @@ package update
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 )
+
+// advisoryMaxBytes is the maximum number of bytes read from an advisory
+// response body. A well-formed advisory.json is always tiny (< 1 KB); the
+// 64 KB cap prevents a malicious or misconfigured endpoint from exhausting
+// memory while still leaving an enormous margin for any realistic payload.
+const advisoryMaxBytes = 64 * 1024
 
 // advisoryURL is the endpoint for the advisory manifest JSON.
 // It points to a dedicated "advisory" git tag/release whose single asset
@@ -68,8 +75,9 @@ func FetchAdvisory(ctx context.Context) (Advisory, bool) {
 	}
 
 	var a Advisory
-	if err := json.NewDecoder(resp.Body).Decode(&a); err != nil {
-		// Malformed JSON — fail-open.
+	limited := io.LimitReader(resp.Body, advisoryMaxBytes)
+	if err := json.NewDecoder(limited).Decode(&a); err != nil {
+		// Malformed JSON or body exceeded the size cap — fail-open.
 		return Advisory{}, false
 	}
 

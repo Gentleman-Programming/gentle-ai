@@ -146,6 +146,51 @@ func TestFetchAdvisory_EmptyMessage(t *testing.T) {
 	}
 }
 
+// TestFetchAdvisory_OversizedBody verifies that a response body that exceeds
+// the advisory size cap is handled gracefully: FetchAdvisory returns
+// (Advisory{}, false) without panicking or propagating an error to the caller.
+// A legitimate advisory.json is tiny; an oversized body is either malicious or
+// a misconfiguration and must never exhaust memory.
+func TestFetchAdvisory_OversizedBody(t *testing.T) {
+	// Stream a body that is larger than the 64 KB cap without buffering the
+	// whole thing in the test process.
+	const bodySize = 128 * 1024 // 128 KB — well over the 64 KB cap
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Write a leading '{' so JSON decoding starts, then flood with garbage.
+		// The decoder must stop reading at the cap, not consume the full body.
+		_, _ = w.Write([]byte{'{'})
+		chunk := make([]byte, 4096)
+		for i := range chunk {
+			chunk[i] = 'x'
+		}
+		written := 1
+		for written < bodySize {
+			n, err := w.Write(chunk)
+			written += n
+			if err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	orig := advisoryURL
+	advisoryURL = srv.URL
+	t.Cleanup(func() { advisoryURL = orig })
+
+	a, ok := FetchAdvisory(context.Background())
+	// Oversized / unparseable body must be treated as fail-open.
+	if ok {
+		t.Error("FetchAdvisory() returned ok=true on oversized body, want false")
+	}
+	if a.Message != "" {
+		t.Errorf("FetchAdvisory().Message = %q on oversized body, want empty", a.Message)
+	}
+}
+
 // TestFetchAdvisory_HTTP404 verifies that a 404 (advisory tag not yet created)
 // returns (Advisory{}, false) silently — expected production state before the
 // advisory release tag is created.

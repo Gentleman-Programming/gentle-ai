@@ -4833,3 +4833,133 @@ func TestWelcomeView_NewlineSeparatorBetweenUpdateAndAdvisory(t *testing.T) {
 		t.Fatalf("update banner and advisory appear on the same line (%d); expected separate lines\nView output:\n%s", updateLineIdx, view)
 	}
 }
+
+// ─── Advisory message sanitization tests ─────────────────────────────────────
+
+// TestSanitizeAdvisoryMessage_StripControlChars verifies that ASCII control
+// characters (including carriage return, bell, backspace, etc.) are removed
+// from the advisory message, keeping only printable characters and normal spaces.
+func TestSanitizeAdvisoryMessage_StripControlChars(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "carriage return stripped",
+			input: "hello\rworld",
+			want:  "helloworld",
+		},
+		{
+			name:  "bell stripped",
+			input: "ring\x07bell",
+			want:  "ringbell",
+		},
+		{
+			name:  "backspace stripped",
+			input: "a\x08b",
+			want:  "ab",
+		},
+		{
+			name:  "null byte stripped",
+			input: "null\x00byte",
+			want:  "nullbyte",
+		},
+		{
+			name:  "tab stripped",
+			input: "ta\tb",
+			want:  "tab",
+		},
+		{
+			name:  "newline stripped",
+			input: "line\nbreak",
+			want:  "linebreak",
+		},
+		{
+			name:  "clean message unchanged",
+			input: "security notice: update now",
+			want:  "security notice: update now",
+		},
+		{
+			name:  "empty string unchanged",
+			input: "",
+			want:  "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeAdvisoryMessage(tc.input)
+			if got != tc.want {
+				t.Errorf("sanitizeAdvisoryMessage(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSanitizeAdvisoryMessage_StripANSIEscapes verifies that ANSI escape
+// sequences (e.g. color codes, cursor movement) are stripped from the message
+// so they cannot corrupt the TUI layout.
+func TestSanitizeAdvisoryMessage_StripANSIEscapes(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "color reset stripped",
+			input: "\x1b[0mhello",
+			want:  "hello",
+		},
+		{
+			name:  "bold red color stripped",
+			input: "\x1b[1;31mwarn\x1b[0m",
+			want:  "warn",
+		},
+		{
+			name:  "cursor movement stripped",
+			input: "a\x1b[2Jb",
+			want:  "ab",
+		},
+		{
+			name:  "mixed text and escapes",
+			input: "normal \x1b[32mgreen\x1b[0m text",
+			want:  "normal green text",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeAdvisoryMessage(tc.input)
+			if got != tc.want {
+				t.Errorf("sanitizeAdvisoryMessage(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAdvisoryMsg_SanitizesOnStore verifies that control characters in an
+// advisory message dispatched via AdvisoryMsg are sanitized before being stored
+// in m.AdvisoryMessage, so they can never reach the rendered View.
+func TestAdvisoryMsg_SanitizesOnStore(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+
+	dirty := "notice\x1b[1;31m URGENT\x1b[0m\r\nupdate now"
+	updated, _ := m.Update(AdvisoryMsg{Advisory: update.Advisory{Message: dirty}})
+	state := updated.(Model)
+
+	// Must not contain any ESC character or control character.
+	for i, ch := range state.AdvisoryMessage {
+		if ch < 0x20 || ch == 0x7f {
+			t.Errorf("AdvisoryMessage[%d] = %U (%q) — control character not stripped; full value: %q",
+				i, ch, ch, state.AdvisoryMessage)
+		}
+	}
+	// Printable parts of the original message must be preserved.
+	if !strings.Contains(state.AdvisoryMessage, "notice") {
+		t.Errorf("AdvisoryMessage = %q — expected printable word %q to survive sanitization", state.AdvisoryMessage, "notice")
+	}
+	if !strings.Contains(state.AdvisoryMessage, "update now") {
+		t.Errorf("AdvisoryMessage = %q — expected printable phrase %q to survive sanitization", state.AdvisoryMessage, "update now")
+	}
+}
