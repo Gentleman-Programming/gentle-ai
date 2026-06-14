@@ -51,13 +51,13 @@ var defaultRuleSet = model.TriggerRuleSet{
 		{
 			On: model.EventPrePR,
 			When: model.TriggerWhen{
-				PathGlobs:    []string{"**/auth/**", "**/update/**", "**/security/**"},
+				PathGlobs:    []string{"**/auth/**", "**/update/**", "**/security/**", "**/payments/**"},
 				MinDiffLines: defaultLargeChangedLineThreshold,
 				Combine:      "or",
 			},
 			Run:  []string{"review-risk", "review-resilience", "review-readability", "review-reliability"},
 			Mode: model.ModeStrong,
-			Reason: "full 4R fan-out (~4x) only on hot paths (auth/update/security) " +
+			Reason: "full 4R fan-out (~4x) only on hot paths (auth/update/security/payments) " +
 				"or diffs exceeding 400 changed lines",
 		},
 		{

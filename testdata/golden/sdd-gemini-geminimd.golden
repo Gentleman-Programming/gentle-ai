@@ -332,6 +332,6 @@ These are organic recommendations, not enforced checkpoints. gentle-ai only rend
 
 - At **pre-commit**, always, consider running `review-readability`. (everyday event → ONE cheap advisory lens (~1x); full 4R fan-out reserved for pre-pr)
 - At **pre-push**, always, consider running `review-readability`. (everyday event → ONE cheap advisory lens (~1x); 4R fan-out reserved for pre-pr on hot paths / large diffs)
-- At **pre-pr**, when the diff touches `**/auth/**`, `**/update/**`, `**/security/**` OR when the diff exceeds 400 changed lines, **strongly recommend** running `review-risk`, `review-resilience`, `review-readability`, and `review-reliability` in parallel. (full 4R fan-out (~4x) only on hot paths (auth/update/security) or diffs exceeding 400 changed lines)
+- At **pre-pr**, when the diff touches `**/auth/**`, `**/update/**`, `**/security/**`, `**/payments/**` OR when the diff exceeds 400 changed lines, **strongly recommend** running `review-risk`, `review-resilience`, `review-readability`, and `review-reliability` in parallel. (full 4R fan-out (~4x) only on hot paths (auth/update/security/payments) or diffs exceeding 400 changed lines)
 - At **post-sdd-phase**, after the design or apply phase completes, **strongly recommend** running `judgment-day`. (adversarial verification (~4 + 3*findings cost) only at high-stakes SDD phases (design and apply))
 <!-- /gentle-ai:trigger-rules -->

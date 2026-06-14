@@ -142,21 +142,16 @@ func TestDefaultTriggerRuleSet_TokenShape(t *testing.T) {
 		if b.When.MinDiffLines != 400 {
 			t.Errorf("pre-pr When.MinDiffLines = %d, want 400", b.When.MinDiffLines)
 		}
-		hasAuth := false
-		hasUpdate := false
+		// Spec E Tier-2 table: auth, update, security, payments.
+		wantGlobs := []string{"**/auth/**", "**/update/**", "**/security/**", "**/payments/**"}
+		globSet := map[string]bool{}
 		for _, g := range b.When.PathGlobs {
-			if g == "**/auth/**" {
-				hasAuth = true
-			}
-			if g == "**/update/**" {
-				hasUpdate = true
-			}
+			globSet[g] = true
 		}
-		if !hasAuth {
-			t.Error("pre-pr When.PathGlobs missing **/auth/**")
-		}
-		if !hasUpdate {
-			t.Error("pre-pr When.PathGlobs missing **/update/**")
+		for _, want := range wantGlobs {
+			if !globSet[want] {
+				t.Errorf("pre-pr When.PathGlobs missing %q", want)
+			}
 		}
 		if b.When.Combine != "or" {
 			t.Errorf("pre-pr When.Combine = %q, want or", b.When.Combine)
