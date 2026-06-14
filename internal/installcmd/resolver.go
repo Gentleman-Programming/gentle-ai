@@ -92,9 +92,31 @@ func resolveKimiInstall(profile system.PlatformProfile) (CommandSequence, error)
 	return CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}}, nil
 }
 
+// npmBasedAgents is the set of agents whose auto-install runs npm commands.
+// When any of these agents is selected, npm (and therefore Node.js) must be
+// present before the pipeline reaches the agent install step.
+//
+// AgentPi is included because InstallCommand always runs engramInitCommand(),
+// which executes either `pnpm dlx` or `npm exec` (both require Node.js). The
+// npm-presence check is a sound proxy for Node.js availability.
+var npmBasedAgents = map[model.AgentID]struct{}{
+	model.AgentClaudeCode: {},
+	model.AgentOpenCode:   {},
+	model.AgentKilocode:   {},
+	model.AgentGeminiCLI:  {},
+	model.AgentCodex:      {},
+	model.AgentQwenCode:   {},
+	model.AgentPi:         {},
+}
+
 // ValidateAgentInstallPreflight validates agent-specific prerequisites that must
 // exist before running installation commands.
 func ValidateAgentInstallPreflight(profile system.PlatformProfile, agent model.AgentID) error {
+	if _, ok := npmBasedAgents[agent]; ok {
+		if err := validateNpmInstallPreflight(profile); err != nil {
+			return err
+		}
+	}
 	switch agent {
 	case model.AgentKimi:
 		return validateKimiInstallPreflight(profile)
@@ -110,6 +132,23 @@ func validatePiInstallPreflight() error {
 		return fmt.Errorf("Pi requires the `pi` executable in PATH before installing Gentle AI Pi packages")
 	}
 
+	return nil
+}
+
+// validateNpmInstallPreflight ensures npm (and therefore Node.js) is available
+// before attempting any npm-based agent install. Called for all agents in
+// npmBasedAgents so the user gets a clear, actionable error instead of a
+// cryptic "exec: npm: executable file not found in PATH" mid-pipeline.
+func validateNpmInstallPreflight(profile system.PlatformProfile) error {
+	if _, err := cmdLookPath("npm"); err != nil {
+		hint := system.InstallHintForDep("node", profile)
+		return fmt.Errorf(
+			"Node.js / npm is required but `npm` was not found in PATH.\n"+
+				"Install Node.js (npm is included) and retry:\n"+
+				"  %s",
+			hint,
+		)
+	}
 	return nil
 }
 

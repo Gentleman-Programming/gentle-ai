@@ -155,11 +155,21 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
+	fakeNpm := filepath.Join(binDir, "npm")
+	if err := os.WriteFile(fakeNpm, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake npm) error = %v", err)
+	}
+
 	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
-		if name == "pi" {
+		switch name {
+		case "pi":
 			return fakePi, nil
+		case "npm":
+			// Pi's install runs npm exec for engram init, so npm must be present.
+			return fakeNpm, nil
+		default:
+			return "", exec.ErrNotFound
 		}
-		return "", exec.ErrNotFound
 	})
 	t.Cleanup(restorePreflightLookPath)
 
