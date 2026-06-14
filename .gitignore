@@ -1,5 +1,6 @@
 # Binaries
 /gentle-ai
+/.bin/
 *.exe
 *.dll
 *.so

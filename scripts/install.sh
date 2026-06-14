@@ -186,15 +186,6 @@ check_prerequisites() {
 # ============================================================================
 
 detect_install_method() {
-    if [ "${CHANNEL}" = "beta" ]; then
-        if [ -n "${FORCE_METHOD:-}" ] && [ "${FORCE_METHOD}" != "go" ]; then
-            fatal "--channel beta installs Gentle AI from main and only supports --method go"
-        fi
-        INSTALL_METHOD="go"
-        info "Using beta channel — will install ${BINARY_NAME} from main via go install"
-        return
-    fi
-
     if [ -n "${FORCE_METHOD:-}" ]; then
         case "$FORCE_METHOD" in
             brew|go|binary) INSTALL_METHOD="$FORCE_METHOD" ;;
@@ -241,8 +232,10 @@ install_brew() {
         info "Already installed, upgrading ${BINARY_NAME}..."
         local output
         if output="$(brew upgrade "$BINARY_NAME" 2>&1)"; then
+            INSTALLED_BINARY_PATH="$(brew --prefix)/bin/${BINARY_NAME}"
             success "Upgraded ${BINARY_NAME} via Homebrew"
         elif printf '%s' "$output" | grep -Eiq 'already.*(up-to-date|installed)|not outdated'; then
+            INSTALLED_BINARY_PATH="$(brew --prefix)/bin/${BINARY_NAME}"
             success "${BINARY_NAME} is already at the latest version"
         else
             printf '%s\n' "$output" >&2
@@ -253,6 +246,7 @@ install_brew() {
         info "Installing ${BINARY_NAME}..."
         local output
         if output="$(brew install "$BINARY_NAME" 2>&1)"; then
+            INSTALLED_BINARY_PATH="$(brew --prefix)/bin/${BINARY_NAME}"
             success "Installed ${BINARY_NAME} via Homebrew"
         else
             printf '%s\n' "$output" >&2
@@ -267,17 +261,13 @@ install_brew() {
 # ============================================================================
 
 install_go() {
-    step "Installing via go install"
+    step "Installing launcher via go install"
 
-    local version="latest"
-    if [ "${CHANNEL}" = "beta" ]; then
-        version="main"
-    fi
     # Lowercase the owner portably: ${var,,} needs bash 4+, but macOS ships
     # bash 3.2, so piping `| bash` would fail with "bad substitution".
     local owner_lc
     owner_lc="$(printf '%s' "$GITHUB_OWNER" | tr '[:upper:]' '[:lower:]')"
-    local go_package="github.com/${owner_lc}/${GITHUB_REPO}/cmd/${BINARY_NAME}@${version}"
+    local go_package="github.com/${owner_lc}/${GITHUB_REPO}/cmd/${BINARY_NAME}@latest"
 
     info "Running: go install ${go_package}"
     if [ "${CHANNEL}" = "beta" ]; then
@@ -305,7 +295,8 @@ install_go() {
         warn "Add this to your shell profile: export PATH=\"\$PATH:${gobin}\""
     fi
 
-    success "Installed ${BINARY_NAME} via go install"
+    INSTALLED_BINARY_PATH="${gobin}/${BINARY_NAME}"
+    success "Installed ${BINARY_NAME} launcher via go install"
 }
 
 prepend_go_env_pattern() {
@@ -465,6 +456,7 @@ install_binary() {
         fatal "Cannot write to ${install_dir}. Run with sudo or use --dir to specify a writable directory."
     fi
 
+    INSTALLED_BINARY_PATH="${install_dir}/${BINARY_NAME}"
     success "Installed ${BINARY_NAME} to ${install_dir}/${BINARY_NAME}"
 
     # Check if install dir is in PATH
@@ -480,6 +472,162 @@ install_binary() {
 # ============================================================================
 # Verify installation
 # ============================================================================
+
+path_to_real_file() {
+    local path="$1"
+    if [ -z "$path" ]; then
+        return 1
+    fi
+    printf '%s/%s' "$(cd "$(dirname "$path")" 2>/dev/null && pwd -P)" "$(basename "$path")"
+}
+
+path_resolves_to_installed_launcher() {
+    local installed="${INSTALLED_BINARY_PATH:-}"
+    if [ -z "$installed" ]; then
+        return 0
+    fi
+
+    local resolved
+    resolved="$(command -v "$BINARY_NAME" 2>/dev/null || true)"
+    if [ -z "$resolved" ]; then
+        return 1
+    fi
+
+    local installed_real resolved_real
+    installed_real="$(path_to_real_file "$installed")"
+    resolved_real="$(path_to_real_file "$resolved")"
+
+    [ "$installed_real" = "$resolved_real" ]
+}
+
+persist_launcher_path_first() {
+    local launcher_dir="$1"
+    local marker_start="# >>> gentle-ai launcher PATH >>>"
+    local marker_end="# <<< gentle-ai launcher PATH <<<"
+    local block
+    block="${marker_start}
+export PATH=\"${launcher_dir}:\$PATH\"
+${marker_end}"
+
+    local profiles=()
+    case "${SHELL:-}" in
+        */zsh) profiles+=("${HOME}/.zshrc") ;;
+        */bash) profiles+=("${HOME}/.bashrc") ;;
+    esac
+    [ -f "${HOME}/.zshrc" ] && profiles+=("${HOME}/.zshrc")
+    [ -f "${HOME}/.bashrc" ] && profiles+=("${HOME}/.bashrc")
+    [ -f "${HOME}/.bash_profile" ] && profiles+=("${HOME}/.bash_profile")
+    if [ ${#profiles[@]} -eq 0 ]; then
+        profiles+=("${HOME}/.profile")
+    fi
+
+    local updated=0
+    local seen=""
+    for profile in "${profiles[@]}"; do
+        case ":$seen:" in *":$profile:"*) continue ;; esac
+        seen="${seen}:$profile"
+        mkdir -p "$(dirname "$profile")"
+        touch "$profile"
+        local tmp_profile
+        tmp_profile="$(mktemp)"
+        awk -v start="$marker_start" -v end="$marker_end" '
+            $0 == start { skip=1; next }
+            $0 == end { skip=0; next }
+            !skip { print }
+        ' "$profile" > "$tmp_profile"
+        {
+            cat "$tmp_profile"
+            printf '\n%s\n' "$block"
+        } > "$profile"
+        rm -f "$tmp_profile"
+        success "Updated ${profile} to prefer the Gentle AI launcher"
+        updated=1
+    done
+
+    if [ "$updated" = "1" ]; then
+        warn "Open a new shell, or run: source <your shell profile>"
+    fi
+}
+
+ensure_launcher_first_in_path() {
+    local installed="${INSTALLED_BINARY_PATH:-}"
+    if [ -z "$installed" ]; then
+        return 0
+    fi
+    local launcher_dir
+    launcher_dir="$(dirname "$installed")"
+
+    if path_resolves_to_installed_launcher; then
+        return 0
+    fi
+
+    local resolved
+    resolved="$(command -v "$BINARY_NAME" 2>/dev/null || true)"
+    warn "Your shell resolves '${BINARY_NAME}' to a different binary:"
+    warn "  current PATH: ${resolved:-not found}"
+    warn "  new launcher:  ${installed}"
+    warn "Legacy installs can shadow the launcher and bypass channel switching."
+
+    export PATH="${launcher_dir}:${PATH}"
+    hash -r 2>/dev/null || true
+    success "This session now uses the Gentle AI launcher first"
+
+    persist_launcher_path_first "$launcher_dir"
+}
+
+install_channel_capable_launcher_from_main() {
+    step "Installing channel-capable launcher from main"
+
+    # Lowercase the owner portably: ${var,,} needs bash 4+, but macOS ships
+    # bash 3.2, so piping `| bash` would fail with "bad substitution".
+    local owner_lc
+    owner_lc="$(printf '%s' "$GITHUB_OWNER" | tr '[:upper:]' '[:lower:]')"
+    local go_package="github.com/${owner_lc}/${GITHUB_REPO}/cmd/${BINARY_NAME}@main"
+    info "Running: go install ${go_package}"
+    if ! go install "$go_package"; then
+        fatal "Failed to install channel-capable launcher from main"
+    fi
+
+    local gobin
+    gobin="$(go env GOBIN)"
+    if [ -z "$gobin" ]; then
+        gobin="$(go env GOPATH)/bin"
+    fi
+    INSTALLED_BINARY_PATH="${gobin}/${BINARY_NAME}"
+    success "Installed channel-capable launcher to ${INSTALLED_BINARY_PATH}"
+}
+
+activate_requested_channel() {
+    if [ "${CHANNEL}" != "beta" ]; then
+        return 0
+    fi
+
+    step "Activating beta channel"
+
+    if ! command -v go &>/dev/null; then
+        fatal "The beta channel builds from main and requires Go 1.24+. Install Go, then run: ${BINARY_NAME} channel beta"
+    fi
+
+    local launcher="${INSTALLED_BINARY_PATH:-}"
+    if [ -z "$launcher" ] || [ ! -x "$launcher" ]; then
+        launcher="$(command -v "$BINARY_NAME" 2>/dev/null || true)"
+    fi
+    if [ -z "$launcher" ]; then
+        fatal "Could not find installed ${BINARY_NAME} launcher to activate beta"
+    fi
+
+    info "Running: ${launcher} channel beta"
+    if ! "$launcher" channel beta; then
+        warn "Installed launcher does not support channel activation yet; bootstrapping from main."
+        install_channel_capable_launcher_from_main
+        launcher="${INSTALLED_BINARY_PATH}"
+        info "Retrying: ${launcher} channel beta"
+        if ! "$launcher" channel beta; then
+            fatal "Failed to activate beta channel"
+        fi
+    fi
+    success "Beta channel activated through the launcher"
+}
 
 verify_installation() {
     step "Verifying installation"
@@ -538,7 +686,8 @@ print_next_steps() {
     echo ""
     echo -e "${BOLD}Next steps:${NC}"
     if [ "${CHANNEL}" = "beta" ]; then
-        echo -e "  ${CYAN}1.${NC} Run ${BOLD}GENTLE_AI_CHANNEL=beta ${BINARY_NAME} install${NC} to keep using the beta channel"
+        echo -e "  ${CYAN}1.${NC} Run ${BOLD}${BINARY_NAME}${NC}; the launcher will delegate normal commands to beta"
+        echo -e "  ${CYAN}2.${NC} Return to stable with ${BOLD}${BINARY_NAME} channel stable${NC}"
     else
         echo -e "  ${CYAN}1.${NC} Run ${BOLD}${BINARY_NAME}${NC} to start the TUI installer"
     fi
@@ -613,6 +762,8 @@ main() {
         binary) install_binary ;;
     esac
 
+    activate_requested_channel
+    ensure_launcher_first_in_path
     verify_installation
     print_next_steps
 }

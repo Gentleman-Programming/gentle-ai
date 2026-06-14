@@ -84,19 +84,38 @@ scoop install gentle-ai
 
 The beta channel builds Gentle AI straight from `main`, so you need **Go 1.24+** installed first. Use it to try unreleased changes and report issues early.
 
-**macOS / Linux**
+Install Gentle AI normally first, then switch channels through the launcher:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
+gentle-ai channel beta
 ```
 
-**Windows (PowerShell)**
+Return to the stable launcher at any time:
 
-```powershell
+```bash
+gentle-ai channel stable
+```
+
+Do not add `~/.gentle-ai/channels/beta` or `~/.gentle-ai/channels/stable` to your `PATH`. Keep your Homebrew/Scoop/binary/Go-installed launcher first; it delegates to the selected channel internally.
+
+If you used an older beta install and `gentle-ai` still resolves to an old Go binary, check:
+
+```bash
+which -a gentle-ai      # macOS/Linux
+where.exe gentle-ai     # Windows
+```
+
+The first entry should be your launcher (`brew`, `scoop`, the binary installer, or your stable `go install`). If an older `~/go/bin/gentle-ai` wins, rerun the installer: it moves the launcher ahead of the legacy binary in your user `PATH` and keeps channel payloads out of `PATH`.
+
+Fresh installs can also activate beta in one step:
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
+
+# Windows (PowerShell)
 $env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
 ```
-
-To keep upgrading on beta later, run `GENTLE_AI_CHANNEL=beta gentle-ai upgrade`. To return to stable, reinstall via Homebrew or Scoop.
 
 ### After install: project-level setup
 

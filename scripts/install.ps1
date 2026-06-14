@@ -5,9 +5,10 @@
     Ecosystem, Frameworks, Workflows for AI coding agents.
 
 .DESCRIPTION
-    Downloads and installs the gentle-ai binary for Windows.
+    Downloads and installs the gentle-ai launcher for Windows.
     Supports installation via Go or pre-built binary from GitHub Releases.
-    Accepted channels: stable (default), beta, nightly.
+    Accepted channels: stable (default), beta, nightly. Beta installs the launcher first,
+    then activates the beta runtime through `gentle-ai channel beta`.
 
 .EXAMPLE
     # Run directly:
@@ -21,7 +22,7 @@
     .\install.ps1 -Method binary
     .\install.ps1 -Method go
 
-    # Install the beta channel from main:
+    # Install the launcher and activate the beta channel from main:
     .\install.ps1 -Channel beta
 
     # Skip checksum verification (not recommended):
@@ -116,14 +117,6 @@ function Test-Prerequisites {
 function Get-InstallMethod {
     param([string]$Forced, [string]$Channel)
 
-    if ($Channel -eq "beta") {
-        if ($Forced -ne "auto" -and $Forced -ne "go") {
-            Stop-WithError "-Channel beta installs Gentle AI from main and only supports -Method go"
-        }
-        Write-Info "Using beta channel — will install $BINARY_NAME from main via go install"
-        return "go"
-    }
-
     if ($Forced -ne "auto") {
         Write-Info "Using forced method: $Forced"
         return $Forced
@@ -143,12 +136,9 @@ function Get-InstallMethod {
 # ============================================================================
 
 function Install-ViaGo {
-    param([string]$Channel = "stable")
+    Write-Step "Installing launcher via go install"
 
-    Write-Step "Installing via go install"
-
-    $version = if ($Channel -eq "beta") { "main" } else { "latest" }
-    $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/cmd/$BINARY_NAME@$version"
+    $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/cmd/$BINARY_NAME@latest"
     Write-Info "Running: go install $goPackage"
 
     if ($Channel -eq "beta") {
@@ -173,7 +163,8 @@ function Install-ViaGo {
         Write-Warn "Add it to your PATH environment variable."
     }
 
-    Write-Success "Installed $BINARY_NAME via go install"
+    $script:InstalledBinaryPath = Join-Path $gobin "$BINARY_NAME.exe"
+    Write-Success "Installed $BINARY_NAME launcher via go install"
 }
 
 function Add-GoEnvPattern {
@@ -300,6 +291,7 @@ function Install-ViaBinary {
         Write-Info "Installing to $destPath..."
         Copy-Item -Path $binaryPath -Destination $destPath -Force
 
+        $script:InstalledBinaryPath = $destPath
         Write-Success "Installed $BINARY_NAME to $destPath"
 
         # Persist install dir to the User PATH if not already present.
@@ -338,6 +330,98 @@ function Install-ViaBinary {
 # ============================================================================
 # Verify installation
 # ============================================================================
+
+function Ensure-LauncherFirstInPath {
+    $installed = $script:InstalledBinaryPath
+    if (-not $installed) { return }
+
+    $cmd = Get-Command $BINARY_NAME -ErrorAction SilentlyContinue
+    if (-not $cmd) { return }
+
+    try {
+        $installedFull = [System.IO.Path]::GetFullPath($installed).TrimEnd('\')
+        $resolvedFull = [System.IO.Path]::GetFullPath($cmd.Source).TrimEnd('\')
+    } catch {
+        return
+    }
+
+    if ($installedFull -ieq $resolvedFull) { return }
+
+    $launcherDir = [System.IO.Path]::GetDirectoryName($installed)
+    Write-Warn "Your shell resolves '$BINARY_NAME' to a different binary:"
+    Write-Warn "  current PATH: $($cmd.Source)"
+    Write-Warn "  new launcher:  $installed"
+    Write-Warn "Legacy installs can shadow the launcher and bypass channel switching."
+
+    $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+    $entries = @()
+    if ($userPath) {
+        $entries = $userPath -split ';' | Where-Object { $_ -ne '' }
+    }
+    $remaining = $entries | Where-Object { $_.TrimEnd('\') -ine $launcherDir.TrimEnd('\') }
+    $newUserPath = (@($launcherDir) + $remaining) -join ';'
+    [Environment]::SetEnvironmentVariable("PATH", $newUserPath, "User")
+
+    $sessionEntries = $env:PATH -split ';' | Where-Object { $_ -ne '' -and $_.TrimEnd('\') -ine $launcherDir.TrimEnd('\') }
+    $env:PATH = (@($launcherDir) + $sessionEntries) -join ';'
+
+    Write-Success "Moved the Gentle AI launcher to the front of your User PATH"
+    Write-Warn "Open a new PowerShell window to use the persisted PATH order."
+}
+
+function Install-ChannelCapableLauncherFromMain {
+    Write-Step "Installing channel-capable launcher from main"
+
+    $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/cmd/$BINARY_NAME@main"
+    Write-Info "Running: go install $goPackage"
+    & go install $goPackage
+    if ($LASTEXITCODE -ne 0) {
+        Stop-WithError "Failed to install channel-capable launcher from main"
+    }
+
+    $gobin = & go env GOBIN 2>$null
+    if (-not $gobin) {
+        $gopath = & go env GOPATH 2>$null
+        $gobin = Join-Path $gopath "bin"
+    }
+    $script:InstalledBinaryPath = Join-Path $gobin "$BINARY_NAME.exe"
+    Write-Success "Installed channel-capable launcher to $script:InstalledBinaryPath"
+}
+
+function Activate-RequestedChannel {
+    param([string]$Channel = "stable")
+
+    if ($Channel -ne "beta") { return }
+
+    Write-Step "Activating beta channel"
+
+    if (-not (Get-Command "go" -ErrorAction SilentlyContinue)) {
+        Stop-WithError "The beta channel builds from main and requires Go 1.24+. Install Go, then run: $BINARY_NAME channel beta"
+    }
+
+    $launcher = $script:InstalledBinaryPath
+    if (-not ($launcher -and (Test-Path $launcher))) {
+        $cmd = Get-Command $BINARY_NAME -ErrorAction SilentlyContinue
+        if ($cmd) { $launcher = $cmd.Source }
+    }
+    if (-not $launcher) {
+        Stop-WithError "Could not find installed $BINARY_NAME launcher to activate beta"
+    }
+
+    Write-Info "Running: $launcher channel beta"
+    & $launcher channel beta
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Installed launcher does not support channel activation yet; bootstrapping from main."
+        Install-ChannelCapableLauncherFromMain
+        $launcher = $script:InstalledBinaryPath
+        Write-Info "Retrying: $launcher channel beta"
+        & $launcher channel beta
+        if ($LASTEXITCODE -ne 0) {
+            Stop-WithError "Failed to activate beta channel"
+        }
+    }
+    Write-Success "Beta channel activated through the launcher"
+}
 
 function Test-Installation {
     Write-Step "Verifying installation"
@@ -392,7 +476,8 @@ function Show-NextSteps {
     Write-Host ""
     Write-Host "Next steps:" -ForegroundColor White
     if ($Channel -eq "beta") {
-        Write-Host ('  1. Run ''$env:GENTLE_AI_CHANNEL = "beta"; {0} install'' to keep using the beta channel' -f $BINARY_NAME) -ForegroundColor Cyan
+        Write-Host "  1. Run '$BINARY_NAME'; the launcher will delegate normal commands to beta" -ForegroundColor Cyan
+        Write-Host "  2. Return to stable with '$BINARY_NAME channel stable'" -ForegroundColor Cyan
     } else {
         Write-Host "  1. Run '$BINARY_NAME' to start the TUI installer" -ForegroundColor Cyan
     }
@@ -432,10 +517,12 @@ function Main {
     $installMethod = Get-InstallMethod -Forced $Method -Channel $Channel
 
     switch ($installMethod) {
-        "go"     { Install-ViaGo -Channel $Channel }
+        "go"     { Install-ViaGo }
         "binary" { Install-ViaBinary -Arch $arch }
     }
 
+    Activate-RequestedChannel -Channel $Channel
+    Ensure-LauncherFirstInPath
     Test-Installation
     Show-NextSteps -Channel $Channel
 }

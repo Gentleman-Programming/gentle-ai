@@ -26,6 +26,115 @@ func TestWindowsInstallScriptHasNoUTF8BOM(t *testing.T) {
 // "($fileSize bytes)" inside a double-quoted string are read by Windows
 // PowerShell 5.1 as an invalid subexpression and abort parsing before any code
 // runs. Use the -f format operator instead, e.g. ("... {0} bytes" -f $fileSize).
+func TestInstallScriptsRepairLegacyPathShadowing(t *testing.T) {
+	checks := []struct {
+		name     string
+		path     string
+		required []string
+	}{
+		{
+			name: "unix",
+			path: filepath.Join("..", "..", "scripts", "install.sh"),
+			required: []string{
+				"ensure_launcher_first_in_path",
+				"persist_launcher_path_first",
+				"Legacy installs can shadow the launcher",
+				"This session now uses the Gentle AI launcher first",
+			},
+		},
+		{
+			name: "windows",
+			path: filepath.Join("..", "..", "scripts", "install.ps1"),
+			required: []string{
+				"Ensure-LauncherFirstInPath",
+				"SetEnvironmentVariable(\"PATH\", $newUserPath, \"User\")",
+				"Legacy installs can shadow the launcher",
+				"Moved the Gentle AI launcher to the front of your User PATH",
+			},
+		},
+	}
+
+	for _, tc := range checks {
+		t.Run(tc.name, func(t *testing.T) {
+			content, err := os.ReadFile(tc.path)
+			if err != nil {
+				t.Fatalf("ReadFile(%q) error = %v", tc.path, err)
+			}
+			for _, required := range tc.required {
+				if !bytes.Contains(content, []byte(required)) {
+					t.Fatalf("%s missing legacy PATH repair marker %q", tc.path, required)
+				}
+			}
+		})
+	}
+}
+
+func TestInstallScriptsActivateBetaThroughLauncher(t *testing.T) {
+	checks := []struct {
+		name      string
+		path      string
+		forbidden []string
+		required  []string
+	}{
+		{
+			name: "unix",
+			path: filepath.Join("..", "..", "scripts", "install.sh"),
+			forbidden: []string{
+				"--channel beta installs Gentle AI from main and only supports --method go",
+				"GENTLE_AI_CHANNEL=beta ${BINARY_NAME} install",
+			},
+			required: []string{
+				"activate_requested_channel",
+				"$launcher\" channel beta",
+				"cmd/${BINARY_NAME}@latest",
+				"install_channel_capable_launcher_from_main",
+				"cmd/${BINARY_NAME}@main",
+				"bootstrapping from main",
+			},
+		},
+		{
+			name: "windows",
+			path: filepath.Join("..", "..", "scripts", "install.ps1"),
+			forbidden: []string{
+				"-Channel beta installs Gentle AI from main and only supports -Method go",
+				"Install-ViaGo -Channel $Channel",
+			},
+			required: []string{
+				"Activate-RequestedChannel",
+				"& $launcher channel beta",
+				"cmd/$BINARY_NAME@latest",
+				"Install-ChannelCapableLauncherFromMain",
+				"cmd/$BINARY_NAME@main",
+				"bootstrapping from main",
+			},
+		},
+	}
+
+	for _, tc := range checks {
+		t.Run(tc.name, func(t *testing.T) {
+			content, err := os.ReadFile(tc.path)
+			if err != nil {
+				t.Fatalf("ReadFile(%q) error = %v", tc.path, err)
+			}
+			text := string(content)
+			for _, forbidden := range tc.forbidden {
+				if bytes.Contains(content, []byte(forbidden)) {
+					t.Fatalf("%s still contains obsolete beta install behavior %q", tc.path, forbidden)
+				}
+			}
+			for _, required := range tc.required {
+				if !bytes.Contains(content, []byte(required)) {
+					t.Fatalf("%s missing required launcher beta activation marker %q", tc.path, required)
+				}
+			}
+			if bytes.Contains(content, []byte("@main")) && !bytes.Contains(content, []byte("channel beta")) {
+				t.Fatalf("%s references @main without launcher channel activation", tc.path)
+			}
+			_ = text
+		})
+	}
+}
+
 func TestWindowsInstallScriptHasNoUnsafeStringSubexpression(t *testing.T) {
 	path := filepath.Join("..", "..", "scripts", "install.ps1")
 	content, err := os.ReadFile(path)
