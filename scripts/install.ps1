@@ -217,9 +217,9 @@ function Install-ViaBinary {
 
         $fileSize = (Get-Item $archivePath).Length
         if ($fileSize -lt 1000) {
-            Stop-WithError "Downloaded file is suspiciously small ($fileSize bytes). Archive may not exist for this platform."
+            Stop-WithError ("Downloaded file is suspiciously small ({0} bytes). Archive may not exist for this platform." -f $fileSize)
         }
-        Write-Success "Downloaded $archiveName ($fileSize bytes)"
+        Write-Success ("Downloaded {0} ({1} bytes)" -f $archiveName, $fileSize)
 
         # Verify checksum
         Write-Info "Verifying checksum..."
