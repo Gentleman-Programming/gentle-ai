@@ -431,18 +431,52 @@ func extractZipBinary(data []byte, binaryName, outPath string) error {
 }
 
 // stopEngramProcesses stops any running Engram process so Windows can replace
-// engram.exe during upgrade. Missing processes are not an error because
-// Get-Process uses SilentlyContinue.
+// engram.exe during upgrade.
+//
+// The PowerShell script is written defensively:
+//  1. Get-Process with -ErrorAction SilentlyContinue returns nothing (not an
+//     error) when no engram process exists, so the no-op case is clean.
+//  2. Stop-Process uses -ErrorAction SilentlyContinue so that an access-denied
+//     condition (e.g. the MCP server is held by the running editor session) does
+//     not produce a terminating error and a non-zero exit code.
+//  3. If processes were found but could not all be stopped (count mismatch) we
+//     return an informative warning so the caller can surface it, but we do NOT
+//     abort the install — Windows may still succeed in replacing the binary if
+//     at least the file lock was released.
 func stopEngramProcesses() error {
+	// Two-step: find running engram processes, then attempt to stop them.
+	// Using -ErrorAction SilentlyContinue on both Get-Process and Stop-Process
+	// prevents access-denied and "no such process" from producing exit status 1.
+	const script = `
+$procs = Get-Process -Name engram -ErrorAction SilentlyContinue
+if ($procs) {
+    $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+    $remaining = Get-Process -Name engram -ErrorAction SilentlyContinue
+    if ($remaining) {
+        Write-Output "WARNING: $($remaining.Count) engram process(es) could not be stopped (access denied or still running). The upgrade may fail if the file is still locked."
+    }
+}
+`
 	cmd := exec.Command("powershell.exe",
 		"-NoProfile",
 		"-NonInteractive",
 		"-Command",
-		"Get-Process -Name engram -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Stop",
+		script,
 	)
 	cmd.Stdin = nil
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// powershell itself failed to launch or returned non-zero despite
+		// our SilentlyContinue guards — surface the raw output so the user
+		// has something actionable.
 		return fmt.Errorf("powershell Stop-Process engram: %w (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+	// If the script emitted a WARNING line, surface it but do not fail.
+	// The caller decides whether to abort based on the returned error being nil.
+	msg := strings.TrimSpace(string(out))
+	if strings.HasPrefix(msg, "WARNING:") {
+		// Non-fatal: log to stderr so operators can diagnose, but return nil.
+		fmt.Fprintf(os.Stderr, "gentle-ai: engram stop: %s\n", msg)
 	}
 	return nil
 }
