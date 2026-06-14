@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -149,10 +150,20 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 	// binary runs sync automatically on its next launch. This replaces the
 	// previous "restart and sync manually" skip path. Failure to write state is
 	// non-fatal — the user can re-run sync explicitly.
+	//
+	// No-clobber guard: only fall back to a fresh InstallState{} when the file
+	// is genuinely missing (ErrNotExist). Any other read error (e.g. corrupt
+	// JSON, permission denied) means an existing file is present — do not
+	// overwrite it and risk dropping unrelated persisted fields.
 	if homeDir != "" {
-		s, _ := state.Read(homeDir)
-		s.PendingSync = true
-		_ = state.Write(homeDir, s)
+		s, readErr := state.Read(homeDir)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			// File exists but is unreadable/corrupt — skip this round to avoid
+			// clobbering installed_agents, model assignments, etc.
+		} else {
+			s.PendingSync = true
+			_ = state.Write(homeDir, s)
+		}
 	}
 
 	return restartAfterGentleAIUpgrade(target.LatestVersion, stdout)

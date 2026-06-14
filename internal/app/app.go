@@ -145,7 +145,11 @@ func RunArgs(args []string, stdout io.Writer) error {
 				// Leave PendingSync=true so the next launch retries.
 			} else {
 				installedState.PendingSync = false
-				_ = state.Write(homeDir, installedState)
+				if writeErr := state.Write(homeDir, installedState); writeErr != nil {
+					// Best-effort: surface the failure so it's not silently swallowed.
+					// Idempotent re-sync on the next launch is acceptable.
+					_, _ = fmt.Fprintf(stdout, "Warning: failed to clear PendingSync flag: %v\n", writeErr)
+				}
 			}
 		}
 

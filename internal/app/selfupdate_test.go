@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -679,6 +680,57 @@ func TestSelfUpdate_DoesNotSetPendingSyncOnFailure(t *testing.T) {
 	s, readErr := state.Read(tmpHome)
 	if readErr == nil && s.PendingSync {
 		t.Errorf("PendingSync = true after failed upgrade, want false")
+	}
+}
+
+// TestSelfUpdate_NoClobberOnCorruptStateFile verifies that when state.Read fails
+// with a non-ErrNotExist error (e.g. corrupt JSON), PendingSync is NOT written
+// and the existing state file bytes are preserved unchanged.
+func TestSelfUpdate_NoClobberOnCorruptStateFile(t *testing.T) {
+	unsetEnv(t, envNoSelfUpdate)
+	unsetEnv(t, envSelfUpdateDone)
+
+	checkResults := []update.UpdateResult{
+		{
+			Tool:             update.ToolInfo{Name: "gentle-ai"},
+			InstalledVersion: "1.7.0",
+			LatestVersion:    "1.8.0",
+			Status:           update.UpdateAvailable,
+		},
+	}
+	upgradeReport := upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "1.8.0"},
+		},
+	}
+
+	swapSelfUpdateDeps(t, checkResults, upgradeReport)
+	tmpHome := t.TempDir()
+	selfUpdateHomeDirFn = func() (string, error) { return tmpHome, nil }
+
+	// Write a corrupt (non-missing) state file so state.Read returns a non-ErrNotExist error.
+	stateDir := filepath.Join(tmpHome, ".gentle-ai")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	corruptPayload := []byte("this is not valid JSON {{{")
+	stateFilePath := filepath.Join(stateDir, "state.json")
+	if err := os.WriteFile(stateFilePath, corruptPayload, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	err := selfUpdate(context.Background(), "1.7.0", stubProfile(), io.Discard)
+	if err != nil {
+		t.Fatalf("selfUpdate returned error: %v", err)
+	}
+
+	// The state file must not have been overwritten — original bytes must be intact.
+	got, readErr := os.ReadFile(stateFilePath)
+	if readErr != nil {
+		t.Fatalf("os.ReadFile after selfUpdate: %v", readErr)
+	}
+	if string(got) != string(corruptPayload) {
+		t.Errorf("state file was overwritten on corrupt-read error\ngot:  %q\nwant: %q", got, corruptPayload)
 	}
 }
 

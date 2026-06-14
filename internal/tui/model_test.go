@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -4653,9 +4654,16 @@ func TestStartUpgradeSync_DoesNotSetPendingSyncWhenGentleAINotUpgraded(t *testin
 	}
 
 	// PendingSync must NOT be set when gentle-ai was not upgraded.
-	// state.json may not exist at all if nothing wrote it; treat that as PendingSync=false.
+	// state.json may not exist at all if nothing wrote it; that is expected and
+	// means PendingSync was never set (correct). Any other read error is
+	// unexpected and should fail the test loudly.
 	s, readErr := state.Read(home)
-	if readErr == nil && s.PendingSync {
+	if readErr != nil {
+		if !errors.Is(readErr, os.ErrNotExist) {
+			t.Fatalf("unexpected state.Read error: %v", readErr)
+		}
+		// File absent → PendingSync was never set — correct.
+	} else if s.PendingSync {
 		t.Errorf("PendingSync = true after non-gentle-ai upgrade, want false")
 	}
 
@@ -4671,5 +4679,50 @@ func TestStartUpgradeSync_DoesNotSetPendingSyncWhenGentleAINotUpgraded(t *testin
 	}
 	if !gotSyncDone {
 		t.Errorf("sequence did not produce SyncDoneMsg; msgs = %v", msgs)
+	}
+}
+
+// TestStartUpgradeSync_NoClobberOnCorruptStateFile verifies that when the HOME
+// directory has a corrupt (non-missing) state.json, the TUI syncCmd branch does
+// NOT overwrite it when setting PendingSync=true — matching the no-clobber
+// pattern in internal/update/cooldown.go.
+func TestStartUpgradeSync_NoClobberOnCorruptStateFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	// Write a corrupt state file so state.Read returns a non-ErrNotExist error.
+	stateDir := filepath.Join(home, ".gentle-ai")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	corruptPayload := []byte("this is not valid JSON {{{")
+	stateFilePath := filepath.Join(stateDir, "state.json")
+	if err := os.WriteFile(stateFilePath, corruptPayload, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpgradeSync
+	m.OperationRunning = true
+
+	// UpgradeFn reports gentle-ai as successfully upgraded.
+	m.UpgradeFn = func(_ context.Context, _ []update.UpdateResult) upgrade.UpgradeReport {
+		return upgrade.UpgradeReport{
+			Results: []upgrade.ToolUpgradeResult{
+				{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "1.8.0"},
+			},
+		}
+	}
+
+	executeUpgradeSyncSequence(t, m)
+
+	// The corrupt state file must NOT have been overwritten.
+	got, readErr := os.ReadFile(stateFilePath)
+	if readErr != nil {
+		t.Fatalf("os.ReadFile after startUpgradeSync: %v", readErr)
+	}
+	if string(got) != string(corruptPayload) {
+		t.Errorf("state file was overwritten on corrupt-read error\ngot:  %q\nwant: %q", got, corruptPayload)
 	}
 }

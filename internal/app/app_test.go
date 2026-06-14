@@ -1646,6 +1646,71 @@ func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
 	}
 }
 
+// TestRunArgs_PendingSync_ClearWriteFailureIsLogged verifies that when the
+// deferred sync succeeds but state.Write (to clear PendingSync) fails, the
+// error is printed to stdout and RunArgs does not return an error.
+// This guards against silently swallowed write failures (Issue 2).
+func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("cannot test permission errors as root")
+	}
+	home := t.TempDir()
+	setupMockHome(t, home)
+
+	// Write initial state with PendingSync=true.
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		PendingSync:     true,
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	// Make the state file read-only so state.Write (the clear-PendingSync write) fails.
+	stateFilePath := state.Path(home)
+	if err := os.Chmod(stateFilePath, 0o444); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stateFilePath, 0o644) })
+
+	origSelf := selfUpdateFn
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origRunTUI := runTUI
+	origDeferredSync := deferredSyncFn
+	t.Cleanup(func() {
+		selfUpdateFn = origSelf
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		runTUI = origRunTUI
+		deferredSyncFn = origDeferredSync
+	})
+
+	selfUpdateFn = func(_ context.Context, _ string, _ system.PlatformProfile, _ io.Writer) error {
+		return nil
+	}
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, nil
+	}
+	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
+		return m, nil
+	}
+
+	// Deferred sync succeeds — the write-clear is what we're testing.
+	deferredSyncFn = func() error { return nil }
+
+	var buf bytes.Buffer
+	if err := RunArgs(nil, &buf); err != nil {
+		t.Fatalf("RunArgs(nil) error = %v (clear-write failure must be non-fatal)", err)
+	}
+
+	// The warning must appear in stdout when the clear-write fails.
+	out := buf.String()
+	if !strings.Contains(out, "Warning:") {
+		t.Errorf("stdout = %q; want a warning message when PendingSync clear-write fails", out)
+	}
+}
+
 // TestRunArgs_NoPendingSync_NoSyncCall verifies that when PendingSync=false,
 // the deferred sync runner is NOT called (no extra sync on a normal launch).
 func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {

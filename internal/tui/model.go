@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -2561,10 +2562,20 @@ func (m Model) startUpgradeSync() tea.Cmd {
 			// Deferred sync (task 4.8): gentle-ai was upgraded in this session.
 			// Set PendingSync=true so the new binary runs sync on next launch
 			// instead of silently skipping it. Non-fatal if state write fails.
+			//
+			// No-clobber guard: only fall back to a fresh InstallState{} when
+			// the file is genuinely missing (ErrNotExist). Any other read error
+			// (e.g. corrupt JSON, permission denied) means an existing file is
+			// present — skip writing to avoid dropping installed_agents, model
+			// assignments, and other persisted fields.
 			if h := homeDir(); h != "" {
-				s, _ := state.Read(h)
-				s.PendingSync = true
-				_ = state.Write(h, s)
+				s, readErr := state.Read(h)
+				if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+					// File exists but unreadable/corrupt — skip to avoid clobber.
+				} else {
+					s.PendingSync = true
+					_ = state.Write(h, s)
+				}
 			}
 			return SyncDoneMsg{}
 		}
