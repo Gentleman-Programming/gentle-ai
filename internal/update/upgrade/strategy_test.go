@@ -15,6 +15,34 @@ import (
 	"testing"
 )
 
+// isolateChannelHome points HOME (and USERPROFILE on Windows) at a fresh empty
+// temp dir so cli.ResolveInstallChannel("") cannot fall through to the host's
+// saved ~/.gentle-ai/channel file. With no saved channel present, resolution
+// degrades to stable. Callers that drive the channel via an explicit
+// GENTLE_AI_CHANNEL value use this so the empty/unset path stays deterministic
+// regardless of the developer's persisted channel.
+func isolateChannelHome(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
+// isolateChannelResolution makes engramBinaryUpgrade's call to
+// cli.ResolveInstallChannel("") deterministic regardless of the host's
+// ~/.gentle-ai/channel file and GENTLE_AI_CHANNEL value. It isolates HOME (so
+// the saved-channel lookup finds nothing and degrades to stable) and unsets the
+// channel env var. Upgrade tests that assert the stable download path must call
+// this so they pass on machines with a persisted non-stable channel.
+func isolateChannelResolution(t *testing.T) {
+	t.Helper()
+	isolateChannelHome(t)
+	t.Setenv("GENTLE_AI_CHANNEL", "")
+	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
+		t.Fatalf("Unsetenv GENTLE_AI_CHANNEL: %v", err)
+	}
+}
+
 // --- TestRunStrategy_BrewUpgrade ---
 
 func TestRunStrategy_BrewUpgrade(t *testing.T) {
@@ -91,6 +119,11 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 }
 
 func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
+	// Isolate HOME: the upgrade now resolves and creates the beta channel directory,
+	// so it must not touch the real ~/.gentle-ai.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 
@@ -137,6 +170,17 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 			t.Fatalf("go install env missing %q in %v", want, gotCmd.Env)
 		}
 	}
+
+	// The build must be pinned to the beta channel directory the launcher delegates
+	// to; otherwise the upgrade lands in $GOPATH/bin and silently no-ops the running
+	// beta binary.
+	wantGOBIN := "GOBIN=" + filepath.Join(home, ".gentle-ai", "channels", "beta")
+	if !envContains(gotCmd.Env, wantGOBIN) {
+		t.Fatalf("go install env missing %q in %v", wantGOBIN, gotCmd.Env)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".gentle-ai", "channels", "beta")); statErr != nil {
+		t.Fatalf("beta channel dir must be created before go install: %v", statErr)
+	}
 }
 
 func envContains(env []string, want string) bool {
@@ -146,27 +190,6 @@ func envContains(env []string, want string) bool {
 		}
 	}
 	return false
-}
-
-func TestGoProxyBypassEnvPreservesExistingPatterns(t *testing.T) {
-	module := "github.com/gentleman-programming/gentle-ai"
-	env := goProxyBypassEnv([]string{
-		"PATH=/usr/bin",
-		"GONOSUMDB=example.com/private",
-		"GOPRIVATE=github.com/acme/*",
-		"GONOPROXY=github.com/gentleman-programming/gentle-ai",
-	}, module)
-
-	for _, want := range []string{
-		"PATH=/usr/bin",
-		"GONOSUMDB=github.com/gentleman-programming/gentle-ai,example.com/private",
-		"GOPRIVATE=github.com/gentleman-programming/gentle-ai,github.com/acme/*",
-		"GONOPROXY=github.com/gentleman-programming/gentle-ai",
-	} {
-		if !envContains(env, want) {
-			t.Fatalf("env missing %q in %v", want, env)
-		}
-	}
 }
 
 // --- TestRunStrategy_GoInstallMissingImportPath ---
@@ -1345,6 +1368,7 @@ func TestInstallScriptURL(t *testing.T) {
 // engram upgrade calls the binary download function, NOT go install.
 // This is the regression test for issue #160.
 func TestEngramUpgradeUsesDownloadNotGoInstall(t *testing.T) {
+	isolateChannelResolution(t)
 	origExecCommand := execCommand
 	origEngramDownloadFn := engramDownloadFn
 	t.Cleanup(func() {
@@ -1394,6 +1418,7 @@ func TestEngramUpgradeUsesDownloadNotGoInstall(t *testing.T) {
 // TestEngramUpgradeLinuxUsesDownload verifies that on Linux (non-brew),
 // engram upgrade uses the binary download function, not go install.
 func TestEngramUpgradeLinuxUsesDownload(t *testing.T) {
+	isolateChannelResolution(t)
 	origExecCommand := execCommand
 	origEngramDownloadFn := engramDownloadFn
 	t.Cleanup(func() {
@@ -1628,6 +1653,11 @@ func TestEngramBinaryUpgrade_StableChannelCallsDownloadFn(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Isolate HOME so the empty/unset-channel subcase cannot fall through
+			// to the host's saved ~/.gentle-ai/channel file (which would resolve to
+			// a non-stable channel on developer machines). The subcase still drives
+			// the channel via the explicit GENTLE_AI_CHANNEL value below.
+			isolateChannelHome(t)
 			t.Setenv("GENTLE_AI_CHANNEL", tt.envVal)
 
 			origDownloadFn := engramDownloadFn

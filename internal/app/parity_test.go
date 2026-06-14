@@ -162,6 +162,7 @@ func TestGuardFlowLinuxDryRunPropagatesDecision(t *testing.T) {
 }
 
 func TestRunArgsNoCommandLaunchesTUI(t *testing.T) {
+	isolateChannelResolution(t)
 	origRunTUI := runTUI
 	t.Cleanup(func() { runTUI = origRunTUI })
 	runTUI = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
@@ -183,6 +184,7 @@ func TestRunArgsNoCommandLaunchesTUI(t *testing.T) {
 }
 
 func TestRunArgsUnknownCommandReturnsError(t *testing.T) {
+	isolateChannelResolution(t)
 	var buf bytes.Buffer
 	err := RunArgs([]string{"bogus"}, &buf)
 	if err == nil {
@@ -199,6 +201,7 @@ func TestRunArgsUnknownCommandReturnsError(t *testing.T) {
 // `RunArgs(["sync", "--dry-run", ...])` is correctly wired through app.go
 // and produces output about the sync plan — not a "unknown command" error.
 func TestRunArgsSyncDryRunIsDispatchedAndPrintsReport(t *testing.T) {
+	isolateChannelResolution(t)
 	var buf bytes.Buffer
 	err := RunArgs([]string{"sync", "--agents", "opencode", "--dry-run"}, &buf)
 	if err != nil {
@@ -220,6 +223,7 @@ func TestRunArgsSyncDryRunIsDispatchedAndPrintsReport(t *testing.T) {
 // TestRunArgsSyncUnknownFlagReturnsError verifies that an unknown flag
 // returns a proper parse error via the sync command path.
 func TestRunArgsSyncUnknownFlagReturnsError(t *testing.T) {
+	isolateChannelResolution(t)
 	var buf bytes.Buffer
 	err := RunArgs([]string{"sync", "--this-flag-does-not-exist"}, &buf)
 	if err == nil {
@@ -239,6 +243,7 @@ func TestRunArgsSyncNoAgentsIsNoOp(t *testing.T) {
 	// but we can verify that the command exits without error and prints
 	// something meaningful (the no-op message).
 	// Use --dry-run to avoid any file creation and allow running in CI.
+	isolateChannelResolution(t)
 	var buf bytes.Buffer
 	err := RunArgs([]string{"sync", "--agents", "opencode", "--dry-run"}, &buf)
 	if err != nil {

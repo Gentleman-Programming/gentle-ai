@@ -91,6 +91,13 @@ type InstallState struct {
 	// False (zero value) = no deferred sync pending. Omitted from JSON when
 	// false for backward-compatibility with existing state files.
 	PendingSync bool `json:"pending_sync,omitempty"`
+
+	// LastChannelStaleWarning records the last time the stale-channel-binary
+	// warning was shown. Gated by a once-per-day TTL so an out-of-date channel
+	// binary (e.g. after an out-of-band `brew upgrade`) nudges the user without
+	// nagging on every command. Nil = never warned, so the next stale launch warns
+	// immediately (safe back-compat for older state files).
+	LastChannelStaleWarning *time.Time `json:"last_channel_stale_warning,omitempty"`
 }
 
 // Path returns the absolute path to the state file for the given home directory.
@@ -151,6 +158,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		Persona:                     existing.Persona,
 		LastUpdateCheck:             existing.LastUpdateCheck,
 		PendingSync:                 existing.PendingSync,
+		LastChannelStaleWarning:     existing.LastChannelStaleWarning,
 	}
 }
 

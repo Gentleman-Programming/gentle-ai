@@ -14,6 +14,7 @@ USAGE
 
 COMMANDS
   install      Configure AI coding agents on this machine
+  channel      Show or set runtime channel: stable or beta (nightly = beta)
   uninstall    Remove Gentle AI managed files from this machine
   sync         Sync agent configs and skills to current version
   skill-registry refresh

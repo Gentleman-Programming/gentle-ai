@@ -200,6 +200,7 @@ func TestRunArgsRestoreUnknownIDReturnsError(t *testing.T) {
 }
 
 func TestRunArgsUninstallIsDispatched(t *testing.T) {
+	isolateChannelResolution(t)
 	var buf bytes.Buffer
 	// uninstall without required flags prints usage help — that's enough to
 	// confirm the dispatch path works without needing real agents or state.
@@ -208,6 +209,7 @@ func TestRunArgsUninstallIsDispatched(t *testing.T) {
 }
 
 func TestRunArgsUninstallBypassesPlatformValidation(t *testing.T) {
+	isolateChannelResolution(t)
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
 	ensureCurrentOSSupported = func() error {
@@ -222,6 +224,7 @@ func TestRunArgsUninstallBypassesPlatformValidation(t *testing.T) {
 }
 
 func TestRunArgsInstallHelpPrintsInstallSpecificHelp(t *testing.T) {
+	isolateChannelResolution(t)
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
 	ensureCurrentOSSupported = func() error {
@@ -243,6 +246,7 @@ func TestRunArgsInstallHelpPrintsInstallSpecificHelp(t *testing.T) {
 }
 
 func TestRunArgsSDDStatusIsDispatchedBeforePlatformValidation(t *testing.T) {
+	isolateChannelResolution(t)
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
 	ensureCurrentOSSupported = func() error {
@@ -266,6 +270,7 @@ func TestRunArgsSDDStatusIsDispatchedBeforePlatformValidation(t *testing.T) {
 }
 
 func TestRunArgsSDDContinueIsDispatchedBeforePlatformValidation(t *testing.T) {
+	isolateChannelResolution(t)
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
 	ensureCurrentOSSupported = func() error {
@@ -1025,6 +1030,7 @@ func TestHelpCommand(t *testing.T) {
 // TestUnknownCommandSuggestsHelp verifies that an unrecognised command returns
 // an error whose message suggests running 'gentle-ai help'.
 func TestUnknownCommandSuggestsHelp(t *testing.T) {
+	isolateChannelResolution(t)
 	var buf bytes.Buffer
 	err := RunArgs([]string{"notacommand"}, &buf)
 	if err == nil {
@@ -1131,6 +1137,7 @@ func TestRunArgs_UpgradeSkipsSelfUpdate(t *testing.T) {
 
 func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
 	// NOTE: modifies package-level vars; must not run in parallel.
+	isolateChannelResolution(t)
 	origSelfUpdate := selfUpdateFn
 	origDetect := detectSystem
 	origEnsure := ensureCurrentOSSupported
@@ -1208,6 +1215,28 @@ func setupMockHome(t *testing.T, home string) {
 	})
 	os.Setenv("HOME", home)
 	os.Setenv("USERPROFILE", home)
+}
+
+// isolateChannelResolution makes RunArgs / MaybeExecChannelTarget deterministic
+// regardless of the host's ~/.gentle-ai/channel file and GENTLE_AI_CHANNEL value.
+// It points HOME/USERPROFILE at a fresh empty temp dir (so the saved-channel lookup
+// degrades to stable and no dispatch to a managed target binary happens) and unsets
+// the channel env var. Launcher-routing tests must call this so they pass on machines
+// with a persisted non-stable channel and an installed channel target binary.
+func isolateChannelResolution(t *testing.T) {
+	t.Helper()
+	setupMockHome(t, t.TempDir())
+	previous, hadPrevious := os.LookupEnv("GENTLE_AI_CHANNEL")
+	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
+		t.Fatalf("Unsetenv GENTLE_AI_CHANNEL: %v", err)
+	}
+	t.Cleanup(func() {
+		if hadPrevious {
+			_ = os.Setenv("GENTLE_AI_CHANNEL", previous)
+			return
+		}
+		_ = os.Unsetenv("GENTLE_AI_CHANNEL")
+	})
 }
 
 // TestApplyOverrides_CodexModelAssignments verifies that a non-nil
@@ -1482,6 +1511,7 @@ func writeAppSDDStatusFile(t *testing.T, path string, content string) {
 // reports a successful gentle-ai upgrade, RunArgs calls restartAfterGentleAIUpgrade
 // which (after task 4.6) prints the restart guidance message instead of re-execing.
 func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
+	isolateChannelResolution(t)
 	origDetect := detectSystem
 	origEnsure := ensureCurrentOSSupported
 	origRunTUI := runTUI

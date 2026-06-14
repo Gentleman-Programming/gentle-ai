@@ -415,63 +415,34 @@ func goInstallMainUpgrade(tool update.ToolInfo) error {
 		module = "github.com/gentleman-programming/gentle-ai"
 	}
 	target := module + "/cmd/gentle-ai@main"
+
+	// The launcher delegates beta commands to ~/.gentle-ai/channels/beta/gentle-ai,
+	// so the upgraded binary MUST land there — mirroring install-time
+	// goInstallChannelBinary, which sets GOBIN to the channel directory. Without an
+	// explicit GOBIN, `go install` writes to $GOPATH/bin and the running beta binary
+	// the launcher execs would never actually be refreshed.
+	betaBinary, err := cli.ChannelBinaryPath(cli.ChannelBeta)
+	if err != nil {
+		return fmt.Errorf("resolve beta channel directory: %w", err)
+	}
+	binDir := filepath.Dir(betaBinary)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return fmt.Errorf("create beta channel dir: %w", err)
+	}
+
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
-	cmd.Env = goProxyBypassEnv(cmd.Env, module)
+	// GOBIN is appended last so it overrides any inherited GOBIN (exec uses the last
+	// value for duplicate keys), pinning the build to the channel directory.
+	cmd.Env = append(cli.GoProxyBypassEnv(cmd.Env, module), "GOBIN="+binDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-func goProxyBypassEnv(base []string, module string) []string {
-	if base == nil {
-		base = os.Environ()
-	}
-	env := append([]string{}, base...)
-	for _, key := range []string{"GONOSUMDB", "GOPRIVATE", "GONOPROXY"} {
-		env = setEnvValue(env, key, prependGoPattern(getEnvValue(env, key), module))
-	}
-	return env
-}
-
-func getEnvValue(env []string, key string) string {
-	prefix := key + "="
-	for i := len(env) - 1; i >= 0; i-- {
-		if strings.HasPrefix(env[i], prefix) {
-			return strings.TrimPrefix(env[i], prefix)
-		}
-	}
-	return ""
-}
-
-func setEnvValue(env []string, key, value string) []string {
-	prefix := key + "="
-	for i := len(env) - 1; i >= 0; i-- {
-		if strings.HasPrefix(env[i], prefix) {
-			env[i] = prefix + value
-			return env
-		}
-	}
-	return append(env, prefix+value)
-}
-
-func prependGoPattern(existing, pattern string) string {
-	pattern = strings.TrimSpace(pattern)
-	if pattern == "" {
-		return existing
-	}
-	parts := strings.Split(existing, ",")
-	for _, part := range parts {
-		if strings.TrimSpace(part) == pattern {
-			return existing
-		}
-	}
-	if strings.TrimSpace(existing) == "" {
-		return pattern
-	}
-	return pattern + "," + existing
-}
+// goProxyBypassEnv and its helpers moved to internal/cli (GoProxyBypassEnv), shared
+// by the channel install and self-upgrade flows so both build beta identically.
 
 // binaryUpgrade handles binary-release upgrades via GitHub Releases asset download.
 //

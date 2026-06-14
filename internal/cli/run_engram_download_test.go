@@ -14,6 +14,7 @@ import (
 // Linux engram installation does NOT use "go install" but instead calls
 // DownloadLatestBinary (i.e. no "go install" in recorder.get()).
 func TestRunInstallLinuxEngramUsesDownloadNotGoInstall(t *testing.T) {
+	isolateChannelResolution(t)
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -62,6 +63,7 @@ func TestRunInstallLinuxEngramUsesDownloadNotGoInstall(t *testing.T) {
 // the engram binary, its directory is prepended to PATH so that subsequent
 // commands (engram setup, resolveEngramCommand) can find it.
 func TestRunInstallEngramDownloadAddsBinDirToPath(t *testing.T) {
+	isolateChannelResolution(t)
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -106,6 +108,7 @@ func TestRunInstallEngramDownloadAddsBinDirToPath(t *testing.T) {
 
 // TestRunInstallWindowsEngramUsesDownloadNotGoInstall verifies Windows path.
 func TestRunInstallWindowsEngramUsesDownloadNotGoInstall(t *testing.T) {
+	isolateChannelResolution(t)
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -162,6 +165,7 @@ func TestRunInstallWindowsEngramUsesDownloadNotGoInstall(t *testing.T) {
 
 // TestRunInstallMacOSEngramStillUsesBrew verifies macOS unchanged.
 func TestRunInstallMacOSEngramStillUsesBrew(t *testing.T) {
+	isolateChannelResolution(t)
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand

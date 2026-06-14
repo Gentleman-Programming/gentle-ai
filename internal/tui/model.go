@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
@@ -375,6 +376,7 @@ type Model struct {
 	SpinnerFrame   int
 
 	Selection         model.Selection
+	InstallChannel    cli.InstallChannel
 	Detection         system.DetectionResult
 	DependencyPlan    planner.ResolvedPlan
 	Review            planner.ReviewPayload
@@ -566,6 +568,11 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		components = piOnlyComponents()
 	}
 
+	installChannel, err := cli.ResolveInstallChannel("")
+	if err != nil {
+		installChannel = cli.ChannelStable
+	}
+
 	selection := model.Selection{
 		Agents:                 agents,
 		Persona:                model.PersonaGentleman,
@@ -581,6 +588,7 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		Screen:               ScreenWelcome,
 		Version:              version,
 		Selection:            selection,
+		InstallChannel:       installChannel,
 		Detection:            detection,
 		UninstallAgents:      agents,
 		UninstallComponents:  defaultUninstallComponents(),
@@ -964,7 +972,8 @@ func (m Model) View() string {
 			}
 			banner += "Advisory: " + m.AdvisoryMessage
 		}
-		return screens.RenderWelcomeWithWidth(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.Width)
+		version := fmt.Sprintf("%s • channel: %s", m.Version, m.InstallChannel)
+		return screens.RenderWelcomeWithWidth(m.Cursor, version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.Width)
 	case ScreenUpgrade:
 		return screens.RenderUpgrade(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenSync:

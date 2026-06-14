@@ -63,6 +63,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 	// --yes as a global CLI flag for self-update is handled via GENTLE_AI_YES=1.
 	// Per-subcommand --yes flags (e.g. restore --yes) are parsed by each subcommand.
 
+	if dispatched, err := cli.MaybeExecChannelTarget(args); dispatched || err != nil {
+		return err
+	}
+
 	// Info commands: no system detection, no self-update, no platform validation.
 	if len(args) > 0 {
 		switch args[0] {
@@ -72,6 +76,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "help", "--help", "-h":
 			printHelp(stdout, Version)
 			return nil
+		case "channel":
+			return cli.RunChannel(args[1:], stdout)
 		case "uninstall":
 			_, err := cli.RunUninstall(args[1:], stdout)
 			return err

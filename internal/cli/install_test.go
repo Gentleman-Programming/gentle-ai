@@ -63,6 +63,7 @@ func TestModelAssignmentsToStatePreservesEffort(t *testing.T) {
 }
 
 func TestNormalizeInstallFlagsDefaults(t *testing.T) {
+	isolateChannelResolution(t)
 	input, err := NormalizeInstallFlags(InstallFlags{}, system.DetectionResult{})
 	if err != nil {
 		t.Fatalf("NormalizeInstallFlags() error = %v", err)

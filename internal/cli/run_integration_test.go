@@ -211,6 +211,7 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 }
 
 func TestRunInstallRollsBackOnComponentFailure(t *testing.T) {
+	isolateChannelResolution(t)
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
@@ -380,6 +381,7 @@ func TestRunInstallLinuxArchResolvesPacmanCommands(t *testing.T) {
 }
 
 func TestRunInstallLinuxUbuntuWithEngramUsesDirectDownload(t *testing.T) {
+	isolateChannelResolution(t)
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -424,6 +426,7 @@ func TestRunInstallLinuxUbuntuWithEngramUsesDirectDownload(t *testing.T) {
 }
 
 func TestRunInstallLinuxArchWithEngramUsesDirectDownload(t *testing.T) {
+	isolateChannelResolution(t)
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -467,6 +470,7 @@ func TestRunInstallLinuxArchWithEngramUsesDirectDownload(t *testing.T) {
 }
 
 func TestRunInstallLinuxRollsBackOnComponentFailure(t *testing.T) {
+	isolateChannelResolution(t)
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
@@ -727,6 +731,7 @@ func macOSDetectionResult() system.DetectionResult {
 }
 
 func TestRunInstallMacOSStillResolvesBrewCommands(t *testing.T) {
+	isolateChannelResolution(t)
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -820,6 +825,7 @@ func TestRunInstallMacOSVerificationMatchesPreLinuxBehavior(t *testing.T) {
 }
 
 func TestRunInstallMacOSRollbackStillWorks(t *testing.T) {
+	isolateChannelResolution(t)
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
@@ -876,6 +882,7 @@ func TestRunInstallMacOSRollbackStillWorks(t *testing.T) {
 // --- Skip-when-installed and Go auto-install tests ---
 
 func TestRunInstallEngramSkipsInstallWhenAlreadyOnPath(t *testing.T) {
+	isolateChannelResolution(t)
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -997,6 +1004,7 @@ func TestRunInstallEngramFallsBackToInjectWhenSetupFails(t *testing.T) {
 }
 
 func TestRunInstallEngramSetupStrictFailsWhenSetupFails(t *testing.T) {
+	isolateChannelResolution(t)
 	t.Setenv("GENTLE_AI_ENGRAM_SETUP_STRICT", "1")
 
 	home := t.TempDir()
@@ -1290,6 +1298,7 @@ func TestRunInstallGGALinuxIncludesTempCleanupBeforeClone(t *testing.T) {
 // TestRunInstallEngramLinuxUsesDirectDownloadNoGoRequired verifies that on Linux,
 // engram is now installed via pre-built binary download — Go is NOT required.
 func TestRunInstallEngramLinuxUsesDirectDownloadNoGoRequired(t *testing.T) {
+	isolateChannelResolution(t)
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -1385,6 +1394,7 @@ func TestRunInstallEngramLinuxNeverInstallsGo(t *testing.T) {
 }
 
 func TestRunInstallEngramBrewSkipsGoCheck(t *testing.T) {
+	isolateChannelResolution(t)
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
