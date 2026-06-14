@@ -2412,8 +2412,13 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Enter always confirms the currently highlighted option.
 		// Direct key presses (u/v/c) are handled separately in handleUpdatePromptKey.
 		switch m.Cursor {
-		case 0: // Update now — route through startUpgrade so the result is surfaced.
-			return m, m.startUpgrade()
+		case 0: // Update now — guard against duplicate/concurrent upgrades.
+			if m.OperationRunning {
+				return m, nil
+			}
+			m.OperationRunning = true
+			m.OperationMode = "upgrade"
+			return m, tea.Batch(tickCmd(), m.startUpgrade())
 		case 1: // View changes
 			return m.openUpdateReleaseURL()
 		default: // Keep current version (cursor=2) or any other position
@@ -2553,7 +2558,13 @@ func (m Model) handleUpdatePromptKey(keyStr string) (tea.Model, tea.Cmd) {
 		// Confirm the highlighted option — same as confirmSelection() for this screen.
 		return m.confirmSelection()
 	case "u":
-		return m, m.startUpgrade()
+		// Guard against duplicate/concurrent upgrades — mirrors ScreenUpgrade behavior.
+		if m.OperationRunning {
+			return m, nil
+		}
+		m.OperationRunning = true
+		m.OperationMode = "upgrade"
+		return m, tea.Batch(tickCmd(), m.startUpgrade())
 	case "v":
 		return m.openUpdateReleaseURL()
 	case "c":
