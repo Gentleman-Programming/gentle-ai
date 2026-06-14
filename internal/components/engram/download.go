@@ -431,15 +431,15 @@ func extractZipBinary(data []byte, binaryName, outPath string) error {
 	return fmt.Errorf("binary %q not found in zip archive", binaryName)
 }
 
-// stopEngramProcesses stops any running Engram process so Windows can replace
-// engram.exe during upgrade. Missing processes are not an error because
-// Get-Process uses SilentlyContinue.
+// stopEngramProcesses stops any running Engram processes so Windows can replace
+// engram.exe during an upgrade. If Engram is not running, the pipeline produces
+// no output and Stop-Process is not invoked.
 func stopEngramProcesses() error {
 	cmd := exec.Command("powershell.exe",
 		"-NoProfile",
 		"-NonInteractive",
 		"-Command",
-		"Get-Process -Name engram -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Stop",
+		"Get-Process | Where-Object Name -eq engram | Stop-Process -Force -ErrorAction Stop",
 	)
 	cmd.Stdin = nil
 	if out, err := cmd.CombinedOutput(); err != nil {
