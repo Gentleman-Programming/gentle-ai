@@ -1017,6 +1017,57 @@ func TestSelfUpdate_YesFlag_AutoAccepts(t *testing.T) {
 	}
 }
 
+// TestSelfUpdate_YesEnvVar_AutoAccepts verifies the GENTLE_AI_YES=1 env-var
+// contract end-to-end using the real selfUpdateYesFn (not an injected stub).
+// When the env var is set, the upgrade must proceed without calling the
+// interactive promptFn. Task 5.3 / 5.5 env-var path.
+func TestSelfUpdate_YesEnvVar_AutoAccepts(t *testing.T) {
+	t.Setenv("GENTLE_AI_YES", "1")
+	unsetEnv(t, envNoSelfUpdate)
+	unsetEnv(t, envSelfUpdateDone)
+
+	checkResults := []update.UpdateResult{
+		{
+			Tool:             update.ToolInfo{Name: "gentle-ai"},
+			InstalledVersion: "1.7.0",
+			LatestVersion:    "1.8.0",
+			Status:           update.UpdateAvailable,
+		},
+	}
+	upgradeReport := upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "1.8.0"},
+		},
+	}
+
+	stubs := swapSelfUpdateDeps(t, checkResults, upgradeReport)
+
+	// Restore the real selfUpdateYesFn so it reads the env var for real.
+	origYes := selfUpdateYesFn
+	t.Cleanup(func() { selfUpdateYesFn = origYes })
+	selfUpdateYesFn = func() bool { return os.Getenv(envYesUpdate) == "1" }
+
+	// A promptFn that declines — it must NOT be called when GENTLE_AI_YES=1.
+	origPrompt := promptFn
+	t.Cleanup(func() { promptFn = origPrompt })
+	promptCalled := 0
+	promptFn = func(_ io.Writer, _ io.Reader, _, _ string) (bool, error) {
+		promptCalled++
+		return false, nil // would decline if reached
+	}
+
+	err := selfUpdate(context.Background(), "1.7.0", stubProfile(), io.Discard)
+	if err != nil {
+		t.Fatalf("selfUpdate returned error: %v", err)
+	}
+	if stubs.upgradeCalled != 1 {
+		t.Errorf("upgradeCalled = %d, want 1 (GENTLE_AI_YES=1 auto-accepts)", stubs.upgradeCalled)
+	}
+	if promptCalled != 0 {
+		t.Errorf("promptCalled = %d, want 0 (GENTLE_AI_YES=1 bypasses interactive prompt)", promptCalled)
+	}
+}
+
 // TestSelfUpdate_NoSelfUpdate_StillSkips_Slice5 verifies that GENTLE_AI_NO_SELF_UPDATE
 // continues to work after slice 5 changes. Task 5.7 guard.
 func TestSelfUpdate_NoSelfUpdate_StillSkips_Slice5(t *testing.T) {

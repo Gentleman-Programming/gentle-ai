@@ -173,9 +173,18 @@ brew trust --cask gentleman-programming/tap/engram
 brew upgrade engram
 ```
 
-Set `GENTLE_AI_CONFIRM_UPDATE=1` to have `gentle-ai` prompt for confirmation (`y/N`) before applying a self-update. Default behavior (no env var) applies the update without an interactive prompt.
+**Self-update prompt behavior** (changed in v1.x slice 5 — `GENTLE_AI_CONFIRM_UPDATE` removed):
 
-Set `GENTLE_AI_NO_SELF_UPDATE=1` to skip the automatic self-update check entirely. `GENTLE_AI_SELF_UPDATE_DONE` is an internal loop guard used after re-exec and should not be set manually.
+| Situation | Behavior |
+|-----------|----------|
+| Interactive terminal (TTY) | Always prompts `Apply now? [Y/n]`. Empty Enter accepts. |
+| Non-TTY (CI, pipe, script) | Auto-declines — never hangs. |
+| `GENTLE_AI_YES=1` | Auto-accepts without prompting (for scripted upgrades). This variable is inherited by subprocesses, so scope it to a single invocation when needed (e.g. `GENTLE_AI_YES=1 gentle-ai …`). |
+| `GENTLE_AI_NO_SELF_UPDATE=1` | Skips the self-update check entirely. |
+
+`GENTLE_AI_CONFIRM_UPDATE` was removed in slice 5. It is now ignored if set.
+
+`GENTLE_AI_SELF_UPDATE_DONE` is an internal loop guard and should not be set manually.
 
 ### model assignment
 
