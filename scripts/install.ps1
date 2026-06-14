@@ -374,6 +374,11 @@ function Install-ChannelCapableLauncherFromMain {
 
     $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/cmd/$BINARY_NAME@main"
     Write-Info "Running: go install $goPackage"
+    # Bypass the module proxy/sumdb so @main resolves to the true HEAD instead of a
+    # cached pseudo-version (matches Install-ViaGo and cli.GoProxyBypassEnv).
+    Add-GoEnvPattern -Name "GONOSUMDB" -Pattern "github.com/gentleman-programming/gentle-ai"
+    Add-GoEnvPattern -Name "GOPRIVATE" -Pattern "github.com/gentleman-programming/gentle-ai"
+    Add-GoEnvPattern -Name "GONOPROXY" -Pattern "github.com/gentleman-programming/gentle-ai"
     & go install $goPackage
     if ($LASTEXITCODE -ne 0) {
         Stop-WithError "Failed to install channel-capable launcher from main"

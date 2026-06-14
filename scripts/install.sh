@@ -584,6 +584,12 @@ install_channel_capable_launcher_from_main() {
     owner_lc="$(printf '%s' "$GITHUB_OWNER" | tr '[:upper:]' '[:lower:]')"
     local go_package="github.com/${owner_lc}/${GITHUB_REPO}/cmd/${BINARY_NAME}@main"
     info "Running: go install ${go_package}"
+    # Bypass the module proxy/sumdb so @main resolves to the true HEAD instead of a
+    # cached pseudo-version (matches install_go and cli.GoProxyBypassEnv).
+    prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai
+    prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai
+    prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai
+    export GONOSUMDB GOPRIVATE GONOPROXY
     if ! go install "$go_package"; then
         fatal "Failed to install channel-capable launcher from main"
     fi
