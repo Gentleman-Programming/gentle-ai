@@ -22,6 +22,12 @@ import (
 // lookPathFn is a package-level var for testability.
 var lookPathFn = exec.LookPath
 
+// selfUpdateNowFn returns the current time; injected for test determinism.
+var selfUpdateNowFn = func() time.Time { return time.Now() }
+
+// selfUpdateHomeDirFn resolves the user home directory; injected for tests.
+var selfUpdateHomeDirFn = os.UserHomeDir
+
 // Environment variable names for self-update control.
 const (
 	envNoSelfUpdate   = "GENTLE_AI_NO_SELF_UPDATE"
@@ -90,8 +96,22 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 	ctx, cancel := context.WithTimeout(ctx, selfUpdateTimeout)
 	defer cancel()
 
-	// Check for updates (only gentle-ai).
-	results := updateCheckFiltered(ctx, version, profile, []string{"gentle-ai"})
+	// Resolve home directory for cooldown state read/write.
+	homeDir, err := selfUpdateHomeDirFn()
+	if err != nil {
+		homeDir = "" // fall back to always-check on home dir failure
+	}
+
+	// Check for updates (only gentle-ai), gated by the 6h cooldown.
+	// When the cache is fresh (elapsed < UpdateCheckTTL), this returns nil
+	// and no network request is made. The underlying check is always
+	// updateCheckFiltered, kept as a package-level var for other tests.
+	results := update.CheckAllWithCooldown(ctx, version, profile, homeDir, update.UpdateCheckTTL,
+		selfUpdateNowFn,
+		func(c context.Context, ver string, prof system.PlatformProfile) []update.UpdateResult {
+			return updateCheckFiltered(c, ver, prof, []string{"gentle-ai"})
+		},
+	)
 
 	// Find the gentle-ai result.
 	var target *update.UpdateResult
@@ -116,9 +136,9 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 	}
 
 	// Run upgrade (backup + strategy execution).
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		_, _ = fmt.Fprintf(stdout, "self-update: cannot resolve home directory: %v\n", err)
+	// homeDir was resolved above for the cooldown gate; re-check in case it failed.
+	if homeDir == "" {
+		_, _ = fmt.Fprintf(stdout, "self-update: cannot resolve home directory\n")
 		return nil // non-fatal
 	}
 

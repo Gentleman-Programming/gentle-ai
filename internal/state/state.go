@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const stateDir = ".gentle-ai"
@@ -74,6 +75,13 @@ type InstallState struct {
 	// Empty for state files written before persona persistence was added —
 	// callers fall back to PersonaGentleman in that case.
 	Persona string `json:"persona,omitempty"`
+
+	// LastUpdateCheck records the last time a successful remote update check was
+	// performed. Used by the cooldown gate (UpdateCheckTTL = 6h) to avoid
+	// hitting the GitHub API on every launch. Nil = never checked, so the
+	// check will always run on first launch (safe back-compat for existing
+	// state files that lack the field entirely).
+	LastUpdateCheck *time.Time `json:"last_update_check,omitempty"`
 }
 
 // Path returns the absolute path to the state file for the given home directory.
@@ -132,6 +140,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		CodexCarrilModelAssignments: existing.CodexCarrilModelAssignments,
 		CodexPhaseModelAssignments:  existing.CodexPhaseModelAssignments,
 		Persona:                     existing.Persona,
+		LastUpdateCheck:             existing.LastUpdateCheck,
 	}
 }
 

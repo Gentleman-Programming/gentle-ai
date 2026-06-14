@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
@@ -65,13 +66,25 @@ func swapSelfUpdateDeps(t *testing.T, checkResult []update.UpdateResult, upgrade
 	origUpgrade := upgradeExecute
 	origReExec := reExec
 	origGoOS := goOS
+	origHomeDir := selfUpdateHomeDirFn
+	origNow := selfUpdateNowFn
+
+	// Use a temp dir for cooldown state so the gate always reads "never checked"
+	// (no state.json present) and calls the injected updateCheckFiltered stub.
+	tmpHome := t.TempDir()
 
 	t.Cleanup(func() {
 		updateCheckFiltered = origCheck
 		upgradeExecute = origUpgrade
 		reExec = origReExec
 		goOS = origGoOS
+		selfUpdateHomeDirFn = origHomeDir
+		selfUpdateNowFn = origNow
 	})
+
+	selfUpdateHomeDirFn = func() (string, error) { return tmpHome, nil }
+	// Use a fixed "now" far in the future so any stale state would still trigger.
+	selfUpdateNowFn = func() time.Time { return time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	updateCheckFiltered = func(_ context.Context, _ string, _ system.PlatformProfile, _ []string) []update.UpdateResult {
 		stubs.checkCalled++
@@ -354,11 +367,20 @@ func TestSelfUpdate_BrewInstallMethod_PassedToUpgradeExecutor(t *testing.T) {
 	origCheck := updateCheckFiltered
 	origUpgrade := upgradeExecute
 	origReExec := reExec
+	origHomeDir := selfUpdateHomeDirFn
+	origNow := selfUpdateNowFn
+	tmpHome := t.TempDir()
 	t.Cleanup(func() {
 		updateCheckFiltered = origCheck
 		upgradeExecute = origUpgrade
 		reExec = origReExec
+		selfUpdateHomeDirFn = origHomeDir
+		selfUpdateNowFn = origNow
 	})
+
+	// Use a temp home with no state.json so the cooldown gate never fires.
+	selfUpdateHomeDirFn = func() (string, error) { return tmpHome, nil }
+	selfUpdateNowFn = func() time.Time { return time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	updateCheckFiltered = func(_ context.Context, _ string, _ system.PlatformProfile, _ []string) []update.UpdateResult {
 		return checkResults

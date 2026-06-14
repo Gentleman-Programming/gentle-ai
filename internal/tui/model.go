@@ -29,6 +29,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
 )
 
+// tuiNowFn returns the current time for the update-check cooldown gate.
+// Package-level var so tests can inject a deterministic clock.
+var tuiNowFn = time.Now
+
 // osStatModelCache is a package-level variable so tests can override it to
 // simulate a missing or present OpenCode model cache file.
 var osStatModelCache = os.Stat
@@ -602,11 +606,15 @@ func installStateModelAssignments(assignments map[string]state.ModelAssignmentSt
 func (m Model) Init() tea.Cmd {
 	version := m.Version
 	profile := m.Detection.System.Profile
+	home := homeDir()
 
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		results := update.CheckAll(ctx, version, profile)
+		results := update.CheckAllWithCooldown(ctx, version, profile, home, update.UpdateCheckTTL,
+			tuiNowFn,
+			update.CheckAll,
+		)
 		return UpdateCheckResultMsg{Results: results}
 	}
 }
