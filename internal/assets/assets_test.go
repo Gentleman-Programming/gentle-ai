@@ -1251,6 +1251,39 @@ func TestClaudeCommandsDetectWorkspaceAgentSide(t *testing.T) {
 	}
 }
 
+func TestOrchestratorsRequireAutomaticGatekeeper(t *testing.T) {
+	paths := []string{
+		"antigravity/sdd-orchestrator.md",
+		"claude/sdd-orchestrator.md",
+		"codex/sdd-orchestrator.md",
+		"cursor/sdd-orchestrator.md",
+		"gemini/sdd-orchestrator.md",
+		"generic/sdd-orchestrator.md",
+		"hermes/sdd-orchestrator.md",
+		"kimi/sdd-orchestrator.md",
+		"kiro/sdd-orchestrator.md",
+		"opencode/sdd-orchestrator.md",
+		"qwen/sdd-orchestrator.md",
+		"windsurf/sdd-orchestrator.md",
+	}
+	anchors := []string{
+		"Automatic Mode Gatekeeper",
+		"The gatekeeper runs after every phase",
+		"Inline for low-risk phases",
+		"Fresh-context reviewer for high-risk phases",
+		"re-run the same phase exactly once",
+		"STOP the automatic chain",
+	}
+	for _, path := range paths {
+		content := MustRead(path)
+		for _, anchor := range anchors {
+			if !strings.Contains(content, anchor) {
+				t.Fatalf("%s missing Automatic Mode Gatekeeper anchor %q", path, anchor)
+			}
+		}
+	}
+}
+
 func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 	for _, assetPath := range []string{
 		"generic/sdd-orchestrator.md",
