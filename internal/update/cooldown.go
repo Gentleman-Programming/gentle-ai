@@ -2,6 +2,8 @@ package update
 
 import (
 	"context"
+	"errors"
+	"os"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/state"
@@ -23,6 +25,10 @@ type checkAllFn func(ctx context.Context, currentVersion string, profile system.
 // current time back to LastUpdateCheck. On any read/write error the function
 // falls back to running the check (fail-open).
 //
+// When homeDir is "" (home directory resolution failed), both the state read
+// and write are skipped entirely: the check always runs and no state file is
+// touched, preventing writes to arbitrary CWD-relative paths.
+//
 // nowFn is injected for test determinism; pass func() time.Time { return time.Now() }
 // in production code. checkFn is injected for testing; pass CheckAll in production.
 func CheckAllWithCooldown(
@@ -36,27 +42,40 @@ func CheckAllWithCooldown(
 ) []UpdateResult {
 	now := nowFn()
 
-	// Read existing state to inspect LastUpdateCheck.
-	s, err := state.Read(homeDir)
-	if err == nil && s.LastUpdateCheck != nil {
-		elapsed := now.Sub(*s.LastUpdateCheck)
-		if elapsed < ttl {
-			// Cache is fresh — skip network call.
-			return nil
+	// When homeDir is empty (home resolution failed), skip both state read and
+	// write: always run the check and never touch any state.json.
+	if homeDir != "" {
+		// Read existing state to inspect LastUpdateCheck.
+		s, err := state.Read(homeDir)
+		if err == nil && s.LastUpdateCheck != nil {
+			elapsed := now.Sub(*s.LastUpdateCheck)
+			// Only skip when elapsed is non-negative AND within the TTL window.
+			// A future LastUpdateCheck (negative elapsed from clock skew) must
+			// not suppress the check.
+			if elapsed >= 0 && elapsed < ttl {
+				// Cache is fresh — skip network call.
+				return nil
+			}
 		}
+		// err != nil means no state file (first run) → always check.
 	}
-	// err != nil means no state file (first run) → always check.
 
 	// Perform the remote check.
 	results := checkFn(ctx, currentVersion, profile)
 
 	// Update LastUpdateCheck only when the check succeeded (at least one
 	// non-failed result, or empty-but-no-error; never if all are CheckFailed).
-	if checkSucceeded(results) {
+	// Also skip write when homeDir is empty.
+	if homeDir != "" && checkSucceeded(results) {
 		// Re-read state to avoid clobbering unrelated fields written concurrently.
 		current, readErr := state.Read(homeDir)
 		if readErr != nil {
-			// No existing state — start fresh.
+			if !errors.Is(readErr, os.ErrNotExist) {
+				// File exists but is unreadable/corrupt — do not overwrite; skip
+				// persisting the timestamp this round to avoid data loss.
+				return results
+			}
+			// File genuinely missing (first run) — start fresh.
 			current = state.InstallState{}
 		}
 		current.LastUpdateCheck = &now

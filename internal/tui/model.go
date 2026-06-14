@@ -3914,7 +3914,10 @@ func (m Model) buildAgentBuilderAdapters() []agentbuilder.AdapterInfo {
 	return adapters
 }
 
-// homeDir returns the current user's home directory path.
+// homeDir returns the current user's home directory path, or "" if it cannot
+// be resolved. Callers that use the result for cooldown state must treat "" as
+// "no persistence" (always-check, never write) to avoid routing state under
+// /tmp or any other fallback path that could pollute unrelated sessions.
 func homeDir() string {
 	if h, err := os.UserHomeDir(); err == nil && h != "" {
 		return h
@@ -3922,7 +3925,7 @@ func homeDir() string {
 	if h := os.Getenv("HOME"); h != "" {
 		return h
 	}
-	return "/tmp"
+	return ""
 }
 
 // buildInstalledAgentIDs returns the list of AgentIDs from the adapter list.
