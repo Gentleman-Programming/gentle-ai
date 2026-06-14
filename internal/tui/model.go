@@ -2558,6 +2558,14 @@ func (m Model) startUpgradeSync() tea.Cmd {
 
 	syncCmd := func() tea.Msg {
 		if gentleAIUpdated {
+			// Deferred sync (task 4.8): gentle-ai was upgraded in this session.
+			// Set PendingSync=true so the new binary runs sync on next launch
+			// instead of silently skipping it. Non-fatal if state write fails.
+			if h := homeDir(); h != "" {
+				s, _ := state.Read(h)
+				s.PendingSync = true
+				_ = state.Write(h, s)
+			}
 			return SyncDoneMsg{}
 		}
 		if syncFn == nil {

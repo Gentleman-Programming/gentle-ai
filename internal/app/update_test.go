@@ -96,20 +96,17 @@ func TestRunUpgrade_ReturnsErrorBeforeExecutingWhenChecksFail(t *testing.T) {
 	}
 }
 
+// TestRunUpgrade_RestartsAfterGentleAIUpgrade verifies that `gentle-ai upgrade`
+// prints the restart guidance message after a successful gentle-ai upgrade.
+// After task 4.6, no re-exec occurs on any OS — the message is always printed.
 func TestRunUpgrade_RestartsAfterGentleAIUpgrade(t *testing.T) {
 	unsetEnv(t, envSelfUpdateDone)
 
 	origCheckFiltered := updateCheckFiltered
 	origUpgradeExecuteWithOptions := upgradeExecuteWithOptions
-	origReExec := reExec
-	origLookPath := lookPathFn
-	origGoOS := goOS
 	t.Cleanup(func() {
 		updateCheckFiltered = origCheckFiltered
 		upgradeExecuteWithOptions = origUpgradeExecuteWithOptions
-		reExec = origReExec
-		lookPathFn = origLookPath
-		goOS = origGoOS
 	})
 
 	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult {
@@ -128,65 +125,36 @@ func TestRunUpgrade_RestartsAfterGentleAIUpgrade(t *testing.T) {
 			Status:     upgrade.UpgradeSucceeded,
 		}}}
 	}
-	lookPathFn = func(string) (string, error) { return "/usr/local/bin/gentle-ai", nil }
-	goOS = func() string { return "darwin" }
-
-	var reExecCalled int
-	var reExecArgv0 string
-	var reExecEnv []string
-	reExec = func(argv0 string, _ []string, envv []string) error {
-		reExecCalled++
-		reExecArgv0 = argv0
-		reExecEnv = envv
-		return nil
-	}
 
 	var buf bytes.Buffer
 	err := runUpgrade(context.Background(), []string{"--no-backup"}, system.DetectionResult{System: system.SystemInfo{Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, &buf)
 	if err != nil {
 		t.Fatalf("runUpgrade() error = %v", err)
 	}
-	if reExecCalled != 1 {
-		t.Fatalf("reExecCalled = %d, want 1", reExecCalled)
-	}
-	if reExecArgv0 != "/usr/local/bin/gentle-ai" {
-		t.Fatalf("reExec argv0 = %q, want PATH gentle-ai", reExecArgv0)
-	}
-	if !envContains(reExecEnv, envSelfUpdateDone+"=1") {
-		t.Fatalf("reExec env missing %s=1", envSelfUpdateDone)
-	}
-	if !strings.Contains(buf.String(), "Updated to v1.36.2, restarting") {
+	// After task 4.6: restart message printed, no re-exec.
+	if !strings.Contains(buf.String(), "restart gentle-ai") {
 		t.Fatalf("runUpgrade() output missing restart notice:\n%s", buf.String())
 	}
 }
 
-func TestRestartAfterGentleAIUpgrade_WindowsPrintsRestart(t *testing.T) {
+// TestRestartAfterGentleAIUpgrade_PrintsRestartGuidance verifies that
+// restartAfterGentleAIUpgrade (converged in task 4.6) always prints
+// the restart guidance message and never re-execs, on any OS.
+func TestRestartAfterGentleAIUpgrade_PrintsRestartGuidance(t *testing.T) {
 	unsetEnv(t, envSelfUpdateDone)
-
-	origReExec := reExec
-	origGoOS := goOS
-	t.Cleanup(func() {
-		reExec = origReExec
-		goOS = origGoOS
-	})
-	goOS = func() string { return "windows" }
-
-	var reExecCalled int
-	reExec = func(string, []string, []string) error {
-		reExecCalled++
-		return nil
-	}
 
 	var buf bytes.Buffer
 	err := restartAfterGentleAIUpgrade("1.36.2", &buf)
 	if err != nil {
-		t.Fatalf("runUpgrade() error = %v", err)
+		t.Fatalf("restartAfterGentleAIUpgrade() error = %v", err)
 	}
-	if reExecCalled != 0 {
-		t.Fatalf("reExecCalled = %d, want 0 on Windows", reExecCalled)
+	out := buf.String()
+	// Must contain version and "restart" guidance.
+	if !strings.Contains(out, "1.36.2") {
+		t.Errorf("output = %q, want version 1.36.2 mentioned", out)
 	}
-	if !strings.Contains(strings.ToLower(buf.String()), "please restart") {
-		t.Fatalf("runUpgrade() output missing restart notice:\n%s", buf.String())
+	if !strings.Contains(strings.ToLower(out), "restart") {
+		t.Errorf("output = %q, want restart guidance", out)
 	}
 }
 

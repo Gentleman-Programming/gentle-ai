@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
@@ -172,7 +173,7 @@ func TestSelfUpdate_GuardEvaluationOrder(t *testing.T) {
 	}
 }
 
-func TestSelfUpdate_UpdateAvailable_CallsUpgradeAndReExec(t *testing.T) {
+func TestSelfUpdate_UpdateAvailable_CallsUpgradeAndRestart(t *testing.T) {
 	unsetEnv(t, envNoSelfUpdate)
 	unsetEnv(t, envSelfUpdateDone)
 
@@ -203,20 +204,16 @@ func TestSelfUpdate_UpdateAvailable_CallsUpgradeAndReExec(t *testing.T) {
 	if stubs.upgradeCalled != 1 {
 		t.Errorf("upgradeCalled = %d, want 1", stubs.upgradeCalled)
 	}
-	if stubs.reExecCalled != 1 {
-		t.Errorf("reExecCalled = %d, want 1", stubs.reExecCalled)
+	// After task 4.6: restartAfterGentleAIUpgrade no longer re-execs on any OS.
+	// It always prints the "restart" message and returns. re-exec is gone.
+	if stubs.reExecCalled != 0 {
+		t.Errorf("reExecCalled = %d, want 0 (restart message printed instead)", stubs.reExecCalled)
 	}
 
-	// Verify GENTLE_AI_SELF_UPDATE_DONE=1 is in the re-exec env.
-	found := false
-	for _, e := range stubs.reExecEnv {
-		if e == envSelfUpdateDone+"=1" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("re-exec env missing %s=1", envSelfUpdateDone)
+	// Output must contain the restart guidance message.
+	out := buf.String()
+	if !containsSubstring(out, "restart") {
+		t.Errorf("output = %q, want it to contain restart guidance", out)
 	}
 }
 
@@ -303,7 +300,10 @@ func TestSelfUpdate_UpgradeError_ReturnsNil(t *testing.T) {
 	}
 }
 
-func TestSelfUpdate_Windows_PrintsRestartMessage(t *testing.T) {
+// TestSelfUpdate_PrintsRestartMessage verifies that after a successful upgrade
+// on any OS, restartAfterGentleAIUpgrade prints a restart-guidance message and
+// does NOT re-exec (converged behavior — task 4.6).
+func TestSelfUpdate_PrintsRestartMessage(t *testing.T) {
 	unsetEnv(t, envNoSelfUpdate)
 	unsetEnv(t, envSelfUpdateDone)
 
@@ -321,26 +321,28 @@ func TestSelfUpdate_Windows_PrintsRestartMessage(t *testing.T) {
 		},
 	}
 
-	stubs := swapSelfUpdateDeps(t, checkResults, upgradeReport)
+	for _, os := range []string{"darwin", "windows", "linux"} {
+		t.Run("os="+os, func(t *testing.T) {
+			stubs := swapSelfUpdateDeps(t, checkResults, upgradeReport)
+			goOS = func() string { return os }
 
-	// Simulate Windows: re-exec should NOT be called, restart message printed instead.
-	goOS = func() string { return "windows" }
+			var buf bytes.Buffer
+			err := selfUpdate(context.Background(), "1.7.0", stubProfile(), &buf)
+			if err != nil {
+				t.Fatalf("selfUpdate returned error: %v", err)
+			}
+			if stubs.reExecCalled != 0 {
+				t.Errorf("reExecCalled = %d, want 0 on %s (restart message path)", stubs.reExecCalled, os)
+			}
+			if stubs.upgradeCalled != 1 {
+				t.Errorf("upgradeCalled = %d, want 1", stubs.upgradeCalled)
+			}
 
-	var buf bytes.Buffer
-	err := selfUpdate(context.Background(), "1.7.0", stubProfile(), &buf)
-	if err != nil {
-		t.Fatalf("selfUpdate returned error: %v", err)
-	}
-	if stubs.reExecCalled != 0 {
-		t.Errorf("reExecCalled = %d, want 0 on Windows", stubs.reExecCalled)
-	}
-	if stubs.upgradeCalled != 1 {
-		t.Errorf("upgradeCalled = %d, want 1", stubs.upgradeCalled)
-	}
-
-	out := buf.String()
-	if want := "please restart"; !containsSubstring(out, want) {
-		t.Errorf("output = %q, want it to contain %q", out, want)
+			out := buf.String()
+			if !containsSubstring(out, "restart") {
+				t.Errorf("output = %q, want it to contain restart guidance", out)
+			}
+		})
 	}
 }
 
@@ -459,8 +461,9 @@ func TestSelfUpdate_ConfirmUpdate_UserAccepts(t *testing.T) {
 	if stubs.upgradeCalled != 1 {
 		t.Errorf("upgradeCalled = %d, want 1 (user accepted)", stubs.upgradeCalled)
 	}
-	if stubs.reExecCalled != 1 {
-		t.Errorf("reExecCalled = %d, want 1 (user accepted)", stubs.reExecCalled)
+	// After task 4.6: no re-exec; restart message is printed instead.
+	if stubs.reExecCalled != 0 {
+		t.Errorf("reExecCalled = %d, want 0 (restart message path)", stubs.reExecCalled)
 	}
 }
 
@@ -548,8 +551,9 @@ func TestSelfUpdate_ConfirmUpdate_EnvUnset(t *testing.T) {
 	if stubs.upgradeCalled != 1 {
 		t.Errorf("upgradeCalled = %d, want 1 (auto-apply)", stubs.upgradeCalled)
 	}
-	if stubs.reExecCalled != 1 {
-		t.Errorf("reExecCalled = %d, want 1 (auto-apply)", stubs.reExecCalled)
+	// After task 4.6: restart message printed instead of re-exec.
+	if stubs.reExecCalled != 0 {
+		t.Errorf("reExecCalled = %d, want 0 (restart message path)", stubs.reExecCalled)
 	}
 }
 
@@ -575,7 +579,7 @@ func TestSelfUpdate_ConfirmUpdateTable(t *testing.T) {
 		confirmEnv      string // "" means unset
 		promptReply     bool
 		wantUpgrade     int
-		wantReExec      int
+		wantReExec      int // always 0 after task 4.6 (restart message path)
 		wantPromptCalls int
 	}{
 		{
@@ -583,7 +587,7 @@ func TestSelfUpdate_ConfirmUpdateTable(t *testing.T) {
 			confirmEnv:      "",
 			promptReply:     false,
 			wantUpgrade:     1,
-			wantReExec:      1,
+			wantReExec:      0, // task 4.6: restart message instead of re-exec
 			wantPromptCalls: 0,
 		},
 		{
@@ -591,7 +595,7 @@ func TestSelfUpdate_ConfirmUpdateTable(t *testing.T) {
 			confirmEnv:      "1",
 			promptReply:     true,
 			wantUpgrade:     1,
-			wantReExec:      1,
+			wantReExec:      0, // task 4.6: restart message instead of re-exec
 			wantPromptCalls: 1,
 		},
 		{
@@ -639,6 +643,91 @@ func TestSelfUpdate_ConfirmUpdateTable(t *testing.T) {
 				t.Errorf("reExecCalled = %d, want %d", stubs.reExecCalled, tc.wantReExec)
 			}
 		})
+	}
+}
+
+// ─── Slice 4 RED: PendingSync written on successful self-upgrade ─────────────
+
+// TestSelfUpdate_SetsPendingSyncOnSuccess verifies that after a successful
+// gentle-ai self-upgrade, PendingSync=true is written to state before the
+// process exits (re-exec or print message). This is the deferred-sync flag
+// that the next launch reads to run sync automatically.
+func TestSelfUpdate_SetsPendingSyncOnSuccess(t *testing.T) {
+	unsetEnv(t, envNoSelfUpdate)
+	unsetEnv(t, envSelfUpdateDone)
+
+	checkResults := []update.UpdateResult{
+		{
+			Tool:             update.ToolInfo{Name: "gentle-ai"},
+			InstalledVersion: "1.7.0",
+			LatestVersion:    "1.8.0",
+			Status:           update.UpdateAvailable,
+		},
+	}
+	upgradeReport := upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "1.8.0"},
+		},
+	}
+
+	stubs := swapSelfUpdateDeps(t, checkResults, upgradeReport)
+
+	// swapSelfUpdateDeps sets selfUpdateHomeDirFn to a temp dir; capture that dir.
+	tmpHome := t.TempDir()
+	selfUpdateHomeDirFn = func() (string, error) { return tmpHome, nil }
+	// Prevent actual re-exec from racing with state write; stubs.reExecCalled tracks it.
+	_ = stubs
+
+	err := selfUpdate(context.Background(), "1.7.0", stubProfile(), io.Discard)
+	if err != nil {
+		t.Fatalf("selfUpdate returned error: %v", err)
+	}
+
+	s, err := state.Read(tmpHome)
+	if err != nil {
+		// state.json may not exist when PendingSync is not implemented yet.
+		t.Fatalf("state.Read() failed — PendingSync was not written: %v", err)
+	}
+	if !s.PendingSync {
+		t.Errorf("PendingSync = false after successful self-upgrade, want true")
+	}
+}
+
+// TestSelfUpdate_DoesNotSetPendingSyncOnFailure verifies that when the
+// gentle-ai upgrade fails, PendingSync is NOT set in state (no retry needed
+// since sync was never deferred).
+func TestSelfUpdate_DoesNotSetPendingSyncOnFailure(t *testing.T) {
+	unsetEnv(t, envNoSelfUpdate)
+	unsetEnv(t, envSelfUpdateDone)
+
+	checkResults := []update.UpdateResult{
+		{
+			Tool:             update.ToolInfo{Name: "gentle-ai"},
+			InstalledVersion: "1.7.0",
+			LatestVersion:    "1.8.0",
+			Status:           update.UpdateAvailable,
+		},
+	}
+	upgradeReport := upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{ToolName: "gentle-ai", Status: upgrade.UpgradeFailed, Err: os.ErrPermission},
+		},
+	}
+
+	swapSelfUpdateDeps(t, checkResults, upgradeReport)
+
+	tmpHome := t.TempDir()
+	selfUpdateHomeDirFn = func() (string, error) { return tmpHome, nil }
+
+	err := selfUpdate(context.Background(), "1.7.0", stubProfile(), io.Discard)
+	if err != nil {
+		t.Fatalf("selfUpdate returned error: %v", err)
+	}
+
+	// State may not exist at all (upgrade failed, nothing written) — that's fine.
+	s, readErr := state.Read(tmpHome)
+	if readErr == nil && s.PendingSync {
+		t.Errorf("PendingSync = true after failed upgrade, want false")
 	}
 }
 

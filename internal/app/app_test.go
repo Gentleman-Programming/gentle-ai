@@ -1478,20 +1478,17 @@ func writeAppSDDStatusFile(t *testing.T, path string, content string) {
 	}
 }
 
+// TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult verifies that when the TUI
+// reports a successful gentle-ai upgrade, RunArgs calls restartAfterGentleAIUpgrade
+// which (after task 4.6) prints the restart guidance message instead of re-execing.
 func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
 	origDetect := detectSystem
 	origEnsure := ensureCurrentOSSupported
 	origRunTUI := runTUI
-	origReExec := reExec
-	origLookPath := lookPathFn
-	origGoOS := goOS
 	t.Cleanup(func() {
 		detectSystem = origDetect
 		ensureCurrentOSSupported = origEnsure
 		runTUI = origRunTUI
-		reExec = origReExec
-		lookPathFn = origLookPath
-		goOS = origGoOS
 		unsetEnv(t, envSelfUpdateDone)
 	})
 	unsetEnv(t, envSelfUpdateDone)
@@ -1500,8 +1497,6 @@ func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
 	detectSystem = func(context.Context) (system.DetectionResult, error) {
 		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, nil
 	}
-	goOS = func() string { return "darwin" }
-	lookPathFn = func(string) (string, error) { return "/usr/local/bin/gentle-ai", nil }
 
 	report := upgrade.UpgradeReport{Results: []upgrade.ToolUpgradeResult{
 		{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "v1.40.0"},
@@ -1512,26 +1507,189 @@ func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
 		return model, nil
 	}
 
-	var reExecCalled int
-	reExec = func(argv0 string, _ []string, envv []string) error {
-		reExecCalled++
-		if argv0 != "/usr/local/bin/gentle-ai" {
-			t.Fatalf("reExec argv0 = %q, want PATH gentle-ai", argv0)
-		}
-		if !envContains(envv, envSelfUpdateDone+"=1") {
-			t.Fatalf("reExec env missing %s=1", envSelfUpdateDone)
-		}
+	var buf bytes.Buffer
+	if err := RunArgs(nil, &buf); err != nil {
+		t.Fatalf("RunArgs(TUI) error = %v", err)
+	}
+	// After task 4.6: restart message is printed, no re-exec occurs.
+	if !strings.Contains(buf.String(), "restart gentle-ai") {
+		t.Fatalf("output missing restart notice:\n%s", buf.String())
+	}
+}
+
+// ─── Slice 4 RED: deferred sync on launch via pending_sync flag ───────────────
+
+// TestRunArgs_PendingSync_RunsSyncAndClearsFlag verifies that when
+// state.json has PendingSync=true, RunArgs (TUI path / no args) calls
+// the deferred sync runner and writes PendingSync=false on success.
+func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
+	home := t.TempDir()
+	setupMockHome(t, home)
+
+	// Write initial state with PendingSync=true.
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		PendingSync:     true,
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	origSelf := selfUpdateFn
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origRunTUI := runTUI
+	origDeferredSync := deferredSyncFn
+	t.Cleanup(func() {
+		selfUpdateFn = origSelf
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		runTUI = origRunTUI
+		deferredSyncFn = origDeferredSync
+	})
+
+	selfUpdateFn = func(_ context.Context, _ string, _ system.PlatformProfile, _ io.Writer) error {
+		return nil
+	}
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, nil
+	}
+	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
+		return m, nil
+	}
+
+	var syncCalled int
+	deferredSyncFn = func() error {
+		syncCalled++
 		return nil
 	}
 
 	var buf bytes.Buffer
 	if err := RunArgs(nil, &buf); err != nil {
-		t.Fatalf("RunArgs(TUI) error = %v", err)
+		t.Fatalf("RunArgs(nil) error = %v", err)
 	}
-	if reExecCalled != 1 {
-		t.Fatalf("reExecCalled = %d, want 1", reExecCalled)
+
+	if syncCalled != 1 {
+		t.Errorf("deferredSyncFn called %d times, want 1", syncCalled)
 	}
-	if !strings.Contains(buf.String(), "Updated to v1.40.0, restarting") {
-		t.Fatalf("output missing restart notice:\n%s", buf.String())
+
+	// PendingSync must be cleared after successful sync.
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read() error = %v", err)
+	}
+	if s.PendingSync {
+		t.Errorf("PendingSync = true after successful deferred sync, want false")
+	}
+}
+
+// TestRunArgs_PendingSync_LeavesSetOnFailure verifies that when the deferred
+// sync fails, PendingSync remains true so the next launch retries idempotently.
+func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
+	home := t.TempDir()
+	setupMockHome(t, home)
+
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		PendingSync:     true,
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	origSelf := selfUpdateFn
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origRunTUI := runTUI
+	origDeferredSync := deferredSyncFn
+	t.Cleanup(func() {
+		selfUpdateFn = origSelf
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		runTUI = origRunTUI
+		deferredSyncFn = origDeferredSync
+	})
+
+	selfUpdateFn = func(_ context.Context, _ string, _ system.PlatformProfile, _ io.Writer) error {
+		return nil
+	}
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, nil
+	}
+	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
+		return m, nil
+	}
+
+	deferredSyncFn = func() error {
+		return fmt.Errorf("sync: network error")
+	}
+
+	var buf bytes.Buffer
+	// RunArgs must NOT return an error — deferred sync failure is non-fatal.
+	if err := RunArgs(nil, &buf); err != nil {
+		t.Fatalf("RunArgs(nil) error = %v (deferred sync failure must be non-fatal)", err)
+	}
+
+	// PendingSync must remain set so the next launch retries.
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read() error = %v", err)
+	}
+	if !s.PendingSync {
+		t.Errorf("PendingSync = false after failed deferred sync, want true (idempotent retry)")
+	}
+}
+
+// TestRunArgs_NoPendingSync_NoSyncCall verifies that when PendingSync=false,
+// the deferred sync runner is NOT called (no extra sync on a normal launch).
+func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
+	home := t.TempDir()
+	setupMockHome(t, home)
+
+	// Write state without PendingSync.
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		PendingSync:     false,
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	origSelf := selfUpdateFn
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origRunTUI := runTUI
+	origDeferredSync := deferredSyncFn
+	t.Cleanup(func() {
+		selfUpdateFn = origSelf
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		runTUI = origRunTUI
+		deferredSyncFn = origDeferredSync
+	})
+
+	selfUpdateFn = func(_ context.Context, _ string, _ system.PlatformProfile, _ io.Writer) error {
+		return nil
+	}
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, nil
+	}
+	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
+		return m, nil
+	}
+
+	var syncCalled int
+	deferredSyncFn = func() error {
+		syncCalled++
+		return nil
+	}
+
+	var buf bytes.Buffer
+	if err := RunArgs(nil, &buf); err != nil {
+		t.Fatalf("RunArgs(nil) error = %v", err)
+	}
+
+	if syncCalled != 0 {
+		t.Errorf("deferredSyncFn called %d times, want 0 (no pending sync)", syncCalled)
 	}
 }
