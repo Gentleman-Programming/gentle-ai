@@ -14,12 +14,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
 
 const (
@@ -37,7 +37,16 @@ var (
 	engramStopProcessesFn = stopEngramProcesses
 )
 
-// DownloadLatestBinary fetches the pinned engram release from GitHub and
+// engramCoreTagPattern matches only plain semver tags (vX.Y.Z) that identify
+// core engram binary releases. The Gentleman-Programming/engram repository also
+// publishes gentle-engram npm and pi releases under tags like
+// "gentle-engram vX.Y.Z" or "pi-vX.Y.Z" in the same release stream. This
+// pattern intentionally excludes those so a gentle-engram/pi tag can never be
+// selected as the core engram binary version. It mirrors the ReleaseTagPattern
+// used by the update-check path in internal/update/registry.go.
+const engramCoreTagPattern = `^v[0-9]+\.[0-9]+\.[0-9]+$`
+
+// DownloadLatestBinary fetches the latest engram release from GitHub and
 // installs it to the appropriate directory for the given platform.
 // It returns the full path to the installed binary.
 //
@@ -49,9 +58,13 @@ var (
 func DownloadLatestBinary(profile system.PlatformProfile) (string, error) {
 	ctx := context.Background()
 
-	// 1. Use the pinned core Engram version. Beta/nightly installs are handled
-	// separately and still install Engram from @main.
-	version := versions.EngramCore
+	// 1. Fetch the latest version tag from GitHub API. Only tags matching the
+	// core engram pattern (vX.Y.Z) are considered; gentle-engram/pi tags are
+	// excluded so the download and update-check paths share the same source of truth.
+	version, err := fetchLatestEngramVersion()
+	if err != nil {
+		return "", fmt.Errorf("fetch latest engram version: %w", err)
+	}
 
 	// 2. Determine binary name and archive URL.
 	goos := profile.OS
@@ -132,8 +145,14 @@ func DownloadLatestBinary(profile system.PlatformProfile) (string, error) {
 	return outPath, nil
 }
 
-// fetchLatestEngramVersion queries the GitHub Releases API for the latest engram
-// release and returns the version string (without leading "v").
+// engramCoreTagRE is the compiled form of engramCoreTagPattern, used to filter
+// GitHub release tags so only core engram binary releases are selected.
+var engramCoreTagRE = regexp.MustCompile(engramCoreTagPattern)
+
+// fetchLatestEngramVersion queries the GitHub Releases API for the latest
+// core engram binary release and returns the version string (without leading "v").
+// Only releases whose tag matches engramCoreTagPattern (vX.Y.Z) are considered,
+// so gentle-engram/pi tags published in the same release stream are ignored.
 func fetchLatestEngramVersion() (string, error) {
 	token := githubToken()
 	version, status, err := fetchLatestEngramVersionRequest(token)
@@ -184,6 +203,22 @@ func fetchLatestEngramVersionRequest(token string) (string, int, error) {
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return "", resp.StatusCode, fmt.Errorf("decode release JSON: %w", err)
+	}
+
+	// Reject tags that don't match the core engram pattern (e.g. gentle-engram/pi-v* tags).
+	// Fall through to the release-list scan when /latest points at a non-core release.
+	if !engramCoreTagRE.MatchString(release.TagName) {
+		fallbackVersion, fallbackStatus, err := fetchLatestEngramVersionWithAssets(token)
+		if err == nil {
+			return fallbackVersion, resp.StatusCode, nil
+		}
+		if token != "" && (fallbackStatus == http.StatusUnauthorized || fallbackStatus == http.StatusForbidden) {
+			fallbackVersion, _, retryErr := fetchLatestEngramVersionWithAssets("")
+			if retryErr == nil {
+				return fallbackVersion, resp.StatusCode, nil
+			}
+		}
+		return "", resp.StatusCode, err
 	}
 
 	version := strings.TrimPrefix(release.TagName, "v")
@@ -262,6 +297,10 @@ func fetchLatestEngramVersionWithAssets(token string) (string, int, error) {
 
 	for _, release := range releases {
 		if release.Draft || release.Prerelease || len(release.Assets) == 0 {
+			continue
+		}
+		// Skip tags that don't match the core engram pattern (e.g. gentle-engram/pi-v* tags).
+		if !engramCoreTagRE.MatchString(release.TagName) {
 			continue
 		}
 		for _, asset := range release.Assets {

@@ -17,13 +17,6 @@
       "matchDatasources": ["npm"],
       "groupName": "pinned npm packages",
       "labels": ["dependencies", "security"]
-    },
-    {
-      "matchManagers": ["custom.regex"],
-      "matchFileNames": ["internal/versions/versions.go"],
-      "matchDatasources": ["github-releases"],
-      "groupName": "pinned GitHub releases",
-      "labels": ["dependencies", "security"]
     }
   ]
 }

@@ -49,9 +49,9 @@ func stringSliceContains(items []string, want string) bool {
 
 func engramInitCommandForTest() string {
 	if _, err := exec.LookPath("pnpm"); err == nil {
-		return fmt.Sprintf("pnpm dlx gentle-engram@%s pi-engram init", versions.GentleEngram)
+		return "pnpm dlx gentle-engram@latest pi-engram init"
 	}
-	return fmt.Sprintf("npm exec --yes --package gentle-engram@%s -- pi-engram init", versions.GentleEngram)
+	return "npm exec --yes --package gentle-engram@latest -- pi-engram init"
 }
 
 func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
@@ -141,8 +141,8 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	if !stringSliceContains(commands, "pi install npm:pi-mcp-adapter") {
 		t.Fatalf("commands missing %q; got %v", "pi install npm:pi-mcp-adapter", commands)
 	}
-	if !stringSliceContains(commands, fmt.Sprintf("npm exec --yes --package gentle-engram@%s -- pi-engram init", versions.GentleEngram)) &&
-		!stringSliceContains(commands, fmt.Sprintf("pnpm dlx gentle-engram@%s pi-engram init", versions.GentleEngram)) {
+	if !stringSliceContains(commands, "npm exec --yes --package gentle-engram@latest -- pi-engram init") &&
+		!stringSliceContains(commands, "pnpm dlx gentle-engram@latest pi-engram init") {
 		t.Fatalf("commands missing Engram init command; got %v", commands)
 	}
 }

@@ -24,9 +24,3 @@ const GeminiCLI = "0.41.2"
 
 // renovate: datasource=npm depName=@upstash/context7-mcp
 const Context7MCP = "2.2.5"
-
-// renovate: datasource=npm depName=gentle-engram
-const GentleEngram = "0.1.8"
-
-// renovate: datasource=github-releases depName=Gentleman-Programming/engram
-const EngramCore = "1.16.3"
