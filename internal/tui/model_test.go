@@ -5606,10 +5606,20 @@ func TestUpdatePromptScreen_UpdateNow_NoDuplicateUpgrade(t *testing.T) {
 		return upgrade.UpgradeReport{}
 	}
 
-	m3aRaw, _ := m3.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m3aRaw, cmd3a := m3.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m3a := m3aRaw.(Model)
 	if !m3a.OperationRunning {
 		t.Error("OperationRunning must be true after Enter on cursor=0 (Update now) on ScreenUpdatePrompt")
+	}
+	if cmd3a == nil {
+		t.Fatal("first Enter on Update now should return a command")
+	}
+	if batch, ok := cmd3a().(tea.BatchMsg); ok {
+		for _, fn := range batch {
+			if fn != nil {
+				fn()
+			}
+		}
 	}
 
 	// Second Enter while in progress — must be no-op.
@@ -5623,7 +5633,7 @@ func TestUpdatePromptScreen_UpdateNow_NoDuplicateUpgrade(t *testing.T) {
 		}
 	}
 
-	if enterCallCount > 1 {
-		t.Errorf("UpgradeFn call count via Enter = %d, want at most 1 (duplicate Enter guard failed)", enterCallCount)
+	if enterCallCount != 1 {
+		t.Errorf("UpgradeFn call count via Enter = %d, want exactly 1 (Enter must start exactly one upgrade)", enterCallCount)
 	}
 }
