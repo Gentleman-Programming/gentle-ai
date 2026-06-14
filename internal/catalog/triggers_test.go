@@ -427,6 +427,98 @@ func TestValidateTriggerRuleSet(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		// W1: MinDiffLines=0 with PathGlobs passes — 0 is not an active numeric
+		// condition; PathGlobs provides the sole condition. The binding is valid.
+		// This proves MinDiffLines:0 is not silently treated as a meaningful threshold.
+		{
+			name: "MinDiffLines zero with valid PathGlobs passes",
+			set: model.TriggerRuleSet{
+				Bindings: []model.TriggerBinding{
+					{
+						On:   model.EventPrePR,
+						Run:  []string{"review-risk"},
+						Mode: model.ModeStrong,
+						When: model.TriggerWhen{MinDiffLines: 0, PathGlobs: []string{"**/auth/**"}},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		// W1: negative MinDiffLines is invalid — must be a positive integer (> 0).
+		{
+			name: "MinDiffLines negative rejected",
+			set: model.TriggerRuleSet{
+				Bindings: []model.TriggerBinding{
+					{
+						On:   model.EventPrePR,
+						Run:  []string{"review-risk"},
+						Mode: model.ModeStrong,
+						When: model.TriggerWhen{MinDiffLines: -1, PathGlobs: []string{"**/auth/**"}},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		// W2: full 4R fan-out on pre-commit with always=true is prohibited (token-budget rule).
+		{
+			name: "pre-commit always with all 4R agents prohibited",
+			set: model.TriggerRuleSet{
+				Bindings: []model.TriggerBinding{
+					{
+						On:   model.EventPreCommit,
+						Run:  []string{"review-risk", "review-readability", "review-reliability", "review-resilience"},
+						Mode: model.ModeAdvisory,
+						When: model.TriggerWhen{Always: true},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		// W2: full 4R fan-out on pre-push with always=true is prohibited (token-budget rule).
+		{
+			name: "pre-push always with all 4R agents prohibited",
+			set: model.TriggerRuleSet{
+				Bindings: []model.TriggerBinding{
+					{
+						On:   model.EventPrePush,
+						Run:  []string{"review-risk", "review-readability", "review-reliability", "review-resilience"},
+						Mode: model.ModeAdvisory,
+						When: model.TriggerWhen{Always: true},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		// W2: full 4R on pre-pr is fine (hot paths are allowed).
+		{
+			name: "pre-pr with all 4R agents allowed",
+			set: model.TriggerRuleSet{
+				Bindings: []model.TriggerBinding{
+					{
+						On:   model.EventPrePR,
+						Run:  []string{"review-risk", "review-readability", "review-reliability", "review-resilience"},
+						Mode: model.ModeStrong,
+						When: model.TriggerWhen{PathGlobs: []string{"**/auth/**"}},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		// W2: pre-commit with 3 of 4 agents and always=true is allowed (not all four 4R).
+		{
+			name: "pre-commit always with only 3 review agents allowed",
+			set: model.TriggerRuleSet{
+				Bindings: []model.TriggerBinding{
+					{
+						On:   model.EventPreCommit,
+						Run:  []string{"review-risk", "review-readability", "review-reliability"},
+						Mode: model.ModeAdvisory,
+						When: model.TriggerWhen{Always: true},
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tc := range tests {

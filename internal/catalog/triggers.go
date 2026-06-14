@@ -222,9 +222,10 @@ func ValidateTriggerRuleSet(set model.TriggerRuleSet) error {
 		if w.PathGlobs != nil && len(w.PathGlobs) == 0 {
 			return fmt.Errorf("binding[%d]: When.PathGlobs must not be an empty slice", i)
 		}
-		// MinDiffLines when set must be positive.
+		// MinDiffLines when non-zero must be a positive integer (> 0).
+		// Zero is valid as an unset/unused value; negative values are always rejected.
 		if w.MinDiffLines < 0 {
-			return fmt.Errorf("binding[%d]: When.MinDiffLines must be >= 0 when set", i)
+			return fmt.Errorf("binding[%d]: When.MinDiffLines must be a positive integer (> 0)", i)
 		}
 		// Combine must be a recognized value.
 		if !validCombine[w.Combine] {
@@ -240,7 +241,39 @@ func ValidateTriggerRuleSet(set model.TriggerRuleSet) error {
 		if len(w.Phases) > 0 && b.On != model.EventPostSDDPhase {
 			return fmt.Errorf("binding[%d]: When.Phases may only be used with the post-sdd-phase event (got %q)", i, b.On)
 		}
+
+		// Token-budget prohibition (spec G): the full 4R fan-out on an everyday event
+		// (pre-commit or pre-push) with When.Always=true is actively prohibited.
+		// This keeps the everyday development loop lightweight (~1x cost).
+		if (b.On == model.EventPreCommit || b.On == model.EventPrePush) && w.Always {
+			if has4RFanOut(b.Run) {
+				return fmt.Errorf(
+					"binding[%d]: full 4R fan-out (review-risk, review-readability, review-reliability, review-resilience) "+
+						"on %q with When.Always=true is prohibited — everyday events must use a single advisory lens, "+
+						"not the full 4R fan-out (spec G token-budget rule)",
+					i, b.On,
+				)
+			}
+		}
 	}
 
 	return nil
+}
+
+// has4RFanOut reports whether run contains all four 4R review agents.
+func has4RFanOut(run []string) bool {
+	const (
+		agentRisk         = "review-risk"
+		agentReadability  = "review-readability"
+		agentReliability  = "review-reliability"
+		agentResilience   = "review-resilience"
+	)
+	found := 0
+	for _, r := range run {
+		switch r {
+		case agentRisk, agentReadability, agentReliability, agentResilience:
+			found++
+		}
+	}
+	return found == 4
 }
