@@ -11,7 +11,9 @@ func TestResolveInstallChannel(t *testing.T) {
 	// Point HOME at an empty temp dir so the saved-channel preference cache is
 	// absent and the default/unset paths deterministically resolve to stable,
 	// regardless of the host's ~/.gentle-ai/channel.
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv(channelEnvVar, "")
 
 	tests := []struct {
@@ -56,7 +58,9 @@ func TestResolveInstallChannel(t *testing.T) {
 // always persists the canonical channel, so "nightly" round-trips as beta and an
 // invalid value is rejected without writing the file.
 func TestSaveInstallChannelPersistsCanonicalForm(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv(channelEnvVar, "")
 
 	tests := []struct {
@@ -76,6 +80,7 @@ func TestSaveInstallChannelPersistsCanonicalForm(t *testing.T) {
 			// Fresh HOME per case so a rejected write cannot read a prior file.
 			home := t.TempDir()
 			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			path := filepath.Join(home, ".gentle-ai", "channel")
 
 			err := SaveInstallChannel(tt.input)

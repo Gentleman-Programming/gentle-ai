@@ -119,10 +119,10 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 }
 
 func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
-	// Isolate HOME: the upgrade now resolves and creates the beta channel directory,
-	// so it must not touch the real ~/.gentle-ai.
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	// Isolate HOME/USERPROFILE so ChannelBinaryPath(os.UserHomeDir()) is hermetic
+	// across platforms — the upgrade now resolves and creates the beta channel dir.
+	isolateChannelHome(t)
+	home := os.Getenv("HOME")
 
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })

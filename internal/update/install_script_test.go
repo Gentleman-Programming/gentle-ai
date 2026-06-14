@@ -116,7 +116,6 @@ func TestInstallScriptsActivateBetaThroughLauncher(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadFile(%q) error = %v", tc.path, err)
 			}
-			text := string(content)
 			for _, forbidden := range tc.forbidden {
 				if bytes.Contains(content, []byte(forbidden)) {
 					t.Fatalf("%s still contains obsolete beta install behavior %q", tc.path, forbidden)
@@ -130,7 +129,6 @@ func TestInstallScriptsActivateBetaThroughLauncher(t *testing.T) {
 			if bytes.Contains(content, []byte("@main")) && !bytes.Contains(content, []byte("channel beta")) {
 				t.Fatalf("%s references @main without launcher channel activation", tc.path)
 			}
-			_ = text
 		})
 	}
 }

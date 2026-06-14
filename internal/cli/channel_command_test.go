@@ -31,13 +31,16 @@ func unsetChannelEnv(t *testing.T) {
 // channel must call this so they pass on machines with a persisted channel.
 func isolateChannelResolution(t *testing.T) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	unsetChannelEnv(t)
 }
 
 func TestRunChannelStablePersistsWithoutInstallingTarget(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	unsetChannelEnv(t)
 
 	origGoInstall := channelGoInstall
@@ -73,6 +76,7 @@ func TestRunChannelStablePersistsWithoutInstallingTarget(t *testing.T) {
 func TestRunChannelInstallsTargetAndPersistsChannel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	unsetChannelEnv(t)
 
 	origGoInstall := channelGoInstall
@@ -118,6 +122,7 @@ func TestRunChannelInstallsTargetAndPersistsChannel(t *testing.T) {
 func TestMaybeExecChannelTargetDoesNotDelegateStable(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	unsetChannelEnv(t)
 	if err := SaveInstallChannel(ChannelStable); err != nil {
 		t.Fatalf("SaveInstallChannel: %v", err)
@@ -145,6 +150,7 @@ func TestMaybeExecChannelTargetDoesNotDelegateStable(t *testing.T) {
 func TestMaybeExecChannelTargetSkipsLauncherOwnedCommands(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	unsetChannelEnv(t)
 	if err := SaveInstallChannel(ChannelBeta); err != nil {
 		t.Fatalf("SaveInstallChannel: %v", err)
@@ -187,6 +193,7 @@ func TestMaybeExecChannelTargetSkipsLauncherOwnedCommands(t *testing.T) {
 func TestMaybeExecChannelTargetDelegatesWhenTargetExists(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	unsetChannelEnv(t)
 	if err := SaveInstallChannel(ChannelBeta); err != nil {
 		t.Fatalf("SaveInstallChannel: %v", err)
@@ -252,8 +259,6 @@ func containsEnv(env []string, want string) bool {
 	return false
 }
 
-// writeSavedChannelFile writes raw bytes to ~/.gentle-ai/channel under the test's
-// HOME so tests can simulate persisted (or corrupt) channel preferences.
 func TestChannelBinaryStale(t *testing.T) {
 	dir := t.TempDir()
 	launcher := filepath.Join(dir, "launcher")
@@ -303,6 +308,7 @@ func TestChannelBinaryStale(t *testing.T) {
 func TestMaybeExecChannelTargetWarnsWhenChannelBinaryStale(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	unsetChannelEnv(t)
 	if err := SaveInstallChannel(ChannelBeta); err != nil {
 		t.Fatalf("SaveInstallChannel: %v", err)
@@ -373,6 +379,7 @@ func TestMaybeExecChannelTargetWarnsWhenChannelBinaryStale(t *testing.T) {
 func TestMaybeExecChannelTargetStaleWarningCooldown(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	unsetChannelEnv(t)
 	if err := SaveInstallChannel(ChannelBeta); err != nil {
 		t.Fatalf("SaveInstallChannel: %v", err)
@@ -442,6 +449,8 @@ func TestMaybeExecChannelTargetStaleWarningCooldown(t *testing.T) {
 	}
 }
 
+// writeSavedChannelFile writes raw bytes to ~/.gentle-ai/channel under the test's
+// HOME so tests can simulate persisted (or corrupt) channel preferences.
 func writeSavedChannelFile(t *testing.T, contents string) {
 	t.Helper()
 	path, err := channelFilePath()
@@ -476,7 +485,9 @@ func TestResolveInstallChannelSavedFileDegradesGracefully(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			unsetChannelEnv(t)
 			writeSavedChannelFile(t, tt.saved)
 
@@ -495,7 +506,9 @@ func TestResolveInstallChannelSavedFileDegradesGracefully(t *testing.T) {
 // saved channel file does not brick the binary: dispatch resolves to stable and the
 // launcher keeps control with no error (FIX 1).
 func TestMaybeExecChannelTargetCorruptSavedFileStaysOnLauncher(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	unsetChannelEnv(t)
 	writeSavedChannelFile(t, "garbage")
 
@@ -522,7 +535,9 @@ func TestResolveInstallChannelEmptyEnvFallsThroughToSavedFile(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			t.Setenv(channelEnvVar, tt.envValue)
 			writeSavedChannelFile(t, "beta\n")
 
@@ -543,6 +558,7 @@ func TestResolveInstallChannelEmptyEnvFallsThroughToSavedFile(t *testing.T) {
 func TestRunChannelBetaRequiresGoToolchain(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	unsetChannelEnv(t)
 
 	origGoInstall := channelGoInstall
@@ -576,6 +592,7 @@ func TestRunChannelBetaRequiresGoToolchain(t *testing.T) {
 func TestRunChannelNoArgShowsCurrentChannel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	unsetChannelEnv(t)
 	writeSavedChannelFile(t, "stable\n")
 
@@ -614,6 +631,7 @@ func TestRunChannelNoArgShowsCurrentChannel(t *testing.T) {
 func TestRunChannelRejectsInvalidInput(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	unsetChannelEnv(t)
 
 	var out bytes.Buffer
