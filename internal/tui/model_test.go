@@ -4726,3 +4726,110 @@ func TestStartUpgradeSync_NoClobberOnCorruptStateFile(t *testing.T) {
 		t.Errorf("state file was overwritten on corrupt-read error\ngot:  %q\nwant: %q", got, corruptPayload)
 	}
 }
+
+// ─── AdvisoryMsg TUI layer tests ─────────────────────────────────────────────
+
+// TestAdvisoryMsg_SetsAdvisoryMessage verifies that dispatching AdvisoryMsg
+// into model.Update stores the advisory text in m.AdvisoryMessage.
+func TestAdvisoryMsg_SetsAdvisoryMessage(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+
+	updated, _ := m.Update(AdvisoryMsg{Advisory: update.Advisory{Message: "test advisory"}})
+	state := updated.(Model)
+
+	if state.AdvisoryMessage != "test advisory" {
+		t.Fatalf("AdvisoryMessage = %q, want %q", state.AdvisoryMessage, "test advisory")
+	}
+}
+
+// TestAdvisoryMsg_EmptyAdvisoryNoChange verifies that dispatching an AdvisoryMsg
+// with an empty message leaves AdvisoryMessage as the empty string.
+func TestAdvisoryMsg_EmptyAdvisoryNoChange(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+
+	updated, _ := m.Update(AdvisoryMsg{})
+	state := updated.(Model)
+
+	if state.AdvisoryMessage != "" {
+		t.Fatalf("AdvisoryMessage = %q, want empty for zero-value AdvisoryMsg", state.AdvisoryMessage)
+	}
+}
+
+// TestWelcomeView_ContainsAdvisoryMessage verifies that View() on ScreenWelcome
+// renders the advisory message when AdvisoryMessage is set.
+func TestWelcomeView_ContainsAdvisoryMessage(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.AdvisoryMessage = "security notice"
+
+	view := m.View()
+
+	if !strings.Contains(view, "security notice") {
+		t.Fatalf("View() does not contain advisory message %q\nView output:\n%s", "security notice", view)
+	}
+}
+
+// TestWelcomeView_AdvisoryPrefixed verifies that the advisory message is
+// rendered with the "Advisory: " prefix on the Welcome screen.
+func TestWelcomeView_AdvisoryPrefixed(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.AdvisoryMessage = "critical update"
+
+	view := m.View()
+
+	if !strings.Contains(view, "Advisory: critical update") {
+		t.Fatalf("View() does not contain %q\nView output:\n%s", "Advisory: critical update", view)
+	}
+}
+
+// TestWelcomeView_NewlineSeparatorBetweenUpdateAndAdvisory verifies that when
+// both an update banner and an advisory message are present, they are rendered
+// on separate lines (the banner string uses "\n" as separator so RenderWelcome
+// outputs them as distinct visual lines).
+func TestWelcomeView_NewlineSeparatorBetweenUpdateAndAdvisory(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.UpdateCheckDone = true
+	m.UpdateResults = []update.UpdateResult{
+		{
+			Tool:             update.ToolInfo{Name: "engram"},
+			InstalledVersion: "1.0.0",
+			LatestVersion:    "1.1.0",
+			Status:           update.UpdateAvailable,
+		},
+	}
+	m.AdvisoryMessage = "advisory here"
+
+	view := m.View()
+
+	// Both pieces must appear in the view.
+	if !strings.Contains(view, "Updates available") {
+		t.Fatalf("View() does not contain update banner\nView output:\n%s", view)
+	}
+	if !strings.Contains(view, "Advisory: advisory here") {
+		t.Fatalf("View() does not contain advisory message\nView output:\n%s", view)
+	}
+	// The box renderer wraps the banner string into per-line box rows, so the
+	// update line and the advisory line must appear on distinct lines. Verify
+	// that no single rendered line contains both substrings at once.
+	lines := strings.Split(view, "\n")
+	updateLineIdx, advisoryLineIdx := -1, -1
+	for i, line := range lines {
+		if strings.Contains(line, "Updates available") {
+			updateLineIdx = i
+		}
+		if strings.Contains(line, "Advisory: advisory here") {
+			advisoryLineIdx = i
+		}
+	}
+	if updateLineIdx < 0 {
+		t.Fatalf("no line contains 'Updates available'\nView output:\n%s", view)
+	}
+	if advisoryLineIdx < 0 {
+		t.Fatalf("no line contains 'Advisory: advisory here'\nView output:\n%s", view)
+	}
+	if updateLineIdx == advisoryLineIdx {
+		t.Fatalf("update banner and advisory appear on the same line (%d); expected separate lines\nView output:\n%s", updateLineIdx, view)
+	}
+}

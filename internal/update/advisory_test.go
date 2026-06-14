@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 )
@@ -39,19 +38,23 @@ func TestFetchAdvisory_ValidJSON(t *testing.T) {
 	}
 }
 
-// TestFetchAdvisory_Timeout verifies that a server that responds after 3s
-// (beyond the 2s advisory timeout) causes FetchAdvisory to fail-open and
-// return (Advisory{}, false) without blocking.
+// TestFetchAdvisory_Timeout verifies that a server that never responds causes
+// FetchAdvisory to fail-open after the 2s client timeout, without blocking
+// teardown for the duration of the stall.
 func TestFetchAdvisory_Timeout(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
+	// unblock is closed in t.Cleanup so the handler exits immediately when the
+	// test ends, allowing srv.Close() to return without waiting for the stall.
+	unblock := make(chan struct{})
+	t.Cleanup(func() { close(unblock) })
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Signal that the handler was reached, then stall.
-		wg.Done()
-		// Sleep long enough to exceed the 2s advisory client timeout.
-		// The test has its own deadline so this will be cleaned up.
-		time.Sleep(10 * time.Second)
-		w.WriteHeader(http.StatusOK)
+		// Stall until either the client disconnects (2s timeout) or the test
+		// cleanup fires — whichever comes first.
+		select {
+		case <-r.Context().Done():
+		case <-unblock:
+		}
+		// Handler exits immediately; no response is sent.
 	}))
 	defer srv.Close()
 
@@ -63,14 +66,14 @@ func TestFetchAdvisory_Timeout(t *testing.T) {
 	a, ok := FetchAdvisory(context.Background())
 	elapsed := time.Since(start)
 
-	// Must have received the "request reached server" signal or timed out.
 	if ok {
 		t.Error("FetchAdvisory() returned ok=true on timeout, want false (fail-open)")
 	}
 	if a.Message != "" {
 		t.Errorf("FetchAdvisory().Message = %q on timeout, want empty", a.Message)
 	}
-	// Must return in well under the server's sleep (10s); allow up to 4s for CI variance.
+	// Must return near the 2s client timeout, not after the server's stall duration.
+	// Allow up to 4s for CI variance.
 	if elapsed > 4*time.Second {
 		t.Errorf("FetchAdvisory() took %v, expected to time out in ~2s", elapsed)
 	}
