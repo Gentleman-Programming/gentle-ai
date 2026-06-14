@@ -1249,3 +1249,35 @@ func TestEngramGoInstallFromMain_BypassesPublicGoProxy(t *testing.T) {
 		}
 	}
 }
+
+// TestEngramStopScriptIsDefensive locks in the shape of the PowerShell stop
+// script so the clean-install regression from issue #815 cannot reappear.
+//
+// On Windows PowerShell 5.1, piping an empty `Get-Process` result straight into
+// Stop-Process flips `$?` and makes powershell.exe exit 1 with no output, which
+// the Go installer surfaces as a bare "exit status 1 (output: )" and marks the
+// whole engram component FAILED on a fresh machine. The fix is structural: guard
+// the pipeline with `if ($procs)` and never use `-ErrorAction Stop`. Because the
+// script only runs on real Windows (integration-covered on Windows CI), this
+// unit test asserts the invariants on the generated string so a future "cleanup"
+// that reintroduces the direct pipe or a terminating error action fails here.
+func TestEngramStopScriptIsDefensive(t *testing.T) {
+	script := engramStopScript()
+
+	// The lookup must not treat a missing process as a terminating error.
+	if !strings.Contains(script, "Get-Process -Name engram -ErrorAction SilentlyContinue") {
+		t.Errorf("stop script must look up engram with -ErrorAction SilentlyContinue\nscript:\n%s", script)
+	}
+
+	// The Stop-Process pipeline must be guarded so it never runs on an empty
+	// result — this is the core of the issue #815 fix.
+	if !strings.Contains(script, "if ($procs)") {
+		t.Errorf("stop script must guard Stop-Process behind `if ($procs)` (issue #815)\nscript:\n%s", script)
+	}
+
+	// -ErrorAction Stop on Stop-Process is exactly what produced exit 1 when the
+	// pipeline was empty. It must never come back.
+	if strings.Contains(script, "Stop-Process -Force -ErrorAction Stop") {
+		t.Errorf("stop script must not use -ErrorAction Stop on Stop-Process (reintroduces issue #815/#850)\nscript:\n%s", script)
+	}
+}

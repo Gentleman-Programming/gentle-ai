@@ -578,24 +578,25 @@ func extractZipBinary(data []byte, binaryName, outPath string) error {
 	return fmt.Errorf("binary %q not found in zip archive", binaryName)
 }
 
-// stopEngramProcesses stops any running Engram process so Windows can replace
-// engram.exe during upgrade.
+// engramStopScript returns the PowerShell script that stops running Engram
+// processes so Windows can replace engram.exe during an upgrade.
 //
-// The PowerShell script is written defensively:
-//  1. Get-Process with -ErrorAction SilentlyContinue returns nothing (not an
-//     error) when no engram process exists, so the no-op case is clean.
-//  2. Stop-Process uses -ErrorAction SilentlyContinue so that an access-denied
-//     condition (e.g. the MCP server is held by the running editor session) does
-//     not produce a terminating error and a non-zero exit code.
-//  3. If processes were found but could not all be stopped (count mismatch) we
-//     return an informative warning so the caller can surface it, but we do NOT
-//     abort the install — Windows may still succeed in replacing the binary if
-//     at least the file lock was released.
-func stopEngramProcesses() error {
-	// Two-step: find running engram processes, then attempt to stop them.
-	// Using -ErrorAction SilentlyContinue on both Get-Process and Stop-Process
-	// prevents access-denied and "no such process" from producing exit status 1.
-	const script = `
+// The script is written defensively so a clean install (no engram process
+// running) is a clean no-op instead of a failure:
+//  1. Get-Process uses -ErrorAction SilentlyContinue, so a missing process is
+//     not a terminating error.
+//  2. The Stop-Process call is guarded by `if ($procs)`, so the pipeline never
+//     runs on an empty result. This matters on Windows PowerShell 5.1, where
+//     piping an empty Get-Process result still flips `$?` and makes
+//     powershell.exe exit 1 with empty output — the clean-install regression in
+//     issue #815.
+//  3. Stop-Process uses -ErrorAction SilentlyContinue (never -ErrorAction Stop),
+//     so an access-denied condition (e.g. the binary is held by the running
+//     editor session) does not abort the install.
+//  4. If processes were found but could not all be stopped, the script emits a
+//     WARNING line so the caller can surface it without failing the install.
+func engramStopScript() string {
+	return `
 $procs = Get-Process -Name engram -ErrorAction SilentlyContinue
 if ($procs) {
     $procs | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -605,11 +606,18 @@ if ($procs) {
     }
 }
 `
+}
+
+// stopEngramProcesses runs the defensive stop script (see engramStopScript) and
+// returns a non-nil error only when powershell.exe itself fails to launch or
+// exits non-zero. A WARNING line (processes found but not all stopped) is
+// surfaced to stderr but is treated as non-fatal.
+func stopEngramProcesses() error {
 	cmd := exec.Command("powershell.exe",
 		"-NoProfile",
 		"-NonInteractive",
 		"-Command",
-		script,
+		engramStopScript(),
 	)
 	cmd.Stdin = nil
 	out, err := cmd.CombinedOutput()
