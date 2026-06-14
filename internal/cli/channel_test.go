@@ -21,10 +21,12 @@ func TestResolveInstallChannel(t *testing.T) {
 		{name: "env beta", envValue: "beta", want: ChannelBeta},
 		{name: "flag wins over env", flagValue: "stable", envValue: "beta", want: ChannelStable},
 		{name: "invalid", flagValue: "engram-beta", wantErr: true},
+		// Spec: empty-string env var treated as unset → stable (slice 3 channel-honoring).
+		{name: "empty env string defaults stable", flagValue: "", envValue: "", want: ChannelStable},
 	}
 
 	for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv(channelEnvVar, tt.envValue)
 
 			got, err := ResolveInstallChannel(tt.flagValue)

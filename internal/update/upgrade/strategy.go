@@ -14,14 +14,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 )
 
-// engramDownloadFn is the function used to download the engram binary.
+// engramDownloadFn is the function used to download the engram binary on the stable channel.
 // Package-level var for testability — swapped in tests to avoid real network calls.
-var engramDownloadFn = engram.DownloadLatestBinary
+var engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+	return engram.DownloadLatestBinary(profile, false)
+}
 
 // execCommand is a package-level var declared in executor.go (same package).
 
@@ -485,18 +488,60 @@ func installerUpgrade(ctx context.Context, tool update.ToolInfo, releaseURL stri
 	return true, nil
 }
 
-// engramBinaryUpgrade downloads the latest engram binary using its dedicated
-// cross-platform downloader and adds the install directory to PATH.
-// On Windows the PATH change is also persisted to the user registry via PowerShell.
+// engramBinaryUpgrade downloads or installs the latest engram binary.
+// It honors GENTLE_AI_CHANNEL: when the channel is beta, engram is installed
+// from source via `go install @main`. For stable (the default when the env var
+// is unset or unknown), the pre-built release binary is downloaded via
+// engramDownloadFn. On Windows, PATH changes are persisted to the user registry
+// via PowerShell.
 func engramBinaryUpgrade(profile system.PlatformProfile) error {
-	binaryPath, err := engramDownloadFn(profile)
+	// Resolve the install channel from the environment. Unknown values fall back
+	// to stable (ResolveInstallChannel returns an error for truly unrecognized
+	// values; we treat those as stable and emit a warning so users are not silently
+	// misrouted).
+	channel, err := cli.ResolveInstallChannel("")
 	if err != nil {
-		return fmt.Errorf("download engram binary: %w", err)
+		fmt.Fprintf(os.Stderr, "WARNING: unrecognized GENTLE_AI_CHANNEL value (%v); defaulting to stable\n", err)
+		channel = cli.ChannelStable
 	}
+
+	var binaryPath string
+	if channel.IsBeta() {
+		// Beta channel: install engram from HEAD using go install @main. This mirrors
+		// the installBetaEngramFromMain path used at install time in internal/cli/run.go.
+		const pkg = "github.com/Gentleman-Programming/engram/cmd/engram@main"
+		cmd := execCommand("go", "install", pkg)
+		cmd.Stdin = nil
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("go install %s: %w (output: %s)", pkg, err, strings.TrimSpace(string(out)))
+		}
+		// Resolve the bin directory where go install placed the binary.
+		gopath := os.Getenv("GOPATH")
+		gobin := os.Getenv("GOBIN")
+		if gobin == "" && gopath != "" {
+			gobin = filepath.Join(gopath, "bin")
+		}
+		if gobin == "" {
+			home, _ := os.UserHomeDir()
+			gobin = filepath.Join(home, "go", "bin")
+		}
+		binaryName := "engram"
+		if runtime.GOOS == "windows" {
+			binaryName += ".exe"
+		}
+		binaryPath = filepath.Join(gobin, binaryName)
+	} else {
+		// Stable channel (default): download the latest release binary.
+		binaryPath, err = engramDownloadFn(profile)
+		if err != nil {
+			return fmt.Errorf("download engram binary: %w", err)
+		}
+	}
+
 	// Add install dir to PATH. On Windows this also persists via PowerShell (user registry).
 	binDir := filepath.Dir(binaryPath)
 	if err := system.AddToUserPath(binDir); err != nil {
-		// Non-fatal: the binary was downloaded successfully. Warn and continue.
+		// Non-fatal: the binary was downloaded or installed successfully. Warn and continue.
 		fmt.Fprintf(os.Stderr, "WARNING: could not add %s to PATH: %v\n", binDir, err)
 	}
 	return nil

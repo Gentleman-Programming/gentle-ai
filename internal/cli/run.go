@@ -62,7 +62,11 @@ var (
 
 	// engramDownloadFn is the function used to download the engram binary on non-brew platforms.
 	// Package-level var for testability — tests can replace this to avoid real HTTP calls.
-	engramDownloadFn = engram.DownloadLatestBinary
+	// Always uses the stable (release) path; beta channel at install time is handled
+	// separately via installBetaEngramFromMain.
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return engram.DownloadLatestBinary(profile, false)
+	}
 
 	// AppVersion is the gentle-ai version that will be written into backup manifests.
 	// It is set by app.go before any CLI operation so that every backup created during

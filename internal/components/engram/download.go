@@ -35,6 +35,10 @@ var (
 	engramInstallDirFn    = engramInstallDir
 	engramChecksumURLFn   = engramChecksumURL
 	engramStopProcessesFn = stopEngramProcesses
+
+	// engramGoInstallFn runs `go install <pkg>` and returns the path to the installed binary.
+	// Package-level var for testability — swapped in tests to avoid real go install calls.
+	engramGoInstallFn = engramGoInstallFromMain
 )
 
 // engramCoreTagPattern matches only plain semver tags (vX.Y.Z) that identify
@@ -50,12 +54,24 @@ const engramCoreTagPattern = `^v[0-9]+\.[0-9]+\.[0-9]+$`
 // installs it to the appropriate directory for the given platform.
 // It returns the full path to the installed binary.
 //
-// Checksum verification is mandatory: the install fails if checksums.txt is
-// unavailable, if the archive is not listed, or if the digest does not match.
+// When isBeta is true, engram is installed from source via `go install @main`
+// instead of downloading a release archive. This mirrors the install-time beta
+// path used by the CLI and ensures the upgrade executor honors GENTLE_AI_CHANNEL.
+//
+// Checksum verification is mandatory for the stable (release) path: the install
+// fails if checksums.txt is unavailable, if the archive is not listed, or if
+// the digest does not match.
 //
 // This is the non-brew installation method for Linux and Windows.
 // On macOS, brew handles engram transitively and this should not be called.
-func DownloadLatestBinary(profile system.PlatformProfile) (string, error) {
+func DownloadLatestBinary(profile system.PlatformProfile, isBeta bool) (string, error) {
+	// Beta channel: install from HEAD via go install rather than a release archive.
+	// This mirrors the installBetaEngramFromMain path used at install time.
+	if isBeta {
+		const pkg = "github.com/Gentleman-Programming/engram/cmd/engram@main"
+		return engramGoInstallFn(pkg)
+	}
+
 	ctx := context.Background()
 
 	// 1. Fetch the latest version tag from GitHub API. Only tags matching the
@@ -694,6 +710,34 @@ func (b *byteReaderAt) ReadAt(p []byte, off int64) (int, error) {
 		return n, io.EOF
 	}
 	return n, nil
+}
+
+// engramGoInstallFromMain installs engram from the given Go package path (expected
+// to be "github.com/Gentleman-Programming/engram/cmd/engram@main") using `go install`.
+// It returns the path to the installed binary. This is the beta-channel upgrade path.
+func engramGoInstallFromMain(pkg string) (string, error) {
+	cmd := exec.Command("go", "install", pkg)
+	cmd.Stdin = nil
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("go install %s: %w (output: %s)", pkg, err, strings.TrimSpace(string(out)))
+	}
+
+	// Resolve the directory where `go install` placed the binary.
+	gopath := os.Getenv("GOPATH")
+	gobin := os.Getenv("GOBIN")
+	if gobin == "" && gopath != "" {
+		gobin = filepath.Join(gopath, "bin")
+	}
+	if gobin == "" {
+		home, _ := os.UserHomeDir()
+		gobin = filepath.Join(home, "go", "bin")
+	}
+
+	binaryName := engramName
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	return filepath.Join(gobin, binaryName), nil
 }
 
 // writeExecutable writes the content from r to outPath with executable permissions.
