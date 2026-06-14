@@ -473,25 +473,71 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 			errContains: "Pi requires the `pi` executable",
 		},
 		{
-			name:    "pi with binary present passes preflight",
+			// Pi requires both `pi` and npm: InstallCommand always runs engramInitCommand()
+			// which executes `pnpm dlx` or `npm exec` (both need Node.js/npm).
+			name:    "pi with binary and npm present passes preflight",
 			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true},
 			agent:   model.AgentPi,
 			lookPath: func(file string) (string, error) {
-				if file == "pi" {
-					return "/usr/bin/pi", nil
+				if file == "pi" || file == "npm" {
+					return "/usr/bin/" + file, nil
 				}
 				return "", fmt.Errorf("not found")
 			},
 			wantErr: false,
 		},
 		{
-			name:    "non kimi agent does not require uv",
+			// Pi npm gate: pi present but npm absent must fail with Node.js remediation.
+			name:    "pi missing npm returns actionable remediation",
+			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true},
+			agent:   model.AgentPi,
+			lookPath: func(file string) (string, error) {
+				if file == "pi" {
+					return "/usr/local/bin/pi", nil
+				}
+				return "", fmt.Errorf("not found")
+			},
+			wantErr:     true,
+			errContains: "Node.js",
+		},
+		{
+			// ClaudeCode does not require uv (that is Kimi-specific), but it does
+			// require npm. This case verifies that npm being present is sufficient
+			// for the preflight to pass — uv absence is irrelevant.
+			name:    "non kimi npm agent does not require uv but does require npm (npm present)",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true},
+			agent:   model.AgentClaudeCode,
+			lookPath: func(file string) (string, error) {
+				if file == "npm" {
+					return "/usr/local/bin/npm", nil
+				}
+				return "", fmt.Errorf("not found")
+			},
+			wantErr: false,
+		},
+		{
+			// Bug A regression: ClaudeCode with npm absent must fail with a clear,
+			// actionable error (not proceed into the pipeline to surface a cryptic
+			// "exec: npm: executable file not found in PATH" during agent install).
+			name:    "claude-code missing npm returns actionable remediation",
+			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true},
 			agent:   model.AgentClaudeCode,
 			lookPath: func(file string) (string, error) {
 				return "", fmt.Errorf("not found")
 			},
-			wantErr: false,
+			wantErr:     true,
+			errContains: "winget install OpenJS.NodeJS.LTS",
+		},
+		{
+			// OpenCode also uses npm on Windows.
+			name:    "opencode missing npm returns actionable remediation",
+			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true},
+			agent:   model.AgentOpenCode,
+			lookPath: func(file string) (string, error) {
+				return "", fmt.Errorf("not found")
+			},
+			wantErr:     true,
+			errContains: "npm",
 		},
 	}
 

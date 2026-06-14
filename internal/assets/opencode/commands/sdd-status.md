@@ -37,5 +37,5 @@ READ-ONLY RULES:
 - Do not create, update, or delete artifacts.
 - Do not mark tasks complete.
 - Do not launch apply, verify, archive, or continue.
-- Do not infer routing from free text. Use `nextRecommended` and dependency states. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop.
+- Do not infer routing from free text. Use `nextRecommended` and dependency states. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop; if `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase.
 - If status cannot be resolved safely, return `status: blocked` with the missing information.

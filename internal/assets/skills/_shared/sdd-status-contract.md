@@ -17,7 +17,7 @@ Commands that select, continue, apply, verify, or archive an SDD change MUST fir
 
 - When the `gentle-ai` binary is available, prefer `gentle-ai sdd-status [change] --cwd <repo> --json --instructions` for read-only status and `gentle-ai sdd-continue [change] --cwd <repo>` for dispatcher output.
 - Treat native status JSON as authoritative over prompt inference or manually reconstructed state.
-- When `blockedReasons` is non-empty, do not proceed to terminal, archive, or apply work. Return or report `blockedReasons` and stop unless `nextRecommended` is `verify`, in which case verification may run only to remediate or refresh evidence for the blockers. When `nextRecommended` is `resolve-blockers`, always report `blockedReasons` and stop.
+- When `blockedReasons` is non-empty, do not proceed to terminal, archive, or apply work. Return or report `blockedReasons` and stop unless `nextRecommended` is `verify`, in which case verification may run only to remediate or refresh evidence for the blockers. When `nextRecommended` is `resolve-blockers`, always report `blockedReasons` and stop. When `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase — missing planning artifacts are the expected output of those phases, not genuine blockers.
 - `nextRecommended` is a bounded machine token for routing, not human prose. Route only by `nextRecommended` and dependency states.
 - Human-readable explanation belongs in `blockedReasons`, not `nextRecommended`.
 - If the binary is unavailable, fall back to this prompt contract and the manual status schema below. Manual fallback status MUST stay shape-compatible with native `gentle-ai.sdd-status` JSON even when values are reconstructed manually.
@@ -84,11 +84,11 @@ phaseInstructions:
   apply: [<instruction strings>]
   verify: [<instruction strings>]
   archive: [<instruction strings>]
-nextRecommended: apply | verify | archive | sdd-new | select-change | resolve-blockers
+nextRecommended: propose | spec | design | tasks | apply | verify | archive | sdd-new | select-change | resolve-blockers
 blockedReasons: []
 ```
 
-`phaseInstructions` is optional and appears only when instructions are requested. Empty path fields MUST be arrays, not null. `changeName` and `changeRoot` are nullable; all other sections should be present in fallback output so consumers can parse native and manual status the same way. Native status currently emits `artifactStore: openspec`; if native adds store modes later, fallback output must mirror the native token.
+`phaseInstructions` is optional and appears only when instructions are requested. It carries only execution-phase keys (`apply`, `verify`, `archive`); planning-phase instructions (`propose`, `spec`, `design`, `tasks`) are surfaced in the dispatcher markdown, not this JSON map, so a consumer routing on a planning `nextRecommended` MUST NOT expect a matching `phaseInstructions` entry. Empty path fields MUST be arrays, not null. `changeName` and `changeRoot` are nullable; all other sections should be present in fallback output so consumers can parse native and manual status the same way. Native status currently emits `artifactStore: openspec`; if native adds store modes later, fallback output must mirror the native token.
 
 ## Apply State
 

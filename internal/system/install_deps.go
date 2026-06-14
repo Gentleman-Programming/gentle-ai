@@ -85,6 +85,27 @@ func installHintGo(profile PlatformProfile) string {
 	}
 }
 
+// InstallHintForDep returns the platform-specific human-readable install hint for
+// the named dependency. Returns an empty string for unknown dependency names.
+func InstallHintForDep(name string, profile PlatformProfile) string {
+	switch name {
+	case "git":
+		return installHintGit(profile)
+	case "curl":
+		return installHintCurl(profile)
+	case "node":
+		return installHintNode(profile)
+	case "npm":
+		return installHintNpm(profile)
+	case "brew":
+		return installHintBrew()
+	case "go":
+		return installHintGo(profile)
+	default:
+		return ""
+	}
+}
+
 // InstallCommandsForDep returns the command sequence to install a missing dependency.
 // Returns nil if no automatic install is available.
 func InstallCommandsForDep(name string, profile PlatformProfile) [][]string {

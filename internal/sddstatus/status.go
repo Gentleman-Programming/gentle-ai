@@ -53,6 +53,10 @@ const (
 type Phase string
 
 const (
+	PhasePropose Phase = "propose"
+	PhaseSpec    Phase = "spec"
+	PhaseDesign  Phase = "design"
+	PhaseTasks   Phase = "tasks"
 	PhaseApply   Phase = "apply"
 	PhaseVerify  Phase = "verify"
 	PhaseArchive Phase = "archive"
@@ -780,7 +784,8 @@ func artifactDependency(state ArtifactState) DependencyState {
 	return DependencyBlocked
 }
 
-func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, blockedReasons []string) string {
+func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, _ []string) string {
+	// Prefer apply over verify when there is still remaining implementation work.
 	if dependencies.Apply == DependencyReady {
 		return string(PhaseApply)
 	}
@@ -790,6 +795,25 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, bl
 	if dependencies.Verify == DependencyAllDone && applyState == ApplyAllDone {
 		return string(PhaseArchive)
 	}
+
+	// Route toward the next missing planning artifact in dependency order.
+	// Missing planning artifacts are the expected output of planning phases,
+	// not genuine blockers. Reserve resolve-blockers for genuine anomalies.
+	if dependencies.Proposal != DependencyAllDone {
+		return string(PhasePropose)
+	}
+	if dependencies.Specs != DependencyAllDone {
+		return string(PhaseSpec)
+	}
+	if dependencies.Design != DependencyAllDone {
+		return string(PhaseDesign)
+	}
+	if dependencies.Tasks != DependencyAllDone {
+		return string(PhaseTasks)
+	}
+
+	// Genuine anomaly: all planning artifacts are done but apply is still blocked.
+	// This indicates a corrupted or ambiguous state that needs human intervention.
 	return "resolve-blockers"
 }
 
@@ -821,7 +845,7 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 
 func nextRecommendedPhase(next string) (Phase, bool) {
 	switch Phase(next) {
-	case PhaseApply, PhaseVerify, PhaseArchive:
+	case PhasePropose, PhaseSpec, PhaseDesign, PhaseTasks, PhaseApply, PhaseVerify, PhaseArchive:
 		return Phase(next), true
 	default:
 		return "", false
@@ -830,6 +854,14 @@ func nextRecommendedPhase(next string) (Phase, bool) {
 
 func dependencyForPhase(status Status, phase Phase) DependencyState {
 	switch phase {
+	case PhasePropose:
+		return status.Dependencies.Proposal
+	case PhaseSpec:
+		return status.Dependencies.Specs
+	case PhaseDesign:
+		return status.Dependencies.Design
+	case PhaseTasks:
+		return status.Dependencies.Tasks
 	case PhaseApply:
 		return status.Dependencies.Apply
 	case PhaseVerify:
@@ -849,6 +881,8 @@ func instructionsForPhase(status Status, phase Phase) []string {
 	}
 
 	switch phase {
+	case PhasePropose, PhaseSpec, PhaseDesign, PhaseTasks:
+		return planningInstructionsForPhase(status, phase)
 	case PhaseApply:
 		return instructions.Apply
 	case PhaseVerify:
@@ -857,6 +891,41 @@ func instructionsForPhase(status Status, phase Phase) []string {
 		return instructions.Archive
 	default:
 		return []string{"Unknown native SDD phase; return blockers and request a valid phase."}
+	}
+}
+
+func planningInstructionsForPhase(status Status, phase Phase) []string {
+	change := "<unresolved>"
+	if status.ChangeName != nil {
+		change = *status.ChangeName
+	}
+	switch phase {
+	case PhasePropose:
+		return []string{
+			fmt.Sprintf("Change: %s", change),
+			"Write proposal.md in the change directory.",
+			"Capture intent, scope, and approach before writing specs.",
+		}
+	case PhaseSpec:
+		return []string{
+			fmt.Sprintf("Change: %s", change),
+			"Read proposal.md before writing specs.",
+			"Create specs/<domain>/spec.md with requirements and scenarios.",
+		}
+	case PhaseDesign:
+		return []string{
+			fmt.Sprintf("Change: %s", change),
+			"Read proposal.md before writing design.",
+			"Write design.md with architecture decisions and implementation approach.",
+		}
+	case PhaseTasks:
+		return []string{
+			fmt.Sprintf("Change: %s", change),
+			"Read spec and design before writing tasks.",
+			"Write tasks.md with an ordered checklist of implementation tasks.",
+		}
+	default:
+		return []string{"Unknown planning phase."}
 	}
 }
 

@@ -23,7 +23,7 @@
 | OpenClaw        | `openclaw`       | Yes          | Yes | Solo-agent                       | No            | No             | `~/.openclaw`                       |
 | Trae            | `trae-ide`       | Yes          | Yes | Solo-agent                       | No            | No             | `~/.trae`                           |
 | Pi              | `pi`             | Yes          | Yes | Full (package-managed subagents) | No            | Yes            | `~/.pi`                             |
-| Hermes          | `hermes`         | Yes          | Yes | Detect-only (no auto-install)    | No            | No             | `~/.hermes`                         |
+| Hermes          | `hermes`         | Yes          | Yes | Full (delegate_task ephemeral)   | No            | No             | `~/.hermes`                         |
 
 Most agents receive the **full SDD orchestrator** policy, plus skill files written to their skills directory. Most receive it through their system prompt; OpenCode and Kilo Code receive it through the OpenCode-compatible `opencode.json` agent overlay. Pi is the exception: Gentle AI installs Pi packages, and `gentle-pi` owns Pi skills, prompts, SDD agents, and chains at runtime. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
 
@@ -36,8 +36,8 @@ Most agents receive the **full SDD orchestrator** policy, plus skill files writt
 | Model                 | How It Works                                                                                                                                                                                       | Agents                                                                                                    |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation, package-managed subagents, or an OpenCode-compatible overlay. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Kimi Code, Kiro IDE, Qwen Code, Pi |
+| **Full (delegate_task)** | The orchestrator uses Hermes's native `delegate_task` primitive to spawn ephemeral workers in fresh context windows. Workers receive only a self-contained mission; the parent receives only their final summary. Toolsets, MCP, and skills must be passed explicitly (not inherited by default). | Hermes |
 | **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence.                                                                     | Codex, Windsurf, Antigravity, OpenClaw, Trae                                                              |
-| **Detect-only**       | gentle-ai detects the agent and injects skills, MCP, and persona when the binary is present. Auto-install is not supported — the user installs the agent manually.                                | Hermes                                                                                                    |
 
 ### Cursor Native Subagents
 
@@ -246,6 +246,31 @@ For the full Pi command and package reference, see [Pi Agent](pi.md).
 - **`@juicesharp/rpiv-ask-user-question` package**: lets Pi child agents ask the active user session for clarification when they need human input.
 - **Pi companion packages**: `pi-web-access`, `@juicesharp/rpiv-todo`, and `pi-btw` add web access, todo tracking, and companion workflow support.
 - **Pi-only flow**: when Pi is the only selected agent, gentle-ai skips persona, ecosystem component selection, and Strict TDD prompts because those behaviors are provided by `gentle-pi`.
+
+### Hermes Ephemeral Delegation
+
+Hermes uses `delegate_task` to spawn ephemeral sub-agents. Each worker starts in a fresh context window and returns only its final summary to the parent orchestrator.
+
+**Delegation rules:**
+
+- Delegate when work needs broad exploration (4+ files), multi-file implementation, test/build execution, or fresh adversarial review.
+- Each worker mission must be self-contained: include the exact goal, file paths or targets, relevant prior context, constraints, expected evidence, and the toolsets/MCP/skills the worker is allowed to use.
+- Toolsets, MCP servers, and skills are NOT automatically inherited from the parent; pass them explicitly in the mission when `inherit_mcp_toolsets` is false (the default).
+- Prefer parallel workers only for truly independent workstreams. Dependencies must run sequentially.
+- Treat worker output as self-report: verify file writes, test pass/fail, URLs, and external side effects before reporting success.
+
+**Tuning knobs** (configure in `~/.hermes/config.yaml` under the `delegation` key):
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `max_spawn_depth` | 2 | Maximum recursive delegation depth |
+| `max_concurrent_children` | 4 | Maximum parallel workers |
+| `max_iterations` | agent default | Iteration budget per worker |
+| `child_timeout_seconds` | agent default | Hard timeout per worker |
+| `inherit_mcp_toolsets` | false | When true, workers inherit parent MCP toolsets automatically |
+| `subagent_auto_approve` | false | When true, workers auto-approve tool calls |
+
+The full delegation decision table lives in `~/.hermes/skills/hermes-ephemeral-delegation/SKILL.md` (installed by gentle-ai). The SDD orchestrator in `~/.hermes/SOUL.md` references this skill.
 
 ### Hermes
 

@@ -555,6 +555,89 @@ func TestDownloadLatestBinaryWindowsStopFailureAbortsBeforeReplace(t *testing.T)
 	}
 }
 
+// TestDownloadLatestBinaryWindowsStopSucceedsWhenProcessNotRunning verifies that the
+// Windows stop-before-replace path does NOT fail when no engram process is running.
+// This is the regression case from issue #850: Stop-Process with -ErrorAction Stop
+// would exit 1 even when nothing needed stopping (e.g. the process list was empty or
+// the process was held by an editor session and Get-Process returned nothing).
+// The seam returning nil (no error) is the contract that must hold for the
+// "engram not running" case; the implementation no longer uses -ErrorAction Stop.
+func TestDownloadLatestBinaryWindowsStopSucceedsWhenProcessNotRunning(t *testing.T) {
+	version := versions.EngramCore
+	server := makeServerWithFakeZip(t, version)
+	defer server.Close()
+
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	origInstallDirFn := engramInstallDirFn
+	origStopProcessesFn := engramStopProcessesFn
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+		engramInstallDirFn = origInstallDirFn
+		engramStopProcessesFn = origStopProcessesFn
+	})
+
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+	installDir := t.TempDir()
+	engramInstallDirFn = func(goos string) string { return installDir }
+
+	// Simulate stopEngramProcesses returning nil (no engram process found — clean).
+	engramStopProcessesFn = func() error { return nil }
+
+	installedPath, err := DownloadLatestBinary(system.PlatformProfile{OS: "windows", PackageManager: "winget"})
+	if err != nil {
+		t.Fatalf("DownloadLatestBinary(windows) should succeed when stop returns nil, got: %v", err)
+	}
+	if _, err := os.Stat(installedPath); err != nil {
+		t.Fatalf("stat installed binary: %v", err)
+	}
+}
+
+// TestDownloadLatestBinaryWindowsStopNilProceedsToInstall verifies that when
+// stopEngramProcesses returns nil, DownloadLatestBinary proceeds and installs the
+// binary. This covers the caller's "nil means proceed" contract only; it does NOT
+// exercise the WARNING-to-stderr emission inside stopEngramProcesses (that branch
+// requires a real PowerShell call and is only integration-covered on Windows CI).
+func TestDownloadLatestBinaryWindowsStopNilProceedsToInstall(t *testing.T) {
+	version := versions.EngramCore
+	server := makeServerWithFakeZip(t, version)
+	defer server.Close()
+
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	origInstallDirFn := engramInstallDirFn
+	origStopProcessesFn := engramStopProcessesFn
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+		engramInstallDirFn = origInstallDirFn
+		engramStopProcessesFn = origStopProcessesFn
+	})
+
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+	installDir := t.TempDir()
+	engramInstallDirFn = func(goos string) string { return installDir }
+
+	// Simulate the resilient case: stop was attempted, some processes could not be
+	// stopped (access denied), but stopEngramProcesses returns nil (warning-only).
+	// The upgrade should still proceed — Windows may succeed in replacing the file.
+	engramStopProcessesFn = func() error {
+		// In the real implementation this prints a WARNING to stderr and returns nil.
+		return nil
+	}
+
+	installedPath, err := DownloadLatestBinary(system.PlatformProfile{OS: "windows", PackageManager: "winget"})
+	if err != nil {
+		t.Fatalf("DownloadLatestBinary(windows) should not abort when stop returns nil (warning path), got: %v", err)
+	}
+	if _, err := os.Stat(installedPath); err != nil {
+		t.Fatalf("stat installed binary: %v", err)
+	}
+}
+
 func TestDownloadLatestBinaryUsesPinnedReleaseWithoutLatestAPIFallback(t *testing.T) {
 	const fakeToken = "ci-token"
 	version := versions.EngramCore
