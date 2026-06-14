@@ -388,8 +388,15 @@ func TestDownloadLatestBinarySkipsLatestReleaseWithoutBinaryAssets(t *testing.T)
 				"tag_name": "pi-v0.1.7",
 				"assets":   []any{},
 			})
-		case strings.Contains(r.URL.Path, "releases") && r.URL.RawQuery == "per_page=20":
+		case strings.Contains(r.URL.Path, "releases") && !strings.Contains(r.URL.Path, "releases/latest") &&
+			!strings.Contains(r.URL.Path, "/releases/download") &&
+			r.URL.Query().Get("per_page") == "20":
 			w.Header().Set("Content-Type", "application/json")
+			// Pages beyond 1 return empty to signal end-of-list.
+			if r.URL.Query().Get("page") != "1" {
+				json.NewEncoder(w).Encode([]map[string]any{})
+				return
+			}
 			json.NewEncoder(w).Encode([]map[string]any{
 				{
 					"tag_name":   "pi-v0.1.7",
@@ -466,12 +473,19 @@ func TestDownloadLatestBinaryReleaseListFallsBackToAnonymousWhenTokenGets403(t *
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"tag_name": "v" + binaryVersion})
-		case strings.Contains(r.URL.Path, "releases") && r.URL.RawQuery == "per_page=20":
+		case strings.Contains(r.URL.Path, "releases") && !strings.Contains(r.URL.Path, "releases/latest") &&
+			!strings.Contains(r.URL.Path, "/releases/download") &&
+			r.URL.Query().Get("per_page") == "20":
 			if auth != "" {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
+			// Pages beyond 1 return empty to signal end-of-list.
+			if r.URL.Query().Get("page") != "1" {
+				json.NewEncoder(w).Encode([]map[string]any{})
+				return
+			}
 			json.NewEncoder(w).Encode([]map[string]any{
 				{
 					"tag_name":   "v" + binaryVersion,
@@ -708,8 +722,15 @@ func TestDownloadLatestBinaryIgnoresGentleEngramAndPiTags(t *testing.T) {
 				"tag_name": "gentle-engram v0.1.8",
 				"assets":   []any{},
 			})
-		case strings.Contains(r.URL.Path, "releases") && r.URL.RawQuery == "per_page=20":
+		case strings.Contains(r.URL.Path, "releases") && !strings.Contains(r.URL.Path, "releases/latest") &&
+			!strings.Contains(r.URL.Path, "/releases/download") &&
+			r.URL.Query().Get("per_page") == "20":
 			w.Header().Set("Content-Type", "application/json")
+			// Pages beyond 1 return empty to signal end-of-list.
+			if r.URL.Query().Get("page") != "1" {
+				json.NewEncoder(w).Encode([]map[string]any{})
+				return
+			}
 			json.NewEncoder(w).Encode([]map[string]any{
 				{
 					"tag_name":   "gentle-engram v0.1.8",
@@ -875,6 +896,135 @@ func TestEngramChecksumVerification(t *testing.T) {
 				t.Errorf("error = %q, want it to contain %q", err.Error(), tt.wantErrSubstr)
 			}
 		})
+	}
+}
+
+// TestFetchLatestEngramVersionWithAssetsPaginates asserts that
+// fetchLatestEngramVersionWithAssets paginates beyond the first page when
+// page 1 contains only non-core tags (pi-v* / gentle-engram) and the valid
+// core vX.Y.Z release with a binary asset is on page 2.
+//
+// Regression test for the issue where per_page=20 capped discovery and returned
+// "no engram release with downloadable binary assets found" even though a valid
+// core release existed just beyond the window.
+func TestFetchLatestEngramVersionWithAssetsPaginates(t *testing.T) {
+	const binaryVersion = "1.17.0"
+
+	tarContent := buildFakeTarGz(t, "engram")
+	checksums := ""
+	for _, goarch := range []string{"amd64", "arm64"} {
+		checksums += makeChecksumsTxt(engramArchiveName(binaryVersion, "linux", goarch), tarContent)
+	}
+
+	// Track which pages were requested so we can assert pagination occurred.
+	var pagesRequested []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "releases/latest"):
+			// /latest points at a pi-v* tag so the single-release path falls
+			// through to fetchLatestEngramVersionWithAssets.
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"tag_name": "pi-v0.2.0",
+				"assets":   []any{},
+			})
+
+		case strings.Contains(r.URL.Path, "/repos/") && strings.Contains(r.URL.Path, "/releases") &&
+			!strings.Contains(r.URL.Path, "/releases/download") &&
+			!strings.Contains(r.URL.Path, "releases/latest"):
+			// Release list endpoint — track the page parameter.
+			page := r.URL.Query().Get("page")
+			if page == "" {
+				page = "1"
+			}
+			pagesRequested = append(pagesRequested, page)
+
+			w.Header().Set("Content-Type", "application/json")
+			switch page {
+			case "1":
+				// Page 1: only non-core tags — must NOT pick any of these.
+				json.NewEncoder(w).Encode([]map[string]any{
+					{
+						"tag_name":   "pi-v0.2.0",
+						"draft":      false,
+						"prerelease": false,
+						"assets":     []any{},
+					},
+					{
+						"tag_name":   "gentle-engram v0.2.0",
+						"draft":      false,
+						"prerelease": false,
+						"assets":     []any{},
+					},
+					{
+						"tag_name":   "pi-v0.1.9",
+						"draft":      false,
+						"prerelease": false,
+						"assets":     []any{},
+					},
+				})
+			case "2":
+				// Page 2: the real core engram release.
+				json.NewEncoder(w).Encode([]map[string]any{
+					{
+						"tag_name":   "v" + binaryVersion,
+						"draft":      false,
+						"prerelease": false,
+						"assets": []map[string]string{
+							{"name": "checksums.txt"},
+							{"name": "engram_" + binaryVersion + "_linux_amd64.tar.gz"},
+						},
+					},
+				})
+			default:
+				// Any further page is empty — signals end of releases.
+				json.NewEncoder(w).Encode([]map[string]any{})
+			}
+
+		case strings.HasSuffix(r.URL.Path, "checksums.txt"):
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(w, checksums)
+
+		case strings.Contains(r.URL.Path, "/releases/download/v"+binaryVersion+"/engram_"+binaryVersion+"_linux_"):
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.WriteHeader(http.StatusOK)
+			w.Write(tarContent)
+
+		default:
+			t.Fatalf("unexpected request: %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+	}))
+	defer server.Close()
+
+	origClient := engramHTTPClient
+	origBaseURL := engramGitHubBaseURL
+	engramHTTPClient = server.Client()
+	engramGitHubBaseURL = server.URL
+	t.Cleanup(func() {
+		engramHTTPClient = origClient
+		engramGitHubBaseURL = origBaseURL
+	})
+
+	tmpDir := t.TempDir()
+	origInstallDirFn := engramInstallDirFn
+	engramInstallDirFn = func(goos string) string { return tmpDir }
+	t.Cleanup(func() { engramInstallDirFn = origInstallDirFn })
+
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+	installedPath, err := DownloadLatestBinary(profile)
+	if err != nil {
+		t.Fatalf("DownloadLatestBinary() error = %v, want core engram v%s selected from page 2", err, binaryVersion)
+	}
+
+	if _, err := os.Stat(installedPath); err != nil {
+		t.Fatalf("stat installed binary: %v", err)
+	}
+
+	// Verify that pagination actually happened — both page 1 and page 2 must have been requested.
+	gotPages := strings.Join(pagesRequested, ",")
+	if !strings.Contains(gotPages, "1") || !strings.Contains(gotPages, "2") {
+		t.Errorf("expected pagination across pages 1 and 2, got pages requested: [%s]", gotPages)
 	}
 }
 

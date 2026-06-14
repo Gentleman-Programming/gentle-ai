@@ -260,60 +260,84 @@ func hasEngramBinaryAsset(assets []json.RawMessage) bool {
 	return false
 }
 
+// engramReleasePageSize is the number of releases requested per page when
+// paginating the GitHub Releases list. GitHub's maximum is 100; 20 is
+// sufficient for typical cadence while keeping response payloads small.
+const engramReleasePageSize = 20
+
+// engramReleaseMaxPages caps the pagination loop so it can never run forever.
+// At 20 releases/page this covers 100 releases — enough runway even when the
+// Gentleman-Programming/engram repo publishes many pi-v*/gentle-engram entries
+// between core vX.Y.Z releases.
+const engramReleaseMaxPages = 5
+
 func fetchLatestEngramVersionWithAssets(token string) (string, int, error) {
-	apiURL := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=20",
-		engramAPIBaseURL(), engramOwner, engramRepo)
+	lastStatus := 0
 
-	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
-	if err != nil {
-		return "", 0, fmt.Errorf("build releases request: %w", err)
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
+	for page := 1; page <= engramReleaseMaxPages; page++ {
+		apiURL := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=%d&page=%d",
+			engramAPIBaseURL(), engramOwner, engramRepo, engramReleasePageSize, page)
 
-	resp, err := engramHTTPClient.Do(req)
-	if err != nil {
-		return "", 0, fmt.Errorf("call GitHub releases API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", resp.StatusCode, fmt.Errorf("GitHub releases API returned HTTP %d", resp.StatusCode)
-	}
-
-	var releases []struct {
-		TagName    string `json:"tag_name"`
-		Draft      bool   `json:"draft"`
-		Prerelease bool   `json:"prerelease"`
-		Assets     []struct {
-			Name string `json:"name"`
-		} `json:"assets"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-		return "", resp.StatusCode, fmt.Errorf("decode releases JSON: %w", err)
-	}
-
-	for _, release := range releases {
-		if release.Draft || release.Prerelease || len(release.Assets) == 0 {
-			continue
+		req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+		if err != nil {
+			return "", 0, fmt.Errorf("build releases request: %w", err)
 		}
-		// Skip tags that don't match the core engram pattern (e.g. gentle-engram/pi-v* tags).
-		if !engramCoreTagRE.MatchString(release.TagName) {
-			continue
+		req.Header.Set("Accept", "application/vnd.github+json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
 		}
-		for _, asset := range release.Assets {
-			if strings.HasPrefix(asset.Name, engramRepo+"_") {
-				version := strings.TrimPrefix(release.TagName, "v")
-				if version != "" {
-					return version, resp.StatusCode, nil
+
+		resp, err := engramHTTPClient.Do(req)
+		if err != nil {
+			return "", lastStatus, fmt.Errorf("call GitHub releases API: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			status := resp.StatusCode
+			resp.Body.Close()
+			return "", status, fmt.Errorf("GitHub releases API returned HTTP %d", status)
+		}
+		lastStatus = resp.StatusCode
+
+		var releases []struct {
+			TagName    string `json:"tag_name"`
+			Draft      bool   `json:"draft"`
+			Prerelease bool   `json:"prerelease"`
+			Assets     []struct {
+				Name string `json:"name"`
+			} `json:"assets"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+			resp.Body.Close()
+			return "", lastStatus, fmt.Errorf("decode releases JSON: %w", err)
+		}
+		resp.Body.Close()
+
+		// An empty page means GitHub has no more releases — stop early.
+		if len(releases) == 0 {
+			break
+		}
+
+		for _, release := range releases {
+			if release.Draft || release.Prerelease || len(release.Assets) == 0 {
+				continue
+			}
+			// Skip tags that don't match the core engram pattern (e.g. gentle-engram/pi-v* tags).
+			if !engramCoreTagRE.MatchString(release.TagName) {
+				continue
+			}
+			for _, asset := range release.Assets {
+				if strings.HasPrefix(asset.Name, engramRepo+"_") {
+					version := strings.TrimPrefix(release.TagName, "v")
+					if version != "" {
+						return version, lastStatus, nil
+					}
 				}
 			}
 		}
 	}
 
-	return "", resp.StatusCode, fmt.Errorf("no engram release with downloadable binary assets found")
+	return "", lastStatus, fmt.Errorf("no engram release with downloadable binary assets found")
 }
 
 // githubToken returns a GitHub API token from the environment, if available.
