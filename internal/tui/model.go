@@ -34,6 +34,10 @@ import (
 // Package-level var so tests can inject a deterministic clock.
 var tuiNowFn = time.Now
 
+// advisoryFetchFn is the function used to fetch the advisory manifest.
+// Package-level var so tests can override without network calls.
+var advisoryFetchFn = update.FetchAdvisory
+
 // osStatModelCache is a package-level variable so tests can override it to
 // simulate a missing or present OpenCode model cache file.
 var osStatModelCache = os.Stat
@@ -157,6 +161,12 @@ type BackupRestoreMsg struct {
 // UpdateCheckResultMsg is sent when the background update check completes.
 type UpdateCheckResultMsg struct {
 	Results []update.UpdateResult
+}
+
+// AdvisoryMsg is sent when the background advisory manifest fetch completes.
+// Advisory is the zero value (Advisory{}) when there is no message to display.
+type AdvisoryMsg struct {
+	Advisory update.Advisory
 }
 
 // UpgradeDoneMsg is sent when the upgrade operation completes.
@@ -385,6 +395,11 @@ type Model struct {
 	// UpdateCheckDone is true once the background update check has completed.
 	UpdateCheckDone bool
 
+	// AdvisoryMessage holds the informational text from the advisory manifest
+	// fetch, when a non-empty message was returned. Empty string means no
+	// advisory to display. Set asynchronously via AdvisoryMsg.
+	AdvisoryMessage string
+
 	// pipelineRunning tracks whether the pipeline goroutine is active.
 	pipelineRunning bool
 
@@ -609,7 +624,7 @@ func (m Model) Init() tea.Cmd {
 	profile := m.Detection.System.Profile
 	home := homeDir()
 
-	return func() tea.Msg {
+	updateCmd := func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		results := update.CheckAllWithCooldown(ctx, version, profile, home, update.UpdateCheckTTL,
@@ -618,6 +633,20 @@ func (m Model) Init() tea.Cmd {
 		)
 		return UpdateCheckResultMsg{Results: results}
 	}
+
+	// Fetch the advisory manifest concurrently with the update check.
+	// advisoryFetchFn is a package-level var so tests can override it.
+	// The fetch is fully non-blocking: it runs in its own goroutine and
+	// delivers an AdvisoryMsg when done. Zero latency is added to TUI launch.
+	advisoryCmd := func() tea.Msg {
+		a, ok := advisoryFetchFn(context.Background())
+		if !ok {
+			return AdvisoryMsg{}
+		}
+		return AdvisoryMsg{Advisory: a}
+	}
+
+	return tea.Batch(updateCmd, advisoryCmd)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -693,6 +722,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case UpdateCheckResultMsg:
 		m.UpdateResults = msg.Results
 		m.UpdateCheckDone = true
+		return m, nil
+	case AdvisoryMsg:
+		// Store the advisory message for display on the Welcome screen.
+		// Empty Advisory.Message (no advisory or fetch failed) is a no-op.
+		m.AdvisoryMessage = msg.Advisory.Message
 		return m, nil
 	case UpgradeDoneMsg:
 		m.OperationRunning = false
@@ -860,6 +894,15 @@ func (m Model) View() string {
 		var banner string
 		if m.UpdateCheckDone && update.HasUpdates(m.UpdateResults) {
 			banner = "Updates available: " + update.UpdateSummaryLine(m.UpdateResults)
+		}
+		// Append advisory message below the update banner when present.
+		// The advisory is purely informational and never replaces or blocks
+		// any other launch behavior.
+		if m.AdvisoryMessage != "" {
+			if banner != "" {
+				banner += "\n"
+			}
+			banner += "Advisory: " + m.AdvisoryMessage
 		}
 		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
 	case ScreenUpgrade:
