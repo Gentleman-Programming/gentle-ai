@@ -270,28 +270,56 @@ func TestEffectiveMethod_NonGentleAIToolsOnWindowsUseBinary(t *testing.T) {
 
 func TestEffectiveMethod(t *testing.T) {
 	tests := []struct {
-		name    string
-		tool    update.ToolInfo
-		profile system.PlatformProfile
-		want    update.InstallMethod
+		name        string
+		tool        update.ToolInfo
+		profile     system.PlatformProfile
+		brewManaged bool // simulated: is the tool's binary under a brew prefix?
+		want        update.InstallMethod
 	}{
 		{
-			name:    "brew profile overrides go-install",
-			tool:    update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallBrew,
+			name:        "brew-managed tool overrides go-install",
+			tool:        update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
+			profile:     system.PlatformProfile{PackageManager: "brew"},
+			brewManaged: true,
+			want:        update.InstallBrew,
 		},
 		{
-			name:    "brew profile overrides binary",
-			tool:    update.ToolInfo{Name: "gga", InstallMethod: update.InstallBinary},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallBrew,
+			name:        "brew-managed tool overrides binary",
+			tool:        update.ToolInfo{Name: "gga", InstallMethod: update.InstallBinary},
+			profile:     system.PlatformProfile{PackageManager: "brew"},
+			brewManaged: true,
+			want:        update.InstallBrew,
 		},
 		{
-			name:    "brew profile overrides script",
-			tool:    update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallBrew,
+			name:        "brew-managed tool overrides script",
+			tool:        update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
+			profile:     system.PlatformProfile{PackageManager: "brew"},
+			brewManaged: true,
+			want:        update.InstallBrew,
+		},
+		// Regression: Homebrew is present on the system but the tool was installed
+		// via install.sh into ~/.local/bin. Routing to brew would fail with
+		// "Error: <tap>/<tool> not installed"; fall through to the real method.
+		{
+			name:        "brew present but tool not brew-managed → declared binary",
+			tool:        update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
+			profile:     system.PlatformProfile{PackageManager: "brew"},
+			brewManaged: false,
+			want:        update.InstallBinary,
+		},
+		{
+			name:        "brew present but tool not brew-managed → declared script",
+			tool:        update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
+			profile:     system.PlatformProfile{PackageManager: "brew"},
+			brewManaged: false,
+			want:        update.InstallScript,
+		},
+		{
+			name:        "brew present but tool not brew-managed → go-install when go available",
+			tool:        update.ToolInfo{Name: "engram", InstallMethod: update.InstallBinary, GoImportPath: "github.com/Gentleman-Programming/engram/cmd/engram"},
+			profile:     system.PlatformProfile{PackageManager: "brew", GoAvailable: true},
+			brewManaged: false,
+			want:        update.InstallGoInstall,
 		},
 		{
 			name:    "apt profile respects declared method (go-install)",
@@ -312,17 +340,19 @@ func TestEffectiveMethod(t *testing.T) {
 			want:    update.InstallScript,
 		},
 		{
-			name:    "brew profile does not override OpenCode plugin method",
-			tool:    update.ToolInfo{Name: "opencode-subagent-statusline", InstallMethod: update.InstallOpenCodePlugin, NpmPackage: "opencode-subagent-statusline"},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallOpenCodePlugin,
+			name:        "brew profile does not override OpenCode plugin method",
+			tool:        update.ToolInfo{Name: "opencode-subagent-statusline", InstallMethod: update.InstallOpenCodePlugin, NpmPackage: "opencode-subagent-statusline"},
+			profile:     system.PlatformProfile{PackageManager: "brew"},
+			brewManaged: true,
+			want:        update.InstallOpenCodePlugin,
 		},
 		// Auto-detect order: brew → go-install → binary (issue #246).
 		{
-			name:    "auto-detect: brew available → brew wins regardless of GoImportPath",
-			tool:    update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: "github.com/example/mytool/cmd/mytool"},
-			profile: system.PlatformProfile{PackageManager: "brew", GoAvailable: true},
-			want:    update.InstallBrew,
+			name:        "auto-detect: brew-managed → brew wins regardless of GoImportPath",
+			tool:        update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: "github.com/example/mytool/cmd/mytool"},
+			profile:     system.PlatformProfile{PackageManager: "brew", GoAvailable: true},
+			brewManaged: true,
+			want:        update.InstallBrew,
 		},
 		{
 			name:    "auto-detect: brew missing + go available + GoImportPath set → go-install",
@@ -344,13 +374,74 @@ func TestEffectiveMethod(t *testing.T) {
 		},
 	}
 
+	origResolver := brewBinaryResolver
+	t.Cleanup(func() { brewBinaryResolver = origResolver })
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.brewManaged {
+				brewBinaryResolver = func(string) (string, bool) {
+					return "/home/linuxbrew/.linuxbrew/Cellar/" + tc.tool.Name + "/1.0.0/bin/" + tc.tool.Name, true
+				}
+			} else {
+				brewBinaryResolver = func(string) (string, bool) {
+					return "/home/user/.local/bin/" + tc.tool.Name, true
+				}
+			}
 			got := effectiveMethod(tc.tool, tc.profile)
 			if got != tc.want {
 				t.Errorf("effectiveMethod = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// --- TestPathUnderBrewPrefix ---
+
+func TestPathUnderBrewPrefix(t *testing.T) {
+	// Clear $HOMEBREW_PREFIX so the test is deterministic regardless of the host.
+	t.Setenv("HOMEBREW_PREFIX", "")
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "linuxbrew Cellar symlink target", path: "/home/linuxbrew/.linuxbrew/Cellar/engram/1.0.0/bin/engram", want: true},
+		{name: "apple silicon prefix bin", path: "/opt/homebrew/bin/gentle-ai", want: true},
+		{name: "intel mac Cellar", path: "/usr/local/Cellar/gga/2.8.0/bin/gga", want: true},
+		{name: "linuxbrew prefix bin", path: "/home/linuxbrew/.linuxbrew/bin/engram", want: true},
+		{name: "install.sh local bin is not brew", path: "/home/user/.local/bin/gentle-ai", want: false},
+		{name: "usr local bin without Cellar is not brew", path: "/usr/local/bin/engram", want: false},
+		{name: "go bin is not brew", path: "/home/user/go/bin/engram", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pathUnderBrewPrefix(tc.path); got != tc.want {
+				t.Errorf("pathUnderBrewPrefix(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+// --- TestPathUnderBrewPrefixHonorsEnv ---
+
+func TestPathUnderBrewPrefixHonorsEnv(t *testing.T) {
+	t.Setenv("HOMEBREW_PREFIX", "/custom/brew")
+	if !pathUnderBrewPrefix("/custom/brew/bin/engram") {
+		t.Errorf("expected path under $HOMEBREW_PREFIX to be detected as brew-managed")
+	}
+}
+
+// --- TestIsBrewManagedFalseWhenNotOnPath ---
+
+func TestIsBrewManagedFalseWhenNotOnPath(t *testing.T) {
+	origResolver := brewBinaryResolver
+	t.Cleanup(func() { brewBinaryResolver = origResolver })
+	brewBinaryResolver = func(string) (string, bool) { return "", false }
+	if isBrewManaged("engram") {
+		t.Errorf("isBrewManaged should be false when the tool is not on PATH")
 	}
 }
 

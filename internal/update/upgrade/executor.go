@@ -603,7 +603,11 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 // Priority order matches the documented install hierarchy: plugin → brew → Windows installer → go-install → declared method.
 //
 //  1. OpenCode plugins are always handled by their own method — never overridden.
-//  2. Brew-managed platforms always use brew regardless of the tool's declared method.
+//  2. Brew is used ONLY when the tool's binary is actually brew-managed. A system
+//     can have Homebrew present (PackageManager == "brew") while a tool was
+//     installed via install.sh into ~/.local/bin; routing such a tool to brew
+//     fails with "Error: <tap>/<tool> not installed". When the tool is not
+//     brew-managed we fall through to its real install method.
 //  3. gentle-ai on Windows uses the installer so the running binary can exit before replacement.
 //  4. When Go is available on PATH and the tool has a GoImportPath, go-install is
 //     preferred over a direct binary download.
@@ -612,7 +616,7 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 	if tool.InstallMethod == update.InstallOpenCodePlugin {
 		return update.InstallOpenCodePlugin
 	}
-	if profile.PackageManager == "brew" {
+	if profile.PackageManager == "brew" && isBrewManaged(tool.Name) {
 		return update.InstallBrew
 	}
 	// Use installer method for gentle-ai on Windows (launches PowerShell installer).
@@ -623,4 +627,74 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 		return update.InstallGoInstall
 	}
 	return tool.InstallMethod
+}
+
+// brewBinaryResolver resolves a tool's installed executable to an absolute,
+// symlink-resolved path. The bool is false when the tool is not found on PATH.
+// Package-level var for testability — swapped in tests to simulate brew-managed
+// vs install.sh-managed binaries without touching the real filesystem.
+var brewBinaryResolver = func(toolName string) (string, bool) {
+	path, err := lookPathCommand(toolName)
+	if err != nil || strings.TrimSpace(path) == "" {
+		return "", false
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil && strings.TrimSpace(resolved) != "" {
+		return resolved, true
+	}
+	return path, true
+}
+
+// isBrewManaged reports whether toolName resolves to a binary that lives under a
+// Homebrew prefix. This is the guard that distinguishes "Homebrew exists on the
+// system" from "this tool was actually installed by Homebrew".
+func isBrewManaged(toolName string) bool {
+	path, ok := brewBinaryResolver(toolName)
+	if !ok {
+		return false
+	}
+	return pathUnderBrewPrefix(path)
+}
+
+// pathUnderBrewPrefix reports whether an absolute binary path belongs to a
+// Homebrew installation. Homebrew links binaries from <prefix>/bin into
+// <prefix>/Cellar/<formula>/<version>/bin, so a symlink-resolved path contains a
+// "Cellar" segment. It also matches well-known prefixes and $HOMEBREW_PREFIX.
+func pathUnderBrewPrefix(path string) bool {
+	path = filepath.Clean(path)
+	if containsPathSegment(path, "Cellar") {
+		return true
+	}
+	for _, prefix := range brewPrefixes() {
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" {
+			continue
+		}
+		prefix = filepath.Clean(prefix)
+		if path == prefix || strings.HasPrefix(path, prefix+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// brewPrefixes returns candidate Homebrew prefixes. $HOMEBREW_PREFIX wins when
+// set; the defaults cover Apple Silicon and Linuxbrew. Intel macOS uses
+// /usr/local, which is too generic to list — those installs are matched by the
+// Cellar segment check in pathUnderBrewPrefix instead.
+func brewPrefixes() []string {
+	prefixes := make([]string, 0, 3)
+	if hp := strings.TrimSpace(os.Getenv("HOMEBREW_PREFIX")); hp != "" {
+		prefixes = append(prefixes, hp)
+	}
+	return append(prefixes, "/opt/homebrew", "/home/linuxbrew/.linuxbrew")
+}
+
+// containsPathSegment reports whether seg appears as a full path component.
+func containsPathSegment(path, seg string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if part == seg {
+			return true
+		}
+	}
+	return false
 }
