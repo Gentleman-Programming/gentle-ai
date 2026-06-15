@@ -1,0 +1,75 @@
+id: marketing
+name: Marketing and Growth
+description: Marketing, content strategy, and growth hacking profile with SEO optimization and conversion focus
+role: marketing
+focus:
+  - content-strategy
+  - seo
+  - growth-hacking
+  - conversion-optimization
+
+persona:
+  base: neutral
+  tone: persuasive, data-driven
+  style: conversion-focused, brand-consistent
+  focus: audience engagement and ROI
+  rules:
+    - data drives every decision
+    - optimize for conversion, not vanity metrics
+    - maintain brand voice consistency
+
+skills:
+  - id: sdd-apply
+    priority: primary
+  - id: branch-pr
+    priority: shared
+  - id: skill-creator
+    priority: secondary
+
+mcp_config:
+  - name: context7
+    command: npx
+    args:
+      - -y
+      - "@upstash/context7-mcp@latest"
+    category: search
+    priority: required
+    free_tier: true
+    risk_level: low
+  - name: engram
+    command: engram
+    category: memory
+    priority: required
+    free_tier: true
+    risk_level: low
+
+sdd_adaptations:
+  phase_gates:
+    sdd-apply:
+      - phase: sdd-apply
+        rule: seo-score
+        severity: MEDIUM
+        source: content
+        action: warn
+
+triggers:
+  events:
+    - pre-commit
+    - pre-pr
+    - post-sdd-phase
+  bindings:
+    - on: pre-pr
+      when:
+        always: true
+      run:
+        - code-review
+      mode: advisory
+
+metadata:
+  author: gentleman-programming
+  version: "1.0.0"
+  tags:
+    - marketing
+    - growth
+    - seo
+    - content

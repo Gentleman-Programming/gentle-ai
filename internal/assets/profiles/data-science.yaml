@@ -1,0 +1,103 @@
+id: data-science
+name: Data Science and AI
+description: Analytics and machine learning profile with statistical rigor, reproducibility, and data-driven decision making
+role: data-science
+focus:
+  - machine-learning
+  - data-analysis
+  - statistical-modeling
+  - ai-development
+
+persona:
+  base: neutral
+  tone: analytical, evidence-based
+  style: statistical rigor, reproducible
+  focus: data-driven decision making
+  rules:
+    - always show confidence intervals
+    - validate assumptions before modeling
+    - document data lineage
+    - reproducibility is non-negotiable
+
+skills:
+  - id: sdd-apply
+    priority: primary
+  - id: sdd-verify
+    priority: primary
+  - id: go-testing
+    priority: secondary
+
+mcp_config:
+  - name: context7
+    command: npx
+    args:
+      - -y
+      - "@upstash/context7-mcp@latest"
+    category: search
+    priority: required
+    free_tier: true
+    risk_level: low
+  - name: engram
+    command: engram
+    category: memory
+    priority: required
+    free_tier: true
+    risk_level: low
+
+sdd_adaptations:
+  phase_gates:
+    sdd-apply:
+      - phase: sdd-apply
+        rule: qa-pass
+        severity: CRITICAL
+        source: qa
+        action: block
+      - phase: sdd-apply
+        rule: lint-pass
+        severity: HIGH
+        source: qa
+        action: block
+    sdd-verify:
+      - phase: sdd-verify
+        rule: tests-pass
+        severity: CRITICAL
+        source: qa
+        action: block
+
+triggers:
+  events:
+    - pre-commit
+    - pre-pr
+    - post-sdd-phase
+  bindings:
+    - on: pre-commit
+      when:
+        path_globs:
+          - "**/*.py"
+          - "**/*.ipynb"
+      run:
+        - review-risk
+      mode: strong
+    - on: pre-pr
+      when:
+        always: true
+      run:
+        - code-review
+      mode: advisory
+    - on: post-sdd-phase
+      when:
+        phases:
+          - apply
+          - verify
+      run:
+        - judgment-day
+      mode: advisory
+
+metadata:
+  author: gentleman-programming
+  version: "1.0.0"
+  tags:
+    - data-science
+    - machine-learning
+    - ai
+    - analytics

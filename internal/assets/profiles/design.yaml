@@ -1,0 +1,90 @@
+id: design
+name: Design and Creative
+description: UI/UX and visual design profile with user-centered approach, accessibility, and design systems
+role: design
+focus:
+  - ui-ux
+  - visual-design
+  - accessibility
+  - design-systems
+
+persona:
+  base: neutral
+  tone: visual, system-thinking
+  style: user-centered, accessible
+  focus: usability and aesthetic consistency
+  rules:
+    - design for accessibility first
+    - consistency across components
+    - user research informs design decisions
+
+skills:
+  - id: sdd-apply
+    priority: primary
+  - id: sdd-design
+    priority: primary
+  - id: skill-creator
+    priority: secondary
+
+mcp_config:
+  - name: context7
+    command: npx
+    args:
+      - -y
+      - "@upstash/context7-mcp@latest"
+    category: search
+    priority: required
+    free_tier: true
+    risk_level: low
+  - name: engram
+    command: engram
+    category: memory
+    priority: required
+    free_tier: true
+    risk_level: low
+
+sdd_adaptations:
+  phase_gates:
+    sdd-design:
+      - phase: sdd-design
+        rule: design-system-check
+        severity: HIGH
+        source: design
+        action: warn
+    sdd-apply:
+      - phase: sdd-apply
+        rule: qa-pass
+        severity: CRITICAL
+        source: qa
+        action: block
+
+triggers:
+  events:
+    - pre-commit
+    - pre-pr
+    - post-sdd-phase
+  bindings:
+    - on: pre-commit
+      when:
+        path_globs:
+          - "**/*.tsx"
+          - "**/*.jsx"
+          - "**/*.css"
+      run:
+        - review-risk
+      mode: advisory
+    - on: pre-pr
+      when:
+        always: true
+      run:
+        - code-review
+      mode: advisory
+
+metadata:
+  author: gentleman-programming
+  version: "1.0.0"
+  tags:
+    - design
+    - ui-ux
+    - accessibility
+    - design-systems

@@ -1,0 +1,96 @@
+id: education
+name: Education and Research
+description: Academic and teaching profile with Socratic method, constructivism, and scaffolded learning approach
+role: education
+focus:
+  - teaching
+  - mentoring
+  - curriculum-design
+  - research
+
+persona:
+  base: gentleman
+  tone: Socratic, concept-first
+  style: constructivism, scaffolded learning
+  focus: deep understanding over memorization
+  rules:
+    - ask before telling
+    - use analogies for complex concepts
+    - scaffold from concrete to abstract
+    - encourage curiosity and exploration
+
+skills:
+  - id: sdd-apply
+    priority: primary
+  - id: sdd-verify
+    priority: primary
+  - id: sdd-explore
+    priority: secondary
+
+mcp_config:
+  - name: context7
+    command: npx
+    args:
+      - -y
+      - "@upstash/context7-mcp@latest"
+    category: search
+    priority: required
+    free_tier: true
+    risk_level: low
+  - name: engram
+    command: engram
+    category: memory
+    priority: required
+    free_tier: true
+    risk_level: low
+
+sdd_adaptations:
+  phase_gates:
+    sdd-apply:
+      - phase: sdd-apply
+        rule: qa-pass
+        severity: CRITICAL
+        source: qa
+        action: block
+    sdd-verify:
+      - phase: sdd-verify
+        rule: tests-pass
+        severity: CRITICAL
+        source: qa
+        action: block
+
+triggers:
+  events:
+    - pre-commit
+    - pre-pr
+    - post-sdd-phase
+  bindings:
+    - on: pre-commit
+      when:
+        path_globs:
+          - "**/*.md"
+      run:
+        - review-risk
+      mode: advisory
+    - on: pre-pr
+      when:
+        always: true
+      run:
+        - code-review
+      mode: advisory
+    - on: post-sdd-phase
+      when:
+        phases:
+          - apply
+      run:
+        - judgment-day
+      mode: advisory
+
+metadata:
+  author: gentleman-programming
+  version: "1.0.0"
+  tags:
+    - education
+    - teaching
+    - research
+    - mentoring

@@ -1,0 +1,126 @@
+id: cybersecurity
+name: Cybersecurity Researcher
+description: Offensive and defensive security profile with pentest tools, vulnerability assessment, and threat modeling
+role: cybersecurity
+focus:
+  - pentesting
+  - vulnerability-assessment
+  - threat-modeling
+  - malware-analysis
+
+persona:
+  base: gentleman
+  tone: adversarial, security-first
+  style: evidence-based, methodical
+  focus: attack vectors and threat models
+  rules:
+    - always verify before exploiting
+    - document all findings
+    - follow responsible disclosure
+    - assume breach mentality
+
+skills:
+  - id: sdd-apply
+    priority: primary
+  - id: sdd-verify
+    priority: primary
+  - id: pentest-methodology
+    priority: primary
+  - id: vuln-classes
+    priority: secondary
+
+mcp_config:
+  - name: nuclei-mcp
+    command: npx
+    args:
+      - nuclei-mcp
+    category: dast
+    priority: required
+    quality_score: 92
+    free_tier: true
+    risk_level: low
+  - name: semgrep-mcp
+    command: npx
+    args:
+      - semgrep-mcp
+    category: sast
+    priority: required
+    quality_score: 85
+    free_tier: true
+    risk_level: low
+  - name: engram
+    command: engram
+    category: memory
+    priority: required
+    free_tier: true
+    risk_level: low
+
+sdd_adaptations:
+  phase_gates:
+    sdd-design:
+      - phase: sdd-design
+        rule: stride-threat-model
+        severity: CRITICAL
+        source: security
+        action: block
+    sdd-apply:
+      - phase: sdd-apply
+        rule: sast-scan
+        severity: CRITICAL
+        source: security
+        action: block
+      - phase: sdd-apply
+        rule: sca-scan
+        severity: CRITICAL
+        source: security
+        action: block
+      - phase: sdd-apply
+        rule: secrets-detection
+        severity: CRITICAL
+        source: security
+        action: block
+    sdd-verify:
+      - phase: sdd-verify
+        rule: dast-scan
+        severity: HIGH
+        source: security
+        action: block
+
+triggers:
+  events:
+    - pre-commit
+    - pre-pr
+    - post-sdd-phase
+  bindings:
+    - on: pre-commit
+      when:
+        path_globs:
+          - "**/*.go"
+          - "**/*.py"
+      run:
+        - review-risk
+      mode: strong
+    - on: post-sdd-phase
+      when:
+        phases:
+          - design
+          - apply
+          - verify
+      run:
+        - judgment-day
+      mode: strong
+    - on: pre-pr
+      when:
+        always: true
+      run:
+        - code-review
+      mode: advisory
+
+metadata:
+  author: gentleman-programming
+  version: "1.0.0"
+  tags:
+    - cybersecurity
+    - pentesting
+    - security
+    - owasp
