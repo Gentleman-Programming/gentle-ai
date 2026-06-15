@@ -194,6 +194,22 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 
 // Write persists the full install state to disk under the given home directory.
 // It creates the .gentle-ai directory if it does not already exist.
+//
+// The write is atomic: the bytes are written to a temporary file in the SAME
+// directory as the target and then os.Rename'd onto the final path. Renaming
+// within one directory is atomic on POSIX (and an atomic replace on Windows),
+// so a concurrent reader can never observe a torn/partial file and misclassify
+// it as ErrCorruptState. On any error before the rename the temp file is removed.
+//
+// This guarantees atomic visibility, not crash durability: the bytes are not
+// fsync'd, so a power loss right after Rename may lose the write (acceptable for
+// non-critical install state). If the process is hard-killed (SIGKILL, crash)
+// between CreateTemp and Rename, a "state-*.json.tmp" orphan may be left behind;
+// these are tiny and harmless, and we deliberately do not sweep them here to
+// avoid racing a concurrent writer's in-flight temp. On Windows, the rename
+// replace can intermittently fail (ERROR_SHARING_VIOLATION) if an antivirus or
+// indexer transiently opens the target; Write callers treat that error as
+// non-fatal and retry on the next launch.
 func Write(homeDir string, s InstallState) error {
 	dir := filepath.Join(homeDir, stateDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -203,5 +219,45 @@ func Write(homeDir string, s InstallState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(Path(homeDir), append(data, '\n'), 0o644)
+	data = append(data, '\n')
+
+	target := Path(homeDir)
+
+	// Create the temp file in the SAME directory as the target so that the
+	// subsequent os.Rename is a same-filesystem (atomic) operation rather than a
+	// cross-device move.
+	tmp, err := os.CreateTemp(dir, "state-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+
+	// On any failure before a successful rename, remove the temp file so we do
+	// not leak partial artifacts into the state directory.
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}
+
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	// CreateTemp defaults to 0o600; force 0o644 before the rename to match the
+	// previous nominal os.WriteFile mode. Note this sets 0o644 regardless of
+	// umask, whereas the old os.WriteFile was umask-subject (e.g. 0o600 under
+	// umask 077); state.json holds no secrets, so 0o644 is intended here.
+	if err := tmp.Chmod(0o644); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, target); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }

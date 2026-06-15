@@ -106,6 +106,54 @@ func TestWriteAndRead(t *testing.T) {
 	}
 }
 
+// TestWriteIsAtomic verifies that Write persists atomically: the value round-trips
+// through Read, the final state file has mode 0o644, and no leftover temp file is
+// left behind in the state directory after a successful write. Atomicity (write to
+// a temp file in the same directory, then os.Rename onto the target) prevents a
+// concurrent reader from observing a torn/partial file and misclassifying it as
+// ErrCorruptState. The rename itself is hard to race deterministically, so this
+// test asserts the observable structural guarantees rather than a timing race.
+func TestWriteIsAtomic(t *testing.T) {
+	home := t.TempDir()
+	want := InstallState{InstalledAgents: []string{"claude-code", "opencode"}}
+
+	if err := Write(home, want); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	// 1) Round-trip: the written state reads back intact.
+	got, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if !reflect.DeepEqual(got.InstalledAgents, want.InstalledAgents) {
+		t.Errorf("InstalledAgents = %v, want %v", got.InstalledAgents, want.InstalledAgents)
+	}
+
+	// 2) Final file mode must be 0o644 (CreateTemp defaults to 0o600, so the
+	//    implementation must chmod the temp/final file to 0o644).
+	info, err := os.Stat(Path(home))
+	if err != nil {
+		t.Fatalf("Stat(state file) error = %v", err)
+	}
+	if got, want := info.Mode().Perm(), os.FileMode(0o644); got != want {
+		t.Errorf("state file mode = %o, want %o", got, want)
+	}
+
+	// 3) No leftover temp file may remain in the state directory after success.
+	dir := filepath.Join(home, stateDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", dir, err)
+	}
+	for _, e := range entries {
+		if e.Name() == stateFile {
+			continue
+		}
+		t.Errorf("unexpected leftover file in state dir after Write: %q", e.Name())
+	}
+}
+
 // TestPersonaRoundTrip verifies the Persona field round-trips through
 // Write/Read. Both `gentle-ai install` (CLI in run.go) and the TUI app
 // (internal/app/app.go) write this field after a successful install so that

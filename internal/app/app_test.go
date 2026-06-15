@@ -1767,12 +1767,17 @@ func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
 		t.Fatalf("state.Write() error = %v", err)
 	}
 
-	// Make the state file read-only so state.Write (the clear-PendingSync write) fails.
-	stateFilePath := state.Path(home)
-	if err := os.Chmod(stateFilePath, 0o444); err != nil {
+	// Make the state DIRECTORY read-only so the clear-PendingSync state.Write
+	// fails. state.Write is atomic (it writes a temp file in this directory and
+	// renames it over the target), so a read-only target file would NOT fail the
+	// write — only a read-only directory blocks the temp-file creation. The state
+	// file itself stays readable, so the earlier state.Read still succeeds and the
+	// PendingSync=true branch is reached.
+	stateDirPath := filepath.Dir(state.Path(home))
+	if err := os.Chmod(stateDirPath, 0o555); err != nil {
 		t.Fatalf("Chmod: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(stateFilePath, 0o644) })
+	t.Cleanup(func() { _ = os.Chmod(stateDirPath, 0o755) })
 
 	origSelf := selfUpdateFn
 	origEnsure := ensureCurrentOSSupported
