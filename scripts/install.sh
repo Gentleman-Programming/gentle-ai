@@ -270,16 +270,7 @@ install_go() {
     local go_package="github.com/${owner_lc}/${GITHUB_REPO}/cmd/${BINARY_NAME}@latest"
 
     info "Running: go install ${go_package}"
-    if [ "${CHANNEL}" = "beta" ]; then
-        prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai
-        prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai
-        prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai
-        export GONOSUMDB GOPRIVATE GONOPROXY
-
-        if ! go install "$go_package"; then
-            fatal "Failed to install via go install. Make sure Go is properly configured."
-        fi
-    elif ! go install "$go_package"; then
+    if ! go install "$go_package"; then
         fatal "Failed to install via go install. Make sure Go is properly configured."
     fi
 

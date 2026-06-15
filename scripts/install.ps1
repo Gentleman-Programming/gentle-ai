@@ -141,12 +141,6 @@ function Install-ViaGo {
     $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/cmd/$BINARY_NAME@latest"
     Write-Info "Running: go install $goPackage"
 
-    if ($Channel -eq "beta") {
-        Add-GoEnvPattern -Name "GONOSUMDB" -Pattern "github.com/gentleman-programming/gentle-ai"
-        Add-GoEnvPattern -Name "GOPRIVATE" -Pattern "github.com/gentleman-programming/gentle-ai"
-        Add-GoEnvPattern -Name "GONOPROXY" -Pattern "github.com/gentleman-programming/gentle-ai"
-    }
-
     & go install $goPackage
     if ($LASTEXITCODE -ne 0) {
         Stop-WithError "Failed to install via go install. Make sure Go is properly configured."
