@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -264,43 +265,125 @@ func TestCheckAllWithCooldown_FutureTimestampAlwaysChecks(t *testing.T) {
 	}
 }
 
-// TestCheckAllWithCooldown_NonMissingReadErrorSkipsWrite verifies that when the
-// state file exists but produces a non-missing read error (e.g. corrupt JSON),
-// the timestamp write is skipped — existing state must never be clobbered.
-func TestCheckAllWithCooldown_NonMissingReadErrorSkipsWrite(t *testing.T) {
+// TestCheckAllWithCooldown_CorruptStateResetsAndPersists verifies that when the
+// write-side re-read fails with state.ErrCorruptState (a decode failure — the
+// persisted data is already unrecoverable), the cooldown still records by
+// resetting to a fresh InstallState and writing the timestamp. Without this the
+// remote update check would fire on EVERY launch until the file is repaired.
+//
+// Both corrupt shapes route through state.Read's ErrCorruptState wrapping:
+//   - structurally-broken JSON ("{ not valid")
+//   - a malformed RFC3339 timestamp in the *time.Time field
+func TestCheckAllWithCooldown_CorruptStateResetsAndPersists(t *testing.T) {
+	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew"}
+	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		blob string
+	}{
+		{name: "structurally broken json", blob: "{ not valid"},
+		{name: "malformed timestamp field", blob: `{"last_update_check":"not-a-timestamp"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+
+			// Seed a corrupt state.json that state.Read classifies as
+			// ErrCorruptState (verified below to guard against false positives).
+			stateDir := filepath.Join(home, ".gentle-ai")
+			if err := os.MkdirAll(stateDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+			if err := os.WriteFile(state.Path(home), []byte(tt.blob), 0o644); err != nil {
+				t.Fatalf("WriteFile corrupt: %v", err)
+			}
+			if _, err := state.Read(home); !errors.Is(err, state.ErrCorruptState) {
+				t.Fatalf("precondition: state.Read(%q) = %v, want errors.Is(..., ErrCorruptState)", tt.blob, err)
+			}
+
+			stubCheckAll := func(_ context.Context, _ string, _ system.PlatformProfile) []UpdateResult {
+				// Successful result → checkSucceeded is true → write attempted.
+				return []UpdateResult{{Tool: ToolInfo{Name: "gentle-ai"}, Status: UpToDate}}
+			}
+
+			CheckAllWithCooldown(context.Background(), "1.0.0", profile, home, 6*time.Hour,
+				func() time.Time { return now },
+				stubCheckAll,
+			)
+
+			// After the run the corrupt file must have been reset to a valid,
+			// decodable state.json whose LastUpdateCheck equals the injected now.
+			updated, err := state.Read(home)
+			if err != nil {
+				t.Fatalf("state.Read() after cooldown error = %v, want nil (corrupt file should be reset)", err)
+			}
+			if updated.LastUpdateCheck == nil || !updated.LastUpdateCheck.Equal(now) {
+				t.Errorf("LastUpdateCheck after corrupt reset = %v, want %v (timestamp must persist)", updated.LastUpdateCheck, now)
+			}
+		})
+	}
+}
+
+// TestCheckAllWithCooldown_UnreadableStateSkipsWrite verifies the conservative
+// branch: when the write-side re-read fails with a genuine IO/permission error
+// (NEITHER os.ErrNotExist NOR state.ErrCorruptState), the file's bytes may still
+// be a valid state.json that is merely unreadable this once, so the timestamp
+// write is skipped to avoid clobbering recoverable data.
+//
+// The unreadable file is simulated with mode 0o000. This is not portable as
+// root (root bypasses permission bits), so the test skips when running as root
+// rather than asserting flakily.
+func TestCheckAllWithCooldown_UnreadableStateSkipsWrite(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses file permission bits; cannot simulate an unreadable state.json")
+	}
+
 	home := t.TempDir()
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew"}
 	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 
-	// Write a corrupt (non-parseable) state file so state.Read returns a
-	// non-missing error (file exists but JSON is invalid).
+	// Seed a VALID state.json, then strip read permission so state.Read returns
+	// an unwrapped os.ErrPermission (the bytes are possibly-valid-but-unreadable).
 	stateDir := filepath.Join(home, ".gentle-ai")
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	corruptPath := filepath.Join(stateDir, "state.json")
-	if err := os.WriteFile(corruptPath, []byte("NOT VALID JSON"), 0o644); err != nil {
-		t.Fatalf("WriteFile corrupt: %v", err)
+	original := []byte(`{"installed_agents":["claude-code"]}` + "\n")
+	statePath := state.Path(home)
+	if err := os.WriteFile(statePath, original, 0o644); err != nil {
+		t.Fatalf("WriteFile valid: %v", err)
+	}
+	if err := os.Chmod(statePath, 0o000); err != nil {
+		t.Fatalf("Chmod 0o000: %v", err)
+	}
+	// Restore perms so t.TempDir cleanup can remove the file.
+	t.Cleanup(func() { _ = os.Chmod(statePath, 0o644) })
+
+	// Guard the precondition: the read error must be neither NotExist nor Corrupt.
+	if _, err := state.Read(home); errors.Is(err, os.ErrNotExist) || errors.Is(err, state.ErrCorruptState) {
+		t.Skipf("could not simulate an unreadable-only state.json (read err = %v)", err)
 	}
 
 	stubCheckAll := func(_ context.Context, _ string, _ system.PlatformProfile) []UpdateResult {
-		// Return a successful result — checkSucceeded will be true.
 		return []UpdateResult{{Tool: ToolInfo{Name: "gentle-ai"}, Status: UpToDate}}
 	}
 
-	// stale first read: corrupt file → read error → always-check (skip cooldown).
-	// After check, re-read for write: corrupt → non-missing error → must skip write.
 	CheckAllWithCooldown(context.Background(), "1.0.0", profile, home, 6*time.Hour,
 		func() time.Time { return now },
 		stubCheckAll,
 	)
 
-	// The corrupt file must still be corrupt — not overwritten with valid JSON.
-	data, err := os.ReadFile(corruptPath)
+	// The unreadable file must NOT have been overwritten: restore read access
+	// and confirm the original bytes survive untouched.
+	if err := os.Chmod(statePath, 0o644); err != nil {
+		t.Fatalf("Chmod restore: %v", err)
+	}
+	data, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatalf("ReadFile after cooldown: %v", err)
 	}
-	if string(data) != "NOT VALID JSON" {
-		t.Errorf("state file was overwritten; got %q, want original corrupt content", string(data))
+	if string(data) != string(original) {
+		t.Errorf("unreadable state file was overwritten; got %q, want original %q", string(data), string(original))
 	}
 }

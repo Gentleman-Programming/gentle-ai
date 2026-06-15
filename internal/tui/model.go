@@ -2774,15 +2774,24 @@ func (m Model) startUpgradeSync() tea.Cmd {
 			// Set PendingSync=true so the new binary runs sync on next launch
 			// instead of silently skipping it. Non-fatal if state write fails.
 			//
-			// No-clobber guard: only fall back to a fresh InstallState{} when
-			// the file is genuinely missing (ErrNotExist). Any other read error
-			// (e.g. corrupt JSON, permission denied) means an existing file is
-			// present — skip writing to avoid dropping installed_agents, model
-			// assignments, and other persisted fields.
+			// Resettable-state guard (same contract as internal/app/selfupdate.go's
+			// deferred-sync block, internal/update/cooldown.go, and
+			// internal/cli/channel_command.go):
+			//   - Missing (os.ErrNotExist) or corrupt (state.ErrCorruptState): start
+			//     fresh and persist PendingSync. state.Read already returned a zero
+			//     InstallState on error, and a corrupt file's fields are already
+			//     undecodable and lost, so resetting loses nothing recoverable.
+			//   - Any OTHER read error (genuine IO/permission failure): the bytes may
+			//     still be a valid state.json that is merely unreadable this once — do
+			//     not overwrite it and risk dropping installed_agents, model
+			//     assignments, etc.
+			//   - Valid state (readErr == nil): other fields are preserved; only
+			//     PendingSync flips to true.
 			if h := homeDir(); h != "" {
 				s, readErr := state.Read(h)
-				if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-					// File exists but unreadable/corrupt — skip to avoid clobber.
+				if readErr != nil && !errors.Is(readErr, os.ErrNotExist) && !errors.Is(readErr, state.ErrCorruptState) {
+					// Genuine IO/permission error — skip this round to avoid
+					// clobbering a possibly-valid-but-unreadable file.
 				} else {
 					s.PendingSync = true
 					_ = state.Write(h, s)

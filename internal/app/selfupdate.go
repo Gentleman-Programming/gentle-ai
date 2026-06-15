@@ -171,15 +171,34 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 	// previous "restart and sync manually" skip path. Failure to write state is
 	// non-fatal — the user can re-run sync explicitly.
 	//
-	// No-clobber guard: only fall back to a fresh InstallState{} when the file
-	// is genuinely missing (ErrNotExist). Any other read error (e.g. corrupt
-	// JSON, permission denied) means an existing file is present — do not
-	// overwrite it and risk dropping unrelated persisted fields.
+	// Note: CheckAllWithCooldown ran earlier in this flow and normally heals a
+	// corrupt state file first (it resets-and-persists LastUpdateCheck on
+	// ErrCorruptState). So reaching this branch with a corrupt file is rare — it
+	// only happens if that cooldown write failed, or the file was corrupted after
+	// the cooldown check. The corrupt handling below is therefore defense-in-depth,
+	// not the primary heal path; do not remove it.
+	//
+	// Resettable-state guard — this contract is shared by the deferred-sync write
+	// sites (this block and internal/tui/model.go) and the cooldown writer in
+	// internal/update/cooldown.go (LastUpdateCheck). It is NOT a codebase-wide
+	// policy: the install/assignment/uninstall sites
+	// (internal/app/app.go persistAssignments, internal/cli/run.go
+	// mergeExplicitAgentInstallState, internal/components/uninstall/service.go)
+	// deliberately PRESERVE on corrupt to avoid silently dropping installed_agents.
+	//   - Missing (os.ErrNotExist) or corrupt (state.ErrCorruptState): start fresh
+	//     and persist PendingSync. state.Read already returned a zero InstallState
+	//     on error, and a corrupt file's fields are already undecodable and lost,
+	//     so resetting loses nothing recoverable.
+	//   - Any OTHER read error (genuine IO/permission failure): the bytes may still
+	//     be a valid state.json that is merely unreadable this once — do not
+	//     overwrite it and risk dropping installed_agents, model assignments, etc.
+	//   - Valid state (readErr == nil): other fields are preserved; only PendingSync
+	//     flips to true.
 	if homeDir != "" {
 		s, readErr := state.Read(homeDir)
-		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-			// File exists but is unreadable/corrupt — skip this round to avoid
-			// clobbering installed_agents, model assignments, etc.
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) && !errors.Is(readErr, state.ErrCorruptState) {
+			// Genuine IO/permission error — skip this round to avoid clobbering a
+			// possibly-valid-but-unreadable file.
 		} else {
 			s.PendingSync = true
 			_ = state.Write(homeDir, s)

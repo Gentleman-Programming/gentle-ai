@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -697,10 +698,110 @@ func TestSelfUpdate_DoesNotSetPendingSyncOnFailure(t *testing.T) {
 	}
 }
 
-// TestSelfUpdate_NoClobberOnCorruptStateFile verifies that when state.Read fails
-// with a non-ErrNotExist error (e.g. corrupt JSON), PendingSync is NOT written
-// and the existing state file bytes are preserved unchanged.
-func TestSelfUpdate_NoClobberOnCorruptStateFile(t *testing.T) {
+// TestSelfUpdate_ResetsCorruptStateAndPersistsPendingSync verifies the unified
+// resettable-state contract: when the deferred-sync read fails with
+// state.ErrCorruptState (a decode failure — the persisted data is already
+// unrecoverable), selfUpdate resets to a fresh InstallState and persists
+// PendingSync=true instead of skipping. Resetting loses nothing recoverable
+// because the corrupt fields were already undecodable. This mirrors the policy
+// in internal/update/cooldown.go and internal/cli/channel_command.go.
+//
+// Both corrupt shapes route through state.Read's ErrCorruptState wrapping:
+//   - structurally-broken JSON ("this is not valid JSON {{{")
+//   - a malformed RFC3339 timestamp in the *time.Time field
+func TestSelfUpdate_ResetsCorruptStateAndPersistsPendingSync(t *testing.T) {
+	checkResults := []update.UpdateResult{
+		{
+			Tool:             update.ToolInfo{Name: "gentle-ai"},
+			InstalledVersion: "1.7.0",
+			LatestVersion:    "1.8.0",
+			Status:           update.UpdateAvailable,
+		},
+	}
+	upgradeReport := upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "1.8.0"},
+		},
+	}
+
+	tests := []struct {
+		name string
+		blob string
+	}{
+		{name: "structurally broken json", blob: "this is not valid JSON {{{"},
+		{name: "malformed timestamp field", blob: `{"last_update_check":"not-a-timestamp"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unsetEnv(t, envNoSelfUpdate)
+			unsetEnv(t, envSelfUpdateDone)
+
+			swapSelfUpdateDeps(t, checkResults, upgradeReport)
+			tmpHome := t.TempDir()
+			selfUpdateHomeDirFn = func() (string, error) { return tmpHome, nil }
+
+			stateDir := filepath.Join(tmpHome, ".gentle-ai")
+			if err := os.MkdirAll(stateDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+			stateFilePath := filepath.Join(stateDir, "state.json")
+
+			// Seed the corrupt state INSIDE the prompt hook. The cooldown gate
+			// (internal/update/cooldown.go) runs before promptFn and would itself
+			// reset a corrupt file on a successful check, masking the deferred-sync
+			// guard under test. promptFn fires after the cooldown returns and before
+			// the upgrade + deferred-sync block, so writing the corrupt bytes here
+			// guarantees state.Read inside the deferred-sync block faces
+			// ErrCorruptState — isolating the guard this test targets.
+			origPrompt := promptFn
+			t.Cleanup(func() { promptFn = origPrompt })
+			promptFn = func(_ io.Writer, _ io.Reader, _, _ string) (bool, error) {
+				if err := os.WriteFile(stateFilePath, []byte(tt.blob), 0o644); err != nil {
+					t.Fatalf("WriteFile corrupt at prompt time: %v", err)
+				}
+				// Guard against false positives: state.Read must now classify the
+				// seeded bytes as ErrCorruptState.
+				if _, err := state.Read(tmpHome); !errors.Is(err, state.ErrCorruptState) {
+					t.Fatalf("precondition: state.Read(%q) = %v, want errors.Is(..., ErrCorruptState)", tt.blob, err)
+				}
+				return true, nil
+			}
+
+			err := selfUpdate(context.Background(), "1.7.0", stubProfile(), io.Discard)
+			if err != nil {
+				t.Fatalf("selfUpdate returned error: %v", err)
+			}
+
+			// The corrupt file must have been reset to a valid, decodable
+			// state.json with PendingSync=true persisted. (LastUpdateCheck may
+			// also be set because the cooldown gate runs earlier in the flow;
+			// do not over-constrain — PendingSync is the contract under test.)
+			updated, readErr := state.Read(tmpHome)
+			if readErr != nil {
+				t.Fatalf("state.Read() after selfUpdate = %v, want nil (corrupt file should be reset)", readErr)
+			}
+			if !updated.PendingSync {
+				t.Errorf("PendingSync = false after corrupt-state reset, want true")
+			}
+		})
+	}
+}
+
+// TestSelfUpdate_UnreadableStateSkipsWrite verifies the conservative branch:
+// when the deferred-sync read fails with a genuine IO/permission error (NEITHER
+// os.ErrNotExist NOR state.ErrCorruptState), the file's bytes may still be a
+// valid state.json that is merely unreadable this once, so the PendingSync write
+// is skipped to avoid clobbering recoverable data.
+//
+// The unreadable file is simulated with mode 0o000. This is not portable as
+// root (root bypasses permission bits), so the test skips when running as root
+// rather than asserting flakily. Mirrors cooldown_test.go's
+// TestCheckAllWithCooldown_UnreadableStateSkipsWrite.
+func TestSelfUpdate_UnreadableStateSkipsWrite(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses file permission bits; cannot simulate an unreadable state.json")
+	}
+
 	unsetEnv(t, envNoSelfUpdate)
 	unsetEnv(t, envSelfUpdateDone)
 
@@ -722,15 +823,26 @@ func TestSelfUpdate_NoClobberOnCorruptStateFile(t *testing.T) {
 	tmpHome := t.TempDir()
 	selfUpdateHomeDirFn = func() (string, error) { return tmpHome, nil }
 
-	// Write a corrupt (non-missing) state file so state.Read returns a non-ErrNotExist error.
+	// Seed a VALID state.json, then strip read permission so state.Read returns
+	// an unwrapped os.ErrPermission (the bytes are possibly-valid-but-unreadable).
 	stateDir := filepath.Join(tmpHome, ".gentle-ai")
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	corruptPayload := []byte("this is not valid JSON {{{")
+	original := []byte(`{"installed_agents":["claude-code"]}` + "\n")
 	stateFilePath := filepath.Join(stateDir, "state.json")
-	if err := os.WriteFile(stateFilePath, corruptPayload, 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	if err := os.WriteFile(stateFilePath, original, 0o644); err != nil {
+		t.Fatalf("WriteFile valid: %v", err)
+	}
+	if err := os.Chmod(stateFilePath, 0o000); err != nil {
+		t.Fatalf("Chmod 0o000: %v", err)
+	}
+	// Restore perms so t.TempDir cleanup can remove the file.
+	t.Cleanup(func() { _ = os.Chmod(stateFilePath, 0o644) })
+
+	// Guard the precondition: the read error must be neither NotExist nor Corrupt.
+	if _, err := state.Read(tmpHome); errors.Is(err, os.ErrNotExist) || errors.Is(err, state.ErrCorruptState) {
+		t.Skipf("could not simulate an unreadable-only state.json (read err = %v)", err)
 	}
 
 	// Slice 5: prompt is always called — inject auto-accept stub.
@@ -743,13 +855,17 @@ func TestSelfUpdate_NoClobberOnCorruptStateFile(t *testing.T) {
 		t.Fatalf("selfUpdate returned error: %v", err)
 	}
 
-	// The state file must not have been overwritten — original bytes must be intact.
+	// The unreadable file must NOT have been overwritten: restore read access
+	// and confirm the original bytes survive untouched.
+	if err := os.Chmod(stateFilePath, 0o644); err != nil {
+		t.Fatalf("Chmod restore: %v", err)
+	}
 	got, readErr := os.ReadFile(stateFilePath)
 	if readErr != nil {
 		t.Fatalf("os.ReadFile after selfUpdate: %v", readErr)
 	}
-	if string(got) != string(corruptPayload) {
-		t.Errorf("state file was overwritten on corrupt-read error\ngot:  %q\nwant: %q", got, corruptPayload)
+	if string(got) != string(original) {
+		t.Errorf("unreadable state file was overwritten\ngot:  %q\nwant: %q", got, original)
 	}
 }
 

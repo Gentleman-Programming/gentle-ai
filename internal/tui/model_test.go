@@ -4683,16 +4683,22 @@ func TestStartUpgradeSync_DoesNotSetPendingSyncWhenGentleAINotUpgraded(t *testin
 	}
 }
 
-// TestStartUpgradeSync_NoClobberOnCorruptStateFile verifies that when the HOME
-// directory has a corrupt (non-missing) state.json, the TUI syncCmd branch does
-// NOT overwrite it when setting PendingSync=true — matching the no-clobber
-// pattern in internal/update/cooldown.go.
-func TestStartUpgradeSync_NoClobberOnCorruptStateFile(t *testing.T) {
+// TestStartUpgradeSync_ResetsAndPersistsOnCorruptStateFile verifies the unified
+// resettable-on-corrupt contract for the TUI deferred-sync path: when the HOME
+// directory has a corrupt (non-missing) state.json, the syncCmd branch treats it
+// like a missing file — it resets to a fresh InstallState and persists
+// PendingSync=true. A corrupt file's fields are already undecodable and lost, so
+// resetting loses nothing recoverable, and persisting PendingSync ensures the new
+// binary still completes its deferred sync. This mirrors the deferred-sync block
+// in internal/app/selfupdate.go and the cooldown writer in
+// internal/update/cooldown.go.
+func TestStartUpgradeSync_ResetsAndPersistsOnCorruptStateFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	// Write a corrupt state file so state.Read returns a non-ErrNotExist error.
+	// Write a corrupt state file so state.Read returns ErrCorruptState
+	// (a non-ErrNotExist error whose bytes were obtained but cannot be decoded).
 	stateDir := filepath.Join(home, ".gentle-ai")
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -4718,13 +4724,14 @@ func TestStartUpgradeSync_NoClobberOnCorruptStateFile(t *testing.T) {
 
 	executeUpgradeSyncSequence(t, m)
 
-	// The corrupt state file must NOT have been overwritten.
-	got, readErr := os.ReadFile(stateFilePath)
-	if readErr != nil {
-		t.Fatalf("os.ReadFile after startUpgradeSync: %v", readErr)
+	// The corrupt state file must have been reset to a fresh, decodable state
+	// with PendingSync=true persisted — not left in its corrupt form.
+	s, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read(%q) after corrupt reset error = %v (file was not repaired)", home, err)
 	}
-	if string(got) != string(corruptPayload) {
-		t.Errorf("state file was overwritten on corrupt-read error\ngot:  %q\nwant: %q", got, corruptPayload)
+	if !s.PendingSync {
+		t.Errorf("PendingSync = false after corrupt-state reset, want true (deferred sync must still be recorded)")
 	}
 }
 

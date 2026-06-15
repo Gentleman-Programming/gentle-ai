@@ -70,12 +70,18 @@ func CheckAllWithCooldown(
 		// Re-read state to avoid clobbering unrelated fields written concurrently.
 		current, readErr := state.Read(homeDir)
 		if readErr != nil {
-			if !errors.Is(readErr, os.ErrNotExist) {
-				// File exists but is unreadable/corrupt — do not overwrite; skip
-				// persisting the timestamp this round to avoid data loss.
+			if !errors.Is(readErr, os.ErrNotExist) && !errors.Is(readErr, state.ErrCorruptState) {
+				// File exists but is unreadable (IO/permission) — its bytes may
+				// still be a valid state.json that is merely unreadable this once,
+				// so do not overwrite; skip persisting the timestamp this round to
+				// avoid clobbering recoverable data.
 				return results
 			}
-			// File genuinely missing (first run) — start fresh.
+			// File genuinely missing (first run) OR corrupt (state.ErrCorruptState —
+			// the persisted fields are already undecodable and lost). Start fresh
+			// so the cooldown can still record: resetting loses nothing recoverable
+			// and stops the remote update check from firing on EVERY launch until
+			// the file is repaired.
 			current = state.InstallState{}
 		}
 		current.LastUpdateCheck = &now
