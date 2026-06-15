@@ -15,6 +15,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -997,6 +998,7 @@ func TestLoadPersistedAssignmentsWiresEffort(t *testing.T) {
 // TestVersionBeforeSystemGuards verifies that `gentle-ai version` returns the
 // version string without going through system detection or platform guards.
 func TestVersionBeforeSystemGuards(t *testing.T) {
+	isolateChannelResolution(t)
 	var buf bytes.Buffer
 	err := RunArgs([]string{"version"}, &buf)
 	if err != nil {
@@ -1004,6 +1006,76 @@ func TestVersionBeforeSystemGuards(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "gentle-ai") {
 		t.Error("version output should contain 'gentle-ai'")
+	}
+}
+
+// TestVersionAnnotatesNonStableChannel verifies that the launcher-owned version
+// output annotates the active channel when it is non-stable, so a beta user is not
+// misled into reading the launcher version as the beta build. Stable output stays
+// unannotated.
+func TestVersionAnnotatesNonStableChannel(t *testing.T) {
+	for _, arg := range []string{"version", "--version", "-v"} {
+		// Beta with the channel binary present: both the channel and the binary path
+		// lines are printed.
+		t.Run("beta-with-binary/"+arg, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("GENTLE_AI_CHANNEL", "beta")
+
+			path, err := cli.ChannelBinaryPath(cli.ChannelBeta)
+			if err != nil {
+				t.Fatalf("ChannelBinaryPath: %v", err)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+			if err := os.WriteFile(path, []byte("fake beta binary"), 0o755); err != nil {
+				t.Fatalf("WriteFile beta binary: %v", err)
+			}
+
+			var buf bytes.Buffer
+			if err := RunArgs([]string{arg}, &buf); err != nil {
+				t.Fatalf("version (%s) should not fail: %v", arg, err)
+			}
+			if !strings.Contains(buf.String(), "channel: beta") {
+				t.Errorf("beta version output should annotate the channel, got %q", buf.String())
+			}
+			if !strings.Contains(buf.String(), "channel binary: "+path) {
+				t.Errorf("beta version output should print the existing binary path, got %q", buf.String())
+			}
+		})
+
+		// Beta with NO channel binary on disk: the channel line is printed but the
+		// binary line is suppressed (the path is not advertised as present).
+		t.Run("beta-without-binary/"+arg, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("GENTLE_AI_CHANNEL", "beta")
+
+			var buf bytes.Buffer
+			if err := RunArgs([]string{arg}, &buf); err != nil {
+				t.Fatalf("version (%s) should not fail: %v", arg, err)
+			}
+			if !strings.Contains(buf.String(), "channel: beta") {
+				t.Errorf("beta version output should annotate the channel, got %q", buf.String())
+			}
+			if strings.Contains(buf.String(), "channel binary:") {
+				t.Errorf("missing beta binary must not be advertised, got %q", buf.String())
+			}
+		})
+
+		t.Run("stable/"+arg, func(t *testing.T) {
+			isolateChannelResolution(t)
+			var buf bytes.Buffer
+			if err := RunArgs([]string{arg}, &buf); err != nil {
+				t.Fatalf("version (%s) should not fail: %v", arg, err)
+			}
+			if strings.Contains(buf.String(), "channel:") {
+				t.Errorf("stable version output must not annotate the channel, got %q", buf.String())
+			}
+		})
 	}
 }
 

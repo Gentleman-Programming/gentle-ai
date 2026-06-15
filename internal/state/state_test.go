@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -187,7 +188,8 @@ func TestReadMissing(t *testing.T) {
 	}
 }
 
-// TestReadCorrupt verifies that writing garbage produces an error on read.
+// TestReadCorrupt verifies that writing garbage produces an error on read that is
+// classified as ErrCorruptState (the bytes were obtained but could not be decoded).
 func TestReadCorrupt(t *testing.T) {
 	home := t.TempDir()
 
@@ -203,6 +205,58 @@ func TestReadCorrupt(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Read() expected error for corrupt JSON, got nil")
 	}
+	if !errors.Is(err, ErrCorruptState) {
+		t.Fatalf("Read() corrupt JSON error = %v, want errors.Is(..., ErrCorruptState)", err)
+	}
+}
+
+// TestReadErrCorruptStateClassification verifies the sentinel contract: a decode
+// failure (whatever its underlying shape) is reported as ErrCorruptState, while a
+// genuinely absent file is NOT — it stays distinguishable as os.ErrNotExist so callers
+// can avoid clobbering a valid-but-unreadable file. Decode shapes include malformed
+// JSON, a top-level type mismatch, and a nested decode failure inside a *time.Time
+// field (a corrupt RFC3339 string → *time.ParseError, a wrong-typed value → plain
+// errors.errorString) — none of which expose a concrete json error type.
+func TestReadErrCorruptStateClassification(t *testing.T) {
+	corruptBlobs := map[string]string{
+		"malformed json":              "{ this is not valid json",
+		"top-level type mismatch":     `{"installed_agents": 5}`,
+		"malformed RFC3339 timestamp": `{"last_channel_stale_warning":"not-a-timestamp"}`,
+		"wrong-typed timestamp":       `{"last_channel_stale_warning":12345}`,
+	}
+	for name, blob := range corruptBlobs {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(home, stateDir), 0o755); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			if err := os.WriteFile(Path(home), []byte(blob), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			_, err := Read(home)
+			if !errors.Is(err, ErrCorruptState) {
+				t.Fatalf("Read(%q) error = %v, want errors.Is(..., ErrCorruptState)", blob, err)
+			}
+			// A corrupt decode must NOT masquerade as an absent file.
+			if errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("Read(%q) error = %v, must not satisfy errors.Is(..., os.ErrNotExist)", blob, err)
+			}
+		})
+	}
+
+	t.Run("absent file is not ErrCorruptState", func(t *testing.T) {
+		home := t.TempDir() // no Write — state.json absent
+		_, err := Read(home)
+		if err == nil {
+			t.Fatal("Read() expected error for absent file, got nil")
+		}
+		if errors.Is(err, ErrCorruptState) {
+			t.Fatalf("Read() absent-file error = %v, must NOT satisfy errors.Is(..., ErrCorruptState)", err)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Read() absent-file error = %v, want errors.Is(..., os.ErrNotExist)", err)
+		}
+	})
 }
 
 // TestWriteOverwrite verifies that a second Write call replaces the previous state.

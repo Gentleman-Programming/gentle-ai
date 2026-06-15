@@ -27,6 +27,11 @@ var (
 	goToolchainAvailable           = defaultGoToolchainAvailable
 	channelStderr        io.Writer = os.Stderr
 	channelStaleNow                = time.Now
+	channelExit                    = os.Exit
+	// channelStateRead reads the persisted state. It is a seam so tests can inject a
+	// non-decode read error (e.g. a transient IO/permission failure) deterministically,
+	// which is not portably reproducible against the real filesystem.
+	channelStateRead = state.Read
 )
 
 // defaultGoToolchainAvailable reports whether a `go` toolchain is on PATH. Non-stable
@@ -107,7 +112,27 @@ func MaybeExecChannelTarget(args []string) (bool, error) {
 		}
 	}
 	env := append(os.Environ(), channelExecEnv+"=1", "GENTLE_AI_NO_SELF_UPDATE=1")
-	return true, channelRun(target, args, env)
+	if err := channelRun(target, args, env); err != nil {
+		// The delegated binary exited non-zero: propagate its exit code transparently
+		// so the launcher mirrors the child instead of collapsing every failure to 1
+		// (and printing a spurious "Error: exit status N" wrapper at the top level).
+		var exitErr interface{ ExitCode() int }
+		if errors.As(err, &exitErr) {
+			// A signal-terminated child reports ExitCode() == -1, which os.Exit coerces
+			// to 255 (a misleading code). Clamp any negative code to 1 so the launcher
+			// reports a conventional non-zero failure instead.
+			code := exitErr.ExitCode()
+			if code < 0 {
+				code = 1
+			}
+			channelExit(code)
+			return true, nil
+		}
+		// Non-exit failures (e.g. the binary could not be started) are real errors —
+		// surface them so the top-level handler reports them.
+		return true, err
+	}
+	return true, nil
 }
 
 // shouldWarnChannelStale gates the stale-binary warning behind a once-per-day TTL
@@ -129,19 +154,44 @@ func shouldWarnChannelStale() bool {
 	return true
 }
 
-// recordChannelStaleWarning persists the warning timestamp, re-reading state first so
-// it never clobbers unrelated fields. A corrupt/unreadable (but present) state file is
-// left untouched; write errors are non-fatal (the next due launch retries).
+// recordChannelStaleWarning persists the warning timestamp, re-reading state first.
+// The success path preserves all existing fields (only the timestamp is updated).
+// When the existing state is genuinely absent (os.ErrNotExist) or genuinely corrupt
+// (state.ErrCorruptState — the bytes decoded into nothing usable, so the data is
+// already unrecoverable) it resets to a fresh state carrying the new timestamp, so the
+// once-per-day cooldown still records (otherwise the warning would fire on every
+// command). Any other read failure (filesystem/permission/IO) is conservative: it does
+// NOT write, to avoid clobbering a valid state.json whose bytes were merely unreadable
+// this once — the warning may repeat but no data is lost. Write errors are non-fatal
+// (the next due launch retries).
 func recordChannelStaleWarning(home string, now time.Time) {
-	current, err := state.Read(home)
+	current, err := channelStateRead(home)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
+		if !isResettableStateError(err) {
+			// Transient/permission/IO read error against a possibly-valid file: do not
+			// write, so persisted fields are never clobbered by an unreadable-this-once read.
 			return
 		}
+		// Absent or corrupt: the contents cannot be preserved, but the cooldown timestamp
+		// must still be written so the warning does not nag every command.
 		current = state.InstallState{}
 	}
 	current.LastChannelStaleWarning = &now
 	_ = state.Write(home, current)
+}
+
+// isResettableStateError reports whether a state.Read error means the existing state
+// can be safely replaced by a fresh one. Only two cases qualify: the file is genuinely
+// absent (os.ErrNotExist), or its contents are genuinely undecodable
+// (state.ErrCorruptState — the data is already lost). state.Read is the single source
+// of truth for the corrupt classification: it wraps ErrCorruptState around ANY decode
+// failure (malformed JSON, a type mismatch, or a nested failure such as a corrupt
+// timestamp in a *time.Time field), so this no longer enumerates concrete json error
+// types. Every other error (e.g. EACCES, EISDIR, an I/O failure) is treated as
+// "preserve": the file may hold a valid state whose bytes were just unreadable this
+// once, so overwriting it would clobber persisted user data.
+func isResettableStateError(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, state.ErrCorruptState)
 }
 
 // channelBinaryStale reports whether the channel binary is older than the launcher

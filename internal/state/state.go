@@ -2,6 +2,8 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -9,6 +11,17 @@ import (
 
 const stateDir = ".gentle-ai"
 const stateFile = "state.json"
+
+// ErrCorruptState is the sentinel returned (wrapped) by Read when the state file
+// is readable (its bytes were obtained) but cannot be decoded — malformed JSON, a
+// type mismatch, or a nested decode failure such as a corrupt RFC3339 timestamp in
+// a *time.Time field. The underlying data is already unrecoverable. Callers can
+// detect this with errors.Is(err, ErrCorruptState) to safely reset to a fresh
+// state. It is deliberately distinct from os.ErrNotExist (file absent) and from raw
+// file-read/IO/permission errors (the bytes may be a valid state.json that is just
+// unreadable this once), both of which Read returns unwrapped so callers can still
+// distinguish them with errors.Is.
+var ErrCorruptState = errors.New("corrupt install state")
 
 // ModelAssignmentState is the JSON-serialisable form of a provider+model pair
 // used by OpenCode-style model assignments. It mirrors model.ModelAssignment
@@ -106,15 +119,32 @@ func Path(homeDir string) string {
 }
 
 // Read reads and unmarshals the state file from the given home directory.
-// Returns an error if the file does not exist or cannot be decoded.
+//
+// Error contract:
+//   - File absent: returns the raw os error unwrapped, so callers can detect it
+//     with errors.Is(err, os.ErrNotExist).
+//   - File read/IO/permission failure (bytes NOT obtained): returns the raw os
+//     error unwrapped, so the caller can tell a possibly-valid-but-unreadable file
+//     apart from genuinely corrupt data and avoid clobbering it.
+//   - Decode failure (bytes obtained but json.Unmarshal fails, including a nested
+//     decode such as a malformed timestamp in a *time.Time field): returns an error
+//     wrapping ErrCorruptState, so callers can detect it with
+//     errors.Is(err, ErrCorruptState). The data is already unrecoverable.
+//
+// A usable zero InstallState is returned alongside any error.
 func Read(homeDir string) (InstallState, error) {
 	data, err := os.ReadFile(Path(homeDir))
 	if err != nil {
+		// Absent / IO / permission: keep the raw error unwrapped so callers can
+		// distinguish it (e.g. errors.Is(err, os.ErrNotExist)) and avoid resetting
+		// a file whose bytes were merely unreadable this once.
 		return InstallState{}, err
 	}
 	var s InstallState
 	if err := json.Unmarshal(data, &s); err != nil {
-		return InstallState{}, err
+		// The bytes are present but undecodable — the persisted data is already
+		// lost. Wrap the sentinel so callers can safely reset to a fresh state.
+		return InstallState{}, fmt.Errorf("%w: %v", ErrCorruptState, err)
 	}
 	return s, nil
 }

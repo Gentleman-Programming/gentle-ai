@@ -72,6 +72,20 @@ func RunArgs(args []string, stdout io.Writer) error {
 		switch args[0] {
 		case "version", "--version", "-v":
 			_, _ = fmt.Fprintf(stdout, "gentle-ai %s\n", Version)
+			// The version/--version command is launcher-owned so the launcher's own
+			// version stays reachable. When a non-stable channel is active, annotate it
+			// so a beta user is not misled into reading this as the beta build's version.
+			if channel, err := cli.ResolveInstallChannel(""); err == nil && channel != cli.ChannelStable {
+				_, _ = fmt.Fprintf(stdout, "channel: %s\n", channel)
+				// ActiveChannelBinaryPath only joins paths; it does not check existence.
+				// Only print the binary line when the file is actually on disk, so a
+				// not-yet-built channel binary is not advertised as present.
+				if path, err := cli.ActiveChannelBinaryPath(channel); err == nil && path != "" {
+					if _, statErr := os.Stat(path); statErr == nil {
+						_, _ = fmt.Fprintf(stdout, "channel binary: %s\n", path)
+					}
+				}
+			}
 			return nil
 		case "help", "--help", "-h":
 			printHelp(stdout, Version)
