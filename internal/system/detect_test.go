@@ -262,6 +262,9 @@ func TestIsDebianLike(t *testing.T) {
 		{name: "ubuntu not debian-like", id: "ubuntu", idLike: "", want: false},
 		{name: "linuxmint not debian-like", id: "linuxmint", idLike: "", want: false},
 		{name: "arch not debian-like", id: "arch", idLike: "", want: false},
+		{name: "via id_like deepin", id: "custom", idLike: "deepin", want: true},
+		{name: "via id_like uos", id: "custom", idLike: "uos", want: true},
+		{name: "via id_like debian", id: "custom", idLike: "debian", want: true},
 		{name: "unknown unknown", id: "unknown", idLike: "", want: false},
 	}
 

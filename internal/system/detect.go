@@ -189,12 +189,14 @@ func detectLinuxDistro(linuxOSRelease string) string {
 	id := fields["ID"]
 	idLike := fields["ID_LIKE"]
 
-	if isDebianLike(id, idLike) {
-		return LinuxDistroDebian
-	}
-
+	// Ubuntu-like check first: Ubuntu derivatives (linuxmint, pop, etc.) have
+	// ID_LIKE containing "debian" but must NOT be classified as Debian-like.
 	if isUbuntuLike(id, idLike) {
 		return LinuxDistroUbuntu
+	}
+
+	if isDebianLike(id, idLike) {
+		return LinuxDistroDebian
 	}
 
 	if isArchLike(id, idLike) {
@@ -211,6 +213,12 @@ func detectLinuxDistro(linuxOSRelease string) string {
 func isDebianLike(id, idLike string) bool {
 	if id == LinuxDistroDebian || id == "deepin" || id == "uos" {
 		return true
+	}
+
+	for _, token := range strings.Fields(idLike) {
+		if token == LinuxDistroDebian || token == "deepin" || token == "uos" {
+			return true
+		}
 	}
 
 	return false
