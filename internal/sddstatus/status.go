@@ -1677,7 +1677,10 @@ func reportLineHasBlocker(line string) bool {
 	if line == "" {
 		return false
 	}
-	if reportPassNegationPattern.MatchString(line) || reportPendingPattern.MatchString(line) {
+	if reportPassNegationPattern.MatchString(line) {
+		return true
+	}
+	if reportPendingPattern.MatchString(line) && !reportLineHasPassSignal(line) {
 		return true
 	}
 	if reportCriticalGlyphStatusPattern.MatchString(line) {
@@ -1709,6 +1712,9 @@ func reportLineHasBlocker(line string) bool {
 func reportLineHasPassSignal(line string) bool {
 	if line == "" {
 		return false
+	}
+	if strings.Contains(line, "✅") {
+		return true
 	}
 	_, value, hasField := reportField(line)
 	if hasField && reportPassValuePattern.MatchString(stripMarkdownSignal(value)) {
