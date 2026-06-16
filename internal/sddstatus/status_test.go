@@ -403,6 +403,44 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			wantBlocked: "verify-report.md is not clearly passing.",
 		},
 		{
+			name: "archive ready when verify report has checkmark todo on same line",
+			seed: func(t *testing.T, root string) {
+				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
+				write(t, filepath.Join(changeRoot, "verify-report.md"), "# Verify\nStatus: PASS\n✅ TODO: finish audit\n✅ PENDING: test run\n")
+			},
+			wantApply:   ApplyAllDone,
+			wantApplyD:  DependencyAllDone,
+			wantVerify:  DependencyAllDone,
+			wantArchive: DependencyReady,
+			wantNext:    "archive",
+		},
+		{
+			name: "archive blocked when verify report has standalone todo without glyph",
+			seed: func(t *testing.T, root string) {
+				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
+				write(t, filepath.Join(changeRoot, "verify-report.md"), "# Verify\nStatus: PASS\ntodo: security review\n")
+			},
+			wantApply:   ApplyAllDone,
+			wantApplyD:  DependencyAllDone,
+			wantVerify:  DependencyReady,
+			wantArchive: DependencyBlocked,
+			wantNext:    "verify",
+			wantBlocked: "verify-report.md is not clearly passing.",
+		},
+		{
+			name: "archive blocked when verify report mixes checkmark todo and standalone todo",
+			seed: func(t *testing.T, root string) {
+				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
+				write(t, filepath.Join(changeRoot, "verify-report.md"), "# Verify\nStatus: PASS\n✅ TODO: finish audit\ntodo: security review\n")
+			},
+			wantApply:   ApplyAllDone,
+			wantApplyD:  DependencyAllDone,
+			wantVerify:  DependencyReady,
+			wantArchive: DependencyBlocked,
+			wantNext:    "verify",
+			wantBlocked: "verify-report.md is not clearly passing.",
+		},
+		{
 			name: "archive blocked when verify report says status not passed",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
