@@ -14,6 +14,7 @@ type Selection struct {
 	ClaudeModelAssignments      map[string]ClaudeModelAlias      // key = phase name; value = fable|opus|sonnet|haiku
 	ClaudePhaseAssignments      map[string]ClaudePhaseAssignment // key = phase name; value = Claude model+effort
 	KiroModelAssignments        map[string]KiroModelAlias        // key = phase name; value = Kiro-native model alias
+	KiloModelAssignments        map[string]KiloModelAlias        // key = phase name; value = Kilo model alias
 	CodexModelAssignments       map[string]CodexEffort           // key = phase name; value = low|medium|high|xhigh
 	CodexCarrilModelAssignments map[string]string                // key = carril profile (sdd-strong|sdd-mid|sdd-cheap); value = model id
 	CodexPhaseModelAssignments  map[string]string                // key = phase name; value = model id (Custom per-phase picker only)
@@ -56,6 +57,7 @@ type SyncOverrides struct {
 	ClaudeModelAssignments      map[string]ClaudeModelAlias      // nil = no override; empty map = reset to defaults
 	ClaudePhaseAssignments      map[string]ClaudePhaseAssignment // nil = no override; empty map = reset to defaults
 	KiroModelAssignments        map[string]KiroModelAlias        // nil = no override; empty map = reset to defaults
+	KiloModelAssignments        map[string]KiloModelAlias        // nil = no override; empty map = reset to defaults
 	CodexModelAssignments       map[string]CodexEffort           // nil = no override; empty map = reset to defaults
 	CodexCarrilModelAssignments map[string]string                // nil = no override; empty map = reset to defaults
 	CodexPhaseModelAssignments  map[string]string                // nil = no override (partial sync); non-nil empty = clear (preset selected); non-nil non-empty = custom per-phase assignments

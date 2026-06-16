@@ -1882,13 +1882,13 @@ func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
 func TestModelConfig_BackNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelConfig
-	m.Cursor = 4 // Back is now at index 4
+	m.Cursor = 5 // Back is now at index 5
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenWelcome {
-		t.Fatalf("ModelConfig cursor=4 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
+		t.Fatalf("ModelConfig cursor=5 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
 	}
 }
 
@@ -1936,6 +1936,36 @@ func TestModelConfig_KiroPickerBackReturnsToModelConfig(t *testing.T) {
 
 	if state.Screen != ScreenModelConfig {
 		t.Fatalf("KiroModelPicker esc (ModelConfigMode): screen = %v, want %v", state.Screen, ScreenModelConfig)
+	}
+}
+
+func TestModelConfig_KiloPickerNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Cursor = 3
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenKiloModelPicker {
+		t.Fatalf("ModelConfig cursor=3 (Kilo): screen = %v, want %v", state.Screen, ScreenKiloModelPicker)
+	}
+	if !state.ModelConfigMode {
+		t.Fatalf("ModelConfigMode should be true after entering Kilo picker from ModelConfig")
+	}
+}
+
+func TestModelConfig_KiloPickerBackReturnsToModelConfig(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenKiloModelPicker
+	m.ModelConfigMode = true
+	m.KiloModelPicker = screens.NewKiloModelPickerState()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelConfig {
+		t.Fatalf("KiloModelPicker esc (ModelConfigMode): screen = %v, want %v", state.Screen, ScreenModelConfig)
 	}
 }
 
@@ -2739,6 +2769,14 @@ func TestModelConfig_EscFromPickersReturnsToModelConfig(t *testing.T) {
 			setup: func(m *Model) {
 				m.ModelConfigMode = true
 				m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
+			},
+		},
+		{
+			name:   "Esc from KiloModelPicker in ModelConfigMode → ScreenModelConfig",
+			screen: ScreenKiloModelPicker,
+			setup: func(m *Model) {
+				m.ModelConfigMode = true
+				m.KiloModelPicker = screens.NewKiloModelPickerState()
 			},
 		},
 		{
