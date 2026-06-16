@@ -59,8 +59,19 @@ func Generate(homeDir string, modelAssignments map[string]model.KiloModelAlias) 
 	if readErr == nil && len(existingBytes) > 0 {
 		merged, err = filemerge.MergeJSONObjects(existingBytes, overlayBytes)
 		if err != nil {
-			// Fallback: write overlay directly if merge fails.
-			merged = overlayBytes
+			// Attempt to preserve existing content by injecting $schema manually.
+			var existing map[string]any
+			if jsonErr := json.Unmarshal(existingBytes, &existing); jsonErr == nil {
+				existing["$schema"] = "https://app.kilo.ai/config.json"
+				preserved, marshalErr := json.MarshalIndent(existing, "", "  ")
+				if marshalErr == nil {
+					merged = append(preserved, '\n')
+				} else {
+					merged = overlayBytes
+				}
+			} else {
+				merged = overlayBytes
+			}
 		}
 	} else {
 		merged = overlayBytes

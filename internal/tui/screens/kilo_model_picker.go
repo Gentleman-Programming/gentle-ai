@@ -13,21 +13,25 @@ type KiloModelPreset string
 
 const (
 	KiloPresetBalanced KiloModelPreset = "balanced"
+	KiloPresetQuality  KiloModelPreset = "quality"
 	KiloPresetCustom   KiloModelPreset = "custom"
 )
 
 var kiloPresetDescriptions = map[KiloModelPreset]string{
 	KiloPresetBalanced: "Auto for most phases, Haiku for lightweight archive/onboard work",
+	KiloPresetQuality:  "Sonnet for reasoning phases, Opus for design, Haiku for lightweight",
 	KiloPresetCustom:   "Pick the Kilo model option for each SDD phase individually",
 }
 
 var kiloPresetOrder = []KiloModelPreset{
 	KiloPresetBalanced,
+	KiloPresetQuality,
 	KiloPresetCustom,
 }
 
 var kiloPresetConstructors = map[KiloModelPreset]func() map[string]model.KiloModelAlias{
-	KiloPresetBalanced: model.KiloModelPresetBalanced,
+	KiloPresetBalanced: model.KiloModelPresetFree,
+	KiloPresetQuality:  model.KiloModelPresetQuality,
 }
 
 var kiloAliasOrder = []model.KiloModelAlias{
@@ -133,12 +137,12 @@ func handleKiloCustomPhaseNav(
 		state.InCustomMode = false
 		return true, nil
 	case "enter":
-		if cursor < len(claudePhases) {
-			phase := claudePhases[cursor]
+		if cursor < len(sddPhases) {
+			phase := sddPhases[cursor]
 			state.CustomAssignments[phase] = nextKiloAlias(state.CustomAssignments[phase])
 			return true, nil
 		}
-		if cursor == len(claudePhases) {
+		if cursor == len(sddPhases) {
 			return true, state.CustomAssignments
 		}
 		state.InCustomMode = false
@@ -158,7 +162,7 @@ func nextKiloAlias(current model.KiloModelAlias) model.KiloModelAlias {
 
 func KiloModelPickerOptionCount(state KiloModelPickerState) int {
 	if state.InCustomMode {
-		return len(claudePhases) + 2 // phase rows + Confirm + Back
+		return len(sddPhases) + 2 // phase rows + Confirm + Back
 	}
 	return len(kiloPresetOrder) + 1 // presets + Back
 }
@@ -201,14 +205,14 @@ func renderKiloCustomPhaseList(state KiloModelPickerState, cursor int) string {
 	b.WriteString(styles.SubtextStyle.Render("Press enter on a phase to cycle: auto → sonnet → opus → haiku → gateway"))
 	b.WriteString("\n\n")
 
-	for idx, phase := range claudePhases {
+	for idx, phase := range sddPhases {
 		focused := idx == cursor
 		alias := state.CustomAssignments[phase]
 		if alias == "" {
 			alias = model.KiloModelAuto
 		}
 
-		label := fmt.Sprintf("%-20s %s", claudePhaseLabels[phase], kiloAliasTag(alias))
+		label := fmt.Sprintf("%-20s %s", sddPhaseLabels[phase], kiloAliasTag(alias))
 
 		if focused {
 			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+label) + "\n")
@@ -218,7 +222,7 @@ func renderKiloCustomPhaseList(state KiloModelPickerState, cursor int) string {
 	}
 
 	b.WriteString("\n")
-	actionCursor := cursor - len(claudePhases)
+	actionCursor := cursor - len(sddPhases)
 	b.WriteString(renderOptions([]string{"Confirm", "← Back"}, actionCursor))
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: cycle/select • esc: back"))

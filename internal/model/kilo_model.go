@@ -27,6 +27,10 @@ func (a KiloModelAlias) Valid() bool {
 //
 // Kilo Gateway model IDs include a provider prefix (e.g. "anthropic/claude-sonnet-4-20250514")
 // that differs from Kiro's bare IDs.
+//
+// NOTE: Model IDs include date stamps (20250514). Update these when Anthropic
+// releases new versions. Kilo Gateway may accept dateless aliases — test before
+// updating. See: https://docs.kilo.ai/gateway/models
 func KiloModelID(alias KiloModelAlias) string {
 	switch alias {
 	case KiloModelAuto:
@@ -44,9 +48,9 @@ func KiloModelID(alias KiloModelAlias) string {
 	}
 }
 
-// KiloModelPresetBalanced returns the default Kilo Gateway assignment table.
-// Auto lets Kilo route most phases while keeping archive/onboard lightweight.
-func KiloModelPresetBalanced() map[string]KiloModelAlias {
+// KiloModelPresetFree returns the default assignment table for Kilo free tier.
+// Most phases use auto routing; archive/onboard use Haiku for cost efficiency.
+func KiloModelPresetFree() map[string]KiloModelAlias {
 	return map[string]KiloModelAlias{
 		"orchestrator": KiloModelAuto,
 		"sdd-explore":  KiloModelAuto,
@@ -56,6 +60,31 @@ func KiloModelPresetBalanced() map[string]KiloModelAlias {
 		"sdd-tasks":    KiloModelAuto,
 		"sdd-apply":    KiloModelAuto,
 		"sdd-verify":   KiloModelAuto,
+		"sdd-archive":  KiloModelHaiku,
+		"sdd-onboard":  KiloModelHaiku,
+		"default":      KiloModelAuto,
+	}
+}
+
+// KiloModelPresetBalanced is a deprecated alias for KiloModelPresetFree.
+// Deprecated: Use KiloModelPresetFree for free tier or KiloModelPresetQuality for paid.
+func KiloModelPresetBalanced() map[string]KiloModelAlias {
+	return KiloModelPresetFree()
+}
+
+// KiloModelPresetQuality returns assignments optimized for Kilo paid tier.
+// Uses Sonnet for reasoning-heavy phases (design, spec, apply) and
+// Haiku for lightweight phases (archive, onboard, init).
+func KiloModelPresetQuality() map[string]KiloModelAlias {
+	return map[string]KiloModelAlias{
+		"orchestrator": KiloModelAuto,
+		"sdd-explore":  KiloModelSonnet,
+		"sdd-propose":  KiloModelSonnet,
+		"sdd-spec":     KiloModelSonnet,
+		"sdd-design":   KiloModelOpus,
+		"sdd-tasks":    KiloModelSonnet,
+		"sdd-apply":    KiloModelSonnet,
+		"sdd-verify":   KiloModelSonnet,
 		"sdd-archive":  KiloModelHaiku,
 		"sdd-onboard":  KiloModelHaiku,
 		"default":      KiloModelAuto,
