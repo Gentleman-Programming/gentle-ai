@@ -34,13 +34,7 @@ var kiloPresetConstructors = map[KiloModelPreset]func() map[string]model.KiloMod
 	KiloPresetQuality:  model.KiloModelPresetQuality,
 }
 
-var kiloAliasOrder = []model.KiloModelAlias{
-	model.KiloModelAuto,
-	model.KiloModelSonnet,
-	model.KiloModelOpus,
-	model.KiloModelHaiku,
-	model.KiloModelGateway,
-}
+var kiloAliasOrder = model.KnownKiloAliases
 
 // KiloModelPickerState holds navigation state for the Kilo model picker screen.
 type KiloModelPickerState struct {
@@ -202,7 +196,7 @@ func renderKiloCustomPhaseList(state KiloModelPickerState, cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("Custom Kilo Model Assignments"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Press enter on a phase to cycle: auto → sonnet → opus → haiku → gateway"))
+	b.WriteString(styles.SubtextStyle.Render("Press enter on a phase to cycle through known models (auto, sonnet, opus, gpt-4o, gemini, deepseek, ...)"))
 	b.WriteString("\n\n")
 
 	for idx, phase := range sddPhases {
@@ -234,15 +228,34 @@ func kiloAliasTag(alias model.KiloModelAlias) string {
 	switch alias {
 	case model.KiloModelAuto:
 		return styles.SuccessStyle.Render("[auto]")
-	case model.KiloModelSonnet:
+	case model.KiloModelGateway:
+		return styles.SuccessStyle.Render("[gateway]")
+	// Anthropic
+	case model.KiloModelSonnet, model.KiloModelSonnet4:
 		return styles.SuccessStyle.Render("[sonnet]")
-	case model.KiloModelOpus:
+	case model.KiloModelOpus, model.KiloModelOpus4:
 		return styles.WarningStyle.Render("[opus]")
 	case model.KiloModelHaiku:
 		return styles.SubtextStyle.Render("[haiku]")
-	case model.KiloModelGateway:
-		return styles.SuccessStyle.Render("[gateway]")
+	// OpenAI
+	case model.KiloModelGPT4o, model.KiloModelGPT4oMini:
+		return styles.SuccessStyle.Render("[gpt-4o]")
+	case model.KiloModelO1, model.KiloModelO3, model.KiloModelO3Mini, model.KiloModelO4Mini:
+		return styles.WarningStyle.Render("[openai-reasoning]")
+	// Google
+	case model.KiloModelGemini25Pro, model.KiloModelGemini25Flash, model.KiloModelGemini20Flash:
+		return styles.SuccessStyle.Render("[gemini]")
+	// Open-weight
+	case model.KiloModelDeepSeek, model.KiloModelDeepSeekR1:
+		return styles.WarningStyle.Render("[deepseek]")
+	case model.KiloModelQwen, model.KiloModelQwen3:
+		return styles.SuccessStyle.Render("[qwen]")
+	case model.KiloModelLlama:
+		return styles.SuccessStyle.Render("[llama]")
+	case model.KiloModelMistral:
+		return styles.SuccessStyle.Render("[mistral]")
 	default:
-		return styles.SuccessStyle.Render("[auto]")
+		// Custom pass-through model: show the alias string itself.
+		return styles.SubtextStyle.Render("[" + string(alias) + "]")
 	}
 }
