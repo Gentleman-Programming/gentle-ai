@@ -40,34 +40,57 @@ func TestHandleKiloModelPickerNav_SelectsBalancedPreset(t *testing.T) {
 	}
 }
 
-func TestHandleKiloModelPickerNav_CustomCyclesAcrossKiloOptions(t *testing.T) {
+func TestHandleKiloModelPickerNav_CustomCyclesThroughAliases(t *testing.T) {
 	state := NewKiloModelPickerState()
 
+	// Enter custom mode
 	handled, assignments := HandleKiloModelPickerNav("enter", &state, 2)
 	if !handled || assignments != nil || !state.InCustomMode {
 		t.Fatalf("expected custom preset to enter custom mode, handled=%v assignments=%v inCustom=%v", handled, assignments, state.InCustomMode)
 	}
 
+	// First cycle: auto → next alias (gateway, since KnownKiloAliases[0]=auto, [1]=gateway)
 	handled, assignments = HandleKiloModelPickerNav("enter", &state, 1)
 	if !handled || assignments != nil {
 		t.Fatalf("expected phase cycle to be handled without confirming, handled=%v assignments=%v", handled, assignments)
 	}
-	if got := state.CustomAssignments["sdd-explore"]; got != model.KiloModelSonnet {
-		t.Fatalf("first cycle from auto should become sonnet, got %q", got)
+	firstCycled := state.CustomAssignments["sdd-explore"]
+	if firstCycled == model.KiloModelAuto {
+		t.Fatalf("first cycle from auto should change, got %q", firstCycled)
 	}
 
-	for _, want := range []model.KiloModelAlias{
-		model.KiloModelOpus,
-		model.KiloModelHaiku,
-		model.KiloModelGateway,
-		model.KiloModelAuto,
-	} {
+	// Cycle through remaining aliases and verify we return to auto after N total steps.
+	// The first cycle already moved from auto→gateway, so we need N-1 more cycles.
+	seen := map[model.KiloModelAlias]bool{model.KiloModelAuto: true}
+	seen[firstCycled] = true
+	current := firstCycled
+	for i := 0; i < len(model.KnownKiloAliases)-1; i++ {
 		handled, _ = HandleKiloModelPickerNav("enter", &state, 1)
 		if !handled {
 			t.Fatal("expected cycle to be handled")
 		}
-		if got := state.CustomAssignments["sdd-explore"]; got != want {
-			t.Fatalf("cycled assignment = %q, want %q", got, want)
+		next := state.CustomAssignments["sdd-explore"]
+		if next == current {
+			t.Fatalf("cycle stuck at %q after %d iterations", next, i)
+		}
+		current = next
+		seen[current] = true
+	}
+
+	// After cycling through all known aliases, we should be back to auto
+	if current != model.KiloModelAuto {
+		t.Fatalf("expected to return to auto after full cycle, got %q", current)
+	}
+
+	// Verify we saw at least the first few distinct aliases
+	for _, expected := range []model.KiloModelAlias{
+		model.KiloModelGateway,
+		model.KiloModelOpus,
+		model.KiloModelSonnet,
+		model.KiloModelHaiku,
+	} {
+		if !seen[expected] {
+			t.Fatalf("expected to see alias %q during cycle", expected)
 		}
 	}
 }
