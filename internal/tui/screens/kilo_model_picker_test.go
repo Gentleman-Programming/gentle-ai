@@ -17,7 +17,7 @@ func TestRenderKiloModelPicker_ShowsRequestedCopy(t *testing.T) {
 	if !strings.Contains(out, "Choose how Kilo models are assigned to each SDD execution phase") {
 		t.Fatalf("expected Kilo subtitle in output, got:\n%s", out)
 	}
-	for _, want := range []string{"balanced", "custom"} {
+	for _, want := range []string{"balanced", "quality", "custom"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected preset %q in output, got:\n%s", want, out)
 		}
@@ -43,12 +43,12 @@ func TestHandleKiloModelPickerNav_SelectsBalancedPreset(t *testing.T) {
 func TestHandleKiloModelPickerNav_CustomCyclesAcrossKiloOptions(t *testing.T) {
 	state := NewKiloModelPickerState()
 
-	handled, assignments := HandleKiloModelPickerNav("enter", &state, 1)
+	handled, assignments := HandleKiloModelPickerNav("enter", &state, 2)
 	if !handled || assignments != nil || !state.InCustomMode {
 		t.Fatalf("expected custom preset to enter custom mode, handled=%v assignments=%v inCustom=%v", handled, assignments, state.InCustomMode)
 	}
 
-	handled, assignments = HandleKiloModelPickerNav("enter", &state, 0)
+	handled, assignments = HandleKiloModelPickerNav("enter", &state, 1)
 	if !handled || assignments != nil {
 		t.Fatalf("expected phase cycle to be handled without confirming, handled=%v assignments=%v", handled, assignments)
 	}
@@ -62,7 +62,7 @@ func TestHandleKiloModelPickerNav_CustomCyclesAcrossKiloOptions(t *testing.T) {
 		model.KiloModelGateway,
 		model.KiloModelAuto,
 	} {
-		handled, _ = HandleKiloModelPickerNav("enter", &state, 0)
+		handled, _ = HandleKiloModelPickerNav("enter", &state, 1)
 		if !handled {
 			t.Fatal("expected cycle to be handled")
 		}
@@ -109,7 +109,7 @@ func TestKiloModelPickerOptionCount_CustomMode(t *testing.T) {
 	state := NewKiloModelPickerState()
 	state.InCustomMode = true
 	count := KiloModelPickerOptionCount(state)
-	if count != len(claudePhases)+2 {
-		t.Fatalf("KiloModelPickerOptionCount (custom) = %d, want %d", count, len(claudePhases)+2)
+	if count != len(sddPhases)+2 {
+		t.Fatalf("KiloModelPickerOptionCount (custom) = %d, want %d", count, len(sddPhases)+2)
 	}
 }

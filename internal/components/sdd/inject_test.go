@@ -3508,6 +3508,56 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPlugin(t *testing.T) {
 	}
 }
 
+// TestInjectKilocodePreservesExistingKiloJsonc verifies that when a kilo.jsonc
+// file already exists with custom content, Inject preserves it and only adds
+// the $schema key.
+func TestInjectKilocodePreservesExistingKiloJsonc(t *testing.T) {
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".config", "kilo")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write existing kilo.jsonc with custom content.
+	existing := []byte(`{
+  "customKey": "customValue",
+  "anotherKey": 123
+}`)
+	if err := os.WriteFile(filepath.Join(configDir, "kilo.jsonc"), existing, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := kilocodeAdapter()
+	_, err := Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("Inject(kilocode) error = %v", err)
+	}
+
+	// Read the resulting kilo.jsonc.
+	content, readErr := os.ReadFile(filepath.Join(configDir, "kilo.jsonc"))
+	if readErr != nil {
+		t.Fatalf("ReadFile(kilo.jsonc) error = %v", readErr)
+	}
+
+	text := string(content)
+
+	// $schema should be present.
+	if !strings.Contains(text, "$schema") {
+		t.Fatal("kilo.jsonc should contain $schema after inject")
+	}
+
+	// Custom content should be preserved.
+	if !strings.Contains(text, "customKey") {
+		t.Fatal("kilo.jsonc should preserve existing customKey")
+	}
+	if !strings.Contains(text, "customValue") {
+		t.Fatal("kilo.jsonc should preserve existing customValue")
+	}
+	if !strings.Contains(text, "anotherKey") {
+		t.Fatal("kilo.jsonc should preserve existing anotherKey")
+	}
+}
+
 func TestInjectOpenCodePluginNoPkgManagerAvailable(t *testing.T) {
 	home := t.TempDir()
 
