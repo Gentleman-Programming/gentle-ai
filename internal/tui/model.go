@@ -29,6 +29,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/internal/workflow"
 )
 
 // tuiNowFn returns the current time for the update-check cooldown gate.
@@ -257,20 +258,22 @@ type OpenCodePluginRegistrationDoneMsg struct {
 
 // AgentBuilderState holds all transient state for the agent-builder TUI flow.
 type AgentBuilderState struct {
-	AvailableEngines []model.AgentID
-	SelectedEngine   model.AgentID
-	Textarea         textarea.Model
-	SDDMode          agentbuilder.SDDIntegrationMode
-	SDDTargetPhase   string
-	Generating       bool
-	GenerationCancel context.CancelFunc
-	Generated        *agentbuilder.GeneratedAgent
-	GenerationErr    error
-	ConflictWarning  string
-	Installing       bool
-	InstallResults   []agentbuilder.InstallResult
-	InstallErr       error
-	PreviewScroll    int
+	AvailableEngines    []model.AgentID
+	SelectedEngine      model.AgentID
+	Textarea            textarea.Model
+	SDDMode             agentbuilder.SDDIntegrationMode
+	SDDTargetPhase      string
+	WorkflowName        string   // selected workflow name; empty implies SDD
+	AvailableWorkflows  []string // cached from workflow.List() + "sdd" prepended
+	Generating          bool
+	GenerationCancel    context.CancelFunc
+	Generated           *agentbuilder.GeneratedAgent
+	GenerationErr       error
+	ConflictWarning     string
+	Installing          bool
+	InstallResults      []agentbuilder.InstallResult
+	InstallErr          error
+	PreviewScroll       int
 }
 
 // UpgradeFunc is the signature of the function injected to perform tool upgrades.
@@ -353,6 +356,7 @@ const (
 	ScreenProfileDelete
 	ScreenAgentBuilderEngine
 	ScreenAgentBuilderPrompt
+	ScreenAgentBuilderWorkflow
 	ScreenAgentBuilderSDD
 	ScreenAgentBuilderSDDPhase
 	ScreenAgentBuilderGenerating
@@ -857,9 +861,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.handleKeyPress(msg)
 			}
 			if msg.String() == "tab" || msg.String() == "ctrl+enter" {
-				// "Continue" — proceed to SDD selection if textarea is not empty.
+				// "Continue" — proceed to workflow selection if textarea is not empty.
 				if m.AgentBuilder.Textarea.Value() != "" {
-					m.setScreen(ScreenAgentBuilderSDD)
+					m.populateWorkflows()
+					m.setScreen(ScreenAgentBuilderWorkflow)
 				}
 				return m, nil
 			}
@@ -1059,6 +1064,8 @@ func (m Model) View() string {
 		return screens.RenderABEngine(m.AgentBuilder.AvailableEngines, m.Cursor)
 	case ScreenAgentBuilderPrompt:
 		return screens.RenderABPrompt(m.AgentBuilder.Textarea)
+	case ScreenAgentBuilderWorkflow:
+		return screens.RenderABWorkflow(m.AgentBuilder.AvailableWorkflows, m.Cursor)
 	case ScreenAgentBuilderSDD:
 		return screens.RenderABSDD(string(m.AgentBuilder.SDDMode), m.Cursor)
 	case ScreenAgentBuilderSDDPhase:
@@ -2350,7 +2357,23 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 	case ScreenAgentBuilderPrompt:
 		// "Continue" only if textarea is not empty.
 		if m.AgentBuilder.Textarea.Value() != "" {
-			m.setScreen(ScreenAgentBuilderSDD)
+			m.populateWorkflows()
+			m.setScreen(ScreenAgentBuilderWorkflow)
+		}
+	case ScreenAgentBuilderWorkflow:
+		workflows := m.AgentBuilder.AvailableWorkflows
+		if m.Cursor < len(workflows) {
+			selected := workflows[m.Cursor]
+			if selected == "sdd" {
+				m.AgentBuilder.WorkflowName = ""
+				m.setScreen(ScreenAgentBuilderSDD)
+			} else {
+				m.AgentBuilder.WorkflowName = selected
+				return m.startGeneration()
+			}
+		} else {
+			// "Back" option.
+			m.setScreen(ScreenAgentBuilderPrompt)
 		}
 	case ScreenAgentBuilderSDD:
 		opts := screens.ABSDDOptions()
@@ -3180,6 +3203,11 @@ func (m *Model) setScreen(next Screen) {
 			m.Cursor = 0
 		}
 	}
+	if next == ScreenAgentBuilderWorkflow {
+		if len(m.AgentBuilder.AvailableWorkflows) == 0 {
+			m.populateWorkflows()
+		}
+	}
 	if next == ScreenUninstallMode {
 		m.refreshUninstallProfiles()
 		m.UninstallProfilesToRemove = nil
@@ -3331,6 +3359,8 @@ func (m Model) optionCount() int {
 		return len(m.AgentBuilder.AvailableEngines) + 1 // engines + Back
 	case ScreenAgentBuilderPrompt:
 		return 0 // textarea mode — cursor navigation via textarea
+	case ScreenAgentBuilderWorkflow:
+		return len(m.AgentBuilder.AvailableWorkflows) + 1 // workflows + Back
 	case ScreenAgentBuilderSDD:
 		return len(screens.ABSDDOptions()) // 3 modes + Back
 	case ScreenAgentBuilderSDDPhase:
@@ -4080,6 +4110,21 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 	}
 }
 
+// populateWorkflows discovers available workflows and caches them on the model.
+// It prepends "sdd" as the first/default option. Falls back to SDD-only when the
+// project root cannot be determined.
+func (m *Model) populateWorkflows() {
+	projectRoot := ""
+	if cwd, err := osGetwdFn(); err == nil {
+		projectRoot = cwd
+	}
+	workflows := workflow.List(projectRoot)
+	available := make([]string, 0, 1+len(workflows))
+	available = append(available, "sdd")
+	available = append(available, workflows...)
+	m.AgentBuilder.AvailableWorkflows = available
+}
+
 // detectAgentBuilderEngines scans for supported AI agent binaries on PATH and
 // returns the list of available AgentIDs.
 func (m Model) detectAgentBuilderEngines() []model.AgentID {
@@ -4255,6 +4300,13 @@ func (m Model) startGeneration() (tea.Model, tea.Cmd) {
 			agent.SDDConfig = capturedSDD
 		}
 
+		// Propagate the workflow name to the generated agent.
+		// Empty means SDD (set via the SDD integration screen), non-empty means
+		// a custom workflow was selected on the workflow selection screen.
+		if m.AgentBuilder.WorkflowName != "" {
+			agent.WorkflowName = m.AgentBuilder.WorkflowName
+		}
+
 		return AgentBuilderGeneratedMsg{Agent: agent}
 	})
 }
@@ -4315,6 +4367,7 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 				CreatedAt:        time.Now(),
 				GenerationEngine: engineID,
 				SDDIntegration:   installAgent.SDDConfig,
+				WorkflowName:     installAgent.WorkflowName,
 				InstalledAgents:  installedIDs,
 			}
 			// Update existing entry if present; otherwise append.
@@ -4324,6 +4377,7 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 				existing.CreatedAt = entry.CreatedAt
 				existing.GenerationEngine = entry.GenerationEngine
 				existing.SDDIntegration = entry.SDDIntegration
+				existing.WorkflowName = entry.WorkflowName
 				existing.InstalledAgents = entry.InstalledAgents
 			} else {
 				reg.Add(entry)

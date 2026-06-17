@@ -92,9 +92,9 @@ func TestAgentBuilder_EnterOnPromptEmpty_StaysOnPrompt(t *testing.T) {
 	}
 }
 
-// ─── T-28.5: Tab on prompt with non-empty textarea → navigates to SDD ────────
+// ─── T-28.5: Tab on prompt with non-empty textarea → navigates to Workflow screen ─
 
-func TestAgentBuilder_TabOnPromptNonEmpty_NavigatesToSDD(t *testing.T) {
+func TestAgentBuilder_TabOnPromptNonEmpty_NavigatesToWorkflow(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgentBuilderPrompt
 
@@ -103,12 +103,95 @@ func TestAgentBuilder_TabOnPromptNonEmpty_NavigatesToSDD(t *testing.T) {
 	ta.SetValue("create an a11y reviewer")
 	m.AgentBuilder.Textarea = ta
 
-	// Tab navigates from prompt to SDD when textarea is non-empty.
+	// Tab navigates from prompt to workflow selection when textarea is non-empty.
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	state := updated.(Model)
+
+	if state.Screen != ScreenAgentBuilderWorkflow {
+		t.Fatalf("screen = %v, want ScreenAgentBuilderWorkflow", state.Screen)
+	}
+	if len(state.AgentBuilder.AvailableWorkflows) == 0 {
+		t.Error("AvailableWorkflows should be populated after navigation")
+	}
+	if state.AgentBuilder.AvailableWorkflows[0] != "sdd" {
+		t.Errorf("AvailableWorkflows[0] = %q, want 'sdd'", state.AgentBuilder.AvailableWorkflows[0])
+	}
+}
+
+// ─── Workflow → SDD: selecting "sdd" goes to SDD screen ──────────────────────
+
+func TestAgentBuilder_WorkflowSelectSDD_NavigatesToSDD(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgentBuilderWorkflow
+	m.AgentBuilder.AvailableWorkflows = []string{"sdd", "paper-review"}
+	m.Cursor = 0 // "sdd"
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenAgentBuilderSDD {
 		t.Fatalf("screen = %v, want ScreenAgentBuilderSDD", state.Screen)
+	}
+	if state.AgentBuilder.WorkflowName != "" {
+		t.Errorf("WorkflowName = %q, want empty (SDD)", state.AgentBuilder.WorkflowName)
+	}
+}
+
+// ─── Workflow → non-SDD: selecting a custom workflow goes to Generating ──────
+
+func TestAgentBuilder_WorkflowSelectNonSDD_NavigatesToGenerating(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgentBuilderWorkflow
+	m.AgentBuilder.SelectedEngine = model.AgentClaudeCode
+	m.AgentBuilder.AvailableWorkflows = []string{"sdd", "paper-review"}
+	ta := textarea.New()
+	ta.SetValue("review my article")
+	m.AgentBuilder.Textarea = ta
+	m.Cursor = 1 // "paper-review"
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenAgentBuilderGenerating {
+		t.Fatalf("screen = %v, want ScreenAgentBuilderGenerating", state.Screen)
+	}
+	if state.AgentBuilder.WorkflowName != "paper-review" {
+		t.Errorf("WorkflowName = %q, want 'paper-review'", state.AgentBuilder.WorkflowName)
+	}
+	if !state.AgentBuilder.Generating {
+		t.Error("AgentBuilder.Generating should be true")
+	}
+}
+
+// ─── Workflow → Back option returns to Prompt ───────────────────────────────
+
+func TestAgentBuilder_BackOnWorkflowScreen_ReturnsToPrompt(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgentBuilderWorkflow
+	m.AgentBuilder.AvailableWorkflows = []string{"sdd", "paper-review"}
+	// Cursor on "Back" (last option)
+	m.Cursor = len(m.AgentBuilder.AvailableWorkflows)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenAgentBuilderPrompt {
+		t.Fatalf("screen = %v, want ScreenAgentBuilderPrompt", state.Screen)
+	}
+}
+
+// ─── Workflow → Esc returns to Prompt ───────────────────────────────────────
+
+func TestAgentBuilder_EscFromWorkflow_ReturnsToPrompt(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgentBuilderWorkflow
+	m.AgentBuilder.AvailableWorkflows = []string{"sdd", "paper-review"}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenAgentBuilderPrompt {
+		t.Fatalf("screen = %v, want ScreenAgentBuilderPrompt", state.Screen)
 	}
 }
 
@@ -149,17 +232,18 @@ func TestAgentBuilder_NewPhaseMode_NavigatesToSDDPhase(t *testing.T) {
 	}
 }
 
-// ─── T-28.8: Esc from ScreenAgentBuilderSDD → goes to ScreenAgentBuilderPrompt
+// ─── T-28.8: Esc from ScreenAgentBuilderSDD → goes to ScreenAgentBuilderWorkflow
 
-func TestAgentBuilder_EscFromSDD_ReturnsToPrompt(t *testing.T) {
+func TestAgentBuilder_EscFromSDD_ReturnsToWorkflow(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgentBuilderSDD
+	m.AgentBuilder.AvailableWorkflows = []string{"sdd", "paper-review"}
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	state := updated.(Model)
 
-	if state.Screen != ScreenAgentBuilderPrompt {
-		t.Fatalf("screen = %v, want ScreenAgentBuilderPrompt", state.Screen)
+	if state.Screen != ScreenAgentBuilderWorkflow {
+		t.Fatalf("screen = %v, want ScreenAgentBuilderWorkflow", state.Screen)
 	}
 }
 
