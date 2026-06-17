@@ -24,12 +24,13 @@ type SDDIntegration struct {
 
 // GeneratedAgent holds the result of a generation run before installation.
 type GeneratedAgent struct {
-	Name        string
-	Title       string
-	Description string
-	Trigger     string
-	Content     string
-	SDDConfig   *SDDIntegration
+	Name         string
+	Title        string
+	Description  string
+	Trigger      string
+	Content      string
+	SDDConfig    *SDDIntegration
+	WorkflowName string // binds this agent to a workflow; empty means SDD
 }
 
 // RegistryEntry is a single record persisted in the custom-agent registry.
@@ -40,6 +41,7 @@ type RegistryEntry struct {
 	CreatedAt        time.Time       `json:"created_at"`
 	GenerationEngine model.AgentID   `json:"generation_engine"`
 	SDDIntegration   *SDDIntegration `json:"sdd_integration,omitempty"`
+	WorkflowName     string          `json:"workflow_name,omitempty"` // empty = SDD
 	InstalledAgents  []model.AgentID `json:"installed_agents"`
 }
 

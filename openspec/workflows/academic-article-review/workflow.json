@@ -1,0 +1,220 @@
+{
+  "name": "academic-article-review",
+  "version": 1,
+  "produces_code": false,
+  "validation": {
+    "strict_tdd": false
+  },
+  "phases": [
+    {
+      "id": "global-reading",
+      "name": "Lectura global y comprensión",
+      "depends_on": null,
+      "artifact": "global-reading.md",
+      "required_skills": [
+        "academic-researcher"
+      ],
+      "validation_gates": [
+        {
+          "id": "global-reading-complete",
+          "type": "agent-evaluated",
+          "skill": "academic-researcher",
+          "criteria": "Complete understanding of the article's scope, claims, and structure"
+        }
+      ]
+    },
+    {
+      "id": "initial-diagnosis",
+      "name": "Diagnóstico inicial (fortalezas y debilidades)",
+      "depends_on": [
+        "global-reading"
+      ],
+      "artifact": "initial-diagnosis.md",
+      "required_skills": [
+        "academic-researcher"
+      ],
+      "validation_gates": [
+        {
+          "id": "diagnosis-balanced",
+          "type": "agent-evaluated",
+          "skill": "academic-researcher",
+          "criteria": "Identifies both strengths and weaknesses with evidence"
+        }
+      ]
+    },
+    {
+      "id": "scientific-review",
+      "name": "Revisión científica (contenido)",
+      "depends_on": [
+        "initial-diagnosis"
+      ],
+      "artifact": "scientific-review.md",
+      "required_skills": [
+        "academic-researcher"
+      ],
+      "validation_gates": [
+        {
+          "id": "scientific-rigor",
+          "type": "agent-evaluated",
+          "skill": "academic-researcher",
+          "criteria": "Methodology, results, and conclusions are scientifically sound"
+        }
+      ]
+    },
+    {
+      "id": "narrative-review",
+      "name": "Revisión narrativa (escritura)",
+      "depends_on": [
+        "initial-diagnosis"
+      ],
+      "artifact": "narrative-review.md",
+      "required_skills": [
+        "academic-researcher"
+      ],
+      "validation_gates": [
+        {
+          "id": "narrative-clarity",
+          "type": "agent-evaluated",
+          "skill": "academic-researcher",
+          "criteria": "Writing is clear, well-structured, and follows academic conventions"
+        }
+      ]
+    },
+    {
+      "id": "improvement-plan",
+      "name": "Plan de mejoras priorizado",
+      "depends_on": [
+        "scientific-review",
+        "narrative-review"
+      ],
+      "artifact": "improvement-plan.md",
+      "required_skills": [
+        "academic-researcher"
+      ],
+      "validation_gates": [
+        {
+          "id": "plan-prioritized",
+          "type": "agent-evaluated",
+          "skill": "academic-researcher",
+          "criteria": "Improvements are prioritized by impact and feasibility"
+        }
+      ]
+    },
+    {
+      "id": "scientific-improvements",
+      "name": "Mejoras científicas",
+      "depends_on": [
+        "improvement-plan"
+      ],
+      "artifact": "scientific-improvements.md",
+      "required_skills": [
+        "academic-researcher"
+      ],
+      "validation_gates": [
+        {
+          "id": "scientific-improvements-applied",
+          "type": "agent-evaluated",
+          "skill": "academic-researcher",
+          "criteria": "Scientific improvements address the identified weaknesses"
+        }
+      ]
+    },
+    {
+      "id": "experiment-improvements",
+      "name": "Mejoras de experimentos",
+      "depends_on": [
+        "improvement-plan"
+      ],
+      "artifact": "experiment-improvements.md",
+      "required_skills": [
+        "academic-researcher"
+      ],
+      "validation_gates": [
+        {
+          "id": "experiment-improvements-applied",
+          "type": "agent-evaluated",
+          "skill": "academic-researcher",
+          "criteria": "Experimental design improvements are concrete and justified"
+        }
+      ]
+    },
+    {
+      "id": "writing-improvements",
+      "name": "Mejoras de redacción",
+      "depends_on": [
+        "improvement-plan"
+      ],
+      "artifact": "writing-improvements.md",
+      "required_skills": [
+        "academic-researcher"
+      ],
+      "validation_gates": [
+        {
+          "id": "writing-improvements-applied",
+          "type": "agent-evaluated",
+          "skill": "academic-researcher",
+          "criteria": "Writing improvements enhance clarity, flow, and academic tone"
+        }
+      ]
+    },
+    {
+      "id": "coherence-review",
+      "name": "Revisión integral de coherencia global",
+      "depends_on": [
+        "scientific-improvements",
+        "experiment-improvements",
+        "writing-improvements"
+      ],
+      "artifact": "coherence-review.md",
+      "required_skills": [
+        "academic-researcher"
+      ],
+      "validation_gates": [
+        {
+          "id": "global-coherence",
+          "type": "agent-evaluated",
+          "skill": "academic-researcher",
+          "criteria": "All improvements integrate coherently; no contradictions or gaps"
+        }
+      ]
+    },
+    {
+      "id": "reviewer-simulation",
+      "name": "Simulación de reviewers (Reviewer 1/2/3)",
+      "depends_on": [
+        "coherence-review"
+      ],
+      "artifact": "reviewer-simulation.md",
+      "required_skills": [
+        "academic-researcher"
+      ],
+      "validation_gates": [
+        {
+          "id": "reviewer-perspectives",
+          "type": "agent-evaluated",
+          "skill": "academic-researcher",
+          "criteria": "Three distinct reviewer personas provide realistic, constructive feedback"
+        }
+      ]
+    },
+    {
+      "id": "submission-preparation",
+      "name": "Preparación de envío (checklist de conferencia)",
+      "depends_on": [
+        "reviewer-simulation"
+      ],
+      "artifact": "submission-preparation.md",
+      "required_skills": [
+        "academic-researcher"
+      ],
+      "validation_gates": [
+        {
+          "id": "submission-ready",
+          "type": "agent-evaluated",
+          "skill": "academic-researcher",
+          "criteria": "All conference checklist items are verified and complete"
+        }
+      ]
+    }
+  ]
+}

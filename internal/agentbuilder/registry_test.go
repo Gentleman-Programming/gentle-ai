@@ -1,6 +1,7 @@
 package agentbuilder
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -173,6 +174,90 @@ func TestHasConflictWithBuiltin_FalseForCustom(t *testing.T) {
 		if HasConflictWithBuiltin(name) {
 			t.Errorf("HasConflictWithBuiltin(%q) = true, want false", name)
 		}
+	}
+}
+
+func TestRegistry_WorkflowNamePersisted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "registry.json")
+
+	entry := RegistryEntry{
+		Name:         "article-reviewer",
+		Title:        "Article Reviewer",
+		Description:  "Reviews academic articles",
+		CreatedAt:    time.Now().UTC().Truncate(time.Second),
+		WorkflowName: "academic-article-review",
+		InstalledAgents: []model.AgentID{model.AgentClaudeCode},
+	}
+	original := &Registry{Version: 1, Agents: []RegistryEntry{entry}}
+
+	if err := SaveRegistry(path, original); err != nil {
+		t.Fatalf("SaveRegistry: %v", err)
+	}
+
+	loaded, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+	if len(loaded.Agents) != 1 {
+		t.Fatalf("Agents len = %d, want 1", len(loaded.Agents))
+	}
+	if loaded.Agents[0].WorkflowName != "academic-article-review" {
+		t.Errorf("WorkflowName = %q, want %q", loaded.Agents[0].WorkflowName, "academic-article-review")
+	}
+}
+
+func TestRegistry_WorkflowNameEmptyWhenSDD(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "registry.json")
+
+	// SDD agents have empty WorkflowName (the default).
+	entry := RegistryEntry{
+		Name:         "sdd-agent",
+		Title:        "SDD Agent",
+		Description:  "Does SDD things",
+		CreatedAt:    time.Now().UTC().Truncate(time.Second),
+		InstalledAgents: []model.AgentID{model.AgentOpenCode},
+	}
+	original := &Registry{Version: 1, Agents: []RegistryEntry{entry}}
+
+	if err := SaveRegistry(path, original); err != nil {
+		t.Fatalf("SaveRegistry: %v", err)
+	}
+
+	loaded, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+	if len(loaded.Agents) != 1 {
+		t.Fatalf("Agents len = %d, want 1", len(loaded.Agents))
+	}
+	if loaded.Agents[0].WorkflowName != "" {
+		t.Errorf("WorkflowName = %q, want empty (SDD)", loaded.Agents[0].WorkflowName)
+	}
+}
+
+func TestRegistry_BackwardCompat_MissingWorkflowName(t *testing.T) {
+	// Old registry entries without workflow_name must deserialize with empty
+	// WorkflowName, which the code interprets as SDD.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "registry.json")
+
+	// Write JSON without workflow_name field.
+	jsonContent := `{"version":1,"agents":[{"name":"legacy-agent","title":"Legacy Agent","description":"Old agent","created_at":"2026-01-15T10:00:00Z","generation_engine":"claude-code","installed_agents":["claude-code"]}]}`
+	if err := os.WriteFile(path, []byte(jsonContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	loaded, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+	if len(loaded.Agents) != 1 {
+		t.Fatalf("Agents len = %d, want 1", len(loaded.Agents))
+	}
+	if loaded.Agents[0].WorkflowName != "" {
+		t.Errorf("WorkflowName = %q, want empty (backward compat)", loaded.Agents[0].WorkflowName)
 	}
 }
 
