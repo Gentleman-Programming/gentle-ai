@@ -12,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/internal/components/kilojsonc"
 	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
@@ -29,6 +30,7 @@ type InjectOptions struct {
 	ClaudeModelAssignments      map[string]model.ClaudeModelAlias
 	ClaudePhaseAssignments      map[string]model.ClaudePhaseAssignment
 	KiroModelAssignments        map[string]model.KiroModelAlias
+	KiloModelAssignments        map[string]model.KiloModelAlias
 	CodexModelAssignments       map[string]model.CodexEffort
 	CodexCarrilModelAssignments map[string]string // carril→model-id; nil = use defaults
 	CodexPhaseModelAssignments  map[string]string // phase→model-id; non-empty = Custom per-phase mode; nil/empty = preset/carril mode
@@ -90,6 +92,14 @@ type workflowInjector interface {
 // Adapters that do not implement this interface are unaffected.
 type kiroModelResolver interface {
 	KiroModelID(alias model.KiroModelAlias) string
+}
+
+// kiloModelResolver is an optional adapter capability. When implemented,
+// the subagent copy loop resolves KiloModelAlias values to Kilo Gateway
+// model IDs and stamps them into the agent frontmatter sentinel {{KILO_MODEL}}.
+// Adapters that do not implement this interface are unaffected.
+type kiloModelResolver interface {
+	KiloModelID(alias model.KiloModelAlias) string
 }
 
 // claudeModelResolver is an optional adapter capability. When implemented,
@@ -669,6 +679,29 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				contentStr = strings.ReplaceAll(contentStr, "{{KIRO_MODEL}}", kmr.KiroModelID(alias))
 			}
 
+			// Resolve {{KILO_MODEL}} placeholder for adapters that support it (e.g. Kilo Code).
+			// Non-Kilo adapters don't implement kiloModelResolver and are unaffected.
+			if lmr, ok := adapter.(kiloModelResolver); ok {
+				phase := strings.TrimSuffix(entry.Name(), ".md")
+				alias := model.KiloModelAuto // safe default
+				if opts.KiloModelAssignments != nil {
+					if a, hasAlias := opts.KiloModelAssignments[phase]; hasAlias {
+						alias = a
+					} else if d, hasDefault := opts.KiloModelAssignments["default"]; hasDefault {
+						alias = d
+					}
+				} else {
+					// Fall back to balanced preset when no assignments provided.
+					balanced := model.KiloModelPresetBalanced()
+					if a, hasPreset := balanced[phase]; hasPreset {
+						alias = a
+					} else if d, hasDefault := balanced["default"]; hasDefault {
+						alias = d
+					}
+				}
+				contentStr = strings.ReplaceAll(contentStr, "{{KILO_MODEL}}", lmr.KiloModelID(alias))
+			}
+
 			// Resolve {{CLAUDE_MODEL}} placeholder for adapters that support it (e.g. Claude Code).
 			// Non-Claude adapters don't implement claudeModelResolver and are unaffected.
 			if cmr, ok := adapter.(claudeModelResolver); ok {
@@ -778,6 +811,50 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				}
 			}
 		}
+	}
+
+	// 5b. Kilo Code post-injection verification — verify native agent files
+	// were written to ~/.kilo/agents/ with valid frontmatter and no mode: primary.
+	if adapter.Agent() == model.AgentKilocode {
+		agentsDir := adapter.SubAgentsDir(homeDir)
+		expectedPhases := []string{
+			"sdd-apply", "sdd-verify", "sdd-design", "sdd-spec", "sdd-tasks",
+			"sdd-explore", "sdd-propose", "sdd-archive", "sdd-init", "sdd-onboard",
+		}
+		for _, phase := range expectedPhases {
+			path := filepath.Join(agentsDir, phase+".md")
+			info, err := os.Stat(path)
+			if err != nil {
+				return InjectionResult{}, fmt.Errorf("post-check: Kilo agent file %q not found: %w", phase+".md", err)
+			}
+			if info.Size() < 10 {
+				return InjectionResult{}, fmt.Errorf("post-check: Kilo agent file %q is too small (%d bytes)", phase+".md", info.Size())
+			}
+			// Verify frontmatter has a name field.
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return InjectionResult{}, fmt.Errorf("post-check: read Kilo agent file %q: %w", phase+".md", readErr)
+			}
+			if !strings.Contains(string(content), "name:") {
+				return InjectionResult{}, fmt.Errorf("post-check: Kilo agent file %q missing name: in frontmatter", phase+".md")
+			}
+		}
+		// Verify orchestrator does NOT have mode: primary (Kilo v7 rejects this).
+		orchPath := filepath.Join(agentsDir, "gentle-orchestrator.md")
+		if orchContent, readErr := os.ReadFile(orchPath); readErr == nil {
+			if strings.Contains(string(orchContent), "mode: primary") {
+				return InjectionResult{}, fmt.Errorf("post-check: Kilo orchestrator agent must not use mode: primary (Kilo v7 rejects this)")
+			}
+		}
+	}
+
+	// 5c. Generate kilo.jsonc with Kilo Gateway provider config.
+	if adapter.Agent() == model.AgentKilocode {
+		kiloChanged, kiloErr := kilojsonc.Generate(homeDir, opts.KiloModelAssignments)
+		if kiloErr != nil {
+			return InjectionResult{}, fmt.Errorf("generate kilo.jsonc: %w", kiloErr)
+		}
+		changed = changed || kiloChanged
 	}
 
 	if adapter.SupportsSkills() {
