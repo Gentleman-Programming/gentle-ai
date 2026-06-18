@@ -21,6 +21,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/internal/components/theme"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/verify"
@@ -607,20 +608,61 @@ func (s componentSyncStep) Run() error {
 		//   from disk so their orchestrator prompts are refreshed from updated embedded
 		//   assets while model assignments are preserved.
 		profiles := s.selection.Profiles
-		if len(profiles) == 0 && profileStrategy != model.SDDProfileStrategyExternalSingleActive {
-			settingsPath := ""
-			for _, adapter := range adapters {
-				if adapter.Agent() == model.AgentOpenCode {
-					settingsPath = adapter.SettingsPath(s.homeDir)
-					break
-				}
+		settingsPath := ""
+		for _, adapter := range adapters {
+			if adapter.Agent() == model.AgentOpenCode {
+				settingsPath = adapter.SettingsPath(s.homeDir)
+				break
 			}
+		}
+
+		if len(profiles) == 0 && profileStrategy != model.SDDProfileStrategyExternalSingleActive {
 			if settingsPath != "" {
 				detected, detectErr := sdd.DetectProfiles(settingsPath)
 				if detectErr == nil {
 					profiles = detected
 				}
 				// If detect fails (e.g. file missing), silently skip — no profiles to refresh.
+			}
+		}
+
+		// R-PROF-31: Validate profile model assignments against OpenCode model cache
+		if len(profiles) > 0 && settingsPath != "" {
+			cachePath := opencode.DefaultCachePath()
+			if cachePath != "" {
+				if providers, err := opencode.LoadModelsOrEmpty(cachePath); err == nil {
+					// Merge custom providers if defined
+					configProviders, configErr := opencode.LoadConfigProviders(settingsPath)
+					if configErr == nil && len(configProviders) > 0 {
+						providers = opencode.MergeCustomProviders(providers, configProviders)
+					}
+
+					// Build a map of valid full model IDs: "provider/model"
+					validModels := make(map[string]bool)
+					for provID, prov := range providers {
+						for modelID := range prov.Models {
+							validModels[provID+"/"+modelID] = true
+						}
+					}
+
+					// Check each profile
+					for _, p := range profiles {
+						if p.OrchestratorModel.ProviderID != "" && p.OrchestratorModel.ModelID != "" {
+							fullID := p.OrchestratorModel.FullID()
+							if !validModels[fullID] {
+								fmt.Fprintf(os.Stderr, "WARNING: model %q assigned to orchestrator in profile %q not found in OpenCode model cache\n", fullID, p.Name)
+							}
+						}
+						for phase, assignment := range p.PhaseAssignments {
+							if assignment.ProviderID != "" && assignment.ModelID != "" {
+								fullID := assignment.FullID()
+								if !validModels[fullID] {
+									fmt.Fprintf(os.Stderr, "WARNING: model %q assigned to phase %q in profile %q not found in OpenCode model cache\n", fullID, phase, p.Name)
+								}
+							}
+						}
+					}
+				}
 			}
 		}
 

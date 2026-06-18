@@ -1205,7 +1205,7 @@ func TestEngramGoInstallFromMain_UsesGoEnvForBinDir(t *testing.T) {
 		t.Fatalf("engramGoInstallFromMain: unexpected error: %v", err)
 	}
 
-	wantDir := fakeInstallDir
+	wantDir := filepath.Clean(fakeInstallDir)
 	gotDir := filepath.Dir(binaryPath)
 	if gotDir != wantDir {
 		t.Errorf("binary dir = %q, want %q (from go env GOBIN)", gotDir, wantDir)
@@ -1216,9 +1216,19 @@ func TestEngramGoInstallFromMain_BypassesPublicGoProxy(t *testing.T) {
 	binDir := t.TempDir()
 	goPath := filepath.Join(binDir, "go")
 	recordPath := filepath.Join(t.TempDir(), "go-env.txt")
-	fakeGo := filepath.Join(binDir, "go")
-	script := "#!/usr/bin/env bash\n" +
-		"printf 'GONOSUMDB=%s\\nGOPRIVATE=%s\\nGONOPROXY=%s\\n' \"${GONOSUMDB:-}\" \"${GOPRIVATE:-}\" \"${GONOPROXY:-}\" > \"$GO_ENV_RECORD\"\n"
+	var fakeGo string
+	var script string
+	if runtime.GOOS == "windows" {
+		fakeGo = filepath.Join(binDir, "go.bat")
+		script = "@echo off\r\n" +
+			"echo GONOSUMDB=%GONOSUMDB% > \"%GO_ENV_RECORD%\"\r\n" +
+			"echo GOPRIVATE=%GOPRIVATE% >> \"%GO_ENV_RECORD%\"\r\n" +
+			"echo GONOPROXY=%GONOPROXY% >> \"%GO_ENV_RECORD%\"\r\n"
+	} else {
+		fakeGo = filepath.Join(binDir, "go")
+		script = "#!/usr/bin/env bash\n" +
+			"printf 'GONOSUMDB=%s\\nGOPRIVATE=%s\\nGONOPROXY=%s\\n' \"${GONOSUMDB:-}\" \"${GOPRIVATE:-}\" \"${GONOPROXY:-}\" > \"$GO_ENV_RECORD\"\n"
+	}
 	if err := os.WriteFile(fakeGo, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

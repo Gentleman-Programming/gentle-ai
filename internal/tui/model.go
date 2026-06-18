@@ -4021,6 +4021,16 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 		// Model assignment picker: orchestrator + all sub-agent phases in one screen.
 		// Reuse the same enter-on-row logic as ScreenModelPicker.
 		// Profile creation uses filtered rows (no JD agents).
+		cachePath := opencode.DefaultCachePath()
+		if _, err := osStatModelCache(cachePath); err != nil {
+			if m.ProfileEditMode {
+				m.setScreen(ScreenProfiles)
+			} else {
+				m.ProfileCreateStep = 0
+				m.Cursor = 0
+			}
+			return m, nil
+		}
 		rows := screens.ModelPickerRowsForProfile()
 		if m.Cursor < len(rows) {
 			// Enter sub-selection: pick provider then model.

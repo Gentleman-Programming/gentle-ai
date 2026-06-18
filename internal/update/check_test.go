@@ -876,9 +876,9 @@ func TestCheckSingleTool_EngramUsesBinaryReleaseChannel(t *testing.T) {
 	}
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		if name == "engram" {
-			return exec.Command("echo", "engram 1.15.13")
+			return mockCmd("echo", "engram 1.15.13")
 		}
-		return exec.Command("false")
+		return mockCmd("false")
 	}
 
 	result := checkSingleTool(context.Background(), Tools[1], "dev", system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true})

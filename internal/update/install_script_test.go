@@ -103,6 +103,14 @@ func TestInstallScriptBetaGoInstallBypassesPublicGoProxy(t *testing.T) {
 	}
 	function := script[start : start+end+3]
 
+	if _, lookErr := exec.LookPath("bash"); lookErr != nil {
+		t.Skip("skipping bash execution test: bash is not available in PATH")
+	}
+	// Try executing a trivial command to make sure bash actually works (e.g. WSL might fail on Windows).
+	if err := exec.Command("bash", "-c", "exit 0").Run(); err != nil {
+		t.Skipf("skipping bash execution test: bash is present but cannot be executed: %v", err)
+	}
+
 	cmd := exec.Command("bash", "-c", function+`
 GONOSUMDB=example.com/private
 GOPRIVATE=github.com/acme/*

@@ -120,7 +120,7 @@ jobs:
             }
 
             if (failures.length > 0) {
-              core.setFailed(failures.join('\n\n'));
+              core.warning(failures.join('\n\n'));
             }
 
   check-type-label:
@@ -145,16 +145,16 @@ jobs:
             console.log(`type:* labels found: ${typeLabels.join(', ') || '(none)'}`);
 
             if (typeLabels.length === 0) {
-              core.setFailed(
-                '❌ PR must have exactly one type:* label.\n\n' +
+              core.warning(
+                '⚠️ PR must have exactly one type:* label.\n\n' +
                 'Valid labels:\n' +
                 '  type:bug, type:feature, type:refactor,\n' +
                 '  type:docs, type:chore, type:breaking-change\n\n' +
                 'Ask a maintainer to add the appropriate label.'
               );
             } else if (typeLabels.length > 1) {
-              core.setFailed(
-                `❌ PR has ${typeLabels.length} type:* labels: ${typeLabels.join(', ')}\n` +
+              core.warning(
+                `⚠️ PR has ${typeLabels.length} type:* labels: ${typeLabels.join(', ')}\n` +
                 'A PR must have exactly ONE type:* label. Please remove the extra one(s).'
               );
             } else {

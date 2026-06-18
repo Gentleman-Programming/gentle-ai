@@ -4119,7 +4119,7 @@ func TestInjectCodexWritesSDDOrchestratorAndSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", extractedSkillPath, err)
 	}
-	if !strings.HasPrefix(string(extractedSkill), "---\n") {
+	if !strings.HasPrefix(string(extractedSkill), "---\n") && !strings.HasPrefix(string(extractedSkill), "---\r\n") {
 		t.Fatalf("Codex SDD skill must start with YAML frontmatter delimiter, got prefix %q", string(extractedSkill[:min(len(extractedSkill), 16)]))
 	}
 

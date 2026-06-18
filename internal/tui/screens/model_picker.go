@@ -645,6 +645,16 @@ func renderPhaseList(
 	}
 
 	if len(state.AvailableIDs) == 0 {
+		if state.ForProfile {
+			b.WriteString(styles.WarningStyle.Render("OpenCode has not been run yet — model cache not found."))
+			b.WriteString("\n")
+			b.WriteString(styles.SubtextStyle.Render("Run OpenCode at least once to populate the model cache."))
+			b.WriteString("\n\n")
+			b.WriteString(renderOptions([]string{"← Back"}, cursor))
+			b.WriteString("\n")
+			b.WriteString(styles.HelpStyle.Render("enter: confirm • esc: back"))
+			return b.String()
+		}
 		b.WriteString(styles.WarningStyle.Render("OpenCode has not been run yet — model cache not found."))
 		b.WriteString("\n")
 		b.WriteString(styles.SubtextStyle.Render("Run 'opencode' once, then re-run 'gentle-ai sync' to assign models."))

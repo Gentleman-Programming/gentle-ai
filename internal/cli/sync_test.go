@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -2994,5 +2995,100 @@ func TestRunSync_RestoresCodexPhaseModelAssignments(t *testing.T) {
 	}
 	if strings.Contains(text, "| `sdd-strong` |") {
 		t.Fatalf("AGENTS.md rendered carril table instead of Custom per-phase table; got:\n%s", text)
+	}
+}
+
+func TestRunSync_ProfileInvalidModelWarning(t *testing.T) {
+	home := t.TempDir()
+	
+	// Create opencode.json settings with a profile containing an invalid model
+	settingsDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	opencodeJSON := `{
+		"agent": {
+			"sdd-orchestrator-test-profile": {
+				"mode": "primary",
+				"model": "nonexistent/invalid-model"
+			}
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(settingsDir, "opencode.json"), []byte(opencodeJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Create models.json cache with a single valid model
+	cacheDir := filepath.Join(home, ".cache", "opencode")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	modelsJSON := `{
+		"anthropic": {
+			"name": "Anthropic",
+			"models": {
+				"claude-sonnet-4": {
+					"id": "claude-sonnet-4",
+					"name": "Claude 4 Sonnet",
+					"tool_call": true
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(cacheDir, "models.json"), []byte(modelsJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Setup mocks
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	// Capture stderr
+	oldStderr := os.Stderr
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatalf("os.Pipe: %v", pipeErr)
+	}
+	os.Stderr = w
+
+	sel := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{
+			model.ComponentSDD,
+			model.ComponentEngram,
+			model.ComponentContext7,
+			model.ComponentGGA,
+			model.ComponentSkills,
+			model.ComponentPersona,
+		},
+		SDDMode:    model.SDDModeMulti,
+	}
+	_, syncErr := RunSyncWithSelection(home, sel)
+	
+	// Restore stderr
+	w.Close()
+	os.Stderr = oldStderr
+	if syncErr != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", syncErr)
+	}
+
+	var buf strings.Builder
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("io.Copy: %v", err)
+	}
+	output := buf.String()
+
+	expectedWarning := `WARNING: model "nonexistent/invalid-model" assigned to orchestrator in profile "test-profile" not found in OpenCode model cache`
+	if !strings.Contains(output, expectedWarning) {
+		t.Errorf("expected warning message to contain %q; got:\n%s", expectedWarning, output)
 	}
 }
