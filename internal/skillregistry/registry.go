@@ -56,6 +56,7 @@ func UserSkillDirs(home string) []string {
 		filepath.Join(home, ".config", "agents", "skills"),
 		filepath.Join(home, ".agents", "skills"),
 		filepath.Join(home, ".kimi", "skills"),
+		filepath.Join(home, ".kimi-code", "skills"),
 
 		// Agent-specific global skill locations supported by Gentle AI adapters.
 		filepath.Join(home, ".config", "opencode", "skills"),
@@ -89,6 +90,8 @@ func ProjectSkillDirs(cwd string) []string {
 		filepath.Join(cwd, ".qwen", "skills"),
 		filepath.Join(cwd, ".kiro", "skills"),
 		filepath.Join(cwd, ".openclaw", "skills"),
+		filepath.Join(cwd, ".kimi", "skills"),
+		filepath.Join(cwd, ".kimi-code", "skills"),
 
 		// Gentle AI/Pi and generic Agent Skills workspace locations.
 		filepath.Join(cwd, ".pi", "skills"),
@@ -276,7 +279,7 @@ func uniqueExistingDirs(dirs []string) []string {
 			continue
 		}
 		seen[clean] = true
-		out = append(out, clean)
+		out = append(out, dir)
 	}
 	return out
 }
