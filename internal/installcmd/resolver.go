@@ -47,7 +47,7 @@ func (profileResolver) ResolveAgentInstall(profile system.PlatformProfile, agent
 	case model.AgentKilocode:
 		return resolveKilocodeInstall(profile), nil
 	case model.AgentKimi:
-		return resolveKimiInstall(profile)
+		return resolveKimiInstall(profile), nil
 	default:
 		return nil, fmt.Errorf("install command is not supported for agent %q", agent)
 	}
@@ -78,18 +78,15 @@ func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
 	return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}
 }
 
-// resolveKimiInstall returns the official Kimi install command sequence.
-// To avoid the security risks of pipe-to-shell patterns (curl | bash),
-// we execute the underlying command that the scripts alias: `uv tool install`.
-func resolveKimiInstall(profile system.PlatformProfile) (CommandSequence, error) {
-	// Kimi CLI is a python-based tool. We use Astral's `uv` as our deterministic
-	// prerequisite manager to ensure secure and isolated installs.
-	if !profile.Supported {
-		return nil, fmt.Errorf("Kimi is not supported on this platform (%s/%s)", profile.OS, profile.LinuxDistro)
+// resolveKimiInstall returns the official Kimi Code CLI install command sequence.
+// Kimi Code CLI (v0.18.0+) is a TypeScript-based tool distributed via npm.
+// We use npm with --ignore-scripts for supply-chain safety and a pinned version.
+func resolveKimiInstall(profile system.PlatformProfile) CommandSequence {
+	pkg := "@moonshot-ai/kimi-code@" + versions.Kimi
+	if profile.OS == "linux" && !profile.NpmWritable {
+		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}
 	}
-
-	// We explicitly request python 3.13 as strictly defined by Kimi upstream.
-	return CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}}, nil
+	return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}
 }
 
 // npmBasedAgents is the set of agents whose auto-install runs npm commands.
@@ -107,6 +104,7 @@ var npmBasedAgents = map[model.AgentID]struct{}{
 	model.AgentCodex:      {},
 	model.AgentQwenCode:   {},
 	model.AgentPi:         {},
+	model.AgentKimi:       {},
 }
 
 // ValidateAgentInstallPreflight validates agent-specific prerequisites that must
@@ -118,8 +116,6 @@ func ValidateAgentInstallPreflight(profile system.PlatformProfile, agent model.A
 		}
 	}
 	switch agent {
-	case model.AgentKimi:
-		return validateKimiInstallPreflight(profile)
 	case model.AgentPi:
 		return validatePiInstallPreflight()
 	default:
@@ -150,40 +146,6 @@ func validateNpmInstallPreflight(profile system.PlatformProfile) error {
 		)
 	}
 	return nil
-}
-
-func validateKimiInstallPreflight(profile system.PlatformProfile) error {
-	if !profile.Supported {
-		return fmt.Errorf("Kimi is not supported on this platform (%s/%s)", profile.OS, profile.LinuxDistro)
-	}
-
-	if _, err := cmdLookPath("uv"); err != nil {
-		return fmt.Errorf(
-			"Kimi requires Astral uv, but `uv` was not found in PATH.\n"+
-				"Install uv and retry:\n"+
-				"  %s",
-			uvInstallHint(profile),
-		)
-	}
-
-	return nil
-}
-
-func uvInstallHint(profile system.PlatformProfile) string {
-	switch profile.PackageManager {
-	case "brew":
-		return "brew install uv"
-	case "apt":
-		return "sudo apt-get install -y uv (or see https://docs.astral.sh/uv/getting-started/installation/)"
-	case "pacman":
-		return "sudo pacman -S --noconfirm uv"
-	case "dnf":
-		return "sudo dnf install -y uv"
-	case "winget":
-		return "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements"
-	default:
-		return "https://docs.astral.sh/uv/getting-started/installation/"
-	}
 }
 
 func (profileResolver) ResolveComponentInstall(profile system.PlatformProfile, component model.ComponentID) (CommandSequence, error) {
@@ -316,7 +278,7 @@ func gitBashPath() string {
 			return candidate
 		}
 
-		// git might already be in bin/ (not cmd/).
+		// git might already be in bin/ (not cmd/). 
 		candidate = filepath.Join(gitDir, "bash.exe")
 		if _, err := osStat(candidate); err == nil {
 			return candidate
