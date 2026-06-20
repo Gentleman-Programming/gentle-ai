@@ -4,33 +4,33 @@
 
 ## Persona
 
-<!-- GENTLEMAN_AI_PERSONA_START -->
-<!-- GENTLEMAN_AI_PERSONA_END -->
+<!-- gentle-ai:persona -->
+<!-- /gentle-ai:persona -->
 
 ## Output Style
 
-<!-- GENTLEMAN_AI_OUTPUT_STYLE_START -->
-<!-- GENTLEMAN_AI_OUTPUT_STYLE_END -->
+<!-- gentle-ai:output-style -->
+<!-- /gentle-ai:output-style -->
 
 ## Engram Protocol
 
-<!-- GENTLEMAN_AI_ENGRAM_START -->
-<!-- GENTLEMAN_AI_ENGRAM_END -->
+<!-- gentle-ai:engram-protocol -->
+<!-- /gentle-ai:engram-protocol -->
 
 ## SDD Orchestrator
 
-<!-- GENTLEMAN_AI_SDD_START -->
-<!-- GENTLEMAN_AI_SDD_END -->
+<!-- gentle-ai:sdd-orchestrator -->
+<!-- /gentle-ai:sdd-orchestrator -->
 
 ## Strict TDD Mode
 
-<!-- GENTLEMAN_AI_TDD_START -->
-<!-- GENTLEMAN_AI_TDD_END -->
+<!-- gentle-ai:strict-tdd-mode -->
+<!-- /gentle-ai:strict-tdd-mode -->
 
 ## Trigger Rules
 
-<!-- GENTLEMAN_AI_TRIGGERS_START -->
-<!-- GENTLEMAN_AI_TRIGGERS_END -->
+<!-- gentle-ai:trigger-rules -->
+<!-- /gentle-ai:trigger-rules -->
 
 ## Project Instructions
 
