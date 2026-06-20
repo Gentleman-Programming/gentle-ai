@@ -24,3 +24,6 @@ const GeminiCLI = "0.41.2"
 
 // renovate: datasource=npm depName=@upstash/context7-mcp
 const Context7MCP = "2.2.5"
+
+// renovate: datasource=npm depName=@moonshot-ai/kimi-code
+const Kimi = "0.18.0"
