@@ -147,7 +147,7 @@ func renderUpgradeResult(b *strings.Builder, report *upgrade.UpgradeReport) stri
 			line := r.ToolName + "  " + styles.SubtextStyle.Render("(skipped)")
 			b.WriteString("  " + styles.SubtextStyle.Render("-") + "  " + styles.SubtextStyle.Render(line))
 			if r.ManualHint != "" {
-				b.WriteString("\n     " + styles.SubtextStyle.Render(r.ManualHint))
+				writeManualHint(b, r.ManualHint)
 			}
 		}
 		b.WriteString("\n")
@@ -185,6 +185,19 @@ func renderUpgradeResult(b *strings.Builder, report *upgrade.UpgradeReport) stri
 	b.WriteString(styles.HelpStyle.Render("enter: return • esc: back • q: quit"))
 
 	return b.String()
+}
+
+// writeManualHint renders a ManualHint to the builder.
+// Hints longer than 80 chars that contain ": " are split so the command
+// appears on its own line and remains visible on narrow terminals.
+func writeManualHint(b *strings.Builder, hint string) {
+	const indent = "     "
+	if idx := strings.LastIndex(hint, ": "); idx >= 0 && len(hint) > 80 {
+		b.WriteString("\n" + indent + styles.SubtextStyle.Render(hint[:idx+1]))
+		b.WriteString("\n" + indent + "  " + styles.SubtextStyle.Render(hint[idx+2:]))
+	} else {
+		b.WriteString("\n" + indent + styles.SubtextStyle.Render(hint))
+	}
 }
 
 func reportUpgradedGentleAI(report *upgrade.UpgradeReport) bool {

@@ -127,6 +127,38 @@ func TestRenderUpgrade_ErrorState(t *testing.T) {
 	}
 }
 
+// TestRenderUpgrade_LongManualHintSplitsAcrossLines verifies that a long ManualHint
+// containing ": " is split so the command appears on its own line and is not clipped
+// by BubbleTea at the terminal width.
+func TestRenderUpgrade_LongManualHintSplitsAcrossLines(t *testing.T) {
+	longHint := `upgrade "gentle-ai" on Windows requires manual update: irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex`
+	report := &upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{
+				ToolName:   "gentle-ai",
+				OldVersion: "v1.0.0",
+				NewVersion: "v1.1.0",
+				Status:     upgrade.UpgradeSkipped,
+				ManualHint: longHint,
+			},
+		},
+	}
+
+	out := RenderUpgrade(nil, report, nil, false, true, 0, 0)
+
+	if !strings.Contains(out, "requires manual update:") {
+		t.Errorf("hint preamble should appear in output; got:\n%s", out)
+	}
+	if !strings.Contains(out, "irm https://") {
+		t.Errorf("hint command should appear in output; got:\n%s", out)
+	}
+	// Both parts must be present on separate lines — verify the preamble ends with ":"
+	// and the command starts on its own indented line.
+	if !strings.Contains(out, "manual update:\n") {
+		t.Errorf("preamble should end with colon followed by newline (split layout); got:\n%s", out)
+	}
+}
+
 // TestRenderUpgrade_TitleAlwaysPresent verifies that the "Upgrade Tools" title
 // is always present regardless of state.
 func TestRenderUpgrade_TitleAlwaysPresent(t *testing.T) {

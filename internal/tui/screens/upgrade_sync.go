@@ -143,11 +143,10 @@ func renderUpgradeSyncResult(report *upgrade.UpgradeReport, syncFiles []string, 
 				}
 			case upgrade.UpgradeSkipped:
 				upgradeSkipped++
-				hint := ""
+				b.WriteString("  " + styles.SubtextStyle.Render("-") + "  " + styles.SubtextStyle.Render(r.ToolName+" (skipped)"))
 				if r.ManualHint != "" {
-					hint = "  " + styles.SubtextStyle.Render(r.ManualHint)
+					writeManualHint(&b, r.ManualHint)
 				}
-				b.WriteString("  " + styles.SubtextStyle.Render("-") + "  " + styles.SubtextStyle.Render(r.ToolName+" (skipped)") + hint)
 			}
 			b.WriteString("\n")
 		}
