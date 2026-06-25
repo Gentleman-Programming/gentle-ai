@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,9 @@ func TestCheckOneTool_MissingBinary(t *testing.T) {
 func TestCheckOneTool_ShadowedBinary(t *testing.T) {
 	orig := lookPathFn
 	defer func() { lookPathFn = orig }()
+	origExts := executableExtsFn
+	defer func() { executableExtsFn = origExts }()
+	executableExtsFn = func() []string { return []string{""} }
 
 	dir1 := t.TempDir()
 	dir2 := t.TempDir()
@@ -65,6 +69,9 @@ func TestCheckOneTool_ShadowedBinary(t *testing.T) {
 func TestCheckOneTool_OK(t *testing.T) {
 	orig := lookPathFn
 	defer func() { lookPathFn = orig }()
+	origExts := executableExtsFn
+	defer func() { executableExtsFn = origExts }()
+	executableExtsFn = func() []string { return []string{""} }
 
 	dir := t.TempDir()
 	f, err := os.Create(filepath.Join(dir, "engram"))
@@ -79,6 +86,60 @@ func TestCheckOneTool_OK(t *testing.T) {
 
 	if got.Status != CheckStatusPass {
 		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
+	}
+}
+
+// TestCheckOneTool_ShadowedWindowsExt reproduces the Windows bug: binaries on
+// disk carry an executable extension (e.g. gentle-ai.exe / gentle-ai.cmd), so a
+// bare-name scan misses them and shadowing is reported as [ok]. With PATHEXT
+// extensions the duplicate copies are detected and a warning is produced.
+func TestCheckOneTool_ShadowedWindowsExt(t *testing.T) {
+	origLook := lookPathFn
+	defer func() { lookPathFn = origLook }()
+	origExts := executableExtsFn
+	defer func() { executableExtsFn = origExts }()
+	executableExtsFn = func() []string { return []string{".exe", ".cmd"} }
+
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+	for _, p := range []string{filepath.Join(dir1, "gentle-ai.exe"), filepath.Join(dir2, "gentle-ai.cmd")} {
+		f, err := os.Create(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+	}
+
+	lookPathFn = func(string) (string, error) { return filepath.Join(dir1, "gentle-ai.exe"), nil }
+
+	got := checkOneTool("gentle-ai", []string{dir1, dir2})
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("expected warn for extensioned shadow, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "2 copies found") {
+		t.Errorf("unexpected detail: %s", got.Detail)
+	}
+}
+
+// TestExecutableExtensions verifies the per-platform extension set.
+func TestExecutableExtensions(t *testing.T) {
+	exts := executableExtensions()
+	if len(exts) == 0 {
+		t.Fatal("expected at least one extension")
+	}
+	if runtime.GOOS == "windows" {
+		var hasExe bool
+		for _, e := range exts {
+			if e == ".exe" {
+				hasExe = true
+			}
+		}
+		if !hasExe {
+			t.Errorf("expected .exe among Windows extensions, got %v", exts)
+		}
+	} else if len(exts) != 1 || exts[0] != "" {
+		t.Errorf(`expected [""] on non-Windows, got %v`, exts)
 	}
 }
 

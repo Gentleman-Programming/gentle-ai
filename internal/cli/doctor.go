@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -40,9 +41,9 @@ type DoctorReport struct {
 var knownTools = []string{"gentle-ai", "engram", "gga", "claude", "opencode"}
 
 const (
-	engramHealthEnvVar    = "ENGRAM_BASE_URL"
-	diskWarnThreshold     = int64(100 * 1024 * 1024) // 100 MB
-	diskFailThreshold     = int64(10 * 1024 * 1024)  // 10 MB
+	engramHealthEnvVar = "ENGRAM_BASE_URL"
+	diskWarnThreshold  = int64(100 * 1024 * 1024) // 100 MB
+	diskFailThreshold  = int64(10 * 1024 * 1024)  // 10 MB
 )
 
 // Overridable for testing.
@@ -50,6 +51,7 @@ var (
 	lookPathFn          = exec.LookPath
 	availableBytesFn    = storage.AvailableBytes
 	osUserHomeDirDoctor = os.UserHomeDir
+	executableExtsFn    = executableExtensions
 	pathDirsFn          = func() []string {
 		return filepath.SplitList(os.Getenv("PATH"))
 	}
@@ -102,8 +104,8 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 
 	var copies []string
 	for _, dir := range pathDirs {
-		if _, statErr := os.Stat(filepath.Join(dir, tool)); statErr == nil {
-			copies = append(copies, filepath.Join(dir, tool))
+		if p := toolInDir(dir, tool); p != "" {
+			copies = append(copies, p)
 		}
 	}
 
@@ -121,6 +123,44 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 		Status: CheckStatusPass,
 		Detail: tool + " found at " + resolved,
 	}
+}
+
+// executableExtensions returns the filename suffixes to probe when scanning a
+// PATH directory for a tool binary. On Windows it mirrors exec.LookPath, which
+// resolves a bare name like "gentle-ai" to "gentle-ai.exe"/".cmd" via PATHEXT;
+// on other platforms the bare name is used as-is. Without this, the duplicate
+// scan never matches real Windows binaries and PATH shadowing goes unreported.
+func executableExtensions() []string {
+	if runtime.GOOS != "windows" {
+		return []string{""}
+	}
+	pathext := os.Getenv("PATHEXT")
+	if pathext == "" {
+		pathext = ".COM;.EXE;.BAT;.CMD"
+	}
+	var exts []string
+	for _, e := range strings.Split(pathext, ";") {
+		if e = strings.TrimSpace(e); e != "" {
+			exts = append(exts, strings.ToLower(e))
+		}
+	}
+	if len(exts) == 0 {
+		return []string{".exe"}
+	}
+	return exts
+}
+
+// toolInDir returns the path to tool's executable inside dir, or "" if absent.
+// It honors Windows executable extensions so the duplicate scan agrees with
+// exec.LookPath (used for the resolved path).
+func toolInDir(dir, tool string) string {
+	for _, ext := range executableExtsFn() {
+		candidate := filepath.Join(dir, tool+ext)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // checkStateJSON validates ~/.gentle-ai/state.json and agent config dirs.
