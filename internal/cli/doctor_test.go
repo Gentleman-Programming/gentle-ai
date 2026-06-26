@@ -143,6 +143,41 @@ func TestExecutableExtensions(t *testing.T) {
 	}
 }
 
+func TestExecutableExtensionsFor(t *testing.T) {
+	tests := []struct {
+		name    string
+		goos    string
+		pathext string
+		want    []string
+	}{
+		{
+			name: "non-windows uses bare name",
+			goos: "darwin",
+			want: []string{""},
+		},
+		{
+			name: "windows default PATHEXT",
+			goos: "windows",
+			want: []string{".com", ".exe", ".bat", ".cmd"},
+		},
+		{
+			name:    "windows normalizes PATHEXT case and missing dots",
+			goos:    "windows",
+			pathext: "EXE;.Cmd; ;BAT",
+			want:    []string{".exe", ".cmd", ".bat"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := executableExtensionsFor(tt.goos, tt.pathext)
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // --- checkStateJSON ---
 
 func TestCheckStateJSON_Missing(t *testing.T) {

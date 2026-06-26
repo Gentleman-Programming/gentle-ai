@@ -131,21 +131,26 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 // on other platforms the bare name is used as-is. Without this, the duplicate
 // scan never matches real Windows binaries and PATH shadowing goes unreported.
 func executableExtensions() []string {
-	if runtime.GOOS != "windows" {
+	return executableExtensionsFor(runtime.GOOS, os.Getenv("PATHEXT"))
+}
+
+func executableExtensionsFor(goos, pathext string) []string {
+	if goos != "windows" {
 		return []string{""}
 	}
-	pathext := os.Getenv("PATHEXT")
 	if pathext == "" {
-		pathext = ".COM;.EXE;.BAT;.CMD"
+		return []string{".com", ".exe", ".bat", ".cmd"}
 	}
 	var exts []string
 	for _, e := range strings.Split(pathext, ";") {
-		if e = strings.TrimSpace(e); e != "" {
-			exts = append(exts, strings.ToLower(e))
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e == "" {
+			continue
 		}
-	}
-	if len(exts) == 0 {
-		return []string{".exe"}
+		if !strings.HasPrefix(e, ".") {
+			e = "." + e
+		}
+		exts = append(exts, e)
 	}
 	return exts
 }
