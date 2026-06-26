@@ -17,6 +17,12 @@ import (
 //  3. !operationRunning && (upgradeReport != nil || upgradeErr != nil) → show combined results
 //  4. Otherwise → show confirmation screen
 func RenderUpgradeSync(results []update.UpdateResult, upgradeReport *upgrade.UpgradeReport, syncFiles []string, upgradeErr error, syncErr error, operationRunning bool, updateCheckDone bool, cursor int, spinnerFrame int) string {
+	return RenderUpgradeSyncWithWidth(results, upgradeReport, syncFiles, upgradeErr, syncErr, operationRunning, updateCheckDone, cursor, spinnerFrame, 0)
+}
+
+// RenderUpgradeSyncWithWidth handles all states of the combined upgrade+sync
+// screen, constraining long manual hints to the terminal width when width is known.
+func RenderUpgradeSyncWithWidth(results []update.UpdateResult, upgradeReport *upgrade.UpgradeReport, syncFiles []string, upgradeErr error, syncErr error, operationRunning bool, updateCheckDone bool, cursor int, spinnerFrame int, width int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Upgrade + Sync"))
@@ -51,7 +57,7 @@ func RenderUpgradeSync(results []update.UpdateResult, upgradeReport *upgrade.Upg
 	// State 3: both operations done — show combined results
 	// Triggered when not running and either upgrade report or upgrade error is present.
 	if !operationRunning && (upgradeReport != nil || upgradeErr != nil) {
-		b.WriteString(renderUpgradeSyncResult(upgradeReport, syncFiles, upgradeErr, syncErr))
+		b.WriteString(renderUpgradeSyncResult(upgradeReport, syncFiles, upgradeErr, syncErr, width))
 		return b.String()
 	}
 
@@ -107,7 +113,7 @@ func renderUpgradeSyncConfirm(results []update.UpdateResult, updateCheckDone boo
 	return b.String()
 }
 
-func renderUpgradeSyncResult(report *upgrade.UpgradeReport, syncFiles []string, upgradeErr error, syncErr error) string {
+func renderUpgradeSyncResult(report *upgrade.UpgradeReport, syncFiles []string, upgradeErr error, syncErr error, width int) string {
 	var b strings.Builder
 
 	// --- Upgrade section ---
@@ -145,7 +151,7 @@ func renderUpgradeSyncResult(report *upgrade.UpgradeReport, syncFiles []string, 
 				upgradeSkipped++
 				b.WriteString("  " + styles.SubtextStyle.Render("-") + "  " + styles.SubtextStyle.Render(r.ToolName+" (skipped)"))
 				if r.ManualHint != "" {
-					writeManualHint(&b, r.ManualHint)
+					writeManualHint(&b, r.ManualHint, width)
 				}
 			}
 			b.WriteString("\n")

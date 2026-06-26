@@ -3,6 +3,7 @@ package screens
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
@@ -27,6 +28,12 @@ func SpinnerChar(frame int) string {
 //  4. upgradeErr != nil (and report == nil) → show error with return prompt
 //  5. Otherwise → show list of tools with status, option to upgrade
 func RenderUpgrade(results []update.UpdateResult, report *upgrade.UpgradeReport, upgradeErr error, operationRunning bool, updateCheckDone bool, cursor int, spinnerFrame int) string {
+	return RenderUpgradeWithWidth(results, report, upgradeErr, operationRunning, updateCheckDone, cursor, spinnerFrame, 0)
+}
+
+// RenderUpgradeWithWidth handles all states of the upgrade screen, constraining
+// long manual hints to the terminal width when width is known.
+func RenderUpgradeWithWidth(results []update.UpdateResult, report *upgrade.UpgradeReport, upgradeErr error, operationRunning bool, updateCheckDone bool, cursor int, spinnerFrame int, width int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Upgrade Tools"))
@@ -50,7 +57,7 @@ func RenderUpgrade(results []update.UpdateResult, report *upgrade.UpgradeReport,
 
 	// State 3: upgrade report is available — show results
 	if report != nil {
-		return renderUpgradeResult(&b, report)
+		return renderUpgradeResult(&b, report, width)
 	}
 
 	// State 4: upgrade error — show error and allow returning
@@ -115,7 +122,7 @@ func renderUpgradeReady(b *strings.Builder, results []update.UpdateResult) strin
 	return b.String()
 }
 
-func renderUpgradeResult(b *strings.Builder, report *upgrade.UpgradeReport) string {
+func renderUpgradeResult(b *strings.Builder, report *upgrade.UpgradeReport, width int) string {
 	if len(report.Results) == 0 {
 		b.WriteString("  " + styles.SuccessStyle.Render("✓ All tools are up to date"))
 		b.WriteString("\n\n")
@@ -147,7 +154,7 @@ func renderUpgradeResult(b *strings.Builder, report *upgrade.UpgradeReport) stri
 			line := r.ToolName + "  " + styles.SubtextStyle.Render("(skipped)")
 			b.WriteString("  " + styles.SubtextStyle.Render("-") + "  " + styles.SubtextStyle.Render(line))
 			if r.ManualHint != "" {
-				writeManualHint(b, r.ManualHint)
+				writeManualHint(b, r.ManualHint, width)
 			}
 		}
 		b.WriteString("\n")
@@ -188,15 +195,30 @@ func renderUpgradeResult(b *strings.Builder, report *upgrade.UpgradeReport) stri
 }
 
 // writeManualHint renders a ManualHint to the builder.
-// Hints longer than 80 chars that contain ": " are split so the command
+// Hints longer than 80 runes that contain ": " are split so the command
 // appears on its own line and remains visible on narrow terminals.
-func writeManualHint(b *strings.Builder, hint string) {
+func writeManualHint(b *strings.Builder, hint string, width int) {
 	const indent = "     "
-	if idx := strings.LastIndex(hint, ": "); idx >= 0 && len(hint) > 80 {
+	const commandIndent = indent + "  "
+
+	if idx := strings.Index(hint, ": "); idx >= 0 && utf8.RuneCountInString(hint) > 80 {
 		b.WriteString("\n" + indent + styles.SubtextStyle.Render(hint[:idx+1]))
-		b.WriteString("\n" + indent + "  " + styles.SubtextStyle.Render(hint[idx+2:]))
-	} else {
-		b.WriteString("\n" + indent + styles.SubtextStyle.Render(hint))
+		writeWrappedManualHintLine(b, commandIndent, hint[idx+2:], width)
+		return
+	}
+
+	writeWrappedManualHintLine(b, indent, hint, width)
+}
+
+func writeWrappedManualHintLine(b *strings.Builder, indent string, text string, width int) {
+	availableWidth := width - len(indent)
+	if width <= 0 || availableWidth <= 0 {
+		b.WriteString("\n" + indent + styles.SubtextStyle.Render(text))
+		return
+	}
+
+	for _, line := range wrapPlainLine(text, availableWidth) {
+		b.WriteString("\n" + indent + styles.SubtextStyle.Render(line))
 	}
 }
 

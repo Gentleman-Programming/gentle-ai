@@ -2,6 +2,7 @@ package screens
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -144,19 +145,38 @@ func TestRenderUpgrade_LongManualHintSplitsAcrossLines(t *testing.T) {
 		},
 	}
 
-	out := RenderUpgrade(nil, report, nil, false, true, 0, 0)
+	out := stripANSI(RenderUpgradeWithWidth(nil, report, nil, false, true, 0, 0, 80))
+	lines := strings.Split(out, "\n")
 
-	if !strings.Contains(out, "requires manual update:") {
-		t.Errorf("hint preamble should appear in output; got:\n%s", out)
+	preambleIndex := -1
+	for i, line := range lines {
+		if strings.Contains(line, "requires manual update:") {
+			preambleIndex = i
+			break
+		}
 	}
-	if !strings.Contains(out, "irm https://") {
-		t.Errorf("hint command should appear in output; got:\n%s", out)
+	if preambleIndex == -1 {
+		t.Fatalf("hint preamble should appear in output; got:\n%s", out)
 	}
-	// Both parts must be present on separate lines — verify the preamble ends with ":"
-	// and the command starts on its own indented line.
-	if !strings.Contains(out, "manual update:\n") {
-		t.Errorf("preamble should end with colon followed by newline (split layout); got:\n%s", out)
+	if preambleIndex+1 >= len(lines) || !strings.Contains(lines[preambleIndex+1], "irm") {
+		t.Fatalf("hint command should start on the line after the preamble; got:\n%s", out)
 	}
+	if !strings.Contains(out, "install.ps1") || !strings.Contains(out, "| iex") {
+		t.Fatalf("full manual command should remain visible; got:\n%s", out)
+	}
+	for _, line := range lines[preambleIndex+1:] {
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+		if len(line) > 80 {
+			t.Fatalf("manual hint line exceeds terminal width: len=%d line=%q\noutput:\n%s", len(line), line, out)
+		}
+	}
+}
+
+func stripANSI(s string) string {
+	ansiPattern := regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+	return ansiPattern.ReplaceAllString(s, "")
 }
 
 // TestRenderUpgrade_TitleAlwaysPresent verifies that the "Upgrade Tools" title
