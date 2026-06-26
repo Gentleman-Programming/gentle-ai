@@ -195,14 +195,15 @@ func renderUpgradeResult(b *strings.Builder, report *upgrade.UpgradeReport, widt
 }
 
 // writeManualHint renders a ManualHint to the builder.
-// Hints longer than 80 runes that contain ": " are split so the command
-// appears on its own line and remains visible on narrow terminals.
+// Hints that exceed the available terminal width and contain ": " are split so
+// the command appears on its own wrapped block and remains visible on narrow terminals.
 func writeManualHint(b *strings.Builder, hint string, width int) {
 	const indent = "     "
 	const commandIndent = indent + "  "
 
-	if idx := strings.Index(hint, ": "); idx >= 0 && utf8.RuneCountInString(hint) > 80 {
-		b.WriteString("\n" + indent + styles.SubtextStyle.Render(hint[:idx+1]))
+	availableWidth := width - utf8.RuneCountInString(indent)
+	if idx := strings.Index(hint, ": "); idx >= 0 && availableWidth > 0 && utf8.RuneCountInString(hint) > availableWidth {
+		writeWrappedManualHintLine(b, indent, hint[:idx+1], width)
 		writeWrappedManualHintLine(b, commandIndent, hint[idx+2:], width)
 		return
 	}
