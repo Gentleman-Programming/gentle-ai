@@ -1166,6 +1166,68 @@ func TestDownloadLatestBinary_BetaChannelUsesGoInstallMain(t *testing.T) {
 	}
 }
 
+func TestCanonicalEngramGoInstallPackagePreservesDeclaredModuleCasing(t *testing.T) {
+	tests := []struct {
+		name string
+		pkg  string
+		want string
+	}{
+		{
+			name: "lowercase owner is canonicalized",
+			pkg:  "github.com/gentleman-programming/engram/cmd/engram@main",
+			want: "github.com/Gentleman-Programming/engram/cmd/engram@main",
+		},
+		{
+			name: "canonical owner remains unchanged",
+			pkg:  "github.com/Gentleman-Programming/engram/cmd/engram@v1.2.3",
+			want: "github.com/Gentleman-Programming/engram/cmd/engram@v1.2.3",
+		},
+		{
+			name: "unrelated package remains unchanged",
+			pkg:  "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest",
+			want: "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := canonicalEngramGoInstallPackage(tt.pkg); got != tt.want {
+				t.Fatalf("canonicalEngramGoInstallPackage(%q) = %q, want %q", tt.pkg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEngramGoInstallFromMainCanonicalizesModuleCasing(t *testing.T) {
+	const fakeInstallDir = "/custom/gobin"
+
+	origGoInstallCmdFn := engramGoInstallCmdFn
+	origGoEnvFn := engramGoEnvFn
+	t.Cleanup(func() {
+		engramGoInstallCmdFn = origGoInstallCmdFn
+		engramGoEnvFn = origGoEnvFn
+	})
+
+	var gotPkg string
+	engramGoInstallCmdFn = func(pkg string) error {
+		gotPkg = pkg
+		return nil
+	}
+	engramGoEnvFn = func(keys ...string) (map[string]string, error) {
+		return map[string]string{"GOBIN": fakeInstallDir, "GOPATH": ""}, nil
+	}
+
+	_, err := engramGoInstallFromMain("github.com/gentleman-programming/engram/cmd/engram@main")
+	if err != nil {
+		t.Fatalf("engramGoInstallFromMain: unexpected error: %v", err)
+	}
+
+	wantPkg := "github.com/Gentleman-Programming/engram/cmd/engram@main"
+	if gotPkg != wantPkg {
+		t.Fatalf("go install package = %q, want %q", gotPkg, wantPkg)
+	}
+}
+
 // TestEngramGoInstallFromMain_UsesGoEnvForBinDir verifies that
 // engramGoInstallFromMain resolves the install directory via `go env GOBIN GOPATH`
 // (the effective Go environment) rather than reading raw shell env vars.

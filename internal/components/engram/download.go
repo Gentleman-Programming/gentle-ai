@@ -23,9 +23,11 @@ import (
 )
 
 const (
-	engramOwner = "Gentleman-Programming"
-	engramRepo  = "engram"
-	engramName  = "engram"
+	engramOwner            = "Gentleman-Programming"
+	engramRepo             = "engram"
+	engramName             = "engram"
+	engramCanonicalModule  = "github.com/Gentleman-Programming/engram"
+	engramCanonicalPackage = engramCanonicalModule + "/cmd/engram"
 )
 
 // Package-level vars for testability.
@@ -43,7 +45,7 @@ var (
 	// engramGoInstallCmdFn executes `go install <pkg>`. Package-level var for testability.
 	engramGoInstallCmdFn = func(pkg string) error {
 		cmd := exec.Command("go", "install", pkg)
-		cmd.Env = goPrivateModuleEnv(os.Environ(), "github.com/Gentleman-Programming/engram")
+		cmd.Env = goPrivateModuleEnv(os.Environ(), engramCanonicalModule)
 		cmd.Stdin = nil
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -110,6 +112,14 @@ func appendGoEnvPattern(required, existing string) string {
 	return existing + "," + required
 }
 
+func canonicalEngramGoInstallPackage(pkg string) string {
+	const lowerPackage = "github.com/gentleman-programming/engram/cmd/engram"
+	if strings.HasPrefix(strings.ToLower(pkg), lowerPackage) {
+		return engramCanonicalPackage + pkg[len(lowerPackage):]
+	}
+	return pkg
+}
+
 // engramCoreTagPattern matches only plain semver tags (vX.Y.Z) that identify
 // core engram binary releases. The Gentleman-Programming/engram repository also
 // publishes gentle-engram npm and pi releases under tags like
@@ -137,8 +147,7 @@ func DownloadLatestBinary(profile system.PlatformProfile, isBeta bool) (string, 
 	// Beta channel: install from HEAD via go install rather than a release archive.
 	// This mirrors the installBetaEngramFromMain path used at install time.
 	if isBeta {
-		const pkg = "github.com/Gentleman-Programming/engram/cmd/engram@main"
-		return engramGoInstallFn(pkg)
+		return engramGoInstallFn(engramCanonicalPackage + "@main")
 	}
 
 	ctx := context.Background()
@@ -791,7 +800,7 @@ func (b *byteReaderAt) ReadAt(p []byte, off int64) (int, error) {
 }
 
 // engramGoInstallFromMain installs engram from the given Go package path (expected
-// to be "github.com/Gentleman-Programming/engram/cmd/engram@main") using `go install`.
+// to be engramCanonicalPackage + "@main") using `go install`.
 // It returns the path to the installed binary. This is the beta-channel upgrade path.
 //
 // The install directory is resolved via `go env GOBIN GOPATH` (the effective Go
@@ -799,6 +808,7 @@ func (b *byteReaderAt) ReadAt(p []byte, off int64) (int, error) {
 // file, NOT in shell env) are honored correctly. This mirrors the resolution done
 // by goInstallBinDirFromGoEnv in internal/cli/run.go.
 func engramGoInstallFromMain(pkg string) (string, error) {
+	pkg = canonicalEngramGoInstallPackage(pkg)
 	if err := engramGoInstallCmdFn(pkg); err != nil {
 		return "", err
 	}
