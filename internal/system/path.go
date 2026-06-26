@@ -1,6 +1,7 @@
 package system
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,6 +20,12 @@ import (
 func AddToUserPath(dir string) error {
 	if runtime.GOOS != "windows" {
 		// Still add to the current process PATH on non-Windows (harmless for callers).
+		return addToProcessPath(dir)
+	}
+	if runningInGoTest() {
+		// Go tests must not mutate the real Windows user PATH registry. Keep the
+		// test process behavior identical for callers that need the new directory
+		// available later in the same run.
 		return addToProcessPath(dir)
 	}
 
@@ -65,7 +72,7 @@ func PrioritizeUserPath(dir string) error {
 	if err := prioritizeProcessPath(dir); err != nil {
 		return err
 	}
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS != "windows" || runningInGoTest() {
 		return nil
 	}
 
@@ -103,6 +110,10 @@ func splitWindowsPath(value string) []string {
 		return nil
 	}
 	return strings.Split(value, ";")
+}
+
+func runningInGoTest() bool {
+	return flag.Lookup("test.v") != nil
 }
 
 // escapePowerShellString escapes a string for safe use inside a PowerShell

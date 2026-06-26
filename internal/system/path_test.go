@@ -85,6 +85,49 @@ func TestAddToUserPathNoOpOnNonWindows(t *testing.T) {
 	}
 }
 
+func TestAddToUserPathUsesProcessPathInGoTests(t *testing.T) {
+	if !runningInGoTest() {
+		t.Fatal("runningInGoTest() = false in go test binary")
+	}
+
+	targetDir := filepath.Join(t.TempDir(), "test-bin")
+	original := os.Getenv("PATH")
+	t.Cleanup(func() { os.Setenv("PATH", original) })
+
+	os.Setenv("PATH", strings.ReplaceAll(original, targetDir, ""))
+
+	if err := AddToUserPath(targetDir); err != nil {
+		t.Fatalf("AddToUserPath() error = %v", err)
+	}
+
+	entries := filepath.SplitList(os.Getenv("PATH"))
+	if len(entries) == 0 || !strings.EqualFold(filepath.Clean(entries[0]), filepath.Clean(targetDir)) {
+		t.Fatalf("PATH first entry = %q, want %q; full PATH=%q", entries, targetDir, os.Getenv("PATH"))
+	}
+}
+
+func TestPrioritizeUserPathUsesProcessPathInGoTests(t *testing.T) {
+	if !runningInGoTest() {
+		t.Fatal("runningInGoTest() = false in go test binary")
+	}
+
+	firstDir := filepath.Join(t.TempDir(), "first")
+	targetDir := filepath.Join(t.TempDir(), "target")
+	original := os.Getenv("PATH")
+	t.Cleanup(func() { os.Setenv("PATH", original) })
+
+	os.Setenv("PATH", strings.Join([]string{firstDir, targetDir}, string(os.PathListSeparator)))
+
+	if err := PrioritizeUserPath(targetDir); err != nil {
+		t.Fatalf("PrioritizeUserPath() error = %v", err)
+	}
+
+	entries := filepath.SplitList(os.Getenv("PATH"))
+	if len(entries) == 0 || !strings.EqualFold(filepath.Clean(entries[0]), filepath.Clean(targetDir)) {
+		t.Fatalf("PATH first entry = %q, want %q; full PATH=%q", entries, targetDir, os.Getenv("PATH"))
+	}
+}
+
 func TestPrioritizeProcessPathMovesExistingEntryToFront(t *testing.T) {
 	firstDir := filepath.Join(t.TempDir(), "first")
 	targetDir := filepath.Join(t.TempDir(), "target")
