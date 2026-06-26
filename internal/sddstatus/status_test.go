@@ -26,6 +26,44 @@ func TestListActiveOpenSpecChanges(t *testing.T) {
 	}
 }
 
+func TestResolveUsesEngramArtifactsWhenOpenSpecIsAbsent(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".engram"))
+	write(t, filepath.Join(root, ".git", "config"), "[remote \"origin\"]\n\turl = git@github.com:Gentleman-Programming/gentle-ai.git\n")
+
+	restore := stubEngramExport(t, []engramObservation{
+		{Title: "sdd/add-auth/proposal", Content: "## Proposal\nAdd auth", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/add-auth/spec", Content: "## Requirements\n- SHALL work", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/add-auth/design", Content: "## Design\nUse middleware", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/add-auth/tasks", Content: "- [ ] 1.1 Wire routes\n", Project: "gentle-ai", Scope: "project"},
+	})
+	defer restore()
+
+	status, err := Resolve(ResolveOptions{CWD: root, IncludeInstructions: true})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if status.ArtifactStore != ArtifactStoreEngram {
+		t.Fatalf("ArtifactStore = %q, want %q", status.ArtifactStore, ArtifactStoreEngram)
+	}
+	if status.ChangeName == nil || *status.ChangeName != "add-auth" {
+		t.Fatalf("ChangeName = %v, want add-auth", ptrValue(status.ChangeName))
+	}
+	if status.Dependencies.Apply != DependencyReady || status.NextRecommended != "apply" {
+		t.Fatalf("apply dependency = %q next = %q, want ready/apply", status.Dependencies.Apply, status.NextRecommended)
+	}
+	if status.TaskProgress != (TaskProgress{Total: 1, Pending: 1, AllComplete: false}) {
+		t.Fatalf("TaskProgress = %#v", status.TaskProgress)
+	}
+	if got := firstPath(status.ArtifactPaths.Tasks); got != "sdd/add-auth/tasks" {
+		t.Fatalf("ArtifactPaths.Tasks[0] = %q, want topic key", got)
+	}
+	if status.PhaseInstructions == nil {
+		t.Fatal("PhaseInstructions is nil")
+	}
+}
+
 func TestResolveSelectionStates(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -789,6 +827,15 @@ func write(t *testing.T, path string, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
+}
+
+func stubEngramExport(t *testing.T, observations []engramObservation) func() {
+	t.Helper()
+	original := engramExport
+	engramExport = func(_ string) ([]engramObservation, error) {
+		return observations, nil
+	}
+	return func() { engramExport = original }
 }
 
 func mkdir(t *testing.T, path string) {

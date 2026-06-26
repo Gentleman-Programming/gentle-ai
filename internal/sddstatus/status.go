@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -17,6 +18,7 @@ type ArtifactStore string
 
 const (
 	ArtifactStoreOpenSpec ArtifactStore = "openspec"
+	ArtifactStoreEngram   ArtifactStore = "engram"
 	ArtifactStoreNone     ArtifactStore = "none"
 )
 
@@ -147,6 +149,15 @@ type CommandArgs struct {
 	IncludeInstructions bool
 }
 
+type engramObservation struct {
+	Title   string `json:"title"`
+	Content string `json:"content"`
+	Project string `json:"project"`
+	Scope   string `json:"scope"`
+}
+
+var engramExport = exportEngramObservations
+
 func ParseCommandArgs(args []string) (CommandArgs, error) {
 	var parsed CommandArgs
 	for i := 0; i < len(args); i++ {
@@ -215,6 +226,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if changeName == "" {
 		switch len(activeChanges) {
 		case 0:
+			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions); ok || err != nil {
+				return status, err
+			}
 			return blockedStatus(workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
 		case 1:
 			changeName = activeChanges[0]
@@ -224,6 +238,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 
 	if !contains(activeChanges, changeName) {
+		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions); ok || err != nil {
+			return status, err
+		}
 		return blockedStatus(workspaceRoot, &changeName, nil, "sdd-new", []string{fmt.Sprintf("Active OpenSpec change not found: %s.", changeName)}, options.IncludeInstructions), nil
 	}
 
@@ -270,6 +287,251 @@ func Resolve(options ResolveOptions) (Status, error) {
 		status.PhaseInstructions = &instructions
 	}
 	return status, nil
+}
+
+func resolveEngramStatus(workspaceRoot string, requestedChange string, includeInstructions bool) (Status, bool, error) {
+	if !shouldTryEngram(workspaceRoot) {
+		return Status{}, false, nil
+	}
+	observations, err := engramExport(workspaceRoot)
+	if err != nil {
+		return Status{}, false, err
+	}
+	project := inferEngramProject(workspaceRoot)
+	changes := collectEngramChanges(observations, project)
+	changeName := strings.TrimSpace(requestedChange)
+	if changeName == "" {
+		switch len(changes) {
+		case 0:
+			return Status{}, false, nil
+		case 1:
+			changeName = changes[0]
+		default:
+			return blockedEngramStatus(workspaceRoot, nil, "select-change", []string{fmt.Sprintf("Engram change selection is ambiguous: %s.", strings.Join(changes, ", "))}, includeInstructions), true, nil
+		}
+	}
+
+	artifactsByType := engramArtifactsForChange(observations, project, changeName)
+	if len(artifactsByType) == 0 {
+		return Status{}, false, nil
+	}
+
+	artifactPaths := engramArtifactPaths(changeName, artifactsByType)
+	artifacts := map[string]ArtifactState{
+		"proposal":      engramArtifactState(artifactsByType["proposal"]),
+		"specs":         engramArtifactState(artifactsByType["spec"]),
+		"design":        engramArtifactState(artifactsByType["design"]),
+		"tasks":         engramArtifactState(artifactsByType["tasks"]),
+		"applyProgress": engramArtifactState(artifactsByType["apply-progress"]),
+		"verifyReport":  engramArtifactState(artifactsByType["verify-report"]),
+	}
+	taskProgress := countTaskProgressText(artifactsByType["tasks"].Content)
+	verifyReportPassing := reportTextIsClearlyPassing(artifactsByType["verify-report"].Content)
+	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
+	applyState := resolveApplyState(coreReady, taskProgress)
+	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
+	if artifacts["verifyReport"] == ArtifactDone && !verifyReportPassing && applyState != ApplyReady {
+		blockedReasons = append(blockedReasons, "verify-report.md is not clearly passing.")
+	}
+	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportPassing)
+	nextRecommended := resolveNextRecommended(dependencies, applyState, blockedReasons)
+
+	changeRoot := fmt.Sprintf("engram:sdd/%s", changeName)
+	status := baseStatus(workspaceRoot, &changeName, &changeRoot, nextRecommended, blockedReasons)
+	status.ArtifactStore = ArtifactStoreEngram
+	status.PlanningHome = PlanningHome{Mode: ActionModeRepoLocal, Path: "engram:sdd"}
+	status.ArtifactPaths = artifactPaths
+	status.ContextFiles = artifactPaths
+	status.Artifacts = artifacts
+	status.TaskProgress = taskProgress
+	status.Dependencies = dependencies
+	status.ApplyState = applyState
+	if includeInstructions {
+		instructions := renderPhaseInstructions(status)
+		status.PhaseInstructions = &instructions
+	}
+	return status, true, nil
+}
+
+func blockedEngramStatus(workspaceRoot string, changeName *string, next string, reasons []string, includeInstructions bool) Status {
+	status := blockedStatus(workspaceRoot, changeName, nil, next, reasons, includeInstructions)
+	status.ArtifactStore = ArtifactStoreEngram
+	status.PlanningHome = PlanningHome{Mode: ActionModeRepoLocal, Path: "engram:sdd"}
+	return status
+}
+
+func shouldTryEngram(workspaceRoot string) bool {
+	if os.Getenv("GENTLE_AI_SDD_STATUS_ENGRAM") != "" {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, ".engram")); err == nil {
+		return true
+	}
+	for _, path := range []string{filepath.Join(workspaceRoot, "openspec", "config.yaml"), filepath.Join(workspaceRoot, "openspec", "config.yml")} {
+		content, err := os.ReadFile(path)
+		if err == nil && configMentionsEngram(string(content)) {
+			return true
+		}
+	}
+	return false
+}
+
+func configMentionsEngram(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
+		if strings.HasPrefix(trimmed, "artifact_store:") || strings.HasPrefix(trimmed, "artifactStore:") {
+			return strings.Contains(strings.ToLower(trimmed), "engram") || strings.Contains(strings.ToLower(trimmed), "hybrid")
+		}
+	}
+	return false
+}
+
+func exportEngramObservations(workspaceRoot string) ([]engramObservation, error) {
+	tmp, err := os.CreateTemp("", "gentle-ai-sdd-engram-*.json")
+	if err != nil {
+		return nil, err
+	}
+	path := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+	defer os.Remove(path)
+
+	cmd := exec.Command("engram", "export", path)
+	cmd.Dir = workspaceRoot
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("engram export failed: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Observations []engramObservation `json:"observations"`
+	}
+	if err := json.Unmarshal(content, &payload); err != nil {
+		return nil, err
+	}
+	return payload.Observations, nil
+}
+
+func inferEngramProject(workspaceRoot string) string {
+	if project := strings.TrimSpace(os.Getenv("ENGRAM_PROJECT")); project != "" {
+		return strings.ToLower(project)
+	}
+	config, err := os.ReadFile(filepath.Join(workspaceRoot, ".git", "config"))
+	if err == nil {
+		if project := projectFromGitConfig(string(config)); project != "" {
+			return project
+		}
+	}
+	return strings.ToLower(filepath.Base(workspaceRoot))
+}
+
+func projectFromGitConfig(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "url =") {
+			continue
+		}
+		url := strings.TrimSpace(strings.TrimPrefix(line, "url ="))
+		url = strings.TrimSuffix(url, ".git")
+		if idx := strings.LastIndexAny(url, "/:"); idx >= 0 && idx+1 < len(url) {
+			return strings.ToLower(url[idx+1:])
+		}
+	}
+	return ""
+}
+
+var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress|verify-report|state)$`)
+
+func collectEngramChanges(observations []engramObservation, project string) []string {
+	seen := map[string]bool{}
+	for _, observation := range observations {
+		if !engramObservationMatchesProject(observation, project) {
+			continue
+		}
+		matches := engramTitlePattern.FindStringSubmatch(strings.TrimSpace(observation.Title))
+		if len(matches) != 3 || matches[2] == "state" {
+			continue
+		}
+		seen[matches[1]] = true
+	}
+	changes := make([]string, 0, len(seen))
+	for change := range seen {
+		changes = append(changes, change)
+	}
+	sort.Strings(changes)
+	return changes
+}
+
+func engramArtifactsForChange(observations []engramObservation, project string, changeName string) map[string]engramObservation {
+	artifacts := map[string]engramObservation{}
+	for _, observation := range observations {
+		if !engramObservationMatchesProject(observation, project) {
+			continue
+		}
+		matches := engramTitlePattern.FindStringSubmatch(strings.TrimSpace(observation.Title))
+		if len(matches) != 3 || matches[1] != changeName {
+			continue
+		}
+		artifacts[matches[2]] = observation
+	}
+	return artifacts
+}
+
+func engramObservationMatchesProject(observation engramObservation, project string) bool {
+	return strings.EqualFold(strings.TrimSpace(observation.Project), project) && strings.TrimSpace(observation.Scope) != "personal"
+}
+
+func engramArtifactPaths(changeName string, artifacts map[string]engramObservation) ArtifactPaths {
+	paths := emptyArtifactPaths()
+	if _, ok := artifacts["proposal"]; ok {
+		paths.Proposal = []string{fmt.Sprintf("sdd/%s/proposal", changeName)}
+	}
+	if _, ok := artifacts["spec"]; ok {
+		paths.Specs = []string{fmt.Sprintf("sdd/%s/spec", changeName)}
+	}
+	if _, ok := artifacts["design"]; ok {
+		paths.Design = []string{fmt.Sprintf("sdd/%s/design", changeName)}
+	}
+	if _, ok := artifacts["tasks"]; ok {
+		paths.Tasks = []string{fmt.Sprintf("sdd/%s/tasks", changeName)}
+	}
+	if _, ok := artifacts["apply-progress"]; ok {
+		paths.ApplyProgress = []string{fmt.Sprintf("sdd/%s/apply-progress", changeName)}
+	}
+	if _, ok := artifacts["verify-report"]; ok {
+		paths.VerifyReport = []string{fmt.Sprintf("sdd/%s/verify-report", changeName)}
+	}
+	return paths
+}
+
+func engramArtifactState(observation engramObservation) ArtifactState {
+	if observation.Title == "" {
+		return ArtifactMissing
+	}
+	if strings.TrimSpace(observation.Content) == "" {
+		return ArtifactPartial
+	}
+	return ArtifactDone
+}
+
+func reportTextIsClearlyPassing(text string) bool {
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+	hasPassSignal := false
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if reportLineHasBlocker(line) {
+			return false
+		}
+		if reportLineHasPassSignal(line) {
+			hasPassSignal = true
+		}
+	}
+	return hasPassSignal
 }
 
 func RenderMarkdown(status Status) string {
@@ -701,8 +963,12 @@ func countTaskProgress(tasksPath string) (TaskProgress, error) {
 	if err != nil {
 		return TaskProgress{}, err
 	}
+	return countTaskProgressText(string(content)), nil
+}
+
+func countTaskProgressText(content string) TaskProgress {
 	var progress TaskProgress
-	for _, line := range strings.Split(string(content), "\n") {
+	for _, line := range strings.Split(content, "\n") {
 		matches := taskCheckbox.FindStringSubmatch(line)
 		if len(matches) == 0 {
 			continue
@@ -715,7 +981,7 @@ func countTaskProgress(tasksPath string) (TaskProgress, error) {
 		}
 	}
 	progress.AllComplete = progress.Total > 0 && progress.Pending == 0
-	return progress, nil
+	return progress
 }
 
 func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress TaskProgress) []string {
