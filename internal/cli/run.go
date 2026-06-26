@@ -924,6 +924,9 @@ func (s componentApplyStep) Run() error {
 			if err := gga.EnsurePowerShellShim(s.homeDir); err != nil {
 				return fmt.Errorf("ensure gga powershell shim: %w", err)
 			}
+			if err := gga.EnsureCommandShim(s.homeDir); err != nil {
+				return fmt.Errorf("ensure gga command shim: %w", err)
+			}
 			// Add GGA bin dir to the user PATH persistently on Windows.
 			// GGA's install.sh drops the binary into ~/bin which is not on PATH by default.
 			ggaBinDir := filepath.Join(s.homeDir, "bin")

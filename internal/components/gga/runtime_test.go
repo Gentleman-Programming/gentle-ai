@@ -147,6 +147,22 @@ func TestRuntimePS1Path(t *testing.T) {
 	}
 }
 
+func TestRuntimeCMDPath(t *testing.T) {
+	tests := []struct {
+		homeDir    string
+		wantSuffix string
+	}{
+		{"/home/user", filepath.Join("bin", "gga.cmd")},
+		{"/root", filepath.Join("bin", "gga.cmd")},
+	}
+	for _, tc := range tests {
+		got := RuntimeCMDPath(tc.homeDir)
+		if !strings.HasSuffix(got, tc.wantSuffix) {
+			t.Errorf("RuntimeCMDPath(%q) = %q, want suffix %q", tc.homeDir, got, tc.wantSuffix)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // EnsurePowerShellShim
 // ---------------------------------------------------------------------------
@@ -204,6 +220,54 @@ func TestEnsurePowerShellShimOverwritesStaleShim(t *testing.T) {
 // TestEnsurePowerShellShimIsNoOpWhenContentMatches verifies idempotency:
 // when gga.ps1 already contains the correct embedded content,
 // EnsurePowerShellShim must not modify it (WriteFileAtomic no-op).
+func TestEnsureCommandShimCreatesFileWhenMissing(t *testing.T) {
+	home := t.TempDir()
+	path := RuntimeCMDPath(home)
+
+	if err := EnsureCommandShim(home); err != nil {
+		t.Fatalf("EnsureCommandShim() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "gga.ps1") {
+		t.Fatalf("gga.cmd missing expected PowerShell shim delegation, got: %s", text)
+	}
+}
+
+func TestEnsureCommandShimOverwritesStaleShim(t *testing.T) {
+	home := t.TempDir()
+	path := RuntimeCMDPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	const stale = "@echo stale\r\n"
+	if err := os.WriteFile(path, []byte(stale), 0o755); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := EnsureCommandShim(home); err != nil {
+		t.Fatalf("EnsureCommandShim() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+
+	if string(content) == stale {
+		t.Fatalf("EnsureCommandShim did not overwrite stale gga.cmd")
+	}
+	if !strings.Contains(string(content), "gga.ps1") {
+		t.Fatalf("overwritten gga.cmd missing expected embedded content")
+	}
+}
+
 func TestEnsurePowerShellShimIsNoOpWhenContentMatches(t *testing.T) {
 	home := t.TempDir()
 

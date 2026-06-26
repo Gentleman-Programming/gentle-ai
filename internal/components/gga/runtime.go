@@ -24,10 +24,15 @@ func RuntimePRModePath(homeDir string) string {
 }
 
 // RuntimePS1Path returns the expected gga.ps1 path.
-// On Windows, the shim goes to ~/bin/ (same dir as the bash gga script,
-// already in PATH) so PowerShell finds it as a native command.
+// On Windows, the shim goes to ~/bin/ so PowerShell finds it as a native command.
 func RuntimePS1Path(homeDir string) string {
 	return filepath.Join(homeDir, "bin", "gga.ps1")
+}
+
+// RuntimeCMDPath returns the expected gga.cmd path.
+// On Windows, cmd.exe and exec.LookPath resolve .cmd files through PATHEXT.
+func RuntimeCMDPath(homeDir string) string {
+	return filepath.Join(homeDir, "bin", "gga.cmd")
 }
 
 // EnsureRuntimeAssets ensures critical gga runtime files are current.
@@ -65,6 +70,23 @@ func EnsurePowerShellShim(homeDir string) error {
 
 	if _, err := filemerge.WriteFileAtomic(ps1Path, []byte(content), 0o755); err != nil {
 		return fmt.Errorf("write gga runtime file %q: %w", ps1Path, err)
+	}
+
+	return nil
+}
+
+// EnsureCommandShim writes gga.cmd to the GGA bin directory.
+// Must only be called on Windows (caller is responsible for the OS guard).
+func EnsureCommandShim(homeDir string) error {
+	cmdPath := RuntimeCMDPath(homeDir)
+
+	content, err := assets.Read("gga/gga.cmd")
+	if err != nil {
+		return fmt.Errorf("read embedded gga runtime asset gga.cmd: %w", err)
+	}
+
+	if _, err := filemerge.WriteFileAtomic(cmdPath, []byte(content), 0o755); err != nil {
+		return fmt.Errorf("write gga runtime file %q: %w", cmdPath, err)
 	}
 
 	return nil
