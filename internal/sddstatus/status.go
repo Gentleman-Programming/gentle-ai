@@ -911,12 +911,11 @@ func reportLineHasBlocker(line string) bool {
 
 // reportLineHasComplianceSignal checks if a line contains explicit pass/compliance indicators.
 func reportLineHasComplianceSignal(line string) bool {
-	trimmed := stripMarkdownSignal(line)
+	trimmed := strings.ToUpper(stripMarkdownSignal(line))
 	return strings.Contains(trimmed, "COMPLIANT") ||
-		strings.Contains(trimmed, "no blockers") ||
-		strings.Contains(trimmed, "0 blocking") ||
-		strings.HasPrefix(trimmed, "PASS") ||
-		strings.HasPrefix(trimmed, "PASSED")
+		strings.Contains(trimmed, "NO BLOCKERS") ||
+		strings.Contains(trimmed, "0 BLOCKING") ||
+		strings.HasPrefix(trimmed, "PASS")
 }
 
 func reportLineHasPassSignal(line string) bool {
