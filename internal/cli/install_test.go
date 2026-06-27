@@ -79,6 +79,7 @@ func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 			model.ComponentContext7,
 			model.ComponentPermission,
 			model.ComponentGGA,
+			model.ComponentHeadroom,
 			model.ComponentClaudeTheme,
 			model.ComponentOpenCodeGentleLogo,
 			model.ComponentPersona,

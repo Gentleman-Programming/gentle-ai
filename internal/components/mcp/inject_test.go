@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
 func cursorAdapter(t *testing.T) agents.Adapter {
@@ -85,6 +86,34 @@ func readOpenCodeContext7Entry(t *testing.T, path string) map[string]any {
 	return context7
 }
 
+// readOpenCodeHeadroomEntry reads the mcp.headroom object from an OpenCode/KiloCode
+// opencode.json config file.
+func readOpenCodeHeadroomEntry(t *testing.T, path string) map[string]any {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", path, err)
+	}
+
+	mcp, ok := parsed["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing object key mcp; got %#v", path, parsed["mcp"])
+	}
+
+	headroom, ok := mcp["headroom"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing object key mcp.headroom; got %#v", path, mcp["headroom"])
+	}
+
+	return headroom
+}
+
 // assertOpenCodeRemoteContext7Schema asserts the mcp.context7 entry in an
 // OpenCode/KiloCode opencode.json is a valid remote entry with no legacy local keys.
 func assertOpenCodeRemoteContext7Schema(t *testing.T, path string) {
@@ -103,6 +132,24 @@ func assertOpenCodeRemoteContext7Schema(t *testing.T, path string) {
 	}
 
 	assertOnlyKeys(t, path, context7, "type", "url", "enabled")
+}
+
+// assertOpenCodeHeadroomLocalSchema asserts the mcp.headroom entry in an
+// OpenCode/KiloCode opencode.json is a valid local stdio entry.
+func assertOpenCodeHeadroomLocalSchema(t *testing.T, path string) {
+	t.Helper()
+
+	headroom := readOpenCodeHeadroomEntry(t, path)
+
+	if got := headroom["type"]; got != "local" {
+		t.Fatalf("%q mcp.headroom.type = %#v; want %q", path, got, "local")
+	}
+	if got := headroom["command"]; got != "headroom" {
+		t.Fatalf("%q mcp.headroom.command = %#v; want %q", path, got, "headroom")
+	}
+	if got := headroom["enabled"]; got != true {
+		t.Fatalf("%q mcp.headroom.enabled = %#v; want true", path, got)
+	}
 }
 
 // readMCPServersContext7Entry reads the mcpServers.context7 object used by
@@ -131,6 +178,33 @@ func readMCPServersContext7Entry(t *testing.T, path string) map[string]any {
 	}
 
 	return context7
+}
+
+// readMCPServersHeadroomEntry reads the mcpServers.headroom object.
+func readMCPServersHeadroomEntry(t *testing.T, path string) map[string]any {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", path, err)
+	}
+
+	mcpServers, ok := parsed["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing object key mcpServers; got %#v", path, parsed["mcpServers"])
+	}
+
+	headroom, ok := mcpServers["headroom"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing object key mcpServers.headroom; got %#v", path, mcpServers["headroom"])
+	}
+
+	return headroom
 }
 
 // assertAntigravityContext7Schema asserts the mcpServers.context7 entry in an
@@ -167,7 +241,7 @@ func assertKimiContext7Schema(t *testing.T, path string) {
 func TestInjectOpenCodeMergesContext7AndIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 
-	first, err := Inject(home, opencodeAdapter())
+	first, err := Inject(home, opencodeAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject() first error = %v", err)
 	}
@@ -175,7 +249,7 @@ func TestInjectOpenCodeMergesContext7AndIsIdempotent(t *testing.T) {
 		t.Fatalf("Inject() first changed = false")
 	}
 
-	second, err := Inject(home, opencodeAdapter())
+	second, err := Inject(home, opencodeAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
@@ -205,6 +279,55 @@ func TestInjectOpenCodeMergesContext7AndIsIdempotent(t *testing.T) {
 	if strings.Contains(text, `"mcpServers"`) {
 		t.Fatal("opencode.json should use 'mcp' key, not 'mcpServers'")
 	}
+}
+
+func TestInjectOpenCodeHeadroomAndIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+
+	first, err := Inject(home, opencodeAdapter(), model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(headroom) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(headroom) first changed = false")
+	}
+
+	second, err := Inject(home, opencodeAdapter(), model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(headroom) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(headroom) second changed = true")
+	}
+
+	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	assertOpenCodeHeadroomLocalSchema(t, configPath)
+
+	text, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	if strings.Contains(string(text), `"mcpServers"`) {
+		t.Fatal("opencode.json should use 'mcp' key, not 'mcpServers'")
+	}
+}
+
+func TestInjectOpenCodeContext7AndHeadroomCoexist(t *testing.T) {
+	home := t.TempDir()
+
+	// Inject Context7 first.
+	if _, err := Inject(home, opencodeAdapter(), model.ComponentContext7); err != nil {
+		t.Fatalf("Inject(context7) error = %v", err)
+	}
+
+	// Then inject Headroom.
+	if _, err := Inject(home, opencodeAdapter(), model.ComponentHeadroom); err != nil {
+		t.Fatalf("Inject(headroom) error = %v", err)
+	}
+
+	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	assertOpenCodeRemoteContext7Schema(t, configPath)
+	assertOpenCodeHeadroomLocalSchema(t, configPath)
 }
 
 func TestInjectOpenClawMergesContext7UnderMCPDotServersAndMigratesLegacyMCPServers(t *testing.T) {
@@ -239,7 +362,7 @@ func TestInjectOpenClawMergesContext7UnderMCPDotServersAndMigratesLegacyMCPServe
 		t.Fatalf("WriteFile(openclaw.json) error = %v", err)
 	}
 
-	first, err := Inject(home, adapter)
+	first, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(openclaw) first error = %v", err)
 	}
@@ -247,7 +370,7 @@ func TestInjectOpenClawMergesContext7UnderMCPDotServersAndMigratesLegacyMCPServe
 		t.Fatalf("Inject(openclaw) first changed = false")
 	}
 
-	second, err := Inject(home, adapter)
+	second, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(openclaw) second error = %v", err)
 	}
@@ -302,7 +425,7 @@ func TestInjectOpenCodeReplacesLegacyContext7LocalConfig(t *testing.T) {
 		t.Fatalf("WriteFile(opencode.json) error = %v", err)
 	}
 
-	first, err := Inject(home, adapter)
+	first, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject() first error = %v", err)
 	}
@@ -312,7 +435,7 @@ func TestInjectOpenCodeReplacesLegacyContext7LocalConfig(t *testing.T) {
 
 	assertOpenCodeRemoteContext7Schema(t, configPath)
 
-	second, err := Inject(home, adapter)
+	second, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
@@ -348,7 +471,7 @@ func TestInjectKilocodeReplacesLegacyContext7LocalConfig(t *testing.T) {
 		t.Fatalf("WriteFile(kilo opencode.json) error = %v", err)
 	}
 
-	first, err := Inject(home, adapter)
+	first, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject() first error = %v", err)
 	}
@@ -358,7 +481,7 @@ func TestInjectKilocodeReplacesLegacyContext7LocalConfig(t *testing.T) {
 
 	assertOpenCodeRemoteContext7Schema(t, configPath)
 
-	second, err := Inject(home, adapter)
+	second, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
@@ -397,7 +520,7 @@ func TestInjectOpenCodePreservesOtherMCPEntriesWhenReplacingContext7(t *testing.
 		t.Fatalf("WriteFile(opencode.json) error = %v", err)
 	}
 
-	_, err := Inject(home, adapter)
+	_, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject() error = %v", err)
 	}
@@ -435,7 +558,7 @@ func TestInjectOpenCodePreservesOtherMCPEntriesWhenReplacingContext7(t *testing.
 func TestInjectClaudeWritesContext7FileAndIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 
-	first, err := Inject(home, claudeAdapter())
+	first, err := Inject(home, claudeAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject() first error = %v", err)
 	}
@@ -443,7 +566,7 @@ func TestInjectClaudeWritesContext7FileAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Inject() first changed = false")
 	}
 
-	second, err := Inject(home, claudeAdapter())
+	second, err := Inject(home, claudeAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
@@ -454,6 +577,31 @@ func TestInjectClaudeWritesContext7FileAndIsIdempotent(t *testing.T) {
 	path := filepath.Join(home, ".claude", "mcp", "context7.json")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected context7 file %q: %v", path, err)
+	}
+}
+
+func TestInjectClaudeHeadroomWritesFileAndIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+
+	first, err := Inject(home, claudeAdapter(), model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(headroom,claude) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(headroom,claude) first changed = false")
+	}
+
+	second, err := Inject(home, claudeAdapter(), model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(headroom,claude) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(headroom,claude) second changed = true")
+	}
+
+	path := filepath.Join(home, ".claude", "mcp", "headroom.json")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected headroom file %q: %v", path, err)
 	}
 }
 
@@ -473,7 +621,7 @@ func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
 		t.Fatalf("WriteFile(malformed mcp.json) error = %v", err)
 	}
 
-	result, err := Inject(home, adapter)
+	result, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(cursor) with malformed mcp.json error = %v; want nil (should recover)", err)
 	}
@@ -500,7 +648,7 @@ func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
 func TestInjectCodexContext7TOML(t *testing.T) {
 	home := t.TempDir()
 
-	result, err := Inject(home, codex.NewAdapter())
+	result, err := Inject(home, codex.NewAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(codex) error = %v", err)
 	}
@@ -533,12 +681,40 @@ func TestInjectCodexContext7TOML(t *testing.T) {
 	}
 }
 
+// TestInjectCodexHeadroomTOML verifies that Headroom injection for Codex
+// creates config.toml with [mcp_servers.headroom] block using local command.
+func TestInjectCodexHeadroomTOML(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, codex.NewAdapter(), model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(codex,headroom) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(codex,headroom) first call changed = false; want true")
+	}
+
+	configTOML := filepath.Join(home, ".codex", "config.toml")
+	content, err := os.ReadFile(configTOML)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "[mcp_servers.headroom]") {
+		t.Fatalf("config.toml missing [mcp_servers.headroom]; got:\n%s", text)
+	}
+	if !strings.Contains(text, `command = "headroom"`) {
+		t.Fatalf("config.toml missing headroom command; got:\n%s", text)
+	}
+}
+
 // TestInjectCodexContext7Idempotent verifies that a second Inject call with
 // the same pinned version is a no-op (Changed == false, single block).
 func TestInjectCodexContext7Idempotent(t *testing.T) {
 	home := t.TempDir()
 
-	first, err := Inject(home, codex.NewAdapter())
+	first, err := Inject(home, codex.NewAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(codex) first error = %v", err)
 	}
@@ -546,7 +722,7 @@ func TestInjectCodexContext7Idempotent(t *testing.T) {
 		t.Fatal("Inject(codex) first changed = false; want true")
 	}
 
-	second, err := Inject(home, codex.NewAdapter())
+	second, err := Inject(home, codex.NewAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(codex) second error = %v", err)
 	}
@@ -584,7 +760,7 @@ args = ["mcp", "--tools=agent"]
 		t.Fatalf("WriteFile(config.toml) error = %v", err)
 	}
 
-	_, err := Inject(home, codex.NewAdapter())
+	_, err := Inject(home, codex.NewAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(codex) error = %v", err)
 	}
@@ -606,6 +782,47 @@ args = ["mcp", "--tools=agent"]
 	}
 }
 
+// TestInjectCodexContext7CoexistsWithHeadroomTOML verifies that injecting
+// headroom into a config.toml that already has context7 preserves both blocks.
+func TestInjectCodexContext7CoexistsWithHeadroomTOML(t *testing.T) {
+	home := t.TempDir()
+
+	configTOML := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configTOML), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	existing := `[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
+`
+	if err := os.WriteFile(configTOML, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.toml) error = %v", err)
+	}
+
+	_, err := Inject(home, codex.NewAdapter(), model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(codex,headroom) error = %v", err)
+	}
+
+	content, err := os.ReadFile(configTOML)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	text := string(content)
+
+	context7Count := strings.Count(text, "[mcp_servers.context7]")
+	if context7Count != 1 {
+		t.Fatalf("expected 1 [mcp_servers.context7], got %d; result:\n%s", context7Count, text)
+	}
+
+	headroomCount := strings.Count(text, "[mcp_servers.headroom]")
+	if headroomCount != 1 {
+		t.Fatalf("expected 1 [mcp_servers.headroom], got %d; result:\n%s", headroomCount, text)
+	}
+}
+
+// TestInjectCodexContext7ReplacesLegacyLocalBlock(t *testing.T) verifies
+// that injecting Context7 into a config.toml with a legacy local block
+// migrates it to the remote URL form.
 func TestInjectCodexContext7ReplacesLegacyLocalBlock(t *testing.T) {
 	home := t.TempDir()
 	configTOML := filepath.Join(home, ".codex", "config.toml")
@@ -624,7 +841,7 @@ args = ["mcp", "--tools=agent"]
 		t.Fatalf("WriteFile(config.toml) error = %v", err)
 	}
 
-	result, err := Inject(home, codex.NewAdapter())
+	result, err := Inject(home, codex.NewAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(codex) error = %v", err)
 	}
@@ -658,7 +875,7 @@ func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 	adapter := vscode.NewAdapter()
 
-	first, err := Inject(home, adapter)
+	first, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject() first error = %v", err)
 	}
@@ -666,7 +883,7 @@ func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 		t.Fatalf("Inject() first changed = false")
 	}
 
-	second, err := Inject(home, adapter)
+	second, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
@@ -686,6 +903,46 @@ func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 	}
 	if !strings.Contains(text, `"context7"`) {
 		t.Fatal("mcp.json missing context7 server")
+	}
+	if strings.Contains(text, `"mcpServers"`) {
+		t.Fatal("mcp.json should use 'servers' key, not 'mcpServers'")
+	}
+}
+
+func TestInjectVSCCodeWritesHeadroomToMCPConfigFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	adapter := vscode.NewAdapter()
+
+	first, err := Inject(home, adapter, model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(headroom,vscode) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(headroom,vscode) first changed = false")
+	}
+
+	second, err := Inject(home, adapter, model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(headroom,vscode) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(headroom,vscode) second changed = true")
+	}
+
+	path := adapter.MCPConfigPath(home, "headroom")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(mcp.json) error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, `"servers"`) {
+		t.Fatal("mcp.json missing servers key")
+	}
+	if !strings.Contains(text, `"headroom"`) {
+		t.Fatal("mcp.json missing headroom server")
 	}
 	if strings.Contains(text, `"mcpServers"`) {
 		t.Fatal("mcp.json should use 'servers' key, not 'mcpServers'")
@@ -713,7 +970,7 @@ func TestInjectAntigravityReplacesLegacyContext7LocalConfig(t *testing.T) {
 		t.Fatalf("WriteFile(mcp_config.json) error = %v", err)
 	}
 
-	first, err := Inject(home, adapter)
+	first, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject() first error = %v", err)
 	}
@@ -723,7 +980,7 @@ func TestInjectAntigravityReplacesLegacyContext7LocalConfig(t *testing.T) {
 
 	assertAntigravityContext7Schema(t, configPath)
 
-	second, err := Inject(home, adapter)
+	second, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
@@ -734,10 +991,37 @@ func TestInjectAntigravityReplacesLegacyContext7LocalConfig(t *testing.T) {
 	assertAntigravityContext7Schema(t, configPath)
 }
 
+func TestInjectAntigravityHeadroomLocalConfig(t *testing.T) {
+	home := t.TempDir()
+	adapter := antigravityAdapter()
+
+	first, err := Inject(home, adapter, model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(antigravity,headroom) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(antigravity,headroom) first changed = false")
+	}
+
+	configPath := adapter.MCPConfigPath(home, "headroom")
+	headroom := readMCPServersHeadroomEntry(t, configPath)
+	if headroom["command"] != "headroom" {
+		t.Fatalf("command = %#v, want %q", headroom["command"], "headroom")
+	}
+
+	second, err := Inject(home, adapter, model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(antigravity,headroom) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(antigravity,headroom) second changed = true")
+	}
+}
+
 func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
 	home := t.TempDir()
 
-	first, err := Inject(home, kimiAdapter())
+	first, err := Inject(home, kimiAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(kimi) first error = %v", err)
 	}
@@ -745,7 +1029,7 @@ func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
 		t.Fatalf("Inject(kimi) first changed = false")
 	}
 
-	second, err := Inject(home, kimiAdapter())
+	second, err := Inject(home, kimiAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(kimi) second error = %v", err)
 	}
@@ -774,6 +1058,43 @@ func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
 	}
 }
 
+func TestInjectKimiHeadroomToMCPConfigFile(t *testing.T) {
+	home := t.TempDir()
+
+	first, err := Inject(home, kimiAdapter(), model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(kimi,headroom) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(kimi,headroom) first changed = false")
+	}
+
+	second, err := Inject(home, kimiAdapter(), model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(kimi,headroom) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(kimi,headroom) second changed = true")
+	}
+
+	path := filepath.Join(home, ".kimi", "mcp.json")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(kimi mcp.json) error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, `"mcpServers"`) {
+		t.Fatal("kimi mcp.json missing mcpServers key")
+	}
+	if !strings.Contains(text, `"headroom"`) {
+		t.Fatal("kimi mcp.json missing headroom server")
+	}
+	if !strings.Contains(text, `"command": "headroom"`) {
+		t.Fatal("kimi mcp.json should have command=headroom for local MCP")
+	}
+}
+
 func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
 	home := t.TempDir()
 	adapter := kimiAdapter()
@@ -795,7 +1116,7 @@ func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
 		t.Fatalf("WriteFile(kimi mcp.json) error = %v", err)
 	}
 
-	first, err := Inject(home, adapter)
+	first, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(kimi) first error = %v", err)
 	}
@@ -805,7 +1126,7 @@ func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
 
 	assertKimiContext7Schema(t, configPath)
 
-	second, err := Inject(home, adapter)
+	second, err := Inject(home, adapter, model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(kimi) second error = %v", err)
 	}
@@ -821,7 +1142,7 @@ func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
 func TestInjectHermesContext7IntoYAML(t *testing.T) {
 	home := t.TempDir()
 
-	result, err := Inject(home, hermesAdapter())
+	result, err := Inject(home, hermesAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(hermes) error = %v", err)
 	}
@@ -850,12 +1171,46 @@ func TestInjectHermesContext7IntoYAML(t *testing.T) {
 	}
 }
 
+// TestInjectHermesHeadroomIntoYAML verifies that Inject(hermes, headroom)
+// writes headroom under mcp_servers: in ~/.hermes/config.yaml.
+func TestInjectHermesHeadroomIntoYAML(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, hermesAdapter(), model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(hermes,headroom) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(hermes,headroom) changed = false")
+	}
+
+	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.yaml) error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "mcp_servers:") {
+		t.Fatal("config.yaml missing mcp_servers: key")
+	}
+	if !strings.Contains(text, "headroom:") {
+		t.Fatal("config.yaml missing headroom: entry under mcp_servers:")
+	}
+	if !strings.Contains(text, "headroom") {
+		t.Fatal("config.yaml missing headroom command")
+	}
+	if result.Files[0] != configPath {
+		t.Fatalf("result.Files[0] = %q, want %q", result.Files[0], configPath)
+	}
+}
+
 // TestInjectHermesContext7Idempotent verifies calling Inject twice yields exactly
 // one context7: entry (idempotent upsert), and Changed=false on the second call.
 func TestInjectHermesContext7Idempotent(t *testing.T) {
 	home := t.TempDir()
 
-	first, err := Inject(home, hermesAdapter())
+	first, err := Inject(home, hermesAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(hermes) first error = %v", err)
 	}
@@ -863,7 +1218,7 @@ func TestInjectHermesContext7Idempotent(t *testing.T) {
 		t.Fatal("Inject(hermes) first changed = false")
 	}
 
-	second, err := Inject(home, hermesAdapter())
+	second, err := Inject(home, hermesAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(hermes) second error = %v", err)
 	}
@@ -891,7 +1246,7 @@ func TestInjectHermesStrategyMergeIntoYAMLDispatches(t *testing.T) {
 	home := t.TempDir()
 
 	// Confirm no error is returned (the old code returned an error for strategy 4).
-	result, err := Inject(home, hermesAdapter())
+	result, err := Inject(home, hermesAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(hermes) with StrategyMergeIntoYAML returned error = %v (expected nil)", err)
 	}
@@ -903,8 +1258,6 @@ func TestInjectHermesStrategyMergeIntoYAMLDispatches(t *testing.T) {
 // TestInjectHermesPreservesExistingTopLevelKeys verifies that a full Inject
 // round-trip on a config.yaml that already contains an unrelated top-level key
 // (e.g. "model: claude") preserves that key after context7 injection.
-// This covers the review-flagged coverage gap: existing non-managed content
-// must survive the MCP upsert.
 func TestInjectHermesPreservesExistingTopLevelKeys(t *testing.T) {
 	home := t.TempDir()
 	hermesDir := filepath.Join(home, ".hermes")
@@ -919,7 +1272,7 @@ func TestInjectHermesPreservesExistingTopLevelKeys(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	result, err := Inject(home, hermesAdapter())
+	result, err := Inject(home, hermesAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(hermes) error = %v", err)
 	}
@@ -946,7 +1299,7 @@ func TestInjectHermesPreservesExistingTopLevelKeys(t *testing.T) {
 	}
 
 	// Second Inject must be idempotent and still preserve the original key.
-	second, err := Inject(home, hermesAdapter())
+	second, err := Inject(home, hermesAdapter(), model.ComponentContext7)
 	if err != nil {
 		t.Fatalf("Inject(hermes) second error = %v", err)
 	}
@@ -961,5 +1314,45 @@ func TestInjectHermesPreservesExistingTopLevelKeys(t *testing.T) {
 	text2 := string(content2)
 	if !strings.Contains(text2, "model: claude") {
 		t.Fatalf("config.yaml lost pre-existing key on second Inject:\n%s", text2)
+	}
+}
+
+// TestInjectOpenClawHeadroomUnderMCPDotServers verifies Headroom injection
+// works under OpenClaw's mcp.servers structure.
+func TestInjectOpenClawHeadroomUnderMCPDotServers(t *testing.T) {
+	home := t.TempDir()
+	adapter := openclawAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	first, err := Inject(home, adapter, model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(openclaw,headroom) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(openclaw,headroom) first changed = false")
+	}
+
+	second, err := Inject(home, adapter, model.ComponentHeadroom)
+	if err != nil {
+		t.Fatalf("Inject(openclaw,headroom) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(openclaw,headroom) second changed = true")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(openclaw.json) error = %v", err)
+	}
+	text := string(content)
+
+	if strings.Contains(text, `"mcpServers"`) {
+		t.Fatalf("openclaw.json must use mcp.servers, not root mcpServers; got:\n%s", text)
+	}
+	if !strings.Contains(text, `"headroom"`) {
+		t.Fatalf("openclaw.json missing headroom under mcp.servers; got:\n%s", text)
 	}
 }

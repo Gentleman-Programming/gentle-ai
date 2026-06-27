@@ -38,7 +38,7 @@ type DoctorReport struct {
 	Checks []CheckResult
 }
 
-var knownTools = []string{"gentle-ai", "engram", "gga", "claude", "opencode"}
+var knownTools = []string{"gentle-ai", "engram", "gga", "claude", "opencode", "headroom"}
 
 const (
 	engramHealthEnvVar = "ENGRAM_BASE_URL"

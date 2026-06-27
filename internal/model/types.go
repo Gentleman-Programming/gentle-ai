@@ -45,6 +45,7 @@ const (
 	ComponentTheme              ComponentID = "theme"
 	ComponentClaudeTheme        ComponentID = "claude-theme"
 	ComponentOpenCodeGentleLogo ComponentID = "opencode-gentle-logo"
+	ComponentHeadroom           ComponentID = "headroom"
 )
 
 type UninstallMode string

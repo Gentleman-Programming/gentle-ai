@@ -4043,7 +4043,7 @@ func componentsForPreset(preset model.PresetID, persona model.PersonaID) []model
 	case model.PresetMinimal:
 		components = []model.ComponentID{model.ComponentEngram}
 	case model.PresetEcosystemOnly:
-		components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD, model.ComponentSkills, model.ComponentContext7, model.ComponentGGA}
+		components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD, model.ComponentSkills, model.ComponentContext7, model.ComponentGGA, model.ComponentHeadroom}
 	case model.PresetCustom:
 		return nil
 	default: // full-gentleman
@@ -4054,6 +4054,7 @@ func componentsForPreset(preset model.PresetID, persona model.PersonaID) []model
 			model.ComponentContext7,
 			model.ComponentPermission,
 			model.ComponentGGA,
+			model.ComponentHeadroom,
 			model.ComponentClaudeTheme,
 			model.ComponentOpenCodeGentleLogo,
 		}

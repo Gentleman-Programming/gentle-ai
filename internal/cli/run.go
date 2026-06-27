@@ -34,6 +34,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/internal/versions"
 	"github.com/gentleman-programming/gentle-ai/internal/verify"
 )
 
@@ -866,8 +867,29 @@ func (s componentApplyStep) Run() error {
 		return nil
 	case model.ComponentContext7:
 		for _, adapter := range adapters {
-			if _, err := mcp.Inject(s.homeDir, adapter); err != nil {
+			if _, err := mcp.Inject(s.homeDir, adapter, model.ComponentContext7); err != nil {
 				return fmt.Errorf("inject context7 for %q: %w", adapter.Agent(), err)
+			}
+		}
+		return nil
+	case model.ComponentHeadroom:
+		if _, err := cmdLookPath("headroom"); err != nil {
+			// headroom not on PATH — install the pip package.
+			pipCmd := "pip"
+			if _, pipErr := cmdLookPath(pipCmd); pipErr != nil {
+				pipCmd = "pip3"
+				if _, pip3Err := cmdLookPath(pipCmd); pip3Err != nil {
+					return fmt.Errorf("headroom: %[1]w and pip/pip3 not found — install headroom-ai[all] via pip or add headroom to PATH before running install: %[1]w", err)
+				}
+			}
+			fmt.Fprintf(os.Stderr, "INFO: headroom binary not found on PATH — installing headroom-ai[all]==%s via %s\n", versions.HeadroomMCP, pipCmd)
+			if installErr := runCommand(pipCmd, "install", fmt.Sprintf("headroom-ai[all]==%s", versions.HeadroomMCP)); installErr != nil {
+				return fmt.Errorf("install headroom via %s: %w", pipCmd, installErr)
+			}
+		}
+		for _, adapter := range adapters {
+			if _, err := mcp.Inject(s.homeDir, adapter, model.ComponentHeadroom); err != nil {
+				return fmt.Errorf("inject headroom for %q: %w", adapter.Agent(), err)
 			}
 		}
 		return nil
@@ -1289,6 +1311,23 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				}
 			case model.StrategyTOMLFile:
 				if p := adapter.MCPConfigPath(homeDir, "context7"); p != "" {
+					paths = append(paths, p)
+				}
+			}
+		case model.ComponentHeadroom:
+			switch adapter.MCPStrategy() {
+			case model.StrategySeparateMCPFiles:
+				paths = append(paths, adapter.MCPConfigPath(homeDir, "headroom"))
+			case model.StrategyMergeIntoSettings:
+				if p := adapter.SettingsPath(homeDir); p != "" {
+					paths = append(paths, p)
+				}
+			case model.StrategyMCPConfigFile:
+				if p := adapter.MCPConfigPath(homeDir, "headroom"); p != "" {
+					paths = append(paths, p)
+				}
+			case model.StrategyTOMLFile:
+				if p := adapter.MCPConfigPath(homeDir, "headroom"); p != "" {
 					paths = append(paths, p)
 				}
 			}

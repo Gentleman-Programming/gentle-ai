@@ -295,6 +295,7 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 		model.ComponentSDD,
 		model.ComponentEngram,
 		model.ComponentContext7,
+		model.ComponentHeadroom,
 		model.ComponentGGA,
 		model.ComponentSkills,
 	}
@@ -629,9 +630,19 @@ func (s componentSyncStep) Run() error {
 
 	case model.ComponentContext7:
 		for _, adapter := range adapters {
-			res, err := mcp.Inject(s.homeDir, adapter)
+			res, err := mcp.Inject(s.homeDir, adapter, model.ComponentContext7)
 			if err != nil {
 				return fmt.Errorf("sync context7 for %q: %w", adapter.Agent(), err)
+			}
+			s.countChanged(boolToInt(res.Changed), res.Files...)
+		}
+		return nil
+
+	case model.ComponentHeadroom:
+		for _, adapter := range adapters {
+			res, err := mcp.Inject(s.homeDir, adapter, model.ComponentHeadroom)
+			if err != nil {
+				return fmt.Errorf("sync headroom for %q: %w", adapter.Agent(), err)
 			}
 			s.countChanged(boolToInt(res.Changed), res.Files...)
 		}

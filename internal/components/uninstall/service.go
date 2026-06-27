@@ -79,6 +79,7 @@ var (
 		model.ComponentPersona,
 		model.ComponentEngram,
 		model.ComponentContext7,
+		model.ComponentHeadroom,
 		model.ComponentPermission,
 		model.ComponentSDD,
 		model.ComponentSkills,
@@ -91,6 +92,7 @@ var (
 		model.ComponentPersona,
 		model.ComponentEngram,
 		model.ComponentContext7,
+		model.ComponentHeadroom,
 		model.ComponentPermission,
 		model.ComponentSDD,
 		model.ComponentSkills,
@@ -467,6 +469,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 	case model.ComponentContext7:
 		targets = append(targets, context7Targets(adapter, homeDir)...)
 		ops = append(ops, context7Operations(adapter, homeDir)...)
+	case model.ComponentHeadroom:
+		targets = append(targets, headroomTargets(adapter, homeDir)...)
+		ops = append(ops, headroomOperations(adapter, homeDir)...)
 	case model.ComponentEngram:
 		if s.engramUninstallScope == model.EngramUninstallScopeProject {
 			projectDataPath := filepath.Join(s.workspaceDir, ".engram")
@@ -704,6 +709,43 @@ func context7Operations(adapter agents.Adapter, homeDir string) []operation {
 			return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "context7"})}
 		default:
 			return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "context7"})}
+		}
+	default:
+		return nil
+	}
+}
+
+func headroomTargets(adapter agents.Adapter, homeDir string) []string {
+	switch adapter.MCPStrategy() {
+	case model.StrategySeparateMCPFiles:
+		return []string{adapter.MCPConfigPath(homeDir, "headroom")}
+	case model.StrategyMergeIntoSettings, model.StrategyMCPConfigFile:
+		return []string{adapter.MCPConfigPath(homeDir, "headroom")}
+	default:
+		return nil
+	}
+}
+
+func headroomOperations(adapter agents.Adapter, homeDir string) []operation {
+	switch adapter.MCPStrategy() {
+	case model.StrategySeparateMCPFiles:
+		path := adapter.MCPConfigPath(homeDir, "headroom")
+		return []operation{removeFile(path), removeDirIfEmpty(filepath.Dir(path))}
+	case model.StrategyMergeIntoSettings:
+		path := adapter.SettingsPath(homeDir)
+		if adapter.Agent() == model.AgentOpenCode {
+			return []operation{rewriteJSONFile(path, jsonPath{"mcp", "headroom"})}
+		}
+		return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "headroom"})}
+	case model.StrategyMCPConfigFile:
+		path := adapter.MCPConfigPath(homeDir, "headroom")
+		switch adapter.Agent() {
+		case model.AgentVSCodeCopilot:
+			return []operation{rewriteJSONFile(path, jsonPath{"servers", "headroom"})}
+		case model.AgentAntigravity:
+			return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "headroom"})}
+		default:
+			return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "headroom"})}
 		}
 	default:
 		return nil
