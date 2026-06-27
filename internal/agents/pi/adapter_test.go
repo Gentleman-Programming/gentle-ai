@@ -211,3 +211,41 @@ func TestAdapterInstallCommandSequenceUsesPnpmForEngramInitWhenAvailable(t *test
 		t.Fatalf("InstallCommand()[3] = %#v, want %#v", commands[3], want)
 	}
 }
+
+func TestAppendPiPackageRemovesLegacyPiSubagentsEntries(t *testing.T) {
+	existing := []any{
+		"npm:pi-subagents",
+		"vendor/pi-subagents",
+		"vendor/pi-subagents-fixed",
+		"npm:pi-subagents-j0k3r",
+		"npm:pi-mcp-adapter",
+		"npm:gentle-pi",
+	}
+
+	got := appendPiPackage(existing, piMCPAdapterPackageSpec)
+	want := []any{
+		"npm:pi-subagents-j0k3r",
+		"npm:gentle-pi",
+		"npm:pi-mcp-adapter",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("appendPiPackage() = %#v, want %#v", got, want)
+	}
+}
+
+func TestAppendPiPackagePreservesUnrelatedPackages(t *testing.T) {
+	existing := []any{
+		"npm:gentle-pi",
+		"npm:pi-web-access",
+	}
+
+	got := appendPiPackage(existing, piMCPAdapterPackageSpec)
+	want := []any{
+		"npm:gentle-pi",
+		"npm:pi-web-access",
+		"npm:pi-mcp-adapter",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("appendPiPackage() = %#v, want %#v", got, want)
+	}
+}

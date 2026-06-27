@@ -26,6 +26,9 @@ const (
 	piSettingsFile              = "settings.json"
 	piNPMDirectory              = "npm"
 	piNPMPackageFile            = "package.json"
+	piSubagentsLegacyPackage    = "npm:pi-subagents"
+	piSubagentsLegacyVendor     = "vendor/pi-subagents"
+	piSubagentsLegacyFixed      = "vendor/pi-subagents-fixed"
 	piSubagentsJ0k3rPackageSpec = "npm:pi-subagents-j0k3r"
 )
 
@@ -223,12 +226,22 @@ func appendPiPackage(existing any, desired string) []any {
 	packages := piPackagesAsSlice(existing)
 	filtered := make([]any, 0, len(packages)+1)
 	for _, pkg := range packages {
-		if piPackageIdentity(pkg) == piMCPAdapterPackage {
+		identity := piPackageIdentity(pkg)
+		if identity == piMCPAdapterPackage || isLegacyPiSubagentsPackage(identity) {
 			continue
 		}
 		filtered = append(filtered, pkg)
 	}
 	return append(filtered, desired)
+}
+
+func isLegacyPiSubagentsPackage(source string) bool {
+	switch source {
+	case piSubagentsLegacyPackage, piSubagentsLegacyVendor, piSubagentsLegacyFixed:
+		return true
+	default:
+		return false
+	}
 }
 
 func piPackagesAsSlice(existing any) []any {
