@@ -879,8 +879,6 @@ func TestReportLineHasBlocker_AllowsCompliantProseWithRiskTerms(t *testing.T) {
 		{"fail term in description", "fail-fast propagation"},
 		{"pending in table row with pass signal", "| REQ-01 | Covers auth | ✅ COMPLIANT | — no pending issues"},
 		{"pending in table with COMPLIANT", "| REQ-02 | Validates input | test_validate | ✅ COMPLIANT — pending review done"},
-		{"todo in table with PASS", "| REQ-03 | rate limit | | ⚠️ TODO (known limitation, documented)"},
-		// Casos que sí deben fallar
 	}
 	for _, tt := range tests {
 		t.Run("allow_"+tt.name, func(t *testing.T) {
@@ -901,6 +899,7 @@ func TestReportLineHasBlocker_BlocksGenuineBlockers(t *testing.T) {
 		{"critical with blocker value", "critical: archive blocker"},
 		{"failed count nonzero", "failed: 3"},
 		{"pending field with real blocker", "Pending: evidence missing"},
+		{"todo in result cell without compliance signal", "| REQ-03 | rate limit | | ⚠️ TODO (known limitation, documented)"},
 	}
 	for _, tt := range tests {
 		t.Run("block_"+tt.name, func(t *testing.T) {
@@ -913,11 +912,13 @@ func TestReportLineHasBlocker_BlocksGenuineBlockers(t *testing.T) {
 
 func TestReportTextIsClearlyPassing_FalsePositivesFromIssue848(t *testing.T) {
 	tests := []struct {
-		name string
-		text string
+		name        string
+		text        string
+		wantPassing bool
 	}{
 		{
 			name: "canonical pass with warnings and risk terms in prose",
+			wantPassing: true,
 			text: strings.Join([]string{
 				"## Verification Report",
 				"### Build & Tests Execution",
@@ -937,7 +938,22 @@ func TestReportTextIsClearlyPassing_FalsePositivesFromIssue848(t *testing.T) {
 			}, "\n"),
 		},
 		{
-			name: "spec compliance matrix with pending in compliant rows",
+			name: "spec compliance matrix with pending in COMPLIANT rows",
+			wantPassing: true,
+			text: strings.Join([]string{
+				"## Verification Report",
+				"### Spec Compliance Matrix",
+				"| Requirement | Scenario | Test | Result |",
+				"|-------------|----------|------|--------|",
+				"| REQ-01 | Covers auth | test_auth | ✅ COMPLIANT — pending review done |",
+				"| REQ-02 | rate limit | test_rate | ✅ COMPLIANT — no pending issues |",
+				"### Verdict",
+				"Verdict: PASS",
+				"",
+			}, "\n"),
+		},
+		{
+			name: "spec compliance matrix with TODO in non-compliant cell blocks",
 			text: strings.Join([]string{
 				"## Verification Report",
 				"### Spec Compliance Matrix",
@@ -946,15 +962,17 @@ func TestReportTextIsClearlyPassing_FalsePositivesFromIssue848(t *testing.T) {
 				"| REQ-01 | Covers auth | test_auth | ✅ COMPLIANT — pending review done |",
 				"| REQ-02 | rate limit | | ⚠️ TODO (known limitation, documented) |",
 				"### Verdict",
-				"Verdict: PASS",
+				"Verdict: FAIL",
 				"",
 			}, "\n"),
+			wantPassing: false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if !reportTextIsClearlyPassing(tt.text) {
-				t.Errorf("reportTextIsClearlyPassing() = false, want true")
+			got := reportTextIsClearlyPassing(tt.text)
+			if got != tt.wantPassing {
+				t.Errorf("reportTextIsClearlyPassing() = %v, want %v", got, tt.wantPassing)
 			}
 		})
 	}

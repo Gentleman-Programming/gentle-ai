@@ -901,8 +901,22 @@ func reportLineHasBlocker(line string) bool {
 			}
 		}
 	}
+	// PENDING/TODO sin field parseable solo bloquean si no hay señal de compliance
+	if !hasField && reportPendingPattern.MatchString(line) && !reportLineHasComplianceSignal(line) {
+		return true
+	}
 	trimmed := stripMarkdownSignal(line)
 	return reportFailValuePattern.MatchString(trimmed)
+}
+
+// reportLineHasComplianceSignal checks if a line contains explicit pass/compliance indicators.
+func reportLineHasComplianceSignal(line string) bool {
+	trimmed := stripMarkdownSignal(line)
+	return strings.Contains(trimmed, "COMPLIANT") ||
+		strings.Contains(trimmed, "no blockers") ||
+		strings.Contains(trimmed, "0 blocking") ||
+		strings.HasPrefix(trimmed, "PASS") ||
+		strings.HasPrefix(trimmed, "PASSED")
 }
 
 func reportLineHasPassSignal(line string) bool {
