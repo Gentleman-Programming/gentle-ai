@@ -161,8 +161,16 @@ func defaultStat(path string) statResult {
 	return statResult{isDir: info.IsDir()}
 }
 
-// ConfigPath returns the path to ~/.hermes, the Hermes global config directory.
+// ConfigPath returns the Hermes global config directory. It honors the
+// HERMES_HOME environment variable when set (the same override Hermes Desktop
+// itself uses), so that gentle-ai and Hermes agree on where persona/skills/MCP
+// config live. When HERMES_HOME is unset, the historical default of
+// filepath.Join(homeDir, ".hermes") is preserved to avoid changing existing
+// behavior on any platform.
 func ConfigPath(homeDir string) string {
+	if envHome := os.Getenv("HERMES_HOME"); envHome != "" {
+		return envHome
+	}
 	return filepath.Join(homeDir, ".hermes")
 }
 

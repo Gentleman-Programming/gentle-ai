@@ -64,6 +64,7 @@ func TestDetect(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HERMES_HOME", "")
 			a := &Adapter{
 				lookPath: func(string) (string, error) {
 					return tt.lookPathPath, tt.lookPathErr
@@ -103,6 +104,44 @@ func TestDetect(t *testing.T) {
 	}
 }
 
+func TestConfigPathHERMES_HOME(t *testing.T) {
+	homeDir := filepath.Join(string(filepath.Separator), "home", "test")
+
+	tests := []struct {
+		name string
+		envs map[string]string
+		want string
+	}{
+		{
+			name: "HERMES_HOME overrides default",
+			envs: map[string]string{"HERMES_HOME": filepath.Join(homeDir, "custom")},
+			want: filepath.Join(homeDir, "custom"),
+		},
+		{
+			name: "HERMES_HOME empty falls back to ~/.hermes",
+			envs: map[string]string{"HERMES_HOME": ""},
+			want: filepath.Join(homeDir, ".hermes"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cleared := map[string]string{"HERMES_HOME": ""}
+			for k := range cleared {
+				t.Setenv(k, "")
+			}
+			for k, v := range tt.envs {
+				t.Setenv(k, v)
+			}
+
+			got := ConfigPath(homeDir)
+			if got != tt.want {
+				t.Fatalf("ConfigPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestInstallCommand(t *testing.T) {
 	a := NewAdapter()
 
@@ -131,6 +170,7 @@ func TestSupportsAutoInstall(t *testing.T) {
 }
 
 func TestConfigPaths(t *testing.T) {
+	t.Setenv("HERMES_HOME", "")
 	a := NewAdapter()
 	homeDir := filepath.Join(string(filepath.Separator), "home", "test")
 	configDir := filepath.Join(homeDir, ".hermes")
