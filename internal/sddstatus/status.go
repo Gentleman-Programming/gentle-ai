@@ -914,9 +914,12 @@ func reportLineHasComplianceSignal(line string) bool {
 	trimmed := strings.ToUpper(stripMarkdownSignal(line))
 	return strings.Contains(trimmed, "COMPLIANT") ||
 		strings.Contains(trimmed, "NO BLOCKERS") ||
-		strings.Contains(trimmed, "0 BLOCKING") ||
-		strings.HasPrefix(trimmed, "PASS")
+		reportZeroBlockingPattern.MatchString(trimmed) ||
+		reportPassWordPattern.MatchString(trimmed)
 }
+
+var reportZeroBlockingPattern = regexp.MustCompile(`\b0\s+BLOCKING\b`)
+var reportPassWordPattern = regexp.MustCompile(`\bPASS(?:ED|ING)?\b`)
 
 func reportLineHasPassSignal(line string) bool {
 	if line == "" {
