@@ -12,7 +12,7 @@
 | SDD | `sdd` | Spec-Driven Development workflow (10 phases, including `sdd-onboard`) — the agent handles SDD organically when the task warrants it, or when you ask; you don't need to learn the commands |
 | Skills | `skills` | Curated coding skill library |
 | Context7 | `context7` | MCP server for live framework/library documentation |
-| Headroom | `headroom` | MCP context compression server — compresses verbose tool outputs and LLM responses to stay within context window limits via three tools: `compress`, `retrieve`, and `stats`. Installed via pip (`headroom-ai[all]`). See [headroom repo](https://github.com/headroomlabs-ai/headroom) |
+| Headroom | `headroom` | MCP context compression server — compresses verbose tool outputs and LLM responses to stay within context window limits via three tools: `compress`, `retrieve`, and `stats`. Installed via pip (`headroom-ai[all]`). See [headroom docs](headroom.md) |
 | Persona | `persona` | Managed Gentleman/neutral persona injection, or unmanaged custom persona mode |
 | Permissions | `permissions` | Security-first defaults and guardrails. Applied to Claude Code and OpenCode (the two adapters with permissions overlay support). Default sensitive-paths deny list: `~/.ssh/*`, `~/.ssh/**/*`, `**/*.pem`, `**/*.key`, `**/.env*`, `~/.credentials/*`, `~/.aws/credentials`, `~/.config/gh/hosts.yml`, `~/Library/Keychains/*`, `**/secrets/*`, `**/*.p12`, `**/*.pfx` |
 | GGA | `gga` | Gentleman Guardian Angel — AI provider switcher |
