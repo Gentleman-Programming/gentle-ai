@@ -863,6 +863,103 @@ func equalStringPtr(left *string, right *string) bool {
 	return *left == *right
 }
 
+func TestReportLineHasBlocker_AllowsCompliantProseWithRiskTerms(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+	}{
+		// False positives reportados en #848
+		{"CRITICAL with None value", "**CRITICAL**: None"},
+		{"WARNING with None value", "**WARNING**: None"},
+		{"blocking count zero", "Issues found: 0 (0 blocking, 0 advisory)"},
+		{"failed count zero", "failed: 0"},
+		{"error term in description", "an errored step skips its dependents"},
+		{"missing term in description", "tolerates a missing/empty field"},
+		{"not-ok term in description", "run is not-ok when a step is skipped"},
+		{"fail term in description", "fail-fast propagation"},
+		{"pending in table row with pass signal", "| REQ-01 | Covers auth | ✅ COMPLIANT | — no pending issues"},
+		{"pending in table with COMPLIANT", "| REQ-02 | Validates input | test_validate | ✅ COMPLIANT — pending review done"},
+		{"todo in table with PASS", "| REQ-03 | rate limit | | ⚠️ TODO (known limitation, documented)"},
+		// Casos que sí deben fallar
+	}
+	for _, tt := range tests {
+		t.Run("allow_"+tt.name, func(t *testing.T) {
+			if reportLineHasBlocker(tt.line) {
+				t.Errorf("reportLineHasBlocker(%q) = true, want false (false positive)", tt.line)
+			}
+		})
+	}
+}
+
+func TestReportLineHasBlocker_BlocksGenuineBlockers(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"TODO with non-benign value", "TODO: finish audit"},
+		{"PENDING with non-benign value", "PENDING: test run"},
+		{"critical with blocker value", "critical: archive blocker"},
+		{"failed count nonzero", "failed: 3"},
+		{"pending field with real blocker", "Pending: evidence missing"},
+	}
+	for _, tt := range tests {
+		t.Run("block_"+tt.name, func(t *testing.T) {
+			if !reportLineHasBlocker(tt.line) {
+				t.Errorf("reportLineHasBlocker(%q) = false, want true", tt.line)
+			}
+		})
+	}
+}
+
+func TestReportTextIsClearlyPassing_FalsePositivesFromIssue848(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+	}{
+		{
+			name: "canonical pass with warnings and risk terms in prose",
+			text: strings.Join([]string{
+				"## Verification Report",
+				"### Build & Tests Execution",
+				"**Tests**: ✅ 12 passed / ❌ 0 failed / ⚠️ 0 skipped",
+				"failed: 0",
+				"Issues found: 0 (0 blocking, 0 advisory)",
+				"an errored step skips its dependents",
+				"tolerates a missing/empty field",
+				"fail-fast propagation",
+				"### Issues Found",
+				"**CRITICAL**: None",
+				"**WARNING**: None",
+				"No blockers",
+				"### Verdict",
+				"Verdict: PASS",
+				"",
+			}, "\n"),
+		},
+		{
+			name: "spec compliance matrix with pending in compliant rows",
+			text: strings.Join([]string{
+				"## Verification Report",
+				"### Spec Compliance Matrix",
+				"| Requirement | Scenario | Test | Result |",
+				"|-------------|----------|------|--------|",
+				"| REQ-01 | Covers auth | test_auth | ✅ COMPLIANT — pending review done |",
+				"| REQ-02 | rate limit | | ⚠️ TODO (known limitation, documented) |",
+				"### Verdict",
+				"Verdict: PASS",
+				"",
+			}, "\n"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !reportTextIsClearlyPassing(tt.text) {
+				t.Errorf("reportTextIsClearlyPassing() = false, want true")
+			}
+		})
+	}
+}
+
 func ptrValue(value *string) string {
 	if value == nil {
 		return "<nil>"

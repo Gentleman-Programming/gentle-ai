@@ -876,7 +876,7 @@ func reportLineHasBlocker(line string) bool {
 	if line == "" {
 		return false
 	}
-	if reportPassNegationPattern.MatchString(line) || reportPendingPattern.MatchString(line) {
+	if reportPassNegationPattern.MatchString(line) {
 		return true
 	}
 	if reportCriticalGlyphStatusPattern.MatchString(line) {
@@ -893,7 +893,7 @@ func reportLineHasBlocker(line string) bool {
 		normalizedLabel := normalizeReportToken(label)
 		trimmedValue := strings.TrimSpace(value)
 		switch normalizedLabel {
-		case "critical", "blocker", "blockers", "verificationblocker", "verificationblockers", "failure", "fail", "failed":
+		case "critical", "blocker", "blockers", "verificationblocker", "verificationblockers", "failure", "fail", "failed", "pending", "todo":
 			return !reportValueIsBenign(trimmedValue)
 		case "verdict", "status", "result", "verification", "finalverdict", "build", "tests":
 			if reportFailValuePattern.MatchString(stripMarkdownSignal(trimmedValue)) {
