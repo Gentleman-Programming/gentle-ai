@@ -1126,3 +1126,72 @@ func assertExactTaskPermissions(t *testing.T, got, want map[string]any) {
 		}
 	}
 }
+
+// TestExtractModelFromAgent covers the model-spec parsing path used by
+// DetectProfiles. Includes regression coverage for issue #260: OpenRouter
+// free models such as "openrouter/qwen/qwen3.6-plus:free" must split at the
+// first separator (the leading '/'), not at ':'.
+func TestExtractModelFromAgent(t *testing.T) {
+	tests := []struct {
+		name     string
+		agentMap map[string]any
+		want     model.ModelAssignment
+	}{
+		{
+			name:     "nil map",
+			agentMap: nil,
+			want:     model.ModelAssignment{},
+		},
+		{
+			name:     "missing model field",
+			agentMap: map[string]any{"prompt": "hello"},
+			want:     model.ModelAssignment{},
+		},
+		{
+			name:     "model field not a string",
+			agentMap: map[string]any{"model": 42},
+			want:     model.ModelAssignment{},
+		},
+		{
+			name:     "empty model string",
+			agentMap: map[string]any{"model": ""},
+			want:     model.ModelAssignment{},
+		},
+		{
+			name:     "model with no separator",
+			agentMap: map[string]any{"model": "no-separator-here"},
+			want:     model.ModelAssignment{},
+		},
+		{
+			name:     "colon separator",
+			agentMap: map[string]any{"model": "anthropic:claude-sonnet-4-20250514"},
+			want:     model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
+		},
+		{
+			name:     "slash separator",
+			agentMap: map[string]any{"model": "zai-coding-plan/glm-5-turbo"},
+			want:     model.ModelAssignment{ProviderID: "zai-coding-plan", ModelID: "glm-5-turbo"},
+		},
+		// Regression #260: OpenRouter free models contain both '/' and ':'.
+		// Must split at the first '/' so the colon stays inside the modelID.
+		{
+			name:     "openrouter free suffix",
+			agentMap: map[string]any{"model": "openrouter/qwen/qwen3.6-plus:free"},
+			want:     model.ModelAssignment{ProviderID: "openrouter", ModelID: "qwen/qwen3.6-plus:free"},
+		},
+		{
+			name:     "openrouter paid with multiple slashes",
+			agentMap: map[string]any{"model": "openrouter/anthropic/claude-sonnet-4"},
+			want:     model.ModelAssignment{ProviderID: "openrouter", ModelID: "anthropic/claude-sonnet-4"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractModelFromAgent(tt.agentMap)
+			if got != tt.want {
+				t.Errorf("extractModelFromAgent() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}

@@ -236,18 +236,8 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 	if modelStr == "" {
 		return model.ModelAssignment{}
 	}
-
-	// Try colon separator first (standard: "anthropic:claude-sonnet-4"), then slash.
-	idx := strings.Index(modelStr, ":")
-	if idx <= 0 {
-		idx = strings.Index(modelStr, "/")
-	}
-	if idx <= 0 {
-		return model.ModelAssignment{}
-	}
-	providerID := modelStr[:idx]
-	modelID := modelStr[idx+1:]
-	if modelID == "" {
+	providerID, modelID, ok := model.SplitProviderModel(modelStr)
+	if !ok {
 		return model.ModelAssignment{}
 	}
 	effort, _ := agentMap["variant"].(string)

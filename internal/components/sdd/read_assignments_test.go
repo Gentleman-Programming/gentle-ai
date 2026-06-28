@@ -297,3 +297,59 @@ func TestReadCurrentModelAssignmentsMixedSeparators(t *testing.T) {
 		}
 	}
 }
+
+// TestReadCurrentModelAssignmentsOpenRouterFreeSuffix is a regression test
+// for issue #260: OpenRouter free models have the form
+// "openrouter/qwen/qwen3.6-plus:free" — they contain BOTH '/' and ':'.
+// The parser must split on the FIRST separator (the leading '/'), producing
+// providerID="openrouter" and modelID="qwen/qwen3.6-plus:free". Splitting
+// on ':' first would mis-attribute "openrouter/qwen/qwen3.6-plus" to the
+// provider, which breaks OpenCode model resolution.
+//
+// The fixture intentionally uses the legacy "sdd-orchestrator" key (the
+// real-world config shape from issue #260, before the user re-syncs) and
+// asserts the result lands under "gentle-orchestrator" — exercising both
+// the first-separator split and the legacy alias normalization together.
+func TestReadCurrentModelAssignmentsOpenRouterFreeSuffix(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.json")
+
+	content := `{
+  "agent": {
+    "sdd-orchestrator": { "model": "openrouter/qwen/qwen3.6-plus:free" },
+    "sdd-apply":        { "model": "openrouter/anthropic/claude-sonnet-4" }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	got, err := ReadCurrentModelAssignments(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadCurrentModelAssignments() error = %v", err)
+	}
+
+	tests := []struct {
+		phase      string
+		providerID string
+		modelID    string
+	}{
+		// Legacy "sdd-orchestrator" fixture key normalizes to "gentle-orchestrator".
+		{"gentle-orchestrator", "openrouter", "qwen/qwen3.6-plus:free"},
+		{"sdd-apply", "openrouter", "anthropic/claude-sonnet-4"},
+	}
+
+	for _, tt := range tests {
+		a, ok := got[tt.phase]
+		if !ok {
+			t.Errorf("phase %q missing from result", tt.phase)
+			continue
+		}
+		if a.ProviderID != tt.providerID {
+			t.Errorf("phase %q: ProviderID = %q, want %q", tt.phase, a.ProviderID, tt.providerID)
+		}
+		if a.ModelID != tt.modelID {
+			t.Errorf("phase %q: ModelID = %q, want %q", tt.phase, a.ModelID, tt.modelID)
+		}
+	}
+}
