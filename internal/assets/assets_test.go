@@ -737,7 +737,19 @@ func TestVSCodeNativeAgentAssetsFrontmatter(t *testing.T) {
 			requireFrontmatterKeyAbsent(t, frontmatter, "model")
 			requireFrontmatterKeyAbsent(t, frontmatter, "infer")
 			requireNoDeprecatedVSCodeTools(t, frontmatter)
-			if strings.Contains(frontmatterKeyLine(frontmatter, "tools"), "agent") {
+			toolsLine := frontmatterKeyLine(frontmatter, "tools")
+			toolsLine = strings.TrimPrefix(toolsLine, "tools:")
+			toolsLine = strings.TrimSpace(toolsLine)
+			toolsLine = strings.Trim(toolsLine, "[]")
+			parts := strings.Split(toolsLine, ",")
+			hasAgent := false
+			for _, part := range parts {
+				if strings.TrimSpace(part) == "agent" {
+					hasAgent = true
+					break
+				}
+			}
+			if hasAgent {
 				t.Fatalf("%s must not include coordinator-only agent tool", phase)
 			}
 			for _, tool := range expectedVSCodePhaseTools(phase) {
@@ -855,6 +867,11 @@ func requireInlineTool(t *testing.T, frontmatter, tool string) {
 
 func requireAgentsAllowlist(t *testing.T, frontmatter string, want []string) {
 	t.Helper()
+	// Note: We use a simple count of "\n  - " which assumes a strict 2-space
+	// indentation for YAML list items in the frontmatter of these controlled assets.
+	// This is sufficient for verifying our internal templates. If YAML formatting
+	// requirements evolve to use different indentation (e.g. 4 spaces or inline arrays),
+	// we would need to parse the YAML document using a proper YAML library here.
 	if strings.Count(frontmatter, "\n  - ") != len(want) {
 		t.Fatalf("coordinator agents allowlist must contain only %v:\n%s", want, frontmatter)
 	}

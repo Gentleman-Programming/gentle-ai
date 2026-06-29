@@ -39,6 +39,13 @@ func hideManagedClaudeInternalAgentsForVSCode(homeDir string) (InjectionResult, 
 		if updated == text {
 			continue
 		}
+
+		// Back up original content before write
+		backupPath := path + ".backup"
+		if err := os.WriteFile(backupPath, content, 0o644); err != nil {
+			return InjectionResult{}, fmt.Errorf("backup managed Claude agent %s: %w", fileName, err)
+		}
+
 		writeResult, err := filemerge.WriteFileAtomic(path, []byte(updated), 0o644)
 		if err != nil {
 			return InjectionResult{}, fmt.Errorf("write managed Claude agent %s: %w", fileName, err)
@@ -49,6 +56,27 @@ func hideManagedClaudeInternalAgentsForVSCode(homeDir string) (InjectionResult, 
 		}
 	}
 	return result, nil
+}
+
+// RestoreManagedClaudeInternalAgentsForVSCode restores the backed-up Claude internal agent files
+// from their .backup copies and removes the backup files.
+func RestoreManagedClaudeInternalAgentsForVSCode(homeDir string) error {
+	agentsDir := filepath.Join(homeDir, ".claude", "agents")
+	for _, fileName := range managedClaudeInternalAgentFiles() {
+		path := filepath.Join(agentsDir, fileName)
+		backupPath := path + ".backup"
+		if _, err := os.Stat(backupPath); err == nil {
+			content, err := os.ReadFile(backupPath)
+			if err != nil {
+				return fmt.Errorf("read backup %s: %w", backupPath, err)
+			}
+			if _, err := filemerge.WriteFileAtomic(path, content, 0o644); err != nil {
+				return fmt.Errorf("restore agent %s from backup: %w", path, err)
+			}
+			_ = os.Remove(backupPath)
+		}
+	}
+	return nil
 }
 
 func managedClaudeInternalAgentFiles() []string {

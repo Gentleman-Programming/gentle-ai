@@ -577,6 +577,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			ops = append(ops, removeTree(dirPath), removeDirIfEmpty(skillDir))
 		}
 	case model.ComponentSDD:
+		if adapter.Agent() == model.AgentVSCodeCopilot {
+			ops = append(ops, restoreClaudeVisibilityBackupOperation(homeDir))
+		}
 		if adapter.SupportsSystemPrompt() {
 			path := adapter.SystemPromptFile(homeDir)
 			targets = append(targets, path)
@@ -1337,4 +1340,18 @@ func updateStateAfterUninstall(homeDir string, toRemove []model.AgentID) ([]mode
 		return nil, fmt.Errorf("write install state: %w", err)
 	}
 	return removed, nil
+}
+
+func restoreClaudeVisibilityBackupOperation(homeDir string) operation {
+	return operation{
+		typeID: opRewriteFile,
+		path:   filepath.Join(homeDir, ".claude", "agents"),
+		apply: func(path string) (bool, bool, error) {
+			err := sdd.RestoreManagedClaudeInternalAgentsForVSCode(homeDir)
+			if err != nil {
+				return false, false, err
+			}
+			return true, false, nil
+		},
+	}
 }

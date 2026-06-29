@@ -810,7 +810,7 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 		selection.ModelAssignments = m
 	}
 	if len(selection.VSCodeModelAssignments) == 0 && len(s.VSCodeModelAssignments) > 0 {
-		selection.VSCodeModelAssignments = stateModelAssignmentsToModel(s.VSCodeModelAssignments)
+		selection.VSCodeModelAssignments = cli.StateModelAssignmentsToModel(s.VSCodeModelAssignments)
 	}
 }
 
@@ -909,17 +909,6 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 		}
 	}
 	return state.Write(homeDir, current)
-}
-
-func stateModelAssignmentsToModel(m map[string]state.ModelAssignmentState) map[string]model.ModelAssignment {
-	if len(m) == 0 {
-		return nil
-	}
-	out := make(map[string]model.ModelAssignment, len(m))
-	for k, v := range m {
-		out[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
-	}
-	return out
 }
 
 // claudeAliasesToStrings converts a typed ClaudeModelAlias map to plain strings

@@ -1185,7 +1185,9 @@ func dedupStrings(values []string) []string {
 	return out
 }
 
-func stateModelAssignmentsToModel(m map[string]state.ModelAssignmentState) map[string]model.ModelAssignment {
+// StateModelAssignmentsToModel converts a map of state.ModelAssignmentState
+// to model.ModelAssignment.
+func StateModelAssignmentsToModel(m map[string]state.ModelAssignmentState) map[string]model.ModelAssignment {
 	if len(m) == 0 {
 		return nil
 	}

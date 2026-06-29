@@ -3026,6 +3026,10 @@ func TestRunSyncWithSelectionPropagatesVSCodeModelWarnings(t *testing.T) {
 		},
 	}
 
+	// RunSyncWithSelection is called with a fresh temp home directory that lacks a
+	// models cache. Consequently, the VSCode model assignments cannot be validated
+	// against cached metadata. The sync operation should emit a models cache warning
+	// and omit the "model:" field from the generated agent files since validation failed.
 	result, err := RunSyncWithSelection(home, selection)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
