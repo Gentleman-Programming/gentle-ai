@@ -1262,6 +1262,9 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 						filepath.Join(skillDir, "sdd-verify", "SKILL.md"),
 						filepath.Join(skillDir, "sdd-archive", "SKILL.md"),
 					)
+					if adapter.Agent() == model.AgentClaudeCode {
+						paths = append(paths, filepath.Join(skillDir, "_shared", "sdd-orchestrator-workflow.md"))
+					}
 				}
 			}
 			paths = append(paths, sddSubAgentPaths(targetDir, adapter)...)

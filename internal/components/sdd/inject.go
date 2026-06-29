@@ -595,6 +595,18 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 	}
 
+	// Claude Code keeps the always-on CLAUDE.md bootstrap thin. The heavy SDD
+	// workflow procedure is installed as a lazy shared skill document and read
+	// only when an SDD command or SDD/Judgment-Day delegation needs it.
+	if adapter.Agent() == model.AgentClaudeCode {
+		workflowResult, workflowErr := writeClaudeLazySDDWorkflow(homeDir, adapter, opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments)
+		if workflowErr != nil {
+			return InjectionResult{}, workflowErr
+		}
+		changed = changed || workflowResult.Changed
+		files = append(files, workflowResult.Files...)
+	}
+
 	// 3b. Write native workflow files (Windsurf Hybrid-First, and any future
 	// agent that implements the workflowInjector optional interface).
 	// findProjectRoot walks upward from WorkspaceDir so gentle-ai can be
@@ -2021,13 +2033,6 @@ func stripBareOrchestratorSection(content string) string {
 func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment) (InjectionResult, error) {
 	promptPath := adapter.SystemPromptFile(homeDir)
 	content := assets.MustRead(sddOrchestratorAsset(adapter.Agent()))
-	if adapter.Agent() == model.AgentClaudeCode && (len(legacyAssignments) > 0 || len(phaseAssignments) > 0) {
-		var err error
-		content, err = injectClaudePhaseAssignments(content, legacyAssignments, phaseAssignments)
-		if err != nil {
-			return InjectionResult{}, err
-		}
-	}
 
 	existing, err := readFileOrEmpty(promptPath)
 	if err != nil {
@@ -2052,6 +2057,32 @@ func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssign
 	}
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
+}
+
+func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment) (InjectionResult, error) {
+	if adapter.Agent() != model.AgentClaudeCode {
+		return InjectionResult{}, nil
+	}
+	skillDir := adapter.SkillsDir(homeDir)
+	if strings.TrimSpace(skillDir) == "" {
+		return InjectionResult{}, nil
+	}
+
+	content := assets.MustRead("claude/sdd-orchestrator-workflow.md")
+	if len(legacyAssignments) > 0 || len(phaseAssignments) > 0 {
+		var err error
+		content, err = injectClaudePhaseAssignments(content, legacyAssignments, phaseAssignments)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+	}
+
+	path := filepath.Join(skillDir, "_shared", "sdd-orchestrator-workflow.md")
+	writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	return InjectionResult{Changed: writeResult.Changed, Files: []string{path}}, nil
 }
 
 var claudeModelAssignmentRowOrder = []string{

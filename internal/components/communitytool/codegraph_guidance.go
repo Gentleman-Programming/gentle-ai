@@ -16,6 +16,8 @@ const (
 	codeGraphGuidanceSectionID   = "codegraph-guidance"
 	legacyCodeGraphGuidanceStart = "<!-- CODEGRAPH_START -->"
 	legacyCodeGraphGuidanceEnd   = "<!-- CODEGRAPH_END -->"
+	upstreamCodeGraphSkipPhrase  = "If there is no `.codegraph/` directory, skip CodeGraph entirely"
+	upstreamCodeGraphOrderPhrase = "BEFORE grep/find or reading files"
 )
 
 // GuidanceInjectionResult describes the managed agent-instruction updates made
@@ -208,7 +210,9 @@ func readTextFileOrEmpty(path string) (string, error) {
 }
 
 func containsLegacyCodeGraphGuidance(content string) bool {
-	return strings.Contains(content, legacyCodeGraphGuidanceStart) || strings.Contains(content, legacyCodeGraphGuidanceEnd)
+	return strings.Contains(content, legacyCodeGraphGuidanceStart) ||
+		strings.Contains(content, legacyCodeGraphGuidanceEnd) ||
+		containsUnmarkedUpstreamCodeGraphGuidance(content)
 }
 
 func stripLegacyCodeGraphGuidance(content string) string {
@@ -241,6 +245,170 @@ func stripLegacyCodeGraphGuidance(content string) string {
 
 	content = strings.ReplaceAll(content, legacyCodeGraphGuidanceStart, "")
 	content = strings.ReplaceAll(content, legacyCodeGraphGuidanceEnd, "")
+	for strings.Contains(content, "\n\n\n") {
+		content = strings.ReplaceAll(content, "\n\n\n", "\n\n")
+	}
+	return stripUnmarkedUpstreamCodeGraphGuidance(content)
+}
+
+func containsUnmarkedUpstreamCodeGraphGuidance(content string) bool {
+	return findUnmarkedUpstreamCodeGraphGuidanceStart(content) >= 0
+}
+
+func stripUnmarkedUpstreamCodeGraphGuidance(content string) string {
+	for {
+		startIdx := findUnmarkedUpstreamCodeGraphGuidanceStart(content)
+		if startIdx < 0 {
+			return collapseBlankLines(content)
+		}
+
+		endIdx := findNextMarkdownHeading(content, startIdx+len("## CodeGraph"))
+		if endIdx < 0 {
+			endIdx = len(content)
+		}
+		cleanedSection, changed := stripKnownUpstreamCodeGraphLines(content[startIdx:endIdx])
+		if !changed {
+			return collapseBlankLines(content)
+		}
+		if cleanedSection != "" {
+			after := content[endIdx:]
+			if after != "" && !strings.HasSuffix(cleanedSection, "\n") && !strings.HasPrefix(after, "\n") {
+				cleanedSection += "\n"
+			}
+			content = content[:startIdx] + cleanedSection + after
+			continue
+		}
+
+		before := strings.TrimRight(content[:startIdx], "\r\n")
+		after := strings.TrimLeft(content[endIdx:], "\r\n")
+		switch {
+		case before == "":
+			content = after
+		case after == "":
+			content = before
+		default:
+			content = before + "\n\n" + after
+		}
+	}
+}
+
+func stripKnownUpstreamCodeGraphLines(section string) (string, bool) {
+	lines := strings.Split(section, "\n")
+	remove := make([]bool, len(lines))
+	changed := false
+	for idx, line := range lines {
+		if isKnownUpstreamCodeGraphLine(line) {
+			remove[idx] = true
+			changed = true
+		}
+	}
+	if !changed {
+		return section, false
+	}
+	for idx, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			continue
+		}
+		if (idx > 0 && remove[idx-1]) || (idx+1 < len(remove) && remove[idx+1]) {
+			remove[idx] = true
+		}
+	}
+
+	kept := make([]string, 0, len(lines))
+	for idx, line := range lines {
+		if remove[idx] {
+			continue
+		}
+		kept = append(kept, line)
+	}
+
+	manualLines := trimBlankLines(kept[1:])
+	if len(manualLines) == 0 {
+		return "", true
+	}
+	return "## CodeGraph\n\n" + strings.Join(manualLines, "\n"), true
+}
+
+func trimBlankLines(lines []string) []string {
+	start := 0
+	for start < len(lines) && strings.TrimSpace(lines[start]) == "" {
+		start++
+	}
+	end := len(lines)
+	for end > start && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	return lines[start:end]
+}
+
+func isKnownUpstreamCodeGraphLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return isKnownUpstreamCodeGraphIntroLine(trimmed) ||
+		strings.HasPrefix(trimmed, "- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call") ||
+		strings.HasPrefix(trimmed, "- **Shell** (always works): `codegraph explore ") ||
+		isKnownUpstreamCodeGraphSkipLine(trimmed)
+}
+
+func isKnownUpstreamCodeGraphIntroLine(line string) bool {
+	return strings.HasPrefix(line, "In repositories indexed by CodeGraph") &&
+		strings.Contains(line, upstreamCodeGraphOrderPhrase)
+}
+
+func isKnownUpstreamCodeGraphSkipLine(line string) bool {
+	return strings.HasPrefix(line, upstreamCodeGraphSkipPhrase)
+}
+
+func findUnmarkedUpstreamCodeGraphGuidanceStart(content string) int {
+	searchFrom := 0
+	for {
+		relStart := strings.Index(content[searchFrom:], "## CodeGraph")
+		if relStart < 0 {
+			return -1
+		}
+		startIdx := searchFrom + relStart
+		endIdx := findNextMarkdownHeading(content, startIdx+len("## CodeGraph"))
+		if endIdx < 0 {
+			endIdx = len(content)
+		}
+		section := content[startIdx:endIdx]
+		if containsKnownUpstreamCodeGraphDuplicate(section) {
+			return startIdx
+		}
+		searchFrom = startIdx + len("## CodeGraph")
+	}
+}
+
+func containsKnownUpstreamCodeGraphDuplicate(section string) bool {
+	hasIntro := false
+	hasSkip := false
+	for _, line := range strings.Split(section, "\n") {
+		trimmed := strings.TrimSpace(line)
+		hasIntro = hasIntro || isKnownUpstreamCodeGraphIntroLine(trimmed)
+		hasSkip = hasSkip || isKnownUpstreamCodeGraphSkipLine(trimmed)
+	}
+	return hasIntro && hasSkip
+}
+
+func findNextMarkdownHeading(content string, from int) int {
+	for from < len(content) {
+		relNewline := strings.IndexByte(content[from:], '\n')
+		if relNewline < 0 {
+			return -1
+		}
+		lineStart := from + relNewline + 1
+		lineEnd := len(content)
+		if relNext := strings.IndexByte(content[lineStart:], '\n'); relNext >= 0 {
+			lineEnd = lineStart + relNext
+		}
+		if strings.HasPrefix(strings.TrimSpace(content[lineStart:lineEnd]), "#") {
+			return lineStart
+		}
+		from = lineStart
+	}
+	return -1
+}
+
+func collapseBlankLines(content string) string {
 	for strings.Contains(content, "\n\n\n") {
 		content = strings.ReplaceAll(content, "\n\n\n", "\n\n")
 	}

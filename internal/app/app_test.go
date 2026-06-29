@@ -462,13 +462,13 @@ func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
 		t.Fatalf("sdd-apply agent did not receive selected model; got:\n%s", body)
 	}
 
-	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
-	body, err = os.ReadFile(claudeMD)
+	workflowPath := filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md")
+	body, err = os.ReadFile(workflowPath)
 	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", claudeMD, err)
+		t.Fatalf("ReadFile(%s): %v", workflowPath, err)
 	}
 	if strings.Contains(string(body), "| orchestrator |") {
-		t.Fatalf("CLAUDE.md should not expose orchestrator as a configurable model row; got:\n%s", body)
+		t.Fatalf("lazy SDD workflow should not expose orchestrator as a configurable model row; got:\n%s", body)
 	}
 	for _, want := range []string{
 		"| sdd-apply | haiku | default | Implementation |",
@@ -476,7 +476,7 @@ func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
 		"Gentle AI does not configure the main orchestrator model",
 	} {
 		if !strings.Contains(string(body), want) {
-			t.Fatalf("CLAUDE.md missing %q; got:\n%s", want, body)
+			t.Fatalf("lazy SDD workflow missing %q; got:\n%s", want, body)
 		}
 	}
 }

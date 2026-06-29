@@ -255,6 +255,247 @@ func TestCodeGraphGuidanceInjectRemovesLegacySkipBlock(t *testing.T) {
 	}
 }
 
+func TestCodeGraphGuidanceInjectRemovesUnmarkedUpstreamDuplicateBlock(t *testing.T) {
+	home := t.TempDir()
+	agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	mustWrite(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{}`)
+	mustWrite(t, agentsPath, strings.Join([]string{
+		"custom notes",
+		"",
+		"## CodeGraph",
+		"",
+		"In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the repo root), reach for it BEFORE grep/find or reading files when you need to understand or locate code:",
+		"",
+		"- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call — the relevant symbols' verbatim source plus the call paths between them, including dynamic-dispatch hops grep can't follow.",
+		"- **Shell** (always works): `codegraph explore \"<symbol names or question>\"` prints the same output.",
+		"",
+		"If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.",
+		"",
+		"## CodeGraph manual notes",
+		"This manual section is unrelated and must stay.",
+		"",
+		"more notes",
+	}, "\n"))
+
+	result, err := InjectCodeGraphGuidanceIfSelected(home, []model.CommunityToolID{model.CommunityToolCodeGraph})
+	if err != nil {
+		t.Fatalf("InjectCodeGraphGuidanceIfSelected() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("result.Changed = false, want true")
+	}
+
+	body, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", agentsPath, err)
+	}
+	text := string(body)
+	for _, stale := range []string{"BEFORE grep/find or reading files", "skip CodeGraph entirely", "`codegraph explore \"<symbol names or question>\"`"} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("unmarked upstream CodeGraph guidance %q was not removed:\n%s", stale, text)
+		}
+	}
+	for _, want := range []string{"custom notes", "## CodeGraph manual notes", "This manual section is unrelated and must stay.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "codegraph init <project-root>"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("updated guidance missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestCodeGraphGuidanceInjectPreservesManualNotesInsideUnmarkedCodeGraphSection(t *testing.T) {
+	home := t.TempDir()
+	agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	mustWrite(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{}`)
+	mustWrite(t, agentsPath, strings.Join([]string{
+		"custom notes",
+		"",
+		"## CodeGraph",
+		"",
+		"In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the repo root), reach for it BEFORE grep/find or reading files when you need to understand or locate code:",
+		"",
+		"- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call — the relevant symbols' verbatim source plus the call paths between them, including dynamic-dispatch hops grep can't follow.",
+		"- **Shell** (always works): `codegraph explore \"<symbol names or question>\"` prints the same output.",
+		"",
+		"If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.",
+		"",
+		"Manual note: keep CodeGraph indexes outside throwaway directories.",
+		"Manual note: rerun `codegraph sync` after large refactors.",
+		"",
+		"more notes",
+	}, "\n"))
+
+	result, err := InjectCodeGraphGuidanceIfSelected(home, []model.CommunityToolID{model.CommunityToolCodeGraph})
+	if err != nil {
+		t.Fatalf("InjectCodeGraphGuidanceIfSelected() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("result.Changed = false, want true")
+	}
+
+	body, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", agentsPath, err)
+	}
+	text := string(body)
+	for _, stale := range []string{"BEFORE grep/find or reading files", "skip CodeGraph entirely", "`codegraph explore \"<symbol names or question>\"`"} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("unmarked upstream CodeGraph guidance %q was not removed:\n%s", stale, text)
+		}
+	}
+	for _, want := range []string{"custom notes", "Manual note: keep CodeGraph indexes outside throwaway directories.", "Manual note: rerun `codegraph sync` after large refactors.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "codegraph init <project-root>"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("updated guidance missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestCodeGraphGuidanceInjectPreservesManualNoteBoundaryBeforeNextHeading(t *testing.T) {
+	home := t.TempDir()
+	agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	mustWrite(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{}`)
+	mustWrite(t, agentsPath, strings.Join([]string{
+		"custom notes",
+		"",
+		"## CodeGraph",
+		"",
+		"In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the repo root), reach for it BEFORE grep/find or reading files when you need to understand or locate code:",
+		"",
+		"- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call — the relevant symbols' verbatim source plus the call paths between them, including dynamic-dispatch hops grep can't follow.",
+		"- **Shell** (always works): `codegraph explore \"<symbol names or question>\"` prints the same output.",
+		"",
+		"If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.",
+		"",
+		"Manual note: preserve this boundary.",
+		"## Next Heading",
+		"This section must remain separate.",
+	}, "\n"))
+
+	result, err := InjectCodeGraphGuidanceIfSelected(home, []model.CommunityToolID{model.CommunityToolCodeGraph})
+	if err != nil {
+		t.Fatalf("InjectCodeGraphGuidanceIfSelected() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("result.Changed = false, want true")
+	}
+
+	body, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", agentsPath, err)
+	}
+	text := string(body)
+	for _, stale := range []string{"BEFORE grep/find or reading files", "skip CodeGraph entirely", "`codegraph explore \"<symbol names or question>\"`"} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("unmarked upstream CodeGraph guidance %q was not removed:\n%s", stale, text)
+		}
+	}
+	if !strings.Contains(text, "Manual note: preserve this boundary.\n## Next Heading") {
+		t.Fatalf("manual note was not separated from the next heading by exactly one newline:\n%s", text)
+	}
+	for _, broken := range []string{"Manual note: preserve this boundary.## Next Heading", "Manual note: preserve this boundary.\n\n## Next Heading"} {
+		if strings.Contains(text, broken) {
+			t.Fatalf("manual note boundary contains invalid separator %q:\n%s", broken, text)
+		}
+	}
+	for _, want := range []string{"custom notes", "This section must remain separate.", "<!-- gentle-ai:codegraph-guidance -->", "codegraph init <project-root>"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("updated guidance missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestCodeGraphGuidanceInjectPreservesManualNotesBeforeUnmarkedUpstreamDuplicateBlock(t *testing.T) {
+	home := t.TempDir()
+	agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	mustWrite(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{}`)
+	mustWrite(t, agentsPath, strings.Join([]string{
+		"custom notes",
+		"",
+		"## CodeGraph",
+		"",
+		"Manual note: always inspect the project root before using generated indexes.",
+		"Manual note: never initialize CodeGraph in scratch directories.",
+		"",
+		"In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the repo root), reach for it BEFORE grep/find or reading files when you need to understand or locate code:",
+		"",
+		"- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call — the relevant symbols' verbatim source plus the call paths between them, including dynamic-dispatch hops grep can't follow.",
+		"- **Shell** (always works): `codegraph explore \"<symbol names or question>\"` prints the same output.",
+		"",
+		"If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.",
+		"",
+		"more notes",
+	}, "\n"))
+
+	result, err := InjectCodeGraphGuidanceIfSelected(home, []model.CommunityToolID{model.CommunityToolCodeGraph})
+	if err != nil {
+		t.Fatalf("InjectCodeGraphGuidanceIfSelected() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("result.Changed = false, want true")
+	}
+
+	body, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", agentsPath, err)
+	}
+	text := string(body)
+	for _, stale := range []string{"BEFORE grep/find or reading files", "skip CodeGraph entirely", "`codegraph explore \"<symbol names or question>\"`"} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("unmarked upstream CodeGraph guidance %q was not removed:\n%s", stale, text)
+		}
+	}
+	for _, want := range []string{"custom notes", "Manual note: always inspect the project root before using generated indexes.", "Manual note: never initialize CodeGraph in scratch directories.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "codegraph init <project-root>"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("updated guidance missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestCodeGraphGuidanceInjectPreservesManualNotesInterleavedWithUnmarkedUpstreamDuplicateBlock(t *testing.T) {
+	home := t.TempDir()
+	agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	mustWrite(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{}`)
+	mustWrite(t, agentsPath, strings.Join([]string{
+		"custom notes",
+		"",
+		"## CodeGraph",
+		"",
+		"In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the repo root), reach for it BEFORE grep/find or reading files when you need to understand or locate code:",
+		"Manual note: prefer the MCP tool when it returns exact source.",
+		"",
+		"- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call — the relevant symbols' verbatim source plus the call paths between them, including dynamic-dispatch hops grep can't follow.",
+		"Manual note: shell fallback is okay after CodeGraph initialization fails.",
+		"- **Shell** (always works): `codegraph explore \"<symbol names or question>\"` prints the same output.",
+		"",
+		"If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.",
+		"",
+		"more notes",
+	}, "\n"))
+
+	result, err := InjectCodeGraphGuidanceIfSelected(home, []model.CommunityToolID{model.CommunityToolCodeGraph})
+	if err != nil {
+		t.Fatalf("InjectCodeGraphGuidanceIfSelected() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("result.Changed = false, want true")
+	}
+
+	body, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", agentsPath, err)
+	}
+	text := string(body)
+	for _, stale := range []string{"BEFORE grep/find or reading files", "skip CodeGraph entirely", "`codegraph explore \"<symbol names or question>\"`"} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("unmarked upstream CodeGraph guidance %q was not removed:\n%s", stale, text)
+		}
+	}
+	for _, want := range []string{"custom notes", "Manual note: prefer the MCP tool when it returns exact source.", "Manual note: shell fallback is okay after CodeGraph initialization fails.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "codegraph init <project-root>"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("updated guidance missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestUnselectedCodeGraphDoesNotInjectGuidance(t *testing.T) {
 	home := t.TempDir()
 	mustWrite(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{}`)

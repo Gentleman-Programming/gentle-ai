@@ -223,6 +223,58 @@ func TestInjectClaudeWritesSectionMarkers(t *testing.T) {
 	}
 }
 
+func TestInjectClaudeKeepsHeavySDDWorkflowLazy(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := Inject(home, claudeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	promptPath := filepath.Join(home, ".claude", "CLAUDE.md")
+	promptContent, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", promptPath, err)
+	}
+	prompt := string(promptContent)
+	for _, heavy := range []string{
+		"## SDD Workflow (Spec-Driven Development)",
+		"### Automatic Mode Gatekeeper (MANDATORY)",
+		"### Native SDD Dispatcher Guard",
+	} {
+		if strings.Contains(prompt, heavy) {
+			t.Fatalf("CLAUDE.md eagerly includes heavy SDD workflow detail %q:\n%s", heavy, prompt)
+		}
+	}
+	for _, eager := range []string{
+		"### Delegation Rules",
+		"#### Mandatory Delegation Triggers",
+		"#### Review Lens Selection",
+		"#### Cost and Context Balance",
+		"~/.claude/skills/_shared/sdd-orchestrator-workflow.md",
+	} {
+		if !strings.Contains(prompt, eager) {
+			t.Fatalf("CLAUDE.md missing eager bootstrap %q:\n%s", eager, prompt)
+		}
+	}
+
+	lazyPath := filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md")
+	lazyContent, err := os.ReadFile(lazyPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", lazyPath, err)
+	}
+	lazy := string(lazyContent)
+	for _, want := range []string{
+		"## SDD Workflow (Spec-Driven Development)",
+		"### Automatic Mode Gatekeeper (MANDATORY)",
+		"### Native SDD Dispatcher Guard",
+	} {
+		if !strings.Contains(lazy, want) {
+			t.Fatalf("lazy SDD workflow missing %q:\n%s", want, lazy)
+		}
+	}
+}
+
 func TestInjectClaudePreservesExistingSections(t *testing.T) {
 	home := t.TempDir()
 	claudeDir := filepath.Join(home, ".claude")
@@ -334,14 +386,14 @@ func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 		t.Fatal("Inject(claude, custom assignments) changed = false")
 	}
 
-	content, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md"))
+	content, err := os.ReadFile(filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md"))
 	if err != nil {
-		t.Fatalf("ReadFile(CLAUDE.md) error = %v", err)
+		t.Fatalf("ReadFile(sdd-orchestrator-workflow.md) error = %v", err)
 	}
 
 	text := string(content)
 	if strings.Contains(text, "| orchestrator |") {
-		t.Fatal("CLAUDE.md should not expose orchestrator as a configurable model row")
+		t.Fatal("lazy workflow should not expose orchestrator as a configurable model row")
 	}
 	for _, want := range []string{
 		"| sdd-design | sonnet | default | Architecture decisions |",
@@ -350,15 +402,15 @@ func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 		"Gentle AI does not configure the main orchestrator model",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("CLAUDE.md missing custom table row %q", want)
+			t.Fatalf("lazy workflow missing custom table row %q", want)
 		}
 	}
 
 	if !strings.Contains(text, "<!-- gentle-ai:sdd-model-assignments -->") {
-		t.Fatal("CLAUDE.md missing model assignment open marker")
+		t.Fatal("lazy workflow missing model assignment open marker")
 	}
 	if !strings.Contains(text, "<!-- /gentle-ai:sdd-model-assignments -->") {
-		t.Fatal("CLAUDE.md missing model assignment close marker")
+		t.Fatal("lazy workflow missing model assignment close marker")
 	}
 	for _, want := range []string{
 		"Agent tool calls for SDD/Judgment-Day phase agents MUST include `model`",
@@ -366,7 +418,7 @@ func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 		"omit `model` unless the user explicitly requested an override",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("CLAUDE.md missing scoped model gate text %q", want)
+			t.Fatalf("lazy workflow missing scoped model gate text %q", want)
 		}
 	}
 	for _, forbidden := range []string{
@@ -375,7 +427,7 @@ func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 		"Non-SDD general delegation",
 	} {
 		if strings.Contains(text, forbidden) {
-			t.Fatalf("CLAUDE.md contains legacy generic delegation model routing text %q", forbidden)
+			t.Fatalf("lazy workflow contains legacy generic delegation model routing text %q", forbidden)
 		}
 	}
 }

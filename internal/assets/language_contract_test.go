@@ -127,6 +127,9 @@ func TestSDDOrchestratorAssetsEnforceInteractiveProposalGates(t *testing.T) {
 	for _, path := range assetPaths {
 		t.Run(path, func(t *testing.T) {
 			content := MustRead(path)
+			if path == "claude/sdd-orchestrator.md" {
+				content = MustRead("claude/sdd-orchestrator-workflow.md")
+			}
 			for _, required := range []string{
 				"Interactive approval is phase-scoped",
 				"approve only the immediate next phase",

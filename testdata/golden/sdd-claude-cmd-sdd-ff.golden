@@ -2,7 +2,7 @@
 description: Fast-forward all SDD planning phases — proposal through tasks
 ---
 
-Follow the SDD orchestrator workflow inline using the instructions already installed in `~/.claude/CLAUDE.md`.
+Read `~/.claude/skills/_shared/sdd-orchestrator-workflow.md` FIRST, then treat it as the authoritative SDD workflow instructions for this command.
 The Claude Code session model is controlled by Claude Code; Gentle AI only configures models for Agent tool calls to phase sub-agents.
 
 WORKFLOW:
@@ -30,4 +30,4 @@ CONTEXT:
 ENGRAM NOTE:
 Sub-agents handle persistence automatically. Each phase saves its artifact to engram with topic_key "sdd/$ARGUMENTS/{type}" where type is: proposal, spec, design, tasks.
 
-Read the orchestrator instructions to coordinate this workflow. Do NOT execute phase work inline when a native sub-agent is available.
+Use the lazy workflow instructions to coordinate this workflow. Do NOT execute phase work inline when a native sub-agent is available.

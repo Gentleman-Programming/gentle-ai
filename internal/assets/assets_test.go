@@ -692,7 +692,7 @@ func TestOpenCodeSDDCommandsAreOrchestratorGuarded(t *testing.T) {
 }
 
 func TestClaudeSDDOrchestratorChainStrategy(t *testing.T) {
-	content := MustRead("claude/sdd-orchestrator.md")
+	content := MustRead("claude/sdd-orchestrator.md") + "\n" + MustRead("claude/sdd-orchestrator-workflow.md")
 
 	for _, required := range []string{
 		"### Chain Strategy",
@@ -1376,6 +1376,9 @@ func TestOrchestratorsRequireAutomaticGatekeeper(t *testing.T) {
 	}
 	for _, path := range paths {
 		content := MustRead(path)
+		if path == "claude/sdd-orchestrator.md" {
+			content += "\n" + MustRead("claude/sdd-orchestrator-workflow.md")
+		}
 		for _, anchor := range anchors {
 			if !strings.Contains(content, anchor) {
 				t.Fatalf("%s missing Automatic Mode Gatekeeper anchor %q", path, anchor)
