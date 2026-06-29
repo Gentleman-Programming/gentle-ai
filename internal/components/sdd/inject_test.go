@@ -5124,7 +5124,7 @@ func TestInjectVSCodeRendersResolvedModelAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(%s): %v", applyPath, err)
 	}
-	if !strings.Contains(string(applyContent), `model: "GPT-4.1"`) {
+	if !strings.Contains(string(applyContent), `model: GPT-4.1`) {
 		t.Fatalf("sdd-apply.agent.md missing resolved model line; got:\n%s", applyContent)
 	}
 
@@ -5179,7 +5179,7 @@ func TestInjectVSCodeDefaultModelCacheUsesInjectedHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(%s): %v", applyPath, err)
 	}
-	if !strings.Contains(string(applyContent), `model: "GPT-4.1"`) {
+	if !strings.Contains(string(applyContent), `model: GPT-4.1`) {
 		t.Fatalf("default cache path should use injected home, not process home; got:\n%s", applyContent)
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -49,7 +48,7 @@ func withDefaultVSCodeModelPaths(opts InjectOptions, homeDir string) InjectOptio
 // renderVSCodeAgentModelAssignment applies an optional model line to a single
 // native VS Code agent file. Unresolved assignments are intentionally rendered
 // without a model line so Copilot safely inherits the parent session model.
-func renderVSCodeAgentModelAssignment(content, fileName string, opts InjectOptions) (string, []string) {
+func renderVSCodeAgentModelAssignment(content, fileName string, opts InjectOptions, catalog map[string]opencode.Provider, catalogErr error) (string, []string) {
 	agentKey, ok := vscodeAgentKey(fileName)
 	if !ok {
 		return content, nil
@@ -61,8 +60,8 @@ func renderVSCodeAgentModelAssignment(content, fileName string, opts InjectOptio
 	modelLabel, warnings := resolveVSCodeModelAssignment(
 		agentKey,
 		opts.VSCodeModelAssignments,
-		opts.VSCodeModelCachePath,
-		opts.VSCodeModelVariantsPath,
+		catalog,
+		catalogErr,
 	)
 	return injectVSCodeModelLine(content, modelLabel), warnings
 }
@@ -98,7 +97,7 @@ func isVSCodeModelAssignmentKey(key string) bool {
 // OpenCode model cache and returns the VS Code display label to write. Any
 // invalid or stale assignment returns a warning plus an empty label; the caller
 // must then omit `model:` instead of failing sync.
-func resolveVSCodeModelAssignment(agentKey string, assignments map[string]model.ModelAssignment, cachePath, variantsPath string) (string, []string) {
+func resolveVSCodeModelAssignment(agentKey string, assignments map[string]model.ModelAssignment, catalog map[string]opencode.Provider, catalogErr error) (string, []string) {
 	assignment, ok := assignments[agentKey]
 	if !ok || assignment.ProviderID == "" || assignment.ModelID == "" {
 		return "", nil
@@ -107,12 +106,14 @@ func resolveVSCodeModelAssignment(agentKey string, assignments map[string]model.
 		return "", []string{fmt.Sprintf("VS Code model assignment for %s skipped: provider %q is not %q", agentKey, assignment.ProviderID, githubCopilotProviderID)}
 	}
 
-	providers, warnings := loadVSCodeModelCatalog(cachePath, variantsPath)
-	if len(warnings) > 0 {
-		return "", warnings
+	if catalogErr != nil {
+		return "", []string{fmt.Sprintf("VS Code model assignments skipped: %v", catalogErr)}
+	}
+	if catalog == nil {
+		return "", []string{"VS Code model assignments skipped: models cache unavailable"}
 	}
 
-	provider, ok := providers[githubCopilotProviderID]
+	provider, ok := catalog[githubCopilotProviderID]
 	if !ok {
 		return "", []string{fmt.Sprintf("VS Code model assignment for %s skipped: provider %q missing from models cache", agentKey, githubCopilotProviderID)}
 	}
@@ -137,25 +138,24 @@ func resolveVSCodeModelAssignment(agentKey string, assignments map[string]model.
 	return label, nil
 }
 
-// loadVSCodeModelCatalog reads the current model cache and enriches it with
+// LoadVSCodeModelCatalog reads the current model cache and enriches it with
 // optional effort variants. A missing cache is a recoverable warning because the
 // assignment must stay persisted for a future cache refresh.
-func loadVSCodeModelCatalog(cachePath, variantsPath string) (map[string]opencode.Provider, []string) {
+func LoadVSCodeModelCatalog(cachePath, variantsPath string) (map[string]opencode.Provider, error) {
 	path := cachePath
 	if path == "" {
 		path = opencode.DefaultCachePath()
 	}
 	if path == "" {
-		return nil, []string{"VS Code model assignments skipped: models cache path unavailable"}
+		return nil, fmt.Errorf("models cache path unavailable")
 	}
 
 	providers, err := opencode.LoadModels(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, []string{fmt.Sprintf("VS Code model assignments skipped: models cache %q not found", path)}
+			return nil, fmt.Errorf("models cache %q not found", path)
 		}
-		wrappedErr := fmt.Errorf("read models cache %q: %w", path, err)
-		return nil, []string{fmt.Sprintf("VS Code model assignments skipped: %v", wrappedErr)}
+		return nil, fmt.Errorf("read models cache %q: %v", path, err)
 	}
 
 	variantPath := variantsPath
@@ -209,10 +209,27 @@ func injectVSCodeModelLine(content, modelLabel string) string {
 		updated = append(updated, lines[i])
 	}
 	if modelLabel != "" {
-		updated = append(updated, "model: "+strconv.Quote(modelLabel))
+		updated = append(updated, "model: "+yamlQuote(modelLabel))
 	}
 	updated = append(updated, lines[closing:]...)
 	return strings.Join(updated, lineBreak)
+}
+
+func yamlQuote(s string) string {
+	needsQuote := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '/' || r == '.' {
+			continue
+		}
+		needsQuote = true
+		break
+	}
+	if needsQuote {
+		escaped := strings.ReplaceAll(s, "\\", "\\\\")
+		escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+		return "\"" + escaped + "\""
+	}
+	return s
 }
 
 // frontmatterClosingLine finds the second YAML delimiter that ends frontmatter.

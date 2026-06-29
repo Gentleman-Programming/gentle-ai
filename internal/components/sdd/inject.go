@@ -701,6 +701,13 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			return InjectionResult{}, fmt.Errorf("read embedded agents dir: %w", err)
 		}
 
+		var vscodeCatalog map[string]opencode.Provider
+		var vscodeCatalogErr error
+		if adapter.Agent() == model.AgentVSCodeCopilot && len(opts.VSCodeModelAssignments) > 0 {
+			resolvedOpts := withDefaultVSCodeModelPaths(opts, homeDir)
+			vscodeCatalog, vscodeCatalogErr = LoadVSCodeModelCatalog(resolvedOpts.VSCodeModelCachePath, resolvedOpts.VSCodeModelVariantsPath)
+		}
+
 		for _, entry := range entries {
 			if entry.IsDir() {
 				continue
@@ -744,7 +751,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				contentStr = injectCodeGraphGuidanceIntoPrompt(contentStr, opts.CodeGraphGuidanceMarkdown)
 			}
 			if adapter.Agent() == model.AgentVSCodeCopilot {
-				resolved, modelWarnings := renderVSCodeAgentModelAssignment(contentStr, entry.Name(), opts)
+				resolved, modelWarnings := renderVSCodeAgentModelAssignment(contentStr, entry.Name(), opts, vscodeCatalog, vscodeCatalogErr)
 				contentStr = resolved
 				warnings = append(warnings, modelWarnings...)
 			}

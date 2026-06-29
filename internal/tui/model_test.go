@@ -3106,7 +3106,19 @@ func TestModelConfig_OpenCodePickerContinueTriggersSyncScreen(t *testing.T) {
 func TestModelConfig_VSCodeOptionOpensCopilotPicker(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelConfig
-	m.Cursor = 4 // Claude(0) OpenCode(1) Kiro(2) Codex(3) VS Code Copilot(4)
+
+	options := screens.ModelConfigOptions()
+	vscodeIndex := -1
+	for idx, opt := range options {
+		if opt == "Configure VS Code Copilot SDD models" {
+			vscodeIndex = idx
+			break
+		}
+	}
+	if vscodeIndex == -1 {
+		t.Fatal("VS Code Copilot option not found in ModelConfigOptions")
+	}
+	m.Cursor = vscodeIndex
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
@@ -3186,8 +3198,8 @@ func TestPresetFlowSkipsVSCodeModelPickerWithoutVSCodeAgent(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen == ScreenModelPicker {
-		t.Fatalf("screen = ScreenModelPicker without VS Code agent; want a later non-VS Code flow screen")
+	if state.Screen != ScreenCodexModelPicker {
+		t.Fatalf("screen = %v, want ScreenCodexModelPicker", state.Screen)
 	}
 }
 

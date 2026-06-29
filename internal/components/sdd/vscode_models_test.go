@@ -85,7 +85,8 @@ func TestResolveVSCodeModelAssignment(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			label, warnings := resolveVSCodeModelAssignment("sdd-apply", tt.assignments, tt.cachePath, "")
+			catalog, err := LoadVSCodeModelCatalog(tt.cachePath, "")
+			label, warnings := resolveVSCodeModelAssignment("sdd-apply", tt.assignments, catalog, err)
 			if label != tt.wantLabel {
 				t.Fatalf("label = %q, want %q", label, tt.wantLabel)
 			}
@@ -103,17 +104,19 @@ func TestResolveVSCodeModelAssignment(t *testing.T) {
 func TestResolveVSCodeModelAssignmentEffortMetadata(t *testing.T) {
 	cachePath := writeVSCodeModelCache(t, "gpt-4.1", "GPT-4.1", true)
 
+	missingVariantsCatalog, missingVariantsErr := LoadVSCodeModelCatalog(cachePath, filepath.Join(t.TempDir(), "missing-variants.json"))
 	_, warnings := resolveVSCodeModelAssignment("sdd-apply", map[string]model.ModelAssignment{
 		"sdd-apply": {ProviderID: "github-copilot", ModelID: "gpt-4.1", Effort: "low"},
-	}, cachePath, filepath.Join(t.TempDir(), "missing-variants.json"))
+	}, missingVariantsCatalog, missingVariantsErr)
 	if !containsWarning(warnings, "effort metadata") {
 		t.Fatalf("warnings = %v, want missing effort metadata warning", warnings)
 	}
 
 	variantsPath := writeVSCodeModelVariants(t, "gpt-4.1", []string{"low", "medium"})
+	variantsCatalog, variantsErr := LoadVSCodeModelCatalog(cachePath, variantsPath)
 	_, warnings = resolveVSCodeModelAssignment("sdd-apply", map[string]model.ModelAssignment{
 		"sdd-apply": {ProviderID: "github-copilot", ModelID: "gpt-4.1", Effort: "high"},
-	}, cachePath, variantsPath)
+	}, variantsCatalog, variantsErr)
 	if !containsWarning(warnings, "effort") {
 		t.Fatalf("warnings = %v, want invalid effort warning", warnings)
 	}
@@ -151,7 +154,8 @@ func TestRenderVSCodeAgentModelAssignmentStripsStaleModelPlaceholdersWithoutVali
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, warnings := renderVSCodeAgentModelAssignment(staleContent, "sdd-orchestrator.agent.md", tt.opts)
+			catalog, err := LoadVSCodeModelCatalog(tt.opts.VSCodeModelCachePath, tt.opts.VSCodeModelVariantsPath)
+			got, warnings := renderVSCodeAgentModelAssignment(staleContent, "sdd-orchestrator.agent.md", tt.opts, catalog, err)
 			if strings.Contains(got, "{{VSC_MODEL}}") {
 				t.Fatalf("rendered VS Code agent leaked raw placeholder:\n%s", got)
 			}
