@@ -10,6 +10,11 @@ import (
 )
 
 // GenerationEngine abstracts the AI CLI tool used to generate a skill.
+// It provides an interface for interacting with different AI code generation
+// tools through their command line interfaces. Implementations handle
+// execution, availability checks, and agent-specific invocation patterns.
+// The engine is responsible for managing the lifecycle of CLI commands
+// and interpreting their outputs.
 type GenerationEngine interface {
 	// Agent returns the AgentID this engine wraps.
 	Agent() model.AgentID
