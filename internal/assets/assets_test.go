@@ -247,6 +247,19 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"cursor/agents/review-resilience.md",
 		"cursor/agents/review-refuter.md",
 
+		// VSCode agent files
+		"vscode/agents/sdd-orchestrator.agent.md",
+		"vscode/agents/sdd-init.agent.md",
+		"vscode/agents/sdd-explore.agent.md",
+		"vscode/agents/sdd-propose.agent.md",
+		"vscode/agents/sdd-spec.agent.md",
+		"vscode/agents/sdd-design.agent.md",
+		"vscode/agents/sdd-tasks.agent.md",
+		"vscode/agents/sdd-apply.agent.md",
+		"vscode/agents/sdd-verify.agent.md",
+		"vscode/agents/sdd-archive.agent.md",
+		"vscode/agents/sdd-onboard.agent.md",
+
 		// Kiro agent files
 		"kiro/agents/review-risk.md",
 		"kiro/agents/review-readability.md",
