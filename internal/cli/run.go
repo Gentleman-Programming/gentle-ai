@@ -270,6 +270,9 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	if newState.CodexPhaseModelAssignments != nil {
 		merged.CodexPhaseModelAssignments = newState.CodexPhaseModelAssignments
 	}
+	if newState.VSCodeModelAssignments != nil {
+		merged.VSCodeModelAssignments = newState.VSCodeModelAssignments
+	}
 	if merged.SelectionConfigured {
 		if len(flags.Components) > 0 {
 			merged.Components = newState.Components

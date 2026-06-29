@@ -901,8 +901,12 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 			current.ModelAssignments = nil
 		}
 	}
-	if len(selection.VSCodeModelAssignments) > 0 {
-		current.VSCodeModelAssignments = modelAssignmentsToState(selection.VSCodeModelAssignments)
+	if selection.VSCodeModelAssignments != nil {
+		if len(selection.VSCodeModelAssignments) > 0 {
+			current.VSCodeModelAssignments = modelAssignmentsToState(selection.VSCodeModelAssignments)
+		} else {
+			current.VSCodeModelAssignments = nil
+		}
 	}
 	return state.Write(homeDir, current)
 }
