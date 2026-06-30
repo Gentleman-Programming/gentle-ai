@@ -2625,15 +2625,21 @@ func readFileOrEmpty(path string) (string, error) {
 func writeFileWithBackup(path string, content []byte, perm os.FileMode) (filemerge.WriteResult, error) {
 	if _, err := os.Stat(path); err == nil {
 		backupPath := path + ".backup"
-		if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+		if _, statErr := os.Stat(backupPath); statErr == nil {
+			// backup already exists, do nothing
+		} else if os.IsNotExist(statErr) {
 			existingContent, err := os.ReadFile(path)
 			if err != nil {
 				return filemerge.WriteResult{}, fmt.Errorf("read file for backup %s: %w", path, err)
 			}
-			if err := os.WriteFile(backupPath, existingContent, 0o644); err != nil {
+			if _, err := filemerge.WriteFileAtomic(backupPath, existingContent, 0o644); err != nil {
 				return filemerge.WriteResult{}, fmt.Errorf("create backup file %s: %w", backupPath, err)
 			}
+		} else {
+			return filemerge.WriteResult{}, fmt.Errorf("stat backup file %s: %w", backupPath, statErr)
 		}
+	} else if !os.IsNotExist(err) {
+		return filemerge.WriteResult{}, fmt.Errorf("stat target file %s: %w", path, err)
 	}
 	return filemerge.WriteFileAtomic(path, content, perm)
 }

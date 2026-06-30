@@ -7430,6 +7430,9 @@ func TestCodexAndVSCodeCopilotPresetFlowTransitionsToVSCodePickerAfterCodex(t *t
 	if state.Screen != ScreenModelPicker {
 		t.Fatalf("screen = %v, want ScreenModelPicker (VS Code model picker) after Codex model picker confirmation", state.Screen)
 	}
+	if !state.ModelPicker.ForVSCode {
+		t.Fatalf("ModelPicker.ForVSCode = false, want true after Codex model picker confirmation")
+	}
 }
 
 func TestCodexModelPickerCustomConfirmSignalsOrchestratorClear(t *testing.T) {

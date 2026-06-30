@@ -1378,17 +1378,32 @@ func restoreUserFileBackupOperation(path string) operation {
 				if _, err := filemerge.WriteFileAtomic(path, content, 0o644); err != nil {
 					return false, false, fmt.Errorf("restore file %s from backup: %w", path, err)
 				}
-				_ = os.Remove(backupPath)
+				if err := os.Remove(backupPath); err != nil {
+					return false, false, fmt.Errorf("remove backup file %s: %w", backupPath, err)
+				}
 				return true, false, nil
 			}
 
-			// If no backup exists, delete the file if it exists
+			// If no backup exists, check if it's still our managed content.
+			// If not, we skip deleting it (it's user-owned or already restored).
 			_, statErr := os.Stat(path)
 			if statErr != nil {
 				if os.IsNotExist(statErr) {
 					return false, false, nil
 				}
 				return false, false, statErr
+			}
+			content, readErr := os.ReadFile(path)
+			if readErr == nil {
+				contentStr := string(content)
+				isManaged := strings.Contains(contentStr, "sdd-orchestrator") ||
+					strings.Contains(contentStr, "strict-tdd-mode") ||
+					strings.Contains(contentStr, "trigger-rules") ||
+					strings.Contains(contentStr, "gentle-ai") ||
+					strings.Contains(contentStr, "managed")
+				if !isManaged {
+					return false, false, nil
+				}
 			}
 			if err := removeFileIfExists(path); err != nil {
 				return false, false, err
