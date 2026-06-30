@@ -6576,6 +6576,7 @@ func TestUpdatePromptScreen_UpdateNow_NoDuplicateUpgrade(t *testing.T) {
 	}
 }
 
+<<<<<<< HEAD
 // ─── Unit 1+2: pickerFlowSlice, pickerNextScreen, pickerPreviousScreen ──────
 
 // withModelCache returns a cleanup function that installs a fake osStatModelCache
@@ -7413,6 +7414,21 @@ func TestStrictTDDForward(t *testing.T) {
 				t.Fatalf("screen = %v, want %v", got.Screen, tt.wantScreen)
 			}
 		})
+}
+
+func TestCodexAndVSCodeCopilotPresetFlowTransitionsToVSCodePickerAfterCodex(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCodexModelPicker
+	m.Selection.Agents = []model.AgentID{model.AgentCodex, model.AgentVSCodeCopilot}
+	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+	m.CodexModelPicker = screens.NewCodexModelPickerState()
+	m.Cursor = 1 // Select a preset in the Codex picker (Recommended)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelPicker {
+		t.Fatalf("screen = %v, want ScreenModelPicker (VS Code model picker) after Codex model picker confirmation", state.Screen)
 	}
 }
 

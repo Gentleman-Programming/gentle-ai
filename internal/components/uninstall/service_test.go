@@ -1199,3 +1199,88 @@ func TestComponentOperationsSDD_CodexRemovesSkillRegistryHook(t *testing.T) {
 		t.Fatalf("unrelated hooks should be preserved:\n%s", text)
 	}
 }
+
+func TestComponentOperationsSDD_VSCodeRestoresUserBackups(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
+	t.Setenv("APPDATA", filepath.Join(homeDir, "AppData", "Roaming"))
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentVSCodeCopilot)
+	if !ok {
+		t.Fatal("vscode adapter not found in registry")
+	}
+
+	// 1. Setup a subagent file with a backup
+	agentsDir := adapter.SubAgentsDir(homeDir)
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(agents dir) error = %v", err)
+	}
+	agentPath := filepath.Join(agentsDir, "sdd-apply.agent.md")
+	backupPath := agentPath + ".backup"
+	originalContent := "user original content"
+	modifiedContent := "app modified content"
+	if err := os.WriteFile(agentPath, []byte(modifiedContent), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if err := os.WriteFile(backupPath, []byte(originalContent), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	// 2. Setup system prompt file with a backup
+	promptPath := adapter.SystemPromptFile(homeDir)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(prompt dir) error = %v", err)
+	}
+	promptBackupPath := promptPath + ".backup"
+	originalPromptContent := "user original prompt"
+	modifiedPromptContent := "app modified prompt"
+	if err := os.WriteFile(promptPath, []byte(modifiedPromptContent), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if err := os.WriteFile(promptBackupPath, []byte(originalPromptContent), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+
+	for _, op := range ops {
+		if op.path == agentPath || op.path == promptPath {
+			if _, _, err := op.apply(op.path); err != nil {
+				t.Fatalf("op.apply(%q) error = %v", op.path, err)
+			}
+		}
+	}
+
+	// Verify both files were restored to original content and backups removed
+	gotAgent, err := os.ReadFile(agentPath)
+	if err != nil {
+		t.Fatalf("ReadFile(agent) error = %v", err)
+	}
+	if string(gotAgent) != originalContent {
+		t.Errorf("agent content = %q, want %q", string(gotAgent), originalContent)
+	}
+	if _, err := os.Stat(backupPath); !os.IsNotExist(err) {
+		t.Errorf("backup file %s should be removed", backupPath)
+	}
+
+	gotPrompt, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile(prompt) error = %v", err)
+	}
+	if string(gotPrompt) != originalPromptContent {
+		t.Errorf("prompt content = %q, want %q", string(gotPrompt), originalPromptContent)
+	}
+	if _, err := os.Stat(promptBackupPath); !os.IsNotExist(err) {
+		t.Errorf("prompt backup file %s should be removed", promptBackupPath)
+	}
+}
+

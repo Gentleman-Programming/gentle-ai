@@ -348,7 +348,13 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				return InjectionResult{}, readErr
 			}
 			updated := filemerge.InjectMarkdownSection(existing, sectionTriggerRules, rendered)
-			writeResult, writeErr := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+			var writeResult filemerge.WriteResult
+			var writeErr error
+			if adapter.Agent() == model.AgentVSCodeCopilot {
+				writeResult, writeErr = writeFileWithBackup(promptPath, []byte(updated), 0o644)
+			} else {
+				writeResult, writeErr = filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+			}
 			if writeErr != nil {
 				return InjectionResult{}, writeErr
 			}
@@ -390,7 +396,13 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				return InjectionResult{}, readErr
 			}
 			updated := filemerge.InjectMarkdownSection(existing, "strict-tdd-mode", strictTDDContent)
-			writeResult, writeErr := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+			var writeResult filemerge.WriteResult
+			var writeErr error
+			if adapter.Agent() == model.AgentVSCodeCopilot {
+				writeResult, writeErr = writeFileWithBackup(promptPath, []byte(updated), 0o644)
+			} else {
+				writeResult, writeErr = filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+			}
 			if writeErr != nil {
 				return InjectionResult{}, writeErr
 			}
@@ -737,7 +749,13 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				warnings = append(warnings, modelWarnings...)
 			}
 			outPath := filepath.Join(agentsDir, entry.Name())
-			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
+			var writeResult filemerge.WriteResult
+			var err error
+			if adapter.Agent() == model.AgentVSCodeCopilot {
+				writeResult, err = writeFileWithBackup(outPath, []byte(contentStr), 0o644)
+			} else {
+				writeResult, err = filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
+			}
 			if err != nil {
 				return InjectionResult{}, fmt.Errorf("write agent %s: %w", entry.Name(), err)
 			}
@@ -2035,7 +2053,12 @@ func injectFileAppend(homeDir string, adapter agents.Adapter, opts InjectOptions
 
 	updated := filemerge.InjectMarkdownSection(existing, "sdd-orchestrator", content)
 
-	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+	var writeResult filemerge.WriteResult
+	if adapter.Agent() == model.AgentVSCodeCopilot {
+		writeResult, err = writeFileWithBackup(promptPath, []byte(updated), 0o644)
+	} else {
+		writeResult, err = filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+	}
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -2597,4 +2620,20 @@ func readFileOrEmpty(path string) (string, error) {
 		return "", fmt.Errorf("read file %q: %w", path, err)
 	}
 	return string(data), nil
+}
+
+func writeFileWithBackup(path string, content []byte, perm os.FileMode) (filemerge.WriteResult, error) {
+	if _, err := os.Stat(path); err == nil {
+		backupPath := path + ".backup"
+		if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+			existingContent, err := os.ReadFile(path)
+			if err != nil {
+				return filemerge.WriteResult{}, fmt.Errorf("read file for backup %s: %w", path, err)
+			}
+			if err := os.WriteFile(backupPath, existingContent, 0o644); err != nil {
+				return filemerge.WriteResult{}, fmt.Errorf("create backup file %s: %w", backupPath, err)
+			}
+		}
+	}
+	return filemerge.WriteFileAtomic(path, content, perm)
 }

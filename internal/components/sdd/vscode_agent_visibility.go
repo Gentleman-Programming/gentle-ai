@@ -40,10 +40,12 @@ func hideManagedClaudeInternalAgentsForVSCode(homeDir string) (InjectionResult, 
 			continue
 		}
 
-		// Back up original content before write
+		// Back up original content before write, only if it doesn't already exist
 		backupPath := path + ".backup"
-		if err := os.WriteFile(backupPath, content, 0o644); err != nil {
-			return InjectionResult{}, fmt.Errorf("backup managed Claude agent %s: %w", fileName, err)
+		if _, err := os.Stat(backupPath); errors.Is(err, os.ErrNotExist) {
+			if err := os.WriteFile(backupPath, content, 0o644); err != nil {
+				return InjectionResult{}, fmt.Errorf("backup managed Claude agent %s: %w", fileName, err)
+			}
 		}
 
 		writeResult, err := filemerge.WriteFileAtomic(path, []byte(updated), 0o644)
@@ -59,24 +61,26 @@ func hideManagedClaudeInternalAgentsForVSCode(homeDir string) (InjectionResult, 
 }
 
 // RestoreManagedClaudeInternalAgentsForVSCode restores the backed-up Claude internal agent files
-// from their .backup copies and removes the backup files.
-func RestoreManagedClaudeInternalAgentsForVSCode(homeDir string) error {
+// from their .backup copies and removes the backup files. Returns true if any files were restored.
+func RestoreManagedClaudeInternalAgentsForVSCode(homeDir string) (bool, error) {
 	agentsDir := filepath.Join(homeDir, ".claude", "agents")
+	restoredAny := false
 	for _, fileName := range managedClaudeInternalAgentFiles() {
 		path := filepath.Join(agentsDir, fileName)
 		backupPath := path + ".backup"
 		if _, err := os.Stat(backupPath); err == nil {
 			content, err := os.ReadFile(backupPath)
 			if err != nil {
-				return fmt.Errorf("read backup %s: %w", backupPath, err)
+				return false, fmt.Errorf("read backup %s: %w", backupPath, err)
 			}
 			if _, err := filemerge.WriteFileAtomic(path, content, 0o644); err != nil {
-				return fmt.Errorf("restore agent %s from backup: %w", path, err)
+				return false, fmt.Errorf("restore agent %s from backup: %w", path, err)
 			}
 			_ = os.Remove(backupPath)
+			restoredAny = true
 		}
 	}
-	return nil
+	return restoredAny, nil
 }
 
 func managedClaudeInternalAgentFiles() []string {

@@ -154,7 +154,8 @@ func loadVSCodeModelCatalog(cachePath, variantsPath string) (map[string]opencode
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, []string{fmt.Sprintf("VS Code model assignments skipped: models cache %q not found", path)}
 		}
-		return nil, []string{fmt.Sprintf("VS Code model assignments skipped: read models cache %q: %v", path, err)}
+		wrappedErr := fmt.Errorf("read models cache %q: %w", path, err)
+		return nil, []string{fmt.Sprintf("VS Code model assignments skipped: %v", wrappedErr)}
 	}
 
 	variantPath := variantsPath

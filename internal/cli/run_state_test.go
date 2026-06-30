@@ -34,7 +34,7 @@ func TestMergeExplicitAgentInstallStatePreservesExistingAssignmentsWhenFreshStat
 			"sdd-verify": "gpt-5.4",
 		},
 		VSCodeModelAssignments: map[string]state.ModelAssignmentState{
-			"sdd-init": {ProviderID: "copilot", ModelID: "gpt-4o"},
+			"sdd-init": {ProviderID: "github-copilot", ModelID: "gpt-4o"},
 		},
 		Persona: "neutral",
 	}); err != nil {
@@ -51,7 +51,7 @@ func TestMergeExplicitAgentInstallStatePreservesExistingAssignmentsWhenFreshStat
 	if merged.ModelAssignments["sdd-init"].ModelID != "claude-sonnet-4" {
 		t.Fatalf("ModelAssignments not preserved: %#v", merged.ModelAssignments)
 	}
-	if merged.VSCodeModelAssignments["sdd-init"].ModelID != "gpt-4o" {
+	if merged.VSCodeModelAssignments["sdd-init"].ProviderID != "github-copilot" || merged.VSCodeModelAssignments["sdd-init"].ModelID != "gpt-4o" {
 		t.Fatalf("VSCodeModelAssignments not preserved: %#v", merged.VSCodeModelAssignments)
 	}
 	if merged.ClaudeModelAssignments["sdd-apply"] != "opus" {
@@ -128,7 +128,7 @@ func TestMergeExplicitAgentInstallStatePreservesFreshAssignments(t *testing.T) {
 			"sdd-apply": "gpt-5.4",
 		},
 		VSCodeModelAssignments: map[string]state.ModelAssignmentState{
-			"sdd-init": {ProviderID: "copilot", ModelID: "gpt-4o-mini"},
+			"sdd-init": {ProviderID: "github-copilot", ModelID: "gpt-4o-mini"},
 		},
 		Persona: "gentleman",
 	}
@@ -143,8 +143,8 @@ func TestMergeExplicitAgentInstallStatePreservesFreshAssignments(t *testing.T) {
 	if merged.CodexModelAssignments["sdd-apply"] != "high" {
 		t.Fatalf("CodexModelAssignments[sdd-apply] = %q, want high", merged.CodexModelAssignments["sdd-apply"])
 	}
-	if merged.VSCodeModelAssignments["sdd-init"].ModelID != "gpt-4o-mini" {
-		t.Fatalf("VSCodeModelAssignments[sdd-init] = %q, want gpt-4o-mini", merged.VSCodeModelAssignments["sdd-init"].ModelID)
+	if merged.VSCodeModelAssignments["sdd-init"].ProviderID != "github-copilot" || merged.VSCodeModelAssignments["sdd-init"].ModelID != "gpt-4o-mini" {
+		t.Fatalf("VSCodeModelAssignments[sdd-init] = %#v, want ProviderID=github-copilot ModelID=gpt-4o-mini", merged.VSCodeModelAssignments["sdd-init"])
 	}
 	if merged.CodexCarrilModelAssignments["sdd-strong"] != "gpt-5.5" {
 		t.Fatalf("CodexCarrilModelAssignments not preserved: %#v", merged.CodexCarrilModelAssignments)

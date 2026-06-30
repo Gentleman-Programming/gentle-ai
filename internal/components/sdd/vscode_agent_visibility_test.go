@@ -51,8 +51,12 @@ func TestHideAndRestoreManagedClaudeInternalAgentsForVSCode(t *testing.T) {
 	}
 
 	// Run restore
-	if err := RestoreManagedClaudeInternalAgentsForVSCode(homeDir); err != nil {
+	restored, err := RestoreManagedClaudeInternalAgentsForVSCode(homeDir)
+	if err != nil {
 		t.Fatalf("RestoreManagedClaudeInternalAgentsForVSCode: %v", err)
+	}
+	if !restored {
+		t.Errorf("expected RestoreManagedClaudeInternalAgentsForVSCode to return true, got false")
 	}
 
 	// Verify restored agent content is back to original

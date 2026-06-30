@@ -662,6 +662,7 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		ClaudePhaseAssignments: installStateClaudePhaseAssignments(s.ClaudePhaseAssignments),
 		KiroModelAssignments:   installStateKiroAssignments(s.KiroModelAssignments),
 		ModelAssignments:       installStateModelAssignments(s.ModelAssignments),
+		VSCodeModelAssignments: installStateModelAssignmentsToModel(s.VSCodeModelAssignments),
 	}
 
 	return Model{

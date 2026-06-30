@@ -583,9 +583,13 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		if adapter.SupportsSystemPrompt() {
 			path := adapter.SystemPromptFile(homeDir)
 			targets = append(targets, path)
-			ops = append(ops, rewriteMarkdownFile(path, func(content string) (string, bool) {
-				return removeMarkdownSections(content, "sdd-orchestrator", "strict-tdd-mode")
-			}))
+			if adapter.Agent() == model.AgentVSCodeCopilot {
+				ops = append(ops, restoreUserFileBackupOperation(path))
+			} else {
+				ops = append(ops, rewriteMarkdownFile(path, func(content string) (string, bool) {
+					return removeMarkdownSections(content, "sdd-orchestrator", "strict-tdd-mode")
+				}))
+			}
 		}
 		if adapter.SupportsSlashCommands() {
 			commandsDir := adapter.CommandsDir(homeDir)
@@ -704,7 +708,11 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 				}
 				path := filepath.Join(agentsDir, entry.Name())
 				targets = append(targets, path)
-				ops = append(ops, removeFile(path))
+				if adapter.Agent() == model.AgentVSCodeCopilot {
+					ops = append(ops, restoreUserFileBackupOperation(path))
+				} else {
+					ops = append(ops, removeFile(path))
+				}
 			}
 			ops = append(ops, removeDirIfEmpty(agentsDir))
 		}
@@ -1347,11 +1355,45 @@ func restoreClaudeVisibilityBackupOperation(homeDir string) operation {
 		typeID: opRewriteFile,
 		path:   filepath.Join(homeDir, ".claude", "agents"),
 		apply: func(path string) (bool, bool, error) {
-			err := sdd.RestoreManagedClaudeInternalAgentsForVSCode(homeDir)
+			restored, err := sdd.RestoreManagedClaudeInternalAgentsForVSCode(homeDir)
 			if err != nil {
 				return false, false, err
 			}
-			return true, false, nil
+			return restored, false, nil
+		},
+	}
+}
+
+func restoreUserFileBackupOperation(path string) operation {
+	return operation{
+		typeID: opRewriteFile,
+		path:   path,
+		apply: func(path string) (bool, bool, error) {
+			backupPath := path + ".backup"
+			if _, err := os.Stat(backupPath); err == nil {
+				content, err := os.ReadFile(backupPath)
+				if err != nil {
+					return false, false, fmt.Errorf("read backup %s: %w", backupPath, err)
+				}
+				if _, err := filemerge.WriteFileAtomic(path, content, 0o644); err != nil {
+					return false, false, fmt.Errorf("restore file %s from backup: %w", path, err)
+				}
+				_ = os.Remove(backupPath)
+				return true, false, nil
+			}
+
+			// If no backup exists, delete the file if it exists
+			_, statErr := os.Stat(path)
+			if statErr != nil {
+				if os.IsNotExist(statErr) {
+					return false, false, nil
+				}
+				return false, false, statErr
+			}
+			if err := removeFileIfExists(path); err != nil {
+				return false, false, err
+			}
+			return true, true, nil
 		},
 	}
 }
