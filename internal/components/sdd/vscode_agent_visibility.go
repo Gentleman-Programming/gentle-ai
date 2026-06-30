@@ -42,18 +42,25 @@ func hideManagedClaudeInternalAgentsForVSCode(homeDir string) (InjectionResult, 
 
 		// Back up original content before write, only if it doesn't already exist
 		backupPath := path + ".backup"
+		createdBackup := false
 		if _, err := os.Stat(backupPath); err == nil {
 			// backup already exists, do nothing
 		} else if errors.Is(err, os.ErrNotExist) {
 			if _, err := filemerge.WriteFileAtomic(backupPath, content, 0o644); err != nil {
 				return InjectionResult{}, fmt.Errorf("backup managed Claude agent %s: %w", fileName, err)
 			}
+			createdBackup = true
 		} else {
 			return InjectionResult{}, fmt.Errorf("stat backup file %s: %w", backupPath, err)
 		}
 
 		writeResult, err := filemerge.WriteFileAtomic(path, []byte(updated), 0o644)
 		if err != nil {
+			if createdBackup {
+				if removeErr := os.Remove(backupPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+					return InjectionResult{}, fmt.Errorf("write managed Claude agent %s: %w (cleanup backup %s: %v)", fileName, err, backupPath, removeErr)
+				}
+			}
 			return InjectionResult{}, fmt.Errorf("write managed Claude agent %s: %w", fileName, err)
 		}
 		if writeResult.Changed {

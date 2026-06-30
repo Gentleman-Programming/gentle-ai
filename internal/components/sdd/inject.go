@@ -1759,8 +1759,8 @@ func migrateLegacyOpenCodeSDDOrchestrator(baseJSON []byte) ([]byte, error) {
 		return baseJSON, nil
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(baseJSON)
+	if err != nil {
 		return baseJSON, nil
 	}
 
@@ -1852,8 +1852,8 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 		return baseJSON, nil
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(baseJSON)
+	if err != nil {
 		// Preserve prior behavior for non-JSON/non-parseable inputs.
 		return baseJSON, nil
 	}
@@ -1911,8 +1911,8 @@ func migrateLegacyOpenCodeCommandPrompt(baseJSON []byte) ([]byte, error) {
 		return baseJSON, nil
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(baseJSON)
+	if err != nil {
 		// Preserve prior behavior for non-JSON/non-parseable inputs.
 		return baseJSON, nil
 	}

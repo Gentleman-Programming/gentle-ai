@@ -879,18 +879,28 @@ func pathEntriesContainDir(entries []string, dir string) bool {
 
 func engramBinaryDirsOnPath(pathEntries []string, goos string) []string {
 	var dirs []string
+	seen := make(map[string]struct{})
 	for _, entry := range pathEntries {
 		entry = strings.Trim(strings.TrimSpace(entry), `"`)
 		if entry == "" {
+			continue
+		}
+		cleaned := filepath.Clean(entry)
+		key := cleaned
+		if goos == "windows" {
+			key = strings.ToLower(cleaned)
+		}
+		if _, ok := seen[key]; ok {
 			continue
 		}
 		binaryName := "engram"
 		if goos == "windows" {
 			binaryName = "engram.exe"
 		}
-		candidate := filepath.Join(entry, binaryName)
+		candidate := filepath.Join(cleaned, binaryName)
 		if _, err := os.Stat(candidate); err == nil {
-			dirs = append(dirs, entry)
+			seen[key] = struct{}{}
+			dirs = append(dirs, cleaned)
 		}
 	}
 	return dirs

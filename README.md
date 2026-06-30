@@ -207,7 +207,7 @@ After creating a profile, open OpenCode and press **Tab** to switch between `gen
 
 ### VS Code Copilot SDD Agents
 
-Gentle-AI installs three VS Code layers: global instructions/rules in `Code/User/prompts/gentle-ai.instructions.md`, native custom agents in `~/.copilot/agents`, and SDD skills/shared conventions in `~/.copilot/skills`.
+Gentle-AI installs three VS Code layers: global instructions/rules in the VS Code user prompts folder (e.g. `%APPDATA%/Code/User/prompts/gentle-ai.instructions.md` on Windows, `~/Library/Application Support/Code/User/prompts/gentle-ai.instructions.md` on macOS, or `~/.config/Code/User/prompts/gentle-ai.instructions.md` on Linux), native custom agents in `~/.copilot/agents`, and SDD skills/shared conventions in `~/.copilot/skills`.
 
 When a VS Code model assignment is missing, invalid, or unvalidated, generated agents omit `model` and inherit the parent chat model instead of failing sync.
 
