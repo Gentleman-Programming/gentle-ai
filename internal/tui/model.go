@@ -3688,7 +3688,7 @@ func (m Model) goBackFromOpenCodePlugins() Model {
 }
 
 func opencodepluginDefinitions() []model.OpenCodeCommunityPluginID {
-	return []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline, model.OpenCodePluginSDDEngramManage}
+	return []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline, model.OpenCodePluginSDDEngramManage, model.OpenCodePluginBtwOpenCode}
 }
 
 func communityToolDefinitions() []communitytool.Definition {
@@ -3696,7 +3696,7 @@ func communityToolDefinitions() []communitytool.Definition {
 }
 
 func opencodepluginRepoURLs() []string {
-	return []string{"https://github.com/Joaquinvesapa/sub-agent-statusline", "https://github.com/j0k3r-dev-rgl/sdd-engram-plugin"}
+	return []string{"https://github.com/Joaquinvesapa/sub-agent-statusline", "https://github.com/j0k3r-dev-rgl/sdd-engram-plugin", "https://github.com/pabloXDXDXD/btw-opencode"}
 }
 
 func openBrowserCmd(url string) tea.Cmd {
