@@ -6755,10 +6755,9 @@ func TestPickerFlowSlice(t *testing.T) {
 		{
 			name: "non-custom all agents SDDMode Multi cache absent excludes ModelPicker",
 			setup: func(t *testing.T) Model {
-				orig := osStatModelCache
-				osStatModelCache = func(name string) (os.FileInfo, error) { return nil, os.ErrNotExist }
-				t.Cleanup(func() { osStatModelCache = orig })
-
+				tempDir := t.TempDir()
+				t.Setenv("HOME", tempDir)
+				t.Setenv("USERPROFILE", tempDir)
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Selection.Preset = model.PresetFullGentleman
 				m.Selection.Agents = allPickerAgents

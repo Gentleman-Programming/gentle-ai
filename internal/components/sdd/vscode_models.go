@@ -155,7 +155,7 @@ func LoadVSCodeModelCatalog(cachePath, variantsPath string) (map[string]opencode
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("models cache %q not found", path)
 		}
-		return nil, fmt.Errorf("read models cache %q: %v", path, err)
+		return nil, fmt.Errorf("read models cache %q: %w", path, err)
 	}
 
 	variantPath := variantsPath
