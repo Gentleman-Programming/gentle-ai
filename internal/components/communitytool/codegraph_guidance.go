@@ -159,6 +159,135 @@ func CleanLegacyCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, erro
 	return result, nil
 }
 
+func RefreshCodeGraphGuidanceIfConfiguredForAgents(homeDir string, agentIDs []model.AgentID, detector Detector) (GuidanceInjectionResult, bool, error) {
+	if !HasConfiguredCodeGraphForAgents(homeDir, agentIDs, detector) && !hasAvailableLegacyCodeGraphGuidanceForAgents(homeDir, agentIDs, detector) {
+		return GuidanceInjectionResult{}, false, nil
+	}
+
+	result, err := InjectCodeGraphGuidanceForAgents(homeDir, agentIDs)
+	return result, true, err
+}
+
+func hasAvailableLegacyCodeGraphGuidanceForAgents(homeDir string, agentIDs []model.AgentID, detector Detector) bool {
+	status := DetectStatus(model.CommunityToolCodeGraph, homeDir, detector)
+	return status.CLI == AvailabilityAvailable && HasLegacyCodeGraphGuidanceForAgents(homeDir, agentIDs)
+}
+
+func HasConfiguredCodeGraphForAgents(homeDir string, agentIDs []model.AgentID, detector Detector) bool {
+	status := DetectStatus(model.CommunityToolCodeGraph, homeDir, detector)
+	if status.CLI != AvailabilityAvailable {
+		return false
+	}
+	for _, agent := range status.Agents {
+		if slices.Contains(agentIDs, agent.Agent) && agent.Detected && agent.Configured {
+			return true
+		}
+	}
+	return hasDetectedCodeGraphToolWiring(homeDir)
+}
+
+func HasLegacyCodeGraphGuidanceForAgents(homeDir string, agentIDs []model.AgentID) bool {
+	for _, path := range CodeGraphGuidancePathsForAgents(homeDir, agentIDs) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if containsLegacyCodeGraphGuidance(string(data)) {
+			return true
+		}
+	}
+	return false
+}
+
+func CleanLegacyCodeGraphGuidanceForAgents(homeDir string, agentIDs []model.AgentID) (GuidanceInjectionResult, error) {
+	result := GuidanceInjectionResult{}
+	for _, path := range CodeGraphGuidancePathsForAgents(homeDir, agentIDs) {
+		existing, err := readTextFileOrEmpty(path)
+		if err != nil {
+			return result, err
+		}
+		cleaned := stripLegacyCodeGraphGuidance(existing)
+		if cleaned == existing {
+			continue
+		}
+
+		writeResult, err := filemerge.WriteFileAtomic(path, []byte(cleaned), 0o644)
+		if err != nil {
+			return result, err
+		}
+		result.Changed = result.Changed || writeResult.Changed
+		if writeResult.Changed {
+			result.Files = append(result.Files, path)
+		}
+	}
+	return result, nil
+}
+
+func InjectCodeGraphGuidanceForAgents(homeDir string, agentIDs []model.AgentID) (GuidanceInjectionResult, error) {
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		return GuidanceInjectionResult{}, err
+	}
+
+	installed := agents.DiscoverInstalled(reg, homeDir)
+	installedMap := make(map[model.AgentID]struct{})
+	for _, inst := range installed {
+		installedMap[inst.ID] = struct{}{}
+	}
+
+	result := GuidanceInjectionResult{}
+	for _, id := range agentIDs {
+		if _, ok := installedMap[id]; !ok {
+			continue
+		}
+		adapter, ok := reg.Get(id)
+		if !ok || !isCodeGraphSupportedAgent(id) || !adapter.SupportsSystemPrompt() {
+			continue
+		}
+
+		file, changed, err := injectCodeGraphGuidanceForAgent(homeDir, adapter)
+		if err != nil {
+			return result, fmt.Errorf("inject CodeGraph guidance for %s: %w", id, err)
+		}
+		if file == "" {
+			continue
+		}
+		result.Changed = result.Changed || changed
+		result.Files = append(result.Files, file)
+	}
+
+	return result, nil
+}
+
+func CodeGraphGuidancePathsForAgents(homeDir string, agentIDs []model.AgentID) []string {
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		return nil
+	}
+
+	installed := agents.DiscoverInstalled(reg, homeDir)
+	installedMap := make(map[model.AgentID]struct{})
+	for _, inst := range installed {
+		installedMap[inst.ID] = struct{}{}
+	}
+
+	paths := make([]string, 0, len(agentIDs))
+	for _, id := range agentIDs {
+		if _, ok := installedMap[id]; !ok {
+			continue
+		}
+		adapter, ok := reg.Get(id)
+		if !ok || !isCodeGraphSupportedAgent(id) || !adapter.SupportsSystemPrompt() {
+			continue
+		}
+		path := adapter.SystemPromptFile(homeDir)
+		if strings.TrimSpace(path) != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
 // InjectCodeGraphGuidance writes the shared CodeGraph lifecycle guidance to all
 // detected supported agents. Detection is intentionally based on existing agent
 // config directories so standalone Community Tools setup does not create agent

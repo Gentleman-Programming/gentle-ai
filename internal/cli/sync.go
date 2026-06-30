@@ -501,6 +501,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			id:           "sync:community-tool:codegraph-guidance",
 			homeDir:      r.homeDir,
 			runner:       codeGraphHomeRunner{homeDir: r.homeDir},
+			agentIDs:     r.agentIDs,
 			changedFiles: &r.changedFiles,
 		})
 		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles})
@@ -638,6 +639,7 @@ type codeGraphGuidanceSyncStep struct {
 	id           string
 	homeDir      string
 	runner       communitytool.Runner
+	agentIDs     []model.AgentID
 	changedFiles *[]string
 	before       map[string]syncFileSnapshot
 }
@@ -688,12 +690,12 @@ func (s *codeGraphGuidanceSyncStep) Run() (runErr error) {
 		}
 	}
 
-	res, configured, err := communitytool.RefreshCodeGraphGuidanceIfConfigured(s.homeDir, communitytool.DetectorFunc(cmdLookPath))
+	res, configured, err := communitytool.RefreshCodeGraphGuidanceIfConfiguredForAgents(s.homeDir, s.agentIDs, communitytool.DetectorFunc(cmdLookPath))
 	if err != nil {
 		return fmt.Errorf("sync CodeGraph guidance: %w", err)
 	}
 	if !configured {
-		res, err = communitytool.CleanLegacyCodeGraphGuidance(s.homeDir)
+		res, err = communitytool.CleanLegacyCodeGraphGuidanceForAgents(s.homeDir, s.agentIDs)
 		if err != nil {
 			return fmt.Errorf("sync legacy CodeGraph guidance cleanup: %w", err)
 		}

@@ -1021,66 +1021,31 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 }
 
 func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {
-	legacyFragments := []string{
-		"Ask the user directly with a compact, numbered preflight prompt.",
-		"Keep option codes",
-		"Do NOT ask the user to type raw keys",
-		"Use this shape for English users",
-		"If the user's current language is Spanish, use this localized shape:",
-		"Do NOT mix languages inside one preflight prompt",
-		"Spanish localized shape below as the neutral fallback",
-		"translate user-facing prose to the user's current language while preserving option codes",
-		"Before continuing with SDD, choose one option per group.",
-		"Reply with \"use recommended\" or with codes like:",
-		"A. Pace",
-		"A1 Interactive",
-		"A2 Automatic",
-		"B. Artifacts",
-		"B1 OpenSpec",
-		"B2 Engram",
-		"B3 Both",
-		"C. PRs",
-		"C1 Ask me",
-		"C2 Single PR",
-		"C3 Chained",
-		"C4 Auto",
-		"D. Review",
-		"D1 400 lines",
-		"D2 800 lines",
-		"D3 Other",
-		"After asking this, STOP and wait for the user's answer.",
-		"Antes de continuar con SDD, elija una opción por grupo.",
-		"Responda con \"usar recomendado\" o con códigos como:",
-		"A. Ritmo",
-		"A1 Interactivo",
-		"A2 Automático",
-		"B. Artefactos",
-		"B1 OpenSpec",
-		"B2 Engram",
-		"B3 Ambos",
-		"C1 Preguntarme",
-		"C2 Un solo PR",
-		"C3 Encadenados",
-		"D. Revisión",
-		"D1 400 líneas",
-		"D2 800 líneas",
-		"D3 Otro",
-		"Map answers to canonical values: A1/Interactive",
-	}
-
 	lines := strings.Split(prompt, "\n")
 	kept := make([]string, 0, len(lines))
+	inBlock := false
+
 	for _, line := range lines {
-		stale := false
-		for _, fragment := range legacyFragments {
-			if strings.Contains(line, fragment) {
-				stale = true
-				break
+		trimmed := strings.TrimSpace(line)
+		if !inBlock {
+			if strings.Contains(trimmed, "Before continuing with SDD, choose one option per group.") ||
+				strings.Contains(trimmed, "Antes de continuar con SDD, elija una opción por grupo.") ||
+				strings.Contains(trimmed, "Ask the user directly with a compact, numbered preflight prompt.") {
+				inBlock = true
+				continue
 			}
 		}
-		if !stale {
-			kept = append(kept, line)
+
+		if inBlock {
+			if strings.Contains(trimmed, "After asking this, STOP and wait for the user's answer.") ||
+				strings.Contains(trimmed, "Map answers to canonical values: A1/Interactive") ||
+				strings.Contains(trimmed, "Map answers to canonical values") {
+				inBlock = false
+			}
+			continue
 		}
+
+		kept = append(kept, line)
 	}
 	return strings.Join(kept, "\n")
 }

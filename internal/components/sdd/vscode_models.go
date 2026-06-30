@@ -107,7 +107,7 @@ func resolveVSCodeModelAssignment(agentKey string, assignments map[string]model.
 		return "", []string{fmt.Sprintf("VS Code model assignment for %s skipped: provider %q is not %q", agentKey, assignment.ProviderID, githubCopilotProviderID)}
 	}
 
-	providers, warnings := loadVSCodeModelCatalog(agentKey, cachePath, variantsPath)
+	providers, warnings := loadVSCodeModelCatalog(cachePath, variantsPath)
 	if len(warnings) > 0 {
 		return "", warnings
 	}
@@ -140,21 +140,21 @@ func resolveVSCodeModelAssignment(agentKey string, assignments map[string]model.
 // loadVSCodeModelCatalog reads the current model cache and enriches it with
 // optional effort variants. A missing cache is a recoverable warning because the
 // assignment must stay persisted for a future cache refresh.
-func loadVSCodeModelCatalog(agentKey, cachePath, variantsPath string) (map[string]opencode.Provider, []string) {
+func loadVSCodeModelCatalog(cachePath, variantsPath string) (map[string]opencode.Provider, []string) {
 	path := cachePath
 	if path == "" {
 		path = opencode.DefaultCachePath()
 	}
 	if path == "" {
-		return nil, []string{fmt.Sprintf("VS Code model assignment for %s skipped: models cache path unavailable", agentKey)}
+		return nil, []string{"VS Code model assignments skipped: models cache path unavailable"}
 	}
 
 	providers, err := opencode.LoadModels(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, []string{fmt.Sprintf("VS Code model assignment for %s skipped: models cache %q not found", agentKey, path)}
+			return nil, []string{fmt.Sprintf("VS Code model assignments skipped: models cache %q not found", path)}
 		}
-		return nil, []string{fmt.Sprintf("VS Code model assignment for %s skipped: read models cache %q: %v", agentKey, path, err)}
+		return nil, []string{fmt.Sprintf("VS Code model assignments skipped: read models cache %q: %v", path, err)}
 	}
 
 	variantPath := variantsPath

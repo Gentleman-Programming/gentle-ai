@@ -721,6 +721,7 @@ func TestCodeGraphGuidanceSyncStepRefreshesOldMarkerWhenConfigured(t *testing.T)
 			mustWriteFile(t, settingsPath, []byte(`{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`))
 			return nil
 		}),
+		agentIDs:     []model.AgentID{model.AgentOpenCode},
 		changedFiles: &changed,
 	}
 	if err := step.Run(); err != nil {
@@ -1044,6 +1045,7 @@ func TestCodeGraphGuidanceSyncStepRemovesLegacySkipBlockWhenConfigured(t *testin
 			mustWriteFile(t, settingsPath, []byte(`{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`))
 			return nil
 		}),
+		agentIDs:     []model.AgentID{model.AgentOpenCode},
 		changedFiles: &changed,
 	}
 	if err := step.Run(); err != nil {
@@ -1090,6 +1092,7 @@ func TestCodeGraphGuidanceSyncStepRepairsCodexConfigOnlyGuidance(t *testing.T) {
 	step := codeGraphGuidanceSyncStep{
 		id:           "sync:community-tool:codegraph-guidance",
 		homeDir:      home,
+		agentIDs:     []model.AgentID{model.AgentCodex, model.AgentOpenCode},
 		changedFiles: &changed,
 	}
 	if err := step.Run(); err != nil {
@@ -1130,6 +1133,7 @@ func TestCodeGraphGuidanceSyncStepCleansLegacyBlockWithoutCodeGraphCLI(t *testin
 	step := codeGraphGuidanceSyncStep{
 		id:           "sync:community-tool:codegraph-guidance",
 		homeDir:      home,
+		agentIDs:     []model.AgentID{model.AgentCodex, model.AgentOpenCode},
 		changedFiles: &changed,
 	}
 	if err := step.Run(); err != nil {
