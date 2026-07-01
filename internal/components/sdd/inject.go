@@ -1022,54 +1022,48 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 
 func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {
 	lines := strings.Split(prompt, "\n")
-	start, end := -1, -1
+	type blockRange struct{ start, end int }
+	var ranges []blockRange
+
+	start := -1
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if start == -1 &&
-			(strings.Contains(trimmed, "Before continuing with SDD, choose one option per group.") ||
-				strings.Contains(trimmed, "Antes de continuar con SDD, elija una opción por grupo.") ||
-				strings.Contains(trimmed, "Ask the user directly with a compact, numbered preflight prompt.")) {
+		if start == -1 && isLegacyPreflightStart(trimmed) {
 			start = i
 			continue
 		}
-		if start != -1 &&
-			(strings.Contains(trimmed, "After asking this, STOP and wait for the user's answer.") ||
-				strings.Contains(trimmed, "Map answers to canonical values: A1/Interactive") ||
-				strings.Contains(trimmed, "Map answers to canonical values")) {
-			end = i
-			break
+		if start != -1 && isLegacyPreflightEnd(trimmed) {
+			ranges = append(ranges, blockRange{start, i})
+			start = -1
 		}
 	}
-	if start == -1 || end == -1 || end < start {
+	if len(ranges) == 0 {
 		return prompt
 	}
 
 	kept := make([]string, 0, len(lines))
-	inBlock := false
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !inBlock {
-			if strings.Contains(trimmed, "Before continuing with SDD, choose one option per group.") ||
-				strings.Contains(trimmed, "Antes de continuar con SDD, elija una opción por grupo.") ||
-				strings.Contains(trimmed, "Ask the user directly with a compact, numbered preflight prompt.") {
-				inBlock = true
-				continue
-			}
-		}
-
-		if inBlock {
-			if strings.Contains(trimmed, "After asking this, STOP and wait for the user's answer.") ||
-				strings.Contains(trimmed, "Map answers to canonical values: A1/Interactive") ||
-				strings.Contains(trimmed, "Map answers to canonical values") {
-				inBlock = false
-			}
+	ri := 0
+	for i := 0; i < len(lines); i++ {
+		if ri < len(ranges) && i == ranges[ri].start {
+			i = ranges[ri].end
+			ri++
 			continue
 		}
-
-		kept = append(kept, line)
+		kept = append(kept, lines[i])
 	}
 	return strings.Join(kept, "\n")
+}
+
+func isLegacyPreflightStart(trimmed string) bool {
+	return strings.Contains(trimmed, "Before continuing with SDD, choose one option per group.") ||
+		strings.Contains(trimmed, "Antes de continuar con SDD, elija una opción por grupo.") ||
+		strings.Contains(trimmed, "Ask the user directly with a compact, numbered preflight prompt.")
+}
+
+func isLegacyPreflightEnd(trimmed string) bool {
+	return strings.Contains(trimmed, "After asking this, STOP and wait for the user's answer.") ||
+		strings.Contains(trimmed, "Map answers to canonical values: A1/Interactive") ||
+		strings.Contains(trimmed, "Map answers to canonical values")
 }
 
 func ensurePreservedOpenCodeDelegationHardGates(prompt string) string {
