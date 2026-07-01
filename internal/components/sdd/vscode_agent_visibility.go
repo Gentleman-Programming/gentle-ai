@@ -24,7 +24,7 @@ func hideManagedClaudeInternalAgentsForVSCode(homeDir string) (InjectionResult, 
 	}
 
 	result := InjectionResult{}
-	for _, fileName := range managedClaudeInternalAgentFiles() {
+	for _, fileName := range ManagedClaudeInternalAgentFiles() {
 		path := filepath.Join(agentsDir, fileName)
 		content, err := os.ReadFile(path)
 		if err != nil {
@@ -76,27 +76,31 @@ func hideManagedClaudeInternalAgentsForVSCode(homeDir string) (InjectionResult, 
 func RestoreManagedClaudeInternalAgentsForVSCode(homeDir string) (bool, error) {
 	agentsDir := filepath.Join(homeDir, ".claude", "agents")
 	restoredAny := false
-	for _, fileName := range managedClaudeInternalAgentFiles() {
+	for _, fileName := range ManagedClaudeInternalAgentFiles() {
 		path := filepath.Join(agentsDir, fileName)
 		backupPath := path + ".backup"
-		if _, err := os.Stat(backupPath); err == nil {
-			content, err := os.ReadFile(backupPath)
-			if err != nil {
-				return false, fmt.Errorf("read backup %s: %w", backupPath, err)
+		if _, err := os.Stat(backupPath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
 			}
-			if _, err := filemerge.WriteFileAtomic(path, content, 0o644); err != nil {
-				return false, fmt.Errorf("restore agent %s from backup: %w", path, err)
-			}
-			if err := os.Remove(backupPath); err != nil {
-				return false, fmt.Errorf("remove backup file %s: %w", backupPath, err)
-			}
-			restoredAny = true
+			return false, fmt.Errorf("inspect backup %s: %w", backupPath, err)
 		}
+		content, err := os.ReadFile(backupPath)
+		if err != nil {
+			return false, fmt.Errorf("read backup %s: %w", backupPath, err)
+		}
+		if _, err := filemerge.WriteFileAtomic(path, content, 0o644); err != nil {
+			return false, fmt.Errorf("restore agent %s from backup: %w", path, err)
+		}
+		if err := os.Remove(backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, fmt.Errorf("remove backup %s: %w", backupPath, err)
+		}
+		restoredAny = true
 	}
 	return restoredAny, nil
 }
 
-func managedClaudeInternalAgentFiles() []string {
+func ManagedClaudeInternalAgentFiles() []string {
 	return []string{
 		"sdd-init.md",
 		"sdd-explore.md",

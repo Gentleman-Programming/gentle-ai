@@ -578,6 +578,11 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		}
 	case model.ComponentSDD:
 		if adapter.Agent() == model.AgentVSCodeCopilot {
+			claudeAgentsDir := filepath.Join(homeDir, ".claude", "agents")
+			for _, fileName := range sdd.ManagedClaudeInternalAgentFiles() {
+				targets = append(targets, filepath.Join(claudeAgentsDir, fileName))
+				targets = append(targets, filepath.Join(claudeAgentsDir, fileName+".backup"))
+			}
 			ops = append(ops, restoreClaudeVisibilityBackupOperation(homeDir))
 		}
 		if adapter.SupportsSystemPrompt() {

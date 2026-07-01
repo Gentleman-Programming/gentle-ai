@@ -726,7 +726,7 @@ func TestComponentOperationsSDD_VSCodeRemovesOnlyManagedAgentFiles(t *testing.T)
 		if op.path != agentsDir && !strings.HasPrefix(op.path, agentsDir+string(filepath.Separator)) {
 			continue
 		}
-		if op.typeID == opRemoveFile {
+		if op.typeID == opRemoveFile || op.typeID == opRewriteFile {
 			if _, _, err := op.apply(op.path); err != nil {
 				t.Fatalf("op.apply(%q) error = %v", op.path, err)
 			}
