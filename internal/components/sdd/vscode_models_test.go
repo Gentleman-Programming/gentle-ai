@@ -204,16 +204,7 @@ func boolJSON(value bool) string {
 	return "false"
 }
 
-// containsString keeps assignment-key assertions readable in closed-surface
-// tests.
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
+
 
 // containsWarning checks warning substrings so tests assert behavior without
 // coupling to exact full diagnostic wording.
