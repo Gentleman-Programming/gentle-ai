@@ -2,6 +2,7 @@ package uninstall
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -1387,6 +1388,8 @@ func restoreUserFileBackupOperation(path string) operation {
 					return false, false, fmt.Errorf("remove backup file %s: %w", backupPath, err)
 				}
 				return true, false, nil
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return false, false, fmt.Errorf("inspect backup %s: %w", backupPath, err)
 			}
 
 			// If no backup exists, check if it's still our managed content.
@@ -1399,16 +1402,17 @@ func restoreUserFileBackupOperation(path string) operation {
 				return false, false, statErr
 			}
 			content, readErr := os.ReadFile(path)
-			if readErr == nil {
-				contentStr := string(content)
-				isManaged := strings.Contains(contentStr, "sdd-orchestrator") ||
-					strings.Contains(contentStr, "strict-tdd-mode") ||
-					strings.Contains(contentStr, "trigger-rules") ||
-					strings.Contains(contentStr, "gentle-ai") ||
-					strings.Contains(contentStr, "managed")
-				if !isManaged {
-					return false, false, nil
-				}
+			if readErr != nil {
+				return false, false, fmt.Errorf("read file %s: %w", path, readErr)
+			}
+			contentStr := string(content)
+			isManaged := strings.Contains(contentStr, "sdd-orchestrator") ||
+				strings.Contains(contentStr, "strict-tdd-mode") ||
+				strings.Contains(contentStr, "trigger-rules") ||
+				strings.Contains(contentStr, "gentle-ai") ||
+				strings.Contains(contentStr, "managed")
+			if !isManaged {
+				return false, false, nil
 			}
 			if err := removeFileIfExists(path); err != nil {
 				return false, false, err
