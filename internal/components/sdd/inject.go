@@ -1022,6 +1022,28 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 
 func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {
 	lines := strings.Split(prompt, "\n")
+	start, end := -1, -1
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if start == -1 &&
+			(strings.Contains(trimmed, "Before continuing with SDD, choose one option per group.") ||
+				strings.Contains(trimmed, "Antes de continuar con SDD, elija una opción por grupo.") ||
+				strings.Contains(trimmed, "Ask the user directly with a compact, numbered preflight prompt.")) {
+			start = i
+			continue
+		}
+		if start != -1 &&
+			(strings.Contains(trimmed, "After asking this, STOP and wait for the user's answer.") ||
+				strings.Contains(trimmed, "Map answers to canonical values: A1/Interactive") ||
+				strings.Contains(trimmed, "Map answers to canonical values")) {
+			end = i
+			break
+		}
+	}
+	if start == -1 || end == -1 || end < start {
+		return prompt
+	}
+
 	kept := make([]string, 0, len(lines))
 	inBlock := false
 
