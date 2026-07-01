@@ -174,7 +174,7 @@ On the first `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural
 
 ### Dependency Graph
 
-```
+```text
 proposal -> specs --> tasks -> apply -> verify -> archive
              ^
              |
