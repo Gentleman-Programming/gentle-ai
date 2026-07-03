@@ -70,6 +70,7 @@ For agents not listed here, SDD runs in single-mode automatically. One model han
 
 For VS Code Copilot, the picker uses dynamic `github-copilot` model data. If the cache is missing, the selected model is invalid, or the cost tier cannot be validated, generated agents omit `model` and inherit the parent chat model instead of failing sync. Gentle-AI does not generate named/suffixed VS Code profiles.
 
+
 If you prefer a **runtime profile manager** that keeps profiles outside `opencode.json`, gentle-ai supports that too. During sync, OpenCode can auto-detect external profile files under `~/.config/opencode/profiles/*.json` and switch to a safer compatibility path that preserves the active `gentle-orchestrator` prompt instead of overwriting it.
 
 **Full step-by-step guide**: [OpenCode SDD Profiles](opencode-profiles.md)
