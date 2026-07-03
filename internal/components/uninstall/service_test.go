@@ -274,6 +274,7 @@ func TestPartialUninstallVisualPolishSelectionRemovesThemeLogoGroup(t *testing.T
 	}
 }
 
+
 func readJSONFileForTest(t *testing.T, path string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)

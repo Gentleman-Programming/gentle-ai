@@ -37,7 +37,6 @@ var legacyPiSubagentPackageIdentities = map[string]struct{}{
 }
 
 var piWalkDir = filepath.WalkDir
-
 func piSubagentsInstallCommand(system.PlatformProfile) []string {
 	return []string{"pi", "install", piSubagentsJ0k3rPackageSpec}
 }
