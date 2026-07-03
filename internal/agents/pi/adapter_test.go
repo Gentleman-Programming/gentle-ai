@@ -2,6 +2,7 @@ package pi
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -209,5 +210,53 @@ func TestAdapterInstallCommandSequenceUsesPnpmForEngramInitWhenAvailable(t *test
 	want := []string{"pnpm", "dlx", "gentle-engram@latest", "pi-engram", "init"}
 	if !reflect.DeepEqual(commands[3], want) {
 		t.Fatalf("InstallCommand()[3] = %#v, want %#v", commands[3], want)
+	}
+}
+
+func TestMergePiSettingsFileRemovesLegacySubagentPackages(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	initial := `{
+  "theme": "kanagawa",
+  "packages": [
+    "npm:pi-subagents",
+    "npm:pi-subagents@1.0.0",
+    "vendor/pi-subagents",
+    "vendor/pi-subagents-fixed@0.0.1",
+    "npm:pi-subagents-j0k3r",
+    "npm:other@1.0.0"
+  ]
+}`
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	if _, err := mergePiSettingsFile(settingsPath); err != nil {
+		t.Fatalf("mergePiSettingsFile() error = %v", err)
+	}
+
+	var settings struct {
+		Packages []string `json:"packages"`
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("Unmarshal(settings) error = %v", err)
+	}
+
+	for _, forbidden := range []string{"npm:pi-subagents", "npm:pi-subagents@1.0.0", "vendor/pi-subagents", "vendor/pi-subagents-fixed@0.0.1"} {
+		for _, pkg := range settings.Packages {
+			if pkg == forbidden {
+				t.Fatalf("packages still contains legacy subagent package %q: %#v", forbidden, settings.Packages)
+			}
+		}
+	}
+	if !reflect.DeepEqual(settings.Packages, []string{"npm:pi-subagents-j0k3r", "npm:other@1.0.0", "npm:pi-mcp-adapter"}) {
+		t.Fatalf("packages = %#v", settings.Packages)
 	}
 }

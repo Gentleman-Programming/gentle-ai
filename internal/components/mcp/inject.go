@@ -23,6 +23,9 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 
 	switch adapter.MCPStrategy() {
 	case model.StrategySeparateMCPFiles:
+		if adapter.Agent() == model.AgentClaudeCode {
+			return injectMergeIntoSettings(homeDir, adapter)
+		}
 		return injectSeparateFile(homeDir, adapter)
 	case model.StrategyMergeIntoSettings:
 		return injectMergeIntoSettings(homeDir, adapter)
@@ -93,7 +96,7 @@ func injectYAMLFile(homeDir string, adapter agents.Adapter) (InjectionResult, er
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{configPath}}, nil
 }
 
-// injectSeparateFile writes a standalone JSON file per MCP server (Claude Code pattern).
+// injectSeparateFile writes a standalone JSON file per MCP server.
 func injectSeparateFile(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	path := adapter.MCPConfigPath(homeDir, "context7")
 	writeResult, err := filemerge.WriteFileAtomic(path, DefaultContext7ServerJSON(), 0o644)

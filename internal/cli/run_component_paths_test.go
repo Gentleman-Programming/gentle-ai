@@ -346,6 +346,22 @@ func TestComponentPathsContext7KimiIncludesMCPConfig(t *testing.T) {
 	}
 }
 
+func TestComponentPathsContext7ClaudeUsesSettingsFile(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentClaudeCode})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentContext7)
+
+	want := filepath.Join(home, ".claude", "settings.json")
+	if !containsPath(paths, want) {
+		t.Fatalf("componentPaths(context7,claude) missing %q\npaths=%v", want, paths)
+	}
+	legacy := filepath.Join(home, ".claude", "mcp", "context7.json")
+	if containsPath(paths, legacy) {
+		t.Fatalf("componentPaths(context7,claude) should not verify legacy path %q\npaths=%v", legacy, paths)
+	}
+}
+
 // TestComponentPathsEngramCodexIncludesConfigTOML verifies that componentPaths
 // for ComponentEngram + Codex reports ~/.codex/config.toml as a backup target.
 func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {

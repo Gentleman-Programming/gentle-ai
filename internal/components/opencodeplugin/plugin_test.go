@@ -135,6 +135,11 @@ func TestInstallGentleLogoWritesLocalTUIPluginAndRegistersAbsolutePath(t *testin
 	if strings.Contains(pluginContent, "server") {
 		t.Fatalf("plugin must not export or define server shape")
 	}
+	for _, forbidden := range []string{"TuiThemeCurrent", "ctx.theme", "props.theme"} {
+		if strings.Contains(pluginContent, forbidden) {
+			t.Fatalf("plugin must not subscribe to theme state (%q) because OpenCode can destroy TextBuffer during theme swaps", forbidden)
+		}
+	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {

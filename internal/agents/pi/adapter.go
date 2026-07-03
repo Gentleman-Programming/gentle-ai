@@ -29,6 +29,12 @@ const (
 	piSubagentsJ0k3rPackageSpec = "npm:pi-subagents-j0k3r"
 )
 
+var legacyPiSubagentPackageIdentities = map[string]struct{}{
+	"npm:pi-subagents":          {},
+	"vendor/pi-subagents":       {},
+	"vendor/pi-subagents-fixed": {},
+}
+
 func piSubagentsInstallCommand(system.PlatformProfile) []string {
 	return []string{"pi", "install", piSubagentsJ0k3rPackageSpec}
 }
@@ -223,7 +229,8 @@ func appendPiPackage(existing any, desired string) []any {
 	packages := piPackagesAsSlice(existing)
 	filtered := make([]any, 0, len(packages)+1)
 	for _, pkg := range packages {
-		if piPackageIdentity(pkg) == piMCPAdapterPackage {
+		identity := piPackageIdentity(pkg)
+		if identity == piMCPAdapterPackage || isLegacyPiSubagentPackage(identity) {
 			continue
 		}
 		filtered = append(filtered, pkg)
@@ -269,7 +276,17 @@ func piPackageIdentity(pkg any) string {
 	if strings.HasPrefix(source, piMCPAdapterPackage+"@") || source == piMCPAdapterPackage {
 		return piMCPAdapterPackage
 	}
+	for legacy := range legacyPiSubagentPackageIdentities {
+		if source == legacy || strings.HasPrefix(source, legacy+"@") {
+			return legacy
+		}
+	}
 	return source
+}
+
+func isLegacyPiSubagentPackage(identity string) bool {
+	_, ok := legacyPiSubagentPackageIdentities[identity]
+	return ok
 }
 
 func mergePiJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {

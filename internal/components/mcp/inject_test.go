@@ -432,8 +432,15 @@ func TestInjectOpenCodePreservesOtherMCPEntriesWhenReplacingContext7(t *testing.
 	}
 }
 
-func TestInjectClaudeWritesContext7FileAndIsIdempotent(t *testing.T) {
+func TestInjectClaudeMergesContext7IntoSettingsAndIsIdempotent(t *testing.T) {
 	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"theme":"dark"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
 
 	first, err := Inject(home, claudeAdapter())
 	if err != nil {
@@ -451,10 +458,32 @@ func TestInjectClaudeWritesContext7FileAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Inject() second changed = true")
 	}
 
-	path := filepath.Join(home, ".claude", "mcp", "context7.json")
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("expected context7 file %q: %v", path, err)
+	context7 := readMCPServersContext7Entry(t, settingsPath)
+	if got := context7["command"]; got != "npx" {
+		t.Fatalf("mcpServers.context7.command = %#v; want npx", got)
 	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "mcp", "context7.json")); !os.IsNotExist(err) {
+		t.Fatalf("Claude Context7 must not be written to ~/.claude/mcp/context7.json; stat err = %v", err)
+	}
+}
+
+func TestInjectClaudeLeavesLegacyContext7FileForExplicitUninstallCleanup(t *testing.T) {
+	home := t.TempDir()
+	legacyPath := filepath.Join(home, ".claude", "mcp", "context7.json")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(legacy dir) error = %v", err)
+	}
+	if err := os.WriteFile(legacyPath, DefaultContext7ServerJSON(), 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy context7) error = %v", err)
+	}
+
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if _, err := os.Stat(legacyPath); err != nil {
+		t.Fatalf("legacy context7 file should be left for explicit uninstall cleanup: %v", err)
+	}
+	readMCPServersContext7Entry(t, filepath.Join(home, ".claude", "settings.json"))
 }
 
 func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {

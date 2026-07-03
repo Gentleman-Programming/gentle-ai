@@ -1282,6 +1282,12 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 		case model.ComponentContext7:
 			switch adapter.MCPStrategy() {
 			case model.StrategySeparateMCPFiles:
+				if adapter.Agent() == model.AgentClaudeCode {
+					if p := adapter.SettingsPath(homeDir); p != "" {
+						paths = append(paths, p)
+					}
+					break
+				}
 				paths = append(paths, adapter.MCPConfigPath(homeDir, "context7"))
 			case model.StrategyMergeIntoSettings:
 				if p := adapter.SettingsPath(homeDir); p != "" {
