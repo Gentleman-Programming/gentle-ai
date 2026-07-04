@@ -909,7 +909,11 @@ func reportLineHasBlocker(line string) bool {
 	return reportFailValuePattern.MatchString(trimmed)
 }
 
-// reportLineHasComplianceSignal checks if a line contains explicit pass/compliance indicators.
+// reportLineHasComplianceSignal checks if a line contains explicit compliance indicators.
+// PASS/PASSED/PASSING alone is NOT sufficient — it matches too broadly in prose
+// (e.g. "pending work continues but tests pass") and would incorrectly exempt
+// lines with real TODO/PENDING blockers. Only COMPLIANT (non-negated), NO BLOCKERS,
+// and 0 BLOCKING qualify as compliance signals.
 func reportLineHasComplianceSignal(line string) bool {
 	trimmed := strings.ToUpper(stripMarkdownSignal(line))
 	if reportNonCompliantPattern.MatchString(trimmed) {
@@ -917,11 +921,10 @@ func reportLineHasComplianceSignal(line string) bool {
 	}
 	return strings.Contains(trimmed, "COMPLIANT") ||
 		strings.Contains(trimmed, "NO BLOCKERS") ||
-		reportZeroBlockingPattern.MatchString(trimmed) ||
-		reportPassWordPattern.MatchString(trimmed)
+		reportZeroBlockingPattern.MatchString(trimmed)
 }
 
-var reportNonCompliantPattern = regexp.MustCompile(`\bNON[-\s]*COMPLIANT\b`)
+var reportNonCompliantPattern = regexp.MustCompile(`\b(?:NON[-\s]*|NOT\s+)COMPLIANT\b`)
 var reportZeroBlockingPattern = regexp.MustCompile(`\b0\s+BLOCKING\b`)
 var reportPassWordPattern = regexp.MustCompile(`\bPASS(?:ED|ING)?\b`)
 

@@ -900,6 +900,10 @@ func TestReportLineHasBlocker_BlocksGenuineBlockers(t *testing.T) {
 		{"failed count nonzero", "failed: 3"},
 		{"pending field with real blocker", "Pending: evidence missing"},
 		{"todo in result cell without compliance signal", "| REQ-03 | rate limit | | ⚠️ TODO (known limitation, documented)"},
+		// Alan-TheGentleman: NOT COMPLIANT must not be treated as a compliance signal.
+		{"not compliant with pending todo", "NOT COMPLIANT — TODO: needs full audit"},
+		// Alan-TheGentleman: standalone pass must not exempt lines with real TODO/PENDING.
+		{"pending with pass in prose", "- pending work continues but tests pass"},
 	}
 	for _, tt := range tests {
 		t.Run("block_"+tt.name, func(t *testing.T) {
