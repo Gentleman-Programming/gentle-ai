@@ -904,6 +904,9 @@ func TestReportLineHasBlocker_BlocksGenuineBlockers(t *testing.T) {
 		{"not compliant with pending todo", "NOT COMPLIANT — TODO: needs full audit"},
 		// Alan-TheGentleman: standalone pass must not exempt lines with real TODO/PENDING.
 		{"pending with pass in prose", "- pending work continues but tests pass"},
+		// Additional test cases for substring matches
+		{"TODO with internal COMPLIANT substring", "TODO: fix this COMPLIANTLY issue"},
+		{"TODO with internal NO BLOCKERS substring", "TODO: beware of NO BLOCKERSHIP"},
 	}
 	for _, tt := range tests {
 		t.Run("block_"+tt.name, func(t *testing.T) {
