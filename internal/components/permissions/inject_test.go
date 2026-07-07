@@ -320,8 +320,27 @@ func TestInjectAntigravitySkipsPermissions(t *testing.T) {
 	}
 }
 
+// nixPathsPresent forces osStat to report every path as present so tests that
+// assert the Nix read paths are injected do not depend on the host filesystem.
+func nixPathsPresent(t *testing.T) {
+	t.Helper()
+	orig := osStat
+	osStat = func(string) (os.FileInfo, error) { return nil, nil }
+	t.Cleanup(func() { osStat = orig })
+}
+
+// nixPathsAbsent forces osStat to report every path as missing so tests can
+// verify that the Nix read paths are skipped on non-Nix hosts.
+func nixPathsAbsent(t *testing.T) {
+	t.Helper()
+	orig := osStat
+	osStat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+	t.Cleanup(func() { osStat = orig })
+}
+
 func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 	home := t.TempDir()
+	nixPathsPresent(t)
 
 	result, err := Inject(home, codexAdapter())
 	if err != nil {
@@ -400,11 +419,14 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 	}
 }
 
-func TestInjectCodexPermissionsSkipsNixStoreOnWindows(t *testing.T) {
+// TestInjectCodexPermissionsSkipsNixPathsWhenAbsent verifies that on a host
+// without Nix installed (none of the Nix paths resolve on disk), the generated
+// Codex profile contains NONE of the three Nix read paths. Binding a
+// non-existent path makes bubblewrap create a synthetic ".../deleted" tmpfs
+// entry that fails with EBUSY, which broke Codex on non-Nix Linux/WSL.
+func TestInjectCodexPermissionsSkipsNixPathsWhenAbsent(t *testing.T) {
 	home := t.TempDir()
-	origGOOS := codexPermissionsGOOS
-	codexPermissionsGOOS = "windows"
-	t.Cleanup(func() { codexPermissionsGOOS = origGOOS })
+	nixPathsAbsent(t)
 
 	if _, err := Inject(home, codexAdapter()); err != nil {
 		t.Fatalf("Inject() error = %v", err)
@@ -417,15 +439,53 @@ func TestInjectCodexPermissionsSkipsNixStoreOnWindows(t *testing.T) {
 	}
 	text := string(content)
 
-	if strings.Contains(text, `"/nix/store"`) {
-		t.Fatalf("Windows Codex config should not include /nix/store; got:\n%s", text)
-	}
-	for _, want := range []string{
-		`"~/.local/state/nix/profiles/home-manager/home-path" = "read"`,
+	for _, forbidden := range []string{
+		`"/nix/store" = "read"`,
 		`"~/.nix-profile" = "read"`,
+		`"~/.local/state/nix/profiles/home-manager/home-path" = "read"`,
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("non-Nix Codex config should not include Nix read path %q; got:\n%s", forbidden, text)
+		}
+	}
+
+	// The always-present read paths must still be there.
+	for _, want := range []string{
+		`":minimal" = "read"`,
+		`"~/.config/git" = "read"`,
+		`"~/.gitconfig" = "read"`,
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("Windows Codex config missing non-fatal Nix home path %q; got:\n%s", want, text)
+			t.Fatalf("Codex config missing base read path %q; got:\n%s", want, text)
+		}
+	}
+}
+
+// TestInjectCodexPermissionsIncludesNixPathsWhenPresent verifies that when the
+// Nix paths resolve on disk, all three Nix read paths are injected into the
+// generated Codex profile.
+func TestInjectCodexPermissionsIncludesNixPathsWhenPresent(t *testing.T) {
+	home := t.TempDir()
+	nixPathsPresent(t)
+
+	if _, err := Inject(home, codexAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config.toml: %v", err)
+	}
+	text := string(content)
+
+	for _, want := range []string{
+		`"/nix/store" = "read"`,
+		`"~/.nix-profile" = "read"`,
+		`"~/.local/state/nix/profiles/home-manager/home-path" = "read"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("Codex config with Nix present missing read path %q; got:\n%s", want, text)
 		}
 	}
 }

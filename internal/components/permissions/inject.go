@@ -3,14 +3,12 @@ package permissions
 import (
 	"fmt"
 	"os"
-	"runtime"
+	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
-
-var codexPermissionsGOOS = runtime.GOOS
 
 type InjectionResult struct {
 	Changed bool
@@ -194,11 +192,27 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 		`":minimal"`,
 		`"~/.config/git"`,
 		`"~/.gitconfig"`,
-		`"~/.local/state/nix/profiles/home-manager/home-path"`,
-		`"~/.nix-profile"`,
 	}
-	if codexPermissionsGOOS != "windows" {
-		readPaths = append(readPaths, `"/nix/store"`)
+	// Only inject Nix read paths that actually resolve on disk. Codex enforces the
+	// profile through a bubblewrap sandbox, and binding a non-existent path makes
+	// bubblewrap create a synthetic ".../deleted" read-only tmpfs entry whose access
+	// then fails with "Device or resource busy" (EBUSY), breaking Codex on non-Nix
+	// Linux/WSL. The prior OS-based guard (#941) only skipped "/nix/store" on Windows,
+	// which left the "~/.nix-profile" and home-manager paths breaking config load on
+	// non-Nix hosts. This existence check subsumes that guard and covers every host.
+	// Keep a deterministic slice order (no map) so the generated TOML stays stable.
+	nixReadPaths := []struct {
+		key      string
+		resolved string
+	}{
+		{`"~/.local/state/nix/profiles/home-manager/home-path"`, filepath.Join(homeDir, ".local", "state", "nix", "profiles", "home-manager", "home-path")},
+		{`"~/.nix-profile"`, filepath.Join(homeDir, ".nix-profile")},
+		{`"/nix/store"`, "/nix/store"},
+	}
+	for _, nix := range nixReadPaths {
+		if _, err := osStat(nix.resolved); err == nil {
+			readPaths = append(readPaths, nix.key)
+		}
 	}
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", "glob_scan_max_depth", "6")
 	for _, path := range readPaths {
@@ -261,6 +275,10 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 
 	return filemerge.WriteFileAtomic(path, merged, 0o644)
 }
+
+// osStat is a mockable indirection over os.Stat so tests can simulate the
+// presence or absence of the Nix read paths without touching the real filesystem.
+var osStat = os.Stat
 
 var osReadFile = func(path string) ([]byte, error) {
 	content, err := os.ReadFile(path)
