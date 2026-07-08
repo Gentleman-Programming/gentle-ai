@@ -273,6 +273,15 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// The static KIMI.md template references it via {% include "sdd-orchestrator.md" %}.
 			configDir := adapter.GlobalConfigDir(homeDir)
 			content := assets.MustRead(sddOrchestratorAsset(adapter.Agent()))
+
+			// Extract the section matching this install's model capability. Falls back to
+			// full content when the asset has no model-capable/model-small markers.
+			capability := opts.Capability
+			if capability == "" {
+				capability = "capable"
+			}
+			content = extractModelSection(content, capability)
+
 			modulePath := filepath.Join(configDir, "sdd-orchestrator.md")
 			writeResult, err := filemerge.WriteFileAtomic(modulePath, []byte(content), 0o644)
 			if err != nil {
