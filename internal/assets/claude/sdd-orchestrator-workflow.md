@@ -4,10 +4,10 @@ SDD is the structured planning layer for substantial changes. This file is the l
 
 ### Artifact Store Policy
 
-- `engram` — default when available; persistent memory across sessions.
-- `openspec` — file-based artifacts; use only when the user explicitly requests it or a change already exists there.
+- `openspec` — default; file-based artifacts and native dispatcher source of truth.
+- `engram` — opt-in only when the user explicitly wants SDD artifacts stored in memory instead of files.
 - `hybrid` — both backends; useful for team-shareable files plus cross-session recovery.
-- `none` — return results inline only; recommend enabling engram or openspec.
+- `none` — return results inline only; recommend enabling openspec or engram.
 
 ### Commands
 
@@ -79,7 +79,7 @@ On gate failure, re-run the same phase exactly once with specific corrective fee
 
 ### Artifact Store Mode
 
-On the first SDD chain request in a session, ask once which artifact store to use (`engram`, `openspec`, `hybrid`, or `none`) and cache it. If unspecified, default to `engram` when Engram is available; otherwise use `none` and explain the persistence limitation.
+On the first SDD chain request in a session, ask once which artifact store to use (`engram`, `openspec`, `hybrid`, or `none`) and cache it. If unspecified, default to `openspec`. Use `engram` only when the user explicitly asks to skip files for the change.
 
 Pass the artifact store mode to every SDD phase agent.
 

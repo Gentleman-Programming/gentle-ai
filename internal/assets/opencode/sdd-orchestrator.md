@@ -108,10 +108,10 @@ SDD is the structured planning layer for substantial changes.
 
 ### Artifact Store Policy
 
-- `engram` -> default when available; persistent memory across sessions
-- `openspec` -> file-based artifacts; use only when the user explicitly requests it
+- `openspec` -> default; file-based artifacts and native dispatcher source of truth
+- `engram` -> opt-in only when the user explicitly requests it
 - `hybrid` -> both backends; cross-session recovery + local files; more tokens per operation
-- `none` -> return results inline only; recommend enabling engram or openspec
+- `none` -> return results inline only; recommend enabling openspec or engram
 
 ### Commands
 
@@ -269,7 +269,7 @@ This is collected by `SDD Session Preflight`. If missing, enforce the hard gate 
 - **`openspec`**: File-based. Creates `openspec/` with a shareable artifact trail.
 - **`both` / `hybrid`**: Both - files for team sharing + engram for cross-session recovery.
 
-If the user doesn't specify, detect: if engram is available -> default to `engram`. Otherwise -> `none`.
+If the user doesn't specify, default to `openspec`. Use `engram` only when the user explicitly asks to skip files for the change.
 
 Cache the artifact store choice for the session. Pass it as `artifact_store.mode` to every sub-agent launch.
 

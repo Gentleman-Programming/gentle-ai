@@ -241,7 +241,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
 		switch adapter.SystemPromptStrategy() {
 		case model.StrategyMarkdownSections:
-			result, err := injectMarkdownSections(homeDir, adapter, opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments)
+			result, err := injectMarkdownSections(homeDir, adapter, opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, opts.Capability)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -1836,6 +1836,14 @@ func injectFileAppend(homeDir string, adapter agents.Adapter, opts InjectOptions
 	// Use agent-specific SDD orchestrator content when available; fall back to generic.
 	content := assets.MustRead(sddOrchestratorAsset(adapter.Agent()))
 
+	// Extract the section matching this install's model capability. Falls back to
+	// full content when the asset has no model-capable/model-small markers.
+	capability := opts.Capability
+	if capability == "" {
+		capability = "capable"
+	}
+	content = extractModelSection(content, capability)
+
 	// Codex-only: substitute {{CODEX_PHASE_EFFORTS}} with a rendered per-phase
 	// effort table. Only fires when the adapter implements codexModelResolver.
 	// All other FileReplace adapters (Gemini, Cursor, etc.) are unaffected.
@@ -2046,9 +2054,16 @@ func stripBareOrchestratorSection(content string) string {
 	return result
 }
 
-func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment) (InjectionResult, error) {
+func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment, capability string) (InjectionResult, error) {
 	promptPath := adapter.SystemPromptFile(homeDir)
 	content := assets.MustRead(sddOrchestratorAsset(adapter.Agent()))
+
+	// Extract the section matching this install's model capability. Falls back to
+	// full content when the asset has no model-capable/model-small markers.
+	if capability == "" {
+		capability = "capable"
+	}
+	content = extractModelSection(content, capability)
 
 	existing, err := readFileOrEmpty(promptPath)
 	if err != nil {

@@ -296,7 +296,7 @@ When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first ti
 - **`openspec`**: File-based. Creates `openspec/` directory. Committable, shareable.
 - **`hybrid`**: Both — files for team sharing + engram for cross-session recovery.
 
-Default: `engram` when available. Cache the choice for the session.
+Default: `openspec`. Use `engram` only when the user explicitly asks to skip files for the change. Cache the choice for the session.
 
 ### Delivery Strategy
 
@@ -321,7 +321,7 @@ If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimat
 
 When launching `sdd-apply`, include the resolved `delivery_strategy`, `chain_strategy`, and any chosen PR boundary/exception in the prompt.
 
-### Artifact store (engram default)
+### Artifact store (openspec default)
 
 | Artifact | Topic key |
 |----------|-----------|
