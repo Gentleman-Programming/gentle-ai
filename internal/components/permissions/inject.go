@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
@@ -184,12 +185,19 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	merged := filemerge.UpsertTopLevelTOMLString(string(baseTOML), "approval_policy", "on-request")
 	merged = filemerge.UpsertTopLevelTOMLString(merged, "default_permissions", "gentle-dev")
 	merged = filemerge.RemoveTOMLTableKeys(merged, "permissions.gentle-dev", []string{"extends"})
-	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev", "description", `"Comfortable local development profile with workspace writes, network access, Git metadata writes, Nix/Home Manager support, and secret-file protections."`)
+	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev", "description", `"Comfortable local development profile with workspace writes, network access, and read-only access to Git and Nix/Home Manager metadata."`)
 	merged = filemerge.RemoveTOMLTableKeys(merged, "permissions.gentle-dev", []string{"glob_scan_max_depth"})
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network", "enabled", "true")
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network.domains", `"*"`, `"allow"`)
 
 	merged = filemerge.RemoveTOMLTableKeys(merged, `permissions.gentle-dev.filesystem.":root"`, []string{`"."`})
+	merged = filemerge.RemoveTOMLTableKeys(merged, "permissions.gentle-dev.filesystem", []string{
+		"glob_scan_max_depth",
+		`":tmpdir"`,
+		`":slash_tmp"`,
+	})
+	merged = removeTOMLTable(merged, `permissions.gentle-dev.filesystem.":workspace_roots"`)
+
 	readPaths := []string{
 		`":minimal"`,
 		`"~/.config/git"`,
@@ -200,45 +208,11 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	if codexPermissionsGOOS != "windows" {
 		readPaths = append(readPaths, `"/nix/store"`)
 	}
-	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", "glob_scan_max_depth", "6")
 	for _, path := range readPaths {
 		merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", path, `"read"`)
 	}
-	for _, path := range []string{
-		`":tmpdir"`,
-		`":slash_tmp"`,
-	} {
-		merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", path, `"write"`)
-	}
 
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.workspace_roots", `"~"`, "true")
-
-	workspaceRootsSection := `permissions.gentle-dev.filesystem.":workspace_roots"`
-	merged = filemerge.RemoveTOMLTableKeys(merged, workspaceRootsSection, []string{
-		`"**/.git"`,
-		`"**/.git/**"`,
-		`"**/.env.*"`,
-		`"*.env.*"`,
-	})
-	merged = filemerge.UpsertTOMLTableKey(merged, workspaceRootsSection, `"."`, `"write"`)
-	merged = filemerge.UpsertTOMLTableKey(merged, workspaceRootsSection, `".git/**"`, `"write"`)
-
-	for _, pattern := range []string{
-		`"**/.env"`,
-		`"**/.env.local"`,
-		`"**/.env.*.local"`,
-		`"**/.aws/credentials"`,
-		`"**/.config/gh/hosts.yml"`,
-		`"**/.credentials/**"`,
-		`"**/.ssh/**"`,
-		`"**/Library/Keychains/**"`,
-		`"**/credentials.json"`,
-		`"**/*.pem"`,
-		`"**/*.key"`,
-		`"**/secrets/**"`,
-	} {
-		merged = filemerge.UpsertTOMLTableKey(merged, workspaceRootsSection, pattern, `"deny"`)
-	}
 
 	writeResult, err := filemerge.WriteFileAtomic(configPath, []byte(merged), 0o644)
 	if err != nil {
@@ -246,6 +220,32 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	}
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{configPath}}, nil
+}
+
+func removeTOMLTable(content, section string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	header := "[" + section + "]"
+	lines := strings.Split(content, "\n")
+	out := make([]string, 0, len(lines))
+	inSection := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == header {
+			inSection = true
+			continue
+		}
+		if inSection {
+			if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+				inSection = false
+			} else {
+				continue
+			}
+		}
+		out = append(out, line)
+	}
+
+	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {

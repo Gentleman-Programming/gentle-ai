@@ -458,14 +458,13 @@ func TestTuiSyncIncludesCodexPermissions(t *testing.T) {
 		t.Fatalf("ReadFile(%s): %v", configPath, err)
 	}
 	text := string(body)
-	if !strings.Contains(text, `[permissions.gentle-dev.filesystem]`) || !strings.Contains(text, `glob_scan_max_depth = 6`) {
-		t.Fatalf("Codex permissions sync should add glob_scan_max_depth to filesystem profile; got:\n%s", text)
+	if !strings.Contains(text, `[permissions.gentle-dev.filesystem]`) || !strings.Contains(text, `":minimal" = "read"`) {
+		t.Fatalf("Codex permissions sync should add valid filesystem reads; got:\n%s", text)
 	}
-	if count := strings.Count(text, `glob_scan_max_depth = 6`); count != 1 {
-		t.Fatalf("glob_scan_max_depth count = %d, want 1; got:\n%s", count, text)
-	}
-	if !strings.Contains(text, `"**/*.key" = "deny"`) || !strings.Contains(text, `"**/*.pem" = "deny"`) {
-		t.Fatalf("Codex permissions sync should preserve deny rules; got:\n%s", text)
+	for _, invalid := range []string{`glob_scan_max_depth = 6`, `":slash_tmp" = "write"`, `":tmpdir" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`, `"**/*.key" = "deny"`, `"**/*.pem" = "deny"`} {
+		if strings.Contains(text, invalid) {
+			t.Fatalf("Codex permissions sync should remove invalid entry %q; got:\n%s", invalid, text)
+		}
 	}
 
 	changed, err = tuiSync(home)(nil)
@@ -477,8 +476,10 @@ func TestTuiSyncIncludesCodexPermissions(t *testing.T) {
 		t.Fatalf("ReadFile(%s) after second sync: %v", configPath, err)
 	}
 	text = string(body)
-	if count := strings.Count(text, `glob_scan_max_depth = 6`); count != 1 {
-		t.Fatalf("second sync glob_scan_max_depth count = %d, want 1; got:\n%s", count, text)
+	for _, invalid := range []string{`glob_scan_max_depth = 6`, `":slash_tmp" = "write"`, `":tmpdir" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`} {
+		if strings.Contains(text, invalid) {
+			t.Fatalf("second sync should keep invalid entry %q removed; got:\n%s", invalid, text)
+		}
 	}
 }
 
@@ -512,11 +513,13 @@ func TestTuiSyncIncludesCodexPermissionsForTargetedOverrides(t *testing.T) {
 		t.Fatalf("ReadFile(%s): %v", configPath, err)
 	}
 	text := string(body)
-	if count := strings.Count(text, `glob_scan_max_depth = 6`); count != 1 {
-		t.Fatalf("targeted sync glob_scan_max_depth count = %d, want 1; got:\n%s", count, text)
+	if !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `[permissions.gentle-dev.workspace_roots]`) {
+		t.Fatalf("targeted sync should add valid Codex permissions profile; got:\n%s", text)
 	}
-	if !strings.Contains(text, `"**/*.key" = "deny"`) {
-		t.Fatalf("targeted sync should preserve Codex deny rules; got:\n%s", text)
+	for _, invalid := range []string{`glob_scan_max_depth = 6`, `":slash_tmp" = "write"`, `":tmpdir" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`, `"**/*.key" = "deny"`} {
+		if strings.Contains(text, invalid) {
+			t.Fatalf("targeted sync should remove invalid entry %q; got:\n%s", invalid, text)
+		}
 	}
 }
 
@@ -1749,11 +1752,13 @@ func TestRunArgsPendingSyncRepairsCodexPermissions(t *testing.T) {
 		t.Fatalf("ReadFile(%s): %v", configPath, err)
 	}
 	text := string(body)
-	if count := strings.Count(text, `glob_scan_max_depth = 6`); count != 1 {
-		t.Fatalf("deferred sync glob_scan_max_depth count = %d, want 1; got:\n%s", count, text)
+	if !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `[permissions.gentle-dev.workspace_roots]`) {
+		t.Fatalf("deferred sync should add valid Codex permissions profile; got:\n%s", text)
 	}
-	if !strings.Contains(text, `"**/*.key" = "deny"`) || !strings.Contains(text, `"**/*.pem" = "deny"`) {
-		t.Fatalf("deferred sync should preserve Codex deny rules; got:\n%s", text)
+	for _, invalid := range []string{`glob_scan_max_depth = 6`, `":slash_tmp" = "write"`, `":tmpdir" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`, `"**/*.key" = "deny"`, `"**/*.pem" = "deny"`} {
+		if strings.Contains(text, invalid) {
+			t.Fatalf("deferred sync should remove invalid entry %q; got:\n%s", invalid, text)
+		}
 	}
 
 	s, err := state.Read(home)

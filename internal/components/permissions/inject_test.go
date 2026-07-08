@@ -346,7 +346,6 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 		`approval_policy = "on-request"`,
 		`default_permissions = "gentle-dev"`,
 		`[permissions.gentle-dev]`,
-		`glob_scan_max_depth = 6`,
 		`[permissions.gentle-dev.network]`,
 		`enabled = true`,
 		`[permissions.gentle-dev.network.domains]`,
@@ -358,41 +357,28 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 		`"~/.local/state/nix/profiles/home-manager/home-path" = "read"`,
 		`"~/.nix-profile" = "read"`,
 		`"/nix/store" = "read"`,
-		`":tmpdir" = "write"`,
-		`":slash_tmp" = "write"`,
 		`[permissions.gentle-dev.workspace_roots]`,
 		`"~" = true`,
-		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
-		`"." = "write"`,
-		`".git/**" = "write"`,
-		`"**/.env" = "deny"`,
-		`"**/.env.local" = "deny"`,
-		`"**/.env.*.local" = "deny"`,
-		`"**/.aws/credentials" = "deny"`,
-		`"**/.config/gh/hosts.yml" = "deny"`,
-		`"**/.credentials/**" = "deny"`,
-		`"**/.ssh/**" = "deny"`,
-		`"**/Library/Keychains/**" = "deny"`,
-		`"**/credentials.json" = "deny"`,
-		`"**/*.pem" = "deny"`,
-		`"**/*.key" = "deny"`,
-		`"**/secrets/**" = "deny"`,
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(text, want) {
 			t.Fatalf("config.toml missing %q; got:\n%s", want, text)
 		}
 	}
-	if !strings.Contains(tomlSection(text, "[permissions.gentle-dev.filesystem]"), `glob_scan_max_depth = 6`) {
-		t.Fatalf("config.toml should set glob_scan_max_depth in the filesystem profile; got:\n%s", text)
-	}
-	if strings.Contains(tomlSection(text, "[permissions.gentle-dev]"), `glob_scan_max_depth = 6`) {
-		t.Fatalf("config.toml should not set glob_scan_max_depth in the permissions profile; got:\n%s", text)
-	}
-
-	for _, invalidGitRule := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`, `".git" = "write"`} {
-		if strings.Contains(text, invalidGitRule) {
-			t.Fatalf("config.toml contains invalid or redundant Codex permissions git rule %q; got:\n%s", invalidGitRule, text)
+	for _, invalid := range []string{
+		`glob_scan_max_depth = 6`,
+		`":tmpdir" = "write"`,
+		`":slash_tmp" = "write"`,
+		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
+		`"." = "write"`,
+		`".git/**" = "write"`,
+		`"**/.git" = "write"`,
+		`"**/.git/**" = "write"`,
+		`"**/.env" = "deny"`,
+		`"**/*.pem" = "deny"`,
+	} {
+		if strings.Contains(text, invalid) {
+			t.Fatalf("config.toml contains invalid Codex permission entry %q; got:\n%s", invalid, text)
 		}
 	}
 	if strings.Contains(text, `extends = ":workspace"`) {
@@ -518,24 +504,19 @@ args = ["mcp", "--tools=agent"]
 		"[permissions.gentle-dev.network]",
 		"[permissions.gentle-dev.network.domains]",
 		"[permissions.gentle-dev.workspace_roots]",
-		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
 	} {
 		if count := strings.Count(text, section); count != 1 {
 			t.Fatalf("section %q count = %d, want 1; got:\n%s", section, count, text)
 		}
 	}
-	if count := strings.Count(text, `glob_scan_max_depth = 6`); count != 1 {
-		t.Fatalf("glob_scan_max_depth count = %d, want 1; got:\n%s", count, text)
-	}
-	if !strings.Contains(tomlSection(text, "[permissions.gentle-dev.filesystem]"), `glob_scan_max_depth = 6`) {
-		t.Fatalf("config.toml should keep glob_scan_max_depth in the filesystem profile; got:\n%s", text)
-	}
-	if strings.Contains(tomlSection(text, "[permissions.gentle-dev]"), `glob_scan_max_depth = 6`) {
-		t.Fatalf("config.toml should not keep glob_scan_max_depth in the permissions profile; got:\n%s", text)
+	for _, invalid := range []string{`glob_scan_max_depth = 6`, `":tmpdir" = "write"`, `":slash_tmp" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`} {
+		if strings.Contains(text, invalid) {
+			t.Fatalf("config.toml should remove stale invalid entry %q; got:\n%s", invalid, text)
+		}
 	}
 }
 
-func TestInjectCodexPermissionsRemovesInvalidGitWriteRules(t *testing.T) {
+func TestInjectCodexPermissionsRemovesInvalidWorkspaceRootsTable(t *testing.T) {
 	home := t.TempDir()
 	configPath := filepath.Join(home, ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
@@ -566,36 +547,21 @@ func TestInjectCodexPermissionsRemovesInvalidGitWriteRules(t *testing.T) {
 	}
 	text := string(content)
 
-	if !strings.Contains(text, `".git/**" = "write"`) {
-		t.Fatalf("config.toml missing valid git write rule; got:\n%s", text)
-	}
-	for _, invalidGitRule := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`} {
-		if strings.Contains(text, invalidGitRule) {
-			t.Fatalf("config.toml still contains invalid git write rule %q; got:\n%s", invalidGitRule, text)
-		}
-	}
-
-	for _, denyRule := range []string{
+	for _, invalid := range []string{
+		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
+		`"**/.git" = "write"`,
+		`"**/.git/**" = "write"`,
 		`"**/.env" = "deny"`,
-		`"**/.env.local" = "deny"`,
-		`"**/.env.*.local" = "deny"`,
-		`"**/.aws/credentials" = "deny"`,
-		`"**/.config/gh/hosts.yml" = "deny"`,
-		`"**/.credentials/**" = "deny"`,
-		`"**/.ssh/**" = "deny"`,
-		`"**/Library/Keychains/**" = "deny"`,
-		`"**/credentials.json" = "deny"`,
 		`"**/*.pem" = "deny"`,
 		`"**/*.key" = "deny"`,
-		`"**/secrets/**" = "deny"`,
 	} {
-		if strings.Count(text, denyRule) != 1 {
-			t.Fatalf("config.toml should preserve deny rule %q exactly once; got:\n%s", denyRule, text)
+		if strings.Contains(text, invalid) {
+			t.Fatalf("config.toml still contains invalid workspace_roots entry %q; got:\n%s", invalid, text)
 		}
 	}
 }
 
-func TestInjectCodexPermissionsRemovesObsoleteBroadEnvDenyRules(t *testing.T) {
+func TestInjectCodexPermissionsRemovesObsoleteWorkspaceRootDenyRules(t *testing.T) {
 	home := t.TempDir()
 	configPath := filepath.Join(home, ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
@@ -623,14 +589,16 @@ func TestInjectCodexPermissionsRemovesObsoleteBroadEnvDenyRules(t *testing.T) {
 	}
 	text := string(content)
 
-	for _, obsolete := range []string{`"**/.env.*" = "deny"`, `"*.env.*" = "deny"`} {
+	for _, obsolete := range []string{
+		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
+		`"**/.env.*" = "deny"`,
+		`"*.env.*" = "deny"`,
+		`"**/.env" = "deny"`,
+		`"**/.env.local" = "deny"`,
+		`"**/.env.*.local" = "deny"`,
+	} {
 		if strings.Contains(text, obsolete) {
-			t.Fatalf("config.toml still contains obsolete broad env deny rule %q; got:\n%s", obsolete, text)
-		}
-	}
-	for _, current := range []string{`"**/.env" = "deny"`, `"**/.env.local" = "deny"`, `"**/.env.*.local" = "deny"`} {
-		if strings.Count(text, current) != 1 {
-			t.Fatalf("config.toml should preserve current env deny rule %q exactly once; got:\n%s", current, text)
+			t.Fatalf("config.toml still contains obsolete workspace root deny entry %q; got:\n%s", obsolete, text)
 		}
 	}
 }
