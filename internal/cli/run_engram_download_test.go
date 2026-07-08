@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,6 +106,83 @@ func TestRunInstallEngramDownloadAddsBinDirToPath(t *testing.T) {
 	}
 }
 
+func TestRunInstallFreshEngramDownloadUsesDownloadedBinaryForVersionProbeAndSetup(t *testing.T) {
+	home := t.TempDir()
+	fakeBinDir := filepath.Join(home, "engram-bin")
+	fakeBinaryPath := filepath.Join(fakeBinDir, "engram")
+
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	restoreAddUserPath := addUserPath
+	restoreVerifyVersionCommand := verifyEngramVersionCommand
+	restoreProbeCommand := probeEngramProtocolFlagCommand
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		addUserPath = restoreAddUserPath
+		verifyEngramVersionCommand = restoreVerifyVersionCommand
+		probeEngramProtocolFlagCommand = restoreProbeCommand
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = missingBinaryLookPath
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+	addUserPath = func(dir string) error {
+		if dir != fakeBinDir {
+			t.Fatalf("addUserPath() dir = %q, want %q", dir, fakeBinDir)
+		}
+		return os.ErrPermission
+	}
+	var versionCommand string
+	verifyEngramVersionCommand = func(command string) (string, error) {
+		versionCommand = command
+		return "engram 1.18.0", nil
+	}
+	var probeCommand string
+	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
+		probeCommand = command
+		return "Usage: engram setup <slug> [--protocol=slim|full]\n", nil
+	}
+
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return fakeBinaryPath, nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
+
+	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
+	_, err := RunInstall(
+		[]string{"--agent", "opencode", "--component", "engram"},
+		detection,
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	commands := recorder.get()
+	foundSetupWithDownloadedBinary := false
+	for _, cmd := range commands {
+		if strings.HasPrefix(cmd, fakeBinaryPath+" setup ") {
+			foundSetupWithDownloadedBinary = true
+		}
+		if strings.HasPrefix(cmd, "engram setup ") {
+			t.Fatalf("engram setup should use downloaded binary %q, got commands: %v", fakeBinaryPath, commands)
+		}
+	}
+	if !foundSetupWithDownloadedBinary {
+		t.Fatalf("expected setup to use downloaded binary %q, got commands: %v", fakeBinaryPath, commands)
+	}
+	if versionCommand != fakeBinaryPath {
+		t.Fatalf("expected version gate to use downloaded binary %q, got %q", fakeBinaryPath, versionCommand)
+	}
+	if probeCommand != fakeBinaryPath {
+		t.Fatalf("expected protocol probe to use downloaded binary %q, got %q", fakeBinaryPath, probeCommand)
+	}
+}
+
 // TestRunInstallWindowsEngramUsesDownloadNotGoInstall verifies Windows path.
 func TestRunInstallWindowsEngramUsesDownloadNotGoInstall(t *testing.T) {
 	home := t.TempDir()
@@ -198,6 +276,8 @@ func TestRunInstallWindowsRefreshesEngramWhenDuplicatePathEntriesShadowManagedBi
 	restorePathEntries := pathEnvEntries
 	restoreEnsureUserPathFirst := ensureUserPathFirst
 	restoreUserPathEntries := userPathEntries
+	restoreVerifyVersionCommand := verifyEngramVersionCommand
+	restoreProbeCommand := probeEngramProtocolFlagCommand
 	restorePath := os.Getenv("PATH")
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
@@ -206,6 +286,8 @@ func TestRunInstallWindowsRefreshesEngramWhenDuplicatePathEntriesShadowManagedBi
 		pathEnvEntries = restorePathEntries
 		ensureUserPathFirst = restoreEnsureUserPathFirst
 		userPathEntries = restoreUserPathEntries
+		verifyEngramVersionCommand = restoreVerifyVersionCommand
+		probeEngramProtocolFlagCommand = restoreProbeCommand
 		os.Setenv("PATH", restorePath)
 	})
 
@@ -224,6 +306,16 @@ func TestRunInstallWindowsRefreshesEngramWhenDuplicatePathEntriesShadowManagedBi
 	}
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
+	var versionCommand string
+	verifyEngramVersionCommand = func(command string) (string, error) {
+		versionCommand = command
+		return "engram 1.18.0", nil
+	}
+	var probeCommand string
+	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
+		probeCommand = command
+		return "Usage: engram setup <slug> [--protocol=slim|full]\n", nil
+	}
 	var repairedPath string
 	ensureUserPathFirst = func(dir string) error {
 		repairedPath = dir
@@ -274,6 +366,12 @@ func TestRunInstallWindowsRefreshesEngramWhenDuplicatePathEntriesShadowManagedBi
 	}
 	if !foundSetupWithManagedBinary {
 		t.Fatalf("expected engram setup to use refreshed managed binary %q, got commands: %v", managedBinary, commands)
+	}
+	if versionCommand != managedBinary {
+		t.Fatalf("expected version gate to use refreshed managed binary %q, got %q", managedBinary, versionCommand)
+	}
+	if probeCommand != managedBinary {
+		t.Fatalf("expected protocol probe to use refreshed managed binary %q, got %q", managedBinary, probeCommand)
 	}
 }
 
@@ -507,11 +605,15 @@ func TestRunInstallBetaEngramUsesMainGoInstallAndInstalledBinary(t *testing.T) {
 	restoreLookPath := cmdLookPath
 	restoreGoEnv := goEnv
 	restorePath := os.Getenv("PATH")
+	restoreVerifyVersionCommand := verifyEngramVersionCommand
+	restoreProbeCommand := probeEngramProtocolFlagCommand
 	t.Cleanup(func() {
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
 		goEnv = restoreGoEnv
 		os.Setenv("PATH", restorePath)
+		verifyEngramVersionCommand = restoreVerifyVersionCommand
+		probeEngramProtocolFlagCommand = restoreProbeCommand
 	})
 
 	cmdLookPath = func(name string) (string, error) {
@@ -525,6 +627,16 @@ func TestRunInstallBetaEngramUsesMainGoInstallAndInstalledBinary(t *testing.T) {
 	}
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
+	var versionCommand string
+	verifyEngramVersionCommand = func(command string) (string, error) {
+		versionCommand = command
+		return "engram 1.18.0", nil
+	}
+	var probeCommand string
+	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
+		probeCommand = command
+		return "Usage: engram setup <slug> [--protocol=slim|full]\n", nil
+	}
 
 	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
 	_, err := RunInstall(
@@ -551,6 +663,12 @@ func TestRunInstallBetaEngramUsesMainGoInstallAndInstalledBinary(t *testing.T) {
 	}
 	if !foundSetupWithBetaBinary {
 		t.Fatalf("expected setup to use beta engram binary %q, got commands: %v", betaEngram, commands)
+	}
+	if versionCommand != betaEngram {
+		t.Fatalf("expected version gate to use beta engram binary %q, got %q", betaEngram, versionCommand)
+	}
+	if probeCommand != betaEngram {
+		t.Fatalf("expected protocol probe to use beta engram binary %q, got %q", betaEngram, probeCommand)
 	}
 }
 

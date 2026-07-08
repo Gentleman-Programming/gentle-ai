@@ -24,6 +24,65 @@ func TestUpsertCodexEngramBlock_Empty(t *testing.T) {
 	}
 }
 
+func TestRemoveTOMLTable(t *testing.T) {
+	input := "model = \"gpt-5.5\"\n\n[mcp_servers.engram]\ncommand = \"engram\"\nargs = [\"mcp\"]\n\n[other]\nvalue = true\n"
+	got := RemoveTOMLTable(input, "mcp_servers.engram")
+	if strings.Contains(got, "[mcp_servers.engram]") || strings.Contains(got, "command = \"engram\"") {
+		t.Fatalf("RemoveTOMLTable() kept removed table; got:\n%s", got)
+	}
+	if !strings.Contains(got, "model = \"gpt-5.5\"") || !strings.Contains(got, "[other]") {
+		t.Fatalf("RemoveTOMLTable() did not preserve unrelated content; got:\n%s", got)
+	}
+}
+
+func TestRemoveTOMLTable_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		tableName string
+		want      string
+	}{
+		{
+			name:      "table at EOF without trailing newline",
+			input:     "model = \"gpt-5.5\"\n\n[mcp_servers.engram]\ncommand = \"engram\"",
+			tableName: "mcp_servers.engram",
+			want:      "model = \"gpt-5.5\"\n",
+		},
+		{
+			name:      "absent table preserves LF content unchanged",
+			input:     "model = \"gpt-5.5\"\n\n[other]\nvalue = true\n",
+			tableName: "mcp_servers.engram",
+			want:      "model = \"gpt-5.5\"\n\n[other]\nvalue = true\n",
+		},
+		{
+			name:      "preserves top-level and next table boundaries",
+			input:     "model = \"gpt-5.5\"\n\n[mcp_servers.engram]\ncommand = \"engram\"\n\n[other]\nvalue = true\n",
+			tableName: "mcp_servers.engram",
+			want:      "model = \"gpt-5.5\"\n\n[other]\nvalue = true\n",
+		},
+		{
+			name:      "adjacent tables keep following table",
+			input:     "[mcp_servers.engram]\ncommand = \"engram\"\n[other]\nvalue = true\n",
+			tableName: "mcp_servers.engram",
+			want:      "[other]\nvalue = true\n",
+		},
+		{
+			name:      "CRLF input is normalized to LF",
+			input:     "model = \"gpt-5.5\"\r\n\r\n[mcp_servers.engram]\r\ncommand = \"engram\"\r\n[other]\r\nvalue = true\r\n",
+			tableName: "mcp_servers.engram",
+			want:      "model = \"gpt-5.5\"\n\n[other]\nvalue = true\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RemoveTOMLTable(tt.input, tt.tableName); got != tt.want {
+				t.Fatalf("RemoveTOMLTable() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestUpsertCodexEngramBlock_ExistingBlock(t *testing.T) {
 	input := `[other_section]
 key = "value"

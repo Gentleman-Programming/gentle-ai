@@ -288,6 +288,35 @@ func RemoveTOMLTableKeys(content, section string, keys []string) string {
 	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
 }
 
+// RemoveTOMLTable removes a complete single TOML table and its key-value lines.
+// It preserves every other table and top-level key verbatim, normalizing CRLF to
+// LF like the other string-based TOML merge helpers in this package.
+func RemoveTOMLTable(content, tableName string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	lines := strings.Split(content, "\n")
+	header := "[" + tableName + "]"
+
+	kept := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == header {
+			i++
+			for i < len(lines) {
+				next := strings.TrimSpace(lines[i])
+				if strings.HasPrefix(next, "[") && strings.HasSuffix(next, "]") {
+					break
+				}
+				i++
+			}
+			continue
+		}
+		kept = append(kept, lines[i])
+		i++
+	}
+
+	return strings.Join(kept, "\n")
+}
+
 // UpsertTopLevelTOMLString inserts or replaces a top-level key = "value" pair
 // in TOML content. The key is placed before the first [section] header so it
 // remains a top-level (non-table) setting. Existing occurrences of the key are

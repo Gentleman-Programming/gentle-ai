@@ -458,10 +458,10 @@ func TestTuiSyncIncludesCodexPermissions(t *testing.T) {
 		t.Fatalf("ReadFile(%s): %v", configPath, err)
 	}
 	text := string(body)
-	if !strings.Contains(text, `[permissions.gentle-dev.filesystem]`) || !strings.Contains(text, `":minimal" = "read"`) {
+	if !strings.Contains(text, `[permissions.gentle-dev.filesystem]`) || !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `"**/*.key" = "deny"`) {
 		t.Fatalf("Codex permissions sync should add valid filesystem reads; got:\n%s", text)
 	}
-	for _, invalid := range []string{`glob_scan_max_depth = 6`, `":slash_tmp" = "write"`, `":tmpdir" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`, `"**/*.key" = "deny"`, `"**/*.pem" = "deny"`} {
+	for _, invalid := range []string{`":slash_tmp" = "write"`, `":tmpdir" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`} {
 		if strings.Contains(text, invalid) {
 			t.Fatalf("Codex permissions sync should remove invalid entry %q; got:\n%s", invalid, text)
 		}
@@ -476,7 +476,7 @@ func TestTuiSyncIncludesCodexPermissions(t *testing.T) {
 		t.Fatalf("ReadFile(%s) after second sync: %v", configPath, err)
 	}
 	text = string(body)
-	for _, invalid := range []string{`glob_scan_max_depth = 6`, `":slash_tmp" = "write"`, `":tmpdir" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`} {
+	for _, invalid := range []string{`":slash_tmp" = "write"`, `":tmpdir" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`} {
 		if strings.Contains(text, invalid) {
 			t.Fatalf("second sync should keep invalid entry %q removed; got:\n%s", invalid, text)
 		}
@@ -513,10 +513,10 @@ func TestTuiSyncIncludesCodexPermissionsForTargetedOverrides(t *testing.T) {
 		t.Fatalf("ReadFile(%s): %v", configPath, err)
 	}
 	text := string(body)
-	if !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `[permissions.gentle-dev.workspace_roots]`) {
+	if !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `[permissions.gentle-dev.workspace_roots]`) || !strings.Contains(text, `"**/*.key" = "deny"`) {
 		t.Fatalf("targeted sync should add valid Codex permissions profile; got:\n%s", text)
 	}
-	for _, invalid := range []string{`glob_scan_max_depth = 6`, `":slash_tmp" = "write"`, `":tmpdir" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`, `"**/*.key" = "deny"`} {
+	for _, invalid := range []string{`":slash_tmp" = "write"`, `":tmpdir" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`} {
 		if strings.Contains(text, invalid) {
 			t.Fatalf("targeted sync should remove invalid entry %q; got:\n%s", invalid, text)
 		}
@@ -1752,10 +1752,10 @@ func TestRunArgsPendingSyncRepairsCodexPermissions(t *testing.T) {
 		t.Fatalf("ReadFile(%s): %v", configPath, err)
 	}
 	text := string(body)
-	if !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `[permissions.gentle-dev.workspace_roots]`) {
+	if !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `[permissions.gentle-dev.workspace_roots]`) || !strings.Contains(text, `"**/*.key" = "deny"`) {
 		t.Fatalf("deferred sync should add valid Codex permissions profile; got:\n%s", text)
 	}
-	for _, invalid := range []string{`glob_scan_max_depth = 6`, `":slash_tmp" = "write"`, `":tmpdir" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`, `"**/*.key" = "deny"`, `"**/*.pem" = "deny"`} {
+	for _, invalid := range []string{`":slash_tmp" = "write"`, `":tmpdir" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`} {
 		if strings.Contains(text, invalid) {
 			t.Fatalf("deferred sync should remove invalid entry %q; got:\n%s", invalid, text)
 		}

@@ -14,6 +14,59 @@ func TestInjectMarkdownSection_EmptyFile(t *testing.T) {
 	}
 }
 
+func TestExtractHTMLCommentSection(t *testing.T) {
+	content := "before\n<!-- section:model-small -->\nsmall body\n<!-- /section:model-small -->\nafter\n"
+	if got := ExtractHTMLCommentSection(content, "model-small"); got != "small body\n" {
+		t.Fatalf("ExtractHTMLCommentSection() = %q, want section body", got)
+	}
+	if got := ExtractHTMLCommentSection(content, "missing"); got != content {
+		t.Fatalf("ExtractHTMLCommentSection() missing = %q, want original content", got)
+	}
+}
+
+func TestExtractHTMLCommentSection_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "lone start marker returns original content",
+			content: "before\n<!-- section:model-small -->\nsmall body\n",
+		},
+		{
+			name:    "lone end marker returns original content",
+			content: "before\n<!-- /section:model-small -->\nafter\n",
+		},
+		{
+			name:    "reversed markers return original content",
+			content: "<!-- /section:model-small -->\nbody\n<!-- section:model-small -->\n",
+		},
+		{
+			name:    "repeated sections extract the first complete section",
+			content: "<!-- section:model-small -->\nfirst\n<!-- /section:model-small -->\n<!-- section:model-small -->\nsecond\n<!-- /section:model-small -->\n",
+			want:    "first\n",
+		},
+		{
+			name:    "extra trailing end marker is ignored after first pair",
+			content: "<!-- section:model-small -->\nbody\n<!-- /section:model-small -->\n<!-- /section:model-small -->\n",
+			want:    "body\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := tt.want
+			if want == "" {
+				want = tt.content
+			}
+			if got := ExtractHTMLCommentSection(tt.content, "model-small"); got != want {
+				t.Fatalf("ExtractHTMLCommentSection() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestInjectMarkdownSection_AppendToExistingContent(t *testing.T) {
 	existing := "# My Config\n\nSome existing content.\n"
 	result := InjectMarkdownSection(existing, "persona", "You are a senior architect.\n")

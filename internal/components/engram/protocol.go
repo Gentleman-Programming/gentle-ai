@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
@@ -35,23 +36,8 @@ func protocolAssetContent() string {
 	return assets.MustRead(engramProtocolAssetPath)
 }
 
-// extractProtocolSection extracts the content between a paired
-// <!-- section:NAME --> ... <!-- /section:NAME --> marker pair. Marker logic
-// mirrors sdd.extractModelSection (internal/components/sdd/profiles.go) but
-// is kept local to this package to avoid cross-package coupling, per
-// design.md Decision 3. A lone or missing marker pair falls back to
-// returning the full content unchanged (same fallback behavior as the
-// mirrored implementation).
 func extractProtocolSection(content, name string) string {
-	openMarker := "<!-- section:" + name + " -->"
-	closeMarker := "<!-- /section:" + name + " -->"
-	start := strings.Index(content, openMarker)
-	end := strings.Index(content, closeMarker)
-	if start == -1 || end == -1 || end <= start {
-		return content
-	}
-	afterOpen := start + len(openMarker)
-	return strings.TrimLeft(content[afterOpen:end], " \t\r\n")
+	return filemerge.ExtractHTMLCommentSection(content, name)
 }
 
 // protocolFull returns the full Engram protocol section, byte-identical to

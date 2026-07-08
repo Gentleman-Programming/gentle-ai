@@ -135,13 +135,5 @@ func SkillPathForAgent(homeDir string, adapter agents.Adapter, id model.SkillID)
 // and <!-- section:model-small --> markers. If no matching section is found,
 // the full content is returned.
 func extractModelSection(content, capability string) string {
-	openMarker := "<!-- section:model-" + capability + " -->"
-	closeMarker := "<!-- /section:model-" + capability + " -->"
-	start := strings.Index(content, openMarker)
-	end := strings.Index(content, closeMarker)
-	if start == -1 || end == -1 || end <= start {
-		return content // fallback: return full content
-	}
-	afterOpen := start + len(openMarker)
-	return strings.TrimLeft(content[afterOpen:end], " \t\r\n")
+	return filemerge.ExtractHTMLCommentSection(content, "model-"+capability)
 }

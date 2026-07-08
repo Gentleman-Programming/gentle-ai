@@ -37,12 +37,13 @@ const protocolProbeTimeout = 5 * time.Second
 // prior hand-rolled version was reproducibly racy under `go test -race` and
 // could leak the child process if ctx fired before Process was set).
 //
-// Invariant: this assumes the process PATH already points at the intended
-// engram binary (see the install-branch PATH management in
-// componentApplyStep.Run, internal/cli/run.go) — same invariant as
-// runVersionCommand below (JD-019).
-var runProtocolProbeCommand = func(ctx context.Context) ([]byte, error) {
-	cmd := execCommandContext(ctx, "engram", "setup", "--help")
+// The command argument is the already-resolved engram binary for install paths
+// that must avoid PATH shadowing; empty falls back to "engram".
+var runProtocolProbeCommand = func(ctx context.Context, command string) ([]byte, error) {
+	if strings.TrimSpace(command) == "" {
+		command = "engram"
+	}
+	cmd := execCommandContext(ctx, command, "setup", "--help")
 	cmd.Stdin = nil // explicit: never attach a TTY, avoids blocking on interactive input
 	return cmd.Output()
 }
@@ -55,10 +56,17 @@ var runProtocolProbeCommand = func(ctx context.Context) ([]byte, error) {
 // fall back to today's behavior (design.md Decision 4). Setup invocation
 // itself MUST NOT fail as a result of this detection.
 func ProbeProtocolFlag(ctx context.Context) (string, error) {
+	return ProbeProtocolFlagCommand(ctx, "engram")
+}
+
+// ProbeProtocolFlagCommand is like ProbeProtocolFlag but probes the provided
+// engram command path so beta installs and repaired Windows binaries use the
+// same binary for setup, protocol detection, and version gating.
+func ProbeProtocolFlagCommand(ctx context.Context, command string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, protocolProbeTimeout)
 	defer cancel()
 
-	out, err := runProtocolProbeCommand(ctx)
+	out, err := runProtocolProbeCommand(ctx, command)
 	if err != nil {
 		return "", fmt.Errorf("probe engram setup --help: %w", err)
 	}

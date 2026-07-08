@@ -43,7 +43,7 @@ func TestRunProtocolProbeCommandRealProcessDeadline(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := runProtocolProbeCommand(ctx)
+	_, err := runProtocolProbeCommand(ctx, "engram")
 	elapsed := time.Since(start)
 
 	if err == nil {

@@ -4,6 +4,21 @@ import (
 	"strings"
 )
 
+// ExtractHTMLCommentSection extracts the content between a paired
+// <!-- section:NAME --> ... <!-- /section:NAME --> marker pair. A missing,
+// lone, or reversed marker pair returns the full content unchanged.
+func ExtractHTMLCommentSection(content, name string) string {
+	openMarker := "<!-- section:" + name + " -->"
+	closeMarker := "<!-- /section:" + name + " -->"
+	start := strings.Index(content, openMarker)
+	end := strings.Index(content, closeMarker)
+	if start == -1 || end == -1 || end <= start {
+		return content
+	}
+	afterOpen := start + len(openMarker)
+	return strings.TrimLeft(content[afterOpen:end], " \t\r\n")
+}
+
 const (
 	markerPrefix = "<!-- gentle-ai:"
 	markerSuffix = " -->"

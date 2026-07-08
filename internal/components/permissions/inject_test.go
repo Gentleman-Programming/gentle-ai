@@ -357,6 +357,18 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 		`"~/.local/state/nix/profiles/home-manager/home-path" = "read"`,
 		`"~/.nix-profile" = "read"`,
 		`"/nix/store" = "read"`,
+		`glob_scan_max_depth = 6`,
+		`"**/.env" = "deny"`,
+		`"**/.env.local" = "deny"`,
+		`"**/.env.*.local" = "deny"`,
+		`"**/*.pem" = "deny"`,
+		`"**/*.key" = "deny"`,
+		`"**/secrets/**" = "deny"`,
+		`"**/.ssh/**" = "deny"`,
+		`"**/.credentials/**" = "deny"`,
+		`"**/credentials.json" = "deny"`,
+		`"**/.aws/credentials" = "deny"`,
+		`"**/.config/gh/hosts.yml" = "deny"`,
 		`[permissions.gentle-dev.workspace_roots]`,
 		`"~" = true`,
 	}
@@ -366,7 +378,6 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 		}
 	}
 	for _, invalid := range []string{
-		`glob_scan_max_depth = 6`,
 		`":tmpdir" = "write"`,
 		`":slash_tmp" = "write"`,
 		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
@@ -374,8 +385,6 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 		`".git/**" = "write"`,
 		`"**/.git" = "write"`,
 		`"**/.git/**" = "write"`,
-		`"**/.env" = "deny"`,
-		`"**/*.pem" = "deny"`,
 	} {
 		if strings.Contains(text, invalid) {
 			t.Fatalf("config.toml contains invalid Codex permission entry %q; got:\n%s", invalid, text)
@@ -509,7 +518,7 @@ args = ["mcp", "--tools=agent"]
 			t.Fatalf("section %q count = %d, want 1; got:\n%s", section, count, text)
 		}
 	}
-	for _, invalid := range []string{`glob_scan_max_depth = 6`, `":tmpdir" = "write"`, `":slash_tmp" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`} {
+	for _, invalid := range []string{`":tmpdir" = "write"`, `":slash_tmp" = "write"`, `[permissions.gentle-dev.filesystem.":workspace_roots"]`} {
 		if strings.Contains(text, invalid) {
 			t.Fatalf("config.toml should remove stale invalid entry %q; got:\n%s", invalid, text)
 		}
@@ -551,9 +560,6 @@ func TestInjectCodexPermissionsRemovesInvalidWorkspaceRootsTable(t *testing.T) {
 		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
 		`"**/.git" = "write"`,
 		`"**/.git/**" = "write"`,
-		`"**/.env" = "deny"`,
-		`"**/*.pem" = "deny"`,
-		`"**/*.key" = "deny"`,
 	} {
 		if strings.Contains(text, invalid) {
 			t.Fatalf("config.toml still contains invalid workspace_roots entry %q; got:\n%s", invalid, text)
@@ -593,9 +599,6 @@ func TestInjectCodexPermissionsRemovesObsoleteWorkspaceRootDenyRules(t *testing.
 		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
 		`"**/.env.*" = "deny"`,
 		`"*.env.*" = "deny"`,
-		`"**/.env" = "deny"`,
-		`"**/.env.local" = "deny"`,
-		`"**/.env.*.local" = "deny"`,
 	} {
 		if strings.Contains(text, obsolete) {
 			t.Fatalf("config.toml still contains obsolete workspace root deny entry %q; got:\n%s", obsolete, text)

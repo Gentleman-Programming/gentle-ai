@@ -21,7 +21,8 @@ Release artifacts are produced by CI. Windows users should install through the P
 ## Windows Notes
 
 - **PowerShell installer** is the recommended Windows install path for Gentle AI:
-  `irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex`
+  `irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/<version>/scripts/install.ps1 | iex`
+  Replace `<version>` with the latest stable release tag. For stricter environments, download the script and verify it against the release checksums before running it.
 - **Scoop** is supported as a manual-update alternative. If installed through Scoop, update with `scoop update gentle-ai`; do not rely on Gentle AI's built-in updater for the Scoop shim.
 - **npm global installs** do not require `sudo` on Windows (user-writable by default).
 - **curl** is pre-installed on Windows 10+ and does not require separate installation.

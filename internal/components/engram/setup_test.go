@@ -102,7 +102,7 @@ func TestShouldAttemptSetup(t *testing.T) {
 // and portable across environments.
 // ---------------------------------------------------------------------------
 
-func withFakeProtocolProbe(t *testing.T, fake func(ctx context.Context) ([]byte, error)) {
+func withFakeProtocolProbe(t *testing.T, fake func(ctx context.Context, command string) ([]byte, error)) {
 	t.Helper()
 	orig := runProtocolProbeCommand
 	runProtocolProbeCommand = fake
@@ -110,7 +110,7 @@ func withFakeProtocolProbe(t *testing.T, fake func(ctx context.Context) ([]byte,
 }
 
 func TestProbeProtocolFlagDetectsSupportedBinary(t *testing.T) {
-	withFakeProtocolProbe(t, func(context.Context) ([]byte, error) {
+	withFakeProtocolProbe(t, func(context.Context, string) ([]byte, error) {
 		return []byte("Usage: engram setup <slug> [--protocol=slim|full]\n"), nil
 	})
 
@@ -124,7 +124,7 @@ func TestProbeProtocolFlagDetectsSupportedBinary(t *testing.T) {
 }
 
 func TestProbeProtocolFlagDegradesWhenFlagAbsent(t *testing.T) {
-	withFakeProtocolProbe(t, func(context.Context) ([]byte, error) {
+	withFakeProtocolProbe(t, func(context.Context, string) ([]byte, error) {
 		return []byte("Usage: engram setup <slug>\n\nInteractive agent menu:\n  1) claude-code\n  2) codex\n"), nil
 	})
 
@@ -138,7 +138,7 @@ func TestProbeProtocolFlagDegradesWhenFlagAbsent(t *testing.T) {
 }
 
 func TestProbeProtocolFlagDegradesOnContextDeadlineTimeout(t *testing.T) {
-	withFakeProtocolProbe(t, func(ctx context.Context) ([]byte, error) {
+	withFakeProtocolProbe(t, func(ctx context.Context, _ string) ([]byte, error) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})
@@ -155,12 +155,27 @@ func TestProbeProtocolFlagDegradesOnContextDeadlineTimeout(t *testing.T) {
 }
 
 func TestProbeProtocolFlagDegradesOnNonZeroExit(t *testing.T) {
-	withFakeProtocolProbe(t, func(context.Context) ([]byte, error) {
+	withFakeProtocolProbe(t, func(context.Context, string) ([]byte, error) {
 		return nil, errors.New("exit status 2")
 	})
 
 	_, err := ProbeProtocolFlag(context.Background())
 	if err == nil {
 		t.Fatal("ProbeProtocolFlag() error = nil, want a non-nil error so the caller degrades to flag-unsupported")
+	}
+}
+
+func TestProbeProtocolFlagCommandUsesProvidedBinary(t *testing.T) {
+	var gotCommand string
+	withFakeProtocolProbe(t, func(_ context.Context, command string) ([]byte, error) {
+		gotCommand = command
+		return []byte("Usage: engram setup <slug> [--protocol=slim|full]\n"), nil
+	})
+
+	if _, err := ProbeProtocolFlagCommand(context.Background(), "/tmp/beta/engram"); err != nil {
+		t.Fatalf("ProbeProtocolFlagCommand() error = %v", err)
+	}
+	if gotCommand != "/tmp/beta/engram" {
+		t.Fatalf("probe command = %q, want beta binary path", gotCommand)
 	}
 }
