@@ -1253,6 +1253,7 @@ func runCommandSequence(commands [][]string) error {
 
 func executeCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
+	hideConsoleWindow(cmd)
 
 	if streamCommandOutput {
 		cmd.Stdout = os.Stdout
