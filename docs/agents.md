@@ -108,6 +108,18 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - Gentle AI sets OpenCode SDD agent sharing to `disabled` by default for privacy; existing user-managed `share` values such as `manual` or `auto` are preserved.
 - OpenCode Desktop SDD commands resolve the project with `git rev-parse --show-toplevel || pwd` before acting, avoiding Electron current-working-directory drift.
 
+#### Windows-Native Delegation (no WSL)
+
+OpenCode's `gentle-orchestrator` supports headless delegation via `opencode run --agent gentle-orchestrator "<task>"`, but that alone doesn't give you a persistent, identifiable terminal window/tab to route delegated work into — the role tmux `send-keys` plays on Linux/macOS. On native Windows (PowerShell or Git Bash, no WSL), use Windows Terminal's `wt.exe` instead:
+
+```bash
+wt -w orquestador-gentleman new-tab --title "OpenCode" opencode run --agent gentle-orchestrator "<task>"
+```
+
+`wt -w <name>` reuses an existing named window if one is already open, or creates it if not — the closest native Windows equivalent to targeting a persistent tmux pane by name. Combined with `opencode run --agent <name> "<task>"` headless mode (no TUI interaction required), this gives a scriptable delegation path with zero extra dependencies: no WSL, no tmux port.
+
+This requires `wt.exe` (ships with Windows Terminal, installed by default on Windows 11) and `opencode` on `PATH`. WSL + tmux remains a valid alternative if you already have that setup, but it's unnecessary extra onboarding for a Windows-only workflow.
+
 ### Kilo Code
 
 - **Detection**: gentle-ai detects Kilo Code from `~/.config/kilo` and checks for the `kilo` binary on `PATH`
