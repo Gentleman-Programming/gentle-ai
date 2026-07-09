@@ -98,7 +98,9 @@ var osGetwdFn = os.Getwd
 var osExecutableFn = os.Executable
 var osRemoveFn = os.Remove
 var execCommandFn = exec.Command
-var communityToolInstallFn = communitytool.Install
+var communityToolInstallFn = func(id model.CommunityToolID, workspaceDir string, runner communitytool.Runner, force bool) (communitytool.Result, error) {
+	return communitytool.Install(id, workspaceDir, runner, force)
+}
 var communityToolStatusFn = communitytool.DetectStatus
 
 // readCurrentAssignmentsFn is a package-level variable so tests can override
@@ -2649,7 +2651,7 @@ func (m Model) startCommunityToolInstallation() tea.Cmd {
 	return func() tea.Msg {
 		results := make([]communitytool.Result, 0, len(tools))
 		for _, tool := range tools {
-			result, err := communityToolInstallFn(tool, workspaceDir, runner)
+			result, err := communityToolInstallFn(tool, workspaceDir, runner, false)
 			if err != nil {
 				if hasCommunityToolResultContext(result) {
 					results = append(results, result)

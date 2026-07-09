@@ -35,3 +35,7 @@ dist/
 # Engram local runtime state (project sync chunks are intentionally versioned)
 .engram/engram.db
 .engram/cloud.json
+.engram/chunks/
+
+# Node package lock (used for local npm experiments)
+package-lock.json
