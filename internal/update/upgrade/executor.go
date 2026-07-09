@@ -42,7 +42,9 @@ var execCommand = exec.Command
 var brewListFn = defaultBrewList
 
 func defaultBrewList(toolName string) bool {
-	cmd := execCommand("brew", "list", "--formula", toolName)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "brew", "list", "--formula", toolName)
 	return cmd.Run() == nil
 }
 
