@@ -153,6 +153,41 @@ func TestWriteFileAtomicSymlinkNoopPreservesLink(t *testing.T) {
 	}
 }
 
+func TestWriteFileAtomicCreatesDanglingSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "missing", "target.txt")
+	path := filepath.Join(dir, "linked.txt")
+	if err := os.Symlink(target, path); err != nil {
+		if isSymlinkPrivilegeError(err) {
+			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
+		}
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	content := []byte("created\n")
+	result, err := WriteFileAtomic(path, content, 0o644)
+	if err != nil {
+		t.Fatalf("WriteFileAtomic(dangling symlink) error = %v, want success", err)
+	}
+	if !result.Changed || !result.Created {
+		t.Fatalf("WriteFileAtomic(dangling symlink) result = %+v, want Changed=true Created=true", result)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("Lstat(symlink) error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("WriteFileAtomic replaced dangling symlink, want symlink preserved")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile(target) error = %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("target content = %q, want %q", got, content)
+	}
+}
+
 func TestWriteFileAtomicRejectsOversizedExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "big.txt")

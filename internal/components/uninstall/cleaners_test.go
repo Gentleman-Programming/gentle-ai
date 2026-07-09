@@ -307,6 +307,26 @@ func TestReadManagedFile_FollowsSymlink(t *testing.T) {
 	}
 }
 
+func TestReadManagedFile_BrokenSymlinkReturnsNotExist(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(target, link); err != nil {
+		if isSymlinkPrivilegeError(err) {
+			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
+		}
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	_, err := readManagedFile(link)
+	if err == nil {
+		t.Fatal("readManagedFile(broken symlink) error = nil, want error")
+	}
+	if !os.IsNotExist(err) {
+		t.Fatalf("readManagedFile(broken symlink) error = %v, want os.IsNotExist", err)
+	}
+}
+
 func TestRemoveFileIfExists_RemovesSymlinkNotTarget(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.md")

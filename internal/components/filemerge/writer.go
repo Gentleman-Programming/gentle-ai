@@ -128,7 +128,17 @@ func resolveExistingSymlink(path string) (string, error) {
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", fmt.Errorf("resolve symlink %q: %w", path, err)
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("resolve symlink %q: %w", path, err)
+		}
+		target, readErr := os.Readlink(path)
+		if readErr != nil {
+			return "", fmt.Errorf("read symlink %q: %w", path, readErr)
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		return filepath.Clean(target), nil
 	}
 	return resolved, nil
 }

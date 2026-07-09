@@ -241,6 +241,9 @@ func readManagedFile(path string) ([]byte, error) {
 		original := path
 		path, err = filepath.EvalSymlinks(path)
 		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, &os.PathError{Op: "resolve symlink", Path: original, Err: os.ErrNotExist}
+			}
 			return nil, fmt.Errorf("resolve symlink %q: %w", original, err)
 		}
 		info, err = os.Stat(path)
