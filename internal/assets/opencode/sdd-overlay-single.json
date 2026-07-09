@@ -1,4 +1,5 @@
 {
+  "default_agent": "gentle-orchestrator",
   "agent": {
     "gentle-orchestrator": {
       "mode": "primary",

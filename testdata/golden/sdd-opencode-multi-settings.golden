@@ -1,4 +1,5 @@
 {
+  "default_agent": "gentle-orchestrator",
   "agent": {
     "gentle-orchestrator": {
       "description": "Gentle AI SDD Orchestrator - coordinates sub-agents, never does work inline",
