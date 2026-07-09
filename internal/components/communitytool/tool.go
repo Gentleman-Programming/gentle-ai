@@ -170,15 +170,17 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		return result, err
 	}
 	after := DetectStatus(id, homeDir, detector)
+	pathFollowUp := ""
 	if after.CLI != AvailabilityAvailable && setupCommand[0] != "codegraph" {
-		after.FollowUps = append(after.FollowUps, fmt.Sprintf("CodeGraph setup ran via %s, but `codegraph` is still not available in PATH. Add the package manager global binary directory to PATH, restart your shell, then rerun Gentle AI.", setupCommand[0]))
+		pathFollowUp = fmt.Sprintf("CodeGraph setup ran via %s, but `codegraph` is still not available in PATH. Add the package manager global binary directory to PATH, restart your shell, then rerun Gentle AI.", setupCommand[0])
+		after.FollowUps = append(after.FollowUps, pathFollowUp)
 	}
 	result.StatusAfter = &after
-	if after.CLI != AvailabilityAvailable && setupCommand[0] != "codegraph" && len(after.FollowUps) > 0 {
+	if pathFollowUp != "" {
 		if err := validateCodeGraphDetectedAgentsConfigured(after); err != nil {
 			return result, err
 		}
-		result.ManualActions = append(result.ManualActions, after.FollowUps[len(after.FollowUps)-1])
+		result.ManualActions = append(result.ManualActions, pathFollowUp)
 		result.ManualActions = append(result.ManualActions, "CodeGraph setup completed through the resolved package-manager executable. Add the package manager global binary directory to PATH before running `codegraph` directly.")
 		return result, nil
 	}
