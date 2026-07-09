@@ -1014,6 +1014,55 @@ func TestExtractModelFromAgent_ReadsVariant(t *testing.T) {
 	}
 }
 
+// TestExtractModelFromAgent_SlashBeforeColon verifies that a model spec with
+// a slash before a colon (e.g. OpenRouter free models) is split at the first
+// separator, not at the colon. Issue #802.
+func TestExtractModelFromAgent_SlashBeforeColon(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      string
+		providerID string
+		modelID    string
+	}{
+		{
+			name:       "openrouter free model (slash before colon)",
+			model:      "openrouter/qwen/qwen3.6-plus:free",
+			providerID: "openrouter",
+			modelID:    "qwen/qwen3.6-plus:free",
+		},
+		{
+			name:       "standard colon format",
+			model:      "anthropic:claude-sonnet-4",
+			providerID: "anthropic",
+			modelID:    "claude-sonnet-4",
+		},
+		{
+			name:       "slash-only custom provider",
+			model:      "zai-coding-plan/glm-5-turbo",
+			providerID: "zai-coding-plan",
+			modelID:    "glm-5-turbo",
+		},
+		{
+			name:       "colon with slash in model ID",
+			model:      "openrouter:anthropic/claude-sonnet-4",
+			providerID: "openrouter",
+			modelID:    "anthropic/claude-sonnet-4",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agentMap := map[string]any{"model": tt.model}
+			got := extractModelFromAgent(agentMap)
+			if got.ProviderID != tt.providerID {
+				t.Errorf("ProviderID = %q, want %q", got.ProviderID, tt.providerID)
+			}
+			if got.ModelID != tt.modelID {
+				t.Errorf("ModelID = %q, want %q", got.ModelID, tt.modelID)
+			}
+		})
+	}
+}
+
 // TestExtractModelFromAgent_NoVariantDefaultsEmpty verifies that a missing
 // "variant" key results in Effort="".
 func TestExtractModelFromAgent_NoVariantDefaultsEmpty(t *testing.T) {

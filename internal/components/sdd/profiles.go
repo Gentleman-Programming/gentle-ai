@@ -237,10 +237,16 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 		return model.ModelAssignment{}
 	}
 
-	// Try colon separator first (standard: "anthropic:claude-sonnet-4"), then slash.
-	idx := strings.Index(modelStr, ":")
-	if idx <= 0 {
-		idx = strings.Index(modelStr, "/")
+	// Find the first separator — slash or colon, whichever appears first.
+	// Standard format: "anthropic:claude-sonnet-4" (colon).
+	// Custom providers: "zai-coding-plan/glm-5-turbo" (slash).
+	// Mixed: "openrouter/qwen/qwen3.6-plus:free" — slash is the provider boundary.
+	idx := -1
+	for i, c := range modelStr {
+		if c == '/' || c == ':' {
+			idx = i
+			break
+		}
 	}
 	if idx <= 0 {
 		return model.ModelAssignment{}

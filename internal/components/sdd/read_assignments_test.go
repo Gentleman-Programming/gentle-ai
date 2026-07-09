@@ -182,6 +182,53 @@ func TestReadCurrentModelAssignmentsMalformedModelField(t *testing.T) {
 	}
 }
 
+// TestReadCurrentModelAssignmentsSlashBeforeColon verifies that model specs with
+// a slash before a colon (e.g. OpenRouter free models like
+// "openrouter/qwen/qwen3.6-plus:free") are split at the first separator, not at
+// the colon. Issue #802.
+func TestReadCurrentModelAssignmentsSlashBeforeColon(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.json")
+
+	content := `{
+  "agent": {
+    "gentle-orchestrator": { "model": "openrouter/qwen/qwen3.6-plus:free" },
+    "sdd-apply":           { "model": "openrouter:anthropic/claude-sonnet-4" }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	got, err := ReadCurrentModelAssignments(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadCurrentModelAssignments() error = %v", err)
+	}
+
+	tests := []struct {
+		phase      string
+		providerID string
+		modelID    string
+	}{
+		{"gentle-orchestrator", "openrouter", "qwen/qwen3.6-plus:free"},
+		{"sdd-apply", "openrouter", "anthropic/claude-sonnet-4"},
+	}
+
+	for _, tt := range tests {
+		a, ok := got[tt.phase]
+		if !ok {
+			t.Errorf("phase %q missing from result", tt.phase)
+			continue
+		}
+		if a.ProviderID != tt.providerID {
+			t.Errorf("phase %q: ProviderID = %q, want %q", tt.phase, a.ProviderID, tt.providerID)
+		}
+		if a.ModelID != tt.modelID {
+			t.Errorf("phase %q: ModelID = %q, want %q", tt.phase, a.ModelID, tt.modelID)
+		}
+	}
+}
+
 // TestReadCurrentModelAssignmentsSlashSeparator verifies that custom provider
 // models using slash format ("provider/model-id") are parsed correctly.
 // Issue #152: OpenCode uses "zai-coding-plan/glm-5-turbo" for custom providers.
