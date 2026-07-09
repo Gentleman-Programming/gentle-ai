@@ -17,9 +17,15 @@ func TestMain(m *testing.M) {
 		if name == "npm" {
 			return "/bin/npm", nil
 		}
+		if name == "codegraph" {
+			return "/bin/codegraph", nil
+		}
 		return "", fmt.Errorf("not found")
 	}
 	codeGraphPnpmGlobalBin = func() (string, error) {
+		return "/bin", nil
+	}
+	codeGraphNpmGlobalBin = func() (string, error) {
 		return "/bin", nil
 	}
 	os.Exit(m.Run())
@@ -122,6 +128,9 @@ func TestInstallUsesPnpmWhenNpmIsUnavailable(t *testing.T) {
 		if name == "pnpm" {
 			return "/bin/pnpm", nil
 		}
+		if name == "codegraph" {
+			return "/bin/codegraph", nil
+		}
 		return "", errors.New("not found")
 	}
 	t.Cleanup(func() { codeGraphPackageLookPath = previous })
@@ -147,6 +156,217 @@ func TestInstallUsesPnpmWhenNpmIsUnavailable(t *testing.T) {
 	}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestResolveCodeGraphSetupCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		manager     string
+		globalBin   string
+		lookPath    func(string) (string, error)
+		wantCommand []string
+		wantErr     []string
+	}{
+		{
+			name:      "preserves codegraph from PATH",
+			manager:   "npm",
+			globalBin: "/unused",
+			lookPath: func(name string) (string, error) {
+				if name == "codegraph" {
+					return "/usr/local/bin/codegraph", nil
+				}
+				return "", errors.New("not found")
+			},
+			wantCommand: []string{"codegraph", "install", "--yes"},
+		},
+		{
+			name:      "uses npm global bin when PATH misses codegraph",
+			manager:   "npm",
+			globalBin: "/home/example/.npm/bin",
+			lookPath: func(name string) (string, error) {
+				candidate := filepath.Join("/home/example/.npm/bin", "codegraph")
+				if name == candidate {
+					return candidate, nil
+				}
+				return "", errors.New("not found")
+			},
+			wantCommand: []string{filepath.Join("/home/example/.npm/bin", "codegraph"), "install", "--yes"},
+		},
+		{
+			name:      "uses pnpm global bin when PATH misses codegraph",
+			manager:   "pnpm",
+			globalBin: "/home/example/.local/share/pnpm",
+			lookPath: func(name string) (string, error) {
+				candidate := filepath.Join("/home/example/.local/share/pnpm", "codegraph")
+				if name == candidate {
+					return candidate, nil
+				}
+				return "", errors.New("not found")
+			},
+			wantCommand: []string{filepath.Join("/home/example/.local/share/pnpm", "codegraph"), "install", "--yes"},
+		},
+		{
+			name:      "reports actionable error when installed binary cannot be resolved",
+			manager:   "npm",
+			globalBin: "/home/example/.npm/bin",
+			lookPath: func(string) (string, error) {
+				return "", errors.New("not found")
+			},
+			wantErr: []string{"CodeGraph CLI was installed with npm", "not in PATH", "/home/example/.npm/bin", "restart your shell"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			previousNpmGlobalBin := codeGraphNpmGlobalBin
+			previousPnpmGlobalBin := codeGraphPnpmGlobalBin
+			codeGraphNpmGlobalBin = func() (string, error) { return tt.globalBin, nil }
+			codeGraphPnpmGlobalBin = func() (string, error) { return tt.globalBin, nil }
+			t.Cleanup(func() {
+				codeGraphNpmGlobalBin = previousNpmGlobalBin
+				codeGraphPnpmGlobalBin = previousPnpmGlobalBin
+			})
+
+			command, err := resolveCodeGraphSetupCommand(tt.manager, DetectorFunc(tt.lookPath))
+			if len(tt.wantErr) > 0 {
+				if err == nil {
+					t.Fatal("resolveCodeGraphSetupCommand() error = nil, want error")
+				}
+				for _, want := range tt.wantErr {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("error = %v, want %q", err, want)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveCodeGraphSetupCommand() error = %v", err)
+			}
+			if !reflect.DeepEqual(command, tt.wantCommand) {
+				t.Fatalf("resolveCodeGraphSetupCommand() = %#v, want %#v", command, tt.wantCommand)
+			}
+		})
+	}
+}
+
+func TestCodeGraphExecutableCandidatesForOS(t *testing.T) {
+	globalBin := filepath.Join("C:", "Users", "example", "AppData", "Roaming", "npm")
+
+	tests := []struct {
+		name string
+		goos string
+		want []string
+	}{
+		{
+			name: "windows includes cmd and exe shims",
+			goos: "windows",
+			want: []string{
+				filepath.Join(globalBin, "codegraph"),
+				filepath.Join(globalBin, "codegraph.cmd"),
+				filepath.Join(globalBin, "codegraph.exe"),
+			},
+		},
+		{
+			name: "non windows uses extensionless executable",
+			goos: "linux",
+			want: []string{filepath.Join(globalBin, "codegraph")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := codeGraphExecutableCandidatesForOS(globalBin, tt.goos)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("codeGraphExecutableCandidatesForOS() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCodeGraphNpmGlobalBinForOS(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+		goos   string
+		want   string
+	}{
+		{
+			name:   "windows npm prefix is already the global bin directory",
+			prefix: filepath.Join("C:", "Users", "example", "AppData", "Roaming", "npm"),
+			goos:   "windows",
+			want:   filepath.Join("C:", "Users", "example", "AppData", "Roaming", "npm"),
+		},
+		{
+			name:   "non windows npm prefix uses bin child",
+			prefix: filepath.Join("home", "example", ".npm-global"),
+			goos:   "linux",
+			want:   filepath.Join("home", "example", ".npm-global", "bin"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := codeGraphNpmGlobalBinForOS(tt.prefix, tt.goos)
+			if got != tt.want {
+				t.Fatalf("codeGraphNpmGlobalBinForOS() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInstallUsesResolvedNpmCodeGraphButKeepsMissingStatusWhenNotInPath(t *testing.T) {
+	globalBin := filepath.Join("home", "example", ".npm", "bin")
+	codeGraphPath := filepath.Join(globalBin, "codegraph")
+
+	previousLookPath := codeGraphPackageLookPath
+	previousNpmGlobalBin := codeGraphNpmGlobalBin
+	codeGraphPackageLookPath = func(name string) (string, error) {
+		if name == "npm" {
+			return "/usr/bin/npm", nil
+		}
+		if name == codeGraphPath {
+			return codeGraphPath, nil
+		}
+		return "", errors.New("not found")
+	}
+	codeGraphNpmGlobalBin = func() (string, error) { return globalBin, nil }
+	t.Cleanup(func() {
+		codeGraphPackageLookPath = previousLookPath
+		codeGraphNpmGlobalBin = previousNpmGlobalBin
+	})
+
+	var commands []string
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", t.TempDir(), RunnerFunc(func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}), DetectorFunc(func(string) (string, error) {
+		return "", errors.New("not found")
+	}))
+	if err != nil {
+		t.Fatalf("InstallWithHome() error = %v", err)
+	}
+	wantCommands := []string{
+		"npm install -g @colbymchenry/codegraph@latest",
+		strings.Join([]string{codeGraphPath, "install", "--yes"}, " "),
+	}
+	if !reflect.DeepEqual(commands, wantCommands) {
+		t.Fatalf("commands = %#v, want %#v", commands, wantCommands)
+	}
+	if result.StatusAfter == nil || result.StatusAfter.CLI != AvailabilityMissing || result.StatusAfter.CLIPath != "" {
+		t.Fatalf("StatusAfter = %#v, want missing CodeGraph CLI from DetectStatus", result.StatusAfter)
+	}
+	followUps := strings.Join(result.StatusAfter.FollowUps, "\n")
+	for _, want := range []string{codeGraphPath, "not available in PATH", "restart your shell"} {
+		if !strings.Contains(followUps, want) {
+			t.Fatalf("StatusAfter.FollowUps = %#v, want %q", result.StatusAfter.FollowUps, want)
+		}
+	}
+	manualActions := strings.Join(result.ManualActions, "\n")
+	for _, want := range []string{codeGraphPath, "not available in PATH", "global binary directory to PATH"} {
+		if !strings.Contains(manualActions, want) {
+			t.Fatalf("ManualActions = %#v, want %q", result.ManualActions, want)
+		}
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -81,6 +83,7 @@ func (fn RunnerFunc) Run(name string, args ...string) error { return fn(name, ar
 var (
 	codeGraphPackageLookPath = exec.LookPath
 	codeGraphPnpmGlobalBin   = defaultPnpmGlobalBin
+	codeGraphNpmGlobalBin    = defaultNpmGlobalBin
 )
 
 var definitions = []Definition{
@@ -146,24 +149,39 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		return result, nil
 	}
 
-	commands, err := CodeGraphCommandsForDetector(DetectorFunc(codeGraphPackageLookPath))
+	packageManager, err := detectCodeGraphPackageManager(DetectorFunc(codeGraphPackageLookPath))
 	if err != nil {
 		return result, err
 	}
-	for _, command := range commands {
-		if len(command) == 0 {
-			continue
-		}
-		result.CommandsRun = append(result.CommandsRun, strings.Join(command, " "))
-		if err := runner.Run(command[0], command[1:]...); err != nil {
-			return result, fmt.Errorf("run %q: %w", strings.Join(command, " "), err)
-		}
+	installCommand := codeGraphPackageInstallCommand(packageManager)
+	result.CommandsRun = append(result.CommandsRun, strings.Join(installCommand, " "))
+	if err := runner.Run(installCommand[0], installCommand[1:]...); err != nil {
+		return result, fmt.Errorf("run %q: %w", strings.Join(installCommand, " "), err)
+	}
+	setupCommand, err := resolveCodeGraphSetupCommand(packageManager, DetectorFunc(codeGraphPackageLookPath))
+	if err != nil {
+		return result, err
+	}
+	result.CommandsRun = append(result.CommandsRun, strings.Join(setupCommand, " "))
+	if err := runner.Run(setupCommand[0], setupCommand[1:]...); err != nil {
+		return result, fmt.Errorf("run %q: %w", strings.Join(setupCommand, " "), err)
 	}
 	if _, err := InjectCodeGraphGuidanceIfSelected(homeDir, []model.CommunityToolID{id}); err != nil {
 		return result, err
 	}
 	after := DetectStatus(id, homeDir, detector)
+	if after.CLI != AvailabilityAvailable && setupCommand[0] != "codegraph" {
+		after.FollowUps = append(after.FollowUps, fmt.Sprintf("CodeGraph setup ran via %s, but `codegraph` is still not available in PATH. Add the package manager global binary directory to PATH, restart your shell, then rerun Gentle AI.", setupCommand[0]))
+	}
 	result.StatusAfter = &after
+	if after.CLI != AvailabilityAvailable && setupCommand[0] != "codegraph" && len(after.FollowUps) > 0 {
+		if err := validateCodeGraphDetectedAgentsConfigured(after); err != nil {
+			return result, err
+		}
+		result.ManualActions = append(result.ManualActions, after.FollowUps[len(after.FollowUps)-1])
+		result.ManualActions = append(result.ManualActions, "CodeGraph setup completed through the resolved package-manager executable. Add the package manager global binary directory to PATH before running `codegraph` directly.")
+		return result, nil
+	}
 	if err := validateCodeGraphInstallStatus(after); err != nil {
 		return result, err
 	}
@@ -178,6 +196,10 @@ func validateCodeGraphInstallStatus(status Status) error {
 	if status.CLI != AvailabilityAvailable {
 		return fmt.Errorf("CodeGraph install did not leave the codegraph CLI available")
 	}
+	return validateCodeGraphDetectedAgentsConfigured(status)
+}
+
+func validateCodeGraphDetectedAgentsConfigured(status Status) error {
 	missing := make([]string, 0)
 	for _, agent := range status.Agents {
 		if agent.Detected && !agent.Configured {
@@ -415,6 +437,29 @@ func defaultPnpmGlobalBin() (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
+func defaultNpmGlobalBin() (string, error) {
+	output, err := exec.Command("npm", "prefix", "-g").CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return "", fmt.Errorf("npm global prefix is not usable: %s", message)
+	}
+	prefix := strings.TrimSpace(string(output))
+	if prefix == "" {
+		return "", fmt.Errorf("npm global prefix is empty")
+	}
+	return codeGraphNpmGlobalBinForOS(prefix, runtime.GOOS), nil
+}
+
+func codeGraphNpmGlobalBinForOS(prefix string, goos string) string {
+	if goos == "windows" {
+		return prefix
+	}
+	return filepath.Join(prefix, "bin")
+}
+
 func detectCodeGraphPackageManager(detector Detector) (string, error) {
 	if detector == nil {
 		detector = DetectorFunc(exec.LookPath)
@@ -436,12 +481,66 @@ func detectCodeGraphPackageManager(detector Detector) (string, error) {
 }
 
 func codeGraphCommands(packageManager string) [][]string {
-	installCommand := []string{"npm", "install", "-g", "@colbymchenry/codegraph@latest"}
-	if packageManager == "pnpm" {
-		installCommand = []string{"pnpm", "add", "-g", "@colbymchenry/codegraph@latest"}
-	}
 	return [][]string{
-		installCommand,
+		codeGraphPackageInstallCommand(packageManager),
 		{"codegraph", "install", "--yes"},
 	}
+}
+
+func codeGraphPackageInstallCommand(packageManager string) []string {
+	if packageManager == "pnpm" {
+		return []string{"pnpm", "add", "-g", "@colbymchenry/codegraph@latest"}
+	}
+	return []string{"npm", "install", "-g", "@colbymchenry/codegraph@latest"}
+}
+
+func resolveCodeGraphSetupCommand(packageManager string, detector Detector) ([]string, error) {
+	if detector == nil {
+		detector = DetectorFunc(exec.LookPath)
+	}
+	if _, err := detector.LookPath("codegraph"); err == nil {
+		return []string{"codegraph", "install", "--yes"}, nil
+	}
+
+	globalBin, err := codeGraphGlobalBin(packageManager)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(globalBin) == "" {
+		return nil, fmt.Errorf("CodeGraph CLI was installed with %s, but the global binary directory could not be determined. Add the package manager global bin directory to PATH, restart your shell, then rerun Gentle AI", packageManager)
+	}
+
+	for _, candidate := range codeGraphExecutableCandidates(globalBin) {
+		if _, err := detector.LookPath(candidate); err == nil {
+			return []string{candidate, "install", "--yes"}, nil
+		}
+	}
+	return nil, fmt.Errorf("CodeGraph CLI was installed with %s, but `codegraph` is not in PATH and no executable was found in %q. Add that directory to PATH or restart your shell, then rerun Gentle AI", packageManager, globalBin)
+}
+
+func codeGraphGlobalBin(packageManager string) (string, error) {
+	if packageManager == "pnpm" {
+		globalBin, err := codeGraphPnpmGlobalBin()
+		if err != nil {
+			return "", fmt.Errorf("CodeGraph CLI was installed with pnpm, but pnpm global binary directory could not be resolved. Run `pnpm setup`, restart your shell, then rerun Gentle AI: %w", err)
+		}
+		return globalBin, nil
+	}
+	globalBin, err := codeGraphNpmGlobalBin()
+	if err != nil {
+		return "", fmt.Errorf("CodeGraph CLI was installed with npm, but npm global binary directory could not be resolved. Add npm's global bin directory to PATH, restart your shell, then rerun Gentle AI: %w", err)
+	}
+	return globalBin, nil
+}
+
+func codeGraphExecutableCandidates(globalBin string) []string {
+	return codeGraphExecutableCandidatesForOS(globalBin, runtime.GOOS)
+}
+
+func codeGraphExecutableCandidatesForOS(globalBin string, goos string) []string {
+	candidates := []string{filepath.Join(globalBin, "codegraph")}
+	if goos == "windows" {
+		candidates = append(candidates, filepath.Join(globalBin, "codegraph.cmd"), filepath.Join(globalBin, "codegraph.exe"))
+	}
+	return candidates
 }
