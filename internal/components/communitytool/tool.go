@@ -14,6 +14,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
+// Availability describes whether a community tool CLI was found on the system.
 type Availability string
 
 const (
@@ -21,6 +22,7 @@ const (
 	AvailabilityMissing   Availability = "missing"
 )
 
+// AgentStatusKind describes the configuration state of a supported agent relative to a community tool.
 type AgentStatusKind string
 
 const (
@@ -29,6 +31,7 @@ const (
 	AgentStatusMissing     AgentStatusKind = "missing"
 )
 
+// Definition describes a community tool that can be installed and wired to agents.
 type Definition struct {
 	ID          model.CommunityToolID
 	Name        string
@@ -38,6 +41,7 @@ type Definition struct {
 	Description string
 }
 
+// Result reports what happened during a community tool installation or upgrade.
 type Result struct {
 	Tool          model.CommunityToolID
 	CommandsRun   []string
@@ -48,6 +52,7 @@ type Result struct {
 	PiCodeGraph   *PiCodeGraphResult
 }
 
+// Status describes the detected installation and agent wiring state of a community tool.
 type Status struct {
 	Tool       model.CommunityToolID
 	CLI        Availability
@@ -57,6 +62,7 @@ type Status struct {
 	FollowUps  []string
 }
 
+// AgentStatus describes the configuration state of a single agent for a community tool.
 type AgentStatus struct {
 	Agent      model.AgentID
 	Name       string
@@ -68,18 +74,22 @@ type AgentStatus struct {
 	Children   []PiCodeGraphChild
 }
 
+// Detector abstracts how a community tool looks up a command on PATH.
 type Detector interface {
 	LookPath(name string) (string, error)
 }
 
+// DetectorFunc adapts a plain function to the Detector interface.
 type DetectorFunc func(name string) (string, error)
 
 func (fn DetectorFunc) LookPath(name string) (string, error) { return fn(name) }
 
+// Runner abstracts how a community tool install command is executed.
 type Runner interface {
 	Run(name string, args ...string) error
 }
 
+// RunnerFunc adapts a plain function to the Runner interface.
 type RunnerFunc func(name string, args ...string) error
 
 func (fn RunnerFunc) Run(name string, args ...string) error { return fn(name, args...) }
@@ -100,6 +110,7 @@ var definitions = []Definition{
 	},
 }
 
+// Definitions returns the configured community tool definitions.
 func Definitions() []Definition {
 	out := make([]Definition, len(definitions))
 	copy(out, definitions)
@@ -286,6 +297,7 @@ func validateCodeGraphInstallStatus(status Status) error {
 	return nil
 }
 
+// DetectStatus returns the current installation and agent wiring status for a community tool.
 func DetectStatus(id model.CommunityToolID, homeDir string, detector Detector) Status {
 	status := Status{Tool: id, CLI: AvailabilityMissing}
 	def, ok := DefinitionFor(id)
@@ -513,10 +525,12 @@ func defaultHomeDir() string {
 	return os.Getenv("HOME")
 }
 
+// CodeGraphCommands returns the install/upgrade commands for CodeGraph using npm.
 func CodeGraphCommands() [][]string {
 	return codeGraphCommands("npm")
 }
 
+// CodeGraphCommandsForDetector returns the install/upgrade commands for CodeGraph using the provided detector.
 func CodeGraphCommandsForDetector(detector Detector) ([][]string, error) {
 	packageManager, err := detectCodeGraphPackageManager(detector)
 	if err != nil {
