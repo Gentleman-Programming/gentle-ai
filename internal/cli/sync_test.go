@@ -3890,6 +3890,16 @@ func TestSyncStagePlanIncludesCommunityToolUpgradeWhenConfigured(t *testing.T) {
 	home := t.TempDir()
 	mustWriteFile(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), []byte(`{"command":"codegraph"}`))
 
+	// Simulate codegraph on PATH so HasConfiguredCodeGraph returns true.
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() { cmdLookPath = restoreLookPath })
+	cmdLookPath = func(name string) (string, error) {
+		if name == "codegraph" {
+			return "/usr/local/bin/codegraph", nil
+		}
+		return restoreLookPath(name)
+	}
+
 	rt, err := newSyncRuntime(home, model.Selection{
 		Agents:              []model.AgentID{model.AgentClaudeCode},
 		Components:          []model.ComponentID{},
@@ -3915,6 +3925,16 @@ func TestSyncStagePlanIncludesCommunityToolUpgradeWhenConfigured(t *testing.T) {
 func TestSyncStagePlanIncludesCommunityToolUpgradeWithForce(t *testing.T) {
 	home := t.TempDir()
 	mustWriteFile(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), []byte(`{"command":"codegraph"}`))
+
+	// Simulate codegraph on PATH so HasConfiguredCodeGraph returns true.
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() { cmdLookPath = restoreLookPath })
+	cmdLookPath = func(name string) (string, error) {
+		if name == "codegraph" {
+			return "/usr/local/bin/codegraph", nil
+		}
+		return restoreLookPath(name)
+	}
 
 	rt, err := newSyncRuntime(home, model.Selection{
 		Agents:              []model.AgentID{model.AgentClaudeCode},
