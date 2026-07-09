@@ -11,6 +11,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/internal/components/permissions"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
@@ -315,6 +316,7 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 			"task": map[string]any{
 				"__replace__": taskPerms,
 			},
+			"read": permissions.SensitiveFileReadDenyRules,
 		},
 		"tools": map[string]any{
 			"__replace__": map[string]any{

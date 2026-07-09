@@ -27,6 +27,22 @@
             "review-reliability": "allow",
             "review-resilience": "allow"
           }
+        },
+        "read": {
+          "*": "allow",
+          "*.env": "deny",
+          "*.env.*": "deny",
+          "**/.env": "deny",
+          "**/.env.*": "deny",
+          "**/secrets/**": "deny",
+          "**/credentials.json": "deny",
+          "**/.ssh/**": "deny",
+          "**/.credentials/**": "deny",
+          "**/Library/Keychains/**": "deny",
+          "**/.aws/credentials": "deny",
+          "**/.config/gh/hosts.yml": "deny",
+          "**/*.pem": "deny",
+          "**/*.key": "deny"
         }
       },
       "tools": {

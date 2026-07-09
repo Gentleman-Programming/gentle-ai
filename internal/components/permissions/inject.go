@@ -65,6 +65,29 @@ var claudeCodeOverlayJSON = []byte(`{
 }
 `)
 
+// SensitiveFileReadDenyRules is the canonical set of file patterns that should
+// be denied read access in agent-level permission blocks. When an agent defines
+// its own permission object, OpenCode shadows the top-level permission entirely.
+// These rules must be duplicated into agent-level blocks to maintain protection.
+//
+// Keep in sync with the read deny patterns in openCodeOverlayJSON.
+var SensitiveFileReadDenyRules = map[string]string{
+	"*":                       "allow",
+	"*.env":                   "deny",
+	"*.env.*":                 "deny",
+	"**/.env":                 "deny",
+	"**/.env.*":               "deny",
+	"**/secrets/**":           "deny",
+	"**/credentials.json":     "deny",
+	"**/.ssh/**":              "deny",
+	"**/.credentials/**":      "deny",
+	"**/Library/Keychains/**": "deny",
+	"**/.aws/credentials":     "deny",
+	"**/.config/gh/hosts.yml": "deny",
+	"**/*.pem":                "deny",
+	"**/*.key":                "deny",
+}
+
 // openCodeOverlayJSON uses the OpenCode "permission" key with bash/read granularity.
 var openCodeOverlayJSON = []byte(`{
   "permission": {
