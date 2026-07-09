@@ -1154,6 +1154,9 @@ func TestSyncRuntimeAddsCodeGraphStepsOnlyWhenSelected(t *testing.T) {
 	if !hasStepID(plan.Apply, "sync:community-tool:pi-codegraph") {
 		t.Fatal("sync plan missing selected Pi CodeGraph step")
 	}
+	if !hasStepID(plan.Apply, "sync:community-tool:codegraph-upgrade") {
+		t.Fatalf("sync plan missing selected CodeGraph community tool upgrade step")
+	}
 
 	rt, err = newSyncRuntime(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}})
 	if err != nil {
@@ -1165,6 +1168,9 @@ func TestSyncRuntimeAddsCodeGraphStepsOnlyWhenSelected(t *testing.T) {
 	}
 	if hasStepID(plan.Apply, "sync:community-tool:pi-codegraph") {
 		t.Fatal("sync plan included Pi CodeGraph without explicit selection")
+	}
+	if hasStepID(plan.Apply, "sync:community-tool:codegraph-upgrade") {
+		t.Fatalf("sync plan included CodeGraph community tool upgrade without explicit selection")
 	}
 
 	paths := syncBackupTargets(home, "", selected, resolveAdapters([]model.AgentID{model.AgentOpenCode}))
@@ -3859,5 +3865,91 @@ func TestRunSync_RestoresCodexPhaseModelAssignments(t *testing.T) {
 	}
 	if strings.Contains(text, "| `sdd-strong` |") {
 		t.Fatalf("AGENTS.md rendered carril table instead of Custom per-phase table; got:\n%s", text)
+	}
+}
+
+func TestParseSyncFlagsForceCommunityTools(t *testing.T) {
+	flags, err := ParseSyncFlags([]string{"--force-community-tools"})
+	if err != nil {
+		t.Fatalf("ParseSyncFlags() error = %v", err)
+	}
+	if !flags.ForceCommunityTools {
+		t.Fatal("ForceCommunityTools = false, want true")
+	}
+
+	flags, err = ParseSyncFlags([]string{})
+	if err != nil {
+		t.Fatalf("ParseSyncFlags() error = %v", err)
+	}
+	if flags.ForceCommunityTools {
+		t.Fatal("ForceCommunityTools = true, want false")
+	}
+}
+
+func TestSyncStagePlanIncludesCommunityToolUpgradeWhenConfigured(t *testing.T) {
+	home := t.TempDir()
+	mustWriteFile(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), []byte(`{"command":"codegraph"}`))
+
+	rt, err := newSyncRuntime(home, model.Selection{
+		Agents:              []model.AgentID{model.AgentClaudeCode},
+		Components:          []model.ComponentID{},
+		ForceCommunityTools: false,
+	})
+	if err != nil {
+		t.Fatalf("newSyncRuntime() error = %v", err)
+	}
+	plan := rt.stagePlan()
+
+	found := false
+	for _, step := range plan.Apply {
+		if step.ID() == "sync:community-tool:codegraph-upgrade" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("sync stage plan missing community tool upgrade step; apply steps = %#v", plan.Apply)
+	}
+}
+
+func TestSyncStagePlanIncludesCommunityToolUpgradeWithForce(t *testing.T) {
+	home := t.TempDir()
+	mustWriteFile(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), []byte(`{"command":"codegraph"}`))
+
+	rt, err := newSyncRuntime(home, model.Selection{
+		Agents:              []model.AgentID{model.AgentClaudeCode},
+		Components:          []model.ComponentID{},
+		ForceCommunityTools: true,
+	})
+	if err != nil {
+		t.Fatalf("newSyncRuntime() error = %v", err)
+	}
+	plan := rt.stagePlan()
+
+	for _, step := range plan.Apply {
+		if s, ok := step.(communityToolSyncStep); ok && s.force {
+			return
+		}
+	}
+	t.Fatal("sync stage plan missing community tool sync step with force=true")
+}
+
+
+func TestSyncStagePlanExcludesCommunityToolWhenNotConfigured(t *testing.T) {
+	home := t.TempDir()
+
+	rt, err := newSyncRuntime(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{},
+	})
+	if err != nil {
+		t.Fatalf("newSyncRuntime() error = %v", err)
+	}
+	plan := rt.stagePlan()
+
+	for _, step := range plan.Apply {
+		if strings.HasPrefix(step.ID(), "sync:community-tool") {
+			t.Fatalf("unexpected community tool step in sync plan when CodeGraph not configured: %q", step.ID())
+		}
 	}
 }

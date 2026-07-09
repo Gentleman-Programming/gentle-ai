@@ -42,6 +42,7 @@ type SyncFlags struct {
 	StrictTDD          bool
 	IncludePermissions bool
 	IncludeTheme       bool
+	ForceCommunityTools bool
 	DryRun             bool
 	// Profiles holds named SDD profiles parsed from --profile flags.
 	// Each entry is populated by parseProfileFlag and augmented by
@@ -90,6 +91,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	fs.BoolVar(&opts.StrictTDD, "strict-tdd", false, "enable strict TDD mode for SDD agents (RED → GREEN → REFACTOR)")
 	fs.BoolVar(&opts.IncludePermissions, "include-permissions", false, "include permissions component in sync")
 	fs.BoolVar(&opts.IncludeTheme, "include-theme", false, "include theme component in sync")
+	fs.BoolVar(&opts.ForceCommunityTools, "force-community-tools", false, "force reinstall/upgrade of community tools during sync")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
 	registerListFlag(fs, "profile", &opts.rawProfiles)
 	registerListFlag(fs, "profile-phase", &opts.rawProfilePhases)
@@ -324,6 +326,7 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 		SDDMode:            sddMode,
 		SDDProfileStrategy: model.SDDProfileStrategyID(flags.SDDProfileStrategy),
 		StrictTDD:          flags.StrictTDD,
+		ForceCommunityTools: flags.ForceCommunityTools,
 		Skills:             skillIDs,
 		Profiles:           flags.Profiles,
 		// Preset is set to full-gentleman so selectedSkillIDs() returns the
@@ -455,6 +458,25 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles})
 	}
 
+	configured := communitytool.HasConfiguredCodeGraph(r.homeDir, communitytool.DetectorFunc(cmdLookPath))
+	hasLegacy := communitytool.HasLegacyCodeGraphGuidance(r.homeDir)
+	if configured || hasLegacy {
+		if configured {
+			apply = append(apply, communityToolSyncStep{
+				id:           "sync:community-tool:codegraph-upgrade",
+				homeDir:      r.homeDir,
+				workspaceDir: r.workspaceDir,
+				force:        r.selection.ForceCommunityTools,
+			})
+		} else {
+			apply = append(apply, &codeGraphGuidanceSyncStep{
+				id:           "sync:community-tool:codegraph-guidance",
+				homeDir:      r.homeDir,
+				changedFiles: &r.changedFiles,
+			})
+		}
+	}
+
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
 }
 
@@ -469,7 +491,9 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 			paths[path] = struct{}{}
 		}
 	}
-	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
+	configured := communitytool.HasConfiguredCodeGraph(homeDir, communitytool.DetectorFunc(cmdLookPath))
+	hasLegacy := communitytool.HasLegacyCodeGraphGuidance(homeDir)
+	if configured || hasLegacy {
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
 			paths[path] = struct{}{}
 		}
@@ -588,6 +612,25 @@ type codeGraphGuidanceSyncStep struct {
 	runner       communitytool.Runner
 	changedFiles *[]string
 	before       map[string]syncFileSnapshot
+}
+
+type communityToolSyncStep struct {
+	id           string
+	homeDir      string
+	workspaceDir string
+	force        bool
+}
+
+func (s communityToolSyncStep) ID() string {
+	return s.id
+}
+
+func (s communityToolSyncStep) Run() error {
+	_, err := communitytool.InstallWithHome(model.CommunityToolCodeGraph, s.workspaceDir, s.homeDir, communitytool.RunnerFunc(runCommand), communitytool.DetectorFunc(cmdLookPath), s.force)
+	if err != nil {
+		return fmt.Errorf("sync community tool %q: %w", model.CommunityToolCodeGraph, err)
+	}
+	return nil
 }
 
 type piCodeGraphSyncStep struct {
