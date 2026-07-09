@@ -348,29 +348,48 @@ func TestEffectiveMethod_NonGentleAIToolsOnWindowsUseBinary(t *testing.T) {
 // --- TestEffectiveMethod ---
 
 func TestEffectiveMethod(t *testing.T) {
+	origHomebrewPackageInstalled := homebrewPackageInstalled
+	t.Cleanup(func() { homebrewPackageInstalled = origHomebrewPackageInstalled })
+
 	tests := []struct {
-		name    string
-		tool    update.ToolInfo
-		profile system.PlatformProfile
-		want    update.InstallMethod
+		name          string
+		tool          update.ToolInfo
+		profile       system.PlatformProfile
+		brewInstalled bool
+		want          update.InstallMethod
 	}{
 		{
-			name:    "brew profile overrides go-install",
-			tool:    update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallBrew,
+			name:          "brew-owned package overrides go-install",
+			tool:          update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
+			profile:       system.PlatformProfile{PackageManager: "brew"},
+			brewInstalled: true,
+			want:          update.InstallBrew,
 		},
 		{
-			name:    "brew profile overrides binary",
-			tool:    update.ToolInfo{Name: "gga", InstallMethod: update.InstallBinary},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallBrew,
+			name:          "brew-owned package overrides binary",
+			tool:          update.ToolInfo{Name: "gga", InstallMethod: update.InstallBinary},
+			profile:       system.PlatformProfile{PackageManager: "brew"},
+			brewInstalled: true,
+			want:          update.InstallBrew,
 		},
 		{
-			name:    "brew profile overrides script",
-			tool:    update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallBrew,
+			name:          "brew-owned package overrides script",
+			tool:          update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
+			profile:       system.PlatformProfile{PackageManager: "brew"},
+			brewInstalled: true,
+			want:          update.InstallBrew,
+		},
+		{
+			name:    "brew profile without package ownership respects declared method",
+			tool:    update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
+			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
+			want:    update.InstallBinary,
+		},
+		{
+			name:    "brew profile without package ownership can use go-install fallback",
+			tool:    update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: "github.com/example/mytool/cmd/mytool"},
+			profile: system.PlatformProfile{PackageManager: "brew", GoAvailable: true},
+			want:    update.InstallGoInstall,
 		},
 		{
 			name:    "apt profile respects declared method (go-install)",
@@ -391,17 +410,19 @@ func TestEffectiveMethod(t *testing.T) {
 			want:    update.InstallScript,
 		},
 		{
-			name:    "brew profile does not override OpenCode plugin method",
-			tool:    update.ToolInfo{Name: "opencode-subagent-statusline", InstallMethod: update.InstallOpenCodePlugin, NpmPackage: "opencode-subagent-statusline"},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallOpenCodePlugin,
+			name:          "brew profile does not override OpenCode plugin method",
+			tool:          update.ToolInfo{Name: "opencode-subagent-statusline", InstallMethod: update.InstallOpenCodePlugin, NpmPackage: "opencode-subagent-statusline"},
+			profile:       system.PlatformProfile{PackageManager: "brew"},
+			brewInstalled: true,
+			want:          update.InstallOpenCodePlugin,
 		},
-		// Auto-detect order: brew → go-install → binary (issue #246).
+		// Auto-detect order: brew-owned package → go-install → binary (issue #246).
 		{
-			name:    "auto-detect: brew available → brew wins regardless of GoImportPath",
-			tool:    update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: "github.com/example/mytool/cmd/mytool"},
-			profile: system.PlatformProfile{PackageManager: "brew", GoAvailable: true},
-			want:    update.InstallBrew,
+			name:          "auto-detect: brew-owned package wins regardless of GoImportPath",
+			tool:          update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: "github.com/example/mytool/cmd/mytool"},
+			profile:       system.PlatformProfile{PackageManager: "brew", GoAvailable: true},
+			brewInstalled: true,
+			want:          update.InstallBrew,
 		},
 		{
 			name:    "auto-detect: brew missing + go available + GoImportPath set → go-install",
@@ -425,11 +446,47 @@ func TestEffectiveMethod(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			homebrewPackageInstalled = func(toolName string) bool {
+				return toolName == tc.tool.Name && tc.brewInstalled
+			}
+
 			got := effectiveMethod(tc.tool, tc.profile)
 			if got != tc.want {
 				t.Errorf("effectiveMethod = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestHomebrewPackageInstalledWithRequiresActiveBrewPath(t *testing.T) {
+	brewPrefix := filepath.Join(t.TempDir(), "opt", "gentle-ai")
+	brewBin := filepath.Join(brewPrefix, "bin", "gentle-ai")
+	nonBrewBin := filepath.Join(t.TempDir(), "gentle-ai")
+
+	run := func(name string, args ...string) *exec.Cmd {
+		if name != "brew" {
+			return mockCmd("false")
+		}
+		if len(args) >= 3 && args[0] == "list" && args[1] == "--formula" && args[2] == "gentle-ai" {
+			return mockCmd("true")
+		}
+		if len(args) == 2 && args[0] == "--prefix" && args[1] == "gentle-ai" {
+			return mockCmd("echo", brewPrefix)
+		}
+		return mockCmd("false")
+	}
+
+	if !homebrewPackageInstalledWith(run, func(string) (string, error) { return brewBin, nil }, "gentle-ai") {
+		t.Fatal("expected brew-owned active path to be treated as Homebrew installed")
+	}
+	if homebrewPackageInstalledWith(run, func(string) (string, error) { return nonBrewBin, nil }, "gentle-ai") {
+		t.Fatal("expected shadowing non-brew active path to avoid Homebrew")
+	}
+	if homebrewPackageInstalledWith(func(string, ...string) *exec.Cmd { return mockCmd("false") }, func(string) (string, error) { return brewBin, nil }, "gentle-ai") {
+		t.Fatal("expected brew list failure to avoid Homebrew")
+	}
+	if homebrewPackageInstalledWith(func(string, ...string) *exec.Cmd { return mockCmd("true") }, func(string) (string, error) { return "", errors.New("not found") }, "gentle-ai") {
+		t.Fatal("expected active path lookup failure to avoid Homebrew")
 	}
 }
 
@@ -1489,10 +1546,10 @@ func TestInstallerUpgradeArgs(t *testing.T) {
 	const tmpPath = `C:\Users\user\AppData\Local\Temp\gentle-ai-install-12345.ps1`
 
 	tests := []struct {
-		name          string
-		beta          bool
-		wantContains  []string
-		wantAbsent    []string
+		name         string
+		beta         bool
+		wantContains []string
+		wantAbsent   []string
 	}{
 		{
 			name: "stable upgrade does not include -Channel beta",

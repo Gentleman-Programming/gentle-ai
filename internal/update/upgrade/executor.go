@@ -600,10 +600,10 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 }
 
 // effectiveMethod resolves the actual upgrade strategy for a tool on a given platform.
-// Priority order matches the documented install hierarchy: plugin → brew → Windows installer → go-install → declared method.
+// Priority order matches the documented install hierarchy: plugin → brew-owned package → Windows installer → go-install → declared method.
 //
 //  1. OpenCode plugins are always handled by their own method — never overridden.
-//  2. Brew-managed platforms always use brew regardless of the tool's declared method.
+//  2. Homebrew is used only when Homebrew confirms it owns this specific tool.
 //  3. gentle-ai on Windows uses the installer so the running binary can exit before replacement.
 //  4. When Go is available on PATH and the tool has a GoImportPath, go-install is
 //     preferred over a direct binary download.
@@ -612,7 +612,7 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 	if tool.InstallMethod == update.InstallOpenCodePlugin {
 		return update.InstallOpenCodePlugin
 	}
-	if profile.PackageManager == "brew" {
+	if profile.PackageManager == "brew" && homebrewPackageInstalled(tool.Name) {
 		return update.InstallBrew
 	}
 	// Use installer method for gentle-ai on Windows (launches PowerShell installer).

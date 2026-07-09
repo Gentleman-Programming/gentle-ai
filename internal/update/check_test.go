@@ -977,17 +977,28 @@ func TestCheckFiltered_FetchErrorPreservesCheckFailedForMissingTool(t *testing.T
 // --- TestUpdateHint ---
 
 func TestUpdateHint(t *testing.T) {
+	origHomebrewPackageInstalled := homebrewPackageInstalled
+	t.Cleanup(func() { homebrewPackageInstalled = origHomebrewPackageInstalled })
+
 	tests := []struct {
-		name    string
-		tool    ToolInfo
-		profile system.PlatformProfile
-		want    string
+		name          string
+		tool          ToolInfo
+		profile       system.PlatformProfile
+		brewInstalled bool
+		want          string
 	}{
 		{
-			name:    "gentle-ai macOS",
+			name:          "gentle-ai macOS brew-owned",
+			tool:          ToolInfo{Name: "gentle-ai"},
+			profile:       system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
+			brewInstalled: true,
+			want:          "brew upgrade gentle-ai",
+		},
+		{
+			name:    "gentle-ai macOS non-brew",
 			tool:    ToolInfo{Name: "gentle-ai"},
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    "brew upgrade gentle-ai",
+			want:    "gentle-ai upgrade (downloads pre-built binary)",
 		},
 		{
 			name:    "gentle-ai linux",
@@ -1002,10 +1013,17 @@ func TestUpdateHint(t *testing.T) {
 			want:    "irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex",
 		},
 		{
-			name:    "engram macOS brew",
+			name:          "engram macOS brew-owned",
+			tool:          ToolInfo{Name: "engram"},
+			profile:       system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
+			brewInstalled: true,
+			want:          "brew upgrade engram",
+		},
+		{
+			name:    "engram macOS non-brew",
 			tool:    ToolInfo{Name: "engram"},
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    "brew upgrade engram",
+			want:    "gentle-ai upgrade (downloads pre-built binary)",
 		},
 		{
 			name:    "engram linux",
@@ -1020,10 +1038,17 @@ func TestUpdateHint(t *testing.T) {
 			want:    "gentle-ai upgrade (downloads pre-built binary)",
 		},
 		{
-			name:    "gga macOS brew",
+			name:          "gga macOS brew-owned",
+			tool:          ToolInfo{Name: "gga"},
+			profile:       system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
+			brewInstalled: true,
+			want:          "brew upgrade gga",
+		},
+		{
+			name:    "gga macOS non-brew",
 			tool:    ToolInfo{Name: "gga"},
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    "brew upgrade gga",
+			want:    "See https://github.com/Gentleman-Programming/gentleman-guardian-angel",
 		},
 		{
 			name:    "gga linux",
@@ -1041,11 +1066,47 @@ func TestUpdateHint(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			homebrewPackageInstalled = func(toolName string) bool {
+				return toolName == tc.tool.Name && tc.brewInstalled
+			}
+
 			got := updateHint(tc.tool, tc.profile)
 			if got != tc.want {
 				t.Fatalf("updateHint(%q, %q) = %q, want %q", tc.tool.Name, tc.profile.OS, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestHomebrewPackageInstalledWithRequiresActiveBrewPath(t *testing.T) {
+	brewPrefix := filepath.Join(t.TempDir(), "opt", "gentle-ai")
+	brewBin := filepath.Join(brewPrefix, "bin", "gentle-ai")
+	nonBrewBin := filepath.Join(t.TempDir(), "gentle-ai")
+
+	run := func(name string, args ...string) *exec.Cmd {
+		if name != "brew" {
+			return mockCmd("false")
+		}
+		if len(args) >= 3 && args[0] == "list" && args[1] == "--formula" && args[2] == "gentle-ai" {
+			return mockCmd("true")
+		}
+		if len(args) == 2 && args[0] == "--prefix" && args[1] == "gentle-ai" {
+			return mockCmd("echo", brewPrefix)
+		}
+		return mockCmd("false")
+	}
+
+	if !homebrewPackageInstalledWith(run, func(string) (string, error) { return brewBin, nil }, "gentle-ai") {
+		t.Fatal("expected brew-owned active path to be treated as Homebrew installed")
+	}
+	if homebrewPackageInstalledWith(run, func(string) (string, error) { return nonBrewBin, nil }, "gentle-ai") {
+		t.Fatal("expected shadowing non-brew active path to avoid Homebrew")
+	}
+	if homebrewPackageInstalledWith(func(string, ...string) *exec.Cmd { return mockCmd("false") }, func(string) (string, error) { return brewBin, nil }, "gentle-ai") {
+		t.Fatal("expected brew list failure to avoid Homebrew")
+	}
+	if homebrewPackageInstalledWith(func(string, ...string) *exec.Cmd { return mockCmd("true") }, func(string) (string, error) { return "", fmt.Errorf("not found") }, "gentle-ai") {
+		t.Fatal("expected active path lookup failure to avoid Homebrew")
 	}
 }
 

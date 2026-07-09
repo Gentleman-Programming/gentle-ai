@@ -32,11 +32,15 @@ func openCodeRegisteredNotMaterializedHint(tool ToolInfo) string {
 }
 
 func gentleAIHint(profile system.PlatformProfile) string {
-	switch profile.OS {
-	case "darwin":
+	if profile.PackageManager == "brew" && homebrewPackageInstalled("gentle-ai") {
 		return "brew upgrade gentle-ai"
+	}
+
+	switch profile.OS {
 	case "linux":
 		return "curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash"
+	case "darwin":
+		return "gentle-ai upgrade (downloads pre-built binary)"
 	case "windows":
 		return "irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex"
 	default:
@@ -45,19 +49,15 @@ func gentleAIHint(profile system.PlatformProfile) string {
 }
 
 func engramHint(profile system.PlatformProfile) string {
-	switch profile.PackageManager {
-	case "brew":
+	if profile.PackageManager == "brew" && homebrewPackageInstalled("engram") {
 		return "brew upgrade engram"
-	default:
-		return "gentle-ai upgrade (downloads pre-built binary)"
 	}
+	return "gentle-ai upgrade (downloads pre-built binary)"
 }
 
 func ggaHint(profile system.PlatformProfile) string {
-	switch profile.PackageManager {
-	case "brew":
+	if profile.PackageManager == "brew" && homebrewPackageInstalled("gga") {
 		return "brew upgrade gga"
-	default:
-		return "See https://github.com/Gentleman-Programming/gentleman-guardian-angel"
 	}
+	return "See https://github.com/Gentleman-Programming/gentleman-guardian-angel"
 }
