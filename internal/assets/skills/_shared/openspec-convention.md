@@ -118,3 +118,10 @@ openspec/changes/archive/YYYY-MM-DD-{change-name}/
 ```
 
 Use today's date in ISO format. The archive is an AUDIT TRAIL — never delete or modify archived changes.
+
+## Archive Isolation
+
+- Do not proactively read, search, or index `openspec/changes/archive/` during normal SDD work, except when delegating or executing the `sdd-archive` phase.
+- Treat `openspec/changes/archive/` as historical-only content that may contradict current requirements.
+- Ignore accidental search hits from that path unless the task is explicitly a historical audit, legacy comparison, archived logic retrieval, or the user explicitly directs otherwise.
+- Only the `sdd-archive` phase writes to the archive path.
