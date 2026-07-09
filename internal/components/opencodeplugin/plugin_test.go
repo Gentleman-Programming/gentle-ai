@@ -155,3 +155,48 @@ func TestInstallGentleLogoWritesLocalTUIPluginAndRegistersAbsolutePath(t *testin
 		t.Fatalf("plugin registration = %#v, want absolute %q", root.Plugin, pluginPath)
 	}
 }
+
+func TestDCPDefinitionExists(t *testing.T) {
+	def, ok := DefinitionFor(model.OpenCodePluginDCP)
+	if !ok {
+		t.Fatal("DCP definition not found")
+	}
+	if def.PackageName != "opencode-dynamic-context-pruning" {
+		t.Fatalf("DCP PackageName = %q, want %q", def.PackageName, "opencode-dynamic-context-pruning")
+	}
+	if def.Owner != "Opencode-DCP" {
+		t.Fatalf("DCP Owner = %q, want %q", def.Owner, "Opencode-DCP")
+	}
+}
+
+func TestInstallDCPAddsToTUIConfig(t *testing.T) {
+	home := t.TempDir()
+	result, err := Install(home, model.OpenCodePluginDCP)
+	if err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Install() changed = false, want true")
+	}
+
+	configPath := filepath.Join(home, ".config", "opencode", "tui.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(tui.json) error = %v", err)
+	}
+	var root struct {
+		Plugin []string `json:"plugin"`
+	}
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatalf("Unmarshal(tui.json) error = %v", err)
+	}
+	found := false
+	for _, p := range root.Plugin {
+		if p == "opencode-dynamic-context-pruning" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("plugin list = %#v, want opencode-dynamic-context-pruning", root.Plugin)
+	}
+}

@@ -173,6 +173,7 @@ const (
 	OpenCodePluginSubAgentStatusline OpenCodeCommunityPluginID = "sub-agent-statusline"
 	OpenCodePluginSDDEngramManage    OpenCodeCommunityPluginID = "sdd-engram-plugin"
 	OpenCodePluginGentleLogo         OpenCodeCommunityPluginID = "gentle-logo"
+	OpenCodePluginDCP                OpenCodeCommunityPluginID = "dynamic-context-pruning"
 )
 
 type CommunityToolID string
