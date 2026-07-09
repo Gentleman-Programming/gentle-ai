@@ -134,7 +134,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 		// Detect missing TTY early: Bubbletea requires /dev/tty to render.
 		// Print a helpful error with available non-TUI subcommands instead of
 		// letting Bubbletea panic with a cryptic "could not open a new TTY".
-		if f, ok := os.Stdin.(*os.File); !ok || !isattyFn(f.Fd()) {
+		if !isattyFn(os.Stdin.Fd()) {
+			return fmt.Errorf("no terminal attached (TTY required for the interactive TUI)\n\nAvailable non-interactive commands:\n  gentle-ai --version    Show version\n  gentle-ai --help       List all commands\n  gentle-ai install      Install agents/tools from CLI\n  gentle-ai upgrade      Upgrade managed tools from CLI\n  gentle-ai update check Check for updates\n  gentle-ai sync         Sync agent configs")
+		}
+		if !isattyFn(os.Stdout.Fd()) {
 			return fmt.Errorf("no terminal attached (TTY required for the interactive TUI)\n\nAvailable non-interactive commands:\n  gentle-ai --version    Show version\n  gentle-ai --help       List all commands\n  gentle-ai install      Install agents/tools from CLI\n  gentle-ai upgrade      Upgrade managed tools from CLI\n  gentle-ai update check Check for updates\n  gentle-ai sync         Sync agent configs")
 		}
 
