@@ -420,6 +420,9 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 			t.Fatalf("workspace-scoped filesystem table missing %q; got:\n%s", want, scopedFilesystem)
 		}
 	}
+	if !strings.Contains(scopedFilesystem, `glob_scan_max_depth = 6`) {
+		t.Fatalf("workspace-scoped filesystem table missing glob_scan_max_depth; got:\n%s", scopedFilesystem)
+	}
 	for _, invalid := range []string{
 		`"**/.git" = "write"`,
 		`"**/.git/**" = "write"`,

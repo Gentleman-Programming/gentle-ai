@@ -229,6 +229,11 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 		merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", path, `"write"`)
 	}
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", "glob_scan_max_depth", "6")
+	// Also set glob_scan_max_depth in the :workspace_roots sub-table.
+	// Codex's sandbox does not inherit this setting from the parent
+	// filesystem table, so unbounded ** globs in deny rules would emit
+	// warnings on Linux and Windows without this.
+	merged = filemerge.UpsertTOMLTableKey(merged, `permissions.gentle-dev.filesystem.":workspace_roots"`, "glob_scan_max_depth", "6")
 	for _, path := range []string{`"."`, `".git/**"`} {
 		merged = filemerge.UpsertTOMLTableKey(merged, `permissions.gentle-dev.filesystem.":workspace_roots"`, path, `"write"`)
 	}
