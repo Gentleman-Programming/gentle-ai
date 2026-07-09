@@ -72,6 +72,32 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 
 ---
 
+## Platform-Specific Delegation Recipes
+
+These recipes let you route delegated work into a persistent, identifiable terminal window or tab. They are optional — use them when you want a visible, named container for background agent work.
+
+### Windows (Windows Terminal)
+
+Windows users without WSL, tmux, or zellij can use Windows Terminal's named window feature (`wt -w <name>`) to target a persistent, reusable terminal window for agent delegation.
+
+```powershell
+wt -w orquestador-gentleman new-tab --title "OpenCode" opencode run --agent gentle-orchestrator "<task>"
+```
+
+`wt -w <name>` reuses an existing named window if one is already open, or creates it if not — the closest native Windows equivalent to targeting a persistent tmux pane by name. Combined with `opencode run --agent <name> "<task>"` headless mode (no TUI interaction required), this gives Windows users a scriptable delegation path with zero extra dependencies (no WSL, no tmux port).
+
+**Requirements:** Windows 11 with Windows Terminal installed (ships by default). No WSL, tmux, or zellij needed.
+
+### macOS / Linux (tmux)
+
+On macOS and Linux, tmux `send-keys` provides persistent, named panes for agent delegation:
+
+```bash
+tmux send-keys -t orquestador-gentleman "opencode run --agent gentle-orchestrator '<task>'" Enter
+```
+
+---
+
 ## SDD Mode Support
 
 | Feature          | Claude Code | OpenCode | Kilo Code | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE | Qwen Code | OpenClaw | Trae |   Pi    | Hermes |
