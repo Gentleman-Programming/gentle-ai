@@ -2,11 +2,24 @@ package uninstall
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+func isSymlinkPrivilegeError(err error) bool {
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		var errno syscall.Errno
+		if errors.As(le.Err, &errno) {
+			return errno == 1314 // ERROR_PRIVILEGE_NOT_HELD
+		}
+	}
+	return false
+}
 
 func FuzzNormalizeJSON_NoPanic(f *testing.F) {
 	seeds := [][]byte{
@@ -270,20 +283,57 @@ func TestRemoveJSONPaths_PreservesCRLF(t *testing.T) {
 	}
 }
 
-func TestReadManagedFile_RejectsSymlink(t *testing.T) {
+func TestReadManagedFile_FollowsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(target, []byte(`{"ok":true}`), 0o644); err != nil {
+	want := []byte(`{"ok":true}`)
+	if err := os.WriteFile(target, want, 0o644); err != nil {
 		t.Fatalf("WriteFile(target) error = %v", err)
 	}
 	link := filepath.Join(dir, "link.json")
 	if err := os.Symlink(target, link); err != nil {
+		if isSymlinkPrivilegeError(err) {
+			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
+		}
 		t.Fatalf("Symlink() error = %v", err)
 	}
 
-	_, err := readManagedFile(link)
-	if err == nil || !strings.Contains(err.Error(), "refusing to read symlink") {
-		t.Fatalf("readManagedFile(symlink) error = %v, want symlink rejection", err)
+	got, err := readManagedFile(link)
+	if err != nil {
+		t.Fatalf("readManagedFile(symlink) error = %v, want success", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("readManagedFile(symlink) = %q, want %q", got, want)
+	}
+}
+
+func TestRemoveFileIfExists_RemovesSymlinkNotTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.md")
+	content := []byte("keep target\n")
+	if err := os.WriteFile(target, content, 0o644); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	link := filepath.Join(dir, "link.md")
+	if err := os.Symlink(target, link); err != nil {
+		if isSymlinkPrivilegeError(err) {
+			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
+		}
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	if err := removeFileIfExists(link); err != nil {
+		t.Fatalf("removeFileIfExists(symlink) error = %v", err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("symlink still exists after remove: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile(target) error = %v", err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("target content = %q, want %q", got, content)
 	}
 }
 
