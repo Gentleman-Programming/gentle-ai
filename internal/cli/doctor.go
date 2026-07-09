@@ -12,6 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/storage"
 )
@@ -64,6 +67,7 @@ var (
 		_ = resp.Body.Close()
 		return resp.StatusCode, nil
 	}
+	newDoctorRegistry = agents.NewDefaultRegistry
 )
 
 // RunDoctor runs all ecosystem health checks and renders a report to w.
@@ -363,6 +367,201 @@ func checkDiskSpace(homeDir string) CheckResult {
 			Detail: fmt.Sprintf("%d MB free on %s filesystem", freeMB, dir),
 		}
 	}
+}
+
+// estimateTokens returns a rough token count using the ~4-chars/token
+// heuristic. Intentionally coarse: doctor labels every token figure a "rough
+// estimate" and no model-specific tokenizer is a dependency (out of scope).
+func estimateTokens(chars int) int {
+	return chars / 4
+}
+
+// AgentFootprint is one agent's measured managed-block footprint.
+type AgentFootprint struct {
+	AgentID    string
+	Path       string // "" when the agent id had no adapter
+	Unresolved bool   // state listed an id with no registered adapter
+	Present    bool   // instruction file existed and was read
+	Sections   []filemerge.Section
+	Anomalies  []filemerge.Anomaly
+	CharCount  int // sum of section CharCounts
+	LineCount  int // sum of section LineCounts
+	TokenEst   int // estimateTokens(CharCount)
+}
+
+// FootprintSummary aggregates managed-block footprint measurements across all
+// agents listed in the persisted install state.
+type FootprintSummary struct {
+	Agents        []AgentFootprint
+	TotalBlocks   int
+	AgentsCovered int // agents with >=1 measured block
+	TotalChars    int
+	TotalTokenEst int
+	HasFail       bool // any AnomalyOrphanOpen or AnomalyMismatch anywhere
+	HasWarn       bool // any AnomalyOrphanClose anywhere
+	StateMissing  bool // state.json absent (first-time install)
+	NoAgents      bool // state present and readable, but InstalledAgents is genuinely empty
+	// StateUnreadable is true when state.Read failed for a reason OTHER than
+	// "file does not exist" — i.e. a malformed/corrupt state.json. This is
+	// deliberately distinct from NoAgents: telling a user with a corrupt
+	// state file to "run install" (the NoAgents remedy) contradicts the
+	// state:json check, which correctly diagnoses the same file as needing
+	// repair.
+	StateUnreadable bool
+	// RegistryUnavailable is true when newDoctorRegistry() itself failed.
+	// This is a defensive, not user-actionable, path — it does not mean
+	// "no agents installed" and must not carry that remedy.
+	RegistryUnavailable bool
+}
+
+// collectFootprint reads the install state and every installed agent's
+// instruction file, scanning each for managed marker blocks.
+func collectFootprint(homeDir string) FootprintSummary {
+	var sum FootprintSummary
+
+	reg, err := newDoctorRegistry()
+	if err != nil {
+		sum.RegistryUnavailable = true
+		return sum
+	}
+
+	s, err := state.Read(homeDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			sum.StateMissing = true
+		} else {
+			sum.StateUnreadable = true
+		}
+		return sum
+	}
+
+	if len(s.InstalledAgents) == 0 {
+		sum.NoAgents = true
+		return sum
+	}
+
+	for _, id := range s.InstalledAgents {
+		sum.Agents = append(sum.Agents, collectAgentFootprint(reg, homeDir, id))
+	}
+
+	for _, af := range sum.Agents {
+		sum.TotalBlocks += len(af.Sections)
+		sum.TotalChars += af.CharCount
+		sum.TotalTokenEst += af.TokenEst
+		if len(af.Sections) > 0 {
+			sum.AgentsCovered++
+		}
+		for _, an := range af.Anomalies {
+			switch an.Kind {
+			case filemerge.AnomalyOrphanOpen, filemerge.AnomalyMismatch:
+				sum.HasFail = true
+			case filemerge.AnomalyOrphanClose:
+				sum.HasWarn = true
+			}
+		}
+	}
+
+	return sum
+}
+
+// collectAgentFootprint resolves and scans a single agent's instruction file.
+func collectAgentFootprint(reg *agents.Registry, homeDir, agentID string) AgentFootprint {
+	af := AgentFootprint{AgentID: agentID}
+
+	adapter, ok := reg.Get(model.AgentID(agentID))
+	if !ok {
+		af.Unresolved = true
+		return af
+	}
+
+	af.Path = adapter.SystemPromptFile(homeDir)
+	data, err := os.ReadFile(af.Path)
+	if err != nil {
+		return af
+	}
+	af.Present = true
+
+	res := filemerge.ScanSections(string(data))
+	af.Sections = res.Sections
+	af.Anomalies = res.Anomalies
+	for _, sec := range res.Sections {
+		af.CharCount += sec.CharCount
+		af.LineCount += sec.LineCount
+	}
+	af.TokenEst = estimateTokens(af.CharCount)
+
+	return af
+}
+
+// footprintCheckResult classifies a FootprintSummary into the always-on
+// "managed:footprint" CheckResult.
+func footprintCheckResult(sum FootprintSummary) CheckResult {
+	const name = "managed:footprint"
+
+	switch {
+	case sum.StateMissing:
+		return CheckResult{
+			Name:   name,
+			Status: CheckStatusWarn,
+			Detail: "state file not found — managed block footprint unavailable (expected for first-time install)",
+			Remedy: "Run 'gentle-ai install' to create initial state",
+		}
+	case sum.StateUnreadable:
+		return CheckResult{
+			Name:   name,
+			Status: CheckStatusFail,
+			Detail: "state file could not be read — managed block footprint unavailable (see the state:json check above for details)",
+			Remedy: "Delete or repair the state file, then re-run 'gentle-ai install'",
+		}
+	case sum.NoAgents:
+		return CheckResult{
+			Name:   name,
+			Status: CheckStatusWarn,
+			Detail: "no installed agents — managed block footprint unavailable",
+			Remedy: "Run 'gentle-ai install' to configure agents",
+		}
+	case sum.RegistryUnavailable:
+		return CheckResult{
+			Name:   name,
+			Status: CheckStatusWarn,
+			Detail: "agent registry unavailable — managed block footprint could not be computed",
+			Remedy: "Re-run 'gentle-ai doctor'; if this persists, reinstall gentle-ai",
+		}
+	case sum.HasFail:
+		return CheckResult{
+			Name:   name,
+			Status: CheckStatusFail,
+			Detail: "broken managed block marker(s): " + strings.Join(footprintFailLocations(sum), ", "),
+			Remedy: "Run 'gentle-ai sync' to repair marker boundaries",
+		}
+	case sum.HasWarn:
+		return CheckResult{
+			Name:   name,
+			Status: CheckStatusWarn,
+			Detail: "stray closing marker found in managed block(s)",
+			Remedy: "Run 'gentle-ai sync' to repair marker boundaries",
+		}
+	default:
+		return CheckResult{
+			Name:   name,
+			Status: CheckStatusPass,
+			Detail: fmt.Sprintf("%d block(s) across %d agent(s), ~%d tokens (rough estimate)", sum.TotalBlocks, sum.AgentsCovered, sum.TotalTokenEst),
+		}
+	}
+}
+
+// footprintFailLocations returns "agentID:sectionID" for every orphan-open or
+// mismatch anomaly, for the Fail detail message.
+func footprintFailLocations(sum FootprintSummary) []string {
+	var locations []string
+	for _, af := range sum.Agents {
+		for _, an := range af.Anomalies {
+			if an.Kind == filemerge.AnomalyOrphanOpen || an.Kind == filemerge.AnomalyMismatch {
+				locations = append(locations, af.AgentID+":"+an.ID)
+			}
+		}
+	}
+	return locations
 }
 
 // renderDoctorReport writes a human-readable report to w.
