@@ -15,7 +15,7 @@ internal/
   system/                  OS/distro detection, dependency checks, platform guards
   cli/                     Install flags, validation, orchestration, dry-run
   planner/                 Dependency graph, resolution, ordering, review payloads
-  installcmd/              Profile-aware command resolver (brew/apt/pacman/dnf/winget/go install)
+  installcmd/              Profile-aware command resolver (brew/apt/pacman/dnf/zypper/winget/go install)
   pipeline/                Staged execution + rollback orchestration
   backup/                  Config snapshot + restore
   assets/                  Embedded skill files + persona templates

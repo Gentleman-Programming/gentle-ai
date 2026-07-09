@@ -75,6 +75,7 @@ This is NOT an "AI agent installer." Most agents are already easy to install (`n
 | Linux - Ubuntu/Debian | apt + Homebrew | P0 |
 | Linux - Arch | pacman | P0 |
 | Linux - Fedora/RHEL | dnf | P1 |
+| Linux - openSUSE | zypper | P1 |
 | WSL 2 (Windows) | apt + Homebrew | P1 |
 | Windows (native) | winget / scoop / choco | P2 |
 | Termux (Android) | pkg | P2 |
@@ -130,7 +131,7 @@ These are the base tools the installer itself and the ecosystem need.
 | Dependency | Min Version | Why | Install Method |
 |-----------|-------------|-----|----------------|
 | `bash` | 3.2+ | GGA, install scripts, Engram plugin hooks | Pre-installed on all targets |
-| `git` | 2.x | GGA (diff/staging), Engram (git sync), skills clone, agent integrations | `brew`/`apt`/`pacman`/`dnf`/`pkg` |
+| `git` | 2.x | GGA (diff/staging), Engram (git sync), skills clone, agent integrations | `brew`/`apt`/`pacman`/`dnf`/`zypper`/`pkg` |
 | `curl` | Any | Binary downloads, GGA providers (lmstudio, github), installer script | Pre-installed on most systems |
 
 #### Conditionally Required (based on user's selections)
@@ -152,6 +153,7 @@ These are the base tools the installer itself and the ecosystem need.
 | **Ubuntu/Debian** | bash, curl, git, sha256sum | Homebrew (optional), Node.js (apt version is often outdated → use NodeSource or fnm) | Node.js from apt is often v12/v16 — MUST use NodeSource repo or version manager for v20+ |
 | **Arch** | bash, curl, git, python3, sha256sum | Node.js (`pacman -S nodejs npm`) | Arch packages are usually current — `pacman` versions are fine |
 | **Fedora/RHEL** | bash, curl, git, sha256sum | Node.js (`dnf install nodejs`) | May need `dnf module enable nodejs:20` for correct version |
+| **openSUSE** | bash, curl, git, sha256sum | Node.js (`zypper install nodejs-default npm-default`) | Leap and Tumbleweed expose default Node/npm packages via `nodejs-default` and `npm-default` |
 | **WSL 2** | Same as host Linux distro | Same as Linux + note about Windows-side agents (Cursor, VSCode) | Windows-side agents use Windows paths; WSL agents use Linux paths |
 | **Windows native** | None guaranteed | Everything: git (Git for Windows), Node.js (winget/scoop), bash (Git Bash) | GGA needs bash — Git for Windows includes Git Bash |
 | **Termux** | bash, curl, git | Node.js (`pkg install nodejs`), python (`pkg install python`) | No sudo, no Homebrew. Commands run directly, not via `sh -c`. Go cross-compile has limitations on Android. |

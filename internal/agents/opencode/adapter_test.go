@@ -123,8 +123,18 @@ func TestInstallCommand(t *testing.T) {
 			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
 		},
 		{
+			name:    "opensuse resolves npm install",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper"},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+		},
+		{
+			name:    "opensuse with writable npm skips sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper", NpmWritable: true},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+		},
+		{
 			name:    "unsupported package manager returns error",
-			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "zypper"},
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "unknownpm"},
 			wantErr: true,
 		},
 	}

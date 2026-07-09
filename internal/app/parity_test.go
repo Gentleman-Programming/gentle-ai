@@ -129,6 +129,13 @@ func TestGuardAcceptsFedoraProfile(t *testing.T) {
 	}
 }
 
+func TestGuardAcceptsOpenSUSEProfile(t *testing.T) {
+	profile := system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper", Supported: true}
+	if err := system.EnsureSupportedPlatform(profile); err != nil {
+		t.Fatalf("expected opensuse profile to be accepted, got %v", err)
+	}
+}
+
 func TestGuardFlowLinuxDryRunPropagatesDecision(t *testing.T) {
 	detection := system.DetectionResult{
 		System: system.SystemInfo{
@@ -336,6 +343,13 @@ func TestGuardFlowLinuxArchProfileExplicitlyPasses(t *testing.T) {
 	profile := system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman", Supported: true}
 	if err := system.EnsureSupportedPlatform(profile); err != nil {
 		t.Fatalf("Arch profile should pass guard, got %v", err)
+	}
+}
+
+func TestGuardFlowLinuxOpenSUSEProfileExplicitlyPasses(t *testing.T) {
+	profile := system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper", Supported: true}
+	if err := system.EnsureSupportedPlatform(profile); err != nil {
+		t.Fatalf("openSUSE profile should pass guard, got %v", err)
 	}
 }
 

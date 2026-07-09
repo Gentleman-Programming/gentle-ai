@@ -10,6 +10,8 @@ e2e/
   e2e_test.sh         # All test cases, tiered by env vars
   Dockerfile.ubuntu   # Ubuntu 22.04 test image
   Dockerfile.arch     # Arch Linux test image
+  Dockerfile.fedora   # Fedora test image
+  Dockerfile.opensuse # openSUSE Leap test image
   docker-test.sh      # Orchestrator: build + run all platforms
 ```
 
@@ -37,6 +39,8 @@ RUN_FULL_E2E=1 RUN_BACKUP_TESTS=1 ./e2e/docker-test.sh
 |----------|-----------|-----------------|
 | Ubuntu 22.04 | `Dockerfile.ubuntu` | apt |
 | Arch Linux | `Dockerfile.arch` | pacman |
+| Fedora 43 | `Dockerfile.fedora` | dnf |
+| openSUSE Leap 15.6 | `Dockerfile.opensuse` | zypper |
 
 ## How it works
 
@@ -59,6 +63,10 @@ docker run --rm gentle-ai-e2e-ubuntu
 # Run with full E2E on Arch
 docker build -f e2e/Dockerfile.arch -t gentle-ai-e2e-arch .
 docker run --rm -e RUN_FULL_E2E=1 gentle-ai-e2e-arch
+
+# Run openSUSE only
+docker build -f e2e/Dockerfile.opensuse -t gentle-ai-e2e-opensuse .
+docker run --rm gentle-ai-e2e-opensuse
 
 # Interactive debugging
 docker run --rm -it gentle-ai-e2e-ubuntu /bin/bash

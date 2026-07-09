@@ -221,6 +221,11 @@ func TestInstallCommand(t *testing.T) {
 			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@kilocode/cli@" + versions.Kilocode}},
 		},
 		{
+			name:    "opensuse resolves npm install with sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper"},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@kilocode/cli@" + versions.Kilocode}},
+		},
+		{
 			name:    "linux with writable npm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", NpmWritable: true},
 			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@kilocode/cli@" + versions.Kilocode}},

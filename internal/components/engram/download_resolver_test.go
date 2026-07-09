@@ -29,6 +29,10 @@ func TestInstallCommandNonBrewReturnsError(t *testing.T) {
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
 		},
 		{
+			name:    "opensuse returns error (no longer go install)",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper"},
+		},
+		{
 			name:    "windows returns error (no longer go install)",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 		},

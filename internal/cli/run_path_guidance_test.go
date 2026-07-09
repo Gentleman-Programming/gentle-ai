@@ -26,6 +26,9 @@ func TestEngramPathGuidanceZsh(t *testing.T) {
 }
 
 func TestEngramPathGuidanceDefault(t *testing.T) {
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", "")
+
 	msg := engramPathGuidance("")
 	want := filepath.Join("go", "bin")
 	if !strings.Contains(msg, want) {

@@ -76,6 +76,15 @@ func TestPlatformDecisionFromProfileMatrix(t *testing.T) {
 				OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", Supported: true,
 			},
 		},
+		{
+			name: "opensuse profile maps to zypper decision",
+			profile: system.PlatformProfile{
+				OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper", Supported: true,
+			},
+			want: PlatformDecision{
+				OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper", Supported: true,
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -94,6 +103,7 @@ func TestBuildReviewPayloadPlatformDecisionPropagatesPerProfile(t *testing.T) {
 		{OS: "linux", LinuxDistro: "ubuntu", PackageManager: "apt", Supported: true},
 		{OS: "linux", LinuxDistro: "arch", PackageManager: "pacman", Supported: true},
 		{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", Supported: true},
+		{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper", Supported: true},
 	}
 
 	for _, decision := range profiles {
