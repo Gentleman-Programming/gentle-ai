@@ -29,6 +29,7 @@ Saving to memory is internal bookkeeping. It NEVER counts as answering the user,
 - End every turn with your complete user-facing answer as the final message, with NO tool calls after it.
 - Save memory BEFORE composing that final answer, not after. Never let a `mem_save`/`mem_judge` be the last action in a turn that still owed the user a substantive reply.
 - If a memory chain (`mem_save` → `mem_judge`) ran late, still write the full answer in that final message — do not collapse it into a one-line "saved / done" acknowledgement.
+- If a memory call (`mem_save`, `mem_judge`, `mem_session_summary`) fails or times out, deliver the complete answer anyway and note the failure briefly — a failed or slow memory operation never blocks, truncates, or replaces the reply.
 - Never treat the text you stored in memory as the text you delivered: memory is for your future self, the reply is for the user.
 
 Format for `mem_save`:
