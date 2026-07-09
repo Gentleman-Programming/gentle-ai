@@ -98,7 +98,8 @@ rules:
     - Group by phase, use hierarchical numbering
     - Keep tasks completable in one session
   apply:
-    - Follow existing code patterns
+    guidelines:
+      - Follow existing code patterns
     tdd: false           # Set to true to enable RED-GREEN-REFACTOR
     test_command: ""
   verify:
