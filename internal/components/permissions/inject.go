@@ -188,11 +188,6 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network.domains", `"*"`, `"allow"`)
 
 	merged = filemerge.RemoveTOMLTableKeys(merged, `permissions.gentle-dev.filesystem.":root"`, []string{`"."`})
-	readPaths := []string{
-		`":minimal"`,
-		`"~/.config/git"`,
-		`"~/.gitconfig"`,
-	}
 	// Only inject Nix read paths that actually resolve on disk. Codex enforces the
 	// profile through a bubblewrap sandbox, and binding a non-existent path makes
 	// bubblewrap create a synthetic ".../deleted" read-only tmpfs entry whose access
@@ -208,6 +203,17 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 		{`"~/.local/state/nix/profiles/home-manager/home-path"`, filepath.Join(homeDir, ".local", "state", "nix", "profiles", "home-manager", "home-path")},
 		{`"~/.nix-profile"`, filepath.Join(homeDir, ".nix-profile")},
 		{`"/nix/store"`, "/nix/store"},
+	}
+	nixReadPathKeys := make([]string, 0, len(nixReadPaths))
+	for _, nix := range nixReadPaths {
+		nixReadPathKeys = append(nixReadPathKeys, nix.key)
+	}
+	merged = filemerge.RemoveTOMLTableKeys(merged, "permissions.gentle-dev.filesystem", nixReadPathKeys)
+
+	readPaths := []string{
+		`":minimal"`,
+		`"~/.config/git"`,
+		`"~/.gitconfig"`,
 	}
 	for _, nix := range nixReadPaths {
 		if _, err := osStat(nix.resolved); err == nil {

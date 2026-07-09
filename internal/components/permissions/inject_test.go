@@ -420,19 +420,35 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 }
 
 // TestInjectCodexPermissionsSkipsNixPathsWhenAbsent verifies that on a host
-// without Nix installed (none of the Nix paths resolve on disk), the generated
-// Codex profile contains NONE of the three Nix read paths. Binding a
-// non-existent path makes bubblewrap create a synthetic ".../deleted" tmpfs
-// entry that fails with EBUSY, which broke Codex on non-Nix Linux/WSL.
+// without Nix installed (none of the Nix paths resolve on disk), stale managed
+// Nix read paths are removed while non-Nix filesystem permissions remain.
+// Binding a non-existent path makes bubblewrap create a synthetic ".../deleted"
+// tmpfs entry that fails with EBUSY, which broke Codex on non-Nix Linux/WSL.
 func TestInjectCodexPermissionsSkipsNixPathsWhenAbsent(t *testing.T) {
 	home := t.TempDir()
 	nixPathsAbsent(t)
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	initial := `[permissions.gentle-dev.filesystem]
+":minimal" = "read"
+"~/.config/git" = "read"
+"~/.gitconfig" = "read"
+"~/.local/state/nix/profiles/home-manager/home-path" = "read"
+"~/.nix-profile" = "read"
+"/nix/store" = "read"
+"/opt/tooling" = "read"
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
 
 	if _, err := Inject(home, codexAdapter()); err != nil {
 		t.Fatalf("Inject() error = %v", err)
 	}
 
-	configPath := filepath.Join(home, ".codex", "config.toml")
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("read config.toml: %v", err)
@@ -455,9 +471,12 @@ func TestInjectCodexPermissionsSkipsNixPathsWhenAbsent(t *testing.T) {
 		`"~/.config/git" = "read"`,
 		`"~/.gitconfig" = "read"`,
 	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("Codex config missing base read path %q; got:\n%s", want, text)
+		if strings.Count(text, want) != 1 {
+			t.Fatalf("Codex config should keep base read path %q exactly once; got:\n%s", want, text)
 		}
+	}
+	if strings.Count(text, `"/opt/tooling" = "read"`) != 1 {
+		t.Fatalf("Codex config should preserve unrelated filesystem permissions; got:\n%s", text)
 	}
 }
 
