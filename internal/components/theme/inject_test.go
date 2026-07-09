@@ -55,8 +55,8 @@ func TestInjectMergesThemeOverlayIntoAdapterSettings(t *testing.T) {
 	if err := json.Unmarshal(data, &root); err != nil {
 		t.Fatalf("Unmarshal(settings) error = %v", err)
 	}
-	if root.Theme != "gentleman-kanagawa" {
-		t.Fatalf("theme = %q, want gentleman-kanagawa", root.Theme)
+	if root.Theme != "gentleman" {
+		t.Fatalf("theme = %q, want gentleman", root.Theme)
 	}
 	if got := root.Permissions["allow"]; len(got) != 1 || got[0] != "Bash(go test ./...)" {
 		t.Fatalf("permissions.allow = %#v, want preserved existing permission", got)
@@ -92,8 +92,8 @@ func TestInjectCreatesAdapterSettingsWhenMissing(t *testing.T) {
 	if err := json.Unmarshal(data, &root); err != nil {
 		t.Fatalf("Unmarshal(settings) error = %v", err)
 	}
-	if root.Theme != "gentleman-kanagawa" {
-		t.Fatalf("theme = %q, want gentleman-kanagawa", root.Theme)
+	if root.Theme != "gentleman" {
+		t.Fatalf("theme = %q, want gentleman", root.Theme)
 	}
 }
 

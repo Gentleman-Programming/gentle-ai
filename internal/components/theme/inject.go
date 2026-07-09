@@ -16,7 +16,7 @@ type InjectionResult struct {
 	Files   []string
 }
 
-var themeOverlayJSON = []byte("{\n  \"theme\": \"gentleman-kanagawa\"\n}\n")
+var themeOverlayJSON = []byte("{\n  \"theme\": \"gentleman\"\n}\n")
 
 type claudeTheme struct {
 	Name      string            `json:"name"`
