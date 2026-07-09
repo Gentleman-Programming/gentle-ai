@@ -190,10 +190,6 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network.domains", `"*"`, `"allow"`)
 
 	merged = filemerge.RemoveTOMLTableKeys(merged, `permissions.gentle-dev.filesystem.":root"`, []string{`"."`})
-	merged = filemerge.RemoveTOMLTableKeys(merged, "permissions.gentle-dev.filesystem", []string{
-		`":tmpdir"`,
-		`":slash_tmp"`,
-	})
 	secretDenyPaths := []string{
 		`"**/.env"`,
 		`"**/.env.local"`,
@@ -211,7 +207,6 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	merged = filemerge.RemoveTOMLTableKeys(merged, `permissions.gentle-dev.filesystem.":workspace_roots"`, []string{
 		`"**/.git"`,
 		`"**/.git/**"`,
-		`".git/**"`,
 		`"**/.env.*"`,
 		`"*.env.*"`,
 		`"**/secrets/*"`,
@@ -230,7 +225,13 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	for _, path := range readPaths {
 		merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", path, `"read"`)
 	}
+	for _, path := range []string{`":tmpdir"`, `":slash_tmp"`} {
+		merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", path, `"write"`)
+	}
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", "glob_scan_max_depth", "6")
+	for _, path := range []string{`"."`, `".git/**"`} {
+		merged = filemerge.UpsertTOMLTableKey(merged, `permissions.gentle-dev.filesystem.":workspace_roots"`, path, `"write"`)
+	}
 	for _, path := range secretDenyPaths {
 		merged = filemerge.UpsertTOMLTableKey(merged, `permissions.gentle-dev.filesystem.":workspace_roots"`, path, `"deny"`)
 	}

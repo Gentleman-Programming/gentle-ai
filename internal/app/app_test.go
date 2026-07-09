@@ -35,6 +35,27 @@ func tomlSection(text, header string) string {
 	return section
 }
 
+func assertCodexWorkspaceWriteRulesScoped(t *testing.T, text string) {
+	t.Helper()
+
+	rootFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem]`)
+	for _, rule := range []string{`"." = "write"`, `".git/**" = "write"`} {
+		if strings.Contains(rootFilesystem, rule) {
+			t.Fatalf("root filesystem table contains workspace write rule %q; got:\n%s", rule, rootFilesystem)
+		}
+	}
+
+	scopedFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem.":workspace_roots"]`)
+	if scopedFilesystem == "" {
+		t.Fatalf("config.toml missing workspace-scoped filesystem table; got:\n%s", text)
+	}
+	for _, rule := range []string{`"." = "write"`, `".git/**" = "write"`} {
+		if !strings.Contains(scopedFilesystem, rule) {
+			t.Fatalf("workspace-scoped filesystem table missing workspace write rule %q; got:\n%s", rule, scopedFilesystem)
+		}
+	}
+}
+
 // TestListBackupsNewestFirst verifies that ListBackups returns manifests sorted
 // newest-first by CreatedAt timestamp, matching the spec "newest first" ordering.
 func TestListBackupsNewestFirst(t *testing.T) {
@@ -470,14 +491,15 @@ func TestTuiSyncIncludesCodexPermissions(t *testing.T) {
 		t.Fatalf("ReadFile(%s): %v", configPath, err)
 	}
 	text := string(body)
-	if !strings.Contains(text, `[permissions.gentle-dev.filesystem]`) || !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `[permissions.gentle-dev.filesystem.":workspace_roots"]`) || !strings.Contains(text, `"**/*.key" = "deny"`) {
+	if !strings.Contains(text, `[permissions.gentle-dev.filesystem]`) || !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `":tmpdir" = "write"`) || !strings.Contains(text, `":slash_tmp" = "write"`) || !strings.Contains(text, `[permissions.gentle-dev.filesystem.":workspace_roots"]`) || !strings.Contains(text, `"**/*.key" = "deny"`) {
 		t.Fatalf("Codex permissions sync should add valid filesystem reads; got:\n%s", text)
 	}
+	assertCodexWorkspaceWriteRulesScoped(t, text)
 	rootFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem]`)
 	if strings.Contains(rootFilesystem, `"**/*.key" = "deny"`) || strings.Contains(rootFilesystem, `"**/*.pem" = "deny"`) {
 		t.Fatalf("Codex root filesystem table should not contain secret glob denies; got:\n%s", rootFilesystem)
 	}
-	for _, invalid := range []string{`":slash_tmp" = "write"`, `":tmpdir" = "write"`} {
+	for _, invalid := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`} {
 		if strings.Contains(text, invalid) {
 			t.Fatalf("Codex permissions sync should remove invalid entry %q; got:\n%s", invalid, text)
 		}
@@ -492,7 +514,7 @@ func TestTuiSyncIncludesCodexPermissions(t *testing.T) {
 		t.Fatalf("ReadFile(%s) after second sync: %v", configPath, err)
 	}
 	text = string(body)
-	for _, invalid := range []string{`":slash_tmp" = "write"`, `":tmpdir" = "write"`} {
+	for _, invalid := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`} {
 		if strings.Contains(text, invalid) {
 			t.Fatalf("second sync should keep invalid entry %q removed; got:\n%s", invalid, text)
 		}
@@ -529,14 +551,15 @@ func TestTuiSyncIncludesCodexPermissionsForTargetedOverrides(t *testing.T) {
 		t.Fatalf("ReadFile(%s): %v", configPath, err)
 	}
 	text := string(body)
-	if !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `[permissions.gentle-dev.workspace_roots]`) || !strings.Contains(text, `[permissions.gentle-dev.filesystem.":workspace_roots"]`) || !strings.Contains(text, `"**/*.key" = "deny"`) {
+	if !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `":tmpdir" = "write"`) || !strings.Contains(text, `":slash_tmp" = "write"`) || !strings.Contains(text, `[permissions.gentle-dev.workspace_roots]`) || !strings.Contains(text, `[permissions.gentle-dev.filesystem.":workspace_roots"]`) || !strings.Contains(text, `"**/*.key" = "deny"`) {
 		t.Fatalf("targeted sync should add valid Codex permissions profile; got:\n%s", text)
 	}
+	assertCodexWorkspaceWriteRulesScoped(t, text)
 	rootFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem]`)
 	if strings.Contains(rootFilesystem, `"**/*.key" = "deny"`) {
 		t.Fatalf("targeted sync root filesystem table should not contain secret glob denies; got:\n%s", rootFilesystem)
 	}
-	for _, invalid := range []string{`":slash_tmp" = "write"`, `":tmpdir" = "write"`} {
+	for _, invalid := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`} {
 		if strings.Contains(text, invalid) {
 			t.Fatalf("targeted sync should remove invalid entry %q; got:\n%s", invalid, text)
 		}
@@ -1772,14 +1795,15 @@ func TestRunArgsPendingSyncRepairsCodexPermissions(t *testing.T) {
 		t.Fatalf("ReadFile(%s): %v", configPath, err)
 	}
 	text := string(body)
-	if !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `[permissions.gentle-dev.workspace_roots]`) || !strings.Contains(text, `[permissions.gentle-dev.filesystem.":workspace_roots"]`) || !strings.Contains(text, `"**/*.key" = "deny"`) {
+	if !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `":tmpdir" = "write"`) || !strings.Contains(text, `":slash_tmp" = "write"`) || !strings.Contains(text, `[permissions.gentle-dev.workspace_roots]`) || !strings.Contains(text, `[permissions.gentle-dev.filesystem.":workspace_roots"]`) || !strings.Contains(text, `"**/*.key" = "deny"`) {
 		t.Fatalf("deferred sync should add valid Codex permissions profile; got:\n%s", text)
 	}
+	assertCodexWorkspaceWriteRulesScoped(t, text)
 	rootFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem]`)
 	if strings.Contains(rootFilesystem, `"**/*.key" = "deny"`) || strings.Contains(rootFilesystem, `"**/*.pem" = "deny"`) {
 		t.Fatalf("deferred sync root filesystem table should not contain secret glob denies; got:\n%s", rootFilesystem)
 	}
-	for _, invalid := range []string{`":slash_tmp" = "write"`, `":tmpdir" = "write"`} {
+	for _, invalid := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`} {
 		if strings.Contains(text, invalid) {
 			t.Fatalf("deferred sync should remove invalid entry %q; got:\n%s", invalid, text)
 		}

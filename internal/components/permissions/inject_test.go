@@ -40,6 +40,27 @@ func tomlSection(text, header string) string {
 	return section
 }
 
+func assertCodexWorkspaceWriteRulesScoped(t *testing.T, text string) {
+	t.Helper()
+
+	rootFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem]`)
+	for _, rule := range []string{`"." = "write"`, `".git/**" = "write"`} {
+		if strings.Contains(rootFilesystem, rule) {
+			t.Fatalf("root filesystem table contains workspace write rule %q; got:\n%s", rule, rootFilesystem)
+		}
+	}
+
+	scopedFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem.":workspace_roots"]`)
+	if scopedFilesystem == "" {
+		t.Fatalf("config.toml missing workspace-scoped filesystem table; got:\n%s", text)
+	}
+	for _, rule := range []string{`"." = "write"`, `".git/**" = "write"`} {
+		if !strings.Contains(scopedFilesystem, rule) {
+			t.Fatalf("workspace-scoped filesystem table missing workspace write rule %q; got:\n%s", rule, scopedFilesystem)
+		}
+	}
+}
+
 // TestInjectHermesSkipsPermissions verifies that Hermes returns nil (no file written)
 // because Hermes permission format is undocumented — §14 of spec.
 func TestInjectHermesSkipsPermissions(t *testing.T) {
@@ -357,6 +378,8 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 		`"~/.local/state/nix/profiles/home-manager/home-path" = "read"`,
 		`"~/.nix-profile" = "read"`,
 		`"/nix/store" = "read"`,
+		`":tmpdir" = "write"`,
+		`":slash_tmp" = "write"`,
 		`glob_scan_max_depth = 6`,
 		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
 		`"**/.env" = "deny"`,
@@ -387,6 +410,7 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 			t.Fatalf("root filesystem table contains scoped secret deny %q; got:\n%s", invalidRootGlob, rootFilesystem)
 		}
 	}
+	assertCodexWorkspaceWriteRulesScoped(t, text)
 	scopedFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem.":workspace_roots"]`)
 	if scopedFilesystem == "" {
 		t.Fatalf("config.toml missing workspace-scoped filesystem table; got:\n%s", text)
@@ -397,10 +421,6 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 		}
 	}
 	for _, invalid := range []string{
-		`":tmpdir" = "write"`,
-		`":slash_tmp" = "write"`,
-		`"." = "write"`,
-		`".git/**" = "write"`,
 		`"**/.git" = "write"`,
 		`"**/.git/**" = "write"`,
 	} {
@@ -538,16 +558,17 @@ args = ["mcp", "--tools=agent"]
 		}
 	}
 	rootFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem]`)
-	for _, invalid := range []string{`":tmpdir" = "write"`, `":slash_tmp" = "write"`, `"**/*.key" = "deny"`, `"**/*.pem" = "deny"`} {
+	for _, invalid := range []string{`"**/*.key" = "deny"`, `"**/*.pem" = "deny"`} {
 		if strings.Contains(rootFilesystem, invalid) {
 			t.Fatalf("root filesystem table should not contain invalid/stale entry %q; got:\n%s", invalid, rootFilesystem)
 		}
 	}
-	for _, invalid := range []string{`":tmpdir" = "write"`, `":slash_tmp" = "write"`} {
-		if strings.Contains(text, invalid) {
-			t.Fatalf("config.toml should remove stale invalid entry %q; got:\n%s", invalid, text)
+	for _, want := range []string{`":tmpdir" = "write"`, `":slash_tmp" = "write"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("config.toml missing compatible Codex permission entry %q; got:\n%s", want, text)
 		}
 	}
+	assertCodexWorkspaceWriteRulesScoped(t, text)
 }
 
 func TestInjectCodexPermissionsRelocatesSecretDeniesToWorkspaceRootsTable(t *testing.T) {
