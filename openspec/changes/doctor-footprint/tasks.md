@@ -32,33 +32,44 @@ Chain strategy: pending
 
 ## Phase 2: WU2+WU3 — Token Helper + Collector/Classifier (cli/doctor.go)
 
-- [ ] 2.1 RED: `cli/doctor_test.go` — `TestCollectFootprint`/`TestFootprintCheckResult`, 7 cases (healthy, orphan-open→Fail, stray-closer→Warn, state-missing, no-agents, unresolved-agent, absent-file→Pass).
-- [ ] 2.2 GREEN: add `estimateTokens(chars int) int` to `cli/doctor.go`.
-- [ ] 2.3 GREEN: add seam var `newDoctorRegistry = agents.NewDefaultRegistry`.
-- [ ] 2.4 GREEN: add `AgentFootprint`, `FootprintSummary` structs.
-- [ ] 2.5 GREEN: implement `collectFootprint(homeDir string) FootprintSummary`.
-- [ ] 2.6 GREEN: implement `footprintCheckResult(sum FootprintSummary) CheckResult`.
-- [ ] 2.7 REFACTOR: `gofmt`, `go vet ./internal/cli/...`, confirm tests green.
+- [x] 2.1 RED: `cli/doctor_test.go` — `TestCollectFootprint`/`TestFootprintCheckResult`, 7 cases (healthy, orphan-open→Fail, stray-closer→Warn, state-missing, no-agents, unresolved-agent, absent-file→Pass).
+- [x] 2.2 GREEN: add `estimateTokens(chars int) int` to `cli/doctor.go`.
+- [x] 2.3 GREEN: add seam var `newDoctorRegistry = agents.NewDefaultRegistry`.
+- [x] 2.4 GREEN: add `AgentFootprint`, `FootprintSummary` structs.
+- [x] 2.5 GREEN: implement `collectFootprint(homeDir string) FootprintSummary`.
+- [x] 2.6 GREEN: implement `footprintCheckResult(sum FootprintSummary) CheckResult`.
+- [x] 2.7 REFACTOR: `gofmt`, `go vet ./internal/cli/...`, confirm tests green.
 
 ## Phase 3: WU4 — `--footprint` Flag + `RunDoctor` Signature Migration (compile gate)
 
-- [ ] 3.1 RED: `cli/doctor_test.go` — `TestParseDoctorFlags`, 5 cases (nil/empty, `--footprint`, `--footprint=false`, bad flag, extra arg).
-- [ ] 3.2 GREEN: add `DoctorFlags` struct + `ParseDoctorFlags(args []string) (*DoctorFlags, error)`.
-- [ ] 3.3 GREEN: change `RunDoctor` to `RunDoctor(ctx context.Context, args []string, w io.Writer) error`; wire flag parsing, `collectFootprint`, `footprintCheckResult`.
-- [ ] 3.4 GREEN (same commit, compile gate): update call site `internal/app/app.go` `case "doctor"` to `cli.RunDoctor(context.Background(), args[1:], stdout)`.
-- [ ] 3.5 GREEN (same commit, compile gate): migrate existing `TestRunDoctor` (`doctor_test.go:476`) and `TestRunDoctor_HomeDirError` (`:498`) calls to `RunDoctor(ctx, nil, &buf)`.
-- [ ] 3.6 REFACTOR: `go build ./...` to confirm compile gate, `gofmt`, `go vet ./...`.
+- [x] 3.1 RED: `cli/doctor_test.go` — `TestParseDoctorFlags`, 5 cases (nil/empty, `--footprint`, `--footprint=false`, bad flag, extra arg).
+- [x] 3.2 GREEN: add `DoctorFlags` struct + `ParseDoctorFlags(args []string) (*DoctorFlags, error)`.
+- [x] 3.3 GREEN: change `RunDoctor` to `RunDoctor(ctx context.Context, args []string, w io.Writer) error`; wire flag parsing, `collectFootprint`, `footprintCheckResult`.
+- [x] 3.4 GREEN (same commit, compile gate): update call site `internal/app/app.go` `case "doctor"` to `cli.RunDoctor(context.Background(), args[1:], stdout)`.
+- [x] 3.5 GREEN (same commit, compile gate): migrate existing `TestRunDoctor` (`doctor_test.go:476`) and `TestRunDoctor_HomeDirError` (`:498`) calls to `RunDoctor(ctx, nil, &buf)`.
+- [x] 3.6 REFACTOR: `go build ./...` to confirm compile gate, `gofmt`, `go vet ./...`.
 
 ## Phase 4: WU5 — `renderFootprintDetail`
 
-- [ ] 4.1 RED: `cli/doctor_test.go` — `TestRenderFootprintDetail`, 3 cases (healthy, absent-file, unresolved-agent).
-- [ ] 4.2 GREEN: implement `renderFootprintDetail(w io.Writer, sum FootprintSummary)`; leave `renderDoctorReport` untouched.
-- [ ] 4.3 GREEN: gate the call behind `flags.Footprint` inside `RunDoctor`.
-- [ ] 4.4 REFACTOR: `gofmt`, `go vet ./internal/cli/...`, confirm tests green.
+- [x] 4.1 RED: `cli/doctor_test.go` — `TestRenderFootprintDetail`, 3 cases (healthy, absent-file, unresolved-agent).
+- [x] 4.2 GREEN: implement `renderFootprintDetail(w io.Writer, sum FootprintSummary)`; leave `renderDoctorReport` untouched.
+- [x] 4.3 GREEN: gate the call behind `flags.Footprint` inside `RunDoctor`.
+- [x] 4.4 REFACTOR: `gofmt`, `go vet ./internal/cli/...`, confirm tests green.
 
 ## Phase 5: WU6 — Integration Test + Full Verification
 
-- [ ] 5.1 RED: `TestRunDoctor_FootprintFlag` — temp home + subset registry + fixtures; detail table present with `--footprint`, absent with `nil`.
-- [ ] 5.2 GREEN: confirm the test passes against the Phase 2-4 implementation (no new production code expected).
-- [ ] 5.3 Full gate: `go test ./...`, `go vet ./...`, `gofmt -l .` — must be clean.
-- [ ] 5.4 Cross-check all 13 spec scenarios (`specs/doctor/spec.md`, 6 requirements) against test coverage; flag any gap before `sdd-verify`.
+- [x] 5.1 RED: `TestRunDoctor_FootprintFlag` — temp home + subset registry + fixtures; detail table present with `--footprint`, absent with `nil`.
+- [x] 5.2 GREEN: confirm the test passes against the Phase 2-4 implementation (no new production code expected).
+- [x] 5.3 Full gate: `go test ./...`, `go vet ./...`, `gofmt -l .` — must be clean.
+- [x] 5.4 Cross-check all 13 spec scenarios (`specs/doctor/spec.md`, 6 requirements) against test coverage; flag any gap before `sdd-verify`.
+
+## Post-review additions (PR3, not in the original plan)
+
+Two independent code reviews (readability + reliability) on the WU4-6 diff surfaced 2 must-fix issues + 2 test gaps before merge. Fixed via strict TDD in the same PR3 commit:
+
+- [x] 6.1 Split `FootprintSummary.NoAgents` into three distinct fields (`NoAgents`, `StateUnreadable`, `RegistryUnavailable`) so a corrupt `state.json` no longer gets the same "run install" remedy as a genuinely empty agent list — was contradicting `checkStateJSON`'s own diagnosis of the same file.
+- [x] 6.2 Added `safeCollectFootprint` with `defer recover()` around the live footprint scan, so a panic reading an arbitrary on-disk instruction file can't crash `RunDoctor` and lose the other 4 checks.
+- [x] 6.3 Added `TestRunDoctor_FootprintFailureDegradesOverallStatus` — end-to-end assertion that a broken marker flips `RunDoctor`'s printed `Status:` line, not just `footprintCheckResult` in isolation.
+- [x] 6.4 Added `TestRunDoctor_FootprintFlagFreshInstallNoStateFile` — `--footprint` against a genuinely fresh install (no `state.json` at all) produces no crash/garbage output.
+
+**Change status: DONE.** All 6 work units + 4 post-review fixes implemented across the 3-PR stacked chain (`feat/doctor-footprint-scanner`, `feat/doctor-footprint-check`, `feat/doctor-footprint-flag`). PR3 exceeds the 400-line budget (~463 lines) due to the review fixes above; `size:exception` requested in that PR per CONTRIBUTING.md.
