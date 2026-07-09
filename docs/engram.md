@@ -61,6 +61,84 @@ engram sync --import
 
 Add `.engram/` to your repo and commit it. When a teammate clones and runs `engram sync --import`, they get the full project context. This is especially useful for onboarding -- new contributors start with the accumulated knowledge of the team.
 
+## Cloud Sync (Optional)
+
+Sync your engram memories across machines through a self-hosted cloud server, so the same observations are available wherever your agent runs.
+
+Cloud sync runs **in-process** inside the `engram` binary -- any subcommand that holds the store open (e.g. `serve`, `mcp`, `protocol-mode`). It activates when three environment variables are set before engram starts. Without them, engram behaves exactly as it does today: local-only, with git-based team sharing via `engram sync`.
+
+### Required environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `ENGRAM_CLOUD_AUTOSYNC="1"` | Turns on the background sync loop (must be exactly the string `1` -- not `true`, not `yes`, not `1` as integer) |
+| `ENGRAM_CLOUD_TOKEN` | Authenticates the agent against your cloud server (env var only; never persisted to disk by engram) |
+| `ENGRAM_CLOUD_SERVER` | URL of the cloud server you self-host (env var, or persisted to `~/.engram/cloud.json` via `engram cloud config --server <url>`) |
+
+All three must be present **before the engram processes start**. Setting them after engram is already running has no effect on the current processes; restart is required.
+
+### Setup (any platform)
+
+```bash
+# 1. Persist the server URL to cloud.json (skippable if you prefer env-only)
+engram cloud config --server https://your-server
+
+# 2. Export the two runtime variables
+export ENGRAM_CLOUD_AUTOSYNC="1"
+export ENGRAM_CLOUD_TOKEN=***
+
+# 3. Restart engram so the new environment is picked up
+pkill -f "engram mcp"
+pkill -f "engram serve"
+
+# 4. Verify
+engram cloud status
+```
+
+For shell rc files (~/.zshrc, ~/.bashrc), the variables load on every new shell but not in already-running services. For long-running services that don't inherit your shell environment:
+
+```bash
+# macOS (launchd user services)
+launchctl setenv ENGRAM_CLOUD_AUTOSYNC "1"
+launchctl setenv ENGRAM_CLOUD_TOKEN YOUR_TOKEN_HERE
+launchctl setenv ENGRAM_CLOUD_SERVER https://your-server
+
+# Linux (systemd user services)
+systemctl --user import-environment ENGRAM_CLOUD_AUTOSYNC ENGRAM_CLOUD_TOKEN ENGRAM_CLOUD_SERVER
+```
+
+### Windows (Task Scheduler)
+
+Windows Task Scheduler is the native service equivalent on Windows. It restarts `engram serve` on login and after reboots, keeping autosync alive. The full step-by-step is in the upstream engram docs:
+
+- [Engram docs -- Cloud Autosync](https://github.com/Gentleman-Programming/engram/blob/main/DOCS.md#cloud-autosync)
+- [Engram docs -- Windows Task Scheduler setup](https://github.com/Gentleman-Programming/engram/blob/main/DOCS.md#using-windows-task-scheduler)
+
+Key constraint: Task Scheduler does **not** inherit session environment variables. `ENGRAM_CLOUD_TOKEN`, `ENGRAM_CLOUD_SERVER`, and `ENGRAM_CLOUD_AUTOSYNC` must be set as persistent user or system environment variables (Control Panel -> System -> Advanced -> Environment Variables), not via `$env:` in a PowerShell session or `export` in a shell profile.
+
+### Verify it's working
+
+```bash
+engram cloud status
+```
+
+`engram cloud status` reports `Cloud status: configured (target=cloud)` when the three variables are set, the server is reachable, and a token is available. If anything is missing or the server is unreachable, it warns without blocking local-only operation.
+
+### Security
+
+- **Never commit the token** -- keep it in your shell rc file, a user-level env store, or a secrets manager. Not in `.env` files that get committed, not in version-controlled config, not in plist or unit files checked into git.
+- **Token is per-agent** -- generate a separate token per machine or per service. Rotate by exporting a new value and restarting the engram processes.
+- **Server URL is yours** -- `ENGRAM_CLOUD_SERVER` points at a server you control. The official binary does not phone home to any default endpoint; without the three variables set, no network traffic leaves your machine.
+- **`cloud.json` stores only the server URL, never the token** -- the token is intentionally env-var-only (see [Engram docs -- Cloud Troubleshooting](https://github.com/Gentleman-Programming/engram/blob/main/docs/engram-cloud/troubleshooting.md)).
+
+### What this does and does not replace
+
+- **Adds** background sync of observations across machines pointing at the same cloud server.
+- **Composes with** git-based team sharing (`engram sync` to `.engram/` then commit) -- they solve different problems. Cloud sync keeps your personal machine states aligned; git sharing keeps team knowledge versioned and reviewable.
+- **Does not replace** local storage. If the cloud server is unreachable, engram keeps working locally and syncs when connectivity returns.
+- **Does not include** scripts, install-time hooks, or `brew tap` automation. Those belong in engram's own `scripts/` directory if maintainers ever want them -- for now, the env vars and `engram cloud config` are the entire activation surface.
+
+---
 ---
 
 ## MCP Tools Reference
