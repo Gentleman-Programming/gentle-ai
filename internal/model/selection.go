@@ -9,8 +9,9 @@ type Selection struct {
 	SDDMode                     SDDModeID
 	SDDProfileStrategy          SDDProfileStrategyID
 	StrictTDD                   bool
+	ForceCommunityTools         bool                             // force reinstall/upgrade of community tools during sync
 	CodexMultiAgent             bool                             // deprecated: Codex now always writes features.multi_agent = true; retained for state/back-compat
-	ModelAssignments            map[string]ModelAssignment       // key = sub-agent name (e.g., "sdd-init")
+	ModelAssignments            map[string]ModelAssignment       // key = sub-agent name (e.g. "sdd-init")
 	ClaudeModelAssignments      map[string]ClaudeModelAlias      // key = phase name; value = fable|opus|sonnet|haiku
 	ClaudePhaseAssignments      map[string]ClaudePhaseAssignment // key = phase name; value = Claude model+effort
 	KiroModelAssignments        map[string]KiroModelAlias        // key = phase name; value = Kiro-native model alias
