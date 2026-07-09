@@ -131,6 +131,13 @@ func RunArgs(args []string, stdout io.Writer) error {
 	}
 
 	if len(args) == 0 {
+		// Detect missing TTY early: Bubbletea requires /dev/tty to render.
+		// Print a helpful error with available non-TUI subcommands instead of
+		// letting Bubbletea panic with a cryptic "could not open a new TTY".
+		if f, ok := os.Stdin.(*os.File); !ok || !isattyFn(f.Fd()) {
+			return fmt.Errorf("no terminal attached (TTY required for the interactive TUI)\n\nAvailable non-interactive commands:\n  gentle-ai --version    Show version\n  gentle-ai --help       List all commands\n  gentle-ai install      Install agents/tools from CLI\n  gentle-ai upgrade      Upgrade managed tools from CLI\n  gentle-ai update check Check for updates\n  gentle-ai sync         Sync agent configs")
+		}
+
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("resolve user home directory: %w", err)

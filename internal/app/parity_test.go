@@ -170,14 +170,14 @@ func TestRunArgsNoCommandLaunchesTUI(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := RunArgs(nil, &buf)
-	// With no args, RunArgs now launches the TUI via Bubbletea.
-	// In a headless/test environment without a TTY, this returns an error
-	// about opening /dev/tty. That's expected — the TUI requires a terminal.
 	if err == nil {
 		// If no error, we're somehow in a TTY — that's fine too.
 		return
 	}
-	if !strings.Contains(err.Error(), "TTY") && !strings.Contains(err.Error(), "tty") && !strings.Contains(err.Error(), "mock TUI") {
+	// With no args, RunArgs first checks for a TTY. In headless/test
+	// environments without a TTY, the TTY check fires before Bubbletea
+	// can attempt to open /dev/tty.
+	if !strings.Contains(err.Error(), "TTY") && !strings.Contains(err.Error(), "tty") && !strings.Contains(err.Error(), "mock TUI") && !strings.Contains(err.Error(), "no terminal attached") {
 		t.Fatalf("RunArgs(nil) unexpected error = %v; want TTY-related error or nil", err)
 	}
 }
