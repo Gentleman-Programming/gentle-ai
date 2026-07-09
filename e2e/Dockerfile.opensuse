@@ -22,7 +22,7 @@ RUN zypper --non-interactive refresh && \
 # Install Go (match go.mod version)
 # ---------------------------------------------------------------------------
 ARG GO_VERSION=1.25.10
-RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+RUN set -o pipefail && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
     | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
