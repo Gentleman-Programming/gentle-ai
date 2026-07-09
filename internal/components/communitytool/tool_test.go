@@ -158,9 +158,9 @@ func TestInstallUsesPnpmWhenNpmIsUnavailable(t *testing.T) {
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
-		t.Fatalf("InstallWithHome() error = %v", err)
+		t.Fatalf("InstallWithHome(, false) error = %v", err)
 	}
 	want := []string{
 		"pnpm add -g @colbymchenry/codegraph@latest",
@@ -311,9 +311,9 @@ func TestCodeGraphGuidanceInjectsForRepresentativeAgents(t *testing.T) {
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
-		t.Fatalf("InstallWithHome() error = %v", err)
+		t.Fatalf("InstallWithHome(, false) error = %v", err)
 	}
 	if result.StatusAfter == nil {
 		t.Fatal("StatusAfter = nil")
@@ -647,7 +647,7 @@ func TestInstallRunsCommandsAndReturnsLazyProjectIndexManualAction(t *testing.T)
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
@@ -1030,9 +1030,9 @@ func TestInstallFailsWhenPostInstallContractStillMissing(t *testing.T) {
 		return nil
 	}), DetectorFunc(func(string) (string, error) {
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err == nil || !strings.Contains(err.Error(), "CLI available") {
-		t.Fatalf("InstallWithHome() error = %v, want missing CLI validation", err)
+		t.Fatalf("InstallWithHome(, false) error = %v, want missing CLI validation", err)
 	}
 	if result.StatusAfter == nil {
 		t.Fatal("StatusAfter = nil, want partial result context")
@@ -1063,9 +1063,9 @@ func TestInstallSkipsWhenCodeGraphAlreadyReconciled(t *testing.T) {
 		return nil
 	}), DetectorFunc(func(string) (string, error) {
 		return "/bin/codegraph", nil
-	}))
+	}), false)
 	if err != nil {
-		t.Fatalf("InstallWithHome() error = %v", err)
+		t.Fatalf("InstallWithHome(, false) error = %v", err)
 	}
 	if calls != 0 {
 		t.Fatalf("runner calls = %d, want 0 for already reconciled install", calls)
@@ -1091,9 +1091,9 @@ func TestInstallRefreshesOldCodeGraphGuidanceMarker(t *testing.T) {
 		return nil
 	}), DetectorFunc(func(string) (string, error) {
 		return "/bin/codegraph", nil
-	}))
+	}), false)
 	if err != nil {
-		t.Fatalf("InstallWithHome() error = %v", err)
+		t.Fatalf("InstallWithHome(, false) error = %v", err)
 	}
 	if !reflect.DeepEqual(result.CommandsRun, []string{"codegraph install --target opencode --location global --yes"}) {
 		t.Fatalf("CommandsRun = %#v, want MCP reconciliation only", result.CommandsRun)
@@ -1127,9 +1127,9 @@ func TestInstallRepairsMissingCLIWhenAgentMarkerExists(t *testing.T) {
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
-		t.Fatalf("InstallWithHome() error = %v", err)
+		t.Fatalf("InstallWithHome(, false) error = %v", err)
 	}
 	want := []string{
 		"npm install -g @colbymchenry/codegraph@latest",
@@ -1145,7 +1145,7 @@ func TestInstallRepairsMissingCLIWhenAgentMarkerExists(t *testing.T) {
 
 func TestInstallFailurePaths(t *testing.T) {
 	t.Run("nil runner", func(t *testing.T) {
-		result, err := Install(model.CommunityToolCodeGraph, "/work/project", nil)
+		result, err := Install(model.CommunityToolCodeGraph, "/work/project", nil, false)
 		if err == nil {
 			t.Fatal("Install() error = nil, want configured runner error")
 		}
@@ -1155,7 +1155,7 @@ func TestInstallFailurePaths(t *testing.T) {
 	})
 
 	t.Run("unknown tool", func(t *testing.T) {
-		result, err := Install(model.CommunityToolID("missing-tool"), "/work/project", RunnerFunc(func(string, ...string) error { return nil }))
+		result, err := Install(model.CommunityToolID("missing-tool"), "/work/project", RunnerFunc(func(string, ...string) error { return nil }), false)
 		if err == nil || !strings.Contains(err.Error(), "unknown community tool") {
 			t.Fatalf("Install() error = %v, want unknown tool error", err)
 		}
@@ -1168,7 +1168,7 @@ func TestInstallFailurePaths(t *testing.T) {
 		boom := errors.New("npm failed")
 		result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", t.TempDir(), RunnerFunc(func(string, ...string) error { return boom }), DetectorFunc(func(string) (string, error) {
 			return "", errors.New("not found")
-		}))
+		}), false)
 		if !errors.Is(err, boom) {
 			t.Fatalf("Install() error = %v, want wrapped runner error", err)
 		}
@@ -1191,7 +1191,7 @@ func TestInstallFailurePaths(t *testing.T) {
 			return nil
 		}), DetectorFunc(func(string) (string, error) {
 			return "", errors.New("not found")
-		}))
+		}), false)
 		if !errors.Is(err, boom) {
 			t.Fatalf("Install() error = %v, want wrapped install error", err)
 		}
@@ -1227,4 +1227,175 @@ func findAgentStatus(t *testing.T, status Status, id model.AgentID) AgentStatus 
 	}
 	t.Fatalf("agent %s not found in %#v", id, status.Agents)
 	return AgentStatus{}
+}
+
+func TestInstalledVersionParsesFirstLine(t *testing.T) {
+	script := fakeCLI(t, "#!/bin/sh\necho '1.1.1'\n")
+	got, err := installedVersion(script)
+	if err != nil {
+		t.Fatalf("installedVersion() error = %v", err)
+	}
+	if got != "1.1.1" {
+		t.Fatalf("installedVersion() = %q, want 1.1.1", got)
+	}
+}
+
+func TestDetectStatusReportsInstalledVersion(t *testing.T) {
+	script := fakeCLI(t, "#!/bin/sh\necho '1.1.1'\n")
+	status := DetectStatus(model.CommunityToolCodeGraph, t.TempDir(), DetectorFunc(func(name string) (string, error) {
+		if name != "codegraph" {
+			t.Fatalf("LookPath(%q), want codegraph", name)
+		}
+		return script, nil
+	}))
+	if status.CLI != AvailabilityAvailable {
+		t.Fatalf("CLI = %s, want available", status.CLI)
+	}
+	if status.CLIVersion != "1.1.1" {
+		t.Fatalf("CLIVersion = %q, want 1.1.1", status.CLIVersion)
+	}
+}
+
+func TestInstallUpgradesWhenVersionMismatches(t *testing.T) {
+	previous := codeGraphPackageLookPath
+	codeGraphPackageLookPath = func(name string) (string, error) {
+		if name == "npm" {
+			return "/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	t.Cleanup(func() { codeGraphPackageLookPath = previous })
+
+	previousResolver := resolveCodeGraphTargetVersionFn
+	resolveCodeGraphTargetVersionFn = func() (string, error) { return "1.1.2", nil }
+	t.Cleanup(func() { resolveCodeGraphTargetVersionFn = previousResolver })
+
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), `{"command":"codegraph"}`)
+
+	codegraph := fakeCLI(t, "#!/bin/sh\necho '1.1.1'\n")
+	var commands []string
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}), DetectorFunc(func(name string) (string, error) {
+		if name != "codegraph" {
+			t.Fatalf("LookPath(%q), want codegraph", name)
+		}
+		return codegraph, nil
+	}), false)
+	if err != nil {
+		t.Fatalf("InstallWithHome() error = %v", err)
+	}
+	if len(commands) == 0 {
+		t.Fatal("expected install commands to run for version upgrade")
+	}
+	if result.StatusBefore == nil || result.StatusBefore.CLIVersion != "1.1.1" {
+		t.Fatalf("StatusBefore.CLIVersion = %q, want 1.1.1", result.StatusBefore.CLIVersion)
+	}
+	if len(result.ManualActions) != 1 || !strings.Contains(result.ManualActions[0], "upgraded") {
+		t.Fatalf("ManualActions = %#v, want upgrade message", result.ManualActions)
+	}
+}
+
+func TestInstallSkipsWhenVersionMatches(t *testing.T) {
+	previous := codeGraphPackageLookPath
+	codeGraphPackageLookPath = func(name string) (string, error) {
+		if name == "npm" {
+			return "/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	t.Cleanup(func() { codeGraphPackageLookPath = previous })
+
+	previousResolver := resolveCodeGraphTargetVersionFn
+	resolveCodeGraphTargetVersionFn = func() (string, error) { return "1.1.2", nil }
+	t.Cleanup(func() { resolveCodeGraphTargetVersionFn = previousResolver })
+
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), `{"command":"codegraph"}`)
+	if _, err := InjectCodeGraphGuidanceIfSelected(home, []model.CommunityToolID{model.CommunityToolCodeGraph}); err != nil {
+		t.Fatalf("pre-inject guidance: %v", err)
+	}
+
+	codegraph := fakeCLI(t, "#!/bin/sh\necho '1.1.2'\n")
+	var commands []string
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}), DetectorFunc(func(name string) (string, error) {
+		if name != "codegraph" {
+			t.Fatalf("LookPath(%q), want codegraph", name)
+		}
+		return codegraph, nil
+	}), false)
+	if err != nil {
+		t.Fatalf("InstallWithHome() error = %v", err)
+	}
+	if len(commands) != 0 {
+		t.Fatalf("commands = %#v, want no install commands when version matches", commands)
+	}
+	wantMsg := "No changes were needed"
+	if len(result.ManualActions) != 1 || !strings.Contains(result.ManualActions[0], wantMsg) {
+		t.Fatalf("ManualActions = %#v, want message containing %q", result.ManualActions, wantMsg)
+	}
+}
+
+func TestInstallWithForceRunsCommandsEvenWhenReconciled(t *testing.T) {
+	previous := codeGraphPackageLookPath
+	codeGraphPackageLookPath = func(name string) (string, error) {
+		if name == "npm" {
+			return "/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	t.Cleanup(func() { codeGraphPackageLookPath = previous })
+
+	previousResolver := resolveCodeGraphTargetVersionFn
+	resolveCodeGraphTargetVersionFn = func() (string, error) { return "1.1.2", nil }
+	t.Cleanup(func() { resolveCodeGraphTargetVersionFn = previousResolver })
+
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), `{"command":"codegraph"}`)
+
+	codegraph := fakeCLI(t, "#!/bin/sh\necho '1.1.2'\n")
+	var commands []string
+	_, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}), DetectorFunc(func(name string) (string, error) {
+		if name != "codegraph" {
+			t.Fatalf("LookPath(%q), want codegraph", name)
+		}
+		return codegraph, nil
+	}), true)
+	if err != nil {
+		t.Fatalf("InstallWithHome() error = %v", err)
+	}
+	if len(commands) == 0 {
+		t.Fatal("expected install commands to run when force is true")
+	}
+}
+
+func TestResolveCodeGraphTargetVersionParsesNpmLatest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skips npm network integration test in short mode")
+	}
+	got, err := resolveCodeGraphTargetVersion()
+	if err != nil {
+		t.Fatalf("resolveCodeGraphTargetVersion() error = %v", err)
+	}
+	if got == "" {
+		t.Fatal("resolveCodeGraphTargetVersion() returned empty version")
+	}
+}
+
+func fakeCLI(t *testing.T, script string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codegraph")
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+	return path
 }

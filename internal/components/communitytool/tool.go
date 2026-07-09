@@ -1,6 +1,7 @@
 package communitytool
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -41,17 +42,19 @@ type Result struct {
 	Tool          model.CommunityToolID
 	CommandsRun   []string
 	ManualActions []string
+	FollowUps     []string
 	StatusBefore  *Status
 	StatusAfter   *Status
 	PiCodeGraph   *PiCodeGraphResult
 }
 
 type Status struct {
-	Tool      model.CommunityToolID
-	CLI       Availability
-	CLIPath   string
-	Agents    []AgentStatus
-	FollowUps []string
+	Tool       model.CommunityToolID
+	CLI        Availability
+	CLIPath    string
+	CLIVersion string
+	Agents     []AgentStatus
+	FollowUps  []string
 }
 
 type AgentStatus struct {
@@ -103,6 +106,7 @@ func Definitions() []Definition {
 	return out
 }
 
+// DefinitionFor returns the definition for a community tool, or false if it is unknown.
 func DefinitionFor(id model.CommunityToolID) (Definition, bool) {
 	for _, def := range definitions {
 		if def.ID == id {
@@ -112,11 +116,16 @@ func DefinitionFor(id model.CommunityToolID) (Definition, bool) {
 	return Definition{}, false
 }
 
-func Install(id model.CommunityToolID, workspaceDir string, runner Runner) (Result, error) {
-	return InstallWithHome(id, workspaceDir, defaultHomeDir(), runner, DetectorFunc(exec.LookPath))
+// Install installs the requested community tool in the default home directory.
+// When force is true, the installation commands run even if the tool appears already configured.
+func Install(id model.CommunityToolID, workspaceDir string, runner Runner, force bool) (Result, error) {
+	return InstallWithHome(id, workspaceDir, defaultHomeDir(), runner, DetectorFunc(exec.LookPath), force)
 }
 
-func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir string, runner Runner, detector Detector) (Result, error) {
+// InstallWithHome installs the requested community tool using the provided home directory.
+// It detects the current state, upgrades when the installed version is older than the npm latest,
+// and skips installation when the tool is already reconciled unless force is true.
+func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir string, runner Runner, detector Detector, force bool) (Result, error) {
 	if runner == nil {
 		return Result{}, fmt.Errorf("community tool runner is not configured")
 	}
@@ -129,9 +138,19 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	}
 
 	result := Result{Tool: id}
+
+	targetVersion, err := resolveCodeGraphTargetVersionFn()
+	if err != nil {
+		result.FollowUps = append(result.FollowUps, fmt.Sprintf("Could not determine latest CodeGraph version: %v", err))
+	}
+
 	before := DetectStatus(id, homeDir, detector)
 	result.StatusBefore = &before
-	if before.CodeGraphReconcileSatisfied() || codeGraphCanRepairWithoutFullInstall(homeDir, before) {
+
+	reconciled := before.CodeGraphReconcileSatisfied() || codeGraphCanRepairWithoutFullInstall(homeDir, before)
+	needsUpgrade := targetVersion != "" && versionNeedsUpgrade(before.CLIVersion, targetVersion)
+
+	if reconciled && !needsUpgrade && !force {
 		if NeedsOpenCodeCodeGraphReconcile(homeDir) {
 			result.CommandsRun = append(result.CommandsRun, "codegraph install --target opencode --location global --yes")
 		}
@@ -165,7 +184,7 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	}
 
 	commands := [][]string{{"codegraph", "install", "--yes"}}
-	if before.CLI != AvailabilityAvailable {
+	if before.CLI != AvailabilityAvailable || needsUpgrade {
 		var err error
 		commands, err = CodeGraphCommandsForDetector(DetectorFunc(codeGraphPackageLookPath))
 		if err != nil {
@@ -197,7 +216,11 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	if err := validateCodeGraphInstallStatus(after); err != nil {
 		return result, err
 	}
-	result.ManualActions = append(result.ManualActions, "CodeGraph CLI was installed and supported agents were connected. Project indexes will be created automatically when an enabled agent opens inside a project.")
+	if needsUpgrade {
+		result.ManualActions = append(result.ManualActions, fmt.Sprintf("CodeGraph CLI was upgraded from %s to %s and supported agents were reconnected. Project indexes will be created automatically when an enabled agent opens inside a project.", before.CLIVersion, targetVersion))
+	} else {
+		result.ManualActions = append(result.ManualActions, "CodeGraph CLI was installed and supported agents were connected. Project indexes will be created automatically when an enabled agent opens inside a project.")
+	}
 	return result, nil
 }
 
@@ -276,6 +299,9 @@ func DetectStatus(id model.CommunityToolID, homeDir string, detector Detector) S
 	if path, err := detector.LookPath(def.CommandName); err == nil && strings.TrimSpace(path) != "" {
 		status.CLI = AvailabilityAvailable
 		status.CLIPath = path
+		if v, err := installedVersion(path); err == nil && v != "" {
+			status.CLIVersion = v
+		}
 	}
 	status.Agents = detectCodeGraphAgents(homeDir)
 	status.FollowUps = append(status.FollowUps, "CodeGraph markers can vary by upstream version; detection currently checks conservative MCP entries and instruction markers containing codegraph.")
@@ -540,4 +566,56 @@ func codeGraphCommands(packageManager string) [][]string {
 		installCommand,
 		{"codegraph", "install", "--yes"},
 	}
+}
+
+// installedVersion runs the given CLI binary with --version and returns the
+// first non-empty line. It is exported as a package helper for testing.
+func installedVersion(commandPath string) (string, error) {
+	if commandPath == "" {
+		return "", fmt.Errorf("command path is empty")
+	}
+	out, err := exec.Command(commandPath, "--version").Output()
+	if err != nil {
+		return "", fmt.Errorf("run %q --version: %w", commandPath, err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line, nil
+		}
+	}
+	return "", fmt.Errorf("no version output from %q", commandPath)
+}
+
+// resolveCodeGraphTargetVersionFn is the package-level resolver used by
+// InstallWithHome so tests can stub the npm lookup.
+var resolveCodeGraphTargetVersionFn = resolveCodeGraphTargetVersion
+
+// resolveCodeGraphTargetVersion returns the latest published version of the
+// CodeGraph npm package by querying npm dist-tags.
+func resolveCodeGraphTargetVersion() (string, error) {
+	out, err := exec.Command("npm", "view", "@colbymchenry/codegraph", "dist-tags", "--json").Output()
+	if err != nil {
+		return "", fmt.Errorf("npm view dist-tags: %w", err)
+	}
+	var tags map[string]string
+	if err := json.Unmarshal(out, &tags); err != nil {
+		return "", fmt.Errorf("parse npm dist-tags: %w", err)
+	}
+	latest, ok := tags["latest"]
+	if !ok || latest == "" {
+		return "", fmt.Errorf("npm dist-tags missing latest")
+	}
+	return latest, nil
+}
+
+// versionNeedsUpgrade reports whether the installed version is different from
+// the target version. Exact equality is used because npm dist-tags resolve to
+// concrete semver versions.
+func versionNeedsUpgrade(installed, target string) bool {
+	if installed == "" || target == "" {
+		return false
+	}
+	return installed != target
 }

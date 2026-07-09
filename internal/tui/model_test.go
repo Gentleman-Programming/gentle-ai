@@ -1627,9 +1627,9 @@ func TestCommunityToolInstallationPreservesPartialResultOnError(t *testing.T) {
 	})
 
 	osGetwdFn = func() (string, error) { return "/work/project", nil }
-	communityToolInstallFn = func(id model.CommunityToolID, workspaceDir string, runner communitytool.Runner) (communitytool.Result, error) {
-		if id != model.CommunityToolCodeGraph || workspaceDir != "/work/project" || runner == nil {
-			t.Fatalf("install args = (%q, %q, %#v), want CodeGraph, workspace, runner", id, workspaceDir, runner)
+	communityToolInstallFn = func(id model.CommunityToolID, workspaceDir string, runner communitytool.Runner, force bool) (communitytool.Result, error) {
+		if id != model.CommunityToolCodeGraph || workspaceDir != "/work/project" || runner == nil || force {
+			t.Fatalf("install args = (%q, %q, %#v, %v), want CodeGraph, workspace, runner, false", id, workspaceDir, runner, force)
 		}
 		return communitytool.Result{
 			Tool:        id,
