@@ -1030,32 +1030,47 @@ func TestRTKSupportedAgents(t *testing.T) {
 	if len(agents) == 0 {
 		t.Fatal("rtkSupportedAgents() returned empty")
 	}
-	// Claude Code and OpenCode should be in the list.
-	hasClaude := false
-	hasOpenCode := false
-	for _, id := range agents {
-		if id == model.AgentClaudeCode {
-			hasClaude = true
-		}
-		if id == model.AgentOpenCode {
-			hasOpenCode = true
-		}
+	supported := []model.AgentID{
+		model.AgentClaudeCode,
+		model.AgentOpenCode,
+		model.AgentCursor,
+		model.AgentGeminiCLI,
+		model.AgentCodex,
+		model.AgentWindsurf,
+		model.AgentVSCodeCopilot,
+		model.AgentHermes,
 	}
-	if !hasClaude {
-		t.Fatal("rtkSupportedAgents() missing Claude Code")
-	}
-	if !hasOpenCode {
-		t.Fatal("rtkSupportedAgents() missing OpenCode")
+	for _, want := range supported {
+		found := false
+		for _, id := range agents {
+			if id == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("rtkSupportedAgents() missing %s", want)
+		}
 	}
 }
 
 func TestIsRTKSupportedAgent(t *testing.T) {
-	if !isRTKSupportedAgent(model.AgentClaudeCode) {
-		t.Fatal("Claude Code should be RTK supported")
+	supported := []model.AgentID{
+		model.AgentClaudeCode,
+		model.AgentOpenCode,
+		model.AgentCursor,
+		model.AgentGeminiCLI,
+		model.AgentCodex,
+		model.AgentWindsurf,
+		model.AgentVSCodeCopilot,
+		model.AgentHermes,
 	}
-	if !isRTKSupportedAgent(model.AgentOpenCode) {
-		t.Fatal("OpenCode should be RTK supported")
+	for _, id := range supported {
+		if !isRTKSupportedAgent(id) {
+			t.Errorf("isRTKSupportedAgent(%s) = false, want true", id)
+		}
 	}
+	// Pi is not RTK-supported.
 	if isRTKSupportedAgent(model.AgentPi) {
 		t.Fatal("Pi should NOT be RTK supported")
 	}

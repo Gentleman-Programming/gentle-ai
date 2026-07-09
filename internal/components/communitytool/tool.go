@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -133,7 +134,7 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	case model.CommunityToolCodeGraph:
 		return installCodeGraph(workspaceDir, homeDir, runner, detector)
 	case model.CommunityToolRTK:
-		return installRTK(workspaceDir, homeDir, runner, detector)
+		return installRTK(homeDir, runner, detector)
 	default:
 		return Result{}, fmt.Errorf("community tool %q is not supported", id)
 	}
@@ -186,7 +187,7 @@ func installCodeGraph(workspaceDir string, homeDir string, runner Runner, detect
 	return result, nil
 }
 
-func installRTK(workspaceDir string, homeDir string, runner Runner, detector Detector) (Result, error) {
+func installRTK(homeDir string, runner Runner, detector Detector) (Result, error) {
 	result := Result{Tool: model.CommunityToolRTK}
 	if detector == nil {
 		detector = DetectorFunc(exec.LookPath)
@@ -215,7 +216,18 @@ func installRTK(workspaceDir string, homeDir string, runner Runner, detector Det
 	after := DetectStatus(model.CommunityToolRTK, homeDir, detector)
 	result.StatusAfter = &after
 	if after.CLI != AvailabilityAvailable {
-		return result, fmt.Errorf("RTK install did not leave the rtk CLI available")
+		// Fallback: cargo installs to ~/.cargo/bin which may not be on PATH.
+		if home, homeErr := os.UserHomeDir(); homeErr == nil {
+			cargoBin := filepath.Join(home, ".cargo", "bin", "rtk")
+			if _, statErr := os.Stat(cargoBin); statErr == nil {
+				after.CLI = AvailabilityAvailable
+				after.CLIPath = cargoBin
+				result.StatusAfter = &after
+			}
+		}
+		if after.CLI != AvailabilityAvailable {
+			return result, fmt.Errorf("RTK install did not leave the rtk CLI available")
+		}
 	}
 	result.ManualActions = append(result.ManualActions, "RTK CLI was installed. Run 'rtk init -g' in your project to configure agent hooks for token-optimized command output.")
 	return result, nil
@@ -225,15 +237,15 @@ func rtkInstallCommands(detector Detector) [][]string {
 	if detector == nil {
 		detector = DetectorFunc(exec.LookPath)
 	}
-	// Prefer cargo if available (Rust ecosystem).
+	// Prefer cargo if available (Rust ecosystem). Try crates.io first, fall back to git.
 	if _, err := detector.LookPath("cargo"); err == nil {
 		return [][]string{
-			{"cargo", "install", "--git", "https://github.com/rtk-ai/rtk"},
+			{"cargo", "install", "rtk"},
 		}
 	}
-	// Fallback: binary download from GitHub releases (platform-specific).
+	// Fallback: pinned binary download from GitHub releases.
 	return [][]string{
-		{"sh", "-c", "curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/main/install.sh | sh"},
+		{"sh", "-c", "curl -fsSL https://github.com/rtk-ai/rtk/releases/latest/download/install.sh | sh"},
 	}
 }
 
@@ -610,7 +622,7 @@ func hasRTKWiring(homeDir string, adapter agents.Adapter) (bool, string, string)
 			continue
 		}
 		content := strings.ToLower(string(data))
-		if strings.Contains(content, "rtk") {
+		if strings.Contains(content, "rtk init") || strings.Contains(content, "rtk rewrite") {
 			return true, path, "found RTK hook marker"
 		}
 	}
