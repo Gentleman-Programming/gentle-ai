@@ -86,7 +86,7 @@ func TestWriteFileAtomicCreatesAndIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestWriteFileAtomicRejectsExistingSymlink(t *testing.T) {
+func TestWriteFileAtomicPreservesExistingSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.txt")
 	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
@@ -103,12 +103,53 @@ func TestWriteFileAtomicRejectsExistingSymlink(t *testing.T) {
 		t.Fatalf("Symlink() error = %v", err)
 	}
 
-	_, err := WriteFileAtomic(path, []byte("new\n"), 0o644)
-	if err == nil || err.Error() == "" {
-		t.Fatalf("WriteFileAtomic(symlink) error = %v, want rejection", err)
+	result, err := WriteFileAtomic(path, []byte("new\n"), 0o644)
+	if err != nil {
+		t.Fatalf("WriteFileAtomic(symlink) error = %v, want success", err)
 	}
-	if got, readErr := os.ReadFile(target); readErr != nil || string(got) != "old\n" {
-		t.Fatalf("target content changed through symlink: got %q err=%v", got, readErr)
+	if !result.Changed || result.Created {
+		t.Fatalf("WriteFileAtomic(symlink) result = %+v, want Changed=true Created=false", result)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("Lstat(symlink) error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("WriteFileAtomic replaced symlink, want symlink preserved")
+	}
+	if got, readErr := os.ReadFile(target); readErr != nil || string(got) != "new\n" {
+		t.Fatalf("target content = %q err=%v, want updated target", got, readErr)
+	}
+}
+
+func TestWriteFileAtomicSymlinkNoopPreservesLink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	content := []byte("same\n")
+	if err := os.WriteFile(target, content, 0o644); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	path := filepath.Join(dir, "linked.txt")
+	if err := os.Symlink(target, path); err != nil {
+		if isSymlinkPrivilegeError(err) {
+			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
+		}
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	result, err := WriteFileAtomic(path, content, 0o644)
+	if err != nil {
+		t.Fatalf("WriteFileAtomic(symlink noop) error = %v", err)
+	}
+	if result.Changed || result.Created {
+		t.Fatalf("WriteFileAtomic(symlink noop) result = %+v, want no change", result)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("Lstat(symlink) error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("WriteFileAtomic replaced symlink on noop write")
 	}
 }
 

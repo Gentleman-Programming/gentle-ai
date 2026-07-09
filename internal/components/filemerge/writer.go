@@ -44,8 +44,13 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 		perm = 0o644
 	}
 
+	writePath, err := resolveExistingSymlink(path)
+	if err != nil {
+		return WriteResult{}, err
+	}
+
 	created := false
-	existing, err := readComparableFile(path)
+	existing, err := readComparableFile(writePath)
 	if err == nil {
 		if bytes.Equal(existing, content) {
 			return WriteResult{}, nil
@@ -56,8 +61,8 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 		created = true
 	}
 
-	dir := filepath.Dir(path)
-	if err := ensureAtomicParentDir(dir, path); err != nil {
+	dir := filepath.Dir(writePath)
+	if err := ensureAtomicParentDir(dir, writePath); err != nil {
 		return WriteResult{}, err
 	}
 
@@ -93,7 +98,7 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 		return WriteResult{}, fmt.Errorf("close temp file for %q: %w", path, err)
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := os.Rename(tmpPath, writePath); err != nil {
 		return WriteResult{}, fmt.Errorf("replace %q atomically: %w", path, err)
 	}
 
@@ -110,13 +115,39 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 	return WriteResult{Changed: true, Created: created}, nil
 }
 
+func resolveExistingSymlink(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return path, nil
+		}
+		return "", fmt.Errorf("stat file %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlink %q: %w", path, err)
+	}
+	return resolved, nil
+}
+
 func readComparableFile(path string) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("refusing to read symlink %q", path)
+		original := path
+		path, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return nil, fmt.Errorf("resolve symlink %q: %w", original, err)
+		}
+		info, err = os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if info.Size() > maxAtomicFileSize {
 		return nil, fmt.Errorf("file %q exceeds max atomic compare size %d bytes", path, maxAtomicFileSize)

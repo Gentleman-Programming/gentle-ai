@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
@@ -237,7 +238,15 @@ func readManagedFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("stat file %q: %w", path, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("refusing to read symlink %q", path)
+		original := path
+		path, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return nil, fmt.Errorf("resolve symlink %q: %w", original, err)
+		}
+		info, err = os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("stat symlink target %q: %w", path, err)
+		}
 	}
 	if info.Size() > maxManagedFileSize {
 		return nil, fmt.Errorf("file %q exceeds max managed size %d bytes", path, maxManagedFileSize)
