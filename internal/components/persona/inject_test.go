@@ -11,6 +11,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
@@ -22,6 +23,7 @@ import (
 
 func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
 func claudeAdapter() agents.Adapter      { return claude.NewAdapter() }
+func codexAdapter() agents.Adapter       { return codex.NewAdapter() }
 func hermesAdapter() agents.Adapter      { return hermes.NewAdapter() }
 func kimiAdapter() agents.Adapter        { return kimi.NewAdapter() }
 func kilocodeAdapter() agents.Adapter    { return kilocode.NewAdapter() }
@@ -101,6 +103,55 @@ func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
 	}
 	if !strings.Contains(text, "Persona Voice") {
 		t.Fatal("CLAUDE.md residual persona section missing the 'Persona Voice' pointer to the output style")
+	}
+}
+
+func TestInjectCodexGentlemanWritesPersonaWithManagedMarkers(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, codexAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(codex) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(codex) changed = false")
+	}
+
+	path := filepath.Join(home, ".codex", "AGENTS.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing open marker for persona")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing close marker for persona")
+	}
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("AGENTS.md persona section missing 'Senior Architect' content")
+	}
+}
+
+func TestInjectCodexGentlemanIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+
+	first, err := Inject(home, codexAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(codex) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(codex) first changed = false")
+	}
+
+	second, err := Inject(home, codexAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(codex) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("Inject(codex) second changed = true — not idempotent")
 	}
 }
 
