@@ -179,6 +179,7 @@ type CommunityToolID string
 
 const (
 	CommunityToolCodeGraph CommunityToolID = "codegraph"
+	CommunityToolRTK       CommunityToolID = "rtk"
 )
 
 // Profile represents a named SDD orchestrator configuration with model assignments.

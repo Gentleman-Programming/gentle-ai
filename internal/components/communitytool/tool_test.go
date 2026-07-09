@@ -883,3 +883,180 @@ func findAgentStatus(t *testing.T, status Status, id model.AgentID) AgentStatus 
 	t.Fatalf("agent %s not found in %#v", id, status.Agents)
 	return AgentStatus{}
 }
+
+// RTK tests.
+
+func TestDefinitionsIncludesRTK(t *testing.T) {
+	def, ok := DefinitionFor(model.CommunityToolRTK)
+	if !ok {
+		t.Fatal("RTK definition not found")
+	}
+	if def.CommandName != "rtk" {
+		t.Fatalf("RTK definition CommandName = %q, want %q", def.CommandName, "rtk")
+	}
+	if def.RepoURL != "https://github.com/rtk-ai/rtk" {
+		t.Fatalf("RTK definition RepoURL = %q", def.RepoURL)
+	}
+}
+
+func TestRTKInstallWhenAlreadyAvailable(t *testing.T) {
+	homeDir := t.TempDir()
+	result, err := InstallWithHome(model.CommunityToolRTK, "/work/project", homeDir, RunnerFunc(func(string, ...string) error {
+		t.Fatal("runner should not be called when RTK is already available")
+		return nil
+	}), DetectorFunc(func(name string) (string, error) {
+		if name == "rtk" {
+			return "/usr/local/bin/rtk", nil
+		}
+		return "", errors.New("not found")
+	}))
+	if err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	if len(result.CommandsRun) != 0 {
+		t.Fatalf("CommandsRun = %#v, want empty (already installed)", result.CommandsRun)
+	}
+	if len(result.ManualActions) == 0 || !strings.Contains(result.ManualActions[0], "already available") {
+		t.Fatalf("ManualActions = %#v, want 'already available' message", result.ManualActions)
+	}
+}
+
+func TestRTKInstallWithCargo(t *testing.T) {
+	homeDir := t.TempDir()
+	var ranCommands [][]string
+	result, err := InstallWithHome(model.CommunityToolRTK, "/work/project", homeDir, RunnerFunc(func(name string, args ...string) error {
+		ranCommands = append(ranCommands, append([]string{name}, args...))
+		return nil
+	}), DetectorFunc(func(name string) (string, error) {
+		if name == "cargo" {
+			return "/usr/bin/cargo", nil
+		}
+		if name == "rtk" {
+			// After install, rtk becomes available.
+			if len(ranCommands) > 0 {
+				return "/home/user/.cargo/bin/rtk", nil
+			}
+			return "", errors.New("not found")
+		}
+		return "", errors.New("not found")
+	}))
+	if err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	if len(ranCommands) != 1 {
+		t.Fatalf("runner calls = %d, want 1 (cargo install)", len(ranCommands))
+	}
+	if !strings.Contains(strings.Join(ranCommands[0], " "), "cargo install") {
+		t.Fatalf("CommandsRun = %#v, want cargo install", result.CommandsRun)
+	}
+	if len(result.ManualActions) == 0 || !strings.Contains(result.ManualActions[0], "RTK CLI was installed") {
+		t.Fatalf("ManualActions = %#v, want install success message", result.ManualActions)
+	}
+}
+
+func TestRTKInstallWithBinaryFallback(t *testing.T) {
+	homeDir := t.TempDir()
+	var ranCommands [][]string
+	result, err := InstallWithHome(model.CommunityToolRTK, "/work/project", homeDir, RunnerFunc(func(name string, args ...string) error {
+		ranCommands = append(ranCommands, append([]string{name}, args...))
+		return nil
+	}), DetectorFunc(func(name string) (string, error) {
+		if name == "cargo" {
+			return "", errors.New("not found")
+		}
+		if name == "rtk" {
+			if len(ranCommands) > 0 {
+				return "/usr/local/bin/rtk", nil
+			}
+			return "", errors.New("not found")
+		}
+		return "", errors.New("not found")
+	}))
+	if err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	if len(ranCommands) != 1 {
+		t.Fatalf("runner calls = %d, want 1 (binary install)", len(ranCommands))
+	}
+	if !strings.Contains(strings.Join(ranCommands[0], " "), "curl") {
+		t.Fatalf("CommandsRun = %#v, want curl install", result.CommandsRun)
+	}
+}
+
+func TestRTKInstallFailure(t *testing.T) {
+	homeDir := t.TempDir()
+	boom := errors.New("cargo failed")
+	_, err := InstallWithHome(model.CommunityToolRTK, "/work/project", homeDir, RunnerFunc(func(string, ...string) error {
+		return boom
+	}), DetectorFunc(func(name string) (string, error) {
+		if name == "cargo" {
+			return "/usr/bin/cargo", nil
+		}
+		return "", errors.New("not found")
+	}))
+	if !errors.Is(err, boom) {
+		t.Fatalf("Install() error = %v, want %v", err, boom)
+	}
+}
+
+func TestDetectStatusRTK(t *testing.T) {
+	homeDir := t.TempDir()
+	status := DetectStatus(model.CommunityToolRTK, homeDir, DetectorFunc(func(name string) (string, error) {
+		if name == "rtk" {
+			return "/usr/local/bin/rtk", nil
+		}
+		return "", errors.New("not found")
+	}))
+	if status.CLI != AvailabilityAvailable {
+		t.Fatalf("CLI = %q, want %q", status.CLI, AvailabilityAvailable)
+	}
+	if status.CLIPath != "/usr/local/bin/rtk" {
+		t.Fatalf("CLIPath = %q", status.CLIPath)
+	}
+}
+
+func TestDetectStatusRTKMissing(t *testing.T) {
+	homeDir := t.TempDir()
+	status := DetectStatus(model.CommunityToolRTK, homeDir, DetectorFunc(func(string) (string, error) {
+		return "", errors.New("not found")
+	}))
+	if status.CLI != AvailabilityMissing {
+		t.Fatalf("CLI = %q, want %q", status.CLI, AvailabilityMissing)
+	}
+}
+
+func TestRTKSupportedAgents(t *testing.T) {
+	agents := rtkSupportedAgents()
+	if len(agents) == 0 {
+		t.Fatal("rtkSupportedAgents() returned empty")
+	}
+	// Claude Code and OpenCode should be in the list.
+	hasClaude := false
+	hasOpenCode := false
+	for _, id := range agents {
+		if id == model.AgentClaudeCode {
+			hasClaude = true
+		}
+		if id == model.AgentOpenCode {
+			hasOpenCode = true
+		}
+	}
+	if !hasClaude {
+		t.Fatal("rtkSupportedAgents() missing Claude Code")
+	}
+	if !hasOpenCode {
+		t.Fatal("rtkSupportedAgents() missing OpenCode")
+	}
+}
+
+func TestIsRTKSupportedAgent(t *testing.T) {
+	if !isRTKSupportedAgent(model.AgentClaudeCode) {
+		t.Fatal("Claude Code should be RTK supported")
+	}
+	if !isRTKSupportedAgent(model.AgentOpenCode) {
+		t.Fatal("OpenCode should be RTK supported")
+	}
+	if isRTKSupportedAgent(model.AgentPi) {
+		t.Fatal("Pi should NOT be RTK supported")
+	}
+}

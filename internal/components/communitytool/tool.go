@@ -92,6 +92,14 @@ var definitions = []Definition{
 		RepoURL:     "https://github.com/colbymchenry/codegraph",
 		Description: "Code graph indexing and MCP wiring for supported coding agents",
 	},
+	{
+		ID:          model.CommunityToolRTK,
+		Name:        "RTK",
+		PackageName: "",
+		CommandName: "rtk",
+		RepoURL:     "https://github.com/rtk-ai/rtk",
+		Description: "CLI proxy that reduces LLM token consumption by 60-90% on common dev commands",
+	},
 }
 
 func Definitions() []Definition {
@@ -121,19 +129,26 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	if !ok {
 		return Result{}, fmt.Errorf("unknown community tool %q", id)
 	}
-	if def.ID != model.CommunityToolCodeGraph {
+	switch def.ID {
+	case model.CommunityToolCodeGraph:
+		return installCodeGraph(workspaceDir, homeDir, runner, detector)
+	case model.CommunityToolRTK:
+		return installRTK(workspaceDir, homeDir, runner, detector)
+	default:
 		return Result{}, fmt.Errorf("community tool %q is not supported", id)
 	}
+}
 
-	result := Result{Tool: id}
-	before := DetectStatus(id, homeDir, detector)
+func installCodeGraph(workspaceDir string, homeDir string, runner Runner, detector Detector) (Result, error) {
+	result := Result{Tool: model.CommunityToolCodeGraph}
+	before := DetectStatus(model.CommunityToolCodeGraph, homeDir, detector)
 	result.StatusBefore = &before
 	if before.CodeGraphReconcileSatisfied() || (before.CLI == AvailabilityAvailable && hasDetectedCodeGraphToolWiring(homeDir)) {
-		guidanceResult, err := InjectCodeGraphGuidanceIfSelected(homeDir, []model.CommunityToolID{id})
+		guidanceResult, err := InjectCodeGraphGuidanceIfSelected(homeDir, []model.CommunityToolID{model.CommunityToolCodeGraph})
 		if err != nil {
 			return result, err
 		}
-		after := DetectStatus(id, homeDir, detector)
+		after := DetectStatus(model.CommunityToolCodeGraph, homeDir, detector)
 		result.StatusAfter = &after
 		if err := validateCodeGraphInstallStatus(after); err != nil {
 			return result, err
@@ -159,16 +174,67 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 			return result, fmt.Errorf("run %q: %w", strings.Join(command, " "), err)
 		}
 	}
-	if _, err := InjectCodeGraphGuidanceIfSelected(homeDir, []model.CommunityToolID{id}); err != nil {
+	if _, err := InjectCodeGraphGuidanceIfSelected(homeDir, []model.CommunityToolID{model.CommunityToolCodeGraph}); err != nil {
 		return result, err
 	}
-	after := DetectStatus(id, homeDir, detector)
+	after := DetectStatus(model.CommunityToolCodeGraph, homeDir, detector)
 	result.StatusAfter = &after
 	if err := validateCodeGraphInstallStatus(after); err != nil {
 		return result, err
 	}
 	result.ManualActions = append(result.ManualActions, "CodeGraph CLI was installed and supported agents were connected. Project indexes will be created automatically when an enabled agent opens inside a project.")
 	return result, nil
+}
+
+func installRTK(workspaceDir string, homeDir string, runner Runner, detector Detector) (Result, error) {
+	result := Result{Tool: model.CommunityToolRTK}
+	if detector == nil {
+		detector = DetectorFunc(exec.LookPath)
+	}
+
+	// Check if RTK is already installed.
+	if _, err := detector.LookPath("rtk"); err == nil {
+		result.ManualActions = append(result.ManualActions, "RTK is already available. Run 'rtk init -g' in your project to configure agent hooks.")
+		after := DetectStatus(model.CommunityToolRTK, homeDir, detector)
+		result.StatusAfter = &after
+		return result, nil
+	}
+
+	// Install RTK via cargo (preferred) or binary download.
+	commands := rtkInstallCommands(detector)
+	for _, command := range commands {
+		if len(command) == 0 {
+			continue
+		}
+		result.CommandsRun = append(result.CommandsRun, strings.Join(command, " "))
+		if err := runner.Run(command[0], command[1:]...); err != nil {
+			return result, fmt.Errorf("run %q: %w", strings.Join(command, " "), err)
+		}
+	}
+
+	after := DetectStatus(model.CommunityToolRTK, homeDir, detector)
+	result.StatusAfter = &after
+	if after.CLI != AvailabilityAvailable {
+		return result, fmt.Errorf("RTK install did not leave the rtk CLI available")
+	}
+	result.ManualActions = append(result.ManualActions, "RTK CLI was installed. Run 'rtk init -g' in your project to configure agent hooks for token-optimized command output.")
+	return result, nil
+}
+
+func rtkInstallCommands(detector Detector) [][]string {
+	if detector == nil {
+		detector = DetectorFunc(exec.LookPath)
+	}
+	// Prefer cargo if available (Rust ecosystem).
+	if _, err := detector.LookPath("cargo"); err == nil {
+		return [][]string{
+			{"cargo", "install", "--git", "https://github.com/rtk-ai/rtk"},
+		}
+	}
+	// Fallback: binary download from GitHub releases (platform-specific).
+	return [][]string{
+		{"sh", "-c", "curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/main/install.sh | sh"},
+	}
 }
 
 func validateCodeGraphInstallStatus(status Status) error {
@@ -193,7 +259,7 @@ func validateCodeGraphInstallStatus(status Status) error {
 func DetectStatus(id model.CommunityToolID, homeDir string, detector Detector) Status {
 	status := Status{Tool: id, CLI: AvailabilityMissing}
 	def, ok := DefinitionFor(id)
-	if !ok || id != model.CommunityToolCodeGraph {
+	if !ok {
 		status.FollowUps = append(status.FollowUps, fmt.Sprintf("status detection for %q is not implemented", id))
 		return status
 	}
@@ -204,8 +270,17 @@ func DetectStatus(id model.CommunityToolID, homeDir string, detector Detector) S
 		status.CLI = AvailabilityAvailable
 		status.CLIPath = path
 	}
-	status.Agents = detectCodeGraphAgents(homeDir)
-	status.FollowUps = append(status.FollowUps, "CodeGraph markers can vary by upstream version; detection currently checks conservative MCP entries and instruction markers containing codegraph.")
+
+	switch id {
+	case model.CommunityToolCodeGraph:
+		status.Agents = detectCodeGraphAgents(homeDir)
+		status.FollowUps = append(status.FollowUps, "CodeGraph markers can vary by upstream version; detection currently checks conservative MCP entries and instruction markers containing codegraph.")
+	case model.CommunityToolRTK:
+		status.Agents = detectRTKAgents(homeDir)
+		status.FollowUps = append(status.FollowUps, "RTK hook detection checks for rtk rewrite rules in agent configuration files.")
+	default:
+		status.FollowUps = append(status.FollowUps, fmt.Sprintf("status detection for %q is not implemented", id))
+	}
 	return status
 }
 
@@ -444,4 +519,100 @@ func codeGraphCommands(packageManager string) [][]string {
 		installCommand,
 		{"codegraph", "install", "--yes"},
 	}
+}
+
+// RTK agent detection.
+
+func detectRTKAgents(homeDir string) []AgentStatus {
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		return nil
+	}
+	supported := rtkSupportedAgents()
+	installed := agents.DiscoverInstalled(reg, homeDir)
+	installedByID := make(map[model.AgentID]string, len(installed))
+	for _, agent := range installed {
+		installedByID[agent.ID] = agent.ConfigDir
+	}
+
+	result := make([]AgentStatus, 0, len(supported))
+	for _, id := range supported {
+		adapter, ok := reg.Get(id)
+		if !ok {
+			continue
+		}
+		name := agentDisplayName(id)
+		configDir, detected := installedByID[id]
+		state := AgentStatus{
+			Agent:    id,
+			Name:     name,
+			Detected: detected,
+			Path:     configDir,
+			Status:   AgentStatusUnavailable,
+			Reason:   "agent config directory was not detected",
+		}
+		if detected {
+			configured, markerPath, reason := hasRTKWiring(homeDir, adapter)
+			state.Configured = configured
+			state.Path = markerPath
+			state.Reason = reason
+			if configured {
+				state.Status = AgentStatusConfigured
+			} else {
+				state.Status = AgentStatusMissing
+			}
+		}
+		result = append(result, state)
+	}
+	return result
+}
+
+func rtkSupportedAgents() []model.AgentID {
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		return nil
+	}
+	ids := reg.SupportedAgents()
+	ids = slices.DeleteFunc(ids, func(id model.AgentID) bool { return !isRTKSupportedAgent(id) })
+	return ids
+}
+
+func isRTKSupportedAgent(id model.AgentID) bool {
+	return slices.Contains([]model.AgentID{
+		model.AgentClaudeCode,
+		model.AgentOpenCode,
+		model.AgentCursor,
+		model.AgentGeminiCLI,
+		model.AgentCodex,
+		model.AgentWindsurf,
+		model.AgentVSCodeCopilot,
+		model.AgentHermes,
+	}, id)
+}
+
+func hasRTKWiring(homeDir string, adapter agents.Adapter) (bool, string, string) {
+	// Check if RTK hooks are configured in the agent's settings or config files.
+	paths := []string{
+		adapter.SettingsPath(homeDir),
+		adapter.MCPConfigPath(homeDir, "rtk"),
+	}
+	seen := map[string]struct{}{}
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		content := strings.ToLower(string(data))
+		if strings.Contains(content, "rtk") {
+			return true, path, "found RTK hook marker"
+		}
+	}
+	return false, adapter.GlobalConfigDir(homeDir), "detected agent but no RTK hook marker was found"
 }
