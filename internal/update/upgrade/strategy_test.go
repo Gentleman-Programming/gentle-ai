@@ -348,6 +348,12 @@ func TestEffectiveMethod_NonGentleAIToolsOnWindowsUseBinary(t *testing.T) {
 // --- TestEffectiveMethod ---
 
 func TestEffectiveMethod(t *testing.T) {
+	origBrewList := brewListFn
+	t.Cleanup(func() { brewListFn = origBrewList })
+
+	// Default mock: tool IS brew-managed (simulates macOS where all tools are in brew).
+	brewListFn = func(toolName string) bool { return true }
+
 	tests := []struct {
 		name    string
 		tool    update.ToolInfo
@@ -430,6 +436,67 @@ func TestEffectiveMethod(t *testing.T) {
 				t.Errorf("effectiveMethod = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestEffectiveMethod_LinuxbrewFallsThrough verifies that on Linux with
+// Linuxbrew installed, tools that are NOT in the brew Cellar fall through
+// to their declared InstallMethod instead of failing with "No available
+// formula". Issue #186.
+func TestEffectiveMethod_LinuxbrewFallsThrough(t *testing.T) {
+	origBrewList := brewListFn
+	t.Cleanup(func() { brewListFn = origBrewList })
+
+	// Simulate Linux with Linuxbrew: brew is available but the tool is NOT
+	// in the brew Cellar (brewListFn returns false).
+	brewListFn = func(toolName string) bool { return false }
+
+	tests := []struct {
+		name string
+		tool update.ToolInfo
+		want update.InstallMethod
+	}{
+		{
+			name: "binary tool falls through to declared method",
+			tool: update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
+			want: update.InstallBinary,
+		},
+		{
+			name: "script tool falls through to declared method",
+			tool: update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
+			want: update.InstallScript,
+		},
+		{
+			name: "go-install tool falls through to go-install when go available",
+			tool: update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall, GoImportPath: "github.com/Gentleman-Programming/engram/cmd/engram"},
+			want: update.InstallGoInstall,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := system.PlatformProfile{OS: "linux", PackageManager: "brew", GoAvailable: true}
+			got := effectiveMethod(tc.tool, profile)
+			if got != tc.want {
+				t.Errorf("effectiveMethod(%q) = %q, want %q", tc.tool.Name, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEffectiveMethod_BrewInstalledToolUsesBrew verifies that when a tool IS
+// in the brew Cellar, the brew strategy is selected even on Linux.
+func TestEffectiveMethod_BrewInstalledToolUsesBrew(t *testing.T) {
+	origBrewList := brewListFn
+	t.Cleanup(func() { brewListFn = origBrewList })
+
+	brewListFn = func(toolName string) bool { return true }
+
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "brew"}
+	tool := update.ToolInfo{Name: "engram", InstallMethod: update.InstallBinary}
+	got := effectiveMethod(tool, profile)
+	if got != update.InstallBrew {
+		t.Errorf("effectiveMethod = %q, want %q", got, update.InstallBrew)
 	}
 }
 

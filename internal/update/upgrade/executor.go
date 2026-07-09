@@ -37,6 +37,15 @@ import (
 // Swapping this var in tests controls which commands are actually run.
 var execCommand = exec.Command
 
+// brewListFn checks whether a tool is installed via Homebrew by running
+// `brew list --formula <name>`. Swappable in tests for isolation.
+var brewListFn = defaultBrewList
+
+func defaultBrewList(toolName string) bool {
+	cmd := execCommand("brew", "list", "--formula", toolName)
+	return cmd.Run() == nil
+}
+
 // snapshotCreator is the function used to create a backup snapshot before
 // upgrade execution. Swapping this var in tests allows forcing snapshot
 // failures to verify end-to-end warning surfacing in UpgradeReport.
@@ -612,7 +621,11 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 	if tool.InstallMethod == update.InstallOpenCodePlugin {
 		return update.InstallOpenCodePlugin
 	}
-	if profile.PackageManager == "brew" {
+	// On macOS, the brew profile means all tools are brew-managed. On Linux
+	// with Linuxbrew, brew may be present for unrelated packages while the
+	// tool itself was installed via binary or go-install. Verify the tool is
+	// actually in the brew Cellar before selecting the brew strategy.
+	if profile.PackageManager == "brew" && brewListFn(tool.Name) {
 		return update.InstallBrew
 	}
 	// Use installer method for gentle-ai on Windows (launches PowerShell installer).
