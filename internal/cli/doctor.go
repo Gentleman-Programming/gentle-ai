@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -70,8 +72,52 @@ var (
 	newDoctorRegistry = agents.NewDefaultRegistry
 )
 
+// DoctorFlags holds parsed CLI flags for the doctor command.
+type DoctorFlags struct {
+	Footprint bool
+}
+
+// ParseDoctorFlags parses the CLI arguments for the doctor subcommand.
+func ParseDoctorFlags(args []string) (*DoctorFlags, error) {
+	opts := &DoctorFlags{}
+
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.SetOutput(ioDiscard{})
+	fs.BoolVar(&opts.Footprint, "footprint", false, "show per-agent/per-block managed block footprint breakdown")
+
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+
+	if fs.NArg() > 0 {
+		return nil, fmt.Errorf("unexpected doctor argument %q", fs.Arg(0))
+	}
+
+	return opts, nil
+}
+
+// PrintDoctorHelp writes doctor's usage text to w.
+func PrintDoctorHelp(w io.Writer) {
+	fmt.Fprint(w, `USAGE
+  gentle-ai doctor [flags]
+
+FLAGS
+  --footprint   Show per-agent/per-block managed block footprint breakdown
+  --help, -h    Show this help
+`)
+}
+
 // RunDoctor runs all ecosystem health checks and renders a report to w.
-func RunDoctor(ctx context.Context, w io.Writer) error {
+func RunDoctor(ctx context.Context, args []string, w io.Writer) error {
+	flags, err := ParseDoctorFlags(args)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			PrintDoctorHelp(w)
+			return nil
+		}
+		return err
+	}
+
 	homeDir, err := osUserHomeDirDoctor()
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
@@ -83,7 +129,22 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	report.Checks = append(report.Checks, checkEngramReachable())
 	report.Checks = append(report.Checks, checkDiskSpace(homeDir))
 
+	summary, panicked := safeCollectFootprint(homeDir)
+	if panicked {
+		report.Checks = append(report.Checks, CheckResult{
+			Name:   "managed:footprint",
+			Status: CheckStatusWarn,
+			Detail: "footprint check failed unexpectedly and was recovered — managed block footprint unavailable this run",
+			Remedy: "Re-run 'gentle-ai doctor'; if this persists, report a bug",
+		})
+	} else {
+		report.Checks = append(report.Checks, footprintCheckResult(summary))
+	}
+
 	renderDoctorReport(w, report)
+	if flags.Footprint && !panicked {
+		renderFootprintDetail(w, summary)
+	}
 	return nil
 }
 
@@ -464,6 +525,23 @@ func collectFootprint(homeDir string) FootprintSummary {
 	return sum
 }
 
+// safeCollectFootprint runs collectFootprint with panic recovery. The
+// footprint scan reads arbitrary, user-edited files from disk (agent
+// instruction files) — a diagnostic tool must never let that turn into a
+// crash that loses every other check RunDoctor already computed. panicked is
+// true when a panic was recovered; callers should treat sum as unavailable
+// (zero value) in that case and surface a dedicated CheckResult instead of
+// footprintCheckResult(sum).
+func safeCollectFootprint(homeDir string) (sum FootprintSummary, panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+		}
+	}()
+	sum = collectFootprint(homeDir)
+	return sum, false
+}
+
 // collectAgentFootprint resolves and scans a single agent's instruction file.
 func collectAgentFootprint(reg *agents.Registry, homeDir, agentID string) AgentFootprint {
 	af := AgentFootprint{AgentID: agentID}
@@ -599,6 +677,44 @@ func renderDoctorReport(w io.Writer, report DoctorReport) {
 		status = "degraded"
 	}
 	fmt.Fprintf(w, "Status:  %s\n", status)
+}
+
+// renderFootprintDetail writes the per-agent, per-block managed footprint
+// table to w. Only called when --footprint is set; the compact summary is
+// already rendered by renderDoctorReport via the managed:footprint CheckResult.
+func renderFootprintDetail(w io.Writer, sum FootprintSummary) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Managed block footprint (rough estimate)")
+	fmt.Fprintln(w, "----------------------------------------")
+
+	for _, af := range sum.Agents {
+		renderAgentFootprint(w, af)
+	}
+
+	fmt.Fprintln(w, "----------------------------------------")
+	fmt.Fprintf(w, "TOTAL  %d block(s) · %d agent(s) · ~%d tokens (rough estimate)\n", sum.TotalBlocks, sum.AgentsCovered, sum.TotalTokenEst)
+}
+
+func renderAgentFootprint(w io.Writer, af AgentFootprint) {
+	if af.Unresolved {
+		fmt.Fprintf(w, "  %s  (unresolved — no registered adapter for this agent id)\n", af.AgentID)
+		return
+	}
+
+	fmt.Fprintf(w, "  %s  %s\n", af.AgentID, af.Path)
+	if !af.Present {
+		fmt.Fprintln(w, "    (instruction file absent)")
+		return
+	}
+	if len(af.Sections) == 0 {
+		fmt.Fprintln(w, "    (no managed blocks)")
+		return
+	}
+
+	for _, sec := range af.Sections {
+		fmt.Fprintf(w, "    %-18s %6d lines %8d chars %6d tokens\n", sec.ID, sec.LineCount, sec.CharCount, estimateTokens(sec.CharCount))
+	}
+	fmt.Fprintf(w, "    %-18s %6d lines %8d chars %6d tokens\n", "subtotal", af.LineCount, af.CharCount, af.TokenEst)
 }
 
 func statusIcon(s CheckStatus) string {
