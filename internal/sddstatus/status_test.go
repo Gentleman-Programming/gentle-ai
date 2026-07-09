@@ -491,6 +491,18 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			wantArchive: DependencyReady,
 			wantNext:    "archive",
 		},
+		{
+			name: "archive ready when verify report has pending word in compliant prose with checkmark",
+			seed: func(t *testing.T, root string) {
+				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
+				write(t, filepath.Join(changeRoot, "verify-report.md"), "# Verify\nVerdict: PASS\n\n| Scenario | Description | Test | Status |\n|---|---|---|---|\n| Per-interface polling | Pending apply/update messages drain before final poll | test_pending_final_poll | ✅ COMPLIANT |\n")
+			},
+			wantApply:   ApplyAllDone,
+			wantApplyD:  DependencyAllDone,
+			wantVerify:  DependencyAllDone,
+			wantArchive: DependencyReady,
+			wantNext:    "archive",
+		},
 	}
 
 	for _, tt := range tests {

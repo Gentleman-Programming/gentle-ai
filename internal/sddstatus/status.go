@@ -871,12 +871,19 @@ var reportCriticalGlyphStatusPattern = regexp.MustCompile(`(?i)❌\s*(?:FAIL|FAI
 var reportPassNegationPattern = regexp.MustCompile(`(?i)\bnot\s+(?:pass|passed|passing|successful|complete|completed)\b|\b(?:pass|passed|success|successful|complete|completed)\s*:\s*no\b`)
 var reportPendingPattern = regexp.MustCompile(`(?i)\b(?:TODO|PENDING)\b`)
 var reportBenignValuePattern = regexp.MustCompile(`(?i)^(?:none|no|n/a|not\s+applicable|0\s+(?:failed|blockers?|critical|issues?))\.?$`)
+var reportCompliantGlyphPattern = regexp.MustCompile(`✅`)
 
 func reportLineHasBlocker(line string) bool {
 	if line == "" {
 		return false
 	}
-	if reportPassNegationPattern.MatchString(line) || reportPendingPattern.MatchString(line) {
+	// Don't flag PENDING/TODO as blockers when the line has a compliant
+	// glyph (✅) — the word may appear in prose or test names without
+	// indicating an actual pending status.
+	if reportPassNegationPattern.MatchString(line) {
+		return true
+	}
+	if reportPendingPattern.MatchString(line) && !reportCompliantGlyphPattern.MatchString(line) {
 		return true
 	}
 	if reportCriticalGlyphStatusPattern.MatchString(line) {
