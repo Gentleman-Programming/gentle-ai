@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
@@ -183,6 +184,26 @@ func tickCmd() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 		return TickMsg(t)
 	})
+}
+
+// progressListenerCmd reads one event from the progress channel and returns it
+// as a StepProgressMsg. When the channel is closed (pipeline done), it returns
+// nil, causing the listener to exit cleanly.
+func (m Model) progressListenerCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.progressCh == nil {
+			return nil
+		}
+		event, ok := <-m.progressCh
+		if !ok {
+			return nil // channel closed, listener exits
+		}
+		return StepProgressMsg{
+			StepID: event.StepID,
+			Status: event.Status,
+			Err:    event.Err,
+		}
+	}
 }
 
 // StepProgressMsg is sent from the pipeline goroutine when a step changes status.
@@ -460,6 +481,10 @@ type Model struct {
 	// fetch, when a non-empty message was returned. Empty string means no
 	// advisory to display. Set asynchronously via AdvisoryMsg.
 	AdvisoryMessage string
+
+	// progressCh is a buffered channel for real-time pipeline progress events.
+	// Created in startInstalling, closed when the pipeline goroutine finishes.
+	progressCh chan pipeline.ProgressEvent
 
 	// pipelineRunning tracks whether the pipeline goroutine is active.
 	pipelineRunning bool
@@ -802,7 +827,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.CommunityToolStatusErr = msg.Err
 		return m, nil
 	case StepProgressMsg:
-		return m.handleStepProgress(msg)
+		updated, cmd := m.handleStepProgress(msg)
+		// Re-subscribe progress listener after each event so the goroutine
+		// continues delivering progress until the channel is closed.
+		if mod, ok := updated.(Model); ok && mod.pipelineRunning {
+			return mod, tea.Batch(cmd, mod.progressListenerCmd())
+		}
+		return updated, cmd
 	case PipelineDoneMsg:
 		return m.handlePipelineDone(msg)
 	case BackupRestoreMsg:
@@ -931,7 +962,13 @@ func (m Model) handleStepProgress(msg StepProgressMsg) (tea.Model, tea.Cmd) {
 		m.Progress.Mark(idx, string(pipeline.StepStatusFailed))
 		errMsg := "unknown error"
 		if msg.Err != nil {
+			// Truncate at \noutput: to keep the log readable.
+			// The full error (including command output) is still available
+			// via PipelineDoneMsg/ProgressFromExecution if needed for debugging.
 			errMsg = msg.Err.Error()
+			if idx := strings.Index(errMsg, "\noutput:\n"); idx >= 0 {
+				errMsg = errMsg[:idx]
+			}
 		}
 		m.Progress.AppendLog("FAILED: %s — %s", msg.StepID, errMsg)
 	}
@@ -948,15 +985,27 @@ func (m Model) handlePipelineDone(msg PipelineDoneMsg) (tea.Model, tea.Cmd) {
 	m.Progress = ProgressFromExecution(msg.Result)
 
 	// Surface individual error messages so the user knows WHAT failed.
+	piModuleErrors := 0
 	appendStepErrors := func(steps []pipeline.StepResult) {
 		for _, step := range steps {
 			if step.Status == pipeline.StepStatusFailed && step.Err != nil {
-				m.Progress.AppendLog("FAILED: %s — %s", step.StepID, step.Err.Error())
+				errMsg := step.Err.Error()
+				if idx := strings.Index(errMsg, "\noutput:\n"); idx >= 0 {
+					errMsg = errMsg[:idx]
+				}
+				if strings.Contains(errMsg, "Pi CLI module not found") {
+					piModuleErrors++
+				}
+				m.Progress.AppendLog("FAILED: %s — %s", step.StepID, errMsg)
 			}
 		}
 	}
 	appendStepErrors(msg.Result.Prepare.Steps)
 	appendStepErrors(msg.Result.Apply.Steps)
+
+	if piModuleErrors > 0 {
+		m.Progress.AppendLog("Note: Pi CLI module not found in %d package(s) — reinstall with: pnpm add -g @earendil-works/pi-coding-agent", piModuleErrors)
+	}
 
 	if msg.Result.Err != nil {
 		m.Progress.AppendLog("pipeline completed with errors")
@@ -2412,23 +2461,27 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 	}
 
 	m.pipelineRunning = true
+	m.progressCh = make(chan pipeline.ProgressEvent, 32)
 
 	// Capture values for the goroutine closure.
 	executeFn := m.ExecuteFn
 	selection := m.Selection
 	resolved := m.DependencyPlan
 	detection := m.Detection
+	progressCh := m.progressCh
 
-	return m, tea.Batch(tickCmd(), func() tea.Msg {
+	return m, tea.Batch(tickCmd(), m.progressListenerCmd(), func() tea.Msg {
 		onProgress := func(event pipeline.ProgressEvent) {
-			// NOTE: ProgressFunc is called synchronously from the pipeline goroutine.
-			// We cannot use p.Send() here because we don't have a reference to the
-			// tea.Program. Instead, these events are collected in the ExecutionResult
-			// and the PipelineDoneMsg handles the final state. For real-time updates,
-			// we rely on the pipeline calling this synchronously from each step.
+			// Non-blocking write: if the channel buffer is full, drop the event
+			// so the pipeline goroutine is never blocked.
+			select {
+			case progressCh <- event:
+			default:
+			}
 		}
 
 		result := executeFn(selection, resolved, detection, onProgress)
+		close(progressCh)
 		return PipelineDoneMsg{Result: result}
 	})
 }
@@ -2863,27 +2916,11 @@ func (m Model) restoreBackup(manifest backup.Manifest) (tea.Model, tea.Cmd) {
 }
 
 // buildProgressLabels creates step labels from the resolved plan that match
-// the step IDs the pipeline will produce.
+// the step IDs the pipeline will produce. It delegates to cli.StagePlanLabels
+// for authoritative label generation that accounts for multi-command agent
+// (e.g., PI) expansion into per-command sub-steps.
 func buildProgressLabels(resolved planner.ResolvedPlan, communityTools []model.CommunityToolID) []string {
-	labels := make([]string, 0, 3+len(resolved.Agents)+len(communityTools)+len(resolved.OrderedComponents))
-
-	labels = append(labels, "prepare:check-dependencies")
-	labels = append(labels, "prepare:backup-snapshot")
-	labels = append(labels, "apply:rollback-restore")
-
-	for _, agent := range resolved.Agents {
-		labels = append(labels, "agent:"+string(agent))
-	}
-
-	for _, tool := range communityTools {
-		labels = append(labels, "community-tool:"+string(tool))
-	}
-
-	for _, component := range resolved.OrderedComponents {
-		labels = append(labels, "component:"+string(component))
-	}
-
-	return labels
+	return cli.StagePlanLabels(resolved, communityTools)
 }
 
 func (m Model) goBack() Model {

@@ -56,15 +56,25 @@ func RenderInstalling(progress InstallProgress, spinner string) string {
 		b.WriteString("\n")
 		b.WriteString(styles.HeadingStyle.Render("Logs"))
 		b.WriteString("\n")
+
+		// Collect all log lines from the last 5 entries, then cap at 20 total lines.
+		const maxLogLines = 20
 		start := 0
 		if len(progress.Logs) > 5 {
 			start = len(progress.Logs) - 5
 		}
+		var logLines []string
 		for _, entry := range progress.Logs[start:] {
-			for _, line := range strings.Split(entry, "\n") {
-				b.WriteString(styles.SubtextStyle.Render("  " + line))
-				b.WriteString("\n")
-			}
+			logLines = append(logLines, strings.Split(entry, "\n")...)
+		}
+		if len(logLines) > maxLogLines {
+			logLines = logLines[len(logLines)-maxLogLines:]
+			b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("  ... (truncated %d lines)", len(logLines))))
+			b.WriteString("\n")
+		}
+		for _, line := range logLines {
+			b.WriteString(styles.SubtextStyle.Render("  " + line))
+			b.WriteString("\n")
 		}
 	}
 
