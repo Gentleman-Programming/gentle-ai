@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -507,14 +508,30 @@ func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 		t.Fatal("start installing command = nil")
 	}
 	msg := cmd()
-	if batch, ok := msg.(tea.BatchMsg); ok {
-		for _, innerCmd := range batch {
-			if innerCmd == nil {
-				continue
-			}
-			if _, ok := innerCmd().(PipelineDoneMsg); ok {
-				break
-			}
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected BatchMsg, got %T", msg)
+	}
+
+	// Run batch commands concurrently, like Bubbletea does. The
+	// progressListenerCmd blocks on channel read until the execute
+	// command writes events or closes the channel.
+	results := make(chan tea.Msg, len(batch))
+	var launched int
+	for _, innerCmd := range batch {
+		if innerCmd == nil {
+			continue
+		}
+		launched++
+		go func(cmd tea.Cmd) {
+			results <- cmd()
+		}(innerCmd)
+	}
+	for i := 0; i < launched; i++ {
+		select {
+		case <-results:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for installing commands to complete")
 		}
 	}
 
@@ -724,6 +741,97 @@ func TestBuildProgressLabelsFromResolvedPlan(t *testing.T) {
 
 	if !reflect.DeepEqual(labels, want) {
 		t.Fatalf("labels = %v, want %v", labels, want)
+	}
+}
+
+func TestBuildProgressLabelsPiAgentProducesSubStepLabels(t *testing.T) {
+	resolved := planner.ResolvedPlan{
+		Agents: []model.AgentID{model.AgentPi},
+	}
+
+	labels := buildProgressLabels(resolved, nil)
+
+	if len(labels) < 4 {
+		t.Fatalf("PI agent: expected at least 4 labels (3 fixed + sub-steps), got %d", len(labels))
+	}
+	// First three are fixed
+	if labels[0] != "prepare:check-dependencies" {
+		t.Fatalf("label[0] = %q, want %q", labels[0], "prepare:check-dependencies")
+	}
+	if labels[1] != "prepare:backup-snapshot" {
+		t.Fatalf("label[1] = %q, want %q", labels[1], "prepare:backup-snapshot")
+	}
+	if labels[2] != "apply:rollback-restore" {
+		t.Fatalf("label[2] = %q, want %q", labels[2], "apply:rollback-restore")
+	}
+	// PI sub-step labels should follow the pattern "agent:pi/npm:<package>"
+	piLabels := labels[3:]
+	if len(piLabels) < 2 {
+		t.Fatalf("PI agent: expected multiple sub-step labels, got %d: %v", len(piLabels), piLabels)
+	}
+	for _, l := range piLabels {
+		if len(l) < 10 || l[:9] != "agent:pi/" {
+			t.Fatalf("PI sub-step label = %q, want prefix \"agent:pi/\"", l)
+		}
+	}
+}
+
+func TestBuildProgressLabelsNonPiAgentSingleStep(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentKimi, model.AgentCursor} {
+		resolved := planner.ResolvedPlan{
+			Agents: []model.AgentID{agent},
+		}
+
+		labels := buildProgressLabels(resolved, nil)
+
+		if len(labels) != 4 {
+			t.Fatalf("agent %q: expected 4 labels (3 fixed + 1 agent), got %d: %v", agent, len(labels), labels)
+		}
+		if labels[3] != "agent:"+string(agent) {
+			t.Fatalf("agent %q: label[3] = %q, want %q", agent, labels[3], "agent:"+string(agent))
+		}
+	}
+}
+
+func TestProgressListenerChannelCloseExitsCleanly(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	ch := make(chan pipeline.ProgressEvent)
+	m.progressCh = ch
+	m.pipelineRunning = false // not running; we manually control the channel
+
+	cmd := m.progressListenerCmd()
+	if cmd == nil {
+		t.Fatal("progressListenerCmd returned nil")
+	}
+
+	// Close channel — listener should return nil (no message).
+	close(ch)
+	msg := cmd()
+	if msg != nil {
+		t.Fatalf("expected nil after channel close, got %T: %v", msg, msg)
+	}
+}
+
+func TestProgressListenerNonBlockingWrite(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenInstalling
+	m.Progress = NewProgressState([]string{"test-step"})
+
+	// Create a full channel (buffer 1, fill it).
+	ch := make(chan pipeline.ProgressEvent, 1)
+	ch <- pipeline.ProgressEvent{StepID: "test-step", Status: pipeline.StepStatusRunning}
+	m.progressCh = ch
+	m.pipelineRunning = true
+
+	// This should produce a StepProgressMsg (reads from channel).
+	updated, cmd := m.Update(StepProgressMsg{StepID: "test-step", Status: pipeline.StepStatusSucceeded})
+	state := updated.(Model)
+	if state.Progress.Items[0].Status != "succeeded" {
+		t.Fatalf("status = %q, want succeeded", state.Progress.Items[0].Status)
+	}
+	// cmd should be non-nil (re-subscribed listener)
+	if cmd == nil {
+		t.Fatal("expected re-subscribed listener cmd, got nil")
 	}
 }
 
