@@ -432,6 +432,53 @@ func buildStagePlan(selection model.Selection, resolved planner.ResolvedPlan) pi
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
 }
 
+// StagePlanLabels generates step labels that match the IDs produced by
+// installRuntime.stagePlan(), including multi-command agent expansion.
+// It is the authoritative source for label → step-ID alignment used by both
+// CLI and TUI. communityTools are appended verbatim as "community-tool:<id>".
+func StagePlanLabels(resolved planner.ResolvedPlan, communityTools []model.CommunityToolID) []string {
+	labels := make([]string, 0, 3+len(resolved.Agents)+len(communityTools)+len(resolved.OrderedComponents))
+
+	labels = append(labels, "prepare:check-dependencies")
+	labels = append(labels, "prepare:backup-snapshot")
+	labels = append(labels, "apply:rollback-restore")
+
+	for _, agent := range resolved.Agents {
+		labels = append(labels, agentStepLabels(agent)...)
+	}
+
+	for _, tool := range communityTools {
+		labels = append(labels, "community-tool:"+string(tool))
+	}
+
+	for _, component := range resolved.OrderedComponents {
+		labels = append(labels, "component:"+string(component))
+	}
+
+	return labels
+}
+
+// agentStepLabels returns the step labels for a single agent.
+// For multi-command agents (PI), it returns one label per command.
+// For single-command agents, it returns one standard label.
+func agentStepLabels(agent model.AgentID) []string {
+	adapter, err := agents.NewAdapter(agent)
+	if err != nil || !adapter.SupportsAutoInstall() {
+		return []string{"agent:" + string(agent)}
+	}
+
+	commands, err := adapter.InstallCommand(system.PlatformProfile{})
+	if err != nil || len(commands) <= 1 {
+		return []string{"agent:" + string(agent)}
+	}
+
+	labels := make([]string, len(commands))
+	for i, cmd := range commands {
+		labels[i] = commandStepID(agent, cmd)
+	}
+	return labels
+}
+
 type installRuntime struct {
 	homeDir      string
 	workspaceDir string
@@ -509,8 +556,8 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	for _, agent := range r.resolved.Agents {
-
-		apply = append(apply, agentInstallStep{id: "agent:" + string(agent), agent: agent, homeDir: r.homeDir, profile: r.profile})
+		agentSteps := r.agentStepsForAgent(agent)
+		apply = append(apply, agentSteps...)
 	}
 
 	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
@@ -570,6 +617,103 @@ func (s piCodeGraphReconcileStep) Run() error {
 func (s piCodeGraphReconcileStep) Rollback() error {
 	_, err := communitytool.UninstallPiCodeGraph(s.homeDir)
 	return err
+}
+
+// agentStepsForAgent returns the pipeline steps for installing a single agent.
+// For multi-command agents (those whose InstallCommand returns >1 command),
+// it creates one agentCommandStep per command. For single-command agents,
+// it returns the existing agentInstallStep.
+func (r *installRuntime) agentStepsForAgent(agent model.AgentID) []pipeline.Step {
+	adapter, err := agents.NewAdapter(agent)
+	if err != nil || !adapter.SupportsAutoInstall() {
+		return []pipeline.Step{agentInstallStep{id: "agent:" + string(agent), agent: agent, homeDir: r.homeDir, profile: r.profile}}
+	}
+
+	commands, err := adapter.InstallCommand(r.profile)
+	if err != nil || len(commands) <= 1 {
+		if err != nil {
+			log.Printf("stagePlan: InstallCommand for %q failed: %v; falling back to single step", agent, err)
+		}
+		return []pipeline.Step{agentInstallStep{id: "agent:" + string(agent), agent: agent, homeDir: r.homeDir, profile: r.profile}}
+	}
+
+	// Multi-command agent: create one sub-step per command.
+	steps := make([]pipeline.Step, len(commands))
+	for i, cmd := range commands {
+		steps[i] = agentCommandStep{
+			id:      commandStepID(agent, cmd),
+			agent:   agent,
+			homeDir: r.homeDir,
+			profile: r.profile,
+			command: cmd,
+			first:   i == 0,
+		}
+	}
+	return steps
+}
+
+// commandStepID generates a deterministic step ID from a command.
+// For npm install commands, the format is "agent:<name>/npm:<package>".
+func commandStepID(agent model.AgentID, cmd []string) string {
+	if len(cmd) >= 3 && cmd[1] == "install" && strings.HasPrefix(cmd[2], "npm:") {
+		pkg := strings.TrimPrefix(cmd[2], "npm:")
+		return fmt.Sprintf("agent:%s/npm:%s", string(agent), pkg)
+	}
+	// Fallback for non-npm commands (e.g., engram init).
+	return fmt.Sprintf("agent:%s/%s", string(agent), cmd[0])
+}
+
+// agentCommandStep runs a single install command for an agent.
+// When first is true, it also runs detection and preflight checks.
+type agentCommandStep struct {
+	id      string
+	agent   model.AgentID
+	homeDir string
+	profile system.PlatformProfile
+	command []string
+	first   bool
+}
+
+func (s agentCommandStep) ID() string { return s.id }
+
+func (s agentCommandStep) Run() error {
+	adapter, err := agents.NewAdapter(s.agent)
+	if err != nil {
+		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
+	}
+
+	// First sub-step handles detection and preflight.
+	if s.first {
+		if !adapter.SupportsAutoInstall() {
+			return nil
+		}
+
+		installed, _, _, _, err := adapter.Detect(context.Background(), s.homeDir)
+		if err != nil {
+			return fmt.Errorf("detect agent %q: %w", s.agent, err)
+		}
+		// PI always proceeds to install even if detected.
+		if installed && s.agent != model.AgentPi {
+			return nil
+		}
+
+		if err := installcmd.ValidateAgentInstallPreflight(s.profile, s.agent); err != nil {
+			return fmt.Errorf("preflight for agent %q: %w", s.agent, err)
+		}
+	}
+
+	if len(s.command) > 0 {
+		err := runCommand(s.command[0], s.command[1:]...)
+		if err != nil && s.command[0] == "pi" {
+			errStr := err.Error()
+			if strings.Contains(errStr, "Cannot find module") ||
+				strings.Contains(errStr, "MODULE_NOT_FOUND") {
+				return fmt.Errorf("Pi CLI module not found")
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 type prepareBackupStep struct {
