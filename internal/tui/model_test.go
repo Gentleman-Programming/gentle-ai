@@ -513,9 +513,6 @@ func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 		t.Fatalf("expected BatchMsg, got %T", msg)
 	}
 
-	// Run batch commands concurrently, like Bubbletea does. The
-	// progressListenerCmd blocks on channel read until the execute
-	// command writes events or closes the channel.
 	results := make(chan tea.Msg, len(batch))
 	var launched int
 	for _, innerCmd := range batch {
@@ -571,23 +568,21 @@ func TestReviewToInstallingInitializesProgress(t *testing.T) {
 func TestStepProgressMsgUpdatesProgressState(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenInstalling
+	m.pipelineRunning = true
 	m.Progress = NewProgressState([]string{"step-a", "step-b"})
 
-	// Send running event for step-a.
 	updated, _ := m.Update(StepProgressMsg{StepID: "step-a", Status: pipeline.StepStatusRunning})
 	state := updated.(Model)
 	if state.Progress.Items[0].Status != ProgressStatusRunning {
 		t.Fatalf("step-a status = %q, want running", state.Progress.Items[0].Status)
 	}
 
-	// Send succeeded event for step-a.
 	updated, _ = state.Update(StepProgressMsg{StepID: "step-a", Status: pipeline.StepStatusSucceeded})
 	state = updated.(Model)
 	if state.Progress.Items[0].Status != string(pipeline.StepStatusSucceeded) {
 		t.Fatalf("step-a status = %q, want succeeded", state.Progress.Items[0].Status)
 	}
 
-	// Send failed event for step-b.
 	updated, _ = state.Update(StepProgressMsg{StepID: "step-b", Status: pipeline.StepStatusFailed, Err: fmt.Errorf("oops")})
 	state = updated.(Model)
 	if state.Progress.Items[1].Status != string(pipeline.StepStatusFailed) {
@@ -596,6 +591,21 @@ func TestStepProgressMsgUpdatesProgressState(t *testing.T) {
 
 	if !state.Progress.HasFailures() {
 		t.Fatalf("expected HasFailures() = true")
+	}
+}
+
+func TestStepProgressMsgIgnoredAfterPipelineCompletes(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenInstalling
+	m.pipelineRunning = false
+	m.Progress = NewProgressState([]string{"step-a"})
+	m.Progress.Mark(0, string(pipeline.StepStatusSucceeded))
+
+	updated, _ := m.Update(StepProgressMsg{StepID: "step-a", Status: pipeline.StepStatusRunning})
+	state := updated.(Model)
+
+	if state.Progress.Items[0].Status != string(pipeline.StepStatusSucceeded) {
+		t.Fatalf("step-a status = %q, want succeeded", state.Progress.Items[0].Status)
 	}
 }
 
@@ -721,7 +731,7 @@ func TestInstallingDoneToComplete(t *testing.T) {
 	}
 }
 
-func TestBuildProgressLabelsFromResolvedPlan(t *testing.T) {
+func TestBuildProgressLabelsDelegatesStagePlanLabels(t *testing.T) {
 	resolved := planner.ResolvedPlan{
 		Agents:            []model.AgentID{model.AgentClaudeCode},
 		OrderedComponents: []model.ComponentID{model.ComponentEngram, model.ComponentSDD},
@@ -744,55 +754,6 @@ func TestBuildProgressLabelsFromResolvedPlan(t *testing.T) {
 	}
 }
 
-func TestBuildProgressLabelsPiAgentProducesSubStepLabels(t *testing.T) {
-	resolved := planner.ResolvedPlan{
-		Agents: []model.AgentID{model.AgentPi},
-	}
-
-	labels := buildProgressLabels(resolved, nil)
-
-	if len(labels) < 4 {
-		t.Fatalf("PI agent: expected at least 4 labels (3 fixed + sub-steps), got %d", len(labels))
-	}
-	// First three are fixed
-	if labels[0] != "prepare:check-dependencies" {
-		t.Fatalf("label[0] = %q, want %q", labels[0], "prepare:check-dependencies")
-	}
-	if labels[1] != "prepare:backup-snapshot" {
-		t.Fatalf("label[1] = %q, want %q", labels[1], "prepare:backup-snapshot")
-	}
-	if labels[2] != "apply:rollback-restore" {
-		t.Fatalf("label[2] = %q, want %q", labels[2], "apply:rollback-restore")
-	}
-	// PI sub-step labels should follow the pattern "agent:pi/npm:<package>"
-	piLabels := labels[3:]
-	if len(piLabels) < 2 {
-		t.Fatalf("PI agent: expected multiple sub-step labels, got %d: %v", len(piLabels), piLabels)
-	}
-	for _, l := range piLabels {
-		if len(l) < 10 || l[:9] != "agent:pi/" {
-			t.Fatalf("PI sub-step label = %q, want prefix \"agent:pi/\"", l)
-		}
-	}
-}
-
-func TestBuildProgressLabelsNonPiAgentSingleStep(t *testing.T) {
-	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentKimi, model.AgentCursor} {
-		resolved := planner.ResolvedPlan{
-			Agents: []model.AgentID{agent},
-		}
-
-		labels := buildProgressLabels(resolved, nil)
-
-		if len(labels) != 4 {
-			t.Fatalf("agent %q: expected 4 labels (3 fixed + 1 agent), got %d: %v", agent, len(labels), labels)
-		}
-		if labels[3] != "agent:"+string(agent) {
-			t.Fatalf("agent %q: label[3] = %q, want %q", agent, labels[3], "agent:"+string(agent))
-		}
-	}
-}
-
 func TestProgressListenerChannelCloseExitsCleanly(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	ch := make(chan pipeline.ProgressEvent)
@@ -804,7 +765,6 @@ func TestProgressListenerChannelCloseExitsCleanly(t *testing.T) {
 		t.Fatal("progressListenerCmd returned nil")
 	}
 
-	// Close channel — listener should return nil (no message).
 	close(ch)
 	msg := cmd()
 	if msg != nil {
@@ -812,24 +772,21 @@ func TestProgressListenerChannelCloseExitsCleanly(t *testing.T) {
 	}
 }
 
-func TestProgressListenerNonBlockingWrite(t *testing.T) {
+func TestProgressListenerResubscribesAfterStepProgress(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenInstalling
 	m.Progress = NewProgressState([]string{"test-step"})
 
-	// Create a full channel (buffer 1, fill it).
 	ch := make(chan pipeline.ProgressEvent, 1)
 	ch <- pipeline.ProgressEvent{StepID: "test-step", Status: pipeline.StepStatusRunning}
 	m.progressCh = ch
 	m.pipelineRunning = true
 
-	// This should produce a StepProgressMsg (reads from channel).
 	updated, cmd := m.Update(StepProgressMsg{StepID: "test-step", Status: pipeline.StepStatusSucceeded})
 	state := updated.(Model)
 	if state.Progress.Items[0].Status != "succeeded" {
 		t.Fatalf("status = %q, want succeeded", state.Progress.Items[0].Status)
 	}
-	// cmd should be non-nil (re-subscribed listener)
 	if cmd == nil {
 		t.Fatal("expected re-subscribed listener cmd, got nil")
 	}

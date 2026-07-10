@@ -68,8 +68,9 @@ func RenderInstalling(progress InstallProgress, spinner string) string {
 			logLines = append(logLines, strings.Split(entry, "\n")...)
 		}
 		if len(logLines) > maxLogLines {
+			omitted := len(logLines) - maxLogLines
 			logLines = logLines[len(logLines)-maxLogLines:]
-			b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("  ... (truncated %d lines)", len(logLines))))
+			b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("  ... (truncated %d lines)", omitted)))
 			b.WriteString("\n")
 		}
 		for _, line := range logLines {

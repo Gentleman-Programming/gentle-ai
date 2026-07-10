@@ -432,10 +432,7 @@ func buildStagePlan(selection model.Selection, resolved planner.ResolvedPlan) pi
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
 }
 
-// StagePlanLabels generates step labels that match the IDs produced by
-// installRuntime.stagePlan(), including multi-command agent expansion.
-// It is the authoritative source for label → step-ID alignment used by both
-// CLI and TUI. communityTools are appended verbatim as "community-tool:<id>".
+// StagePlanLabels generates step labels matching stagePlan() output for CLI/TUI progress.
 func StagePlanLabels(resolved planner.ResolvedPlan, communityTools []model.CommunityToolID) []string {
 	labels := make([]string, 0, 3+len(resolved.Agents)+len(communityTools)+len(resolved.OrderedComponents))
 
@@ -458,9 +455,7 @@ func StagePlanLabels(resolved planner.ResolvedPlan, communityTools []model.Commu
 	return labels
 }
 
-// agentStepLabels returns the step labels for a single agent.
-// For multi-command agents (PI), it returns one label per command.
-// For single-command agents, it returns one standard label.
+// agentStepLabels returns per-command labels for multi-command agents, or "agent:<name>".
 func agentStepLabels(agent model.AgentID) []string {
 	adapter, err := agents.NewAdapter(agent)
 	if err != nil || !adapter.SupportsAutoInstall() {
@@ -619,10 +614,8 @@ func (s piCodeGraphReconcileStep) Rollback() error {
 	return err
 }
 
-// agentStepsForAgent returns the pipeline steps for installing a single agent.
-// For multi-command agents (those whose InstallCommand returns >1 command),
-// it creates one agentCommandStep per command. For single-command agents,
-// it returns the existing agentInstallStep.
+// agentStepsForAgent returns one agentCommandStep per command for multi-command agents,
+// falling back to agentInstallStep for single-command agents.
 func (r *installRuntime) agentStepsForAgent(agent model.AgentID) []pipeline.Step {
 	adapter, err := agents.NewAdapter(agent)
 	if err != nil || !adapter.SupportsAutoInstall() {
@@ -637,7 +630,6 @@ func (r *installRuntime) agentStepsForAgent(agent model.AgentID) []pipeline.Step
 		return []pipeline.Step{agentInstallStep{id: "agent:" + string(agent), agent: agent, homeDir: r.homeDir, profile: r.profile}}
 	}
 
-	// Multi-command agent: create one sub-step per command.
 	steps := make([]pipeline.Step, len(commands))
 	for i, cmd := range commands {
 		steps[i] = agentCommandStep{
@@ -652,19 +644,20 @@ func (r *installRuntime) agentStepsForAgent(agent model.AgentID) []pipeline.Step
 	return steps
 }
 
-// commandStepID generates a deterministic step ID from a command.
-// For npm install commands, the format is "agent:<name>/npm:<package>".
+// commandStepID returns "agent:<name>/npm:<package>" for npm installs, or "agent:<name>/<arg>".
 func commandStepID(agent model.AgentID, cmd []string) string {
+	if len(cmd) == 0 {
+		return fmt.Sprintf("agent:%s/command", string(agent))
+	}
 	if len(cmd) >= 3 && cmd[1] == "install" && strings.HasPrefix(cmd[2], "npm:") {
 		pkg := strings.TrimPrefix(cmd[2], "npm:")
 		return fmt.Sprintf("agent:%s/npm:%s", string(agent), pkg)
 	}
-	// Fallback for non-npm commands (e.g., engram init).
 	return fmt.Sprintf("agent:%s/%s", string(agent), cmd[0])
 }
 
-// agentCommandStep runs a single install command for an agent.
-// When first is true, it also runs detection and preflight checks.
+// agentCommandStep runs a single agent install command as a pipeline step.
+// On first=true, it also runs detection and preflight checks.
 type agentCommandStep struct {
 	id      string
 	agent   model.AgentID
@@ -676,13 +669,14 @@ type agentCommandStep struct {
 
 func (s agentCommandStep) ID() string { return s.id }
 
+// Run executes the install command, running detection/preflight on first sub-step
+// and mapping Pi "module not found" errors to a user-friendly message.
 func (s agentCommandStep) Run() error {
 	adapter, err := agents.NewAdapter(s.agent)
 	if err != nil {
 		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
 	}
 
-	// First sub-step handles detection and preflight.
 	if s.first {
 		if !adapter.SupportsAutoInstall() {
 			return nil
@@ -692,7 +686,6 @@ func (s agentCommandStep) Run() error {
 		if err != nil {
 			return fmt.Errorf("detect agent %q: %w", s.agent, err)
 		}
-		// PI always proceeds to install even if detected.
 		if installed && s.agent != model.AgentPi {
 			return nil
 		}

@@ -91,9 +91,7 @@ func ProgressFromExecution(result pipeline.ExecutionResult) ProgressState {
 
 	appendSteps(result.Prepare)
 	appendSteps(result.Apply)
-	// Rollback stage is intentionally excluded: its steps mirror the Apply stage
-	// (same StepIDs), so including them would duplicate entries and inflate the
-	// progress total without adding new information for the user.
+	// Rollback steps mirror Apply StageIDs; exclude to avoid duplicates.
 
 	progress := NewProgressState(labels)
 	for idx, status := range statuses {

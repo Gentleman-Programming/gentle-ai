@@ -16,8 +16,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
@@ -186,9 +186,8 @@ func tickCmd() tea.Cmd {
 	})
 }
 
-// progressListenerCmd reads one event from the progress channel and returns it
-// as a StepProgressMsg. When the channel is closed (pipeline done), it returns
-// nil, causing the listener to exit cleanly.
+// progressListenerCmd reads one channel event and returns StepProgressMsg,
+// or nil when the channel is closed (pipeline done).
 func (m Model) progressListenerCmd() tea.Cmd {
 	return func() tea.Msg {
 		if m.progressCh == nil {
@@ -828,8 +827,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case StepProgressMsg:
 		updated, cmd := m.handleStepProgress(msg)
-		// Re-subscribe progress listener after each event so the goroutine
-		// continues delivering progress until the channel is closed.
+		// Re-subscribe listener until channel closes.
 		if mod, ok := updated.(Model); ok && mod.pipelineRunning {
 			return mod, tea.Batch(cmd, mod.progressListenerCmd())
 		}
@@ -942,6 +940,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleStepProgress(msg StepProgressMsg) (tea.Model, tea.Cmd) {
+	if !m.pipelineRunning {
+		return m, nil
+	}
+
 	if m.Screen != ScreenInstalling {
 		return m, nil
 	}
@@ -962,9 +964,7 @@ func (m Model) handleStepProgress(msg StepProgressMsg) (tea.Model, tea.Cmd) {
 		m.Progress.Mark(idx, string(pipeline.StepStatusFailed))
 		errMsg := "unknown error"
 		if msg.Err != nil {
-			// Truncate at \noutput: to keep the log readable.
-			// The full error (including command output) is still available
-			// via PipelineDoneMsg/ProgressFromExecution if needed for debugging.
+			// Truncate at \noutput: to keep logs readable.
 			errMsg = msg.Err.Error()
 			if idx := strings.Index(errMsg, "\noutput:\n"); idx >= 0 {
 				errMsg = errMsg[:idx]
@@ -2483,8 +2483,7 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 
 	return m, tea.Batch(tickCmd(), m.progressListenerCmd(), func() tea.Msg {
 		onProgress := func(event pipeline.ProgressEvent) {
-			// Non-blocking write: if the channel buffer is full, drop the event
-			// so the pipeline goroutine is never blocked.
+			// Non-blocking write: drop if buffer full.
 			select {
 			case progressCh <- event:
 			default:
@@ -2926,10 +2925,7 @@ func (m Model) restoreBackup(manifest backup.Manifest) (tea.Model, tea.Cmd) {
 	}
 }
 
-// buildProgressLabels creates step labels from the resolved plan that match
-// the step IDs the pipeline will produce. It delegates to cli.StagePlanLabels
-// for authoritative label generation that accounts for multi-command agent
-// (e.g., PI) expansion into per-command sub-steps.
+// buildProgressLabels delegates to cli.StagePlanLabels for TUI/CLI label alignment.
 func buildProgressLabels(resolved planner.ResolvedPlan, communityTools []model.CommunityToolID) []string {
 	return cli.StagePlanLabels(resolved, communityTools)
 }

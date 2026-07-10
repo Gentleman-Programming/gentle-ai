@@ -8,20 +8,14 @@ import (
 )
 
 func TestStagePlanLabelsPiAgentExpands(t *testing.T) {
-	resolved := planner.ResolvedPlan{
-		Agents: []model.AgentID{model.AgentPi},
-	}
-
-	labels := StagePlanLabels(resolved, nil)
+	labels := StagePlanLabels(planner.ResolvedPlan{Agents: []model.AgentID{model.AgentPi}}, nil)
 
 	if len(labels) < 4 {
 		t.Fatalf("PI agent: expected at least 4 labels, got %d", len(labels))
 	}
-	// First 3 are fixed
 	if labels[0] != "prepare:check-dependencies" {
 		t.Fatalf("label[0] = %q, want %q", labels[0], "prepare:check-dependencies")
 	}
-	// PI sub-steps start at index 3
 	piLabels := labels[3:]
 	if len(piLabels) < 2 {
 		t.Fatalf("PI agent: expected multiple sub-step labels, got %d: %v", len(piLabels), piLabels)
@@ -34,11 +28,7 @@ func TestStagePlanLabelsPiAgentExpands(t *testing.T) {
 }
 
 func TestStagePlanLabelsSingleCommandAgent(t *testing.T) {
-	resolved := planner.ResolvedPlan{
-		Agents: []model.AgentID{model.AgentClaudeCode},
-	}
-
-	labels := StagePlanLabels(resolved, nil)
+	labels := StagePlanLabels(planner.ResolvedPlan{Agents: []model.AgentID{model.AgentClaudeCode}}, nil)
 
 	if len(labels) != 4 {
 		t.Fatalf("single-command agent: expected 4 labels, got %d: %v", len(labels), labels)
@@ -49,11 +39,7 @@ func TestStagePlanLabelsSingleCommandAgent(t *testing.T) {
 }
 
 func TestStagePlanLabelsWithCommunityTools(t *testing.T) {
-	resolved := planner.ResolvedPlan{
-		Agents: []model.AgentID{model.AgentPi},
-	}
-
-	labels := StagePlanLabels(resolved, []model.CommunityToolID{model.CommunityToolCodeGraph})
+	labels := StagePlanLabels(planner.ResolvedPlan{Agents: []model.AgentID{model.AgentPi}}, []model.CommunityToolID{model.CommunityToolCodeGraph})
 
 	hasCodeGraph := false
 	for _, l := range labels {
