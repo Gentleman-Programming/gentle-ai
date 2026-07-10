@@ -79,7 +79,7 @@ func (p ProgressState) Percent() int {
 }
 
 func ProgressFromExecution(result pipeline.ExecutionResult) ProgressState {
-	labels := make([]string, 0, len(result.Prepare.Steps)+len(result.Apply.Steps)+len(result.Rollback.Steps))
+	labels := make([]string, 0, len(result.Prepare.Steps)+len(result.Apply.Steps))
 	statuses := make([]pipeline.StepStatus, 0, cap(labels))
 
 	appendSteps := func(stage pipeline.StageResult) {
@@ -91,7 +91,9 @@ func ProgressFromExecution(result pipeline.ExecutionResult) ProgressState {
 
 	appendSteps(result.Prepare)
 	appendSteps(result.Apply)
-	appendSteps(result.Rollback)
+	// Rollback stage is intentionally excluded: its steps mirror the Apply stage
+	// (same StepIDs), so including them would duplicate entries and inflate the
+	// progress total without adding new information for the user.
 
 	progress := NewProgressState(labels)
 	for idx, status := range statuses {

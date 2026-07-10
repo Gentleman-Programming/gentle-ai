@@ -962,7 +962,13 @@ func (m Model) handleStepProgress(msg StepProgressMsg) (tea.Model, tea.Cmd) {
 		m.Progress.Mark(idx, string(pipeline.StepStatusFailed))
 		errMsg := "unknown error"
 		if msg.Err != nil {
+			// Truncate at \noutput: to keep the log readable.
+			// The full error (including command output) is still available
+			// via PipelineDoneMsg/ProgressFromExecution if needed for debugging.
 			errMsg = msg.Err.Error()
+			if idx := strings.Index(errMsg, "\noutput:\n"); idx >= 0 {
+				errMsg = errMsg[:idx]
+			}
 		}
 		m.Progress.AppendLog("FAILED: %s — %s", msg.StepID, errMsg)
 	}
@@ -979,15 +985,27 @@ func (m Model) handlePipelineDone(msg PipelineDoneMsg) (tea.Model, tea.Cmd) {
 	m.Progress = ProgressFromExecution(msg.Result)
 
 	// Surface individual error messages so the user knows WHAT failed.
+	piModuleErrors := 0
 	appendStepErrors := func(steps []pipeline.StepResult) {
 		for _, step := range steps {
 			if step.Status == pipeline.StepStatusFailed && step.Err != nil {
-				m.Progress.AppendLog("FAILED: %s — %s", step.StepID, step.Err.Error())
+				errMsg := step.Err.Error()
+				if idx := strings.Index(errMsg, "\noutput:\n"); idx >= 0 {
+					errMsg = errMsg[:idx]
+				}
+				if strings.Contains(errMsg, "Pi CLI module not found") {
+					piModuleErrors++
+				}
+				m.Progress.AppendLog("FAILED: %s — %s", step.StepID, errMsg)
 			}
 		}
 	}
 	appendStepErrors(msg.Result.Prepare.Steps)
 	appendStepErrors(msg.Result.Apply.Steps)
+
+	if piModuleErrors > 0 {
+		m.Progress.AppendLog("Note: Pi CLI module not found in %d package(s) — reinstall with: pnpm add -g @earendil-works/pi-coding-agent", piModuleErrors)
+	}
 
 	if msg.Result.Err != nil {
 		m.Progress.AppendLog("pipeline completed with errors")
