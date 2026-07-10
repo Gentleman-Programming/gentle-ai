@@ -217,6 +217,27 @@ Breaking changes map to the `type:breaking-change` label.
 
 ---
 
+## Hermes — Knowledge-Layer Agent
+
+Hermes is a detect-only agent in the Gentle-AI ecosystem. Unlike coding agents (Claude Code, OpenCode, Cursor), Hermes does not receive Gentle-AI-injected skills directories at install time, has no system prompt injection targets beyond SOUL.md, and does not support subagents.
+
+### Capabilities
+
+- **SOUL.md system prompt** — injected via `StrategyMarkdownSections`, which uses marker-based insertion into existing prompt files.
+- **YAML MCP config** — injected via `StrategyMergeIntoYAML`, which merges MCP server blocks into `config.yaml` without overwriting user configuration.
+- **Skills directory** — Gentle-AI recognizes `~/.hermes/skills/` for user-managed skills.
+
+### Why It Matters
+
+Hermes's YAML MCP strategy is the reference implementation for non-coding agents that need MCP configuration. If you are building a knowledge-layer integration (MCP servers for context, memory, or retrieval), Hermes's YAML merge strategy is the adapter pattern to follow. It demonstrates how to inject MCP configuration into a YAML-structured config file without parsing, templating, or conflicting with existing user entries.
+
+### Contributing
+
+- Hermes cannot be auto-installed. It must be installed manually before Gentle-AI detects it.
+- Adapter location: `internal/agents/hermes/adapter.go`
+- All `SupportTier` methods return `TierFull` for display purposes only; there is no auto-install path.
+- No subagents, no slash commands, no output styles.
+
 ## Branch Naming
 
 Branch names **must** match this pattern:
