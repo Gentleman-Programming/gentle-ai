@@ -214,6 +214,48 @@ type ioErrHome string
 
 func (e ioErrHome) Error() string { return string(e) }
 
+// TestPromptUninstallOpenCodePluginConfirmGentleLogoBranch exercises the
+// !hasDef branch of promptUninstallOpenCodePluginConfirm (B-503). For the
+// built-in GentleLogo, the prompt must still surface Layer 1 (the tui.json
+// entry removal that always runs) and additively disclose the .tsx removal,
+// not claim "Layer 1 (only)".
+func TestPromptUninstallOpenCodePluginConfirmGentleLogoBranch(t *testing.T) {
+	var stdout bytes.Buffer
+	ok, err := promptUninstallOpenCodePluginConfirm(model.OpenCodePluginGentleLogo, &stdout, strings.NewReader("yes\n"))
+	if err != nil {
+		t.Fatalf("prompt error = %v", err)
+	}
+	if !ok {
+		t.Fatal("prompt returned false, want true on 'yes' response")
+	}
+	out := stdout.String()
+	wantSubstrings := []string{
+		"Gentle Logo",
+		"Layer 1: removes entry from ~/.config/opencode/tui.json",
+		"Plus: removes the local .tsx file ~/.config/opencode/tui-plugins/gentle-logo.tsx",
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(out, want) {
+			t.Fatalf("GentleLogo prompt missing %q; output:\n%s", want, out)
+		}
+	}
+	// The deprecated "Layer 1 (only)" wording must not appear.
+	if strings.Contains(out, "Layer 1 (only)") {
+		t.Fatalf("GentleLogo prompt must not advertise Layer 1 (only); output:\n%s", out)
+	}
+	// NPM-only layers must not appear for GentleLogo.
+	npmOnlySubstrings := []string{
+		"Layer 2: removes",
+		"Layer 3: removes",
+		"Layer 4: removes",
+	}
+	for _, forbidden := range npmOnlySubstrings {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("GentleLogo prompt must not advertise %s; output:\n%s", forbidden, out)
+		}
+	}
+}
+
 // eofReader returns EOF immediately so the confirmation prompt fails fast
 // without blocking on stdin during the cancelled test.
 type eofReader struct{}
