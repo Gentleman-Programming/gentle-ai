@@ -6836,6 +6836,13 @@ func TestInjectTriggerRules_AllAdapters(t *testing.T) {
 				return readFileOrEmpty(a.SystemPromptFile(home))
 			},
 		},
+		{
+			name:    "freebuff",
+			agentID: model.AgentFreebuff,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SystemPromptFile(home))
+			},
+		},
 	}
 
 	// Count guard: the test table must enumerate exactly as many adapters as the

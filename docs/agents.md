@@ -294,7 +294,7 @@ The full delegation decision table lives in `~/.hermes/skills/hermes-ephemeral-d
 
 ### Freebuff
 
-- **Detection**: gentle-ai detects Freebuff from the `freebuff` binary on `PATH` and its config root at `~/.agents`.
+- **Detection**: gentle-ai checks for the `freebuff` binary on `PATH` and the config root at `~/.agents` independently.
 - **Install**: `npm install -g freebuff` — auto-install is supported (`--auto-install` flag). On Linux with system-owned npm prefix, `sudo` is prepended automatically.
 - **Config path**: `~/.agents/` (shared with Codebuff; Freebuff reads from this directory)
 - **System prompt**: SDD orchestrator and persona are written to `~/knowledge.md` (read first by Freebuff, before `AGENTS.md` and `CLAUDE.md`) via markdown section markers (`<!-- gentle-ai:sdd-orchestrator -->`, `<!-- gentle-ai:persona -->`).

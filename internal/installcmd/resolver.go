@@ -83,10 +83,11 @@ func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
 // resolveFreebuffInstall returns the npm install command for Freebuff.
 // On Linux with system npm (non-writable prefix), sudo is required.
 func resolveFreebuffInstall(profile system.PlatformProfile) CommandSequence {
+	pkg := "freebuff@" + versions.Freebuff
 	if profile.OS == "linux" && !profile.NpmWritable {
-		return CommandSequence{{"sudo", "npm", "install", "-g", "freebuff"}}
+		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}
 	}
-	return CommandSequence{{"npm", "install", "-g", "freebuff"}}
+	return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}
 }
 
 // resolveKimiInstall returns the official Kimi install command sequence.

@@ -475,6 +475,12 @@ func TestInstallPipelineDoesNotDuplicatePiPendingWhenSelected(t *testing.T) {
 		installCommunityToolWithHome = previousInstall
 		reconcilePiCodeGraph = previousReconcile
 	})
+	tmpBin := t.TempDir()
+	piPath := filepath.Join(tmpBin, "pi")
+	if err := os.WriteFile(piPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatalf("failed to write mock pi binary: %v", err)
+	}
+	t.Setenv("PATH", tmpBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	pending := communitytool.PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph integration is pending: Pi 0.80.6 has no supported machine-verifiable adapter health signal. CodeGraph capability was not reported as configured."}}
 	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
 		return communitytool.Result{Tool: model.CommunityToolCodeGraph, PiCodeGraph: &pending}, nil
