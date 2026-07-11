@@ -99,7 +99,7 @@ $env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-P
 
 #### Refreshing on the beta channel
 
-The beta channel does not update in the background. Run `gentle-ai upgrade` when you want to refresh Gentle AI and its managed tools:
+The beta channel does not update in the background. Run `gentle-ai upgrade` to refresh managed tools such as Engram and GGA:
 
 ```bash
 # macOS / Linux
@@ -136,17 +136,21 @@ You can also re-run the beta installer shown above; it runs the same `go install
 > $env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main
 > ```
 
-To return to stable, clear the beta channel first, then reinstall with Homebrew or Scoop:
+To update the Gentle AI beta binary itself, run the `go install ...@main` command above or re-run the beta installer.
+
+To return to stable, clear the beta channel first. Then use the installer you prefer:
 
 ```bash
 unset GENTLE_AI_CHANNEL
-brew upgrade gentle-ai
+curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
 ```
 
 ```powershell
 Remove-Item Env:GENTLE_AI_CHANNEL -ErrorAction SilentlyContinue
-scoop install gentle-ai
+irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
 ```
+
+If Homebrew or Scoop already manages your stable installation, you can use `brew upgrade gentle-ai` or `scoop update gentle-ai` instead.
 
 ### After install: project-level setup
 
