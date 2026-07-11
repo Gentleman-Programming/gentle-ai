@@ -1404,6 +1404,38 @@ func TestWelcomeMenu_UninstallOpenCodePluginNavigation(t *testing.T) {
 	}
 }
 
+// TestWelcomeMenu_UninstallOpenCodePluginEmptyTUIJSON covers A-603: when
+// the launcher finds no installed plugins (missing or empty tui.json), it
+// must short-circuit to ScreenOpenCodePluginUninstallResult so the
+// Result screen can show the empty-state message — NOT navigate to
+// ScreenOpenCodePluginUninstall which would render a blank frame.
+func TestWelcomeMenu_UninstallOpenCodePluginEmptyTUIJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	// Do NOT pre-populate tui.json — the launcher will find zero installed
+	// plugins and should route to the Result screen, not Select.
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 7
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenOpenCodePluginUninstallResult {
+		t.Fatalf("cursor=7 with empty tui.json: screen = %v, want %v (short-circuit to Result)",
+			state.Screen, ScreenOpenCodePluginUninstallResult)
+	}
+	if !state.OpenCodePluginUninstallStandalone {
+		t.Fatal("expected standalone uninstall mode even with empty tui.json")
+	}
+	if len(state.OpenCodePluginUninstallInstalled) != 0 {
+		t.Fatalf("installed = %#v, want empty", state.OpenCodePluginUninstallInstalled)
+	}
+}
+
 func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
