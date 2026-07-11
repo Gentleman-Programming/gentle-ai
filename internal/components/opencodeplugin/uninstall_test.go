@@ -514,6 +514,28 @@ func TestUninstallIdempotent(t *testing.T) {
 	}
 }
 
+// TestUninstallRemovesAllDuplicateTUIEntries covers the F5 regression: if the
+// same package appears twice in tui.json's plugin[] list, both occurrences
+// must be removed, not just the first one.
+func TestUninstallRemovesAllDuplicateTUIEntries(t *testing.T) {
+	home := t.TempDir()
+	pkgName := "opencode-subagent-statusline"
+	writeTUIConfig(t, home, []string{pkgName, "unrelated-plugin", pkgName})
+
+	res, err := Uninstall(home, model.OpenCodePluginSubAgentStatusline)
+	if err != nil {
+		t.Fatalf("Uninstall() error = %v", err)
+	}
+	if !res.ChangedTUI {
+		t.Fatal("res.ChangedTUI = false, want true (duplicates were present)")
+	}
+	got := readTUIPlugins(t, home)
+	want := []string{"unrelated-plugin"}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("tui.json plugin list after uninstall = %#v, want %#v", got, want)
+	}
+}
+
 // ─── 9. Rollback ───────────────────────────────────────────────────────────
 
 // TestUninstallRollbackOnFailure forces layer 2 (package.json write) to fail

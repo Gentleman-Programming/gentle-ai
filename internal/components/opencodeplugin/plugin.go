@@ -226,7 +226,7 @@ func removeTUIPlugin(path, pkg string) (bool, []byte, error) {
 	}
 
 	plugins := stringSlice(root["plugin"])
-	kept := plugins[:0:0]
+	kept := make([]string, 0, len(plugins))
 	changedAny := false
 	for _, existing := range plugins {
 		if existing == pkg {

@@ -2,8 +2,6 @@ package opencodeplugin
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,7 +71,7 @@ func Uninstall(homeDir string, id model.OpenCodeCommunityPluginID) (UninstallRes
 
 	// ── Layer 1: tui.json ──────────────────────────────────────────────────
 	if err := journal.Capture(tuiPath); err != nil {
-		return result, fmt.Errorf("uninstall layer 1: capture tui.json: %w", err)
+		return result, fmt.Errorf("uninstall layer 1 (tui.json capture): %w", err)
 	}
 	tuiChanged, tuiAfter, err := removeTUIPlugin(tuiPath, targetInTUI)
 	if err != nil {
@@ -192,10 +190,11 @@ func uninstallPackageJSON(journal *mutationjournal.Journal, packagePath, pkg str
 		return false, mutationjournal.OwnedFile{}, fmt.Errorf("marshal package.json: %w", err)
 	}
 	out = append(out, '\n')
-	if _, err := journal.Write(packagePath, out); err != nil {
+	written, err := journal.Write(packagePath, out)
+	if err != nil {
 		return false, mutationjournal.OwnedFile{}, err
 	}
-	return true, journal.OwnedFile(packagePath, string(out), false, false), nil
+	return true, written, nil
 }
 
 // uninstallCacheEntry removes the OpenCode plugin cache for pkg. Must mirror
@@ -242,10 +241,11 @@ func rollbackUninstall(journal *mutationjournal.Journal, id model.OpenCodeCommun
 // snapshot directly (a directory tree, e.g. node_modules/<pkg>/ or the cache
 // entry). After is empty, AfterHash is the canonical sha256 of the empty
 // string, and Mode is 0 so the entry is omitted from JSON.
+const emptySHA256Hex = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
 func removalRecord() mutationjournal.OwnedFile {
-	sum := sha256.Sum256(nil)
 	return mutationjournal.OwnedFile{
 		After:     "",
-		AfterHash: hex.EncodeToString(sum[:]),
+		AfterHash: emptySHA256Hex,
 	}
 }
