@@ -95,3 +95,35 @@ func TestIsSupportedAgentAcceptsHermes(t *testing.T) {
 		t.Fatalf("IsSupportedAgent(%q) = false, want true", model.AgentHermes)
 	}
 }
+
+func TestAllAgentsIncludesFreebuff(t *testing.T) {
+	agents := AllAgents()
+
+	for _, agent := range agents {
+		if agent.ID != model.AgentFreebuff {
+			continue
+		}
+
+		if agent.Name != "Freebuff" {
+			t.Fatalf("Freebuff Name = %q, want Freebuff", agent.Name)
+		}
+
+		if agent.Tier != model.TierFull {
+			t.Fatalf("Freebuff Tier = %q, want %q", agent.Tier, model.TierFull)
+		}
+
+		if agent.ConfigPath != "~/.agents" {
+			t.Fatalf("Freebuff ConfigPath = %q, want ~/.agents", agent.ConfigPath)
+		}
+
+		return
+	}
+
+	t.Fatalf("AllAgents() missing %s", model.AgentFreebuff)
+}
+
+func TestIsSupportedAgentAcceptsFreebuff(t *testing.T) {
+	if !IsSupportedAgent(model.AgentFreebuff) {
+		t.Fatalf("IsSupportedAgent(%q) = false, want true", model.AgentFreebuff)
+	}
+}

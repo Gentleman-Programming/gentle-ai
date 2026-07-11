@@ -3271,6 +3271,7 @@ func TestPreselectedAgents_AllKnownAgentsMappedCorrectly(t *testing.T) {
 		{"vscode-copilot", model.AgentVSCodeCopilot},
 		{"codex", model.AgentCodex},
 		{"hermes", model.AgentHermes},
+		{"freebuff", model.AgentFreebuff},
 	}
 
 	for _, tt := range tests {

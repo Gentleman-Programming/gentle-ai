@@ -48,6 +48,8 @@ func (profileResolver) ResolveAgentInstall(profile system.PlatformProfile, agent
 		return resolveKilocodeInstall(profile), nil
 	case model.AgentKimi:
 		return resolveKimiInstall(profile)
+	case model.AgentFreebuff:
+		return resolveFreebuffInstall(profile), nil
 	default:
 		return nil, fmt.Errorf("install command is not supported for agent %q", agent)
 	}
@@ -76,6 +78,15 @@ func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
 		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}
 	}
 	return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}
+}
+
+// resolveFreebuffInstall returns the npm install command for Freebuff.
+// On Linux with system npm (non-writable prefix), sudo is required.
+func resolveFreebuffInstall(profile system.PlatformProfile) CommandSequence {
+	if profile.OS == "linux" && !profile.NpmWritable {
+		return CommandSequence{{"sudo", "npm", "install", "-g", "freebuff"}}
+	}
+	return CommandSequence{{"npm", "install", "-g", "freebuff"}}
 }
 
 // resolveKimiInstall returns the official Kimi install command sequence.
@@ -107,6 +118,7 @@ var npmBasedAgents = map[model.AgentID]struct{}{
 	model.AgentCodex:      {},
 	model.AgentQwenCode:   {},
 	model.AgentPi:         {},
+	model.AgentFreebuff:   {},
 }
 
 // ValidateAgentInstallPreflight validates agent-specific prerequisites that must
