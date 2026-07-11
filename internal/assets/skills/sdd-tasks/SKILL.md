@@ -2,7 +2,7 @@
 name: sdd-tasks
 description: "Break an SDD change into implementation tasks. Trigger: orchestrator launches task planning for a change."
 disable-model-invocation: true
-user-invocable: false
+user-invocable: true
 license: MIT
 metadata:
   author: gentleman-programming

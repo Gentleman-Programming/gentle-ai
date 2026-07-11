@@ -3,7 +3,7 @@
 name: sdd-verify
 description: "Trigger: SDD verification phase, verify change. Execute tests and prove implementation matches specs, design, and tasks."
 disable-model-invocation: true
-user-invocable: false
+user-invocable: true
 license: MIT
 metadata:
   author: gentleman-programming
@@ -104,7 +104,7 @@ Return `## Verification Report` with change, mode, completeness table, build/tes
 name: sdd-verify
 description: "Trigger: SDD verification phase, verify change. Execute tests and prove implementation matches specs, design, and tasks."
 disable-model-invocation: true
-user-invocable: false
+user-invocable: true
 license: MIT
 metadata:
   author: gentleman-programming
