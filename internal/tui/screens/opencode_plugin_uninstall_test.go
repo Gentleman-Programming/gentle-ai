@@ -22,7 +22,6 @@ func TestRenderOpenCodePluginUninstallSelectListsInstalledPlugins(t *testing.T) 
 		"Uninstall OpenCode Community Plugins",
 		"Sub-agent Statusline",
 		"SDD Engram Manager",
-		"Continue",
 		"Back",
 		"↑/↓: navigate",
 	} {
@@ -80,12 +79,12 @@ func TestRenderOpenCodePluginUninstallSelectEmptyReturnsEmptyString(t *testing.T
 	}
 }
 
-func TestOpenCodePluginUninstallOptionCountIncludesContinueAndBack(t *testing.T) {
+func TestOpenCodePluginUninstallOptionCountIncludesBack(t *testing.T) {
 	installed := []model.OpenCodeCommunityPluginID{
 		model.OpenCodePluginSubAgentStatusline,
 		model.OpenCodePluginSDDEngramManage,
 	}
-	if got, want := OpenCodePluginUninstallOptionCount(installed), 4; got != want {
+	if got, want := OpenCodePluginUninstallOptionCount(installed), 3; got != want {
 		t.Fatalf("OpenCodePluginUninstallOptionCount() = %d, want %d", got, want)
 	}
 }
@@ -168,5 +167,27 @@ func TestRenderOpenCodePluginUninstallResultGentleLogoShowsTSX(t *testing.T) {
 	}, nil)
 	if !strings.Contains(out, "gentle-logo.tsx") {
 		t.Fatalf("GentleLogo result screen missing TSX path; output:\n%s", out)
+	}
+}
+
+// TestRenderOpenCodePluginUninstallResultEmptyState covers the launcher
+// short-circuit when tui.json has no recognizable plugin entries. The
+// Model sets screen=Result with a zero-value UninstallResult and
+// err=nil. The Result screen must surface a clear empty-state message
+// instead of a blank frame.
+func TestRenderOpenCodePluginUninstallResultEmptyState(t *testing.T) {
+	out := RenderOpenCodePluginUninstallResult(opencodeplugin.UninstallResult{}, nil)
+	for _, want := range []string{
+		"No OpenCode community plugins are installed",
+		"Install one first",
+		"Return to menu",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("empty-state result screen missing %q; output:\n%s", want, out)
+		}
+	}
+	// Empty state must not pretend an uninstall succeeded.
+	if strings.Contains(out, "uninstalled") && !strings.Contains(out, "No OpenCode") {
+		t.Fatalf("empty-state result must not show a success checkmark; output:\n%s", out)
 	}
 }

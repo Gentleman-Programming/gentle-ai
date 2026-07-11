@@ -1619,7 +1619,13 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.OpenCodePluginUninstallResult = opencodeplugin.UninstallResult{}
 				m.OpenCodePluginUninstallErr = nil
 				m.OpenCodePluginUninstallSpinnerFrame = 0
-				m.setScreen(ScreenOpenCodePluginUninstall)
+				// Empty tui.json (or no recognizable plugin entries) — skip
+				// the Select screen and surface the empty state on Result.
+				if len(m.OpenCodePluginUninstallInstalled) == 0 {
+					m.setScreen(ScreenOpenCodePluginUninstallResult)
+				} else {
+					m.setScreen(ScreenOpenCodePluginUninstall)
+				}
 				return m, nil
 			}
 			next++
@@ -2727,16 +2733,34 @@ func (m Model) startOpenCodePluginUninstall() tea.Cmd {
 }
 
 // confirmOpenCodePluginUninstallSelect handles Enter on the Select screen:
-// the plugin at cursor becomes selected and we advance to Confirm. Back is
-// not handled here — Esc flows through goBack.
+// cursor on a plugin row selects it and advances to Confirm; cursor on the
+// trailing Back row returns to Welcome and resets the uninstall state.
 func (m Model) confirmOpenCodePluginUninstallSelect() (tea.Model, tea.Cmd) {
 	installed := m.OpenCodePluginUninstallInstalled
-	if m.Cursor < 0 || m.Cursor >= len(installed) {
+	if m.Cursor < 0 {
 		return m, nil
 	}
-	m.OpenCodePluginUninstallSelected = installed[m.Cursor]
-	m.setScreen(ScreenOpenCodePluginUninstallConfirm)
+	if m.Cursor < len(installed) {
+		m.OpenCodePluginUninstallSelected = installed[m.Cursor]
+		m.setScreen(ScreenOpenCodePluginUninstallConfirm)
+		return m, nil
+	}
+	// Back row.
+	m.resetOpenCodePluginUninstallState()
+	m.setScreen(ScreenWelcome)
 	return m, nil
+}
+
+// resetOpenCodePluginUninstallState clears every uninstall-flow field so
+// re-entering the flow from Welcome starts fresh. Mirrors the install
+// flow's OpenCodePluginsStandalone reset pattern.
+func (m *Model) resetOpenCodePluginUninstallState() {
+	m.OpenCodePluginUninstallStandalone = false
+	m.OpenCodePluginUninstallInstalled = nil
+	m.OpenCodePluginUninstallSelected = ""
+	m.OpenCodePluginUninstallResult = opencodeplugin.UninstallResult{}
+	m.OpenCodePluginUninstallErr = nil
+	m.OpenCodePluginUninstallSpinnerFrame = 0
 }
 
 // confirmOpenCodePluginUninstallConfirm handles Enter on the Confirm screen:
@@ -3072,6 +3096,15 @@ func (m Model) goBack() Model {
 		m.Selection.OpenCodePlugins = nil
 		m.OpenCodePluginRegistrationResults = nil
 		m.OpenCodePluginRegistrationErr = nil
+		m.setScreen(ScreenWelcome)
+		return m
+	}
+
+	// Esc on the uninstall Select screen returns to Welcome and resets the
+	// uninstall state. Mirrors the install flow's goBackFromOpenCodePlugins
+	// reset on Esc from ScreenOpenCodePlugins.
+	if m.Screen == ScreenOpenCodePluginUninstall {
+		m.resetOpenCodePluginUninstallState()
 		m.setScreen(ScreenWelcome)
 		return m
 	}

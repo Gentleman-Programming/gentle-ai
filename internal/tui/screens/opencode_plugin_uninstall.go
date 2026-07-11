@@ -41,24 +41,22 @@ func RenderOpenCodePluginUninstallSelect(installed []model.OpenCodeCommunityPlug
 		row++
 	}
 
-	for _, action := range []string{"Continue", "Back"} {
-		if cursor == row {
-			b.WriteString(styles.SelectedStyle.Render("▸ "+action) + "\n")
-		} else {
-			b.WriteString(styles.UnselectedStyle.Render("  "+action) + "\n")
-		}
-		row++
+	// Back row — single-select flow: cursor on the Back row returns to Welcome.
+	if cursor == row {
+		b.WriteString(styles.SelectedStyle.Render("▸ Back") + "\n")
+	} else {
+		b.WriteString(styles.UnselectedStyle.Render("  Back") + "\n")
 	}
 
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("↑/↓: navigate • enter: select • esc: back"))
+	b.WriteString(styles.HelpStyle.Render("↑/↓: navigate • enter: select or back • esc: back"))
 	return styles.FrameStyle.Render(b.String())
 }
 
 // OpenCodePluginUninstallOptionCount returns the number of interactive rows
-// in the select screen (one per installed plugin + Continue + Back).
+// in the select screen (one per installed plugin + Back).
 func OpenCodePluginUninstallOptionCount(installed []model.OpenCodeCommunityPluginID) int {
-	return len(installed) + 2
+	return len(installed) + 1
 }
 
 // RenderOpenCodePluginUninstallConfirm renders the confirmation prompt
@@ -118,6 +116,14 @@ func RenderOpenCodePluginUninstallResult(result opencodeplugin.UninstallResult, 
 		b.WriteString(styles.HeadingStyle.Render("Error:"))
 		b.WriteString("\n")
 		b.WriteString(styles.ErrorStyle.Render("  " + err.Error()))
+		b.WriteString("\n\n")
+	} else if result.PluginID == "" {
+		// Empty result reached when the launcher found no installed plugins to
+		// offer for uninstall. Surface a clear empty-state rather than a
+		// blank frame.
+		b.WriteString(styles.WarningStyle.Render("No OpenCode community plugins are installed."))
+		b.WriteString("\n")
+		b.WriteString(styles.SubtextStyle.Render("Install one first to be able to uninstall it."))
 		b.WriteString("\n\n")
 	} else if result.PluginID != "" {
 		name := pluginDisplayName(result.PluginID)

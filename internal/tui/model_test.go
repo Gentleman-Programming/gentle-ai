@@ -7546,7 +7546,7 @@ func TestOpenCodePluginUninstallStandaloneResetMatchesPluginsPattern(t *testing.
 			},
 		},
 		{
-			name: "Esc on ScreenOpenCodePluginUninstallConfirm clears standalone on goBack path",
+			name: "Esc on ScreenOpenCodePluginUninstallConfirm keeps standalone on goBack path",
 			prepare: func(m Model) Model {
 				m.Screen = ScreenOpenCodePluginUninstallConfirm
 				m.OpenCodePluginUninstallStandalone = true
@@ -7558,6 +7558,46 @@ func TestOpenCodePluginUninstallStandaloneResetMatchesPluginsPattern(t *testing.
 				// still set because we haven't exited the flow yet.
 				if m.Screen != ScreenOpenCodePluginUninstall {
 					t.Fatalf("screen = %v, want %v", m.Screen, ScreenOpenCodePluginUninstall)
+				}
+			},
+		},
+		{
+			name: "Esc on ScreenOpenCodePluginUninstallSelect clears standalone",
+			prepare: func(m Model) Model {
+				m.Screen = ScreenOpenCodePluginUninstall
+				m.OpenCodePluginUninstallStandalone = true
+				m.OpenCodePluginUninstallInstalled = []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline}
+				return m
+			},
+			action: tea.KeyMsg{Type: tea.KeyEsc},
+			validate: func(t *testing.T, m Model) {
+				if m.OpenCodePluginUninstallStandalone {
+					t.Fatal("OpenCodePluginUninstallStandalone should be false after Esc from Select")
+				}
+				if m.Screen != ScreenWelcome {
+					t.Fatalf("screen = %v, want %v", m.Screen, ScreenWelcome)
+				}
+				if len(m.OpenCodePluginUninstallInstalled) != 0 {
+					t.Fatalf("installed should be cleared after Esc from Select; got %v", m.OpenCodePluginUninstallInstalled)
+				}
+			},
+		},
+		{
+			name: "Enter on Back row of Select clears standalone",
+			prepare: func(m Model) Model {
+				m.Screen = ScreenOpenCodePluginUninstall
+				m.Cursor = 1 // Cursor on Back row when 1 plugin installed
+				m.OpenCodePluginUninstallInstalled = []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline}
+				m.OpenCodePluginUninstallStandalone = true
+				return m
+			},
+			action: tea.KeyMsg{Type: tea.KeyEnter},
+			validate: func(t *testing.T, m Model) {
+				if m.OpenCodePluginUninstallStandalone {
+					t.Fatal("OpenCodePluginUninstallStandalone should be false after Enter on Back row")
+				}
+				if m.Screen != ScreenWelcome {
+					t.Fatalf("screen = %v, want %v", m.Screen, ScreenWelcome)
 				}
 			},
 		},
