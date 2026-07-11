@@ -3968,8 +3968,8 @@ func TestSyncStagePlanExcludesCommunityToolWhenNotConfigured(t *testing.T) {
 	plan := rt.stagePlan()
 
 	for _, step := range plan.Apply {
-		if strings.HasPrefix(step.ID(), "sync:community-tool") {
-			t.Fatalf("unexpected community tool step in sync plan when CodeGraph not configured: %q", step.ID())
+		if _, ok := step.(communityToolSyncStep); ok {
+			t.Fatalf("unexpected community tool upgrade step in sync plan when CodeGraph not configured: %q", step.ID())
 		}
 	}
 }
