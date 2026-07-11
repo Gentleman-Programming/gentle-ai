@@ -78,6 +78,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 			printHelp(stdout, Version)
 			return nil
 		case "uninstall":
+			if len(args) >= 2 && args[1] == "opencode-plugin" {
+				_, err := cli.RunUninstallOpenCodePlugin(args[2:], stdout)
+				return err
+			}
 			_, err := cli.RunUninstall(args[1:], stdout)
 			return err
 		case "skill-registry":
