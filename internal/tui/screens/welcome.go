@@ -39,6 +39,11 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 		"OpenCode Community Plugins",
 	}
 
+	// Slice 3b — standalone launcher for the 4-layer managed uninstall of
+	// OpenCode community plugins. Sits next to the install shortcut above
+	// so the menu pairs install + uninstall as mirror operations.
+	opts = append(opts, "Uninstall OpenCode Plugin")
+
 	if showProfiles {
 		profilesLabel := "OpenCode SDD Profiles"
 		if profileCount > 0 {

@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
@@ -197,6 +198,12 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.SyncFn = tuiSync(homeDir)
 		m.UninstallFn = tuiUninstall(homeDir)
 		m.UninstallWithProfilesFn = tuiUninstallWithProfiles(homeDir)
+		// Slice 3b — wire the 4-layer managed-uninstall runner used by the
+		// standalone "Uninstall OpenCode Plugin" TUI shortcut. The TUI
+		// model falls back to opencodeplugin.Uninstall when this field is
+		// nil; assigning it explicitly here keeps the production wiring
+		// visible at the same seam as the other injected functions.
+		m.OpenCodePluginUninstallFn = opencodeplugin.Uninstall
 		finalModel, err := runTUI(m, tea.WithAltScreen())
 		if err != nil {
 			return err
