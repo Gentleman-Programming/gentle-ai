@@ -333,6 +333,7 @@ func isCodeGraphSupportedAgent(id model.AgentID) bool {
 		model.AgentClaudeCode,
 		model.AgentCodex,
 		model.AgentCursor,
+		model.AgentFreebuff,
 		model.AgentGeminiCLI,
 		model.AgentHermes,
 		model.AgentKilocode,
