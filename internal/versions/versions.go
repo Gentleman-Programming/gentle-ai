@@ -24,3 +24,6 @@ const GeminiCLI = "0.41.2"
 
 // renovate: datasource=npm depName=@upstash/context7-mcp
 const Context7MCP = "2.2.5"
+
+// renovate: datasource=npm depName=freebuff
+const Freebuff = "0.0.122"

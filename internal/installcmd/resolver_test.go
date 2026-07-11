@@ -390,6 +390,25 @@ func TestResolveAgentInstall(t *testing.T) {
 		},
 
 		{
+			name:    "freebuff on darwin uses npm without sudo",
+			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
+			agent:   model.AgentFreebuff,
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "freebuff@" + versions.Freebuff}},
+		},
+		{
+			name:    "freebuff on linux system npm uses sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
+			agent:   model.AgentFreebuff,
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "freebuff@" + versions.Freebuff}},
+		},
+		{
+			name:    "freebuff on linux nvm skips sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", NpmWritable: true},
+			agent:   model.AgentFreebuff,
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "freebuff@" + versions.Freebuff}},
+		},
+
+		{
 			name:    "unsupported agent returns error",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
 			agent:   "unsupported",
