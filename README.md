@@ -99,9 +99,7 @@ $env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-P
 
 #### Refreshing on the beta channel
 
-The beta channel has no auto-update — `main` only advances when you re-roll the binary yourself.
-
-**Refresh managed tools (engram, GGA, configs)**
+The beta channel does not update in the background. Run `gentle-ai upgrade` when you want to refresh Gentle AI and its managed tools:
 
 ```bash
 # macOS / Linux
@@ -113,32 +111,42 @@ GENTLE_AI_CHANNEL=beta gentle-ai upgrade
 $env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade
 ```
 
-> On Windows the running binary cannot replace itself in place, so `gentle-ai upgrade` updates the managed tool binaries (engram, GGA, etc.) and the report typically shows `gentle-ai` as needing a manual update. That signal is expected on beta — to actually roll the binary, follow the next path.
-
-**Re-roll the Gentle AI beta binary**
-
-With Go 1.24+ on PATH:
+If you only need to rebuild the beta binary from the current `main`, use Go directly:
 
 ```bash
 go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main
 ```
 
-Or just re-run the installer — it does the same `go install @main` for you. Use the same commands from [Try the beta channel](#try-the-beta-channel-test-main-before-a-release) above.
+You can also re-run the beta installer shown above; it runs the same `go install ...@main` flow.
 
-> ⚠️ **Go proxy lag.** `proxy.golang.org` can lag behind new commits on `main` for up to ~30 minutes. When the proxy is stale, `go install ...@main` exits silently without updating the binary — the symptom looks like "nothing happened". If you hit that, prefer an explicit released tag (always available on the proxy):
+> ⚠️ **Go proxy lag.** `proxy.golang.org` can temporarily serve an older `main`. If `go install ...@main` finishes but the version does not change, prefer an explicit released tag:
 >
 > ```bash
-> # Pin to a known-good tag from https://github.com/Gentleman-Programming/gentle-ai/releases
+> # Choose a tag from https://github.com/Gentleman-Programming/gentle-ai/releases
 > go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@vX.Y.Z
 > ```
 >
-> Only use `GOPROXY=direct` as a scoped workaround when you really need fresh `main` right now. It bypasses the proxy cache and queries the module server directly, which is slower on first use and not a stable default:
+> When you specifically need the latest `main`, bypass the module proxy for that command and fetch from the VCS repository directly:
+>
+> ```bash
+> GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main
+> ```
 >
 > ```powershell
 > $env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main
 > ```
 
-To return to stable on either platform, reinstall with the default installer.
+To return to stable, clear the beta channel first, then reinstall with Homebrew or Scoop:
+
+```bash
+unset GENTLE_AI_CHANNEL
+brew upgrade gentle-ai
+```
+
+```powershell
+Remove-Item Env:GENTLE_AI_CHANNEL -ErrorAction SilentlyContinue
+scoop install gentle-ai
+```
 
 ### After install: project-level setup
 
