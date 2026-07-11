@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -1738,12 +1740,316 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 		return mergeJSONResult{}, err
 	}
 
+	merged, err = propagateTopLevelPermissions(merged)
+	if err != nil {
+		return mergeJSONResult{}, err
+	}
+
 	writeResult, err := filemerge.WriteFileAtomic(path, merged, 0o644)
 	if err != nil {
 		return mergeJSONResult{}, err
 	}
 
 	return mergeJSONResult{writeResult: writeResult, merged: merged}, nil
+}
+
+func permissionRules(value any) (map[string]string, bool) {
+	if action, ok := value.(string); ok && permissionRank(action) >= 0 {
+		return map[string]string{"*": action}, true
+	}
+	raw, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	rules := make(map[string]string, len(raw))
+	for pattern, value := range raw {
+		if action, ok := value.(string); ok && permissionRank(action) >= 0 {
+			rules[pattern] = action
+		}
+	}
+	return rules, len(rules) > 0
+}
+func permissionRank(action string) int {
+	switch action {
+	case "deny":
+		return 3
+	case "ask":
+		return 2
+	case "allow", "default":
+		return 1
+	default:
+		return -1
+	}
+}
+func permissionPatternsOverlap(a, b string) bool {
+	type state struct{ a, b int }
+	memo := map[state]bool{}
+	seen := map[state]bool{}
+	var overlap func(int, int) bool
+	overlap = func(i, j int) bool {
+		s := state{i, j}
+		if seen[s] {
+			return memo[s]
+		}
+		seen[s] = true
+		var result bool
+		switch {
+		case i == len(a) && j == len(b):
+			result = true
+		case i < len(a) && a[i] == '*':
+			result = overlap(i+1, j) || (j < len(b) && overlap(i, j+1))
+		case j < len(b) && b[j] == '*':
+			result = overlap(i, j+1) || (i < len(a) && overlap(i+1, j))
+		case i < len(a) && j < len(b) && (a[i] == '?' || b[j] == '?' || a[i] == b[j]):
+			result = overlap(i+1, j+1)
+		}
+		memo[s] = result
+		return result
+	}
+	return overlap(0, 0)
+}
+func sortedPermissionPatterns(rules map[string]string) []string {
+	patterns := make([]string, 0, len(rules))
+	for pattern := range rules {
+		patterns = append(patterns, pattern)
+	}
+	sort.Strings(patterns)
+	return patterns
+}
+func normalizePermissionRules(rules map[string]string) map[string]string {
+	normalized := make(map[string]string, len(rules))
+	for pattern, action := range rules {
+		normalized[pattern] = action
+	}
+	patterns := sortedPermissionPatterns(normalized)
+	for changed := true; changed; {
+		changed = false
+		for i, pattern := range patterns {
+			for _, other := range patterns[i+1:] {
+				if !permissionPatternsOverlap(pattern, other) {
+					continue
+				}
+				stronger := normalized[pattern]
+				if permissionRank(normalized[other]) > permissionRank(stronger) {
+					stronger = normalized[other]
+				}
+				if normalized[pattern] != stronger || normalized[other] != stronger {
+					normalized[pattern], normalized[other], changed = stronger, stronger, true
+				}
+			}
+		}
+	}
+	return normalized
+}
+
+func normalizedPermissionValue(value any) (any, map[string]string, bool) {
+	rules, ok := permissionRules(value)
+	if !ok {
+		return value, nil, false
+	}
+	normalized := normalizePermissionRules(rules)
+	raw, isMap := value.(map[string]any)
+	if !isMap {
+		return value, normalized, true
+	}
+	result := make(map[string]any, len(raw))
+	for pattern, action := range raw {
+		result[pattern] = action
+	}
+	for pattern, action := range normalized {
+		result[pattern] = action
+	}
+	return result, normalized, true
+}
+
+func mergePermissionRules(topValue, agentValue any) (any, bool) {
+	_, top, ok := normalizedPermissionValue(topValue)
+	if !ok {
+		return agentValue, false
+	}
+	if raw, isMap := agentValue.(map[string]any); isMap && raw["*"] == "ask" {
+		result := make(map[string]any, len(raw)+len(top))
+		for pattern, action := range raw {
+			result[pattern] = action
+		}
+		for pattern, action := range top {
+			if permissionRank(action) > permissionRank("ask") {
+				result[pattern] = action
+			}
+		}
+		return result, !reflect.DeepEqual(agentValue, result)
+	}
+	if agentValue != nil {
+		if _, isMap := agentValue.(map[string]any); !isMap {
+			if _, valid := permissionRules(agentValue); !valid {
+				// An unknown scalar has no safe merge semantics; retaining it cannot
+				// weaken an existing restriction.
+				return agentValue, false
+			}
+		}
+	}
+
+	agent, hasAgent := permissionRules(agentValue)
+	if !hasAgent {
+		agent = map[string]string{}
+	}
+	merged := make(map[string]string, len(top)+len(agent))
+	for key, action := range agent {
+		merged[key] = action
+	}
+	for key, action := range top {
+		if current, exists := merged[key]; !exists || permissionRank(action) > permissionRank(current) {
+			merged[key] = action
+		}
+	}
+	merged = normalizePermissionRules(merged)
+	if len(merged) == 1 {
+		if action, only := merged["*"]; only {
+			if old, ok := agentValue.(string); ok && old == action {
+				return agentValue, false
+			}
+			if _, topIsScalar := topValue.(string); topIsScalar {
+				return action, agentValue != action
+			}
+		}
+	}
+	result := make(map[string]any, len(merged))
+	if raw, ok := agentValue.(map[string]any); ok {
+		for pattern, action := range raw {
+			result[pattern] = action
+		}
+	}
+	unchanged := hasAgent && len(agent) == len(merged)
+	for key, action := range merged {
+		result[key] = action
+		unchanged = unchanged && agent[key] == action
+	}
+	if unchanged {
+		return agentValue, false
+	}
+	return result, true
+}
+
+func mergeAskPermissionRules(topValue any) (any, bool) {
+	_, top, ok := normalizedPermissionValue(topValue)
+	if !ok {
+		return nil, false
+	}
+	if action, scalar := topValue.(string); scalar {
+		if permissionRank(action) >= permissionRank("ask") {
+			return action, action != "ask"
+		}
+		return "ask", true
+	}
+	result := map[string]any{"*": "ask"}
+	for pattern, action := range top {
+		if permissionRank(action) > permissionRank("ask") {
+			result[pattern] = action
+		}
+	}
+	return result, true
+}
+
+func propagateTopLevelPermissions(jsonBytes []byte) ([]byte, error) {
+	if len(jsonBytes) == 0 {
+		return jsonBytes, nil
+	}
+	var root map[string]any
+	if err := json.Unmarshal(jsonBytes, &root); err != nil {
+		return nil, err
+	}
+	topValue := root["permission"]
+	topPerms, topIsMap := topValue.(map[string]any)
+	if !topIsMap {
+		if _, valid := permissionRules(topValue); !valid {
+			return jsonBytes, nil
+		}
+	}
+	agents, ok := root["agent"].(map[string]any)
+	if !ok {
+		return jsonBytes, nil
+	}
+
+	changed := false
+	if topIsMap {
+		for category, topValue := range topPerms {
+			normalized, _, valid := normalizedPermissionValue(topValue)
+			if valid && !reflect.DeepEqual(topValue, normalized) {
+				topPerms[category] = normalized
+				changed = true
+			}
+		}
+	}
+	for agentKey, agentValue := range agents {
+		if agentKey != "gentle-orchestrator" && !strings.HasPrefix(agentKey, "sdd-orchestrator-") {
+			continue
+		}
+		agent, ok := agentValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		if !topIsMap {
+			merged, permissionChanged := mergePermissionRules(topValue, agent["permission"])
+			if permissionChanged {
+				agent["permission"] = merged
+				changed = true
+			}
+			continue
+		}
+		agentPerms, _ := agent["permission"].(map[string]any)
+		if agentPerms == nil {
+			if action, scalar := agent["permission"].(string); scalar {
+				switch action {
+				case "deny":
+					continue
+				case "ask":
+					agentPerms = map[string]any{}
+					for category, topValue := range topPerms {
+						merged, categoryChanged := mergeAskPermissionRules(topValue)
+						if categoryChanged {
+							agentPerms[category] = merged
+						}
+					}
+					if len(agentPerms) > 0 {
+						agent["permission"] = agentPerms
+						changed = true
+					}
+					continue
+				case "allow", "default":
+				default:
+					continue
+				}
+			} else if agent["permission"] != nil {
+				continue
+			}
+		}
+		for category, topValue := range topPerms {
+			var agentValue any
+			if agentPerms != nil {
+				agentValue = agentPerms[category]
+			}
+			merged, categoryChanged := mergePermissionRules(topValue, agentValue)
+			if !categoryChanged {
+				continue
+			}
+			if agentPerms == nil {
+				agentPerms = map[string]any{}
+				agent["permission"] = agentPerms
+			}
+			agentPerms[category] = merged
+			changed = true
+		}
+	}
+
+	if !changed {
+		return jsonBytes, nil
+	}
+
+	res, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(res, '\n'), nil
 }
 
 // defaultOpenCodeShareDisabled adds a defensive OpenCode default for SDD

@@ -5018,6 +5018,100 @@ func TestMergeJSONFileReturnsMergedBytes(t *testing.T) {
 	}
 }
 
+func TestPropagateTopLevelPermissions(t *testing.T) {
+	tests := []struct{ name, input, want string }{
+		{"map deny wins", `{"permission":{"read":{"*":"deny","secret.txt":"allow"}},"agent":{"gentle-orchestrator":{"permission":{"read":"allow"}},"sdd-orchestrator-x":{"permission":{"read":"allow"}}}}`, `{"read":{"*":"deny","secret.txt":"deny"}}`},
+		{"overlapping map deny wins", `{"permission":{"read":{"**/config/*.sh":"deny"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"**/config/deploy.sh":"allow"}}},"sdd-orchestrator-x":{"permission":{"read":{"**/config/deploy.sh":"allow"}}}}}`, `{"read":{"**/config/*.sh":"deny","**/config/deploy.sh":"deny"}}`},
+		{"map ask preserves deny", `{"permission":{"read":{"*.env":"ask"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"*.env":"deny"}}},"sdd-orchestrator-x":{"permission":{"read":{"*.env":"deny"}}}}}`, `{"read":{"*.env":"deny"}}`},
+		{"invalid nested values are preserved", `{"permission":{"read":{"*.key":"deny","bad-array":["deny"],"bad-object":{"nested":"deny"}}},"agent":{"gentle-orchestrator":{"permission":{"read":{"*.key":"allow","bad-array":["allow"],"bad-object":{}}}},"sdd-orchestrator-x":{"permission":{"read":{"*.key":"allow","bad-array":["allow"],"bad-object":{}}}}}}`, `{"read":{"*.key":"deny","bad-array":["allow"],"bad-object":{}}}`},
+		{"scalar deny blocks map allows", `{"permission":"deny","agent":{"gentle-orchestrator":{"permission":{"*":"allow","secret.txt":"allow"}},"sdd-orchestrator-x":{"permission":{"*":"allow","secret.txt":"allow"}}}}`, `{"*":"deny","secret.txt":"deny"}`},
+		{"scalar ask overrides allow", `{"permission":"ask","agent":{"gentle-orchestrator":{"permission":"allow"},"sdd-orchestrator-x":{"permission":"allow"}}}`, `"ask"`},
+		{"scalar ask preserves map deny", `{"permission":"ask","agent":{"gentle-orchestrator":{"permission":{"*.env":"deny"}},"sdd-orchestrator-x":{"permission":{"*.env":"deny"}}}}`, `{"*":"deny","*.env":"deny"}`},
+		{"scalar allow fills missing permission", `{"permission":"allow","agent":{"gentle-orchestrator":{},"sdd-orchestrator-x":{}}}`, `"allow"`},
+		{"malformed scalar is skipped", `{"permission":"invalid","agent":{"gentle-orchestrator":{"permission":"allow"},"sdd-orchestrator-x":{"permission":"allow"}}}`, `"allow"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			first, err := propagateTopLevelPermissions([]byte(tt.input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := propagateTopLevelPermissions(first)
+			if err != nil || !bytes.Equal(first, second) {
+				t.Fatalf("second pass = %q, err = %v", second, err)
+			}
+			var root map[string]any
+			if err := json.Unmarshal(first, &root); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"gentle-orchestrator", "sdd-orchestrator-x"} {
+				got, _ := json.Marshal(root["agent"].(map[string]any)[name].(map[string]any)["permission"])
+				if string(got) != tt.want {
+					t.Fatalf("%s permission = %s, want %s", name, got, tt.want)
+				}
+			}
+		})
+	}
+}
+
+func TestPropagateTopLevelPermissions_CrossProduct(t *testing.T) {
+	tests := []struct{ name, top, agent, want string }{
+		{"scalar/missing", `"deny"`, `{}`, `"deny"`},
+		{"scalar/ask", `"deny"`, `{"permission":"ask"}`, `"deny"`},
+		{"scalar/map", `"deny"`, `{"permission":{"*":"allow","secret":"allow"}}`, `{"*":"deny","secret":"deny"}`},
+		{"map/missing", `{"read":{"secret":"deny","public":"allow"}}`, `{}`, `{"read":{"public":"allow","secret":"deny"}}`},
+		{"map/deny", `{"read":{"secret":"deny","public":"allow"}}`, `{"permission":"deny"}`, `"deny"`},
+		{"map/ask", `{"read":{"secret":"deny","public":"allow"}}`, `{"permission":"ask"}`, `{"read":{"*":"ask","secret":"deny"}}`},
+		{"map/allow", `{"read":{"secret":"deny","public":"allow"}}`, `{"permission":"allow"}`, `{"read":{"public":"allow","secret":"deny"}}`},
+		{"map/map", `{"read":{"secret":"deny","public":"allow"}}`, `{"permission":{"read":{"secret":"allow"}}}`, `{"read":{"public":"allow","secret":"deny"}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := []byte(`{"permission":` + tt.top + `,"agent":{"gentle-orchestrator":` + tt.agent + `}}`)
+			got, err := propagateTopLevelPermissions(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var root map[string]any
+			if err := json.Unmarshal(got, &root); err != nil {
+				t.Fatal(err)
+			}
+			permission, _ := json.Marshal(root["agent"].(map[string]any)["gentle-orchestrator"].(map[string]any)["permission"])
+			if string(permission) != tt.want {
+				t.Fatalf("permission = %s, want %s", permission, tt.want)
+			}
+			second, err := propagateTopLevelPermissions(got)
+			if err != nil || !bytes.Equal(got, second) {
+				t.Fatalf("second pass = %q, err = %v", second, err)
+			}
+		})
+	}
+}
+
+func TestMergeJSONFile_PermissionPropagationIsByteIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(path, []byte(`{"permission":{"read":{"*":"deny"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	overlay := []byte(`{"agent":{"gentle-orchestrator":{"permission":{"read":{"secret.txt":"allow"}}}}}`)
+	first, err := mergeJSONFile(path, overlay)
+	if err != nil || !first.writeResult.Changed {
+		t.Fatalf("first merge = %#v, %v", first.writeResult, err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := mergeJSONFile(path, overlay)
+	if err != nil || second.writeResult.Changed {
+		t.Fatalf("second merge = %#v, %v", second.writeResult, err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) || !bytes.Equal(first.merged, second.merged) {
+		t.Fatalf("second merge was not byte-identical: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Fix 1: Cursor sub-agent files written to disk
 // ---------------------------------------------------------------------------
