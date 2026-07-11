@@ -27,6 +27,16 @@ func TestHelpContainsVersion(t *testing.T) {
 	}
 }
 
+func TestHelpDescribesOrdinaryBoundedLensOperations(t *testing.T) {
+	var buf bytes.Buffer
+	printHelp(&buf, "v1.0.0-test")
+	for _, want := range []string{"ordinary_bounded", "--lens <name>", "record-lens-result", "structured findings and evidence"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("help output missing %q", want)
+		}
+	}
+}
+
 func TestHelpCommandsHeadingIsAligned(t *testing.T) {
 	var buf bytes.Buffer
 	printHelp(&buf, "v1.2.3")

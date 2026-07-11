@@ -42,6 +42,9 @@ type Receipt struct {
 	JudgeProofHash     string           `json:"judge_proof_hash,omitempty"`
 	Release            *ReleaseEvidence `json:"release,omitempty"`
 	Counters           Counters         `json:"counters"`
+	RiskLevel          RiskLevel        `json:"risk_level,omitempty"`
+	SelectedLenses     []string         `json:"selected_lenses,omitempty"`
+	LensResults        []LensResult     `json:"lens_results,omitempty"`
 	TerminalState      TerminalState    `json:"terminal_state"`
 }
 
@@ -89,7 +92,8 @@ func (transaction *Transaction) Receipt() (Receipt, error) {
 		PathsDigest: transaction.PathsDigest, FixDeltaHash: transaction.FixDeltaHash,
 		PolicyHash: transaction.PolicyHash, LedgerHash: ledgerHash, EvidenceHash: evidenceHash,
 		JudgeProofHash: transaction.JudgeProofHash, Release: cloneReleaseEvidence(transaction.Release),
-		Counters: transaction.Counters, TerminalState: terminal,
+		Counters: transaction.Counters, RiskLevel: transaction.RiskLevel, SelectedLenses: append([]string(nil), transaction.SelectedLenses...),
+		LensResults: append([]LensResult(nil), transaction.LensResults...), TerminalState: terminal,
 	}
 	if err := validateReceiptStructure(receipt); err != nil {
 		return Receipt{}, err
@@ -246,7 +250,7 @@ func validateReceiptStructure(receipt Receipt) error {
 	if receipt.Generation < 1 {
 		return errors.New("receipt requires a positive generation")
 	}
-	if receipt.Mode != ModeOrdinary4R && receipt.Mode != ModeJudgmentDay {
+	if receipt.Mode != ModeOrdinary4R && receipt.Mode != ModeOrdinaryBounded && receipt.Mode != ModeJudgmentDay {
 		return fmt.Errorf("invalid receipt mode %q", receipt.Mode)
 	}
 	for _, tree := range []string{receipt.BaseTree, receipt.InitialReviewTree, receipt.FinalCandidateTree} {
@@ -262,6 +266,10 @@ func validateReceiptStructure(receipt Receipt) error {
 	if err := validateCounters(receipt.Mode, receipt.Counters); err != nil {
 		return err
 	}
+	lensState := Transaction{Mode: receipt.Mode, State: StateApproved, RiskLevel: receipt.RiskLevel, SelectedLenses: receipt.SelectedLenses, LensResults: receipt.LensResults, Counters: receipt.Counters, Findings: mergedLensFindings(receipt.LensResults)}
+	if err := lensState.validateLensState(); err != nil {
+		return err
+	}
 	switch receipt.TerminalState {
 	case TerminalApproved:
 		if receipt.Counters.FinalVerifications != 1 {
@@ -271,6 +279,10 @@ func validateReceiptStructure(receipt Receipt) error {
 		case ModeOrdinary4R:
 			if receipt.Counters.FullReviews != 1 || receipt.Counters.FixBatches != receipt.Counters.ScopedFixValidations {
 				return errors.New("approved ordinary receipt has incoherent review/fix counters")
+			}
+		case ModeOrdinaryBounded:
+			if len(receipt.LensResults) != len(receipt.SelectedLenses) || receipt.Counters.FixBatches != receipt.Counters.ScopedFixValidations {
+				return errors.New("approved ordinary bounded receipt has incomplete lenses or incoherent fix counters")
 			}
 		case ModeJudgmentDay:
 			if receipt.Counters.FixRounds != receipt.Counters.ScopedRejudgments {
@@ -284,7 +296,7 @@ func validateReceiptStructure(receipt Receipt) error {
 	default:
 		return fmt.Errorf("invalid terminal_state %q", receipt.TerminalState)
 	}
-	if receipt.Mode == ModeOrdinary4R && receipt.JudgeProofHash != "" {
+	if isOrdinaryMode(receipt.Mode) && receipt.JudgeProofHash != "" {
 		return errors.New("ordinary receipt cannot contain Judgment Day proof")
 	}
 	if receipt.Release != nil {
@@ -296,6 +308,14 @@ func validateReceiptStructure(receipt Receipt) error {
 		}
 	}
 	return nil
+}
+
+func mergedLensFindings(results []LensResult) []Finding {
+	findings := make([]Finding, 0)
+	for _, result := range results {
+		findings = append(findings, result.Findings...)
+	}
+	return findings
 }
 
 func validateReleaseEvidence(release ReleaseEvidence) error {

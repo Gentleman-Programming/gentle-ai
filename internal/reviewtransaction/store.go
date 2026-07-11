@@ -303,6 +303,36 @@ func validateSuccessor(previous, next Transaction, operation string) error {
 	if !equalStrings(previous.GenesisPaths, next.GenesisPaths) {
 		return fmt.Errorf("%w: immutable genesis paths changed", ErrInvalidSuccessor)
 	}
+	if !equalStrings(previous.SelectedLenses, next.SelectedLenses) {
+		return fmt.Errorf("%w: selected lenses are immutable", ErrInvalidSuccessor)
+	}
+	if previous.RiskLevel != next.RiskLevel {
+		return fmt.Errorf("%w: native risk classification is immutable", ErrInvalidSuccessor)
+	}
+	lensStateChanged := !reflect.DeepEqual(previous.LensResults, next.LensResults) ||
+		previous.Counters.RiskExecutions != next.Counters.RiskExecutions ||
+		previous.Counters.ResilienceExecutions != next.Counters.ResilienceExecutions ||
+		previous.Counters.ReadabilityExecutions != next.Counters.ReadabilityExecutions ||
+		previous.Counters.ReliabilityExecutions != next.Counters.ReliabilityExecutions
+	lensTransition := operation == "review/record-lens-result" && previous.Mode == ModeOrdinaryBounded && previous.State == StateReviewing && next.State == StateReviewing
+	if lensTransition {
+		if len(next.LensResults) != len(previous.LensResults)+1 {
+			return fmt.Errorf("%w: lens result transition must append exactly one result", ErrInvalidSuccessor)
+		}
+		expected := previous
+		if err := expected.RecordLensResult(next.LensResults[len(next.LensResults)-1]); err != nil || !transactionsEqual(expected, next) {
+			return fmt.Errorf("%w: lens result transition changed unrelated transaction state", ErrInvalidSuccessor)
+		}
+	} else if lensStateChanged || operation == "review/record-lens-result" {
+		return fmt.Errorf("%w: lens state changed outside the native lens result transition", ErrInvalidSuccessor)
+	}
+	freezeTransition := (previous.State == StateReviewing || previous.State == StateJudgesConfirmed) && next.State == StateFindingsFrozen
+	if freezeTransition {
+		expected := previous
+		if operation != "review/freeze-findings" || expected.FreezeFindings(next.Findings, next.LedgerHash) != nil || !transactionsEqual(expected, next) {
+			return fmt.Errorf("%w: findings freeze must replay the exact native transition", ErrInvalidSuccessor)
+		}
+	}
 	fixCompletion := previous.State == StateFixing && next.State == StateFixValidating
 	if !fixCompletion && !snapshotsEqual(previous.Snapshot, next.Snapshot) {
 		return fmt.Errorf("%w: immutable review snapshot changed", ErrInvalidSuccessor)
@@ -330,7 +360,7 @@ func validateSuccessor(previous, next Transaction, operation string) error {
 			return fmt.Errorf("%w: release evidence must be bound as the only change while ready for final verification", ErrInvalidSuccessor)
 		}
 	}
-	if !releaseBinding && !legalStateTransition(previous.State, next.State) {
+	if !releaseBinding && !lensTransition && !legalStateTransition(previous.State, next.State) {
 		return fmt.Errorf("%w: illegal state transition %q -> %q", ErrInvalidSuccessor, previous.State, next.State)
 	}
 	if !countersMonotonic(previous.Counters, next.Counters) {
@@ -370,7 +400,7 @@ func validateSuccessor(previous, next Transaction, operation string) error {
 	if previous.FixDeltaHash != next.FixDeltaHash && !fixCompletion {
 		return fmt.Errorf("%w: fix delta changed outside fix completion", ErrInvalidSuccessor)
 	}
-	validationCompletion := previous.Mode == ModeOrdinary4R && previous.State == StateFixValidating && (next.State == StateReadyFinalVerification || next.State == StateEscalated)
+	validationCompletion := isOrdinaryMode(previous.Mode) && previous.State == StateFixValidating && (next.State == StateReadyFinalVerification || next.State == StateEscalated)
 	if validationCompletion {
 		legacy := next.OriginalCriteria == nil && next.CorrectionRegression == nil
 		if legacy {
@@ -418,6 +448,12 @@ func transactionsEqual(left, right Transaction) bool {
 		if len(transaction.JudgeProofs) == 0 {
 			transaction.JudgeProofs = nil
 		}
+		if len(transaction.SelectedLenses) == 0 {
+			transaction.SelectedLenses = nil
+		}
+		if len(transaction.LensResults) == 0 {
+			transaction.LensResults = nil
+		}
 		for index := range transaction.Findings {
 			if len(transaction.Findings[index].ProofRefs) == 0 {
 				transaction.Findings[index].ProofRefs = nil
@@ -444,18 +480,23 @@ func followUpSliceIsPrefix(previous, next []FollowUp) bool {
 func validateSuccessorCounters(previous, next Transaction) error {
 	expected := previous.Counters
 	switch {
+	case previous.Mode == ModeOrdinaryBounded && previous.State == StateReviewing && next.State == StateReviewing:
+		if len(next.LensResults) != len(previous.LensResults)+1 {
+			return fmt.Errorf("%w: lens result transition must consume exactly one execution", ErrInvalidSuccessor)
+		}
+		setLensCounter(&expected, next.LensResults[len(next.LensResults)-1].Lens, 1)
 	case previous.State == StateReviewing && next.State == StateJudgesConfirmed:
 		expected.JudgeExecutions = 2
 	case previous.State == StateEvidenceClassified && next.State != StateEvidenceClassified:
 		expected.RefuterBatches++
 	case previous.State == StateFixRequired && next.State == StateFixing:
-		if previous.Mode == ModeOrdinary4R {
+		if isOrdinaryMode(previous.Mode) {
 			expected.FixBatches++
 		} else {
 			expected.FixRounds++
 		}
 	case previous.State == StateFixValidating && (next.State == StateReadyFinalVerification || next.State == StateFixRequired || next.State == StateEscalated):
-		if previous.Mode == ModeOrdinary4R {
+		if isOrdinaryMode(previous.Mode) {
 			expected.ScopedFixValidations++
 		} else {
 			expected.ScopedRejudgments++
@@ -504,6 +545,8 @@ func validInitialStoreRecord(record Record) bool {
 	switch transaction.Mode {
 	case ModeOrdinary4R:
 		return transaction.Counters == (Counters{FullReviews: 1})
+	case ModeOrdinaryBounded:
+		return transaction.Counters == (Counters{}) && len(transaction.LensResults) == 0
 	case ModeJudgmentDay:
 		return transaction.Counters == (Counters{})
 	default:
@@ -548,7 +591,11 @@ func countersMonotonic(previous, next Counters) bool {
 		next.FinalVerifications >= previous.FinalVerifications &&
 		next.FixRounds >= previous.FixRounds &&
 		next.ScopedRejudgments >= previous.ScopedRejudgments &&
-		next.JudgeExecutions >= previous.JudgeExecutions
+		next.JudgeExecutions >= previous.JudgeExecutions &&
+		next.RiskExecutions >= previous.RiskExecutions &&
+		next.ResilienceExecutions >= previous.ResilienceExecutions &&
+		next.ReadabilityExecutions >= previous.ReadabilityExecutions &&
+		next.ReliabilityExecutions >= previous.ReliabilityExecutions
 }
 
 func mapIsMonotonic[K comparable, V comparable](previous, next map[K]V) bool {

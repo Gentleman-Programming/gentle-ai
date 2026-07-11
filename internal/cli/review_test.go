@@ -238,6 +238,116 @@ func TestRunReviewStepAppendsLifecycleStateThroughAuthoritativeStore(t *testing.
 	}
 }
 
+func TestRunReviewStartStepAndResumeOrdinaryBoundedLensResult(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("standard executable change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	policy := filepath.Join(t.TempDir(), "policy.md")
+	if err := os.WriteFile(policy, []byte("bounded policy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var started bytes.Buffer
+	if err := RunReviewStart([]string{
+		"--cwd", repo,
+		"--lineage", "bounded-lens",
+		"--policy-file", policy,
+		"--mode", string(reviewtransaction.ModeOrdinaryBounded),
+		"--lens", "review-reliability",
+	}, &started); err != nil {
+		t.Fatalf("RunReviewStart() error = %v", err)
+	}
+	var startResult ReviewStartResult
+	if err := json.Unmarshal(started.Bytes(), &startResult); err != nil {
+		t.Fatal(err)
+	}
+	if startResult.Transaction.Counters != (reviewtransaction.Counters{}) || len(startResult.Transaction.SelectedLenses) != 1 {
+		t.Fatalf("bounded start = %#v", startResult.Transaction)
+	}
+
+	input := filepath.Join(t.TempDir(), "lens-result.json")
+	writeReviewCLIJSON(t, input, ReviewStepInput{LensResult: &reviewtransaction.LensResult{
+		Lens: "review-reliability", Findings: []reviewtransaction.Finding{}, Evidence: []string{"focused reliability sweep completed"},
+	}})
+	if err := RunReviewStep([]string{
+		"--cwd", repo, "--lineage", "bounded-lens", "--operation", "record-lens-result", "--input", input,
+	}, failingReviewWriter{}); err == nil {
+		t.Fatal("RunReviewStep() hid the post-commit output failure")
+	}
+
+	var resumed bytes.Buffer
+	if err := RunReviewResume([]string{"--cwd", repo, "--lineage", "bounded-lens"}, &resumed); err != nil {
+		t.Fatalf("RunReviewResume() error = %v", err)
+	}
+	var resumeResult ReviewResumeResult
+	if err := json.Unmarshal(resumed.Bytes(), &resumeResult); err != nil {
+		t.Fatal(err)
+	}
+	if len(resumeResult.Transaction.LensResults) != 1 || resumeResult.Transaction.Counters.ReliabilityExecutions != 1 || resumeResult.Transaction.State != reviewtransaction.StateReviewing {
+		t.Fatalf("resumed bounded result = %#v", resumeResult.Transaction)
+	}
+}
+
+func TestRunReviewStartBindsSelectedLensesToImmutableSnapshotRisk(t *testing.T) {
+	policy := filepath.Join(t.TempDir(), "policy.md")
+	if err := os.WriteFile(policy, []byte("bounded policy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		changePath string
+		content    string
+		lenses     []string
+		wantRisk   reviewtransaction.RiskLevel
+	}{
+		{name: "low", changePath: "guide.md", content: "documentation only\n", wantRisk: reviewtransaction.RiskLow},
+		{name: "medium", changePath: "tracked.txt", content: "standard executable change\n", lenses: []string{reviewtransaction.LensReliability}, wantRisk: reviewtransaction.RiskMedium},
+		{name: "high", changePath: "internal/security/check.go", content: "package security\n", lenses: []string{reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability}, wantRisk: reviewtransaction.RiskHigh},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, tt.changePath)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(repo, tt.changePath), []byte(tt.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"--cwd", repo, "--lineage", "risk-" + tt.name, "--policy-file", policy, "--mode", string(reviewtransaction.ModeOrdinaryBounded)}
+			if tt.changePath != "tracked.txt" {
+				args = append(args, "--intended-untracked", tt.changePath)
+			}
+			for _, lens := range tt.lenses {
+				args = append(args, "--lens", lens)
+			}
+			var output bytes.Buffer
+			if err := RunReviewStart(args, &output); err != nil {
+				t.Fatalf("RunReviewStart() error = %v", err)
+			}
+			var result ReviewStartResult
+			if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Transaction.RiskLevel != tt.wantRisk || len(result.Transaction.SelectedLenses) != len(tt.lenses) {
+				t.Fatalf("bounded classification = %q, %v", result.Transaction.RiskLevel, result.Transaction.SelectedLenses)
+			}
+		})
+	}
+
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "guide.md"), []byte("documentation only\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := RunReviewStart([]string{
+		"--cwd", repo, "--lineage", "risk-mismatch", "--policy-file", policy,
+		"--mode", string(reviewtransaction.ModeOrdinaryBounded), "--intended-untracked", "guide.md",
+		"--lens", reviewtransaction.LensReliability,
+	}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "low risk requires exactly 0") {
+		t.Fatalf("RunReviewStart(risk mismatch) error = %v", err)
+	}
+}
+
 func TestRunReviewStepAppendsTargetedValidationAndResumeReemitsIt(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	lineage := "targeted-validation"

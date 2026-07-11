@@ -17,9 +17,19 @@ const TransactionSchema = "gentle-ai.review-transaction/v1"
 type Mode string
 
 const (
-	ModeOrdinary4R  Mode = "ordinary_4r"
-	ModeJudgmentDay Mode = "judgment_day"
+	ModeOrdinary4R      Mode = "ordinary_4r"
+	ModeOrdinaryBounded Mode = "ordinary_bounded"
+	ModeJudgmentDay     Mode = "judgment_day"
 )
+
+const (
+	LensRisk        = "review-risk"
+	LensResilience  = "review-resilience"
+	LensReadability = "review-readability"
+	LensReliability = "review-reliability"
+)
+
+var supportedLenses = []string{LensRisk, LensResilience, LensReadability, LensReliability}
 
 type State string
 
@@ -56,22 +66,35 @@ const (
 )
 
 type Counters struct {
-	FullReviews          int `json:"full_reviews"`
-	RefuterBatches       int `json:"refuter_batches"`
-	FixBatches           int `json:"fix_batches"`
-	ScopedFixValidations int `json:"scoped_fix_validations"`
-	FinalVerifications   int `json:"final_verifications"`
-	FixRounds            int `json:"fix_rounds"`
-	ScopedRejudgments    int `json:"scoped_rejudgments"`
-	JudgeExecutions      int `json:"judge_executions"`
+	FullReviews           int `json:"full_reviews"`
+	RefuterBatches        int `json:"refuter_batches"`
+	FixBatches            int `json:"fix_batches"`
+	ScopedFixValidations  int `json:"scoped_fix_validations"`
+	FinalVerifications    int `json:"final_verifications"`
+	FixRounds             int `json:"fix_rounds"`
+	ScopedRejudgments     int `json:"scoped_rejudgments"`
+	JudgeExecutions       int `json:"judge_executions"`
+	RiskExecutions        int `json:"risk_executions,omitempty"`
+	ResilienceExecutions  int `json:"resilience_executions,omitempty"`
+	ReadabilityExecutions int `json:"readability_executions,omitempty"`
+	ReliabilityExecutions int `json:"reliability_executions,omitempty"`
 }
 
 type Start struct {
-	LineageID  string
-	Mode       Mode
-	Generation int
-	Snapshot   Snapshot
-	PolicyHash string
+	LineageID      string
+	Mode           Mode
+	Generation     int
+	Snapshot       Snapshot
+	PolicyHash     string
+	RiskLevel      RiskLevel
+	SelectedLenses []string
+}
+
+type LensResult struct {
+	Lens       string    `json:"lens"`
+	Findings   []Finding `json:"findings"`
+	Evidence   []string  `json:"evidence"`
+	ResultHash string    `json:"result_hash"`
 }
 
 type Finding struct {
@@ -166,14 +189,21 @@ type Transaction struct {
 	FollowUps              []FollowUp                 `json:"follow_ups"`
 	OriginalCriteria       *ValidationCheck           `json:"original_criteria,omitempty"`
 	CorrectionRegression   *ValidationCheck           `json:"correction_regression,omitempty"`
+	RiskLevel              RiskLevel                  `json:"risk_level,omitempty"`
+	SelectedLenses         []string                   `json:"selected_lenses,omitempty"`
+	LensResults            []LensResult               `json:"lens_results,omitempty"`
 }
 
 func NewTransaction(start Start) (*Transaction, error) {
 	if err := validateLineageID(start.LineageID); err != nil {
 		return nil, err
 	}
-	if start.Mode != ModeOrdinary4R && start.Mode != ModeJudgmentDay {
+	if start.Mode != ModeOrdinary4R && start.Mode != ModeOrdinaryBounded && start.Mode != ModeJudgmentDay {
 		return nil, fmt.Errorf("unsupported review mode %q", start.Mode)
+	}
+	selectedLenses, err := validateSelectedLenses(start.Mode, start.RiskLevel, start.SelectedLenses)
+	if err != nil {
+		return nil, err
 	}
 	if start.Generation < 1 {
 		return nil, errors.New("generation must be positive")
@@ -184,7 +214,7 @@ func NewTransaction(start Start) (*Transaction, error) {
 	if !validSHA256(start.PolicyHash) {
 		return nil, errors.New("policy_hash must be a lowercase SHA-256 identity")
 	}
-	return &Transaction{
+	transaction := &Transaction{
 		Schema: TransactionSchema, LineageID: start.LineageID, Mode: start.Mode,
 		Generation: start.Generation, State: StateUnreviewed, Snapshot: start.Snapshot,
 		GenesisPaths: append([]string(nil), start.Snapshot.Paths...),
@@ -194,7 +224,13 @@ func NewTransaction(start Start) (*Transaction, error) {
 		Findings: []Finding{}, Classifications: map[string]FindingEvidence{},
 		Outcomes: map[string]EvidenceOutcome{}, FixFindingIDs: []string{}, PendingRefuterIDs: []string{},
 		FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, JudgeProofs: []JudgeProof{},
-	}, nil
+	}
+	if start.Mode == ModeOrdinaryBounded {
+		transaction.RiskLevel = start.RiskLevel
+		transaction.SelectedLenses = selectedLenses
+		transaction.LensResults = []LensResult{}
+	}
+	return transaction, nil
 }
 
 func NewLineage(previousLineageID string, start Start) (*Transaction, error) {
@@ -216,6 +252,85 @@ func (transaction *Transaction) StartReview() error {
 	}
 	transaction.State = StateReviewing
 	return nil
+}
+
+func (transaction *Transaction) RecordLensResult(result LensResult) error {
+	if transaction.Mode != ModeOrdinaryBounded || transaction.State != StateReviewing {
+		return transaction.invalidTransition("record lens result")
+	}
+	result.Lens = strings.TrimSpace(result.Lens)
+	if !isSupportedLens(result.Lens) {
+		return fmt.Errorf("unknown review lens %q", result.Lens)
+	}
+	selectedIndex := stringIndex(transaction.SelectedLenses, result.Lens)
+	if selectedIndex < 0 {
+		return fmt.Errorf("review lens %q was not selected", result.Lens)
+	}
+	if transaction.lensExecutions(result.Lens) != 0 || stringIndexLensResult(transaction.LensResults, result.Lens) >= 0 {
+		return fmt.Errorf("review lens %q already has a complete result", result.Lens)
+	}
+	if selectedIndex != len(transaction.LensResults) {
+		return fmt.Errorf("review lens %q is out of canonical execution order", result.Lens)
+	}
+	validated, err := validateLensResult(result)
+	if err != nil {
+		return err
+	}
+	for _, existing := range transaction.LensResults {
+		if existing.ResultHash == validated.ResultHash {
+			return errors.New("lens result evidence cannot be reused across selected lenses")
+		}
+	}
+	transaction.LensResults = append(transaction.LensResults, validated)
+	transaction.setLensExecutions(validated.Lens, 1)
+	return nil
+}
+
+// LensResultHash binds a complete native lens result to its lens and content.
+func LensResultHash(result LensResult) string {
+	payload, _ := json.Marshal(struct {
+		Lens     string    `json:"lens"`
+		Findings []Finding `json:"findings"`
+		Evidence []string  `json:"evidence"`
+	}{Lens: result.Lens, Findings: result.Findings, Evidence: result.Evidence})
+	sum := sha256.Sum256(append([]byte("gentle-ai.lens-result/v1\x00"), payload...))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func validateLensResult(result LensResult) (LensResult, error) {
+	result.Lens = strings.TrimSpace(result.Lens)
+	if !isSupportedLens(result.Lens) {
+		return LensResult{}, fmt.Errorf("unknown review lens %q", result.Lens)
+	}
+	if result.Findings == nil || result.Evidence == nil || len(result.Evidence) == 0 {
+		return LensResult{}, errors.New("lens result requires explicit findings and concrete evidence")
+	}
+	wantFindingLens := strings.TrimPrefix(result.Lens, "review-")
+	for index, finding := range result.Findings {
+		if err := validateStructuredFinding(finding); err != nil {
+			return LensResult{}, fmt.Errorf("lens result finding[%d]: %w", index, err)
+		}
+		if finding.Lens != wantFindingLens {
+			return LensResult{}, fmt.Errorf("lens result finding[%d] is not bound to %q", index, result.Lens)
+		}
+	}
+	for index, evidence := range result.Evidence {
+		if !isConcreteEvidence(evidence) {
+			return LensResult{}, fmt.Errorf("lens result evidence[%d] must be concrete", index)
+		}
+	}
+	findings := make([]Finding, len(result.Findings))
+	copy(findings, result.Findings)
+	result.Findings = findings
+	evidence := make([]string, len(result.Evidence))
+	copy(evidence, result.Evidence)
+	result.Evidence = evidence
+	derived := LensResultHash(result)
+	if result.ResultHash != "" && result.ResultHash != derived {
+		return LensResult{}, errors.New("lens result_hash does not match canonical structured result content")
+	}
+	result.ResultHash = derived
+	return result, nil
 }
 
 func (transaction *Transaction) RecordJudgeProofs(proofs []JudgeProof, agreementHash string) error {
@@ -241,6 +356,17 @@ func (transaction *Transaction) FreezeFindings(findings []Finding, ledgerHash st
 	}
 	if transaction.State != expectedState {
 		return transaction.invalidTransition("freeze findings")
+	}
+	if transaction.Mode == ModeOrdinaryBounded {
+		if len(transaction.LensResults) != len(transaction.SelectedLenses) {
+			return errors.New("cannot freeze findings before every selected lens has one complete result")
+		}
+		if len(transaction.SelectedLenses) == 0 && findings == nil {
+			return errors.New("zero-lens review requires an explicit empty findings ledger")
+		}
+		if !reflectLensFindings(transaction.LensResults, findings) {
+			return errors.New("frozen findings must exactly match the completed native lens results")
+		}
 	}
 	if !validSHA256(ledgerHash) {
 		return errors.New("ledger_hash must be a lowercase SHA-256 identity")
@@ -358,7 +484,7 @@ func (transaction *Transaction) ClassifyEvidence(evidence []FindingEvidence) (Ev
 }
 
 func (transaction *Transaction) ApplyRefuterOutcomes(results []EvidenceResult) error {
-	if transaction.Mode != ModeOrdinary4R || transaction.State != StateEvidenceClassified || len(transaction.PendingRefuterIDs) == 0 {
+	if !isOrdinaryMode(transaction.Mode) || transaction.State != StateEvidenceClassified || len(transaction.PendingRefuterIDs) == 0 {
 		return transaction.invalidTransition("apply refuter outcomes")
 	}
 	if transaction.Counters.RefuterBatches >= 1 {
@@ -423,7 +549,7 @@ func (transaction *Transaction) BeginFix(failedEvidenceRevision string) error {
 		return errors.New("failed evidence revision must be a lowercase SHA-256 identity")
 	}
 	switch transaction.Mode {
-	case ModeOrdinary4R:
+	case ModeOrdinary4R, ModeOrdinaryBounded:
 		if transaction.Counters.FixBatches >= 1 {
 			return transaction.escalateBudget("fix batch")
 		}
@@ -506,7 +632,7 @@ func (transaction *Transaction) ValidateFixDeltaResult(result ScopedValidationRe
 	if !equalStrings(ids, transaction.FixFindingIDs) {
 		return errors.New("scoped validation must use the frozen fix ledger IDs")
 	}
-	if transaction.Mode == ModeOrdinary4R {
+	if isOrdinaryMode(transaction.Mode) {
 		legacy := result.OriginalCriteria.EvidenceHash == transaction.FixDeltaHash &&
 			result.CorrectionRegression.EvidenceHash == transaction.FixDeltaHash
 		if !legacy {
@@ -518,10 +644,10 @@ func (transaction *Transaction) ValidateFixDeltaResult(result ScopedValidationRe
 	if result.FixCausedFindings == nil {
 		return errors.New("scoped validation must provide an explicit fix_caused_findings array")
 	}
-	if transaction.Mode == ModeOrdinary4R && result.FollowUps == nil {
+	if isOrdinaryMode(transaction.Mode) && result.FollowUps == nil {
 		return errors.New("scoped validation must provide an explicit follow_ups array")
 	}
-	if transaction.Mode == ModeOrdinary4R && len(result.FixCausedFindings) != 0 {
+	if isOrdinaryMode(transaction.Mode) && len(result.FixCausedFindings) != 0 {
 		return errors.New("ordinary scoped validation records later observations only as non-blocking follow-ups")
 	}
 	if err := validateFollowUps(result.FollowUps); err != nil {
@@ -546,7 +672,7 @@ func (transaction *Transaction) ValidateFixDeltaResult(result ScopedValidationRe
 			severeFixCaused++
 		}
 	}
-	if transaction.Mode == ModeOrdinary4R {
+	if isOrdinaryMode(transaction.Mode) {
 		result.Approved = result.OriginalCriteria.Passed && result.CorrectionRegression.Passed
 		legacy := result.OriginalCriteria.EvidenceHash == transaction.FixDeltaHash &&
 			result.CorrectionRegression.EvidenceHash == transaction.FixDeltaHash
@@ -572,7 +698,7 @@ func (transaction *Transaction) ValidateFixDeltaResult(result ScopedValidationRe
 		}
 	}
 	switch transaction.Mode {
-	case ModeOrdinary4R:
+	case ModeOrdinary4R, ModeOrdinaryBounded:
 		if transaction.Counters.ScopedFixValidations >= 1 {
 			return transaction.escalateBudget("scoped fix validation")
 		}
@@ -706,7 +832,7 @@ func (transaction *Transaction) validate() error {
 	if transaction.Generation < 1 {
 		return errors.New("transaction requires a positive generation")
 	}
-	if transaction.Mode != ModeOrdinary4R && transaction.Mode != ModeJudgmentDay {
+	if transaction.Mode != ModeOrdinary4R && transaction.Mode != ModeOrdinaryBounded && transaction.Mode != ModeJudgmentDay {
 		return errors.New("invalid transaction mode")
 	}
 	if err := validateSnapshot(transaction.Snapshot); err != nil {
@@ -757,7 +883,7 @@ func (transaction *Transaction) validate() error {
 	}
 	if transaction.OriginalCriteria != nil {
 		result := ScopedValidationResult{OriginalCriteria: *transaction.OriginalCriteria, CorrectionRegression: *transaction.CorrectionRegression}
-		if transaction.Mode != ModeOrdinary4R || transaction.Counters.ScopedFixValidations != 1 || transaction.State == StateFixValidating {
+		if !isOrdinaryMode(transaction.Mode) || transaction.Counters.ScopedFixValidations != 1 || transaction.State == StateFixValidating {
 			return errors.New("targeted validation checks require a completed ordinary scoped validation")
 		}
 		if err := validateTargetedValidation(result, transaction.FixDeltaHash); err != nil {
@@ -785,6 +911,9 @@ func (transaction *Transaction) validate() error {
 	if err := validateCounters(transaction.Mode, transaction.Counters); err != nil {
 		return err
 	}
+	if err := transaction.validateLensState(); err != nil {
+		return err
+	}
 	if err := transaction.validateJudgeState(); err != nil {
 		return err
 	}
@@ -792,7 +921,7 @@ func (transaction *Transaction) validate() error {
 		if !validSHA256(transaction.FailedEvidenceRevision) {
 			return errors.New("active fix state requires an exact failed evidence revision")
 		}
-		if transaction.Mode == ModeOrdinary4R && transaction.Counters.FixBatches != 1 {
+		if isOrdinaryMode(transaction.Mode) && transaction.Counters.FixBatches != 1 {
 			return errors.New("ordinary active fix state requires its single fix batch")
 		}
 		if transaction.Mode == ModeJudgmentDay && (transaction.Counters.FixRounds < 1 || transaction.Counters.FixRounds > 2) {
@@ -848,23 +977,175 @@ func validateSnapshot(snapshot Snapshot) error {
 }
 
 func validateCounters(mode Mode, counters Counters) error {
-	values := []int{counters.FullReviews, counters.RefuterBatches, counters.FixBatches, counters.ScopedFixValidations, counters.FinalVerifications, counters.FixRounds, counters.ScopedRejudgments, counters.JudgeExecutions}
+	values := []int{counters.FullReviews, counters.RefuterBatches, counters.FixBatches, counters.ScopedFixValidations, counters.FinalVerifications, counters.FixRounds, counters.ScopedRejudgments, counters.JudgeExecutions, counters.RiskExecutions, counters.ResilienceExecutions, counters.ReadabilityExecutions, counters.ReliabilityExecutions}
 	for _, value := range values {
 		if value < 0 {
 			return errors.New("review counters cannot be negative")
 		}
 	}
 	switch mode {
-	case ModeOrdinary4R:
-		if counters.FullReviews > 1 || counters.RefuterBatches > 1 || counters.FixBatches > 1 || counters.ScopedFixValidations > 1 || counters.FinalVerifications > 1 || counters.FixRounds != 0 || counters.ScopedRejudgments != 0 || counters.JudgeExecutions != 0 {
-			return errors.New("ordinary_4r budget exceeded")
+	case ModeOrdinary4R, ModeOrdinaryBounded:
+		if counters.FullReviews > 1 || counters.RefuterBatches > 1 || counters.FixBatches > 1 || counters.ScopedFixValidations > 1 || counters.FinalVerifications > 1 || counters.FixRounds != 0 || counters.ScopedRejudgments != 0 || counters.JudgeExecutions != 0 || counters.RiskExecutions > 1 || counters.ResilienceExecutions > 1 || counters.ReadabilityExecutions > 1 || counters.ReliabilityExecutions > 1 {
+			return errors.New("ordinary review budget exceeded")
+		}
+		if mode == ModeOrdinary4R && (counters.RiskExecutions != 0 || counters.ResilienceExecutions != 0 || counters.ReadabilityExecutions != 0 || counters.ReliabilityExecutions != 0) {
+			return errors.New("ordinary_4r cannot contain native lens execution counters")
+		}
+		if mode == ModeOrdinaryBounded && counters.FullReviews != 0 {
+			return errors.New("ordinary_bounded cannot consume the legacy full review counter")
 		}
 	case ModeJudgmentDay:
-		if counters.FixRounds > 2 || counters.ScopedRejudgments > 2 || counters.RefuterBatches != 0 || counters.FixBatches != 0 || counters.ScopedFixValidations != 0 || counters.FinalVerifications > 1 || (counters.JudgeExecutions != 0 && counters.JudgeExecutions != 2) {
+		if counters.FixRounds > 2 || counters.ScopedRejudgments > 2 || counters.RefuterBatches != 0 || counters.FixBatches != 0 || counters.ScopedFixValidations != 0 || counters.FinalVerifications > 1 || (counters.JudgeExecutions != 0 && counters.JudgeExecutions != 2) || counters.RiskExecutions != 0 || counters.ResilienceExecutions != 0 || counters.ReadabilityExecutions != 0 || counters.ReliabilityExecutions != 0 {
 			return errors.New("judgment_day budget exceeded")
 		}
 	}
 	return nil
+}
+
+func validateSelectedLenses(mode Mode, riskLevel RiskLevel, lenses []string) ([]string, error) {
+	if mode != ModeOrdinaryBounded {
+		if riskLevel != "" || len(lenses) != 0 {
+			return nil, errors.New("selected lenses require ordinary_bounded mode")
+		}
+		return nil, nil
+	}
+	validated := append([]string(nil), lenses...)
+	want := -1
+	switch riskLevel {
+	case RiskLow:
+		want = 0
+	case RiskMedium:
+		want = 1
+	case RiskHigh:
+		want = len(supportedLenses)
+	default:
+		return nil, errors.New("ordinary_bounded requires a native low, medium, or high risk classification")
+	}
+	if len(validated) != want {
+		return nil, fmt.Errorf("ordinary_bounded %s risk requires exactly %d selected lenses", riskLevel, want)
+	}
+	for index, lens := range validated {
+		if strings.TrimSpace(lens) != lens || !isSupportedLens(lens) {
+			return nil, fmt.Errorf("unknown review lens %q", lens)
+		}
+		if len(validated) == len(supportedLenses) && lens != supportedLenses[index] {
+			return nil, errors.New("the full selected lens set must use canonical 4R order")
+		}
+	}
+	return validated, nil
+}
+
+func (transaction *Transaction) validateLensState() error {
+	if transaction.Mode != ModeOrdinaryBounded {
+		if len(transaction.SelectedLenses) != 0 || len(transaction.LensResults) != 0 {
+			return errors.New("native lens state requires ordinary_bounded mode")
+		}
+		return nil
+	}
+	selected, err := validateSelectedLenses(transaction.Mode, transaction.RiskLevel, transaction.SelectedLenses)
+	if err != nil || !equalStrings(selected, transaction.SelectedLenses) {
+		return errors.New("ordinary_bounded selected lenses are invalid")
+	}
+	if len(transaction.LensResults) > len(selected) {
+		return errors.New("ordinary_bounded has more lens results than selected lenses")
+	}
+	for index, result := range transaction.LensResults {
+		validated, validationErr := validateLensResult(result)
+		if validationErr != nil || result.Lens != selected[index] || result.ResultHash != validated.ResultHash || transaction.lensExecutions(result.Lens) != 1 {
+			return errors.New("ordinary_bounded lens results must be complete, unique, and canonically ordered")
+		}
+		for previous := 0; previous < index; previous++ {
+			if transaction.LensResults[previous].ResultHash == result.ResultHash {
+				return errors.New("ordinary_bounded lens result identities must be distinct")
+			}
+		}
+	}
+	for _, lens := range supportedLenses {
+		want := 0
+		if stringIndexLensResult(transaction.LensResults, lens) >= 0 {
+			want = 1
+		}
+		if transaction.lensExecutions(lens) != want {
+			return errors.New("ordinary_bounded lens execution counters do not match completed results")
+		}
+	}
+	if transaction.State != StateUnreviewed && transaction.State != StateReviewing {
+		if len(transaction.LensResults) != len(selected) {
+			return errors.New("ordinary_bounded cannot leave reviewing before every selected lens is complete")
+		}
+		if !reflectLensFindings(transaction.LensResults, transaction.Findings) {
+			return errors.New("ordinary_bounded frozen ledger does not match completed lens results")
+		}
+	}
+	return nil
+}
+
+func reflectLensFindings(results []LensResult, findings []Finding) bool {
+	merged := make([]Finding, 0)
+	for _, result := range results {
+		merged = append(merged, result.Findings...)
+	}
+	left, _ := json.Marshal(merged)
+	right, _ := json.Marshal(findings)
+	return bytes.Equal(left, right)
+}
+
+func isOrdinaryMode(mode Mode) bool {
+	return mode == ModeOrdinary4R || mode == ModeOrdinaryBounded
+}
+
+func isSupportedLens(lens string) bool {
+	return stringIndex(supportedLenses, lens) >= 0
+}
+
+func stringIndex(values []string, value string) int {
+	for index, candidate := range values {
+		if candidate == value {
+			return index
+		}
+	}
+	return -1
+}
+
+func stringIndexLensResult(results []LensResult, lens string) int {
+	for index, result := range results {
+		if result.Lens == lens {
+			return index
+		}
+	}
+	return -1
+}
+
+func (transaction *Transaction) lensExecutions(lens string) int {
+	switch lens {
+	case LensRisk:
+		return transaction.Counters.RiskExecutions
+	case LensResilience:
+		return transaction.Counters.ResilienceExecutions
+	case LensReadability:
+		return transaction.Counters.ReadabilityExecutions
+	case LensReliability:
+		return transaction.Counters.ReliabilityExecutions
+	default:
+		return 0
+	}
+}
+
+func (transaction *Transaction) setLensExecutions(lens string, value int) {
+	setLensCounter(&transaction.Counters, lens, value)
+}
+
+func setLensCounter(counters *Counters, lens string, value int) {
+	switch lens {
+	case LensRisk:
+		counters.RiskExecutions = value
+	case LensResilience:
+		counters.ResilienceExecutions = value
+	case LensReadability:
+		counters.ReadabilityExecutions = value
+	case LensReliability:
+		counters.ReliabilityExecutions = value
+	}
 }
 
 func validateJudgeProofs(proofs []JudgeProof, agreementHash string) ([]JudgeProof, string, error) {
@@ -904,7 +1185,7 @@ func validateJudgeProofs(proofs []JudgeProof, agreementHash string) ([]JudgeProo
 }
 
 func (transaction *Transaction) validateJudgeState() error {
-	if transaction.Mode == ModeOrdinary4R {
+	if isOrdinaryMode(transaction.Mode) {
 		if len(transaction.JudgeProofs) != 0 || transaction.JudgeProofHash != "" || transaction.JudgeAgreementHash != "" || transaction.Counters.JudgeExecutions != 0 || transaction.State == StateJudgesConfirmed {
 			return errors.New("ordinary review cannot contain Judgment Day judge proof")
 		}
@@ -1104,7 +1385,7 @@ func (transaction *Transaction) validateFindingState(findings, severe map[string
 			}
 		}
 	}
-	if transaction.Mode == ModeOrdinary4R && hasResolvedInferential && !hasInsufficient && transaction.Counters.RefuterBatches != 1 {
+	if isOrdinaryMode(transaction.Mode) && hasResolvedInferential && !hasInsufficient && transaction.Counters.RefuterBatches != 1 {
 		return errors.New("resolved ordinary inferential findings require exactly one consumed refuter batch")
 	}
 	return transaction.validateResolutionCounters(len(corroborated) > 0)
@@ -1113,7 +1394,7 @@ func (transaction *Transaction) validateFindingState(findings, severe map[string
 func (transaction *Transaction) validateResolutionCounters(hasCorrections bool) error {
 	switch transaction.State {
 	case StateFixRequired:
-		if transaction.Mode == ModeOrdinary4R && (transaction.Counters.FixBatches != 0 || transaction.Counters.ScopedFixValidations != 0) {
+		if isOrdinaryMode(transaction.Mode) && (transaction.Counters.FixBatches != 0 || transaction.Counters.ScopedFixValidations != 0) {
 			return errors.New("ordinary fix_required state cannot pre-consume correction or validation")
 		}
 	case StateFixing, StateFixValidating:
@@ -1125,7 +1406,7 @@ func (transaction *Transaction) validateResolutionCounters(hasCorrections bool) 
 			return errors.New("final verification states cannot contain pending refuter IDs")
 		}
 		switch transaction.Mode {
-		case ModeOrdinary4R:
+		case ModeOrdinary4R, ModeOrdinaryBounded:
 			want := 0
 			if hasCorrections {
 				want = 1
@@ -1143,7 +1424,7 @@ func (transaction *Transaction) validateResolutionCounters(hasCorrections bool) 
 			}
 		}
 		if hasCorrections {
-			wrongBase := transaction.Mode == ModeOrdinary4R && transaction.Snapshot.BaseTree != transaction.InitialReviewTree
+			wrongBase := isOrdinaryMode(transaction.Mode) && transaction.Snapshot.BaseTree != transaction.InitialReviewTree
 			if !validSHA256(transaction.FailedEvidenceRevision) || transaction.Snapshot.Kind != TargetFixDiff || wrongBase || transaction.Snapshot.CandidateTree != transaction.FinalCandidateTree || !equalStrings(transaction.Snapshot.LedgerIDs, transaction.FixFindingIDs) || transaction.FixDeltaHash != FixDeltaHashForSnapshot(transaction.Snapshot) {
 				return errors.New("corrected final verification readiness requires a complete ledger-bound fix snapshot")
 			}
