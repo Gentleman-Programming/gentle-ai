@@ -184,7 +184,7 @@ func TestInstallWithHomeReportsPiChildClassifications(t *testing.T) {
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestInstallWithHomeReportsWorkspaceChildAndOwnershipTarget(t *testing.T) {
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestInstallWithHomeReportsEffectiveMCPAdapterSchema(t *testing.T) {
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestInstallWithHomeFailsClosedForEmptyPiSettingsWithoutMCPProcess(t *testin
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err == nil || !strings.Contains(err.Error(), "capability probe") {
 		t.Fatalf("InstallWithHome() error = %v, want failed effective MCP capability probe", err)
 	}
@@ -693,7 +693,7 @@ func TestInstallLeavesPiPendingWhenAdapterHealthIsNotMachineVerifiable(t *testin
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
