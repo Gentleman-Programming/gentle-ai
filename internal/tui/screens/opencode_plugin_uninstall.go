@@ -76,7 +76,7 @@ func RenderOpenCodePluginUninstallConfirm(selected model.OpenCodeCommunityPlugin
 		b.WriteString(styles.WarningStyle.Render(SpinnerChar(spinnerFrame) + "  Uninstalling " + name + "..."))
 		b.WriteString("\n\n")
 		b.WriteString(styles.HelpStyle.Render("Please wait..."))
-		return b.String()
+		return styles.FrameStyle.Render(b.String())
 	}
 
 	b.WriteString(styles.SubtextStyle.Render("About to uninstall " + name + "."))
@@ -101,7 +101,7 @@ func RenderOpenCodePluginUninstallConfirm(selected model.OpenCodeCommunityPlugin
 	b.WriteString("\n\n")
 	b.WriteString(styles.SubtextStyle.Render("Press enter to confirm, esc to cancel."))
 
-	return b.String()
+	return styles.FrameStyle.Render(b.String())
 }
 
 // RenderOpenCodePluginUninstallResult renders the success/failure summary

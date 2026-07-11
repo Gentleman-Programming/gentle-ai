@@ -137,7 +137,7 @@ func promptUninstallOpenCodePluginConfirm(id model.OpenCodeCommunityPluginID, st
 		_, _ = fmt.Fprintf(stdout, "  Layer 3: removes ~/.config/opencode/node_modules/%s/\n", pkg)
 		_, _ = fmt.Fprintf(stdout, "  Layer 4: removes ~/.cache/opencode/packages/%s@latest\n", pkg)
 	} else {
-		_, _ = fmt.Fprintf(stdout, "  Layer 1 (only): removes the local .tsx file ~/.config/opencode/tui-plugins/gentle-logo.tsx\n")
+		_, _ = fmt.Fprintf(stdout, "  Plus: removes the local .tsx file ~/.config/opencode/tui-plugins/gentle-logo.tsx\n")
 	}
 	_, _ = fmt.Fprintln(stdout, "A journal snapshot will be created; on failure the changes are rolled back.")
 	_, _ = fmt.Fprint(stdout, "Type 'yes' to confirm: ")

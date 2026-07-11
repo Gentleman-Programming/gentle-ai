@@ -37,9 +37,39 @@ func TestRenderOpenCodePluginUninstallSelectHighlightsCursor(t *testing.T) {
 		model.OpenCodePluginSubAgentStatusline,
 		model.OpenCodePluginSDDEngramManage,
 	}
-	out := RenderOpenCodePluginUninstallSelect(installed, 1)
-	if !strings.Contains(out, "▸") {
-		t.Fatalf("cursor highlight should render with ▸ prefix; output:\n%s", out)
+	// Cursor=1 must highlight "SDD Engram Manager" and NOT highlight
+	// "Sub-agent Statusline". A naive impl that always highlights row 0
+	// would still produce "▸" somewhere; we assert on exact lines.
+	linesAt := func(s, substr string) int {
+		for i, line := range strings.Split(s, "\n") {
+			if strings.Contains(line, substr) {
+				return i
+			}
+		}
+		return -1
+	}
+	outCursor1 := RenderOpenCodePluginUninstallSelect(installed, 1)
+	subAgentLine := linesAt(outCursor1, "Sub-agent Statusline")
+	sddLine := linesAt(outCursor1, "SDD Engram Manager")
+	if subAgentLine < 0 || sddLine < 0 {
+		t.Fatalf("output missing one of the expected plugin names:\n%s", outCursor1)
+	}
+	if !strings.Contains(strings.Split(outCursor1, "\n")[sddLine], "▸") {
+		t.Fatalf("cursor=1 must highlight SDD Engram Manager; output:\n%s", outCursor1)
+	}
+	if strings.Contains(strings.Split(outCursor1, "\n")[subAgentLine], "▸") {
+		t.Fatalf("cursor=1 must NOT highlight Sub-agent Statusline; output:\n%s", outCursor1)
+	}
+
+	// And cursor=0 highlights the first row, not the second.
+	outCursor0 := RenderOpenCodePluginUninstallSelect(installed, 0)
+	subAgentLine0 := linesAt(outCursor0, "Sub-agent Statusline")
+	sddLine0 := linesAt(outCursor0, "SDD Engram Manager")
+	if !strings.Contains(strings.Split(outCursor0, "\n")[subAgentLine0], "▸") {
+		t.Fatalf("cursor=0 must highlight Sub-agent Statusline; output:\n%s", outCursor0)
+	}
+	if strings.Contains(strings.Split(outCursor0, "\n")[sddLine0], "▸") {
+		t.Fatalf("cursor=0 must NOT highlight SDD Engram Manager; output:\n%s", outCursor0)
 	}
 }
 
