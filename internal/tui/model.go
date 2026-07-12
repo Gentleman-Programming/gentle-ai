@@ -607,7 +607,10 @@ type Model struct {
 
 	// OpenCodePluginUninstallResult + Err hold the dedicated uninstall result.
 	OpenCodePluginUninstallResult opencodeplugin.UninstallResult
-	OpenCodePluginUninstallErr    error
+	// OpenCodePluginUninstallErr is the error from the async uninstall runner,
+	// or nil on success. Populated alongside OpenCodePluginUninstallResult when
+	// the OpenCodePluginUninstallDoneMsg arrives.
+	OpenCodePluginUninstallErr error
 
 	// OpenCodePluginUninstallSpinnerFrame drives the spinner during the
 	// running state of the Confirm screen.
