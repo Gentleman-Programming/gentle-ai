@@ -884,7 +884,7 @@ func TestInstallRecordsTargetedOpenCodeReconciliation(t *testing.T) {
 		mustWrite(t, settingsPath, `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`)
 		mustWrite(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), `{"command":"codegraph","args":["serve","--mcp"]}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -904,7 +904,7 @@ func TestInstallRunsFullReconcileWhenAnotherAgentIsMissing(t *testing.T) {
 		mustWrite(t, settingsPath, `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`)
 		mustWrite(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), `{"command":"codegraph","args":["serve","--mcp"]}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}

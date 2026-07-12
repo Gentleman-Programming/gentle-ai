@@ -448,20 +448,11 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		})
 	}
 
-	if r.selection.HasCommunityTool(model.CommunityToolCodeGraph) {
-		apply = append(apply, &codeGraphGuidanceSyncStep{
-			id:           "sync:community-tool:codegraph-guidance",
-			homeDir:      r.homeDir,
-			runner:       codeGraphHomeRunner{homeDir: r.homeDir},
-			changedFiles: &r.changedFiles,
-		})
-		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles})
-	}
-
 	configured := communitytool.HasConfiguredCodeGraph(r.homeDir, communitytool.DetectorFunc(cmdLookPath))
 	hasLegacy := communitytool.HasLegacyCodeGraphGuidance(r.homeDir)
-	if configured || hasLegacy {
-		if configured {
+	selectedCodeGraph := r.selection.HasCommunityTool(model.CommunityToolCodeGraph)
+	if configured || selectedCodeGraph || hasLegacy {
+		if configured || selectedCodeGraph {
 			apply = append(apply, communityToolSyncStep{
 				id:           "sync:community-tool:codegraph-upgrade",
 				homeDir:      r.homeDir,
@@ -475,6 +466,16 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 				changedFiles: &r.changedFiles,
 			})
 		}
+	}
+
+	if r.selection.HasCommunityTool(model.CommunityToolCodeGraph) {
+		apply = append(apply, &codeGraphGuidanceSyncStep{
+			id:           "sync:community-tool:codegraph-guidance",
+			homeDir:      r.homeDir,
+			runner:       codeGraphHomeRunner{homeDir: r.homeDir},
+			changedFiles: &r.changedFiles,
+		})
+		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles})
 	}
 
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
@@ -493,7 +494,8 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 	}
 	configured := communitytool.HasConfiguredCodeGraph(homeDir, communitytool.DetectorFunc(cmdLookPath))
 	hasLegacy := communitytool.HasLegacyCodeGraphGuidance(homeDir)
-	if configured || hasLegacy {
+	selectedCodeGraph := selection.HasCommunityTool(model.CommunityToolCodeGraph)
+	if configured || selectedCodeGraph || hasLegacy {
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
 			paths[path] = struct{}{}
 		}
