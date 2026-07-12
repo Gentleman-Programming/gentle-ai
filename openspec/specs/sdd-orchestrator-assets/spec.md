@@ -314,3 +314,58 @@ The system MUST also keep direct static assertions and impacted golden fixtures 
 - WHEN compared with expected outputs
 - THEN fixtures include required strategy guidance and propagation where relevant
 - AND fixtures preserve accurate platform-native wording without unrelated churn
+
+---
+
+### Requirement: Project Root Resolution
+
+`findProjectRoot()` MUST walk upward from a starting directory and return the authoritative project root. When the walk encounters a `.git` entry, the system MUST distinguish between a directory (normal repository) and a regular file (git worktree) and resolve accordingly. The function contract (return project root or `false`) is preserved; only the resolution logic for `.git` worktrees is corrected.
+
+**Functional rules:**
+
+| # | Rule |
+|---|------|
+| FR1 | When `.git` is a FILE, the system MUST treat it as a worktree pointer and MUST NOT return the worktree root as the project root. |
+| FR2 | For a worktree `.git` file, the system MUST read the file, extract the path from the `gitdir:` line, resolve the shared `.git` directory (two levels up from the referenced worktrees path), and return its parent as the project root. |
+| FR3 | If reading or parsing the `.git` file fails, the system MUST fall back to `git rev-parse --git-common-dir` and return the parent of the resolved common git directory. |
+| FR4 | When `.git` is a DIRECTORY (normal repository), the system MUST return the directory containing `.git` as the project root — unchanged behavior. |
+| FR5 | The fix is limited to `findProjectRoot()`. No Engram-side changes are required; resolving the correct project root naturally prevents duplicate per-worktree Engram projects and avoids re-triggering `sdd-init`. |
+
+**Non-functional rules:**
+
+| # | Rule |
+|---|------|
+| NFR1 | The fix MUST NOT change behavior for non-worktree repositories. |
+| NFR2 | All existing `findProjectRoot` tests MUST pass unchanged (backward compatible). |
+| NFR3 | The happy path MUST NOT shell out to `git rev-parse`; the external command is ONLY a fallback when `.git` file parsing fails. |
+
+#### Scenario: Worktree with valid .git file
+
+- GIVEN a directory inside a git worktree where `.git` is a file containing `gitdir: /main/.git/worktrees/name`
+- WHEN `findProjectRoot` walks up and finds `.git` as a file
+- THEN it reads the `gitdir:` line and returns the main repository root (parent of `/main/.git`)
+- AND it MUST NOT return the worktree root
+
+#### Scenario: Normal repo with .git directory
+
+- GIVEN a directory inside a normal git repository where `.git` is a directory
+- WHEN `findProjectRoot` walks up and finds `.git` as a directory
+- THEN it returns the directory containing `.git` as the project root (unchanged behavior)
+
+#### Scenario: Worktree with unreadable .git file
+
+- GIVEN a worktree where the `.git` file exists but cannot be read (e.g. permission error)
+- WHEN `findProjectRoot` attempts to read the `.git` file
+- THEN it falls back to `git rev-parse --git-common-dir` and returns the parent of that directory
+
+#### Scenario: Worktree with malformed .git file
+
+- GIVEN a worktree where the `.git` file does not contain a valid `gitdir:` line
+- WHEN `findProjectRoot` reads the file content
+- THEN it falls back to `git rev-parse --git-common-dir` to resolve the shared git directory
+
+#### Scenario: No git at all
+
+- GIVEN a directory hierarchy with no `.git` entry at any ancestor level
+- WHEN `findProjectRoot` walks upward
+- THEN it behaves exactly as before — returns the best candidate (e.g. package.json) or `("", false)` when no markers are found

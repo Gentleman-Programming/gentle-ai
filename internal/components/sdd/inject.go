@@ -1,12 +1,15 @@
 package sdd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
@@ -153,6 +156,99 @@ type bootstrapper interface {
 	BootstrapTemplate(homeDir string) error
 }
 
+// resolveWorktreeRoot resolves the main repository root from a git worktree
+// `.git` file. Git worktrees store a `.git` regular file (not a directory) at
+// the worktree checkout root containing a single `gitdir: <path>` line that
+// points to the shared worktree metadata directory
+// (`<main>/.git/worktrees/<name>`). This helper parses that line, walks up two
+// levels from the worktrees metadata directory to reach the shared `.git`
+// directory, resolves symlinks, and returns the parent of the shared `.git`
+// directory — i.e. the main repository root.
+//
+// Returns (root, true) on success and ("", false) on any failure (read error,
+// missing `gitdir:` prefix, non-directory resolved path, symlink failure). The
+// caller is expected to fall back to `git rev-parse --git-common-dir` when this
+// returns false.
+func resolveWorktreeRoot(gitPath string) (string, bool) {
+	content, err := os.ReadFile(gitPath)
+	if err != nil {
+		return "", false
+	}
+
+	// The .git file format is: "gitdir: <path>\n". Parse the first line.
+	lines := strings.SplitN(string(content), "\n", 2)
+	if len(lines) == 0 {
+		return "", false
+	}
+	firstLine := strings.TrimSpace(lines[0])
+	const gitdirPrefix = "gitdir: "
+	if !strings.HasPrefix(firstLine, gitdirPrefix) {
+		return "", false
+	}
+	parsedPath := strings.TrimSpace(strings.TrimPrefix(firstLine, gitdirPrefix))
+	if parsedPath == "" {
+		return "", false
+	}
+
+	// Normalize for cross-platform path separators (Git writes forward slashes
+	// even on Windows). filepath.FromSlash converts to the OS-native separator.
+	normalized := filepath.FromSlash(parsedPath)
+
+	// The parsed path points at `<main>/.git/worktrees/<name>`. Walking up two
+	// levels yields the shared `.git` directory: `<main>/.git`.
+	commonGitDir := filepath.Dir(filepath.Dir(normalized))
+
+	// Resolve symlinks defensively — some setups symlink the shared .git dir.
+	resolved, err := filepath.EvalSymlinks(commonGitDir)
+	if err != nil {
+		return "", false
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return "", false
+	}
+
+	// The parent of the shared `.git` directory is the main repository root.
+	return filepath.Dir(resolved), true
+}
+
+// resolveGitCommonDir is the fallback path for worktree detection: when the
+// `.git` file cannot be parsed directly, shell out to
+// `git rev-parse --git-common-dir` from the given directory to locate the
+// shared `.git` directory and return its parent (the main repo root).
+//
+// This is ONLY invoked when resolveWorktreeRoot fails, preserving NFR3 (happy
+// path does not shell out). A short timeout guards against hanging git
+// operations. Returns (root, true) on success and ("", false) on any failure.
+func resolveGitCommonDir(dir string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--git-common-dir")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	commonDir := strings.TrimSpace(string(output))
+	if commonDir == "" {
+		return "", false
+	}
+	// git rev-parse may return a relative or absolute path. Resolve it
+	// relative to dir when it is not absolute.
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(dir, commonDir)
+	}
+	resolved, err := filepath.EvalSymlinks(commonDir)
+	if err != nil {
+		return "", false
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return "", false
+	}
+	return filepath.Dir(resolved), true
+}
+
 // findProjectRoot walks upward from dir, looking for the best project root.
 //
 // Priority order:
@@ -184,9 +280,29 @@ func findProjectRoot(dir string) (string, bool) {
 		}
 		// Check strong project markers — definitive roots; return immediately.
 		for _, marker := range strongProjectMarkers {
-			if _, err := os.Stat(filepath.Join(current, marker)); err == nil {
-				return current, true
+			markerPath := filepath.Join(current, marker)
+			fi, err := os.Stat(markerPath)
+			if err != nil {
+				continue
 			}
+			// `.git` can be a directory (normal repo) OR a regular file (git
+			// worktree pointer). For a directory, the current behavior is
+			// unchanged: return immediately. For a file, resolve the main
+			// repository root from the worktree pointer; on failure fall back
+			// to `git rev-parse --git-common-dir`. All other markers (go.mod,
+			// Cargo.toml, etc.) behave exactly as before.
+			if marker == ".git" && !fi.IsDir() {
+				if root, ok := resolveWorktreeRoot(markerPath); ok {
+					return root, true
+				}
+				if root, ok := resolveGitCommonDir(current); ok {
+					return root, true
+				}
+				// Both resolution paths failed: keep walking up rather than
+				// returning the worktree root as the project root.
+				continue
+			}
+			return current, true
 		}
 		// Weak marker: package.json — record but keep walking. Always update
 		// to the highest ancestor with a package.json, since in a JS project

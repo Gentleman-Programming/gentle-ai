@@ -5174,6 +5174,105 @@ func TestFindProjectRootAllMarkers(t *testing.T) {
 	}
 }
 
+// TestFindProjectRootWorktreeGitFile verifies that when the upward walk
+// encounters a `.git` FILE (a git worktree pointer) instead of a directory,
+// findProjectRoot resolves the main repository root via the `gitdir:` line and
+// returns it — not the worktree root.
+func TestFindProjectRootWorktreeGitFile(t *testing.T) {
+	mainRoot := t.TempDir()
+
+	// Main repo has a real .git directory with a worktrees subdirectory.
+	mainGitDir := filepath.Join(mainRoot, ".git")
+	worktreeGitDir := filepath.Join(mainGitDir, "worktrees", "wt")
+	if err := os.MkdirAll(worktreeGitDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(worktree git dir): %v", err)
+	}
+
+	// Worktree checkout lives in a sibling directory; its `.git` is a FILE
+	// pointing back at the shared worktrees metadata directory.
+	worktreeRoot := t.TempDir()
+	gitFile := filepath.Join(worktreeRoot, ".git")
+	gitdirLine := "gitdir: " + filepath.ToSlash(worktreeGitDir)
+	if err := os.WriteFile(gitFile, []byte(gitdirLine+"\n"), 0o644); err != nil {
+		t.Fatalf("write .git file: %v", err)
+	}
+
+	// Start from a subdirectory of the worktree.
+	startDir := filepath.Join(worktreeRoot, "src", "app")
+	if err := os.MkdirAll(startDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(startDir): %v", err)
+	}
+
+	got, ok := findProjectRoot(startDir)
+	if !ok {
+		t.Fatal("findProjectRoot returned false, want true")
+	}
+	if got != mainRoot {
+		t.Fatalf("findProjectRoot = %q, want main repo root %q", got, mainRoot)
+	}
+}
+
+// TestFindProjectRootWorktreeGitFileFallback verifies that a malformed `.git`
+// file (no `gitdir:` line) does not cause a panic and falls through gracefully —
+// either via the `git rev-parse` fallback or by continuing the upward walk.
+func TestFindProjectRootWorktreeGitFileFallback(t *testing.T) {
+	worktreeRoot := t.TempDir()
+
+	// Write a .git FILE with malformed content (no gitdir: prefix).
+	gitFile := filepath.Join(worktreeRoot, ".git")
+	if err := os.WriteFile(gitFile, []byte("not a valid worktree pointer\n"), 0o644); err != nil {
+		t.Fatalf("write .git file: %v", err)
+	}
+
+	// Also place a go.mod at the worktree root so the fallback path has a
+	// definitive marker to return if the worktree resolution fails. Without a
+	// real git repo, the `git rev-parse` fallback will either fail (no repo)
+	// or return something we cannot predict; the go.mod guarantees a stable
+	// outcome and proves no panic occurred.
+	if err := os.WriteFile(filepath.Join(worktreeRoot, "go.mod"), []byte("module wt\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	startDir := filepath.Join(worktreeRoot, "internal", "pkg")
+	if err := os.MkdirAll(startDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(startDir): %v", err)
+	}
+
+	// The critical assertion: no panic, and findProjectRoot returns a valid
+	// root (go.mod marker) rather than the worktree root being misreported.
+	got, ok := findProjectRoot(startDir)
+	if !ok {
+		t.Fatal("findProjectRoot returned false, want true (go.mod marker should be found)")
+	}
+	if got != worktreeRoot {
+		t.Fatalf("findProjectRoot = %q, want worktree root %q (go.mod marker)", got, worktreeRoot)
+	}
+}
+
+// TestFindProjectRootNormalGitDirUnchanged is a regression guard: a normal
+// `.git` directory (not a worktree file) must continue to return the directory
+// that contains `.git`, identical to the pre-change behavior.
+func TestFindProjectRootNormalGitDirUnchanged(t *testing.T) {
+	root := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git): %v", err)
+	}
+
+	subDir := filepath.Join(root, "cmd", "server")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(subDir): %v", err)
+	}
+
+	got, ok := findProjectRoot(subDir)
+	if !ok {
+		t.Fatal("findProjectRoot returned false, want true")
+	}
+	if got != root {
+		t.Fatalf("findProjectRoot = %q, want .git root %q", got, root)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Fix: SDD post-check disk fallback on Windows
 // ---------------------------------------------------------------------------
