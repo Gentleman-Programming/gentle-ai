@@ -175,6 +175,28 @@ func TestStoreLockRecoversCrashAndCorruptOwnerRecords(t *testing.T) {
 	}
 }
 
+func TestStoreLockIsReleasedWhenOwnerProcessExits(t *testing.T) {
+	if os.Getenv("GENTLE_AI_LOCK_EXIT_HELPER") == "1" {
+		lock, err := acquireStoreLock(os.Getenv("GENTLE_AI_LOCK_EXIT_PATH"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = lock
+		return
+	}
+	path := filepath.Join(t.TempDir(), "review-store", "LOCK")
+	command := exec.Command(os.Args[0], "-test.run=^TestStoreLockIsReleasedWhenOwnerProcessExits$")
+	command.Env = append(os.Environ(), "GENTLE_AI_LOCK_EXIT_HELPER=1", "GENTLE_AI_LOCK_EXIT_PATH="+path)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("lock owner helper: %v\n%s", err, output)
+	}
+	lock, err := acquireStoreLock(path)
+	if err != nil {
+		t.Fatalf("kernel lock remained held after process exit: %v", err)
+	}
+	defer lock.release()
+}
+
 func TestConcurrentStoreLockRecoverersCannotBothWin(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "review-store", "LOCK")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

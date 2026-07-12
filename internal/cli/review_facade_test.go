@@ -408,7 +408,7 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 	}
 }
 
-func TestReviewFacadePersistsOverBudgetForecastAndRejectsOverBudgetActual(t *testing.T) {
+func TestReviewFacadePersistsOverBudgetForecastAndActual(t *testing.T) {
 	newCandidate := func(t *testing.T) (string, ReviewFacadeStartResult, string) {
 		t.Helper()
 		repo := initReviewCLIRepo(t)
@@ -451,14 +451,24 @@ func TestReviewFacadePersistsOverBudgetForecastAndRejectsOverBudgetActual(t *tes
 			CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"regression passes"}},
 			FollowUps:            []reviewtransaction.FollowUp{},
 		})
-		err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validationPath}, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "exceeding the frozen budget") {
-			t.Fatalf("over-budget actual error = %v", err)
+		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validationPath}, io.Discard); err != nil {
+			t.Fatal(err)
 		}
 		store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 		record, loadErr := store.Load()
-		if loadErr != nil || record.State.State != reviewtransaction.StateCorrectionRequired || record.State.ActualCorrectionLines != nil || !reflect.DeepEqual(record.State.CurrentSnapshot, record.State.InitialSnapshot) {
-			t.Fatalf("over-budget actual changed authority = %#v, %v", record.State, loadErr)
+		if loadErr != nil || record.State.State != reviewtransaction.StateEscalated || record.State.CumulativeCorrectionLines <= record.State.CorrectionBudget || len(record.State.CorrectionAttempts) != 1 {
+			t.Fatalf("over-budget actual authority = %#v, %v", record.State, loadErr)
+		}
+		before := record.Revision
+		if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--correction-lines", "1"}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		after, _ := store.Load()
+		if after.Revision != before || after.State.State != reviewtransaction.StateEscalated {
+			t.Fatalf("overflow authority resumed = %#v", after)
 		}
 	})
 }
@@ -490,11 +500,15 @@ func TestReviewFacadeCompactRefuterAndHostileGitSelection(t *testing.T) {
 }
 
 func TestReviewFacadeHelpAndFlatCompatibilityPathsRemainAvailable(t *testing.T) {
-	for _, subcommand := range []string{"start", "finalize", "validate"} {
+	for _, subcommand := range []string{"start", "finalize", "validate", "recover"} {
 		var output bytes.Buffer
 		if err := RunReview([]string{subcommand, "--help"}, &output); err != nil || !strings.Contains(output.String(), "Usage: gentle-ai review "+subcommand) {
 			t.Fatalf("facade %s help: %v\n%s", subcommand, err, output.String())
 		}
+	}
+	var validateHelp bytes.Buffer
+	if err := RunReview([]string{"validate", "--help"}, &validateHelp); err != nil || !strings.Contains(validateHelp.String(), "--lineage") {
+		t.Fatalf("review validate help must expose --lineage: %v\n%s", err, validateHelp.String())
 	}
 	for _, test := range []struct {
 		run  func([]string, io.Writer) error
@@ -509,6 +523,233 @@ func TestReviewFacadeHelpAndFlatCompatibilityPathsRemainAvailable(t *testing.T) 
 			t.Fatalf("flat compatibility help %q: %v\n%s", test.want, err, output.String())
 		}
 	}
+}
+
+func TestReviewSchemaExamplesMatchStrictFacadeContracts(t *testing.T) {
+	for _, kind := range []string{"reviewer", "refuter", "validator"} {
+		t.Run(kind, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunReview([]string{"schema", kind}, &output); err != nil {
+				t.Fatal(err)
+			}
+			var document struct {
+				Schema   string            `json:"$schema"`
+				ID       string            `json:"$id"`
+				Examples []json.RawMessage `json:"examples"`
+			}
+			if err := json.Unmarshal(output.Bytes(), &document); err != nil || document.Schema == "" || document.ID == "" || len(document.Examples) != 1 {
+				t.Fatalf("schema document = %#v, %v", document, err)
+			}
+			path := filepath.Join(t.TempDir(), kind+".json")
+			if err := os.WriteFile(path, document.Examples[0], 0o600); err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "reviewer":
+				if _, err := readFacadeReviewerResults([]string{path}); err != nil {
+					t.Fatal(err)
+				}
+			case "refuter":
+				var value facadeRefuterResult
+				if err := readFacadeJSON(path, &value); err != nil {
+					t.Fatal(err)
+				}
+			case "validator":
+				var value facadeValidationResult
+				if err := readFacadeJSON(path, &value); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := value.compact(reviewtransaction.EmptyFixDeltaHash, []string{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestReviewerSchemaRequiresRuntimeMandatoryFindingEvidence(t *testing.T) {
+	var schema struct {
+		Properties map[string]struct {
+			MinItems int `json:"minItems"`
+			Items    struct {
+				Required []string `json:"required"`
+				AllOf    []struct {
+					Then struct {
+						Required []string `json:"required"`
+					} `json:"then"`
+				} `json:"allOf"`
+				Properties map[string]struct {
+					MinItems int `json:"minItems"`
+				} `json:"properties"`
+			} `json:"items"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(reviewInputSchemas["reviewer"], &schema); err != nil {
+		t.Fatal(err)
+	}
+	wantRequired := []string{"location", "severity", "claim", "proof_refs"}
+	wantSevere := []string{"evidence_class", "causal_disposition"}
+	if !reflect.DeepEqual(schema.Properties["findings"].Items.Required, wantRequired) || len(schema.Properties["findings"].Items.AllOf) != 1 || !reflect.DeepEqual(schema.Properties["findings"].Items.AllOf[0].Then.Required, wantSevere) || schema.Properties["evidence"].MinItems != 1 || schema.Properties["findings"].Items.Properties["proof_refs"].MinItems != 1 {
+		t.Fatalf("reviewer schema requirements = %#v", schema)
+	}
+
+	for name, payload := range map[string]string{
+		"missing location":              `{"findings":[{"severity":"CRITICAL","claim":"x","proof_refs":["proof"],"evidence_class":"deterministic","causal_disposition":"introduced"}],"evidence":["reviewed"]}`,
+		"empty evidence":                `{"findings":[],"evidence":[]}`,
+		"empty proof refs":              `{"findings":[{"location":"x.go:1","severity":"CRITICAL","claim":"x","proof_refs":[],"evidence_class":"deterministic","causal_disposition":"introduced"}],"evidence":["reviewed"]}`,
+		"missing severe classification": `{"findings":[{"location":"x.go:1","severity":"CRITICAL","claim":"x","proof_refs":["proof"]}],"evidence":["reviewed"]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "reviewer.json")
+			if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			results, err := readFacadeReviewerResults([]string{path})
+			if err != nil {
+				return
+			}
+			state := reviewtransaction.CompactState{SelectedLenses: []string{reviewtransaction.LensReliability}}
+			input, err := prepareCompactReviewerResults(state, results, facadeRefuterResult{})
+			if err == nil {
+				err = state.CompleteReview(input)
+			}
+			if err == nil {
+				t.Fatal("runtime accepted schema-invalid reviewer input")
+			}
+		})
+	}
+}
+
+func TestReviewSchemasRequireConcreteEvidenceStrings(t *testing.T) {
+	for _, kind := range []string{"reviewer", "refuter", "validator"} {
+		if !bytes.Contains(reviewInputSchemas[kind], []byte(`"pattern":"\\S"`)) {
+			t.Fatalf("%s schema lacks concrete-evidence pattern", kind)
+		}
+	}
+}
+
+func TestReviewFacadeRejectsMalformedInputsWithoutConsumingIterativeCorrection(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	assertUnchanged := func(before string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("malformed input was accepted")
+		}
+		after, loadErr := store.Load()
+		if loadErr != nil || after.Revision != before {
+			t.Fatalf("malformed input changed authority: %v, %#v", loadErr, after)
+		}
+	}
+	malformed := filepath.Join(t.TempDir(), "malformed.json")
+	if err := os.WriteFile(malformed, []byte(`{"findings":[],"evidence":[],"unknown":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record, _ := store.Load()
+	assertUnchanged(record.Revision, RunReviewFacadeFinalize([]string{"--cwd", repo, "--result", malformed}, io.Discard))
+
+	reviewer := filepath.Join(t.TempDir(), "reviewer.json")
+	writeReviewCLIJSON(t, reviewer, facadeReviewerResult{Findings: []facadeFinding{{Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "wrong value", ProofRefs: []string{"candidate-only failure"}, EvidenceClass: reviewtransaction.EvidenceInferential, CausalDisposition: reviewtransaction.CausalIntroduced}}, Evidence: []string{"reviewed once"}})
+	if err := os.WriteFile(malformed, []byte(`{"results":[],"unknown":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertUnchanged(record.Revision, RunReviewFacadeFinalize([]string{"--cwd", repo, "--result", reviewer, "--refuter", malformed}, io.Discard))
+	refuter := filepath.Join(t.TempDir(), "refuter.json")
+	writeReviewCLIJSON(t, refuter, facadeRefuterResult{Results: []facadeRefuterOutcome{{FindingID: "R3-001", Outcome: reviewtransaction.OutcomeCorroborated, ProofRefs: []string{"independent reproduction"}}}})
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--result", reviewer, "--refuter", refuter, "--correction-lines", "6"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\n01\n02\n03\nfirst-fix\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(malformed, []byte(`{"original_criteria":{"passed":false,"evidence":["failed"]},"correction_regression":{"passed":false,"evidence":["failed"]},"follow_ups":[],"unknown":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record, _ = store.Load()
+	assertUnchanged(record.Revision, RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", malformed}, io.Discard))
+	validator := filepath.Join(t.TempDir(), "validator.json")
+	writeReviewCLIJSON(t, validator, facadeValidationResult{OriginalCriteria: facadeValidationCheck{Passed: false, Evidence: []string{"acceptance still fails"}}, CorrectionRegression: facadeValidationCheck{Passed: false, Evidence: []string{"regression still fails"}}, FollowUps: []reviewtransaction.FollowUp{}})
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validator}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	failed, _ := store.Load()
+	if failed.State.State != reviewtransaction.StateCorrectionRequired || failed.State.CumulativeCorrectionLines <= 0 || len(failed.State.LensResults) != 1 {
+		t.Fatalf("failed validation state = %#v", failed.State)
+	}
+
+	remaining := failed.State.CorrectionBudget - failed.State.CumulativeCorrectionLines
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--correction-lines", fmt.Sprint(remaining)}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\n01\n02\n03\nfixed\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeReviewCLIJSON(t, validator, facadeValidationResult{OriginalCriteria: facadeValidationCheck{Passed: true, Evidence: []string{"acceptance passes"}}, CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"regression passes"}}, FollowUps: []reviewtransaction.FollowUp{}})
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validator}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	corrected, _ := store.Load()
+	if corrected.State.State != reviewtransaction.StateValidating || corrected.State.CumulativeCorrectionLines > corrected.State.CorrectionBudget || len(corrected.State.CorrectionAttempts) != 2 || len(corrected.State.LensResults) != 1 {
+		t.Fatalf("corrected retry state = %#v", corrected.State)
+	}
+}
+
+func TestReviewRecoverCreatesSuccessorAndDiscoveryRejectsHistoricalAuthority(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	resultPath := filepath.Join(t.TempDir(), "review.json")
+	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
+	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{Findings: []facadeFinding{}, Evidence: []string{"reviewed"}})
+	if err := os.WriteFile(evidencePath, []byte("tests pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--evidence", evidencePath}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	predecessorStore, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	predecessor, _ := predecessorStore.Load()
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed scope\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReview([]string{"recover", "--cwd", repo, "--predecessor-lineage", started.LineageID,
+		"--expected-predecessor-revision", predecessor.Revision, "--successor-lineage", "review-recovered",
+		"--disposition", "scope_changed", "--reason", "candidate changed", "--actor", "maintainer"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var recovered ReviewRecoverResult
+	if err := json.Unmarshal(output.Bytes(), &recovered); err != nil {
+		t.Fatal(err)
+	}
+	if recovered.LineageID != "review-recovered" || recovered.Recovery.PredecessorRevision != predecessor.Revision {
+		t.Fatalf("recovered = %#v", recovered)
+	}
+	output.Reset()
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", started.LineageID, "--gate", string(reviewtransaction.GatePreCommit)}, &output); err == nil || !strings.Contains(output.String(), "superseded") {
+		t.Fatalf("historical authority validation = %v\n%s", err, output.String())
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", recovered.LineageID, "--result", resultPath}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", recovered.LineageID, "--evidence", evidencePath}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output); err != nil {
+		t.Fatalf("successor validation: %v\n%s", err, output.String())
+	}
+	assertReviewGateResult(t, output.Bytes(), reviewtransaction.GateAllow)
 }
 
 func TestReviewBindSDDRequiresExplicitInputs(t *testing.T) {

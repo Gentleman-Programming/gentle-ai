@@ -11,42 +11,74 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 )
 
 const CompactStateSchema = "gentle-ai.review-state/v2"
 const CompactReceiptSchema = "gentle-ai.review-receipt/v2"
 
 const (
-	StateCorrectionRequired State = "correction_required"
-	StateValidating         State = "validating"
+	StateCorrectionRequired      State = "correction_required"
+	StateValidating              State = "validating"
+	MaxCompactCorrectionAttempts       = 3
 )
 
 type CompactState struct {
-	Schema                  string                     `json:"schema"`
-	LineageID               string                     `json:"lineage_id"`
-	Generation              int                        `json:"generation"`
-	State                   State                      `json:"state"`
-	InitialSnapshot         Snapshot                   `json:"initial_snapshot"`
-	CurrentSnapshot         Snapshot                   `json:"current_snapshot"`
-	GenesisPaths            []string                   `json:"genesis_paths"`
-	PolicyHash              string                     `json:"policy_hash"`
-	RiskLevel               RiskLevel                  `json:"risk_level"`
-	SelectedLenses          []string                   `json:"selected_lenses"`
-	OriginalChangedLines    int                        `json:"original_changed_lines"`
-	CorrectionBudget        int                        `json:"correction_budget"`
-	LensResults             []LensResult               `json:"lens_results"`
-	Findings                []Finding                  `json:"findings"`
-	Classifications         map[string]FindingEvidence `json:"classifications"`
-	Outcomes                map[string]EvidenceOutcome `json:"outcomes"`
-	FixFindingIDs           []string                   `json:"fix_finding_ids"`
-	FollowUps               []FollowUp                 `json:"follow_ups"`
-	ProposedCorrectionLines *int                       `json:"proposed_correction_lines,omitempty"`
-	ActualCorrectionLines   *int                       `json:"actual_correction_lines,omitempty"`
-	FixDeltaHash            string                     `json:"fix_delta_hash"`
-	OriginalCriteria        *ValidationCheck           `json:"original_criteria,omitempty"`
-	CorrectionRegression    *ValidationCheck           `json:"correction_regression,omitempty"`
-	EvidenceHash            string                     `json:"evidence_hash,omitempty"`
-	InvalidationReason      string                     `json:"invalidation_reason,omitempty"`
+	Schema                    string                     `json:"schema"`
+	LineageID                 string                     `json:"lineage_id"`
+	Generation                int                        `json:"generation"`
+	State                     State                      `json:"state"`
+	InitialSnapshot           Snapshot                   `json:"initial_snapshot"`
+	CurrentSnapshot           Snapshot                   `json:"current_snapshot"`
+	GenesisPaths              []string                   `json:"genesis_paths"`
+	PolicyHash                string                     `json:"policy_hash"`
+	RiskLevel                 RiskLevel                  `json:"risk_level"`
+	SelectedLenses            []string                   `json:"selected_lenses"`
+	OriginalChangedLines      int                        `json:"original_changed_lines"`
+	CorrectionBudget          int                        `json:"correction_budget"`
+	LensResults               []LensResult               `json:"lens_results"`
+	Findings                  []Finding                  `json:"findings"`
+	Classifications           map[string]FindingEvidence `json:"classifications"`
+	Outcomes                  map[string]EvidenceOutcome `json:"outcomes"`
+	FixFindingIDs             []string                   `json:"fix_finding_ids"`
+	FollowUps                 []FollowUp                 `json:"follow_ups"`
+	ProposedCorrectionLines   *int                       `json:"proposed_correction_lines,omitempty"`
+	ActualCorrectionLines     *int                       `json:"actual_correction_lines,omitempty"`
+	FixDeltaHash              string                     `json:"fix_delta_hash"`
+	OriginalCriteria          *ValidationCheck           `json:"original_criteria,omitempty"`
+	CorrectionRegression      *ValidationCheck           `json:"correction_regression,omitempty"`
+	EvidenceHash              string                     `json:"evidence_hash,omitempty"`
+	InvalidationReason        string                     `json:"invalidation_reason,omitempty"`
+	Recovery                  *CompactRecoveryProvenance `json:"recovery,omitempty"`
+	CorrectionAttempts        []CompactCorrectionAttempt `json:"correction_attempts,omitempty"`
+	CumulativeCorrectionLines int                        `json:"cumulative_correction_lines,omitempty"`
+}
+
+type CompactCorrectionAttempt struct {
+	Snapshot             Snapshot        `json:"snapshot"`
+	ProposedLines        int             `json:"proposed_lines"`
+	ActualLines          int             `json:"actual_lines"`
+	FixDeltaHash         string          `json:"fix_delta_hash"`
+	OriginalCriteria     ValidationCheck `json:"original_criteria"`
+	CorrectionRegression ValidationCheck `json:"correction_regression"`
+}
+
+type RecoveryDisposition string
+
+const (
+	RecoveryScopeChanged RecoveryDisposition = "scope_changed"
+	RecoveryInvalidated  RecoveryDisposition = "invalidated"
+	RecoveryEscalated    RecoveryDisposition = "escalated"
+)
+
+type CompactRecoveryProvenance struct {
+	PredecessorLineageID    string              `json:"predecessor_lineage_id"`
+	PredecessorRevision     string              `json:"predecessor_revision"`
+	Disposition             RecoveryDisposition `json:"disposition"`
+	Reason                  string              `json:"reason"`
+	Actor                   string              `json:"actor"`
+	RecoveredAt             time.Time           `json:"recovered_at"`
+	MaintainerAuthorization string              `json:"maintainer_authorization,omitempty"`
 }
 
 type CompactReceipt struct {
@@ -121,6 +153,22 @@ func (state CompactState) Validate() error {
 	if state.Generation < 1 {
 		return errors.New("compact review state requires a positive generation")
 	}
+	if state.Recovery != nil {
+		recovery := state.Recovery
+		if validateLineageID(recovery.PredecessorLineageID) != nil || recovery.PredecessorLineageID == state.LineageID ||
+			!validSHA256(recovery.PredecessorRevision) || strings.TrimSpace(recovery.Reason) == "" || strings.TrimSpace(recovery.Actor) == "" || recovery.RecoveredAt.IsZero() {
+			return errors.New("compact recovery provenance is incomplete or invalid")
+		}
+		switch recovery.Disposition {
+		case RecoveryScopeChanged, RecoveryInvalidated:
+		case RecoveryEscalated:
+			if strings.TrimSpace(recovery.MaintainerAuthorization) == "" {
+				return errors.New("escalated recovery requires maintainer authorization")
+			}
+		default:
+			return errors.New("compact recovery disposition is invalid")
+		}
+	}
 	if err := validateSnapshot(state.InitialSnapshot); err != nil {
 		return fmt.Errorf("initial snapshot: %w", err)
 	}
@@ -175,7 +223,7 @@ func (state CompactState) Validate() error {
 	if state.ProposedCorrectionLines != nil && *state.ProposedCorrectionLines > state.CorrectionBudget && (state.State != StateEscalated || state.ActualCorrectionLines != nil) {
 		return errors.New("only a terminally escalated compact state may retain an over-budget forecast")
 	}
-	if state.ActualCorrectionLines != nil && (*state.ActualCorrectionLines < 0 || *state.ActualCorrectionLines > state.CorrectionBudget) {
+	if state.ActualCorrectionLines != nil && (*state.ActualCorrectionLines < 0 || *state.ActualCorrectionLines > state.CorrectionBudget && state.State != StateEscalated) {
 		return errors.New("compact actual correction lines must be within the frozen budget")
 	}
 	if err := validateCompactCorrection(state); err != nil {
@@ -355,6 +403,42 @@ func compactSevereFindingCount(findings []Finding) int {
 }
 
 func validateCompactCorrection(state CompactState) error {
+	if len(state.CorrectionAttempts) == 0 && state.CumulativeCorrectionLines != 0 {
+		return errors.New("compact cumulative correction lines require persisted attempts")
+	}
+	if len(state.CorrectionAttempts) > 0 {
+		base, cumulative := state.InitialSnapshot.CandidateTree, 0
+		for _, attempt := range state.CorrectionAttempts {
+			if attempt.ProposedLines <= 0 || attempt.ActualLines < 0 || attempt.Snapshot.Kind != TargetFixDiff || attempt.Snapshot.BaseTree != base ||
+				!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(attempt.Snapshot.Paths, state.GenesisPaths) != nil ||
+				attempt.FixDeltaHash != FixDeltaHashForSnapshot(attempt.Snapshot) {
+				return errors.New("compact correction attempt is outside frozen scope")
+			}
+			result := ScopedValidationResult{OriginalCriteria: attempt.OriginalCriteria, CorrectionRegression: attempt.CorrectionRegression}
+			if err := validateTargetedValidation(result, attempt.FixDeltaHash); err != nil {
+				return err
+			}
+			base, cumulative = attempt.Snapshot.CandidateTree, cumulative+attempt.ActualLines
+		}
+		if cumulative != state.CumulativeCorrectionLines || cumulative > state.CorrectionBudget && state.State != StateEscalated || !snapshotsEqual(state.CurrentSnapshot, state.CorrectionAttempts[len(state.CorrectionAttempts)-1].Snapshot) {
+			return errors.New("compact cumulative correction accounting is invalid")
+		}
+		if state.State == StateCorrectionRequired {
+			if state.ProposedCorrectionLines != nil && state.CumulativeCorrectionLines+*state.ProposedCorrectionLines > state.CorrectionBudget {
+				return errors.New("compact correction forecast exceeds the remaining budget")
+			}
+			if state.ActualCorrectionLines != nil || state.OriginalCriteria != nil || state.CorrectionRegression != nil || state.FixDeltaHash != EmptyFixDeltaHash {
+				return errors.New("failed compact correction retained completed attempt state")
+			}
+			return nil
+		}
+		if state.State == StateEscalated && state.ProposedCorrectionLines != nil && state.CumulativeCorrectionLines+*state.ProposedCorrectionLines > state.CorrectionBudget && state.ActualCorrectionLines == nil {
+			return nil
+		}
+		if state.State == StateEscalated && len(state.CorrectionAttempts) >= MaxCompactCorrectionAttempts && state.ActualCorrectionLines == nil {
+			return nil
+		}
+	}
 	corrected := !snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) || state.FixDeltaHash != EmptyFixDeltaHash || state.ActualCorrectionLines != nil || state.OriginalCriteria != nil || state.CorrectionRegression != nil
 	if !corrected {
 		if !snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) || state.FixDeltaHash != EmptyFixDeltaHash || state.ActualCorrectionLines != nil || state.OriginalCriteria != nil || state.CorrectionRegression != nil {
@@ -379,7 +463,7 @@ func validateCompactCorrection(state CompactState) error {
 	if state.ProposedCorrectionLines == nil || *state.ProposedCorrectionLines > state.CorrectionBudget || state.ActualCorrectionLines == nil {
 		return errors.New("completed compact correction requires in-budget forecast and actual size")
 	}
-	if state.CurrentSnapshot.Kind != TargetFixDiff || state.CurrentSnapshot.BaseTree != state.InitialSnapshot.CandidateTree ||
+	if state.CurrentSnapshot.Kind != TargetFixDiff || len(state.CorrectionAttempts) == 0 && state.CurrentSnapshot.BaseTree != state.InitialSnapshot.CandidateTree ||
 		!equalStrings(state.CurrentSnapshot.LedgerIDs, state.FixFindingIDs) ||
 		!equalStrings(state.CurrentSnapshot.IntendedUntracked, state.InitialSnapshot.IntendedUntracked) {
 		return errors.New("completed compact correction snapshot is not bound to the original candidate and causal findings")
@@ -532,7 +616,7 @@ func (state *CompactState) BeginCorrection(proposed int) error {
 	}
 	value := proposed
 	state.ProposedCorrectionLines = &value
-	if proposed > state.CorrectionBudget {
+	if state.CumulativeCorrectionLines+proposed > state.CorrectionBudget {
 		state.State = StateEscalated
 	}
 	return state.Validate()
@@ -548,7 +632,7 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	if err := pathsAreSubset(snapshot.Paths, state.GenesisPaths); err != nil {
 		return err
 	}
-	if actual < 0 || actual > state.CorrectionBudget {
+	if actual < 0 {
 		return fmt.Errorf("actual correction is %d changed lines, exceeding the frozen budget of %d", actual, state.CorrectionBudget)
 	}
 	fixHash := FixDeltaHashForSnapshot(snapshot)
@@ -558,16 +642,30 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	if err := validateTargetedValidation(validation, fixHash); err != nil {
 		return err
 	}
+	attempt := CompactCorrectionAttempt{Snapshot: snapshot, ProposedLines: *state.ProposedCorrectionLines, ActualLines: actual, FixDeltaHash: fixHash,
+		OriginalCriteria: validation.OriginalCriteria, CorrectionRegression: validation.CorrectionRegression}
+	state.CorrectionAttempts = append(state.CorrectionAttempts, attempt)
+	state.CumulativeCorrectionLines += actual
 	state.CurrentSnapshot = snapshot
-	state.FixDeltaHash = fixHash
-	state.ActualCorrectionLines = &actual
-	original, regression := validation.OriginalCriteria, validation.CorrectionRegression
-	state.OriginalCriteria, state.CorrectionRegression = &original, &regression
 	state.FollowUps = append(state.FollowUps, validation.FollowUps...)
-	if original.Passed && regression.Passed {
+	if state.CumulativeCorrectionLines > state.CorrectionBudget {
+		state.FixDeltaHash, state.ActualCorrectionLines = fixHash, &actual
+		original, regression := validation.OriginalCriteria, validation.CorrectionRegression
+		state.OriginalCriteria, state.CorrectionRegression = &original, &regression
+		state.State = StateEscalated
+	} else if validation.OriginalCriteria.Passed && validation.CorrectionRegression.Passed {
+		state.FixDeltaHash, state.ActualCorrectionLines = fixHash, &actual
+		original, regression := validation.OriginalCriteria, validation.CorrectionRegression
+		state.OriginalCriteria, state.CorrectionRegression = &original, &regression
 		state.State = StateValidating
 	} else {
-		state.State = StateEscalated
+		state.State = StateCorrectionRequired
+		if len(state.CorrectionAttempts) >= MaxCompactCorrectionAttempts {
+			state.State = StateEscalated
+		}
+		state.ProposedCorrectionLines, state.ActualCorrectionLines = nil, nil
+		state.FixDeltaHash = EmptyFixDeltaHash
+		state.OriginalCriteria, state.CorrectionRegression = nil, nil
 	}
 	return state.Validate()
 }

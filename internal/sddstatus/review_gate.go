@@ -21,7 +21,7 @@ type compactPreVerifyBridge struct {
 }
 
 func discoverCompactPreVerifyAuthority(ctx context.Context, repo, changeName, observedRevision string) compactPreVerifyBridge {
-	stores, err := reviewtransaction.DiscoverCompactStores(ctx, repo)
+	stores, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
 	if err != nil {
 		return compactPreVerifyBridge{Reason: "no eligible path-bound compact authority found"}
 	}
@@ -284,7 +284,7 @@ var evaluateNativeReviewGate = reviewtransaction.EvaluateNativeGate
 
 func discoverNativeReceipt(ctx context.Context, repo string) ([]byte, error) {
 	var matches [][]byte
-	compactStores, err := reviewtransaction.DiscoverCompactStores(ctx, repo)
+	compactStores, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
 	if err != nil {
 		return nil, fmt.Errorf("discover compact review stores: %w", err)
 	}

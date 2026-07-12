@@ -49,6 +49,14 @@ type ReviewInvalidateResult struct {
 	StoreRevision string                  `json:"store_revision"`
 }
 
+type ReviewRecoverResult struct {
+	Operation     string                                      `json:"operation"`
+	LineageID     string                                      `json:"lineage_id"`
+	State         reviewtransaction.State                     `json:"state"`
+	StoreRevision string                                      `json:"store_revision"`
+	Recovery      reviewtransaction.CompactRecoveryProvenance `json:"recovery"`
+}
+
 type facadeFinding struct {
 	ID                string                              `json:"id,omitempty"`
 	Lens              string                              `json:"lens,omitempty"`
@@ -93,7 +101,7 @@ type facadeArtifacts struct {
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <start|finalize|validate|invalidate|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <start|finalize|validate|invalidate|recover|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go.")
 		return nil
 	}
 	switch args[0] {
@@ -105,11 +113,89 @@ func RunReview(args []string, stdout io.Writer) error {
 		return RunReviewFacadeValidate(args[1:], stdout)
 	case "invalidate":
 		return RunReviewInvalidate(args[1:], stdout)
+	case "recover":
+		return RunReviewRecover(args[1:], stdout)
+	case "schema":
+		return RunReviewSchema(args[1:], stdout)
 	case "bind-sdd":
 		return RunReviewBindSDD(args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown review command %q", args[0])
 	}
+}
+
+func RunReviewRecover(args []string, stdout io.Writer) error {
+	flags := newReviewFlagSet("review recover", stdout, "Create an auditable successor authority without changing its predecessor.")
+	cwd := flags.String("cwd", ".", "repository path")
+	predecessor := flags.String("predecessor-lineage", "", "explicit predecessor lineage")
+	expected := flags.String("expected-predecessor-revision", "", "exact predecessor revision")
+	successor := flags.String("successor-lineage", "", "distinct successor lineage")
+	disposition := flags.String("disposition", "", "scope_changed, invalidated, or escalated")
+	reason := flags.String("reason", "", "recovery reason")
+	actor := flags.String("actor", "", "recovery actor")
+	authorization := flags.String("maintainer-authorization", "", "explicit authorization required for escalated recovery")
+	policySource := flags.String("policy", "", "optional review policy file")
+	focus := flags.String("focus", "reliability", "dominant standard-risk focus")
+	if err := parseReviewFlags(flags, args); err != nil {
+		return err
+	}
+	if reviewHelpRequested(args) {
+		return nil
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected review recover argument %q", flags.Arg(0))
+	}
+	if strings.TrimSpace(*predecessor) == "" || strings.TrimSpace(*expected) == "" || strings.TrimSpace(*successor) == "" || strings.TrimSpace(*reason) == "" || strings.TrimSpace(*actor) == "" || strings.TrimSpace(*disposition) == "" {
+		return errors.New("review recover requires --predecessor-lineage, --expected-predecessor-revision, --successor-lineage, --disposition, --reason, and --actor")
+	}
+	builder := reviewtransaction.SnapshotBuilder{Repo: *cwd}
+	root, err := builder.ResolveRepositoryRoot(context.Background())
+	if err != nil {
+		return fmt.Errorf("resolve review repository root: %w", err)
+	}
+	predecessorStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, *predecessor)
+	if err != nil {
+		return err
+	}
+	predecessorRecord, err := predecessorStore.Load()
+	if err != nil {
+		return fmt.Errorf("load recovery predecessor: %w", err)
+	}
+	intended, err := builder.DiscoverIntendedUntracked(context.Background())
+	if err != nil {
+		return err
+	}
+	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: root}).Build(context.Background(), reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: intended})
+	if err != nil {
+		return err
+	}
+	risk, changedLines, err := (reviewtransaction.SnapshotBuilder{Repo: root}).ClassifySnapshotRisk(context.Background(), snapshot)
+	if err != nil {
+		return err
+	}
+	lenses, err := facadeSelectedLenses(risk, *focus)
+	if err != nil {
+		return err
+	}
+	policy, err := facadePolicyBytes(*policySource)
+	if err != nil {
+		return err
+	}
+	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+		LineageID: *successor, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: predecessorRecord.State.Generation + 1,
+		Snapshot: snapshot, PolicyHash: facadePayloadHash(policy), RiskLevel: risk, SelectedLenses: lenses, OriginalChangedLines: &changedLines,
+	})
+	if err != nil {
+		return err
+	}
+	record, err := reviewtransaction.RecoverCompactAuthority(context.Background(), root, reviewtransaction.CompactRecoveryRequest{
+		PredecessorLineageID: *predecessor, ExpectedPredecessorRevision: *expected, Successor: state,
+		Disposition: reviewtransaction.RecoveryDisposition(*disposition), Reason: *reason, Actor: *actor, MaintainerAuthorization: *authorization,
+	})
+	if err != nil {
+		return err
+	}
+	return encodeReviewJSON(stdout, ReviewRecoverResult{Operation: "review/recover", LineageID: record.State.LineageID, State: record.State.State, StoreRevision: record.Revision, Recovery: *record.State.Recovery})
 }
 
 func RunReviewBindSDD(args []string, stdout io.Writer) error {
@@ -256,6 +342,11 @@ func RunReviewFacadeStart(args []string, stdout io.Writer) error {
 		return fmt.Errorf("derive facade review store: %w", err)
 	}
 	store.TracePath = strings.TrimSpace(*tracePath)
+	if existing, loadErr := store.Load(); loadErr == nil {
+		return fmt.Errorf("review lineage %q already exists at revision %s; use gentle-ai review recover with an explicit predecessor and distinct successor lineage", *lineage, existing.Revision)
+	} else if !os.IsNotExist(loadErr) {
+		return fmt.Errorf("load existing compact review lineage: %w", loadErr)
+	}
 	legacy, err := reviewtransaction.AuthoritativeStore(context.Background(), root, *lineage)
 	if err == nil {
 		if _, loadErr := legacy.LoadChain(); loadErr == nil {
@@ -640,7 +731,7 @@ func discoverCompactFacadeReview(ctx context.Context, repo, lineage string, term
 		}
 		return store, record, nil
 	}
-	stores, err := reviewtransaction.DiscoverCompactStores(ctx, repo)
+	stores, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
 	if err != nil {
 		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, err
 	}
