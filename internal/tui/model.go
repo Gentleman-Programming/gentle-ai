@@ -2208,12 +2208,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		return m.confirmOpenCodePluginUninstallConfirm()
 	case ScreenOpenCodePluginUninstallResult:
-		m.OpenCodePluginUninstallStandalone = false
-		m.OpenCodePluginUninstallInstalled = nil
-		m.OpenCodePluginUninstallSelected = ""
-		m.OpenCodePluginUninstallResult = opencodeplugin.UninstallResult{}
-		m.OpenCodePluginUninstallErr = nil
-		m.OpenCodePluginUninstallSpinnerFrame = 0
+		m.resetOpenCodePluginUninstallState()
 		m.setScreen(ScreenWelcome)
 		return m, nil
 	case ScreenCommunityTools:
@@ -2771,7 +2766,7 @@ func (m Model) confirmOpenCodePluginUninstallConfirm() (tea.Model, tea.Cmd) {
 	}
 	m.OperationRunning = true
 	m.OpenCodePluginUninstallSpinnerFrame = 0
-	return m, m.startOpenCodePluginUninstall()
+	return m, tea.Batch(tickCmd(), m.startOpenCodePluginUninstall())
 }
 
 // spinnerTickOpenCodePluginUninstall advances the dedicated uninstall
@@ -3945,7 +3940,6 @@ func openCodePluginUninstallInstalledFromTUI(home string) []model.OpenCodeCommun
 	// Install path uses filepath.Join (native separator for the host).
 	gentleLogoSuffixes := []string{
 		filepath.Join("tui-plugins", "gentle-logo.tsx"),
-		"tui-plugins" + string(filepath.Separator) + "gentle-logo.tsx",
 		"tui-plugins/gentle-logo.tsx",
 	}
 	seen := map[model.OpenCodeCommunityPluginID]bool{}

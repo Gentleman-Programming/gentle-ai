@@ -7354,10 +7354,24 @@ func TestNavigationOpenCodePluginUninstallConfirmToResult(t *testing.T) {
 		t.Fatal("expected uninstall command")
 	}
 
-	msg := cmd()
-	done, ok := msg.(OpenCodePluginUninstallDoneMsg)
-	if !ok {
-		t.Fatalf("message = %T, want OpenCodePluginUninstallDoneMsg", msg)
+	// The cmd is a tea.BatchMsg containing tickCmd() + the uninstall
+	// goroutine; search the batch for the OpenCodePluginUninstallDoneMsg
+	// rather than assuming cmd() returns it directly.
+	var done OpenCodePluginUninstallDoneMsg
+	raw := cmd()
+	if batch, ok := raw.(tea.BatchMsg); ok {
+		for _, fn := range batch {
+			if inner := fn(); inner != nil {
+				if d, isDone := inner.(OpenCodePluginUninstallDoneMsg); isDone {
+					done = d
+					break
+				}
+			}
+		}
+	} else if d, ok := raw.(OpenCodePluginUninstallDoneMsg); ok {
+		done = d
+	} else {
+		t.Fatalf("message = %T, want tea.BatchMsg or OpenCodePluginUninstallDoneMsg", raw)
 	}
 	if done.Err != nil {
 		t.Fatalf("done.Err = %v, want nil", done.Err)
@@ -7505,10 +7519,24 @@ func TestOpenCodePluginUninstallFnReceivesHomeDirAndSelectedID(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected uninstall command")
 	}
-	msg := cmd()
-	done, ok := msg.(OpenCodePluginUninstallDoneMsg)
-	if !ok {
-		t.Fatalf("message = %T, want OpenCodePluginUninstallDoneMsg", msg)
+	// The cmd is a tea.BatchMsg containing tickCmd() + the uninstall
+	// goroutine; search the batch for the OpenCodePluginUninstallDoneMsg
+	// rather than assuming cmd() returns it directly.
+	var done OpenCodePluginUninstallDoneMsg
+	raw := cmd()
+	if batch, ok := raw.(tea.BatchMsg); ok {
+		for _, fn := range batch {
+			if inner := fn(); inner != nil {
+				if d, isDone := inner.(OpenCodePluginUninstallDoneMsg); isDone {
+					done = d
+					break
+				}
+			}
+		}
+	} else if d, ok := raw.(OpenCodePluginUninstallDoneMsg); ok {
+		done = d
+	} else {
+		t.Fatalf("message = %T, want tea.BatchMsg or OpenCodePluginUninstallDoneMsg", raw)
 	}
 
 	if calls != 1 {
