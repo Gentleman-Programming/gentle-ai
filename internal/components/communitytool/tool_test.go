@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 					"type": "object",
 					"properties": map[string]any{
 						"query":       map[string]any{"type": "string"},
-						"maxFiles":    map[string]any{"type": "number"},
+						"maxFiles":    map[string]any{"type": "integer"},
 						"projectPath": map[string]any{"type": "string"},
 					},
 					"required": []any{"query"},
@@ -671,16 +671,12 @@ func TestInstallRunsCommandsAndReturnsLazyProjectIndexManualAction(t *testing.T)
 func TestInstallLeavesPiPendingWhenAdapterHealthIsNotMachineVerifiable(t *testing.T) {
 	home := t.TempDir()
 	mustWrite(t, filepath.Join(home, ".pi", "agent", "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
-	previousRuntime := piCodeGraphAdapterRuntimeRunner
 	previousProbe := piCodeGraphEffectiveMCPProbe
-	piCodeGraphAdapterRuntimeRunner = func(string, []string, []string) ([]byte, error) {
-		return []byte(`{"type":"session","version":3}`), nil
-	}
-	piCodeGraphEffectiveMCPProbe = func(string) (PiCodeGraphMCPProbeResult, error) {
-		return PiCodeGraphMCPProbeResult{}, ErrPiCodeGraphAdapterHealthUnavailable
+	piCodeGraphEffectiveMCPProbe = func(path string) (PiCodeGraphMCPProbeResult, error) {
+		result, _ := piProbeForTest(path)
+		return result, ErrPiCodeGraphAdapterHealthUnavailable
 	}
 	t.Cleanup(func() {
-		piCodeGraphAdapterRuntimeRunner = previousRuntime
 		piCodeGraphEffectiveMCPProbe = previousProbe
 	})
 

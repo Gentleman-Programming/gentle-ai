@@ -359,7 +359,7 @@ func TestVerifyPiMCPUsesInjectedEffectiveProbe(t *testing.T) {
 			"type": "object",
 			"properties": map[string]any{
 				"query":       map[string]any{"type": "string"},
-				"maxFiles":    map[string]any{"type": "number"},
+				"maxFiles":    map[string]any{"type": "integer"},
 				"projectPath": map[string]any{"type": "string"},
 			},
 			"required": []any{"query"},
@@ -367,9 +367,11 @@ func TestVerifyPiMCPUsesInjectedEffectiveProbe(t *testing.T) {
 	}
 
 	for _, tt := range []struct {
-		name    string
-		probe   PiCodeGraphMCPProbeResult
-		wantErr bool
+		name        string
+		probe       PiCodeGraphMCPProbeResult
+		probeErr    error
+		wantErr     bool
+		wantPending bool
 	}{
 		{name: "successful initialized read-only explore", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{validTool}}},
 		{name: "successful unindexed initialized read-only explore requires project path", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{{Name: validTool.Name, InputSchema: map[string]any{
@@ -381,6 +383,7 @@ func TestVerifyPiMCPUsesInjectedEffectiveProbe(t *testing.T) {
 		{name: "handshake failed", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Tools: []PiCodeGraphMCPTool{validTool}}, wantErr: true},
 		{name: "missing explore tool", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true}, wantErr: true},
 		{name: "malformed explore schema", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{{Name: "codegraph_explore", InputSchema: map[string]any{"type": "object"}}}}, wantErr: true},
+		{name: "incompatible maxFiles type", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{{Name: validTool.Name, InputSchema: map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}, "maxFiles": map[string]any{"type": "boolean"}, "projectPath": map[string]any{"type": "string"}}, "required": []any{"query"}}}}}, wantErr: true},
 		{name: "unknown required field", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{{Name: validTool.Name, InputSchema: map[string]any{
 			"type":       "object",
 			"properties": validTool.InputSchema["properties"],
@@ -397,13 +400,25 @@ func TestVerifyPiMCPUsesInjectedEffectiveProbe(t *testing.T) {
 			"required":   []any{"query", "query"},
 		}}}}, wantErr: true},
 		{name: "unexpected writable tool", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{validTool, {Name: "codegraph_write", InputSchema: validTool.InputSchema}}}, wantErr: true},
+		{name: "pending health with missing explore tool remains fatal", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true}, probeErr: ErrPiCodeGraphAdapterHealthUnavailable, wantErr: true},
+		{name: "pending health with malformed explore schema remains fatal", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{{Name: "codegraph_explore", InputSchema: map[string]any{"type": "object"}}}}, probeErr: ErrPiCodeGraphAdapterHealthUnavailable, wantErr: true},
+		{name: "validated capability with unavailable adapter health becomes pending", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{validTool}}, probeErr: ErrPiCodeGraphAdapterHealthUnavailable, wantPending: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			previous := piCodeGraphEffectiveMCPProbe
-			piCodeGraphEffectiveMCPProbe = func(string) (PiCodeGraphMCPProbeResult, error) { return tt.probe, nil }
+			piCodeGraphEffectiveMCPProbe = func(string) (PiCodeGraphMCPProbeResult, error) { return tt.probe, tt.probeErr }
 			t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previous })
 
 			verification, err := verifyPiMCP(mcpPath)
+			if tt.wantPending {
+				if !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
+					t.Fatalf("verifyPiMCP() error = %v, want pending adapter health", err)
+				}
+				if !verification.Adapter || !verification.ReadOnlyExplore || len(verification.Tools) != 1 || verification.Tools[0] != "codegraph_explore" {
+					t.Fatalf("verification = %#v, want validated capability evidence", verification)
+				}
+				return
+			}
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("verifyPiMCP() = %#v, nil error", verification)
@@ -477,11 +492,13 @@ func TestPiCodeGraphPendingProbePreservesConfiguredFiles(t *testing.T) {
 	childPath := filepath.Join(home, ".pi", "agent", "subagents", "worker.md")
 	manifestPath := filepath.Join(home, ".gentle-ai", "pi-codegraph.json")
 	writePiFile(t, childPath, "---\ntools: bash\n---\nwork\n")
-	pendingProbe := func(string) (PiCodeGraphMCPProbeResult, error) {
-		return PiCodeGraphMCPProbeResult{}, ErrPiCodeGraphAdapterHealthUnavailable
-	}
+	writePiFile(t, filepath.Join(home, ".pi", "agent", "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
+	installFakeCodeGraph(t)
+	previousProbe := piCodeGraphEffectiveMCPProbe
+	piCodeGraphEffectiveMCPProbe = probePiCodeGraphMCP
+	t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previousProbe })
 
-	result, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: pendingProbe})
+	result, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true})
 	if err != nil {
 		t.Fatalf("ReconcilePiCodeGraph() error = %v, want pending success", err)
 	}
@@ -605,139 +622,20 @@ func TestPiCodeGraphFailsClosedForBrokenProjectMCPOverride(t *testing.T) {
 	}
 }
 
-func TestPiCodeGraphProbeUsesAgentRuntimeForProjectMCPOverride(t *testing.T) {
+func TestPiCodeGraphProbeVerifiesDirectMCPWithoutPiProcess(t *testing.T) {
 	home := t.TempDir()
 	agentDir := filepath.Join(home, "custom-agent")
 	mcpPath := filepath.Join(home, "project", ".mcp.json")
 	writePiFile(t, filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
 	writePiFile(t, mcpPath, `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
+	installFakeCodeGraph(t)
 
-	previous := piCodeGraphAdapterRuntimeRunner
-	defer func() { piCodeGraphAdapterRuntimeRunner = previous }()
-	called := false
-	piCodeGraphAdapterRuntimeRunner = func(name string, args, env []string) ([]byte, error) {
-		called = name == "pi" && slices.Equal(args, []string{"--mcp-config", mcpPath, "--mode", "json", "--no-session", "--offline", "--print", "/mcp status"}) && slices.Contains(env, "PI_CODING_AGENT_DIR="+agentDir)
-		return []byte("MCP Servers:\n  codegraph: connected\n"), nil
+	result, err := probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir)
+	if !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
+		t.Fatalf("probe error = %v, want unavailable adapter health", err)
 	}
-
-	if _, err := probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir); !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) || !called {
-		t.Fatalf("probe error=%v called=%v, want fail-closed project config through Pi agent runtime", err, called)
-	}
-}
-
-func TestPiCodeGraphAdapterRuntimeFailsClosedWithoutPositiveCapabilityEvidence(t *testing.T) {
-	agentDir := t.TempDir()
-	mcpPath := filepath.Join(agentDir, "mcp.json")
-
-	tests := []struct {
-		name    string
-		output  string
-		wantErr bool
-	}{
-		{
-			name:    "exit zero with failed MCP config",
-			output:  "Failed to load MCP config: invalid JSON\n",
-			wantErr: true,
-		},
-		{
-			name:    "exit zero with adapter load error",
-			output:  "Failed to load extension pi-mcp-adapter: module not found\n",
-			wantErr: true,
-		},
-		{
-			name:    "exit zero with unknown MCP command",
-			output:  "Unknown command: /mcp\n",
-			wantErr: true,
-		},
-		{
-			name:    "exit zero without capability evidence",
-			output:  `{"type":"session","version":3}` + "\n",
-			wantErr: true,
-		},
-		{
-			name:    "rejects negated ready status",
-			output:  "MCP Servers:\n  codegraph: not ready\n",
-			wantErr: true,
-		},
-		{
-			name:    "rejects negated running status",
-			output:  "MCP Servers:\n  codegraph: not running\n",
-			wantErr: true,
-		},
-		{
-			name:    "rejects unloaded status",
-			output:  "MCP Servers:\n  codegraph: unloaded\n",
-			wantErr: true,
-		},
-		{
-			name:    "rejects inactive status",
-			output:  "MCP Servers:\n  codegraph: inactive\n",
-			wantErr: true,
-		},
-		{
-			name:    "rejects broken status containing ok",
-			output:  "MCP Servers:\n  codegraph: broken\n",
-			wantErr: true,
-		},
-		{
-			name:    "rejects malformed status",
-			output:  "MCP Servers:\n  codegraph connected\n",
-			wantErr: true,
-		},
-		{
-			name:    "rejects unrelated healthy status",
-			output:  "MCP Servers:\n  filesystem: ready\n",
-			wantErr: true,
-		},
-		{
-			name:    "rejects ambiguous codegraph statuses",
-			output:  "MCP Servers:\n  codegraph: connected\n  codegraph: not ready\n",
-			wantErr: true,
-		},
-		{
-			name:    "session-only status is not adapter health",
-			output:  "MCP Servers:\n  codegraph: connected\n",
-			wantErr: true,
-		},
-		{
-			name:    "ambiguous ready status is not adapter health",
-			output:  "MCP Servers:\n  codegraph: ready\n",
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			previous := piCodeGraphAdapterRuntimeRunner
-			piCodeGraphAdapterRuntimeRunner = func(name string, args, env []string) ([]byte, error) {
-				if name != "pi" {
-					t.Fatalf("runtime = %q, want pi", name)
-				}
-				wantArgs := []string{"--mcp-config", mcpPath, "--mode", "json", "--no-session", "--offline", "--print", "/mcp status"}
-				if !slices.Equal(args, wantArgs) {
-					t.Fatalf("args = %q, want %q", args, wantArgs)
-				}
-				if !slices.Contains(env, "PI_CODING_AGENT_DIR="+agentDir) {
-					t.Fatalf("env = %q, want Pi agent directory", env)
-				}
-				return []byte(tt.output), nil
-			}
-			t.Cleanup(func() { piCodeGraphAdapterRuntimeRunner = previous })
-
-			result, err := probePiCodeGraphAdapterRuntime(agentDir, mcpPath)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("probe result = %#v, want rejected output", result)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("probe error = %v", err)
-			}
-			if !result.AdapterAvailable || !result.Initialized {
-				t.Fatalf("probe result = %#v, want initialized adapter", result)
-			}
-		})
+	if !result.AdapterAvailable || !result.Initialized || !isReadOnlyCodeGraphExploreSchema(result.Tools) {
+		t.Fatalf("probe result = %#v, want verified direct MCP capability", result)
 	}
 }
 
@@ -873,7 +771,7 @@ func piProbeForTest(string) (PiCodeGraphMCPProbeResult, error) {
 			"type": "object",
 			"properties": map[string]any{
 				"query":       map[string]any{"type": "string"},
-				"maxFiles":    map[string]any{"type": "number"},
+				"maxFiles":    map[string]any{"type": "integer"},
 				"projectPath": map[string]any{"type": "string"},
 			},
 			"required": []any{"query"},
@@ -898,4 +796,22 @@ func mustReadPiFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func installFakeCodeGraph(t *testing.T) {
+	t.Helper()
+	binDir := t.TempDir()
+	script := `#!/bin/sh
+while IFS= read -r request; do
+  case "$request" in
+    *'"id":1'*) printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}' ;;
+    *'"id":2'*) printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"codegraph_explore","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"maxFiles":{"type":"integer"},"projectPath":{"type":"string"}},"required":["query"]}}]}}' ;;
+  esac
+done
+`
+	path := filepath.Join(binDir, "codegraph")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
