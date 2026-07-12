@@ -149,6 +149,9 @@ func Uninstall(homeDir string, id model.OpenCodeCommunityPluginID) (UninstallRes
 // internal/update/upgrade/strategy.go) so that unrelated keys — packageManager,
 // scripts, workspaces, etc. — survive the rewrite verbatim.
 func uninstallPackageJSON(journal *mutationjournal.Journal, packagePath, pkg string) (bool, mutationjournal.OwnedFile, error) {
+	if err := journal.Capture(packagePath); err != nil {
+		return false, mutationjournal.OwnedFile{}, fmt.Errorf("uninstall layer 2 (package.json capture): %w", err)
+	}
 	data, err := os.ReadFile(packagePath)
 	if err != nil {
 		if os.IsNotExist(err) {
