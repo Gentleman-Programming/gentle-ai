@@ -409,19 +409,21 @@ func TestCommunityToolInstallStepUsesInjectableInstaller(t *testing.T) {
 	var gotTool model.CommunityToolID
 	var gotWorkspace string
 	var runner communitytool.Runner
-	installCommunityToolWithHome = func(tool model.CommunityToolID, workspaceDir string, _ string, r communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+	var gotForce bool
+	installCommunityToolWithHome = func(tool model.CommunityToolID, workspaceDir string, _ string, r communitytool.Runner, _ communitytool.Detector, force bool) (communitytool.Result, error) {
 		gotTool = tool
 		gotWorkspace = workspaceDir
 		runner = r
+		gotForce = force
 		return communitytool.Result{Tool: tool}, nil
 	}
 
-	step := communityToolInstallStep{id: "community-tool:codegraph", tool: model.CommunityToolCodeGraph, workspaceDir: "/work/project"}
+	step := communityToolInstallStep{id: "community-tool:codegraph", tool: model.CommunityToolCodeGraph, workspaceDir: "/work/project", force: false}
 	if err := step.Run(); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if gotTool != model.CommunityToolCodeGraph || gotWorkspace != "/work/project" || runner == nil {
-		t.Fatalf("installer args = (%q, %q, %#v), want CodeGraph, workspace, runner", gotTool, gotWorkspace, runner)
+	if gotTool != model.CommunityToolCodeGraph || gotWorkspace != "/work/project" || runner == nil || gotForce {
+		t.Fatalf("installer args = (%q, %q, %#v, %v), want CodeGraph, workspace, runner, false", gotTool, gotWorkspace, runner, gotForce)
 	}
 }
 
@@ -429,7 +431,7 @@ func TestCommunityToolInstallStepPassesRuntimeHomeToPiReconciler(t *testing.T) {
 	previous := installCommunityToolWithHome
 	t.Cleanup(func() { installCommunityToolWithHome = previous })
 	var gotHome string
-	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, home string, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, home string, _ communitytool.Runner, _ communitytool.Detector, _ bool) (communitytool.Result, error) {
 		gotHome = home
 		return communitytool.Result{Tool: model.CommunityToolCodeGraph}, nil
 	}
@@ -446,7 +448,7 @@ func TestInstallPipelinePropagatesInitialPiPendingWhenPiUnselected(t *testing.T)
 	previous := installCommunityToolWithHome
 	t.Cleanup(func() { installCommunityToolWithHome = previous })
 	pending := communitytool.PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph runtime verification is pending."}}
-	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector, _ bool) (communitytool.Result, error) {
 		return communitytool.Result{Tool: model.CommunityToolCodeGraph, PiCodeGraph: &pending}, nil
 	}
 	runtime := &installRuntime{
@@ -473,7 +475,7 @@ func TestInstallPipelineDoesNotDuplicatePiPendingWhenSelected(t *testing.T) {
 		reconcilePiCodeGraph = previousReconcile
 	})
 	pending := communitytool.PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph integration is pending: Pi 0.80.6 has no supported machine-verifiable adapter health signal. CodeGraph capability was not reported as configured."}}
-	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector, _ bool) (communitytool.Result, error) {
 		return communitytool.Result{Tool: model.CommunityToolCodeGraph, PiCodeGraph: &pending}, nil
 	}
 	reconcilePiCodeGraph = func(communitytool.PiCodeGraphOptions) (communitytool.PiCodeGraphResult, error) {
