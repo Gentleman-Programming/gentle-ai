@@ -1,6 +1,7 @@
 package communitytool
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	piagent "github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
@@ -639,6 +641,48 @@ func TestPiCodeGraphProbeVerifiesDirectMCPWithoutPiProcess(t *testing.T) {
 	}
 }
 
+func TestPiCodeGraphProbeClassifiesStalledMCPResponsesAsDeadlineExceeded(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		script    string
+		wantPhase string
+	}{
+		{
+			name:      "initialize",
+			script:    `while IFS= read -r request; do while :; do :; done; done`,
+			wantPhase: "MCP initialize: read response",
+		},
+		{
+			name: "tools list",
+			script: `while IFS= read -r request; do
+  case "$request" in
+    *'"id":1'*) printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}' ;;
+    *'"id":2'*) while :; do :; done ;;
+  esac
+done`,
+			wantPhase: "MCP tools/list: read response",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			agentDir := filepath.Join(home, "custom-agent")
+			mcpPath := filepath.Join(home, "project", ".mcp.json")
+			writePiFile(t, filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
+			installFakeCodeGraphScript(t, tt.script)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			_, err := probePiCodeGraphMCPWithAgentDirContext(ctx, mcpPath, agentDir)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("probe error = %v, want context deadline exceeded", err)
+			}
+			if !strings.Contains(err.Error(), tt.wantPhase) {
+				t.Fatalf("probe error = %q, want phase %q", err, tt.wantPhase)
+			}
+		})
+	}
+}
+
 func TestPiCodeGraphRejectsMalformedMCPServersWithoutChangingBytes(t *testing.T) {
 	home := t.TempDir()
 	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
@@ -800,15 +844,18 @@ func mustReadPiFile(t *testing.T, path string) []byte {
 
 func installFakeCodeGraph(t *testing.T) {
 	t.Helper()
-	binDir := t.TempDir()
-	script := `#!/bin/sh
-while IFS= read -r request; do
+	installFakeCodeGraphScript(t, `while IFS= read -r request; do
   case "$request" in
     *'"id":1'*) printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}' ;;
     *'"id":2'*) printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"codegraph_explore","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"maxFiles":{"type":"integer"},"projectPath":{"type":"string"}},"required":["query"]}}]}}' ;;
   esac
-done
-`
+done`)
+}
+
+func installFakeCodeGraphScript(t *testing.T, body string) {
+	t.Helper()
+	binDir := t.TempDir()
+	script := "#!/bin/sh\n" + body + "\n"
 	path := filepath.Join(binDir, "codegraph")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)

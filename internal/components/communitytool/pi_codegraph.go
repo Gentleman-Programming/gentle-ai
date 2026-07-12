@@ -480,12 +480,16 @@ func probePiCodeGraphMCP(mcpPath string) (PiCodeGraphMCPProbeResult, error) {
 }
 
 func probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir string) (PiCodeGraphMCPProbeResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return probePiCodeGraphMCPWithAgentDirContext(ctx, mcpPath, agentDir)
+}
+
+func probePiCodeGraphMCPWithAgentDirContext(ctx context.Context, mcpPath, agentDir string) (probeResult PiCodeGraphMCPProbeResult, returnErr error) {
 	adapterPath := filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts")
 	if _, err := os.Stat(adapterPath); err != nil {
 		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("Pi MCP adapter extension is unavailable at %q: %w", adapterPath, err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	command := exec.CommandContext(ctx, "codegraph", "serve", "--mcp")
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -500,8 +504,19 @@ func probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir string) (PiCodeGraphMCPPr
 	}
 	defer func() {
 		_ = stdin.Close()
-		_ = command.Process.Kill()
-		_ = command.Wait()
+		killErr := command.Process.Kill()
+		waitErr := command.Wait()
+		if errors.Is(returnErr, context.DeadlineExceeded) {
+			return
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			probeResult = PiCodeGraphMCPProbeResult{}
+			returnErr = fmt.Errorf("wait for CodeGraph MCP server: %w", context.DeadlineExceeded)
+			return
+		}
+		if returnErr == nil && errors.Is(killErr, os.ErrProcessDone) && waitErr != nil {
+			returnErr = fmt.Errorf("wait for CodeGraph MCP server: %w", waitErr)
+		}
 	}()
 
 	encoder := json.NewEncoder(stdin)
@@ -513,7 +528,7 @@ func probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir string) (PiCodeGraphMCPPr
 		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("send MCP initialize: %w", err)
 	}
 	if _, err := readPiMCPResponse(decoder, 1); err != nil {
-		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("MCP initialize: %w", err)
+		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("MCP initialize: %w", piCodeGraphMCPDeadlineError(ctx, "read response", err))
 	}
 	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized", "params": map[string]any{}}); err != nil {
 		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("send MCP initialized notification: %w", err)
@@ -523,7 +538,7 @@ func probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir string) (PiCodeGraphMCPPr
 	}
 	response, err := readPiMCPResponse(decoder, 2)
 	if err != nil {
-		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("MCP tools/list: %w", err)
+		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("MCP tools/list: %w", piCodeGraphMCPDeadlineError(ctx, "read response", err))
 	}
 	result, _ := response["result"].(map[string]any)
 	rawTools, _ := result["tools"].([]any)
@@ -540,6 +555,13 @@ func probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir string) (PiCodeGraphMCPPr
 		tools = append(tools, tool)
 	}
 	return PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: tools}, ErrPiCodeGraphAdapterHealthUnavailable
+}
+
+func piCodeGraphMCPDeadlineError(ctx context.Context, phase string, err error) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("%s: %w", phase, context.DeadlineExceeded)
+	}
+	return err
 }
 
 func readPiMCPResponse(decoder *json.Decoder, id int) (map[string]any, error) {
