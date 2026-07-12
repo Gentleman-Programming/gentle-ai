@@ -218,7 +218,8 @@ func TestSnapshotBuilderSupportsBaseDiffAndExactCommitRange(t *testing.T) {
 	secondCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
 
 	builder := SnapshotBuilder{Repo: repo}
-	baseDiff, err := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, BaseRef: firstCommit})
+	writeSnapshotFile(t, repo, "notes.txt", "intended untracked\n")
+	baseDiff, err := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, BaseRef: firstCommit, IntendedUntracked: []string{"notes.txt"}})
 	if err != nil {
 		t.Fatalf("Build(base diff) error = %v", err)
 	}
@@ -226,8 +227,17 @@ func TestSnapshotBuilderSupportsBaseDiffAndExactCommitRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build(exact range) error = %v", err)
 	}
-	if baseDiff.BaseTree != exact.BaseTree || baseDiff.CandidateTree != exact.CandidateTree {
-		t.Fatalf("base diff and exact range disagree: base=%#v exact=%#v", baseDiff, exact)
+	if baseDiff.BaseTree != exact.BaseTree {
+		t.Fatalf("base diff and exact range bases disagree: base=%#v exact=%#v", baseDiff, exact)
+	}
+	if !reflect.DeepEqual(baseDiff.Paths, []string{"notes.txt", "tracked.txt"}) {
+		t.Fatalf("base diff paths = %v", baseDiff.Paths)
+	}
+	if !reflect.DeepEqual(baseDiff.IntendedUntracked, []string{"notes.txt"}) {
+		t.Fatalf("base diff intended untracked = %v", baseDiff.IntendedUntracked)
+	}
+	if err := builder.ValidateEvidence(context.Background(), baseDiff); err != nil {
+		t.Fatalf("ValidateEvidence(base diff) error = %v", err)
 	}
 }
 

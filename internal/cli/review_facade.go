@@ -106,6 +106,7 @@ func RunReviewFacadeStart(args []string, stdout io.Writer) error {
 	lineage := flags.String("lineage", "", "optional explicit review lineage identifier")
 	policySource := flags.String("policy", "", "optional review policy file; the native bounded policy is used by default")
 	focus := flags.String("focus", "reliability", "dominant standard-risk focus: risk, resilience, readability, or reliability")
+	baseRef := flags.String("base-ref", "", "optional base revision for reviewing committed HEAD changes")
 	tracePath := flags.String("trace", "", "optional diagnostic operation metadata trace path")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
@@ -125,9 +126,12 @@ func RunReviewFacadeStart(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("discover intended untracked files: %w", err)
 	}
-	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: root}).Build(context.Background(), reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: intended,
-	})
+	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: intended}
+	if strings.TrimSpace(*baseRef) != "" {
+		target.Kind = reviewtransaction.TargetBaseDiff
+		target.BaseRef = strings.TrimSpace(*baseRef)
+	}
+	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: root}).Build(context.Background(), target)
 	if err != nil {
 		return fmt.Errorf("build facade review target: %w", err)
 	}

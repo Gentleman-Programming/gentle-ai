@@ -22,7 +22,7 @@ COMMANDS
                Print native SDD phase status for orchestrators
   sdd-continue [change]
                Print native SDD dispatcher routing output
-  review start [--cwd <repo>] [--focus <risk|resilience|readability|reliability>]
+  review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>]
   review finalize [--cwd <repo>] [--result <review.json> ...] [--evidence <path>]
   review validate --gate <gate> [--cwd <repo>]
                Normal review path; ordinary authority is compact state plus receipt

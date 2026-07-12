@@ -83,11 +83,17 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 		if strings.TrimSpace(target.BaseRef) == "" {
 			return Snapshot{}, errors.New("base-diff requires base_ref")
 		}
+		if strings.Contains(target.BaseRef, "..") {
+			return Snapshot{}, errors.New("base-diff base_ref must be one revision, not a range")
+		}
+		intended, err = canonicalPaths(target.IntendedUntracked)
+		if err != nil {
+			return Snapshot{}, err
+		}
 		baseTree, err = builder.resolveTree(ctx, target.BaseRef)
 		if err == nil {
-			candidateTree, err = builder.resolveTree(ctx, "HEAD")
+			candidateTree, untrackedProof, err = builder.buildHeadWithIntended(ctx, intended)
 		}
-		untrackedProof = hashCanonical("gentle-ai.intended-untracked/v1")
 	case TargetExactRevision:
 		baseTree, candidateTree, err = builder.resolveExactRevision(ctx, target.Revision)
 		untrackedProof = hashCanonical("gentle-ai.intended-untracked/v1")
@@ -125,6 +131,40 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 		IntendedUntrackedProof: untrackedProof, LedgerIDs: ledgerIDs,
 		Paths: paths, Identity: identity,
 	}, nil
+}
+
+func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intended []string) (string, string, error) {
+	temp, err := os.CreateTemp("", "gentle-ai-review-index-*")
+	if err != nil {
+		return "", "", err
+	}
+	tempIndex := temp.Name()
+	if err := temp.Close(); err != nil {
+		return "", "", err
+	}
+	defer os.Remove(tempIndex)
+	env := []string{"GIT_INDEX_FILE=" + tempIndex}
+	if _, err := runGit(ctx, builder.Repo, env, nil, "read-tree", "HEAD"); err != nil {
+		return "", "", err
+	}
+	for _, logicalPath := range intended {
+		if _, err := runGit(ctx, builder.Repo, nil, nil, "ls-files", "--error-unmatch", "--", logicalPath); err == nil {
+			return "", "", fmt.Errorf("intended-untracked path %q is already tracked", logicalPath)
+		}
+	}
+	if len(intended) > 0 {
+		args := append([]string{"add", "--"}, intended...)
+		if _, err := runGit(ctx, builder.Repo, env, nil, args...); err != nil {
+			return "", "", err
+		}
+	}
+	output, err := runGit(ctx, builder.Repo, env, nil, "write-tree")
+	if err != nil {
+		return "", "", err
+	}
+	candidateTree := strings.TrimSpace(string(output))
+	proof, err := builder.untrackedProof(ctx, candidateTree, intended)
+	return candidateTree, proof, err
 }
 
 // ValidateEvidence binds snapshot metadata to repository object evidence.

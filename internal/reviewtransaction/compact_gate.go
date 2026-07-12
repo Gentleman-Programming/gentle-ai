@@ -131,7 +131,10 @@ func buildCompactGateRequest(ctx context.Context, repo string, state CompactStat
 				return GateRequest{}, errors.New("compact pre-PR base does not match the remote publication boundary")
 			}
 		}
-		request.Target = Target{Kind: TargetBaseDiff, BaseRef: baseCommit}
+		request.Target = Target{
+			Kind: TargetBaseDiff, BaseRef: baseCommit,
+			IntendedUntracked: append([]string(nil), state.InitialSnapshot.IntendedUntracked...),
+		}
 		if strings.TrimSpace(input.PrePRCIAttestation) != "" {
 			request.PrePR = &PrePRRequest{CIAttestationArtifact: input.PrePRCIAttestation}
 		}

@@ -126,6 +126,87 @@ func TestReviewFacadeCleanFlowReplacesOneCompactStateAndUsesOnlyReceipt(t *testi
 	}
 }
 
+func TestReviewFacadeStartSupportsCommittedBaseDiff(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+	configureCLIReviewPublicationRemote(t, repo, branch)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("committed candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "notes.txt"), []byte("intended untracked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
+
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", base}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var result ReviewFacadeStartResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, result.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State.InitialSnapshot.Kind != reviewtransaction.TargetBaseDiff || record.State.InitialSnapshot.BaseTree == record.State.InitialSnapshot.CandidateTree {
+		t.Fatalf("base diff snapshot = %#v", record.State.InitialSnapshot)
+	}
+	if !reflect.DeepEqual(record.State.InitialSnapshot.IntendedUntracked, []string{"notes.txt"}) {
+		t.Fatalf("intended untracked = %v", record.State.InitialSnapshot.IntendedUntracked)
+	}
+	resultPath := filepath.Join(t.TempDir(), "review.json")
+	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
+	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{Findings: []facadeFinding{}, Evidence: []string{"committed diff reviewed"}})
+	if err := os.WriteFile(evidencePath, []byte("focused tests pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", result.LineageID, "--result", resultPath}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", result.LineageID, "--evidence", evidencePath}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", result.LineageID, "--gate", string(reviewtransaction.GatePrePR), "--base-ref", base}, &output); err != nil {
+		t.Fatalf("pre-pr base diff gate: %v\n%s", err, output.String())
+	}
+}
+
+func TestReviewFacadeStartRejectsInvalidBaseRefWithoutPersistingLineage(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  string
+	}{
+		{name: "range", ref: "HEAD~1..HEAD"},
+		{name: "missing ref", ref: "refs/heads/does-not-exist"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			lineage := "invalid-base-ref"
+			err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage, "--base-ref", tt.ref}, io.Discard)
+			if err == nil {
+				t.Fatalf("base ref %q was accepted", tt.ref)
+			}
+			store, storeErr := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+			if storeErr != nil {
+				t.Fatal(storeErr)
+			}
+			if _, statErr := os.Stat(store.Dir); !os.IsNotExist(statErr) {
+				t.Fatalf("invalid base ref persisted lineage: %v", statErr)
+			}
+		})
+	}
+}
+
 func TestReadFacadeReviewerResultsRejectsNonNativeFields(t *testing.T) {
 	tests := []struct {
 		name    string

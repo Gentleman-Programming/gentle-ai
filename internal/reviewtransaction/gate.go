@@ -257,7 +257,9 @@ func buildLifecycleSnapshot(ctx context.Context, repo string, request GateReques
 	if err != nil {
 		return Snapshot{}, nil, err
 	}
-	snapshot, err = (SnapshotBuilder{Repo: repo}).Build(ctx, Target{Kind: TargetExactRevision, Revision: base + ".." + head})
+	snapshot, err = (SnapshotBuilder{Repo: repo}).Build(ctx, Target{
+		Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: target.IntendedUntracked,
+	})
 	if err != nil {
 		return Snapshot{}, nil, err
 	}
@@ -361,7 +363,10 @@ func lifecycleTargetForGate(ctx context.Context, repo string, request GateReques
 		if request.Target.Kind != TargetBaseDiff || strings.TrimSpace(request.Target.BaseRef) == "" {
 			return Target{}, errors.New("pre-PR validation requires an explicit base-diff target")
 		}
-		return Target{Kind: TargetBaseDiff, BaseRef: request.Target.BaseRef}, nil
+		return Target{
+			Kind: TargetBaseDiff, BaseRef: request.Target.BaseRef,
+			IntendedUntracked: append([]string(nil), request.Target.IntendedUntracked...),
+		}, nil
 	case GateRelease:
 		if request.Target.Kind != TargetExactRevision || request.Release == nil {
 			return Target{}, errors.New("release validation requires an exact current release revision")
