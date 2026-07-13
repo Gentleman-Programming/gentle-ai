@@ -121,7 +121,7 @@ Run `gentle-ai doctor` at any time for a read-only health check of your ecosyste
 ```bash
 # macOS / Linux
 brew tap Gentleman-Programming/homebrew-tap
-brew trust gentleman-programming/tap  # brew trust gentleman-programming/tap  # Homebrew 6+, if required (one-time)
+brew trust gentleman-programming/tap  # Homebrew 6+, if required (one-time)
 brew install gentle-ai
 ```
 
@@ -161,7 +161,7 @@ Workspace scope is not Claude-only; it applies to selected agents for agent-scop
 > [!NOTE]
 > **Homebrew 6+**
 >
-> Recent versions of Homebrew require third-party taps to be explicitly trusted before formulas or casks can be installed or upgraded.
+> Depending on your Homebrew security configuration, Homebrew 6 may require you to explicitly trust third-party taps before formulas or casks can be installed or upgraded.
 >
 > If you see an error similar to:
 >
@@ -184,7 +184,7 @@ Workspace scope is not Claude-only; it applies to selected agents for agent-scop
 > brew trust --cask gentleman-programming/tap/engram
 > ```
 >
-> This only needs to be done once.
+> This is a one-time operation.
 
 ---
 
