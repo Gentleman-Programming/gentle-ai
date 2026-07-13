@@ -12,10 +12,15 @@ import (
 type Status string
 
 const (
+	// StatusPass indica que la verificación pasó exitosamente.
 	StatusPass Status = "PASS"
+	// StatusWarn indica que la verificación pasó con advertencias.
 	StatusWarn Status = "WARN"
+	// StatusFail indica que la verificación falló y requiere atención.
 	StatusFail Status = "FAIL"
+	// StatusInfo indica información informativa sin impacto en salud.
 	StatusInfo Status = "INFO"
+	// StatusSkip indica que la verificación fue omitida.
 	StatusSkip Status = "SKIP"
 )
 
@@ -23,9 +28,12 @@ const (
 type Category string
 
 const (
+	// CategoryHardware agrupa verificaciones de hardware del sistema.
 	CategoryHardware Category = "hardware"
+	// CategorySoftware agrupa verificaciones de software y dependencias.
 	CategorySoftware Category = "software"
-	CategoryConfig   Category = "config"
+	// CategoryConfig agrupa verificaciones de configuración del agente.
+	CategoryConfig Category = "config"
 )
 
 // CheckResult is the outcome of a single health check.
