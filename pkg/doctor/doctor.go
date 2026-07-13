@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -127,9 +128,18 @@ func parseCategories(input []string) []Category {
 		return []Category{CategoryHardware, CategorySoftware, CategoryConfig}
 	}
 
-	var result []Category
+	var names []string
+	catByName := make(map[string]Category, len(catMap))
 	for cat := range catMap {
-		result = append(result, cat)
+		n := string(cat)
+		names = append(names, n)
+		catByName[n] = cat
+	}
+	sort.Strings(names)
+
+	result := make([]Category, 0, len(names))
+	for _, n := range names {
+		result = append(result, catByName[n])
 	}
 	return result
 }
