@@ -170,7 +170,7 @@ Workspace scope is not Claude-only; it applies to selected agents for agent-scop
 > Error: Refusing to load cask...
 > ```
 >
-> Trust the tap once:
+> If you encounter this error, trust the tap once:
 >
 > ```bash
 > brew trust gentleman-programming/tap
