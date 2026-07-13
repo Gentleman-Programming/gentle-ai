@@ -30,12 +30,19 @@ type BaseFixer struct {
 	fixMap   map[string]FixResult
 }
 
+// Name returns the fixer identifier.
 func (b *BaseFixer) Name() string { return b.name }
-func (b *BaseFixer) OS() string   { return b.os }
+
+// OS returns the target operating system for this fixer.
+func (b *BaseFixer) OS() string { return b.os }
+
+// Fixes returns the fix result for the given check name, if available.
 func (b *BaseFixer) Fixes(checkName string) (FixResult, bool) {
 	fix, ok := b.fixMap[checkName]
 	return fix, ok
 }
+
+// AllFixes returns the complete map of check names to fix results.
 func (b *BaseFixer) AllFixes() map[string]FixResult { return b.fixMap }
 
 // NewBaseFixer creates a base fixer with the given fix map.
