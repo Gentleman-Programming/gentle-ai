@@ -25,6 +25,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
 	"github.com/gentleman-programming/gentle-ai/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/pkg/doctor"
 )
 
 // Version is set from main via ldflags at build time.
@@ -260,7 +261,17 @@ func RunArgs(args []string, stdout io.Writer) error {
 	case "restore":
 		return cli.RunRestore(args[1:], stdout)
 	case "doctor":
-		return cli.RunDoctor(context.Background(), stdout)
+		flags, err := parseDoctorFlags(args[1:])
+		if err != nil {
+			return err
+		}
+		// Handle --help/-h for doctor
+		if hasHelpFlag(args[1:]) {
+			printDoctorHelp(stdout, Version)
+			return nil
+		}
+		checkers := createDoctorCheckers(flags.toPkgDoctorFlags().Categories)
+		return doctor.RunDoctor(context.Background(), flags.toPkgDoctorFlags(), stdout, checkers)
 	default:
 		return fmt.Errorf("unknown command %q — run 'gentle-ai help' for available commands", args[0])
 	}
