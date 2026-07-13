@@ -25,9 +25,13 @@ func NewHardwareChecker() *HardwareChecker {
 	return &HardwareChecker{}
 }
 
-func (h *HardwareChecker) Name() string          { return "hardware" }
+// Name returns the checker identifier.
+func (h *HardwareChecker) Name() string { return "hardware" }
+
+// Category returns the hardware category.
 func (h *HardwareChecker) Category() doctor.Category { return doctor.CategoryHardware }
 
+// Run executes all hardware checks and returns results.
 func (h *HardwareChecker) Run(ctx context.Context) []doctor.CheckResult {
 	var results []doctor.CheckResult
 
@@ -40,6 +44,7 @@ func (h *HardwareChecker) Run(ctx context.Context) []doctor.CheckResult {
 	return results
 }
 
+// checkCPUCores verifies the system has sufficient CPU cores.
 func (h *HardwareChecker) checkCPUCores(ctx context.Context) []doctor.CheckResult {
 	start := time.Now()
 	cores := runtime.NumCPU()
@@ -59,6 +64,7 @@ func (h *HardwareChecker) checkCPUCores(ctx context.Context) []doctor.CheckResul
 	}}
 }
 
+// checkCPUArchitecture reports the CPU architecture and model.
 func (h *HardwareChecker) checkCPUArchitecture(ctx context.Context) []doctor.CheckResult {
 	start := time.Now()
 	info, err := cpu.Info()
@@ -79,6 +85,7 @@ func (h *HardwareChecker) checkCPUArchitecture(ctx context.Context) []doctor.Che
 	}}
 }
 
+// checkRAM verifies the system has sufficient memory.
 func (h *HardwareChecker) checkRAM(ctx context.Context) []doctor.CheckResult {
 	start := time.Now()
 	v, err := mem.VirtualMemory()
@@ -133,6 +140,7 @@ func (h *HardwareChecker) checkRAM(ctx context.Context) []doctor.CheckResult {
 	}
 }
 
+// checkDiskSpace verifies sufficient free disk space on key partitions.
 func (h *HardwareChecker) checkDiskSpace(ctx context.Context) []doctor.CheckResult {
 	start := time.Now()
 	homeDir, _ := os.UserHomeDir()
@@ -174,6 +182,7 @@ func (h *HardwareChecker) checkDiskSpace(ctx context.Context) []doctor.CheckResu
 	}}
 }
 
+// checkGPU reports GPU availability for ML/AI workloads.
 func (h *HardwareChecker) checkGPU(ctx context.Context) []doctor.CheckResult {
 	start := time.Now()
 	var results []doctor.CheckResult

@@ -31,9 +31,13 @@ func NewSoftwareChecker() *SoftwareChecker {
 	}
 }
 
-func (s *SoftwareChecker) Name() string          { return "software" }
+// Name returns the checker identifier.
+func (s *SoftwareChecker) Name() string { return "software" }
+
+// Category returns the software category.
 func (s *SoftwareChecker) Category() doctor.Category { return doctor.CategorySoftware }
 
+// Run executes all software checks and returns results.
 func (s *SoftwareChecker) Run(ctx context.Context) []doctor.CheckResult {
 	var results []doctor.CheckResult
 
@@ -55,6 +59,7 @@ func (s *SoftwareChecker) Run(ctx context.Context) []doctor.CheckResult {
 	return results
 }
 
+// checkBinary verifies that a binary exists in PATH.
 func (s *SoftwareChecker) checkBinary(ctx context.Context, name string, required bool) doctor.CheckResult {
 	start := time.Now()
 	path, err := exec.LookPath(name)
@@ -99,6 +104,7 @@ func (s *SoftwareChecker) checkBinary(ctx context.Context, name string, required
 	}
 }
 
+// getVersion retrieves the version string for a binary.
 func (s *SoftwareChecker) getVersion(bin string) string {
 	// Common version flags
 	for _, flag := range []string{"--version", "-v", "version"} {
@@ -110,6 +116,7 @@ func (s *SoftwareChecker) getVersion(bin string) string {
 	return ""
 }
 
+// parseVersion extracts a version string from command output.
 func parseVersion(output string) string {
 	// Extract version from common output formats
 	lines := strings.Split(output, "\n")
@@ -128,6 +135,7 @@ func parseVersion(output string) string {
 	return ""
 }
 
+// compareVersions returns -1, 0, or 1 comparing current vs minimum semver.
 func compareVersions(current, minimum string) int {
 	// Simple semantic version comparison
 	cParts := strings.Split(current, ".")
@@ -155,6 +163,7 @@ func compareVersions(current, minimum string) int {
 	return 0
 }
 
+// checkEnvVars validates required environment variables are set.
 func (s *SoftwareChecker) checkEnvVars(ctx context.Context) []doctor.CheckResult {
 	start := time.Now()
 	critical := []string{"HOME", "PATH", "SHELL"}
@@ -181,6 +190,7 @@ func (s *SoftwareChecker) checkEnvVars(ctx context.Context) []doctor.CheckResult
 	return results
 }
 
+// checkGentleAITools verifies that gentle-ai ecosystem tools are installed.
 func (s *SoftwareChecker) checkGentleAITools(ctx context.Context) []doctor.CheckResult {
 	start := time.Now()
 	tools := []string{"gentle-ai", "engram", "gga"}
@@ -202,6 +212,7 @@ func (s *SoftwareChecker) checkGentleAITools(ctx context.Context) []doctor.Check
 	return results
 }
 
+// checkShell validates that a valid shell is configured.
 func (s *SoftwareChecker) checkShell(ctx context.Context) []doctor.CheckResult {
 	start := time.Now()
 	shell := os.Getenv("SHELL")

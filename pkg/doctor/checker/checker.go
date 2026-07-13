@@ -20,7 +20,10 @@ type BaseChecker struct {
 	category doctor.Category
 }
 
-func (b *BaseChecker) Name() string     { return b.name }
+// Name returns the checker identifier.
+func (b *BaseChecker) Name() string { return b.name }
+
+// Category returns the checker category.
 func (b *BaseChecker) Category() doctor.Category { return b.category }
 
 // HardwareChecker performs hardware-related health checks.

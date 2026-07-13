@@ -23,9 +23,13 @@ func NewConfigChecker(extraPaths []string) *ConfigChecker {
 	return &ConfigChecker{ExtraPaths: extraPaths}
 }
 
-func (c *ConfigChecker) Name() string          { return "config" }
+// Name returns the checker identifier.
+func (c *ConfigChecker) Name() string { return "config" }
+
+// Category returns the config category.
 func (c *ConfigChecker) Category() doctor.Category { return doctor.CategoryConfig }
 
+// Run executes all configuration checks and returns results.
 func (c *ConfigChecker) Run(ctx context.Context) []doctor.CheckResult {
 	var results []doctor.CheckResult
 
@@ -65,6 +69,7 @@ func (c *ConfigChecker) Run(ctx context.Context) []doctor.CheckResult {
 	return results
 }
 
+// checkFile validates a configuration file using the provided validator function.
 func (c *ConfigChecker) checkFile(name, path string, validator func([]byte) (doctor.Status, string)) doctor.CheckResult {
 	start := time.Now()
 	data, err := os.ReadFile(path)
@@ -106,6 +111,7 @@ func (c *ConfigChecker) checkFile(name, path string, validator func([]byte) (doc
 	}
 }
 
+// validateGlobalConfig checks the global config file for required fields.
 func (c *ConfigChecker) validateGlobalConfig(data []byte) (doctor.Status, string) {
 	var cfg map[string]interface{}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
@@ -120,6 +126,7 @@ func (c *ConfigChecker) validateGlobalConfig(data []byte) (doctor.Status, string
 	return doctor.StatusPass, "Valid global config"
 }
 
+// validateStateFile checks the state file for required fields.
 func (c *ConfigChecker) validateStateFile(data []byte) (doctor.Status, string) {
 	var state map[string]interface{}
 	if err := json.Unmarshal(data, &state); err != nil {
@@ -131,6 +138,7 @@ func (c *ConfigChecker) validateStateFile(data []byte) (doctor.Status, string) {
 	return doctor.StatusPass, "Valid state file"
 }
 
+// validateYAML checks whether the data is valid YAML.
 func (c *ConfigChecker) validateYAML(data []byte) (doctor.Status, string) {
 	var v interface{}
 	if err := yaml.Unmarshal(data, &v); err != nil {
@@ -139,6 +147,7 @@ func (c *ConfigChecker) validateYAML(data []byte) (doctor.Status, string) {
 	return doctor.StatusPass, "Valid YAML"
 }
 
+// findProjectConfigs discovers configuration files in the current project.
 func (c *ConfigChecker) findProjectConfigs() []doctor.CheckResult {
 	var results []doctor.CheckResult
 	cwd, _ := os.Getwd()
@@ -160,6 +169,7 @@ func (c *ConfigChecker) findProjectConfigs() []doctor.CheckResult {
 	return results
 }
 
+// checkAgentConfigs validates configuration for supported AI agents.
 func (c *ConfigChecker) checkAgentConfigs(homeDir string) []doctor.CheckResult {
 	agents := map[string]string{
 		"claude":    filepath.Join(homeDir, ".claude"),
@@ -193,6 +203,7 @@ func (c *ConfigChecker) checkAgentConfigs(homeDir string) []doctor.CheckResult {
 	return results
 }
 
+// checkSSH validates SSH key configuration and permissions.
 func (c *ConfigChecker) checkSSH(homeDir string) []doctor.CheckResult {
 	start := time.Now()
 	sshDir := filepath.Join(homeDir, ".ssh")
@@ -216,6 +227,7 @@ func (c *ConfigChecker) checkSSH(homeDir string) []doctor.CheckResult {
 	}}
 }
 
+// checkGitConfig validates the global git configuration.
 func (c *ConfigChecker) checkGitConfig(homeDir string) doctor.CheckResult {
 	start := time.Now()
 	gitConfig := filepath.Join(homeDir, ".gitconfig")
