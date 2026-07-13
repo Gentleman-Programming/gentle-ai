@@ -440,7 +440,7 @@ func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended
 		return "", "", "", err
 	}
 	candidateTree := strings.TrimSpace(string(candidateOutput))
-	if stagedIntended > 0 {
+	if allowStagedIntended {
 		if _, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--cached", "--quiet", candidateTree, "--"); err != nil {
 			return "", "", "", errors.New("staged tree does not exactly match the complete reviewed candidate")
 		}

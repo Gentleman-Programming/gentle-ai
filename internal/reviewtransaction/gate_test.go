@@ -1082,6 +1082,7 @@ func TestNativeGateRejectsHistoricalTargetAfterHeadAdvances(t *testing.T) {
 
 func TestNativePrePushGateAcceptsCommittedCurrentChangesReceipt(t *testing.T) {
 	repo, receipt, request := approvedCurrentChangesGateFixture(t, "pre-push-current-changes")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
 	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result != GateAllow {
 		t.Fatalf("EvaluateNativeGate(pre-commit current changes) = %#v", got)
 	}
@@ -1178,8 +1179,12 @@ func TestNativeGateUsesRetainedArtifactContentAndRejectsMismatch(t *testing.T) {
 
 func TestNativeGateFinalRecheckRejectsConcurrentRepositoryMutation(t *testing.T) {
 	repo, receipt, request := approvedCurrentChangesGateFixture(t, "final-recheck")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
 	originalHook := finalGateAuthorizationHook
-	finalGateAuthorizationHook = func() { writeSnapshotFile(t, repo, "tracked.txt", "concurrent mutation\n") }
+	finalGateAuthorizationHook = func() {
+		writeSnapshotFile(t, repo, "tracked.txt", "concurrent mutation\n")
+		gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	}
 	t.Cleanup(func() { finalGateAuthorizationHook = originalHook })
 
 	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result != GateInvalidated || !strings.Contains(got.Reason, "changed during final authorization") {
@@ -1189,6 +1194,7 @@ func TestNativeGateFinalRecheckRejectsConcurrentRepositoryMutation(t *testing.T)
 
 func TestNativeGateFinalRecheckRejectsConcurrentAuthorityMutation(t *testing.T) {
 	repo, receipt, request := approvedCurrentChangesGateFixture(t, "final-authority-recheck")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
 	store, err := AuthoritativeStore(context.Background(), repo, receipt.LineageID)
 	if err != nil {
 		t.Fatal(err)
@@ -1203,6 +1209,53 @@ func TestNativeGateFinalRecheckRejectsConcurrentAuthorityMutation(t *testing.T) 
 
 	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result != GateInvalidated || !strings.Contains(got.Reason, "changed during final authorization") {
 		t.Fatalf("concurrent authority evaluation = %#v", got)
+	}
+}
+
+func TestLegacyPreCommitGateRejectsPartialTrackedIndex(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "a.txt", "base a\n")
+	writeSnapshotFile(t, repo, "b.txt", "base b\n")
+	gitSnapshot(t, repo, "add", "--", "a.txt", "b.txt")
+	gitSnapshot(t, repo, "commit", "-m", "add tracked files")
+	writeSnapshotFile(t, repo, "a.txt", "reviewed a\n")
+	writeSnapshotFile(t, repo, "b.txt", "reviewed b\n")
+	transaction, receipt, request := nativeGateFixture(t, repo, "legacy-partial-tracked-index")
+	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApprovedStoreChain(t, store, transaction)
+	bindGateRequestToStore(t, &request, store)
+	request.Gate = GatePreCommit
+	gitSnapshot(t, repo, "add", "--", "a.txt")
+
+	got := EvaluateNativeGate(context.Background(), repo, receipt, request)
+	if got.Result != GateInvalidated || got.Reason != "current repository target cannot be derived: staged tree does not exactly match the complete reviewed candidate" {
+		t.Fatalf("partial tracked index result = %#v", got)
+	}
+}
+
+func TestLegacyPreCommitGateAllowsExactTrackedIndex(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "a.txt", "base a\n")
+	writeSnapshotFile(t, repo, "b.txt", "base b\n")
+	gitSnapshot(t, repo, "add", "--", "a.txt", "b.txt")
+	gitSnapshot(t, repo, "commit", "-m", "add tracked files")
+	writeSnapshotFile(t, repo, "a.txt", "reviewed a\n")
+	writeSnapshotFile(t, repo, "b.txt", "reviewed b\n")
+	transaction, receipt, request := nativeGateFixture(t, repo, "legacy-exact-tracked-index")
+	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApprovedStoreChain(t, store, transaction)
+	bindGateRequestToStore(t, &request, store)
+	request.Gate = GatePreCommit
+	gitSnapshot(t, repo, "add", "--", "a.txt", "b.txt")
+
+	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result != GateAllow {
+		t.Fatalf("exact tracked index = %#v", got)
 	}
 }
 

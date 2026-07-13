@@ -227,6 +227,7 @@ func TestCompactGateFinalRecheckRejectsConcurrentAuthorityAndGitChanges(t *testi
 	}{
 		{name: "Git target", mutate: func(t *testing.T, repo string, _ CompactStore, _ CompactState, _ string) {
 			writeSnapshotFile(t, repo, "tracked.txt", "changed during gate\n")
+			gitSnapshot(t, repo, "add", "--", "tracked.txt")
 		}},
 		{name: "authority", mutate: func(t *testing.T, _ string, store CompactStore, state CompactState, revision string) {
 			payload, err := os.ReadFile(store.StatePath())
@@ -260,6 +261,7 @@ func TestCompactGateFinalRecheckRejectsConcurrentAuthorityAndGitChanges(t *testi
 			revision, _ = store.Replace(revision, "review/complete-verification", state)
 			receipt, _ := state.Receipt()
 			_ = WriteCompactReceiptAtomic(store.ReceiptPath(), receipt)
+			gitSnapshot(t, repo, "add", "--", "tracked.txt")
 			originalHook := finalGateAuthorizationHook
 			finalGateAuthorizationHook = func() {
 				finalGateAuthorizationHook = originalHook

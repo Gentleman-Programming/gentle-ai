@@ -53,6 +53,7 @@ func TestLegacyV1ResumeValidateExportImportRemainUsable(t *testing.T) {
 		t.Fatalf("legacy resume result = %#v, %v", resumed, err)
 	}
 	output.Reset()
+	runReviewCLIGit(t, fixture.repo, "add", "tracked.txt")
 	if err := RunReviewValidate([]string{
 		"--cwd", fixture.repo, "--receipt", fixture.receiptPath,
 		"--lineage", fixture.lineage, "--gate", string(reviewtransaction.GatePreCommit),
@@ -149,6 +150,7 @@ func TestLegacyV1MutationCommandsRejectWithoutChangingHead(t *testing.T) {
 
 func TestLegacyV1ExplicitAndNativeValidationRemainEquivalent(t *testing.T) {
 	fixture := newLegacyCLIFixture(t, "legacy-gate-parity")
+	runReviewCLIGit(t, fixture.repo, "add", "tracked.txt")
 	request, err := reviewtransaction.BuildNativeGateRequest(context.Background(), fixture.repo, reviewtransaction.NativeGateRequestInput{
 		Gate: reviewtransaction.GatePreCommit, LineageID: fixture.lineage,
 	})
