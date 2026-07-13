@@ -634,6 +634,10 @@ type Model struct {
 	CommunityToolStatusErr     error
 	CommunityToolResults       []communitytool.Result
 	CommunityToolErr           error
+
+	// agentBuilderEngines is the immutable availability snapshot captured when
+	// the model is constructed. Welcome interactions must not scan PATH.
+	agentBuilderEngines []model.AgentID
 }
 
 // NewModel constructs the initial TUI model for the given detection result.
@@ -676,6 +680,7 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 			"Configure selected agents",
 			"Inject ecosystem components",
 		}),
+		agentBuilderEngines: detectAgentBuilderEnginesFn(),
 	}
 }
 
@@ -1626,7 +1631,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.AgentBuilder = AgentBuilderState{}
-			m.AgentBuilder.AvailableEngines = m.detectAgentBuilderEngines()
+			m.AgentBuilder.AvailableEngines = append([]model.AgentID(nil), m.agentBuilderEngines...)
 			ta := textarea.New()
 			ta.Placeholder = "Describe what you want your agent to do..."
 			ta.Focus()
@@ -4607,9 +4612,11 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 	}
 }
 
+var detectAgentBuilderEnginesFn = detectAgentBuilderEngines
+
 // detectAgentBuilderEngines scans for supported AI agent binaries on PATH and
 // returns the list of available AgentIDs.
-func (m Model) detectAgentBuilderEngines() []model.AgentID {
+func detectAgentBuilderEngines() []model.AgentID {
 	candidateIDs := []model.AgentID{
 		model.AgentClaudeCode,
 		model.AgentOpenCode,
@@ -4626,9 +4633,10 @@ func (m Model) detectAgentBuilderEngines() []model.AgentID {
 	return available
 }
 
-// hasAgentBuilderEngines reports whether any supported AI agent binary is installed.
+// hasAgentBuilderEngines reports whether the model's availability snapshot has
+// at least one supported AI agent binary.
 func (m Model) hasAgentBuilderEngines() bool {
-	return len(m.detectAgentBuilderEngines()) > 0
+	return len(m.agentBuilderEngines) > 0
 }
 
 // agentBuilderInstallTargets returns the list of install target paths for the preview screen.
