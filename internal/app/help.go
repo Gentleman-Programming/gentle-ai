@@ -32,6 +32,33 @@ FLAGS
   --help, -h    Show this help
 
 Run 'gentle-ai help' for this message.
+Run 'gentle-ai doctor --help' for doctor-specific flags.
 Documentation: https://github.com/Gentleman-Programming/gentle-ai
+`, version)
+}
+
+// printDoctorHelp prints the doctor-specific help text.
+func printDoctorHelp(w io.Writer, version string) {
+	fmt.Fprintf(w, `gentle-ai doctor — Run ecosystem health diagnostics (%s)
+
+USAGE
+  gentle-ai doctor [flags]
+
+FLAGS
+  --json, -j      Output results as JSON (for CI/CD pipelines)
+  --fix, -f       Show remediation commands for failed checks
+  --category, -c  Comma-separated list of categories to check (hw, sw, cfg)
+                  Default: all categories (hw,sw,cfg)
+  --verbose, -v   Show passing checks and detailed output
+  --config-path   Additional config file paths to validate
+  --help, -h      Show this help message
+
+EXAMPLES
+  gentle-ai doctor                    # Full health check with TUI
+  gentle-ai doctor --json             # JSON output for CI/CD
+  gentle-ai doctor --fix              # Show remediation hints for failures
+  gentle-ai doctor -c hw,sw           # Check only hardware and software
+  gentle-ai doctor -v                 # Verbose output including passing checks
+
 `, version)
 }
