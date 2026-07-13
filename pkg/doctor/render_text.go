@@ -103,9 +103,9 @@ func (t *TextRenderer) Render(report DoctorReport) error {
 
 			b.WriteString(fmt.Sprintf("  %s  %-38s %s\n", statusIcon, checkName, summary))
 
-			if t.verbose && result.Detail != "" {
-				b.WriteString(fmt.Sprintf("       %s\n", indentLines(result.Detail, "       ")))
-			}
+		if t.verbose && result.Detail != "" {
+			b.WriteString(fmt.Sprintf("  %s\n", indentLines(result.Detail, "  ")))
+		}
 
 			if result.Remediation != nil && result.Remediation.Description != "" {
 				b.WriteString(fmt.Sprintf("       %s %s\n",

@@ -36,7 +36,15 @@ func parseDoctorFlags(args []string) (DoctorFlags, error) {
 			if i+1 >= len(args) {
 				return flags, fmt.Errorf("--category requires a value")
 			}
-			flags.Categories = append(flags.Categories, args[i+1])
+			for _, token := range strings.Split(args[i+1], ",") {
+				token = strings.ToLower(strings.TrimSpace(token))
+				switch token {
+				case "hw", "hardware", "sw", "software", "cfg", "config":
+					flags.Categories = append(flags.Categories, token)
+				default:
+					return flags, fmt.Errorf("unknown category %q (valid: hw, sw, cfg)", args[i+1])
+				}
+			}
 			i++
 		case arg == "--config-path":
 			if i+1 >= len(args) {
@@ -49,6 +57,8 @@ func parseDoctorFlags(args []string) (DoctorFlags, error) {
 			return flags, nil
 		case strings.HasPrefix(arg, "-"):
 			return flags, fmt.Errorf("unknown doctor flag: %s", arg)
+		default:
+			return flags, fmt.Errorf("unexpected argument: %s", arg)
 		}
 	}
 
