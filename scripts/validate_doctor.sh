@@ -191,9 +191,9 @@ run_all_tests() {
         
         # Run each scenario
         for scenario in "test_clean_install" "test_fix_mode" "test_json_output" "test_category_filter"; do
-            ((total++))
+            total=$((total + 1))
             if ! ${scenario} "${image}"; then
-                ((failed++))
+                failed=$((failed + 1))
             fi
         done
         
@@ -237,7 +237,15 @@ main() {
     fi
     
     if ! command -v jq &> /dev/null; then
-        log_warn "jq not found. JSON validation will be skipped."
+        log_warn "jq not found. Attempting to install..."
+        if command -v apk &> /dev/null; then
+            apk add --no-cache jq
+        elif command -v apt-get &> /dev/null; then
+            apt-get update -qq && apt-get install -y -qq jq
+        else
+            log_error "Cannot install jq automatically. Please install jq manually."
+            exit 1
+        fi
     fi
     
     # Build binary

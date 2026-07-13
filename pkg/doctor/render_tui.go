@@ -247,7 +247,7 @@ func (m *tuiModel) View() string {
 	b.WriteString("\n\n")
 
 	// Legend / Help
-	b.WriteString(m.styles.help.Render("↑/↓ navigate • v toggle verbose • enter details • q/esc quit"))
+	b.WriteString(m.styles.help.Render("↑/↓ navigate • v toggle verbose • q/esc quit"))
 	if m.report.Summary.Fail > 0 {
 		b.WriteString("\n")
 		b.WriteString(m.styles.failed.Render("⚠ Some checks failed. Run with --fix for remediation hints."))
