@@ -44,7 +44,7 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 | **OpenClaw**        |            Solo-agent            | Workspace-first `AGENTS.md` / `SOUL.md` with global MCP config  |
 | **Trae**            |            Solo-agent            | Desktop app by ByteDance; `~/.trae/skills/` + OS-specific rules |
 | **Pi**              | Full (package-managed subagents) | `gentle-pi` harness with persona/model commands + Engram memory |
-| **Hermes**          |         Detect-only              | YAML MCP config, SOUL.md persona; install manually first        |
+| **Hermes**          |           Detect-only            | YAML MCP config, SOUL.md persona; install manually first        |
 
 > **Note**: This project supersedes [Agent Teams Lite](https://github.com/Gentleman-Programming/agent-teams-lite) (now archived). Everything ATL provided is included here with better installation, automatic updates, and persistent memory.
 
@@ -121,7 +121,7 @@ Run `gentle-ai doctor` at any time for a read-only health check of your ecosyste
 ```bash
 # macOS / Linux
 brew tap Gentleman-Programming/homebrew-tap
-brew trust --formula gentleman-programming/tap/gentle-ai  # one-time, for Homebrew tap trust
+brew trust --formula gentleman-programming/tap/gentle-ai  # Homebrew +6, one-time, for Homebrew tap trust
 brew install gentle-ai
 ```
 
@@ -157,6 +157,34 @@ gentle-ai install --scope=workspace
 ```
 
 Workspace scope is not Claude-only; it applies to selected agents for agent-scoped files such as system prompts, skills, SDD agents, and persona files. Global-only integrations remain global by design.
+
+> [!NOTE]
+> **Homebrew 6+**
+>
+> Recent versions of Homebrew require third-party taps to be explicitly trusted before formulas or casks can be installed or upgraded.
+>
+> If you see an error similar to:
+>
+> ```text
+> Error: Refusing to load formula...
+> Error: Refusing to load cask...
+> ```
+>
+> Trust the tap once:
+>
+> ```bash
+> brew trust gentleman-programming/tap
+> ```
+>
+> Or, if you prefer a more restrictive approach, trust only the required packages:
+>
+> ```bash
+> brew trust --formula gentleman-programming/tap/gentle-ai
+> brew trust --formula gentleman-programming/tap/gga
+> brew trust --cask gentleman-programming/tap/engram
+> ```
+>
+> This only needs to be done once.
 
 ---
 
@@ -216,7 +244,7 @@ engram tui                    # Visual memory browser
 | [Engram Commands](docs/engram.md)                  | CLI commands, MCP tools, project management, team sharing                               |
 | [Codebase Guide](docs/CODEBASE-GUIDE.md)           | Maintainer map for repository ownership, architecture boundaries, and review guardrails |
 | [Agents](docs/agents.md)                           | Supported agents, feature matrix, config paths, and per-agent notes                     |
-| [Skill Registry](docs/skill-registry.md)           | Index-first skill discovery flow, delegation contract, and usage diagrams              |
+| [Skill Registry](docs/skill-registry.md)           | Index-first skill discovery flow, delegation contract, and usage diagrams               |
 | [Pi Agent](docs/pi.md)                             | Pi package stack, commands, persona, model assignment, and troubleshooting              |
 | [Components, Skills & Presets](docs/components.md) | All components, GGA behavior, skill catalog, and preset definitions                     |
 | [Usage](docs/usage.md)                             | Persona modes, interactive TUI, CLI flags, and dependency management                    |
