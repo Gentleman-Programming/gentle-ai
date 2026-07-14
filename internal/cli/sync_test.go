@@ -478,6 +478,37 @@ func TestComponentSyncStepSkipsEngramBinaryInstall(t *testing.T) {
 	}
 }
 
+func TestComponentSyncStepSkipsInstallOnlyComponents(t *testing.T) {
+	// Install-only visual components (claude-theme, opencode-gentle-logo) are
+	// persisted in state.json by the installer, so sync builds a step for them.
+	// They have nothing to re-apply on sync and must no-op instead of failing
+	// the whole pipeline (regression: "component X is not supported in sync
+	// runtime" aborted sync for every full-gentleman install).
+	for _, component := range []model.ComponentID{
+		model.ComponentClaudeTheme,
+		model.ComponentOpenCodeGentleLogo,
+	} {
+		t.Run(string(component), func(t *testing.T) {
+			home := t.TempDir()
+			var changed []string
+			step := componentSyncStep{
+				id:           "sync:component:" + string(component),
+				component:    component,
+				homeDir:      home,
+				agents:       []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode},
+				changedFiles: &changed,
+			}
+
+			if err := step.Run(); err != nil {
+				t.Fatalf("componentSyncStep.Run() with %s = %v, want nil (install-only components must no-op in sync)", component, err)
+			}
+			if len(changed) != 0 {
+				t.Errorf("install-only component %s reported changed files in sync: %v", component, changed)
+			}
+		})
+	}
+}
+
 func TestComponentSyncStepCodexRuntimeGate(t *testing.T) {
 	tests := []struct {
 		name    string

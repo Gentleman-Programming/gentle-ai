@@ -923,8 +923,14 @@ func (s componentSyncStep) Run() error {
 		}
 		return nil
 
+	case model.ComponentClaudeTheme, model.ComponentOpenCodeGentleLogo:
+		// Install-only visual components. The installer persists them in
+		// state.json, so sync builds a step for them, but they have nothing
+		// to re-apply — skip instead of failing the pipeline.
+		return nil
+
 	default:
-		// Persona and any unknown components are out of sync scope.
+		// Any unknown components are out of sync scope.
 		return fmt.Errorf("component %q is not supported in sync runtime", s.component)
 	}
 }
