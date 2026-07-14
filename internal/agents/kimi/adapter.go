@@ -6,8 +6,8 @@
 // prefers ~/.kimi-code when present, falling back to ~/.kimi for backward
 // compatibility.
 //
-// Legacy install: uv tool install kimi-cli
-// kimi-code install: npm install -g kimi-code (or official installer)
+// Legacy install: uv tool install kimi-cli (no longer installed by gentle-ai)
+// kimi-code install: npm install -g @moonshot-ai/kimi-code
 package kimi
 
 import (
@@ -102,6 +102,15 @@ func (a *Adapter) findKimi() (string, error) {
 		fallbacks = append(fallbacks,
 			filepath.Join(home, "AppData", "Local", "Microsoft", "WinGet", "Links", "kimi.exe"),
 			filepath.Join(home, "AppData", "Roaming", "uv", "bin", "kimi.exe"),
+			// npm global installs land in %APPDATA%\npm on Windows (current kimi-code).
+			filepath.Join(home, "AppData", "Roaming", "npm", "kimi.cmd"),
+			filepath.Join(home, "AppData", "Roaming", "npm", "kimi.exe"),
+		)
+	} else {
+		// Common npm global bin locations for current kimi-code on Unix/macOS.
+		fallbacks = append(fallbacks,
+			filepath.Join(home, ".npm-global", "bin", "kimi"),
+			"/usr/local/bin/kimi",
 		)
 	}
 
