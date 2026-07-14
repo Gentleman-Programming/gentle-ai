@@ -447,7 +447,7 @@ func TestComponentPathsSDDKimiIncludesAgentFilesAndGlobalSkills(t *testing.T) {
 	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
 
 	for _, want := range []string{
-		filepath.Join(home, ".kimi", "KIMI.md"),
+		filepath.Join(home, ".kimi", "AGENTS.md"),
 		filepath.Join(home, ".kimi", "agents", "gentleman.yaml"),
 		filepath.Join(home, ".kimi", "agents", "sdd-init.yaml"),
 		filepath.Join(home, ".kimi", "agents", "sdd-propose.md"),

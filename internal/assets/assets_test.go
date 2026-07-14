@@ -303,7 +303,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"kimi/output-style-gentleman.md",
 		"kimi/output-style-neutral.md",
 		"kimi/sdd-orchestrator.md",
-		"kimi/KIMI.md",
+		"kimi/AGENTS.md",
 		"kimi/agents/gentleman.yaml",
 		"kimi/agents/sdd-init.yaml",
 		"kimi/agents/sdd-explore.yaml",

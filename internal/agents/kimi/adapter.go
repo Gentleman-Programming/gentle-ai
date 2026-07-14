@@ -167,7 +167,7 @@ func (a *Adapter) SystemPromptDir(homeDir string) string {
 }
 
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(a.resolveConfigDir(homeDir), "KIMI.md")
+	return filepath.Join(a.resolveConfigDir(homeDir), "AGENTS.md")
 }
 
 // SkillsDir returns the skills directory path.
@@ -370,7 +370,7 @@ func binaryName() string {
 	return "kimi"
 }
 
-// BootstrapTemplate ensures the base KIMI.md template exists in the agent's config directory.
+// BootstrapTemplate ensures the base AGENTS.md template exists in the agent's config directory.
 // It is used by the installation pipeline to guarantee that modular components
 // (SDD, Engram) can be included even if the Persona component is not installed.
 func (a *Adapter) BootstrapTemplate(homeDir string) error {
@@ -382,9 +382,9 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 	skeletonPath := a.SystemPromptFile(homeDir)
 
 	// We always write the skeleton to ensure any missing includes are restored.
-	// Since KIMI.md is the 'router' for modular Jinja components, it should
+	// Since AGENTS.md is the 'router' for modular Jinja components, it should
 	// remain managed by the framework.
-	content := assets.MustRead("kimi/KIMI.md")
+	content := assets.MustRead("kimi/AGENTS.md")
 
 	// Project instructions remain project-scoped. We do NOT copy cwd-derived
 	// AGENTS.md into the global Kimi config because that crosses a provider
@@ -396,7 +396,7 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 	content = strings.ReplaceAll(content, "${KIMI_SKILLS}", "<!-- Skills loaded from skill directories -->")
 
 	if _, err := filemerge.WriteFileAtomic(skeletonPath, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("write KIMI.md skeleton: %w", err)
+		return fmt.Errorf("write AGENTS.md skeleton: %w", err)
 	}
 
 	// Kimi considers config.toml a required file. We create one with sensible

@@ -2241,7 +2241,7 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				paths = append(paths, adapter.SystemPromptFile(targetDir))
 			}
 		case model.ComponentSDD:
-			// Jinja modular hubs (e.g. Kimi KIMI.md) are appended once below so SDD+Persona
+			// Jinja modular hubs (e.g. Kimi AGENTS.md) are appended once below so SDD+Persona
 			// do not duplicate the same system prompt path. OpenCode-compatible adapters
 			// write the SDD orchestrator to their settings file instead (#3975).
 			if adapter.SupportsSystemPrompt() &&

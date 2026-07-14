@@ -2326,8 +2326,8 @@ func TestRunInstallKimiBootstrapsHub(t *testing.T) {
 		t.Fatalf("RunInstall() error = %v", err)
 	}
 
-	// Verify that KIMI.md was created in the agent's config dir.
-	hubPath := filepath.Join(home, ".kimi", "KIMI.md")
+	// Verify that AGENTS.md was created in the agent's config dir.
+	hubPath := filepath.Join(home, ".kimi", "AGENTS.md")
 	if _, err := os.Stat(hubPath); err != nil {
 		t.Fatalf("expected Kimi prompt hub file %q to be bootstrapped: %v", hubPath, err)
 	}
@@ -2387,7 +2387,7 @@ func TestRunInstallKimiAlreadyInstalledDoesNotRequireUV(t *testing.T) {
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	hubPath := filepath.Join(home, ".kimi", "KIMI.md")
+	hubPath := filepath.Join(home, ".kimi", "AGENTS.md")
 	if _, err := os.Stat(hubPath); err != nil {
 		t.Fatalf("expected Kimi prompt hub file %q to be bootstrapped: %v", hubPath, err)
 	}
