@@ -1,9 +1,13 @@
 // Package kimi provides Kimi Code CLI agent integration.
 //
 // Integration Note:
-// This adapter natively relies on Astral's `uv` package manager
-// (`uv tool install kimi-cli`) to securely download and run Kimi CLI,
-// avoiding upstream's pipe-to-shell bootstrap scripts.
+// This adapter supports both the legacy Python/uv-based Kimi CLI (~/.kimi)
+// and the Node.js-based kimi-code v0.11+ (~/.kimi-code). Path resolution
+// prefers ~/.kimi-code when present, falling back to ~/.kimi for backward
+// compatibility.
+//
+// Legacy install: uv tool install kimi-cli
+// v0.11+ install: npm install -g kimi-code (or official installer)
 package kimi
 
 import (
@@ -13,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
@@ -125,39 +130,97 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 
 // --- Config paths ---
 
-func (a *Adapter) GlobalConfigDir(homeDir string) string {
+// resolveConfigDir returns the configuration directory for Kimi.
+// It checks KIMI_CODE_HOME env var first, then prefers ~/.kimi-code (v0.11+)
+// when present, falling back to ~/.kimi (legacy).
+func (a *Adapter) resolveConfigDir(homeDir string) string {
+	if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" {
+		if info, err := os.Stat(envDir); err == nil && info.IsDir() {
+			return envDir
+		}
+	}
+	kimiCodeDir := filepath.Join(homeDir, ".kimi-code")
+	if stat := a.statPath(kimiCodeDir); stat.err == nil && stat.isDir {
+		return kimiCodeDir
+	}
 	return filepath.Join(homeDir, ".kimi")
+}
+
+// isV11Plus reports whether the v0.11+ Node.js-based kimi-code is installed.
+// It checks KIMI_CODE_HOME first, then falls back to ~/.kimi-code detection.
+func (a *Adapter) isV11Plus(homeDir string) bool {
+	if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" {
+		if st := a.statPath(envDir); st.err == nil && st.isDir {
+			return true
+		}
+	}
+	st := a.statPath(filepath.Join(homeDir, ".kimi-code"))
+	return st.err == nil && st.isDir
+}
+
+func (a *Adapter) GlobalConfigDir(homeDir string) string {
+	return a.resolveConfigDir(homeDir)
 }
 
 func (a *Adapter) SystemPromptDir(homeDir string) string {
-	return filepath.Join(homeDir, ".kimi")
+	return a.resolveConfigDir(homeDir)
 }
 
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(homeDir, ".kimi", "KIMI.md")
+	return filepath.Join(a.resolveConfigDir(homeDir), "KIMI.md")
 }
 
-// SkillsDir returns the shared skills directory path.
+// SkillsDir returns the skills directory path.
 //
-// Kimi Code CLI supports native Agent Skills. It recognizes both:
-//   - native brand-specific skills: ~/.kimi/skills
-//   - generic shared skills: ~/.config/agents/skills and ~/.agents/skills
+// For v0.11+ (Node.js) with plugin support, it returns the plugin skills subdirectory
+// under the resolved Kimi config directory:
 //
-// We intentionally use ~/.config/agents/skills here as a cross-agent shared
-// convention. Kimi will discover this directory natively as part of its
-// generic skills group (the docs mark this path as "recommended").
+//	{resolvedConfigDir}/plugins/managed/gentle-ai/skills
+//
+// For legacy (Python/uv), it returns the cross-agent shared convention:
+//
+//	~/.config/agents/skills
+//
+// Kimi Code CLI discovers skills from multiple sources including:
+//   - {resolvedConfigDir}/plugins/managed/gentle-ai/skills (v0.11+ plugin)
+//   - {resolvedConfigDir}/skills (v0.11+ user skills)
+//   - ~/.config/agents/skills (generic shared skills)
+//   - ~/.agents/skills (generic shared skills)
 //
 // See: https://moonshotai.github.io/kimi-cli/en/customization/skills.html
 func (a *Adapter) SkillsDir(homeDir string) string {
+	if a.isV11Plus(homeDir) {
+		return filepath.Join(a.PluginDir(homeDir), "skills")
+	}
 	return filepath.Join(homeDir, ".config", "agents", "skills")
 }
 
 func (a *Adapter) SettingsPath(homeDir string) string {
-	return filepath.Join(homeDir, ".kimi", "config.toml")
+	return filepath.Join(a.resolveConfigDir(homeDir), "config.toml")
 }
 
 func (a *Adapter) CommandsDir(string) string {
 	return ""
+}
+
+// AllSkillsDirs returns all directories Kimi Code discovers for skills.
+// For v0.11+: plugin skills, {resolvedConfigDir}/skills, ~/.agents/skills, ~/.config/agents/skills
+// For legacy: ~/.config/agents/skills only.
+func (a *Adapter) AllSkillsDirs(homeDir string) []string {
+	if a.isV11Plus(homeDir) {
+		return []string{
+			filepath.Join(a.PluginDir(homeDir), "skills"),
+			filepath.Join(a.resolveConfigDir(homeDir), "skills"),
+			filepath.Join(homeDir, ".agents", "skills"),
+			filepath.Join(homeDir, ".config", "agents", "skills"),
+		}
+	}
+	return []string{filepath.Join(homeDir, ".config", "agents", "skills")}
+}
+
+// AGENTSMDPath returns the path to the Kimi-level AGENTS.md file.
+func (a *Adapter) AGENTSMDPath(homeDir string) string {
+	return filepath.Join(a.resolveConfigDir(homeDir), "AGENTS.md")
 }
 
 // --- Config strategies ---
@@ -173,7 +236,7 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 // --- MCP ---
 
 func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
-	return filepath.Join(homeDir, ".kimi", "mcp.json")
+	return filepath.Join(a.resolveConfigDir(homeDir), "mcp.json")
 }
 
 // --- Optional capabilities ---
@@ -212,7 +275,7 @@ func (a *Adapter) SupportsSubAgents() bool {
 }
 
 func (a *Adapter) SubAgentsDir(homeDir string) string {
-	return filepath.Join(homeDir, ".kimi", "agents")
+	return filepath.Join(a.resolveConfigDir(homeDir), "agents")
 }
 
 func (a *Adapter) EmbeddedSubAgentsDir() string {
@@ -220,8 +283,32 @@ func (a *Adapter) EmbeddedSubAgentsDir() string {
 }
 
 func (a *Adapter) PostInstallMessage(homeDir string) string {
-	gentlemanYaml := filepath.Join(homeDir, ".kimi", "agents", "gentleman.yaml")
-	skillsRoot := filepath.Join(homeDir, ".config", "agents", "skills")
+	configDir := a.resolveConfigDir(homeDir)
+	skillsRoot := a.SkillsDir(homeDir)
+
+	if a.isV11Plus(homeDir) {
+		return fmt.Sprintf(`Kimi Code v0.11+ configured!
+
+Usage:
+  kimi
+
+Native SDD skills:
+  /skill:sdd-init
+  /skill:sdd-explore
+  /skill:sdd-propose
+  /skill:sdd-spec
+  /skill:sdd-design
+  /skill:sdd-tasks
+  /skill:sdd-apply
+  /skill:sdd-verify
+  /skill:sdd-archive
+  /skill:sdd-onboard
+
+Skills root:
+  "%s"`, skillsRoot)
+	}
+
+	gentlemanYaml := filepath.Join(configDir, "agents", "gentleman.yaml")
 
 	return fmt.Sprintf(`Kimi Code configured!
 
@@ -261,7 +348,18 @@ func defaultPathExists(path string) bool {
 }
 
 // ConfigPath returns the configuration directory path.
+// It checks KIMI_CODE_HOME env var first, then prefers ~/.kimi-code (v0.11+)
+// when present, falling back to ~/.kimi (legacy).
 func ConfigPath(homeDir string) string {
+	if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" {
+		if info, err := os.Stat(envDir); err == nil && info.IsDir() {
+			return envDir
+		}
+	}
+	kimiCodeDir := filepath.Join(homeDir, ".kimi-code")
+	if info, err := os.Stat(kimiCodeDir); err == nil && info.IsDir() {
+		return kimiCodeDir
+	}
 	return filepath.Join(homeDir, ".kimi")
 }
 
@@ -287,18 +385,263 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 	// Since KIMI.md is the 'router' for modular Jinja components, it should
 	// remain managed by the framework.
 	content := assets.MustRead("kimi/KIMI.md")
+
+	// Project instructions remain project-scoped. We do NOT copy cwd-derived
+	// AGENTS.md into the global Kimi config because that crosses a provider
+	// boundary and would let untrusted repos persist instructions globally.
+	content = strings.ReplaceAll(content, "${KIMI_AGENTS_MD}",
+		"<!-- Project AGENTS.md is read from the current worktree at runtime; it is not copied into the global Kimi config. -->")
+
+	// Resolve skills content (placeholder for now).
+	content = strings.ReplaceAll(content, "${KIMI_SKILLS}", "<!-- Skills loaded from skill directories -->")
+
 	if _, err := filemerge.WriteFileAtomic(skeletonPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write KIMI.md skeleton: %w", err)
 	}
 
-	// Kimi considers config.toml a required file. We create an empty one if
-	// it's missing to satisfy verification during a minimalist install.
+	// Kimi considers config.toml a required file. We create one with sensible
+	// defaults if it's missing to satisfy verification during a minimalist install.
+	// For v0.11+, we also append hooks and extra_skill_dirs.
 	configPath := a.SettingsPath(homeDir)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		if _, err := filemerge.WriteFileAtomic(configPath, []byte("# Kimi Code Config\n"), 0o644); err != nil {
+		content := resolveConfigTOMLContent()
+		if a.isV11Plus(homeDir) {
+			content += configTOMLV11Extras()
+		}
+		if _, err := filemerge.WriteFileAtomic(configPath, []byte(content), 0o644); err != nil {
 			return err
+		}
+	} else if a.isV11Plus(homeDir) {
+		if _, err := mergeConfigTOMLV11Extras(configPath); err != nil {
+			return fmt.Errorf("merge v0.11+ config extras: %w", err)
+		}
+	}
+
+	// Install the Kimi plugin for v0.11+. This is best-effort: if plugin
+	// directory creation fails (e.g. permissions), log a warning and continue
+	// — the core config files are already written.
+	if a.isV11Plus(homeDir) {
+		if err := a.InstallPlugin(homeDir, versions.GentleAI); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: plugin install failed (non-fatal): %v\n", err)
 		}
 	}
 
 	return nil
+}
+
+// resolveConfigTOMLContent returns the default TOML config for Kimi Code.
+// It enables skill merging and sets permission rules: auto-approve safe tools,
+// require manual approval for Bash.
+func resolveConfigTOMLContent() string {
+	return `default_permission_mode = "manual"
+merge_all_available_skills = true
+
+[[permission.rules]]
+decision = "allow"
+pattern = "Read"
+
+[[permission.rules]]
+decision = "allow"
+pattern = "Grep"
+
+[[permission.rules]]
+decision = "allow"
+pattern = "Glob"
+
+[[permission.rules]]
+decision = "allow"
+pattern = "Write"
+
+[[permission.rules]]
+decision = "allow"
+pattern = "Edit"
+
+[[permission.rules]]
+decision = "allow"
+pattern = "Agent"
+
+[[permission.rules]]
+decision = "ask"
+pattern = "Bash"
+`
+}
+
+// configTOMLV11Extras returns the additional TOML content appended to config.toml
+// for Kimi Code v0.11+ installations. It includes lifecycle hooks and cross-tool
+// skill directory discovery.
+func configTOMLV11Extras() string {
+	return `
+# --- Gentle AI v0.11+ extras ---
+
+[[hooks]]
+event = "SessionStart"
+command = 'gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true'
+
+extra_skill_dirs = ["~/.config/agents/skills", "~/.agents/skills"]
+`
+}
+
+// v11ExtraSkillDirs are the additional skill directories Gentle AI registers in
+// Kimi Code v0.11+ so that user-scope and extra-scope skills are discoverable.
+var v11ExtraSkillDirs = []string{"~/.config/agents/skills", "~/.agents/skills"}
+
+// mergeConfigTOMLV11Extras updates an existing config.toml with the v0.11+
+// extra_skill_dirs setting. It preserves user settings and only adds the
+// Gentle AI directories when they are missing.
+func mergeConfigTOMLV11Extras(configPath string) (filemerge.WriteResult, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return filemerge.WriteResult{}, fmt.Errorf("read config %q: %w", configPath, err)
+	}
+	text := string(data)
+
+	start, end := findTOMLStringArrayBounds(text, "extra_skill_dirs")
+	if start == -1 {
+		block := "\n# --- Gentle AI v0.11+ extras ---\nextra_skill_dirs = " + formatStringArray(v11ExtraSkillDirs)
+		if !strings.HasSuffix(text, "\n") {
+			block = "\n" + block
+		}
+		text += block
+		return filemerge.WriteFileAtomic(configPath, []byte(text), 0o644)
+	}
+
+	existing := parseTOMLStringArrayValues(text[start : end+1])
+	merged := mergeStringSlices(existing, v11ExtraSkillDirs)
+	if stringSlicesEqual(existing, merged) {
+		return filemerge.WriteResult{}, nil
+	}
+
+	lineStart := strings.LastIndex(text[:start], "\n") + 1
+	nextNL := strings.Index(text[start:], "\n")
+	lineEnd := start + len(text[start:])
+	if nextNL != -1 {
+		lineEnd = start + nextNL
+	}
+	newLine := "extra_skill_dirs = " + formatStringArray(merged)
+	text = text[:lineStart] + newLine + text[lineEnd:]
+	return filemerge.WriteFileAtomic(configPath, []byte(text), 0o644)
+}
+
+// findTOMLStringArrayBounds locates the start (index of '[') and end (index of
+// ']') of the string array associated with key. It tolerates inline comments,
+// quoted keys and both single/double quoted strings. Returns -1, -1 when not
+// found or unbalanced.
+func findTOMLStringArrayBounds(text, key string) (int, int) {
+	keyIdx := strings.Index(text, key)
+	if keyIdx == -1 {
+		return -1, -1
+	}
+	eqIdx := strings.Index(text[keyIdx:], "=")
+	if eqIdx == -1 {
+		return -1, -1
+	}
+	startIdx := keyIdx + eqIdx
+	openIdx := strings.Index(text[startIdx:], "[")
+	if openIdx == -1 {
+		return -1, -1
+	}
+	i := startIdx + openIdx
+	depth := 1
+	var inString bool
+	var quote byte
+	var prev byte
+	for i+1 < len(text) {
+		i++
+		c := text[i]
+		if inString {
+			if c == quote && prev != '\\' {
+				inString = false
+			}
+		} else {
+			switch c {
+			case '"', '\'':
+				inString = true
+				quote = c
+			case '[':
+				depth++
+			case ']':
+				depth--
+				if depth == 0 {
+					return startIdx + openIdx, i
+				}
+			}
+		}
+		prev = c
+	}
+	return -1, -1
+}
+
+// parseTOMLStringArrayValues extracts the quoted string values inside a TOML
+// array literal such as `["a", 'b']`.
+func parseTOMLStringArrayValues(arrayText string) []string {
+	var values []string
+	var inString bool
+	var quote byte
+	var buf strings.Builder
+	var prev byte
+	for i := 0; i < len(arrayText); i++ {
+		c := arrayText[i]
+		if inString {
+			if c == quote && prev != '\\' {
+				values = append(values, buf.String())
+				buf.Reset()
+				inString = false
+			} else {
+				buf.WriteByte(c)
+			}
+		} else {
+			if c == '"' || c == '\'' {
+				inString = true
+				quote = c
+			}
+		}
+		prev = c
+	}
+	return values
+}
+
+// formatStringArray returns a compact TOML array literal with double-quoted
+// strings, e.g. `["a", "b"]`.
+func formatStringArray(values []string) string {
+	parts := make([]string, len(values))
+	for i, v := range values {
+		parts[i] = fmt.Sprintf("%q", v)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// mergeStringSlices returns a new slice containing all elements of a followed by
+// any elements of b not already present, preserving order.
+func mergeStringSlices(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, v := range a {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	for _, v := range b {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
+// stringSlicesEqual reports whether two string slices have the same elements in
+// the same order.
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

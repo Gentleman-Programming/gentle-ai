@@ -126,6 +126,10 @@ func agentOverlay(id model.AgentID) []byte {
 		return geminiCLIOverlayJSON
 	case model.AgentQwenCode:
 		return qwenCodeOverlayJSON
+	case model.AgentKimi:
+		// Kimi permissions are managed by BootstrapTemplate via config.toml,
+		// not by the permissions overlay system.
+		return nil
 	case model.AgentAntigravity:
 		// Antigravity manages permissions via IDE UI (Artifact Review Policy /
 		// Terminal Command Auto Execution). No injectable settings.json schema.

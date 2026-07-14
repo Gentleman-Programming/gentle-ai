@@ -1927,6 +1927,11 @@ func TestInjectGeminiWritesSDDOrchestratorAndSkills(t *testing.T) {
 func TestInjectKimiWritesNativeAgentFilesAndGlobalSkills(t *testing.T) {
 	home := t.TempDir()
 
+	// Create .kimi-code directory so isV11Plus returns true and plugin architecture is used.
+	if err := os.MkdirAll(filepath.Join(home, ".kimi-code"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
 	result, err := Inject(home, kimiAdapter(), "")
 	if err != nil {
 		t.Fatalf("Inject(kimi) error = %v", err)
@@ -1936,7 +1941,8 @@ func TestInjectKimiWritesNativeAgentFilesAndGlobalSkills(t *testing.T) {
 	}
 
 	// SDD orchestrator is written as a standalone Jinja include module.
-	sddModulePath := filepath.Join(home, ".kimi", "sdd-orchestrator.md")
+	// Since we created .kimi-code, v0.11+ paths MUST be used — no legacy fallback.
+	sddModulePath := filepath.Join(home, ".kimi-code", "sdd-orchestrator.md")
 	sddModule, err := os.ReadFile(sddModulePath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", sddModulePath, err)
@@ -1950,7 +1956,13 @@ func TestInjectKimiWritesNativeAgentFilesAndGlobalSkills(t *testing.T) {
 		t.Fatal("sdd-orchestrator.md should reference Kimi's documented Task tool for custom subagent delegation")
 	}
 
-	rootAgentPath := filepath.Join(home, ".kimi", "agents", "gentleman.yaml")
+	// Since .kimi-code exists, agents MUST be in v0.11+ path — no legacy fallback.
+	agentsDir := filepath.Join(home, ".kimi-code", "agents")
+	if _, err := os.Stat(agentsDir); err != nil {
+		t.Fatalf("v0.11+ agents directory %q must exist when .kimi-code is present", agentsDir)
+	}
+
+	rootAgentPath := filepath.Join(agentsDir, "gentleman.yaml")
 	rootAgent, err := os.ReadFile(rootAgentPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", rootAgentPath, err)
@@ -1967,22 +1979,27 @@ func TestInjectKimiWritesNativeAgentFilesAndGlobalSkills(t *testing.T) {
 		t.Fatal("gentleman.yaml should load the installed KIMI.md system prompt")
 	}
 
+	// Check skills are written to the plugin skills directory (v0.11+ only).
+	skillsRoot := filepath.Join(home, ".kimi-code", "plugins", "managed", "gentle-ai", "skills")
+	if _, err := os.Stat(skillsRoot); err != nil {
+		t.Fatalf("v0.11+ plugin skills directory %q must exist when .kimi-code is present", skillsRoot)
+	}
+
 	for _, want := range []string{
-		filepath.Join(home, ".kimi", "agents", "sdd-init.yaml"),
-		filepath.Join(home, ".kimi", "agents", "sdd-init.md"),
-		filepath.Join(home, ".kimi", "agents", "sdd-explore.yaml"),
-		filepath.Join(home, ".kimi", "agents", "sdd-propose.yaml"),
-		filepath.Join(home, ".kimi", "agents", "sdd-spec.yaml"),
-		filepath.Join(home, ".kimi", "agents", "sdd-design.yaml"),
-		filepath.Join(home, ".kimi", "agents", "sdd-tasks.yaml"),
-		filepath.Join(home, ".kimi", "agents", "sdd-apply.yaml"),
-		filepath.Join(home, ".kimi", "agents", "sdd-verify.yaml"),
-		filepath.Join(home, ".kimi", "agents", "sdd-archive.yaml"),
-		filepath.Join(home, ".config", "agents", "skills", "sdd-init", "SKILL.md"),
-		filepath.Join(home, ".config", "agents", "skills", "_shared", "sdd-phase-common.md"),
+		filepath.Join(skillsRoot, "sdd-init", "SKILL.md"),
+		filepath.Join(skillsRoot, "_shared", "sdd-phase-common.md"),
 	} {
 		if _, err := os.Stat(want); err != nil {
-			t.Fatalf("expected Kimi SDD artifact %q: %v", want, err)
+			t.Fatalf("expected Kimi SDD skill artifact %q: %v", want, err)
+		}
+	}
+
+	// Also verify agents directory has the sub-agent YAML files
+	for _, want := range []string{
+		filepath.Join(agentsDir, "gentleman.yaml"),
+	} {
+		if _, err := os.Stat(want); err != nil {
+			t.Fatalf("expected Kimi agent artifact %q: %v", want, err)
 		}
 	}
 }
@@ -5407,7 +5424,9 @@ func TestInjectCodexWritesSDDOrchestratorAndSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", extractedSkillPath, err)
 	}
-	if !strings.HasPrefix(string(extractedSkill), "---\n") {
+	// Normalize line endings for cross-platform comparison
+	normalizedSkill := strings.ReplaceAll(string(extractedSkill), "\r\n", "\n")
+	if !strings.HasPrefix(normalizedSkill, "---\n") {
 		t.Fatalf("Codex SDD skill must start with YAML frontmatter delimiter, got prefix %q", string(extractedSkill[:min(len(extractedSkill), 16)]))
 	}
 
@@ -7474,6 +7493,193 @@ func TestEnsureCodexSkillRegistryHookWritesSessionStartHookIdempotently(t *testi
 	}
 	if !strings.Contains(text, "echo keep") {
 		t.Fatalf("existing hooks not preserved:\n%s", text)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Kimi skill-registry automation tests
+// ---------------------------------------------------------------------------
+
+func TestEnsureKimiSkillRegistryHook_WritesHook(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".kimi-code", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := `merge_all_available_skills = true
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := ensureKimiSkillRegistryHook(configPath)
+	if err != nil {
+		t.Fatalf("ensureKimiSkillRegistryHook() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("first call changed = false, want true")
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "[[hooks]]") {
+		t.Errorf("config.toml missing [[hooks]] section; got:\n%s", text)
+	}
+	if !strings.Contains(text, "skill-registry refresh") {
+		t.Errorf("config.toml missing skill-registry refresh; got:\n%s", text)
+	}
+	if !strings.Contains(text, `event = "SessionStart"`) {
+		t.Errorf("config.toml missing SessionStart event; got:\n%s", text)
+	}
+}
+
+func TestEnsureKimiSkillRegistryHook_Idempotent(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".kimi-code", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := `merge_all_available_skills = true
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// First call.
+	changed, err := ensureKimiSkillRegistryHook(configPath)
+	if err != nil {
+		t.Fatalf("ensureKimiSkillRegistryHook() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("first call changed = false, want true")
+	}
+
+	// Second call — should be idempotent.
+	changed, err = ensureKimiSkillRegistryHook(configPath)
+	if err != nil {
+		t.Fatalf("second ensureKimiSkillRegistryHook() error = %v", err)
+	}
+	if changed {
+		t.Fatal("second call changed = true, want false")
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Count(text, "gentle-ai skill-registry refresh") != 1 {
+		t.Errorf("hook command duplicated; got:\n%s", text)
+	}
+}
+
+func TestEnsureKimiSkillRegistryHook_PreservesExistingContent(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".kimi-code", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := `merge_all_available_skills = true
+
+[[permission.rules]]
+decision = "allow"
+pattern = "Read"
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ensureKimiSkillRegistryHook(configPath)
+	if err != nil {
+		t.Fatalf("ensureKimiSkillRegistryHook() error = %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, `pattern = "Read"`) {
+		t.Errorf("existing content not preserved; got:\n%s", text)
+	}
+}
+
+func TestInstallSkillRegistryAutomation_Kimi(t *testing.T) {
+	home := t.TempDir()
+	kimiCodeDir := filepath.Join(home, ".kimi-code")
+	if err := os.MkdirAll(kimiCodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(kimiCodeDir, "config.toml")
+	initial := `merge_all_available_skills = true
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := kimi.NewTestAdapter(
+		kimi.WithStatPath(func(path string) kimi.StatResult {
+			if path == kimiCodeDir {
+				return kimi.StatResult{IsDir: true}
+			}
+			return kimi.StatResult{Err: os.ErrNotExist}
+		}),
+		kimi.WithPathExists(func(path string) bool { return path == kimiCodeDir }),
+	)
+
+	result, err := installSkillRegistryAutomation(home, adapter)
+	if err != nil {
+		t.Fatalf("installSkillRegistryAutomation(kimi) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("installSkillRegistryAutomation(kimi) changed = false, want true")
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "[[hooks]]") {
+		t.Errorf("config.toml missing [[hooks]]; got:\n%s", text)
+	}
+	if !strings.Contains(text, "skill-registry refresh") {
+		t.Errorf("config.toml missing skill-registry refresh; got:\n%s", text)
+	}
+}
+
+func TestInstallSkillRegistryAutomation_NonKimiUnaffected(t *testing.T) {
+	// Claude adapter should not be affected by Kimi changes.
+	home := t.TempDir()
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := claude.NewAdapter()
+	result, err := installSkillRegistryAutomation(home, adapter)
+	if err != nil {
+		t.Fatalf("installSkillRegistryAutomation(claude) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("installSkillRegistryAutomation(claude) changed = false, want true (adds hook)")
+	}
+
+	// Verify it wrote a Claude-format hook, not a Kimi TOML hook.
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "[[hooks]]") {
+		t.Errorf("Claude settings should not contain TOML [[hooks]]; got:\n%s", text)
 	}
 }
 
