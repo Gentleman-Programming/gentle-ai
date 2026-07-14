@@ -171,7 +171,7 @@ const (
 	// StrategyInstructionsFile writes a dedicated instructions file (e.g. .instructions.md).
 	StrategyInstructionsFile
 	// StrategyJinjaModules writes separate module files that are included into a
-	// thin Jinja2 template (e.g. Kimi's KIMI.md).
+	// thin Jinja2 template (e.g. Kimi's AGENTS.md).
 	StrategyJinjaModules
 	// StrategySteeringFile writes a Kiro steering file with inclusion: always frontmatter.
 	StrategySteeringFile

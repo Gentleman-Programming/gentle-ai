@@ -127,8 +127,8 @@ func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testin
 		t.Fatal("Inject(kimi) changed = false")
 	}
 
-	// KIMI.md should be the static Jinja template (includes + variable placeholders).
-	templatePath := filepath.Join(home, ".kimi", "KIMI.md")
+	// AGENTS.md should be the static Jinja template (includes + variable placeholders).
+	templatePath := filepath.Join(home, ".kimi", "AGENTS.md")
 	content, err := os.ReadFile(templatePath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", templatePath, err)
@@ -136,16 +136,16 @@ func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testin
 
 	text := string(content)
 	if !strings.Contains(text, `{% include "output-style.md"`) {
-		t.Fatal("KIMI.md template missing {% include \"output-style.md\" %}")
+		t.Fatal("AGENTS.md template missing {% include \"output-style.md\" %}")
 	}
 	// BootstrapTemplate no longer copies cwd-derived AGENTS.md into the global
 	// Kimi config; it only writes a project-scoped placeholder.
 	if !strings.Contains(text, "<!-- Project AGENTS.md is read from the current worktree at runtime") {
-		t.Fatal("KIMI.md missing project-scoped AGENTS.md placeholder")
+		t.Fatal("AGENTS.md missing project-scoped AGENTS.md placeholder")
 	}
 	// ${KIMI_SKILLS} is also resolved during bootstrap.
 	if !strings.Contains(text, "Skills loaded from skill directories") {
-		t.Fatal("KIMI.md missing resolved skills content")
+		t.Fatal("AGENTS.md missing resolved skills content")
 	}
 
 	// output-style.md module should contain the Gentleman style content.

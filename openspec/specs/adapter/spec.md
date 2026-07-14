@@ -34,8 +34,8 @@ Defines requirements for comprehensive Kimi Code v0.11+ adapter integration: env
 
 ### Requirement: Functional config.toml Generation
 
-`BootstrapTemplate` MUST write a TOML config file with `merge_all_available_skills = true` and a `[permissions]` section containing safe auto-approve defaults when the config file does not already exist. For v0.11+, `BootstrapTemplate` MUST also generate `kimi.plugin.json` via `InstallPlugin` after writing config.toml/KIMI.md. `resolveConfigTOMLContent` MUST include a `[[hooks]]` block with `sessionStart` referencing `sdd-init`, and MUST include `extra_skill_dirs` entries for cross-tool skill discovery.
-(Previously: only wrote config.toml and KIMI.md skeleton; no hooks or extra_skill_dirs)
+`BootstrapTemplate` MUST write a TOML config file with `merge_all_available_skills = true` and a `[permissions]` section containing safe auto-approve defaults when the config file does not already exist. For v0.11+, `BootstrapTemplate` MUST also generate `kimi.plugin.json` via `InstallPlugin` after writing config.toml/AGENTS.md. `resolveConfigTOMLContent` MUST include a `[[hooks]]` block with `sessionStart` referencing `sdd-init`, and MUST include `extra_skill_dirs` entries for cross-tool skill discovery.
+(Previously: only wrote config.toml and AGENTS.md skeleton; no hooks or extra_skill_dirs)
 
 #### Scenario: Fresh install writes functional config.toml
 

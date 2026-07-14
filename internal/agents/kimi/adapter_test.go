@@ -43,7 +43,7 @@ func TestAdapter_ConfigPaths(t *testing.T) {
 	}{
 		{"GlobalConfigDir", a.GlobalConfigDir(homeDir), filepath.Join(homeDir, ".kimi")},
 		{"SystemPromptDir", a.SystemPromptDir(homeDir), filepath.Join(homeDir, ".kimi")},
-		{"SystemPromptFile", a.SystemPromptFile(homeDir), filepath.Join(homeDir, ".kimi", "KIMI.md")},
+		{"SystemPromptFile", a.SystemPromptFile(homeDir), filepath.Join(homeDir, ".kimi", "AGENTS.md")},
 		{"SkillsDir", a.SkillsDir(homeDir), filepath.Join(homeDir, ".config", "agents", "skills")},
 		{"SettingsPath", a.SettingsPath(homeDir), filepath.Join(homeDir, ".kimi", "config.toml")},
 		{"CommandsDir", a.CommandsDir(homeDir), ""},
@@ -258,7 +258,7 @@ func TestAdapter_ConfigPaths_V11Plus(t *testing.T) {
 	}{
 		{"GlobalConfigDir", a.GlobalConfigDir(homeDir), filepath.Join(homeDir, ".kimi-code")},
 		{"SystemPromptDir", a.SystemPromptDir(homeDir), filepath.Join(homeDir, ".kimi-code")},
-		{"SystemPromptFile", a.SystemPromptFile(homeDir), filepath.Join(homeDir, ".kimi-code", "KIMI.md")},
+		{"SystemPromptFile", a.SystemPromptFile(homeDir), filepath.Join(homeDir, ".kimi-code", "AGENTS.md")},
 		{"SkillsDir", a.SkillsDir(homeDir), filepath.Join(homeDir, ".kimi-code", "plugins", "managed", "gentle-ai", "skills")},
 		{"SettingsPath", a.SettingsPath(homeDir), filepath.Join(homeDir, ".kimi-code", "config.toml")},
 		{"CommandsDir", a.CommandsDir(homeDir), ""},
@@ -683,27 +683,22 @@ func TestAdapter_BootstrapTemplate_DoesNotCopyProjectAGENTSMD(t *testing.T) {
 		t.Fatalf("BootstrapTemplate() error = %v", err)
 	}
 
-	// KIMI.md should contain the project-scoped placeholder, not the repo's AGENTS.md content.
-	kimiMDPath := filepath.Join(kimiCodeDir, "KIMI.md")
-	kimiMDContent, err := os.ReadFile(kimiMDPath)
+	// The global AGENTS.md (the system-prompt hub) must contain the
+	// project-scoped placeholder, not the repo's AGENTS.md content.
+	globalPath := filepath.Join(kimiCodeDir, "AGENTS.md")
+	globalContent, err := os.ReadFile(globalPath)
 	if err != nil {
-		t.Fatalf("ReadFile(KIMI.md) error = %v", err)
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
 	}
-	if strings.Contains(string(kimiMDContent), agentsMDContent) {
-		t.Errorf("KIMI.md unexpectedly contains project AGENTS.md content; got:\n%s", string(kimiMDContent))
+	if strings.Contains(string(globalContent), agentsMDContent) {
+		t.Errorf("global AGENTS.md unexpectedly contains project AGENTS.md content; got:\n%s", string(globalContent))
 	}
-	if !strings.Contains(string(kimiMDContent), "<!-- Project AGENTS.md is read from the current worktree at runtime") {
-		t.Errorf("KIMI.md missing project-scoped placeholder; got:\n%s", string(kimiMDContent))
-	}
-
-	// The global AGENTS.md must NOT be written from cwd-derived content.
-	agentsMDOut := filepath.Join(kimiCodeDir, "AGENTS.md")
-	if _, err := os.Stat(agentsMDOut); !os.IsNotExist(err) {
-		t.Errorf("global AGENTS.md was written from cwd-derived content: %s", agentsMDOut)
+	if !strings.Contains(string(globalContent), "<!-- Project AGENTS.md is read from the current worktree at runtime") {
+		t.Errorf("global AGENTS.md missing project-scoped placeholder; got:\n%s", string(globalContent))
 	}
 }
 
-func TestAdapter_BootstrapTemplate_KIMI_MD_HasProjectScopedPlaceholder(t *testing.T) {
+func TestAdapter_BootstrapTemplate_AGENTS_MD_HasProjectScopedPlaceholder(t *testing.T) {
 	tmpDir := t.TempDir()
 	kimiCodeDir := filepath.Join(tmpDir, ".kimi-code")
 	if err := os.MkdirAll(kimiCodeDir, 0755); err != nil {
@@ -722,13 +717,13 @@ func TestAdapter_BootstrapTemplate_KIMI_MD_HasProjectScopedPlaceholder(t *testin
 		t.Fatalf("BootstrapTemplate() error = %v", err)
 	}
 
-	kimiMDPath := filepath.Join(kimiCodeDir, "KIMI.md")
-	kimiMDContent, err := os.ReadFile(kimiMDPath)
+	globalPath := filepath.Join(kimiCodeDir, "AGENTS.md")
+	globalContent, err := os.ReadFile(globalPath)
 	if err != nil {
-		t.Fatalf("ReadFile(KIMI.md) error = %v", err)
+		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
 	}
-	if !strings.Contains(string(kimiMDContent), "<!-- Project AGENTS.md is read from the current worktree at runtime") {
-		t.Errorf("KIMI.md missing project-scoped placeholder; got:\n%s", string(kimiMDContent))
+	if !strings.Contains(string(globalContent), "<!-- Project AGENTS.md is read from the current worktree at runtime") {
+		t.Errorf("AGENTS.md missing project-scoped placeholder; got:\n%s", string(globalContent))
 	}
 }
 

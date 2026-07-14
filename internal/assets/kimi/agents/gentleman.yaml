@@ -2,7 +2,7 @@ version: "1"
 agent:
   name: gentleman
   extend: default
-  system_prompt_path: ../KIMI.md
+  system_prompt_path: ../AGENTS.md
   subagents:
     sdd-init:
       path: ./sdd-init.yaml
