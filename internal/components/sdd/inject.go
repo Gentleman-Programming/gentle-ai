@@ -1850,7 +1850,7 @@ func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (Inj
 }
 
 func ensureKimiSkillRegistryHook(configPath string) (bool, error) {
-	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true`
+	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore || true`
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -1873,23 +1873,9 @@ func ensureKimiSkillRegistryHook(configPath string) (bool, error) {
 		return false, nil
 	}
 
-	// Remove any previous (possibly malformed) instance of this hook block.
-	for {
-		cmdIdx := strings.Index(text, command)
-		if cmdIdx == -1 {
-			break
-		}
-		blockStart := strings.LastIndex(text[:cmdIdx], "[[hooks]]")
-		if blockStart == -1 {
-			break
-		}
-		rest := text[blockStart:]
-		blockEnd := len(rest)
-		if next := strings.Index(rest[1:], "\n[["); next != -1 {
-			blockEnd = next + 1
-		}
-		text = text[:blockStart] + strings.TrimPrefix(rest[blockEnd:], "\n")
-	}
+	// Migration: drop any stale SessionStart skill-registry hook block (e.g. the
+	// Unix-only `--cwd "$PWD"` variant) before appending the current one.
+	text = removeKimiSkillRegistryHookBlocks(text)
 
 	hookBlock := `
 [[hooks]]
@@ -1902,6 +1888,40 @@ event = "SessionStart"
 		return false, fmt.Errorf("write Kimi config %q: %w", configPath, err)
 	}
 	return wr.Changed, nil
+}
+
+// kimiSkillRegistryMarker matches every variant of the skill-registry hook
+// command, including stale ones such as the Unix-only `--cwd "$PWD"` form.
+const kimiSkillRegistryMarker = "skill-registry refresh"
+
+// removeKimiSkillRegistryHookBlocks deletes every [[hooks]] SessionStart block
+// whose command references the skill-registry marker, so a sync replaces stale
+// hook variants with the current command. Unrelated [[hooks]] blocks are kept.
+func removeKimiSkillRegistryHookBlocks(text string) string {
+	searchFrom := 0
+	for {
+		idx := strings.Index(text[searchFrom:], kimiSkillRegistryMarker)
+		if idx == -1 {
+			return text
+		}
+		idx += searchFrom
+		blockStart := strings.LastIndex(text[:idx], "[[hooks]]")
+		if blockStart == -1 {
+			return text
+		}
+		rest := text[blockStart:]
+		blockEnd := len(rest)
+		if next := strings.Index(rest[1:], "\n[["); next != -1 {
+			blockEnd = next + 1
+		}
+		if !strings.Contains(rest[:blockEnd], "SessionStart") {
+			// Not a SessionStart hook: leave the block and keep scanning.
+			searchFrom = idx + len(kimiSkillRegistryMarker)
+			continue
+		}
+		text = text[:blockStart] + strings.TrimPrefix(rest[blockEnd:], "\n")
+		searchFrom = blockStart
+	}
 }
 
 func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
