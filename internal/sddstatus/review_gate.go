@@ -225,6 +225,50 @@ func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, tra
 	return state
 }
 
+func resolveBoundCompactRemediation(required bool, verify verifyResultEvaluation, authority reviewtransaction.CompactState) RemediationState {
+	if !required {
+		return RemediationState{}
+	}
+	if !verify.Valid || verify.EvidenceRevision == "" || verify.EvidenceRevision != authority.EvidenceHash {
+		return RemediationState{Reason: "verify evidence does not exactly match the bound compact authority"}
+	}
+	if authority.CumulativeCorrectionLines >= authority.CorrectionBudget {
+		return RemediationState{Reason: "bound compact authority has no remaining correction budget"}
+	}
+	if len(authority.CorrectionAttempts) >= reviewtransaction.MaxCompactCorrectionAttempts {
+		return RemediationState{Reason: "bound compact authority exhausted its correction attempt budget"}
+	}
+	return RemediationState{
+		Required:               true,
+		FailedEvidenceRevision: verify.EvidenceRevision,
+		LineageID:              authority.LineageID,
+		Generation:             authority.Generation,
+		FixBatch:               len(authority.CorrectionAttempts) + 1,
+		Reason:                 fmt.Sprintf("verify evidence requires bounded remediation for %s: %s", verify.EvidenceRevision, verify.Reason),
+	}
+}
+
+func applyBoundCompactRemediationRouting(dependencies *Dependencies, nextRecommended *string, applyState ApplyState, verify verifyResultEvaluation, remediation RemediationState) {
+	if remediation.Required {
+		dependencies.Verify = DependencyBlocked
+		dependencies.Archive = DependencyBlocked
+		*nextRecommended = "remediate"
+		return
+	}
+	if applyState != ApplyAllDone || verify.Passing {
+		return
+	}
+	if remediation.Reason != "" {
+		dependencies.Verify = DependencyBlocked
+		dependencies.Archive = DependencyBlocked
+		*nextRecommended = "resolve-review"
+		return
+	}
+	dependencies.Verify = DependencyReady
+	dependencies.Archive = DependencyBlocked
+	*nextRecommended = "verify"
+}
+
 func applyReviewGate(
 	status *Status,
 	repo string,

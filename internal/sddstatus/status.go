@@ -325,13 +325,17 @@ func Resolve(options ResolveOptions) (Status, error) {
 	bridge := compactPreVerifyBridge{}
 	recoverable := authorityOnlyFailedReport(readText(firstPath(artifactPaths.VerifyReport)))
 	if bindingPresent {
-		_, evaluation, bindingErr := validateBoundReview(context.Background(), workspaceRoot, changeName)
+		_, evaluation, authority, bindingErr := validateBoundReviewWithState(context.Background(), workspaceRoot, changeName)
 		if bindingErr == nil {
-			if applyState == ApplyAllDone && artifacts["verifyReport"] != ArtifactDone {
-				dependencies.Verify = DependencyReady
-				dependencies.Archive = DependencyBlocked
-				nextRecommended = "verify"
-			}
+			reviewState = nil
+			remediationState = resolveBoundCompactRemediation(
+				artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone && !recoverable && verifyResult.Valid && verifyResult.EvidenceRevision == authority.EvidenceHash,
+				verifyResult,
+				authority,
+			)
+			dependencies = resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyResult.Passing, remediationState.Complete)
+			nextRecommended = resolveNextRecommended(dependencies, applyState, artifacts["verifyReport"] == ArtifactDone, remediationState)
+			applyBoundCompactRemediationRouting(&dependencies, &nextRecommended, applyState, verifyResult, remediationState)
 			boundGate = &ReviewGateState{Result: evaluation.Result, Reason: "explicit bound compact authority exactly matches the current repository"}
 		} else {
 			dependencies.Verify = DependencyBlocked

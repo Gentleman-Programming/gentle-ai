@@ -24,6 +24,7 @@ type verifyCompletion struct {
 
 type verifyResultEvaluation struct {
 	Passing          bool
+	Valid            bool
 	Reason           string
 	EvidenceRevision string
 }
@@ -118,6 +119,7 @@ func parseVerifyResult(text string, expected SpecCounts) verifyResultEvaluation 
 		evaluation.Reason = fmt.Sprintf("invalid verdict %s", verdict)
 		return evaluation
 	}
+	evaluation.Valid = true
 	if testExit != 0 {
 		evaluation.Reason = "test_exit_code must be zero for archive readiness"
 		return evaluation

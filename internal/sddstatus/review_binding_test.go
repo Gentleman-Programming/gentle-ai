@@ -379,6 +379,133 @@ func TestBoundReviewUsesNormalVerifyThenArchiveRouting(t *testing.T) {
 	}
 }
 
+func TestBoundCompactAuthorityRoutesSubstantiveFailedVerifyIntoRemediation(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Binding\n#### Scenario: Exact authority\n")
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "approved-thin")
+	if _, err := BindApprovedReview(context.Background(), root, "thin", "approved-thin", ""); err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "approved-thin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptPayload, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := reviewtransaction.ParseCompactReceipt(receiptPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := strings.ReplaceAll(boundedVerifyEnvelope(receipt.EvidenceHash, "fail"), "test_exit_code: 0", "test_exit_code: 1")
+	write(t, filepath.Join(changeRoot, "verify-report.md"), failed)
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateAllow || !status.RemediationState.Required || status.RemediationState.FailedEvidenceRevision != receipt.EvidenceHash || status.RemediationState.LineageID != receipt.LineageID || status.RemediationState.Generation != receipt.Generation || status.RemediationState.FixBatch != 1 || status.NextRecommended != "remediate" {
+		t.Fatalf("bound failed verification status = %#v", status)
+	}
+}
+
+func TestBoundCompactRemediationDenialFailsClosed(t *testing.T) {
+	verify := verifyResultEvaluation{
+		Valid:            true,
+		EvidenceRevision: shaID("a"),
+		Reason:           "substantive verification failure",
+	}
+	for _, tt := range []struct {
+		name       string
+		authority  reviewtransaction.CompactState
+		wantReason string
+	}{
+		{
+			name: "cumulative correction budget exhausted",
+			authority: reviewtransaction.CompactState{
+				LineageID: "approved-thin", Generation: 1, EvidenceHash: verify.EvidenceRevision,
+				CorrectionBudget: 10, CumulativeCorrectionLines: 10,
+			},
+			wantReason: "no remaining correction budget",
+		},
+		{
+			name: "correction attempt budget exhausted",
+			authority: reviewtransaction.CompactState{
+				LineageID: "approved-thin", Generation: 1, EvidenceHash: verify.EvidenceRevision,
+				CorrectionBudget:   10,
+				CorrectionAttempts: make([]reviewtransaction.CompactCorrectionAttempt, reviewtransaction.MaxCompactCorrectionAttempts),
+			},
+			wantReason: "exhausted its correction attempt budget",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			remediation := resolveBoundCompactRemediation(true, verify, tt.authority)
+			if remediation.Required || remediation.Reason == "" || !strings.Contains(remediation.Reason, tt.wantReason) {
+				t.Fatalf("remediation = %#v", remediation)
+			}
+
+			dependencies := Dependencies{Verify: DependencyReady, Archive: DependencyBlocked}
+			nextRecommended := "verify"
+			applyBoundCompactRemediationRouting(&dependencies, &nextRecommended, ApplyAllDone, verify, remediation)
+			if dependencies.Verify != DependencyBlocked || dependencies.Archive != DependencyBlocked || nextRecommended != "resolve-review" {
+				t.Fatalf("dependencies=%#v next=%q, want verify/archive blocked and resolve-review", dependencies, nextRecommended)
+			}
+		})
+	}
+}
+
+func TestValidBindingSuppressesStaleLegacyReviewRouting(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		verify      string
+		wantVerify  DependencyState
+		wantArchive DependencyState
+		wantNext    string
+	}{
+		{name: "missing verify result", wantVerify: DependencyReady, wantArchive: DependencyBlocked, wantNext: "verify"},
+		{name: "non-native stale verify result", verify: "# Verify\nVerdict: PASS\n", wantVerify: DependencyReady, wantArchive: DependencyBlocked, wantNext: "verify"},
+		{name: "passing native verify result", verify: boundedVerifyEnvelope(shaID("a"), "pass"), wantVerify: DependencyAllDone, wantArchive: DependencyReady, wantNext: "archive"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+			write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Binding\n#### Scenario: Exact authority\n")
+			stale, err := reviewtransaction.NewTransaction(reviewtransaction.Start{
+				LineageID: "legacy-thin", Mode: reviewtransaction.ModeOrdinary4R, Generation: 1,
+				Snapshot:   reviewtransaction.Snapshot{Kind: reviewtransaction.TargetCurrentChanges, BaseTree: strings.Repeat("a", 40), CandidateTree: strings.Repeat("b", 40), PathsDigest: shaID("1"), IntendedUntracked: []string{}, IntendedUntrackedProof: shaID("2"), Paths: []string{"openspec/changes/thin/tasks.md"}, Identity: shaID("3")},
+				PolicyHash: shaID("4"),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := stale.StartReview(); err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(t, filepath.Join(changeRoot, "reviews", "transaction.json"), stale)
+			if tt.verify != "" {
+				write(t, filepath.Join(changeRoot, "verify-report.md"), tt.verify)
+			}
+			writeApprovedCompactAuthorityForChange(t, root, changeRoot, "approved-thin")
+			if _, err := BindApprovedReview(context.Background(), root, "thin", "approved-thin", ""); err != nil {
+				t.Fatal(err)
+			}
+
+			status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateAllow || status.ReviewTransaction != nil || status.RemediationState != (RemediationState{}) || status.Dependencies.Verify != tt.wantVerify || status.Dependencies.Archive != tt.wantArchive || status.NextRecommended != tt.wantNext {
+				t.Fatalf("status = %#v", status)
+			}
+			if strings.Contains(strings.Join(status.BlockedReasons, "\n"), "does not match failed evidence revision") {
+				t.Fatalf("stale legacy remediation leaked into status: %#v", status)
+			}
+		})
+	}
+}
+
 func TestSelectedBindingSupersedesOnlyItsLegacyReviewAuthority(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")

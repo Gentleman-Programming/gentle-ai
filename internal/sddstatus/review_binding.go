@@ -84,55 +84,60 @@ func BindApprovedReview(ctx context.Context, repo, change, lineage, expected str
 }
 
 func validateBoundReview(ctx context.Context, repo, change string) (ReviewBinding, reviewtransaction.NativeGateEvaluation, error) {
+	binding, evaluation, _, err := validateBoundReviewWithState(ctx, repo, change)
+	return binding, evaluation, err
+}
+
+func validateBoundReviewWithState(ctx context.Context, repo, change string) (ReviewBinding, reviewtransaction.NativeGateEvaluation, reviewtransaction.CompactState, error) {
 	if !validReviewBindingChange(change) {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("invalid OpenSpec change name")
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, errors.New("invalid OpenSpec change name")
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, err
 	}
 	changeRoot, err := resolveBindingChangeRoot(root, repo, change)
 	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, err
 	}
 	probe, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, "binding-probe")
 	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, err
 	}
 	payload, err := os.ReadFile(bindingPath(probe, change))
 	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, fmt.Errorf("approved review binding is missing: %w", err)
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, fmt.Errorf("approved review binding is missing: %w", err)
 	}
 	binding, err := parseBinding(payload)
 	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, fmt.Errorf("approved review binding is invalid: %w", err)
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, fmt.Errorf("approved review binding is invalid: %w", err)
 	}
 	if binding.Change != change {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("approved review binding change does not match selected change")
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, errors.New("approved review binding change does not match selected change")
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, binding.Lineage)
 	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, err
 	}
 	record, err := store.Load()
 	if err != nil || record.Revision != binding.AuthorityRevision || record.State.State != reviewtransaction.StateApproved {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact authority is stale or not approved")
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, errors.New("bound compact authority is stale or not approved")
 	}
 	receiptPayload, err := os.ReadFile(store.ReceiptPath())
 	if err != nil || bindingHash(receiptPayload) != binding.ReceiptHash {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact receipt changed")
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, errors.New("bound compact receipt changed")
 	}
 	receipt, err := reviewtransaction.ParseCompactReceipt(receiptPayload)
 	authoritative, receiptErr := record.State.Receipt()
 	if err != nil || receiptErr != nil || !reflect.DeepEqual(receipt, authoritative) {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact receipt does not match approved authority")
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, errors.New("bound compact receipt does not match approved authority")
 	}
 	if err := verifyBindingLedger(changeRoot, record.State.Findings); err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, err
 	}
 	evaluation := reviewtransaction.EvaluateCompactGate(ctx, root, receipt, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: binding.Lineage})
 	if evaluation.Result != reviewtransaction.GateAllow || !reflect.DeepEqual(evaluation.Context, binding.GateContext) {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact post-apply gate context changed")
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, errors.New("bound compact post-apply gate context changed")
 	}
 	bindingFinalAuthorizationHook()
 	finalBinding, bindingErr := os.ReadFile(bindingPath(probe, change))
@@ -140,18 +145,18 @@ func validateBoundReview(ctx context.Context, repo, change string) (ReviewBindin
 	finalReceipt, receiptErr := os.ReadFile(store.ReceiptPath())
 	finalChangeRoot, changeErr := resolveBindingChangeRoot(root, repo, change)
 	if bindingErr != nil || recordErr != nil || receiptErr != nil || changeErr != nil || finalChangeRoot != changeRoot || !bytes.Equal(finalBinding, payload) || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalRecord.State, record.State) || finalRecord.State.State != reviewtransaction.StateApproved || !bytes.Equal(finalReceipt, receiptPayload) || bindingHash(finalReceipt) != binding.ReceiptHash {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound authority, receipt, or binding changed during final read")
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, errors.New("bound authority, receipt, or binding changed during final read")
 	}
 	finalReceiptValue, parseErr := reviewtransaction.ParseCompactReceipt(finalReceipt)
 	finalAuthoritative, authorityErr := finalRecord.State.Receipt()
 	if parseErr != nil || authorityErr != nil || !reflect.DeepEqual(finalReceiptValue, finalAuthoritative) {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact receipt does not match final authority")
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, errors.New("bound compact receipt does not match final authority")
 	}
 	finalGate := reviewtransaction.EvaluateCompactGate(ctx, root, finalReceiptValue, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: binding.Lineage})
 	if finalGate.Result != reviewtransaction.GateAllow || !reflect.DeepEqual(finalGate.Context, binding.GateContext) {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact post-apply gate changed during final authorization")
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, reviewtransaction.CompactState{}, errors.New("bound compact post-apply gate changed during final authorization")
 	}
-	return binding, finalGate, nil
+	return binding, finalGate, finalRecord.State, nil
 }
 
 func bindingExists(ctx context.Context, repo, change string) (bool, error) {
