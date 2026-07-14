@@ -2303,12 +2303,16 @@ func TestRunInstallKimiBootstrapsHub(t *testing.T) {
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = missingBinaryLookPath
 	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
-		if name == "uv" {
-			return "/usr/bin/uv", nil
+		if name == "npm" {
+			return "/usr/bin/npm", nil
 		}
 		return "", exec.ErrNotFound
 	})
 	t.Cleanup(restoreInstallcmdLookPath)
+	restoreNodeVersion := installcmd.OverrideNodeVersion(func() ([]byte, error) {
+		return []byte("v22.19.0"), nil
+	})
+	t.Cleanup(restoreNodeVersion)
 
 	// This test targets kimiSystemPromptHubStep bootstrap content, not agent
 	// install behavior, so simulate Kimi as already installed — otherwise
@@ -2342,7 +2346,71 @@ func TestRunInstallKimiBootstrapsHub(t *testing.T) {
 	}
 }
 
+<<<<<<< HEAD
 func TestRunInstallKimiAlreadyInstalledDoesNotRequireUV(t *testing.T) {
+=======
+func TestRunInstallKimiMissingNodeFailsBeforeExecutingInstallCommands(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = missingBinaryLookPath
+
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+
+	// Kimi must be undetected so the Node.js preflight actually runs, even on
+	// machines where a real kimi binary is on PATH.
+	originalKimiLookPath := kimi.LookPathOverride
+	kimi.LookPathOverride = func(name string) (string, error) {
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { kimi.LookPathOverride = originalKimiLookPath })
+
+	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		return "/usr/bin/" + name, nil
+	})
+	t.Cleanup(restoreInstallcmdLookPath)
+	restoreNodeVersion := installcmd.OverrideNodeVersion(func() ([]byte, error) {
+		return nil, exec.ErrNotFound
+	})
+	t.Cleanup(restoreNodeVersion)
+
+	// The refusal makes Apply fail, which triggers rollback of the
+	// pre-install snapshot; rollback validates restored paths are under the
+	// real user home directory, so it needs this test's fake home too (see
+	// TestRunInstallRefusesMissingOpenCodeInsteadOfInstalling for the same
+	// fix and its full explanation).
+	restoreBackupHome := backup.UserHomeDirFn
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() { backup.UserHomeDirFn = restoreBackupHome })
+
+	_, err := RunInstall(
+		[]string{"--agent", "kimi", "--component", "permissions"},
+		macOSDetectionResult(),
+	)
+	if err == nil {
+		t.Fatal("RunInstall() expected error when Kimi Node.js preflight fails")
+	}
+
+	if !strings.Contains(err.Error(), "preflight for agent \"kimi\"") || !strings.Contains(err.Error(), "Node.js") {
+		t.Fatalf("RunInstall() error = %q, expected Kimi Node.js preflight error", err.Error())
+	}
+
+	if got := recorder.get(); len(got) != 0 {
+		t.Fatalf("commands executed = %v, want none — gentle-ai must never run an install command on the user's behalf", got)
+	}
+}
+
+func TestRunInstallKimiAlreadyInstalledSkipsPreflight(t *testing.T) {
+>>>>>>> dc3f3e96 (fix(kimi): install current kimi-code via npm instead of legacy uv kimi-cli)
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -2367,13 +2435,16 @@ func TestRunInstallKimiAlreadyInstalledDoesNotRequireUV(t *testing.T) {
 	}
 	t.Cleanup(func() { kimi.LookPathOverride = originalKimiLookPath })
 
+	// Every preflight input fails: npm missing and node missing. The install
+	// must still succeed because an already-detected Kimi skips preflight.
 	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
-		if name == "uv" {
-			return "", exec.ErrNotFound
-		}
-		return "/usr/bin/" + name, nil
+		return "", exec.ErrNotFound
 	})
 	t.Cleanup(restoreInstallcmdLookPath)
+	restoreNodeVersion := installcmd.OverrideNodeVersion(func() ([]byte, error) {
+		return nil, exec.ErrNotFound
+	})
+	t.Cleanup(restoreNodeVersion)
 
 	result, err := RunInstall(
 		[]string{"--agent", "kimi", "--component", "permissions"},
