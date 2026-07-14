@@ -11,7 +11,7 @@ import (
 type Capability string
 
 // PluginInstaller is an optional adapter capability for agents that support
-// plugin-based distribution (e.g. Kimi Code v0.11+). When implemented,
+// plugin-based distribution (e.g. Kimi Code). When implemented,
 // components write skills into the plugin directory instead of the flat skills dir.
 type PluginInstaller interface {
 	// PluginDir returns the root directory for the plugin (e.g. ~/.kimi-code/plugins/managed/gentle-ai/).

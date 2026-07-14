@@ -11,7 +11,7 @@ import (
 )
 
 // KimiPluginManifest represents the kimi.plugin.json manifest generated
-// for Kimi Code v0.11+ plugin-based skill distribution.
+// for Kimi Code plugin-based skill distribution.
 //
 // Schema reference: https://www.kimi.com/code/docs/en/kimi-code-cli/customization/plugins.html
 type KimiPluginManifest struct {

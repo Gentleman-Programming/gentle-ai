@@ -1927,7 +1927,7 @@ func TestInjectGeminiWritesSDDOrchestratorAndSkills(t *testing.T) {
 func TestInjectKimiWritesNativeAgentFilesAndGlobalSkills(t *testing.T) {
 	home := t.TempDir()
 
-	// Create .kimi-code directory so isV11Plus returns true and plugin architecture is used.
+	// Create .kimi-code directory so usesKimiCodeLayout returns true and plugin architecture is used.
 	if err := os.MkdirAll(filepath.Join(home, ".kimi-code"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1941,7 +1941,7 @@ func TestInjectKimiWritesNativeAgentFilesAndGlobalSkills(t *testing.T) {
 	}
 
 	// SDD orchestrator is written as a standalone Jinja include module.
-	// Since we created .kimi-code, v0.11+ paths MUST be used — no legacy fallback.
+	// Since we created .kimi-code, kimi-code paths MUST be used — no legacy fallback.
 	sddModulePath := filepath.Join(home, ".kimi-code", "sdd-orchestrator.md")
 	sddModule, err := os.ReadFile(sddModulePath)
 	if err != nil {
@@ -1956,10 +1956,10 @@ func TestInjectKimiWritesNativeAgentFilesAndGlobalSkills(t *testing.T) {
 		t.Fatal("sdd-orchestrator.md should reference Kimi's documented Task tool for custom subagent delegation")
 	}
 
-	// Since .kimi-code exists, agents MUST be in v0.11+ path — no legacy fallback.
+	// Since .kimi-code exists, agents MUST be in kimi-code path — no legacy fallback.
 	agentsDir := filepath.Join(home, ".kimi-code", "agents")
 	if _, err := os.Stat(agentsDir); err != nil {
-		t.Fatalf("v0.11+ agents directory %q must exist when .kimi-code is present", agentsDir)
+		t.Fatalf("kimi-code agents directory %q must exist when .kimi-code is present", agentsDir)
 	}
 
 	rootAgentPath := filepath.Join(agentsDir, "gentleman.yaml")
@@ -1979,10 +1979,10 @@ func TestInjectKimiWritesNativeAgentFilesAndGlobalSkills(t *testing.T) {
 		t.Fatal("gentleman.yaml should load the installed AGENTS.md system prompt")
 	}
 
-	// Check skills are written to the plugin skills directory (v0.11+ only).
+	// Check skills are written to the plugin skills directory (kimi-code only).
 	skillsRoot := filepath.Join(home, ".kimi-code", "plugins", "managed", "gentle-ai", "skills")
 	if _, err := os.Stat(skillsRoot); err != nil {
-		t.Fatalf("v0.11+ plugin skills directory %q must exist when .kimi-code is present", skillsRoot)
+		t.Fatalf("kimi-code plugin skills directory %q must exist when .kimi-code is present", skillsRoot)
 	}
 
 	for _, want := range []string{

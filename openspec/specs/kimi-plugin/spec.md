@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines requirements for the Kimi Code v0.11+ plugin scaffolding: directory structure creation, manifest generation with sessionStart hook, and the `skills/` subdirectory that enables skill injection.
+Defines requirements for the current Kimi Code plugin scaffolding: directory structure creation, manifest generation with sessionStart hook, and the `skills/` subdirectory that enables skill injection.
 
 ---
 
@@ -10,11 +10,11 @@ Defines requirements for the Kimi Code v0.11+ plugin scaffolding: directory stru
 
 ### Requirement: InstallPlugin Creates Full Directory Structure
 
-`InstallPlugin` MUST create the complete plugin directory tree under `~/.kimi-code/plugins/managed/gentle-ai/`, including a `skills/` subdirectory, when called for v0.11+ installs. The directory creation MUST be idempotent.
+`InstallPlugin` MUST create the complete plugin directory tree under `~/.kimi-code/plugins/managed/gentle-ai/`, including a `skills/` subdirectory, when called for current kimi-code installs. The directory creation MUST be idempotent.
 
 #### Scenario: Fresh install creates full tree
 
-- GIVEN v0.11+ is detected and `~/.kimi-code/plugins/managed/gentle-ai/` does not exist
+- GIVEN current kimi-code is detected and `~/.kimi-code/plugins/managed/gentle-ai/` does not exist
 - WHEN `InstallPlugin(homeDir, version)` is called
 - THEN `{homeDir}/.kimi-code/plugins/managed/gentle-ai/` exists
 - AND `{homeDir}/.kimi-code/plugins/managed/gentle-ai/skills/` exists

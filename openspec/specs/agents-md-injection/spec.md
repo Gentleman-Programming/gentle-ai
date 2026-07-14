@@ -16,9 +16,9 @@ The adapter MUST implement an `AGENTSMDPath(homeDir string) string` method
 returning the path to the Kimi-level AGENTS.md file in the resolved config
 directory.
 
-#### Scenario: v0.11+ returns correct path
+#### Scenario: current kimi-code returns correct path
 
-- GIVEN Kimi Code v0.11+ is detected (`~/.kimi-code` exists or `KIMI_CODE_HOME`
+- GIVEN current Kimi Code is detected (`~/.kimi-code` exists or `KIMI_CODE_HOME`
   is set)
 - WHEN `AGENTSMDPath(homeDir)` is called
 - THEN it returns `{resolvedConfigDir}/AGENTS.md`

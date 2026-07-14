@@ -28,8 +28,8 @@ type ConfigState struct {
 // until the import cycle is resolved and ScanConfigs can delegate directly to
 // agents.DiscoverInstalled.
 func knownAgentConfigDirs(homeDir string) []ConfigState {
-	// Kimi Code v0.11+ (Node.js) uses ~/.kimi-code; legacy (Python/uv) uses ~/.kimi.
-	// We prefer the v0.11+ directory when present for detection purposes.
+	// Kimi Code (Node.js) uses ~/.kimi-code; legacy (Python/uv) uses ~/.kimi.
+	// We prefer the kimi-code directory when present for detection purposes.
 	kimiDir := filepath.Join(homeDir, ".kimi-code")
 	if info, err := os.Stat(kimiDir); err != nil {
 		if os.IsNotExist(err) {

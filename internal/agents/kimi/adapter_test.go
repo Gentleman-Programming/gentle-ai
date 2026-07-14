@@ -235,7 +235,7 @@ func TestConfigPath(t *testing.T) {
 	}
 }
 
-func TestAdapter_ConfigPaths_V11Plus(t *testing.T) {
+func TestAdapter_ConfigPaths_KimiCode(t *testing.T) {
 	homeDir := "/home/test"
 	kimiCodeDir := filepath.Join(homeDir, ".kimi-code")
 
@@ -274,7 +274,7 @@ func TestAdapter_ConfigPaths_V11Plus(t *testing.T) {
 	}
 }
 
-func TestAdapter_Detect_V11Plus(t *testing.T) {
+func TestAdapter_Detect_KimiCode(t *testing.T) {
 	tmpDir := t.TempDir()
 	kimiCodeDir := filepath.Join(tmpDir, ".kimi-code")
 	if err := os.MkdirAll(kimiCodeDir, 0755); err != nil {
@@ -316,7 +316,7 @@ func TestAdapter_Detect_V11Plus(t *testing.T) {
 	}
 }
 
-func TestAdapter_PostInstallMessage_V11Plus(t *testing.T) {
+func TestAdapter_PostInstallMessage_KimiCode(t *testing.T) {
 	homeDir := "/home/test"
 	kimiCodeDir := filepath.Join(homeDir, ".kimi-code")
 
@@ -335,14 +335,14 @@ func TestAdapter_PostInstallMessage_V11Plus(t *testing.T) {
 	msg := a.PostInstallMessage(homeDir)
 
 	if strings.Contains(msg, "--agent-file") {
-		t.Error("PostInstallMessage() for v0.11+ should NOT contain --agent-file")
+		t.Error("PostInstallMessage() for current kimi-code should NOT contain --agent-file")
 	}
-	if !strings.Contains(msg, "Kimi Code v0.11+") {
-		t.Error("PostInstallMessage() for v0.11+ should contain 'Kimi Code v0.11+'")
+	if !strings.Contains(msg, "Kimi Code configured!") {
+		t.Error("PostInstallMessage() for current kimi-code should contain 'Kimi Code configured!'")
 	}
 	expectedSkills := filepath.Join(homeDir, ".kimi-code", "plugins", "managed", "gentle-ai", "skills")
 	if !strings.Contains(msg, expectedSkills) {
-		t.Errorf("PostInstallMessage() missing v0.11+ skills path %q, got: %q", expectedSkills, msg)
+		t.Errorf("PostInstallMessage() missing kimi-code skills path %q, got: %q", expectedSkills, msg)
 	}
 }
 
@@ -456,7 +456,7 @@ func TestAdapter_KIMI_CODE_HOME_FallbackOnInvalid(t *testing.T) {
 	}
 }
 
-func TestConfigPath_V11Plus(t *testing.T) {
+func TestConfigPath_KimiCode(t *testing.T) {
 	tmpDir := t.TempDir()
 	kimiCodeDir := filepath.Join(tmpDir, ".kimi-code")
 	if err := os.MkdirAll(kimiCodeDir, 0755); err != nil {
@@ -470,7 +470,7 @@ func TestConfigPath_V11Plus(t *testing.T) {
 	}
 }
 
-func TestAdapter_AllSkillsDirs_V11Plus(t *testing.T) {
+func TestAdapter_AllSkillsDirs_KimiCode(t *testing.T) {
 	homeDir := "/home/test"
 	kimiCodeDir := filepath.Join(homeDir, ".kimi-code")
 
@@ -523,7 +523,7 @@ func TestAdapter_AllSkillsDirs_Legacy(t *testing.T) {
 	}
 }
 
-func TestAdapter_AGENTSMDPath_V11Plus(t *testing.T) {
+func TestAdapter_AGENTSMDPath_KimiCode(t *testing.T) {
 	homeDir := "/home/test"
 	kimiCodeDir := filepath.Join(homeDir, ".kimi-code")
 
@@ -652,7 +652,7 @@ func TestAdapter_BootstrapTemplate_ExistingConfigNotOverwritten(t *testing.T) {
 	if !strings.Contains(text, "merge_all_available_skills = false") {
 		t.Errorf("config.toml lost custom setting; got:\n%s", text)
 	}
-	// For v0.11+, Gentle AI merges its extras without overwriting.
+	// For current kimi-code, Gentle AI merges its extras without overwriting.
 	if !strings.Contains(text, "extra_skill_dirs") {
 		t.Errorf("config.toml missing merged extra_skill_dirs; got:\n%s", text)
 	}
@@ -730,7 +730,7 @@ func TestAdapter_BootstrapTemplate_AGENTS_MD_HasProjectScopedPlaceholder(t *test
 // Verify GentleAI version constant is non-empty at compile time.
 var _ string = versions.GentleAI
 
-func TestBootstrapTemplate_ConfigTOML_Hooks_V11(t *testing.T) {
+func TestBootstrapTemplate_ConfigTOML_Hooks_KimiCode(t *testing.T) {
 	tmpDir := t.TempDir()
 	kimiCodeDir := filepath.Join(tmpDir, ".kimi-code")
 	if err := os.MkdirAll(kimiCodeDir, 0755); err != nil {
@@ -767,7 +767,7 @@ func TestBootstrapTemplate_ConfigTOML_Hooks_V11(t *testing.T) {
 	}
 }
 
-func TestBootstrapTemplate_ConfigTOML_ExtraSkillDirs_V11(t *testing.T) {
+func TestBootstrapTemplate_ConfigTOML_ExtraSkillDirs_KimiCode(t *testing.T) {
 	tmpDir := t.TempDir()
 	kimiCodeDir := filepath.Join(tmpDir, ".kimi-code")
 	if err := os.MkdirAll(kimiCodeDir, 0755); err != nil {
@@ -804,7 +804,7 @@ func TestBootstrapTemplate_ConfigTOML_ExtraSkillDirs_V11(t *testing.T) {
 	}
 }
 
-func TestBootstrapTemplate_MergesExtraSkillDirs_ExistingConfigV11(t *testing.T) {
+func TestBootstrapTemplate_MergesExtraSkillDirs_ExistingConfigKimiCode(t *testing.T) {
 	tmpDir := t.TempDir()
 	kimiCodeDir := filepath.Join(tmpDir, ".kimi-code")
 	if err := os.MkdirAll(kimiCodeDir, 0755); err != nil {
@@ -846,7 +846,7 @@ func TestBootstrapTemplate_MergesExtraSkillDirs_ExistingConfigV11(t *testing.T) 
 	}
 }
 
-func TestBootstrapTemplate_CallsInstallPlugin_V11(t *testing.T) {
+func TestBootstrapTemplate_CallsInstallPlugin_KimiCode(t *testing.T) {
 	tmpDir := t.TempDir()
 	kimiCodeDir := filepath.Join(tmpDir, ".kimi-code")
 	if err := os.MkdirAll(kimiCodeDir, 0755); err != nil {

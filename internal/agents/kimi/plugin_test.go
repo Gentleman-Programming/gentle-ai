@@ -13,14 +13,14 @@ import (
 // Verify Adapter implements PluginInstaller at compile time.
 var _ agents.PluginInstaller = (*kimi.Adapter)(nil)
 
-func TestPluginDir_V11Plus(t *testing.T) {
+func TestPluginDir_KimiCode(t *testing.T) {
 	tmpDir := t.TempDir()
 	kimiCodeDir := filepath.Join(tmpDir, ".kimi-code")
 	if err := os.MkdirAll(kimiCodeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 	got := a.PluginDir(tmpDir)
 	expected := filepath.Join(tmpDir, ".kimi-code", "plugins", "managed", "gentle-ai")
 	if got != expected {
@@ -28,14 +28,14 @@ func TestPluginDir_V11Plus(t *testing.T) {
 	}
 }
 
-func TestPluginManifestPath_V11Plus(t *testing.T) {
+func TestPluginManifestPath_KimiCode(t *testing.T) {
 	tmpDir := t.TempDir()
 	kimiCodeDir := filepath.Join(tmpDir, ".kimi-code")
 	if err := os.MkdirAll(kimiCodeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 	got := a.PluginManifestPath(tmpDir)
 	expected := filepath.Join(tmpDir, ".kimi-code", "plugins", "managed", "gentle-ai", "kimi.plugin.json")
 	if got != expected {
@@ -50,7 +50,7 @@ func TestInstallPlugin_CreatesDirAndManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 	err := a.InstallPlugin(tmpDir, "1.2.3")
 	if err != nil {
 		t.Fatalf("InstallPlugin() error = %v", err)
@@ -112,7 +112,7 @@ func TestInstallPlugin_VersionFromArg(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 	if err := a.InstallPlugin(tmpDir, "9.9.9"); err != nil {
 		t.Fatalf("InstallPlugin() error = %v", err)
 	}
@@ -137,7 +137,7 @@ func TestPluginManifest_OverwritesExisting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 
 	// First call.
 	if err := a.InstallPlugin(tmpDir, "1.0.0"); err != nil {
@@ -164,18 +164,18 @@ func TestPluginManifest_OverwritesExisting(t *testing.T) {
 
 // --- Phase 2: Version Guard Tests ---
 
-func TestSkillsDir_PluginPath_V11Plus(t *testing.T) {
+func TestSkillsDir_PluginPath_KimiCode(t *testing.T) {
 	tmpDir := t.TempDir()
 	kimiCodeDir := filepath.Join(tmpDir, ".kimi-code")
 	if err := os.MkdirAll(kimiCodeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 	got := a.SkillsDir(tmpDir)
 	expected := filepath.Join(tmpDir, ".kimi-code", "plugins", "managed", "gentle-ai", "skills")
 	if got != expected {
-		t.Errorf("SkillsDir() v0.11+ = %v, want %v", got, expected)
+		t.Errorf("SkillsDir() kimi-code = %v, want %v", got, expected)
 	}
 }
 
@@ -190,17 +190,17 @@ func TestSkillsDir_LegacyPath(t *testing.T) {
 	}
 }
 
-func TestAllSkillsDirs_PluginDirFirst_V11Plus(t *testing.T) {
+func TestAllSkillsDirs_PluginDirFirst_KimiCode(t *testing.T) {
 	tmpDir := t.TempDir()
 	kimiCodeDir := filepath.Join(tmpDir, ".kimi-code")
 	if err := os.MkdirAll(kimiCodeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 	dirs := a.AllSkillsDirs(tmpDir)
 	if len(dirs) != 4 {
-		t.Fatalf("AllSkillsDirs() v0.11+ returned %d dirs, want 4: %v", len(dirs), dirs)
+		t.Fatalf("AllSkillsDirs() kimi-code returned %d dirs, want 4: %v", len(dirs), dirs)
 	}
 
 	expected := []string{
@@ -229,7 +229,7 @@ func TestAllSkillsDirs_LegacyUnchanged(t *testing.T) {
 	}
 }
 
-// newLegacyAdapter creates a test Adapter without v0.11+ (no .kimi-code dir).
+// newLegacyAdapter creates a test Adapter without the kimi-code layout (no .kimi-code dir).
 func newLegacyAdapter(homeDir string) *kimi.Adapter {
 	return kimi.NewTestAdapter(
 		kimi.WithStatPath(func(path string) kimi.StatResult {
@@ -239,8 +239,8 @@ func newLegacyAdapter(homeDir string) *kimi.Adapter {
 	)
 }
 
-// newV11Adapter creates a test Adapter with v0.11+ detection enabled.
-func newV11Adapter(t *testing.T, homeDir string) *kimi.Adapter {
+// newKimiCodeAdapter creates a test Adapter with the kimi-code layout detected.
+func newKimiCodeAdapter(t *testing.T, homeDir string) *kimi.Adapter {
 	t.Helper()
 	kimiCodeDir := filepath.Join(homeDir, ".kimi-code")
 	return kimi.NewTestAdapter(
@@ -269,7 +269,7 @@ func TestInstallPlugin_DirCreationFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 	err := a.InstallPlugin(tmpDir, "1.0.0")
 	// Should return an error (not panic).
 	if err == nil {
@@ -298,7 +298,7 @@ func TestPluginManifest_NoMCPServers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 	if err := a.InstallPlugin(tmpDir, "1.0.0"); err != nil {
 		t.Fatalf("InstallPlugin() error = %v", err)
 	}
@@ -325,7 +325,7 @@ func TestInstallPlugin_CreatesSkillsSubdir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 	if err := a.InstallPlugin(tmpDir, "1.0.0"); err != nil {
 		t.Fatalf("InstallPlugin() error = %v", err)
 	}
@@ -356,7 +356,7 @@ func TestInstallPlugin_SkillsSubdirIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 
 	// First call.
 	if err := a.InstallPlugin(tmpDir, "1.0.0"); err != nil {
@@ -391,7 +391,7 @@ func TestPluginManifest_SkillsPathRelative(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 	if err := a.InstallPlugin(tmpDir, "1.0.0"); err != nil {
 		t.Fatalf("InstallPlugin() error = %v", err)
 	}
@@ -420,7 +420,7 @@ func TestPluginDir_KIMI_CODE_HOME(t *testing.T) {
 	}
 	t.Setenv("KIMI_CODE_HOME", customDir)
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 	got := a.PluginDir(tmpDir)
 	expected := filepath.Join(customDir, "plugins", "managed", "gentle-ai")
 	if got != expected {
@@ -436,7 +436,7 @@ func TestInstallPlugin_KIMI_CODE_HOME(t *testing.T) {
 	}
 	t.Setenv("KIMI_CODE_HOME", customDir)
 
-	a := newV11Adapter(t, tmpDir)
+	a := newKimiCodeAdapter(t, tmpDir)
 	if err := a.InstallPlugin(tmpDir, "1.0.0"); err != nil {
 		t.Fatalf("InstallPlugin() error = %v", err)
 	}
