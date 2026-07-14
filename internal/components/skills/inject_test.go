@@ -494,7 +494,7 @@ func requiredBundledSkillIDs() []model.SkillID {
 
 func TestInject_PluginInstaller_UsesPluginDir(t *testing.T) {
 	home := t.TempDir()
-	// Create the .kimi-code sentinel so isV11Plus returns true.
+	// Create the .kimi-code sentinel so usesKimiCodeLayout returns true.
 	if err := os.MkdirAll(filepath.Join(home, ".kimi-code"), 0o755); err != nil {
 		t.Fatal(err)
 	}

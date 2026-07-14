@@ -2,12 +2,12 @@
 //
 // Integration Note:
 // This adapter supports both the legacy Python/uv-based Kimi CLI (~/.kimi)
-// and the Node.js-based kimi-code v0.11+ (~/.kimi-code). Path resolution
+// and the Node.js-based kimi-code (~/.kimi-code). Path resolution
 // prefers ~/.kimi-code when present, falling back to ~/.kimi for backward
 // compatibility.
 //
 // Legacy install: uv tool install kimi-cli
-// v0.11+ install: npm install -g kimi-code (or official installer)
+// kimi-code install: npm install -g kimi-code (or official installer)
 package kimi
 
 import (
@@ -131,7 +131,7 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 // --- Config paths ---
 
 // resolveConfigDir returns the configuration directory for Kimi.
-// It checks KIMI_CODE_HOME env var first, then prefers ~/.kimi-code (v0.11+)
+// It checks KIMI_CODE_HOME env var first, then prefers ~/.kimi-code (current kimi-code)
 // when present, falling back to ~/.kimi (legacy).
 func (a *Adapter) resolveConfigDir(homeDir string) string {
 	if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" {
@@ -146,9 +146,9 @@ func (a *Adapter) resolveConfigDir(homeDir string) string {
 	return filepath.Join(homeDir, ".kimi")
 }
 
-// isV11Plus reports whether the v0.11+ Node.js-based kimi-code is installed.
+// usesKimiCodeLayout reports whether the current Node.js-based kimi-code layout is installed.
 // It checks KIMI_CODE_HOME first, then falls back to ~/.kimi-code detection.
-func (a *Adapter) isV11Plus(homeDir string) bool {
+func (a *Adapter) usesKimiCodeLayout(homeDir string) bool {
 	if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" {
 		if st := a.statPath(envDir); st.err == nil && st.isDir {
 			return true
@@ -172,7 +172,7 @@ func (a *Adapter) SystemPromptFile(homeDir string) string {
 
 // SkillsDir returns the skills directory path.
 //
-// For v0.11+ (Node.js) with plugin support, it returns the plugin skills subdirectory
+// For current kimi-code (Node.js) with plugin support, it returns the plugin skills subdirectory
 // under the resolved Kimi config directory:
 //
 //	{resolvedConfigDir}/plugins/managed/gentle-ai/skills
@@ -182,14 +182,14 @@ func (a *Adapter) SystemPromptFile(homeDir string) string {
 //	~/.config/agents/skills
 //
 // Kimi Code CLI discovers skills from multiple sources including:
-//   - {resolvedConfigDir}/plugins/managed/gentle-ai/skills (v0.11+ plugin)
-//   - {resolvedConfigDir}/skills (v0.11+ user skills)
+//   - {resolvedConfigDir}/plugins/managed/gentle-ai/skills (kimi-code plugin)
+//   - {resolvedConfigDir}/skills (kimi-code user skills)
 //   - ~/.config/agents/skills (generic shared skills)
 //   - ~/.agents/skills (generic shared skills)
 //
 // See: https://moonshotai.github.io/kimi-cli/en/customization/skills.html
 func (a *Adapter) SkillsDir(homeDir string) string {
-	if a.isV11Plus(homeDir) {
+	if a.usesKimiCodeLayout(homeDir) {
 		return filepath.Join(a.PluginDir(homeDir), "skills")
 	}
 	return filepath.Join(homeDir, ".config", "agents", "skills")
@@ -204,10 +204,10 @@ func (a *Adapter) CommandsDir(string) string {
 }
 
 // AllSkillsDirs returns all directories Kimi Code discovers for skills.
-// For v0.11+: plugin skills, {resolvedConfigDir}/skills, ~/.agents/skills, ~/.config/agents/skills
+// For current kimi-code: plugin skills, {resolvedConfigDir}/skills, ~/.agents/skills, ~/.config/agents/skills
 // For legacy: ~/.config/agents/skills only.
 func (a *Adapter) AllSkillsDirs(homeDir string) []string {
-	if a.isV11Plus(homeDir) {
+	if a.usesKimiCodeLayout(homeDir) {
 		return []string{
 			filepath.Join(a.PluginDir(homeDir), "skills"),
 			filepath.Join(a.resolveConfigDir(homeDir), "skills"),
@@ -286,8 +286,8 @@ func (a *Adapter) PostInstallMessage(homeDir string) string {
 	configDir := a.resolveConfigDir(homeDir)
 	skillsRoot := a.SkillsDir(homeDir)
 
-	if a.isV11Plus(homeDir) {
-		return fmt.Sprintf(`Kimi Code v0.11+ configured!
+	if a.usesKimiCodeLayout(homeDir) {
+		return fmt.Sprintf(`Kimi Code configured!
 
 Usage:
   kimi
@@ -348,7 +348,7 @@ func defaultPathExists(path string) bool {
 }
 
 // ConfigPath returns the configuration directory path.
-// It checks KIMI_CODE_HOME env var first, then prefers ~/.kimi-code (v0.11+)
+// It checks KIMI_CODE_HOME env var first, then prefers ~/.kimi-code (current kimi-code)
 // when present, falling back to ~/.kimi (legacy).
 func ConfigPath(homeDir string) string {
 	if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" {
@@ -401,26 +401,26 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 
 	// Kimi considers config.toml a required file. We create one with sensible
 	// defaults if it's missing to satisfy verification during a minimalist install.
-	// For v0.11+, we also append hooks and extra_skill_dirs.
+	// For current kimi-code, we also append hooks and extra_skill_dirs.
 	configPath := a.SettingsPath(homeDir)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		content := resolveConfigTOMLContent()
-		if a.isV11Plus(homeDir) {
-			content += configTOMLV11Extras()
+		if a.usesKimiCodeLayout(homeDir) {
+			content += configTOMLKimiCodeExtras()
 		}
 		if _, err := filemerge.WriteFileAtomic(configPath, []byte(content), 0o644); err != nil {
 			return err
 		}
-	} else if a.isV11Plus(homeDir) {
-		if _, err := mergeConfigTOMLV11Extras(configPath); err != nil {
-			return fmt.Errorf("merge v0.11+ config extras: %w", err)
+	} else if a.usesKimiCodeLayout(homeDir) {
+		if _, err := mergeConfigTOMLKimiCodeExtras(configPath); err != nil {
+			return fmt.Errorf("merge kimi-code config extras: %w", err)
 		}
 	}
 
-	// Install the Kimi plugin for v0.11+. This is best-effort: if plugin
+	// Install the Kimi plugin for current kimi-code. This is best-effort: if plugin
 	// directory creation fails (e.g. permissions), log a warning and continue
 	// — the core config files are already written.
-	if a.isV11Plus(homeDir) {
+	if a.usesKimiCodeLayout(homeDir) {
 		if err := a.InstallPlugin(homeDir, versions.GentleAI); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: plugin install failed (non-fatal): %v\n", err)
 		}
@@ -466,12 +466,12 @@ pattern = "Bash"
 `
 }
 
-// configTOMLV11Extras returns the additional TOML content appended to config.toml
-// for Kimi Code v0.11+ installations. It includes lifecycle hooks and cross-tool
+// configTOMLKimiCodeExtras returns the additional TOML content appended to config.toml
+// for current Kimi Code installations. It includes lifecycle hooks and cross-tool
 // skill directory discovery.
-func configTOMLV11Extras() string {
+func configTOMLKimiCodeExtras() string {
 	return `
-# --- Gentle AI v0.11+ extras ---
+# --- Gentle AI kimi-code extras ---
 
 [[hooks]]
 event = "SessionStart"
@@ -481,14 +481,14 @@ extra_skill_dirs = ["~/.config/agents/skills", "~/.agents/skills"]
 `
 }
 
-// v11ExtraSkillDirs are the additional skill directories Gentle AI registers in
-// Kimi Code v0.11+ so that user-scope and extra-scope skills are discoverable.
-var v11ExtraSkillDirs = []string{"~/.config/agents/skills", "~/.agents/skills"}
+// kimiCodeExtraSkillDirs are the additional skill directories Gentle AI registers in
+// current Kimi Code so that user-scope and extra-scope skills are discoverable.
+var kimiCodeExtraSkillDirs = []string{"~/.config/agents/skills", "~/.agents/skills"}
 
-// mergeConfigTOMLV11Extras updates an existing config.toml with the v0.11+
+// mergeConfigTOMLKimiCodeExtras updates an existing config.toml with the kimi-code
 // extra_skill_dirs setting. It preserves user settings and only adds the
 // Gentle AI directories when they are missing.
-func mergeConfigTOMLV11Extras(configPath string) (filemerge.WriteResult, error) {
+func mergeConfigTOMLKimiCodeExtras(configPath string) (filemerge.WriteResult, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return filemerge.WriteResult{}, fmt.Errorf("read config %q: %w", configPath, err)
@@ -497,7 +497,7 @@ func mergeConfigTOMLV11Extras(configPath string) (filemerge.WriteResult, error) 
 
 	start, end := findTOMLStringArrayBounds(text, "extra_skill_dirs")
 	if start == -1 {
-		block := "\n# --- Gentle AI v0.11+ extras ---\nextra_skill_dirs = " + formatStringArray(v11ExtraSkillDirs)
+		block := "\n# --- Gentle AI kimi-code extras ---\nextra_skill_dirs = " + formatStringArray(kimiCodeExtraSkillDirs)
 		if !strings.HasSuffix(text, "\n") {
 			block = "\n" + block
 		}
@@ -506,7 +506,7 @@ func mergeConfigTOMLV11Extras(configPath string) (filemerge.WriteResult, error) 
 	}
 
 	existing := parseTOMLStringArrayValues(text[start : end+1])
-	merged := mergeStringSlices(existing, v11ExtraSkillDirs)
+	merged := mergeStringSlices(existing, kimiCodeExtraSkillDirs)
 	if stringSlicesEqual(existing, merged) {
 		return filemerge.WriteResult{}, nil
 	}

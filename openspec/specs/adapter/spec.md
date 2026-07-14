@@ -1,8 +1,8 @@
-# Kimi Adapter v0.11+ Integration Specification
+# Kimi Code Adapter Integration Specification
 
 ## Purpose
 
-Defines requirements for comprehensive Kimi Code v0.11+ adapter integration: env-based config override, functional config.toml generation, complete skill directory discovery, and permission defaults.
+Defines requirements for comprehensive current Kimi Code adapter integration: env-based config override, functional config.toml generation, complete skill directory discovery, and permission defaults.
 
 ---
 
@@ -10,7 +10,7 @@ Defines requirements for comprehensive Kimi Code v0.11+ adapter integration: env
 
 ### Requirement: KIMI_CODE_HOME Environment Override
 
-`resolveConfigDir` MUST check the `KIMI_CODE_HOME` environment variable before falling back to `~/.kimi-code` (v0.11+) or `~/.kimi` (legacy). The standalone `ConfigPath` function MUST apply the same priority.
+`resolveConfigDir` MUST check the `KIMI_CODE_HOME` environment variable before falling back to `~/.kimi-code` (current kimi-code) or `~/.kimi` (legacy). The standalone `ConfigPath` function MUST apply the same priority.
 
 #### Scenario: KIMI_CODE_HOME set to valid directory
 
@@ -28,13 +28,13 @@ Defines requirements for comprehensive Kimi Code v0.11+ adapter integration: env
 
 - GIVEN `KIMI_CODE_HOME` is not set
 - WHEN `resolveConfigDir(homeDir)` is called
-- THEN standard v0.11+ / legacy fallback applies
+- THEN standard current kimi-code / legacy fallback applies
 
 ---
 
 ### Requirement: Functional config.toml Generation
 
-`BootstrapTemplate` MUST write a TOML config file with `merge_all_available_skills = true` and a `[permissions]` section containing safe auto-approve defaults when the config file does not already exist. For v0.11+, `BootstrapTemplate` MUST also generate `kimi.plugin.json` via `InstallPlugin` after writing config.toml/AGENTS.md. `resolveConfigTOMLContent` MUST include a `[[hooks]]` block with `sessionStart` referencing `sdd-init`, and MUST include `extra_skill_dirs` entries for cross-tool skill discovery.
+`BootstrapTemplate` MUST write a TOML config file with `merge_all_available_skills = true` and a `[permissions]` section containing safe auto-approve defaults when the config file does not already exist. For current kimi-code, `BootstrapTemplate` MUST also generate `kimi.plugin.json` via `InstallPlugin` after writing config.toml/AGENTS.md. `resolveConfigTOMLContent` MUST include a `[[hooks]]` block with `sessionStart` referencing `sdd-init`, and MUST include `extra_skill_dirs` entries for cross-tool skill discovery.
 (Previously: only wrote config.toml and AGENTS.md skeleton; no hooks or extra_skill_dirs)
 
 #### Scenario: Fresh install writes functional config.toml
@@ -52,9 +52,9 @@ Defines requirements for comprehensive Kimi Code v0.11+ adapter integration: env
 - WHEN `BootstrapTemplate(homeDir)` is called
 - THEN `config.toml` content is unchanged
 
-#### Scenario: v0.11+ generates plugin manifest during bootstrap
+#### Scenario: current kimi-code generates plugin manifest during bootstrap
 
-- GIVEN v0.11+ is detected and no `kimi.plugin.json` exists
+- GIVEN current kimi-code is detected and no `kimi.plugin.json` exists
 - WHEN `BootstrapTemplate(homeDir)` is called
 - THEN `InstallPlugin` is called with the adapter's resolved homeDir and the Gentle AI version constant
 - AND `kimi.plugin.json` is created at the plugin manifest path
@@ -78,12 +78,12 @@ Defines requirements for comprehensive Kimi Code v0.11+ adapter integration: env
 
 ### Requirement: Complete Skills Directory Discovery
 
-The adapter MUST expose an `AllSkillsDirs(homeDir) []string` method returning all directories Kimi Code v0.11+ scans for skills. For v0.11+ with plugin support, the first entry MUST be the plugin skills subdirectory (`{resolvedConfigDir}/plugins/managed/gentle-ai/skills`), followed by the shared directories.
+The adapter MUST expose an `AllSkillsDirs(homeDir) []string` method returning all directories current Kimi Code scans for skills. For current kimi-code with plugin support, the first entry MUST be the plugin skills subdirectory (`{resolvedConfigDir}/plugins/managed/gentle-ai/skills`), followed by the shared directories.
 (Previously: returned `~/.kimi-code/skills`, `~/.agents/skills`, `~/.config/agents/skills`)
 
-#### Scenario: v0.11+ returns plugin dir plus shared dirs
+#### Scenario: current kimi-code returns plugin dir plus shared dirs
 
-- GIVEN Kimi Code v0.11+ is detected (`~/.kimi-code` exists or `KIMI_CODE_HOME` is set)
+- GIVEN current Kimi Code is detected (`~/.kimi-code` exists or `KIMI_CODE_HOME` is set)
 - WHEN `AllSkillsDirs(homeDir)` is called
 - THEN it returns four paths
 - AND the first path is `{resolvedConfigDir}/plugins/managed/gentle-ai/skills`
@@ -135,32 +135,32 @@ The standalone `ConfigPath(homeDir string)` function MUST apply the same `KIMI_C
 
 ### Requirement: PluginInstaller Interface Implementation
 
-The Kimi adapter MUST implement the `PluginInstaller` interface, providing `PluginDir`, `PluginManifestPath`, and `InstallPlugin` methods that enable plugin-based skill distribution for v0.11+.
+The Kimi adapter MUST implement the `PluginInstaller` interface, providing `PluginDir`, `PluginManifestPath`, and `InstallPlugin` methods that enable plugin-based skill distribution for current kimi-code.
 
 #### Scenario: PluginInstaller methods return correct paths
 
-- GIVEN v0.11+ is detected (`~/.kimi-code` exists or `KIMI_CODE_HOME` is set)
+- GIVEN current kimi-code is detected (`~/.kimi-code` exists or `KIMI_CODE_HOME` is set)
 - WHEN `PluginDir(homeDir)` is called
 - THEN it returns `{resolvedConfigDir}/plugins/managed/gentle-ai`
 - AND `PluginManifestPath(homeDir)` returns `{resolvedConfigDir}/plugins/managed/gentle-ai/kimi.plugin.json`
 
 #### Scenario: InstallPlugin creates directory and writes manifest
 
-- GIVEN v0.11+ is detected and plugin directory does not exist
+- GIVEN current kimi-code is detected and plugin directory does not exist
 - WHEN `InstallPlugin(homeDir, "1.0.0")` is called
 - THEN the directory `{resolvedConfigDir}/plugins/managed/gentle-ai/` is created
 - AND `kimi.plugin.json` is written with version `"1.0.0"`
 
 ---
 
-### Requirement: SkillsDir Returns Plugin Path for v0.11+
+### Requirement: SkillsDir Returns Plugin Path for current kimi-code
 
-The `SkillsDir` method MUST return the plugin skills subdirectory for v0.11+ installs instead of the flat `~/.kimi-code/skills` path.
+The `SkillsDir` method MUST return the plugin skills subdirectory for current kimi-code installs instead of the flat `~/.kimi-code/skills` path.
 (Previously: returned `~/.kimi-code/skills`)
 
-#### Scenario: v0.11+ SkillsDir returns plugin path
+#### Scenario: current kimi-code SkillsDir returns plugin path
 
-- GIVEN v0.11+ is detected (`~/.kimi-code` exists or `KIMI_CODE_HOME` is set)
+- GIVEN current kimi-code is detected (`~/.kimi-code` exists or `KIMI_CODE_HOME` is set)
 - WHEN `SkillsDir(homeDir)` is called
 - THEN it returns `{resolvedConfigDir}/plugins/managed/gentle-ai/skills`
 
@@ -174,7 +174,7 @@ The `SkillsDir` method MUST return the plugin skills subdirectory for v0.11+ ins
 
 ### Requirement: KIMI_CODE_HOME Propagation to Plugin and Skills Paths
 
-All v0.11+ plugin and skill paths — including `PluginDir`, `PluginManifestPath`,
+All current kimi-code plugin and skill paths — including `PluginDir`, `PluginManifestPath`,
 `SkillsDir`, the user skills directory used by `AllSkillsDirs`, and the
 `installed.json` registry path written by `InstallPlugin` — MUST be rooted under
 the directory returned by `resolveConfigDir(homeDir)` so that `KIMI_CODE_HOME`

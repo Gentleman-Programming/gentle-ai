@@ -5332,7 +5332,7 @@ func agentBuilderSkillsDir(agentID model.AgentID) (string, bool) {
 	case model.AgentCodex:
 		return filepath.Join(home, ".codex", "skills"), true
 	case model.AgentKimi:
-		// Prefer v0.11+ path when ~/.kimi-code is a directory; fall back to
+		// Prefer the kimi-code path when ~/.kimi-code is a directory; fall back to
 		// the legacy Python/uv layout otherwise — mirrors adapter.SkillsDir.
 		kimiCodeDir := filepath.Join(home, ".kimi-code")
 		if info, err := os.Stat(kimiCodeDir); err == nil && info.IsDir() {
