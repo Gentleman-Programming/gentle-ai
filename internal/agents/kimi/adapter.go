@@ -484,7 +484,7 @@ func configTOMLKimiCodeExtras() string {
 
 [[hooks]]
 event = "SessionStart"
-command = 'gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true'
+command = 'gentle-ai skill-registry refresh --quiet --no-gitignore || true'
 
 extra_skill_dirs = ["~/.config/agents/skills", "~/.agents/skills"]
 `

@@ -7607,6 +7607,63 @@ pattern = "Read"
 	}
 }
 
+func TestEnsureKimiSkillRegistryHook_MigratesLegacyCwdVariant(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".kimi-code", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := `merge_all_available_skills = true
+
+[[hooks]]
+event = "SessionStart"
+command = 'gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true'
+
+[[hooks]]
+event = "PreToolUse"
+command = 'echo keep'
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := ensureKimiSkillRegistryHook(configPath)
+	if err != nil {
+		t.Fatalf("ensureKimiSkillRegistryHook() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true (legacy hook must be migrated)")
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	const newCommand = `gentle-ai skill-registry refresh --quiet --no-gitignore || true`
+	if strings.Count(text, newCommand) != 1 {
+		t.Errorf("new hook command should appear exactly once; got:\n%s", text)
+	}
+	if strings.Count(text, "skill-registry refresh") != 1 {
+		t.Errorf("skill-registry hook should appear exactly once after migration; got:\n%s", text)
+	}
+	if strings.Contains(text, `--cwd "$PWD"`) {
+		t.Errorf("legacy --cwd $PWD hook variant not removed; got:\n%s", text)
+	}
+	if !strings.Contains(text, "echo keep") {
+		t.Errorf("unrelated hook block not preserved; got:\n%s", text)
+	}
+
+	// Migration must converge: a second run is a no-op.
+	changed, err = ensureKimiSkillRegistryHook(configPath)
+	if err != nil {
+		t.Fatalf("second ensureKimiSkillRegistryHook() error = %v", err)
+	}
+	if changed {
+		t.Fatal("second call changed = true, want false")
+	}
+}
+
 func TestInstallSkillRegistryAutomation_Kimi(t *testing.T) {
 	home := t.TempDir()
 	kimiCodeDir := filepath.Join(home, ".kimi-code")

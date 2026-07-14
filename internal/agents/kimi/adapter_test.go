@@ -762,8 +762,21 @@ func TestBootstrapTemplate_ConfigTOML_Hooks_KimiCode(t *testing.T) {
 	if !strings.Contains(text, `SessionStart`) {
 		t.Errorf("config.toml missing SessionStart in hooks; got:\n%s", text)
 	}
-	if !strings.Contains(text, `skill-registry refresh`) {
+	if !strings.Contains(text, `command = 'gentle-ai skill-registry refresh --quiet --no-gitignore || true'`) {
 		t.Errorf("config.toml missing skill-registry refresh command; got:\n%s", text)
+	}
+	if strings.Contains(text, "$PWD") {
+		t.Errorf("config.toml hook must not use unix-only $PWD; got:\n%s", text)
+	}
+}
+
+func TestConfigTOMLKimiCodeExtras_SessionStartHookOmitsPWD(t *testing.T) {
+	extras := configTOMLKimiCodeExtras()
+	if !strings.Contains(extras, `command = 'gentle-ai skill-registry refresh --quiet --no-gitignore || true'`) {
+		t.Errorf("kimi-code extras missing skill-registry hook command; got:\n%s", extras)
+	}
+	if strings.Contains(extras, "$PWD") {
+		t.Errorf("kimi-code extras hook must not use unix-only $PWD; got:\n%s", extras)
 	}
 }
 
