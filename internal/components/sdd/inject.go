@@ -1754,6 +1754,17 @@ func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (Inj
 		}
 		return InjectionResult{Changed: changed, Files: []string{hooksPath}}, nil
 	}
+	if adapter.Agent() == model.AgentKimi {
+		configPath := adapter.SettingsPath(homeDir)
+		if configPath == "" {
+			return InjectionResult{}, nil
+		}
+		changed, err := ensureKimiSkillRegistryHook(configPath)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("install Kimi skill-registry hook: %w", err)
+		}
+		return InjectionResult{Changed: changed, Files: []string{configPath}}, nil
+	}
 	if adapter.Agent() != model.AgentClaudeCode {
 		return InjectionResult{}, nil
 	}
@@ -1770,6 +1781,61 @@ func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (Inj
 		return InjectionResult{}, fmt.Errorf("install Claude review stop-hook: %w", err)
 	}
 	return InjectionResult{Changed: changed || stopHookChanged, Files: []string{settingsPath}}, nil
+}
+
+func ensureKimiSkillRegistryHook(configPath string) (bool, error) {
+	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true`
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read Kimi config %q: %w", configPath, err)
+	}
+	text := string(data)
+
+	// Dedup: if the hook command already exists, skip.
+	if strings.Contains(text, command) {
+		return false, nil
+	}
+
+	const correctLine = `command = '` + command + `'`
+
+	// If the correctly-quoted hook already exists, nothing to do.
+	if strings.Contains(text, correctLine) {
+		return false, nil
+	}
+
+	// Remove any previous (possibly malformed) instance of this hook block.
+	for {
+		cmdIdx := strings.Index(text, command)
+		if cmdIdx == -1 {
+			break
+		}
+		blockStart := strings.LastIndex(text[:cmdIdx], "[[hooks]]")
+		if blockStart == -1 {
+			break
+		}
+		rest := text[blockStart:]
+		blockEnd := len(rest)
+		if next := strings.Index(rest[1:], "\n[["); next != -1 {
+			blockEnd = next + 1
+		}
+		text = text[:blockStart] + strings.TrimPrefix(rest[blockEnd:], "\n")
+	}
+
+	hookBlock := `
+[[hooks]]
+event = "SessionStart"
+` + correctLine
+	updated := strings.TrimRight(text, "\n") + "\n" + hookBlock
+
+	wr, err := filemerge.WriteFileAtomic(configPath, []byte(updated), 0o644)
+	if err != nil {
+		return false, fmt.Errorf("write Kimi config %q: %w", configPath, err)
+	}
+	return wr.Changed, nil
 }
 
 func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
