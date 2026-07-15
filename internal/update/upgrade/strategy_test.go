@@ -1817,10 +1817,22 @@ func TestInstallerUpgradeArgs(t *testing.T) {
 				}
 			}
 
-			// For go-install, assert the flags form an ordered sequence after -File.
+			// For go-install, assert the flags form an ordered sequence AFTER
+			// -File <path> — PowerShell treats only arguments following the
+			// script path as script arguments.
 			if tc.useGo && !tc.beta {
-				if !containsSubsequence(args, []string{"-Method", "go", "-Version", tc.version}) {
-					t.Errorf("go args: missing ordered -Method go -Version %s subsequence; args: %v", tc.version, args)
+				fileIdx := -1
+				for i, arg := range args {
+					if arg == "-File" {
+						fileIdx = i
+						break
+					}
+				}
+				if fileIdx < 0 || fileIdx+2 > len(args) {
+					t.Fatalf("go args: missing -File <path>; args: %v", args)
+				}
+				if !containsSubsequence(args[fileIdx+2:], []string{"-Method", "go", "-Version", tc.version}) {
+					t.Errorf("go args: missing ordered -Method go -Version %s subsequence after -File; args: %v", tc.version, args)
 				}
 			}
 		})
@@ -2320,6 +2332,73 @@ func TestRunStrategy_StableGentleAIGoInstallWindowsUsesMethodGo(t *testing.T) {
 	}
 	if containsArg(gotArgs, "-Channel") {
 		t.Errorf("stable upgrade must not pass -Channel, got args %v", gotArgs)
+	}
+}
+
+// TestRunStrategy_StableGentleAIBinaryInstallWindowsOmitsMethodGo is the
+// negative counterpart to the test above: with Go available but the running
+// binary OUTSIDE every Go bin dir (a binary install), the installer must
+// receive no -Method/-Version. It guards against regressions that drop the
+// runningFromGoBinDir condition and reroute binary installs through go install.
+func TestRunStrategy_StableGentleAIBinaryInstallWindowsOmitsMethodGo(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("skipping Windows-only installer negative test on non-windows platform")
+	}
+
+	home := t.TempDir()
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", "")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	stubExePath(t, `C:\Users\tester\AppData\Local\gentle-ai\bin\gentle-ai.exe`, nil)
+	stubGoEnv(t, map[string]string{"GOPATH": `C:\Users\tester\go`}, nil)
+
+	origExecCommand := execCommand
+	origHTTPClient := scriptHTTPClient
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		scriptHTTPClient = origHTTPClient
+	})
+
+	scriptHTTPClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			rec := httptest.NewRecorder()
+			rec.Header().Set("Content-Type", "text/plain")
+			rec.WriteHeader(http.StatusOK)
+			rec.WriteString("Write-Output 'installer ok'\n")
+			return rec.Result(), nil
+		}),
+	}
+
+	var gotArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		gotArgs = append([]string(nil), args...)
+		return mockCmd("echo", "ok")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gentle-ai",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentle-ai",
+			InstallMethod: update.InstallBinary,
+			GoImportPath:  "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai",
+		},
+		LatestVersion: "1.40.2",
+		Status:        update.UpdateAvailable,
+	}
+	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true, Supported: true}
+
+	_, err := runStrategy(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("runStrategy stable binary-installed gentle-ai on Windows: unexpected error: %v", err)
+	}
+
+	for _, flag := range []string{"-Method", "-Version", "-Channel"} {
+		if containsArg(gotArgs, flag) {
+			t.Errorf("binary install on Windows must not pass %s, got args %v", flag, gotArgs)
+		}
 	}
 }
 
