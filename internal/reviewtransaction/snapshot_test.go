@@ -509,6 +509,53 @@ func TestSnapshotDiffStatsExcludeGeneratedGoldensOnlyFromAuthoredLines(t *testin
 	}
 }
 
+func TestSnapshotDiffStatsIncludesCanonicalRawModesForModeOnlyChanges(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	gitSnapshot(t, repo, "config", "core.filemode", "true")
+	if err := os.Chmod(filepath.Join(repo, "tracked.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := (SnapshotBuilder{Repo: repo}).DiffStats(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []DiffStat{{Path: "tracked.txt", OldMode: "100644", NewMode: "100755", ModeOnly: true}}
+	if !reflect.DeepEqual(stats, want) {
+		t.Fatalf("DiffStats() = %#v, want %#v", stats, want)
+	}
+	if lines, err := CountChangedLines(stats); err != nil || lines != 0 {
+		t.Fatalf("CountChangedLines(mode-only) = %d, %v; want 0, nil", lines, err)
+	}
+}
+
+func TestSnapshotDiffStatsDistinguishesContentAndModeChanges(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	gitSnapshot(t, repo, "config", "core.filemode", "true")
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	if err := os.Chmod(filepath.Join(repo, "tracked.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := (SnapshotBuilder{Repo: repo}).DiffStats(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].OldMode != "100644" || stats[0].NewMode != "100755" || stats[0].ModeOnly || stats[0].Additions != 1 || stats[0].Deletions != 1 {
+		t.Fatalf("content-plus-mode DiffStats() = %#v", stats)
+	}
+}
+
 func TestGeneratedGoldenPathMatchesRepositorySegments(t *testing.T) {
 	tests := []struct {
 		name string

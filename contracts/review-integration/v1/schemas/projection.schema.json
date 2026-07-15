@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/projection.schema.json",
+  "title": "Gentle AI Review Integration Projection v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kind",
+    "projection",
+    "base_tree",
+    "initial_review_tree",
+    "current_candidate_tree",
+    "paths_digest",
+    "paths",
+    "intended_untracked",
+    "intended_untracked_proof",
+    "initial_snapshot_identity",
+    "current_snapshot_identity"
+  ],
+  "properties": {
+    "schema": { "const": "gentle-ai.review-integration.projection/v1" },
+    "kind": { "enum": ["current-changes", "base-diff", "exact-revision", "fix-diff"] },
+    "projection": { "enum": ["staged", "workspace"] },
+    "base_tree": { "$ref": "#/$defs/gitTree" },
+    "initial_review_tree": { "$ref": "#/$defs/gitTree" },
+    "current_candidate_tree": { "$ref": "#/$defs/gitTree" },
+    "paths_digest": { "$ref": "#/$defs/sha256" },
+    "paths": { "$ref": "#/$defs/paths" },
+    "intended_untracked": { "$ref": "#/$defs/paths" },
+    "intended_untracked_proof": { "$ref": "#/$defs/sha256" },
+    "initial_snapshot_identity": { "$ref": "#/$defs/sha256" },
+    "current_snapshot_identity": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "gitTree": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+    "paths": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$" }
+    }
+  }
+}

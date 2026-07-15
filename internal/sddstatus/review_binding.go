@@ -51,6 +51,14 @@ func BindApprovedReview(ctx context.Context, repo, change, lineage, expected str
 		return ReviewBinding{}, err
 	}
 	record, err := store.Load()
+	if errors.Is(err, os.ErrNotExist) {
+		legacy, legacyErr := reviewtransaction.AuthoritativeStore(ctx, root, lineage)
+		if legacyErr == nil {
+			if _, legacyLoadErr := legacy.LoadChain(); legacyLoadErr == nil {
+				return ReviewBinding{}, reviewtransaction.NewLegacyReadOnlyError("review/bind-sdd", lineage)
+			}
+		}
+	}
 	if err != nil || record.State.State != reviewtransaction.StateApproved {
 		return ReviewBinding{}, errors.New("explicit compact authority is not approved")
 	}

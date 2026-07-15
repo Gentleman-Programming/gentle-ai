@@ -117,7 +117,11 @@ func RunReviewStep(args []string, stdout io.Writer) error {
 	if _, err := store.LoadChain(); err != nil {
 		return fmt.Errorf("load authoritative review transaction: %w", err)
 	}
-	return fmt.Errorf("%w: review-step cannot mutate shipped v1 authority; use gentle-ai review finalize", reviewtransaction.ErrLegacyReadOnly)
+	attemptedOperation := strings.TrimSpace(*operation)
+	if !strings.HasPrefix(attemptedOperation, "review/") {
+		attemptedOperation = "review/" + attemptedOperation
+	}
+	return fmt.Errorf("%w: review-step cannot mutate shipped v1 authority; use gentle-ai review finalize", reviewtransaction.NewLegacyReadOnlyError(attemptedOperation, *lineage))
 }
 
 func (err ReviewGateDeniedError) Error() string {
@@ -160,7 +164,7 @@ func RunReviewStart(args []string, stdout io.Writer) error {
 	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*policyFile) == "" {
 		return errors.New("review-start requires --cwd, --lineage, and --policy-file")
 	}
-	return fmt.Errorf("%w: review-start cannot create v1 authority; use gentle-ai review start", reviewtransaction.ErrLegacyReadOnly)
+	return fmt.Errorf("%w: review-start cannot create v1 authority; use gentle-ai review start", reviewtransaction.NewLegacyReadOnlyError("review/start", *lineage))
 }
 
 func RunReviewResume(args []string, stdout io.Writer) error {

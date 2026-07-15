@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/operation.schema.json",
+  "title": "Gentle AI negotiated review operation result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "contract", "operation", "result"],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.operation/v1"},
+    "contract": {"const": "gentle-ai.review-integration/v1"},
+    "operation": {"enum": ["review.finalize", "review.validate", "review.bind_sdd"]},
+    "result": {
+      "oneOf": [
+        {"$ref": "#/$defs/finalize"},
+        {"$ref": "#/$defs/validate"},
+        {"$ref": "#/$defs/bind_sdd"}
+      ]
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "finalize": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "lineage_id", "state", "action", "store_revision"],
+      "properties": {
+        "operation": {"const": "review/finalize"},
+        "lineage_id": {"type": "string", "minLength": 1},
+        "state": {"type": "string", "minLength": 1},
+        "action": {"type": "string", "minLength": 1},
+        "store_revision": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "validate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "result", "allowed", "action", "reason", "context"],
+      "properties": {
+        "schema": {"const": "gentle-ai.review-gate-result/v1"},
+        "result": {"enum": ["allow", "scope-changed", "invalidated", "escalated"]},
+        "allowed": {"type": "boolean"},
+        "action": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "context": {"type": "object"}
+      }
+    },
+    "bind_sdd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "revision", "change", "lineage", "authority_revision", "receipt_hash", "gate_context"],
+      "properties": {
+        "schema": {"const": "gentle-ai.sdd-review-binding/v1"},
+        "revision": {"$ref": "#/$defs/sha256"},
+        "change": {"type": "string", "minLength": 1},
+        "lineage": {"type": "string", "minLength": 1},
+        "authority_revision": {"$ref": "#/$defs/sha256"},
+        "receipt_hash": {"$ref": "#/$defs/sha256"},
+        "gate_context": {"type": "object"}
+      }
+    }
+  }
+}

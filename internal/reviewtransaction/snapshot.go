@@ -269,49 +269,118 @@ func (builder SnapshotBuilder) DiffStats(ctx context.Context, snapshot Snapshot)
 	if err != nil {
 		return nil, err
 	}
-	output, err := runGit(ctx, repo, nil, nil, "diff", "--numstat", "--no-renames", snapshot.BaseTree, snapshot.CandidateTree, "--")
+	output, err := runGit(ctx, repo, nil, nil, "diff", "--numstat", "-z", "--no-renames", snapshot.BaseTree, snapshot.CandidateTree, "--")
 	if err != nil {
 		return nil, err
 	}
-	stats := make([]DiffStat, 0, len(snapshot.Paths))
-	seenPaths := make(map[string]struct{}, len(snapshot.Paths))
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		if line == "" {
+	statsByPath := make(map[string]DiffStat, len(snapshot.Paths))
+	for _, record := range bytes.Split(output, []byte{0}) {
+		if len(record) == 0 {
 			continue
 		}
-		fields := strings.Split(line, "\t")
+		fields := bytes.SplitN(record, []byte{'\t'}, 3)
 		if len(fields) != 3 {
-			return nil, fmt.Errorf("unexpected immutable diff stat %q", line)
+			return nil, fmt.Errorf("unexpected immutable diff stat %q", record)
 		}
-		logicalPath, err := normalizeLogicalPath(fields[2])
+		logicalPath, err := normalizeLogicalPath(string(fields[2]))
 		if err != nil {
 			return nil, err
 		}
+		if _, duplicate := statsByPath[logicalPath]; duplicate {
+			return nil, fmt.Errorf("duplicate immutable diff stat path %q", logicalPath)
+		}
 		stat := DiffStat{Path: logicalPath, Generated: isGeneratedGoldenPath(logicalPath)}
-		if fields[0] == "-" && fields[1] == "-" {
+		if bytes.Equal(fields[0], []byte{'-'}) && bytes.Equal(fields[1], []byte{'-'}) {
 			stat.Binary = true
 		} else {
-			stat.Additions, err = strconv.Atoi(fields[0])
+			stat.Additions, err = strconv.Atoi(string(fields[0]))
 			if err != nil {
 				return nil, fmt.Errorf("parse additions for %q: %w", stat.Path, err)
 			}
-			stat.Deletions, err = strconv.Atoi(fields[1])
+			stat.Deletions, err = strconv.Atoi(string(fields[1]))
 			if err != nil {
 				return nil, fmt.Errorf("parse deletions for %q: %w", stat.Path, err)
 			}
 		}
-		stats = append(stats, stat)
-		seenPaths[stat.Path] = struct{}{}
+		statsByPath[stat.Path] = stat
 	}
+	rawOutput, err := runGit(ctx, repo, nil, nil, "diff", "--raw", "-z", "--no-ext-diff", "--no-textconv", "--no-renames", snapshot.BaseTree, snapshot.CandidateTree, "--")
+	if err != nil {
+		return nil, err
+	}
+	modesByPath, err := parseRawDiffModes(rawOutput)
+	if err != nil {
+		return nil, err
+	}
+	stats := make([]DiffStat, 0, len(snapshot.Paths))
 	for _, path := range snapshot.Paths {
-		if _, ok := seenPaths[path]; !ok {
+		stat, ok := statsByPath[path]
+		if !ok {
 			return nil, fmt.Errorf("immutable snapshot path %q is missing from tree diff stats", path)
 		}
+		modes, ok := modesByPath[path]
+		if !ok {
+			return nil, fmt.Errorf("immutable snapshot path %q is missing from raw tree diff", path)
+		}
+		stat.OldMode, stat.NewMode = modes.oldMode, modes.newMode
+		stat.ModeOnly = modes.oldObject == modes.newObject && modes.oldMode != modes.newMode
+		stats = append(stats, stat)
 	}
-	if len(seenPaths) != len(snapshot.Paths) {
+	if len(statsByPath) != len(snapshot.Paths) || len(modesByPath) != len(snapshot.Paths) {
 		return nil, errors.New("immutable tree diff contains paths outside the review snapshot")
 	}
 	return stats, nil
+}
+
+type rawDiffModes struct {
+	oldMode, newMode     string
+	oldObject, newObject string
+}
+
+func parseRawDiffModes(payload []byte) (map[string]rawDiffModes, error) {
+	records := bytes.Split(payload, []byte{0})
+	modes := make(map[string]rawDiffModes, len(records)/2)
+	for index := 0; index < len(records); index++ {
+		header := records[index]
+		if len(header) == 0 {
+			continue
+		}
+		fields := bytes.Fields(header)
+		if len(fields) != 5 || len(fields[0]) != 7 || fields[0][0] != ':' || index+1 >= len(records) || len(records[index+1]) == 0 {
+			return nil, fmt.Errorf("unexpected immutable raw diff record %q", header)
+		}
+		if len(fields[4]) != 1 || !bytes.ContainsAny(fields[4], "ADMT") {
+			return nil, fmt.Errorf("unexpected immutable raw diff status %q", fields[4])
+		}
+		oldMode, newMode := string(fields[0][1:]), string(fields[1])
+		if !validRawGitMode(oldMode) || !validRawGitMode(newMode) {
+			return nil, fmt.Errorf("unexpected immutable raw diff modes %q and %q", oldMode, newMode)
+		}
+		index++
+		logicalPath, err := normalizeLogicalPath(string(records[index]))
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := modes[logicalPath]; duplicate {
+			return nil, fmt.Errorf("duplicate immutable raw diff path %q", logicalPath)
+		}
+		modes[logicalPath] = rawDiffModes{
+			oldMode: oldMode, newMode: newMode, oldObject: string(fields[2]), newObject: string(fields[3]),
+		}
+	}
+	return modes, nil
+}
+
+func validRawGitMode(mode string) bool {
+	if len(mode) != 6 {
+		return false
+	}
+	for _, digit := range mode {
+		if digit < '0' || digit > '7' {
+			return false
+		}
+	}
+	return true
 }
 
 func isGeneratedGoldenPath(logicalPath string) bool {

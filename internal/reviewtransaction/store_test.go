@@ -478,6 +478,76 @@ func TestStoreReplaysOnlyDocumentedHistoricalV1Aliases(t *testing.T) {
 	})
 }
 
+func TestStoreReplaysPublishedV149Ordinary4RAuthority(t *testing.T) {
+	fixture := filepath.Join("testdata", "v1.49.0-ordinary-4r")
+	checksums := map[string]string{
+		"HEAD":                   "5c6444bb299691060d3d6b449f3177275b02ab472b246d082615b0d851e7b56f",
+		"artifacts/receipt.json": "e219f2c50ec3c5cf7c83a9844d955511c07041cbfdc9f8530cc6f9bd558d2fa2",
+		"events/5608bd6bbd175cd48f0754897f1204e1cae0612d38aeb1af448d5ac4d51c0e9f.json": "5608bd6bbd175cd48f0754897f1204e1cae0612d38aeb1af448d5ac4d51c0e9f",
+		"events/9b7dc5776fcad044ac56798b9ca3c823b53a3486816c27234ff537dbde2ee0ef.json": "9b7dc5776fcad044ac56798b9ca3c823b53a3486816c27234ff537dbde2ee0ef",
+		"events/b7d4df583b8e1bb952c6f021e5aeb015cb837cdbf81f827007ca42c29b13278c.json": "b7d4df583b8e1bb952c6f021e5aeb015cb837cdbf81f827007ca42c29b13278c",
+		"events/bd3ac2bea5b0c51c7205479d680b907b5b88a88c24be899a7cf0e6843d3d23eb.json": "bd3ac2bea5b0c51c7205479d680b907b5b88a88c24be899a7cf0e6843d3d23eb",
+		"events/d4c310032d9bb4d299277dece13c029b3bae8b9728fa481558c5c2f59d8eed86.json": "d4c310032d9bb4d299277dece13c029b3bae8b9728fa481558c5c2f59d8eed86",
+	}
+	for name, want := range checksums {
+		payload, err := os.ReadFile(filepath.Join(fixture, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", name, err)
+		}
+		got := sha256.Sum256(payload)
+		if hex.EncodeToString(got[:]) != want {
+			t.Fatalf("fixture checksum %s = %x, want %s", name, got, want)
+		}
+	}
+	chain, err := (Store{Dir: fixture}).LoadChain()
+	if err != nil {
+		t.Fatalf("LoadChain(published v1.49.0) error = %v", err)
+	}
+	if len(chain.Records) != 5 || chain.Records[len(chain.Records)-1].Transaction.State != StateApproved {
+		t.Fatalf("LoadChain(published v1.49.0) = %#v", chain)
+	}
+}
+
+func TestPublishedV149FreezeCompatibilityRejectsUnreproducedChanges(t *testing.T) {
+	store := Store{Dir: filepath.Join("testdata", "v1.49.0-ordinary-4r")}
+	start, _, err := store.loadRevision("sha256:d4c310032d9bb4d299277dece13c029b3bae8b9728fa481558c5c2f59d8eed86")
+	if err != nil {
+		t.Fatal(err)
+	}
+	freeze, _, err := store.loadRevision("sha256:5608bd6bbd175cd48f0754897f1204e1cae0612d38aeb1af448d5ac4d51c0e9f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePersistedV1Successor(start.Transaction, freeze.Transaction, freeze.Operation, 1); err != nil {
+		t.Fatalf("published freeze transition error = %v", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*Transaction)
+	}{
+		{name: "empty findings representation", mutate: func(next *Transaction) { next.Findings = nil }},
+		{name: "derived findings hash", mutate: func(next *Transaction) { next.LedgerFindingsHash = hash("changed findings hash") }},
+		{name: "external ledger hash format", mutate: func(next *Transaction) { next.LedgerHash = "not-a-sha256" }},
+		{name: "evidence", mutate: func(next *Transaction) { next.EvidenceHash = hash("changed evidence") }},
+		{name: "criteria", mutate: func(next *Transaction) {
+			next.OriginalCriteria = &ValidationCheck{EvidenceHash: hash("evidence"), FixDeltaHash: hash("delta"), Passed: true}
+		}},
+		{name: "lineage", mutate: func(next *Transaction) { next.LineageID = "different-lineage" }},
+		{name: "policy", mutate: func(next *Transaction) { next.PolicyHash = hash("changed policy") }},
+		{name: "snapshot", mutate: func(next *Transaction) { next.Snapshot.Identity = hash("changed snapshot") }},
+		{name: "outcomes", mutate: func(next *Transaction) { next.Outcomes = map[string]EvidenceOutcome{"unknown": OutcomeInfo} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			next := freeze.Transaction
+			test.mutate(&next)
+			if err := validatePersistedV1Successor(start.Transaction, next, freeze.Operation, 1); !errors.Is(err, ErrInvalidSuccessor) {
+				t.Fatalf("validatePersistedV1Successor() error = %v, want ErrInvalidSuccessor", err)
+			}
+		})
+	}
+}
+
 func TestValidatePersistedV1SuccessorRejectsUnknownAndNonEquivalentAliases(t *testing.T) {
 	previous := ordinaryAtFixing(t)
 	legacy := historicalValidationTransition(*previous)

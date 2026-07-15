@@ -141,12 +141,16 @@ func validateLineageID(lineageID string) error {
 }
 
 func (store Store) Append(expectedRevision string, record Record) (string, error) {
-	return store.append(expectedRevision, record, false)
+	return store.append(expectedRevision, record)
 }
 
-func (store Store) append(expectedRevision string, record Record, allowInvalidate bool) (string, error) {
-	if store.readOnly && !allowInvalidate {
-		return "", ErrLegacyReadOnly
+func (store Store) append(expectedRevision string, record Record) (string, error) {
+	if store.readOnly {
+		operation := strings.TrimSpace(record.Operation)
+		if operation == "" {
+			operation = "review/append"
+		}
+		return "", NewLegacyReadOnlyError(operation, store.lineageID)
 	}
 	if strings.TrimSpace(store.Dir) == "" {
 		return "", errors.New("review store directory is required")
@@ -277,31 +281,10 @@ func (store Store) append(expectedRevision string, record Record, allowInvalidat
 	return revision, nil
 }
 
-// InvalidatePristine is the sole legacy write compatibility path. It appends
-// exactly review/invalidate without remarshal or modification of prior events.
+// InvalidatePristine is retained as a compatibility entry point, but ordinary
+// legacy-v1 authority is immutable once created.
 func (store Store) InvalidatePristine(expectedRevision, reason string, snapshot Snapshot) (string, error) {
-	chain, err := store.LoadChain()
-	if err != nil {
-		return "", err
-	}
-	current := chain.Records[len(chain.Records)-1].Transaction
-	if current.State == StateInvalidated {
-		if len(chain.Revisions) == 2 && expectedRevision == chain.Revisions[0] && current.InvalidationReason == strings.TrimSpace(reason) && snapshotsEqual(current.Snapshot, snapshot) {
-			return chain.HeadRevision, nil
-		}
-		return "", ErrConcurrentUpdate
-	}
-	if chain.HeadRevision != expectedRevision || !snapshotsEqual(current.Snapshot, snapshot) {
-		return "", ErrConcurrentUpdate
-	}
-	if err := rebuildCurrentSnapshotEvidence(context.Background(), store.repo, snapshot); err != nil {
-		return "", err
-	}
-	next := current
-	if err := next.Invalidate(reason); err != nil {
-		return "", err
-	}
-	return store.append(expectedRevision, Record{Operation: "review/invalidate", Transaction: next}, true)
+	return "", NewLegacyReadOnlyError("review/invalidate", store.lineageID)
 }
 
 func (store Store) Load() (Record, string, error) {
@@ -631,7 +614,13 @@ func validateHistoricalFreezeFindings(previous, next Transaction) error {
 		return fmt.Errorf("%w: historical findings freeze requires a ledger hash", ErrInvalidSuccessor)
 	}
 	expected := previous
-	expected.Findings = append([]Finding(nil), next.Findings...)
+	expected.Findings = nil
+	if next.Findings != nil {
+		// v1.49 hashed an explicit empty findings array differently from null.
+		// Preserve that published representation while deriving the hash.
+		expected.Findings = make([]Finding, len(next.Findings))
+		copy(expected.Findings, next.Findings)
+	}
 	expected.Outcomes = cloneOutcomes(previous.Outcomes)
 	for _, finding := range expected.Findings {
 		if !isSevereSeverity(finding.Severity) {

@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/status.schema.json",
+  "title": "Gentle AI Review Integration Target Status v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "operation",
+    "applicability",
+    "receipt",
+    "action",
+    "replayability",
+    "target_identity",
+    "projection",
+    "candidates"
+  ],
+  "properties": {
+    "schema": { "const": "gentle-ai.review-integration.status/v1" },
+    "contract": { "const": "gentle-ai.review-integration/v1" },
+    "operation": { "const": "review.status" },
+    "applicability": { "enum": ["current_target", "unrelated", "ambiguous", "corrupted"] },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "lineage_id", "state", "generation", "revision"],
+      "properties": {
+        "version": { "enum": ["compact-v2", "legacy-v1"] },
+        "lineage_id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "state": { "type": "string", "minLength": 1 },
+        "generation": { "type": "integer", "minimum": 1 },
+        "revision": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["expected_missing", "present", "publication_pending", "not_applicable"] },
+        "identity": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "action": { "enum": ["start", "finalize", "validate", "recover", "maintainer_action", "select_lineage", "repair_authority", "stop"] },
+    "replayability": { "enum": ["not_replayable", "exact_replay_safe", "status_required", "manual_action_required"] },
+    "frozen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tier", "original_changed_lines", "correction_budget"],
+      "properties": {
+        "tier": { "enum": ["low", "medium", "high"] },
+        "original_changed_lines": { "type": "integer", "minimum": 0 },
+        "correction_budget": { "type": "integer", "minimum": 0, "maximum": 200 }
+      }
+    },
+    "target_identity": { "$ref": "#/$defs/sha256" },
+    "projection": { "$ref": "projection.schema.json" },
+    "candidates": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "applicability": { "const": "current_target" } } },
+      "then": { "required": ["authority"] },
+      "else": { "not": { "anyOf": [{ "required": ["authority"] }, { "required": ["frozen"] }] } }
+    },
+    {
+      "if": {
+        "required": ["authority"],
+        "properties": {
+          "applicability": { "const": "current_target" },
+          "authority": {
+            "required": ["version"],
+            "properties": { "version": { "const": "compact-v2" } }
+          }
+        }
+      },
+      "then": { "required": ["frozen"] }
+    },
+    {
+      "if": {
+        "required": ["authority"],
+        "properties": {
+          "applicability": { "const": "current_target" },
+          "authority": {
+            "required": ["version"],
+            "properties": { "version": { "const": "legacy-v1" } }
+          }
+        }
+      },
+      "then": {
+        "not": { "required": ["frozen"] },
+        "properties": {
+          "receipt": {
+            "properties": { "status": { "enum": ["expected_missing", "present"] } }
+          }
+        }
+      }
+    }
+  ]
+}

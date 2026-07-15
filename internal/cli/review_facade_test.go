@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -473,6 +474,146 @@ func TestReviewFacadeStartServiceTokenSelectsCanonicalHighRiskLenses(t *testing.
 			t.Fatalf("facade service-token state from %q = risk %q lenses %v, want high %v", cwd, record.State.RiskLevel, record.State.SelectedLenses, want)
 		}
 	}
+}
+
+func TestReviewFacadeStartProvableShellAndModeRiskSelectsCanonical4R(t *testing.T) {
+	want := []string{reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability}
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, repo string)
+	}{
+		{
+			name: "shell source",
+			setup: func(t *testing.T, repo string) {
+				if err := os.WriteFile(filepath.Join(repo, "run.sh"), []byte("printf '%s\\n' safe\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "mode only",
+			setup: func(t *testing.T, repo string) {
+				runReviewCLIGit(t, repo, "config", "core.filemode", "true")
+				if err := os.Chmod(filepath.Join(repo, "tracked.txt"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			tt.setup(t, repo)
+			var output bytes.Buffer
+			if err := RunReviewFacadeStart([]string{"--cwd", repo}, &output); err != nil {
+				t.Fatal(err)
+			}
+			var started ReviewFacadeStartResult
+			if err := json.Unmarshal(output.Bytes(), &started); err != nil {
+				t.Fatal(err)
+			}
+			if started.RiskLevel != reviewtransaction.RiskHigh || !reflect.DeepEqual(started.SelectedLenses, want) {
+				t.Fatalf("start risk/lenses = %q/%v, want high/%v", started.RiskLevel, started.SelectedLenses, want)
+			}
+		})
+	}
+}
+
+func TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(output.Bytes(), &fields); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"action", "changed_files", "changed_lines", "correction_budget", "lenses_required", "lineage_id", "operation", "projection", "risk_level", "selected_lenses", "state"}
+	got := make([]string, 0, len(fields))
+	for field := range fields {
+		got = append(got, field)
+	}
+	slices.Sort(got)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unnegotiated start fields = %v, want %v", got, want)
+	}
+}
+
+func TestReviewFacadeFinalizeReceiptPublicationFailureIsExactlyReplayable(t *testing.T) {
+	fixture := prepareFacadeReceiptPending(t)
+	if fixture.diagnostic.MutationOutcome != "committed" || fixture.diagnostic.Replayability != "exact_replay_safe" || fixture.diagnostic.LineageID != fixture.started.LineageID || !strings.HasPrefix(fixture.diagnostic.RequestDigest, "sha256:") {
+		t.Fatalf("receipt publication diagnostic = %#v", fixture.diagnostic)
+	}
+	receipt, err := fixture.pending.State.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDigest := facadeFinalizeReplayRequestDigest(fixture.started.LineageID, fixture.pending.Revision, receipt)
+	if fixture.diagnostic.RequestDigest != wantDigest {
+		t.Fatalf("request digest = %q, want %q", fixture.diagnostic.RequestDigest, wantDigest)
+	}
+	if _, err := os.Stat(fixture.store.ReceiptPath()); !os.IsNotExist(err) {
+		t.Fatalf("failed publication created receipt: %v", err)
+	}
+
+	original := writeCompactFacadeReceipt
+	writes := 0
+	writeCompactFacadeReceipt = func(path string, got reviewtransaction.CompactReceipt) error {
+		writes++
+		if !reflect.DeepEqual(got, receipt) {
+			t.Fatalf("replay receipt = %#v, want %#v", got, receipt)
+		}
+		return reviewtransaction.WriteCompactReceiptAtomic(path, got)
+	}
+	defer func() { writeCompactFacadeReceipt = original }()
+	var output bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--cwd", fixture.repo, "--lineage", fixture.started.LineageID}, &output); err != nil {
+		t.Fatalf("exact receipt replay: %v", err)
+	}
+	if writes != 1 {
+		t.Fatalf("receipt replay writes = %d, want 1", writes)
+	}
+	after, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != fixture.pending.Revision || !reflect.DeepEqual(after.State, fixture.pending.State) {
+		t.Fatalf("receipt replay mutated authority: before %#v after %#v", fixture.pending, after)
+	}
+	result := decodeFacadeFinalize(t, output.Bytes())
+	if result.LineageID != fixture.started.LineageID || result.StoreRevision != fixture.pending.Revision || result.State != reviewtransaction.StateApproved {
+		t.Fatalf("receipt replay result = %#v", result)
+	}
+}
+
+func TestReviewFacadeFinalizeReceiptReplayRejectsNonExactAndUnsafeRequests(t *testing.T) {
+	t.Run("explicit lineage is required", func(t *testing.T) {
+		fixture := prepareFacadeReceiptPending(t)
+		assertFacadeReceiptReplayRejected(t, fixture, []string{"--cwd", fixture.repo})
+	})
+	t.Run("mutation inputs are rejected", func(t *testing.T) {
+		fixture := prepareFacadeReceiptPending(t)
+		assertFacadeReceiptReplayRejected(t, fixture, []string{"--cwd", fixture.repo, "--lineage", fixture.started.LineageID, "--evidence", fixture.evidencePath})
+	})
+	t.Run("malformed existing receipt is not overwritten", func(t *testing.T) {
+		fixture := prepareFacadeReceiptPending(t)
+		malformed := []byte("malformed receipt\n")
+		if err := os.WriteFile(fixture.store.ReceiptPath(), malformed, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		assertFacadeReceiptReplayRejected(t, fixture, []string{"--cwd", fixture.repo, "--lineage", fixture.started.LineageID})
+		got, err := os.ReadFile(fixture.store.ReceiptPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, malformed) {
+			t.Fatalf("unsafe replay overwrote existing receipt: %q", got)
+		}
+	})
 }
 
 func TestReviewFacadeDeniedGateRetainsObservedBoundaryWithoutAuthorizing(t *testing.T) {
@@ -1444,5 +1585,83 @@ func assertCompactLineageFiles(t *testing.T, store reviewtransaction.CompactStor
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("compact lineage files = %v, want %v", got, want)
+	}
+}
+
+type facadeReceiptPendingFixture struct {
+	repo         string
+	evidencePath string
+	started      ReviewFacadeStartResult
+	store        reviewtransaction.CompactStore
+	pending      reviewtransaction.CompactRecord
+	diagnostic   *ReviewFacadeReceiptPublicationError
+}
+
+func prepareFacadeReceiptPending(t *testing.T) facadeReceiptPendingFixture {
+	t.Helper()
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultPath := filepath.Join(t.TempDir(), "review.json")
+	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{Findings: []facadeFinding{}, Evidence: []string{"review complete"}})
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(evidencePath, []byte("focused tests pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := errors.New("injected receipt publication interruption")
+	original := writeCompactFacadeReceipt
+	writeCompactFacadeReceipt = func(string, reviewtransaction.CompactReceipt) error { return sentinel }
+	err = RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--evidence", evidencePath}, io.Discard)
+	writeCompactFacadeReceipt = original
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("receipt publication error = %v, want injected cause", err)
+	}
+	var diagnostic *ReviewFacadeReceiptPublicationError
+	if !errors.As(err, &diagnostic) {
+		t.Fatalf("receipt publication error type = %T, want *ReviewFacadeReceiptPublicationError", err)
+	}
+	pending, loadErr := store.Load()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if pending.State.State != reviewtransaction.StateApproved {
+		t.Fatalf("pending receipt authority state = %q, want approved", pending.State.State)
+	}
+	return facadeReceiptPendingFixture{
+		repo: repo, evidencePath: evidencePath, started: started, store: store, pending: pending, diagnostic: diagnostic,
+	}
+}
+
+func assertFacadeReceiptReplayRejected(t *testing.T, fixture facadeReceiptPendingFixture, args []string) {
+	t.Helper()
+	original := writeCompactFacadeReceipt
+	writes := 0
+	writeCompactFacadeReceipt = func(string, reviewtransaction.CompactReceipt) error {
+		writes++
+		return errors.New("unexpected receipt write")
+	}
+	defer func() { writeCompactFacadeReceipt = original }()
+	err := RunReviewFacadeFinalize(args, io.Discard)
+	if err == nil {
+		t.Fatal("unsafe receipt replay succeeded")
+	}
+	if writes != 0 {
+		t.Fatalf("unsafe receipt replay writes = %d, want 0", writes)
+	}
+	after, loadErr := fixture.store.Load()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if after.Revision != fixture.pending.Revision || !reflect.DeepEqual(after.State, fixture.pending.State) {
+		t.Fatalf("unsafe replay mutated authority: before %#v after %#v", fixture.pending, after)
 	}
 }

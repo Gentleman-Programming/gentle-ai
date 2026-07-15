@@ -258,7 +258,7 @@ func newLegacyCLIFixture(t *testing.T, lineage string) legacyCLIFixture {
 		t.Fatal(err)
 	}
 	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
 	})
 	if err != nil {
 		t.Fatal(err)

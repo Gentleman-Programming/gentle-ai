@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/start.schema.json",
+  "title": "Gentle AI negotiated review START response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "operation",
+    "action",
+    "lenses_required",
+    "lineage_id",
+    "state",
+    "risk_level",
+    "selected_lenses",
+    "projection",
+    "changed_files",
+    "changed_lines",
+    "correction_budget",
+    "risk_reasons"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.start/v1"},
+    "contract": {"const": "gentle-ai.review-integration/v1"},
+    "operation": {"const": "review.start"},
+    "action": {"enum": ["created", "resumed", "reuse-receipt", "blocked-scope-action"]},
+    "lenses_required": {"type": "boolean"},
+    "lineage_id": {"type": "string", "minLength": 1},
+    "state": {
+      "enum": [
+        "unreviewed",
+        "reviewing",
+        "judges_confirmed",
+        "findings_frozen",
+        "evidence_classified",
+        "fix_required",
+        "fixing",
+        "fix_validating",
+        "ready_final_verification",
+        "final_verifying",
+        "approved",
+        "escalated",
+        "invalidated"
+      ]
+    },
+    "risk_level": {"enum": ["low", "medium", "high"]},
+    "selected_lenses": {
+      "type": "array",
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {"enum": ["review-risk", "review-resilience", "review-readability", "review-reliability"]}
+    },
+    "projection": {"enum": ["workspace", "staged"]},
+    "changed_files": {"type": "integer", "minimum": 0},
+    "changed_lines": {"type": "integer", "minimum": 0},
+    "correction_budget": {"type": "integer", "minimum": 0, "maximum": 200},
+    "risk_reasons": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/risk_reason"}
+    }
+  },
+  "$defs": {
+    "risk_reason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code"],
+      "properties": {
+        "code": {
+          "enum": [
+            "configuration_change",
+            "executable_change",
+            "executable_mode",
+            "hot_path",
+            "large_change",
+            "non_executable_only",
+            "service_token",
+            "shell_source"
+          ]
+        },
+        "signal": {"enum": ["auth", "update", "security", "payments", "permissions", "shell_process"]},
+        "path": {"type": "string", "minLength": 1},
+        "old_mode": {"type": "string", "pattern": "^[0-7]{6}$"},
+        "new_mode": {"type": "string", "pattern": "^[0-7]{6}$"}
+      }
+    }
+  }
+}

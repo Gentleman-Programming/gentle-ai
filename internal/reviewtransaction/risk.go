@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -46,6 +48,39 @@ type DiffStat struct {
 	Binary    bool
 	Generated bool
 	ModeOnly  bool
+	OldMode   string
+	NewMode   string
+}
+
+type RiskReasonCode string
+
+const (
+	RiskReasonHotPath             RiskReasonCode = "hot_path"
+	RiskReasonServiceToken        RiskReasonCode = "service_token"
+	RiskReasonShellSource         RiskReasonCode = "shell_source"
+	RiskReasonExecutableMode      RiskReasonCode = "executable_mode"
+	RiskReasonLargeChange         RiskReasonCode = "large_change"
+	RiskReasonNonExecutableOnly   RiskReasonCode = "non_executable_only"
+	RiskReasonConfigurationChange RiskReasonCode = "configuration_change"
+	RiskReasonExecutableChange    RiskReasonCode = "executable_change"
+)
+
+// RiskReason records only evidence derivable from the immutable snapshot.
+// It is intentionally not part of compact authority or receipt identity.
+type RiskReason struct {
+	Code    RiskReasonCode `json:"code"`
+	Signal  RiskSignal     `json:"signal,omitempty"`
+	Path    string         `json:"path,omitempty"`
+	OldMode string         `json:"old_mode,omitempty"`
+	NewMode string         `json:"new_mode,omitempty"`
+}
+
+// RiskAssessment is the deterministic, repository-derived classification.
+// Public exposure is negotiated separately; existing facade responses remain unchanged.
+type RiskAssessment struct {
+	Level        RiskLevel    `json:"level"`
+	ChangedLines int          `json:"changed_lines"`
+	Reasons      []RiskReason `json:"reasons"`
 }
 
 type RiskInput struct {
@@ -117,15 +152,23 @@ func CorrectionBudget(originalChangedLines int) (int, error) {
 // ClassifySnapshotRisk derives both risk and changed lines from one immutable
 // repository tree boundary and the canonical CountChangedLines contract.
 func (builder SnapshotBuilder) ClassifySnapshotRisk(ctx context.Context, snapshot Snapshot) (RiskLevel, int, error) {
+	assessment, err := builder.AssessSnapshotRisk(ctx, snapshot)
+	return assessment.Level, assessment.ChangedLines, err
+}
+
+// AssessSnapshotRisk derives the tier, authored size, and canonical reasons
+// from one immutable Git tree boundary.
+func (builder SnapshotBuilder) AssessSnapshotRisk(ctx context.Context, snapshot Snapshot) (RiskAssessment, error) {
 	stats, err := builder.DiffStats(ctx, snapshot)
 	if err != nil {
-		return "", 0, err
+		return RiskAssessment{}, err
 	}
 	changedLines, err := CountChangedLines(stats)
 	if err != nil {
-		return "", 0, err
+		return RiskAssessment{}, err
 	}
-	signals := deriveSemanticRiskSignals(stats)
+	reasons := deriveSnapshotRiskReasons(stats, changedLines)
+	signals := riskSignalsFromReasons(reasons)
 	onlyNonExecutable := true
 	touchesConfiguration := false
 	for _, stat := range stats {
@@ -138,21 +181,148 @@ func (builder SnapshotBuilder) ClassifySnapshotRisk(ctx context.Context, snapsho
 	risk, err := ClassifyRisk(RiskInput{
 		Stats: stats, Signals: signals, OnlyNonExecutableChanges: onlyNonExecutable, TouchesConfiguration: touchesConfiguration,
 	})
-	return risk, changedLines, err
+	if err != nil {
+		return RiskAssessment{}, err
+	}
+	return RiskAssessment{Level: risk, ChangedLines: changedLines, Reasons: reasons}, nil
 }
 
 func deriveSemanticRiskSignals(stats []DiffStat) []RiskSignal {
-	for _, stat := range stats {
-		if !isSemanticRiskEligible(stat) {
-			continue
+	reasons := deriveSnapshotRiskReasons(stats, 0)
+	signals := make([]RiskSignal, 0, len(reasons))
+	for _, reason := range reasons {
+		switch reason.Code {
+		case RiskReasonServiceToken, RiskReasonShellSource, RiskReasonExecutableMode:
+			signals = append(signals, reason.Signal)
 		}
-		for _, segment := range strings.Split(stat.Path, "/") {
-			if hasAdjacentServiceTokenTokens(stripSemanticPathExtension(segment)) {
-				return []RiskSignal{SignalAuth}
+	}
+	return canonicalRiskSignals(signals)
+}
+
+func deriveSnapshotRiskReasons(stats []DiffStat, changedLines int) []RiskReason {
+	candidates := make([]RiskReason, 0, len(stats)+1)
+	for _, stat := range stats {
+		if isSemanticRiskEligible(stat) {
+			if isServiceTokenReviewPath(stat.Path) {
+				candidates = append(candidates, RiskReason{Code: RiskReasonServiceToken, Signal: SignalAuth, Path: stat.Path})
+			}
+			if isShellReviewPath(stat.Path) {
+				candidates = append(candidates, RiskReason{Code: RiskReasonShellSource, Signal: SignalShellProcess, Path: stat.Path})
+			}
+		}
+		if executableModeChanged(stat.OldMode, stat.NewMode) {
+			candidates = append(candidates, RiskReason{
+				Code: RiskReasonExecutableMode, Signal: SignalPermissions, Path: stat.Path,
+				OldMode: stat.OldMode, NewMode: stat.NewMode,
+			})
+		}
+		if !isGeneratedGoldenPath(stat.Path) {
+			for _, signal := range hotPathRiskSignals(stat.Path) {
+				candidates = append(candidates, RiskReason{Code: RiskReasonHotPath, Signal: signal, Path: stat.Path})
 			}
 		}
 	}
-	return nil
+	if changedLines > LargeChangeLines {
+		candidates = append(candidates, RiskReason{Code: RiskReasonLargeChange})
+	}
+	if len(candidates) == 0 {
+		candidates = append(candidates, fallbackRiskReason(stats))
+	}
+	return canonicalRiskReasons(candidates)
+}
+
+func isServiceTokenReviewPath(logicalPath string) bool {
+	for _, segment := range strings.Split(logicalPath, "/") {
+		if hasAdjacentServiceTokenTokens(stripSemanticPathExtension(segment)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isShellReviewPath(logicalPath string) bool {
+	switch asciiLower(filepath.Ext(logicalPath)) {
+	case ".sh", ".bash", ".zsh":
+		return true
+	default:
+		return false
+	}
+}
+
+func executableModeChanged(oldMode, newMode string) bool {
+	if oldMode == "" || newMode == "" {
+		return false
+	}
+	oldValue, oldErr := strconv.ParseUint(oldMode, 8, 32)
+	newValue, newErr := strconv.ParseUint(newMode, 8, 32)
+	return oldErr == nil && newErr == nil && oldValue&0o111 != newValue&0o111
+}
+
+func fallbackRiskReason(stats []DiffStat) RiskReason {
+	for _, stat := range stats {
+		if isGeneratedGoldenPath(stat.Path) {
+			continue
+		}
+		if isConfigurationReviewPath(stat.Path) {
+			return RiskReason{Code: RiskReasonConfigurationChange, Path: stat.Path}
+		}
+		if !isNonExecutableReviewPath(stat.Path) {
+			return RiskReason{Code: RiskReasonExecutableChange, Path: stat.Path}
+		}
+	}
+	return RiskReason{Code: RiskReasonNonExecutableOnly}
+}
+
+func canonicalRiskReasons(reasons []RiskReason) []RiskReason {
+	sorted := append([]RiskReason(nil), reasons...)
+	sort.Slice(sorted, func(left, right int) bool {
+		if sorted[left].Code != sorted[right].Code {
+			return sorted[left].Code < sorted[right].Code
+		}
+		if sorted[left].Signal != sorted[right].Signal {
+			return sorted[left].Signal < sorted[right].Signal
+		}
+		if sorted[left].Path != sorted[right].Path {
+			return sorted[left].Path < sorted[right].Path
+		}
+		if sorted[left].OldMode != sorted[right].OldMode {
+			return sorted[left].OldMode < sorted[right].OldMode
+		}
+		return sorted[left].NewMode < sorted[right].NewMode
+	})
+	canonical := make([]RiskReason, 0, len(sorted))
+	seen := make(map[string]struct{}, len(sorted))
+	for _, reason := range sorted {
+		key := string(reason.Code) + "\x00" + string(reason.Signal)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		canonical = append(canonical, reason)
+	}
+	return canonical
+}
+
+func riskSignalsFromReasons(reasons []RiskReason) []RiskSignal {
+	signals := make([]RiskSignal, 0, len(reasons))
+	for _, reason := range reasons {
+		if reason.Signal != "" {
+			signals = append(signals, reason.Signal)
+		}
+	}
+	return canonicalRiskSignals(signals)
+}
+
+func canonicalRiskSignals(signals []RiskSignal) []RiskSignal {
+	sorted := append([]RiskSignal(nil), signals...)
+	sort.Slice(sorted, func(left, right int) bool { return sorted[left] < sorted[right] })
+	canonical := make([]RiskSignal, 0, len(sorted))
+	for _, signal := range sorted {
+		if len(canonical) == 0 || canonical[len(canonical)-1] != signal {
+			canonical = append(canonical, signal)
+		}
+	}
+	return canonical
 }
 
 func isSemanticRiskEligible(stat DiffStat) bool {
@@ -256,17 +426,30 @@ func touchesHotPath(stats []DiffStat) bool {
 		if isGeneratedGoldenPath(stat.Path) {
 			continue
 		}
-		lower := strings.ToLower(stat.Path)
-		for _, token := range strings.FieldsFunc(lower, func(r rune) bool {
-			return r == '/' || r == '\\' || r == '.' || r == '-' || r == '_'
-		}) {
-			switch token {
-			case "auth", "update", "security", "payments":
-				return true
-			}
+		if len(hotPathRiskSignals(stat.Path)) != 0 {
+			return true
 		}
 	}
 	return false
+}
+
+func hotPathRiskSignals(logicalPath string) []RiskSignal {
+	signals := make([]RiskSignal, 0, 4)
+	for _, token := range strings.FieldsFunc(strings.ToLower(logicalPath), func(r rune) bool {
+		return r == '/' || r == '\\' || r == '.' || r == '-' || r == '_'
+	}) {
+		switch token {
+		case "auth":
+			signals = append(signals, SignalAuth)
+		case "update":
+			signals = append(signals, SignalUpdate)
+		case "security":
+			signals = append(signals, SignalSecurity)
+		case "payments":
+			signals = append(signals, SignalPayments)
+		}
+	}
+	return canonicalRiskSignals(signals)
 }
 
 func normalizeLogicalPath(value string) (string, error) {

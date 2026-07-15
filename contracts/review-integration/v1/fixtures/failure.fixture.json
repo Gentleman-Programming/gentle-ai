@@ -1,0 +1,16 @@
+{
+  "schema": "gentle-ai.review-integration.failure/v1",
+  "contract": "gentle-ai.review-integration/v1",
+  "operation": "review.finalize",
+  "phase": "native_committed",
+  "code": "receipt_publication_pending",
+  "message": "Receipt publication did not complete after terminal authority was committed.",
+  "mutation_outcome": "committed",
+  "authority_applicability": "current_target",
+  "retry_safe": false,
+  "replayability": "exact_replay_safe",
+  "lineage_id": "review-failure-fixture",
+  "request_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "required_inputs": ["lineage_id"],
+  "next_action": "review.finalize"
+}

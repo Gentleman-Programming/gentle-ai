@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
@@ -51,6 +52,27 @@ type ReviewFacadeFinalizeResult struct {
 	StoreRevision string                  `json:"store_revision"`
 	ReceiptPath   string                  `json:"receipt_path,omitempty"`
 }
+
+// ReviewFacadeReceiptPublicationError reports the only safe interpretation of
+// a terminal authority whose derived receipt could not be materialized.
+type ReviewFacadeReceiptPublicationError struct {
+	MutationOutcome string `json:"mutation_outcome"`
+	Replayability   string `json:"replayability"`
+	LineageID       string `json:"lineage_id"`
+	RequestDigest   string `json:"request_digest"`
+	Cause           error  `json:"-"`
+}
+
+func (err *ReviewFacadeReceiptPublicationError) Error() string {
+	return fmt.Sprintf(
+		"write compact review receipt: %v (mutation_outcome: %s, replayability: %s, lineage: %s, request_digest: %s)",
+		err.Cause, err.MutationOutcome, err.Replayability, err.LineageID, err.RequestDigest,
+	)
+}
+
+func (err *ReviewFacadeReceiptPublicationError) Unwrap() error { return err.Cause }
+
+var writeCompactFacadeReceipt = reviewtransaction.WriteCompactReceiptAtomic
 
 type ReviewInvalidateResult struct {
 	Operation     string                  `json:"operation"`
@@ -111,10 +133,36 @@ type facadeArtifacts struct {
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <start|finalize|validate|status|invalidate|recover|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capabilities|start|finalize|validate|status|invalidate|recover|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go.")
 		return nil
 	}
+	operation, negotiated, preflightFailure := reviewIntegrationFailureRoute(args)
+	if preflightFailure != nil {
+		if err := emitReviewIntegrationFailure(stdout, *preflightFailure); err != nil {
+			return err
+		}
+		return newReviewIntegrationFailureError(*preflightFailure, nil)
+	}
+	if !negotiated {
+		return runReviewCommand(args, stdout)
+	}
+	var output bytes.Buffer
+	runErr := runReviewCommand(args, &output)
+	if runErr == nil {
+		_, err := io.Copy(stdout, &output)
+		return err
+	}
+	failure := newReviewIntegrationFailure(operation, args[1:], runErr)
+	if err := emitReviewIntegrationFailure(stdout, failure); err != nil {
+		return err
+	}
+	return newReviewIntegrationFailureError(failure, runErr)
+}
+
+func runReviewCommand(args []string, stdout io.Writer) error {
 	switch args[0] {
+	case "capabilities":
+		return RunReviewCapabilities(args[1:], stdout)
 	case "start":
 		return RunReviewFacadeStart(args[1:], stdout)
 	case "finalize":
@@ -139,6 +187,10 @@ func RunReview(args []string, stdout io.Writer) error {
 func RunReviewStatus(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review status", stdout, "Read every compact-v2 and shipped legacy-v1 authority from the shared Git common directory without mutation.")
 	cwd := flags.String("cwd", ".", "repository path")
+	contract := flags.String("contract", "", "optional negotiated review integration contract")
+	lineage := flags.String("lineage", "", "optional explicit lineage selector for negotiated target status")
+	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "negotiated target projection: workspace or staged")
+	baseRef := flags.String("base-ref", "", "optional negotiated immutable base-to-HEAD target")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -146,7 +198,46 @@ func RunReviewStatus(args []string, stdout io.Writer) error {
 		return nil
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected review status argument %q", flags.Arg(0))
+		return reviewPreflightError(fmt.Errorf("unexpected review status argument %q", flags.Arg(0)))
+	}
+	if *contract != "" {
+		if err := validateReviewIntegrationContract(*contract); err != nil {
+			return err
+		}
+		selectedProjection := reviewtransaction.Projection(strings.TrimSpace(*projection))
+		if selectedProjection != reviewtransaction.ProjectionWorkspace && selectedProjection != reviewtransaction.ProjectionStaged {
+			return fmt.Errorf("unsupported review projection %q", *projection)
+		}
+		builder := reviewtransaction.SnapshotBuilder{Repo: *cwd}
+		root, err := builder.ResolveRepositoryRoot(context.Background())
+		if err != nil {
+			return fmt.Errorf("resolve negotiated review repository root: %w", err)
+		}
+		intended := []string{}
+		if selectedProjection != reviewtransaction.ProjectionStaged {
+			intended, err = (reviewtransaction.SnapshotBuilder{Repo: root}).DiscoverIntendedUntracked(context.Background())
+			if err != nil {
+				return fmt.Errorf("discover negotiated review target: %w", err)
+			}
+		}
+		target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: intended}
+		if strings.TrimSpace(*baseRef) != "" {
+			target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, strings.TrimSpace(*baseRef)
+		}
+		native, err := reviewtransaction.AssessTargetStatus(context.Background(), root, reviewtransaction.TargetStatusRequest{
+			Target: target, LineageID: *lineage,
+		})
+		if err != nil {
+			return fmt.Errorf("assess negotiated review target: %w", err)
+		}
+		result := newReviewTargetStatusResult(native)
+		if err := result.Validate(); err != nil {
+			return fmt.Errorf("validate negotiated review status: %w", err)
+		}
+		return encodeReviewJSON(stdout, result)
+	}
+	if strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || *projection != string(reviewtransaction.ProjectionWorkspace) {
+		return errors.New("review status target selectors require --contract")
 	}
 	report, err := reviewtransaction.InventoryAuthority(context.Background(), *cwd)
 	if err != nil {
@@ -236,6 +327,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 func RunReviewBindSDD(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review bind-sdd", stdout, "Bind an explicit approved compact lineage to an OpenSpec change.")
 	cwd := flags.String("cwd", "", "repository path")
+	contract := flags.String("contract", "", "optional negotiated review integration contract")
 	change := flags.String("change", "", "OpenSpec change")
 	lineage := flags.String("lineage", "", "approved lineage")
 	expected := flags.String("expected-binding-revision", "", "binding revision")
@@ -246,7 +338,11 @@ func RunReviewBindSDD(args []string, stdout io.Writer) error {
 		return nil
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected review bind-sdd argument %q", flags.Arg(0))
+		return reviewPreflightError(fmt.Errorf("unexpected review bind-sdd argument %q", flags.Arg(0)))
+	}
+	negotiated, err := reviewIntegrationNegotiation(flags, *contract)
+	if err != nil {
+		return err
 	}
 	hasExpected := false
 	for _, arg := range args {
@@ -259,7 +355,7 @@ func RunReviewBindSDD(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return encodeReviewJSON(stdout, binding)
+	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationBindSDD, binding, binding)
 }
 
 func RunReviewInvalidate(args []string, stdout io.Writer) error {
@@ -329,6 +425,7 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 func RunReviewFacadeStart(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review start", stdout, "Freeze live Git scope and derive the bounded review tier, lenses, and correction budget.")
 	cwd := flags.String("cwd", ".", "repository path")
+	contract := flags.String("contract", "", "optional negotiated review integration contract")
 	lineage := flags.String("lineage", "", "optional explicit review lineage identifier")
 	policySource := flags.String("policy", "", "optional review policy file; the native bounded policy is used by default")
 	focus := flags.String("focus", "reliability", "dominant standard-risk focus: risk, resilience, readability, or reliability")
@@ -343,7 +440,11 @@ func RunReviewFacadeStart(args []string, stdout io.Writer) error {
 		return nil
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected review start argument %q", flags.Arg(0))
+		return reviewPreflightError(fmt.Errorf("unexpected review start argument %q", flags.Arg(0)))
+	}
+	negotiated, err := reviewIntegrationNegotiation(flags, *contract)
+	if err != nil {
+		return err
 	}
 	builder := reviewtransaction.SnapshotBuilder{Repo: *cwd}
 	root, err := builder.ResolveRepositoryRoot(context.Background())
@@ -379,10 +480,11 @@ func RunReviewFacadeStart(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("build facade review target: %w", err)
 	}
-	risk, changedLines, err := (reviewtransaction.SnapshotBuilder{Repo: root}).ClassifySnapshotRisk(context.Background(), snapshot)
+	assessment, err := (reviewtransaction.SnapshotBuilder{Repo: root}).AssessSnapshotRisk(context.Background(), snapshot)
 	if err != nil {
 		return fmt.Errorf("classify facade review target: %w", err)
 	}
+	risk, changedLines := assessment.Level, assessment.ChangedLines
 	lenses, err := facadeSelectedLenses(risk, *focus)
 	if err != nil {
 		return err
@@ -393,7 +495,7 @@ func RunReviewFacadeStart(args []string, stdout io.Writer) error {
 	legacy, err := reviewtransaction.AuthoritativeStore(context.Background(), root, *lineage)
 	if err == nil {
 		if _, loadErr := legacy.LoadChain(); loadErr == nil {
-			return fmt.Errorf("%w: choose a new lineage for compact authority", reviewtransaction.ErrLegacyReadOnly)
+			return fmt.Errorf("%w: choose a new lineage for compact authority", reviewtransaction.NewLegacyReadOnlyError("review/start", *lineage))
 		}
 	}
 	policy, err := facadePolicyBytes(*policySource)
@@ -415,18 +517,33 @@ func RunReviewFacadeStart(args []string, stdout io.Writer) error {
 		return fmt.Errorf("start compact facade review: %w", err)
 	}
 	authority := started.Record.State
-	return encodeReviewJSON(stdout, ReviewFacadeStartResult{
+	legacyResult := ReviewFacadeStartResult{
 		Operation: "review/start", Action: string(started.Action), LensesRequired: started.LensesRequired,
 		LineageID: authority.LineageID, State: authority.State, RiskLevel: authority.RiskLevel,
 		SelectedLenses: authority.SelectedLenses, Projection: facadeProjection(authority.InitialSnapshot.Projection),
 		ChangedFiles: len(authority.InitialSnapshot.Paths),
 		ChangedLines: authority.OriginalChangedLines, CorrectionBudget: authority.CorrectionBudget,
-	})
+	}
+	if !negotiated {
+		return encodeReviewJSON(stdout, legacyResult)
+	}
+	if authority.InitialSnapshot.Identity != snapshot.Identity {
+		assessment, err = (reviewtransaction.SnapshotBuilder{Repo: root}).AssessSnapshotRisk(context.Background(), authority.InitialSnapshot)
+		if err != nil {
+			return fmt.Errorf("classify authoritative negotiated START target: %w", err)
+		}
+	}
+	negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment)
+	if err != nil {
+		return err
+	}
+	return encodeReviewJSON(stdout, negotiatedResult)
 }
 
 func RunReviewFacadeFinalize(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review finalize", stdout, "Canonicalize reviewer output and evidence, perform required native transitions, and materialize the terminal receipt.")
 	cwd := flags.String("cwd", ".", "repository path")
+	contract := flags.String("contract", "", "optional negotiated review integration contract")
 	lineage := flags.String("lineage", "", "optional lineage override when discovery is ambiguous")
 	validationPath := flags.String("validation", "", "targeted correction validation JSON file or - for stdin")
 	refuterPath := flags.String("refuter", "", "optional refuter outcomes JSON file or - for stdin")
@@ -443,7 +560,11 @@ func RunReviewFacadeFinalize(args []string, stdout io.Writer) error {
 		return nil
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected review finalize argument %q", flags.Arg(0))
+		return reviewPreflightError(fmt.Errorf("unexpected review finalize argument %q", flags.Arg(0)))
+	}
+	negotiated, err := reviewIntegrationNegotiation(flags, *contract)
+	if err != nil {
+		return err
 	}
 	if countFacadeStdin(resultPaths, *validationPath, *refuterPath, *evidencePath) > 1 {
 		return errors.New("review finalize accepts stdin for only one input")
@@ -454,13 +575,35 @@ func RunReviewFacadeFinalize(args []string, stdout io.Writer) error {
 	}
 	store, record, err := discoverCompactFacadeReview(context.Background(), root, *lineage, false)
 	if err != nil {
-		if _, _, _, legacyErr := discoverFacadeReview(context.Background(), root, *lineage, false); legacyErr == nil {
-			return reviewtransaction.ErrLegacyReadOnly
+		if _, chain, _, legacyErr := discoverFacadeReview(context.Background(), root, *lineage, false); legacyErr == nil {
+			legacyLineage := chain.Records[len(chain.Records)-1].Transaction.LineageID
+			return reviewtransaction.NewLegacyReadOnlyError("review/finalize", legacyLineage)
 		}
 		return err
 	}
 	store.TracePath = strings.TrimSpace(*tracePath)
 	state := record.State
+	terminalAtEntry := facadeTerminalState(state.State)
+	var terminalReceipt reviewtransaction.CompactReceipt
+	terminalReceiptExists := false
+	if terminalAtEntry {
+		terminalReceipt, err = state.Receipt()
+		if err != nil {
+			return err
+		}
+		terminalReceiptExists, err = inspectCompactFacadeReceipt(store.ReceiptPath(), terminalReceipt)
+		if err != nil {
+			return err
+		}
+		if !terminalReceiptExists {
+			if !facadeFinalizeReplayInputsEmpty(resultPaths, *validationPath, *refuterPath, *evidencePath, *correctionLines, *failed, *tracePath) {
+				return errors.New("terminal review finalize accepts no review inputs; exact receipt replay requires only --lineage")
+			}
+			if *lineage != state.LineageID || strings.TrimSpace(*lineage) != *lineage {
+				return errors.New("receipt publication replay requires the exact explicit --lineage")
+			}
+		}
+	}
 	reviewerResults, err := readFacadeReviewerResults(resultPaths)
 	if err != nil {
 		return err
@@ -511,11 +654,11 @@ func RunReviewFacadeFinalize(args []string, stdout io.Writer) error {
 		record.Revision, record.State = revision, state
 	}
 	if state.State == reviewtransaction.StateCorrectionRequired && state.ProposedCorrectionLines == nil {
-		return encodeCompactFacadeFinalize(stdout, state, record.Revision, store, "rerun with --correction-lines before editing")
+		return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "rerun with --correction-lines before editing")
 	}
 	if state.State == reviewtransaction.StateCorrectionRequired {
 		if validation == nil {
-			return encodeCompactFacadeFinalize(stdout, state, record.Revision, store, "apply the bounded correction, then rerun with --validation and --evidence")
+			return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "apply the bounded correction, then rerun with --validation and --evidence")
 		}
 		if err := rejectFacadeCorrectionUntracked(context.Background(), root, state); err != nil {
 			return err
@@ -547,7 +690,7 @@ func RunReviewFacadeFinalize(args []string, stdout io.Writer) error {
 	}
 	if state.State == reviewtransaction.StateValidating {
 		if len(evidence) == 0 {
-			return encodeCompactFacadeFinalize(stdout, state, record.Revision, store, "rerun with --evidence")
+			return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "rerun with --evidence")
 		}
 		if err := state.CompleteVerification(evidence, !*failed); err != nil {
 			return fmt.Errorf("complete compact final verification: %w", err)
@@ -559,21 +702,83 @@ func RunReviewFacadeFinalize(args []string, stdout io.Writer) error {
 		record.Revision, record.State = revision, state
 	}
 	if state.State != reviewtransaction.StateApproved && state.State != reviewtransaction.StateEscalated {
-		return encodeCompactFacadeFinalize(stdout, state, record.Revision, store, "continue the current review state")
+		return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "continue the current review state")
 	}
-	receipt, err := state.Receipt()
+	if terminalAtEntry && terminalReceiptExists {
+		return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>")
+	}
+	receipt := terminalReceipt
+	if !terminalAtEntry {
+		receipt, err = state.Receipt()
+		if err != nil {
+			return err
+		}
+	}
+	digest := facadeFinalizeReplayRequestDigest(state.LineageID, record.Revision, receipt)
+	if err := writeCompactFacadeReceipt(store.ReceiptPath(), receipt); err != nil {
+		return newFacadeReceiptPublicationError(state.LineageID, digest, err)
+	}
+	published, err := inspectCompactFacadeReceipt(store.ReceiptPath(), receipt)
 	if err != nil {
-		return err
+		return newFacadeReceiptPublicationError(state.LineageID, digest, err)
 	}
-	if err := reviewtransaction.WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
-		return fmt.Errorf("write compact review receipt: %w", err)
+	if !published {
+		return newFacadeReceiptPublicationError(state.LineageID, digest, errors.New("receipt writer did not materialize the derived receipt"))
 	}
-	return encodeCompactFacadeFinalize(stdout, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>")
+	return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>")
+}
+
+func facadeTerminalState(state reviewtransaction.State) bool {
+	return state == reviewtransaction.StateApproved || state == reviewtransaction.StateEscalated
+}
+
+func facadeFinalizeReplayInputsEmpty(results []string, validation, refuter, evidence string, correctionLines int, failed bool, trace string) bool {
+	return len(results) == 0 && strings.TrimSpace(validation) == "" && strings.TrimSpace(refuter) == "" &&
+		strings.TrimSpace(evidence) == "" && correctionLines == 0 && !failed && strings.TrimSpace(trace) == ""
+}
+
+func inspectCompactFacadeReceipt(path string, expected reviewtransaction.CompactReceipt) (bool, error) {
+	payload, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect compact review receipt: %w", err)
+	}
+	existing, err := reviewtransaction.ParseCompactReceipt(payload)
+	if err != nil {
+		return false, fmt.Errorf("existing compact review receipt is unsafe for replay: %w", err)
+	}
+	if !reflect.DeepEqual(existing, expected) {
+		return false, errors.New("existing compact review receipt is unsafe for replay: receipt does not equal terminal authority")
+	}
+	return true, nil
+}
+
+func newFacadeReceiptPublicationError(lineage, requestDigest string, cause error) error {
+	return &ReviewFacadeReceiptPublicationError{
+		MutationOutcome: "committed", Replayability: "exact_replay_safe",
+		LineageID: lineage, RequestDigest: requestDigest, Cause: cause,
+	}
+}
+
+func facadeFinalizeReplayRequestDigest(lineage, revision string, receipt reviewtransaction.CompactReceipt) string {
+	return facadeValueHash("finalize-replay-request", struct {
+		Schema        string                           `json:"schema"`
+		Operation     string                           `json:"operation"`
+		LineageID     string                           `json:"lineage_id"`
+		StoreRevision string                           `json:"store_revision"`
+		Receipt       reviewtransaction.CompactReceipt `json:"receipt"`
+	}{
+		Schema: "gentle-ai.review-finalize-replay-request/v1", Operation: "review/finalize",
+		LineageID: lineage, StoreRevision: revision, Receipt: receipt,
+	})
 }
 
 func RunReviewFacadeValidate(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review validate", stdout, "Auto-discover authoritative review state and receipt, then validate them against live Git evidence.")
 	cwd := flags.String("cwd", ".", "repository path")
+	contract := flags.String("contract", "", "optional negotiated review integration contract")
 	lineage := flags.String("lineage", "", "optional lineage override when discovery is ambiguous")
 	gate := flags.String("gate", "", "lifecycle gate: post-apply, pre-commit, pre-push, pre-pr, or release")
 	baseRef := flags.String("base-ref", "", "optional expected remote publication base for pre-pr")
@@ -591,7 +796,11 @@ func RunReviewFacadeValidate(args []string, stdout io.Writer) error {
 		return nil
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected review validate argument %q", flags.Arg(0))
+		return reviewPreflightError(fmt.Errorf("unexpected review validate argument %q", flags.Arg(0)))
+	}
+	negotiated, err := reviewIntegrationNegotiation(flags, *contract)
+	if err != nil {
+		return err
 	}
 	if strings.TrimSpace(*gate) == "" {
 		return errors.New("review validate requires --gate")
@@ -625,7 +834,7 @@ func RunReviewFacadeValidate(args []string, stdout io.Writer) error {
 			input.PolicyArtifact = *policy
 		}
 		evaluation := reviewtransaction.EvaluateCompactGate(context.Background(), root, receipt, input)
-		return emitFacadeGateEvaluation(stdout, evaluation)
+		return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated)
 	}
 
 	_, chain, artifacts, legacyErr := discoverFacadeReview(context.Background(), root, *lineage, true)
@@ -651,7 +860,7 @@ func RunReviewFacadeValidate(args []string, stdout io.Writer) error {
 	for _, path := range tx.Snapshot.IntendedUntracked {
 		validateArgs = append(validateArgs, "--intended-untracked", path)
 	}
-	return RunReviewValidate(validateArgs, stdout)
+	return runFacadeLegacyValidateNegotiated(validateArgs, stdout, negotiated)
 }
 
 func facadeSelectedLenses(risk reviewtransaction.RiskLevel, focus string) ([]string, error) {
@@ -937,14 +1146,18 @@ func facadeArtifactPaths(store reviewtransaction.Store) facadeArtifacts {
 	}
 }
 
-func encodeCompactFacadeFinalize(stdout io.Writer, state reviewtransaction.CompactState, revision string, store reviewtransaction.CompactStore, action string) error {
+func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, state reviewtransaction.CompactState, revision string, store reviewtransaction.CompactStore, action string) error {
 	result := ReviewFacadeFinalizeResult{
 		Operation: "review/finalize", LineageID: state.LineageID, State: state.State, Action: action, StoreRevision: revision,
 	}
 	if state.State == reviewtransaction.StateApproved || state.State == reviewtransaction.StateEscalated {
 		result.ReceiptPath = store.ReceiptPath()
 	}
-	return encodeReviewJSON(stdout, result)
+	public := ReviewIntegrationFinalizeResult{
+		Operation: result.Operation, LineageID: result.LineageID, State: result.State,
+		Action: result.Action, StoreRevision: result.StoreRevision,
+	}
+	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationFinalize, result, public)
 }
 
 func rejectFacadeCorrectionUntracked(ctx context.Context, repo string, state reviewtransaction.CompactState) error {
@@ -972,17 +1185,40 @@ func rejectFacadeCorrectionUntracked(ctx context.Context, repo string, state rev
 }
 
 func emitFacadeGateEvaluation(stdout io.Writer, evaluation reviewtransaction.NativeGateEvaluation) error {
+	return emitFacadeGateEvaluationNegotiated(stdout, evaluation, false)
+}
+
+func emitFacadeGateEvaluationNegotiated(stdout io.Writer, evaluation reviewtransaction.NativeGateEvaluation, negotiated bool) error {
 	result := ReviewValidateResult{
 		Schema: ReviewValidateSchema, Result: evaluation.Result, Allowed: evaluation.Result == reviewtransaction.GateAllow,
 		Action: reviewGateAction(evaluation.Result), Reason: evaluation.Reason, Context: evaluation.Context,
 	}
-	if err := encodeReviewJSON(stdout, result); err != nil {
+	if err := encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationValidate, result, result); err != nil {
 		return err
 	}
 	if !result.Allowed {
 		return ReviewGateDeniedError{Result: result.Result}
 	}
 	return nil
+}
+
+func runFacadeLegacyValidateNegotiated(args []string, stdout io.Writer, negotiated bool) error {
+	if !negotiated {
+		return RunReviewValidate(args, stdout)
+	}
+	var output bytes.Buffer
+	runErr := RunReviewValidate(args, &output)
+	if output.Len() == 0 {
+		return runErr
+	}
+	var result ReviewValidateResult
+	if err := decodeStrictReviewIntegrationResult(output.Bytes(), &result); err != nil {
+		return err
+	}
+	if err := encodeReviewIntegrationOperation(stdout, true, ReviewIntegrationOperationValidate, result, result); err != nil {
+		return err
+	}
+	return runErr
 }
 
 func facadePolicyBytes(path string) ([]byte, error) {

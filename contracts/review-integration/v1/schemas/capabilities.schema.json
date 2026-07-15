@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities.schema.json",
+  "title": "Gentle AI review integration capabilities",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "protocol",
+    "package",
+    "build",
+    "executable",
+    "operations",
+    "gates",
+    "projections",
+    "schemas",
+    "features",
+    "compatibility"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gentle-ai.review-integration.capabilities/v1"
+    },
+    "contract": {
+      "const": "gentle-ai.review-integration/v1"
+    },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["major", "minor"],
+      "properties": {
+        "major": {"const": 1},
+        "minor": {"const": 0}
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "release_channel"],
+      "properties": {
+        "name": {"const": "gentle-ai"},
+        "version": {"type": "string", "minLength": 1},
+        "release_channel": {"enum": ["development", "prerelease", "stable"]}
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "go_version", "module_version", "vcs", "vcs_revision", "vcs_time", "vcs_modified"],
+      "properties": {
+        "id": {"$ref": "#/$defs/sha256"},
+        "go_version": {"type": "string", "minLength": 1},
+        "module_version": {"type": "string"},
+        "vcs": {"type": "string"},
+        "vcs_revision": {"type": "string"},
+        "vcs_time": {"type": "string"},
+        "vcs_modified": {"enum": ["true", "false", "unknown"]}
+      }
+    },
+    "executable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "evidence", "verification"],
+      "properties": {
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "evidence": {"const": "self-reported"},
+        "verification": {"const": "compare-with-published-manifest"}
+      }
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "review.bind_sdd",
+          "review.capabilities",
+          "review.finalize",
+          "review.start",
+          "review.status",
+          "review.validate"
+        ]
+      }
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {"enum": ["post-apply", "pre-commit", "pre-push", "pre-pr", "release"]}
+    },
+    "projections": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {"enum": ["staged", "workspace"]}
+    },
+    "schemas": {
+      "type": "array",
+      "minItems": 13,
+      "maxItems": 13,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "gentle-ai.review-authority-status/v1",
+          "gentle-ai.review-gate-request/v1",
+          "gentle-ai.review-integration.capabilities/v1",
+          "gentle-ai.review-integration.failure/v1",
+          "gentle-ai.review-integration.operation/v1",
+          "gentle-ai.review-integration.projection/v1",
+          "gentle-ai.review-integration.start/v1",
+          "gentle-ai.review-integration.status/v1",
+          "gentle-ai.review-receipt/v1",
+          "gentle-ai.review-receipt/v2",
+          "https://gentle-ai.dev/schema/review/refuter/v1",
+          "https://gentle-ai.dev/schema/review/reviewer/v1",
+          "https://gentle-ai.dev/schema/review/validator/v1"
+        ]
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mandatory", "optional"],
+      "properties": {
+        "mandatory": {
+          "type": "array",
+          "minItems": 10,
+          "maxItems": 10,
+          "items": {"$ref": "#/$defs/feature"}
+        },
+        "optional": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {"$ref": "#/$defs/feature"}
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimum_protocol_major",
+        "maximum_protocol_major",
+        "additive_minor_policy",
+        "unknown_mandatory",
+        "unknown_optional",
+        "modes",
+        "legacy_window"
+      ],
+      "properties": {
+        "minimum_protocol_major": {"const": 1},
+        "maximum_protocol_major": {"const": 1},
+        "additive_minor_policy": {"const": "optional-fields-only"},
+        "unknown_mandatory": {"const": "reject"},
+        "unknown_optional": {"const": "ignore"},
+        "modes": {
+          "type": "array",
+          "prefixItems": [{"const": "compact-v2"}, {"const": "legacy-v1"}],
+          "items": false
+        },
+        "legacy_window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "state", "read_only", "deprecation_started", "removal", "minimum_compatibility_releases"],
+          "properties": {
+            "mode": {"const": "legacy-v1"},
+            "state": {"enum": ["pre-fence", "active", "deprecated", "expired"]},
+            "read_only": {"type": "boolean"},
+            "deprecation_started": {"type": "boolean"},
+            "removal": {"type": "string", "minLength": 1},
+            "minimum_compatibility_releases": {"type": "integer", "minimum": 1}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "feature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "supported", "requires"],
+      "properties": {
+        "name": {
+          "enum": [
+            "compact_v2_authority",
+            "exact_receipt_replay",
+            "five_delivery_gates",
+            "immutable_snapshot",
+            "legacy_v1_target_scoped_read_only",
+            "repository_independent_capabilities",
+            "restart_safe_projection",
+            "risk_reasons",
+            "sdd_receipt_binding",
+            "target_scoped_status",
+            "uniform_failure_envelope"
+          ]
+        },
+        "supported": {"type": "boolean"},
+        "requires": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

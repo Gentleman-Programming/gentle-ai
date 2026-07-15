@@ -19,8 +19,29 @@ import (
 
 const compactRecordSchema = "gentle-ai.review-state-record/v2"
 const CompactTransportSchema = "gentle-ai.review-transport/v2"
+const LegacyReadOnlyErrorCode = "legacy_v1_read_only"
 
 var ErrLegacyReadOnly = errors.New("legacy v1 review lineage is read-only")
+
+// LegacyReadOnlyError is the typed ordinary-mutation denial for historical
+// legacy-v1 authority. Legacy authority remains available for read-only
+// compatibility and explicit maintenance transport operations only.
+type LegacyReadOnlyError struct {
+	Operation string
+	LineageID string
+}
+
+func (err *LegacyReadOnlyError) Error() string {
+	return fmt.Sprintf("%s: %s for lineage %q", ErrLegacyReadOnly, err.Operation, err.LineageID)
+}
+
+func (err *LegacyReadOnlyError) Unwrap() error { return ErrLegacyReadOnly }
+
+func (err *LegacyReadOnlyError) Code() string { return LegacyReadOnlyErrorCode }
+
+func NewLegacyReadOnlyError(operation, lineageID string) error {
+	return &LegacyReadOnlyError{Operation: strings.TrimSpace(operation), LineageID: strings.TrimSpace(lineageID)}
+}
 
 type CompactRecord struct {
 	Schema   string       `json:"schema"`
@@ -507,19 +528,11 @@ func compactStartCorrectionCandidateMatches(ctx context.Context, repo string, ex
 }
 
 func compactStartLiveTargetMatches(ctx context.Context, repo string, existing, requested CompactState, requireCurrentCandidate bool) bool {
-	live := requested.InitialSnapshot
 	if existing.Generation != requested.Generation || existing.PolicyHash != requested.PolicyHash ||
-		!reflect.DeepEqual(existing.Recovery, requested.Recovery) ||
-		existing.InitialSnapshot.Projection != live.Projection ||
-		!compactStartTargetKindsCompatible(existing.InitialSnapshot.Kind, live.Kind) ||
-		live.BaseTree != existing.InitialSnapshot.BaseTree ||
-		(requireCurrentCandidate && live.CandidateTree != existing.CurrentSnapshot.CandidateTree) ||
-		pathsAreSubset(live.Paths, existing.GenesisPaths) != nil ||
-		!equalStrings(live.IntendedUntracked, existing.InitialSnapshot.IntendedUntracked) ||
-		live.IntendedUntrackedProof != existing.InitialSnapshot.IntendedUntrackedProof || len(live.LedgerIDs) != 0 {
+		!reflect.DeepEqual(existing.Recovery, requested.Recovery) {
 		return false
 	}
-	return (SnapshotBuilder{Repo: repo}).ValidateEvidence(ctx, live) == nil
+	return compactLiveTargetMatchesSnapshot(ctx, repo, existing, requested.InitialSnapshot, requireCurrentCandidate)
 }
 
 func compactStartScopeEqual(existing, requested CompactState) bool {

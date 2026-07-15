@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/failure.schema.json",
+  "title": "Gentle AI negotiated review failure",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "operation",
+    "phase",
+    "code",
+    "message",
+    "mutation_outcome",
+    "authority_applicability",
+    "retry_safe",
+    "replayability",
+    "required_inputs",
+    "next_action"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.failure/v1"},
+    "contract": {"const": "gentle-ai.review-integration/v1"},
+    "operation": {
+      "enum": ["review.capabilities", "review.start", "review.status", "review.finalize", "review.validate", "review.bind_sdd"]
+    },
+    "phase": {"enum": ["preflight", "pre_native", "native_running", "native_committed", "reconciliation"]},
+    "code": {"type": "string", "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"},
+    "message": {"type": "string", "minLength": 1, "maxLength": 240, "pattern": "^[^\\r\\n]+$"},
+    "mutation_outcome": {"enum": ["not_started", "unknown", "committed"]},
+    "authority_applicability": {"enum": ["current_target", "unrelated", "ambiguous", "corrupted", "not_evaluated"]},
+    "retry_safe": {"type": "boolean"},
+    "replayability": {"enum": ["not_replayable", "exact_replay_safe", "status_required", "manual_action_required"]},
+    "lineage_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "request_digest": {"$ref": "#/$defs/sha256"},
+    "required_inputs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["lineage_id"]}
+    },
+    "next_action": {"enum": ["correct_request", "retry", "review.status", "review.finalize", "explicit-maintainer-action", "stop"]}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

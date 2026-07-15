@@ -1,0 +1,27 @@
+{
+  "schema": "gentle-ai.review-integration.start/v1",
+  "contract": "gentle-ai.review-integration/v1",
+  "operation": "review.start",
+  "action": "created",
+  "lenses_required": true,
+  "lineage_id": "review-start-fixture",
+  "state": "reviewing",
+  "risk_level": "high",
+  "selected_lenses": [
+    "review-risk",
+    "review-resilience",
+    "review-readability",
+    "review-reliability"
+  ],
+  "projection": "workspace",
+  "changed_files": 1,
+  "changed_lines": 1,
+  "correction_budget": 1,
+  "risk_reasons": [
+    {
+      "code": "shell_source",
+      "signal": "shell_process",
+      "path": "scripts/deploy.sh"
+    }
+  ]
+}
