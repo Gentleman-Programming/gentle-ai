@@ -517,6 +517,9 @@ func RunReviewFacadeFinalize(args []string, stdout io.Writer) error {
 		if validation == nil {
 			return encodeCompactFacadeFinalize(stdout, state, record.Revision, store, "apply the bounded correction, then rerun with --validation and --evidence")
 		}
+		if err := rejectFacadeCorrectionUntracked(context.Background(), root, state); err != nil {
+			return err
+		}
 		fixSnapshot, err := (reviewtransaction.SnapshotBuilder{Repo: root}).Build(context.Background(), reviewtransaction.Target{
 			Kind: reviewtransaction.TargetFixDiff, Projection: state.InitialSnapshot.Projection,
 			BaseRef: state.CurrentSnapshot.CandidateTree, IntendedUntracked: state.InitialSnapshot.IntendedUntracked,
@@ -942,6 +945,30 @@ func encodeCompactFacadeFinalize(stdout io.Writer, state reviewtransaction.Compa
 		result.ReceiptPath = store.ReceiptPath()
 	}
 	return encodeReviewJSON(stdout, result)
+}
+
+func rejectFacadeCorrectionUntracked(ctx context.Context, repo string, state reviewtransaction.CompactState) error {
+	if state.InitialSnapshot.Projection == reviewtransaction.ProjectionStaged {
+		return nil
+	}
+	live, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).DiscoverIntendedUntracked(ctx)
+	if err != nil {
+		return fmt.Errorf("discover correction untracked paths: %w", err)
+	}
+	allowed := make(map[string]struct{}, len(state.CurrentSnapshot.IntendedUntracked))
+	for _, path := range state.CurrentSnapshot.IntendedUntracked {
+		allowed[path] = struct{}{}
+	}
+	unexpected := make([]string, 0)
+	for _, path := range live {
+		if _, ok := allowed[path]; !ok {
+			unexpected = append(unexpected, path)
+		}
+	}
+	if len(unexpected) != 0 {
+		return fmt.Errorf("correction contains untracked paths outside the frozen review scope: %s", strings.Join(unexpected, ", "))
+	}
+	return nil
 }
 
 func emitFacadeGateEvaluation(stdout io.Writer, evaluation reviewtransaction.NativeGateEvaluation) error {

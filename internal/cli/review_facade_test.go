@@ -658,6 +658,86 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 	}
 }
 
+func TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	resultPath := filepath.Join(t.TempDir(), "review.json")
+	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
+		Findings: []facadeFinding{{
+			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate returns the wrong terminal value",
+			ProofRefs:     []string{"differential test passes on base and fails on candidate"},
+			EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+		}},
+		Evidence: []string{"focused differential test failed on candidate"},
+	})
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--result", resultPath, "--correction-lines", "2"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "correction-evidence.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	validationPath := filepath.Join(t.TempDir(), "validation.json")
+	writeReviewCLIJSON(t, validationPath, facadeValidationResult{
+		OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance test passed for tracked.txt and correction-evidence.json"}},
+		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"targeted regression passed for tracked.txt and correction-evidence.json"}},
+		FollowUps:            []reviewtransaction.FollowUp{},
+	})
+
+	err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validationPath}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "untracked") || !strings.Contains(err.Error(), "correction-evidence.json") {
+		t.Fatalf("correction-created untracked path error = %v", err)
+	}
+	store, storeErr := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	record, loadErr := store.Load()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if record.State.State != reviewtransaction.StateCorrectionRequired {
+		t.Fatalf("rejected correction mutated authority to %q", record.State.State)
+	}
+	if _, statErr := os.Stat(store.ReceiptPath()); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected correction materialized receipt: %v", statErr)
+	}
+
+	if err := os.Remove(filepath.Join(repo, "correction-evidence.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validationPath}, io.Discard); err != nil {
+		t.Fatalf("exact tracked correction: %v", err)
+	}
+	record, loadErr = store.Load()
+	if loadErr != nil || record.State.State != reviewtransaction.StateValidating {
+		t.Fatalf("exact correction authority = %#v, %v", record.State, loadErr)
+	}
+}
+
+func TestRejectFacadeCorrectionUntrackedRespectsStagedProjection(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "excluded.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state := reviewtransaction.CompactState{
+		InitialSnapshot: reviewtransaction.Snapshot{Projection: reviewtransaction.ProjectionStaged},
+		CurrentSnapshot: reviewtransaction.Snapshot{IntendedUntracked: []string{}},
+	}
+	if err := rejectFacadeCorrectionUntracked(context.Background(), repo, state); err != nil {
+		t.Fatalf("staged projection excluded workspace path: %v", err)
+	}
+	state.InitialSnapshot.Projection = reviewtransaction.ProjectionWorkspace
+	if err := rejectFacadeCorrectionUntracked(context.Background(), repo, state); err == nil {
+		t.Fatal("workspace projection accepted unreviewed correction path")
+	}
+}
+
 func TestReviewFacadePersistsOverBudgetForecastAndActual(t *testing.T) {
 	newCandidate := func(t *testing.T) (string, ReviewFacadeStartResult, string) {
 		t.Helper()
@@ -1160,6 +1240,8 @@ func TestReviewBindSDDFeedsSelectedSDDStatusRuntime(t *testing.T) {
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--evidence", evidence}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
+	runReviewCLIGit(t, repo, "add", "-A")
+	runReviewCLIGit(t, repo, "commit", "-qm", "exact approved SDD candidate")
 	var output bytes.Buffer
 	if err := RunReview([]string{"bind-sdd", "--cwd", repo, "--change", "thin", "--lineage", started.LineageID, "--expected-binding-revision", ""}, &output); err != nil {
 		t.Fatal(err)
@@ -1239,7 +1321,7 @@ func TestCompactTransportCommandsRoundTripWithoutEventReconstruction(t *testing.
 	assertCompactLineageFiles(t, cloneStore, []string{"review-receipt.json", "review-state.json"})
 }
 
-func TestCompactTransportRecoversCorrectedCurrentChangesWithoutIntermediateTrees(t *testing.T) {
+func TestCompactTransportAllowsCorrectedPrePushWithoutTransientBaseObject(t *testing.T) {
 	source := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(source, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1318,6 +1400,13 @@ func TestCompactTransportRecoversCorrectedCurrentChangesWithoutIntermediateTrees
 	var output bytes.Buffer
 	if err := RunReviewFacadeValidate([]string{"--cwd", clone, "--lineage", started.LineageID, "--gate", string(reviewtransaction.GatePrePush), "--base-ref", "origin/reviewed-base"}, &output); err != nil {
 		t.Fatalf("corrected recovered gate: %v\n%s", err, output.String())
+	}
+	var denied ReviewValidateResult
+	if err := json.Unmarshal(output.Bytes(), &denied); err != nil {
+		t.Fatal(err)
+	}
+	if !denied.Allowed || !denied.Context.BaseRelationshipValid {
+		t.Fatalf("corrected recovered gate = %#v", denied)
 	}
 }
 

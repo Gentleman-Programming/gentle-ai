@@ -66,6 +66,9 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if (request.Gate == GatePostApply || request.Gate == GatePreCommit) && !equalStrings(request.Target.IntendedUntracked, record.State.CurrentSnapshot.IntendedUntracked) {
 		return invalid("current repository target does not retain the authoritative intended-untracked paths")
 	}
+	if err := validateCompactUntrackedScope(ctx, repo, record.State, request); err != nil {
+		return invalid(err.Error())
+	}
 	preimages, err := readGateArtifactPreimages(request)
 	if err != nil {
 		return invalid("compact gate evidence cannot be read: " + err.Error())
@@ -86,6 +89,11 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if request.Gate == GatePrePush && record.State.InitialSnapshot.Kind == TargetCurrentChanges && resolvedPrePR.DeliveredCommitCount != 1 {
 		return invalid("pre-push current-changes receipt requires exactly one delivery commit")
 	}
+	if request.Gate == GatePrePush && record.State.InitialSnapshot.Kind == TargetBaseDiff {
+		if err := validateCompactPublicationRange(ctx, repo, record.State.GenesisPaths, resolvedPrePR); err != nil {
+			return invalid(err.Error())
+		}
+	}
 	compatibleAdvance := false
 	var compatibility *BaseAdvanceCompatibility
 	if request.Gate == GatePrePR && snapshot.BaseTree != receipt.BaseTree {
@@ -95,23 +103,37 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 			compatibleAdvance = proof.Compatible
 		}
 	}
+	binding := record.State.CurrentSnapshot
+	strictBinding := request.Gate == GatePostApply || request.Gate == GatePreCommit || request.Gate == GatePrePush && record.State.InitialSnapshot.Kind != TargetCurrentChanges
+	baseRelationshipValid := snapshot.BaseTree == receipt.BaseTree || request.Target.Kind == TargetFixDiff
+	if strictBinding {
+		baseRelationshipValid = snapshot.BaseTree == binding.BaseTree
+	}
 	gateContext := GateContext{
 		Gate: request.Gate, LineageID: receipt.LineageID, Generation: receipt.Generation,
 		StoreRevision: record.Revision, GenesisRevision: record.Revision, ChainIdentity: record.Revision, BundleDigest: record.Revision,
 		BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree, PathsDigest: snapshot.PathsDigest,
 		FixDeltaHash: record.State.FixDeltaHash, PolicyHash: record.State.PolicyHash,
 		LedgerHash: EmptyFixDeltaHash, EvidenceHash: record.State.EvidenceHash,
-		BaseRelationshipValid: snapshot.BaseTree == receipt.BaseTree || request.Target.Kind == TargetFixDiff, BaseAdvance: compatibility,
+		BaseRelationshipValid: baseRelationshipValid, BaseAdvance: compatibility,
 	}
 	if request.Gate == GatePrePR && resolvedPrePR != nil {
 		boundary := resolvedPrePR.Selection
 		gateContext.PrePRBoundary = &boundary
 	}
-	if snapshot.CandidateTree != receipt.FinalCandidateTree || pathsAreSubset(snapshot.Paths, record.State.GenesisPaths) != nil && !compatibleAdvance {
+	pathsMismatch := pathsAreSubset(snapshot.Paths, record.State.GenesisPaths) != nil && !compatibleAdvance
+	if strictBinding {
+		pathsMismatch = snapshot.PathsDigest != binding.PathsDigest
+	}
+	if snapshot.CandidateTree != receipt.FinalCandidateTree || pathsMismatch {
 		gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: "candidate-or-paths-mismatch"}
 		return NativeGateEvaluation{Result: GateScopeChanged, Reason: nativeGateReason(GateScopeChanged), Context: gateContext}
 	}
-	if snapshot.BaseTree != receipt.BaseTree && request.Target.Kind != TargetFixDiff && !compatibleAdvance {
+	baseMismatch := snapshot.BaseTree != receipt.BaseTree && request.Target.Kind != TargetFixDiff && !compatibleAdvance
+	if strictBinding {
+		baseMismatch = snapshot.BaseTree != binding.BaseTree
+	}
+	if baseMismatch {
 		gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: "base-mismatch"}
 		return NativeGateEvaluation{Result: GateInvalidated, Reason: "current repository base no longer matches compact authority", Context: gateContext}
 	}
@@ -135,9 +157,11 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	finalGateAuthorizationHook()
 	finalRecord, loadErr := store.Load()
 	finalSnapshot, finalRefs, snapshotErr := buildCompactLifecycleSnapshot(ctx, repo, request)
+	finalUntrackedErr := validateCompactUntrackedScope(ctx, repo, record.State, request)
+	finalTrackedErr := validateCompactCommittedTrackedScope(ctx, repo, request)
 	_, graphErr := CompactAuthorityLeaves(ctx, repo)
 	finalSuperseded, supersededErr := CompactLineageSuperseded(ctx, repo, receipt.LineageID)
-	if loadErr != nil || snapshotErr != nil || graphErr != nil || supersededErr != nil || finalSuperseded || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalSnapshot, snapshot) || !sameResolvedPrePRRefs(finalRefs, resolvedPrePR) {
+	if loadErr != nil || snapshotErr != nil || finalUntrackedErr != nil || finalTrackedErr != nil || graphErr != nil || supersededErr != nil || finalSuperseded || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalSnapshot, snapshot) || !sameResolvedPrePRRefs(finalRefs, resolvedPrePR) {
 		return invalid("compact authority or repository target changed during final authorization")
 	}
 	if request.Gate == GateRelease {
@@ -152,7 +176,10 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 }
 
 func buildCompactLifecycleSnapshot(ctx context.Context, repo string, request GateRequest) (Snapshot, *resolvedPrePRRefs, error) {
-	if request.Target.Kind == TargetFixDiff {
+	if request.Gate == GatePreCommit && request.Target.Projection == ProjectionStaged {
+		request.Target.IntendedUntracked = []string{}
+	}
+	if request.Target.Kind == TargetFixDiff || request.Target.Kind == TargetBaseDiff && (request.Gate == GatePostApply || request.Gate == GatePreCommit) {
 		snapshot, err := (SnapshotBuilder{Repo: repo}).build(ctx, request.Target, request.Gate == GatePreCommit)
 		return snapshot, nil, err
 	}
@@ -170,7 +197,34 @@ func buildCompactGateRequest(ctx context.Context, repo string, state CompactStat
 		if intended == nil {
 			intended = []string{}
 		}
-		request.Target = Target{Kind: TargetCurrentChanges, Projection: state.InitialSnapshot.Projection, IntendedUntracked: intended}
+		current := state.CurrentSnapshot
+		projection := current.Projection
+		if input.Gate == GatePreCommit {
+			projection = ProjectionStaged
+		}
+		if current.Kind == TargetFixDiff {
+			request.Target = Target{
+				Kind: TargetFixDiff, Projection: projection, BaseRef: current.BaseTree,
+				IntendedUntracked: intended, LedgerIDs: append([]string(nil), current.LedgerIDs...),
+			}
+			break
+		}
+		headTree, err := (SnapshotBuilder{Repo: repo}).resolveTree(ctx, "HEAD")
+		if err != nil {
+			return GateRequest{}, err
+		}
+		if headTree == current.CandidateTree {
+			dirty, err := (SnapshotBuilder{Repo: repo}).HasDirtyTrackedChanges(ctx)
+			if err != nil {
+				return GateRequest{}, err
+			}
+			if dirty {
+				return GateRequest{}, errors.New("committed approved target has dirty tracked changes")
+			}
+			request.Target = Target{Kind: TargetBaseDiff, Projection: projection, BaseRef: current.BaseTree, IntendedUntracked: intended}
+			break
+		}
+		request.Target = Target{Kind: TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
 	case GatePrePush:
 		deliveryBaseTree := map[TargetKind]string{TargetCurrentChanges: state.InitialSnapshot.BaseTree}[state.InitialSnapshot.Kind]
 		target, push, err := buildPushTarget(ctx, repo, input.BaseRef, deliveryBaseTree)
@@ -211,4 +265,62 @@ func buildCompactGateRequest(ctx context.Context, repo string, state CompactStat
 		}
 	}
 	return request, nil
+}
+
+func validateCompactUntrackedScope(ctx context.Context, repo string, state CompactState, request GateRequest) error {
+	if request.Target.Projection == ProjectionStaged || request.Gate != GatePostApply && request.Gate != GatePreCommit {
+		return nil
+	}
+	live, err := (SnapshotBuilder{Repo: repo}).DiscoverIntendedUntracked(ctx)
+	if err != nil {
+		return fmt.Errorf("discover current untracked paths: %w", err)
+	}
+	allowed := make(map[string]struct{}, len(state.CurrentSnapshot.IntendedUntracked))
+	for _, path := range state.CurrentSnapshot.IntendedUntracked {
+		allowed[path] = struct{}{}
+	}
+	for _, path := range live {
+		if _, ok := allowed[path]; ok || isPostReviewLifecycleArtifact(path) {
+			continue
+		}
+		return errors.New("current repository contains untracked paths outside the authoritative review scope")
+	}
+	return nil
+}
+
+func validateCompactCommittedTrackedScope(ctx context.Context, repo string, request GateRequest) error {
+	if request.Target.Kind != TargetBaseDiff || request.Gate != GatePostApply && request.Gate != GatePreCommit {
+		return nil
+	}
+	dirty, err := (SnapshotBuilder{Repo: repo}).HasDirtyTrackedChanges(ctx)
+	if err != nil || !dirty {
+		return err
+	}
+	return errors.New("committed approved target has dirty tracked changes")
+}
+
+func validateCompactPublicationRange(ctx context.Context, repo string, genesis []string, refs *resolvedPrePRRefs) error {
+	output, err := runGit(ctx, repo, nil, nil, "log", "--format=", "--name-only", "-z", "--no-renames", refs.BaseCommit+".."+refs.HeadCommit)
+	if err != nil {
+		return fmt.Errorf("inspect complete publication range: %w", err)
+	}
+	paths := []string{}
+	for _, path := range strings.Split(string(output), "\x00") {
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	paths, err = canonicalPaths(paths)
+	if err == nil {
+		err = pathsAreSubset(paths, genesis)
+	}
+	if err != nil {
+		return fmt.Errorf("publication range exceeds immutable genesis scope: %w", err)
+	}
+	return nil
+}
+
+func isPostReviewLifecycleArtifact(path string) bool {
+	parts := strings.Split(path, "/")
+	return len(parts) == 4 && parts[0] == "openspec" && parts[1] == "changes" && parts[3] == "verify-report.md"
 }

@@ -187,6 +187,143 @@ func TestCompactGateAllowsCorrectedFinalSnapshotWithIntendedUntracked(t *testing
 	}
 }
 
+func TestCompactPostApplyPreservesExactCommittedApprovedTarget(t *testing.T) {
+	tests := []struct {
+		name  string
+		start func(t *testing.T, repo, lineage string) CompactState
+	}{
+		{
+			name: "current changes",
+			start: func(t *testing.T, repo, lineage string) CompactState {
+				writeSnapshotFile(t, repo, "tracked.txt", "approved current changes\n")
+				return newCompactStartStateForTarget(t, repo, lineage, Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+			},
+		},
+		{
+			name: "base diff",
+			start: func(t *testing.T, repo, lineage string) CompactState {
+				base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+				writeSnapshotFile(t, repo, "tracked.txt", "approved committed base diff\n")
+				gitSnapshot(t, repo, "add", "tracked.txt")
+				gitSnapshot(t, repo, "commit", "-m", "reviewed candidate")
+				return newCompactStartStateForTarget(t, repo, lineage, Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: []string{}})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			state := tt.start(t, repo, "compact-committed-"+strings.ReplaceAll(tt.name, " ", "-"))
+			state, receipt := persistApprovedCompactState(t, repo, state)
+			if state.InitialSnapshot.Kind == TargetCurrentChanges {
+				gitSnapshot(t, repo, "add", "tracked.txt")
+				gitSnapshot(t, repo, "commit", "-m", "reviewed candidate")
+			}
+
+			got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID})
+			replayed := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID})
+			if got.Result != GateAllow || !reflect.DeepEqual(got, replayed) || got.Context.BaseTree != state.CurrentSnapshot.BaseTree || got.Context.CandidateTree != state.CurrentSnapshot.CandidateTree || got.Context.PathsDigest != state.CurrentSnapshot.PathsDigest {
+				t.Fatalf("exact committed approved target = %#v", got)
+			}
+
+			writeSnapshotFile(t, repo, "tracked.txt", "base\n")
+			if missing := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID}); missing.Result == GateAllow {
+				t.Fatalf("committed target with missing reviewed path = %#v", missing)
+			}
+			writeSnapshotFile(t, repo, "tracked.txt", "changed after approval\n")
+			if changed := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID}); changed.Result == GateAllow {
+				t.Fatalf("changed committed tree = %#v", changed)
+			}
+		})
+	}
+}
+
+func TestCompactPostApplyRejectsUnboundUntrackedPathAfterCommit(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "approved candidate\n")
+	state := newCompactStartStateForTarget(t, repo, "compact-committed-extra-untracked", Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	state, receipt := persistApprovedCompactState(t, repo, state)
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed candidate")
+	writeSnapshotFile(t, repo, "correction-evidence.json", "{}\n")
+
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID})
+	if got.Result == GateAllow {
+		t.Fatalf("unbound untracked path = %#v", got)
+	}
+	if err := os.Remove(filepath.Join(repo, "correction-evidence.json")); err != nil {
+		t.Fatal(err)
+	}
+	verifyReport := filepath.Join(repo, "openspec", "changes", "thin", "verify-report.md")
+	if err := os.MkdirAll(filepath.Dir(verifyReport), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(verifyReport, []byte("# Verification\n\nPASS\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID}); lifecycle.Result != GateAllow {
+		t.Fatalf("post-review verify report = %#v", lifecycle)
+	}
+}
+
+func TestCompactFixDiffUsesAuthoritativeCorrectionBindingAcrossDelivery(t *testing.T) {
+	t.Run("uncommitted pre-commit", func(t *testing.T) {
+		repo, state, receipt, _ := approvedCompactFixDiffFixture(t, "compact-fix-pre-commit")
+		gitSnapshot(t, repo, "add", "other.txt")
+		got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePreCommit, LineageID: state.LineageID})
+		replayed := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePreCommit, LineageID: state.LineageID})
+		if got.Result != GateAllow || !reflect.DeepEqual(got, replayed) || got.Context.BaseTree != state.CurrentSnapshot.BaseTree || got.Context.CandidateTree != state.CurrentSnapshot.CandidateTree || got.Context.PathsDigest != state.CurrentSnapshot.PathsDigest {
+			t.Fatalf("exact uncommitted correction = %#v", got)
+		}
+	})
+
+	t.Run("committed pre-push", func(t *testing.T) {
+		repo, state, receipt, baseRef := approvedCompactFixDiffFixture(t, "compact-fix-pre-push")
+		gitSnapshot(t, repo, "add", "other.txt")
+		gitSnapshot(t, repo, "commit", "-m", "approved correction")
+		got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: baseRef})
+		replayed := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: baseRef})
+		if got.Result != GateAllow || !reflect.DeepEqual(got, replayed) || got.Context.BaseTree != state.CurrentSnapshot.BaseTree || got.Context.CandidateTree != state.CurrentSnapshot.CandidateTree || got.Context.PathsDigest != state.CurrentSnapshot.PathsDigest {
+			t.Fatalf("exact committed correction = %#v", got)
+		}
+	})
+}
+
+func TestCompactFixDiffRejectsInexactCorrectionBinding(t *testing.T) {
+	tests := []struct {
+		name   string
+		gate   GateKind
+		mutate func(t *testing.T, repo string)
+	}{
+		{name: "pre-commit extra staged path", gate: GatePreCommit, mutate: func(t *testing.T, repo string) {
+			writeSnapshotFile(t, repo, "extra.go", "package extra\n")
+			gitSnapshot(t, repo, "add", "extra.go")
+		}},
+		{name: "pre-commit missing correction", gate: GatePreCommit, mutate: func(t *testing.T, repo string) {
+			writeSnapshotFile(t, repo, "other.txt", "reviewed other\n")
+		}},
+		{name: "pre-commit untracked path", gate: GatePreCommit, mutate: func(t *testing.T, repo string) {
+			writeSnapshotFile(t, repo, "extra.json", "{}\n")
+		}},
+		{name: "pre-push extra committed path", gate: GatePrePush, mutate: func(t *testing.T, repo string) {
+			gitSnapshot(t, repo, "add", "other.txt")
+			writeSnapshotFile(t, repo, "tracked.txt", "changed outside approved correction\n")
+			gitSnapshot(t, repo, "add", "tracked.txt")
+			gitSnapshot(t, repo, "commit", "-m", "inexact correction")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, state, receipt, baseRef := approvedCompactFixDiffFixture(t, "compact-inexact-"+strings.ReplaceAll(tt.name, " ", "-"))
+			tt.mutate(t, repo)
+			got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: tt.gate, LineageID: state.LineageID, BaseRef: baseRef})
+			if got.Result == GateAllow {
+				t.Fatalf("inexact correction binding = %#v", got)
+			}
+		})
+	}
+}
+
 func TestCompactPreCommitGateRejectsInexactStagedIntendedTransitions(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -280,6 +417,44 @@ func TestCompactPreCommitGateRechecksStagedIntendedTarget(t *testing.T) {
 	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePreCommit, LineageID: state.LineageID})
 	if got.Result != GateInvalidated || !strings.Contains(got.Reason, "changed during final authorization") {
 		t.Fatalf("staged intended TOCTOU evaluation = %#v", got)
+	}
+}
+
+func TestCompactGateFinalRecheckRejectsConcurrentUntrackedPath(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
+	state, _, receipt := approvedCompactCurrentChangesFixture(t, repo, "compact-untracked-recheck", []string{})
+	originalHook := finalGateAuthorizationHook
+	finalGateAuthorizationHook = func() {
+		writeSnapshotFile(t, repo, "late-evidence.json", "{}\n")
+	}
+	t.Cleanup(func() { finalGateAuthorizationHook = originalHook })
+
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID})
+	if got.Result != GateInvalidated || !strings.Contains(got.Reason, "changed during final authorization") {
+		t.Fatalf("concurrent untracked path = %#v", got)
+	}
+}
+
+func TestCompactCommittedGateRechecksConcurrentDirtyTrackedTarget(t *testing.T) {
+	for _, gate := range []GateKind{GatePostApply, GatePreCommit} {
+		t.Run(string(gate), func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
+			state := newCompactStartStateForTarget(t, repo, "compact-dirty-recheck-"+string(gate), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+			state, receipt := persistApprovedCompactState(t, repo, state)
+			gitSnapshot(t, repo, "add", "tracked.txt")
+			gitSnapshot(t, repo, "commit", "-m", "reviewed candidate")
+			if control := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: gate, LineageID: state.LineageID}); control.Result != GateAllow {
+				t.Fatalf("unchanged committed target = %#v", control)
+			}
+			originalHook := finalGateAuthorizationHook
+			finalGateAuthorizationHook = func() { writeSnapshotFile(t, repo, "tracked.txt", "concurrent mutation\n") }
+			t.Cleanup(func() { finalGateAuthorizationHook = originalHook })
+			if got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: gate, LineageID: state.LineageID}); got.Result != GateInvalidated {
+				t.Fatalf("concurrent dirty tracked target = %#v", got)
+			}
+		})
 	}
 }
 
@@ -437,15 +612,70 @@ func TestCompactPrePRGatePreservesBoundaryContextForExactAndUnavailableSelectors
 	}
 }
 
-func TestCompactDeliveryGatesAllowFinalSubsetOfGenesisPaths(t *testing.T) {
-	for _, gate := range []GateKind{GatePrePush, GatePrePR} {
-		t.Run(string(gate), func(t *testing.T) {
-			repo, state, receipt, baseRef := approvedCompactSubsetDeliveryFixture(t, "compact-subset-"+string(gate))
-			got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: gate, LineageID: state.LineageID, BaseRef: baseRef})
-			if got.Result != GateAllow {
-				t.Fatalf("subset delivery gate = %#v", got)
-			}
-		})
+func TestCompactPrePRGateAllowsFinalSubsetOfGenesisPaths(t *testing.T) {
+	repo, state, receipt, baseRef := approvedCompactSubsetDeliveryFixture(t, "compact-subset-pre-pr")
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePR, LineageID: state.LineageID, BaseRef: baseRef})
+	if got.Result != GateAllow {
+		t.Fatalf("subset pre-PR gate = %#v", got)
+	}
+}
+
+func TestCompactPrePushAllowsCurrentChangesWithoutTransientCorrectionBaseCommit(t *testing.T) {
+	repo, state, receipt, baseRef := approvedCompactSubsetDeliveryFixture(t, "compact-subset-pre-push")
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: baseRef})
+	if got.Result != GateAllow || !got.Context.BaseRelationshipValid {
+		t.Fatalf("pre-push final delivery binding = %#v", got)
+	}
+}
+
+func TestCompactCorrectedBaseDiffPrePushRejectsIntermediateUnreviewedPath(t *testing.T) {
+	repo, state, receipt, baseRef := approvedCompactFixDiffFixture(t, "compact-hidden-range-path")
+	writeSnapshotFile(t, repo, "secret.txt", "must never be published\n")
+	gitSnapshot(t, repo, "add", "other.txt", "secret.txt")
+	gitSnapshot(t, repo, "commit", "-m", "intermediate secret")
+	if err := os.Remove(filepath.Join(repo, "secret.txt")); err != nil {
+		t.Fatal(err)
+	}
+	gitSnapshot(t, repo, "add", "-A")
+	gitSnapshot(t, repo, "commit", "-m", "remove intermediate secret")
+	if got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: baseRef}); got.Result == GateAllow {
+		t.Fatalf("publication range with hidden path = %#v", got)
+	}
+}
+func TestCompactCorrectedPreCommitBindsStagedIndexAndIgnoresWorkspace(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := correctedCompactTestStateWithIntended(t, repo, "compact-corrected-staged-index", []string{"new.txt"})
+	receipt := persistCorrectedCompactFixture(t, repo, state)
+	gitSnapshot(t, repo, "add", "tracked.txt", "new.txt")
+	writeSnapshotFile(t, repo, "tracked.txt", "unstaged workspace divergence\n")
+	writeSnapshotFile(t, repo, "excluded.txt", "outside staged projection\n")
+	input := NativeGateRequestInput{Gate: GatePreCommit, LineageID: state.LineageID}
+	if got := EvaluateCompactGate(context.Background(), repo, receipt, input); got.Result != GateAllow {
+		t.Fatalf("exact staged corrected target = %#v", got)
+	}
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	if got := EvaluateCompactGate(context.Background(), repo, receipt, input); got.Result == GateAllow {
+		t.Fatalf("mutated staged correction = %#v", got)
+	}
+}
+
+func TestCompactCorrectedCurrentChangesPrePushUsesFinalDeliveryBinding(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	configurePublicationRemote(t, repo, branch)
+	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	state := correctedCompactTestStateWithIntended(t, repo, "compact-corrected-current-delivery", []string{})
+	receipt := persistCorrectedCompactFixture(t, repo, state)
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "corrected delivery")
+	input := NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: "origin/" + branch}
+	if got := EvaluateCompactGate(context.Background(), repo, receipt, input); got.Result != GateAllow {
+		t.Fatalf("one-commit corrected delivery = %#v", got)
+	}
+	gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "unreviewed extra commit")
+	if got := EvaluateCompactGate(context.Background(), repo, receipt, input); got.Result == GateAllow {
+		t.Fatalf("multi-commit current-changes delivery = %#v", got)
 	}
 }
 
@@ -541,6 +771,149 @@ func approvedCompactRevisionFixture(t *testing.T, repo, lineage string) (Compact
 		t.Fatal(err)
 	}
 	return state, store, receipt
+}
+
+func persistApprovedCompactState(t *testing.T, repo string, state CompactState) (CompactState, CompactReceipt) {
+	t.Helper()
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := store.Replace("", "review/start", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make([]LensResult, len(state.SelectedLenses))
+	for index, lens := range state.SelectedLenses {
+		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"review completed"}}
+	}
+	if err := state.CompleteReview(CompactReviewInput{LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{}}); err != nil {
+		t.Fatal(err)
+	}
+	revision, err = store.Replace(revision, "review/complete-review", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.CompleteVerification([]byte("independent verification passed\n"), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(revision, "review/complete-verification", state); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := state.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+		t.Fatal(err)
+	}
+	return state, receipt
+}
+
+func persistCorrectedCompactFixture(t *testing.T, repo string, state CompactState) CompactReceipt {
+	t.Helper()
+	state.CorrectionAttempts = []CompactCorrectionAttempt{{
+		Snapshot: state.CurrentSnapshot, ProposedLines: *state.ProposedCorrectionLines, ActualLines: *state.ActualCorrectionLines,
+		FixDeltaHash: state.FixDeltaHash, OriginalCriteria: *state.OriginalCriteria, CorrectionRegression: *state.CorrectionRegression,
+	}}
+	state.CumulativeCorrectionLines = *state.ActualCorrectionLines
+	store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	_, payload, err := makeCompactRecord(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := state.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+		t.Fatal(err)
+	}
+	return receipt
+}
+
+func approvedCompactFixDiffFixture(t *testing.T, lineage string) (string, CompactState, CompactReceipt, string) {
+	t.Helper()
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "other.txt", "base other\n")
+	gitSnapshot(t, repo, "add", "other.txt")
+	gitSnapshot(t, repo, "commit", "-m", "add correction base path")
+	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed tracked\n")
+	writeSnapshotFile(t, repo, "other.txt", "reviewed other\n")
+	gitSnapshot(t, repo, "add", "tracked.txt", "other.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed candidate")
+	state := newCompactStartStateForTarget(t, repo, lineage, Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: []string{}})
+	finding := Finding{ID: "R3-001", Lens: "reliability", Location: "other.txt:1", Severity: "CRITICAL", Claim: "candidate returns the wrong value", ProofRefs: []string{"differential test fails only on candidate"}}
+	results := make([]LensResult, len(state.SelectedLenses))
+	for index, lens := range state.SelectedLenses {
+		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
+		if lens == LensReliability {
+			results[index].Findings = []Finding{finding}
+		}
+	}
+	if err := state.CompleteReview(CompactReviewInput{
+		LensResults:     results,
+		Classifications: []FindingEvidence{{FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk causes the failure"}},
+		RefuterOutcomes: []EvidenceResult{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.BeginCorrection(1); err != nil {
+		t.Fatal(err)
+	}
+	branch := currentBranch(context.Background(), repo)
+	configurePublicationRemote(t, repo, branch)
+	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	writeSnapshotFile(t, repo, "other.txt", "base other\n")
+	fix, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetFixDiff, BaseRef: state.InitialSnapshot.CandidateTree,
+		IntendedUntracked: []string{}, LedgerIDs: state.FixFindingIDs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixHash := FixDeltaHashForSnapshot(fix)
+	validation := ScopedValidationResult{
+		LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
+		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true},
+		CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true},
+	}
+	if err := state.CompleteCorrection(fix, 1, validation); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.CompleteVerification([]byte("independent correction verification passed\n"), true); err != nil {
+		t.Fatal(err)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err := makeCompactRecord(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := state.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+		t.Fatal(err)
+	}
+	return repo, state, receipt, "origin/" + branch
 }
 
 func approvedCompactSubsetDeliveryFixture(t *testing.T, lineage string) (string, CompactState, CompactReceipt, string) {
