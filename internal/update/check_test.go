@@ -1701,6 +1701,16 @@ func TestInstallMethodFieldsOnRegistry(t *testing.T) {
 			if tool.GoImportPath != "" {
 				t.Errorf("engram GoImportPath should be empty (binary download, not go-install), got %q", tool.GoImportPath)
 			}
+		case "gentle-ai":
+			// gentle-ai keeps InstallBinary as the declared fallback, but needs
+			// GoImportPath so upgrades of go-installed binaries can preserve the
+			// original install method (issue #999).
+			if tool.InstallMethod != InstallBinary {
+				t.Errorf("gentle-ai InstallMethod = %q, want %q", tool.InstallMethod, InstallBinary)
+			}
+			if tool.GoImportPath != "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai" {
+				t.Errorf("gentle-ai GoImportPath = %q, want %q", tool.GoImportPath, "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai")
+			}
 		}
 	}
 }

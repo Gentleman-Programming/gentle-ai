@@ -153,7 +153,9 @@ Check for and install new versions of `gentle-ai` itself. The pre-upgrade backup
 # Check if a newer version is available
 gentle-ai update
 
-# Upgrade to the latest release (downloads new binary, replaces current)
+# Upgrade to the latest release. Preserves the original install method:
+# `go install` when the running binary lives in GOBIN/GOPATH/bin,
+# release binary download/replace otherwise.
 gentle-ai upgrade
 ```
 

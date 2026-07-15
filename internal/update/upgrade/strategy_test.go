@@ -1701,7 +1701,10 @@ func TestRunStrategy_ScriptUpgradeExecFailure(t *testing.T) {
 // --- TestInstallerUpgradeArgs ---
 
 // TestInstallerUpgradeArgs verifies that installerUpgradeArgs builds the correct
-// PowerShell command-line argument list for both stable and beta gentle-ai upgrades.
+// PowerShell command-line argument list: stable binary upgrades add no flags,
+// beta adds -Channel beta, and a go-installed gentle-ai gets -Method go with
+// the target version pinned (issue #999). Beta always wins because it installs
+// from main via go install.
 // This is a pure function test — no OS gate needed.
 func TestInstallerUpgradeArgs(t *testing.T) {
 	const tmpPath = `C:\Users\user\AppData\Local\Temp\gentle-ai-install-12345.ps1`
@@ -1709,19 +1712,20 @@ func TestInstallerUpgradeArgs(t *testing.T) {
 	tests := []struct {
 		name         string
 		beta         bool
+		useGo        bool
+		version      string
 		wantContains []string
 		wantAbsent   []string
 	}{
 		{
 			name: "stable upgrade does not include -Channel beta",
-			beta: false,
 			wantContains: []string{
 				"-NoProfile",
 				"-NoExit",
 				"-ExecutionPolicy", "Bypass",
 				"-File", tmpPath,
 			},
-			wantAbsent: []string{"-Channel", "beta"},
+			wantAbsent: []string{"-Channel", "beta", "-Method", "-Version"},
 		},
 		{
 			name: "beta upgrade includes -Channel beta after -File",
@@ -1733,13 +1737,37 @@ func TestInstallerUpgradeArgs(t *testing.T) {
 				"-File", tmpPath,
 				"-Channel", "beta",
 			},
-			wantAbsent: nil,
+			wantAbsent: []string{"-Method", "-Version"},
+		},
+		{
+			name:    "go-install upgrade passes -Method go with pinned version",
+			useGo:   true,
+			version: "v1.40.2",
+			wantContains: []string{
+				"-NoProfile",
+				"-NoExit",
+				"-ExecutionPolicy", "Bypass",
+				"-File", tmpPath,
+				"-Method", "go", "-Version", "v1.40.2",
+			},
+			wantAbsent: []string{"-Channel", "beta"},
+		},
+		{
+			name:    "beta wins over go-install",
+			beta:    true,
+			useGo:   true,
+			version: "v1.40.2",
+			wantContains: []string{
+				"-File", tmpPath,
+				"-Channel", "beta",
+			},
+			wantAbsent: []string{"-Method", "-Version"},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			args := installerUpgradeArgs(tmpPath, tc.beta)
+			args := installerUpgradeArgs(tmpPath, tc.beta, tc.useGo, tc.version)
 
 			for _, want := range tc.wantContains {
 				found := false
@@ -1750,14 +1778,14 @@ func TestInstallerUpgradeArgs(t *testing.T) {
 					}
 				}
 				if !found {
-					t.Errorf("installerUpgradeArgs(beta=%v): args %v missing expected %q", tc.beta, args, want)
+					t.Errorf("installerUpgradeArgs(beta=%v, useGo=%v): args %v missing expected %q", tc.beta, tc.useGo, args, want)
 				}
 			}
 
 			for _, absent := range tc.wantAbsent {
 				for _, a := range args {
 					if a == absent {
-						t.Errorf("installerUpgradeArgs(beta=%v): args %v must NOT contain %q", tc.beta, args, absent)
+						t.Errorf("installerUpgradeArgs(beta=%v, useGo=%v): args %v must NOT contain %q", tc.beta, tc.useGo, args, absent)
 					}
 				}
 			}
@@ -1786,6 +1814,13 @@ func TestInstallerUpgradeArgs(t *testing.T) {
 				// Confirm the value after -Channel is "beta".
 				if channelIdx+1 >= len(args) || args[channelIdx+1] != "beta" {
 					t.Errorf("beta args: arg after -Channel must be %q, got args[%d]=%q; args: %v", "beta", channelIdx+1, args[channelIdx+1], args)
+				}
+			}
+
+			// For go-install, assert the flags form an ordered sequence after -File.
+			if tc.useGo && !tc.beta {
+				if !containsSubsequence(args, []string{"-Method", "go", "-Version", tc.version}) {
+					t.Errorf("go args: missing ordered -Method go -Version %s subsequence; args: %v", tc.version, args)
 				}
 			}
 		})
@@ -1967,7 +2002,8 @@ func TestInstallerUpgrade_Success(t *testing.T) {
 		return rec.Result(), nil
 	})
 
-	exitReq, err := installerUpgrade(context.Background(), tool, "", false)
+	r := update.UpdateResult{Tool: tool}
+	exitReq, err := installerUpgrade(context.Background(), r, system.PlatformProfile{OS: "windows"})
 	if err != nil {
 		t.Fatalf("installerUpgrade: unexpected error: %v", err)
 	}
@@ -2021,7 +2057,7 @@ func TestInstallerUpgrade_DownloadFailure(t *testing.T) {
 		InstallMethod: update.InstallInstaller,
 	}
 
-	exitReq, err := installerUpgrade(context.Background(), tool, "", false)
+	exitReq, err := installerUpgrade(context.Background(), update.UpdateResult{Tool: tool}, system.PlatformProfile{OS: "windows"})
 	if err == nil {
 		t.Errorf("expected error when installer download fails, got nil")
 	}
@@ -2037,7 +2073,7 @@ func TestInstallerUpgrade_NonWindows(t *testing.T) {
 		t.Skip("skipping non-Windows test on Windows platform")
 	}
 	tool := update.ToolInfo{Name: "gentle-ai"}
-	exitReq, err := installerUpgrade(context.Background(), tool, "", false)
+	exitReq, err := installerUpgrade(context.Background(), update.UpdateResult{Tool: tool}, system.PlatformProfile{OS: "linux"})
 	if err == nil {
 		t.Errorf("expected error when calling installerUpgrade on non-windows, got nil")
 	}
@@ -2135,4 +2171,218 @@ type roundTripFunc func(req *http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+// --- Issue #999: go-installed gentle-ai keeps its install method on upgrade ---
+
+func containsArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSubsequence(args []string, sub []string) bool {
+	if len(sub) == 0 {
+		return true
+	}
+	for i := 0; i+len(sub) <= len(args); i++ {
+		match := true
+		for j := range sub {
+			if args[i+j] != sub[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRunStrategy_GentleAIGoInstallOnUnix verifies issue #999: when the running
+// gentle-ai binary lives in a Go bin dir, the upgrade runs
+// `go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v<version>`
+// instead of downloading a release binary.
+func TestRunStrategy_GentleAIGoInstallOnUnix(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", "")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	stubExePath(t, filepath.Join("/home", "dev", "go", "bin", "gentle-ai"), nil)
+	stubGoEnv(t, map[string]string{"GOPATH": filepath.Join("/home", "dev", "go")}, nil)
+
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	var gotName string
+	var gotArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = args
+		return mockCmd("echo", "ok")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gentle-ai",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentle-ai",
+			InstallMethod: update.InstallBinary,
+			GoImportPath:  "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai",
+		},
+		LatestVersion: "1.40.2",
+		Status:        update.UpdateAvailable,
+	}
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt", GoAvailable: true}
+
+	_, err := runStrategy(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("runStrategy gentle-ai go-install: unexpected error: %v", err)
+	}
+
+	if gotName != "go" {
+		t.Errorf("exec name = %q, want %q", gotName, "go")
+	}
+	want := []string{"install", "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.40.2"}
+	if len(gotArgs) != len(want) || gotArgs[0] != want[0] || gotArgs[1] != want[1] {
+		t.Errorf("exec args = %v, want %v", gotArgs, want)
+	}
+}
+
+// TestRunStrategy_StableGentleAIGoInstallWindowsUsesMethodGo verifies issue #999
+// on Windows: a go-installed gentle-ai keeps its install method by routing the
+// detached installer to `-Method go -Version v<version>` (the running exe must
+// exit before go install can replace it). Windows-only, like the other
+// installer tests.
+func TestRunStrategy_StableGentleAIGoInstallWindowsUsesMethodGo(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("skipping Windows-only installer go-method test on non-windows platform")
+	}
+
+	home := t.TempDir()
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", "")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	stubExePath(t, `C:\Users\tester\go\bin\gentle-ai.exe`, nil)
+	stubGoEnv(t, map[string]string{"GOPATH": `C:\Users\tester\go`}, nil)
+
+	origExecCommand := execCommand
+	origHTTPClient := scriptHTTPClient
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		scriptHTTPClient = origHTTPClient
+	})
+
+	scriptHTTPClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			rec := httptest.NewRecorder()
+			rec.Header().Set("Content-Type", "text/plain")
+			rec.WriteHeader(http.StatusOK)
+			rec.WriteString("Write-Output 'installer ok'\n")
+			return rec.Result(), nil
+		}),
+	}
+
+	var gotArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		gotArgs = append([]string(nil), args...)
+		return mockCmd("echo", "ok")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gentle-ai",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentle-ai",
+			InstallMethod: update.InstallBinary,
+			GoImportPath:  "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai",
+		},
+		LatestVersion: "1.40.2",
+		Status:        update.UpdateAvailable,
+	}
+	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true, Supported: true}
+
+	_, err := runStrategy(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("runStrategy stable go-installed gentle-ai on Windows: unexpected error: %v", err)
+	}
+
+	if !containsSubsequence(gotArgs, []string{"-Method", "go", "-Version", "v1.40.2"}) {
+		t.Errorf("installer args %v must include -Method go -Version v1.40.2", gotArgs)
+	}
+	if containsArg(gotArgs, "-Channel") {
+		t.Errorf("stable upgrade must not pass -Channel, got args %v", gotArgs)
+	}
+}
+
+// TestEffectiveMethod_GentleAIGoInstallDetection verifies the method-selection
+// rules behind issue #999: the original install method is preserved in BOTH
+// directions. A go-installed binary upgrades via go-install, while a binary
+// install is never rerouted to go-install just because Go happens to be on
+// PATH. On Windows the routing stays on the installer because a running exe
+// cannot replace itself in-process.
+func TestEffectiveMethod_GentleAIGoInstallDetection(t *testing.T) {
+	home := t.TempDir()
+	goBin := filepath.Join(home, "go", "bin")
+
+	tool := update.ToolInfo{
+		Name:          "gentle-ai",
+		InstallMethod: update.InstallBinary,
+		GoImportPath:  "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai",
+	}
+
+	tests := []struct {
+		name    string
+		profile system.PlatformProfile
+		exePath string
+		want    update.InstallMethod
+	}{
+		{
+			name:    "linux + go available + exe in go bin → go-install",
+			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt", GoAvailable: true},
+			exePath: filepath.Join(goBin, "gentle-ai"),
+			want:    update.InstallGoInstall,
+		},
+		{
+			name:    "linux + go available + exe outside go bin → binary (no reroute)",
+			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt", GoAvailable: true},
+			exePath: filepath.Join("/usr", "local", "bin", "gentle-ai"),
+			want:    update.InstallBinary,
+		},
+		{
+			name:    "linux + go unavailable + exe in go bin → binary fallback",
+			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt", GoAvailable: false},
+			exePath: filepath.Join(goBin, "gentle-ai"),
+			want:    update.InstallBinary,
+		},
+		{
+			name:    "windows + go installed → installer (running exe cannot self-replace)",
+			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true},
+			exePath: filepath.Join(goBin, "gentle-ai.exe"),
+			want:    update.InstallInstaller,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GOBIN", "")
+			t.Setenv("GOPATH", "")
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			stubExePath(t, tc.exePath, nil)
+			stubGoEnv(t, map[string]string{}, nil)
+
+			if got := effectiveMethod(tool, tc.profile); got != tc.want {
+				t.Errorf("effectiveMethod = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }

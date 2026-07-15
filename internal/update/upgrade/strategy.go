@@ -91,7 +91,7 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 	case update.InstallBinary:
 		return false, binaryUpgrade(ctx, r, profile)
 	case update.InstallInstaller:
-		return installerUpgrade(ctx, r.Tool, r.ReleaseURL, isBetaGentleAIUpgrade(r))
+		return installerUpgrade(ctx, r, profile)
 	case update.InstallScript:
 		// GGA's install.sh expects to run from within a cloned repo — it references
 		// $SCRIPT_DIR/bin/gga and $SCRIPT_DIR/lib/*.sh. The generic scriptUpgrade
@@ -580,8 +580,12 @@ func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 // installerUpgradeArgs builds the PowerShell command argument list for launching
 // install.ps1 as a detached process. When beta is true, "-Channel beta" is
 // appended after "-File <tmpPath>" so install.ps1 routes to go install @main
-// instead of downloading the latest stable release binary.
-func installerUpgradeArgs(tmpPath string, beta bool) []string {
+// instead of downloading the latest stable release binary. When useGoInstall is
+// true (a stable, go-installed gentle-ai — issue #999), "-Method go -Version
+// <version>" is appended so the installer upgrades via `go install ...@<version>`
+// and preserves the original install method. Beta wins over useGoInstall
+// because beta always installs from main via go install.
+func installerUpgradeArgs(tmpPath string, beta, useGoInstall bool, version string) []string {
 	args := []string{
 		"/C",
 		"start",
@@ -592,8 +596,11 @@ func installerUpgradeArgs(tmpPath string, beta bool) []string {
 		"-ExecutionPolicy", "Bypass",
 		"-File", tmpPath,
 	}
-	if beta {
+	switch {
+	case beta:
 		args = append(args, "-Channel", "beta")
+	case useGoInstall:
+		args = append(args, "-Method", "go", "-Version", version)
 	}
 	return args
 }
@@ -601,12 +608,22 @@ func installerUpgradeArgs(tmpPath string, beta bool) []string {
 // installerUpgrade launches the PowerShell installer (install.ps1) for gentle-ai on Windows.
 // This is used for the Windows self-replace workaround — the running process
 // exits immediately after launching the installer, which then replaces the binary.
-// When beta is true, "-Channel beta" is passed to install.ps1 so it installs
-// from HEAD via go install @main instead of downloading the latest stable release.
-func installerUpgrade(ctx context.Context, tool update.ToolInfo, releaseURL string, beta bool) (bool, error) {
+//
+// The original install method is preserved (issue #999): when the running
+// binary was installed via `go install` (it lives in a Go bin directory) and
+// Go is on PATH, the installer receives "-Method go -Version v<version>" so it
+// upgrades with `go install ...@v<version>` after gentle-ai exits — an
+// in-process go install cannot replace a running Windows executable. When the
+// upgrade targets the beta channel, "-Channel beta" is passed so install.ps1
+// installs from HEAD via go install @main.
+func installerUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) (bool, error) {
 	if runtime.GOOS != "windows" {
 		return false, fmt.Errorf("installer upgrade is only supported on Windows")
 	}
+	tool := r.Tool
+	beta := isBetaGentleAIUpgrade(r)
+	useGoInstall := !beta && profile.GoAvailable && runningFromGoBinDir(profile.GoAvailable)
+	version := "v" + strings.TrimPrefix(r.LatestVersion, "v")
 
 	scriptURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/scripts/install.ps1", tool.Owner, tool.Repo)
 
@@ -644,7 +661,7 @@ func installerUpgrade(ctx context.Context, tool update.ToolInfo, releaseURL stri
 	}
 	tmpFile.Close()
 
-	cmd := execCommand("cmd", installerUpgradeArgs(tmpFile.Name(), beta)...)
+	cmd := execCommand("cmd", installerUpgradeArgs(tmpFile.Name(), beta, useGoInstall, version)...)
 
 	fmt.Printf("\nLaunching installer for %s...\n", tool.Name)
 	fmt.Println("gentle-ai will now exit so the installer can replace the binary.")

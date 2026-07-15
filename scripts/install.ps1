@@ -21,6 +21,9 @@
     .\install.ps1 -Method binary
     .\install.ps1 -Method go
 
+    # Pin the version for a go install (used by gentle-ai self-upgrade):
+    .\install.ps1 -Method go -Version v1.40.2
+
     # Install the beta channel from main:
     .\install.ps1 -Channel beta
 
@@ -143,11 +146,11 @@ function Get-InstallMethod {
 # ============================================================================
 
 function Install-ViaGo {
-    param([string]$Channel = "stable")
+    param([string]$Channel = "stable", [string]$Version = "latest")
 
     Write-Step "Installing via go install"
 
-    $version = if ($Channel -eq "beta") { "main" } else { "latest" }
+    $version = if ($Channel -eq "beta") { "main" } else { $Version }
     $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/cmd/$BINARY_NAME@$version"
     Write-Info "Running: go install $goPackage"
 
@@ -437,6 +440,11 @@ function Main {
 
         [string]$InstallDir = "",
 
+        # Version passed to `go install` when -Method go is used on the stable
+        # channel (e.g. "v1.40.2"). gentle-ai self-upgrade pins this so the
+        # upgrade does not depend on the Go module proxy's @latest resolution.
+        [string]$Version = "latest",
+
         [switch]$Insecure
     )
 
@@ -450,7 +458,7 @@ function Main {
     $installMethod = Get-InstallMethod -Forced $Method -Channel $Channel
 
     switch ($installMethod) {
-        "go"     { Install-ViaGo -Channel $Channel }
+        "go"     { Install-ViaGo -Channel $Channel -Version $Version }
         "binary" { Install-ViaBinary -Arch $arch }
     }
 

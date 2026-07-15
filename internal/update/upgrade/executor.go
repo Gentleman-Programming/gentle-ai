@@ -600,20 +600,32 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 }
 
 // effectiveMethod resolves the actual upgrade strategy for a tool on a given platform.
-// Priority order matches the documented install hierarchy: plugin → brew-owned package → Windows installer → go-install → declared method.
+// Priority order matches the documented install hierarchy: plugin → brew-owned package → gentle-ai method preservation → Windows installer → go-install → declared method.
 //
 //  1. OpenCode plugins are always handled by their own method — never overridden.
 //  2. Homebrew is used only when Homebrew confirms it owns this specific tool.
-//  3. gentle-ai on Windows uses the installer so the running binary can exit before replacement.
-//  4. When Go is available on PATH and the tool has a GoImportPath, go-install is
+//  3. gentle-ai preserves its original install method (issue #999): when the
+//     running binary lives in a Go bin directory and Go is available, it
+//     upgrades via go-install; otherwise it keeps its declared method. Binary
+//     installs must NOT be rerouted to go-install just because Go is on PATH.
+//     On Windows this routing is delegated to the installer (rule 4) because a
+//     running executable cannot replace itself in-process.
+//  4. gentle-ai on Windows uses the installer so the running binary can exit before replacement.
+//  5. When Go is available on PATH and the tool has a GoImportPath, go-install is
 //     preferred over a direct binary download.
-//  5. Otherwise the tool's declared InstallMethod is used as-is.
+//  6. Otherwise the tool's declared InstallMethod is used as-is.
 func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
 	if tool.InstallMethod == update.InstallOpenCodePlugin {
 		return update.InstallOpenCodePlugin
 	}
 	if profile.PackageManager == "brew" && homebrewPackageInstalled(tool.Name) {
 		return update.InstallBrew
+	}
+	if tool.Name == "gentle-ai" && tool.GoImportPath != "" && profile.OS != "windows" {
+		if profile.GoAvailable && runningFromGoBinDir(profile.GoAvailable) {
+			return update.InstallGoInstall
+		}
+		return tool.InstallMethod
 	}
 	// Use installer method for gentle-ai on Windows (launches PowerShell installer).
 	if profile.OS == "windows" && tool.Name == "gentle-ai" {
