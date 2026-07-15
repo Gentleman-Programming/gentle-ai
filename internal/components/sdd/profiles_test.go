@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -863,7 +864,13 @@ func buildSettingsWithProfiles(t *testing.T) (path string) {
 		agents[key] = map[string]any{"mode": "subagent"}
 	}
 
-	root := map[string]any{"agent": agents}
+	root := map[string]any{
+		"agent": agents,
+		"mcp": map[string]any{
+			"unrelated-server": map[string]any{"command": "unrelated-command"},
+		},
+		"theme": "custom-theme",
+	}
 	data, _ := json.MarshalIndent(root, "", "  ")
 	if err := os.WriteFile(settingsPath, data, 0o644); err != nil {
 		t.Fatalf("write settings: %v", err)
@@ -914,6 +921,15 @@ func TestRemoveProfileAgents_RemovesProfileSDDAndJDAgents(t *testing.T) {
 		if _, ok := agentMap[key]; !ok {
 			t.Errorf("default key %q was removed — should be preserved", key)
 		}
+	}
+
+	if got := root["theme"]; got != "custom-theme" {
+		t.Errorf("theme = %v, want custom-theme", got)
+	}
+	if got := root["mcp"]; !reflect.DeepEqual(got, map[string]any{
+		"unrelated-server": map[string]any{"command": "unrelated-command"},
+	}) {
+		t.Errorf("mcp = %#v, want unrelated MCP configuration preserved", got)
 	}
 }
 

@@ -2271,6 +2271,32 @@ func TestStartUninstall_PartialProfileRemovalReturnsError(t *testing.T) {
 	}
 }
 
+func TestUninstallDoneMsg_ProfileRemovalErrorRendersFailure(t *testing.T) {
+	removalErr := errors.New("cannot update opencode settings")
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallConfirm
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallProfilesToRemove = []string{"cheap"}
+	m.OperationRunning = true
+
+	updated, _ := m.Update(UninstallDoneMsg{Err: removalErr})
+	state := updated.(Model)
+	if state.Screen != ScreenUninstallResult {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallResult)
+	}
+
+	out := state.View()
+	if !strings.Contains(out, "✗ Uninstall failed") {
+		t.Fatalf("profile-removal error must render failure; got:\n%s", out)
+	}
+	if !strings.Contains(out, removalErr.Error()) {
+		t.Fatalf("profile-removal error must be shown; got:\n%s", out)
+	}
+	if strings.Contains(out, "✓ Uninstall complete") {
+		t.Fatalf("profile-removal error must not render success; got:\n%s", out)
+	}
+}
+
 func TestUninstallProfiles_PartialProfileRemovalHidesEngramCleanup(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstallProfiles
