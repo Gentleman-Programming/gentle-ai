@@ -1134,9 +1134,10 @@ func (m Model) View() string {
 	case ScreenUninstallComponents:
 		return screens.RenderUninstallComponents(m.UninstallComponents, m.Cursor)
 	case ScreenUninstallProfiles:
-		return screens.RenderUninstallProfiles(m.UninstallProfilesAvailable, m.UninstallProfilesToRemove, m.UninstallEngramProjectScopeAvailable, m.UninstallEngramScope, m.Cursor)
+		engramProjectScopeAvailable := m.UninstallEngramProjectScopeAvailable && m.shouldShowUninstallEngramScopeSelection()
+		return screens.RenderUninstallProfiles(m.UninstallProfilesAvailable, m.UninstallProfilesToRemove, engramProjectScopeAvailable, m.UninstallEngramScope, m.Cursor)
 	case ScreenUninstallConfirm:
-		return screens.RenderUninstallConfirm(m.UninstallMode, m.UninstallAgents, m.UninstallComponents, m.UninstallProfilesToRemove, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.Cursor, m.OperationRunning, m.SpinnerFrame)
+		return screens.RenderUninstallConfirm(m.UninstallMode, m.UninstallAgents, m.UninstallComponents, m.UninstallProfilesToRemove, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.isProfileOnlyUninstall(), m.Cursor, m.OperationRunning, m.SpinnerFrame)
 	case ScreenUninstallResult:
 		return screens.RenderUninstallResult(m.UninstallResult, m.UninstallErr, m.UninstallMode, m.UninstallProfilesToRemove, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.SyncCleanInstallFiles, m.SyncCleanInstallErr)
 	case ScreenDetection:
@@ -2935,6 +2936,7 @@ func executeExternalCommand(commandFn func(string, ...string) *exec.Cmd, name st
 func (m Model) startUninstall() tea.Cmd {
 	uninstallFn := m.UninstallFn
 	uninstallWithProfilesFn := m.UninstallWithProfilesFn
+	profileRemovalFn := removeProfileAgentsFn
 	syncFn := m.SyncFn
 	agentIDs := append([]model.AgentID(nil), m.UninstallAgents...)
 	componentIDs := append([]model.ComponentID(nil), m.UninstallComponents...)
@@ -2943,6 +2945,15 @@ func (m Model) startUninstall() tea.Cmd {
 	profileSelectionUsed := m.UninstallProfileSelection || len(profileNamesToRemove) > 0
 	mode := m.UninstallMode
 	return func() tea.Msg {
+		if mode == model.UninstallModePartial && len(profileNamesToRemove) > 0 {
+			for _, profileName := range profileNamesToRemove {
+				if err := profileRemovalFn(opencode.DefaultSettingsPath(), profileName); err != nil {
+					return UninstallDoneMsg{Err: err}
+				}
+			}
+			return UninstallDoneMsg{}
+		}
+
 		if uninstallFn == nil && uninstallWithProfilesFn == nil {
 			return UninstallDoneMsg{Err: fmt.Errorf("uninstall function not configured")}
 		}
@@ -4473,6 +4484,9 @@ func (m Model) shouldShowUninstallProfilesSelection() bool {
 }
 
 func (m Model) shouldShowUninstallEngramScopeSelection() bool {
+	if m.UninstallMode == model.UninstallModePartial && m.shouldShowUninstallProfilesSelection() {
+		return false
+	}
 	if !hasSelectedComponent(m.UninstallComponents, model.ComponentEngram) {
 		return false
 	}
@@ -4481,6 +4495,10 @@ func (m Model) shouldShowUninstallEngramScopeSelection() bool {
 
 func (m Model) shouldShowUninstallSubSelection() bool {
 	return m.shouldShowUninstallProfilesSelection() || m.shouldShowUninstallEngramScopeSelection()
+}
+
+func (m Model) isProfileOnlyUninstall() bool {
+	return m.UninstallMode == model.UninstallModePartial && len(m.UninstallProfilesToRemove) > 0
 }
 
 func (m *Model) selectAllUninstallProfiles() {

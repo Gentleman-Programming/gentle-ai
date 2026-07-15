@@ -239,7 +239,7 @@ func RenderUninstallProfiles(available []string, selected []string, engramProjec
 	return b.String()
 }
 
-func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, components []model.ComponentID, profilesToRemove []string, engramScope model.EngramUninstallScope, engramProjectScopeAvailable bool, cursor int, operationRunning bool, spinnerFrame int) string {
+func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, components []model.ComponentID, profilesToRemove []string, engramScope model.EngramUninstallScope, engramProjectScopeAvailable bool, profileOnly bool, cursor int, operationRunning bool, spinnerFrame int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Confirm Uninstall"))
@@ -255,6 +255,11 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 	// Render mode-specific information
 	switch mode {
 	case model.UninstallModePartial:
+		if profileOnly {
+			b.WriteString(styles.SubtextStyle.Render("Mode: Profile-only removal"))
+			b.WriteString("\n\n")
+			break
+		}
 		if len(selected) == 0 {
 			b.WriteString(styles.WarningStyle.Render("No agents selected."))
 			b.WriteString("\n\n")
@@ -311,7 +316,7 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 		}
 	}
 
-	if hasSelectedComponent(components, model.ComponentEngram) {
+	if !profileOnly && hasSelectedComponent(components, model.ComponentEngram) {
 		b.WriteString("\n")
 		b.WriteString(styles.SubtextStyle.Render("Engram cleanup scope:"))
 		b.WriteString("\n")

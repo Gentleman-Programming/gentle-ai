@@ -32,6 +32,7 @@ func TestRenderUninstallConfirmIncludesSelectedProfiles(t *testing.T) {
 		[]string{"cheap"},
 		model.EngramUninstallScopeGlobal,
 		false,
+		true,
 		0,
 		false,
 		0,
@@ -53,6 +54,7 @@ func TestRenderUninstallConfirmIncludesEngramProjectScopeDetails(t *testing.T) {
 		nil,
 		model.EngramUninstallScopeProject,
 		true,
+		false,
 		0,
 		false,
 		0,
@@ -66,6 +68,28 @@ func TestRenderUninstallConfirmIncludesEngramProjectScopeDetails(t *testing.T) {
 	}
 	if !strings.Contains(out, ".engram/") {
 		t.Fatalf("RenderUninstallConfirm() should mention .engram project data removal; got:\n%s", out)
+	}
+}
+
+func TestRenderUninstallConfirm_ProfileOnlyOmitsEngramCleanup(t *testing.T) {
+	out := RenderUninstallConfirm(
+		model.UninstallModePartial,
+		[]model.AgentID{model.AgentOpenCode},
+		[]model.ComponentID{model.ComponentSDD, model.ComponentEngram},
+		[]string{"cheap"},
+		model.EngramUninstallScopeProject,
+		true,
+		true,
+		0,
+		false,
+		0,
+	)
+
+	if strings.Contains(out, "Engram cleanup scope") {
+		t.Fatalf("profile-only confirmation must not include Engram cleanup; got:\n%s", out)
+	}
+	if !strings.Contains(out, "Profile-only removal") {
+		t.Fatalf("profile-only confirmation must identify its scope; got:\n%s", out)
 	}
 }
 

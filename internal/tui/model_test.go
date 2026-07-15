@@ -2180,9 +2180,9 @@ func TestStartUninstall_FullRemoveNonBrewRemovesBinary(t *testing.T) {
 	}
 }
 
-func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
+func TestStartUninstall_FullProfileSelectionUsesManagedUninstall(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	m.UninstallMode = model.UninstallModePartial
+	m.UninstallMode = model.UninstallModeFull
 	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
 	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
 	m.UninstallProfilesToRemove = []string{"cheap"}
@@ -2210,6 +2210,82 @@ func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("UninstallWithProfilesFn was not called")
+	}
+}
+
+func TestStartUninstall_PartialProfileRemovalDoesNotRunManagedUninstall(t *testing.T) {
+	originalRemoveProfileAgentsFn := removeProfileAgentsFn
+	t.Cleanup(func() { removeProfileAgentsFn = originalRemoveProfileAgentsFn })
+
+	removedProfiles := make([]string, 0, 2)
+	removeProfileAgentsFn = func(settingsPath, profileName string) error {
+		if settingsPath != opencode.DefaultSettingsPath() {
+			t.Fatalf("settingsPath = %q, want %q", settingsPath, opencode.DefaultSettingsPath())
+		}
+		removedProfiles = append(removedProfiles, profileName)
+		return nil
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallProfilesToRemove = []string{"cheap", "fast"}
+	m.UninstallFn = func([]model.AgentID, []model.ComponentID) (componentuninstall.Result, error) {
+		t.Fatal("UninstallFn must not run for profile-only removal")
+		return componentuninstall.Result{}, nil
+	}
+	m.UninstallWithProfilesFn = func([]model.AgentID, []model.ComponentID, []string, model.EngramUninstallScope) (componentuninstall.Result, error) {
+		t.Fatal("UninstallWithProfilesFn must not run for profile-only removal")
+		return componentuninstall.Result{}, nil
+	}
+
+	msg := m.startUninstall()().(UninstallDoneMsg)
+	if msg.Err != nil {
+		t.Fatalf("UninstallDoneMsg.Err = %v, want nil", msg.Err)
+	}
+	if !reflect.DeepEqual(removedProfiles, []string{"cheap", "fast"}) {
+		t.Fatalf("removed profiles = %v, want [cheap fast]", removedProfiles)
+	}
+}
+
+func TestStartUninstall_PartialProfileRemovalReturnsError(t *testing.T) {
+	originalRemoveProfileAgentsFn := removeProfileAgentsFn
+	t.Cleanup(func() { removeProfileAgentsFn = originalRemoveProfileAgentsFn })
+
+	removalErr := errors.New("cannot update opencode settings")
+	removedProfiles := make([]string, 0, 2)
+	removeProfileAgentsFn = func(_ string, profileName string) error {
+		removedProfiles = append(removedProfiles, profileName)
+		return removalErr
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallProfilesToRemove = []string{"cheap", "fast"}
+
+	msg := m.startUninstall()().(UninstallDoneMsg)
+	if !errors.Is(msg.Err, removalErr) {
+		t.Fatalf("UninstallDoneMsg.Err = %v, want %v", msg.Err, removalErr)
+	}
+	if !reflect.DeepEqual(removedProfiles, []string{"cheap"}) {
+		t.Fatalf("removed profiles = %v, want [cheap]", removedProfiles)
+	}
+}
+
+func TestUninstallProfiles_PartialProfileRemovalHidesEngramCleanup(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallProfiles
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD, model.ComponentEngram}
+	m.UninstallProfilesAvailable = []string{"cheap"}
+	m.UninstallProfilesToRemove = []string{"cheap"}
+	m.UninstallEngramProjectScopeAvailable = true
+
+	out := m.View()
+	if strings.Contains(out, "Select Engram cleanup scope") {
+		t.Fatalf("profile-only uninstall must not show Engram cleanup; got:\n%s", out)
+	}
+	if strings.Contains(out, "Project-only cleanup") {
+		t.Fatalf("profile-only uninstall must not offer project cleanup; got:\n%s", out)
 	}
 }
 
