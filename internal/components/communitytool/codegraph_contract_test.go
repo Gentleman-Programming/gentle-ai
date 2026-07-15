@@ -155,7 +155,7 @@ func TestCodeGraphNativeOwnedPaths(t *testing.T) {
 	reg, _ := agents.NewDefaultRegistry()
 	tests := map[model.AgentID][]string{
 		model.AgentClaudeCode:  {filepath.Join(home, ".claude.json")},
-		model.AgentAntigravity: {filepath.Join(home, ".gemini", "config", "mcp_config.json"), filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")},
+		model.AgentAntigravity: {filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json"), filepath.Join(home, ".gemini", "config", "mcp_config.json"), filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")},
 		model.AgentKiroIDE:     {filepath.Join(home, ".kiro", "settings", "mcp.json")},
 	}
 	for id, want := range tests {

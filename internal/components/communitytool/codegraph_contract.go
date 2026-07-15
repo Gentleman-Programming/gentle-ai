@@ -90,7 +90,11 @@ func codeGraphToolWiringPaths(homeDir string, adapter agents.Adapter) []string {
 	case model.AgentClaudeCode:
 		return []string{filepath.Join(homeDir, ".claude.json")}
 	case model.AgentAntigravity:
+		// Include the adapter's MCPConfigPath which uses the variant directory
+		// (e.g., ~/.gemini/antigravity-desktop/mcp_config.json or ~/.gemini/antigravity-cli/mcp_config.json)
+		// as well as the legacy paths for backward compatibility.
 		return []string{
+			adapter.MCPConfigPath(homeDir, "codegraph"),
 			filepath.Join(homeDir, ".gemini", "config", "mcp_config.json"),
 			filepath.Join(homeDir, ".gemini", "antigravity", "mcp_config.json"),
 		}
@@ -115,12 +119,22 @@ func hasCodeGraphToolWiring(homeDir string, adapter agents.Adapter) (string, boo
 		return path, hasCanonicalCodeGraphServer(data)
 	}
 	if adapter.Agent() == model.AgentAntigravity {
-		path := filepath.Join(homeDir, ".gemini", "antigravity", "mcp_config.json")
-		if _, err := os.Stat(filepath.Join(homeDir, ".gemini", "config", ".migrated")); err == nil {
-			path = filepath.Join(homeDir, ".gemini", "config", "mcp_config.json")
+		// Check the adapter's MCPConfigPath first (variant directory),
+		// then fall back to legacy paths for backward compatibility.
+		paths := []string{
+			adapter.MCPConfigPath(homeDir, "codegraph"),
+			filepath.Join(homeDir, ".gemini", "antigravity", "mcp_config.json"),
 		}
-		data, err := os.ReadFile(path)
-		return path, err == nil && hasCanonicalCodeGraphServer(data)
+		if _, err := os.Stat(filepath.Join(homeDir, ".gemini", "config", ".migrated")); err == nil {
+			paths = append(paths, filepath.Join(homeDir, ".gemini", "config", "mcp_config.json"))
+		}
+		for _, path := range paths {
+			data, err := os.ReadFile(path)
+			if err == nil && hasCanonicalCodeGraphServer(data) {
+				return path, true
+			}
+		}
+		return "", false
 	}
 	if detector, ok := adapter.(agents.EffectiveCodeGraphWiringDetector); ok {
 		return detector.EffectiveCodeGraphWiring(homeDir)
