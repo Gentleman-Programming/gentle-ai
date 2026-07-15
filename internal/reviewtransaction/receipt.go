@@ -171,8 +171,11 @@ type GateContext struct {
 // GateDenial identifies the non-authorizing validation stage that rejected a
 // gate request. Its presence never changes the gate result.
 type GateDenial struct {
-	Stage string `json:"stage"`
-	Code  string `json:"code"`
+	Stage            string      `json:"stage"`
+	Code             string      `json:"code"`
+	ReceiptScope     *FinalScope `json:"receipt_scope,omitempty"`
+	CurrentScope     *FinalScope `json:"current_scope,omitempty"`
+	MaintainerAction string      `json:"maintainer_action,omitempty"`
 }
 
 func validateDerivedGate(receipt Receipt, context GateContext) GateResult {

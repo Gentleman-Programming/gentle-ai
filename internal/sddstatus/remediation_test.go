@@ -35,6 +35,18 @@ func TestParseRemediationResultRequiresExactTransactionBinding(t *testing.T) {
 	}
 }
 
+func TestRemediationEvidenceHelperBuildsExactDormantEvidence(t *testing.T) {
+	revision := "sha256:" + strings.Repeat("a", 64)
+	binding := RemediationBinding{LineageID: "lineage-1", Generation: 1, FixBatch: 2}
+	text, err := BuildRemediationEvidence(revision, binding, "go test ./internal/sddstatus", "12 tests passed", "No runtime boundary exists because this is a dormant parser contract.", "internal/sddstatus verification helpers", "Revert the helper and its test together.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parseRemediationResult(text, revision, binding); !got.Complete {
+		t.Fatalf("generated remediation evidence did not validate: %#v", got)
+	}
+}
+
 func remediationEnvelope(revision string) string {
 	return strings.Join([]string{
 		"```yaml",

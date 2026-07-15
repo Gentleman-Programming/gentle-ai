@@ -95,6 +95,17 @@ type facadeValidationResult struct {
 	FollowUps            []reviewtransaction.FollowUp `json:"follow_ups"`
 }
 
+type dormantLifecycleAdapters struct {
+	ArchiveSDD        bool
+	RemediationRoutes bool
+	StatusBehavior    bool
+	Guidance          bool
+}
+
+// DormantLifecycleAdapters makes the PR1 non-activation boundary explicit.
+// It is a pure contract probe and is intentionally not wired to CLI routes.
+func DormantLifecycleAdapters() dormantLifecycleAdapters { return dormantLifecycleAdapters{} }
+
 type facadeRefuterResult struct {
 	Results []facadeRefuterOutcome `json:"results"`
 }

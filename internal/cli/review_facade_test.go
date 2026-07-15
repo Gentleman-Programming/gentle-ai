@@ -818,6 +818,13 @@ func TestReviewFacadeHelpAndFlatCompatibilityPathsRemainAvailable(t *testing.T) 
 	}
 }
 
+func TestDormantLifecycleAdaptersDoNotActivateNewRoutes(t *testing.T) {
+	adapters := DormantLifecycleAdapters()
+	if adapters.ArchiveSDD || adapters.RemediationRoutes || adapters.StatusBehavior || adapters.Guidance {
+		t.Fatalf("PR1 activated lifecycle behavior: %#v", adapters)
+	}
+}
+
 func TestReviewSchemaExamplesMatchStrictFacadeContracts(t *testing.T) {
 	for _, kind := range []string{"reviewer", "refuter", "validator"} {
 		t.Run(kind, func(t *testing.T) {

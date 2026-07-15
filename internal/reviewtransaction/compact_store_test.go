@@ -13,6 +13,35 @@ import (
 	"time"
 )
 
+func TestCompactLifecycleTransitionsAreCASBoundAndBudgetStable(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state, store, _ := approvedCompactCurrentChangesFixture(t, repo, "verify-remediation", []string{})
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := record.Revision
+	budget := state.CorrectionBudget
+	if _, err := store.RecordVerifyFailure(revision, "sha256:"+strings.Repeat("a", 64)); err != nil {
+		t.Fatalf("record verify failure: %v", err)
+	}
+	failed, err := store.Load()
+	if err != nil || failed.State.State != StateVerifyFailed || failed.State.CorrectionBudget != budget {
+		t.Fatalf("failed state = %#v, %v", failed, err)
+	}
+	if _, err := store.AuthorizeVerifyRemediation(failed.Revision, "sha256:"+strings.Repeat("a", 64)); err != nil {
+		t.Fatalf("authorize remediation: %v", err)
+	}
+	remediating, _ := store.Load()
+	if _, err := store.CompleteVerifyRemediation(remediating.Revision, "sha256:"+strings.Repeat("a", 64)); err != nil {
+		t.Fatalf("complete remediation: %v", err)
+	}
+	if _, err := store.EscalateValidatorFailure(revision, "validator failure"); !errors.Is(err, ErrConcurrentUpdate) {
+		t.Fatalf("stale competitor = %v, want concurrent update", err)
+	}
+}
+
 func TestCompactStoreRecoverCreatesAuditableSuccessorWithoutChangingPredecessor(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -541,6 +570,29 @@ func TestStartCompactAuthorityReusesApprovedReceiptAmongUnrelatedLeaves(t *testi
 	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
 	if err != nil || result.Action != CompactStartReuseReceipt || result.Record.State.LineageID != approved.LineageID {
 		t.Fatalf("reuse approved receipt = %#v, %v", result, err)
+	}
+}
+
+func TestStartCompactAuthorityReusesPersistedV2ApprovedReceipt(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "approved candidate\n")
+	approved, store, receipt := approvedCompactCurrentChangesFixture(t, repo, "compact-start-v2-approved", []string{})
+	approved.Schema = LegacyCompactStateSchema
+	_, payload, err := makeCompactRecord(approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	receipt.Schema, receipt.FinalScope = LegacyCompactReceiptSchema, nil
+	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: newCompactTestState(t, repo, "compact-start-v2-request")})
+	if err != nil || result.Action != CompactStartReuseReceipt || result.Record.State.LineageID != approved.LineageID {
+		t.Fatalf("reuse persisted v2 approved receipt = %#v, %v", result, err)
 	}
 }
 

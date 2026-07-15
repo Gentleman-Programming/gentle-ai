@@ -2,6 +2,7 @@ package sddstatus
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -260,6 +261,30 @@ type remediationRuntimeEvidence struct {
 type remediationRollbackEvidence struct {
 	Boundary string `json:"boundary"`
 	Evidence string `json:"evidence"`
+}
+
+// BuildRemediationEvidence creates a content-bound, dormant remediation
+// artifact. It does not start remediation or alter status routing.
+func BuildRemediationEvidence(failedRevision string, binding RemediationBinding, command, result, runtimeNAReason, rollbackBoundary, rollbackEvidence string) (string, error) {
+	if !sha256IdentityPattern.MatchString(failedRevision) || strings.TrimSpace(binding.LineageID) == "" || binding.Generation < 1 || binding.FixBatch < 1 {
+		return "", errors.New("invalid remediation transaction binding")
+	}
+	evidence := remediationEvidence{Schema: "gentle-ai.remediation-evidence/v1", FailedEvidenceRevision: failedRevision,
+		LineageID: binding.LineageID, Generation: binding.Generation, FixBatch: binding.FixBatch,
+		Commands:       []remediationCommandEvidence{{Command: command, ExitCode: 0, Result: result}},
+		RuntimeHarness: remediationRuntimeEvidence{Status: "not_applicable", NAReason: runtimeNAReason},
+		Rollback:       remediationRollbackEvidence{Boundary: rollbackBoundary, Evidence: rollbackEvidence}}
+	payload, err := json.Marshal(evidence)
+	if err != nil {
+		return "", err
+	}
+	text := strings.Join([]string{"```yaml", "schema: " + RemediationResultSchema, "status: complete", "failed_evidence_revision: " + failedRevision,
+		"lineage_id: " + binding.LineageID, "generation: " + strconv.Itoa(binding.Generation), "fix_batch: " + strconv.Itoa(binding.FixBatch),
+		"focused_tests: passed", "runtime_harness: not_applicable", "rollback_boundary: recorded", "```", "```json", string(payload), "```"}, "\n")
+	if !parseRemediationResult(text, failedRevision, binding).Complete {
+		return "", errors.New("remediation evidence fields are incomplete")
+	}
+	return text, nil
 }
 
 func parseRemediationResult(text, expectedRevision string, bindings ...RemediationBinding) remediationResultEvaluation {

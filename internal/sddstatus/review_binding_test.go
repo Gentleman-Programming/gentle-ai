@@ -16,6 +16,30 @@ func TestBindApprovedReviewRejectsInvalidChangeBeforePublishing(t *testing.T) {
 	}
 }
 
+func TestReviewBindingV2PreservesLegacyBytesAndUsesCAS(t *testing.T) {
+	legacyBinding := ReviewBinding{Schema: reviewBindingSchema, Change: "thin", Lineage: "lineage",
+		AuthorityRevision: "sha256:" + strings.Repeat("b", 64), ReceiptHash: "sha256:" + strings.Repeat("c", 64),
+		GateContext: reviewtransaction.GateContext{Gate: reviewtransaction.GatePostApply, LineageID: "lineage", StoreRevision: "sha256:" + strings.Repeat("b", 64)}}
+	legacyBinding.Revision = bindingDigest(legacyBinding)
+	legacy, err := bindingBytes(legacyBinding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := ParseReviewBinding(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := binding.CanonicalBytes(); err != nil || string(got) != string(legacy) {
+		t.Fatalf("legacy binding bytes changed: %q, %v", got, err)
+	}
+	if _, err := CompareReviewBindingRevision(binding.Revision, binding.Revision, binding); err != nil {
+		t.Fatalf("exact binding CAS failed: %v", err)
+	}
+	if _, err := CompareReviewBindingRevision("sha256:"+strings.Repeat("d", 64), binding.Revision, binding); err == nil {
+		t.Fatal("stale binding CAS succeeded")
+	}
+}
+
 func TestBindApprovedReviewCASAndLiveEvidence(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")

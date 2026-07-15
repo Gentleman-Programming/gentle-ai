@@ -14,12 +14,16 @@ import (
 	"time"
 )
 
-const CompactStateSchema = "gentle-ai.review-state/v2"
-const CompactReceiptSchema = "gentle-ai.review-receipt/v2"
+const LegacyCompactStateSchema = "gentle-ai.review-state/v2"
+const CompactStateSchema = "gentle-ai.review-state/v3"
+const LegacyCompactReceiptSchema = "gentle-ai.review-receipt/v2"
+const CompactReceiptSchema = "gentle-ai.review-receipt/v3"
 
 const (
 	StateCorrectionRequired      State = "correction_required"
 	StateValidating              State = "validating"
+	StateVerifyFailed            State = "verify_failed"
+	StateVerifyRemediating       State = "verify_remediating"
 	MaxCompactCorrectionAttempts       = 3
 )
 
@@ -52,6 +56,27 @@ type CompactState struct {
 	Recovery                  *CompactRecoveryProvenance `json:"recovery,omitempty"`
 	CorrectionAttempts        []CompactCorrectionAttempt `json:"correction_attempts,omitempty"`
 	CumulativeCorrectionLines int                        `json:"cumulative_correction_lines,omitempty"`
+	FailedEvidenceRevision    string                     `json:"failed_evidence_revision,omitempty"`
+	RemediationFixBatch       int                        `json:"remediation_fix_batch,omitempty"`
+	LifecycleEvents           []CompactLifecycleEvent    `json:"lifecycle_events,omitempty"`
+}
+
+// CompactLifecycleEvent records a dormant, same-lineage transition. It is
+// intentionally data-only; PR1 does not route any production command to it.
+type CompactLifecycleEvent struct {
+	Kind                   string `json:"kind"`
+	FailedEvidenceRevision string `json:"failed_evidence_revision,omitempty"`
+}
+
+// FinalScope is the immutable terminal correction identity for v3 receipts.
+type FinalScope struct {
+	CorrectionBaseTree     string   `json:"correction_base_tree"`
+	CandidateTree          string   `json:"candidate_tree"`
+	PathsDigest            string   `json:"paths_digest"`
+	IntendedUntrackedProof string   `json:"intended_untracked_proof"`
+	LedgerIDs              []string `json:"ledger_ids"`
+	FixDeltaHash           string   `json:"fix_delta_hash"`
+	EvidenceHash           string   `json:"evidence_hash"`
 }
 
 type CompactCorrectionAttempt struct {
@@ -97,6 +122,7 @@ type CompactReceipt struct {
 	SelectedLenses     []string      `json:"selected_lenses"`
 	ResolvedFindingIDs []string      `json:"resolved_finding_ids"`
 	TerminalState      TerminalState `json:"terminal_state"`
+	FinalScope         *FinalScope   `json:"final_scope,omitempty"`
 }
 
 type CompactReviewInput struct {
@@ -145,7 +171,7 @@ func NewCompactState(start Start) (CompactState, error) {
 }
 
 func (state CompactState) Validate() error {
-	if state.Schema != CompactStateSchema {
+	if state.Schema != CompactStateSchema && state.Schema != LegacyCompactStateSchema {
 		return errors.New("unsupported compact review state schema")
 	}
 	if err := validateLineageID(state.LineageID); err != nil {
@@ -260,6 +286,14 @@ func (state CompactState) Validate() error {
 			return errors.New("approved compact state requires verification evidence")
 		}
 	case StateEscalated:
+	case StateVerifyFailed:
+		if !validSHA256(state.FailedEvidenceRevision) || state.EvidenceHash != "" {
+			return errors.New("verify-failed compact state requires a failed evidence revision")
+		}
+	case StateVerifyRemediating:
+		if !validSHA256(state.FailedEvidenceRevision) || state.RemediationFixBatch < 1 || state.EvidenceHash != "" {
+			return errors.New("verify-remediating compact state requires a failed evidence revision and fix batch")
+		}
 	default:
 		return fmt.Errorf("invalid compact review state %q", state.State)
 	}
@@ -708,14 +742,22 @@ func (state CompactState) Receipt() (CompactReceipt, error) {
 	if evidence == "" {
 		evidence = EmptyFixDeltaHash
 	}
+	receiptSchema := CompactReceiptSchema
+	if state.Schema == LegacyCompactStateSchema {
+		receiptSchema = LegacyCompactReceiptSchema
+	}
 	receipt := CompactReceipt{
-		Schema: CompactReceiptSchema, LineageID: state.LineageID, Generation: state.Generation,
+		Schema: receiptSchema, LineageID: state.LineageID, Generation: state.Generation,
 		Projection: state.InitialSnapshot.Projection,
 		BaseTree:   state.InitialSnapshot.BaseTree, InitialReviewTree: state.InitialSnapshot.CandidateTree,
 		FinalCandidateTree: state.CurrentSnapshot.CandidateTree, PathsDigest: state.InitialSnapshot.PathsDigest,
 		FixDeltaHash: state.FixDeltaHash, PolicyHash: state.PolicyHash, EvidenceHash: evidence,
 		RiskLevel: state.RiskLevel, SelectedLenses: append([]string(nil), state.SelectedLenses...),
 		ResolvedFindingIDs: append([]string(nil), state.FixFindingIDs...), TerminalState: terminal,
+	}
+	if receipt.Schema == CompactReceiptSchema {
+		scope := FinalScopeForSnapshot(state.CurrentSnapshot, state.FixDeltaHash, evidence)
+		receipt.FinalScope = &scope
 	}
 	return receipt, receipt.Validate()
 }
@@ -725,7 +767,7 @@ func (receipt CompactReceipt) Validate() error {
 	if err != nil || projection != receipt.Projection {
 		return errors.New("compact receipt projection is unsupported or non-canonical")
 	}
-	if receipt.Schema != CompactReceiptSchema || validateLineageID(receipt.LineageID) != nil || receipt.Generation < 1 {
+	if receipt.Schema != CompactReceiptSchema && receipt.Schema != LegacyCompactReceiptSchema || validateLineageID(receipt.LineageID) != nil || receipt.Generation < 1 {
 		return errors.New("invalid compact review receipt identity")
 	}
 	for _, tree := range []string{receipt.BaseTree, receipt.InitialReviewTree, receipt.FinalCandidateTree} {
@@ -748,7 +790,83 @@ func (receipt CompactReceipt) Validate() error {
 	if receipt.TerminalState != TerminalApproved && receipt.TerminalState != TerminalEscalated {
 		return errors.New("compact receipt terminal state is invalid")
 	}
+	if receipt.Schema == CompactReceiptSchema {
+		if receipt.FinalScope == nil {
+			return errors.New("compact receipt final scope is incomplete or inconsistent")
+		}
+		if err := receipt.FinalScope.Validate(); err != nil {
+			return fmt.Errorf("compact receipt final scope is incomplete or inconsistent: %w", err)
+		}
+	}
 	return nil
+}
+
+func FinalScopeForSnapshot(snapshot Snapshot, fixDeltaHash, evidenceHash string) FinalScope {
+	return FinalScope{CorrectionBaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree, PathsDigest: snapshot.PathsDigest,
+		IntendedUntrackedProof: snapshot.IntendedUntrackedProof, LedgerIDs: append([]string(nil), snapshot.LedgerIDs...), FixDeltaHash: fixDeltaHash, EvidenceHash: evidenceHash}
+}
+
+func (scope FinalScope) Validate() error {
+	if !validGitTree(scope.CorrectionBaseTree) || !validGitTree(scope.CandidateTree) || !validSHA256(scope.PathsDigest) ||
+		!validSHA256(scope.IntendedUntrackedProof) || !validSHA256(scope.FixDeltaHash) || !validSHA256(scope.EvidenceHash) {
+		return errors.New("incomplete final scope identity")
+	}
+	ids, err := canonicalStrings(scope.LedgerIDs, "ledger id")
+	if err != nil || !equalStrings(ids, scope.LedgerIDs) {
+		return errors.New("final scope ledger IDs must be canonical")
+	}
+	return nil
+}
+
+// CompareFinalScope is pure and only diagnoses drift. It cannot allocate a
+// lineage or budget; callers must perform maintainer action separately.
+func CompareFinalScope(receipt, current FinalScope) *GateDenial {
+	if receipt.Validate() != nil || current.Validate() != nil {
+		return &GateDenial{Stage: "final-scope", Code: "incomplete-final-scope", MaintainerAction: "repair or recreate the receipt with a complete final scope"}
+	}
+	if !reflect.DeepEqual(receipt, current) {
+		return &GateDenial{Stage: "final-scope", Code: "scope-changed", ReceiptScope: &receipt, CurrentScope: &current, MaintainerAction: "create a new lineage explicitly after reviewing the changed scope"}
+	}
+	return nil
+}
+
+func (state *CompactState) RecordVerifyFailure(failedEvidenceRevision string) error {
+	if state.State != StateApproved || !validSHA256(failedEvidenceRevision) {
+		return errors.New("verify failure requires an approved state and evidence revision")
+	}
+	state.State, state.EvidenceHash, state.FailedEvidenceRevision = StateVerifyFailed, "", failedEvidenceRevision
+	state.LifecycleEvents = append(state.LifecycleEvents, CompactLifecycleEvent{Kind: "verify_failed", FailedEvidenceRevision: failedEvidenceRevision})
+	return state.Validate()
+}
+
+func (state *CompactState) AuthorizeVerifyRemediation(failedEvidenceRevision string) error {
+	if state.State != StateVerifyFailed || state.FailedEvidenceRevision != failedEvidenceRevision {
+		return errors.New("verify remediation requires the current failed evidence revision")
+	}
+	state.State, state.RemediationFixBatch = StateVerifyRemediating, state.RemediationFixBatch+1
+	state.LifecycleEvents = append(state.LifecycleEvents, CompactLifecycleEvent{Kind: "verify_remediating", FailedEvidenceRevision: failedEvidenceRevision})
+	return state.Validate()
+}
+
+func (state *CompactState) CompleteVerifyRemediation(failedEvidenceRevision string) error {
+	if state.State != StateVerifyRemediating || state.FailedEvidenceRevision != failedEvidenceRevision {
+		return errors.New("verify remediation completion requires the current failed evidence revision")
+	}
+	state.State, state.FailedEvidenceRevision = StateValidating, ""
+	state.LifecycleEvents = append(state.LifecycleEvents, CompactLifecycleEvent{Kind: "verify_remediated", FailedEvidenceRevision: failedEvidenceRevision})
+	return state.Validate()
+}
+
+func (state *CompactState) EscalateValidatorFailure(reason string) error {
+	if state.State != StateVerifyFailed && state.State != StateVerifyRemediating {
+		return errors.New("validator escalation requires a verify failure")
+	}
+	if strings.TrimSpace(reason) == "" {
+		return errors.New("validator escalation reason is required")
+	}
+	state.State = StateEscalated
+	state.LifecycleEvents = append(state.LifecycleEvents, CompactLifecycleEvent{Kind: "validator_escalated", FailedEvidenceRevision: state.FailedEvidenceRevision})
+	return state.Validate()
 }
 
 func ParseCompactReceipt(payload []byte) (CompactReceipt, error) {

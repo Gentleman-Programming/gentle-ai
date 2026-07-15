@@ -34,6 +34,19 @@ type ReviewBinding struct {
 	GateContext       reviewtransaction.GateContext `json:"gate_context"`
 }
 
+// ParseReviewBinding and CanonicalBytes expose the dormant binding contract
+// without changing the v1 binding writer or any production status route.
+func ParseReviewBinding(payload []byte) (ReviewBinding, error) { return parseBinding(payload) }
+
+func (binding ReviewBinding) CanonicalBytes() ([]byte, error) { return bindingBytes(binding) }
+
+func CompareReviewBindingRevision(expected, actual string, binding ReviewBinding) (ReviewBinding, error) {
+	if expected != actual || actual != binding.Revision {
+		return ReviewBinding{}, errors.New("binding revision conflict")
+	}
+	return binding, nil
+}
+
 func BindApprovedReview(ctx context.Context, repo, change, lineage, expected string) (ReviewBinding, error) {
 	if !validReviewBindingChange(change) {
 		return ReviewBinding{}, errors.New("invalid OpenSpec change name")

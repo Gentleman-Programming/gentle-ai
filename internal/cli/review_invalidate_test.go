@@ -37,6 +37,16 @@ func TestReviewInvalidateFailsClosedForCompetingAuthorities(t *testing.T) {
 	}
 }
 
+func TestReviewInvalidateHelpLeavesDormantRemediationUnreachable(t *testing.T) {
+	var output bytes.Buffer
+	if err := RunReview([]string{"invalidate", "--help"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() == "" || bytes.Contains(output.Bytes(), []byte("remediation")) || bytes.Contains(output.Bytes(), []byte("archive-sdd")) {
+		t.Fatalf("invalidation help activated dormant lifecycle behavior: %q", output.String())
+	}
+}
+
 func addPristineLegacyAuthority(t *testing.T, repo, lineage string) reviewtransaction.Store {
 	t.Helper()
 	snapshot, _ := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{}})

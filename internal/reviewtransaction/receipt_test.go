@@ -6,6 +6,40 @@ import (
 	"testing"
 )
 
+func TestFinalScopeContractFailsClosedAndExplainsScopeChanges(t *testing.T) {
+	scope := FinalScope{
+		CorrectionBaseTree:     tree("a"),
+		CandidateTree:          tree("b"),
+		PathsDigest:            hash("c"),
+		IntendedUntrackedProof: hash("d"),
+		LedgerIDs:              []string{"R3-001"},
+		FixDeltaHash:           hash("e"),
+		EvidenceHash:           hash("f"),
+	}
+	for _, tt := range []struct {
+		name string
+		got  FinalScope
+		want string
+	}{
+		{name: "exact scope", got: scope},
+		{name: "candidate differs", got: FinalScope{CorrectionBaseTree: scope.CorrectionBaseTree, CandidateTree: tree("c"), PathsDigest: scope.PathsDigest, IntendedUntrackedProof: scope.IntendedUntrackedProof, LedgerIDs: scope.LedgerIDs, FixDeltaHash: scope.FixDeltaHash, EvidenceHash: scope.EvidenceHash}, want: "scope-changed"},
+		{name: "incomplete scope", got: FinalScope{CandidateTree: scope.CandidateTree}, want: "incomplete-final-scope"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			denial := CompareFinalScope(scope, tt.got)
+			if tt.want == "" {
+				if denial != nil {
+					t.Fatalf("exact final scope denied: %#v", denial)
+				}
+				return
+			}
+			if denial == nil || denial.Code != tt.want || denial.MaintainerAction == "" {
+				t.Fatalf("final scope denial = %#v, want %q with maintainer action", denial, tt.want)
+			}
+		})
+	}
+}
+
 func TestReceiptDistinguishesReviewedAndFinalTreesAndValidatesExactGateInputs(t *testing.T) {
 	tx := ordinaryAtFixValidation(t)
 	if err := tx.ValidateFixDelta([]string{"R1-DET"}, true); err != nil {

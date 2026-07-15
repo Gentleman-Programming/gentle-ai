@@ -611,6 +611,66 @@ func (store CompactStore) Replace(expectedRevision, operation string, next Compa
 	return record.Revision, nil
 }
 
+func (store CompactStore) RecordVerifyFailure(expectedRevision, failedEvidenceRevision string) (string, error) {
+	record, err := store.Load()
+	if err != nil {
+		return "", err
+	}
+	if record.Revision != expectedRevision {
+		return "", fmt.Errorf("%w: stale compact revision", ErrConcurrentUpdate)
+	}
+	next := record.State
+	if err := next.RecordVerifyFailure(failedEvidenceRevision); err != nil {
+		return "", err
+	}
+	return store.Replace(expectedRevision, "review/record-verify-failure", next)
+}
+
+func (store CompactStore) AuthorizeVerifyRemediation(expectedRevision, failedEvidenceRevision string) (string, error) {
+	record, err := store.Load()
+	if err != nil {
+		return "", err
+	}
+	if record.Revision != expectedRevision {
+		return "", fmt.Errorf("%w: stale compact revision", ErrConcurrentUpdate)
+	}
+	next := record.State
+	if err := next.AuthorizeVerifyRemediation(failedEvidenceRevision); err != nil {
+		return "", err
+	}
+	return store.Replace(expectedRevision, "review/authorize-verify-remediation", next)
+}
+
+func (store CompactStore) CompleteVerifyRemediation(expectedRevision, failedEvidenceRevision string) (string, error) {
+	record, err := store.Load()
+	if err != nil {
+		return "", err
+	}
+	if record.Revision != expectedRevision {
+		return "", fmt.Errorf("%w: stale compact revision", ErrConcurrentUpdate)
+	}
+	next := record.State
+	if err := next.CompleteVerifyRemediation(failedEvidenceRevision); err != nil {
+		return "", err
+	}
+	return store.Replace(expectedRevision, "review/complete-verify-remediation", next)
+}
+
+func (store CompactStore) EscalateValidatorFailure(expectedRevision, reason string) (string, error) {
+	record, err := store.Load()
+	if err != nil {
+		return "", err
+	}
+	if record.Revision != expectedRevision {
+		return "", fmt.Errorf("%w: stale compact revision", ErrConcurrentUpdate)
+	}
+	next := record.State
+	if err := next.EscalateValidatorFailure(reason); err != nil {
+		return "", err
+	}
+	return store.Replace(expectedRevision, "review/escalate-validator-failure", next)
+}
+
 func validateCompactRepositoryEvidence(ctx context.Context, repo string, current *CompactRecord, next CompactState, operation string) error {
 	builder := SnapshotBuilder{Repo: repo}
 	if current == nil {
@@ -690,6 +750,25 @@ func validateCompactSuccessor(previous, next CompactState, operation string) err
 		expected.EvidenceHash = next.EvidenceHash
 		if !compactStateEqual(expected, next) {
 			return fmt.Errorf("%w: compact verification changed unrelated state", ErrInvalidSuccessor)
+		}
+	case "review/record-verify-failure":
+		expected := previous
+		if err := expected.RecordVerifyFailure(next.FailedEvidenceRevision); err != nil || !compactStateEqual(expected, next) {
+			return fmt.Errorf("%w: invalid verify failure transition", ErrInvalidSuccessor)
+		}
+	case "review/authorize-verify-remediation":
+		expected := previous
+		if err := expected.AuthorizeVerifyRemediation(next.FailedEvidenceRevision); err != nil || !compactStateEqual(expected, next) {
+			return fmt.Errorf("%w: invalid verify remediation authorization", ErrInvalidSuccessor)
+		}
+	case "review/complete-verify-remediation":
+		expected := previous
+		if err := expected.CompleteVerifyRemediation(previous.FailedEvidenceRevision); err != nil || !compactStateEqual(expected, next) {
+			return fmt.Errorf("%w: invalid verify remediation completion", ErrInvalidSuccessor)
+		}
+	case "review/escalate-validator-failure":
+		if next.State != StateEscalated || len(next.LifecycleEvents) != len(previous.LifecycleEvents)+1 {
+			return fmt.Errorf("%w: invalid validator escalation", ErrInvalidSuccessor)
 		}
 	default:
 		return fmt.Errorf("%w: unsupported compact operation %q", ErrInvalidSuccessor, operation)

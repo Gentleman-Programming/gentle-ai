@@ -90,6 +90,23 @@ func TestSnapshotBuilderCurrentChangesIsCompleteAndPreservesRealIndex(t *testing
 	}
 }
 
+func TestFinalScopeUsesSortedSnapshotPathIdentity(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "z-last.txt", "z\n")
+	writeSnapshotFile(t, repo, "a-first.txt", "a\n")
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"a-first.txt", "z-last.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot.Paths, []string{"a-first.txt", "z-last.txt"}) {
+		t.Fatalf("sorted snapshot paths = %v", snapshot.Paths)
+	}
+	scope := FinalScopeForSnapshot(snapshot, hash("d"), hash("e"))
+	if err := scope.Validate(); err != nil || scope.PathsDigest != snapshot.PathsDigest || scope.CandidateTree != snapshot.CandidateTree {
+		t.Fatalf("final scope identity = %#v, %v", scope, err)
+	}
+}
+
 func TestSnapshotBuilderStagedProjectionUsesExactIndexAndPreservesWorkspace(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)

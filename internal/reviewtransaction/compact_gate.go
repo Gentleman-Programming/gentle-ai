@@ -11,6 +11,14 @@ import (
 
 var finalCompactGateAllowHook = func() {}
 
+// CompactGateReader is a read-only adapter for lifecycle validation. Keeping
+// this contract separate makes PR1's non-activation boundary explicit.
+type CompactGateReader struct{}
+
+func (CompactGateReader) Read(ctx context.Context, repo string, receipt CompactReceipt, input NativeGateRequestInput) NativeGateEvaluation {
+	return EvaluateCompactGate(ctx, repo, receipt, input)
+}
+
 func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceipt, input NativeGateRequestInput) NativeGateEvaluation {
 	invalid := func(reason string) NativeGateEvaluation {
 		return NativeGateEvaluation{Result: GateInvalidated, Reason: reason}

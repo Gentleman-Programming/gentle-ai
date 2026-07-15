@@ -294,6 +294,21 @@ func TestCompactGateRejectsCallerLineageMismatch(t *testing.T) {
 	}
 }
 
+func TestCompactGateReaderIsReadOnly(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state, store, receipt := approvedCompactCurrentChangesFixture(t, repo, "compact-reader", []string{})
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := (CompactGateReader{}).Read(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID})
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil || got.Result != GateAllow || !bytes.Equal(before, after) {
+		t.Fatalf("read-only compact gate = %#v, %v", got, err)
+	}
+}
+
 func TestCompactGateFinalRecheckRejectsConcurrentAuthorityAndGitChanges(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
