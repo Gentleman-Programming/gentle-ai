@@ -56,12 +56,12 @@ The uninstall flow currently combines OpenCode SDD profile removal with Engram c
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| PROF-01 | P1: profile-only removal | Execute | Implementing |
-| PROF-02 | P1: protect Engram | Execute | Implementing |
-| PROF-03 | P1: preserve unrelated configuration | Execute | Implementing |
-| PROF-04 | P1: surface errors | Execute | Implementing |
+| PROF-01 | P1: profile-only removal | Execute | ✅ Verified |
+| PROF-02 | P1: protect Engram | Execute | ✅ Verified |
+| PROF-03 | P1: preserve unrelated configuration | Execute | ✅ Verified |
+| PROF-04 | P1: surface errors | Execute | ✅ Verified |
 
 ## Success Criteria
 
-- [ ] A selected profile is removed without calling managed uninstall or touching Engram.
-- [ ] Focused TUI tests and the complete Go test suite pass.
+- [x] A selected profile is removed without calling managed uninstall or touching Engram.
+- [x] Focused TUI tests and the complete Go test suite pass.
