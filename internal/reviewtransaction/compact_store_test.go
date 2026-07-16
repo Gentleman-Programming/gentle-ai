@@ -866,7 +866,10 @@ func TestCompactCorrectionRetriesWithinFrozenBudgetAndFindingScope(t *testing.T)
 func TestCompactZeroLineFailuresReachAttemptCap(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfour\n")
-	state := newCompactTestState(t, repo, "compact-zero-attempt-cap")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	state := newCompactStartStateForTarget(t, repo, "compact-zero-attempt-cap", Target{
+		Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{},
+	})
 	finding := Finding{ID: "R3-001", Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "wrong", ProofRefs: []string{"proof"}}
 	if err := state.CompleteReview(CompactReviewInput{LensResults: []LensResult{{Lens: state.SelectedLenses[0], Findings: []Finding{finding}, Evidence: []string{"reviewed"}}}, Classifications: []FindingEvidence{{FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "proof"}}, RefuterOutcomes: []EvidenceResult{}}); err != nil {
 		t.Fatal(err)
@@ -875,14 +878,12 @@ func TestCompactZeroLineFailuresReachAttemptCap(t *testing.T) {
 		if err := state.BeginCorrection(1); err != nil {
 			t.Fatal(err)
 		}
-		mode := os.FileMode(0o755)
+		mode := "+x"
 		if attempt%2 != 0 {
-			mode = 0o644
+			mode = "-x"
 		}
-		if err := os.Chmod(filepath.Join(repo, "tracked.txt"), mode); err != nil {
-			t.Fatal(err)
-		}
-		fix, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetFixDiff, BaseRef: state.CurrentSnapshot.CandidateTree, IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs})
+		gitSnapshot(t, repo, "update-index", "--chmod="+mode, "tracked.txt")
+		fix, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetFixDiff, Projection: ProjectionStaged, BaseRef: state.CurrentSnapshot.CandidateTree, IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs})
 		if err != nil {
 			t.Fatal(err)
 		}

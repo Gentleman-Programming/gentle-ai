@@ -154,10 +154,7 @@ func TestSnapshotBuilderStagedProjectionPreservesExactIndexFidelity(t *testing.T
 		t.Fatal(err)
 	}
 	gitSnapshot(t, repo, "add", "-A", "--", "rename-old.txt", "renamed.txt")
-	if err := os.Chmod(filepath.Join(repo, "mode.txt"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	gitSnapshot(t, repo, "add", "--", "mode.txt")
+	gitSnapshot(t, repo, "update-index", "--chmod=+x", "mode.txt")
 	if err := os.Symlink("tracked.txt", filepath.Join(repo, "link.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -418,10 +415,7 @@ func TestBaseDiffPreservesIntendedAuthorityAfterTrackedTransition(t *testing.T) 
 	if err != nil || drifted.CandidateTree == reviewed.CandidateTree || drifted.IntendedUntrackedProof == reviewed.IntendedUntrackedProof {
 		t.Fatalf("content drift did not change authority: %#v, err=%v", drifted, err)
 	}
-	if err := os.Chmod(filepath.Join(repo, "delivery.txt"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	gitSnapshot(t, repo, "add", "delivery.txt")
+	gitSnapshot(t, repo, "update-index", "--chmod=+x", "delivery.txt")
 	gitSnapshot(t, repo, "commit", "-m", "mode drift")
 	modeDrifted, err := builder.Build(context.Background(), target)
 	if err != nil || modeDrifted.IntendedUntrackedProof == drifted.IntendedUntrackedProof {

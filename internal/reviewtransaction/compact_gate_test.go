@@ -336,11 +336,8 @@ func TestCompactPreCommitGateRejectsInexactStagedIntendedTransitions(t *testing.
 			gitSnapshot(t, repo, "add", "--", "first.txt", "second.txt")
 		}},
 		{name: "changed mode", mutate: func(t *testing.T, repo string) {
-			gitSnapshot(t, repo, "config", "core.filemode", "true")
-			if err := os.Chmod(filepath.Join(repo, "first.txt"), 0o755); err != nil {
-				t.Fatal(err)
-			}
 			gitSnapshot(t, repo, "add", "--", "first.txt", "second.txt")
+			gitSnapshot(t, repo, "update-index", "--chmod=+x", "first.txt")
 		}},
 		{name: "additional unreviewed staged path", mutate: func(t *testing.T, repo string) {
 			writeSnapshotFile(t, repo, "extra.txt", "not reviewed\n")
