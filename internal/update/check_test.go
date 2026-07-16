@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 func TestMain(m *testing.M) {
@@ -1708,8 +1708,8 @@ func TestInstallMethodFieldsOnRegistry(t *testing.T) {
 			if tool.InstallMethod != InstallBinary {
 				t.Errorf("gentle-ai InstallMethod = %q, want %q", tool.InstallMethod, InstallBinary)
 			}
-			if tool.GoImportPath != "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai" {
-				t.Errorf("gentle-ai GoImportPath = %q, want %q", tool.GoImportPath, "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai")
+			if tool.GoImportPath != "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai" {
+				t.Errorf("gentle-ai GoImportPath = %q, want %q", tool.GoImportPath, "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai")
 			}
 		}
 	}

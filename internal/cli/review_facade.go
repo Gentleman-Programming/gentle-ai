@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/internal/sddstatus"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
 const facadeReviewPolicy = `Gentle AI native bounded review policy.

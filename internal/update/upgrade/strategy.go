@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
 // engramDownloadFn is the function used to download the engram binary on the stable channel.
@@ -488,7 +488,8 @@ func goInstallMainUpgrade(tool update.ToolInfo) error {
 	if module == "github.com//" {
 		module = "github.com/gentleman-programming/gentle-ai"
 	}
-	target := module + "/cmd/gentle-ai@main"
+	// The v2 module path is required by Go's semantic import versioning.
+	target := module + "/v2/cmd/gentle-ai@main"
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
 	cmd.Env = goProxyBypassEnv(cmd.Env, module)

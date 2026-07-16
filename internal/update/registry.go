@@ -27,7 +27,7 @@ var Tools = []ToolInfo{
 		// release download. Windows self-upgrade uses the PowerShell installer so
 		// the running binary can exit before replacement.
 		InstallMethod: InstallBinary,
-		GoImportPath:  "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai",
+		GoImportPath:  "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai",
 	},
 	{
 		Name:              "engram",

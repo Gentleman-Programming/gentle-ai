@@ -9,8 +9,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 var requiredLedgerClauses = boundedReviewRequiredClauses

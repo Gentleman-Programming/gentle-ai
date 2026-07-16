@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
 func TestMain(m *testing.M) {
@@ -135,7 +135,7 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 	if gotName != "go" {
 		t.Fatalf("exec name = %q, want %q", gotName, "go")
 	}
-	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main"}
+	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main"}
 	if len(gotArgs) != len(wantArgs) || gotArgs[0] != wantArgs[0] || gotArgs[1] != wantArgs[1] {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
@@ -301,7 +301,7 @@ func TestEffectiveMethod_GentleAIOnWindowsUsesInstaller(t *testing.T) {
 		},
 		{
 			name: "go available still uses installer",
-			tool: update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/Gentleman-Programming/gentle-ai/cmd/gentle-ai"},
+			tool: update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai"},
 			want: update.InstallInstaller,
 		},
 	}
@@ -2217,7 +2217,7 @@ func containsSubsequence(args []string, sub []string) bool {
 
 // TestRunStrategy_GentleAIGoInstallOnUnix verifies issue #999: when the running
 // gentle-ai binary lives in a Go bin dir, the upgrade runs
-// `go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v<version>`
+// `go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v<version>`
 // instead of downloading a release binary.
 func TestRunStrategy_GentleAIGoInstallOnUnix(t *testing.T) {
 	home := t.TempDir()
@@ -2246,7 +2246,7 @@ func TestRunStrategy_GentleAIGoInstallOnUnix(t *testing.T) {
 			Owner:         "Gentleman-Programming",
 			Repo:          "gentle-ai",
 			InstallMethod: update.InstallBinary,
-			GoImportPath:  "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai",
+			GoImportPath:  "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai",
 		},
 		LatestVersion: "1.40.2",
 		Status:        update.UpdateAvailable,
@@ -2261,7 +2261,7 @@ func TestRunStrategy_GentleAIGoInstallOnUnix(t *testing.T) {
 	if gotName != "go" {
 		t.Errorf("exec name = %q, want %q", gotName, "go")
 	}
-	want := []string{"install", "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.40.2"}
+	want := []string{"install", "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v1.40.2"}
 	if len(gotArgs) != len(want) || gotArgs[0] != want[0] || gotArgs[1] != want[1] {
 		t.Errorf("exec args = %v, want %v", gotArgs, want)
 	}
@@ -2315,7 +2315,7 @@ func TestRunStrategy_StableGentleAIGoInstallWindowsUsesMethodGo(t *testing.T) {
 			Owner:         "Gentleman-Programming",
 			Repo:          "gentle-ai",
 			InstallMethod: update.InstallBinary,
-			GoImportPath:  "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai",
+			GoImportPath:  "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai",
 		},
 		LatestVersion: "1.40.2",
 		Status:        update.UpdateAvailable,
@@ -2383,7 +2383,7 @@ func TestRunStrategy_StableGentleAIBinaryInstallWindowsOmitsMethodGo(t *testing.
 			Owner:         "Gentleman-Programming",
 			Repo:          "gentle-ai",
 			InstallMethod: update.InstallBinary,
-			GoImportPath:  "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai",
+			GoImportPath:  "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai",
 		},
 		LatestVersion: "1.40.2",
 		Status:        update.UpdateAvailable,
@@ -2415,7 +2415,7 @@ func TestEffectiveMethod_GentleAIGoInstallDetection(t *testing.T) {
 	tool := update.ToolInfo{
 		Name:          "gentle-ai",
 		InstallMethod: update.InstallBinary,
-		GoImportPath:  "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai",
+		GoImportPath:  "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai",
 	}
 
 	tests := []struct {

@@ -277,7 +277,7 @@ install_go() {
     # bash 3.2, so piping `| bash` would fail with "bad substitution".
     local owner_lc
     owner_lc="$(printf '%s' "$GITHUB_OWNER" | tr '[:upper:]' '[:lower:]')"
-    local go_package="github.com/${owner_lc}/${GITHUB_REPO}/cmd/${BINARY_NAME}@${version}"
+    local go_package="github.com/${owner_lc}/${GITHUB_REPO}/v2/cmd/${BINARY_NAME}@${version}"
 
     info "Running: go install ${go_package}"
     if [ "${CHANNEL}" = "beta" ]; then

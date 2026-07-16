@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	piagent "github.com/gentleman-programming/gentle-ai/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	piagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 )
 
 const (

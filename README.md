@@ -113,7 +113,7 @@ brew install gentle-ai
 **Go install (any platform with Go 1.25.10+)**
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 ```
 
 **Scoop (Windows)** — this is a manual-update path; update it with `scoop update gentle-ai`.

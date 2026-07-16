@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 var updateTriggerRules = flag.Bool("update-trigger-rules", false, "update trigger-rules golden files")

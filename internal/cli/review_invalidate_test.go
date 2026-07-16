@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestReviewInvalidateFailsClosedForCompetingAuthorities(t *testing.T) {

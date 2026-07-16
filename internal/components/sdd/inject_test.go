@@ -11,17 +11,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
-	windsurfagent "github.com/gentleman-programming/gentle-ai/internal/agents/windsurf"
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	opencodemodel "github.com/gentleman-programming/gentle-ai/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	windsurfagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/windsurf"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodemodel "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
 )
 

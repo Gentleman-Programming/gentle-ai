@@ -151,7 +151,7 @@ function Install-ViaGo {
     Write-Step "Installing via go install"
 
     $version = if ($Channel -eq "beta") { "main" } else { $Version }
-    $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/cmd/$BINARY_NAME@$version"
+    $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/v2/cmd/$BINARY_NAME@$version"
     Write-Info "Running: go install $goPackage"
 
     if ($Channel -eq "beta") {
