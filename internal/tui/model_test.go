@@ -1830,7 +1830,7 @@ func TestUninstallModeScreen_PartialNavigatesToAgentSelection(t *testing.T) {
 	}
 }
 
-func TestUninstallModeScreen_FullNavigatesToConfirm(t *testing.T) {
+func TestUninstallModeScreen_FullNavigatesToScopeSelectionWhenEngramSelected(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstallMode
 	m.Cursor = 1 // Full Uninstall option
@@ -1838,22 +1838,25 @@ func TestUninstallModeScreen_FullNavigatesToConfirm(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallConfirm {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	// Full mode populates all components including Engram → scope selection is shown.
+	if state.Screen != ScreenUninstallProfiles {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
 	}
 	if state.UninstallMode != model.UninstallModeFull {
 		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModeFull)
 	}
-	// Verify all agents and components were populated
 	if len(state.UninstallAgents) == 0 {
 		t.Fatal("UninstallAgents should be populated for Full mode")
 	}
 	if len(state.UninstallComponents) == 0 {
 		t.Fatal("UninstallComponents should be populated for Full mode")
 	}
+	if state.UninstallEngramScope != model.EngramUninstallScopeGlobal {
+		t.Fatalf("Full+Engram UninstallEngramScope = %q, want %q", state.UninstallEngramScope, model.EngramUninstallScopeGlobal)
+	}
 }
 
-func TestUninstallModeScreen_FullRemoveNavigatesToConfirm(t *testing.T) {
+func TestUninstallModeScreen_FullRemoveNavigatesToScopeSelectionWhenEngramSelected(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstallMode
 	m.Cursor = 2 // Full Uninstall & Remove Binary option
@@ -1861,8 +1864,8 @@ func TestUninstallModeScreen_FullRemoveNavigatesToConfirm(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallConfirm {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	if state.Screen != ScreenUninstallProfiles {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
 	}
 	if state.UninstallMode != model.UninstallModeFullRemove {
 		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModeFullRemove)
@@ -1873,9 +1876,12 @@ func TestUninstallModeScreen_FullRemoveNavigatesToConfirm(t *testing.T) {
 	if len(state.UninstallComponents) == 0 {
 		t.Fatal("UninstallComponents should be populated for FullRemove mode")
 	}
+	if state.UninstallEngramScope != model.EngramUninstallScopeGlobal {
+		t.Fatalf("FullRemove+Engram UninstallEngramScope = %q, want %q", state.UninstallEngramScope, model.EngramUninstallScopeGlobal)
+	}
 }
 
-func TestUninstallModeScreen_CleanInstallNavigatesToConfirm(t *testing.T) {
+func TestUninstallModeScreen_CleanInstallNavigatesToScopeSelectionWhenEngramSelected(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstallMode
 	m.Cursor = 3 // Full Uninstall + Clean Install option
@@ -1883,8 +1889,8 @@ func TestUninstallModeScreen_CleanInstallNavigatesToConfirm(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallConfirm {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	if state.Screen != ScreenUninstallProfiles {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
 	}
 	if state.UninstallMode != model.UninstallModeCleanInstall {
 		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModeCleanInstall)
@@ -1894,6 +1900,9 @@ func TestUninstallModeScreen_CleanInstallNavigatesToConfirm(t *testing.T) {
 	}
 	if len(state.UninstallComponents) == 0 {
 		t.Fatal("UninstallComponents should be populated for CleanInstall mode")
+	}
+	if state.UninstallEngramScope != model.EngramUninstallScopeGlobal {
+		t.Fatalf("CleanInstall+Engram UninstallEngramScope = %q, want %q", state.UninstallEngramScope, model.EngramUninstallScopeGlobal)
 	}
 }
 
@@ -1977,6 +1986,8 @@ func TestUninstallComponents_ContinueWithProfilesNavigatesToProfileSelection(t *
 func TestUninstallProfiles_ContinueNavigatesToConfirm(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstallProfiles
+	// No Engram selected → no scope rows; Continue is immediately after profiles.
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
 	m.UninstallProfilesAvailable = []string{"cheap"}
 	m.UninstallProfilesToRemove = []string{"cheap"}
 	m.Cursor = len(m.UninstallProfilesAvailable)
@@ -2237,8 +2248,8 @@ func TestUninstallComponents_ContinueWithEngramProjectScopeNavigatesToSubSelecti
 	if !state.UninstallEngramProjectScopeAvailable {
 		t.Fatal("UninstallEngramProjectScopeAvailable = false, want true")
 	}
-	if state.UninstallEngramScope != model.EngramUninstallScopeGlobal {
-		t.Fatalf("UninstallEngramScope = %q, want %q", state.UninstallEngramScope, model.EngramUninstallScopeGlobal)
+	if state.UninstallEngramScope != model.EngramUninstallScopeNone {
+		t.Fatalf("UninstallEngramScope = %q, want %q", state.UninstallEngramScope, model.EngramUninstallScopeNone)
 	}
 }
 
@@ -7878,5 +7889,232 @@ func TestOpenCodePluginUninstallStandaloneResetMatchesPluginsPattern(t *testing.
 			state := updated.(Model)
 			tc.validate(t, state)
 		})
+	}
+}
+
+func TestNewModel_DefaultEngramUninstallScopeIsNone(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	if m.UninstallEngramScope != model.EngramUninstallScopeNone {
+		t.Fatalf("NewModel UninstallEngramScope = %q, want %q", m.UninstallEngramScope, model.EngramUninstallScopeNone)
+	}
+}
+
+func TestWithResetUninstallState_DefaultEngramScopeIsNone(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	m = m.withResetUninstallState()
+	if m.UninstallEngramScope != model.EngramUninstallScopeNone {
+		t.Fatalf("withResetUninstallState UninstallEngramScope = %q, want %q", m.UninstallEngramScope, model.EngramUninstallScopeNone)
+	}
+}
+
+func TestDefaultEngramUninstallScope_Matrix(t *testing.T) {
+	cases := []struct {
+		name       string
+		mode       model.UninstallMode
+		components []model.ComponentID
+		want       model.EngramUninstallScope
+	}{
+		{
+			name:       "partial with engram defaults to none",
+			mode:       model.UninstallModePartial,
+			components: []model.ComponentID{model.ComponentEngram},
+			want:       model.EngramUninstallScopeNone,
+		},
+		{
+			name:       "full with engram defaults to global",
+			mode:       model.UninstallModeFull,
+			components: []model.ComponentID{model.ComponentEngram, model.ComponentSDD},
+			want:       model.EngramUninstallScopeGlobal,
+		},
+		{
+			name:       "full-remove with engram defaults to global",
+			mode:       model.UninstallModeFullRemove,
+			components: []model.ComponentID{model.ComponentEngram},
+			want:       model.EngramUninstallScopeGlobal,
+		},
+		{
+			name:       "clean-install with engram defaults to global",
+			mode:       model.UninstallModeCleanInstall,
+			components: []model.ComponentID{model.ComponentEngram},
+			want:       model.EngramUninstallScopeGlobal,
+		},
+		{
+			name:       "full without engram defaults to none",
+			mode:       model.UninstallModeFull,
+			components: []model.ComponentID{model.ComponentSDD},
+			want:       model.EngramUninstallScopeNone,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := defaultEngramUninstallScope(tc.mode, tc.components)
+			if got != tc.want {
+				t.Fatalf("defaultEngramUninstallScope() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRefreshUninstallProfiles_PartialDefaultsToNone(t *testing.T) {
+	tempWorkspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tempWorkspace, ".engram"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.engram) error = %v", err)
+	}
+	restoreGetwd := setOSGetwdForTest(tempWorkspace, nil)
+	defer restoreGetwd()
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+
+	m.refreshUninstallProfiles()
+
+	if m.UninstallEngramScope != model.EngramUninstallScopeNone {
+		t.Fatalf("refreshUninstallProfiles partial scope = %q, want %q", m.UninstallEngramScope, model.EngramUninstallScopeNone)
+	}
+	if !m.UninstallEngramProjectScopeAvailable {
+		t.Fatal("UninstallEngramProjectScopeAvailable = false, want true")
+	}
+}
+
+func TestRefreshUninstallProfiles_DiscoveryFailureDoesNotForceGlobal(t *testing.T) {
+	restore := readProfilesFn
+	readProfilesFn = func(string) ([]model.Profile, error) {
+		return nil, errors.New("discovery failed")
+	}
+	defer func() { readProfilesFn = restore }()
+
+	m := NewModel(system.DetectionResult{
+		Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}},
+	}, "dev")
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+
+	m.refreshUninstallProfiles()
+
+	if m.UninstallEngramScope == model.EngramUninstallScopeGlobal {
+		t.Fatal("discovery failure must not force Global Engram scope")
+	}
+	if m.UninstallEngramScope != model.EngramUninstallScopeNone {
+		t.Fatalf("scope = %q, want %q", m.UninstallEngramScope, model.EngramUninstallScopeNone)
+	}
+	if len(m.UninstallProfilesAvailable) != 0 {
+		t.Fatalf("profiles available = %v, want empty on discovery failure", m.UninstallProfilesAvailable)
+	}
+}
+
+func TestRefreshUninstallProfiles_FullModeWithEngramDefaultsToGlobal(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallMode = model.UninstallModeFull
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+	m.UninstallEngramScope = model.EngramUninstallScopeNone
+
+	m.refreshUninstallProfiles()
+
+	if m.UninstallEngramScope != model.EngramUninstallScopeGlobal {
+		t.Fatalf("full mode refresh scope = %q, want %q", m.UninstallEngramScope, model.EngramUninstallScopeGlobal)
+	}
+}
+
+func TestShouldShowUninstallEngramScopeSelection_WhenEngramSelected(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.UninstallEngramProjectScopeAvailable = false
+	if !m.shouldShowUninstallEngramScopeSelection() {
+		t.Fatal("should show Engram scope when Engram selected even without project data")
+	}
+
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
+	if m.shouldShowUninstallEngramScopeSelection() {
+		t.Fatal("should not show Engram scope when Engram not selected")
+	}
+}
+
+func TestOptionCount_UninstallProfilesMatchesScopeOptions(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallProfiles
+	m.UninstallProfilesAvailable = []string{"cheap", "fast"}
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.UninstallEngramProjectScopeAvailable = true
+
+	scopeOpts := screens.UninstallEngramScopeOptions(true)
+	want := len(m.UninstallProfilesAvailable) + len(scopeOpts) + 2
+	if got := m.optionCount(); got != want {
+		t.Fatalf("optionCount() = %d, want %d (profiles + scope options + chrome)", got, want)
+	}
+
+	m.UninstallEngramProjectScopeAvailable = false
+	scopeOpts = screens.UninstallEngramScopeOptions(false)
+	want = len(m.UninstallProfilesAvailable) + len(scopeOpts) + 2
+	if got := m.optionCount(); got != want {
+		t.Fatalf("optionCount() without project data = %d, want %d", got, want)
+	}
+}
+
+func TestToggleCurrentUninstallEngramScope_UsesOptionsIndex(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallProfilesAvailable = []string{"cheap"}
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.UninstallEngramProjectScopeAvailable = true
+	m.UninstallEngramScope = model.EngramUninstallScopeNone
+
+	// Cursor on first scope option (after one profile) → none
+	m.Cursor = 1
+	m.toggleCurrentUninstallEngramScope()
+	if m.UninstallEngramScope != model.EngramUninstallScopeNone {
+		t.Fatalf("idx0 scope = %q, want %q", m.UninstallEngramScope, model.EngramUninstallScopeNone)
+	}
+
+	// Project-only is second option when project data available
+	m.Cursor = 2
+	m.toggleCurrentUninstallEngramScope()
+	if m.UninstallEngramScope != model.EngramUninstallScopeProject {
+		t.Fatalf("idx1 scope = %q, want %q", m.UninstallEngramScope, model.EngramUninstallScopeProject)
+	}
+
+	// Global is third
+	m.Cursor = 3
+	m.toggleCurrentUninstallEngramScope()
+	if m.UninstallEngramScope != model.EngramUninstallScopeGlobal {
+		t.Fatalf("idx2 scope = %q, want %q", m.UninstallEngramScope, model.EngramUninstallScopeGlobal)
+	}
+}
+
+func TestStartUninstall_PassesModelScopeUnchanged(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.UninstallProfilesToRemove = []string{"cheap"}
+	m.UninstallEngramScope = model.EngramUninstallScopeNone
+
+	var gotScope model.EngramUninstallScope
+	m.UninstallWithProfilesFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
+		gotScope = engramScope
+		return componentuninstall.Result{}, nil
+	}
+
+	msg := m.startUninstall()().(UninstallDoneMsg)
+	if msg.Err != nil {
+		t.Fatalf("UninstallDoneMsg.Err = %v", msg.Err)
+	}
+	if gotScope != model.EngramUninstallScopeNone {
+		t.Fatalf("dispatched engramScope = %q, want %q", gotScope, model.EngramUninstallScopeNone)
+	}
+}
+
+func TestSetScreenUninstallMode_DoesNotForceGlobal(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallEngramScope = model.EngramUninstallScopeProject
+	m.setScreen(ScreenUninstallMode)
+	if m.UninstallEngramScope == model.EngramUninstallScopeGlobal {
+		t.Fatal("entering ScreenUninstallMode must not force Global")
+	}
+	if m.UninstallEngramScope != model.EngramUninstallScopeNone {
+		t.Fatalf("entering ScreenUninstallMode scope = %q, want %q", m.UninstallEngramScope, model.EngramUninstallScopeNone)
 	}
 }

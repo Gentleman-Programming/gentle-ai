@@ -1131,3 +1131,143 @@ func TestComponentOperationsSDD_CodexRemovesSkillRegistryHook(t *testing.T) {
 		t.Fatalf("unrelated hooks should be preserved:\n%s", text)
 	}
 }
+
+func TestEngramUninstallScopeNone_IsFirstClassConstant(t *testing.T) {
+	if model.EngramUninstallScopeNone != "none" {
+		t.Fatalf("EngramUninstallScopeNone = %q, want %q", model.EngramUninstallScopeNone, "none")
+	}
+}
+
+func TestSetEngramUninstallScope_AcceptsRecognizedScopes(t *testing.T) {
+	svc, err := NewService(t.TempDir(), t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	for _, scope := range []model.EngramUninstallScope{
+		model.EngramUninstallScopeNone,
+		model.EngramUninstallScopeProject,
+		model.EngramUninstallScopeGlobal,
+	} {
+		svc.SetEngramUninstallScope(scope)
+		if svc.engramUninstallScope != scope {
+			t.Fatalf("SetEngramUninstallScope(%q) stored %q", scope, svc.engramUninstallScope)
+		}
+	}
+}
+
+func TestSetEngramUninstallScope_UnknownMapsToNoneNotGlobal(t *testing.T) {
+	svc, err := NewService(t.TempDir(), t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	for _, scope := range []model.EngramUninstallScope{"", "invalid", "ALL", "project-and-global"} {
+		svc.SetEngramUninstallScope(model.EngramUninstallScopeGlobal) // start from destructive
+		svc.SetEngramUninstallScope(scope)
+		if svc.engramUninstallScope == model.EngramUninstallScopeGlobal {
+			t.Fatalf("SetEngramUninstallScope(%q) mapped to global; want fail-closed none", scope)
+		}
+		if svc.engramUninstallScope != model.EngramUninstallScopeNone {
+			t.Fatalf("SetEngramUninstallScope(%q) = %q, want %q", scope, svc.engramUninstallScope, model.EngramUninstallScopeNone)
+		}
+	}
+}
+
+func TestComponentOperationsEngram_NoneScopeZeroOps(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("openCode adapter not found in registry")
+	}
+
+	settingsPath := adapter.SettingsPath(homeDir)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"mcp":{"engram":{"command":["engram"]}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	projectDataDir := filepath.Join(workspaceDir, ".engram")
+	if err := os.MkdirAll(projectDataDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(projectDataDir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDataDir, "memory.db"), []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile(memory.db) error = %v", err)
+	}
+
+	svc.SetEngramUninstallScope(model.EngramUninstallScopeNone)
+
+	ops, targets, err := svc.componentOperations(adapter, model.ComponentEngram)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	if len(ops) != 0 {
+		t.Fatalf("none scope ops = %d, want 0; ops paths: %v", len(ops), opPaths(ops))
+	}
+	if len(targets) != 0 {
+		t.Fatalf("none scope targets = %v, want empty", targets)
+	}
+
+	if _, err := os.Stat(projectDataDir); err != nil {
+		t.Fatalf("project .engram should remain for none scope, err = %v", err)
+	}
+	settingsRaw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings) error = %v", err)
+	}
+	if !strings.Contains(string(settingsRaw), `"engram"`) {
+		t.Fatalf("global engram config should be preserved for none scope, got: %s", string(settingsRaw))
+	}
+}
+
+func TestPartialUninstallWithProfiles_ResetsScopeToNone(t *testing.T) {
+	svc, err := NewService(t.TempDir(), t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	// Empty agent list fails early after SetEngramUninstallScope; defer must still reset.
+	_, _ = svc.PartialUninstallWithProfiles(nil, []model.ComponentID{model.ComponentEngram}, nil, model.EngramUninstallScopeGlobal)
+	if svc.engramUninstallScope != model.EngramUninstallScopeNone {
+		t.Fatalf("after PartialUninstallWithProfiles defer, scope = %q, want %q", svc.engramUninstallScope, model.EngramUninstallScopeNone)
+	}
+}
+
+func TestComponentsForStateRemoval_NoneDropsEngram(t *testing.T) {
+	all := append([]model.ComponentID(nil), fullAgentRemovalComponents...)
+	filtered := componentsForStateRemoval(all, model.EngramUninstallScopeNone)
+	if slices.Contains(filtered, model.ComponentEngram) {
+		t.Fatalf("none scope must drop ComponentEngram from state-removal set, got %v", filtered)
+	}
+	// Without Engram, full agent removal must not trigger.
+	if got := stateAgentsToRemove([]model.AgentID{model.AgentOpenCode}, filtered); got != nil {
+		t.Fatalf("stateAgentsToRemove with Engram dropped = %v, want nil", got)
+	}
+	// Project/global keep Engram in the set so full selection can still clear install state.
+	for _, scope := range []model.EngramUninstallScope{model.EngramUninstallScopeProject, model.EngramUninstallScopeGlobal} {
+		kept := componentsForStateRemoval(all, scope)
+		if !slices.Contains(kept, model.ComponentEngram) {
+			t.Fatalf("scope %q must keep ComponentEngram, got %v", scope, kept)
+		}
+		if got := stateAgentsToRemove([]model.AgentID{model.AgentOpenCode}, kept); !slices.Equal(got, []model.AgentID{model.AgentOpenCode}) {
+			t.Fatalf("scope %q stateAgentsToRemove = %v, want [opencode]", scope, got)
+		}
+	}
+}
+
+func opPaths(ops []operation) []string {
+	paths := make([]string, 0, len(ops))
+	for _, op := range ops {
+		paths = append(paths, op.path)
+	}
+	return paths
+}

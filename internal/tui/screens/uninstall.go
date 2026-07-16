@@ -171,8 +171,16 @@ func RenderUninstallComponents(selected []model.ComponentID, cursor int) string 
 	return b.String()
 }
 
-func uninstallEngramScopeOptions(projectScopeAvailable bool) []UninstallEngramScopeOption {
-	options := make([]UninstallEngramScopeOption, 0, 2)
+// UninstallEngramScopeOptions returns the Engram cleanup options shown on the
+// uninstall scope-selection screen. Order is fixed: No cleanup, optional
+// Project-only (when project data exists), then Global cleanup.
+func UninstallEngramScopeOptions(projectScopeAvailable bool) []UninstallEngramScopeOption {
+	options := make([]UninstallEngramScopeOption, 0, 3)
+	options = append(options, UninstallEngramScopeOption{
+		Scope:       model.EngramUninstallScopeNone,
+		Label:       "No cleanup",
+		Description: "Skip Engram cleanup entirely",
+	})
 	if projectScopeAvailable {
 		options = append(options, UninstallEngramScopeOption{
 			Scope:       model.EngramUninstallScopeProject,
@@ -188,7 +196,7 @@ func uninstallEngramScopeOptions(projectScopeAvailable bool) []UninstallEngramSc
 	return options
 }
 
-func RenderUninstallProfiles(available []string, selected []string, engramProjectScopeAvailable bool, selectedEngramScope model.EngramUninstallScope, cursor int) string {
+func RenderUninstallProfiles(available []string, selected []string, showEngramScope bool, engramProjectScopeAvailable bool, selectedEngramScope model.EngramUninstallScope, cursor int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Uninstall Scope Selection"))
@@ -212,9 +220,9 @@ func RenderUninstallProfiles(available []string, selected []string, engramProjec
 		b.WriteString(renderCheckbox(profileName, checked, focused))
 	}
 
-	engramScopeOptions := uninstallEngramScopeOptions(engramProjectScopeAvailable)
 	engramScopeDisplayed := 0
-	if len(engramScopeOptions) > 1 {
+	if showEngramScope {
+		engramScopeOptions := UninstallEngramScopeOptions(engramProjectScopeAvailable)
 		engramScopeDisplayed = len(engramScopeOptions)
 		if len(available) > 0 {
 			b.WriteString("\n")
@@ -315,11 +323,17 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 		b.WriteString("\n")
 		b.WriteString(styles.SubtextStyle.Render("Engram cleanup scope:"))
 		b.WriteString("\n")
-		scopeLabel := "Global"
-		detail := "  • Removes global Engram MCP/system prompt configuration"
-		if engramScope == model.EngramUninstallScopeProject && engramProjectScopeAvailable {
+		scopeLabel := "None"
+		detail := "  • No Engram cleanup"
+		switch {
+		case engramScope == model.EngramUninstallScopeNone:
+			// defaults already set
+		case engramScope == model.EngramUninstallScopeProject && engramProjectScopeAvailable:
 			scopeLabel = "Project-only"
 			detail = "  • Deletes .engram/ in the current project only"
+		case engramScope == model.EngramUninstallScopeGlobal:
+			scopeLabel = "Global"
+			detail = "  • Removes global Engram MCP/system prompt configuration"
 		}
 		b.WriteString(styles.UnselectedStyle.Render("  • " + scopeLabel))
 		b.WriteString("\n")
@@ -344,8 +358,11 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 		b.WriteString("\n")
 		b.WriteString(styles.SubtextStyle.Render("  • .windsurf/workflows/ (SDD workflows)"))
 		b.WriteString("\n")
-		b.WriteString(styles.SubtextStyle.Render("  • .engram/ (persistent memory context)"))
-		b.WriteString("\n")
+		// Only claim .engram/ deletion when Engram cleanup is actually in scope.
+		if engramScope != model.EngramUninstallScopeNone && hasSelectedComponent(components, model.ComponentEngram) {
+			b.WriteString(styles.SubtextStyle.Render("  • .engram/ (persistent memory context)"))
+			b.WriteString("\n")
+		}
 		b.WriteString(styles.SubtextStyle.Render("  • Skills directories"))
 		b.WriteString("\n\n")
 		b.WriteString(styles.ErrorStyle.Render("  If you commit these deletions, ALL collaborators will lose this context!"))
@@ -413,11 +430,14 @@ func RenderUninstallResult(result componentuninstall.Result, err error, mode mod
 			b.WriteString(styles.UnselectedStyle.Render("Profiles removed: " + strings.Join(selectedProfiles, ", ")))
 		}
 
-		if hasEngramArtifacts(result) {
+		// Truthful Engram reporting: never imply Global when scope is none or no artifacts.
+		if engramScope == model.EngramUninstallScopeNone {
+			// No Global implication; optional explicit none line only when Engram was in play via artifacts is skipped (zero ops).
+		} else if hasEngramArtifacts(result) {
 			b.WriteString("\n\n")
 			if engramScope == model.EngramUninstallScopeProject && engramProjectScopeAvailable {
 				b.WriteString(styles.UnselectedStyle.Render("Engram scope: Project-only (.engram/ removed from current workspace)"))
-			} else {
+			} else if engramScope == model.EngramUninstallScopeGlobal {
 				b.WriteString(styles.UnselectedStyle.Render("Engram scope: Global (MCP/system prompt integration removed)"))
 			}
 		}

@@ -237,7 +237,7 @@ func (s *Service) PartialUninstallWithProfiles(agentIDs []model.AgentID, compone
 	defer func() {
 		s.profileNamesToRemove = nil
 		s.profileSelectionScoped = false
-		s.engramUninstallScope = model.EngramUninstallScopeGlobal
+		s.engramUninstallScope = model.EngramUninstallScopeNone
 	}()
 
 	if len(agentIDs) == 0 {
@@ -255,7 +255,9 @@ func (s *Service) PartialUninstallWithProfiles(agentIDs []model.AgentID, compone
 		return Result{}, err
 	}
 
-	stateRemovals := stateAgentsToRemove(agentIDs, components)
+	// Scope none means Engram has no uninstall effects: exclude it from install-state
+	// full-agent-removal gating so "No cleanup" cannot wipe agent install state.
+	stateRemovals := stateAgentsToRemove(agentIDs, componentsForStateRemoval(components, s.engramUninstallScope))
 	return s.executePlan(plan, stateRemovals)
 }
 
@@ -286,11 +288,13 @@ func (s *Service) SetProfileNamesToRemove(profileNames []string) {
 }
 
 func (s *Service) SetEngramUninstallScope(scope model.EngramUninstallScope) {
-	if scope == model.EngramUninstallScopeProject {
-		s.engramUninstallScope = model.EngramUninstallScopeProject
-		return
+	switch scope {
+	case model.EngramUninstallScopeNone, model.EngramUninstallScopeProject, model.EngramUninstallScopeGlobal:
+		s.engramUninstallScope = scope
+	default:
+		// Fail-closed: unknown/empty never coerce to global.
+		s.engramUninstallScope = model.EngramUninstallScopeNone
 	}
-	s.engramUninstallScope = model.EngramUninstallScopeGlobal
 }
 
 func (s *Service) CompleteUninstall() (Result, error) {
@@ -509,6 +513,10 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		targets = append(targets, context7Targets(adapter, homeDir)...)
 		ops = append(ops, context7Operations(adapter, homeDir)...)
 	case model.ComponentEngram:
+		if s.engramUninstallScope == model.EngramUninstallScopeNone {
+			// Explicit no-op: zero Engram cleanup targets/ops.
+			break
+		}
 		if s.engramUninstallScope == model.EngramUninstallScopeProject {
 			projectDataPath := filepath.Join(s.workspaceDir, ".engram")
 			if strings.TrimSpace(s.workspaceDir) != "" {
@@ -1298,6 +1306,22 @@ func stateAgentsToRemove(agentIDs []model.AgentID, componentIDs []model.Componen
 		}
 	}
 	return slices.Clone(agentIDs)
+}
+
+// componentsForStateRemoval drops ComponentEngram when scope is none so install-state
+// agent removal cannot treat "No Engram cleanup" as a completed Engram uninstall.
+func componentsForStateRemoval(componentIDs []model.ComponentID, scope model.EngramUninstallScope) []model.ComponentID {
+	if scope != model.EngramUninstallScopeNone {
+		return componentIDs
+	}
+	filtered := make([]model.ComponentID, 0, len(componentIDs))
+	for _, componentID := range componentIDs {
+		if componentID == model.ComponentEngram {
+			continue
+		}
+		filtered = append(filtered, componentID)
+	}
+	return filtered
 }
 
 func updateStateAfterUninstall(homeDir string, toRemove []model.AgentID) ([]model.AgentID, error) {
