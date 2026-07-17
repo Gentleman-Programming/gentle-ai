@@ -81,13 +81,13 @@ func (a *Adapter) GlobalConfigDir(homeDir string) string {
 }
 
 func (a *Adapter) SystemPromptDir(homeDir string) string {
-	return homeDir
+	return ConfigPath(homeDir)
 }
 
 // SystemPromptFile returns the path to knowledge.md, which Freebuff reads
 // first (highest priority) before AGENTS.md and CLAUDE.md.
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(homeDir, "knowledge.md")
+	return filepath.Join(ConfigPath(homeDir), "knowledge.md")
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {
