@@ -80,14 +80,19 @@ func (a *Adapter) GlobalConfigDir(homeDir string) string {
 	return ConfigPath(homeDir)
 }
 
+// SystemPromptDir returns the home directory because Freebuff's SDK scans
+// ~/.knowledge.md, ~/.AGENTS.md, and ~/.CLAUDE.md at the home root level.
+// See sdk/src/run-state.ts:loadUserKnowledgeFiles for canonical source.
 func (a *Adapter) SystemPromptDir(homeDir string) string {
-	return ConfigPath(homeDir)
+	return homeDir
 }
 
-// SystemPromptFile returns the path to knowledge.md, which Freebuff reads
-// first (highest priority) before AGENTS.md and CLAUDE.md.
+// SystemPromptFile returns ~/.knowledge.md, the highest-priority user-level
+// knowledge file that Freebuff reads at startup.
+// Priority order: knowledge.md > AGENTS.md > CLAUDE.md (case-insensitive).
+// Source: sdk/src/run-state.ts:349 in CodebuffAI/codebuff.
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(ConfigPath(homeDir), "knowledge.md")
+	return filepath.Join(homeDir, "knowledge.md")
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {

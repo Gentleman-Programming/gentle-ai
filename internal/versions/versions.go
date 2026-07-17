@@ -29,5 +29,5 @@ const Context7MCP = "2.2.5"
 const GGAVersion = "2.10.1"
 
 // renovate: datasource=npm depName=freebuff
-const Freebuff = "0.0.122"
+const Freebuff = "0.0.124"
 
