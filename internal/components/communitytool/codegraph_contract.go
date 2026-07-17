@@ -49,6 +49,7 @@ var codeGraphCompatibilityTable = map[model.AgentID]codeGraphCompatibility{
 	model.AgentPi:            reconciledCompatibility(model.AgentPi, ""),
 	model.AgentTrae:          excludedCompatibility(model.AgentTrae),
 	model.AgentHermes:        nativeCompatibility(model.AgentHermes, "hermes"),
+	model.AgentFreebuff:      nativeCompatibility(model.AgentFreebuff, "freebuff"),
 }
 
 func nativeCompatibility(id model.AgentID, target string) codeGraphCompatibility {
