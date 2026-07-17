@@ -58,6 +58,23 @@ type SnapshotBuilder struct {
 
 var exactObjectPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
 
+type ReviewTargetError string
+
+func (err ReviewTargetError) Error() string {
+	return map[ReviewTargetError]string{ErrNoReviewChanges: "no review changes", ErrUnsupportedBeforeFirstCommit: "review target is unsupported before the first commit"}[err]
+}
+func (err ReviewTargetError) Code() string { return string(err) }
+
+var (
+	ErrNoReviewChanges              = ReviewTargetError("no_review_changes")
+	ErrUnsupportedBeforeFirstCommit = ReviewTargetError("unsupported_before_first_commit")
+)
+
+type headTreeResolution struct {
+	Tree   string
+	Unborn bool
+}
+
 func (builder SnapshotBuilder) Build(ctx context.Context, target Target) (Snapshot, error) {
 	return builder.build(ctx, target, false)
 }
@@ -96,7 +113,7 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 		if projection == ProjectionStaged && len(intended) != 0 {
 			return Snapshot{}, errors.New("staged projection does not accept intended-untracked paths")
 		}
-		baseTree, candidateTree, untrackedProof, err = builder.buildCurrentChanges(ctx, intended, allowStagedIntended, projection)
+		baseTree, candidateTree, untrackedProof, err = builder.buildCurrentChanges(ctx, intended, allowStagedIntended, projection, true)
 	case TargetBaseDiff:
 		if strings.TrimSpace(target.BaseRef) == "" {
 			return Snapshot{}, errors.New("base-diff requires base_ref")
@@ -137,7 +154,7 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 		if projection == ProjectionStaged && len(intended) != 0 {
 			return Snapshot{}, errors.New("staged projection does not accept intended-untracked paths")
 		}
-		_, candidateTree, untrackedProof, err = builder.buildCurrentChanges(ctx, intended, false, projection)
+		_, candidateTree, untrackedProof, err = builder.buildCurrentChanges(ctx, intended, false, projection, false)
 		if err == nil {
 			baseTree, err = builder.resolveTree(ctx, target.BaseRef)
 		}
@@ -452,6 +469,14 @@ func (builder SnapshotBuilder) HasDirtyTrackedChanges(ctx context.Context) (bool
 	if err != nil {
 		return false, err
 	}
+	builder.Repo = root
+	head, err := builder.resolveHEADTree(ctx)
+	if err != nil {
+		return false, err
+	}
+	if head.Unborn {
+		return false, ErrUnsupportedBeforeFirstCommit
+	}
 	output, err := runGit(ctx, root, nil, nil, "diff", "--name-only", "-z", "HEAD", "--")
 	if err != nil {
 		return false, err
@@ -471,11 +496,12 @@ func canonicalRepositoryPath(path string) (string, error) {
 	return filepath.Clean(resolved), nil
 }
 
-func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended []string, allowStagedIntended bool, projection Projection) (string, string, string, error) {
-	baseTree, err := builder.resolveTree(ctx, "HEAD")
+func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended []string, allowStagedIntended bool, projection Projection, rejectEmptyStaged bool) (string, string, string, error) {
+	head, err := builder.resolveHEADTree(ctx)
 	if err != nil {
 		return "", "", "", err
 	}
+	baseTree := head.Tree
 	indexPathOutput, err := runGit(ctx, builder.Repo, nil, nil, "rev-parse", "--git-path", "index")
 	if err != nil {
 		return "", "", "", fmt.Errorf("locate real index: %w", err)
@@ -485,7 +511,8 @@ func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended
 		indexPath = filepath.Join(builder.Repo, indexPath)
 	}
 	indexContent, err := os.ReadFile(indexPath)
-	if err != nil {
+	missingIndex := errors.Is(err, os.ErrNotExist)
+	if err != nil && (!head.Unborn || !missingIndex) {
 		return "", "", "", fmt.Errorf("read real index: %w", err)
 	}
 
@@ -515,22 +542,28 @@ func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended
 			return "", "", "", fmt.Errorf("intended-untracked path %q must name a file or symlink, not a directory", logicalPath)
 		}
 	}
-	temp, err := os.CreateTemp("", "gentle-ai-review-index-*")
+	tempDir, err := os.MkdirTemp("", "gentle-ai-review-index-*")
 	if err != nil {
 		return "", "", "", err
 	}
-	tempIndex := temp.Name()
-	defer os.Remove(tempIndex)
-	if _, err := temp.Write(indexContent); err != nil {
-		return "", "", "", err
-	}
-	if err := temp.Close(); err != nil {
-		return "", "", "", err
+	defer os.RemoveAll(tempDir)
+	tempIndex := filepath.Join(tempDir, "index")
+	if !missingIndex {
+		if err := os.WriteFile(tempIndex, indexContent, 0o600); err != nil {
+			return "", "", "", err
+		}
 	}
 	env := []string{"GIT_INDEX_FILE=" + tempIndex}
-	if projection != ProjectionStaged {
-		if _, err := runGit(ctx, builder.Repo, env, nil, "add", "-u", "--", "."); err != nil {
+	if missingIndex {
+		if _, err := runGit(ctx, builder.Repo, env, nil, "read-tree", baseTree); err != nil {
 			return "", "", "", err
+		}
+	}
+	if projection != ProjectionStaged {
+		if !missingIndex {
+			if _, err := runGit(ctx, builder.Repo, env, nil, "add", "-u", "--", "."); err != nil {
+				return "", "", "", err
+			}
 		}
 		if len(intended) > 0 {
 			args := append([]string{"add", "--"}, literalPathspecs(intended)...)
@@ -544,6 +577,9 @@ func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended
 		return "", "", "", err
 	}
 	candidateTree := strings.TrimSpace(string(candidateOutput))
+	if rejectEmptyStaged && head.Unborn && projection == ProjectionStaged && candidateTree == baseTree {
+		return "", "", "", ErrNoReviewChanges
+	}
 	if allowStagedIntended && projection != ProjectionStaged {
 		if _, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--cached", "--quiet", candidateTree, "--"); err != nil {
 			return "", "", "", errors.New("staged tree does not exactly match the complete reviewed candidate")
@@ -607,6 +643,39 @@ func (builder SnapshotBuilder) resolveTree(ctx context.Context, revision string)
 		return "", err
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+func (builder SnapshotBuilder) resolveHEADTree(ctx context.Context) (headTreeResolution, error) {
+	tree, headErr := builder.resolveTree(ctx, "HEAD")
+	if headErr == nil {
+		return headTreeResolution{Tree: tree}, nil
+	}
+	symbolic, err := runGit(ctx, builder.Repo, nil, nil, "symbolic-ref", "--quiet", "HEAD")
+	ref := strings.TrimSpace(string(symbolic))
+	if err != nil || !strings.HasPrefix(ref, "refs/heads/") || ref == "refs/heads/" || string(symbolic) != ref+"\n" {
+		return headTreeResolution{}, headErr
+	}
+	if _, err := runGit(ctx, builder.Repo, nil, nil, "check-ref-format", ref); err != nil {
+		return headTreeResolution{}, headErr
+	}
+	if _, err := runGit(ctx, builder.Repo, nil, nil, "show-ref", "--exists", ref); !gitExitCode(err, 2) {
+		return headTreeResolution{}, headErr
+	}
+	empty, err := runGit(ctx, builder.Repo, nil, []byte{}, "mktree")
+	if err != nil {
+		return headTreeResolution{}, err
+	}
+	finalSymbolic, finalErr := runGit(ctx, builder.Repo, nil, nil, "symbolic-ref", "--quiet", "HEAD")
+	_, finalRefErr := runGit(ctx, builder.Repo, nil, nil, "show-ref", "--exists", ref)
+	if finalErr != nil || string(finalSymbolic) != ref+"\n" || !gitExitCode(finalRefErr, 2) {
+		return headTreeResolution{}, headErr
+	}
+	return headTreeResolution{Tree: strings.TrimSpace(string(empty)), Unborn: true}, nil
+}
+
+func gitExitCode(err error, code int) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == code
 }
 
 func (builder SnapshotBuilder) changedPaths(ctx context.Context, baseTree, candidateTree string) ([]string, error) {

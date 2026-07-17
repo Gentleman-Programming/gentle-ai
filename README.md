@@ -172,6 +172,7 @@ gentle-ai review start --projection staged
 ```
 
 The staged projection freezes the **complete existing index**, including all previously staged paths. It starts review but does not itself issue an approved receipt; unstaged and untracked worktree content is excluded. The default `workspace` projection remains the complete workspace review, and an existing authority is never auto-converted between projections. See the [review authority threat model](docs/review-authority-threat-model.md) for delivery and base-ref details.
+In a repository before its first commit, review automatically proves an unborn local branch and uses Git's native object-format empty tree; a missing index is initialized only in a temporary `GIT_INDEX_FILE`. Empty staged scope returns `no_review_changes`, `--base-ref` returns `unsupported_before_first_commit`, and only `post-apply`/`pre-commit` are supported for that empty-base receipt—creating the first commit does not make it eligible for `pre-push`/`pre-pr`.
 
 ### Backups
 

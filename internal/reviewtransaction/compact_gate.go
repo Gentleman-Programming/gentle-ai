@@ -188,6 +188,15 @@ func buildCompactLifecycleSnapshot(ctx context.Context, repo string, request Gat
 
 func buildCompactGateRequest(ctx context.Context, repo string, state CompactState, input NativeGateRequestInput) (GateRequest, error) {
 	request := GateRequest{Schema: GateRequestSchema, Gate: input.Gate, PolicyArtifact: input.PolicyArtifact}
+	if input.Gate == GatePrePush || input.Gate == GatePrePR {
+		head, err := (SnapshotBuilder{Repo: repo}).resolveHEADTree(ctx)
+		if err != nil {
+			return GateRequest{}, err
+		}
+		if emptyBase, emptyErr := runGit(ctx, repo, nil, nil, "ls-tree", state.InitialSnapshot.BaseTree); head.Unborn || emptyErr == nil && len(emptyBase) == 0 {
+			return GateRequest{}, ErrUnsupportedBeforeFirstCommit
+		}
+	}
 	switch input.Gate {
 	case GatePostApply, GatePreCommit:
 		intended := input.IntendedUntracked
@@ -209,11 +218,11 @@ func buildCompactGateRequest(ctx context.Context, repo string, state CompactStat
 			}
 			break
 		}
-		headTree, err := (SnapshotBuilder{Repo: repo}).resolveTree(ctx, "HEAD")
+		head, err := (SnapshotBuilder{Repo: repo}).resolveHEADTree(ctx)
 		if err != nil {
 			return GateRequest{}, err
 		}
-		if headTree == current.CandidateTree {
+		if head.Tree == current.CandidateTree {
 			dirty, err := (SnapshotBuilder{Repo: repo}).HasDirtyTrackedChanges(ctx)
 			if err != nil {
 				return GateRequest{}, err

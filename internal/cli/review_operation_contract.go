@@ -164,6 +164,16 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.NextAction = "stop"
 		return failure
 	}
+	var target reviewtransaction.ReviewTargetError
+	if errors.As(runErr, &target) {
+		failure.Phase = "pre_native"
+		failure.Code = target.Code()
+		failure.Message = "The review target is not eligible for a new review."
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
+		failure.NextAction = "stop"
+		return failure
+	}
 	var publication *ReviewFacadeReceiptPublicationError
 	if errors.As(runErr, &publication) {
 		failure.Phase = "native_committed"

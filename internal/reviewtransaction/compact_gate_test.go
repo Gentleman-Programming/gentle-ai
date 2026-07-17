@@ -11,6 +11,91 @@ import (
 	"testing"
 )
 
+func TestCompactUnbornPostApplyPreCommitAndDrift(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initUnbornSnapshotRepo(t, "sha1")
+	writeSnapshotFile(t, repo, "candidate.txt", "reviewed\n")
+	state, store, receipt := approvedCompactCurrentChangesFixture(t, repo, "compact-unborn-local", []string{"candidate.txt"})
+	beforeAuthority, _ := os.ReadFile(store.StatePath())
+	beforeReceipt, _ := os.ReadFile(store.ReceiptPath())
+	beforeRecord, _ := store.Load()
+	indexPath := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--path-format=absolute", "--git-path", "index"))
+	for _, gate := range []GateKind{GatePostApply, GatePreCommit} {
+		if gate == GatePreCommit {
+			gitSnapshot(t, repo, "add", "candidate.txt")
+		}
+		beforeIndex, _ := os.ReadFile(indexPath)
+		got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: gate, LineageID: state.LineageID})
+		afterIndex, _ := os.ReadFile(indexPath)
+		if got.Result != GateAllow || !bytes.Equal(beforeIndex, afterIndex) {
+			t.Fatalf("unchanged unborn %s = %#v", gate, got)
+		}
+	}
+	writeSnapshotFile(t, repo, "extra.txt", "path drift\n")
+	gitSnapshot(t, repo, "add", "extra.txt")
+	beforeIndex, _ := os.ReadFile(indexPath)
+	beforeWorktree, _ := os.ReadFile(filepath.Join(repo, "extra.txt"))
+	if got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePreCommit, LineageID: state.LineageID}); got.Result != GateScopeChanged {
+		t.Fatalf("unborn drift = %#v", got)
+	}
+	afterIndex, _ := os.ReadFile(indexPath)
+	afterWorktree, _ := os.ReadFile(filepath.Join(repo, "extra.txt"))
+	if !bytes.Equal(beforeIndex, afterIndex) || !bytes.Equal(beforeWorktree, afterWorktree) {
+		t.Fatal("unborn path drift gate mutated index or worktree")
+	}
+	for _, gate := range []GateKind{GatePrePush, GatePrePR} {
+		got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: gate, LineageID: state.LineageID})
+		if got.Result == GateAllow || !strings.Contains(got.Reason, ErrUnsupportedBeforeFirstCommit.Error()) {
+			t.Fatalf("unborn %s = %#v", gate, got)
+		}
+	}
+	gitSnapshot(t, repo, "rm", "--cached", "extra.txt")
+	gitSnapshot(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "reviewed root")
+	for _, gate := range []GateKind{GatePrePush, GatePrePR} {
+		got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: gate, LineageID: state.LineageID})
+		if got.Result == GateAllow || !strings.Contains(got.Reason, ErrUnsupportedBeforeFirstCommit.Error()) {
+			t.Fatalf("empty-base receipt after root %s = %#v", gate, got)
+		}
+	}
+	afterAuthority, _ := os.ReadFile(store.StatePath())
+	afterReceipt, _ := os.ReadFile(store.ReceiptPath())
+	afterRecord, _ := store.Load()
+	if !bytes.Equal(beforeAuthority, afterAuthority) || !bytes.Equal(beforeReceipt, afterReceipt) || beforeRecord.State.CorrectionBudget != afterRecord.State.CorrectionBudget {
+		t.Fatal("unborn gates mutated authority, receipt, or budget")
+	}
+}
+
+func TestCompactUnbornMissingOrCorruptAuthorityIsReadOnly(t *testing.T) {
+	requireSnapshotGit(t)
+	for _, mode := range []string{"missing", "corrupt"} {
+		t.Run(mode, func(t *testing.T) {
+			repo := initUnbornSnapshotRepo(t, "sha1")
+			writeSnapshotFile(t, repo, "candidate.txt", "reviewed\n")
+			state, store, receipt := approvedCompactCurrentChangesFixture(t, repo, "compact-unborn-"+mode, []string{"candidate.txt"})
+			if mode == "missing" {
+				if err := os.Remove(store.StatePath()); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(store.StatePath(), []byte("corrupt authority\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			indexPath := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--path-format=absolute", "--git-path", "index"))
+			beforeAuthority, beforeErr := os.ReadFile(store.StatePath())
+			beforeReceipt, _ := os.ReadFile(store.ReceiptPath())
+			beforeIndex, _ := os.ReadFile(indexPath)
+			beforeWorktree, _ := os.ReadFile(filepath.Join(repo, "candidate.txt"))
+			got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID})
+			afterAuthority, afterErr := os.ReadFile(store.StatePath())
+			afterReceipt, _ := os.ReadFile(store.ReceiptPath())
+			afterIndex, _ := os.ReadFile(indexPath)
+			afterWorktree, _ := os.ReadFile(filepath.Join(repo, "candidate.txt"))
+			if got.Result != GateInvalidated || os.IsNotExist(beforeErr) != os.IsNotExist(afterErr) || !bytes.Equal(beforeAuthority, afterAuthority) || !bytes.Equal(beforeReceipt, afterReceipt) || !bytes.Equal(beforeIndex, afterIndex) || !bytes.Equal(beforeWorktree, afterWorktree) {
+				t.Fatalf("%s authority gate = %#v", mode, got)
+			}
+		})
+	}
+}
+
 func TestLegacyCurrentChangesGateRejectsCallerProjectionMismatch(t *testing.T) {
 	for _, gate := range []GateKind{GatePostApply, GatePreCommit} {
 		t.Run(string(gate), func(t *testing.T) {

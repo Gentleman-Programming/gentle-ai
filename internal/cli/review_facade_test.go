@@ -19,6 +19,86 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/sddstatus"
 )
 
+func TestReviewFacadeUnbornStartOutcomesAndFinalize(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uses real git commands")
+	}
+	empty := t.TempDir()
+	runReviewCLIGit(t, empty, "init", "-q", "--initial-branch=main")
+	var coded interface{ Code() string }
+	err := RunReviewFacadeStart([]string{"--cwd", empty, "--projection", "staged"}, io.Discard)
+	if !errors.As(err, &coded) || coded.Code() != "no_review_changes" {
+		t.Fatalf("empty staged error = %T %v", err, err)
+	}
+	if leaves, err := reviewtransaction.CompactAuthorityLeaves(context.Background(), empty); err != nil || len(leaves) != 0 {
+		t.Fatalf("empty staged residue = %v, %v", leaves, err)
+	}
+
+	repo := t.TempDir()
+	runReviewCLIGit(t, repo, "init", "-q", "--initial-branch=main")
+	err = RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", "main", "--policy", filepath.Join(repo, "secret")}, io.Discard)
+	if coded = nil; !errors.As(err, &coded) || coded.Code() != "unsupported_before_first_commit" {
+		t.Fatalf("unborn base-ref error = %T %v", err, err)
+	}
+	writeNegotiatedOperationChange(t, repo, "unborn")
+	started := startFacadeReview(t, repo)
+	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	evidence := filepath.Join(t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(evidence, []byte("tests pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--evidence", evidence}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	record, loadErr := store.Load()
+	payload, _ := os.ReadFile(store.ReceiptPath())
+	receipt, err := reviewtransaction.ParseCompactReceipt(payload)
+	if loadErr != nil || err != nil || receipt.BaseTree != record.State.InitialSnapshot.BaseTree || receipt.FinalCandidateTree != record.State.InitialSnapshot.CandidateTree || record.State.InitialSnapshot.IntendedUntrackedProof == "" {
+		t.Fatalf("unborn receipt/state = %#v / %#v, err=%v", receipt, record.State, err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".git", "index")); !os.IsNotExist(err) {
+		t.Fatalf("facade created real index: %v", err)
+	}
+}
+
+func TestReviewFacadeUnbornNestedCWDUsesRootEvidenceWithoutMutation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uses real git commands")
+	}
+	repo := t.TempDir()
+	runReviewCLIGit(t, repo, "init", "-q", "--initial-branch=main")
+	nested := filepath.Join(repo, "nested", "facade")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "candidate.md"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{"candidate.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeWorktree, _ := os.ReadFile(filepath.Join(repo, "candidate.md"))
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", nested}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	if err := json.Unmarshal(output.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	record, loadErr := store.Load()
+	afterWorktree, _ := os.ReadFile(filepath.Join(repo, "candidate.md"))
+	actual := record.State.InitialSnapshot
+	if loadErr != nil || actual.Identity != expected.Identity || actual.BaseTree != expected.BaseTree || actual.CandidateTree != expected.CandidateTree || !reflect.DeepEqual(actual.Paths, expected.Paths) || !bytes.Equal(beforeWorktree, afterWorktree) {
+		t.Fatalf("nested facade authority=%#v expected=%#v err=%v", record.State.InitialSnapshot, expected, loadErr)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".git", "index")); !os.IsNotExist(err) {
+		t.Fatalf("nested facade created real index: %v", err)
+	}
+}
+
 func TestReviewFacadeStartStagedProjectionFreezesOnlyIndex(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))

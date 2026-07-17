@@ -32,6 +32,7 @@ The compact review store protects valid authority from accidental corruption and
 After committing a staged candidate, use `gentle-ai review start --projection staged --base-ref <ref>` (and `--committed-only` when tracked workspace changes exist) to record immutable base-to-HEAD delivery provenance. It accepts no intended-untracked paths, remains domain-separated in the v2 identity, and can reuse only the matching staged authority; an otherwise identical workspace authority remains separate.
 
 For a staged authority, `post-apply` and `pre-commit` re-derive the exact index; a divergent worktree alone does not broaden or invalidate that candidate. `pre-push` and `pre-pr` continue to validate the delivered commit/base-diff tree against the same staged receipt.
+Before the first commit, fallback requires positive proof that symbolic `HEAD` names an absent canonical local branch; Git derives the SHA-1/SHA-256 empty tree, and an absent real index is never created or changed. Corrupt, detached-unresolvable, malformed, or existing-unresolvable HEAD stays fail-closed, while first-publication gates remain unsupported.
 
 ## Review Input Schemas
 

@@ -50,6 +50,44 @@ func TestNegotiatedReviewFailuresUseOneEnvelopeAcrossRoutes(t *testing.T) {
 	}
 }
 
+func TestNegotiatedUnbornNoChangeFailureIsSecretSafe(t *testing.T) {
+	secret := "/tmp/private token=secret"
+	if got := newReviewIntegrationFailure("review.start", nil, fmt.Errorf("%s: %w", secret, reviewtransaction.ErrNoReviewChanges)); got.Code != "no_review_changes" || got.MutationOutcome != ReviewMutationNotStarted || strings.Contains(got.Message, secret) {
+		t.Fatalf("negotiated no-change failure = %#v", got)
+	}
+}
+
+func TestNegotiatedUnbornEmptyCorrectionReportsCommittedResult(t *testing.T) {
+	repo := t.TempDir()
+	runReviewCLIGit(t, repo, "init", "-q", "--initial-branch=main")
+	if err := os.WriteFile(filepath.Join(repo, "candidate.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "candidate.txt")
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	runReviewCLIGit(t, repo, "rm", "--cached", "candidate.txt")
+	artifacts := t.TempDir()
+	result, validation := filepath.Join(artifacts, "result.json"), filepath.Join(artifacts, "validation.json")
+	writeReviewCLIJSON(t, result, facadeReviewerResult{Findings: []facadeFinding{{Location: "candidate.txt:1", Severity: "CRITICAL", Claim: "candidate must be removed", ProofRefs: []string{"focused regression"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced}}, Evidence: []string{"reviewed staged candidate"}})
+	writeReviewCLIJSON(t, validation, facadeValidationResult{OriginalCriteria: facadeValidationCheck{Passed: true, Evidence: []string{"acceptance passes"}}, CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"regression passes"}}, FollowUps: []reviewtransaction.FollowUp{}})
+	output.Reset()
+	if err := RunReview([]string{"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID, "--result", result, "--correction-lines", "1", "--validation", validation, "--evidence", validation}, &output); err != nil {
+		t.Fatalf("negotiated empty correction: %v\n%s", err, output.String())
+	}
+	var finalized ReviewIntegrationFinalizeResult
+	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &finalized)
+	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	record, loadErr := store.Load()
+	if _, receiptErr := os.Stat(store.ReceiptPath()); finalized.State != reviewtransaction.StateApproved || loadErr != nil || receiptErr != nil || record.State.CurrentSnapshot.CandidateTree != record.State.InitialSnapshot.BaseTree {
+		t.Fatalf("committed empty correction = %#v, load=%v, receipt=%v", finalized, loadErr, receiptErr)
+	}
+}
+
 func TestNegotiatedReviewContractFailuresArePreMutationAndLegacyErrorsStayCompatible(t *testing.T) {
 	tests := []struct {
 		name string

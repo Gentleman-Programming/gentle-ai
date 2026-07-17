@@ -52,6 +52,7 @@ Consumers MUST NOT reconstruct receipts, derive canonical hashes, inspect the Gi
 | `review.bind_sdd` | SDD binding artifact | Binds only an approved receipt to an SDD change. |
 
 `review.start` is the only ordinary entry point that creates a review budget. Finalize continues that frozen lifecycle. Status, validation, and gates are read-only and never allocate a reviewer, actor, lineage, or correction budget.
+For a proven unborn branch, START/finalize and local `post-apply`/`pre-commit` reuse Git's native empty base without touching the real index or worktree; `no_review_changes` and `unsupported_before_first_commit` are stable pre-mutation failure codes, and that empty-base receipt remains unsupported for `pre-push`/`pre-pr` after the first commit.
 
 ### Validate exactly five gates
 
