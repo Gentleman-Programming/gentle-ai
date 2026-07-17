@@ -16,7 +16,6 @@ var allAgents = []Agent{
 	{ID: model.AgentGeminiCLI, Name: "Gemini CLI", Tier: model.TierFull, ConfigPath: "~/.gemini"},
 	{ID: model.AgentCodex, Name: "Codex", Tier: model.TierFull, ConfigPath: "~/.codex"},
 	{ID: model.AgentCursor, Name: "Cursor", Tier: model.TierFull, ConfigPath: "~/.cursor"},
-	{ID: model.AgentFreebuff, Name: "Freebuff", Tier: model.TierFull, ConfigPath: "~/.agents"},
 	{ID: model.AgentVSCodeCopilot, Name: "VS Code Copilot", Tier: model.TierFull, ConfigPath: "~/.copilot"},
 	{ID: model.AgentAntigravity, Name: "Google Antigravity", Tier: model.TierFull, ConfigPath: "~/.gemini/antigravity-cli"},
 	{ID: model.AgentWindsurf, Name: "Windsurf", Tier: model.TierFull, ConfigPath: "~/.codeium/windsurf"},
@@ -27,6 +26,7 @@ var allAgents = []Agent{
 	{ID: model.AgentPi, Name: "Pi", Tier: model.TierFull, ConfigPath: "~/.pi"},
 	{ID: model.AgentTrae, Name: "Trae IDE", Tier: model.TierFull, ConfigPath: "~/.trae"},
 	{ID: model.AgentHermes, Name: "Hermes", Tier: model.TierFull, ConfigPath: "~/.hermes"},
+	{ID: model.AgentFreebuff, Name: "Freebuff", Tier: model.TierFull, ConfigPath: "~/.agents"},
 }
 
 // mvpAgents are the original MVP agents (Claude Code, OpenCode).
