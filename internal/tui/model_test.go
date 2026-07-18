@@ -6576,7 +6576,6 @@ func TestUpdatePromptScreen_UpdateNow_NoDuplicateUpgrade(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
 // ─── Unit 1+2: pickerFlowSlice, pickerNextScreen, pickerPreviousScreen ──────
 
 // withModelCache returns a cleanup function that installs a fake osStatModelCache

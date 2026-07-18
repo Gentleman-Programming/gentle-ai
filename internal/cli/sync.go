@@ -432,13 +432,9 @@ type syncRuntime struct {
 	agentIDs     []model.AgentID
 	backupRoot   string
 	state        *runtimeState
-<<<<<<< HEAD
 	managedPaths []string
-	changedFiles []string // accumulates candidate paths reported by component injectors
-=======
 	changedFiles []string // accumulates absolute paths of files that actually changed
 	warnings     []string
->>>>>>> 034c7a43 (feat(vscode): agrega asignaciones de modelo)
 }
 
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
@@ -993,7 +989,6 @@ func dedupPaths(paths []string) []string {
 	return out
 }
 
-<<<<<<< HEAD
 type syncFileSnapshot struct {
 	exists       bool
 	data         []byte
