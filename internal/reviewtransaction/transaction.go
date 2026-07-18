@@ -1716,7 +1716,7 @@ func (transaction *Transaction) validateFindingState(findings, severe map[string
 	if transaction.State != StateEvidenceClassified && len(pendingSet) != 0 {
 		return errors.New("pending refuter findings cannot survive outside evidence_classified")
 	}
-	if transaction.State != StateEscalated {
+	if transaction.State != StateEscalated && transaction.State != StateDecisionRequired {
 		for id, outcome := range transaction.Outcomes {
 			if _, severeFinding := severe[id]; severeFinding && outcome == OutcomeInconclusive {
 				return fmt.Errorf("inconclusive severe finding %q requires terminal escalation", id)
