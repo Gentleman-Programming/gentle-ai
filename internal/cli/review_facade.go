@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -1106,8 +1107,13 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
+	lineageSet := false
+	flags.Visit(func(current *flag.Flag) { lineageSet = lineageSet || current.Name == "lineage" })
 	if reviewHelpRequested(args) {
 		return nil
+	}
+	if lineageSet && strings.TrimSpace(*lineage) == "" {
+		return errors.New("review validate --lineage requires a value")
 	}
 	if flags.NArg() != 0 {
 		return reviewPreflightError(fmt.Errorf("unexpected review validate argument %q", flags.Arg(0)))
@@ -1134,11 +1140,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	}
 	compactStore, compactRecord, compactErr := discoverCompactFacadeGateReview(ctx, root, *lineage, gateInput)
 	if compactErr == nil {
-		if strings.TrimSpace(*lineage) != "" {
-			if _, _, _, legacyErr := discoverFacadeReview(ctx, root, *lineage, true); legacyErr == nil {
-				return errors.New("review authority is ambiguous across compact v2 and legacy v1 stores; specify and clean up the intended lineage")
-			}
-		} else if legacyExactFacadeGateLineages(ctx, root, gateInput) > 0 {
+		if strings.TrimSpace(*lineage) == "" && legacyExactFacadeGateLineages(ctx, root, gateInput) > 0 {
 			return errors.New("review authority is ambiguous across compact v2 and legacy v1 stores; specify and clean up the intended lineage")
 		}
 		payload, err := os.ReadFile(compactStore.ReceiptPath())
@@ -1160,6 +1162,9 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 			}
 		}
 		return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated)
+	}
+	if strings.TrimSpace(*lineage) != "" {
+		return compactErr
 	}
 	var compactDiscovery *ReviewReceiptDiscoveryError
 	if gateInput.Gate == reviewtransaction.GatePrePR && strings.TrimSpace(*lineage) == "" &&
@@ -1216,7 +1221,27 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 
 func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, input reviewtransaction.NativeGateRequestInput) (reviewtransaction.CompactStore, reviewtransaction.CompactRecord, error) {
 	if strings.TrimSpace(lineage) != "" {
-		return discoverCompactFacadeReview(ctx, repo, lineage, true)
+		store, record, err := discoverCompactFacadeReview(ctx, repo, lineage, true)
+		if err != nil {
+			return store, record, err
+		}
+		mismatch := errors.New("explicit compact review authority or receipt is not approved and content-bound")
+		if record.State.State != reviewtransaction.StateApproved {
+			return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, mismatch
+		}
+		payload, err := os.ReadFile(store.ReceiptPath())
+		if err != nil {
+			return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, mismatch
+		}
+		receipt, err := reviewtransaction.ParseCompactReceipt(payload)
+		if err != nil {
+			return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, mismatch
+		}
+		derived, err := record.State.Receipt()
+		if err != nil || !reviewtransaction.CompactReceiptEqual(receipt, derived) {
+			return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, mismatch
+		}
+		return store, record, nil
 	}
 	report, err := reviewtransaction.InventoryAuthority(ctx, repo)
 	if err != nil || !report.Complete || !report.Authoritative {

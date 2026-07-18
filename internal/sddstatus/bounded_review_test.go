@@ -1,6 +1,7 @@
 package sddstatus
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -454,6 +455,106 @@ func TestResolveBridgesExactlyOnePathBoundCompactAuthorityToVerifyOnly(t *testin
 	}
 	if _, err := os.Stat(filepath.Join(changeRoot, "reviews", "transaction.json")); !os.IsNotExist(err) {
 		t.Fatalf("bridge synthesized local review mirror: %v", err)
+	}
+}
+
+func TestResolveExplicitCompactLineageRoutesWithoutMutation(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	writeJSON(t, filepath.Join(changeRoot, "reviews", "transaction.json"), remediationTransaction(t, shaID("e"), false))
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-target")
+
+	target, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "compact-target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(target.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicit, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", LineageID: "compact-target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit.Dependencies.Verify != DependencyReady || explicit.NextRecommended != "verify" {
+		t.Fatalf("explicit status = %#v", explicit)
+	}
+	after, err := os.ReadFile(target.StatePath())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("explicit routing mutated authority: %v", err)
+	}
+}
+
+func TestResolveExplicitCompactLineageRejectsSelectedAuthority(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		lineage string
+		mutate  func(t *testing.T, root string)
+	}{
+		{name: "unknown", lineage: "missing"},
+		{name: "other change", lineage: "compact-other", mutate: func(t *testing.T, root string) {
+			other := seedReadyChange(t, root, "other", "- [x] 1.1 Done\n")
+			writeApprovedCompactAuthorityForChange(t, root, other, "compact-other")
+		}},
+		{name: "receipt mismatch", lineage: "compact-thin", mutate: func(t *testing.T, root string) {
+			store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "compact-thin")
+			write(t, store.ReceiptPath(), "{}\n")
+		}},
+		{name: "missing receipt", lineage: "compact-thin", mutate: func(t *testing.T, root string) {
+			store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "compact-thin")
+			_ = os.Remove(store.ReceiptPath())
+		}},
+		{name: "gate invalid", lineage: "compact-thin", mutate: func(t *testing.T, root string) {
+			write(t, filepath.Join(root, "openspec", "changes", "thin", "tasks.md"), "- [x] 1.1 Done\n# changed\n")
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+			if tt.lineage == "compact-thin" {
+				writeApprovedCompactAuthorityForChange(t, root, changeRoot, tt.lineage)
+			}
+			if tt.mutate != nil {
+				tt.mutate(t, root)
+			}
+			status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", LineageID: tt.lineage})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "resolve-review" || !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "explicit lineage") {
+				t.Fatalf("rejection status = %#v", status)
+			}
+		})
+	}
+}
+
+func TestResolveArchiveUsesExplicitCompactLineage(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedBoundedReadyChange(t, root)
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-target")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", LineageID: "compact-target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateAllow || status.Dependencies.Archive != DependencyReady || status.NextRecommended != "archive" {
+		t.Fatalf("explicit archive status = %#v", status)
+	}
+}
+
+func TestResolveEngramChangeRejectsExplicitNativeLineage(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".engram"))
+	project := strings.ToLower(filepath.Base(root))
+	restore := stubEngramExport(t, []engramObservation{{Title: "sdd/thin/proposal", Content: "proposal", Project: project, Scope: "project"}})
+	defer restore()
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", LineageID: "native-lineage"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.NextRecommended != "resolve-review" || !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "repository-local OpenSpec change") {
+		t.Fatalf("Engram explicit-lineage status = %#v", status)
 	}
 }
 
@@ -1050,7 +1151,7 @@ func TestApplyReviewGateDiscoversCompactStateAndReceiptWithoutMirrors(t *testing
 		t.Fatal(err)
 	}
 	status := Status{Dependencies: Dependencies{Verify: DependencyAllDone, Archive: DependencyReady}, TaskProgress: TaskProgress{AllComplete: true}}
-	applyReviewGate(&status, repo, "", "")
+	applyReviewGate(&status, repo, "thin", "", "", "")
 	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateAllow || status.Dependencies.Archive != DependencyReady {
 		t.Fatalf("compact SDD gate = %#v", status)
 	}

@@ -179,6 +179,22 @@ func TestUnqualifiedGateDiscoveryRejectsMultipleExactReceiptsButExplicitLineageI
 	if err := reviewtransaction.WriteCompactReceiptAtomic(cloneStore.ReceiptPath(), cloneReceipt); err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := discoverCompactFacadeGateReview(context.Background(), repo, started.LineageID, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply}); err != nil {
+		t.Fatalf("explicit exact receipt discovery: %v", err)
+	}
+	if err := reviewtransaction.WriteCompactReceiptAtomic(store.ReceiptPath(), cloneReceipt); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := discoverCompactFacadeGateReview(context.Background(), repo, started.LineageID, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply}); err == nil {
+		t.Fatal("explicit lineage accepted a receipt from another authority")
+	}
+	receipt, err := record.State.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reviewtransaction.WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+		t.Fatal(err)
+	}
 
 	var output bytes.Buffer
 	err = RunReview([]string{
@@ -218,6 +234,19 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 			logicalPath := "docs/scope-" + tt.name + ".md"
 			_, first := approveDiscoveryMarkdownProjection(t, repo, lineages[0], logicalPath, "reviewed\n", tt.projection)
 			cloneApprovedDiscoveryAuthority(t, repo, first, lineages[1])
+			if tt.projection == reviewtransaction.ProjectionStaged {
+				beforeState, _ := os.ReadFile(first.StatePath())
+				beforeReceipt, _ := os.ReadFile(first.ReceiptPath())
+				var output bytes.Buffer
+				if err := RunReview([]string{"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineages[0], "--gate", string(tt.gate)}, &output); err != nil {
+					t.Fatalf("explicit staged lineage failed: %v\n%s", err, output.String())
+				}
+				afterState, _ := os.ReadFile(first.StatePath())
+				afterReceipt, _ := os.ReadFile(first.ReceiptPath())
+				if !bytes.Equal(beforeState, afterState) || !bytes.Equal(beforeReceipt, afterReceipt) {
+					t.Fatal("explicit validation mutated authority or receipt")
+				}
+			}
 			if err := os.WriteFile(filepath.Join(repo, filepath.FromSlash(logicalPath)), []byte("drifted\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -274,6 +303,26 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 				assertScopeChangeRecovery(t, explicit, lineage, logicalPath)
 			}
 		})
+	}
+}
+
+func TestReviewValidateRejectsEmptyExplicitLineage(t *testing.T) {
+	for _, args := range [][]string{
+		{"validate", "--lineage", "   ", "--gate", string(reviewtransaction.GatePreCommit)},
+		{"validate", "-lineage", "   ", "--gate", string(reviewtransaction.GatePreCommit)},
+	} {
+		err := RunReview(args, &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "--lineage requires a value") {
+			t.Fatalf("empty lineage error = %v", err)
+		}
+	}
+	for _, args := range [][]string{
+		{"validate", "--policy", "--lineage", "--gate", string(reviewtransaction.GatePreCommit)},
+		{"validate", "positional", "--lineage"},
+	} {
+		if err := RunReview(args, &bytes.Buffer{}); err != nil && strings.Contains(err.Error(), "--lineage requires a value") {
+			t.Fatalf("lineage lookalike rejected as explicit flag: %v", err)
+		}
 	}
 }
 

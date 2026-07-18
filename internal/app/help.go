@@ -18,9 +18,9 @@ COMMANDS
   sync         Sync agent configs and skills to current version
   skill-registry refresh
                Refresh .atl/skill-registry.md with cache-hit fast path
-  sdd-status [change]
+  sdd-status [change] [--lineage <id>]
                Print native SDD phase status for orchestrators
-  sdd-continue [change]
+  sdd-continue [change] [--lineage <id>]
                Print native SDD dispatcher routing output
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>]
   review finalize [--cwd <repo>] [--result <review.json> ...] [--evidence <path>]

@@ -14,10 +14,27 @@ import (
 )
 
 type compactPreVerifyBridge struct {
-	Eligible bool
-	Relevant bool
-	Reason   string
-	Revision string
+	Eligible   bool
+	Relevant   bool
+	Reason     string
+	Revision   string
+	Evaluation reviewtransaction.NativeGateEvaluation
+}
+
+func selectCompactPreVerifyAuthority(ctx context.Context, repo, changeName, lineage string) compactPreVerifyBridge {
+	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, repo, lineage)
+	if err != nil {
+		return compactPreVerifyBridge{Relevant: true, Reason: "explicit lineage store is unavailable"}
+	}
+	bridge := evaluateCompactPreVerifyAuthority(ctx, repo, changeName, store)
+	if !bridge.Eligible {
+		if bridge.Reason == "" {
+			bridge.Reason = "authority is not bound to the selected change"
+		}
+		bridge.Relevant = true
+		bridge.Reason = "explicit lineage rejected: " + bridge.Reason
+	}
+	return bridge
 }
 
 func discoverCompactPreVerifyAuthority(ctx context.Context, repo, changeName, observedRevision string) compactPreVerifyBridge {
@@ -28,46 +45,21 @@ func discoverCompactPreVerifyAuthority(ctx context.Context, repo, changeName, ob
 	eligible := 0
 	candidateRevision := ""
 	for _, store := range stores {
-		record, err := store.Load()
-		if err != nil {
-			return compactPreVerifyBridge{Relevant: true, Reason: "compact authority record is malformed"}
-		}
-		bound, pathReason := compactAuthorityPathsBound(record.State, changeName)
-		if !bound {
-			if pathReason != "" {
-				return compactPreVerifyBridge{Relevant: true, Reason: pathReason}
-			}
-			continue
-		}
-		if record.State.State != reviewtransaction.StateApproved {
-			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority is not approved"}
-		}
-		payload, err := os.ReadFile(store.ReceiptPath())
-		if err != nil {
-			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority receipt is missing"}
-		}
-		receipt, err := reviewtransaction.ParseCompactReceipt(payload)
-		authoritative, receiptErr := record.State.Receipt()
-		if err != nil || receiptErr != nil || !reflect.DeepEqual(receipt, authoritative) {
-			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority receipt does not equal approved state"}
-		}
-		evaluation := reviewtransaction.EvaluateCompactGate(ctx, repo, receipt, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: receipt.LineageID})
-		finalRecord, finalErr := store.Load()
-		finalPayload, finalReadErr := os.ReadFile(store.ReceiptPath())
-		if finalErr != nil || finalReadErr != nil || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalPayload, payload) {
-			return compactPreVerifyBridge{Relevant: true, Reason: "compact authority changed during discovery"}
-		}
-		if evaluation.Result != reviewtransaction.GateAllow {
-			if skipsObservedStalePredecessor(observedRevision, record.Revision, evaluation.Result) {
+		bridge := evaluateCompactPreVerifyAuthority(ctx, repo, changeName, store)
+		if !bridge.Eligible {
+			if !bridge.Relevant {
 				continue
 			}
-			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority post-apply gate is not allow"}
+			if skipsObservedStalePredecessor(observedRevision, bridge.Revision, bridge.Evaluation.Result) {
+				continue
+			}
+			return bridge
 		}
 		eligible++
 		if eligible == 1 {
 			// The revision is immutable store evidence used only for retry routing.
 			// It never authorizes a receipt by itself.
-			candidateRevision = record.Revision
+			candidateRevision = bridge.Revision
 		}
 	}
 	switch eligible {
@@ -78,6 +70,42 @@ func discoverCompactPreVerifyAuthority(ctx context.Context, repo, changeName, ob
 	default:
 		return compactPreVerifyBridge{Relevant: true, Reason: "multiple eligible path-bound compact authorities found"}
 	}
+}
+
+func evaluateCompactPreVerifyAuthority(ctx context.Context, repo, changeName string, store reviewtransaction.CompactStore) compactPreVerifyBridge {
+	record, err := store.Load()
+	if err != nil {
+		return compactPreVerifyBridge{Relevant: true, Reason: "compact authority record cannot be loaded"}
+	}
+	bound, pathReason := compactAuthorityPathsBound(record.State, changeName)
+	if !bound {
+		return compactPreVerifyBridge{Relevant: pathReason != "", Reason: pathReason, Revision: record.Revision}
+	}
+	if record.State.State != reviewtransaction.StateApproved {
+		return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority is not approved", Revision: record.Revision}
+	}
+	payload, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority receipt is missing", Revision: record.Revision}
+	}
+	receipt, err := reviewtransaction.ParseCompactReceipt(payload)
+	authoritative, receiptErr := record.State.Receipt()
+	if err != nil || receiptErr != nil || !reflect.DeepEqual(receipt, authoritative) {
+		return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority receipt does not equal approved state", Revision: record.Revision}
+	}
+	evaluation := reviewtransaction.EvaluateCompactGate(ctx, repo, receipt, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: receipt.LineageID})
+	if evaluation.Result != reviewtransaction.GateAllow {
+		return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority post-apply gate is not allow", Revision: record.Revision, Evaluation: evaluation}
+	}
+	finalRecord, finalErr := store.Load()
+	finalPayload, finalReadErr := os.ReadFile(store.ReceiptPath())
+	finalReceipt, finalParseErr := reviewtransaction.ParseCompactReceipt(finalPayload)
+	finalAuthority, finalAuthorityErr := finalRecord.State.Receipt()
+	finalGate := reviewtransaction.EvaluateCompactGate(ctx, repo, finalReceipt, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: receipt.LineageID})
+	if finalErr != nil || finalReadErr != nil || finalParseErr != nil || finalAuthorityErr != nil || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalRecord.State, record.State) || !reflect.DeepEqual(finalPayload, payload) || !reflect.DeepEqual(finalReceipt, finalAuthority) || finalGate.Result != reviewtransaction.GateAllow || !reflect.DeepEqual(finalGate.Context, evaluation.Context) {
+		return compactPreVerifyBridge{Relevant: true, Reason: "compact authority or receipt changed during final authorization", Revision: record.Revision, Evaluation: evaluation}
+	}
+	return compactPreVerifyBridge{Eligible: true, Revision: record.Revision, Evaluation: finalGate}
 }
 
 func skipsObservedStalePredecessor(observedRevision, revision string, result reviewtransaction.GateResult) bool {
@@ -227,10 +255,19 @@ func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, tra
 
 func applyReviewGate(
 	status *Status,
-	repo string,
+	repo, changeName, lineage string,
 	receiptPath, receiptContent string,
 ) {
 	if status.Dependencies.Verify != DependencyAllDone || !status.TaskProgress.AllComplete {
+		return
+	}
+	if lineage != "" {
+		bridge := selectCompactPreVerifyAuthority(context.Background(), repo, changeName, lineage)
+		if !bridge.Eligible {
+			blockReviewGate(status, reviewtransaction.GateInvalidated, bridge.Reason)
+			return
+		}
+		status.ReviewGate = &ReviewGateState{Result: reviewtransaction.GateAllow, Reason: "explicit lineage authority exactly matches the selected change and current repository"}
 		return
 	}
 	receiptPayload, ok := readReviewArtifact(receiptPath, receiptContent)

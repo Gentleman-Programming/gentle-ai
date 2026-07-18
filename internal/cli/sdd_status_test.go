@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,6 +125,35 @@ func TestRunSDDStatusRejectsCWDWithoutNonFlagValue(t *testing.T) {
 				t.Fatalf("RunSDDStatus(%v) expected error", tt.args)
 			}
 		})
+	}
+}
+
+func TestSDDCommandsParseAndForwardExplicitLineage(t *testing.T) {
+	parsed, err := sddstatus.ParseCommandArgs([]string{"thin", "--lineage", "compact-thin"})
+	if err != nil || parsed.LineageID != "compact-thin" {
+		t.Fatalf("ParseCommandArgs() = %#v, %v", parsed, err)
+	}
+	for _, run := range []struct {
+		name string
+		fn   func([]string, io.Writer) error
+	}{{name: "status", fn: RunSDDStatus}, {name: "continue", fn: RunSDDContinue}} {
+		t.Run(run.name, func(t *testing.T) {
+			root := t.TempDir()
+			seedSDDStatusReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+			var output bytes.Buffer
+			err := run.fn([]string{"thin", "--cwd", root, "--lineage", "missing"}, &output)
+			if err != nil || !strings.Contains(output.String(), "explicit lineage") {
+				t.Fatalf("command error = %v, output = %s", err, output.String())
+			}
+		})
+	}
+}
+
+func TestSDDCommandsRejectMissingLineageValue(t *testing.T) {
+	for _, args := range [][]string{{"--lineage"}, {"--lineage", "--json"}} {
+		if _, err := sddstatus.ParseCommandArgs(args); err == nil || !strings.Contains(err.Error(), "--lineage requires a value") {
+			t.Fatalf("ParseCommandArgs(%v) error = %v", args, err)
+		}
 	}
 }
 

@@ -168,12 +168,14 @@ type ResolveOptions struct {
 	CWD                 string
 	WorkspaceRoot       string
 	ChangeName          string
+	LineageID           string
 	IncludeInstructions bool
 }
 
 type CommandArgs struct {
 	ChangeName          string
 	CWD                 string
+	LineageID           string
 	JSON                bool
 	IncludeInstructions bool
 }
@@ -201,6 +203,15 @@ func ParseCommandArgs(args []string) (CommandArgs, error) {
 				return CommandArgs{}, fmt.Errorf("--cwd requires a value")
 			}
 			parsed.CWD = args[i+1]
+			i++
+		case "--lineage":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return CommandArgs{}, fmt.Errorf("--lineage requires a value")
+			}
+			parsed.LineageID = strings.TrimSpace(args[i+1])
+			if parsed.LineageID == "" {
+				return CommandArgs{}, fmt.Errorf("--lineage requires a value")
+			}
 			i++
 		default:
 			if strings.HasPrefix(arg, "-") {
@@ -255,6 +266,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if changeName == "" {
 		switch len(activeChanges) {
 		case 0:
+			if options.LineageID != "" && shouldTryEngram(workspaceRoot) {
+				return blockedStatus(workspaceRoot, nil, nil, "resolve-review", []string{"Explicit lineage selection requires a repository-local OpenSpec change."}, options.IncludeInstructions), nil
+			}
 			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions); ok || err != nil {
 				return status, err
 			}
@@ -267,6 +281,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 
 	if !contains(activeChanges, changeName) {
+		if options.LineageID != "" && shouldTryEngram(workspaceRoot) {
+			return blockedStatus(workspaceRoot, &changeName, nil, "resolve-review", []string{"Explicit lineage selection requires a repository-local OpenSpec change."}, options.IncludeInstructions), nil
+		}
 		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions); ok || err != nil {
 			return status, err
 		}
@@ -324,7 +341,8 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 	bridge := compactPreVerifyBridge{}
 	recoverable := authorityOnlyFailedReport(readText(firstPath(artifactPaths.VerifyReport)))
-	if bindingPresent {
+	useBinding := bindingPresent && options.LineageID == ""
+	if useBinding {
 		_, evaluation, bindingErr := validateBoundReview(context.Background(), workspaceRoot, changeName)
 		if bindingErr == nil {
 			if applyState == ApplyAllDone && artifacts["verifyReport"] != ArtifactDone {
@@ -339,11 +357,13 @@ func Resolve(options ResolveOptions) (Status, error) {
 			nextRecommended = "resolve-review"
 			blockedReasons = append(blockedReasons, bindingErr.Error())
 		}
+	} else if options.LineageID != "" && applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || recoverable) {
+		bridge = selectCompactPreVerifyAuthority(context.Background(), workspaceRoot, changeName, options.LineageID)
 	} else if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || recoverable) && reviewState == nil {
 		fields, _ := authorityFailureFields(readText(firstPath(artifactPaths.VerifyReport)))
 		bridge = discoverCompactPreVerifyAuthority(context.Background(), workspaceRoot, changeName, fields["observed_authority_revision"])
 	}
-	if !bindingPresent && recoverable && bridge.Eligible && authorityChangedSinceReport(readText(firstPath(artifactPaths.VerifyReport)), bridge.Revision) {
+	if !useBinding && recoverable && bridge.Eligible && authorityChangedSinceReport(readText(firstPath(artifactPaths.VerifyReport)), bridge.Revision) {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
@@ -352,10 +372,10 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if remediationState.Reason != "" {
 		blockedReasons = append(blockedReasons, remediationState.Reason)
 	}
-	if !bindingPresent {
-		applyPreVerifyCompactBridgeRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, bridge)
+	if !useBinding {
+		applyPreVerifyCompactBridgeRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, bridge, options.LineageID != "")
 	}
-	if !bindingPresent && !bridge.Eligible && !bridge.Relevant {
+	if !useBinding && !bridge.Eligible && !bridge.Relevant {
 		applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason)
 	}
 
@@ -368,10 +388,12 @@ func Resolve(options ResolveOptions) (Status, error) {
 	status.ApplyState = applyState
 	status.RemediationState = remediationState
 	status.ReviewTransaction = reviewState
-	if !bindingPresent {
+	if !useBinding {
 		applyReviewGate(
 			&status,
 			workspaceRoot,
+			changeName,
+			options.LineageID,
 			firstPath(artifactPaths.ReviewReceipt),
 			"",
 		)
@@ -516,6 +538,8 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	applyReviewGate(
 		&status,
 		workspaceRoot,
+		changeName,
+		"",
 		"",
 		artifactsByType["review/receipt"].Content,
 	)
@@ -558,8 +582,8 @@ func applyPreVerifyReviewRouting(dependencies *Dependencies, next *string, block
 	}
 }
 
-func applyPreVerifyCompactBridgeRouting(dependencies *Dependencies, next *string, blockedReasons *[]string, applyState ApplyState, verifyReportDone bool, transaction *reviewtransaction.Transaction, bridge compactPreVerifyBridge) {
-	if applyState != ApplyAllDone || verifyReportDone || transaction != nil {
+func applyPreVerifyCompactBridgeRouting(dependencies *Dependencies, next *string, blockedReasons *[]string, applyState ApplyState, verifyReportDone bool, transaction *reviewtransaction.Transaction, bridge compactPreVerifyBridge, explicit bool) {
+	if applyState != ApplyAllDone || verifyReportDone || (!explicit && transaction != nil) {
 		return
 	}
 	if bridge.Eligible {

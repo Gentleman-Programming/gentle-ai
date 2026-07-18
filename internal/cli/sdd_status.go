@@ -18,6 +18,7 @@ func RunSDDStatus(args []string, stdout io.Writer) error {
 	status, err := sddstatus.Resolve(sddstatus.ResolveOptions{
 		CWD:                 parsed.CWD,
 		ChangeName:          parsed.ChangeName,
+		LineageID:           parsed.LineageID,
 		IncludeInstructions: parsed.IncludeInstructions,
 	})
 	if err != nil {
@@ -44,6 +45,7 @@ func RunSDDContinue(args []string, stdout io.Writer) error {
 	status, err := sddstatus.Resolve(sddstatus.ResolveOptions{
 		CWD:                 parsed.CWD,
 		ChangeName:          parsed.ChangeName,
+		LineageID:           parsed.LineageID,
 		IncludeInstructions: true,
 	})
 	if err != nil {

@@ -17,6 +17,9 @@ func TestHelpContainsAllCommands(t *testing.T) {
 			t.Errorf("help output missing command %q", cmd)
 		}
 	}
+	if strings.Count(output, "[--lineage <id>]") < 2 {
+		t.Fatalf("help does not expose explicit lineage for both SDD commands:\n%s", output)
+	}
 }
 
 func TestHelpPresentsFlatReviewCommandsAsCompatibilityPaths(t *testing.T) {

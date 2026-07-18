@@ -782,11 +782,11 @@ func TestRenderNativePhasePromptIncludesAuthorityInstructionsJSONAndBlockedGuida
 }
 
 func TestParseCommandArgs(t *testing.T) {
-	got, err := ParseCommandArgs([]string{"add-auth", "--json", "--instructions", "--cwd", "/tmp/repo"})
+	got, err := ParseCommandArgs([]string{"add-auth", "--json", "--instructions", "--cwd", "/tmp/repo", "--lineage", " compact-auth "})
 	if err != nil {
 		t.Fatalf("ParseCommandArgs() error = %v", err)
 	}
-	want := CommandArgs{ChangeName: "add-auth", CWD: "/tmp/repo", JSON: true, IncludeInstructions: true}
+	want := CommandArgs{ChangeName: "add-auth", CWD: "/tmp/repo", LineageID: "compact-auth", JSON: true, IncludeInstructions: true}
 	if got != want {
 		t.Fatalf("ParseCommandArgs() = %#v, want %#v", got, want)
 	}
@@ -800,6 +800,8 @@ func TestParseCommandArgsRejectsInvalidInput(t *testing.T) {
 		{name: "missing cwd value", args: []string{"--cwd"}},
 		{name: "cwd followed by json flag", args: []string{"--cwd", "--json"}},
 		{name: "cwd followed by instructions flag", args: []string{"--cwd", "--instructions"}},
+		{name: "empty lineage", args: []string{"--lineage", ""}},
+		{name: "whitespace lineage", args: []string{"--lineage", "   "}},
 		{name: "unknown flag", args: []string{"--bogus"}},
 		{name: "extra positional", args: []string{"first", "second"}},
 	}
