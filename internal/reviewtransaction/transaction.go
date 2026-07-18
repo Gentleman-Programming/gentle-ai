@@ -13,6 +13,7 @@ import (
 )
 
 const TransactionSchema = "gentle-ai.review-transaction/v1"
+const DecisionPayloadSchema = "gentle-ai.review-decide/v1"
 
 type Mode string
 
@@ -47,7 +48,20 @@ const (
 	StateApproved               State = "approved"
 	StateEscalated              State = "escalated"
 	StateInvalidated            State = "invalidated"
+	StateDecisionRequired       State = "decision_required"
 )
+
+// DecisionPayload records one user resolution of a decision_required pause.
+// It rides inside Transaction so the journal schema stays unchanged; the
+// review/decide Operation identifies the journal record carrying it.
+type DecisionPayload struct {
+	Schema    string `json:"schema"`
+	LineageID string `json:"lineage_id"`
+	Revision  string `json:"revision"`
+	Decision  string `json:"decision"`
+	Reason    string `json:"reason"`
+	SHA256    string `json:"sha256"`
+}
 
 type EvidenceClass string
 
@@ -204,6 +218,7 @@ type Transaction struct {
 	FollowUps               []FollowUp                 `json:"follow_ups"`
 	OriginalCriteria        *ValidationCheck           `json:"original_criteria,omitempty"`
 	CorrectionRegression    *ValidationCheck           `json:"correction_regression,omitempty"`
+	Decision                *DecisionPayload           `json:"decision,omitempty"`
 	RiskLevel               RiskLevel                  `json:"risk_level,omitempty"`
 	SelectedLenses          []string                   `json:"selected_lenses,omitempty"`
 	LensResults             []LensResult               `json:"lens_results,omitempty"`
@@ -643,7 +658,18 @@ func (transaction *Transaction) ApplyRefuterOutcomes(results []EvidenceResult) e
 	transaction.Counters.RefuterBatches++
 	transaction.PendingRefuterIDs = []string{}
 	if escalate {
-		transaction.State = StateEscalated
+		allInconclusive := len(byID) > 0
+		for _, result := range byID {
+			if result.Outcome != OutcomeInconclusive {
+				allInconclusive = false
+				break
+			}
+		}
+		if allInconclusive {
+			transaction.State = StateDecisionRequired
+		} else {
+			transaction.State = StateEscalated
+		}
 	} else {
 		transaction.advanceAfterEvidence()
 	}
@@ -1080,10 +1106,13 @@ func (transaction *Transaction) validate() error {
 	if err := transaction.validateFindingRouting(); err != nil {
 		return err
 	}
+	if err := validateDecisionPayload(transaction.Decision, transaction.LineageID, transaction.State); err != nil {
+		return err
+	}
 	switch transaction.State {
 	case StateUnreviewed, StateReviewing, StateJudgesConfirmed, StateFindingsFrozen, StateEvidenceClassified,
 		StateFixRequired, StateFixing, StateFixValidating, StateReadyFinalVerification,
-		StateFinalVerifying, StateApproved, StateEscalated, StateInvalidated:
+		StateFinalVerifying, StateApproved, StateEscalated, StateInvalidated, StateDecisionRequired:
 	default:
 		return fmt.Errorf("invalid transaction state %q", transaction.State)
 	}
@@ -1231,6 +1260,36 @@ func validateSnapshot(snapshot Snapshot) error {
 	}
 	if snapshot.IntendedUntracked == nil || snapshot.Paths == nil {
 		return errors.New("snapshot path lists must be explicit arrays")
+	}
+	return nil
+}
+
+func validateDecisionPayload(payload *DecisionPayload, lineageID string, state State) error {
+	if payload == nil {
+		return nil
+	}
+	if state != StateDecisionRequired {
+		return errors.New("decision payload is only valid while the transaction is in decision_required")
+	}
+	if payload.Schema != DecisionPayloadSchema {
+		return fmt.Errorf("decision payload has unsupported schema %q", payload.Schema)
+	}
+	if payload.LineageID != lineageID {
+		return errors.New("decision payload lineage_id does not match the transaction lineage")
+	}
+	if !validSHA256(payload.Revision) {
+		return errors.New("decision payload revision must be a lowercase SHA-256 identity")
+	}
+	switch payload.Decision {
+	case "continue", "stop":
+	default:
+		return fmt.Errorf("decision payload decision must be continue or stop, got %q", payload.Decision)
+	}
+	if strings.TrimSpace(payload.Reason) == "" {
+		return errors.New("decision payload reason is required")
+	}
+	if !validSHA256(payload.SHA256) {
+		return errors.New("decision payload sha256 must be a lowercase SHA-256 identity")
 	}
 	return nil
 }

@@ -828,12 +828,13 @@ func legalStateTransition(previous, next State) bool {
 		StateReviewing:              {StateJudgesConfirmed, StateFindingsFrozen, StateEscalated},
 		StateJudgesConfirmed:        {StateFindingsFrozen, StateEscalated},
 		StateFindingsFrozen:         {StateEvidenceClassified, StateFixRequired, StateReadyFinalVerification, StateEscalated},
-		StateEvidenceClassified:     {StateFixRequired, StateReadyFinalVerification, StateEscalated},
+		StateEvidenceClassified:     {StateFixRequired, StateReadyFinalVerification, StateEscalated, StateDecisionRequired},
 		StateFixRequired:            {StateFixing, StateEscalated},
 		StateFixing:                 {StateFixValidating, StateEscalated},
 		StateFixValidating:          {StateReadyFinalVerification, StateFixRequired, StateEscalated},
 		StateReadyFinalVerification: {StateFinalVerifying, StateEscalated},
 		StateFinalVerifying:         {StateApproved, StateEscalated},
+		StateDecisionRequired:       {StateDecisionRequired},
 	}
 	for _, candidate := range allowed[previous] {
 		if candidate == next {

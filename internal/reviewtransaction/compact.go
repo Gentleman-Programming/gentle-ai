@@ -261,6 +261,7 @@ func (state CompactState) Validate() error {
 			return errors.New("approved compact state requires verification evidence")
 		}
 	case StateEscalated:
+	case StateDecisionRequired:
 	default:
 		return fmt.Errorf("invalid compact review state %q", state.State)
 	}

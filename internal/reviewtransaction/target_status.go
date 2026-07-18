@@ -36,6 +36,7 @@ const (
 	TargetStatusActionRepairAuthority   TargetStatusAction = "repair_authority"
 	TargetStatusActionReconcileFinalize TargetStatusAction = "reconcile_finalize"
 	TargetStatusActionStop              TargetStatusAction = "stop"
+	TargetStatusActionDecide            TargetStatusAction = "decide"
 )
 
 type Replayability string
@@ -409,6 +410,8 @@ func targetStatusAction(state State) (TargetStatusAction, Replayability) {
 		return TargetStatusActionRecover, ReplayabilityManualActionRequired
 	case StateEscalated:
 		return TargetStatusActionMaintainer, ReplayabilityManualActionRequired
+	case StateDecisionRequired:
+		return TargetStatusActionDecide, ReplayabilityManualActionRequired
 	default:
 		return TargetStatusActionFinalize, ReplayabilityNotReplayable
 	}
