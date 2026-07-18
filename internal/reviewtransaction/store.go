@@ -112,6 +112,22 @@ func AuthoritativeStore(ctx context.Context, repo, lineageID string) (Store, err
 	return Store{Dir: dir, lineageID: lineageID, repo: root, readOnly: statErr == nil}, nil
 }
 
+// AuthoritativeWritableStore returns a Store that is not flagged read-only,
+// so callers can extend a fresh review authority chain (for example, to
+// append a review/decide journal record on top of a chain that already
+// landed in decision_required). Existing legacy-v1 chains are still
+// returned read-only because AuthoritativeStore checks HEAD existence;
+// callers that opt into the writable variant take responsibility for not
+// mutating immutable legacy chains.
+func AuthoritativeWritableStore(ctx context.Context, repo, lineageID string) (Store, error) {
+	store, err := AuthoritativeStore(ctx, repo, lineageID)
+	if err != nil {
+		return Store{}, err
+	}
+	store.readOnly = false
+	return store, nil
+}
+
 // DiscoverAuthoritativeStores returns every canonical lineage rooted in the
 // repository Git common directory. Callers still validate each chain before
 // treating it as review authority.

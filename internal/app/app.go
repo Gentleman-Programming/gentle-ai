@@ -107,6 +107,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunReviewBundleImport(args[1:], stdout)
 		case "review-validate":
 			return cli.RunReviewValidate(args[1:], stdout)
+		case "review-decide":
+			return cli.RunReviewDecide(args[1:], stdout)
 		case "install":
 			if hasHelpFlag(args[1:]) {
 				cli.PrintInstallHelp(stdout)

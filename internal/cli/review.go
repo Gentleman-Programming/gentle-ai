@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -18,6 +19,7 @@ const (
 	ReviewResumeSchema   = "gentle-ai.review-resume/v1"
 	ReviewBundleSchema   = "gentle-ai.review-bundle-result/v1"
 	ReviewValidateSchema = "gentle-ai.review-gate-result/v1"
+	ReviewDecideSchema   = "gentle-ai.review-decide-result/v1"
 )
 
 type ReviewValidateResult struct {
@@ -563,4 +565,161 @@ func encodeReviewJSON(stdout io.Writer, value any) error {
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
+}
+
+type ReviewDecideResult struct {
+	Schema          string                            `json:"schema"`
+	Operation       string                            `json:"operation"`
+	LineageID       string                            `json:"lineage_id"`
+	Revision        string                            `json:"revision"`
+	Decision        string                            `json:"decision"`
+	Reason          string                            `json:"reason"`
+	Transaction     reviewtransaction.Transaction     `json:"transaction"`
+	StoreAuthority  string                            `json:"store_authority"`
+	StoreRevision   string                            `json:"store_revision"`
+	GenesisRevision string                            `json:"genesis_revision"`
+	ChainIdentity   string                            `json:"chain_identity"`
+	Idempotent      bool                              `json:"idempotent"`
+	Payload         reviewtransaction.DecisionPayload `json:"payload"`
+}
+
+func RunReviewDecide(args []string, stdout io.Writer) error {
+	return runReviewDecide(context.Background(), args, stdout)
+}
+
+func runReviewDecide(ctx context.Context, args []string, stdout io.Writer) error {
+	flags := newReviewFlagSet("review-decide", stdout, "Resolve a decision_required pause with a CAS-protected user decision (continue or stop).")
+	cwd := flags.String("cwd", "", "repository root")
+	lineage := flags.String("lineage", "", "review lineage identifier")
+	expectedRevision := flags.String("expected-revision", "", "expected lineage revision as sha256:hex; CAS-protected")
+	decision := flags.String("decision", "", "user decision: continue or stop")
+	reason := flags.String("reason", "", "human-readable justification for the decision")
+	if err := parseReviewFlags(flags, args); err != nil {
+		return err
+	}
+	if reviewHelpRequested(args) {
+		return nil
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected review-decide argument %q", flags.Arg(0))
+	}
+	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*expectedRevision) == "" || strings.TrimSpace(*decision) == "" || strings.TrimSpace(*reason) == "" {
+		return errors.New("review-decide requires --cwd, --lineage, --expected-revision, --decision, and --reason")
+	}
+	if !isLowercaseSHA256(*expectedRevision) {
+		return errors.New("--expected-revision must be a lowercase sha256:hex identity")
+	}
+	switch *decision {
+	case "continue", "stop":
+	default:
+		return fmt.Errorf("--decision must be continue or stop, got %q", *decision)
+	}
+
+	store, err := reviewtransaction.AuthoritativeWritableStore(ctx, *cwd, *lineage)
+	if err != nil {
+		return fmt.Errorf("derive authoritative review store: %w", err)
+	}
+	chain, err := store.LoadChain()
+	if err != nil {
+		return fmt.Errorf("load authoritative review transaction: %w", err)
+	}
+	current := chain.Records[len(chain.Records)-1].Transaction
+	if current.State != reviewtransaction.StateDecisionRequired {
+		return fmt.Errorf("review decide requires the lineage to be in decision_required, got %q", current.State)
+	}
+	if chain.HeadRevision != *expectedRevision {
+		return fmt.Errorf("review decide revision mismatch: expected %q, current %q", *expectedRevision, chain.HeadRevision)
+	}
+
+	if existing := lastDecidePayload(chain); existing != nil {
+		if existing.Decision != *decision {
+			return fmt.Errorf("lineage %q already has a %q decision; conflicting decisions are rejected", *lineage, existing.Decision)
+		}
+		return encodeReviewJSON(stdout, ReviewDecideResult{
+			Schema: ReviewDecideSchema, Operation: "review/decide", LineageID: *lineage,
+			Revision: chain.HeadRevision, Decision: existing.Decision, Reason: existing.Reason,
+			Transaction: current, StoreAuthority: "repository-git-common-dir",
+			StoreRevision: chain.HeadRevision, GenesisRevision: chain.GenesisRevision, ChainIdentity: chain.Identity,
+			Idempotent: true, Payload: *existing,
+		})
+	}
+
+	next := current
+	identitySum := sha256DecideSha256(current.Snapshot.Identity)
+	payload := reviewtransaction.DecisionPayload{
+		Schema:    reviewtransaction.DecisionPayloadSchema,
+		LineageID: *lineage,
+		Revision:  chain.HeadRevision,
+		Decision:  *decision,
+		Reason:    strings.TrimSpace(*reason),
+		SHA256:    identitySum,
+	}
+	next.Decision = &payload
+
+	revision, err := store.Append(chain.HeadRevision, reviewtransaction.Record{
+		Operation:   "review/decide",
+		Transaction: next,
+	})
+	if err != nil {
+		return fmt.Errorf("append review/decide journal record: %w", err)
+	}
+	updatedChain, err := store.LoadChain()
+	if err != nil {
+		return fmt.Errorf("reload review chain after append: %w", err)
+	}
+	stored := updatedChain.Records[len(updatedChain.Records)-1].Transaction
+	return encodeReviewJSON(stdout, ReviewDecideResult{
+		Schema: ReviewDecideSchema, Operation: "review/decide", LineageID: *lineage,
+		Revision: revision, Decision: payload.Decision, Reason: payload.Reason,
+		Transaction: stored, StoreAuthority: "repository-git-common-dir",
+		StoreRevision: updatedChain.HeadRevision, GenesisRevision: updatedChain.GenesisRevision, ChainIdentity: updatedChain.Identity,
+		Idempotent: false, Payload: payload,
+	})
+}
+
+func lastDecidePayload(chain reviewtransaction.ValidatedChain) *reviewtransaction.DecisionPayload {
+	for index := len(chain.Records) - 1; index >= 0; index-- {
+		record := chain.Records[index]
+		if record.Operation != "review/decide" {
+			continue
+		}
+		if record.Transaction.Decision == nil {
+			continue
+		}
+		copy := *record.Transaction.Decision
+		return &copy
+	}
+	return nil
+}
+
+func sha256DecideSha256(content string) string {
+	sum := sha256.Sum256([]byte("gentle-ai.review-decide-identity/v1\x00" + content))
+	return "sha256:" + hexEncodeLower(sum[:])
+}
+
+func isLowercaseSHA256(value string) bool {
+	if !strings.HasPrefix(value, "sha256:") || len(value) != len("sha256:")+64 {
+		return false
+	}
+	for _, char := range value[len("sha256:"):] {
+		switch {
+		case char >= '0' && char <= '9':
+		case char >= 'a' && char <= 'f':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// hexEncodeLower is duplicated locally so we don't drag crypto/hex into this
+// file's top-level imports just for one short digest call.
+func hexEncodeLower(bytes []byte) string {
+	const alphabet = "0123456789abcdef"
+	out := make([]byte, len(bytes)*2)
+	for index, value := range bytes {
+		out[index*2] = alphabet[value>>4]
+		out[index*2+1] = alphabet[value&0x0f]
+	}
+	return string(out)
 }
