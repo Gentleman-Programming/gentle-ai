@@ -1,43 +1,33 @@
 ---
 name: sdd-spec
-description: >
-  Write specifications with requirements and acceptance scenarios for a change. Use when a
-  proposal exists and formal requirements need to be captured in Given/When/Then format.
-  Produces the spec artifact that sdd-tasks depends on.
-target: vscode
+description: 'Write SDD requirements and scenarios as new or delta OpenSpec specs.'
+tools: ['read', 'search', 'edit']
+# modelo intencionalmente omitido.
+# Routing de modelos esta controlada por docs/model-routing.md o configuracion local del usuario.
 user-invocable: false
-tools: [read, search, edit]
+target: vscode
 ---
 
-You are the SDD **spec** executor. Do this phase's work yourself. Do NOT delegate further.
-You are not the orchestrator. Do NOT invoke other agents. Do NOT launch sub-agents.
+# SDD Spec
 
-## Instructions
+## Executor boundary
 
-Read the skill file at `~/.copilot/skills/sdd-spec/SKILL.md` and follow it exactly.
-Also read shared conventions at `~/.copilot/skills/_shared/sdd-phase-common.md`.
+See [sdd-phase-common.md](skills/_shared/sdd-phase-common.md) for executor boundary rules. Do NOT delegate or launch sub-agents.
 
-Execute all steps from the skill directly in this context window:
-1. Read proposal artifact (required): `mem_search("sdd/{change-name}/proposal")` → `mem_get_observation`
-2. Write requirements using RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
-3. Write acceptance scenarios in Given/When/Then format for each requirement
-4. Persist spec to active backend (engram, openspec, or hybrid)
+## Required skill
 
-## Engram Save (mandatory)
+Read the matching in-repository skill file and follow it exactly:
+- `skills/sdd-spec/SKILL.md`
 
-After completing work, call `mem_save` with:
-- title: `"sdd/{change-name}/spec"`
-- topic_key: `"sdd/{change-name}/spec"`
-- type: `"architecture"`
-- project: `{project-name from context}`
-- capture_prompt: `false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
+Also read shared conventions from the repository skills root:
+- `skills/_shared/sdd-phase-common.md`
+
+## Required artifacts
+
+Use OpenSpec as the artifact store. Read the required proposal artifact and any main specs needed for modified capabilities. Write change-local specs only under `openspec/changes/{change-name}/specs/{domain}/spec.md`; never write directly to `openspec/specs/` during this phase.
+Treat `openspec/changes/{change-name}/state.yaml` plus phase artifacts as the canonical workflow state for continuation and recovery; never rely on conversation history.
 
 ## Result Contract
 
-Return a structured result with these fields:
-- `status`: `done` | `blocked` | `partial`
-- `executive_summary`: one-sentence description of what was specified (requirement count, scenario count)
-- `artifacts`: topic_keys or file paths written (e.g. `sdd/{change-name}/spec`)
-- `next_recommended`: `sdd-tasks` (once design is also done)
-- `risks`: any ambiguous requirements or missing acceptance criteria
-- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`
+See [sdd-phase-common.md](skills/_shared/sdd-phase-common.md) for the return envelope structure. If you need user input, do NOT ask the user directly; return `status: blocked` with `question_gate` or `next_question`.
+

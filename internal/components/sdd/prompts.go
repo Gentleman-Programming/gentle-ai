@@ -115,11 +115,12 @@ func injectCodeGraphToolGrantIntoPrompt(prompt string, agentID model.AgentID, gu
 		return prompt
 	}
 
-	frontmatterEnd := strings.Index(prompt, "\n---\n")
+	normalizedPrompt := strings.ReplaceAll(prompt, "\r\n", "\n")
+	frontmatterEnd := strings.Index(normalizedPrompt, "\n---\n")
 	if frontmatterEnd < 0 {
 		return prompt
 	}
-	lines := strings.Split(prompt[:frontmatterEnd], "\n")
+	lines := strings.Split(normalizedPrompt[:frontmatterEnd], "\n")
 	for i, line := range lines {
 		if !strings.HasPrefix(line, "tools:") {
 			continue
@@ -127,14 +128,15 @@ func injectCodeGraphToolGrantIntoPrompt(prompt string, agentID model.AgentID, gu
 		if strings.Contains(line, grant) {
 			return prompt
 		}
+		trimmed := strings.TrimRight(line, " \t\r\n")
 		if agentID == model.AgentClaudeCode {
-			lines[i] = line + ", " + grant
-		} else if strings.HasSuffix(line, "]") {
-			lines[i] = strings.TrimSuffix(line, "]") + `, "` + grant + `"]`
+			lines[i] = trimmed + ", " + grant
+		} else if strings.HasSuffix(trimmed, "]") {
+			lines[i] = strings.TrimSuffix(trimmed, "]") + `, "` + grant + `"]`
 		} else {
 			return prompt
 		}
-		return strings.Join(lines, "\n") + prompt[frontmatterEnd:]
+		return strings.Join(lines, "\n") + normalizedPrompt[frontmatterEnd:]
 	}
 	return prompt
 }

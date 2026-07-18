@@ -170,9 +170,10 @@ Return {"findings":[],"evidence":["what was inspected"]} when clean.`, nativeRev
 }
 
 func replaceAgentBody(content, body string) string {
-	frontmatterEnd := strings.Index(content, "\n---\n")
+	normalizedContent := strings.ReplaceAll(content, "\r\n", "\n")
+	frontmatterEnd := strings.Index(normalizedContent, "\n---\n")
 	if frontmatterEnd < 0 {
 		return body
 	}
-	return strings.TrimRight(content[:frontmatterEnd+5], "\n") + "\n\n" + body + "\n"
+	return strings.TrimRight(normalizedContent[:frontmatterEnd+5], "\n") + "\n\n" + body + "\n"
 }

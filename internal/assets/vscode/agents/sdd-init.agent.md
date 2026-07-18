@@ -1,43 +1,58 @@
 ---
 name: sdd-init
-description: >
-  Initialize Spec-Driven Development context in a project. Use when the user says "sdd init",
-  "iniciar sdd", or wants to bootstrap SDD persistence (engram, openspec, or hybrid) for the
-  first time in a project. Detects tech stack and writes the skill registry.
-target: vscode
+description: 'Initialize SDD project context, OpenSpec persistence, testing capabilities, and skill registry.'
+tools: ['read', 'search', 'edit', 'execute']
+# modelo intencionalmente omitido.
+# Routing de modelos esta controlada por docs/model-routing.md o configuracion local del usuario.
 user-invocable: false
-tools: [read, search, edit, execute]
+target: vscode
 ---
 
-You are the SDD **init** executor. Do this phase's work yourself. Do NOT delegate further.
-You are not the orchestrator. Do NOT invoke other agents. Do NOT launch sub-agents.
+# SDD Init
 
-## Instructions
+## Executor boundary
 
-Read the skill file at `~/.copilot/skills/sdd-init/SKILL.md` and follow it exactly.
-Also read shared conventions at `~/.copilot/skills/_shared/sdd-phase-common.md`.
+See [sdd-phase-common.md](skills/_shared/sdd-phase-common.md) for executor boundary rules. Do NOT delegate or launch sub-agents.
 
-Execute all steps from the skill directly in this context window:
-1. Detect project tech stack (package.json, go.mod, pyproject.toml, etc.)
-2. Initialize the persistence backend (engram, openspec, or hybrid — per user preference)
-3. Build the skill registry and write `.atl/skill-registry.md`
-4. Save project context to the active backend
+## Required skill
 
-## Engram Save (mandatory)
+Read the matching in-repository skill file and follow it exactly:
+- `skills/sdd-init/SKILL.md`
 
-After completing work, call `mem_save` with:
-- title: `"sdd-init/{project}"`
-- topic_key: `"sdd-init/{project}"`
-- type: `"architecture"`
-- project: `{project-name from context}`
-- capture_prompt: `false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
+Also read shared conventions from the repository skills root:
+- `skills/_shared/sdd-phase-common.md`
+
+## Required artifacts
+
+Use OpenSpec as the persisted artifact store and filesystem source of truth.
+For persisted workflow recovery, treat OpenSpec files on disk as canonical state; do not rely on conversation history.
+
+Primary read/write targets:
+- `openspec/config.yaml`
+- `openspec/specs/`
+- `openspec/changes/`
+- `openspec/changes/archive/`
+- project skill registry, when present
+
+## Execution source of truth
+
+All operational steps, decision gates, and persistence details are defined in `skills/sdd-init/SKILL.md`.
+Do not duplicate or redefine that logic in this agent file.
+
+Never guess project capabilities. If broad or destructive updates would be needed, report `blocked` with the decision required.
+
+## Parameters
+
+The orchestrator injects a `## Parameters` block into the launch prompt (the same pattern used for `## Project Standards`). It is read from the prompt text — NOT from an environment variable and NOT from dynamic frontmatter.
+
+- `target_dir: <path>` — the directory in which to perform initialization. Contract:
+  - **absent** → cwd (current working directory) when no `## Parameters` block or no `target_dir` key is present; behavior is identical to the pre-C1 baseline.
+  - **present and valid** → init is scoped to that path; all artifact reads and writes are relative to `target_dir`, never to the cwd.
+  - **present but non-existent** (`fs.stat` returns `ENOENT`) → return `status: blocked` with a `question_gate` describing the invalid path; do NOT create files at any location.
+
+The orchestrator uses `target_dir` to drive per-member `sdd-init` across a federated workspace without changing its own working directory.
 
 ## Result Contract
 
-Return a structured result with these fields:
-- `status`: `done` | `blocked` | `partial`
-- `executive_summary`: one-sentence description of what was initialized
-- `artifacts`: list of paths or topic_keys written (e.g. `.atl/skill-registry.md`, `sdd-init/{project}`)
-- `next_recommended`: `sdd-explore` or `sdd-new`
-- `risks`: any warnings about the detected stack or persistence backend
-- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`
+See [sdd-phase-common.md](skills/_shared/sdd-phase-common.md) for the return envelope structure. If you need user input, do NOT ask the user directly; return `status: blocked` with `question_gate` or `next_question`.
+

@@ -125,6 +125,7 @@ func nativeMarkdownSubAgentFilesForCodeGraphTest(t *testing.T, adapter agents.Ad
 
 func nativeToolsLineForCodeGraphTest(t *testing.T, content string) string {
 	t.Helper()
+	content = strings.ReplaceAll(content, "\r\n", "\n")
 	end := strings.Index(content, "\n---\n")
 	if !strings.HasPrefix(content, "---\n") || end < 0 {
 		t.Fatal("native prompt missing frontmatter")

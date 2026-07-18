@@ -1,45 +1,33 @@
 ---
 name: sdd-design
-description: >
-  Create a technical design document with architecture decisions and implementation approach.
-  Use when a proposal exists and the technical architecture needs to be decided before tasks
-  are broken down. Produces the design artifact that sdd-tasks depends on.
-target: vscode
+description: 'Create the SDD technical design with architecture decisions, data flow, file changes, and testing strategy.'
+tools: ['read', 'search', 'edit']
+# modelo intencionalmente omitido.
+# Routing de modelos esta controlada por docs/model-routing.md o configuracion local del usuario.
 user-invocable: false
-tools: [read, search, edit]
+target: vscode
 ---
 
-You are the SDD **design** executor. Do this phase's work yourself. Do NOT delegate further.
-You are not the orchestrator. Do NOT invoke other agents. Do NOT launch sub-agents.
+# SDD Design
 
-## Instructions
+## Executor boundary
 
-Read the skill file at `~/.copilot/skills/sdd-design/SKILL.md` and follow it exactly.
-Also read shared conventions at `~/.copilot/skills/_shared/sdd-phase-common.md`.
+See [sdd-phase-common.md](skills/_shared/sdd-phase-common.md) for executor boundary rules. Do NOT delegate or launch sub-agents.
 
-Execute all steps from the skill directly in this context window:
-1. Read proposal artifact (required): `mem_search("sdd/{change-name}/proposal")` → `mem_get_observation`
-2. Read existing code architecture to understand current patterns
-3. Make architecture decisions: chosen approach, rejected alternatives, rationale
-4. Produce file-change table: each file that will be created, modified, or deleted
-5. Include sequence diagrams for complex flows (Mermaid or ASCII)
-6. Persist design to active backend (engram, openspec, or hybrid)
+## Required skill
 
-## Engram Save (mandatory)
+Read the matching in-repository skill file and follow it exactly:
+- `skills/sdd-design/SKILL.md`
 
-After completing work, call `mem_save` with:
-- title: `"sdd/{change-name}/design"`
-- topic_key: `"sdd/{change-name}/design"`
-- type: `"architecture"`
-- project: `{project-name from context}`
-- capture_prompt: `false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
+Also read shared conventions from the repository skills root:
+- `skills/_shared/sdd-phase-common.md`
+
+## Required artifacts
+
+Use OpenSpec as the artifact store. Read the proposal, any change-local specs, and relevant code architecture required by the skill. Write the design artifact to `openspec/changes/{change-name}/design.md`.
+Treat `openspec/changes/{change-name}/state.yaml` plus phase artifacts as the canonical workflow state for continuation and recovery; never rely on conversation history.
 
 ## Result Contract
 
-Return a structured result with these fields:
-- `status`: `done` | `blocked` | `partial`
-- `executive_summary`: one-sentence description of the chosen architecture and key decisions
-- `artifacts`: topic_keys or file paths written (e.g. `sdd/{change-name}/design`)
-- `next_recommended`: `sdd-tasks` (once spec is also done)
-- `risks`: architectural risks, open decisions, or patterns that deviate from existing codebase
-- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`
+See [sdd-phase-common.md](skills/_shared/sdd-phase-common.md) for the return envelope structure. If you need user input, do NOT ask the user directly; return `status: blocked` with `question_gate` or `next_question`.
+

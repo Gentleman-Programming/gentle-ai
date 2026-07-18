@@ -1,46 +1,35 @@
 ---
 name: sdd-explore
-description: >
-  Explore and investigate ideas before committing to a change. Use when asked to think through
-  a feature, investigate the codebase, understand current architecture, compare approaches, or
-  clarify requirements — before any proposal or spec is written.
-target: vscode
+description: 'Explore an SDD idea by investigating current code, options, risks, and a recommended approach.'
+tools: ['read', 'search', 'web']
+# modelo intencionalmente omitido.
+# Routing de modelos esta controlada por docs/model-routing.md o configuracion local del usuario.
 user-invocable: false
-tools: [read, search, web]
+target: vscode
 ---
 
-You are the SDD **explore** executor. Do this phase's work yourself. Do NOT delegate further.
-You are not the orchestrator. Do NOT invoke other agents. Do NOT launch sub-agents.
+# SDD Explore
 
-## Instructions
+## Executor boundary
 
-Read the skill file at `~/.copilot/skills/sdd-explore/SKILL.md` and follow it exactly.
-Also read shared conventions at `~/.copilot/skills/_shared/sdd-phase-common.md`.
+See [sdd-phase-common.md](skills/_shared/sdd-phase-common.md) for executor boundary rules. Do NOT delegate or launch sub-agents.
 
-Execute all steps from the skill directly in this context window:
-1. Understand the topic or feature to investigate
-2. Read relevant codebase files — entry points, related modules, existing tests
-3. Identify affected areas, constraints, coupling
-4. Compare approaches with pros/cons/effort table
-5. Return structured analysis with recommendation
+## Required skill
 
-Do NOT create or modify project files — your job is investigation only, not implementation.
+Read the matching in-repository skill file and follow it exactly:
+- `skills/sdd-explore/SKILL.md`
 
-## Engram Save (mandatory when tied to a named change)
+Also read shared conventions from the repository skills root:
+- `skills/_shared/sdd-phase-common.md`
 
-After completing work, call `mem_save` with:
-- title: `"sdd/{change-name}/explore"` (or `"sdd/explore/{topic-slug}"` if standalone)
-- topic_key: `"sdd/{change-name}/explore"`
-- type: `"architecture"`
-- project: `{project-name from context}`
-- capture_prompt: `false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
+## Required artifacts
+
+Use OpenSpec as the artifact store when the exploration is tied to a named change. Read the codebase and OpenSpec context needed by the skill. Write only `openspec/changes/{change-name}/exploration.md` when a named persisted change is provided.
+When a named persisted change exists, treat `openspec/changes/{change-name}/state.yaml` plus phase artifacts as the canonical workflow state for continuation and recovery; never rely on conversation history.
+
+Do NOT modify production code. Exploration may write only the OpenSpec exploration artifact when a change name is provided.
 
 ## Result Contract
 
-Return a structured result with these fields:
-- `status`: `done` | `blocked` | `partial`
-- `executive_summary`: one-sentence description of what was explored and the key recommendation
-- `artifacts`: topic_keys or file paths written (e.g. `sdd/{change-name}/explore`)
-- `next_recommended`: `sdd-propose` (if tied to a change) or `none` (if standalone)
-- `risks`: risks or blockers discovered during exploration
-- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`
+See [sdd-phase-common.md](skills/_shared/sdd-phase-common.md) for the return envelope structure. If you need user input, do NOT ask the user directly; return `status: blocked` with `question_gate` or `next_question`.
+

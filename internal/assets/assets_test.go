@@ -742,7 +742,7 @@ func TestVSCodeNativeAgentAssetsFrontmatter(t *testing.T) {
 			for _, tool := range expectedVSCodePhaseTools(phase) {
 				requireInlineTool(t, frontmatter, tool)
 			}
-			requireAssetBodyContains(t, path, "## Instructions", "## Engram Save", "## Result Contract")
+			requireAssetBodyContains(t, path, "## Required skill", "## Required artifacts", "## Result Contract")
 		})
 	}
 }

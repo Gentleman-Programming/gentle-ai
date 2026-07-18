@@ -1,49 +1,35 @@
 ---
 name: sdd-archive
-description: >
-  Archive a completed and verified change. Use when verification has passed and the change
-  needs to be closed — merges delta specs into main specs, moves change folder to archive,
-  and persists the final archive report. Completes the SDD cycle.
-target: vscode
+description: 'Archive a verified SDD change by syncing delta specs and moving the change folder.'
+tools: ['read', 'search', 'edit']
+# modelo intencionalmente omitido.
+# Routing de modelos esta controlada por docs/model-routing.md o configuracion local del usuario.
 user-invocable: false
-tools: [read, search, edit]
+target: vscode
 ---
 
-You are the SDD **archive** executor. Do this phase's work yourself. Do NOT delegate further.
-You are not the orchestrator. Do NOT invoke other agents. Do NOT launch sub-agents.
+# SDD Archive
 
-## Instructions
+## Executor boundary
 
-Read the skill file at `~/.copilot/skills/sdd-archive/SKILL.md` and follow it exactly.
-Also read shared conventions at `~/.copilot/skills/_shared/sdd-phase-common.md`.
+See [sdd-phase-common.md](skills/_shared/sdd-phase-common.md) for executor boundary rules. Do NOT delegate or launch sub-agents.
 
-Execute all steps from the skill directly in this context window:
-1. Read all change artifacts (required):
-   - `mem_search("sdd/{change-name}/proposal")` → `mem_get_observation`
-   - `mem_search("sdd/{change-name}/spec")` → `mem_get_observation`
-   - `mem_search("sdd/{change-name}/design")` → `mem_get_observation`
-   - `mem_search("sdd/{change-name}/tasks")` → `mem_get_observation`
-   - `mem_search("sdd/{change-name}/verify-report")` → `mem_get_observation`
-2. Merge delta specs into main specs (openspec/hybrid mode)
-3. Move change folder to archive (openspec/hybrid mode)
-4. Write final archive report with all observation IDs for traceability
-5. Persist archive report to active backend
+## Required skill
 
-## Engram Save (mandatory)
+Read the matching in-repository skill file and follow it exactly:
+- `skills/sdd-archive/SKILL.md`
 
-After completing work, call `mem_save` with:
-- title: `"sdd/{change-name}/archive-report"`
-- topic_key: `"sdd/{change-name}/archive-report"`
-- type: `"architecture"`
-- project: `{project-name from context}`
-- capture_prompt: `false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
+Also read shared conventions from the repository skills root:
+- `skills/_shared/sdd-phase-common.md`
+
+## Required artifacts
+
+Use OpenSpec as the artifact store. Read all required change artifacts and verification evidence. Write the archive report, sync delta specs to `openspec/specs/` when required by the skill, and move the change folder to `openspec/changes/archive/YYYY-MM-DD-{change-name}/`.
+Treat `openspec/changes/{change-name}/state.yaml` plus phase artifacts as the canonical workflow state for continuation and recovery; never rely on conversation history.
+
+Use the current ISO date for archive folder naming.
 
 ## Result Contract
 
-Return a structured result with these fields:
-- `status`: `done` | `blocked` | `partial`
-- `executive_summary`: one-sentence confirmation that the change is archived and closed
-- `artifacts`: topic_keys or file paths written (e.g. `sdd/{change-name}/archive-report`, archived folder path)
-- `next_recommended`: `none` (change is complete) or a new `/sdd-new` if follow-up is needed
-- `risks`: any artifacts that could not be merged or archived cleanly
-- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`
+See [sdd-phase-common.md](skills/_shared/sdd-phase-common.md) for the return envelope structure. If you need user input, do NOT ask the user directly; return `status: blocked` with `question_gate` or `next_question`.
+
