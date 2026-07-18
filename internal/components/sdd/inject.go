@@ -2001,7 +2001,7 @@ func injectFileAppend(homeDir string, adapter agents.Adapter, opts InjectOptions
 		existing = steeringFrontmatter
 	}
 
-	content := renderSDDOrchestratorAsset(adapter.Agent())
+	content := sddOrchestratorContent(adapter.Agent())
 
 	// Codex-only: substitute {{CODEX_PHASE_EFFORTS}} with a rendered per-phase
 	// effort table. Only fires when the adapter implements codexModelResolver.
@@ -2044,7 +2044,7 @@ func injectFileAppend(homeDir string, adapter agents.Adapter, opts InjectOptions
 }
 
 func sddOrchestratorContent(agent model.AgentID) string {
-	content := assets.MustRead(sddOrchestratorAsset(agent))
+	content := renderSDDOrchestratorAsset(agent)
 	if agent != model.AgentVSCodeCopilot {
 		return content
 	}

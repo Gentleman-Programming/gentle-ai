@@ -241,7 +241,7 @@ func InjectCodeGraphGuidanceForAgents(homeDir string, agentIDs []model.AgentID) 
 			continue
 		}
 		adapter, ok := reg.Get(id)
-		if !ok || !isCodeGraphSupportedAgent(id) || !adapter.SupportsSystemPrompt() {
+		if !ok || !isCodeGraphCompatibleAgent(id) || !adapter.SupportsSystemPrompt() {
 			continue
 		}
 
@@ -277,7 +277,7 @@ func CodeGraphGuidancePathsForAgents(homeDir string, agentIDs []model.AgentID) [
 			continue
 		}
 		adapter, ok := reg.Get(id)
-		if !ok || !isCodeGraphSupportedAgent(id) || !adapter.SupportsSystemPrompt() {
+		if !ok || !isCodeGraphCompatibleAgent(id) || !adapter.SupportsSystemPrompt() {
 			continue
 		}
 		path := adapter.SystemPromptFile(homeDir)
