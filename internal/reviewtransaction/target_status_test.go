@@ -654,6 +654,16 @@ func storeLegacyReviewingStatus(t *testing.T, repo, lineage string, snapshot Sna
 	}
 }
 
+func TestTargetStatusActionDecisionRequiredReturnsDecideAction(t *testing.T) {
+	action, replay := targetStatusAction(StateDecisionRequired)
+	if action != TargetStatusActionDecide {
+		t.Fatalf("targetStatusAction(decision_required) action = %q, want %q", action, TargetStatusActionDecide)
+	}
+	if replay != ReplayabilityManualActionRequired {
+		t.Fatalf("targetStatusAction(decision_required) replayability = %q, want %q", replay, ReplayabilityManualActionRequired)
+	}
+}
+
 func TestTargetStatusResultHasNoAuthorityPathFields(t *testing.T) {
 	typeOf := reflect.TypeOf(TargetStatusResult{})
 	for index := 0; index < typeOf.NumField(); index++ {

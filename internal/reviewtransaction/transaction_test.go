@@ -400,6 +400,120 @@ func TestTransactionCausalityRoundTripAndLegacyReadCompatibility(t *testing.T) {
 	}
 }
 
+func TestApplyRefuterOutcomesAllInconclusiveEntersDecisionRequired(t *testing.T) {
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	findings := []Finding{{ID: "R2-INF-A", Severity: "CRITICAL"}, {ID: "R2-INF-B", Severity: "BLOCKER"}}
+	if err := freezeTestFindings(tx, findings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ClassifyEvidence([]FindingEvidence{
+		{FindingID: "R2-INF-A", Class: EvidenceInferential, Causality: CausalIntroduced, Proof: "race requires interpretation"},
+		{FindingID: "R2-INF-B", Class: EvidenceInferential, Causality: CausalWorsened, Proof: "ordering requires interpretation"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.ApplyRefuterOutcomes([]EvidenceResult{
+		{FindingID: "R2-INF-A", Outcome: OutcomeInconclusive, Proof: "no correlated trace"},
+		{FindingID: "R2-INF-B", Outcome: OutcomeInconclusive, Proof: "no correlated trace"},
+	}); err != nil {
+		t.Fatalf("ApplyRefuterOutcomes() error = %v", err)
+	}
+	if tx.State != StateDecisionRequired {
+		t.Fatalf("State = %q, want %q", tx.State, StateDecisionRequired)
+	}
+	if tx.Counters.RefuterBatches != 1 || len(tx.PendingRefuterIDs) != 0 {
+		t.Fatalf("refuter batch counters = %#v pending=%v", tx.Counters, tx.PendingRefuterIDs)
+	}
+	for _, id := range []string{"R2-INF-A", "R2-INF-B"} {
+		if tx.Outcomes[id] != OutcomeInconclusive {
+			t.Fatalf("Outcomes[%s] = %q, want inconclusive", id, tx.Outcomes[id])
+		}
+	}
+}
+
+func TestApplyRefuterOutcomesMixedInconclusiveStillEscalates(t *testing.T) {
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	findings := []Finding{{ID: "R2-INF-A", Severity: "CRITICAL"}, {ID: "R2-INF-B", Severity: "BLOCKER"}}
+	if err := freezeTestFindings(tx, findings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ClassifyEvidence([]FindingEvidence{
+		{FindingID: "R2-INF-A", Class: EvidenceInferential, Causality: CausalIntroduced, Proof: "race requires interpretation"},
+		{FindingID: "R2-INF-B", Class: EvidenceInferential, Causality: CausalWorsened, Proof: "ordering requires interpretation"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.ApplyRefuterOutcomes([]EvidenceResult{
+		{FindingID: "R2-INF-A", Outcome: OutcomeCorroborated, Proof: "independent trace"},
+		{FindingID: "R2-INF-B", Outcome: OutcomeInconclusive, Proof: "no correlated trace"},
+	}); err != nil {
+		t.Fatalf("ApplyRefuterOutcomes() error = %v", err)
+	}
+	if tx.State != StateEscalated {
+		t.Fatalf("State = %q, want %q (mixed outcomes escalate)", tx.State, StateEscalated)
+	}
+}
+
+func TestTransactionValidateAcceptsDecisionRequiredState(t *testing.T) {
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	if err := freezeTestFindings(tx, []Finding{{ID: "R2-INF-A", Severity: "CRITICAL"}, {ID: "R2-INF-B", Severity: "BLOCKER"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ClassifyEvidence([]FindingEvidence{
+		{FindingID: "R2-INF-A", Class: EvidenceInferential, Causality: CausalIntroduced, Proof: "race requires interpretation"},
+		{FindingID: "R2-INF-B", Class: EvidenceInferential, Causality: CausalWorsened, Proof: "ordering requires interpretation"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.ApplyRefuterOutcomes([]EvidenceResult{
+		{FindingID: "R2-INF-A", Outcome: OutcomeInconclusive, Proof: "no correlated trace"},
+		{FindingID: "R2-INF-B", Outcome: OutcomeInconclusive, Proof: "no correlated trace"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if tx.State != StateDecisionRequired {
+		t.Fatalf("State = %q, want decision_required", tx.State)
+	}
+	tx.Decision = &DecisionPayload{
+		Schema:    DecisionPayloadSchema,
+		LineageID: tx.LineageID,
+		Revision:  "sha256:" + strings.Repeat("a", 64),
+		Decision:  "continue",
+		Reason:    "test reason",
+		SHA256:    "sha256:" + strings.Repeat("b", 64),
+	}
+	if _, err := ParseTransaction(mustMarshalTransaction(t, *tx)); err != nil {
+		t.Fatalf("ParseTransaction(decision_required) error = %v", err)
+	}
+
+	invalid := *tx
+	invalid.Decision = &DecisionPayload{Schema: DecisionPayloadSchema, LineageID: tx.LineageID, Revision: "sha256:" + strings.Repeat("a", 64), Decision: "maybe", Reason: "test reason", SHA256: "sha256:" + strings.Repeat("b", 64)}
+	if _, err := ParseTransaction(mustMarshalTransaction(t, invalid)); err == nil {
+		t.Fatal("ParseTransaction accepted unsupported decision value")
+	}
+
+	foreign := *tx
+	foreign.Decision = &DecisionPayload{Schema: DecisionPayloadSchema, LineageID: "other-lineage", Revision: "sha256:" + strings.Repeat("a", 64), Decision: "continue", Reason: "test reason", SHA256: "sha256:" + strings.Repeat("b", 64)}
+	if _, err := ParseTransaction(mustMarshalTransaction(t, foreign)); err == nil {
+		t.Fatal("ParseTransaction accepted foreign lineage decision payload")
+	}
+
+	nonDecision := *tx
+	nonDecision.State = StateFixRequired
+	if _, err := ParseTransaction(mustMarshalTransaction(t, nonDecision)); err == nil {
+		t.Fatal("ParseTransaction accepted decision payload outside decision_required")
+	}
+}
+
 func TestMalformedRefuterBatchIsConsumedAndTerminal(t *testing.T) {
 	tests := []struct {
 		name    string
