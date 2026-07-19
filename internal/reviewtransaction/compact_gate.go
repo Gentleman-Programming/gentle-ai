@@ -48,6 +48,13 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	// intended-retention guard; applicability here derives purely from the
 	// request target and snapshot comparison, so the signal is discarded.
 	request, _, err := buildCompactGateRequest(ctx, repo, state, input)
+	if err != nil && input.Gate == GatePrePush && state.Recovery != nil && state.InitialSnapshot.Kind == TargetCurrentChanges {
+		if chain, ok, chainErr := deriveCompactRecoveryBinding(ctx, repo, state); chainErr == nil && ok && chain.BaseTree != state.InitialSnapshot.BaseTree {
+			if retried, _, retryErr := buildCompactGateRequestWithPushBase(ctx, repo, state, input, chain.BaseTree); retryErr == nil {
+				request, err = retried, nil
+			}
+		}
+	}
 	if err != nil && input.Gate == GateRelease {
 		head, headErr := resolveCommit(ctx, repo, "HEAD")
 		if headErr == nil {
@@ -96,6 +103,16 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	if snapshot.CandidateTree == state.CurrentSnapshot.CandidateTree && pathsMatch && baseMatches {
 		assessment.Applicability = CompactGateTargetExact
 		return assessment, nil
+	}
+	if (request.Gate == GatePrePush || request.Gate == GatePrePR) && state.Recovery != nil && resolvedPrePR != nil {
+		rebindBaseCommit := resolvedPrePR.BaseCommit
+		if request.Gate == GatePrePush {
+			rebindBaseCommit = request.Target.BaseRef
+		}
+		if _, ok := rebindCompactRecoveryDelivery(ctx, repo, state, snapshot, state.CurrentSnapshot.CandidateTree, rebindBaseCommit, resolvedPrePR.HeadCommit); ok {
+			assessment.Applicability = CompactGateTargetExact
+			return assessment, nil
+		}
 	}
 	if snapshot.BaseTree == state.CurrentSnapshot.BaseTree || snapshot.PathsDigest == state.CurrentSnapshot.PathsDigest ||
 		hasAnyReviewPath(snapshot.Paths, state.GenesisPaths) {
@@ -170,12 +187,25 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		return NativeGateEvaluation{Result: GateEscalated, Reason: nativeGateReason(GateEscalated)}
 	}
 	request, nextSliceIntended, err := buildCompactGateRequest(ctx, repo, record.State, input)
+	if err != nil && input.Gate == GatePrePush && record.State.Recovery != nil && record.State.InitialSnapshot.Kind == TargetCurrentChanges {
+		// A scope_changed recovery successor created after its predecessor's
+		// delivery was committed can only restate the delivered tree as its
+		// own base, so its one-commit delivery derivation always fails. Retry
+		// once from the composed chain base; the later receipt binding still
+		// re-verifies the complete delivery before any authorization.
+		if chain, ok, chainErr := deriveCompactRecoveryBinding(ctx, repo, record.State); chainErr == nil && ok && chain.BaseTree != record.State.InitialSnapshot.BaseTree {
+			if retried, retriedNextSlice, retryErr := buildCompactGateRequestWithPushBase(ctx, repo, record.State, input, chain.BaseTree); retryErr == nil {
+				request, nextSliceIntended, err = retried, retriedNextSlice, nil
+			}
+		}
+	}
 	if err != nil {
 		if input.Gate == GatePrePR {
 			denialContext.Denial = &GateDenial{Stage: "boundary-selection", Code: "unavailable"}
 			return NativeGateEvaluation{Result: GateInvalidated, Reason: "compact gate inputs cannot be derived: " + err.Error(), Context: denialContext, Cause: err}
 		}
-		return invalid("compact gate inputs cannot be derived: "+err.Error(), err)
+		denialContext.Denial = &GateDenial{Stage: "delivery-derivation", Code: "unavailable"}
+		return NativeGateEvaluation{Result: GateInvalidated, Reason: "compact gate inputs cannot be derived: " + err.Error(), Context: denialContext, Cause: err}
 	}
 	expectedIntended := record.State.CurrentSnapshot.IntendedUntracked
 	if nextSliceIntended != nil {
@@ -252,6 +282,29 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if strictBinding {
 		pathsMismatch = snapshot.PathsDigest != binding.PathsDigest && !squashedFixDelivery
 	}
+	baseMismatch := snapshot.BaseTree != receipt.BaseTree && request.Target.Kind != TargetFixDiff && !compatibleAdvance
+	if strictBinding {
+		baseMismatch = snapshot.BaseTree != binding.BaseTree && !squashedFixDelivery
+	}
+	// A scope_changed recovery successor freezes only its own pristine scope,
+	// so a delivery already covered by its receipt-bound predecessors would be
+	// denied here forever. Rebind through the composed recovery chain when the
+	// leaf's approved candidate is exactly the delivered tree and native Git
+	// evidence proves the chain covers the complete publication range.
+	var recoveryRebind *compactRecoveryBinding
+	if (request.Gate == GatePrePush || request.Gate == GatePrePR) && record.State.Recovery != nil && resolvedPrePR != nil &&
+		(pathsMismatch || baseMismatch) && snapshot.CandidateTree == receipt.FinalCandidateTree {
+		rebindBaseCommit := resolvedPrePR.BaseCommit
+		if request.Gate == GatePrePush {
+			rebindBaseCommit = request.Target.BaseRef
+		}
+		if chain, ok := rebindCompactRecoveryDelivery(ctx, repo, record.State, snapshot, receipt.FinalCandidateTree, rebindBaseCommit, resolvedPrePR.HeadCommit); ok {
+			recoveryRebind = &chain
+			pathsMismatch = false
+			gateContext.BaseRelationshipValid = true
+			gateContext.FixDeltaHash = chain.FixDeltaHash
+		}
+	}
 	if snapshot.CandidateTree != receipt.FinalCandidateTree || pathsMismatch {
 		gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: "candidate-or-paths-mismatch"}
 		diagnostics, diagnosticsErr := buildCompactScopeChangeDiagnostics(ctx, repo, record.State, record.Revision, snapshot)
@@ -262,11 +315,7 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		gateContext.ScopeChange = &diagnostics
 		return NativeGateEvaluation{Result: GateScopeChanged, Reason: nativeGateReason(GateScopeChanged), Context: gateContext}
 	}
-	baseMismatch := snapshot.BaseTree != receipt.BaseTree && request.Target.Kind != TargetFixDiff && !compatibleAdvance
-	if strictBinding {
-		baseMismatch = snapshot.BaseTree != binding.BaseTree && !squashedFixDelivery
-	}
-	if baseMismatch {
+	if baseMismatch && recoveryRebind == nil {
 		gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: "base-mismatch"}
 		return NativeGateEvaluation{Result: GateInvalidated, Reason: "current repository base no longer matches compact authority", Context: gateContext}
 	}
@@ -296,6 +345,12 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	finalSuperseded, supersededErr := CompactLineageSuperseded(ctx, repo, receipt.LineageID)
 	if loadErr != nil || snapshotErr != nil || finalUntrackedErr != nil || finalTrackedErr != nil || graphErr != nil || supersededErr != nil || finalSuperseded || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalSnapshot, snapshot) || !sameResolvedPrePRRefs(finalRefs, resolvedPrePR) {
 		return invalid("compact authority or repository target changed during final authorization")
+	}
+	if recoveryRebind != nil {
+		finalChain, ok, chainErr := deriveCompactRecoveryBinding(ctx, repo, finalRecord.State)
+		if chainErr != nil || !ok || !reflect.DeepEqual(finalChain, *recoveryRebind) {
+			return invalid("compact authority or repository target changed during final authorization")
+		}
 	}
 	if request.Gate == GateRelease {
 		finalPreimages, preimageErr := readGateArtifactPreimages(request)
@@ -379,6 +434,17 @@ func buildCompactLifecycleSnapshot(ctx context.Context, repo string, request Gat
 // authoritative intended-untracked paths that remain untracked, computed once
 // so callers never repeat the per-path index lookups.
 func buildCompactGateRequest(ctx context.Context, repo string, state CompactState, input NativeGateRequestInput) (GateRequest, []string, error) {
+	return buildCompactGateRequestWithPushBase(ctx, repo, state, input, compactPushDeliveryBaseTree(state))
+}
+
+// compactPushDeliveryBaseTree derives the reviewed delivery base a pre-push
+// target must be exactly one commit from. Only current-changes reviews bind a
+// one-commit delivery to their own frozen base.
+func compactPushDeliveryBaseTree(state CompactState) string {
+	return map[TargetKind]string{TargetCurrentChanges: state.InitialSnapshot.BaseTree}[state.InitialSnapshot.Kind]
+}
+
+func buildCompactGateRequestWithPushBase(ctx context.Context, repo string, state CompactState, input NativeGateRequestInput, deliveryBaseTree string) (GateRequest, []string, error) {
 	request := GateRequest{Schema: GateRequestSchema, Gate: input.Gate, PolicyArtifact: input.PolicyArtifact}
 	var nextSliceIntended []string
 	switch input.Gate {
@@ -440,7 +506,6 @@ func buildCompactGateRequest(ctx context.Context, repo string, state CompactStat
 		}
 		request.Target = Target{Kind: TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
 	case GatePrePush:
-		deliveryBaseTree := map[TargetKind]string{TargetCurrentChanges: state.InitialSnapshot.BaseTree}[state.InitialSnapshot.Kind]
 		target, push, err := buildPushTarget(ctx, repo, input.BaseRef, deliveryBaseTree)
 		if err != nil {
 			return GateRequest{}, nil, err
