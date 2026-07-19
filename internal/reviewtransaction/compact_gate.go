@@ -44,7 +44,10 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	if input.IntendedUntracked == nil {
 		input.IntendedUntracked = append([]string{}, state.CurrentSnapshot.IntendedUntracked...)
 	}
-	request, err := buildCompactGateRequest(ctx, repo, state, input)
+	// The next-slice intended set is only meaningful to EvaluateCompactGate's
+	// intended-retention guard; applicability here derives purely from the
+	// request target and snapshot comparison, so the signal is discarded.
+	request, _, err := buildCompactGateRequest(ctx, repo, state, input)
 	if err != nil && input.Gate == GateRelease {
 		head, headErr := resolveCommit(ctx, repo, "HEAD")
 		if headErr == nil {
@@ -166,7 +169,7 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if receipt.TerminalState == TerminalEscalated {
 		return NativeGateEvaluation{Result: GateEscalated, Reason: nativeGateReason(GateEscalated)}
 	}
-	request, err := buildCompactGateRequest(ctx, repo, record.State, input)
+	request, nextSliceIntended, err := buildCompactGateRequest(ctx, repo, record.State, input)
 	if err != nil {
 		if input.Gate == GatePrePR {
 			denialContext.Denial = &GateDenial{Stage: "boundary-selection", Code: "unavailable"}
@@ -174,7 +177,14 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		}
 		return invalid("compact gate inputs cannot be derived: "+err.Error(), err)
 	}
-	if (request.Gate == GatePostApply || request.Gate == GatePreCommit) && !equalStrings(request.Target.IntendedUntracked, record.State.CurrentSnapshot.IntendedUntracked) {
+	expectedIntended := record.State.CurrentSnapshot.IntendedUntracked
+	if nextSliceIntended != nil {
+		// The approved candidate is committed exactly and its frozen intended
+		// paths are tracked in HEAD; only the already-computed still-untracked
+		// subset can be retained by the live next-slice target.
+		expectedIntended = nextSliceIntended
+	}
+	if (request.Gate == GatePostApply || request.Gate == GatePreCommit) && !equalStrings(request.Target.IntendedUntracked, expectedIntended) {
 		return invalid("current repository target does not retain the authoritative intended-untracked paths")
 	}
 	if err := validateCompactUntrackedScope(ctx, repo, record.State, request); err != nil {
@@ -361,8 +371,16 @@ func buildCompactLifecycleSnapshot(ctx context.Context, repo string, request Gat
 	return buildLifecycleSnapshot(ctx, repo, request)
 }
 
-func buildCompactGateRequest(ctx context.Context, repo string, state CompactState, input NativeGateRequestInput) (GateRequest, error) {
+// buildCompactGateRequest derives the live gate request for the authoritative
+// state. A non-nil second result reports the committed next-slice topology —
+// the approved candidate tree equals HEAD while new dirty tracked work sits
+// on top, so the request names the live current-changes target for
+// classification instead of the delivered base-diff target — and carries the
+// authoritative intended-untracked paths that remain untracked, computed once
+// so callers never repeat the per-path index lookups.
+func buildCompactGateRequest(ctx context.Context, repo string, state CompactState, input NativeGateRequestInput) (GateRequest, []string, error) {
 	request := GateRequest{Schema: GateRequestSchema, Gate: input.Gate, PolicyArtifact: input.PolicyArtifact}
+	var nextSliceIntended []string
 	switch input.Gate {
 	case GatePostApply, GatePreCommit:
 		intended := input.IntendedUntracked
@@ -390,37 +408,54 @@ func buildCompactGateRequest(ctx context.Context, repo string, state CompactStat
 		}
 		headTree, err := (SnapshotBuilder{Repo: repo}).resolveTree(ctx, "HEAD")
 		if err != nil {
-			return GateRequest{}, err
+			return GateRequest{}, nil, err
 		}
 		if headTree == current.CandidateTree {
 			dirty, err := (SnapshotBuilder{Repo: repo}).HasDirtyTrackedChanges(ctx)
 			if err != nil {
-				return GateRequest{}, err
+				return GateRequest{}, nil, err
 			}
-			if dirty {
-				return GateRequest{}, errors.New("committed approved target has dirty tracked changes")
+			if !dirty {
+				request.Target = Target{Kind: TargetBaseDiff, Projection: projection, BaseRef: current.BaseTree, IntendedUntracked: intended}
+				break
 			}
-			request.Target = Target{Kind: TargetBaseDiff, Projection: projection, BaseRef: current.BaseTree, IntendedUntracked: intended}
-			break
+			// The approved target is committed exactly as reviewed and new
+			// dirty tracked work sits on top: the next-slice topology. Route
+			// to the live current-changes target so assessment compares
+			// candidate and path scope and classifies the new work as
+			// scope-changed or unrelated instead of failing input derivation.
+			// A dirty worktree can never reproduce the approved candidate
+			// tree, so this path can never re-authorize the receipt. Frozen
+			// intended paths delivered by the approved commit are tracked now
+			// and cannot join a live current-changes target; a caller-supplied
+			// set that differs from the authoritative one is kept verbatim so
+			// the intended-retention guard rejects it.
+			nextSliceIntended, err = compactStillUntrackedIntended(ctx, repo, current.IntendedUntracked)
+			if err != nil {
+				return GateRequest{}, nil, err
+			}
+			if equalStrings(intended, current.IntendedUntracked) {
+				intended = nextSliceIntended
+			}
 		}
 		request.Target = Target{Kind: TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
 	case GatePrePush:
 		deliveryBaseTree := map[TargetKind]string{TargetCurrentChanges: state.InitialSnapshot.BaseTree}[state.InitialSnapshot.Kind]
 		target, push, err := buildPushTarget(ctx, repo, input.BaseRef, deliveryBaseTree)
 		if err != nil {
-			return GateRequest{}, err
+			return GateRequest{}, nil, err
 		}
 		request.Target, request.Push = target, push
 	case GatePrePR:
 		target, prePR, err := buildPrePRTarget(ctx, repo, input.BaseRef, input.PrePRCIAttestation, state.InitialSnapshot.IntendedUntracked)
 		if err != nil {
-			return GateRequest{}, err
+			return GateRequest{}, nil, err
 		}
 		request.Target, request.PrePR = target, prePR
 	case GateRelease:
 		head, err := resolveCommit(ctx, repo, "HEAD")
 		if err != nil {
-			return GateRequest{}, err
+			return GateRequest{}, nil, err
 		}
 		request.Target = Target{Kind: TargetExactRevision, Revision: head}
 		request.Release = &ReleaseRequest{
@@ -431,19 +466,42 @@ func buildCompactGateRequest(ctx context.Context, repo string, state CompactStat
 			PublicationState:            PublicationStateSealed, EvidenceFreshnessState: EvidenceFreshnessCurrent,
 		}
 	default:
-		return GateRequest{}, fmt.Errorf("unsupported review gate %q", input.Gate)
+		return GateRequest{}, nil, fmt.Errorf("unsupported review gate %q", input.Gate)
 	}
 	if request.Gate == GateRelease {
 		for _, path := range []string{input.ReleaseConfiguration, input.ReleaseGenerated, input.ReleaseProvenance, input.ReleasePublicationBoundary, input.ReleaseEvidenceFreshness} {
 			if strings.TrimSpace(path) == "" {
-				return GateRequest{}, errors.New("release gate requires complete independent release evidence")
+				return GateRequest{}, nil, errors.New("release gate requires complete independent release evidence")
 			}
 			if _, err := os.Stat(path); err != nil {
-				return GateRequest{}, err
+				return GateRequest{}, nil, err
 			}
 		}
 	}
-	return request, nil
+	return request, nextSliceIntended, nil
+}
+
+// compactStillUntrackedIntended keeps only the intended-untracked paths that
+// remain untracked. After an approved candidate is committed exactly as
+// reviewed, its frozen intended paths are tracked in HEAD and can no longer
+// participate in the live current-changes target of the next work unit. Only
+// the expected not-in-index lookup exit reclassifies a path as untracked;
+// git infrastructure failures (timeouts, process control, unexpected exits)
+// propagate so the gate fails instead of misclassifying scope.
+func compactStillUntrackedIntended(ctx context.Context, repo string, intended []string) ([]string, error) {
+	remaining := []string{}
+	for _, logicalPath := range intended {
+		_, err := runGit(ctx, repo, nil, nil, "ls-files", "--error-unmatch", "--", literalPathspec(logicalPath))
+		if err == nil {
+			continue
+		}
+		var lookup *GitCommandError
+		if !errors.As(err, &lookup) || lookup.ExitCode != 1 {
+			return nil, fmt.Errorf("classify intended-untracked path %q: %w", logicalPath, err)
+		}
+		remaining = append(remaining, logicalPath)
+	}
+	return remaining, nil
 }
 
 func validateCompactUntrackedScope(ctx context.Context, repo string, state CompactState, request GateRequest) error {

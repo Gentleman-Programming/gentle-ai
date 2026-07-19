@@ -179,6 +179,63 @@ func TestUnqualifiedGateDiscoveryReturnsTypedMissingAndScopeChanged(t *testing.T
 	})
 }
 
+func TestUnqualifiedGateDiscoveryRoutesCommittedNextSliceWorkspace(t *testing.T) {
+	// #1401: after one approved slice is committed exactly as reviewed, new
+	// dirty tracked work on top must classify as unrelated or scope-changed,
+	// never as authority_corrupted against the healthy predecessor.
+	t.Run("unrelated dirty tracked next slice", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		_, _ = approveDiscoveryMarkdown(t, repo, "review-discovery-next-slice", "docs/reviewed.md", "reviewed\n")
+		runReviewCLIGit(t, repo, "add", "-A")
+		runReviewCLIGit(t, repo, "commit", "-qm", "reviewed target")
+		if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("next slice\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var output bytes.Buffer
+		err := RunReview([]string{
+			"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+			"--gate", string(reviewtransaction.GatePostApply),
+		}, &output)
+		if err == nil {
+			t.Fatal("next-slice workspace validation succeeded")
+		}
+		failure := decodeReviewIntegrationFailure(t, output.Bytes())
+		if failure.Code == "authority_corrupted" {
+			t.Fatalf("healthy committed receipt misrouted as corrupted: %#v", failure)
+		}
+		if failure.Code != "receipt_unrelated" || failure.AuthorityApplicability != "unrelated" || failure.RetrySafe || failure.NextAction != "stop" {
+			t.Fatalf("committed next-slice workspace failure = %#v", failure)
+		}
+	})
+
+	t.Run("overlapping dirty tracked next slice", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		_, _ = approveDiscoveryMarkdown(t, repo, "review-discovery-next-slice-overlap", "docs/reviewed.md", "reviewed\n")
+		runReviewCLIGit(t, repo, "add", "-A")
+		runReviewCLIGit(t, repo, "commit", "-qm", "reviewed target")
+		if err := os.WriteFile(filepath.Join(repo, "docs", "reviewed.md"), []byte("drifted after commit\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var output bytes.Buffer
+		err := RunReview([]string{
+			"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+			"--gate", string(reviewtransaction.GatePostApply),
+		}, &output)
+		if err == nil {
+			t.Fatal("overlapping next-slice validation succeeded")
+		}
+		failure := decodeReviewIntegrationFailure(t, output.Bytes())
+		if failure.Code == "authority_corrupted" {
+			t.Fatalf("healthy committed receipt misrouted as corrupted: %#v", failure)
+		}
+		if failure.Code != "receipt_scope_changed" || failure.AuthorityApplicability != "current_target" || failure.RetrySafe ||
+			failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "explicit-maintainer-action" {
+			t.Fatalf("overlapping next-slice failure = %#v", failure)
+		}
+		assertScopeChangeRecovery(t, failure, "review-discovery-next-slice-overlap", "docs/reviewed.md")
+	})
+}
+
 func TestUnqualifiedGateDiscoveryRejectsMultipleExactReceiptsButExplicitLineageIsDirect(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	started, store := approveDiscoveryMarkdown(t, repo, "review-discovery-exact-a", "docs/exact.md", "exact\n")

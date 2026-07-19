@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -605,6 +607,91 @@ func TestCompactCommittedGateRechecksConcurrentDirtyTrackedTarget(t *testing.T) 
 				t.Fatalf("concurrent dirty tracked target = %#v", got)
 			}
 		})
+	}
+}
+
+func TestCompactCommittedNextSliceWorkspaceRoutesLiveCurrentChanges(t *testing.T) {
+	// A committed approved receipt whose candidate tree equals HEAD plus new
+	// dirty tracked work is the next-slice topology (#1401). Gate input
+	// derivation must construct the live current-changes target so the new
+	// work classifies as scope-changed or unrelated instead of failing with
+	// "committed approved target has dirty tracked changes".
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, repo string)
+		want   CompactGateTargetApplicability
+	}{
+		{name: "unrelated dirty tracked path", mutate: func(t *testing.T, repo string) {
+			writeSnapshotFile(t, repo, "deleted.txt", "next slice in progress\n")
+		}, want: CompactGateTargetUnrelated},
+		{name: "overlapping dirty tracked path", mutate: func(t *testing.T, repo string) {
+			writeSnapshotFile(t, repo, "tracked.txt", "next slice on reviewed path\n")
+		}, want: CompactGateTargetScopeChanged},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
+			state := newCompactStartStateForTarget(t, repo, "compact-next-slice-"+strings.ReplaceAll(tt.name, " ", "-"), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+			state, receipt := persistApprovedCompactState(t, repo, state)
+			gitSnapshot(t, repo, "add", "tracked.txt")
+			gitSnapshot(t, repo, "commit", "-m", "reviewed candidate")
+			tt.mutate(t, repo)
+
+			input := NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID}
+			assessment, err := AssessCompactGateTarget(context.Background(), repo, state, input)
+			if err != nil {
+				t.Fatalf("next-slice workspace assessment failed input derivation: %v", err)
+			}
+			if assessment.Applicability != tt.want {
+				t.Fatalf("next-slice applicability = %q, want %q", assessment.Applicability, tt.want)
+			}
+
+			got := EvaluateCompactGate(context.Background(), repo, receipt, input)
+			if got.Result == GateAllow {
+				t.Fatalf("committed target with dirty tracked changes was allowed: %#v", got)
+			}
+			if got.Result != GateScopeChanged || strings.Contains(got.Reason, "cannot be derived") {
+				t.Fatalf("next-slice explicit-lineage evaluation = %#v", got)
+			}
+		})
+	}
+}
+
+func TestCompactCommittedNextSliceIntendedFilterPropagatesGitInfraFailure(t *testing.T) {
+	// A git infrastructure failure while checking whether frozen intended
+	// paths remain untracked must fail gate input derivation like every other
+	// git call, never silently reclassify the path as untracked.
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
+	writeSnapshotFile(t, repo, "intended.txt", "reviewed untracked\n")
+	state := newCompactStartStateForTarget(t, repo, "compact-next-slice-infra", Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"intended.txt"}})
+	state, receipt := persistApprovedCompactState(t, repo, state)
+	gitSnapshot(t, repo, "add", "tracked.txt", "intended.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed candidate")
+	writeSnapshotFile(t, repo, "deleted.txt", "next slice in progress\n")
+
+	originalStarter := gitProcessTreeStarter
+	t.Cleanup(func() { gitProcessTreeStarter = originalStarter })
+	gitProcessTreeStarter = func(command *exec.Cmd) (func() error, error) {
+		for _, arg := range command.Args {
+			if arg == "--error-unmatch" {
+				return nil, errors.New("job object creation rejected")
+			}
+		}
+		return originalStarter(command)
+	}
+
+	input := NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID}
+	_, err := AssessCompactGateTarget(context.Background(), repo, state, input)
+	var control *GitProcessControlError
+	if !errors.As(err, &control) {
+		t.Fatalf("git infra failure during intended filtering was reclassified instead of failing the assessment: %v", err)
+	}
+
+	got := EvaluateCompactGate(context.Background(), repo, receipt, input)
+	if got.Result != GateInvalidated || !strings.Contains(got.Reason, "cannot be derived") || !errors.As(got.Cause, &control) {
+		t.Fatalf("git infra failure evaluation = %#v", got)
 	}
 }
 
