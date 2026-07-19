@@ -763,6 +763,77 @@ func TestOpenCodeSDDOrchestratorPreflightDoesNotUseVisibleCodesOrCanonicalUIValu
 	}
 }
 
+func TestClaudeSDDWorkflowRequiresSessionPreflight(t *testing.T) {
+	content := MustRead("claude/sdd-orchestrator-workflow.md")
+
+	for _, required := range []string{
+		"### SDD Session Preflight (HARD GATE)",
+		"Before executing ANY SDD command or natural-language SDD request",
+		"**Execution mode**",
+		"**Artifact store**",
+		"**Chained PR strategy**",
+		"**Review budget**",
+		"`openspec/config.yaml`, existing SDD artifacts, previous `sdd-init` results, or installed SDD assets do NOT satisfy session preflight",
+		"Use the built-in `AskUserQuestion` tool for SDD Session Preflight",
+		"Do NOT render the full preflight menu as plain chat text",
+		"Ask all four preflight groups in one single `AskUserQuestion` tool call",
+		"Do NOT run this as a sequential wizard",
+		"Do NOT issue four separate `AskUserQuestion` tool calls",
+		"Match the user's current language and active persona",
+		"Do NOT show option codes",
+		"Do NOT show canonical values",
+		"map the selected human labels to canonical values internally",
+		"1. Pace: Interactive, Automatic.",
+		"2. Artifacts: OpenSpec, Engram, Both.",
+		"3. PRs: Ask me, Single PR, Chained, Auto.",
+		"4. Review: 400 lines, 800 lines, Other.",
+		"### SDD Entry Routing (MANDATORY)",
+		"Never launch `sdd-apply` just because the user asked to implement a feature",
+		"Only launch `sdd-apply` when all are true",
+		"If any dependency is missing, STOP and propose `/sdd-new` or `/sdd-ff`; do not implement",
+		"or `hybrid` when Engram is callable",
+		"Both -> `hybrid`",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("claude/sdd-orchestrator-workflow.md missing required preflight wording %q", required)
+		}
+	}
+
+	for _, forbidden := range []string{
+		"`question` tool",
+		"groups as tabs",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("claude/sdd-orchestrator-workflow.md must use Claude Code's AskUserQuestion mechanics, not OpenCode wording %q", forbidden)
+		}
+	}
+
+	if strings.Contains(content, "`both`") {
+		t.Fatal("claude/sdd-orchestrator-workflow.md must not use `both` as a canonical artifact-store value; the Claude asset vocabulary is `hybrid` end to end (Dispatcher Guard, Artifact Store Policy/Mode)")
+	}
+
+	for _, section := range []string{"### Execution Mode", "### Artifact Store Mode"} {
+		idx := strings.Index(content, section)
+		if idx < 0 {
+			t.Fatalf("claude/sdd-orchestrator-workflow.md missing section %q", section)
+		}
+		body := content[idx+len(section):]
+		if end := strings.Index(body, "\n### "); end >= 0 {
+			body = body[:end]
+		}
+		if !strings.Contains(body, "This is collected by `SDD Session Preflight`") {
+			t.Fatalf("claude/sdd-orchestrator-workflow.md section %q must state its value is collected by SDD Session Preflight instead of independently re-asking", section)
+		}
+	}
+
+	preflight := strings.Index(content, "### SDD Session Preflight (HARD GATE)")
+	routing := strings.Index(content, "### SDD Entry Routing (MANDATORY)")
+	initGuard := strings.Index(content, "### SDD Init Guard (MANDATORY)")
+	if !(preflight < routing && routing < initGuard) {
+		t.Fatalf("claude/sdd-orchestrator-workflow.md section order must be preflight (%d) < entry routing (%d) < init guard (%d)", preflight, routing, initGuard)
+	}
+}
+
 func TestSDDFFCommandsHonorInteractiveMode(t *testing.T) {
 	for _, path := range []string{
 		"opencode/commands/sdd-ff.md",

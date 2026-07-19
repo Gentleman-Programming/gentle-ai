@@ -36,6 +36,68 @@ Before routing, continuing, applying, verifying, or archiving an SDD change, fir
 - Route only by structured `nextRecommended`, dependency states, and `blockedReasons`; never infer from free text.
 - If blocked, stop and report the blocker. Do not proceed to apply, archive, or terminal work.
 
+### SDD Session Preflight (HARD GATE)
+
+Before executing ANY SDD command or natural-language SDD request, ensure this session has an explicit `SDD Session Preflight` decision block.
+
+This applies to `/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-status`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`, and natural-language equivalents such as "use SDD to add dark mode" / "do it with SDD".
+
+Required preflight choices:
+
+1. **Execution mode**: `interactive` or `auto`.
+2. **Artifact store**: `openspec`, `engram`, or `hybrid` when Engram is callable. If Engram is unavailable, offer only file/inline-safe choices.
+3. **Chained PR strategy**: `auto-forecast`, `ask-always`, `single-pr-default`, or `force-chained`.
+4. **Review budget**: maximum changed lines before stopping for reviewer-burden approval.
+
+User-facing preflight question format:
+
+Use the built-in `AskUserQuestion` tool for SDD Session Preflight. Do NOT render the full preflight menu as plain chat text.
+
+Ask all four preflight groups in one single `AskUserQuestion` tool call so Claude Code can render the groups as one interactive prompt. Do NOT run this as a sequential wizard. Do NOT issue four separate `AskUserQuestion` tool calls.
+
+The single `AskUserQuestion` tool call must contain these four localized groups in this order:
+
+1. Pace: Interactive, Automatic.
+2. Artifacts: OpenSpec, Engram, Both.
+3. PRs: Ask me, Single PR, Chained, Auto.
+4. Review: 400 lines, 800 lines, Other.
+
+Match the user's current language and active persona for question labels and descriptions. Treat the preflight UI as direct orchestrator conversation, not as a generated technical artifact. Technical artifacts still default to English, but this UI follows the user's conversation language/persona. Do NOT mix languages inside one grouped question.
+
+Do NOT show option codes in the interactive UI. Do NOT show canonical values or other internal values in the interactive UI labels or descriptions.
+
+After the single grouped `AskUserQuestion` tool call returns, map the selected human labels to canonical values internally. Do not reveal the canonical values in the UI.
+
+If Other is selected for review budget, ask one follow-up question for the numeric budget.
+
+Only after all four preflight choices are collected, summarize them as the `SDD Session Preflight` decision block and continue with the SDD init guard/requested phase.
+
+Map answers to canonical values:
+
+- Pace: Interactive -> `interactive`; Automatic -> `auto`.
+- Artifacts: OpenSpec -> `openspec`; Engram -> `engram`; Both -> `hybrid`.
+- PRs: Ask me -> `ask-always`; Single PR -> `single-pr-default`; Chained -> `force-chained`; Auto -> `auto-forecast`.
+- Review: 400 lines -> `review_budget_lines: 400`; 800 lines -> `review_budget_lines: 800`; Other -> ask one follow-up for the number.
+
+Hard gate rules:
+
+- `openspec/config.yaml`, existing SDD artifacts, previous `sdd-init` results, or installed SDD assets do NOT satisfy session preflight.
+- If the session has no preflight block, ask the single grouped `AskUserQuestion` preflight above. Do not run init, delegate phases, edit files, or apply tasks until all four choices are collected.
+- Cache the choices for this session and include them in later phase prompts.
+- If the user explicitly provided all four choices in the current conversation, summarize them as the session preflight block and continue.
+
+### SDD Entry Routing (MANDATORY)
+
+For a new product/code change request that says to use SDD, start at preflight -> init guard -> explore/proposal (`/sdd-new` equivalent). Never launch `sdd-apply` just because the user asked to implement a feature.
+
+Only launch `sdd-apply` when all are true:
+
+1. Session preflight is complete.
+2. The active change has existing spec, design, and tasks artifacts.
+3. The user explicitly asked to apply/continue implementation, or the prior SDD planning phase completed and the orchestrator has passed the review workload guard.
+
+If any dependency is missing, STOP and propose `/sdd-new` or `/sdd-ff`; do not implement.
+
 ### SDD Init Guard (MANDATORY)
 
 Before executing any SDD command or meta-command, check whether `sdd-init` has run for this project:
@@ -48,7 +110,7 @@ This ensures testing capabilities, Strict TDD mode, and project context are avai
 
 ### Execution Mode
 
-On the first `/sdd-new`, `/sdd-ff`, `/sdd-continue`, or equivalent natural-language SDD request in a session, ask which execution mode the user wants and cache it:
+This is collected by `SDD Session Preflight`. If missing, enforce the hard gate before any phase work. Cache the collected mode for the session:
 
 - **Automatic** (`auto`): phases run back-to-back without pausing, but the orchestrator gatekeeper validates after each phase before launching the next.
 - **Interactive** (`interactive`): after each phase, show a concise summary and ask whether to adjust or continue.
@@ -79,7 +141,7 @@ On gate failure, re-run the same phase exactly once with specific corrective fee
 
 ### Artifact Store Mode
 
-On the first SDD chain request in a session, ask once which artifact store to use (`engram`, `openspec`, `hybrid`, or `none`) and cache it. If unspecified, default to `engram` when Engram is available; otherwise use `none` and explain the persistence limitation.
+This is collected by `SDD Session Preflight`. If missing, enforce the hard gate before any phase work. Cache the collected store (`engram`, `openspec`, `hybrid`, or `none`) for the session. If unspecified, default to `engram` when Engram is available; otherwise use `none` and explain the persistence limitation.
 
 Pass the artifact store mode to every SDD phase agent.
 
