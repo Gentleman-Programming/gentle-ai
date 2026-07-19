@@ -60,15 +60,22 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	if err != nil {
 		return assessment, fmt.Errorf("derive compact gate target: %w", err)
 	}
-	if err := validateCompactUntrackedScope(ctx, repo, state, request); err != nil {
-		assessment.Applicability = CompactGateTargetScopeChanged
-		return assessment, nil
-	}
+	untrackedScopeErr := validateCompactUntrackedScope(ctx, repo, state, request)
 	snapshot, resolvedPrePR, err := buildCompactLifecycleSnapshot(ctx, repo, request)
 	if err != nil {
+		if untrackedScopeErr != nil {
+			// Expanded untracked workspace is still a scope change against the
+			// frozen receipt even when the live candidate cannot be materialized.
+			assessment.Applicability = CompactGateTargetScopeChanged
+			return assessment, nil
+		}
 		return assessment, fmt.Errorf("build compact gate target: %w", err)
 	}
 	assessment.Actual = snapshot
+	if untrackedScopeErr != nil {
+		assessment.Applicability = CompactGateTargetScopeChanged
+		return assessment, nil
+	}
 	squashedFixDelivery := compactSquashedFixDelivery(request.Gate, state, snapshot, resolvedPrePR, state.CurrentSnapshot.CandidateTree)
 	strictBinding := request.Gate == GatePostApply || request.Gate == GatePreCommit ||
 		request.Gate == GatePrePush && state.InitialSnapshot.Kind != TargetCurrentChanges
@@ -175,11 +182,16 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		return invalid("compact gate inputs cannot be derived: "+err.Error(), err)
 	}
 	if (request.Gate == GatePostApply || request.Gate == GatePreCommit) && !equalStrings(request.Target.IntendedUntracked, record.State.CurrentSnapshot.IntendedUntracked) {
-		return invalid("current repository target does not retain the authoritative intended-untracked paths")
+		// After an exact committed delivery, frozen intended-untracked may already
+		// be absorbed into HEAD. Live next-slice targets may therefore diverge
+		// and must be classified by candidate/path comparison, not rejected as
+		// corrupted authority.
+		headTree, headErr := (SnapshotBuilder{Repo: repo}).resolveTree(ctx, "HEAD")
+		if headErr != nil || headTree != record.State.CurrentSnapshot.CandidateTree {
+			return invalid("current repository target does not retain the authoritative intended-untracked paths")
+		}
 	}
-	if err := validateCompactUntrackedScope(ctx, repo, record.State, request); err != nil {
-		return invalid(err.Error())
-	}
+	untrackedScopeErr := validateCompactUntrackedScope(ctx, repo, record.State, request)
 	preimages, err := readGateArtifactPreimages(request)
 	if err != nil {
 		return invalid("compact gate evidence cannot be read: " + err.Error())
@@ -189,7 +201,25 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	}
 	snapshot, resolvedPrePR, err := buildCompactLifecycleSnapshot(ctx, repo, request)
 	if err != nil {
+		if untrackedScopeErr != nil {
+			denialContext.Denial = &GateDenial{Stage: "receipt-binding", Code: "candidate-or-paths-mismatch"}
+			return NativeGateEvaluation{Result: GateScopeChanged, Reason: nativeGateReason(GateScopeChanged), Context: denialContext}
+		}
 		return invalid("current repository target cannot be derived: "+err.Error(), err)
+	}
+	if untrackedScopeErr != nil {
+		gateContext := denialContext
+		gateContext.BaseTree = snapshot.BaseTree
+		gateContext.CandidateTree = snapshot.CandidateTree
+		gateContext.PathsDigest = snapshot.PathsDigest
+		gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: "candidate-or-paths-mismatch"}
+		diagnostics, diagnosticsErr := buildCompactScopeChangeDiagnostics(ctx, repo, record.State, record.Revision, snapshot)
+		if diagnosticsErr != nil {
+			gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: "scope-diagnostics-unavailable"}
+			return NativeGateEvaluation{Result: GateInvalidated, Reason: "exact scope-change diagnostics cannot be derived: " + diagnosticsErr.Error(), Context: gateContext}
+		}
+		gateContext.ScopeChange = &diagnostics
+		return NativeGateEvaluation{Result: GateScopeChanged, Reason: nativeGateReason(GateScopeChanged), Context: gateContext}
 	}
 	if request.Gate == GatePrePush && record.State.InitialSnapshot.Kind == TargetCurrentChanges && snapshot.BaseTree == snapshot.CandidateTree {
 		return invalid("pre-push current-changes receipt requires a delivered tree change")
@@ -398,7 +428,21 @@ func buildCompactGateRequest(ctx context.Context, repo string, state CompactStat
 				return GateRequest{}, err
 			}
 			if dirty {
-				return GateRequest{}, errors.New("committed approved target has dirty tracked changes")
+				// Exact committed delivery plus a dirty next-slice workspace is a
+				// live current-changes target. Frozen intended-untracked may already
+				// be tracked in HEAD, so bind only still-live untracked paths.
+				// Assessment/evaluation compare the live candidate and route
+				// scope-changed/unrelated instead of treating healthy predecessor
+				// authority as corrupted.
+				liveIntended := []string{}
+				if projection != ProjectionStaged {
+					liveIntended, err = liveNextSliceIntendedUntracked(ctx, repo)
+					if err != nil {
+						return GateRequest{}, err
+					}
+				}
+				request.Target = Target{Kind: TargetCurrentChanges, Projection: projection, IntendedUntracked: liveIntended}
+				break
 			}
 			request.Target = Target{Kind: TargetBaseDiff, Projection: projection, BaseRef: current.BaseTree, IntendedUntracked: intended}
 			break
@@ -511,6 +555,27 @@ func validateCompactPublicationRange(ctx context.Context, repo string, genesis [
 func isPostReviewLifecycleArtifact(path string) bool {
 	parts := strings.Split(path, "/")
 	return len(parts) == 4 && parts[0] == "openspec" && parts[1] == "changes" && parts[3] == "verify-report.md"
+}
+
+// liveNextSliceIntendedUntracked returns still-untracked workspace paths that
+// belong to a live next-slice target after an exact committed delivery. Post-
+// review lifecycle artifacts are excluded so they do not inflate scope.
+func liveNextSliceIntendedUntracked(ctx context.Context, repo string) ([]string, error) {
+	live, err := (SnapshotBuilder{Repo: repo}).DiscoverIntendedUntracked(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("discover live next-slice untracked paths: %w", err)
+	}
+	intended := make([]string, 0, len(live))
+	for _, path := range live {
+		if isPostReviewLifecycleArtifact(path) || isChangeLocalReceiptMirror(path) {
+			continue
+		}
+		intended = append(intended, path)
+	}
+	if intended == nil {
+		intended = []string{}
+	}
+	return canonicalPaths(intended)
 }
 
 func isChangeLocalReceiptMirror(path string) bool {

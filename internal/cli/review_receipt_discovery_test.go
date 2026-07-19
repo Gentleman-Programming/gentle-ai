@@ -177,6 +177,63 @@ func TestUnqualifiedGateDiscoveryReturnsTypedMissingAndScopeChanged(t *testing.T
 			t.Fatalf("unrelated receipt failure = %#v", failure)
 		}
 	})
+
+	t.Run("dirty next slice after committed approved", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		started, _ := approveDiscoveryMarkdown(t, repo, "review-discovery-next-slice", "docs/reviewed.md", "reviewed\n")
+		runReviewCLIGit(t, repo, "add", "-A")
+		runReviewCLIGit(t, repo, "commit", "-qm", "reviewed slice a")
+		if err := os.WriteFile(filepath.Join(repo, "docs", "reviewed.md"), []byte("slice b dirty tracked\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "docs", "next-slice.md"), []byte("slice b untracked\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		var unqualified bytes.Buffer
+		err := RunReview([]string{
+			"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+			"--gate", string(reviewtransaction.GatePostApply),
+		}, &unqualified)
+		if err == nil {
+			t.Fatal("dirty next-slice unqualified validation succeeded")
+		}
+		failure := decodeReviewIntegrationFailure(t, unqualified.Bytes())
+		if failure.Code == "authority_corrupted" || strings.Contains(unqualified.String(), "committed approved target has dirty tracked changes") {
+			t.Fatalf("healthy committed predecessor misrouted as corrupted: %#v\n%s", failure, unqualified.String())
+		}
+		if failure.Code != "receipt_scope_changed" || failure.AuthorityApplicability != "current_target" || failure.RetrySafe ||
+			failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "explicit-maintainer-action" {
+			t.Fatalf("dirty next-slice unqualified failure = %#v", failure)
+		}
+		if failure.Context == nil || failure.Context.ScopeChange == nil {
+			t.Fatalf("dirty next-slice missing scope-change recovery context: %#v", failure)
+		}
+		scope := failure.Context.ScopeChange
+		if scope.PredecessorLineageID != started.LineageID || scope.PredecessorRevision == "" || scope.DifferingPathCount < 1 ||
+			!reflect.DeepEqual(failure.RequiredInputs, []string{"predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor"}) {
+			t.Fatalf("dirty next-slice scope-change provenance = %#v", failure)
+		}
+		payload, marshalErr := json.Marshal(failure)
+		if marshalErr != nil || strings.Contains(string(payload), "docs/reviewed.md") || strings.Contains(string(payload), "docs/next-slice.md") ||
+			strings.Contains(string(payload), `"paths"`) || strings.Contains(string(payload), `"differing_paths"`) {
+			t.Fatalf("dirty next-slice failure exposed private paths: %s, %v", payload, marshalErr)
+		}
+
+		var explicit bytes.Buffer
+		err = RunReview([]string{
+			"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+			"--lineage", started.LineageID, "--gate", string(reviewtransaction.GatePostApply),
+		}, &explicit)
+		if err == nil {
+			t.Fatal("dirty next-slice explicit lineage validation succeeded")
+		}
+		explicitFailure := decodeReviewIntegrationFailure(t, explicit.Bytes())
+		if explicitFailure.Code != "gate_scope_changed" || explicitFailure.NextAction != "explicit-maintainer-action" || explicitFailure.RetrySafe ||
+			strings.Contains(explicit.String(), "committed approved target has dirty tracked changes") || strings.Contains(explicit.String(), "authority_corrupted") {
+			t.Fatalf("explicit healthy predecessor misrouted: %#v\n%s", explicitFailure, explicit.String())
+		}
+	})
 }
 
 func TestUnqualifiedGateDiscoveryRejectsMultipleExactReceiptsButExplicitLineageIsDirect(t *testing.T) {

@@ -608,6 +608,72 @@ func TestCompactCommittedGateRechecksConcurrentDirtyTrackedTarget(t *testing.T) 
 	}
 }
 
+func TestCompactPostApplyRoutesDirtyNextSliceAfterCommittedApprovedTarget(t *testing.T) {
+	tests := []struct {
+		name       string
+		dirty      func(t *testing.T, repo string)
+		assessment CompactGateTargetApplicability
+		gateResult GateResult
+	}{
+		{
+			name: "dirty tracked reviewed path",
+			dirty: func(t *testing.T, repo string) {
+				writeSnapshotFile(t, repo, "tracked.txt", "next slice dirty tracked\n")
+			},
+			assessment: CompactGateTargetScopeChanged,
+			gateResult: GateScopeChanged,
+		},
+		{
+			name: "dirty tracked unrelated path",
+			dirty: func(t *testing.T, repo string) {
+				writeSnapshotFile(t, repo, "next-slice.txt", "next slice tracked\n")
+				gitSnapshot(t, repo, "add", "--", "next-slice.txt")
+			},
+			assessment: CompactGateTargetUnrelated,
+			gateResult: GateScopeChanged,
+		},
+		{
+			name: "dirty tracked and unbound untracked",
+			dirty: func(t *testing.T, repo string) {
+				writeSnapshotFile(t, repo, "tracked.txt", "next slice dirty tracked\n")
+				writeSnapshotFile(t, repo, "next-untracked.txt", "next slice untracked\n")
+			},
+			assessment: CompactGateTargetScopeChanged,
+			gateResult: GateScopeChanged,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			writeSnapshotFile(t, repo, "tracked.txt", "approved candidate\n")
+			state := newCompactStartStateForTarget(t, repo, "compact-next-slice-"+strings.ReplaceAll(tt.name, " ", "-"), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+			state, receipt := persistApprovedCompactState(t, repo, state)
+			gitSnapshot(t, repo, "add", "tracked.txt")
+			gitSnapshot(t, repo, "commit", "-m", "reviewed candidate")
+			if control := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID}); control.Result != GateAllow {
+				t.Fatalf("clean committed predecessor = %#v", control)
+			}
+
+			tt.dirty(t, repo)
+			input := NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID}
+			assessment, err := AssessCompactGateTarget(context.Background(), repo, state, input)
+			if err != nil {
+				t.Fatalf("assess dirty next-slice target: %v", err)
+			}
+			if assessment.Applicability != tt.assessment {
+				t.Fatalf("assessment = %#v, want %q", assessment, tt.assessment)
+			}
+			got := EvaluateCompactGate(context.Background(), repo, receipt, input)
+			if got.Result != tt.gateResult {
+				t.Fatalf("explicit lineage gate = %#v, want %q", got, tt.gateResult)
+			}
+			if strings.Contains(got.Reason, "committed approved target has dirty tracked changes") || strings.Contains(got.Reason, "authority") {
+				t.Fatalf("healthy predecessor misrouted as corruption: %#v", got)
+			}
+		})
+	}
+}
+
 func TestCompactReleaseGateUsesIndependentCompleteCurrentEvidence(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
