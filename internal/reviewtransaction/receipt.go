@@ -408,5 +408,7 @@ func validSHA256(value string) bool {
 }
 
 func validGitTree(value string) bool {
-	return gitTreePattern.MatchString(value)
+	// Git reserves the all-zero OID as the null object; it never names a real
+	// tree or commit, so it is rejected even though it is syntactically hex.
+	return gitTreePattern.MatchString(value) && strings.Trim(value, "0") != ""
 }

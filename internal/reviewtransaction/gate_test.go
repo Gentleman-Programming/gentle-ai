@@ -283,7 +283,7 @@ func TestDefaultBoundariesSeparatePrePRTargetFromPrePushTracking(t *testing.T) {
 	if err != nil || prePR.RemoteRef != "refs/heads/main" {
 		t.Fatalf("default PRE-PR boundary = %#v, %v", prePR, err)
 	}
-	_, prePush, err := buildPushTarget(context.Background(), repo, "", "")
+	_, prePush, err := buildPushTarget(context.Background(), repo, "", "", "")
 	if err != nil || prePush.Boundary.RemoteRef != "refs/heads/feature" {
 		t.Fatalf("default PRE-PUSH boundary = %#v, %v", prePush, err)
 	}
@@ -528,7 +528,7 @@ func TestPublicationTargetBindsAdvertisedUpstreamSeparatelyFromPushRemote(t *tes
 	writeSnapshotFile(t, repo, "one.txt", "one\n")
 	gitSnapshot(t, repo, "add", "one.txt")
 	gitSnapshot(t, repo, "commit", "-m", "one")
-	target, push, err := buildPushTarget(context.Background(), repo, "", "")
+	target, push, err := buildPushTarget(context.Background(), repo, "", "", "")
 	if err != nil || target.BaseRef != base || push.Boundary.Remote != "upstream" || push.PushRemote != "origin" {
 		t.Fatalf("one-commit fork target = %#v, %#v, %v", target, push, err)
 	}
@@ -563,7 +563,7 @@ func TestPublicationTargetBindsAdvertisedUpstreamSeparatelyFromPushRemote(t *tes
 		t.Fatal("advertised upstream advance preserved stale authorization")
 	}
 	gitSnapshot(t, repo, "config", "--unset", "branch."+branch+".merge")
-	if _, _, err := buildPushTarget(context.Background(), repo, "", ""); err == nil || !strings.Contains(err.Error(), "--base-ref") {
+	if _, _, err := buildPushTarget(context.Background(), repo, "", "", ""); err == nil || !strings.Contains(err.Error(), "--base-ref") {
 		t.Fatalf("missing upstream error = %v", err)
 	}
 }
@@ -1545,4 +1545,280 @@ func nativePrePushRequest(t *testing.T, repo string, receipt Receipt, artifacts 
 		t.Fatal(err)
 	}
 	return request
+}
+
+func emptyRemoteTrackingRepo(t *testing.T) (string, string) {
+	t.Helper()
+	repo := initSnapshotRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	remote := filepath.Join(t.TempDir(), "empty-remote.git")
+	gitSnapshot(t, repo, "init", "--bare", remote)
+	gitSnapshot(t, repo, "remote", "add", "origin", remote)
+	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	return repo, remote
+}
+
+func TestBuildPushTargetBootstrapsFirstPublicationOnEmptyRemote(t *testing.T) {
+	repo, _ := emptyRemoteTrackingRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	reviewedBase := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	reviewedBaseTree := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}"))
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	gitSnapshot(t, repo, "commit", "-am", "reviewed delivery")
+
+	target, push, err := buildPushTarget(context.Background(), repo, "", reviewedBaseTree, "")
+	if err != nil {
+		t.Fatalf("buildPushTarget(empty remote) error = %v", err)
+	}
+	zero := strings.Repeat("0", len(reviewedBase))
+	if push.Boundary.Source != PrePRBoundaryEmptyRemoteBootstrap || push.Boundary.Commit != zero ||
+		push.Boundary.Remote != "origin" || push.Boundary.RemoteRef != "refs/heads/"+branch || push.Boundary.RemoteIdentity == "" {
+		t.Fatalf("bootstrap boundary = %#v", push.Boundary)
+	}
+	if push.MergeBase != zero || push.PushRemote != "origin" || push.PushRemoteIdentity != push.Boundary.RemoteIdentity {
+		t.Fatalf("bootstrap push request = %#v", push)
+	}
+	if target.BaseRef != reviewedBase {
+		t.Fatalf("bootstrap target base = %q, want reviewed base %q", target.BaseRef, reviewedBase)
+	}
+}
+
+func TestNativePrePushGateAllowsFirstPublicationToEmptyRemote(t *testing.T) {
+	repo, _ := emptyRemoteTrackingRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	transaction, receipt, artifacts := nativeGateFixture(t, repo, "empty-remote-first-publication")
+	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApprovedStoreChain(t, store, transaction)
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed delivery")
+
+	request := nativePrePushRequest(t, repo, receipt, artifacts)
+	if request.Push == nil || request.Push.Boundary.Source != PrePRBoundaryEmptyRemoteBootstrap {
+		t.Fatalf("first-publication pre-push request = %#v", request.Push)
+	}
+	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result != GateAllow {
+		t.Fatalf("first-publication pre-push gate = %#v", got)
+	}
+}
+
+func TestNativePrePushFirstPublicationRejectsUndisclosedAncestorPath(t *testing.T) {
+	repo, _ := emptyRemoteTrackingRepo(t)
+	writeSnapshotFile(t, repo, "secret.txt", "must never be published\n")
+	gitSnapshot(t, repo, "add", "secret.txt")
+	gitSnapshot(t, repo, "commit", "-m", "pre-base secret")
+	gitSnapshot(t, repo, "rm", "-q", "secret.txt")
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed base\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "remove pre-base secret")
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	transaction, receipt, artifacts := nativeGateFixture(t, repo, "empty-remote-undisclosed-ancestor")
+	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApprovedStoreChain(t, store, transaction)
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed delivery")
+
+	request := nativePrePushRequest(t, repo, receipt, artifacts)
+	if request.Push == nil || request.Push.Boundary.Source != PrePRBoundaryEmptyRemoteBootstrap {
+		t.Fatalf("undisclosed-ancestor pre-push request = %#v", request.Push)
+	}
+	got := EvaluateNativeGate(context.Background(), repo, receipt, request)
+	if got.Result == GateAllow || !strings.Contains(got.Reason, "not disclosed by the reviewed base tree") || !strings.Contains(got.Reason, "squash pre-publication history") {
+		t.Fatalf("native bootstrap with undisclosed ancestor path = %#v", got)
+	}
+}
+
+func TestNativePrePushFirstPublicationRejectsOverwrittenSecretBlob(t *testing.T) {
+	repo, _ := emptyRemoteTrackingRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "SECRET_API_KEY=sk-abc123\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "pre-base secret revision")
+	writeSnapshotFile(t, repo, "tracked.txt", "hello\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "overwrite secret before review")
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	transaction, receipt, artifacts := nativeGateFixture(t, repo, "empty-remote-overwritten-secret-blob")
+	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApprovedStoreChain(t, store, transaction)
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed delivery")
+
+	request := nativePrePushRequest(t, repo, receipt, artifacts)
+	if request.Push == nil || request.Push.Boundary.Source != PrePRBoundaryEmptyRemoteBootstrap {
+		t.Fatalf("overwritten-secret pre-push request = %#v", request.Push)
+	}
+	got := EvaluateNativeGate(context.Background(), repo, receipt, request)
+	if got.Result == GateAllow || !strings.Contains(got.Reason, "publishes pre-base history blob") || !strings.Contains(got.Reason, "tracked.txt") || !strings.Contains(got.Reason, "squash pre-publication history") {
+		t.Fatalf("native bootstrap with overwritten secret blob = %#v", got)
+	}
+}
+
+func TestNativePrePushGateInvalidatesWhenEmptyRemoteGainsRefsDuringValidation(t *testing.T) {
+	repo, _ := emptyRemoteTrackingRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	transaction, receipt, artifacts := nativeGateFixture(t, repo, "empty-remote-drift")
+	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApprovedStoreChain(t, store, transaction)
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed delivery")
+	request := nativePrePushRequest(t, repo, receipt, artifacts)
+
+	originalHook := finalGateAuthorizationHook
+	finalGateAuthorizationHook = func() {
+		finalGateAuthorizationHook = originalHook
+		gitSnapshot(t, repo, "push", "origin", "HEAD:refs/heads/"+branch)
+	}
+	t.Cleanup(func() { finalGateAuthorizationHook = originalHook })
+	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result != GateInvalidated || !strings.Contains(got.Reason, "final authorization") {
+		t.Fatalf("remote bootstrap drift evaluation = %#v", got)
+	}
+}
+
+func TestBuildPushTargetEmptyRemoteBootstrapRequiresReviewedDeliveryBase(t *testing.T) {
+	repo, _ := emptyRemoteTrackingRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	gitSnapshot(t, repo, "commit", "-am", "reviewed delivery")
+	if _, _, err := buildPushTarget(context.Background(), repo, "", "", ""); err == nil || !strings.Contains(err.Error(), "reviewed base tree") {
+		t.Fatalf("bootstrap without reviewed base tree error = %v", err)
+	}
+}
+
+func TestBuildPushTargetKeepsFailingClosedWhenRemoteAdvertisesOnlyOtherRefs(t *testing.T) {
+	repo, _ := emptyRemoteTrackingRepo(t)
+	reviewedBaseTree := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}"))
+	gitSnapshot(t, repo, "push", "origin", "HEAD:refs/heads/other")
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	gitSnapshot(t, repo, "commit", "-am", "reviewed delivery")
+	if _, _, err := buildPushTarget(context.Background(), repo, "", reviewedBaseTree, ""); err == nil || !strings.Contains(err.Error(), "advertised remote branch") {
+		t.Fatalf("non-empty remote without tracked branch error = %v", err)
+	}
+}
+
+func TestBuildPushTargetKeepsFailingClosedOnUnrelatedAdvertisedHistory(t *testing.T) {
+	repo, _ := emptyRemoteTrackingRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	reviewedBaseTree := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}"))
+	gitSnapshot(t, repo, "checkout", "--orphan", "unrelated")
+	writeSnapshotFile(t, repo, "unrelated.txt", "unrelated\n")
+	gitSnapshot(t, repo, "add", "unrelated.txt")
+	gitSnapshot(t, repo, "commit", "-m", "unrelated")
+	gitSnapshot(t, repo, "push", "origin", "HEAD:refs/heads/"+branch)
+	gitSnapshot(t, repo, "checkout", branch)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	gitSnapshot(t, repo, "commit", "-am", "reviewed delivery")
+	if _, _, err := buildPushTarget(context.Background(), repo, "", reviewedBaseTree, ""); err == nil || !strings.Contains(err.Error(), "0 merge bases") {
+		t.Fatalf("unrelated advertised history error = %v", err)
+	}
+}
+
+func TestBuildPushTargetEmptyRemoteBootstrapRequiresMatchingPushDestination(t *testing.T) {
+	repo, _ := emptyRemoteTrackingRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	reviewedBaseTree := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}"))
+	other := filepath.Join(t.TempDir(), "other.git")
+	gitSnapshot(t, repo, "init", "--bare", other)
+	gitSnapshot(t, repo, "remote", "add", "publish", other)
+	gitSnapshot(t, repo, "config", "branch."+branch+".pushRemote", "publish")
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	gitSnapshot(t, repo, "commit", "-am", "reviewed delivery")
+	if _, _, err := buildPushTarget(context.Background(), repo, "", reviewedBaseTree, ""); err == nil || !strings.Contains(err.Error(), "bootstrap") {
+		t.Fatalf("mismatched bootstrap push destination error = %v", err)
+	}
+}
+
+func TestBuildPushTargetEmptyRemoteKeepsDetachedHeadFailClosed(t *testing.T) {
+	repo, _ := emptyRemoteTrackingRepo(t)
+	reviewedBaseTree := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}"))
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	gitSnapshot(t, repo, "commit", "-am", "reviewed delivery")
+	gitSnapshot(t, repo, "checkout", "--detach")
+	if _, _, err := buildPushTarget(context.Background(), repo, "", reviewedBaseTree, ""); err == nil || !strings.Contains(err.Error(), "--base-ref") {
+		t.Fatalf("detached HEAD with empty remote error = %v", err)
+	}
+}
+
+func TestValidGitTreeRejectsNullOID(t *testing.T) {
+	for _, value := range []string{strings.Repeat("0", 40), strings.Repeat("0", 64)} {
+		if validGitTree(value) {
+			t.Fatalf("validGitTree(%q) accepted the reserved null OID", value)
+		}
+	}
+	if !validGitTree(strings.Repeat("0", 39) + "1") {
+		t.Fatal("validGitTree rejected a valid non-null object ID")
+	}
+}
+
+func TestBuildPushTargetEmptyRemoteRejectsAmbiguousReviewedDeliveryBase(t *testing.T) {
+	repo, _ := emptyRemoteTrackingRepo(t)
+	reviewedBaseTree := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}"))
+	writeSnapshotFile(t, repo, "tracked.txt", "temporary change\n")
+	gitSnapshot(t, repo, "commit", "-am", "temporary change")
+	gitSnapshot(t, repo, "revert", "--no-edit", "HEAD")
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	gitSnapshot(t, repo, "commit", "-am", "reviewed delivery")
+	if _, _, err := buildPushTarget(context.Background(), repo, "", reviewedBaseTree, ""); err == nil || !strings.Contains(err.Error(), "missing or ambiguous") {
+		t.Fatalf("ambiguous reviewed delivery base error = %v", err)
+	}
+}
+
+// TestBootstrapDisclosureScopeExcludesCommitMetadata pins the documented
+// contract boundary of bootstrap ancestry disclosure: review authority covers
+// repository CONTENT — tracked paths and blob bytes — and never commit or tag
+// metadata. A pre-base commit created with `git commit --allow-empty` touches
+// zero paths and introduces zero blobs, so it passes both disclosure rules
+// even though its commit OBJECT — including the secret message below — is
+// transferred by the bootstrap push. Commit messages are not review-bound
+// anywhere in the gate model: an ordinary (non-bootstrap) pre-push equally
+// publishes the reviewed delivery commit's message without any receipt
+// binding it, so bootstrap widens no guarantee that ever existed (see the
+// validateBootstrapAncestryDisclosure doc). Any future change that intends
+// to close this boundary must consciously flip this test.
+func TestBootstrapDisclosureScopeExcludesCommitMetadata(t *testing.T) {
+	repo, _ := emptyRemoteTrackingRepo(t)
+	gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "SECRET-COMMIT-MESSAGE-MARKER token=hunter2")
+	secretCommit := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "tag", "-a", "-m", "SECRET-TAG-MESSAGE-MARKER", "pre-base-secret")
+	writeSnapshotFile(t, repo, "reviewed-base.txt", "reviewed base\n")
+	gitSnapshot(t, repo, "add", "reviewed-base.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed base")
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	transaction, receipt, artifacts := nativeGateFixture(t, repo, "bootstrap-commit-metadata-scope")
+	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApprovedStoreChain(t, store, transaction)
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed delivery")
+
+	request := nativePrePushRequest(t, repo, receipt, artifacts)
+	if request.Push == nil || request.Push.Boundary.Source != PrePRBoundaryEmptyRemoteBootstrap {
+		t.Fatalf("commit-metadata scope pre-push request = %#v", request.Push)
+	}
+	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result != GateAllow {
+		t.Fatalf("bootstrap with secret pre-base commit message = %#v", got)
+	}
+	if !strings.Contains(gitSnapshot(t, repo, "rev-list", "HEAD"), secretCommit) {
+		t.Fatal("secret pre-base commit is not part of the published history")
+	}
+	// Annotated tag objects point AT commits; nothing reachable from a
+	// commit points back at a tag, so a branch bootstrap push transfers no
+	// tag objects and therefore no tag messages.
+	tagObject := trimGit(gitSnapshot(t, repo, "rev-parse", "pre-base-secret"))
+	if strings.Contains(gitSnapshot(t, repo, "rev-list", "--objects", "HEAD"), tagObject) {
+		t.Fatal("annotated tag object is reachable from the published history")
+	}
 }

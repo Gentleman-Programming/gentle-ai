@@ -215,7 +215,7 @@ func deriveCurrentChangesBoundaryCompatibility(ctx context.Context, repo string,
 	if !disjointPaths(deliveredPaths, basePaths) {
 		return BaseAdvanceCompatibility{}, errors.New("boundary advance overlaps delivered paths")
 	}
-	if err := validateCompactPublicationRange(ctx, repo, state.GenesisPaths, refs); err != nil {
+	if err := validateReviewedPublicationRange(ctx, repo, state.GenesisPaths, refs); err != nil {
 		return BaseAdvanceCompatibility{}, err
 	}
 	mergedOutput, err := runGit(ctx, repo, nil, nil, "merge-tree", "--write-tree", refs.Selection.Commit, refs.HeadCommit)

@@ -240,10 +240,14 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if request.Gate == GatePrePush && record.State.InitialSnapshot.Kind == TargetCurrentChanges && resolvedPrePR.DeliveredCommitCount != 1 {
 		return invalid("pre-push current-changes receipt requires exactly one delivery commit")
 	}
-	validatePublicationRange := request.Gate == GatePrePush && record.State.InitialSnapshot.Kind == TargetBaseDiff ||
+	// An empty-remote bootstrap publishes the candidate's complete history,
+	// so publication-range validation is mandatory for every target kind —
+	// including current-changes; no kind may skip it.
+	bootstrapPublication := resolvedPrePR != nil && resolvedPrePR.Selection.Source == PrePRBoundaryEmptyRemoteBootstrap
+	validatePublicationRange := request.Gate == GatePrePush && (record.State.InitialSnapshot.Kind == TargetBaseDiff || bootstrapPublication) ||
 		record.State.InitialSnapshot.Kind == TargetBaseWorkspaceOverlay && (request.Gate == GatePrePush || request.Gate == GatePrePR)
 	if validatePublicationRange {
-		if err := validateCompactPublicationRange(ctx, repo, record.State.GenesisPaths, resolvedPrePR); err != nil {
+		if err := validateReviewedPublicationRange(ctx, repo, record.State.GenesisPaths, resolvedPrePR); err != nil {
 			return invalid(err.Error())
 		}
 	}
@@ -506,7 +510,7 @@ func buildCompactGateRequestWithPushBase(ctx context.Context, repo string, state
 		}
 		request.Target = Target{Kind: TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
 	case GatePrePush:
-		target, push, err := buildPushTarget(ctx, repo, input.BaseRef, deliveryBaseTree)
+		target, push, err := buildPushTarget(ctx, repo, input.BaseRef, deliveryBaseTree, state.InitialSnapshot.BaseTree)
 		if err != nil {
 			return GateRequest{}, nil, err
 		}
@@ -604,24 +608,26 @@ func validateCompactCommittedTrackedScope(ctx context.Context, repo string, requ
 	return errors.New("committed approved target has dirty tracked changes")
 }
 
-func validateCompactPublicationRange(ctx context.Context, repo string, genesis []string, refs *resolvedPrePRRefs) error {
+// validateReviewedPublicationRange enforces the governing publication
+// invariant: nothing newly published may exceed what review authorized. The
+// receipt's authority is the reviewed base→candidate delta plus the immutable
+// base tree it binds, so every path touched anywhere in the delivered range
+// base..head must stay inside the immutable genesis scope. For an empty-remote
+// bootstrap the range base is the resolved reviewed delivery base commit —
+// never the zero-OID sentinel — and the pre-base ancestry published in full by
+// the first push must additionally satisfy the reviewed base tree disclosure
+// invariant.
+func validateReviewedPublicationRange(ctx context.Context, repo string, genesis []string, refs *resolvedPrePRRefs) error {
+	if refs.Selection.Source == PrePRBoundaryEmptyRemoteBootstrap {
+		if err := validateBootstrapAncestryDisclosure(ctx, repo, refs.BaseCommit); err != nil {
+			return err
+		}
+	}
 	output, err := runGit(ctx, repo, nil, nil, "log", "-m", "--format=", "--name-only", "-z", "--no-renames", refs.BaseCommit+".."+refs.HeadCommit)
 	if err != nil {
 		return fmt.Errorf("inspect complete publication range: %w", err)
 	}
-	paths := []string{}
-	seen := map[string]struct{}{}
-	for _, path := range strings.Split(string(output), "\x00") {
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		paths = append(paths, path)
-	}
-	paths, err = canonicalPaths(paths)
+	paths, err := canonicalPaths(splitNullSeparatedPaths(output))
 	if err == nil {
 		err = pathsAreSubset(paths, genesis)
 	}
