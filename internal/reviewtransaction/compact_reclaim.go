@@ -49,8 +49,13 @@ type CompactReclaimRecord struct {
 	QuarantinePath string    `json:"quarantine_path"`
 	Residue        []string  `json:"residue"`
 	// InvalidRecoveryEdge carries the natively re-derived edge-invalidity
-	// proof; it is set only for reconcile-authority quarantines.
+	// proof; it is set only for reconcile-authority quarantines of the
+	// unchanged-target class.
 	InvalidRecoveryEdge *CompactInvalidRecoveryEdgeProof `json:"invalid_recovery_edge,omitempty"`
+	// MalformedRecoveryAuthorization carries the natively re-derived
+	// pre-contract authorization proof; it is set only for reconcile-authority
+	// quarantines of the malformed-recovery-authorization class.
+	MalformedRecoveryAuthorization *CompactMalformedRecoveryAuthorizationProof `json:"malformed_recovery_authorization,omitempty"`
 }
 
 // compactAuthoritativeArtifact reports whether a store-entry name carries

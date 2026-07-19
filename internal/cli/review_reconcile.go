@@ -16,7 +16,7 @@ type ReviewReconcileAuthorityResult struct {
 }
 
 func RunReviewReconcileAuthority(args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review reconcile-authority", stdout, "Quarantine one compact-v2 recovery successor whose recovery edge natively re-derives as invalid for exactly the unchanged-target class, with a persisted audit record carrying the re-derived proof; valid edges, incomplete entries, and non-recovery records are refused. On partial failure the prepared audit record JSON is still emitted to stdout and the command exits non-zero.")
+	flags := newReviewFlagSet("review reconcile-authority", stdout, "Quarantine one compact-v2 recovery successor whose recovery edge natively re-derives as invalid for exactly one supported class — an unchanged target, or a historical pre-contract free-form maintainer authorization on an otherwise structurally consistent edge — with a persisted audit record carrying the re-derived proof; valid edges, incomplete entries, non-recovery records, and structurally inconsistent edges are refused. On partial failure the prepared audit record JSON is still emitted to stdout and the command exits non-zero.")
 	cwd := flags.String("cwd", ".", "repository path")
 	predecessor := flags.String("predecessor-lineage", "", "exact recovery predecessor lineage; it stays untouched")
 	expectedPredecessor := flags.String("expected-predecessor-revision", "", "exact predecessor revision")

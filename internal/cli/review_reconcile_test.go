@@ -199,6 +199,195 @@ func TestReviewReconcileAuthorityQuarantinesInvalidEdgeAndRestoresDiscovery(t *t
 	}
 }
 
+// preContractAuthorizationCLIFixture persists an escalated docs-only
+// predecessor with its receipt and a changed-target escalated recovery
+// successor whose sole edge anomaly is a pre-contract free-form maintainer
+// authorization, then restores the clean workspace.
+func preContractAuthorizationCLIFixture(t *testing.T, repo string) (predecessorRevision, successorRevision string) {
+	t.Helper()
+	incident := filepath.Join(repo, "docs", "incident.md")
+	if err := os.MkdirAll(filepath.Dir(incident), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(incident, []byte("incident\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	predecessorSnapshot, err := builder.Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{"docs/incident.md"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	risk, lines, err := builder.ClassifySnapshotRisk(context.Background(), predecessorSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if risk != reviewtransaction.RiskLow {
+		t.Fatalf("pre-contract fixture risk = %q", risk)
+	}
+	policy := sha256.Sum256([]byte("reconcile-policy"))
+	policyHash := "sha256:" + hex.EncodeToString(policy[:])
+	predecessorState, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+		LineageID: "reconcile-incident", Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
+		Snapshot: predecessorSnapshot, PolicyHash: policyHash, RiskLevel: risk, SelectedLenses: []string{}, OriginalChangedLines: &lines,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessorState.State = reviewtransaction.StateEscalated
+	predecessorRevision = writeReconcileCLIRecord(t, repo, predecessorState)
+	receipt, err := predecessorState.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptPath := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", predecessorState.LineageID, "review-receipt.json")
+	if err := reviewtransaction.WriteCompactReceiptAtomic(receiptPath, receipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(incident, []byte("incident retried with a changed target\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	successorSnapshot, err := builder.Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{"docs/incident.md"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	successorRisk, successorLines, err := builder.ClassifySnapshotRisk(context.Background(), successorSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	successorState, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+		LineageID: "reconcile-incident-g2", Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 2,
+		Snapshot: successorSnapshot, PolicyHash: policyHash, RiskLevel: successorRisk, SelectedLenses: []string{}, OriginalChangedLines: &successorLines,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	successorState.Recovery = &reviewtransaction.CompactRecoveryProvenance{
+		PredecessorLineageID: predecessorState.LineageID, PredecessorRevision: predecessorRevision,
+		Disposition: reviewtransaction.RecoveryEscalated, Reason: "retry after escalation", Actor: "maintainer@example.com",
+		RecoveredAt:             time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC),
+		MaintainerAuthorization: "maintainer approved incident retry per the 2.1.6 runbook",
+	}
+	successorRevision = writeReconcileCLIRecord(t, repo, successorState)
+	if err := os.Remove(incident); err != nil {
+		t.Fatal(err)
+	}
+	return predecessorRevision, successorRevision
+}
+
+func preContractReconcileCLIArgs(repo, predecessorRevision, successorRevision, authorization string) []string {
+	return []string{
+		"reconcile-authority", "--cwd", repo,
+		"--predecessor-lineage", "reconcile-incident", "--expected-predecessor-revision", predecessorRevision,
+		"--successor-lineage", "reconcile-incident-g2", "--expected-successor-revision", successorRevision,
+		"--reason", "quarantine pre-contract recovery authorization", "--actor", "maintainer@example.com",
+		"--maintainer-authorization", authorization,
+	}
+}
+
+func preContractReconcileCLIBinding(predecessorRevision, successorRevision string) string {
+	return "gentle-ai.review-reconcile-authorization/v1\npredecessor_lineage=reconcile-incident\npredecessor_revision=" + predecessorRevision +
+		"\nsuccessor_lineage=reconcile-incident-g2\nsuccessor_revision=" + successorRevision +
+		"\nactor=maintainer@example.com\nreason=quarantine pre-contract recovery authorization"
+}
+
+func TestReviewReconcileAuthorityRepairsPreContractAuthorizationAndRestoresLifecycle(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	approveDiscoveryMarkdown(t, repo, "review-reconcile-valid", "docs/valid.md", "valid\n")
+	predecessorRevision, successorRevision := preContractAuthorizationCLIFixture(t, repo)
+
+	var statusOutput bytes.Buffer
+	if err := RunReview([]string{"status", "--cwd", repo}, &statusOutput); err != nil {
+		t.Fatalf("review status over pre-contract graph: %v", err)
+	}
+	var before reviewtransaction.AuthorityStatusReport
+	decodeStrictReviewJSON(t, statusOutput.Bytes(), &before)
+	if before.Complete || before.Authoritative {
+		t.Fatalf("pre-contract status = complete %v authoritative %v", before.Complete, before.Authoritative)
+	}
+	malformedProblem := false
+	for _, entry := range before.Entries {
+		if entry.LineageID != "reconcile-incident-g2" {
+			continue
+		}
+		for _, problem := range entry.Problems {
+			malformedProblem = malformedProblem || strings.Contains(problem, "escalated recovery requires an exact maintainer authorization binding")
+		}
+	}
+	if !malformedProblem {
+		t.Fatalf("pre-contract status problems = %#v", before.Entries)
+	}
+
+	var blockedOutput bytes.Buffer
+	err := RunReview([]string{
+		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+		"--gate", string(reviewtransaction.GatePostApply),
+	}, &blockedOutput)
+	if err == nil {
+		t.Fatal("pre-contract recovery edge did not deny lineage-less gate validation")
+	}
+	failure := decodeReviewIntegrationFailure(t, blockedOutput.Bytes())
+	if failure.Code != "authority_corrupted" {
+		t.Fatalf("pre-contract gate failure = %#v", failure)
+	}
+
+	var reconcileOutput bytes.Buffer
+	if err := RunReview(preContractReconcileCLIArgs(repo, predecessorRevision, successorRevision, preContractReconcileCLIBinding(predecessorRevision, successorRevision)), &reconcileOutput); err != nil {
+		t.Fatalf("review reconcile-authority pre-contract repair: %v\n%s", err, reconcileOutput.String())
+	}
+	var result ReviewReconcileAuthorityResult
+	decodeStrictReviewJSON(t, reconcileOutput.Bytes(), &result)
+	if result.Operation != "review/reconcile-authority" || result.Record.LineageID != "reconcile-incident-g2" ||
+		result.Record.Status != reviewtransaction.CompactReclaimCommitted || result.Record.InvalidRecoveryEdge != nil {
+		t.Fatalf("review reconcile-authority pre-contract result = %#v", result)
+	}
+	recordedDigest := sha256.Sum256([]byte("maintainer approved incident retry per the 2.1.6 runbook"))
+	if result.Record.MalformedRecoveryAuthorization == nil ||
+		result.Record.MalformedRecoveryAuthorization.PredecessorLineageID != "reconcile-incident" ||
+		result.Record.MalformedRecoveryAuthorization.PredecessorRevision != predecessorRevision ||
+		result.Record.MalformedRecoveryAuthorization.SuccessorRevision != successorRevision ||
+		result.Record.MalformedRecoveryAuthorization.RecordedAuthorizationSHA256 != "sha256:"+hex.EncodeToString(recordedDigest[:]) ||
+		!strings.Contains(result.Record.MalformedRecoveryAuthorization.ValidationError, "exact maintainer authorization binding") {
+		t.Fatalf("review reconcile-authority pre-contract proof = %#v", result.Record.MalformedRecoveryAuthorization)
+	}
+	if _, err := os.Stat(filepath.Join(result.Record.QuarantinePath, "residue", "review-state.json")); err != nil {
+		t.Fatalf("quarantined successor state missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", "reconcile-incident-g2")); !os.IsNotExist(err) {
+		t.Fatalf("reconciled successor entry still present: %v", err)
+	}
+
+	statusOutput.Reset()
+	if err := RunReview([]string{"status", "--cwd", repo}, &statusOutput); err != nil {
+		t.Fatalf("review status after pre-contract repair: %v", err)
+	}
+	var after reviewtransaction.AuthorityStatusReport
+	decodeStrictReviewJSON(t, statusOutput.Bytes(), &after)
+	if !after.Complete || !after.Authoritative {
+		t.Fatalf("post-repair status = complete %v authoritative %v", after.Complete, after.Authoritative)
+	}
+
+	var validateOutput bytes.Buffer
+	if err := RunReview([]string{
+		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+		"--gate", string(reviewtransaction.GatePostApply),
+	}, &validateOutput); err != nil {
+		t.Fatalf("post-repair lineage-less validation: %v\n%s", err, validateOutput.String())
+	}
+	var validated ReviewValidateResult
+	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, validateOutput.Bytes()).Result, &validated)
+	if !validated.Allowed || validated.Context.LineageID != "review-reconcile-valid" {
+		t.Fatalf("post-repair validation = %#v", validated)
+	}
+
+	if err := RunReview(preContractReconcileCLIArgs(repo, predecessorRevision, successorRevision, preContractReconcileCLIBinding(predecessorRevision, successorRevision)), &bytes.Buffer{}); err == nil {
+		t.Fatal("pre-contract reconcile-authority replayed after quarantine")
+	}
+}
+
 func TestReviewReconcileAuthorityRequiresFlagsAndExactBinding(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	predecessorRevision, successorRevision := invalidRecoveryEdgeCLIFixture(t, repo)

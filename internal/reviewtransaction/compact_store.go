@@ -41,6 +41,15 @@ var ErrLegacyReadOnly = errors.New("legacy v1 review lineage is read-only")
 // anomaly so reconcile-authority can gate quarantine to exactly this class.
 var errCompactRecoveryTargetUnchanged = errors.New("escalated recovery successor target has not changed")
 
+// errCompactRecoveryAuthorizationInexact identifies the escalated-recovery
+// authorization-binding anomaly so reconcile-authority can gate quarantine of
+// historical pre-contract free-form authorizations to exactly this class.
+var errCompactRecoveryAuthorizationInexact = errors.New("escalated recovery requires an exact maintainer authorization binding")
+
+// compactRecoveryAuthorizationSchema is the first line of the exact six-line
+// escalated-recovery maintainer authorization binding.
+const compactRecoveryAuthorizationSchema = "gentle-ai.review-recovery-authorization/v1"
+
 // ErrHistoricalCompatReadOnly denies ordinary mutation of authority loaded
 // through the retired-field compatibility path.
 var ErrHistoricalCompatReadOnly = errors.New("historical compatibility authority is read-only")
@@ -370,7 +379,7 @@ func compactHistoricalFailedValidator(state CompactState) bool {
 }
 
 func compactRecoveryAuthorizationBinding(lineage, revision, targetIdentity, actor, reason string) string {
-	return "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + lineage +
+	return compactRecoveryAuthorizationSchema + "\npredecessor_lineage=" + lineage +
 		"\npredecessor_revision=" + revision + "\ntarget_identity=" + targetIdentity +
 		"\nactor=" + strings.TrimSpace(actor) + "\nreason=" + strings.TrimSpace(reason)
 }
@@ -390,7 +399,7 @@ func compactRecoveryAuthorizationError(snapshot Snapshot) error {
 	if projection == "" {
 		projection = ProjectionWorkspace
 	}
-	return fmt.Errorf("escalated recovery requires an exact maintainer authorization binding (projection=%s target_identity=%s)", projection, snapshot.Identity)
+	return fmt.Errorf("%w (projection=%s target_identity=%s)", errCompactRecoveryAuthorizationInexact, projection, snapshot.Identity)
 }
 
 func compactRecoveryAddsGenesisPath(predecessor CompactState, live Snapshot) bool {
