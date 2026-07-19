@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -700,7 +701,7 @@ func lastDecidePayload(chain reviewtransaction.ValidatedChain) *reviewtransactio
 
 func sha256DecideSha256(content string) string {
 	sum := sha256.Sum256([]byte("gentle-ai.review-decide-identity/v1\x00" + content))
-	return "sha256:" + hexEncodeLower(sum[:])
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func isLowercaseSHA256(value string) bool {
@@ -716,16 +717,4 @@ func isLowercaseSHA256(value string) bool {
 		}
 	}
 	return true
-}
-
-// hexEncodeLower is duplicated locally so we don't drag crypto/hex into this
-// file's top-level imports just for one short digest call.
-func hexEncodeLower(bytes []byte) string {
-	const alphabet = "0123456789abcdef"
-	out := make([]byte, len(bytes)*2)
-	for index, value := range bytes {
-		out[index*2] = alphabet[value>>4]
-		out[index*2+1] = alphabet[value&0x0f]
-	}
-	return string(out)
 }

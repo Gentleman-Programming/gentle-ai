@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -363,9 +361,22 @@ func TestRunReviewDecideRejectsMalformedFlagsBeforeTouchingStore(t *testing.T) {
 	if chain.HeadRevision != headBefore {
 		t.Fatalf("malformed-flag run mutated chain head: before=%q after=%q", headBefore, chain.HeadRevision)
 	}
-	// io.Discard sanity check: ensure the helper works without side effects on stdout.
-	_ = RunReviewDecide([]string{"--help"}, io.Discard)
-	if !errors.Is(nil, nil) {
-		t.Fatal("sanity check failed")
+}
+
+func TestReviewDecideTestsContainNoDeadNilAssertion(t *testing.T) {
+	content, err := os.ReadFile("review_decide_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadAssertion := "errors." + "Is(nil, nil)"
+	if strings.Contains(string(content), deadAssertion) {
+		t.Fatalf("review_decide_test.go still contains dead assertion %q", deadAssertion)
+	}
+}
+
+func TestSHA256DecideSHA256UsesLowercaseHex(t *testing.T) {
+	const want = "sha256:c71f4801f298b7afc61eb67f89d7ee9f7b0324fe2c0c34da20b266516bfc8f8f"
+	if got := sha256DecideSha256("fixture-identity"); got != want {
+		t.Fatalf("sha256DecideSha256() = %q, want %q", got, want)
 	}
 }
