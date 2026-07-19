@@ -74,6 +74,38 @@ func TestReviewFacadeStartStagedProjectionFreezesOnlyIndex(t *testing.T) {
 	}
 }
 
+func TestReviewFacadeStartEmitsCaptureBindingInputs(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\ncandidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Action != "created" || started.TargetIdentity != record.State.InitialSnapshot.Identity {
+		t.Fatalf("start target identity = %q, want frozen %q (action %q)", started.TargetIdentity, record.State.InitialSnapshot.Identity, started.Action)
+	}
+	if len(started.SelectedLenses) == 0 || len(started.LensBindings) != len(started.SelectedLenses) {
+		t.Fatalf("start lens bindings = %#v, want one per selected lens %v", started.LensBindings, started.SelectedLenses)
+	}
+	for index, binding := range started.LensBindings {
+		if binding.Lens != started.SelectedLenses[index] || binding.Order != index {
+			t.Fatalf("lens binding[%d] = %#v, want {%q %d}", index, binding, started.SelectedLenses[index], index)
+		}
+	}
+	resumed := startFacadeReview(t, repo)
+	if resumed.Action != "resumed" || resumed.TargetIdentity != started.TargetIdentity ||
+		!reflect.DeepEqual(resumed.LensBindings, started.LensBindings) {
+		t.Fatalf("resumed binding inputs = %#v, want %#v", resumed, started)
+	}
+}
+
 func TestReviewFacadeStartReusesStagedAuthorityForCommittedBaseDiff(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
@@ -542,7 +574,7 @@ func TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible(t *testing.T
 	if err := json.Unmarshal(output.Bytes(), &fields); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"action", "changed_files", "changed_lines", "correction_budget", "lenses_required", "lineage_id", "operation", "projection", "risk_level", "selected_lenses", "state"}
+	want := []string{"action", "changed_files", "changed_lines", "correction_budget", "lens_bindings", "lenses_required", "lineage_id", "operation", "projection", "risk_level", "selected_lenses", "state", "target_identity"}
 	got := make([]string, 0, len(fields))
 	for field := range fields {
 		got = append(got, field)
@@ -576,7 +608,8 @@ func TestReviewFacadeFinalizeReceiptPublicationFailureIsExactlyReplayable(t *tes
 
 	original := writeCompactFacadeReceipt
 	writes := 0
-	writeCompactFacadeReceipt = func(path string, got reviewtransaction.CompactReceipt) error {
+	writeCompactFacadeReceipt = func(_ context.Context, store reviewtransaction.CompactStore, got reviewtransaction.CompactReceipt) error {
+		path := store.ReceiptPath()
 		writes++
 		if !reflect.DeepEqual(got, receipt) {
 			t.Fatalf("replay receipt = %#v, want %#v", got, receipt)
@@ -1983,7 +2016,9 @@ func prepareFacadeReceiptPending(t *testing.T) facadeReceiptPendingFixture {
 	}
 	sentinel := errors.New("injected receipt publication interruption")
 	original := writeCompactFacadeReceipt
-	writeCompactFacadeReceipt = func(string, reviewtransaction.CompactReceipt) error { return sentinel }
+	writeCompactFacadeReceipt = func(context.Context, reviewtransaction.CompactStore, reviewtransaction.CompactReceipt) error {
+		return sentinel
+	}
 	err = RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--evidence", evidencePath}, io.Discard)
 	writeCompactFacadeReceipt = original
 	if !errors.Is(err, sentinel) {
@@ -2009,7 +2044,7 @@ func assertFacadeReceiptReplayRejected(t *testing.T, fixture facadeReceiptPendin
 	t.Helper()
 	original := writeCompactFacadeReceipt
 	writes := 0
-	writeCompactFacadeReceipt = func(string, reviewtransaction.CompactReceipt) error {
+	writeCompactFacadeReceipt = func(context.Context, reviewtransaction.CompactStore, reviewtransaction.CompactReceipt) error {
 		writes++
 		return errors.New("unexpected receipt write")
 	}

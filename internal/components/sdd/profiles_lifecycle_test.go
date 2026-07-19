@@ -58,7 +58,7 @@ func TestProfileLifecycle_FullCRUD(t *testing.T) {
 		OrchestratorModel: haikuModel,
 	}
 
-	overlayBytes, err := GenerateProfileOverlay(cheapProfile, home)
+	overlayBytes, err := GenerateProfileOverlay(cheapProfile, home, nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay(): %v", err)
 	}
@@ -121,7 +121,7 @@ func TestProfileLifecycle_FullCRUD(t *testing.T) {
 		Name:              "cheap",
 		OrchestratorModel: sonnetModel,
 	}
-	editOverlayBytes, err := GenerateProfileOverlay(editedProfile, home)
+	editOverlayBytes, err := GenerateProfileOverlay(editedProfile, home, nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay() for edit: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestProfileLifecycle_TwoProfiles(t *testing.T) {
 	cheapOverlay, err := GenerateProfileOverlay(model.Profile{
 		Name:              "cheap",
 		OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"},
-	}, home)
+	}, home, nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay(cheap): %v", err)
 	}
@@ -233,7 +233,7 @@ func TestProfileLifecycle_TwoProfiles(t *testing.T) {
 	premiumOverlay, err := GenerateProfileOverlay(model.Profile{
 		Name:              "premium",
 		OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-opus-4-5"},
-	}, home)
+	}, home, nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay(premium): %v", err)
 	}

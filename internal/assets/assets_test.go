@@ -426,20 +426,47 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 	for _, want := range []string{
 		`spawn("gentle-ai"`,
 		`"review", "capture-result"`,
+		`"review", "preserve-result"`,
 		`"--lineage", binding.lineage`,
 		`"--target", binding.target`,
 		`"--lens", binding.lens`,
 		`"--order", String(binding.order)`,
 		`"--input", "-"`,
+		`"--preflight"`,
+		`GENTLE_AI_REVIEW_CWD`,
 		`"tool.execute.before"`,
 		`output.args.background === true`,
+		`await preflightCapture(captureCwd(worktree, directory), parseBinding(output.args.prompt, output.args.subagent_type))`,
 		`!BINDING.test(input.args.prompt)`,
-		`output.output = await captureResult`,
+		`const lens = input.args.subagent_type`,
+		`const binding = parseBinding(input.args.prompt, lens)`,
+		`const cwd = captureCwd(worktree, directory)`,
+		// The replayable payload is extracted exactly once before capture, so a
+		// capture failure preserves the extracted strict JSON, never the task
+		// envelope that `review capture-result --input` would reject on replay.
+		`result = reviewerResult(output.output)`,
+		`output.output = await captureResult(cwd, binding, result)`,
+		`throw await preservedCaptureFailure(cwd, binding, result, cause)`,
+		// Envelope extraction itself can fail; only then is the raw envelope
+		// preserved, under a distinct extraction-failure cause.
+		`throw await preservedCaptureFailure(cwd, binding, output.output, cause)`,
+		`raw reviewer result preserved for recovery`,
+		`raw reviewer result could not be preserved`,
+		// Double failure (capture and preserve both failed) must embed the
+		// bounded raw payload in the thrown error so the transcript retains it.
+		`raw reviewer result follows for manual recovery`,
+		`PRESERVE_EMBED_LIMIT`,
+		// An older installed gentle-ai without --preflight must degrade
+		// gracefully instead of hard-blocking every bound lens launch.
+		`flag provided but not defined`,
 		`export default ReviewResultArtifactsPlugin`,
 	} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("review-result-artifacts.ts missing %q", want)
 		}
+	}
+	if strings.Contains(source, `.slice("review-".length)`) {
+		t.Fatal("review-result-artifacts.ts must preserve the exact full selected lens; found review- prefix stripping")
 	}
 	for _, forbidden := range []string{"writeFile", "link(", "chmod(", "createHash", "export {", "export const"} {
 		if strings.Contains(source, forbidden) {
@@ -755,6 +782,77 @@ func TestOpenCodeSDDOrchestratorPreflightDoesNotUseVisibleCodesOrCanonicalUIValu
 		if strings.Contains(uiBlock, forbidden) {
 			t.Fatalf("preflight UI instructions should not expose option codes or canonical values; found %q", forbidden)
 		}
+	}
+}
+
+func TestClaudeSDDWorkflowRequiresSessionPreflight(t *testing.T) {
+	content := MustRead("claude/sdd-orchestrator-workflow.md")
+
+	for _, required := range []string{
+		"### SDD Session Preflight (HARD GATE)",
+		"Before executing ANY SDD command or natural-language SDD request",
+		"**Execution mode**",
+		"**Artifact store**",
+		"**Chained PR strategy**",
+		"**Review budget**",
+		"`openspec/config.yaml`, existing SDD artifacts, previous `sdd-init` results, or installed SDD assets do NOT satisfy session preflight",
+		"Use the built-in `AskUserQuestion` tool for SDD Session Preflight",
+		"Do NOT render the full preflight menu as plain chat text",
+		"Ask all four preflight groups in one single `AskUserQuestion` tool call",
+		"Do NOT run this as a sequential wizard",
+		"Do NOT issue four separate `AskUserQuestion` tool calls",
+		"Match the user's current language and active persona",
+		"Do NOT show option codes",
+		"Do NOT show canonical values",
+		"map the selected human labels to canonical values internally",
+		"1. Pace: Interactive, Automatic.",
+		"2. Artifacts: OpenSpec, Engram, Both.",
+		"3. PRs: Ask me, Single PR, Chained, Auto.",
+		"4. Review: 400 lines, 800 lines, Other.",
+		"### SDD Entry Routing (MANDATORY)",
+		"Never launch `sdd-apply` just because the user asked to implement a feature",
+		"Only launch `sdd-apply` when all are true",
+		"If any dependency is missing, STOP and propose `/sdd-new` or `/sdd-ff`; do not implement",
+		"or `hybrid` when Engram is callable",
+		"Both -> `hybrid`",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("claude/sdd-orchestrator-workflow.md missing required preflight wording %q", required)
+		}
+	}
+
+	for _, forbidden := range []string{
+		"`question` tool",
+		"groups as tabs",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("claude/sdd-orchestrator-workflow.md must use Claude Code's AskUserQuestion mechanics, not OpenCode wording %q", forbidden)
+		}
+	}
+
+	if strings.Contains(content, "`both`") {
+		t.Fatal("claude/sdd-orchestrator-workflow.md must not use `both` as a canonical artifact-store value; the Claude asset vocabulary is `hybrid` end to end (Dispatcher Guard, Artifact Store Policy/Mode)")
+	}
+
+	for _, section := range []string{"### Execution Mode", "### Artifact Store Mode"} {
+		idx := strings.Index(content, section)
+		if idx < 0 {
+			t.Fatalf("claude/sdd-orchestrator-workflow.md missing section %q", section)
+		}
+		body := content[idx+len(section):]
+		if end := strings.Index(body, "\n### "); end >= 0 {
+			body = body[:end]
+		}
+		if !strings.Contains(body, "This is collected by `SDD Session Preflight`") {
+			t.Fatalf("claude/sdd-orchestrator-workflow.md section %q must state its value is collected by SDD Session Preflight instead of independently re-asking", section)
+		}
+	}
+
+	preflight := strings.Index(content, "### SDD Session Preflight (HARD GATE)")
+	routing := strings.Index(content, "### SDD Entry Routing (MANDATORY)")
+	initGuard := strings.Index(content, "### SDD Init Guard (MANDATORY)")
+	if !(preflight < routing && routing < initGuard) {
+		t.Fatalf("claude/sdd-orchestrator-workflow.md section order must be preflight (%d) < entry routing (%d) < init guard (%d)", preflight, routing, initGuard)
 	}
 }
 

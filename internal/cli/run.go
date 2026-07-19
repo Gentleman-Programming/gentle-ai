@@ -1557,6 +1557,16 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			if p := permissions.TargetPath(homeDir, adapter); p != "" {
 				paths = append(paths, p)
 			}
+			// Codex permission cleanup mutates an existing config.toml but
+			// never creates one. Include the file when it exists — or when
+			// Stat fails without confirming absence — so backup/rollback
+			// covers the migration while post-apply verification never
+			// requires a file the cleanup does not write.
+			if p := permissions.CleanupPath(homeDir, adapter); p != "" {
+				if _, err := os.Stat(p); err == nil || !os.IsNotExist(err) {
+					paths = append(paths, p)
+				}
+			}
 		case model.ComponentGGA:
 			paths = append(paths, gga.ConfigPath(homeDir))
 			paths = append(paths, gga.AgentsTemplatePath(homeDir))
@@ -1704,11 +1714,13 @@ func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
 }
 
 func openCodeSDDPluginPaths(targetDir string) []string {
-	return []string{
-		filepath.Join(targetDir, ".config", "opencode", "plugins", "background-agents.ts"),
-		filepath.Join(targetDir, ".config", "opencode", "plugins", "model-variants.ts"),
-		filepath.Join(targetDir, ".config", "opencode", "plugins", "skill-registry.ts"),
+	// Legacy plugin first: installOpenCodePlugins removes it, and verification
+	// asserts its absence (isLegacyOpenCodeBackgroundAgentsPlugin).
+	paths := []string{filepath.Join(targetDir, ".config", "opencode", "plugins", "background-agents.ts")}
+	for _, name := range sdd.ManagedOpenCodePluginNames() {
+		paths = append(paths, filepath.Join(targetDir, ".config", "opencode", "plugins", name))
 	}
+	return paths
 }
 
 type postApplyVerificationInput struct {

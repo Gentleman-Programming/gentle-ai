@@ -21,13 +21,14 @@ The compact review store protects valid authority from accidental corruption and
 - Legal-transition validation against the currently locked state and repository-derived evidence.
 - Atomic file replacement, with file and directory synchronization where practical.
 - A writer lock and expected revision for concurrent-writer detection.
+- Native authority mutations first take a shared advisory maintenance lock at `<git-common-dir>/gentle-ai/REVIEW-MAINTENANCE.lock`, outside the replaceable `review-transactions` authority subtree, then their lineage or v2 lock; release is reversed. Approved maintenance tools take the same lock exclusively with a bounded context. The lock coordinates cooperative Gentle AI participants only and is not a defense against a malicious same-user actor.
 - Exact retry recognition for idempotent operations.
 - Live-Git gate re-derivation rather than trusting persisted mirrors.
 - Checksums only where useful for detecting accidental corruption; they are not authentication.
 
 ## Candidate Projections
 
-`gentle-ai review start` defaults to the legacy `workspace` projection. Use `gentle-ai review start --projection staged` to freeze exactly the Git index: unstaged and untracked worktree content is excluded, and the live index and worktree are not modified while deriving evidence. The selected projection is emitted in START JSON and retained by compact authority, receipts, corrections, recovery, and transport.
+`gentle-ai review start` defaults to the legacy `workspace` projection. Use `gentle-ai review start --projection staged` to freeze exactly the Git index: unstaged and untracked worktree content is excluded, and the live index and worktree are not modified while deriving evidence. The selected projection is emitted in START JSON and retained by compact authority, receipts, corrections, recovery, and transport. Recovery inherits the predecessor projection when `--projection` is omitted; an explicit cross-projection successor is accepted only for escalated recovery with the canonical authorization bound to that successor's exact target identity.
 
 After committing a staged candidate, use `gentle-ai review start --projection staged --base-ref <ref>` (and `--committed-only` when tracked workspace changes exist) to record immutable base-to-HEAD delivery provenance. It accepts no intended-untracked paths, remains domain-separated in the v2 identity, and can reuse only the matching staged authority; an otherwise identical workspace authority remains separate.
 
@@ -49,11 +50,19 @@ Synthetic Git trees used by persisted snapshots remain subject to repository obj
 - A local hash chain presented as protection from the out-of-scope actor.
 - Mandatory bundles, policy mirrors, ledger mirrors, evidence mirrors, fix-delta mirrors, or gate-context mirrors for ordinary review.
 
-Legacy v1 chains and bundles remain readable for compatibility, but their history cannot be appended, rewritten, repaired, or migrated in place.
+Legacy v1 chains and bundles remain readable for compatibility, but their history cannot be appended, rewritten, or migrated in place. The sole repair exception is an audited whole-lineage quarantine described below; it never makes the historical bytes valid.
+
+## Historical Alias Quarantine
+
+`gentle-ai review repair-legacy-alias` is a narrow maintenance operation for a legacy-v1 lineage whose replay fails solely with `unsupported historical v1 operation alias`. It accepts only the approved historical aliases `review/validate-fix` and `review/complete-fix`, replays every other event normally, and requires the exact current `HEAD` revision, diagnostic `unsupported historical v1 operation alias`, and disposition `quarantine-approved-historical-alias`.
+
+The maintainer authorization is an exact LF-only eight-line binding with schema `gentle-ai.review-legacy-alias-repair-authorization/v1`, followed by `repository`, `lineage`, `revision`, `diagnostic`, `disposition`, `actor`, and `reason`. The operation refuses unknown aliases, semantic corruption, mixed v1/v2 lineage identity, malformed authorization, stale revisions, and active or shared-maintenance-lock contention.
+
+On success it moves the complete immutable lineage into `review-transactions/quarantine/`, writes a prepared then committed audit record with the re-derived chain identity and alias-event revisions, and reads the inventory back. It does not delete or rewrite authority. The status becomes complete/authoritative only if the remaining inventory is independently clean; unrelated invalid, incomplete, compact-v2, or graph authority continues to fail closed.
 
 ## Recovery And Rollback
 
-- Use `gentle-ai review recover` with an explicit predecessor lineage and revision, a distinct successor lineage, a disposition, reason, and actor. Approved predecessors require a proven scope change; invalidated predecessors remain terminal; escalated predecessors additionally require explicit maintainer authorization.
+- Use `gentle-ai review recover` with an explicit predecessor lineage and revision, a distinct successor lineage, a disposition, reason, and actor. `--projection workspace|staged` selects the successor target; omission preserves the predecessor projection for compatibility. Approved predecessors require a proven scope change; invalidated predecessors remain terminal. Only escalated recovery may cross projections, and it requires the exact six-line maintainer authorization binding built from the selected projection's target identity. Authorization diagnostics identify the projection and target identity without exposing repository paths.
 - `review recover --release-scope` is the only recovery target-kind expansion with dedicated constraints: an approved `current-changes` predecessor may become a repository-derived first-parent `base-diff` only when the candidate tree and projection are unchanged and every predecessor path remains covered by a strictly larger release scope.
 - Recovery runs under the shared v2 store lock, records predecessor and operator provenance in the successor, and starts a new generation and correction budget without rewriting or deleting history.
 - Discovery authorizes only a unique valid unsuperseded leaf. Forks, dangling or mismatched predecessor links, cycles, and unrelated leaves fail closed. Explicitly selecting a superseded lineage permits historical inspection but not delivery authorization.

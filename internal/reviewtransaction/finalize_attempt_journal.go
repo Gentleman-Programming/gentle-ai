@@ -71,7 +71,7 @@ func FinalizeAttemptRequestDigest(request FinalizeAttemptRequest) string {
 }
 
 func (store CompactStore) FinalizeAttemptJournalPath() string {
-	return filepath.Join(store.Dir, "finalize-attempt-journal.json")
+	return filepath.Join(store.Dir, compactFinalizeJournalFileName)
 }
 
 // PendingFinalizeAttempt returns the one unresolved request for this lineage.

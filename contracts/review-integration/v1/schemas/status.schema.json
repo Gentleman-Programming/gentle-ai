@@ -43,6 +43,7 @@
       }
     },
     "action": { "enum": ["start", "finalize", "validate", "recover", "maintainer_action", "select_lineage", "repair_authority", "reconcile_finalize", "stop"] },
+    "action_disposition": { "enum": ["scope_changed", "invalidated", "escalated"] },
     "replayability": { "enum": ["not_replayable", "exact_replay_safe", "status_required", "manual_action_required"] },
     "frozen": {
       "type": "object",
@@ -82,6 +83,11 @@
         }
       },
       "else": { "not": { "required": ["reconciliation"] } }
+    },
+    {
+      "if": { "properties": { "action": { "const": "recover" } }, "required": ["action"] },
+      "then": { "required": ["action_disposition"] },
+      "else": { "not": { "required": ["action_disposition"] } }
     },
     {
       "if": { "properties": { "applicability": { "const": "current_target" } } },

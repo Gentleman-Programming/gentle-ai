@@ -24,10 +24,17 @@ const (
 	AuthorityStatusApproved   AuthorityStatus = "approved"
 	AuthorityStatusEscalated  AuthorityStatus = "escalated"
 	AuthorityStatusInvalid    AuthorityStatus = "invalid"
+	AuthorityStatusIncomplete AuthorityStatus = "incomplete-store-entry"
 	AuthorityStatusReset      AuthorityStatus = "reset-in-progress"
 	AuthorityStatusSuperseded AuthorityStatus = "superseded"
 	AuthorityStatusRecovered  AuthorityStatus = "recovered"
 	AuthorityStatusCollision  AuthorityStatus = "same-lineage-mixed-collision"
+	// AuthorityStatusHistorical marks a structurally valid terminal legacy-v1
+	// chain that predates the receipt contract: its receipt file is absent
+	// (never corrupt or mismatched). Such chains stay inventory-readable
+	// without forcing the global inventory incomplete, but they are never
+	// discoverable as gate or receipt authority because no receipt exists.
+	AuthorityStatusHistorical AuthorityStatus = "historical-pre-receipt"
 )
 
 type AuthorityVersion string
@@ -125,7 +132,7 @@ func InventoryAuthority(ctx context.Context, repo string) (AuthorityStatusReport
 	markCompactGraph(&report)
 	markMixedCollisions(&report)
 	for _, entry := range report.Entries {
-		if entry.Status == AuthorityStatusInvalid || entry.Status == AuthorityStatusReset || entry.Status == AuthorityStatusCollision {
+		if entry.Status == AuthorityStatusInvalid || entry.Status == AuthorityStatusIncomplete || entry.Status == AuthorityStatusReset || entry.Status == AuthorityStatusCollision {
 			report.Complete = false
 		}
 	}
@@ -223,6 +230,11 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 		return entry, locks
 	}
 	if version == AuthorityVersionCompact {
+		if _, statErr := os.Stat(filepath.Join(path, compactStateFileName)); os.IsNotExist(statErr) && !compactStoreHoldsAuthority(items) {
+			entry.Status = AuthorityStatusIncomplete
+			entry.Problems = []string{"compact store entry has no review-state.json and no authoritative artifacts; quarantine it with gentle-ai review reclaim"}
+			return entry, locks
+		}
 		store := CompactStore{Dir: path, lineageID: lineage, repo: repo}
 		record, err := store.Load()
 		if err != nil {
@@ -266,7 +278,13 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"legacy receipt does not match terminal authority"}
 		}
 	} else if os.IsNotExist(err) && (transaction.State == StateApproved || transaction.State == StateEscalated) {
-		entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"terminal legacy authority is missing its receipt"}
+		// A structurally valid terminal legacy-v1 chain whose receipt file is
+		// absent predates the receipt contract. It stays inventory-readable as
+		// historical context without forcing the global inventory incomplete,
+		// yet remains ineligible as gate or discovery authority because every
+		// receipt consumer requires the receipt file itself. A present-but-wrong
+		// receipt is handled above and stays invalid.
+		entry.Status = AuthorityStatusHistorical
 	} else if !os.IsNotExist(err) {
 		entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"read legacy receipt: " + err.Error()}
 	}
@@ -341,7 +359,7 @@ func markCompactGraph(report *AuthorityStatusReport) {
 	children := map[string][]int{}
 	for index := range report.Entries {
 		entry := &report.Entries[index]
-		if entry.Version == AuthorityVersionCompact && entry.Status != AuthorityStatusReset &&
+		if entry.Version == AuthorityVersionCompact && entry.Status != AuthorityStatusReset && entry.Status != AuthorityStatusIncomplete &&
 			(entry.Status != AuthorityStatusInvalid || entry.State == StateInvalidated && len(entry.Problems) == 0) {
 			byLineage[entry.LineageID] = index
 		}

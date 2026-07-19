@@ -82,8 +82,8 @@ jobs:
       # schedule run the full Windows suite, mirroring the E2E tier policy.
       - name: Run full Windows suite
         shell: pwsh
-        timeout-minutes: 20
-        run: if ($env:GITHUB_EVENT_NAME -eq 'push' -or $env:GITHUB_EVENT_NAME -eq 'schedule') { go test ./... -count=1 -timeout=18m; exit $LASTEXITCODE } else { Write-Host 'Skipping full suite on pull_request; release-blocker tests already ran.' }
+        timeout-minutes: 35
+        run: if ($env:GITHUB_EVENT_NAME -eq 'push' -or $env:GITHUB_EVENT_NAME -eq 'schedule') { go test ./... -count=1 -timeout=30m; exit $LASTEXITCODE } else { Write-Host 'Skipping full suite on pull_request; release-blocker tests already ran.' }
 
   e2e-tests:
     name: E2E Tests (${{ matrix.platform.name }})

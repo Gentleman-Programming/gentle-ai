@@ -368,6 +368,95 @@ func TestInventoryAuthorityReportsRecoveredInvalidatedSuccessorAndSupersededPred
 	}
 }
 
+func TestInventoryAuthorityKeepsReceiptlessTerminalLegacyChainReadableAsHistorical(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	transaction, _, _ := nativeGateFixture(t, repo, "legacy-pre-receipt")
+	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApprovedStoreChain(t, store, transaction)
+	root, _, err := reviewAuthorityRoot(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := authorityBytes(t, root)
+
+	report, err := InventoryAuthority(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Complete || !report.Authoritative || report.Status != AuthorityStatusHistorical ||
+		!hasAuthorityInventoryStatus(report.Entries, "legacy-pre-receipt", AuthorityStatusHistorical) {
+		t.Fatalf("receiptless terminal legacy report = %#v", report)
+	}
+	for _, entry := range report.Entries {
+		if entry.LineageID == "legacy-pre-receipt" && len(entry.Problems) != 0 {
+			t.Fatalf("historical entry reported problems = %#v", entry.Problems)
+		}
+	}
+	if after := authorityBytes(t, root); !reflect.DeepEqual(before, after) {
+		t.Fatal("read-only authority inventory changed authority bytes")
+	}
+}
+
+func TestInventoryAuthorityKeepsPresentButMalformedLegacyReceiptInvalid(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	transaction, _, _ := nativeGateFixture(t, repo, "legacy-corrupt-receipt")
+	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApprovedStoreChain(t, store, transaction)
+	receiptPath := filepath.Join(store.Dir, "artifacts", "receipt.json")
+	if err := os.MkdirAll(filepath.Dir(receiptPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(receiptPath, []byte("{broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := InventoryAuthority(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Complete || report.Authoritative || report.Status != AuthorityStatusInvalid ||
+		!hasAuthorityInventoryStatus(report.Entries, "legacy-corrupt-receipt", AuthorityStatusInvalid) {
+		t.Fatalf("malformed present receipt report = %#v", report)
+	}
+}
+
+func TestInventoryAuthorityKeepsNonTerminalReceiptlessLegacyChainActive(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	transaction, _, _ := nativeGateFixture(t, repo, "legacy-open-review")
+	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewing := transaction
+	reviewing.LensResults = nil
+	for _, lens := range supportedLenses {
+		setLensCounter(&reviewing.Counters, lens, 0)
+	}
+	reviewing.State = StateReviewing
+	reviewing.LedgerHash = ""
+	reviewing.EvidenceHash = ""
+	reviewing.Release = nil
+	reviewing.Counters.FinalVerifications = 0
+	if _, err := store.Append("", Record{Operation: "review/start", Transaction: reviewing}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := InventoryAuthority(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Complete || !report.Authoritative ||
+		!hasAuthorityInventoryStatus(report.Entries, "legacy-open-review", AuthorityStatusActive) {
+		t.Fatalf("non-terminal receiptless legacy report = %#v", report)
+	}
+}
+
 func authorityBytes(t *testing.T, root string) map[string][]byte {
 	t.Helper()
 	files := map[string][]byte{}

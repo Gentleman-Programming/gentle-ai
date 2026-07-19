@@ -55,6 +55,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	lens := flags.String("lens", "", "exact selected lens")
 	order := flags.Int("order", -1, "zero-based selected lens order")
 	input := flags.String("input", "", "raw reviewer result JSON file or - for stdin")
+	preflight := flags.Bool("preflight", false, "verify the capture binding against the current reviewing authority without reading or persisting any result")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -62,8 +63,11 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		return nil
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*target) == "" ||
-		strings.TrimSpace(*lens) == "" || *order < 0 || strings.TrimSpace(*input) == "" {
-		return reviewPreflightError(errors.New("review capture-result requires exact --cwd, --lineage, --target, --lens, --order, and --input"))
+		strings.TrimSpace(*lens) == "" || *order < 0 || (!*preflight && strings.TrimSpace(*input) == "") {
+		return reviewPreflightError(errors.New("review capture-result requires exact --cwd, --lineage, --target, --lens, --order, and --input (or --preflight)"))
+	}
+	if *preflight && strings.TrimSpace(*input) != "" {
+		return reviewPreflightError(errors.New("review capture-result --preflight verifies the binding only and does not accept --input"))
 	}
 	ctx := context.Background()
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
@@ -72,12 +76,18 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	}
 	store, record, err := discoverCompactFacadeReview(ctx, root, *lineage, false)
 	if err != nil {
-		return err
+		return reviewPreflightError(fmt.Errorf("resolve reviewing authority for lineage %q under repository %q: %w; if the review was started in a different repository (for example a nested one), re-run with --cwd set to that repository", *lineage, root, err))
 	}
 	state := record.State
 	if state.State != reviewtransaction.StateReviewing || state.LineageID != *lineage || state.InitialSnapshot.Identity != *target ||
 		*order >= len(state.SelectedLenses) || state.SelectedLenses[*order] != *lens {
-		return reviewPreflightError(errors.New("capture binding does not match the current reviewing authority"))
+		return reviewPreflightError(fmt.Errorf("capture binding does not match the current reviewing authority under repository %q; verify the frozen lineage, target, lens, and order for that repository, or re-run with --cwd set to the repository where the review was started", root))
+	}
+	if *preflight {
+		return encodeReviewJSON(stdout, reviewCapturePreflightResult{
+			Schema: reviewCapturePreflightSchema, Capability: reviewCapturePreflightCapability, RepositoryRoot: root,
+			LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Lens: *lens, SelectedOrder: *order,
+		})
 	}
 	payload, err := readFacadeBytes(*input)
 	if err != nil {
@@ -98,14 +108,19 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		return err
 	}
 	canonical = append(canonical, '\n')
-	artifact, err := captureReviewerArtifact(store.Dir, state, *order, canonical)
+	var artifact reviewResultArtifact
+	err = store.CaptureReviewerResult(*target, *lens, *order, func(current reviewtransaction.CompactState) error {
+		var captureErr error
+		artifact, captureErr = captureReviewerArtifact(store.Dir, current, *order, canonical)
+		return captureErr
+	})
 	if err != nil {
 		return reviewPreflightError(err)
 	}
 	return encodeReviewJSON(stdout, artifact)
 }
 func captureReviewerArtifact(storeDir string, state reviewtransaction.CompactState, order int, payload []byte) (reviewResultArtifact, error) {
-	dir := filepath.Join(storeDir, "reviewer-results")
+	dir := filepath.Join(storeDir, reviewtransaction.CompactReviewerResultsDir)
 	if err := ensureReviewerArtifactDir(dir); err != nil {
 		return reviewResultArtifact{}, err
 	}
@@ -204,7 +219,7 @@ func readVerifiedReviewerArtifact(artifact reviewResultArtifact, storeDir string
 		artifact.Lens != state.SelectedLenses[artifact.SelectedOrder] || !validReviewCapabilitySHA256(artifact.SHA256) {
 		return nil, errors.New("artifact manifest does not match frozen lineage, target, lens, and order")
 	}
-	wantPath := filepath.Join(storeDir, "reviewer-results", fmt.Sprintf("%02d-%s.json", artifact.SelectedOrder, artifact.Lens))
+	wantPath := filepath.Join(storeDir, reviewtransaction.CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", artifact.SelectedOrder, artifact.Lens))
 	if !filepath.IsAbs(artifact.Path) || filepath.Clean(artifact.Path) != artifact.Path || artifact.Path != wantPath {
 		return nil, errors.New("artifact path is outside native transaction ownership")
 	}

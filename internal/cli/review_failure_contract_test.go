@@ -319,12 +319,21 @@ func TestNegotiatedBindSDDTimeoutBeforePublicationIsRetryable(t *testing.T) {
 
 func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) {
 	for _, tt := range []struct {
-		name string
-		err  error
-		code string
+		name      string
+		err       error
+		code      string
+		causeText string
 	}{
 		{name: "timeout", err: &reviewtransaction.GitCommandTimeoutError{Timeout: 15 * time.Second}, code: "git_command_timeout"},
 		{name: "exit", err: &reviewtransaction.GitCommandError{ExitCode: 128}, code: "git_command_failed"},
+		{
+			name: "process control",
+			err: &reviewtransaction.GitProcessControlError{
+				Args: []string{"read-tree", "--empty"}, Cause: errors.New("job object assignment denied (0xC0000022)"),
+			},
+			code:      "git_command_failed",
+			causeText: "job object assignment denied (0xC0000022)",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			failure := newReviewIntegrationFailure("review.start", []string{"--lineage", "review-git-boundary"}, tt.err)
@@ -332,7 +341,57 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 				failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "stop" {
 				t.Fatalf("git failure = %#v", failure)
 			}
+			if tt.causeText != "" && !strings.Contains(failure.Message, tt.causeText) {
+				t.Fatalf("git failure message masks cause: %q", failure.Message)
+			}
 		})
+	}
+}
+
+func TestNegotiatedStatusProcessControlFailureIsTypedAndDiagnosable(t *testing.T) {
+	originalRunner := reviewFacadeCommandRunner
+	t.Cleanup(func() { reviewFacadeCommandRunner = originalRunner })
+	reviewFacadeCommandRunner = func(context.Context, []string, io.Writer) error {
+		return fmt.Errorf("inventory review authority: %w", &reviewtransaction.GitProcessControlError{
+			Args: []string{"status", "--porcelain=v2"}, Cause: errors.New("NtResumeProcess status 0xC0000022"),
+		})
+	}
+	var output bytes.Buffer
+	err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1}, &output)
+	if err == nil {
+		t.Fatal("negotiated status with process-control failure succeeded")
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Operation != "review.status" || failure.Code != "git_command_failed" || failure.Phase != "pre_native" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe ||
+		failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "stop" {
+		t.Fatalf("negotiated status process-control failure = %#v", failure)
+	}
+	if !strings.Contains(failure.Message, "NtResumeProcess status 0xC0000022") {
+		t.Fatalf("process-control envelope masks cause: %q", failure.Message)
+	}
+}
+
+func TestNegotiatedReadOnlyCatchAllStaysContentFreeAndNeverAbsorbsProcessControl(t *testing.T) {
+	leaky := fmt.Errorf("assess negotiated review target: %w",
+		errors.New("open /home/user/.git/review-authority/receipt.json: permission denied"))
+	failure := newReviewIntegrationFailure("review.status", nil, leaky)
+	if failure.Code != "operation_failed" || failure.Phase != "pre_native" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe ||
+		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != "retry" {
+		t.Fatalf("read-only catch-all failure = %#v", failure)
+	}
+	if failure.Message != "The negotiated read-only review operation failed safely." {
+		t.Fatalf("read-only catch-all message is not content-free: %q", failure.Message)
+	}
+
+	control := fmt.Errorf("inventory review authority: %w", &reviewtransaction.GitProcessControlError{
+		Args: []string{"status", "--porcelain=v2"}, Cause: errors.New("NtResumeProcess status 0xC0000022"),
+	})
+	typed := newReviewIntegrationFailure("review.status", nil, control)
+	if typed.Code != "git_command_failed" || typed.Phase != "pre_native" || typed.RetrySafe ||
+		typed.Replayability != reviewtransaction.ReplayabilityManualActionRequired || typed.NextAction != "stop" {
+		t.Fatalf("process-control failure reached the catch-all: %#v", typed)
 	}
 }
 
@@ -384,7 +443,16 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 	t.Setenv(reviewGitHelperStatePathEnv, store.StatePath())
 	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
 	oldTimeout := reviewFacadeOperationTimeout
-	reviewFacadeOperationTimeout = time.Second
+	// The aggregate budget must comfortably exceed the per-git-command timeout
+	// (localGitCommandTimeout, 15s) plus the slowest-runner overhead of reaching
+	// the committed begin-fix transition. The injected helper stalls longer than
+	// the per-git-command timeout (see reviewGitProcessHelperExitCode), so the
+	// per-git-command timeout deterministically fires first and is classified as
+	// git_command_timeout in the native_committed phase. A tight 1s budget raced
+	// the aggregate operation_timeout ahead of that sub-operation timeout on slow
+	// Windows runners; 25s removes the race without slowing the exit, which is
+	// bounded by the 15s per-git-command timeout regardless of this budget.
+	reviewFacadeOperationTimeout = 25 * time.Second
 	t.Cleanup(func() { reviewFacadeOperationTimeout = oldTimeout })
 	oldTransitionHook := reviewFacadeCommittedTransitionHook
 	reviewFacadeCommittedTransitionHook = func(ctx context.Context, hookRepo, operation, _ string) error {
@@ -487,7 +555,12 @@ func reviewGitProcessHelperExitCode() (int, bool) {
 		return 0, false
 	}
 	if payload, err := os.ReadFile(os.Getenv(reviewGitHelperStatePathEnv)); err == nil && strings.Contains(string(payload), `"proposed_correction_lines":`) {
-		time.Sleep(10 * time.Second)
+		// Stall well beyond the per-git-command timeout (localGitCommandTimeout,
+		// 15s) so that the bounded Git subprocess is cut by that per-command
+		// timeout rather than completing on its own. This keeps the post-commit
+		// failure classified as git_command_timeout deterministically instead of
+		// racing the aggregate operation budget on slow runners.
+		time.Sleep(30 * time.Second)
 		return 0, true
 	}
 	command := exec.Command(os.Getenv(reviewGitHelperRealGitEnv), os.Args[1:]...)
@@ -603,7 +676,9 @@ func TestNegotiatedReceiptPublicationFailureIsSanitizedAndExactlyReplayable(t *t
 	}
 	original := writeCompactFacadeReceipt
 	secret := "raw provider stderr token=secret /tmp/authority.lock"
-	writeCompactFacadeReceipt = func(string, reviewtransaction.CompactReceipt) error { return errors.New(secret) }
+	writeCompactFacadeReceipt = func(context.Context, reviewtransaction.CompactStore, reviewtransaction.CompactReceipt) error {
+		return errors.New(secret)
+	}
 	var output bytes.Buffer
 	err = RunReview([]string{
 		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo,

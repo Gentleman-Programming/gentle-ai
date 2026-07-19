@@ -23,6 +23,7 @@ expected_contract = [
     contract_root / "fixtures/start.fixture.json",
     contract_root / "fixtures/status-ambiguous.fixture.json",
     contract_root / "fixtures/status-corrupted.fixture.json",
+    contract_root / "fixtures/status-recover.fixture.json",
     contract_root / "fixtures/status-unrelated.fixture.json",
     contract_root / "fixtures/status.fixture.json",
 	contract_root / "schemas/capabilities-v1.1.schema.json",

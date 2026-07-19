@@ -264,7 +264,7 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 		const tmpDir = "/tmp/gentleman-guardian-angel"
 		return CommandSequence{
 			{"rm", "-rf", tmpDir},
-			{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tmpDir},
+			{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tmpDir},
 			{"bash", tmpDir + "/install.sh"},
 		}, nil
 	case "winget":
@@ -278,7 +278,7 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 		bash := gitBashPath()
 		return CommandSequence{
 			{"powershell", "-NoProfile", "-Command", fmt.Sprintf("$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath '%s') { Remove-Item -Recurse -Force -LiteralPath '%s' }", safeCloneDst, safeCloneDst)},
-			{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", cloneDst},
+			{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", cloneDst},
 			{bash, bashScriptPath(profile, filepath.Join(cloneDst, "install.sh"))},
 		}, nil
 	default:

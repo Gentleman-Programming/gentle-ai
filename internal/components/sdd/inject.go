@@ -439,7 +439,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// os.ReadFile call due to VFS/NTFS metadata caching, which caused the spurious
 	// "post-check: .../opencode.json missing sdd-apply sub-agent" error.
 	var mergedSettingsBytes []byte
-	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
+	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
 			overlayContent, err := assets.Read(overlayAssetPath(sddMode))
@@ -539,7 +539,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					return InjectionResult{}, fmt.Errorf("clean stale profile JD agents %q: %w", profile.Name, cleanupErr)
 				}
 				changed = changed || cleanupResult.Changed
-				profileOverlay, profileErr := GenerateProfileOverlay(profile, homeDir, opts.CodeGraphGuidanceMarkdown)
+				profileOverlay, profileErr := GenerateProfileOverlay(profile, homeDir, opts.OpenCodeModelAssignments, opts.CodeGraphGuidanceMarkdown)
 				if profileErr != nil {
 					return InjectionResult{}, fmt.Errorf("generate profile overlay %q: %w", profile.Name, profileErr)
 				}
@@ -1594,6 +1594,61 @@ func claudeHookListContains(hookEntries []any, command string) bool {
 	return false
 }
 
+// ManagedOpenCodePluginNames lists the OpenCode plugin files gentle-ai manages
+// as versioned runtime artifacts. Their content is tied to the installed binary
+// version: install writes them and sync must keep already-installed copies
+// byte-equal to the embedded assets (issue #1440).
+func ManagedOpenCodePluginNames() []string {
+	return []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"}
+}
+
+// AgentReceivesManagedOpenCodePlugins reports whether the SDD injector
+// installs the managed OpenCode-compatible plugins for the given agent.
+// Inject's settings/plugins gate and sync's plugin refresh both use this
+// predicate so the two gates cannot drift (issue #1440).
+func AgentReceivesManagedOpenCodePlugins(agent model.AgentID) bool {
+	return agent == model.AgentOpenCode || agent == model.AgentKilocode
+}
+
+// RefreshInstalledOpenCodePlugins rewrites managed OpenCode plugins that are
+// already installed on disk so they track the embedded assets of the running
+// binary. It never creates a plugin that was not previously installed — users
+// who never received the SDD/OpenCode plugins must not get them from a plain
+// sync. Managed plugins carry no user content, so drift is resolved by
+// overwriting, matching installOpenCodePlugins.
+func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+
+	var files []string
+	var changed bool
+
+	for _, name := range ManagedOpenCodePluginNames() {
+		pluginPath := filepath.Join(pluginsDir, name)
+		info, err := os.Lstat(pluginPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return InjectionResult{}, fmt.Errorf("stat managed OpenCode plugin %s: %w", pluginPath, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+
+		content := assets.MustRead("opencode/plugins/" + name)
+		writeResult, err := filemerge.WriteFileAtomic(pluginPath, []byte(content), 0o644)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("refresh managed OpenCode plugin %s: %w", name, err)
+		}
+		if writeResult.Changed {
+			changed = true
+			files = append(files, pluginPath)
+		}
+	}
+
+	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
 // installOpenCodePlugins copies the OpenCode-compatible plugins that gentle-ai
 // still manages by default. Native OpenCode subagents replace the legacy
 // background-agents plugin, so that legacy cleanup is scoped to OpenCode only.
@@ -1620,7 +1675,7 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 		}
 	}
 
-	for _, name := range []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
+	for _, name := range ManagedOpenCodePluginNames() {
 		content := assets.MustRead("opencode/plugins/" + name)
 		pluginPath := filepath.Join(pluginsDir, name)
 

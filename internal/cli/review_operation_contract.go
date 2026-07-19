@@ -245,6 +245,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.NextAction = "review.status"
 		var progressedGitTimeout *reviewtransaction.GitCommandTimeoutError
 		var progressedGitFailure *reviewtransaction.GitCommandError
+		var progressedGitControl *reviewtransaction.GitProcessControlError
 		switch {
 		case errors.As(runErr, &progressedGitTimeout):
 			failure.Code = "git_command_timeout"
@@ -252,6 +253,9 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		case errors.As(runErr, &progressedGitFailure):
 			failure.Code = "git_command_failed"
 			failure.Message = "A Git subprocess failed after review authority committed a native transition."
+		case errors.As(runErr, &progressedGitControl):
+			failure.Code = "git_command_failed"
+			failure.Message = "A Git subprocess could not be started or controlled after review authority committed a native transition: " + progressedGitControl.Error()
 		case errors.Is(runErr, context.DeadlineExceeded):
 			failure.Code = "operation_timeout"
 			failure.Message = "The negotiated review operation timed out after review authority committed a native transition."
@@ -278,6 +282,18 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Phase = "pre_native"
 		failure.Code = "git_command_failed"
 		failure.Message = "A Git subprocess failed before review authority mutation."
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.AuthorityApplicability = "not_evaluated"
+		failure.RetrySafe = false
+		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
+		failure.NextAction = "stop"
+		return failure
+	}
+	var gitControl *reviewtransaction.GitProcessControlError
+	if errors.As(runErr, &gitControl) {
+		failure.Phase = "pre_native"
+		failure.Code = "git_command_failed"
+		failure.Message = "A Git subprocess could not be started or controlled before review authority mutation: " + gitControl.Error()
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "not_evaluated"
 		failure.RetrySafe = false

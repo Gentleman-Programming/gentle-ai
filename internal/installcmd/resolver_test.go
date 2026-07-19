@@ -625,7 +625,7 @@ func TestResolveComponentInstall(t *testing.T) {
 			component: model.ComponentGGA,
 			want: CommandSequence{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
-				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
 				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
 		},
@@ -635,7 +635,7 @@ func TestResolveComponentInstall(t *testing.T) {
 			component: model.ComponentGGA,
 			want: CommandSequence{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
-				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
 				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
 		},
@@ -645,7 +645,7 @@ func TestResolveComponentInstall(t *testing.T) {
 			component: model.ComponentGGA,
 			want: CommandSequence{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
-				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
 				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
 		},
@@ -661,7 +661,7 @@ func TestResolveComponentInstall(t *testing.T) {
 			component: model.ComponentGGA,
 			want: CommandSequence{
 				{"powershell", "-NoProfile", "-Command", fmt.Sprintf("$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath '%s') { Remove-Item -Recurse -Force -LiteralPath '%s' }", powerShellSingleQuotedValue(filepath.Join(os.TempDir(), "gentleman-guardian-angel")), powerShellSingleQuotedValue(filepath.Join(os.TempDir(), "gentleman-guardian-angel")))},
-				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", filepath.Join(os.TempDir(), "gentleman-guardian-angel")},
+				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", filepath.Join(os.TempDir(), "gentleman-guardian-angel")},
 				{gitBashPath(), bashScriptPath(system.PlatformProfile{OS: "windows"}, filepath.Join(os.TempDir(), "gentleman-guardian-angel", "install.sh"))},
 			},
 		},
@@ -688,6 +688,33 @@ func TestResolveComponentInstall(t *testing.T) {
 				t.Fatalf("ResolveComponentInstall() = %v, want %v", command, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveGGAInstall_UsesPinnedReleaseTag(t *testing.T) {
+	r := NewResolver()
+	cmds, err := r.ResolveComponentInstall(
+		system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
+		model.ComponentGGA,
+	)
+	if err != nil {
+		t.Fatalf("ResolveComponentInstall() error = %v", err)
+	}
+	if len(cmds) < 2 {
+		t.Fatalf("ResolveComponentInstall() returned %d commands, want clone command", len(cmds))
+	}
+
+	wantClone := []string{
+		"git",
+		"clone",
+		"--depth=1",
+		"--branch",
+		"v" + versions.GGAVersion,
+		"https://github.com/Gentleman-Programming/gentleman-guardian-angel.git",
+		"/tmp/gentleman-guardian-angel",
+	}
+	if !reflect.DeepEqual(cmds[1], wantClone) {
+		t.Fatalf("GGA clone command = %v, want %v", cmds[1], wantClone)
 	}
 }
 

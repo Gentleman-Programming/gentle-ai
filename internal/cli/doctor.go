@@ -38,7 +38,35 @@ type DoctorReport struct {
 	Checks []CheckResult
 }
 
-var knownTools = []string{"gentle-ai", "engram", "gga", "claude", "opencode"}
+// coreTools are ecosystem-level binaries that gentle-ai always requires
+// regardless of which agents the user installed. Agent-specific binaries are
+// derived from state.json's InstalledAgents field (see #709) so the doctor
+// only reports missing agents the user actually selected.
+var coreTools = []string{"gentle-ai", "gga", "engram"}
+
+// agentToolBinaries maps an agent ID from state.json's InstalledAgents to the
+// CLI binary name exec.LookPath should resolve. An empty string means "no CLI
+// binary to check" — typically IDE-only agents like cursor, windsurf, or
+// antigravity that do not ship a standalone executable on PATH.
+//
+// Keep this map in sync with the agentID → binary convention used by the
+// adapters under internal/agents/*/adapter.go. Unknown agent IDs are ignored
+// by the doctor so legacy or custom state files do not cause spurious
+// failures.
+var agentToolBinaries = map[string]string{
+	"claude-code":    "claude",
+	"opencode":       "opencode",
+	"codex":          "codex",
+	"pi":             "pi",
+	"gemini-cli":     "gemini",
+	"kilocode":       "kilo",
+	"kiro-ide":       "kiro",
+	"kimi":           "kimi",
+	"qwen-code":      "qwen",
+	"vscode-copilot": "code",
+	"openclaw":       "openclaw",
+	"hermes":         "hermes",
+}
 
 const (
 	engramHealthEnvVar = "ENGRAM_BASE_URL"
@@ -73,8 +101,14 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
+	installedAgents, _ := readDoctorInstalledAgents(homeDir)
+	// A state read failure (missing/malformed file) is surfaced separately by
+	// checkStateJSON. Here we fall back to an empty list so the doctor only
+	// reports the always-required core tools — preserving the first-time-install
+	// behaviour where the user has not yet selected any agents (#709).
+
 	report := DoctorReport{}
-	report.Checks = append(report.Checks, checkToolBinaries(pathDirsFn())...)
+	report.Checks = append(report.Checks, checkToolBinaries(pathDirsFn(), installedAgents)...)
 	report.Checks = append(report.Checks, checkStateJSON(homeDir))
 	report.Checks = append(report.Checks, checkEngramReachable())
 	report.Checks = append(report.Checks, checkDiskSpace(homeDir))
@@ -83,10 +117,43 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
-// checkToolBinaries checks each known tool for PATH resolution and shadowing.
-func checkToolBinaries(pathDirs []string) []CheckResult {
-	results := make([]CheckResult, 0, len(knownTools))
-	for _, tool := range knownTools {
+// readDoctorInstalledAgents returns the agent IDs persisted in state.json.
+// An unreadable or absent state file yields a nil slice — callers must treat
+// nil/empty as "no agents selected" rather than a hard error so first-time
+// installs do not surface phantom agent-missing failures.
+func readDoctorInstalledAgents(homeDir string) ([]string, error) {
+	s, err := state.Read(homeDir)
+	if err != nil {
+		return nil, err
+	}
+	return s.InstalledAgents, nil
+}
+
+// checkToolBinaries checks each required tool for PATH resolution and
+// shadowing. The required set is coreTools plus one binary per installed
+// agent ID (resolved via agentToolBinaries), so the doctor only flags agents
+// the user actually selected (#709). Unknown agent IDs are skipped.
+func checkToolBinaries(pathDirs []string, installedAgents []string) []CheckResult {
+	required := make([]string, 0, len(coreTools)+len(installedAgents))
+	required = append(required, coreTools...)
+	seen := make(map[string]struct{}, len(required))
+	for _, t := range required {
+		seen[t] = struct{}{}
+	}
+	for _, agentID := range installedAgents {
+		bin, ok := agentToolBinaries[agentID]
+		if !ok || bin == "" {
+			continue
+		}
+		if _, dup := seen[bin]; dup {
+			continue
+		}
+		seen[bin] = struct{}{}
+		required = append(required, bin)
+	}
+
+	results := make([]CheckResult, 0, len(required))
+	for _, tool := range required {
 		results = append(results, checkOneTool(tool, pathDirs))
 	}
 	return results
@@ -187,13 +254,28 @@ func executableExtensionsFor(goos, pathext string) []string {
 
 // toolInDir returns the path to tool's executable inside dir, or "" if absent.
 // It honors Windows executable extensions so the duplicate scan agrees with
-// exec.LookPath (used for the resolved path).
+// exec.LookPath (used for the resolved path). On non-Windows platforms the
+// candidate must also have at least one execute bit set — files without the
+// execute bit (or directories whose name happens to match a tool, e.g. a
+// PATH entry named "gentle-ai") are not counted as binaries (#709).
+//
+// Windows executable resolution (#177, PATHEXT gaps) is intentionally out of
+// scope here; an extension match is treated as sufficient on Windows because
+// LookPath already enforces PATHEXT when reporting the resolved path.
 func toolInDir(dir, tool string) string {
 	for _, ext := range doctorToolExecutableExts() {
 		candidate := filepath.Join(dir, tool+ext)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate
+		info, err := os.Stat(candidate)
+		if err != nil {
+			continue
 		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		if doctorGOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		return candidate
 	}
 	return ""
 }

@@ -231,7 +231,13 @@ func RunReviewBundleExport(args []string, stdout io.Writer) error {
 	}
 	compact, compactErr := reviewtransaction.CompactAuthoritativeStore(context.Background(), *cwd, *lineage)
 	if compactErr == nil {
-		if transport, loadErr := compact.ExportTransport(); loadErr == nil {
+		transport, loadErr := compact.ExportTransport()
+		if errors.Is(loadErr, reviewtransaction.ErrHistoricalCompatReadOnly) {
+			// A v2-only historical lineage has no legacy chain; the fallback
+			// would surface an unrelated missing-chain error.
+			return fmt.Errorf("export compact review transport: %w", loadErr)
+		}
+		if loadErr == nil {
 			legacy, legacyErr := reviewtransaction.AuthoritativeStore(context.Background(), *cwd, *lineage)
 			if legacyErr == nil {
 				if _, legacyLoadErr := legacy.LoadChain(); legacyLoadErr == nil {

@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -62,7 +64,7 @@ func TestComponentPathsSDDMultiIncludesOpenCodePlugins(t *testing.T) {
 
 	paths := componentPaths(home, model.Selection{SDDMode: model.SDDModeMulti}, adapters, model.ComponentSDD)
 
-	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "skill-registry.ts"} {
+	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
 		path := filepath.Join(home, ".config", "opencode", "plugins", plugin)
 		if !containsPath(paths, path) {
 			t.Fatalf("componentPaths(sdd multi) missing OpenCode plugin path %q\npaths=%v", path, paths)
@@ -76,7 +78,7 @@ func TestComponentPathsSDDSingleIncludesOpenCodePlugins(t *testing.T) {
 
 	paths := componentPaths(home, model.Selection{SDDMode: model.SDDModeSingle}, adapters, model.ComponentSDD)
 
-	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "skill-registry.ts"} {
+	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
 		path := filepath.Join(home, ".config", "opencode", "plugins", plugin)
 		if !containsPath(paths, path) {
 			t.Fatalf("componentPaths(sdd single) missing OpenCode plugin path %q\npaths=%v", path, paths)
@@ -376,17 +378,63 @@ func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
 	}
 }
 
-// TestComponentPathsPermissionsCodexIncludesConfigTOML verifies that
-// ComponentPermission + Codex reports ~/.codex/config.toml as a backup target.
-func TestComponentPathsPermissionsCodexIncludesConfigTOML(t *testing.T) {
+// TestComponentPathsPermissionsCodexExcludesMissingConfigTOML verifies that
+// ComponentPermission + Codex does not report ~/.codex/config.toml when the
+// file does not exist: cleanup never creates it, so post-apply verification
+// must not require it.
+func TestComponentPathsPermissionsCodexExcludesMissingConfigTOML(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentCodex})
 
 	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
 
-	want := filepath.Join(home, ".codex", "config.toml")
-	if !containsPath(paths, want) {
-		t.Fatalf("componentPaths(permissions,codex) missing %q\npaths=%v", want, paths)
+	unwanted := filepath.Join(home, ".codex", "config.toml")
+	if containsPath(paths, unwanted) {
+		t.Fatalf("componentPaths(permissions,codex) must not include missing %q\npaths=%v", unwanted, paths)
+	}
+}
+
+// TestComponentPathsPermissionsCodexIncludesConfigTOMLOnUnconfirmedStat pins
+// the fail-toward-backup direction: when Stat fails with an error that does
+// not confirm absence (here ENOTDIR because ~/.codex is a file), the path must
+// still be included so backup coverage is never silently dropped.
+func TestComponentPathsPermissionsCodexIncludesConfigTOMLOnUnconfirmedStat(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Stat under a file path does not yield a non-IsNotExist error on Windows")
+	}
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".codex"), []byte(""), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	adapters := resolveAdapters([]model.AgentID{model.AgentCodex})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
+
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if !containsPath(paths, configPath) {
+		t.Fatalf("componentPaths(permissions,codex) missing %q on unconfirmed stat\npaths=%v", configPath, paths)
+	}
+}
+
+// TestComponentPathsPermissionsCodexIncludesExistingConfigTOML pins backup and
+// rollback coverage: Codex permission cleanup mutates an existing
+// ~/.codex/config.toml, so a Permission-selected run must snapshot it when it
+// exists.
+func TestComponentPathsPermissionsCodexIncludesExistingConfigTOML(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("model = \"gpt-5.5\"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	adapters := resolveAdapters([]model.AgentID{model.AgentCodex})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
+
+	if !containsPath(paths, configPath) {
+		t.Fatalf("componentPaths(permissions,codex) missing existing %q\npaths=%v", configPath, paths)
 	}
 }
 
@@ -420,16 +468,12 @@ func TestComponentPathsPermissionsIncludesAgentsWithInjectionTarget(t *testing.T
 		model.AgentGeminiCLI,
 		model.AgentQwenCode,
 		model.AgentVSCodeCopilot,
-		model.AgentCodex,
 	})
 
 	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
 
 	for _, adapter := range adapters {
 		want := adapter.SettingsPath(home)
-		if adapter.Agent() == model.AgentCodex {
-			want = filepath.Join(home, ".codex", "config.toml")
-		}
 		if !containsPath(paths, want) {
 			t.Fatalf("componentPaths(permissions) missing supported injection path %q\npaths=%v", want, paths)
 		}

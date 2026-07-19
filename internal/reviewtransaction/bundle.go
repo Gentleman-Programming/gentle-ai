@@ -242,10 +242,17 @@ func (store Store) installBundle(chain ValidatedChain, events []ChainBundleEvent
 	if strings.TrimSpace(store.Dir) == "" || len(events) != len(chain.Revisions) {
 		return ValidatedChain{}, errors.New("review bundle destination is invalid")
 	}
+	if store.maintenanceLockPath != "" {
+		maintenance, err := acquireMaintenanceLock(context.Background(), store.maintenanceLockPath, maintenanceShared)
+		if err != nil {
+			return ValidatedChain{}, err
+		}
+		defer maintenance.Release()
+	}
 	if err := os.MkdirAll(filepath.Join(store.Dir, "events"), 0o755); err != nil {
 		return ValidatedChain{}, err
 	}
-	lock, err := acquireStoreLock(filepath.Join(store.Dir, "LOCK"))
+	lock, err := acquireLocalStoreLock(filepath.Join(store.Dir, "LOCK"))
 	if err != nil {
 		return ValidatedChain{}, err
 	}

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -315,6 +317,71 @@ func TestCompactPostApplyRejectsUnboundUntrackedPathAfterCommit(t *testing.T) {
 	}
 }
 
+func TestCompactPostApplyExemptsExactChangeLocalReceiptMirror(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "approved candidate\n")
+	state := newCompactStartStateForTarget(t, repo, "compact-receipt-mirror-exact", Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	state, receipt := persistApprovedCompactState(t, repo, state)
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed candidate")
+
+	mirror := filepath.Join(repo, "openspec", "changes", "thin", "reviews", "receipt.json")
+	if err := os.MkdirAll(filepath.Dir(mirror), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCompactReceiptAtomic(mirror, receipt); err != nil {
+		t.Fatal(err)
+	}
+
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID})
+	if got.Result != GateAllow {
+		t.Fatalf("exact change-local receipt mirror = %#v", got)
+	}
+}
+
+func TestCompactPostApplyRejectsMismatchedChangeLocalReceiptMirror(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload func(t *testing.T, receipt CompactReceipt) []byte
+	}{
+		{name: "divergent receipt", payload: func(t *testing.T, receipt CompactReceipt) []byte {
+			tampered := receipt
+			tampered.Generation++
+			payload, err := json.MarshalIndent(tampered, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			return append(payload, '\n')
+		}},
+		{name: "malformed payload", payload: func(t *testing.T, receipt CompactReceipt) []byte {
+			return []byte("{\"schema\":\"tampered\"}\n")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			writeSnapshotFile(t, repo, "tracked.txt", "approved candidate\n")
+			state := newCompactStartStateForTarget(t, repo, "compact-receipt-mirror-"+strings.ReplaceAll(tt.name, " ", "-"), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+			state, receipt := persistApprovedCompactState(t, repo, state)
+			gitSnapshot(t, repo, "add", "tracked.txt")
+			gitSnapshot(t, repo, "commit", "-m", "reviewed candidate")
+
+			mirror := filepath.Join(repo, "openspec", "changes", "thin", "reviews", "receipt.json")
+			if err := os.MkdirAll(filepath.Dir(mirror), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(mirror, tt.payload(t, receipt), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID})
+			if got.Result == GateAllow {
+				t.Fatalf("mismatched change-local receipt mirror = %#v", got)
+			}
+		})
+	}
+}
+
 func TestCompactFixDiffUsesAuthoritativeCorrectionBindingAcrossDelivery(t *testing.T) {
 	t.Run("uncommitted pre-commit", func(t *testing.T) {
 		repo, state, receipt, _ := approvedCompactFixDiffFixture(t, "compact-fix-pre-commit")
@@ -543,6 +610,91 @@ func TestCompactCommittedGateRechecksConcurrentDirtyTrackedTarget(t *testing.T) 
 	}
 }
 
+func TestCompactCommittedNextSliceWorkspaceRoutesLiveCurrentChanges(t *testing.T) {
+	// A committed approved receipt whose candidate tree equals HEAD plus new
+	// dirty tracked work is the next-slice topology (#1401). Gate input
+	// derivation must construct the live current-changes target so the new
+	// work classifies as scope-changed or unrelated instead of failing with
+	// "committed approved target has dirty tracked changes".
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, repo string)
+		want   CompactGateTargetApplicability
+	}{
+		{name: "unrelated dirty tracked path", mutate: func(t *testing.T, repo string) {
+			writeSnapshotFile(t, repo, "deleted.txt", "next slice in progress\n")
+		}, want: CompactGateTargetUnrelated},
+		{name: "overlapping dirty tracked path", mutate: func(t *testing.T, repo string) {
+			writeSnapshotFile(t, repo, "tracked.txt", "next slice on reviewed path\n")
+		}, want: CompactGateTargetScopeChanged},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
+			state := newCompactStartStateForTarget(t, repo, "compact-next-slice-"+strings.ReplaceAll(tt.name, " ", "-"), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+			state, receipt := persistApprovedCompactState(t, repo, state)
+			gitSnapshot(t, repo, "add", "tracked.txt")
+			gitSnapshot(t, repo, "commit", "-m", "reviewed candidate")
+			tt.mutate(t, repo)
+
+			input := NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID}
+			assessment, err := AssessCompactGateTarget(context.Background(), repo, state, input)
+			if err != nil {
+				t.Fatalf("next-slice workspace assessment failed input derivation: %v", err)
+			}
+			if assessment.Applicability != tt.want {
+				t.Fatalf("next-slice applicability = %q, want %q", assessment.Applicability, tt.want)
+			}
+
+			got := EvaluateCompactGate(context.Background(), repo, receipt, input)
+			if got.Result == GateAllow {
+				t.Fatalf("committed target with dirty tracked changes was allowed: %#v", got)
+			}
+			if got.Result != GateScopeChanged || strings.Contains(got.Reason, "cannot be derived") {
+				t.Fatalf("next-slice explicit-lineage evaluation = %#v", got)
+			}
+		})
+	}
+}
+
+func TestCompactCommittedNextSliceIntendedFilterPropagatesGitInfraFailure(t *testing.T) {
+	// A git infrastructure failure while checking whether frozen intended
+	// paths remain untracked must fail gate input derivation like every other
+	// git call, never silently reclassify the path as untracked.
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
+	writeSnapshotFile(t, repo, "intended.txt", "reviewed untracked\n")
+	state := newCompactStartStateForTarget(t, repo, "compact-next-slice-infra", Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"intended.txt"}})
+	state, receipt := persistApprovedCompactState(t, repo, state)
+	gitSnapshot(t, repo, "add", "tracked.txt", "intended.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed candidate")
+	writeSnapshotFile(t, repo, "deleted.txt", "next slice in progress\n")
+
+	originalStarter := gitProcessTreeStarter
+	t.Cleanup(func() { gitProcessTreeStarter = originalStarter })
+	gitProcessTreeStarter = func(command *exec.Cmd) (func() error, error) {
+		for _, arg := range command.Args {
+			if arg == "--error-unmatch" {
+				return nil, errors.New("job object creation rejected")
+			}
+		}
+		return originalStarter(command)
+	}
+
+	input := NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID}
+	_, err := AssessCompactGateTarget(context.Background(), repo, state, input)
+	var control *GitProcessControlError
+	if !errors.As(err, &control) {
+		t.Fatalf("git infra failure during intended filtering was reclassified instead of failing the assessment: %v", err)
+	}
+
+	got := EvaluateCompactGate(context.Background(), repo, receipt, input)
+	if got.Result != GateInvalidated || !strings.Contains(got.Reason, "cannot be derived") || !errors.As(got.Cause, &control) {
+		t.Fatalf("git infra failure evaluation = %#v", got)
+	}
+}
+
 func TestCompactReleaseGateUsesIndependentCompleteCurrentEvidence(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -702,6 +854,76 @@ func TestCompactPrePRGateAllowsFinalSubsetOfGenesisPaths(t *testing.T) {
 	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePR, LineageID: state.LineageID, BaseRef: baseRef})
 	if got.Result != GateAllow {
 		t.Fatalf("subset pre-PR gate = %#v", got)
+	}
+}
+
+func TestValidateReviewedPublicationRangeAllowsRepeatedApprovedPath(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	base := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "tracked.txt", "red\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "red")
+	writeSnapshotFile(t, repo, "tracked.txt", "green\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "green")
+	head := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+	err := validateReviewedPublicationRange(context.Background(), repo, []string{"tracked.txt"}, &resolvedPrePRRefs{
+		BaseCommit: base,
+		HeadCommit: head,
+	})
+	if err != nil {
+		t.Fatalf("repeated approved publication path: %v", err)
+	}
+}
+
+func TestValidateReviewedPublicationRangeRejectsHiddenAddedAndRevertedPath(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	base := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "secret.txt", "hidden\n")
+	gitSnapshot(t, repo, "add", "secret.txt")
+	gitSnapshot(t, repo, "commit", "-m", "add hidden path")
+	if err := os.Remove(filepath.Join(repo, "secret.txt")); err != nil {
+		t.Fatal(err)
+	}
+	gitSnapshot(t, repo, "add", "-A")
+	gitSnapshot(t, repo, "commit", "-m", "revert hidden path")
+	head := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+	err := validateReviewedPublicationRange(context.Background(), repo, []string{"tracked.txt"}, &resolvedPrePRRefs{
+		BaseCommit: base,
+		HeadCommit: head,
+	})
+	if err == nil || !strings.Contains(err.Error(), `correction path "secret.txt" is outside immutable genesis scope`) {
+		t.Fatalf("hidden added and reverted publication path error = %v", err)
+	}
+}
+
+func TestValidateReviewedPublicationRangeAllowsRepeatedApprovedPathAcrossMergeHistory(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "approved.txt", "first\nsecond\nthird\nfourth\nfifth\n")
+	gitSnapshot(t, repo, "add", "approved.txt")
+	gitSnapshot(t, repo, "commit", "-m", "add approved path")
+	base := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	branch := currentBranch(context.Background(), repo)
+
+	gitSnapshot(t, repo, "checkout", "-qb", "merge-side")
+	writeSnapshotFile(t, repo, "approved.txt", "first\nsecond\nthird\nfourth\nside\n")
+	gitSnapshot(t, repo, "add", "approved.txt")
+	gitSnapshot(t, repo, "commit", "-m", "side approved change")
+	gitSnapshot(t, repo, "checkout", "-q", branch)
+	writeSnapshotFile(t, repo, "approved.txt", "main\nsecond\nthird\nfourth\nfifth\n")
+	gitSnapshot(t, repo, "add", "approved.txt")
+	gitSnapshot(t, repo, "commit", "-m", "main approved change")
+	gitSnapshot(t, repo, "merge", "--no-edit", "merge-side")
+	head := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+	err := validateReviewedPublicationRange(context.Background(), repo, []string{"approved.txt"}, &resolvedPrePRRefs{
+		BaseCommit: base,
+		HeadCommit: head,
+	})
+	if err != nil {
+		t.Fatalf("repeated approved merge-history path: %v", err)
 	}
 }
 
@@ -1263,4 +1485,205 @@ func approvedCompactPrePRFixture(t *testing.T, fixture *compatiblePrePRFixture) 
 		t.Fatal(err)
 	}
 	return state, receipt
+}
+
+func emptyRemoteCompactBaseDiffFixture(t *testing.T, lineage string) (string, CompactState, CompactReceipt) {
+	t.Helper()
+	repo := t.TempDir()
+	gitSnapshot(t, repo, "init")
+	gitSnapshot(t, repo, "config", "user.email", "snapshot@example.com")
+	gitSnapshot(t, repo, "config", "user.name", "Snapshot Test")
+	writeSnapshotFile(t, repo, "tracked.txt", "base\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+	base := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	branch := currentBranch(context.Background(), repo)
+	remote := filepath.Join(t.TempDir(), "empty-remote.git")
+	gitSnapshot(t, repo, "init", "--bare", remote)
+	gitSnapshot(t, repo, "remote", "add", "origin", remote)
+	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	gitSnapshot(t, repo, "commit", "-am", "reviewed delivery")
+	state := newCompactStartStateForTarget(t, repo, lineage, Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: []string{}})
+	state, receipt := persistApprovedCompactState(t, repo, state)
+	return repo, state, receipt
+}
+
+func TestCompactBaseDiffPrePushAllowsFirstPublicationToEmptyRemote(t *testing.T) {
+	repo, state, receipt := emptyRemoteCompactBaseDiffFixture(t, "compact-empty-remote-first-publication")
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID})
+	if got.Result != GateAllow || !got.Context.BaseRelationshipValid {
+		t.Fatalf("compact first-publication pre-push = %#v", got)
+	}
+}
+
+func TestCompactCurrentChangesFirstPublicationRejectsUndisclosedAncestorPath(t *testing.T) {
+	repo := t.TempDir()
+	gitSnapshot(t, repo, "init")
+	gitSnapshot(t, repo, "config", "user.email", "snapshot@example.com")
+	gitSnapshot(t, repo, "config", "user.name", "Snapshot Test")
+	writeSnapshotFile(t, repo, "tracked.txt", "one\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "one")
+	writeSnapshotFile(t, repo, "secret.txt", "must never be published\n")
+	gitSnapshot(t, repo, "add", "secret.txt")
+	gitSnapshot(t, repo, "commit", "-m", "pre-base secret")
+	gitSnapshot(t, repo, "rm", "-q", "secret.txt")
+	writeSnapshotFile(t, repo, "tracked.txt", "base\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "remove pre-base secret")
+	branch := currentBranch(context.Background(), repo)
+	remote := filepath.Join(t.TempDir(), "empty-remote.git")
+	gitSnapshot(t, repo, "init", "--bare", remote)
+	gitSnapshot(t, repo, "remote", "add", "origin", remote)
+	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	state := newCompactStartStateForTarget(t, repo, "compact-bootstrap-undisclosed-ancestor", Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	state, receipt := persistApprovedCompactState(t, repo, state)
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed delivery")
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID})
+	if got.Result == GateAllow || !strings.Contains(got.Reason, "not disclosed by the reviewed base tree") || !strings.Contains(got.Reason, "squash pre-publication history") {
+		t.Fatalf("current-changes bootstrap with undisclosed ancestor path = %#v", got)
+	}
+}
+
+func TestCompactCurrentChangesFirstPublicationRejectsOverwrittenSecretBlob(t *testing.T) {
+	repo := t.TempDir()
+	gitSnapshot(t, repo, "init")
+	gitSnapshot(t, repo, "config", "user.email", "snapshot@example.com")
+	gitSnapshot(t, repo, "config", "user.name", "Snapshot Test")
+	writeSnapshotFile(t, repo, "tracked.txt", "SECRET_API_KEY=sk-abc123\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "pre-base secret revision")
+	writeSnapshotFile(t, repo, "tracked.txt", "hello\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "overwrite secret before review")
+	branch := currentBranch(context.Background(), repo)
+	remote := filepath.Join(t.TempDir(), "empty-remote.git")
+	gitSnapshot(t, repo, "init", "--bare", remote)
+	gitSnapshot(t, repo, "remote", "add", "origin", remote)
+	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	state := newCompactStartStateForTarget(t, repo, "compact-bootstrap-overwritten-secret-blob", Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	state, receipt := persistApprovedCompactState(t, repo, state)
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed delivery")
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID})
+	if got.Result == GateAllow || !strings.Contains(got.Reason, "publishes pre-base history blob") || !strings.Contains(got.Reason, "tracked.txt") || !strings.Contains(got.Reason, "squash pre-publication history") {
+		t.Fatalf("current-changes bootstrap with overwritten secret blob = %#v", got)
+	}
+}
+
+func TestCompactBaseDiffFirstPublicationAllowsAncestorsDisclosedByBaseTree(t *testing.T) {
+	repo := t.TempDir()
+	gitSnapshot(t, repo, "init")
+	gitSnapshot(t, repo, "config", "user.email", "snapshot@example.com")
+	gitSnapshot(t, repo, "config", "user.name", "Snapshot Test")
+	writeSnapshotFile(t, repo, "docs/README.md", "pre-existing documentation\n")
+	gitSnapshot(t, repo, "add", "docs/README.md")
+	gitSnapshot(t, repo, "commit", "-m", "docs")
+	writeSnapshotFile(t, repo, "tracked.txt", "base\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+	base := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	branch := currentBranch(context.Background(), repo)
+	remote := filepath.Join(t.TempDir(), "empty-remote.git")
+	gitSnapshot(t, repo, "init", "--bare", remote)
+	gitSnapshot(t, repo, "remote", "add", "origin", remote)
+	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	gitSnapshot(t, repo, "commit", "-am", "reviewed delivery")
+	state := newCompactStartStateForTarget(t, repo, "compact-bootstrap-disclosed-ancestors", Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: []string{}})
+	state, receipt := persistApprovedCompactState(t, repo, state)
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID})
+	if got.Result != GateAllow || !got.Context.BaseRelationshipValid {
+		t.Fatalf("bootstrap with base tree containing pre-existing unreviewed files = %#v", got)
+	}
+}
+
+func TestCompactBaseDiffFirstPublicationRejectsHistoryOutsideGenesis(t *testing.T) {
+	repo, state, receipt := emptyRemoteCompactBaseDiffFixture(t, "compact-empty-remote-genesis-exceed")
+	writeSnapshotFile(t, repo, "secret.txt", "must never be published\n")
+	gitSnapshot(t, repo, "add", "secret.txt")
+	gitSnapshot(t, repo, "commit", "-m", "intermediate secret")
+	if err := os.Remove(filepath.Join(repo, "secret.txt")); err != nil {
+		t.Fatal(err)
+	}
+	gitSnapshot(t, repo, "add", "-A")
+	gitSnapshot(t, repo, "commit", "-m", "remove intermediate secret")
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID})
+	if got.Result == GateAllow || !strings.Contains(got.Reason, "publication range exceeds immutable genesis scope") {
+		t.Fatalf("first-publication range outside genesis = %#v", got)
+	}
+}
+
+func TestCompactBaseDiffFirstPublicationRejectsOverwrittenSecretBlob(t *testing.T) {
+	repo := t.TempDir()
+	gitSnapshot(t, repo, "init")
+	gitSnapshot(t, repo, "config", "user.email", "snapshot@example.com")
+	gitSnapshot(t, repo, "config", "user.name", "Snapshot Test")
+	writeSnapshotFile(t, repo, "tracked.txt", "SECRET_API_KEY=sk-abc123\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "pre-base secret revision")
+	writeSnapshotFile(t, repo, "tracked.txt", "hello\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "overwrite secret before review")
+	base := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	branch := currentBranch(context.Background(), repo)
+	remote := filepath.Join(t.TempDir(), "empty-remote.git")
+	gitSnapshot(t, repo, "init", "--bare", remote)
+	gitSnapshot(t, repo, "remote", "add", "origin", remote)
+	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	gitSnapshot(t, repo, "commit", "-am", "reviewed delivery")
+	state := newCompactStartStateForTarget(t, repo, "compact-base-diff-overwritten-secret-blob", Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: []string{}})
+	state, receipt := persistApprovedCompactState(t, repo, state)
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID})
+	if got.Result == GateAllow || !strings.Contains(got.Reason, "publishes pre-base history blob") || !strings.Contains(got.Reason, "tracked.txt") || !strings.Contains(got.Reason, "squash pre-publication history") {
+		t.Fatalf("base-diff bootstrap with overwritten secret blob = %#v", got)
+	}
+}
+
+// TestCompactBootstrapDisclosureScopeExcludesCommitMetadata pins the same
+// documented contract boundary as the native
+// TestBootstrapDisclosureScopeExcludesCommitMetadata through the compact
+// entry point: disclosure covers repository content — tracked paths and blob
+// bytes — and never commit metadata, so a pre-base `--allow-empty` commit
+// with a secret message passes both disclosure rules even though its commit
+// object is transferred by the bootstrap push. Messages are not review-bound
+// anywhere in the gate model (see validateBootstrapAncestryDisclosure);
+// closing this boundary requires consciously flipping this test.
+func TestCompactBootstrapDisclosureScopeExcludesCommitMetadata(t *testing.T) {
+	repo := t.TempDir()
+	gitSnapshot(t, repo, "init")
+	gitSnapshot(t, repo, "config", "user.email", "snapshot@example.com")
+	gitSnapshot(t, repo, "config", "user.name", "Snapshot Test")
+	writeSnapshotFile(t, repo, "tracked.txt", "base\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+	gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "SECRET-COMMIT-MESSAGE-MARKER token=hunter2")
+	writeSnapshotFile(t, repo, "reviewed-base.txt", "reviewed base\n")
+	gitSnapshot(t, repo, "add", "reviewed-base.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed base")
+	base := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	branch := currentBranch(context.Background(), repo)
+	remote := filepath.Join(t.TempDir(), "empty-remote.git")
+	gitSnapshot(t, repo, "init", "--bare", remote)
+	gitSnapshot(t, repo, "remote", "add", "origin", remote)
+	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	gitSnapshot(t, repo, "commit", "-am", "reviewed delivery")
+	state := newCompactStartStateForTarget(t, repo, "compact-bootstrap-commit-metadata-scope", Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: []string{}})
+	state, receipt := persistApprovedCompactState(t, repo, state)
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID})
+	if got.Result != GateAllow || !got.Context.BaseRelationshipValid {
+		t.Fatalf("compact bootstrap with secret pre-base commit message = %#v", got)
+	}
 }

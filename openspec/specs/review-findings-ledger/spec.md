@@ -45,7 +45,7 @@ The current-changes target MUST combine tracked staged, unstaged, and deleted st
 
 ### Requirement: Initial findings freeze
 
-Each selected lens MUST run exactly one initial sweep and emit neutral claims with `id`, `lens`, `location`, `severity`, `claim`, `evidence_class`, `proof_refs`, and `status`. Full 4R means four initial lens sweeps. Findings MUST freeze after merge.
+Each selected lens MUST run exactly one initial sweep and emit neutral claims with `id`, `lens`, `location`, `severity`, `claim`, and `proof_refs`. `BLOCKER | CRITICAL` claims MUST additionally carry `evidence_class` and `causal_disposition`. Per-finding status is derived by the system into evidence outcomes and MUST NOT be emitted by a lens. Full 4R means four initial lens sweeps. Findings MUST freeze after merge.
 
 #### Scenario: Full 4R selects four lenses once
 

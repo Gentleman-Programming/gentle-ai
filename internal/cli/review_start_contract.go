@@ -69,6 +69,13 @@ func reviewStartAssessmentForFrozenAuthority(legacy ReviewFacadeStartResult, ass
 	if assessment.Level == legacy.RiskLevel {
 		return assessment, nil
 	}
+	if legacy.Action == string(reviewtransaction.CompactStartResumed) && legacy.RiskLevel == reviewtransaction.RiskMedium &&
+		assessment.Level == reviewtransaction.RiskHigh && len(assessment.Reasons) > 0 && assessment.Reasons[0].Path != "" &&
+		validateReviewStartLenses(legacy.RiskLevel, legacy.SelectedLenses) == nil {
+		assessment.Level, assessment.DominantLens = legacy.RiskLevel, ""
+		assessment.Reasons = []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonExecutableChange, Path: assessment.Reasons[0].Path}}
+		return assessment, nil
+	}
 	// Authorities created before the pure-documentation policy remain valid and
 	// retain their frozen high/4R route when the same immutable snapshot replays.
 	if legacy.RiskLevel == reviewtransaction.RiskHigh && assessment.Level == reviewtransaction.RiskMedium &&
@@ -148,9 +155,9 @@ func validateReviewStartRiskReasons(reasons []reviewtransaction.RiskReason) erro
 			if reason.Signal != reviewtransaction.SignalAuth || reason.Path == "" || reason.OldMode != "" || reason.NewMode != "" {
 				return fmt.Errorf("invalid service-token risk reason %#v", reason)
 			}
-		case reviewtransaction.RiskReasonShellSource:
+		case reviewtransaction.RiskReasonShellSource, reviewtransaction.RiskReasonProcessBoundary, reviewtransaction.RiskReasonProcessScanLimit:
 			if reason.Signal != reviewtransaction.SignalShellProcess || reason.Path == "" || reason.OldMode != "" || reason.NewMode != "" {
-				return fmt.Errorf("invalid shell-source risk reason %#v", reason)
+				return fmt.Errorf("invalid shell/process risk reason %#v", reason)
 			}
 		case reviewtransaction.RiskReasonExecutableMode:
 			if reason.Signal != reviewtransaction.SignalPermissions || reason.Path == "" || reason.OldMode == "" || reason.NewMode == "" || reason.OldMode == reason.NewMode {

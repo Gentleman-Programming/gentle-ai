@@ -205,6 +205,70 @@ func TestRecoverCompactAuthorityRejectsProjectionChange(t *testing.T) {
 	}
 }
 
+func TestCorrectionRecoveryRejectsAuthorizedProjectionChange(t *testing.T) {
+	repo, predecessor, _, record := correctionScopeRecoveryFixture(t, "correction-projection-predecessor")
+	writeSnapshotFile(t, repo, "new-helper.go", "package helper\n")
+	gitSnapshot(t, repo, "add", "new-helper.go")
+	successor := newCompactStartStateForTarget(t, repo, "correction-projection-successor", Target{
+		Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{},
+	})
+	successor.Generation = predecessor.Generation + 1
+	request := CompactRecoveryRequest{
+		PredecessorLineageID: predecessor.LineageID, ExpectedPredecessorRevision: record.Revision, Successor: successor,
+		Disposition: RecoveryScopeChanged, Reason: "expand correction scope", Actor: "maintainer",
+	}
+	request.MaintainerAuthorization = compactRecoveryAuthorizationBinding(predecessor.LineageID, record.Revision, successor.InitialSnapshot.Identity, request.Actor, request.Reason)
+	if _, err := RecoverCompactAuthority(context.Background(), repo, request); err == nil || !strings.Contains(err.Error(), "retain the predecessor projection") {
+		t.Fatalf("correction cross-projection error = %v", err)
+	}
+	successorStore, _ := CompactAuthoritativeStore(context.Background(), repo, successor.LineageID)
+	if _, err := os.Stat(successorStore.StatePath()); !os.IsNotExist(err) {
+		t.Fatalf("correction cross-projection recovery mutated successor: %v", err)
+	}
+}
+
+func TestRecoverCompactAuthorityAllowsAuthorizedEscalatedProjectionChange(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := correctedCompactTestState(t, repo, "recovery-workspace-escalated")
+	state.State = StateEscalated
+	store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	record, payload, err := makeCompactRecord(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	writeSnapshotFile(t, repo, "tracked.txt", "staged successor\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	writeSnapshotFile(t, repo, "tracked.txt", "unstaged divergence\n")
+	successor := newCompactStartStateForTarget(t, repo, "recovery-staged-successor", Target{Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{}})
+	successor.Generation = state.Generation + 1
+	if state.InitialSnapshot.Projection != "" && state.InitialSnapshot.Projection != ProjectionWorkspace || successor.InitialSnapshot.Projection != ProjectionStaged {
+		t.Fatalf("fixture projections = %q -> %q", state.InitialSnapshot.Projection, successor.InitialSnapshot.Projection)
+	}
+	request := CompactRecoveryRequest{
+		PredecessorLineageID: state.LineageID, ExpectedPredecessorRevision: record.Revision, Successor: successor,
+		Disposition: RecoveryEscalated, Actor: "maintainer", Reason: "select exact staged target",
+	}
+	request.MaintainerAuthorization = compactRecoveryAuthorizationBinding(state.LineageID, record.Revision, successor.InitialSnapshot.Identity, request.Actor, request.Reason)
+
+	recovered, err := RecoverCompactAuthority(context.Background(), repo, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.State.InitialSnapshot.Projection != ProjectionStaged || recovered.State.InitialSnapshot.CandidateTree != successor.InitialSnapshot.CandidateTree {
+		t.Fatalf("cross-projection successor = %#v", recovered.State.InitialSnapshot)
+	}
+	if leaves, err := CompactAuthorityLeaves(context.Background(), repo); err != nil || len(leaves) != 1 || leaves[0].lineageID != successor.LineageID {
+		t.Fatalf("reloaded recovery graph = %#v, %v", leaves, err)
+	}
+}
+
 func TestApprovedRecoveryTreatsBaseTreeMismatchAsScopeChange(t *testing.T) {
 	snapshot := Snapshot{BaseTree: strings.Repeat("a", 40), CandidateTree: strings.Repeat("c", 40), PathsDigest: hash("1")}
 	predecessor, successor := CompactState{State: StateApproved, CurrentSnapshot: snapshot}, CompactState{InitialSnapshot: snapshot}
@@ -1324,9 +1388,10 @@ func TestCompactHistoricalFailedValidatorTransportRequiresExactBinding(t *testin
 	predecessorTransport.BundleDigest = compactTransportDigest(predecessorTransport)
 
 	for _, tt := range []struct {
-		name, want     string
-		changed, exact bool
-	}{{"same target", "target has not changed", false, true}, {"changed target", "", true, true}, {"wrong binding", "exact maintainer authorization", true, false}} {
+		name, want                 string
+		changed, exact, projection bool
+	}{{"same target", "target has not changed", false, true, false}, {"changed target", "", true, true, false},
+		{"authorized projection change", "", true, true, true}, {"wrong projection binding", "exact maintainer authorization", true, false, true}} {
 		t.Run(tt.name, func(t *testing.T) {
 			destination := filepath.Join(t.TempDir(), "clone")
 			gitSnapshot(t, repo, "clone", "--no-local", repo, destination)
@@ -1342,6 +1407,14 @@ func TestCompactHistoricalFailedValidatorTransportRequiresExactBinding(t *testin
 			}
 			successor := newCompactRevisionState(t, destination, "historical-transport-g2-"+strings.ReplaceAll(tt.name, " ", "-"))
 			successor.Generation = state.Generation + 1
+			if tt.projection {
+				successor.InitialSnapshot.Kind = TargetBaseDiff
+				successor.CurrentSnapshot.Kind = TargetBaseDiff
+				successor.InitialSnapshot.Projection = ProjectionStaged
+				successor.CurrentSnapshot.Projection = ProjectionStaged
+				successor.InitialSnapshot.Identity = snapshotIdentityForProjection(successor.InitialSnapshot.Kind, ProjectionStaged, successor.InitialSnapshot.BaseTree, successor.InitialSnapshot.CandidateTree, successor.InitialSnapshot.PathsDigest, successor.InitialSnapshot.IntendedUntrackedProof, successor.InitialSnapshot.IntendedUntracked, successor.InitialSnapshot.LedgerIDs)
+				successor.CurrentSnapshot.Identity = snapshotIdentityForProjection(successor.CurrentSnapshot.Kind, ProjectionStaged, successor.CurrentSnapshot.BaseTree, successor.CurrentSnapshot.CandidateTree, successor.CurrentSnapshot.PathsDigest, successor.CurrentSnapshot.IntendedUntrackedProof, successor.CurrentSnapshot.IntendedUntracked, successor.CurrentSnapshot.LedgerIDs)
+			}
 			successor.Recovery = &CompactRecoveryProvenance{PredecessorLineageID: state.LineageID, PredecessorRevision: predecessor.Revision,
 				Disposition: RecoveryEscalated, Actor: "maintainer", Reason: "recover failed validator", RecoveredAt: time.Now().UTC()}
 			successor.Recovery.MaintainerAuthorization = "wrong"

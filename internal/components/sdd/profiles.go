@@ -243,13 +243,22 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 //     sub-agent references and model assignments table), permissions scoped to *-{name}
 //   - sdd-{phase}-{name} (10 agents): subagent mode, hidden, file reference to
 //     the shared prompt at SharedPromptDir(homeDir)/sdd-{phase}.md
-func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuidance ...string) ([]byte, error) {
+//
+// fallbackPhaseAssignments (optional) is consulted when a phase is not
+// explicitly set on the profile. Typically this is the caller's
+// Selection.ModelAssignments from the gentle-ai TUI's global "Configure
+// Models" flow. Without the fallback, a phase the user assigned globally but
+// did not re-touch inside the profile picker would be silently emitted
+// without a model field, surfacing as "Unassigned" in OpenCode while
+// gentle-ai's UI showed the phase as assigned (issue #557). Profile-level
+// assignments always win over the fallback when both are present.
+//
+// codeGraphGuidance (optional) is markdown appended to sub-agent prompts that
+// instructs the agent how to use the CodeGraph community tool. Pass an empty
+// string when CodeGraph is not enabled.
+func GenerateProfileOverlay(profile model.Profile, homeDir string, fallbackPhaseAssignments map[string]model.ModelAssignment, codeGraphGuidance string) ([]byte, error) {
 	if profile.Name == "" || profile.Name == "default" {
 		return nil, fmt.Errorf("GenerateProfileOverlay: profile name must be non-empty and not 'default'")
-	}
-	guidance := ""
-	if len(codeGraphGuidance) > 0 {
-		guidance = codeGraphGuidance[0]
 	}
 
 	suffix := "-" + profile.Name
@@ -312,12 +321,22 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 			},
 		},
 	}
-	if profile.OrchestratorModel.ProviderID != "" && profile.OrchestratorModel.ModelID != "" {
-		orchEntry["model"] = profile.OrchestratorModel.FullID()
+	orchAssignment := profile.OrchestratorModel
+	if orchAssignment.ProviderID == "" || orchAssignment.ModelID == "" {
+		// Fall back to the global gentle-orchestrator assignment (issue #557)
+		// when the profile did not pin its own orchestrator model. This mirrors
+		// how PhaseAssignments are resolved below so generated profile
+		// orchestrators stay consistent with what the TUI shows elsewhere.
+		if fallback, ok := fallbackPhaseAssignments["gentle-orchestrator"]; ok {
+			orchAssignment = fallback
+		}
+	}
+	if orchAssignment.ProviderID != "" && orchAssignment.ModelID != "" {
+		orchEntry["model"] = orchAssignment.FullID()
 		// Always write variant (even "") so the deep merge clears any stale
 		// effort from a previous profile. Mirrors inject.go (case 1).
-		if profile.OrchestratorModel.Effort != "" {
-			orchEntry["variant"] = profile.OrchestratorModel.Effort
+		if orchAssignment.Effort != "" {
+			orchEntry["variant"] = orchAssignment.Effort
 		} else {
 			orchEntry["variant"] = ""
 		}
@@ -354,7 +373,11 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 				"bash":  true,
 			},
 		}
-		if assignment, ok := profile.PhaseAssignments[phase]; ok && assignment.ProviderID != "" && assignment.ModelID != "" {
+		// Issue #557: consult fallback when the profile did not set the phase,
+		// so generated *-{name} agents stay consistent with what the user sees
+		// in the gentle-ai TUI. Profile-level assignments still win.
+		assignment := resolveProfileAssignment(profile, fallbackPhaseAssignments, phase)
+		if assignment.ProviderID != "" && assignment.ModelID != "" {
 			entry["model"] = assignment.FullID()
 			// Always write variant (even "") so the deep merge clears any stale
 			// effort from a previous profile. Mirrors inject.go (case 1).
@@ -368,22 +391,29 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 	}
 
 	for _, jd := range opencode.JDPhases() {
-		assignment, ok := profile.PhaseAssignments[jd]
-		if !ok || assignment.ProviderID == "" || assignment.ModelID == "" {
+		// Profile wins over fallback for JD agents: their perm/task wiring is
+		// profile-scoped (presence toggles delegation to the *-{name} agent vs
+		// the global one). When the profile has not opted in, fall back to
+		// the global JD agent and skip generating the suffixed entry — this
+		// preserves the existing "profile-scoped JD is opt-in" contract that
+		// other tests (e.g. cleanupStaleProfileJDAgents) rely on.
+		profileAssignment, hasProfileKey := profile.PhaseAssignments[jd]
+		hasProfileValue := hasProfileKey && profileAssignment.ProviderID != "" && profileAssignment.ModelID != ""
+		if !hasProfileValue {
 			continue
 		}
 		key := jd + suffix
 		entry := jdProfileAgentEntry(jd)
-		entry["model"] = assignment.FullID()
-		if assignment.Effort != "" {
-			entry["variant"] = assignment.Effort
+		entry["model"] = profileAssignment.FullID()
+		if profileAssignment.Effort != "" {
+			entry["variant"] = profileAssignment.Effort
 		} else {
 			entry["variant"] = ""
 		}
 		agentMap[key] = entry
 	}
 
-	injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap, guidance)
+	injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap, codeGraphGuidance)
 
 	overlay := map[string]any{
 		"agent": agentMap,
@@ -394,6 +424,27 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 		return nil, fmt.Errorf("marshal profile overlay: %w", err)
 	}
 	return append(result, '\n'), nil
+}
+
+// resolveProfileAssignment returns the effective model assignment for a phase:
+// the profile's explicit assignment wins; otherwise the global fallback (e.g.
+// OpenCodeModelAssignments from the TUI's "Configure Models" flow). Returns
+// a zero ModelAssignment when neither side has a usable value.
+//
+// Issue #557 motivated this helper: prior to the fix, the profile overlay
+// silently emitted agents without a model field whenever the user did not
+// re-touch the phase inside the profile picker — surfacing as "Unassigned"
+// in OpenCode while gentle-ai's UI showed the phase as assigned.
+func resolveProfileAssignment(profile model.Profile, fallback map[string]model.ModelAssignment, phase string) model.ModelAssignment {
+	if assignment, ok := profile.PhaseAssignments[phase]; ok && assignment.ProviderID != "" && assignment.ModelID != "" {
+		return assignment
+	}
+	if fallback != nil {
+		if assignment, ok := fallback[phase]; ok && assignment.ProviderID != "" && assignment.ModelID != "" {
+			return assignment
+		}
+	}
+	return model.ModelAssignment{}
 }
 
 func hasProfileAssignment(profile model.Profile, phase string) bool {

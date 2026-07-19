@@ -155,6 +155,7 @@ func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 		applicability reviewtransaction.TargetApplicability
 	}{
 		{name: "status.fixture.json", applicability: reviewtransaction.TargetApplicabilityCurrent},
+		{name: "status-recover.fixture.json", applicability: reviewtransaction.TargetApplicabilityCurrent},
 		{name: "status-unrelated.fixture.json", applicability: reviewtransaction.TargetApplicabilityUnrelated},
 		{name: "status-ambiguous.fixture.json", applicability: reviewtransaction.TargetApplicabilityAmbiguous},
 		{name: "status-corrupted.fixture.json", applicability: reviewtransaction.TargetApplicabilityCorrupted},
@@ -430,13 +431,80 @@ func TestNegotiatedStatusPreservesManualRecoveryAuthorityContext(t *testing.T) {
 	native := reviewtransaction.TargetStatusResult{
 		Applicability: reviewtransaction.TargetApplicabilityCurrent, AuthorityVersion: reviewtransaction.AuthorityVersionCompact,
 		LineageID: "historical-validator", State: reviewtransaction.StateCorrectionRequired, Generation: 1, Revision: "sha256:" + strings.Repeat("a", 64),
-		Action: reviewtransaction.TargetStatusActionRecover, Replayability: reviewtransaction.ReplayabilityManualActionRequired,
+		Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryEscalated,
+		Replayability: reviewtransaction.ReplayabilityManualActionRequired,
 	}
 	got := newReviewTargetStatusResult(native)
 	if got.Action != reviewtransaction.TargetStatusActionRecover || got.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
+		got.ActionDisposition != reviewtransaction.RecoveryEscalated ||
 		got.Authority == nil || got.Authority.LineageID != native.LineageID || got.Authority.Revision != native.Revision {
 		t.Fatalf("negotiated recovery status = %#v", got)
 	}
+}
+
+// TestNegotiatedStatusBindsRecoveryDispositionToRecoverAction pins issue #1469
+// Case B at the published contract boundary: a recover recommendation must
+// carry the disposition recovery accepts, and nothing else may carry one.
+func TestNegotiatedStatusBindsRecoveryDispositionToRecoverAction(t *testing.T) {
+	base := func() ReviewTargetStatusResult {
+		native := reviewtransaction.TargetStatusResult{
+			Applicability: reviewtransaction.TargetApplicabilityCurrent, AuthorityVersion: reviewtransaction.AuthorityVersionCompact,
+			LineageID: "disposition-contract", State: reviewtransaction.StateCorrectionRequired, Generation: 1,
+			Revision: "sha256:" + strings.Repeat("a", 64), OriginalChangedLines: 2, Tier: reviewtransaction.RiskMedium, CorrectionBudget: 1,
+			Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryScopeChanged,
+			Replayability: reviewtransaction.ReplayabilityManualActionRequired,
+		}
+		result := newReviewTargetStatusResult(native)
+		result.TargetIdentity = "sha256:" + strings.Repeat("b", 64)
+		result.Projection = publishedStatusFixtureProjection(t)
+		return result
+	}
+	valid := base()
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("scope-changed recover status rejected: %v", err)
+	}
+	for _, disposition := range []reviewtransaction.RecoveryDisposition{
+		reviewtransaction.RecoveryScopeChanged, reviewtransaction.RecoveryInvalidated, reviewtransaction.RecoveryEscalated,
+	} {
+		accepted := base()
+		accepted.ActionDisposition = disposition
+		if err := accepted.Validate(); err != nil {
+			t.Fatalf("recover status rejected disposition %q: %v", disposition, err)
+		}
+	}
+	missing := base()
+	missing.ActionDisposition = ""
+	if err := missing.Validate(); err == nil {
+		t.Fatal("recover status accepted without a recovery disposition")
+	}
+	unsupported := base()
+	unsupported.ActionDisposition = reviewtransaction.RecoveryDisposition("corrected")
+	if err := unsupported.Validate(); err == nil {
+		t.Fatal("recover status accepted an unsupported recovery disposition")
+	}
+	misplaced := base()
+	misplaced.Action = reviewtransaction.TargetStatusActionFinalize
+	misplaced.Replayability = reviewtransaction.ReplayabilityNotReplayable
+	if err := misplaced.Validate(); err == nil {
+		t.Fatal("finalize status accepted a recovery disposition")
+	}
+	misplaced.ActionDisposition = ""
+	if err := misplaced.Validate(); err != nil {
+		t.Fatalf("finalize status without a disposition rejected: %v", err)
+	}
+}
+
+func publishedStatusFixtureProjection(t *testing.T) ReviewTargetStatusProjection {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "status.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture ReviewTargetStatusResult
+	if err := json.Unmarshal(payload, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	return fixture.Projection
 }
 
 func TestNegotiatedLegacyReceiptStatusNeverUsesCompactPublicationPending(t *testing.T) {

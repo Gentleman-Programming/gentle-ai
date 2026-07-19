@@ -25,19 +25,22 @@ const (
 )
 
 type ReviewTargetStatusResult struct {
-	Schema         string                                `json:"schema"`
-	Contract       string                                `json:"contract"`
-	Operation      string                                `json:"operation"`
-	Applicability  reviewtransaction.TargetApplicability `json:"applicability"`
-	Authority      *ReviewTargetStatusAuthority          `json:"authority,omitempty"`
-	Receipt        ReviewTargetStatusReceipt             `json:"receipt"`
-	Action         reviewtransaction.TargetStatusAction  `json:"action"`
-	Replayability  reviewtransaction.Replayability       `json:"replayability"`
-	Frozen         *ReviewTargetStatusFrozen             `json:"frozen,omitempty"`
-	TargetIdentity string                                `json:"target_identity"`
-	Projection     ReviewTargetStatusProjection          `json:"projection"`
-	Candidates     []string                              `json:"candidates"`
-	Reconciliation *ReviewFinalizeReconciliation         `json:"reconciliation,omitempty"`
+	Schema        string                                `json:"schema"`
+	Contract      string                                `json:"contract"`
+	Operation     string                                `json:"operation"`
+	Applicability reviewtransaction.TargetApplicability `json:"applicability"`
+	Authority     *ReviewTargetStatusAuthority          `json:"authority,omitempty"`
+	Receipt       ReviewTargetStatusReceipt             `json:"receipt"`
+	Action        reviewtransaction.TargetStatusAction  `json:"action"`
+	// ActionDisposition names the `review recover --disposition` value the
+	// recovery rules accept. It is present exactly when Action is recover.
+	ActionDisposition reviewtransaction.RecoveryDisposition `json:"action_disposition,omitempty"`
+	Replayability     reviewtransaction.Replayability       `json:"replayability"`
+	Frozen            *ReviewTargetStatusFrozen             `json:"frozen,omitempty"`
+	TargetIdentity    string                                `json:"target_identity"`
+	Projection        ReviewTargetStatusProjection          `json:"projection"`
+	Candidates        []string                              `json:"candidates"`
+	Reconciliation    *ReviewFinalizeReconciliation         `json:"reconciliation,omitempty"`
 }
 
 type ReviewFinalizeReconciliation struct {
@@ -81,7 +84,8 @@ type ReviewTargetStatusProjection struct {
 func newReviewTargetStatusResult(native reviewtransaction.TargetStatusResult) ReviewTargetStatusResult {
 	result := ReviewTargetStatusResult{
 		Schema: ReviewIntegrationStatusSchema, Contract: ReviewIntegrationContractV1, Operation: "review.status",
-		Applicability: native.Applicability, Action: native.Action, Replayability: native.Replayability,
+		Applicability: native.Applicability, Action: native.Action, ActionDisposition: native.ActionDisposition,
+		Replayability:  native.Replayability,
 		TargetIdentity: native.TargetIdentity, Candidates: append([]string{}, native.CandidateLineageIDs...),
 		Projection: ReviewTargetStatusProjection{
 			Schema: ReviewIntegrationProjectionSchema, Kind: native.Projection.Kind, Projection: facadeProjection(native.Projection.Projection),
@@ -197,6 +201,18 @@ func (result ReviewTargetStatusResult) Validate() error {
 		reviewtransaction.ReplayabilityStatusRequired, reviewtransaction.ReplayabilityManualActionRequired:
 	default:
 		return errors.New("unsupported review status replayability")
+	}
+	switch result.ActionDisposition {
+	case "":
+		if result.Action == reviewtransaction.TargetStatusActionRecover {
+			return errors.New("recover status requires the recovery disposition recovery accepts")
+		}
+	case reviewtransaction.RecoveryScopeChanged, reviewtransaction.RecoveryInvalidated, reviewtransaction.RecoveryEscalated:
+		if result.Action != reviewtransaction.TargetStatusActionRecover {
+			return errors.New("only recover status may carry a recovery disposition")
+		}
+	default:
+		return errors.New("unsupported review status recovery disposition")
 	}
 	return nil
 }

@@ -44,6 +44,7 @@ type Target struct {
 type Snapshot struct {
 	Kind                   TargetKind `json:"kind"`
 	Projection             Projection `json:"projection,omitempty"`
+	UnbornHead             bool       `json:"unborn_head,omitempty"`
 	BaseTree               string     `json:"base_tree"`
 	CandidateTree          string     `json:"candidate_tree"`
 	PathsDigest            string     `json:"paths_digest"`
@@ -55,7 +56,8 @@ type Snapshot struct {
 }
 
 type SnapshotBuilder struct {
-	Repo string
+	Repo       string
+	unbornHead bool
 }
 
 var exactObjectPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
@@ -173,6 +175,7 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 	identity := snapshotIdentityForProjection(target.Kind, projection, baseTree, candidateTree, pathsDigest, untrackedProof, intended, ledgerIDs)
 	return Snapshot{
 		Kind: target.Kind, Projection: projection, BaseTree: baseTree, CandidateTree: candidateTree,
+		UnbornHead:  builder.unbornHead,
 		PathsDigest: pathsDigest, IntendedUntracked: intended,
 		IntendedUntrackedProof: untrackedProof, LedgerIDs: ledgerIDs,
 		Paths: paths, Identity: identity,
@@ -539,11 +542,12 @@ func canonicalRepositoryPath(path string) (string, error) {
 	return filepath.Clean(resolved), nil
 }
 
-func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended []string, allowStagedIntended bool, projection Projection) (string, string, string, error) {
-	baseTree, err := builder.resolveTree(ctx, "HEAD")
+func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended []string, allowStagedIntended bool, projection Projection) (string, string, string, error) {
+	baseTree, unborn, err := builder.resolveCurrentChangesBase(ctx, projection)
 	if err != nil {
 		return "", "", "", err
 	}
+	builder.unbornHead = unborn
 	indexPathOutput, err := runGit(ctx, builder.Repo, nil, nil, "rev-parse", "--git-path", "index")
 	if err != nil {
 		return "", "", "", fmt.Errorf("locate real index: %w", err)
@@ -553,7 +557,8 @@ func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended
 		indexPath = filepath.Join(builder.Repo, indexPath)
 	}
 	indexContent, err := os.ReadFile(indexPath)
-	if err != nil {
+	missingIndex := errors.Is(err, os.ErrNotExist)
+	if err != nil && !missingIndex {
 		return "", "", "", fmt.Errorf("read real index: %w", err)
 	}
 
@@ -589,13 +594,20 @@ func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended
 	}
 	tempIndex := temp.Name()
 	defer os.Remove(tempIndex)
-	if _, err := temp.Write(indexContent); err != nil {
-		return "", "", "", err
-	}
 	if err := temp.Close(); err != nil {
 		return "", "", "", err
 	}
 	env := []string{"GIT_INDEX_FILE=" + tempIndex}
+	if missingIndex {
+		if err := os.Remove(tempIndex); err != nil {
+			return "", "", "", err
+		}
+		if _, err := runGit(ctx, builder.Repo, env, nil, "read-tree", "--empty"); err != nil {
+			return "", "", "", err
+		}
+	} else if err := os.WriteFile(tempIndex, indexContent, 0o600); err != nil {
+		return "", "", "", err
+	}
 	if projection != ProjectionStaged {
 		if _, err := runGit(ctx, builder.Repo, env, nil, "add", "-u", "--", "."); err != nil {
 			return "", "", "", err
@@ -612,6 +624,9 @@ func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended
 		return "", "", "", err
 	}
 	candidateTree := strings.TrimSpace(string(candidateOutput))
+	if unborn && candidateTree == baseTree {
+		return "", "", "", errors.New("unborn repository has no staged changes; stage the review candidate with git add")
+	}
 	if allowStagedIntended && projection != ProjectionStaged {
 		if _, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--cached", "--quiet", candidateTree, "--"); err != nil {
 			return "", "", "", errors.New("staged tree does not exactly match the complete reviewed candidate")
@@ -622,6 +637,43 @@ func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended
 		return "", "", "", err
 	}
 	return baseTree, candidateTree, proof, nil
+}
+
+func (builder SnapshotBuilder) resolveCurrentChangesBase(ctx context.Context, projection Projection) (string, bool, error) {
+	baseTree, headErr := builder.resolveTree(ctx, "HEAD")
+	if headErr == nil || projection != ProjectionStaged {
+		return baseTree, false, headErr
+	}
+
+	refOutput, err := runGit(ctx, builder.Repo, nil, nil, "symbolic-ref", "--quiet", "HEAD")
+	if err != nil {
+		return "", false, headErr
+	}
+	ref := strings.TrimSpace(string(refOutput))
+	if !strings.HasPrefix(ref, "refs/heads/") || strings.TrimPrefix(ref, "refs/heads/") == "" {
+		return "", false, headErr
+	}
+	if _, err := runGit(ctx, builder.Repo, nil, nil, "show-ref", "--verify", "--quiet", "--", ref); err == nil {
+		return "", false, headErr
+	} else {
+		var commandErr *GitCommandError
+		if !errors.As(err, &commandErr) || commandErr.ExitCode != 1 {
+			return "", false, err
+		}
+	}
+	emptyTree, err := builder.emptyTree(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	return emptyTree, true, nil
+}
+
+func (builder SnapshotBuilder) emptyTree(ctx context.Context) (string, error) {
+	output, err := runGit(ctx, builder.Repo, nil, []byte{}, "mktree")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func (builder SnapshotBuilder) resolveExactRevision(ctx context.Context, revision string) (string, string, error) {
@@ -912,10 +964,26 @@ func (err *GitCommandError) Error() string {
 
 func (err *GitCommandError) Unwrap() error { return err.Cause }
 
+// GitProcessControlError reports that a git subprocess could not be started or
+// its process tree could not be brought under control before it produced any
+// result, e.g. Windows job-object or NtResumeProcess failures. It carries the
+// underlying cause so failure envelopes stay diagnosable.
+type GitProcessControlError struct {
+	Args  []string
+	Cause error
+}
+
+func (err *GitProcessControlError) Error() string {
+	return fmt.Sprintf("git %s subprocess start or process-tree control failed: %v", strings.Join(err.Args, " "), err.Cause)
+}
+
+func (err *GitProcessControlError) Unwrap() error { return err.Cause }
+
 var localGitCommandTimeout = 15 * time.Second
 var remoteGitCommandTimeout = 20 * time.Second
 var gitCommandWaitDelay = time.Second
 var gitCommandContext = exec.CommandContext
+var gitProcessTreeStarter = startGitProcessTree
 
 func runGit(ctx context.Context, repo string, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
 	remote := len(args) > 0 && args[0] == "ls-remote"
@@ -934,7 +1002,8 @@ func runGit(ctx context.Context, repo string, extraEnv []string, stdin []byte, a
 	}
 	var buffer bytes.Buffer
 	command.Stdout, command.Stderr = &buffer, &buffer
-	release, err := startGitProcessTree(command)
+	release, startErr := gitProcessTreeStarter(command)
+	err := startErr
 	if err == nil {
 		released := make(chan struct{})
 		stopRelease := context.AfterFunc(commandContext, func() { _ = release(); close(released) })
@@ -966,6 +1035,9 @@ func runGit(ctx context.Context, repo string, extraEnv []string, stdin []byte, a
 			return nil, &GitCommandTimeoutError{
 				Args: append([]string{}, args...), Timeout: timeout, Remote: remote, Aggregate: aggregate, Cause: cause,
 			}
+		}
+		if startErr != nil {
+			return nil, &GitProcessControlError{Args: append([]string{}, args...), Cause: startErr}
 		}
 		exitCode := -1
 		var exitErr *exec.ExitError

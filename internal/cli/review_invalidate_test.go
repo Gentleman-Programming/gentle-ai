@@ -151,6 +151,59 @@ func TestReviewInvalidateFailsClosedForCompetingAuthorities(t *testing.T) {
 	}
 }
 
+func TestReviewInvalidateRefusesHealthyApprovedLineage(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	started, store := approveDiscoveryMarkdown(t, repo, "invalidate-approved-healthy-cli", "approved.md", "approved\n")
+	runReviewCLIGit(t, repo, "add", "approved.md")
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeState, _ := os.ReadFile(store.StatePath())
+	beforeReceipt, _ := os.ReadFile(store.ReceiptPath())
+
+	err = RunReview([]string{
+		"invalidate", "--cwd", repo, "--lineage", started.LineageID,
+		"--expected-revision", record.Revision, "--gate", string(reviewtransaction.GatePreCommit),
+	}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "healthy approved authority") {
+		t.Fatalf("healthy approved CLI invalidation error = %v", err)
+	}
+	afterState, _ := os.ReadFile(store.StatePath())
+	afterReceipt, _ := os.ReadFile(store.ReceiptPath())
+	if !bytes.Equal(afterState, beforeState) || !bytes.Equal(afterReceipt, beforeReceipt) {
+		t.Fatal("healthy approved CLI invalidation changed authority bytes")
+	}
+}
+
+func TestReviewInvalidateReplaysCompletedApprovedInvalidation(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	started, store := approveDiscoveryMarkdown(t, repo, "invalidate-approved-replay", "approved.md", "approved\n")
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "outside.txt"), []byte("outside frozen scope\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{
+		"invalidate", "--cwd", repo, "--lineage", started.LineageID,
+		"--expected-revision", record.Revision, "--gate", string(reviewtransaction.GatePostApply),
+	}
+
+	var first bytes.Buffer
+	if err := RunReview(args, &first); err != nil {
+		t.Fatalf("first approved invalidation: %v", err)
+	}
+	var second bytes.Buffer
+	if err := RunReview(args, &second); err != nil {
+		t.Fatalf("replay approved invalidation: %v", err)
+	}
+	if first.String() != second.String() {
+		t.Fatalf("CLI replay output changed:\nfirst: %s\nsecond: %s", first.String(), second.String())
+	}
+}
+
 func addPristineLegacyAuthority(t *testing.T, repo, lineage string) reviewtransaction.Store {
 	t.Helper()
 	snapshot, _ := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{}})

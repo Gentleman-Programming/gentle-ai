@@ -379,6 +379,153 @@ func TestReviewRecoverRetainsWorkspaceOverlayBaseAndScope(t *testing.T) {
 	}
 }
 
+func TestReviewRecoverSelectsAuthorizedStagedProjection(t *testing.T) {
+	repo, predecessor, status := escalatedRecoveryProjectionFixture(t, "staged-projection-success")
+	reason, actor := "select exact staged target", "maintainer"
+	authorization := reviewRecoveryAuthorization(predecessor.State.LineageID, predecessor.Revision, status.TargetIdentity, actor, reason)
+	args := recoveryProjectionArgs(repo, predecessor, "staged-projection-successor", reason, actor)
+	args = append(args, "--projection", "staged", "--maintainer-authorization", authorization)
+
+	var output bytes.Buffer
+	if err := RunReviewRecover(args, &output); err != nil {
+		t.Fatal(err)
+	}
+	var result ReviewRecoverResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, result.LineageID)
+	recovered, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.State.InitialSnapshot.Projection != reviewtransaction.ProjectionStaged || recovered.State.InitialSnapshot.Identity != status.TargetIdentity {
+		t.Fatalf("selected recovery target = %#v, status identity = %s", recovered.State.InitialSnapshot, status.TargetIdentity)
+	}
+}
+
+func TestReviewRecoverProjectionFailuresDoNotMutateAuthority(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		projection string
+		authorize  func(ReviewTargetStatusResult, reviewtransaction.CompactRecord, string, string) string
+		want       string
+	}{
+		{name: "omitted projection defaults to predecessor", want: "projection=workspace", authorize: func(status ReviewTargetStatusResult, predecessor reviewtransaction.CompactRecord, actor, reason string) string {
+			return reviewRecoveryAuthorization(predecessor.State.LineageID, predecessor.Revision, status.TargetIdentity, actor, reason)
+		}},
+		{name: "wrong authorization", projection: "staged", want: "projection=staged", authorize: func(_ ReviewTargetStatusResult, _ reviewtransaction.CompactRecord, _, _ string) string {
+			return "wrong"
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, predecessor, status := escalatedRecoveryProjectionFixture(t, "staged-projection-"+strings.ReplaceAll(tt.name, " ", "-"))
+			reason, actor := "select exact staged target", "maintainer"
+			successor := "failed-" + strings.ReplaceAll(tt.name, " ", "-")
+			args := recoveryProjectionArgs(repo, predecessor, successor, reason, actor)
+			if tt.projection != "" {
+				args = append(args, "--projection", tt.projection)
+			}
+			args = append(args, "--maintainer-authorization", tt.authorize(status, predecessor, actor, reason))
+			err := RunReviewRecover(args, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), tt.want) || strings.Contains(err.Error(), repo) {
+				t.Fatalf("recovery error = %v, want path-free %q", err, tt.want)
+			}
+			store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, successor)
+			if _, statErr := os.Stat(store.StatePath()); !os.IsNotExist(statErr) {
+				t.Fatalf("failed recovery created successor: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestReviewRecoverRejectsStagedIndexMutationBeforePersistence(t *testing.T) {
+	repo, predecessor, status := escalatedRecoveryProjectionFixture(t, "staged-projection-race")
+	reason, actor := "select exact staged target", "maintainer"
+	successor := "staged-projection-race-successor"
+	authorization := reviewRecoveryAuthorization(predecessor.State.LineageID, predecessor.Revision, status.TargetIdentity, actor, reason)
+	args := append(recoveryProjectionArgs(repo, predecessor, successor, reason, actor), "--projection", "staged", "--maintainer-authorization", authorization)
+
+	original := reviewRecoverBeforePersist
+	reviewRecoverBeforePersist = func() {
+		if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("raced index\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runReviewCLIGit(t, repo, "add", "tracked.txt")
+	}
+	t.Cleanup(func() { reviewRecoverBeforePersist = original })
+	if err := RunReviewRecover(args, io.Discard); err == nil || !strings.Contains(err.Error(), "repository evidence") {
+		t.Fatalf("index race error = %v", err)
+	}
+	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, successor)
+	if _, statErr := os.Stat(store.StatePath()); !os.IsNotExist(statErr) {
+		t.Fatalf("index race created successor: %v", statErr)
+	}
+}
+
+func TestReviewRecoverHelpDocumentsProjectionAndCanonicalAuthorization(t *testing.T) {
+	var output bytes.Buffer
+	if err := RunReviewRecover([]string{"--help"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	help := output.String()
+	for _, required := range []string{"--projection", "default: predecessor projection", "gentle-ai.review-recovery-authorization/v1", "target_identity"} {
+		if !strings.Contains(help, required) {
+			t.Fatalf("review recover help missing %q:\n%s", required, help)
+		}
+	}
+}
+
+func escalatedRecoveryProjectionFixture(t *testing.T, lineage string) (string, reviewtransaction.CompactRecord, ReviewTargetStatusResult) {
+	t.Helper()
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := record.State
+	finding := reviewtransaction.Finding{ID: "R3-001", Lens: "reliability", Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "observable failure", ProofRefs: []string{"reproduced"}}
+	if err := state.CompleteReview(reviewtransaction.CompactReviewInput{
+		LensResults:     []reviewtransaction.LensResult{{Lens: "reliability", Findings: []reviewtransaction.Finding{finding}, Evidence: []string{"reviewed"}}},
+		Classifications: []reviewtransaction.FindingEvidence{{FindingID: finding.ID, Class: reviewtransaction.EvidenceDeterministic, Causality: reviewtransaction.CausalUnknown, Proof: "requires maintainer recovery"}}, RefuterOutcomes: []reviewtransaction.EvidenceResult{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(record.Revision, "review/complete-review", state); err != nil {
+		t.Fatal(err)
+	}
+	predecessor, _ := store.Load()
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("staged successor\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("unstaged divergence\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReviewStatus([]string{"--contract", ReviewIntegrationContractV1, "--cwd", repo, "--projection", "staged"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	return repo, predecessor, status
+}
+
+func recoveryProjectionArgs(repo string, predecessor reviewtransaction.CompactRecord, successor, reason, actor string) []string {
+	return []string{"--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID, "--expected-predecessor-revision", predecessor.Revision,
+		"--successor-lineage", successor, "--disposition", "escalated", "--reason", reason, "--actor", actor}
+}
+
+func reviewRecoveryAuthorization(lineage, revision, identity, actor, reason string) string {
+	return "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + lineage + "\npredecessor_revision=" + revision +
+		"\ntarget_identity=" + identity + "\nactor=" + actor + "\nreason=" + reason
+}
+
 func TestReviewRecoverReleaseScopeExpandsMergedSliceToFirstParentDiff(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	mainBranch := strings.TrimSpace(runReviewCLIGit(t, repo, "branch", "--show-current"))
@@ -488,8 +635,8 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 	}
 	sortStrings(gotFields)
 	wantFields := []string{
-		"action", "changed_files", "changed_lines", "correction_budget", "lenses_required", "lineage_id",
-		"operation", "projection", "risk_level", "selected_lenses", "state",
+		"action", "changed_files", "changed_lines", "correction_budget", "lens_bindings", "lenses_required",
+		"lineage_id", "operation", "projection", "risk_level", "selected_lenses", "state", "target_identity",
 	}
 	if !reflect.DeepEqual(gotFields, wantFields) {
 		t.Fatalf("unnegotiated START fields = %v, want %v\n%s", gotFields, wantFields, legacyOutput.String())

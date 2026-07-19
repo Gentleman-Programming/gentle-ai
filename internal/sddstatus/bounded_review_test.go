@@ -359,6 +359,169 @@ func boundedEngramObservations(t *testing.T, project, changeRoot string) []engra
 	}
 }
 
+const incompatibleTransactionSummary = "# Native Review Transaction\n\n- lineage: thin-lineage\n- state: approved\n"
+
+func TestReadReviewTransactionRejectsIncompatibleNonJSONArtifact(t *testing.T) {
+	markdownPath := filepath.Join(t.TempDir(), "transaction.json")
+	write(t, markdownPath, incompatibleTransactionSummary)
+	for _, tt := range []struct {
+		name    string
+		path    string
+		content string
+	}{
+		{name: "engram markdown content", content: incompatibleTransactionSummary},
+		{name: "markdown transaction mirror", path: markdownPath},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			transaction, reason := readReviewTransaction(tt.path, tt.content)
+			if transaction != nil {
+				t.Fatalf("readReviewTransaction() = %#v, want nil transaction", transaction)
+			}
+			if strings.Contains(reason, "invalid character") {
+				t.Fatalf("readReviewTransaction() reason = %q, want compatibility reason instead of raw JSON parse error", reason)
+			}
+			if !strings.Contains(reason, "not a native JSON review transaction") {
+				t.Fatalf("readReviewTransaction() reason = %q, want incompatible-artifact reason", reason)
+			}
+		})
+	}
+}
+
+func TestReadReviewTransactionRejectsJSONNonObjectsAsInvalid(t *testing.T) {
+	for _, payload := range []string{`[]`, `null`, `"legacy"`} {
+		t.Run(payload, func(t *testing.T) {
+			transaction, reason := readReviewTransaction("", payload)
+			if transaction != nil || !strings.Contains(reason, "bounded review transaction is invalid") {
+				t.Fatalf("readReviewTransaction() = (%#v, %q), want invalid native transaction", transaction, reason)
+			}
+		})
+	}
+}
+
+func TestResolveEngramBridgesCompactAuthorityOverIncompatibleTransactionArtifact(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
+	mkdir(t, filepath.Join(root, ".engram"))
+	project := strings.ToLower(filepath.Base(root))
+	observation := func(title, path string) engramObservation {
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return engramObservation{Title: title, Content: string(payload), Project: project, Scope: "project"}
+	}
+	observations := []engramObservation{
+		observation("sdd/thin/proposal", filepath.Join(changeRoot, "proposal.md")),
+		observation("sdd/thin/spec", filepath.Join(changeRoot, "specs", "auth", "spec.md")),
+		observation("sdd/thin/design", filepath.Join(changeRoot, "design.md")),
+		observation("sdd/thin/tasks", filepath.Join(changeRoot, "tasks.md")),
+		{Title: "sdd/thin/apply-progress", Content: "all work units complete", Project: project, Scope: "project"},
+		{Title: "sdd/thin/review/transaction", Content: incompatibleTransactionSummary, Project: project, Scope: "project"},
+	}
+	restore := stubEngramExport(t, observations)
+	defer restore()
+
+	status, ok, err := resolveEngramStatus(root, "thin", false)
+	if err != nil {
+		t.Fatalf("resolveEngramStatus() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("resolveEngramStatus() did not retain the Engram change")
+	}
+	if status.ReviewTransaction != nil {
+		t.Fatalf("ReviewTransaction = %#v, want incompatible artifact treated as missing", status.ReviewTransaction)
+	}
+	reasons := strings.Join(status.BlockedReasons, "\n")
+	if strings.Contains(reasons, "invalid character") {
+		t.Fatalf("BlockedReasons = %v, want no raw JSON parse error", status.BlockedReasons)
+	}
+	if status.Dependencies.Verify != DependencyReady || status.NextRecommended != "verify" {
+		t.Fatalf("verify=%q next=%q reasons=%v, want compact authority bridged to ready/verify", status.Dependencies.Verify, status.NextRecommended, status.BlockedReasons)
+	}
+}
+
+func TestResolveEngramDoesNotBridgeCompactAuthorityOverMalformedJSONTransaction(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
+	mkdir(t, filepath.Join(root, ".engram"))
+	project := strings.ToLower(filepath.Base(root))
+	observation := func(title, path string) engramObservation {
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return engramObservation{Title: title, Content: string(payload), Project: project, Scope: "project"}
+	}
+	observations := []engramObservation{
+		observation("sdd/thin/proposal", filepath.Join(changeRoot, "proposal.md")),
+		observation("sdd/thin/spec", filepath.Join(changeRoot, "specs", "auth", "spec.md")),
+		observation("sdd/thin/design", filepath.Join(changeRoot, "design.md")),
+		observation("sdd/thin/tasks", filepath.Join(changeRoot, "tasks.md")),
+		{Title: "sdd/thin/apply-progress", Content: "all work units complete", Project: project, Scope: "project"},
+		{Title: "sdd/thin/review/transaction", Content: `{"state":`, Project: project, Scope: "project"},
+	}
+	restore := stubEngramExport(t, observations)
+	defer restore()
+
+	status, ok, err := resolveEngramStatus(root, "thin", false)
+	if err != nil {
+		t.Fatalf("resolveEngramStatus() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("resolveEngramStatus() did not retain the Engram change")
+	}
+	reasons := strings.Join(status.BlockedReasons, "\n")
+	if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "review" {
+		t.Fatalf("verify=%q next=%q reasons=%v, want malformed JSON to remain blocked on review", status.Dependencies.Verify, status.NextRecommended, status.BlockedReasons)
+	}
+	if !strings.Contains(reasons, "bounded review transaction is invalid") {
+		t.Fatalf("BlockedReasons = %v, want malformed JSON reason", status.BlockedReasons)
+	}
+	for _, payload := range []string{`[]`, `null`, `"legacy"`} {
+		observations[len(observations)-1].Content = payload
+		status, _, err = resolveEngramStatus(root, "thin", false)
+		if err != nil {
+			t.Fatalf("resolveEngramStatus(%s) error = %v", payload, err)
+		}
+		if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "review" {
+			t.Fatalf("payload=%s verify=%q next=%q, want blocked/review", payload, status.Dependencies.Verify, status.NextRecommended)
+		}
+	}
+}
+
+func TestResolveEngramFailsClosedOnIncompatibleTransactionWithoutNativeAuthority(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".engram"))
+	project := strings.ToLower(filepath.Base(root))
+	observations := []engramObservation{
+		{Title: "sdd/thin/proposal", Content: "# Proposal\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/spec", Content: "### Requirement: Auth\n#### Scenario: Valid login\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/design", Content: "# Design\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/tasks", Content: "- [x] 1.1 Done\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/apply-progress", Content: "all work units complete", Project: project, Scope: "project"},
+		{Title: "sdd/thin/review/transaction", Content: incompatibleTransactionSummary, Project: project, Scope: "project"},
+	}
+	restore := stubEngramExport(t, observations)
+	defer restore()
+
+	status, ok, err := resolveEngramStatus(root, "thin", false)
+	if err != nil {
+		t.Fatalf("resolveEngramStatus() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("resolveEngramStatus() did not retain the Engram change")
+	}
+	reasons := strings.Join(status.BlockedReasons, "\n")
+	if strings.Contains(reasons, "invalid character") {
+		t.Fatalf("BlockedReasons = %v, want no raw JSON parse error", status.BlockedReasons)
+	}
+	if status.Dependencies.Verify != DependencyBlocked || !strings.Contains(reasons, "not a native JSON review transaction") {
+		t.Fatalf("verify=%q reasons=%v, want fail-closed compatibility reason", status.Dependencies.Verify, status.BlockedReasons)
+	}
+}
+
 func TestResolveFinalVerifyWaitsForAllTasks(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n- [ ] 1.2 Pending\n")
@@ -704,6 +867,175 @@ func TestResolveRejectsReceiptMismatchAndNonAllowCompactBridge(t *testing.T) {
 				t.Fatalf("%s status = %#v", tt.name, status)
 			}
 		})
+	}
+}
+
+func TestResolveRoutesStaleVerifyEvidenceToVerifyUnderApprovedCompactAuthority(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Auth\n#### Scenario: Valid login\n#### Scenario: Rejected login\n")
+	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("d"), "pass"))
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateAllow {
+		t.Fatalf("ReviewGate = %#v, want allow", status.ReviewGate)
+	}
+	if len(status.BlockedReasons) != 0 {
+		t.Fatalf("BlockedReasons = %v, want empty", status.BlockedReasons)
+	}
+	if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
+		t.Fatalf("verify=%q archive=%q next=%q, want ready/blocked/verify", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+	}
+	if status.RemediationState != (RemediationState{}) {
+		t.Fatalf("RemediationState = %#v, want empty for stale evidence", status.RemediationState)
+	}
+}
+
+func TestResolveRejectsForeignCompactAuthorityForStaleVerifyEvidence(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	foreignRoot := seedReadyChange(t, root, "other", "- [x] 1.1 Done\n")
+	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Auth\n#### Scenario: Valid login\n#### Scenario: Rejected login\n")
+	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("d"), "pass"))
+	writeApprovedCompactAuthorityForChange(t, root, foreignRoot, "compact-other")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "resolve-review" {
+		t.Fatalf("verify=%q next=%q, want blocked/resolve-review", status.Dependencies.Verify, status.NextRecommended)
+	}
+	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), `compact review authority is not bound to selected change "thin"`) {
+		t.Fatalf("BlockedReasons = %v, want foreign-authority rejection", status.BlockedReasons)
+	}
+}
+
+func TestResolveEngramRoutesStaleVerifyEvidenceToVerifyUnderApprovedCompactAuthority(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "compact-thin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptPayload := readText(store.ReceiptPath())
+	if receiptPayload == "" {
+		t.Fatal("compact receipt payload is empty")
+	}
+	mkdir(t, filepath.Join(root, ".engram"))
+	project := strings.ToLower(filepath.Base(root))
+	restore := stubEngramExport(t, []engramObservation{
+		{Title: "sdd/thin/proposal", Content: "# Proposal\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/spec", Content: "### Requirement: Auth\n#### Scenario: Valid login\n#### Scenario: Rejected login\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/design", Content: "# Design\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/tasks", Content: "- [x] 1.1 Done\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/verify-report", Content: boundedVerifyEnvelope(shaID("d"), "pass"), Project: project, Scope: "project"},
+		{Title: "sdd/thin/review/receipt", Content: receiptPayload, Project: project, Scope: "project"},
+	})
+	defer restore()
+
+	status, ok, err := resolveEngramStatus(root, "thin", false)
+	if err != nil {
+		t.Fatalf("resolveEngramStatus() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("resolveEngramStatus() did not retain the Engram change")
+	}
+	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateAllow {
+		t.Fatalf("ReviewGate = %#v, want allow", status.ReviewGate)
+	}
+	if len(status.BlockedReasons) != 0 {
+		t.Fatalf("BlockedReasons = %v, want empty", status.BlockedReasons)
+	}
+	if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
+		t.Fatalf("verify=%q archive=%q next=%q, want ready/blocked/verify", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+	}
+	if status.RemediationState != (RemediationState{}) {
+		t.Fatalf("RemediationState = %#v, want empty for stale evidence", status.RemediationState)
+	}
+}
+
+func TestResolveEngramRejectsForeignCompactAuthorityForStaleVerifyEvidence(t *testing.T) {
+	root := t.TempDir()
+	foreignRoot := seedReadyChange(t, root, "other", "- [x] 1.1 Done\n")
+	writeApprovedCompactAuthorityForChange(t, root, foreignRoot, "compact-other")
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "compact-other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptPayload := readText(store.ReceiptPath())
+	mkdir(t, filepath.Join(root, ".engram"))
+	project := strings.ToLower(filepath.Base(root))
+	restore := stubEngramExport(t, []engramObservation{
+		{Title: "sdd/thin/proposal", Content: "# Proposal\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/spec", Content: "### Requirement: Auth\n#### Scenario: Valid login\n#### Scenario: Rejected login\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/design", Content: "# Design\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/tasks", Content: "- [x] 1.1 Done\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/verify-report", Content: boundedVerifyEnvelope(shaID("d"), "pass"), Project: project, Scope: "project"},
+		{Title: "sdd/thin/review/receipt", Content: receiptPayload, Project: project, Scope: "project"},
+	})
+	defer restore()
+
+	status, ok, err := resolveEngramStatus(root, "thin", false)
+	if err != nil || !ok {
+		t.Fatalf("resolveEngramStatus() = ok %v, error %v", ok, err)
+	}
+	if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "resolve-review" {
+		t.Fatalf("verify=%q next=%q, want blocked/resolve-review", status.Dependencies.Verify, status.NextRecommended)
+	}
+	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), `compact review authority is not bound to selected change "thin"`) {
+		t.Fatalf("BlockedReasons = %v, want foreign-authority rejection", status.BlockedReasons)
+	}
+}
+
+func TestResolveGrantsCompactRemediationBudgetForFailedVerdictWithIncompleteScenarios(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Auth\n#### Scenario: Valid login\n#### Scenario: Added after verification\n")
+	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("d"), "fail"))
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "compact-thin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "remediate" {
+		t.Fatalf("verify=%q next=%q, want blocked/remediate for failed verdict", status.Dependencies.Verify, status.NextRecommended)
+	}
+	wantBudget := before.State.CorrectionBudget - before.State.CumulativeCorrectionLines
+	if !status.RemediationState.Required || status.RemediationState.CorrectionBudget != wantBudget || wantBudget <= 0 || status.RemediationState.LineageID != "compact-thin" || status.RemediationState.FailedEvidenceRevision != shaID("d") {
+		t.Fatalf("RemediationState = %#v, want transaction-bound nonzero compact budget", status.RemediationState)
+	}
+	after, err := store.Load()
+	if err != nil || after.Revision != before.Revision {
+		t.Fatalf("compact authority changed during status resolution: before=%q after=%q err=%v", before.Revision, after.Revision, err)
+	}
+}
+
+func TestResolveRejectsCompactRemediationWhenFrozenBudgetIsZero(t *testing.T) {
+	compact := reviewtransaction.CompactState{
+		LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateApproved,
+		CorrectionBudget: 2, CumulativeCorrectionLines: 2,
+	}
+	state := resolveBoundedRemediation(true, verifyResultEvaluation{
+		EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
+	}, nil, &compact, "bounded review transaction is missing", "")
+
+	if state.Required || !strings.Contains(state.Reason, "compact review authority has no correction budget") {
+		t.Fatalf("RemediationState = %#v, want fail-closed exhausted budget", state)
 	}
 }
 

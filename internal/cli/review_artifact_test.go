@@ -14,6 +14,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
@@ -72,6 +73,41 @@ func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
 	}
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact", manifest}, io.Discard); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReviewCaptureResultWaitsForMaintenanceBeforePublication(t *testing.T) {
+	repo, started, store, record := newArtifactReview(t, false)
+	input := filepath.Join(t.TempDir(), "result.json")
+	if err := os.WriteFile(input, []byte(`{"findings":[],"evidence":["checked exact target"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	held, err := reviewtransaction.AcquireReviewMaintenanceExclusive(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input}
+	if err := RunReviewCaptureResult(args, io.Discard); !errors.Is(err, reviewtransaction.ErrAuthorityLockTimeout) {
+		t.Fatalf("capture while maintenance held = %v", err)
+	}
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("authority changed while capture blocked: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir)); !os.IsNotExist(err) {
+		t.Fatalf("capture published while maintenance held: %v", err)
+	}
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewCaptureResult(args, io.Discard); err != nil {
+		t.Fatalf("capture after maintenance release: %v", err)
 	}
 }
 func TestReviewArtifactSubstitutionFailsBeforeMutation(t *testing.T) {

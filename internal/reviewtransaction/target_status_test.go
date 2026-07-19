@@ -673,3 +673,144 @@ func TestTargetStatusResultHasNoAuthorityPathFields(t *testing.T) {
 	}
 	_ = filepath.Separator
 }
+
+// TestRecoveryStatusNamesTheDispositionRecoveryAccepts pins issue #1469 Case B:
+// every `recover` recommendation must name the --disposition that
+// ValidateCompactRecovery actually accepts, so an operator never has to guess
+// and never lands on the "recovery requires an invalidated predecessor" dead
+// end. It does not change which action any state is routed to.
+func TestRecoveryStatusNamesTheDispositionRecoveryAccepts(t *testing.T) {
+	requireSnapshotGit(t)
+	t.Run("correction-required genesis expansion recovers as scope_changed", func(t *testing.T) {
+		repo, predecessor, _, _ := correctionScopeRecoveryFixture(t, "disposition-expansion")
+		writeSnapshotFile(t, repo, "process_helper.go", "package processhelper\n")
+		target := Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"process_helper.go"}}
+		status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target, LineageID: predecessor.LineageID})
+		if err != nil || status.State != StateCorrectionRequired || status.Action != TargetStatusActionRecover ||
+			status.ActionDisposition != RecoveryScopeChanged {
+			t.Fatalf("expansion status = %#v, %v", status, err)
+		}
+	})
+	t.Run("correction-required pure contraction recovers as scope_changed", func(t *testing.T) {
+		repo, predecessor, _, _ := correctionContractionRecoveryFixture(t, "disposition-contraction")
+		writeSnapshotFile(t, repo, "deleted.txt", "delete me\n")
+		status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: predecessor.LineageID,
+		})
+		if err != nil || status.State != StateCorrectionRequired || status.Action != TargetStatusActionRecover ||
+			status.ActionDisposition != RecoveryScopeChanged {
+			t.Fatalf("contraction status = %#v, %v", status, err)
+		}
+	})
+	t.Run("historical failed validator with a changed target recovers as escalated", func(t *testing.T) {
+		repo, state, _, _ := historicalFailedValidatorFixture(t, "disposition-historical")
+		writeSnapshotFile(t, repo, "tracked.txt", "changed recovery target\n")
+		status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: state.LineageID,
+		})
+		if err != nil || status.Action != TargetStatusActionRecover || status.ActionDisposition != RecoveryEscalated {
+			t.Fatalf("historical failed validator status = %#v, %v", status, err)
+		}
+	})
+	t.Run("invalidated authority recovers as invalidated", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+		state := newCompactTestState(t, repo, "disposition-invalidated")
+		store := storeCompactStartAuthority(t, repo, state)
+		record, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := state.Invalidate("scope drift"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Replace(record.Revision, "review/invalidate", state); err != nil {
+			t.Fatal(err)
+		}
+		status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: state.LineageID,
+		})
+		if err != nil || status.State != StateInvalidated || status.Action != TargetStatusActionRecover ||
+			status.ActionDisposition != RecoveryInvalidated {
+			t.Fatalf("invalidated status = %#v, %v", status, err)
+		}
+	})
+}
+
+// TestNonRecoveryStatusOmitsDisposition proves the field stays unset wherever
+// no recovery disposition applies, so it can never be read as authorization.
+func TestNonRecoveryStatusOmitsDisposition(t *testing.T) {
+	requireSnapshotGit(t)
+	t.Run("reviewing routes to finalize without a disposition", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+		state := newCompactTestState(t, repo, "disposition-reviewing")
+		storeCompactStartAuthority(t, repo, state)
+		status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: state.LineageID,
+		})
+		if err != nil || status.Action != TargetStatusActionFinalize || status.ActionDisposition != "" {
+			t.Fatalf("reviewing status = %#v, %v", status, err)
+		}
+	})
+	t.Run("authorized correction resume routes to finalize without a disposition", func(t *testing.T) {
+		repo, predecessor, _, _ := correctionScopeRecoveryFixture(t, "disposition-resume")
+		status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: predecessor.LineageID,
+		})
+		if err != nil || status.State != StateCorrectionRequired || status.Action != TargetStatusActionFinalize ||
+			status.ActionDisposition != "" {
+			t.Fatalf("correction resume status = %#v, %v", status, err)
+		}
+	})
+	t.Run("historical failed validator with an unchanged target stops without a disposition", func(t *testing.T) {
+		repo, state, _, _ := historicalFailedValidatorFixture(t, "disposition-historical-stop")
+		status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: state.LineageID,
+		})
+		if err != nil || status.Action != TargetStatusActionStop || status.ActionDisposition != "" {
+			t.Fatalf("unchanged historical status = %#v, %v", status, err)
+		}
+	})
+}
+
+// TestCorrectionRecoveryDispositionMirrorsRecoveryRules keeps the guidance
+// helper aligned with the predicates that authorize each recovery. If
+// classifyCompactCorrectionTarget says recover, a disposition must be named.
+func TestCorrectionRecoveryDispositionMirrorsRecoveryRules(t *testing.T) {
+	requireSnapshotGit(t)
+	for _, tt := range []struct {
+		name    string
+		fixture func(*testing.T, string) (string, CompactState, CompactStore, CompactRecord)
+		mutate  func(*testing.T, string)
+		want    RecoveryDisposition
+	}{
+		{name: "expansion", fixture: correctionScopeRecoveryFixture, want: RecoveryScopeChanged,
+			mutate: func(t *testing.T, repo string) {
+				writeSnapshotFile(t, repo, "process_helper.go", "package processhelper\n")
+			}},
+		{name: "contraction", fixture: correctionContractionRecoveryFixture, want: RecoveryScopeChanged,
+			mutate: func(t *testing.T, repo string) { writeSnapshotFile(t, repo, "deleted.txt", "delete me\n") }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, predecessor, _, _ := tt.fixture(t, "mirror-"+tt.name)
+			tt.mutate(t, repo)
+			untracked := []string{}
+			if tt.name == "expansion" {
+				untracked = []string{"process_helper.go"}
+			}
+			live, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: untracked})
+			if err != nil {
+				t.Fatal(err)
+			}
+			requested := predecessor
+			requested.InitialSnapshot = live
+			if claim := classifyCompactCorrectionTarget(context.Background(), repo, predecessor, requested); claim != compactCorrectionTargetRecover {
+				t.Fatalf("classification = %v, want recover", claim)
+			}
+			if got := compactCorrectionRecoveryDisposition(predecessor, live); got != tt.want {
+				t.Fatalf("disposition = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

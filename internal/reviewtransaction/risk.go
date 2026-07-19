@@ -15,6 +15,8 @@ import (
 const LargeChangeLines = 400
 const MaxCorrectionChangedLines = 200
 
+var processBoundaryScanByteLimit int64 = 8 << 20
+
 var semanticSourceExtensions = map[string]struct{}{
 	".c": {}, ".cc": {}, ".cpp": {}, ".cs": {}, ".go": {}, ".h": {}, ".hpp": {},
 	".java": {}, ".js": {}, ".jsx": {}, ".kt": {}, ".kts": {}, ".php": {}, ".py": {},
@@ -59,6 +61,8 @@ const (
 	RiskReasonHotPath             RiskReasonCode = "hot_path"
 	RiskReasonServiceToken        RiskReasonCode = "service_token"
 	RiskReasonShellSource         RiskReasonCode = "shell_source"
+	RiskReasonProcessBoundary     RiskReasonCode = "process_boundary"
+	RiskReasonProcessScanLimit    RiskReasonCode = "process_scan_limit"
 	RiskReasonExecutableMode      RiskReasonCode = "executable_mode"
 	RiskReasonLargeChange         RiskReasonCode = "large_change"
 	RiskReasonNonExecutableOnly   RiskReasonCode = "non_executable_only"
@@ -178,6 +182,14 @@ func (builder SnapshotBuilder) AssessSnapshotRisk(ctx context.Context, snapshot 
 		return RiskAssessment{}, err
 	}
 	reasons := deriveSnapshotRiskReasons(stats, changedLines)
+	processReasons, err := builder.processBoundaryRiskReasons(ctx, snapshot, stats)
+	if err != nil {
+		return RiskAssessment{}, err
+	}
+	if len(processReasons) > 0 {
+		reasons = removeFallbackRiskReasons(reasons)
+		reasons = canonicalRiskReasons(append(reasons, processReasons...))
+	}
 	onlyNonExecutable := true
 	onlyPureDocumentation := true
 	touchesConfiguration := false
@@ -212,6 +224,83 @@ func (builder SnapshotBuilder) AssessSnapshotRisk(ctx context.Context, snapshot 
 		dominantLens = LensReadability
 	}
 	return RiskAssessment{Level: risk, ChangedLines: changedLines, Reasons: reasons, DominantLens: dominantLens}, nil
+}
+
+func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, snapshot Snapshot, stats []DiffStat) ([]RiskReason, error) {
+	repo, err := builder.repositoryRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(stats))
+	for _, stat := range stats {
+		if isSemanticRiskEligible(stat) {
+			paths = append(paths, stat.Path)
+		}
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	reasons, scanned := make([]RiskReason, 0), int64(0)
+	for _, tree := range []string{snapshot.BaseTree, snapshot.CandidateTree} {
+		args := []string{"ls-tree", "-r", "-l", "-z", tree, "--"}
+		for _, logicalPath := range paths {
+			args = append(args, literalPathspec(logicalPath))
+		}
+		entries, err := runGit(ctx, repo, nil, nil, args...)
+		if err != nil {
+			return nil, err
+		}
+		treePaths := make([]string, 0, len(paths))
+		for _, entry := range bytes.Split(entries, []byte{0}) {
+			tab := bytes.IndexByte(entry, '\t')
+			fields := strings.Fields(string(entry[:max(tab, 0)]))
+			if tab < 0 || len(fields) != 4 {
+				continue
+			}
+			size, parseErr := strconv.ParseInt(fields[3], 10, 64)
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse source blob size: %w", parseErr)
+			}
+			logicalPath := string(entry[tab+1:])
+			scanned += size
+			if scanned > processBoundaryScanByteLimit {
+				return []RiskReason{{Code: RiskReasonProcessScanLimit, Signal: SignalShellProcess, Path: logicalPath}}, nil
+			}
+			treePaths = append(treePaths, logicalPath)
+		}
+		if len(treePaths) == 0 {
+			continue
+		}
+		args = []string{"grep", "-I", "-l", "-z", "-i", "-E", `(^|[^[:alnum:]_])(subprocess|exec)([^[:alnum:]_]|$)`, tree, "--"}
+		for _, logicalPath := range treePaths {
+			args = append(args, literalPathspec(logicalPath))
+		}
+		matches, err := runGit(ctx, repo, nil, nil, args...)
+		var gitErr *GitCommandError
+		if err != nil && (!errors.As(err, &gitErr) || gitErr.ExitCode != 1) {
+			return nil, err
+		}
+		for _, match := range bytes.Split(bytes.TrimSuffix(matches, []byte{0}), []byte{0}) {
+			logicalPath := strings.TrimPrefix(string(match), tree+":")
+			if logicalPath != "" {
+				reasons = append(reasons, RiskReason{Code: RiskReasonProcessBoundary, Signal: SignalShellProcess, Path: logicalPath})
+			}
+		}
+	}
+	return canonicalRiskReasons(reasons), nil
+}
+
+func removeFallbackRiskReasons(reasons []RiskReason) []RiskReason {
+	filtered := make([]RiskReason, 0, len(reasons))
+	for _, reason := range reasons {
+		switch reason.Code {
+		case RiskReasonNonExecutableOnly, RiskReasonConfigurationChange, RiskReasonExecutableChange:
+			continue
+		default:
+			filtered = append(filtered, reason)
+		}
+	}
+	return filtered
 }
 
 func isLargePureDocumentation(input RiskInput, changedLines int) bool {
