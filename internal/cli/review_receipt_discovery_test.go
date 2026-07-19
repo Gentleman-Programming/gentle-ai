@@ -436,6 +436,119 @@ func TestUnscopedGateDiscoveryToleratesCorruptedUnrelatedLegacyInventory(t *test
 	}
 }
 
+func TestUnscopedReleaseGateDiscoveryConfinesHistoricalLegacyLockCorruption(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	started, _ := approveDiscoveryMarkdown(t, repo, "review-release-current", "docs/release.md", "release\n")
+	runReviewCLIGit(t, repo, "add", "-A")
+	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed release target")
+	legacyStore, _ := approveLegacyDiscoveryChain(t, repo, "review-release-history")
+	if err := os.Remove(filepath.Join(legacyStore.Dir, "artifacts", "receipt.json")); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(legacyStore.Dir, "LOCK")
+	if err := os.WriteFile(lockPath, []byte("{broken\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := reviewtransaction.InventoryAuthority(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Complete || report.Authoritative {
+		t.Fatalf("historical lock fixture remained authoritative = %#v", report)
+	}
+	historical, ambiguous := false, false
+	for _, entry := range report.Entries {
+		historical = historical || entry.LineageID == "review-release-history" &&
+			entry.Status == reviewtransaction.AuthorityStatusHistorical
+	}
+	for _, lock := range report.Locks {
+		ambiguous = ambiguous || lock.LineageID == "review-release-history" &&
+			lock.Status == reviewtransaction.AuthorityLockAmbiguous
+	}
+	if !historical || !ambiguous {
+		t.Fatalf("historical lock fixture = %#v", report)
+	}
+
+	_, record, err := discoverCompactFacadeGateReview(context.Background(), repo, "", reviewtransaction.NativeGateRequestInput{
+		Gate: reviewtransaction.GateRelease,
+	})
+	if err != nil {
+		t.Fatalf("historical legacy lock poisoned release discovery: %v", err)
+	}
+	if record.State.LineageID != started.LineageID {
+		t.Fatalf("release discovery selected %q, want %q", record.State.LineageID, started.LineageID)
+	}
+}
+
+func TestReviewAuthorityCorruptionConfinementBoundary(t *testing.T) {
+	legacyAliasProblem := "invalid successor: unsupported historical v1 operation alias"
+	tests := []struct {
+		name   string
+		report reviewtransaction.AuthorityStatusReport
+		want   bool
+	}{
+		{
+			name: "active corruption",
+			report: reviewtransaction.AuthorityStatusReport{Entries: []reviewtransaction.AuthorityInventoryEntry{
+				{Version: reviewtransaction.AuthorityVersionLegacy, LineageID: "active", Status: reviewtransaction.AuthorityStatusInvalid, State: reviewtransaction.StateInvalidated},
+			}},
+		},
+		{
+			name: "legacy-only corruption",
+			report: reviewtransaction.AuthorityStatusReport{Entries: []reviewtransaction.AuthorityInventoryEntry{
+				{Version: reviewtransaction.AuthorityVersionLegacy, LineageID: "legacy-broken", Status: reviewtransaction.AuthorityStatusInvalid, Problems: []string{legacyAliasProblem}},
+			}},
+			want: true,
+		},
+		{
+			name: "mixed history",
+			report: reviewtransaction.AuthorityStatusReport{
+				Entries: []reviewtransaction.AuthorityInventoryEntry{
+					{Version: reviewtransaction.AuthorityVersionCompact, LineageID: "current", Status: reviewtransaction.AuthorityStatusApproved},
+					{Version: reviewtransaction.AuthorityVersionLegacy, LineageID: "legacy-broken", Status: reviewtransaction.AuthorityStatusInvalid, Problems: []string{legacyAliasProblem}},
+					{Version: reviewtransaction.AuthorityVersionLegacy, LineageID: "legacy-history", Status: reviewtransaction.AuthorityStatusHistorical},
+				},
+				Locks: []reviewtransaction.AuthorityLockEvidence{
+					{Version: reviewtransaction.AuthorityVersionLegacy, LineageID: "legacy-history", Status: reviewtransaction.AuthorityLockAmbiguous},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "valid state",
+			report: reviewtransaction.AuthorityStatusReport{Entries: []reviewtransaction.AuthorityInventoryEntry{
+				{Version: reviewtransaction.AuthorityVersionCompact, LineageID: "current", Status: reviewtransaction.AuthorityStatusApproved},
+			}},
+		},
+		{
+			name: "active legacy lock",
+			report: reviewtransaction.AuthorityStatusReport{
+				Entries: []reviewtransaction.AuthorityInventoryEntry{
+					{Version: reviewtransaction.AuthorityVersionLegacy, LineageID: "active", Status: reviewtransaction.AuthorityStatusActive},
+				},
+				Locks: []reviewtransaction.AuthorityLockEvidence{
+					{Version: reviewtransaction.AuthorityVersionLegacy, LineageID: "active", Status: reviewtransaction.AuthorityLockAmbiguous},
+				},
+			},
+		},
+		{
+			name: "incomplete current entry mixed with legacy corruption",
+			report: reviewtransaction.AuthorityStatusReport{Entries: []reviewtransaction.AuthorityInventoryEntry{
+				{Version: reviewtransaction.AuthorityVersionLegacy, LineageID: "legacy-broken", Status: reviewtransaction.AuthorityStatusInvalid, Problems: []string{legacyAliasProblem}},
+				{Version: reviewtransaction.AuthorityVersionCompact, LineageID: "current", Status: reviewtransaction.AuthorityStatusIncomplete},
+			}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := reviewAuthorityCorruptionConfinedToLegacyEntries(tt.report, nil); got != tt.want {
+				t.Fatalf("confinement = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestUnscopedGateDiscoveryExcludesTamperedLegacyReceiptFromCandidates(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	started, _ := approveDiscoveryMarkdown(t, repo, "review-discovery-valid", "docs/valid.md", "valid\n")

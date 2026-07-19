@@ -1506,30 +1506,42 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 }
 
 // reviewAuthorityCorruptionConfinedToLegacyEntries reports whether every cause
-// of a non-authoritative inventory is an invalid legacy-v1 entry, which can
-// never resolve as a compact discovery candidate. Inventory IO/layout
-// diagnostics, ambiguous locks, reset residue, mixed-store collisions, and any
-// compact-v2 problem keep lineage-less discovery fail-closed.
+// of a non-authoritative inventory is either an unreadable legacy-v1 entry or
+// ambiguous lock residue attached to terminal pre-receipt legacy history.
+// Inventory IO/layout diagnostics, active or invalidated authority, incomplete
+// entries, reset residue, mixed-store collisions, and every compact-v2 problem
+// keep lineage-less discovery fail-closed.
 func reviewAuthorityCorruptionConfinedToLegacyEntries(report reviewtransaction.AuthorityStatusReport, inventoryErr error) bool {
 	if inventoryErr != nil || len(report.Diagnostics) > 0 {
 		return false
 	}
-	for _, lock := range report.Locks {
-		if lock.Status == reviewtransaction.AuthorityLockAmbiguous {
-			return false
-		}
-	}
+	historicalLegacy := map[string]bool{}
 	confined := false
 	for _, entry := range report.Entries {
+		if entry.Version == reviewtransaction.AuthorityVersionLegacy &&
+			entry.Status == reviewtransaction.AuthorityStatusHistorical {
+			historicalLegacy[entry.LineageID] = true
+		}
 		switch entry.Status {
 		case reviewtransaction.AuthorityStatusInvalid:
-			if entry.Version != reviewtransaction.AuthorityVersionLegacy {
+			if entry.Version != reviewtransaction.AuthorityVersionLegacy ||
+				len(entry.Problems) == 0 ||
+				entry.State != "" && entry.State != reviewtransaction.StateApproved && entry.State != reviewtransaction.StateEscalated {
 				return false
 			}
 			confined = true
-		case reviewtransaction.AuthorityStatusReset, reviewtransaction.AuthorityStatusCollision:
+		case reviewtransaction.AuthorityStatusIncomplete, reviewtransaction.AuthorityStatusReset, reviewtransaction.AuthorityStatusCollision:
 			return false
 		}
+	}
+	for _, lock := range report.Locks {
+		if lock.Status != reviewtransaction.AuthorityLockAmbiguous {
+			continue
+		}
+		if lock.Version != reviewtransaction.AuthorityVersionLegacy || !historicalLegacy[lock.LineageID] {
+			return false
+		}
+		confined = true
 	}
 	return confined
 }
