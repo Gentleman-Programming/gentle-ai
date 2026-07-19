@@ -2,8 +2,10 @@ package sddstatus
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -266,6 +268,72 @@ func TestBindingLockRejectsConcurrentWriter(t *testing.T) {
 	}
 }
 
+func TestBindApprovedReviewPreservesAuthorityAcrossBindingPublicationFailures(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		inject func() func()
+		want   string
+	}{
+		{name: "rename", want: "rename binding", inject: func() func() {
+			original := bindingRename
+			bindingRename = func(string, string) error { return errors.New("rename binding") }
+			return func() { bindingRename = original }
+		}},
+		{name: "directory sync", want: "sync binding", inject: func() func() {
+			original := syncBindingDirectory
+			syncBindingDirectory = func(string) error { return errors.New("sync binding") }
+			return func() { syncBindingDirectory = original }
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+			writeApprovedCompactAuthorityForChange(t, root, changeRoot, "approved-thin")
+			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "approved-thin")
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			restore := tt.inject()
+			_, err = BindApprovedReview(context.Background(), root, "thin", "approved-thin", "")
+			restore()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("binding publication error = %v, want %q", err, tt.want)
+			}
+			after, loadErr := store.Load()
+			if loadErr != nil || after.Revision != before.Revision || !reflect.DeepEqual(after.State, before.State) {
+				t.Fatalf("binding publication changed authority: before=%#v after=%#v error=%v", before, after, loadErr)
+			}
+			path := bindingPath(store, "thin")
+			if tt.name == "rename" {
+				if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+					t.Fatalf("failed rename published binding: %v", statErr)
+				}
+			} else if _, statErr := os.Stat(path); statErr != nil {
+				t.Fatalf("post-rename sync failure lost published binding: %v", statErr)
+			} else {
+				original := syncBindingDirectory
+				syncBindingDirectory = func(string) error { return errors.New("sync binding again") }
+				_, retryErr := BindApprovedReview(context.Background(), root, "thin", "approved-thin", "")
+				var publicationErr *ReviewBindingPublicationError
+				if !errors.As(retryErr, &publicationErr) {
+					t.Fatalf("repeated sync failure = %T %v, want ReviewBindingPublicationError", retryErr, retryErr)
+				}
+				syncs := 0
+				syncBindingDirectory = func(string) error { syncs++; return nil }
+				_, retryErr = BindApprovedReview(context.Background(), root, "thin", "approved-thin", "")
+				syncBindingDirectory = original
+				if retryErr != nil || syncs != 1 {
+					t.Fatalf("binding retry did not repeat directory sync: syncs=%d err=%v", syncs, retryErr)
+				}
+			}
+		})
+	}
+}
+
 func TestBindingFailsClosedForLedgerDriftAndChangedLiveEvidence(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
@@ -379,6 +447,57 @@ func TestBoundReviewUsesNormalVerifyThenArchiveRouting(t *testing.T) {
 	}
 }
 
+func TestBoundReviewRoutesStaleVerifyEvidenceToVerify(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Binding\n#### Scenario: Exact authority\n#### Scenario: Added after verification\n")
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "approved-thin")
+	if _, err := BindApprovedReview(context.Background(), root, "thin", "approved-thin", ""); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("a"), "pass"))
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateAllow {
+		t.Fatalf("ReviewGate = %#v, want allow", status.ReviewGate)
+	}
+	if len(status.BlockedReasons) != 0 {
+		t.Fatalf("BlockedReasons = %v, want empty", status.BlockedReasons)
+	}
+	if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
+		t.Fatalf("verify=%q archive=%q next=%q, want ready/blocked/verify", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+	}
+	if status.RemediationState != (RemediationState{}) {
+		t.Fatalf("RemediationState = %#v, want empty for stale evidence", status.RemediationState)
+	}
+}
+
+func TestBoundReviewKeepsFailedVerdictWithCurrentSpecTotalsMismatchOnRemediationRouting(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Binding\n#### Scenario: Exact authority\n#### Scenario: Added after verification\n")
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "approved-thin")
+	if _, err := BindApprovedReview(context.Background(), root, "thin", "approved-thin", ""); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("a"), "fail"))
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "resolve-review" {
+		t.Fatalf("verify=%q next=%q, want blocked/resolve-review for failed verdict", status.Dependencies.Verify, status.NextRecommended)
+	}
+	want := "verify evidence cannot enter remediation: verify result total 1 does not match actual scenario count 2; bounded review transaction is missing"
+	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), want) {
+		t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, want)
+	}
+}
+
 func TestSelectedBindingSupersedesOnlyItsLegacyReviewAuthority(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
@@ -411,7 +530,7 @@ func TestSelectedBindingSupersedesOnlyItsLegacyReviewAuthority(t *testing.T) {
 func TestValidBindingDoesNotAdvanceIncompleteApply(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [ ] 1.1 Pending\n")
-	writeApprovedCompactAuthorityForChangeWithTasks(t, root, changeRoot, "approved-thin", "- [ ] 1.1 Pending\n")
+	writeApprovedCompactAuthorityForChangeWithTasks(t, root, changeRoot, "approved-thin", "- [ ] 1.1 Pending\n# approved compact scope\n")
 	if _, err := BindApprovedReview(context.Background(), root, "thin", "approved-thin", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -442,15 +561,8 @@ func TestBindApprovedReviewSanitizesHostileGitEnvironmentFromSubdirectory(t *tes
 	} {
 		t.Setenv(name, value)
 	}
-	workingDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	relative, err := filepath.Rel(workingDirectory, subdirectory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := BindApprovedReview(context.Background(), relative, "thin", "approved-thin", ""); err != nil {
+	t.Chdir(root)
+	if _, err := BindApprovedReview(context.Background(), "nested", "thin", "approved-thin", ""); err != nil {
 		t.Fatal(err)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "approved-thin")

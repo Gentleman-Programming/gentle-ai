@@ -29,6 +29,12 @@ archives:
         formats:
           - zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - docs/review-integration.md
+      - contracts/review-integration/v1/schemas/*.schema.json
+      - contracts/review-integration/v1/fixtures/*.fixture.json
 
 checksum:
   name_template: "checksums.txt"

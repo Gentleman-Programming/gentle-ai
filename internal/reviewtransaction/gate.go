@@ -55,6 +55,10 @@ type PushRequest struct {
 	PushRemote         string                 `json:"push_remote"`
 	PushRemoteIdentity string                 `json:"push_remote_identity"`
 	DeliveryBaseTree   string                 `json:"delivery_base_tree,omitempty"`
+	// ReviewedBaseTree is set only for empty-remote bootstrap boundaries and
+	// carries the authoritative reviewed base tree so re-derivation can locate
+	// the same delivery base without a remote publication boundary.
+	ReviewedBaseTree string `json:"reviewed_base_tree,omitempty"`
 }
 
 type PrePRBoundarySource string
@@ -62,6 +66,11 @@ type PrePRBoundarySource string
 const (
 	PrePRBoundaryExplicit           PrePRBoundarySource = "explicit"
 	PrePRBoundaryPublicationDefault PrePRBoundarySource = "publication-default"
+	// PrePRBoundaryEmptyRemoteBootstrap marks a pre-push first-publication
+	// boundary: the configured upstream remote advertises no refs at all, so
+	// the publication base is the explicit zero OID instead of an advertised
+	// remote commit.
+	PrePRBoundaryEmptyRemoteBootstrap PrePRBoundarySource = "empty-remote-bootstrap"
 )
 
 // PrePRBoundarySelection records how the immutable pre-PR range boundary was
@@ -101,6 +110,7 @@ type NativeGateEvaluation struct {
 	Result  GateResult
 	Reason  string
 	Context GateContext
+	Cause   error `json:"-"`
 }
 
 var finalGateAuthorizationHook = func() {}
@@ -220,6 +230,16 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 	}
 	if request.Gate == GatePrePush && record.Transaction.Snapshot.Kind == TargetCurrentChanges && resolvedPrePR.DeliveredCommitCount != 1 {
 		return invalid("pre-push current-changes receipt requires exactly one delivery commit")
+	}
+	if request.Gate == GatePrePush && resolvedPrePR.Selection.Source == PrePRBoundaryEmptyRemoteBootstrap {
+		// A first publication to an empty remote transfers the candidate's
+		// complete history, so it must satisfy the same publication invariant
+		// as the compact path: the delivered range stays inside the reviewed
+		// paths and pre-base ancestry stays disclosed by the reviewed base
+		// tree.
+		if err := validateReviewedPublicationRange(ctx, repo, record.Transaction.Snapshot.Paths, resolvedPrePR); err != nil {
+			return invalid(err.Error())
+		}
 	}
 	policyHash := authoritativeReceipt.PolicyHash
 	if hasArtifactSource(request.PolicyArtifact, request.PolicyContent) {
@@ -454,12 +474,11 @@ func resolveTrackingUpstreamBase(ctx context.Context, repo string) (string, stri
 	if branch == "" {
 		return "", "", "", errors.New("configured upstream is unavailable on detached HEAD; pass --base-ref <remote>/<branch>")
 	}
-	output, err := runGit(ctx, repo, nil, nil, "for-each-ref", "--format=%(upstream:remotename)%00%(upstream:remoteref)", "refs/heads/"+branch)
-	parts := strings.SplitN(strings.TrimSpace(string(output)), "\x00", 2)
-	if err != nil || len(parts) != 2 || parts[0] == "" || !strings.HasPrefix(parts[1], "refs/heads/") {
+	remote, ref, ok := configuredUpstreamRef(ctx, repo, branch)
+	if !ok {
 		return "", "", "", errors.New("configured upstream is missing or ambiguous; pass --base-ref <remote>/<branch>")
 	}
-	selection, err := advertisedRemoteRef(ctx, repo, parts[0], parts[1], parts[0]+"/"+strings.TrimPrefix(parts[1], "refs/heads/"), PrePRBoundaryPublicationDefault)
+	selection, err := advertisedRemoteRef(ctx, repo, remote, ref, remote+"/"+strings.TrimPrefix(ref, "refs/heads/"), PrePRBoundaryPublicationDefault)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -605,7 +624,7 @@ func currentBranch(ctx context.Context, repo string) string {
 	return strings.TrimSpace(string(output))
 }
 
-func buildPushTarget(ctx context.Context, repo, selector, deliveryBaseTree string) (Target, *PushRequest, error) {
+func buildPushTarget(ctx context.Context, repo, selector, deliveryBaseTree, reviewedBaseTree string) (Target, *PushRequest, error) {
 	selection, err := selectPrePushBoundary(ctx, repo, selector)
 	if err != nil {
 		return Target{}, nil, err
@@ -613,6 +632,9 @@ func buildPushTarget(ctx context.Context, repo, selector, deliveryBaseTree strin
 	head, err := resolveCommit(ctx, repo, "HEAD")
 	if err != nil {
 		return Target{}, nil, err
+	}
+	if selection.Source == PrePRBoundaryEmptyRemoteBootstrap {
+		return buildBootstrapPushTarget(ctx, repo, selection, head, deliveryBaseTree, reviewedBaseTree)
 	}
 	bases, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, selection.Commit)
 	mergeBases := strings.Fields(string(bases))
@@ -645,10 +667,309 @@ func selectPrePushBoundary(ctx context.Context, repo, selector string) (PrePRBou
 	}
 	ref, remote, commit, err := resolveTrackingUpstreamBase(ctx, repo)
 	if err != nil {
+		if bootstrap, ok := emptyRemoteBootstrapBoundary(ctx, repo); ok {
+			return bootstrap, nil
+		}
 		return PrePRBoundarySelection{}, err
 	}
 	identity, err := remoteRepositoryIdentity(ctx, repo, remote)
 	return PrePRBoundarySelection{Source: PrePRBoundaryPublicationDefault, Selector: ref, Commit: commit, Remote: remote, RemoteRef: ref, RemoteIdentity: identity}, err
+}
+
+// configuredUpstreamRef resolves the configured upstream remote and branch
+// ref for a local branch. It reports false when the upstream is missing,
+// ambiguous, or not a branch ref.
+func configuredUpstreamRef(ctx context.Context, repo, branch string) (string, string, bool) {
+	output, err := runGit(ctx, repo, nil, nil, "for-each-ref", "--format=%(upstream:remotename)%00%(upstream:remoteref)", "refs/heads/"+branch)
+	parts := strings.SplitN(strings.TrimSpace(string(output)), "\x00", 2)
+	if err != nil || len(parts) != 2 || parts[0] == "" || !strings.HasPrefix(parts[1], "refs/heads/") {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+// emptyRemoteBootstrapBoundary recognizes the first-publication case only:
+// the current branch has a configured upstream whose remote advertises no
+// refs at all (no HEAD, branches, or tags). The boundary content-binds the
+// destination remote identity and intended ref with the explicit zero OID as
+// publication base. Any other condition declines so the original fail-closed
+// error is preserved: detached HEAD, a missing or ambiguous configured
+// upstream, an unreachable remote or failed ls-remote, a remote with any
+// advertised ref, an unresolvable remote identity, or an unresolvable HEAD
+// commit.
+func emptyRemoteBootstrapBoundary(ctx context.Context, repo string) (PrePRBoundarySelection, bool) {
+	branch := currentBranch(ctx, repo)
+	if branch == "" {
+		return PrePRBoundarySelection{}, false
+	}
+	remote, ref, ok := configuredUpstreamRef(ctx, repo, branch)
+	if !ok {
+		return PrePRBoundarySelection{}, false
+	}
+	advertised, err := runGit(ctx, repo, nil, nil, "ls-remote", remote)
+	if err != nil || strings.TrimSpace(string(advertised)) != "" {
+		return PrePRBoundarySelection{}, false
+	}
+	identity, err := remoteRepositoryIdentity(ctx, repo, remote)
+	if err != nil {
+		return PrePRBoundarySelection{}, false
+	}
+	head, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		return PrePRBoundarySelection{}, false
+	}
+	return PrePRBoundarySelection{
+		Source: PrePRBoundaryEmptyRemoteBootstrap, Selector: ref, Commit: strings.Repeat("0", len(head)),
+		Remote: remote, RemoteRef: ref, RemoteIdentity: identity,
+	}, true
+}
+
+// buildBootstrapPushTarget derives the pre-push target for a first
+// publication to a verified empty remote. The reviewed base commit must be
+// uniquely present in the candidate's complete history and, for
+// current-changes receipts, the delivery must be exactly one commit beyond
+// it. The gate evaluation then enforces the bootstrap publication invariant
+// for every target kind: the delivered range reviewedBase..head must stay
+// inside the immutable genesis scope, and pre-base ancestry — published in
+// full by the first push — must satisfy both content-disclosure rules of
+// validateBootstrapAncestryDisclosure: every path it ever named must exist in
+// the reviewed base tree, and every blob object it reaches must be
+// byte-identical to a blob that tree contains. Disclosure covers repository
+// content only — tracked paths and blob bytes; commit and tag metadata
+// (messages, author/committer identities, timestamps) is not review-bound
+// anywhere in the gate model, on bootstrap or ordinary publication alike —
+// see the scope note on validateBootstrapAncestryDisclosure. Everything else
+// fails closed.
+func buildBootstrapPushTarget(ctx context.Context, repo string, selection PrePRBoundarySelection, head, deliveryBaseTree, reviewedBaseTree string) (Target, *PushRequest, error) {
+	// Both parameters originate from the receipt snapshot's BaseTree field:
+	// deliveryBaseTree is the same value gated to current-changes receipts so
+	// the one-commit delivery constraint below applies. The override can
+	// therefore never select a genuinely divergent tree.
+	bootstrapTree := reviewedBaseTree
+	if deliveryBaseTree != "" {
+		bootstrapTree = deliveryBaseTree
+	}
+	if bootstrapTree == "" {
+		return Target{}, nil, errors.New("empty-remote bootstrap requires the authoritative reviewed base tree; pass --base-ref <remote>/<branch> once the remote is published")
+	}
+	pushRemote, configured, err := publicationRemote(ctx, repo)
+	if err != nil || !configured {
+		return Target{}, nil, errors.New("push destination remote is not configured")
+	}
+	if pushRemote != selection.Remote {
+		return Target{}, nil, errors.New("empty-remote bootstrap requires the push destination to be the verified empty upstream remote")
+	}
+	pushIdentity, err := pushRepositoryIdentity(ctx, repo, pushRemote)
+	if err != nil {
+		return Target{}, nil, err
+	}
+	if pushIdentity != selection.RemoteIdentity {
+		return Target{}, nil, errors.New("empty-remote bootstrap requires the push destination identity to match the verified empty remote")
+	}
+	push := &PushRequest{Boundary: selection, MergeBase: selection.Commit, PushRemote: pushRemote, PushRemoteIdentity: pushIdentity, DeliveryBaseTree: deliveryBaseTree, ReviewedBaseTree: reviewedBaseTree}
+	base, err := bootstrapReviewedDeliveryBase(ctx, repo, head, bootstrapTree)
+	if err != nil {
+		return Target{}, nil, err
+	}
+	if deliveryBaseTree != "" {
+		count, countErr := commitCount(ctx, repo, base, head)
+		if countErr != nil || count != 1 {
+			return Target{}, nil, errors.New("reviewed delivery is not exactly one commit from its reviewed base")
+		}
+	}
+	return Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: []string{}}, push, nil
+}
+
+// bootstrapReviewedDeliveryBase locates the reviewed delivery base commit in
+// the candidate's complete history because an empty remote provides no
+// publication range boundary. A single subprocess lists every commit with its
+// tree so the walk stays one call regardless of history length.
+func bootstrapReviewedDeliveryBase(ctx context.Context, repo, head, reviewedTree string) (string, error) {
+	output, err := runGit(ctx, repo, nil, nil, "log", "--format=%H %T", head)
+	if err != nil {
+		return "", err
+	}
+	matches := []string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			return "", errors.New("publication history listing is malformed")
+		}
+		if fields[1] == reviewedTree {
+			matches = append(matches, fields[0])
+		}
+	}
+	if len(matches) != 1 {
+		return "", errors.New("reviewed delivery base commit is missing or ambiguous in publication range")
+	}
+	return matches[0], nil
+}
+
+// validateBootstrapAncestryDisclosure enforces the bootstrap publication
+// invariant for pre-base history. A push to an empty remote transfers every
+// object reachable from HEAD, including ancestry behind the reviewed delivery
+// base that no publication gate ever examined. That ancestry is admissible
+// only under two disclosure rules bound to the reviewed base tree — exactly
+// the immutable context the receipt binds:
+//
+//  1. Path disclosure: every path pre-base history ever named must exist in
+//     the reviewed base tree, so no published tree entry carries a file name
+//     review never saw.
+//  2. Blob disclosure: every blob object reachable from the reviewed base
+//     commit must be byte-identical to some blob the reviewed base tree
+//     contains, path-agnostic. Renaming disclosed content is admissible; any
+//     historical content revision absent from the base tree — for example a
+//     secret later overwritten at the same path — fails closed even though
+//     its path is disclosed.
+//
+// Symlink entries are blobs and participate in both rules. Gitlink
+// (submodule) entries disclose only their path: their commit OIDs reference
+// external objects that history traversal never transfers, so they are
+// excluded from blob disclosure. Failing either rule requires squashing
+// pre-publication history (or re-creating an orphan first commit) so the
+// first publication contains only reviewed content.
+//
+// Scope: disclosure covers repository CONTENT — tracked paths and blob bytes
+// — and nothing else. Commit and tag metadata (messages, author/committer
+// identities, timestamps) is not review-bound anywhere in the gate model: no
+// receipt hashes or binds message text, and an ordinary (non-bootstrap)
+// pre-push equally publishes the reviewed delivery commit's message without
+// any review binding it. A pre-base commit created with `git commit
+// --allow-empty` therefore passes both rules even when its message contains a
+// secret, and the bootstrap push transfers that commit object; bootstrap does
+// not widen a guarantee that never existed. Operators who need message
+// hygiene should follow the same remediation the deny messages give — squash
+// pre-publication history or re-create an orphan first commit — which reduces
+// pre-base history to messages the operator wrote deliberately at publication
+// time. TestBootstrapDisclosureScopeExcludesCommitMetadata pins this
+// boundary.
+func validateBootstrapAncestryDisclosure(ctx context.Context, repo, baseCommit string) error {
+	touchedOutput, err := runGit(ctx, repo, nil, nil, "log", "-m", "--format=", "--name-only", "-z", "--no-renames", baseCommit)
+	if err != nil {
+		return fmt.Errorf("inspect bootstrap pre-base history: %w", err)
+	}
+	touched, err := canonicalPaths(splitNullSeparatedPaths(touchedOutput))
+	if err != nil {
+		return fmt.Errorf("bootstrap pre-base history paths are not canonical: %w", err)
+	}
+	disclosedPaths, disclosedBlobs, err := reviewedBaseTreeDisclosure(ctx, repo, baseCommit)
+	if err != nil {
+		return err
+	}
+	for _, path := range touched {
+		if _, ok := disclosedPaths[path]; !ok {
+			return fmt.Errorf("empty-remote bootstrap publishes pre-base history path %q that is not disclosed by the reviewed base tree; squash pre-publication history (or re-create an orphan first commit) so the first publication contains only reviewed content, then re-run review", path)
+		}
+	}
+	return validateBootstrapReachableBlobs(ctx, repo, baseCommit, disclosedBlobs)
+}
+
+// reviewedBaseTreeDisclosure lists the reviewed base tree once and returns
+// its canonical path set and its blob OID set. Symlink entries are blobs and
+// join both sets; gitlink entries contribute only their path because their
+// commit OIDs reference objects outside this repository.
+func reviewedBaseTreeDisclosure(ctx context.Context, repo, baseCommit string) (map[string]struct{}, map[string]struct{}, error) {
+	output, err := runGit(ctx, repo, nil, nil, "ls-tree", "-r", "-z", "--full-tree", baseCommit)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect reviewed bootstrap base tree: %w", err)
+	}
+	names := []string{}
+	blobs := map[string]struct{}{}
+	for _, entry := range splitNullSeparatedPaths(output) {
+		meta, path, found := strings.Cut(entry, "\t")
+		fields := strings.Fields(meta)
+		if !found || path == "" || len(fields) != 3 {
+			return nil, nil, errors.New("reviewed bootstrap base tree listing is malformed")
+		}
+		names = append(names, path)
+		if fields[1] == "blob" {
+			blobs[fields[2]] = struct{}{}
+		}
+	}
+	canonical, err := canonicalPaths(names)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reviewed bootstrap base tree paths are not canonical: %w", err)
+	}
+	paths := make(map[string]struct{}, len(canonical))
+	for _, path := range canonical {
+		paths[path] = struct{}{}
+	}
+	return paths, blobs, nil
+}
+
+// validateBootstrapReachableBlobs enforces blob-level disclosure: every blob
+// object reachable from the reviewed base commit must be a member of the
+// reviewed base tree's blob set. The subprocess count stays constant
+// regardless of history size: rev-list enumerates each reachable object once
+// with a representative path, and one cat-file batch resolves every object
+// type; anything unresolvable fails closed.
+//
+// The cat-file --batch-check pass exists deliberately: do not "simplify" this
+// to `git rev-list --objects --filter=object:type=blob`. Filter semantics
+// proved version-shaky during design probing — git 2.55 dropped a traversed
+// commit's line while keeping the provided one — so type resolution through
+// one batch-check invocation is the version-stable approach.
+func validateBootstrapReachableBlobs(ctx context.Context, repo, baseCommit string, disclosed map[string]struct{}) error {
+	output, err := runGit(ctx, repo, nil, nil, "rev-list", "--objects", baseCommit)
+	if err != nil {
+		return fmt.Errorf("enumerate bootstrap pre-base objects: %w", err)
+	}
+	oids := []string{}
+	representative := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line == "" {
+			continue
+		}
+		oid, path, _ := strings.Cut(line, " ")
+		oids = append(oids, oid)
+		representative[oid] = path
+	}
+	if len(oids) == 0 {
+		return errors.New("bootstrap pre-base object listing is empty")
+	}
+	typed, err := runGit(ctx, repo, nil, []byte(strings.Join(oids, "\n")+"\n"), "cat-file", "--batch-check=%(objectname) %(objecttype)")
+	if err != nil {
+		return fmt.Errorf("resolve bootstrap pre-base object types: %w", err)
+	}
+	types := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(typed)), "\n") {
+		oid, objectType, found := strings.Cut(line, " ")
+		switch {
+		case found && (objectType == "commit" || objectType == "tree" || objectType == "blob" || objectType == "tag"):
+			types[oid] = objectType
+		default:
+			return errors.New("bootstrap pre-base object types are unresolvable")
+		}
+	}
+	for _, oid := range oids {
+		objectType, resolved := types[oid]
+		if !resolved {
+			return errors.New("bootstrap pre-base object types are incomplete")
+		}
+		if objectType != "blob" {
+			continue
+		}
+		if _, ok := disclosed[oid]; !ok {
+			return fmt.Errorf("empty-remote bootstrap publishes pre-base history blob %s at %q whose content is not disclosed by the reviewed base tree; squash pre-publication history (or re-create an orphan first commit) so the first publication contains only reviewed content, then re-run review", oid, representative[oid])
+		}
+	}
+	return nil
+}
+
+func splitNullSeparatedPaths(output []byte) []string {
+	paths := []string{}
+	seen := map[string]struct{}{}
+	for _, path := range strings.Split(string(output), "\x00") {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 func reviewedDeliveryBase(ctx context.Context, repo, publicationBase, head, reviewedTree string) (string, error) {
@@ -677,11 +998,12 @@ func prePushTargetForRequest(ctx context.Context, repo string, request GateReque
 	if request.Push != nil && request.Push.Boundary.Source == PrePRBoundaryExplicit {
 		selector = request.Push.Boundary.Selector
 	}
-	deliveryBaseTree := ""
+	deliveryBaseTree, reviewedBaseTree := "", ""
 	if request.Push != nil {
 		deliveryBaseTree = request.Push.DeliveryBaseTree
+		reviewedBaseTree = request.Push.ReviewedBaseTree
 	}
-	target, push, err := buildPushTarget(ctx, repo, selector, deliveryBaseTree)
+	target, push, err := buildPushTarget(ctx, repo, selector, deliveryBaseTree, reviewedBaseTree)
 	if err != nil {
 		return Target{}, nil, err
 	}
@@ -699,7 +1021,15 @@ func prePushTargetForRequest(ctx context.Context, repo string, request GateReque
 	if err != nil {
 		return Target{}, nil, err
 	}
-	return target, &resolvedPrePRRefs{Selection: push.Boundary, HeadCommit: head, BaseCommit: push.MergeBase, DeliveredCommitCount: count, PushRemote: push.PushRemote}, nil
+	baseCommit := push.MergeBase
+	if push.Boundary.Source == PrePRBoundaryEmptyRemoteBootstrap {
+		// The zero-OID boundary sentinel only records that no advertised
+		// publication base exists; it must never anchor validation. The
+		// resolved reviewed delivery base commit is the real range boundary
+		// that publication-range and ancestry-disclosure checks scope to.
+		baseCommit = target.BaseRef
+	}
+	return target, &resolvedPrePRRefs{Selection: push.Boundary, HeadCommit: head, BaseCommit: baseCommit, DeliveredCommitCount: count, PushRemote: push.PushRemote}, nil
 }
 
 func commitCount(ctx context.Context, repo, base, head string) (int, error) {

@@ -17,6 +17,7 @@ const (
 	schema       = "gentle-ai.opencode-default-agent"
 	version      = 1
 )
+
 type ownership struct {
 	Schema          string `json:"schema"`
 	Version         int    `json:"version"`
@@ -39,6 +40,7 @@ type UninstallPlan struct {
 	current       fieldValue
 	owned         *ownership
 }
+
 func OwnershipPath(settingsPath string) string {
 	return filepath.Join(filepath.Dir(settingsPath), ".gentle-ai-default-agent.json")
 }

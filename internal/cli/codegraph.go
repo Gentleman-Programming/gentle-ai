@@ -64,7 +64,7 @@ func canonicalCodeGraphProjectRoot(candidate string) (string, error) {
 }
 
 func isUnsafeCodeGraphRoot(root string) bool {
-	if root == string(filepath.Separator) {
+	if volume := filepath.VolumeName(root); root == volume+string(filepath.Separator) {
 		return true
 	}
 	home := canonicalCodeGraphRestrictedPath(codeGraphHomeDir())

@@ -2,6 +2,7 @@ package sddstatus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -151,6 +152,8 @@ func readText(path string) string {
 	return string(content)
 }
 
+const incompatibleReviewTransactionReason = "bounded review transaction artifact is not a native JSON review transaction; regenerate it from native review authority"
+
 func readReviewTransaction(path, content string) (*reviewtransaction.Transaction, string) {
 	if path == "" && strings.TrimSpace(content) == "" {
 		return nil, "bounded review transaction is missing"
@@ -162,6 +165,12 @@ func readReviewTransaction(path, content string) (*reviewtransaction.Transaction
 			return nil, fmt.Sprintf("bounded review transaction cannot be read: %v", err)
 		}
 		payload = read
+	}
+	if !strings.HasPrefix(strings.TrimSpace(string(payload)), "{") {
+		if json.Valid(payload) {
+			return nil, "bounded review transaction is invalid: native review transaction must be a JSON object"
+		}
+		return nil, incompatibleReviewTransactionReason
 	}
 	transaction, err := reviewtransaction.ParseTransaction(payload)
 	if err != nil {
@@ -225,6 +234,11 @@ func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, tra
 	return state
 }
 
+type reviewAuthorityEvaluation struct {
+	Result reviewtransaction.GateResult
+	Reason string
+}
+
 func applyReviewGate(
 	status *Status,
 	repo string,
@@ -233,50 +247,74 @@ func applyReviewGate(
 	if status.Dependencies.Verify != DependencyAllDone || !status.TaskProgress.AllComplete {
 		return
 	}
+	applyReviewGateEvaluation(status, resolveReviewAuthority(context.Background(), repo, receiptPath, receiptContent, ""))
+}
+
+func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluation) {
+	if evaluation.Result == reviewtransaction.GateAllow {
+		status.ReviewGate = &ReviewGateState{Result: evaluation.Result, Reason: evaluation.Reason}
+		return
+	}
+	blockReviewGate(status, evaluation.Result, evaluation.Reason)
+}
+
+func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptContent, changeName string) reviewAuthorityEvaluation {
 	receiptPayload, ok := readReviewArtifact(receiptPath, receiptContent)
 	if !ok {
 		var err error
-		receiptPayload, err = discoverNativeReceipt(context.Background(), repo)
+		receiptPayload, err = discoverNativeReceipt(ctx, repo)
 		if err != nil {
-			blockReviewGate(status, reviewtransaction.GateInvalidated, err.Error())
-			return
+			return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: err.Error()}
 		}
 	}
 	var evaluation reviewtransaction.NativeGateEvaluation
 	if reviewtransaction.CompactReceiptSchemaOf(receiptPayload) == reviewtransaction.CompactReceiptSchema {
 		receipt, err := reviewtransaction.ParseCompactReceipt(receiptPayload)
 		if err != nil {
-			blockReviewGate(status, reviewtransaction.GateInvalidated, fmt.Sprintf("compact review receipt is invalid or non-terminal: %v", err))
-			return
+			return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: fmt.Sprintf("compact review receipt is invalid or non-terminal: %v", err)}
 		}
-		evaluation = reviewtransaction.EvaluateCompactGate(context.Background(), repo, receipt, reviewtransaction.NativeGateRequestInput{
+		if changeName != "" {
+			store, storeErr := reviewtransaction.CompactAuthoritativeStore(ctx, repo, receipt.LineageID)
+			if storeErr != nil {
+				return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: "selected change compact authority cannot be loaded"}
+			}
+			record, loadErr := store.Load()
+			if loadErr != nil {
+				return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: "selected change compact authority cannot be loaded"}
+			}
+			bound, reason := compactAuthorityPathsBound(record.State, changeName)
+			if !bound {
+				if reason == "" {
+					reason = fmt.Sprintf("compact review authority is not bound to selected change %q", changeName)
+				}
+				return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: reason}
+			}
+		}
+		evaluation = reviewtransaction.EvaluateCompactGate(ctx, repo, receipt, reviewtransaction.NativeGateRequestInput{
 			Gate: reviewtransaction.GatePostApply, LineageID: receipt.LineageID,
 		})
 	} else {
 		receipt, err := reviewtransaction.ParseReceipt(receiptPayload)
 		if err != nil {
-			blockReviewGate(status, reviewtransaction.GateInvalidated, fmt.Sprintf("review receipt is invalid or non-terminal: %v", err))
-			return
+			return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: fmt.Sprintf("review receipt is invalid or non-terminal: %v", err)}
 		}
-		request, err := reviewtransaction.BuildNativeGateRequest(context.Background(), repo, reviewtransaction.NativeGateRequestInput{
+		request, err := reviewtransaction.BuildNativeGateRequest(ctx, repo, reviewtransaction.NativeGateRequestInput{
 			Gate: reviewtransaction.GatePostApply, LineageID: receipt.LineageID,
 		})
 		if err != nil {
-			blockReviewGate(status, reviewtransaction.GateInvalidated, fmt.Sprintf("native review gate request cannot be derived: %v", err))
-			return
+			return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: fmt.Sprintf("native review gate request cannot be derived: %v", err)}
 		}
-		evaluation = evaluateNativeReviewGate(context.Background(), repo, receipt, request)
+		evaluation = evaluateNativeReviewGate(ctx, repo, receipt, request)
 	}
-	result := evaluation.Result
-	switch result {
+	switch evaluation.Result {
 	case reviewtransaction.GateAllow:
-		status.ReviewGate = &ReviewGateState{Result: result, Reason: "approved receipt exactly matches authoritative native state and the current repository"}
+		return reviewAuthorityEvaluation{Result: evaluation.Result, Reason: "approved receipt exactly matches authoritative native state and the current repository"}
 	case reviewtransaction.GateScopeChanged:
-		blockReviewGate(status, result, "review scope changed; maintainer must create an explicit new lineage without reusing this budget")
+		return reviewAuthorityEvaluation{Result: evaluation.Result, Reason: "review scope changed; maintainer must create an explicit new lineage without reusing this budget"}
 	case reviewtransaction.GateEscalated:
-		blockReviewGate(status, result, "new external evidence or terminal transaction state escalated the receipt without reopening review")
+		return reviewAuthorityEvaluation{Result: evaluation.Result, Reason: "new external evidence or terminal transaction state escalated the receipt without reopening review"}
 	default:
-		blockReviewGate(status, reviewtransaction.GateInvalidated, "review receipt was invalidated by content relationship, policy, ledger, evidence, or publication state; explicit maintainer action is required and no budget resets")
+		return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: "review receipt was invalidated by content relationship, policy, ledger, evidence, or publication state; explicit maintainer action is required and no budget resets"}
 	}
 }
 

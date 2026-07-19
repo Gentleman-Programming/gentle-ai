@@ -16,6 +16,7 @@ import (
 
 const CompactStateSchema = "gentle-ai.review-state/v2"
 const CompactReceiptSchema = "gentle-ai.review-receipt/v2"
+const NativeLowRiskVerificationDomain = "gentle-ai.native-low-risk-verification/v1"
 
 const (
 	StateCorrectionRequired      State = "correction_required"
@@ -213,7 +214,7 @@ func (state CompactState) Validate() error {
 		return errors.New("compact review has more results than selected lenses")
 	}
 	for index, result := range state.LensResults {
-		canonical, canonicalErr := CanonicalLensResult(result)
+		canonical, canonicalErr := CanonicalCompactLensResult(result)
 		if canonicalErr != nil || result.Lens != state.SelectedLenses[index] || !reflect.DeepEqual(result, canonical) {
 			return errors.New("compact lens results must be complete and canonically ordered")
 		}
@@ -302,7 +303,7 @@ func validateCompactFindings(state CompactState) error {
 	}
 	seen := make(map[string]Finding, len(state.Findings))
 	for _, finding := range state.Findings {
-		if err := validateStructuredFinding(finding); err != nil {
+		if err := validateLensFinding(finding, true); err != nil {
 			return err
 		}
 		if _, exists := seen[finding.ID]; exists {
@@ -499,7 +500,7 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 	state.Findings = []Finding{}
 	for index, result := range input.LensResults {
 		result.Lens = state.SelectedLenses[index]
-		canonical, err := CanonicalLensResult(result)
+		canonical, err := CanonicalCompactLensResult(result)
 		if err != nil {
 			return fmt.Errorf("lens result %d: %w", index+1, err)
 		}
@@ -539,6 +540,12 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 		item, severeFinding := classifications[finding.ID]
 		if !severeFinding {
 			continue
+		}
+		switch item.Causality {
+		case CausalIntroduced, CausalBehaviorActivated, CausalWorsened:
+			if !findingLocationInGenesis(finding.Location, state.GenesisPaths) {
+				item.Causality = CausalUnknown
+			}
 		}
 		state.Classifications[finding.ID] = item
 		if item.Class == EvidenceInsufficient {
@@ -592,6 +599,31 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 	return state.Validate()
 }
 
+func findingLocationInGenesis(location string, genesisPaths []string) bool {
+	separator := strings.LastIndexByte(location, ':')
+	if separator <= 0 || separator == len(location)-1 {
+		return false
+	}
+	line := location[separator+1:]
+	nonzero := false
+	for index := range line {
+		if line[index] < '0' || line[index] > '9' {
+			return false
+		}
+		nonzero = nonzero || line[index] != '0'
+	}
+	logicalPath := location[:separator]
+	if len(logicalPath) >= 3 && logicalPath[1] == ':' && logicalPath[2] == '/' &&
+		((logicalPath[0] >= 'A' && logicalPath[0] <= 'Z') || (logicalPath[0] >= 'a' && logicalPath[0] <= 'z')) {
+		return false
+	}
+	canonical, err := normalizeLogicalPath(logicalPath)
+	if err != nil || canonical != logicalPath || !nonzero {
+		return false
+	}
+	return stringIndex(genesisPaths, canonical) >= 0
+}
+
 func (state *CompactState) Invalidate(reason string) error {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -608,12 +640,16 @@ func compactPristineReviewing(state CompactState) bool {
 	return state.State == StateReviewing && snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) &&
 		len(state.LensResults) == 0 && len(state.Findings) == 0 && len(state.Classifications) == 0 && len(state.Outcomes) == 0 &&
 		len(state.FixFindingIDs) == 0 && len(state.FollowUps) == 0 && state.ProposedCorrectionLines == nil && state.ActualCorrectionLines == nil &&
-		state.FixDeltaHash == EmptyFixDeltaHash && state.OriginalCriteria == nil && state.CorrectionRegression == nil && state.EvidenceHash == "" && state.InvalidationReason == ""
+		state.FixDeltaHash == EmptyFixDeltaHash && state.OriginalCriteria == nil && state.CorrectionRegression == nil && state.EvidenceHash == "" && state.InvalidationReason == "" &&
+		len(state.CorrectionAttempts) == 0 && state.CumulativeCorrectionLines == 0
 }
 
 func (state *CompactState) BeginCorrection(proposed int) error {
 	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines != nil {
 		return fmt.Errorf("cannot begin correction from compact state %q", state.State)
+	}
+	if len(state.CorrectionAttempts) != 0 {
+		return errors.New("compact correction validator was already consumed; use authorized successor recovery")
 	}
 	if proposed <= 0 {
 		return errors.New("compact correction requires a positive changed-line forecast")
@@ -655,24 +691,13 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	state.CumulativeCorrectionLines += actual
 	state.CurrentSnapshot = snapshot
 	state.FollowUps = append(state.FollowUps, validation.FollowUps...)
-	if state.CumulativeCorrectionLines > state.CorrectionBudget {
-		state.FixDeltaHash, state.ActualCorrectionLines = fixHash, &actual
-		original, regression := validation.OriginalCriteria, validation.CorrectionRegression
-		state.OriginalCriteria, state.CorrectionRegression = &original, &regression
+	state.FixDeltaHash, state.ActualCorrectionLines = fixHash, &actual
+	original, regression := validation.OriginalCriteria, validation.CorrectionRegression
+	state.OriginalCriteria, state.CorrectionRegression = &original, &regression
+	if state.CumulativeCorrectionLines > state.CorrectionBudget || !original.Passed || !regression.Passed {
 		state.State = StateEscalated
-	} else if validation.OriginalCriteria.Passed && validation.CorrectionRegression.Passed {
-		state.FixDeltaHash, state.ActualCorrectionLines = fixHash, &actual
-		original, regression := validation.OriginalCriteria, validation.CorrectionRegression
-		state.OriginalCriteria, state.CorrectionRegression = &original, &regression
-		state.State = StateValidating
 	} else {
-		state.State = StateCorrectionRequired
-		if len(state.CorrectionAttempts) >= MaxCompactCorrectionAttempts {
-			state.State = StateEscalated
-		}
-		state.ProposedCorrectionLines, state.ActualCorrectionLines = nil, nil
-		state.FixDeltaHash = EmptyFixDeltaHash
-		state.OriginalCriteria, state.CorrectionRegression = nil, nil
+		state.State = StateValidating
 	}
 	return state.Validate()
 }
@@ -714,10 +739,59 @@ func (state CompactState) Receipt() (CompactReceipt, error) {
 		BaseTree:   state.InitialSnapshot.BaseTree, InitialReviewTree: state.InitialSnapshot.CandidateTree,
 		FinalCandidateTree: state.CurrentSnapshot.CandidateTree, PathsDigest: state.InitialSnapshot.PathsDigest,
 		FixDeltaHash: state.FixDeltaHash, PolicyHash: state.PolicyHash, EvidenceHash: evidence,
-		RiskLevel: state.RiskLevel, SelectedLenses: append([]string(nil), state.SelectedLenses...),
+		RiskLevel: state.RiskLevel, SelectedLenses: append([]string{}, state.SelectedLenses...),
 		ResolvedFindingIDs: append([]string(nil), state.FixFindingIDs...), TerminalState: terminal,
 	}
-	return receipt, receipt.Validate()
+	if err := receipt.Validate(); err != nil {
+		return CompactReceipt{}, err
+	}
+	return receipt, nil
+}
+
+// NativeLowRiskVerificationEvidence returns the canonical structural evidence
+// used only for a genuine low-risk, zero-lens, uncorrected compact review. The
+// state machine still completes review before final verification; this preimage
+// merely removes the need for a caller-created evidence file when native Git
+// and risk evidence already prove the exact frozen target.
+func NativeLowRiskVerificationEvidence(state CompactState, assessment RiskAssessment) ([]byte, error) {
+	if state.State != StateReviewing && state.State != StateValidating && state.State != StateApproved {
+		return nil, fmt.Errorf("native low-risk verification cannot run from compact state %q", state.State)
+	}
+	if err := state.Validate(); err != nil {
+		return nil, fmt.Errorf("validate native low-risk authority: %w", err)
+	}
+	if state.RiskLevel != RiskLow || assessment.Level != RiskLow || len(state.SelectedLenses) != 0 ||
+		len(state.LensResults) != 0 || len(state.Findings) != 0 || len(state.FixFindingIDs) != 0 ||
+		state.ProposedCorrectionLines != nil || state.ActualCorrectionLines != nil ||
+		len(state.CorrectionAttempts) != 0 || state.CumulativeCorrectionLines != 0 ||
+		state.FixDeltaHash != EmptyFixDeltaHash || !snapshotsEqual(state.InitialSnapshot, state.CurrentSnapshot) {
+		return nil, errors.New("native low-risk verification requires an uncorrected zero-lens low-risk authority")
+	}
+	if assessment.ChangedLines != state.OriginalChangedLines {
+		return nil, errors.New("native low-risk verification changed-line count does not match frozen authority")
+	}
+	preimage := struct {
+		Schema               string         `json:"schema"`
+		LineageID            string         `json:"lineage_id"`
+		Generation           int            `json:"generation"`
+		Snapshot             Snapshot       `json:"snapshot"`
+		PolicyHash           string         `json:"policy_hash"`
+		Risk                 RiskAssessment `json:"risk"`
+		SelectedLenses       []string       `json:"selected_lenses"`
+		CorrectionBudget     int            `json:"correction_budget"`
+		OriginalChangedLines int            `json:"original_changed_lines"`
+		FixDeltaHash         string         `json:"fix_delta_hash"`
+	}{
+		Schema: NativeLowRiskVerificationDomain, LineageID: state.LineageID, Generation: state.Generation,
+		Snapshot: state.InitialSnapshot, PolicyHash: state.PolicyHash, Risk: assessment,
+		SelectedLenses: []string{}, CorrectionBudget: state.CorrectionBudget,
+		OriginalChangedLines: state.OriginalChangedLines, FixDeltaHash: state.FixDeltaHash,
+	}
+	payload, err := json.Marshal(preimage)
+	if err != nil {
+		return nil, fmt.Errorf("marshal native low-risk verification evidence: %w", err)
+	}
+	return append([]byte(NativeLowRiskVerificationDomain+"\x00"), payload...), nil
 }
 
 func (receipt CompactReceipt) Validate() error {
@@ -762,7 +836,11 @@ func ParseCompactReceipt(payload []byte) (CompactReceipt, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return CompactReceipt{}, errors.New("multiple JSON values in compact review receipt")
 	}
-	return receipt, receipt.Validate()
+	if err := receipt.Validate(); err != nil {
+		return CompactReceipt{}, err
+	}
+	normalizeCompactReceipt(&receipt)
+	return receipt, nil
 }
 
 func WriteCompactReceiptAtomic(path string, receipt CompactReceipt) error {
@@ -773,7 +851,7 @@ func WriteCompactReceiptAtomic(path string, receipt CompactReceipt) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(path, append(payload, '\n'), 0o644)
+	return publishImmutable(path, append(payload, '\n'), 0o644)
 }
 
 func compactStateEqual(left, right CompactState) bool {
@@ -831,7 +909,19 @@ func normalizeCompactState(state *CompactState) {
 }
 
 func compactReceiptEqual(left, right CompactReceipt) bool {
+	normalizeCompactReceipt(&left)
+	normalizeCompactReceipt(&right)
 	return reflect.DeepEqual(left, right)
+}
+func CompactReceiptEqual(left, right CompactReceipt) bool { return compactReceiptEqual(left, right) }
+
+func normalizeCompactReceipt(receipt *CompactReceipt) {
+	if len(receipt.SelectedLenses) == 0 {
+		receipt.SelectedLenses = []string{}
+	}
+	if len(receipt.ResolvedFindingIDs) == 0 {
+		receipt.ResolvedFindingIDs = nil
+	}
 }
 
 func CompactReceiptSchemaOf(payload []byte) string {

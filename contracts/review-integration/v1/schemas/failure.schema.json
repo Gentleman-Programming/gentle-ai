@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/failure.schema.json",
+  "title": "Gentle AI negotiated review failure",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "operation",
+    "phase",
+    "code",
+    "message",
+    "mutation_outcome",
+    "authority_applicability",
+    "retry_safe",
+    "replayability",
+    "required_inputs",
+    "next_action"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.failure/v1"},
+    "contract": {"const": "gentle-ai.review-integration/v1"},
+    "operation": {
+      "enum": ["review.capabilities", "review.start", "review.status", "review.finalize", "review.validate", "review.bind_sdd"]
+    },
+    "phase": {"enum": ["preflight", "pre_native", "native_running", "native_committed", "reconciliation"]},
+    "code": {"type": "string", "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"},
+    "message": {"type": "string", "minLength": 1, "maxLength": 240, "pattern": "^[^\\r\\n]+$"},
+    "mutation_outcome": {"enum": ["not_started", "unknown", "committed"]},
+    "authority_applicability": {"enum": ["current_target", "unrelated", "ambiguous", "corrupted", "not_evaluated"]},
+    "retry_safe": {"type": "boolean"},
+    "replayability": {"enum": ["not_replayable", "exact_replay_safe", "status_required", "manual_action_required"]},
+    "lineage_id": {"type": "string", "maxLength": 128, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "request_digest": {"$ref": "#/$defs/sha256"},
+    "required_inputs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "lineage_id",
+          "change",
+          "expected_binding_revision",
+          "predecessor_lineage_id",
+          "expected_predecessor_revision",
+          "successor_lineage_id",
+          "disposition",
+          "reason",
+          "actor"
+        ]
+      }
+    },
+    "next_action": {"enum": ["correct_request", "retry", "retry_with_bounded_backoff", "review.status", "review.finalize", "review.bind_sdd", "explicit-maintainer-action", "stop"]},
+    "cause_category": {"enum": ["inventory_io_or_layout", "lock_ambiguous", "reset_residue", "record_or_graph_invalid", "inventory_incomplete"]},
+    "context": {"$ref": "#/$defs/gate_context"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "tree": {"type": "string", "pattern": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$"},
+    "target_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_tree", "paths_digest"],
+      "properties": {
+        "candidate_tree": {"$ref": "#/$defs/tree"},
+        "paths_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "scope_change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expected",
+        "actual",
+        "differing_path_count",
+        "differing_paths_digest",
+        "predecessor_lineage_id",
+        "predecessor_revision",
+        "recovery_operation",
+        "recovery_required_inputs"
+      ],
+      "properties": {
+        "expected": {"$ref": "#/$defs/target_evidence"},
+        "actual": {"$ref": "#/$defs/target_evidence"},
+        "differing_path_count": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "differing_paths_digest": {"$ref": "#/$defs/sha256"},
+        "predecessor_lineage_id": {"type": "string", "maxLength": 128, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+        "predecessor_revision": {"$ref": "#/$defs/sha256"},
+        "recovery_operation": {"const": "review.recover"},
+        "recovery_required_inputs": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "prefixItems": [
+            {"const": "predecessor_lineage_id"},
+            {"const": "expected_predecessor_revision"},
+            {"const": "successor_lineage_id"},
+            {"const": "disposition"},
+            {"const": "reason"},
+            {"const": "actor"}
+          ],
+          "items": false
+        }
+      }
+    },
+    "gate_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope_change"
+      ],
+      "properties": {
+        "scope_change": {"$ref": "#/$defs/scope_change"}
+      }
+    }
+  }
+}

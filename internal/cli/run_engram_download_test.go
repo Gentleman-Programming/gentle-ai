@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -599,7 +600,11 @@ func TestRunInstallMacOSEngramStillUsesBrew(t *testing.T) {
 func TestRunInstallBetaEngramUsesMainGoInstallAndInstalledBinary(t *testing.T) {
 	home := t.TempDir()
 	gobin := filepath.Join(home, "go-bin")
-	betaEngram := filepath.Join(gobin, "engram")
+	binaryName := "engram"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	betaEngram := filepath.Join(gobin, binaryName)
 
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath

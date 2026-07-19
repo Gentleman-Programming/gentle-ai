@@ -32,7 +32,7 @@ func TestRenderTriggerRules_UsesBoundedReceiptLifecycle(t *testing.T) {
 		"tag targets the current immutable `origin/main` SHA",
 		"Major and post-incident releases require explicit extraordinary review",
 		"missing → start explicitly after implementation/post-apply",
-		"scope-changed → create a new lineage",
+		"scope-changed → require explicit maintainer action",
 		"invalidated → require explicit maintainer action",
 		"escalated → stop",
 	} {
@@ -41,6 +41,9 @@ func TestRenderTriggerRules_UsesBoundedReceiptLifecycle(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
+		"scope-changed → create a new lineage",
+		"scope-changed → start a review",
+		"scope-changed → allocate a budget",
 		"run the full 4R fan-out",
 		"run exactly ONE lens selected by the risk table",
 		"run `judgment-day`",
@@ -91,7 +94,9 @@ func TestRenderTriggerRules_TriageTiers(t *testing.T) {
 		"**Low**",
 		"**Medium**",
 		"exactly ONE dominant-risk lens",
+		"pure human documentation above 400 authored changed lines is pinned to `review-readability`",
 		"**High**",
+		"more than 400 authored changed lines in code, configuration, prompts, agent rules, workflows, runtime instruction docs, mixed content, or active content",
 		"four initial 4R lens sweeps",
 		"Generated goldens are excluded from the authored threshold but remain in snapshot identity",
 		"Pre-commit, pre-push, and pre-PR validate the same content-bound receipt",

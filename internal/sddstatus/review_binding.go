@@ -23,6 +23,16 @@ const reviewBindingSchema = "gentle-ai.sdd-review-binding/v1"
 var reviewBindingChange = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var reviewBindingHash = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 var bindingFinalAuthorizationHook = func() {}
+var bindingRename = reviewtransaction.ReplaceFileAtomic
+var syncBindingDirectory = reviewtransaction.SyncReviewDirectory
+
+type ReviewBindingPublicationError struct{ Cause error }
+
+func (err *ReviewBindingPublicationError) Error() string {
+	return fmt.Sprintf("SDD review binding publication requires exact replay: %v", err.Cause)
+}
+
+func (err *ReviewBindingPublicationError) Unwrap() error { return err.Cause }
 
 type ReviewBinding struct {
 	Schema            string                        `json:"schema"`
@@ -51,6 +61,14 @@ func BindApprovedReview(ctx context.Context, repo, change, lineage, expected str
 		return ReviewBinding{}, err
 	}
 	record, err := store.Load()
+	if errors.Is(err, os.ErrNotExist) {
+		legacy, legacyErr := reviewtransaction.AuthoritativeStore(ctx, root, lineage)
+		if legacyErr == nil {
+			if _, legacyLoadErr := legacy.LoadChain(); legacyLoadErr == nil {
+				return ReviewBinding{}, reviewtransaction.NewLegacyReadOnlyError("review/bind-sdd", lineage)
+			}
+		}
+	}
 	if err != nil || record.State.State != reviewtransaction.StateApproved {
 		return ReviewBinding{}, errors.New("explicit compact authority is not approved")
 	}
@@ -364,6 +382,9 @@ func writeBinding(path, expected string, binding ReviewBinding) error {
 		}
 		current = old.Revision
 		if current == binding.Revision {
+			if err := syncBindingDirectory(filepath.Dir(path)); err != nil {
+				return &ReviewBindingPublicationError{Cause: fmt.Errorf("sync SDD review binding directory: %w", err)}
+			}
 			return nil
 		}
 	} else if !os.IsNotExist(err) {
@@ -380,6 +401,7 @@ func writeBinding(path, expected string, binding ReviewBinding) error {
 	if err != nil {
 		return err
 	}
+	defer os.Remove(temp.Name())
 	if _, err = temp.Write(payload); err == nil {
 		err = temp.Sync()
 	}
@@ -390,5 +412,11 @@ func writeBinding(path, expected string, binding ReviewBinding) error {
 		_ = os.Remove(temp.Name())
 		return err
 	}
-	return os.Rename(temp.Name(), path)
+	if err := bindingRename(temp.Name(), path); err != nil {
+		return err
+	}
+	if err := syncBindingDirectory(filepath.Dir(path)); err != nil {
+		return &ReviewBindingPublicationError{Cause: fmt.Errorf("sync SDD review binding directory: %w", err)}
+	}
+	return nil
 }

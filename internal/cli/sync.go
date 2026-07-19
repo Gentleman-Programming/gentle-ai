@@ -31,6 +31,24 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	opencodeagent "github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
+	"github.com/gentleman-programming/gentle-ai/internal/components/permissions"
+	"github.com/gentleman-programming/gentle-ai/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/internal/state"
+	"github.com/gentleman-programming/gentle-ai/internal/verify"
 )
 
 // SyncFlags holds parsed CLI flags for the sync command.
@@ -923,8 +941,25 @@ func (s componentSyncStep) Run() error {
 		}
 		return nil
 
+	case model.ComponentClaudeTheme:
+		for _, adapter := range adapters {
+			res, err := theme.InjectClaudeTheme(s.homeDir, adapter)
+			if err != nil {
+				return fmt.Errorf("sync Claude theme for %q: %w", adapter.Agent(), err)
+			}
+			s.countChanged(boolToInt(res.Changed), res.Files...)
+		}
+		return nil
+
+	case model.ComponentOpenCodeGentleLogo:
+		res, err := opencodeplugin.Install(s.homeDir, model.OpenCodePluginGentleLogo)
+		if err != nil {
+			return fmt.Errorf("sync OpenCode Gentle Logo plugin: %w", err)
+		}
+		s.countChanged(boolToInt(res.Changed), res.Files...)
+		return nil
+
 	default:
-		// Persona and any unknown components are out of sync scope.
 		return fmt.Errorf("component %q is not supported in sync runtime", s.component)
 	}
 }
@@ -1400,7 +1435,7 @@ func restorePersistedCommunityTools(homeDir string, selection *model.Selection, 
 func hasManagedPiCodeGraphManifest(homeDir string) bool {
 	path := filepath.Join(homeDir, ".gentle-ai", "pi-codegraph.json")
 	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+	if err != nil || !info.Mode().IsRegular() || runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		return false
 	}
 	data, err := os.ReadFile(path)

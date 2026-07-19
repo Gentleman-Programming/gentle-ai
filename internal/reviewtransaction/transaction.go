@@ -351,6 +351,10 @@ func LensResultHash(result LensResult) string {
 }
 
 func validateLensResult(result LensResult) (LensResult, error) {
+	return canonicalLensResult(result, false)
+}
+
+func canonicalLensResult(result LensResult, allowMissingSevereLocation bool) (LensResult, error) {
 	result.Lens = strings.TrimSpace(result.Lens)
 	if !isSupportedLens(result.Lens) {
 		return LensResult{}, fmt.Errorf("unknown review lens %q", result.Lens)
@@ -377,7 +381,7 @@ func validateLensResult(result LensResult) (LensResult, error) {
 		for proofIndex := range finding.ProofRefs {
 			finding.ProofRefs[proofIndex] = strings.TrimSpace(finding.ProofRefs[proofIndex])
 		}
-		if err := validateStructuredFinding(finding); err != nil {
+		if err := validateLensFinding(finding, allowMissingSevereLocation); err != nil {
 			return LensResult{}, fmt.Errorf("lens result finding[%d]: %w", index, err)
 		}
 		if finding.Lens != wantFindingLens {
@@ -407,6 +411,19 @@ func validateLensResult(result LensResult) (LensResult, error) {
 // reviewer result without mutating a transaction.
 func CanonicalLensResult(result LensResult) (LensResult, error) {
 	return validateLensResult(result)
+}
+
+// CanonicalCompactLensResult preserves malformed severe findings so compact
+// native routing can downgrade unsupported candidate-causality claims.
+func CanonicalCompactLensResult(result LensResult) (LensResult, error) {
+	return canonicalLensResult(result, true)
+}
+
+func validateLensFinding(finding Finding, allowMissingSevereLocation bool) error {
+	if allowMissingSevereLocation && isSevereSeverity(finding.Severity) && finding.Location == "" {
+		finding.Location = "<missing>"
+	}
+	return validateStructuredFinding(finding)
 }
 
 func (transaction *Transaction) RecordJudgeProofs(proofs []JudgeProof, agreementHash string) error {
@@ -1251,7 +1268,7 @@ func validateSelectedLenses(mode Mode, riskLevel RiskLevel, lenses []string) ([]
 		}
 		return nil, nil
 	}
-	validated := append([]string(nil), lenses...)
+	validated := append([]string{}, lenses...)
 	want := -1
 	switch riskLevel {
 	case RiskLow:
@@ -1773,7 +1790,7 @@ func equalStrings(left, right []string) bool {
 
 func isConcreteEvidence(value string) bool {
 	trimmed := strings.TrimSpace(value)
-	if trimmed == "" || strings.ContainsAny(trimmed, "{}<>") {
+	if trimmed == "" {
 		return false
 	}
 	switch strings.ToLower(trimmed) {

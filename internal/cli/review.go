@@ -88,7 +88,9 @@ type ReviewBundleResult struct {
 }
 
 type ReviewGateDeniedError struct {
-	Result reviewtransaction.GateResult
+	Result  reviewtransaction.GateResult
+	Context reviewtransaction.GateContext
+	Cause   error
 }
 
 func RunReviewStep(args []string, stdout io.Writer) error {
@@ -117,12 +119,18 @@ func RunReviewStep(args []string, stdout io.Writer) error {
 	if _, err := store.LoadChain(); err != nil {
 		return fmt.Errorf("load authoritative review transaction: %w", err)
 	}
-	return fmt.Errorf("%w: review-step cannot mutate shipped v1 authority; use gentle-ai review finalize", reviewtransaction.ErrLegacyReadOnly)
+	attemptedOperation := strings.TrimSpace(*operation)
+	if !strings.HasPrefix(attemptedOperation, "review/") {
+		attemptedOperation = "review/" + attemptedOperation
+	}
+	return fmt.Errorf("%w: review-step cannot mutate shipped v1 authority; use gentle-ai review finalize", reviewtransaction.NewLegacyReadOnlyError(attemptedOperation, *lineage))
 }
 
 func (err ReviewGateDeniedError) Error() string {
 	return fmt.Sprintf("review lifecycle gate denied: %s", err.Result)
 }
+
+func (err ReviewGateDeniedError) Unwrap() error { return err.Cause }
 
 type repeatedString []string
 
@@ -160,7 +168,7 @@ func RunReviewStart(args []string, stdout io.Writer) error {
 	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*policyFile) == "" {
 		return errors.New("review-start requires --cwd, --lineage, and --policy-file")
 	}
-	return fmt.Errorf("%w: review-start cannot create v1 authority; use gentle-ai review start", reviewtransaction.ErrLegacyReadOnly)
+	return fmt.Errorf("%w: review-start cannot create v1 authority; use gentle-ai review start", reviewtransaction.NewLegacyReadOnlyError("review/start", *lineage))
 }
 
 func RunReviewResume(args []string, stdout io.Writer) error {
@@ -220,7 +228,13 @@ func RunReviewBundleExport(args []string, stdout io.Writer) error {
 	}
 	compact, compactErr := reviewtransaction.CompactAuthoritativeStore(context.Background(), *cwd, *lineage)
 	if compactErr == nil {
-		if transport, loadErr := compact.ExportTransport(); loadErr == nil {
+		transport, loadErr := compact.ExportTransport()
+		if errors.Is(loadErr, reviewtransaction.ErrHistoricalCompatReadOnly) {
+			// A v2-only historical lineage has no legacy chain; the fallback
+			// would surface an unrelated missing-chain error.
+			return fmt.Errorf("export compact review transport: %w", loadErr)
+		}
+		if loadErr == nil {
 			legacy, legacyErr := reviewtransaction.AuthoritativeStore(context.Background(), *cwd, *lineage)
 			if legacyErr == nil {
 				if _, legacyLoadErr := legacy.LoadChain(); legacyLoadErr == nil {
@@ -369,6 +383,10 @@ func RunReviewBundleImport(args []string, stdout io.Writer) error {
 }
 
 func RunReviewValidate(args []string, stdout io.Writer) error {
+	return runReviewValidate(context.Background(), args, stdout)
+}
+
+func runReviewValidate(ctx context.Context, args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review-validate", stdout, "Validate a receipt using either --request or native authority flags. Explicit and native modes are mutually exclusive.")
 	cwd := flags.String("cwd", "", "repository root")
 	receiptPath := flags.String("receipt", "", "review receipt JSON")
@@ -420,7 +438,7 @@ func RunReviewValidate(args []string, stdout io.Writer) error {
 			return err
 		}
 		intended = append(intended, manifestPaths...)
-		evaluation := reviewtransaction.EvaluateCompactGate(context.Background(), *cwd, compactReceipt, reviewtransaction.NativeGateRequestInput{
+		evaluation := reviewtransaction.EvaluateCompactGate(ctx, *cwd, compactReceipt, reviewtransaction.NativeGateRequestInput{
 			Gate: reviewtransaction.GateKind(*gate), LineageID: *lineage, BundleArtifact: *bundlePath,
 			PolicyArtifact: *policyPath, LedgerArtifact: *ledgerPath, FixDeltaArtifact: *fixDeltaPath, EvidenceArtifact: *evidencePath,
 			IntendedUntracked: []string(intended), BaseRef: *baseRef, PrePRCIAttestation: *ciAttestation,
@@ -435,7 +453,7 @@ func RunReviewValidate(args []string, stdout io.Writer) error {
 			return err
 		}
 		if !result.Allowed {
-			return ReviewGateDeniedError{Result: result.Result}
+			return ReviewGateDeniedError{Result: result.Result, Context: result.Context}
 		}
 		return nil
 	}
@@ -473,7 +491,7 @@ func RunReviewValidate(args []string, stdout io.Writer) error {
 			return err
 		}
 		intended = append(intended, manifestPaths...)
-		request, err = reviewtransaction.BuildNativeGateRequest(context.Background(), *cwd, reviewtransaction.NativeGateRequestInput{
+		request, err = reviewtransaction.BuildNativeGateRequest(ctx, *cwd, reviewtransaction.NativeGateRequestInput{
 			Gate: reviewtransaction.GateKind(*gate), LineageID: *lineage, BundleArtifact: *bundlePath,
 			PolicyArtifact: *policyPath, LedgerArtifact: *ledgerPath, FixDeltaArtifact: *fixDeltaPath, EvidenceArtifact: *evidencePath,
 			IntendedUntracked: []string(intended), BaseRef: *baseRef, PrePRCIAttestation: *ciAttestation,
@@ -489,7 +507,7 @@ func RunReviewValidate(args []string, stdout io.Writer) error {
 			}
 		}
 	}
-	evaluation := reviewtransaction.EvaluateNativeGate(context.Background(), *cwd, receipt, request)
+	evaluation := reviewtransaction.EvaluateNativeGate(ctx, *cwd, receipt, request)
 	result := ReviewValidateResult{
 		Schema: ReviewValidateSchema, Result: evaluation.Result, Allowed: evaluation.Result == reviewtransaction.GateAllow,
 		Action: reviewGateAction(evaluation.Result), Reason: evaluation.Reason, Context: evaluation.Context,
@@ -498,7 +516,7 @@ func RunReviewValidate(args []string, stdout io.Writer) error {
 		return err
 	}
 	if !result.Allowed {
-		return ReviewGateDeniedError{Result: result.Result}
+		return ReviewGateDeniedError{Result: result.Result, Context: result.Context}
 	}
 	return nil
 }
@@ -539,7 +557,7 @@ func reviewGateAction(result reviewtransaction.GateResult) string {
 	case reviewtransaction.GateAllow:
 		return "continue"
 	case reviewtransaction.GateScopeChanged:
-		return "create-new-lineage"
+		return "explicit-maintainer-action"
 	case reviewtransaction.GateEscalated:
 		return "stop"
 	default:

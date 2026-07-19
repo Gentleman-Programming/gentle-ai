@@ -324,6 +324,43 @@ func TestOrdinaryBoundedCanonicalizesModelLensOutputInGo(t *testing.T) {
 	}
 }
 
+func TestCanonicalLensResultAcceptsTechnicalPunctuationAndRejectsExactSentinels(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "git tree peel", value: "HEAD^{tree}"},
+		{name: "empty object notation", value: "{}"},
+		{name: "symbolic ref", value: "<A>"},
+		{name: "transition arrow", value: "candidate => base"},
+		{name: "blank", value: "   ", wantErr: true},
+		{name: "not applicable", value: "n/a", wantErr: true},
+		{name: "none", value: "none", wantErr: true},
+		{name: "todo", value: "TODO", wantErr: true},
+		{name: "to be determined", value: "tbd", wantErr: true},
+		{name: "generic pass", value: "pass", wantErr: true},
+		{name: "generic passed", value: "PASSED", wantErr: true},
+		{name: "generic success", value: "success", wantErr: true},
+		{name: "placeholder", value: "placeholder", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := CanonicalLensResult(LensResult{
+				Lens: LensReliability,
+				Findings: []Finding{{
+					Location: "internal/example.go:12", Severity: "CRITICAL", Claim: "candidate behavior differs",
+					ProofRefs: []string{tt.value},
+				}},
+				Evidence: []string{tt.value},
+			})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("CanonicalLensResult(%q) error = %v, wantErr %v", tt.value, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestStoreRejectsForgedIncompleteLensFreezeBeforeAppend(t *testing.T) {
 	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
 	tx, err := NewTransaction(boundedStart(t, []string{LensReliability}))

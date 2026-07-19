@@ -398,13 +398,13 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 				return m
 			},
 			forwardActions: []flowAction{
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                       // Preset → Claude picker
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                       // Claude preset → Kiro picker
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                       // Kiro preset → Codex picker
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                       // Codex preset → SDDMode
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                       // SDDMode single → StrictTDD
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                       // StrictTDD → OpenCodePlugins
-				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: continuePluginsCursor, setCursor: true},       // OpenCodePlugins → DependencyTree
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Preset → Claude picker
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Claude preset → Kiro picker
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Kiro preset → Codex picker
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Codex preset → SDDMode
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // SDDMode single → StrictTDD
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // StrictTDD → OpenCodePlugins
+				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: continuePluginsCursor, setCursor: true}, // OpenCodePlugins → DependencyTree
 			},
 			forwardScreens: []Screen{
 				ScreenClaudeModelPicker,
@@ -445,11 +445,11 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 				return m
 			},
 			forwardActions: []flowAction{
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Preset → Claude picker
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Claude preset → Kiro picker
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Kiro preset → Codex picker
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Codex preset → SDDMode
-				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: sddMultiCursor(t), setCursor: true},     // SDDMode multi → ModelPicker
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                             // Preset → Claude picker
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                             // Claude preset → Kiro picker
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                             // Kiro preset → Codex picker
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                             // Codex preset → SDDMode
+				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: sddMultiCursor(t), setCursor: true}, // SDDMode multi → ModelPicker
 				{
 					key:       tea.KeyMsg{Type: tea.KeyEnter},
 					cursor:    len(screens.ModelPickerRows()),

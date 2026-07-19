@@ -1,0 +1,12 @@
+{
+  "schema": "gentle-ai.review-integration.operation/v1",
+  "contract": "gentle-ai.review-integration/v1",
+  "operation": "review.finalize",
+  "result": {
+    "operation": "review/finalize",
+    "lineage_id": "review-operation-fixture",
+    "state": "approved",
+    "action": "validate delivery with gentle-ai review validate --gate <gate>",
+    "store_revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

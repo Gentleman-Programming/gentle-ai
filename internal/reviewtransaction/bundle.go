@@ -294,7 +294,7 @@ func installContentAddressedFile(path string, payload []byte) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	if err := os.Link(tempPath, path); err != nil {
+	if err := publishNoReplace(tempPath, path); err != nil {
 		if !os.IsExist(err) {
 			return err
 		}

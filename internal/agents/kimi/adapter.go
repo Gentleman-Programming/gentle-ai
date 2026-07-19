@@ -1,8 +1,8 @@
 // Package kimi provides Kimi Code CLI agent integration.
 //
 // Integration Note:
-// This adapter natively relies on Astral's `uv` package manager 
-// (`uv tool install kimi-cli`) to securely download and run Kimi CLI, 
+// This adapter natively relies on Astral's `uv` package manager
+// (`uv tool install kimi-cli`) to securely download and run Kimi CLI,
 // avoiding upstream's pipe-to-shell bootstrap scripts.
 package kimi
 
@@ -243,7 +243,6 @@ Skills root:
   "%s"`, gentlemanYaml, skillsRoot)
 }
 
-
 // --- Helpers ---
 
 func defaultStat(path string) statResult {
@@ -272,7 +271,7 @@ func binaryName() string {
 }
 
 // BootstrapTemplate ensures the base KIMI.md template exists in the agent's config directory.
-// It is used by the installation pipeline to guarantee that modular components 
+// It is used by the installation pipeline to guarantee that modular components
 // (SDD, Engram) can be included even if the Persona component is not installed.
 func (a *Adapter) BootstrapTemplate(homeDir string) error {
 	kimiDir := a.GlobalConfigDir(homeDir)
@@ -281,9 +280,9 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 	}
 
 	skeletonPath := a.SystemPromptFile(homeDir)
-	
+
 	// We always write the skeleton to ensure any missing includes are restored.
-	// Since KIMI.md is the 'router' for modular Jinja components, it should 
+	// Since KIMI.md is the 'router' for modular Jinja components, it should
 	// remain managed by the framework.
 	content := assets.MustRead("kimi/KIMI.md")
 	if _, err := filemerge.WriteFileAtomic(skeletonPath, []byte(content), 0o644); err != nil {
@@ -301,5 +300,3 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 
 	return nil
 }
-
-

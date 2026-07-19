@@ -1,12 +1,15 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
-func TestInvalidatePristineLegacyAndCompactAreTerminalAndIdempotent(t *testing.T) {
+func TestInvalidatePristineFencesLegacyReadOnlyAndKeepsCompactTerminal(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 
@@ -27,18 +30,21 @@ func TestInvalidatePristineLegacyAndCompactAreTerminalAndIdempotent(t *testing.T
 		t.Fatal(err)
 	}
 	legacy, _ = AuthoritativeStore(context.Background(), repo, transaction.LineageID)
-	invalidated, err := legacy.InvalidatePristine(genesis, "operator abandoned", snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if retry, err := legacy.InvalidatePristine(genesis, "operator abandoned", snapshot); err != nil || retry != invalidated {
-		t.Fatalf("legacy exact retry = %q, %v", retry, err)
-	}
-	if _, err := legacy.InvalidatePristine(genesis, "different reason", snapshot); !errors.Is(err, ErrConcurrentUpdate) {
-		t.Fatalf("legacy conflicting retry error = %v", err)
-	}
-	if record, _, err := legacy.Load(); err != nil || record.Transaction.State != StateInvalidated || record.Transaction.InvalidationReason != "operator abandoned" {
-		t.Fatalf("legacy invalidation = %#v, %v", record.Transaction, err)
+	beforeHead, beforeEvent := readLegacyAuthorityBytes(t, legacy, genesis)
+	for attempt := 0; attempt < 2; attempt++ {
+		fresh, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = fresh.InvalidatePristine(genesis, "operator abandoned", snapshot)
+		var typed *LegacyReadOnlyError
+		if !errors.Is(err, ErrLegacyReadOnly) || !errors.As(err, &typed) || typed.Code() != LegacyReadOnlyErrorCode || typed.Operation != "review/invalidate" || typed.LineageID != transaction.LineageID {
+			t.Fatalf("legacy invalidation error = %#v", err)
+		}
+		afterHead, afterEvent := readLegacyAuthorityBytes(t, fresh, genesis)
+		if !bytes.Equal(afterHead, beforeHead) || !bytes.Equal(afterEvent, beforeEvent) {
+			t.Fatal("legacy invalidation changed authority bytes")
+		}
 	}
 
 	compact := newCompactTestState(t, repo, "invalidate-compact")
@@ -50,7 +56,7 @@ func TestInvalidatePristineLegacyAndCompactAreTerminalAndIdempotent(t *testing.T
 	if err := compact.Invalidate("operator abandoned"); err != nil {
 		t.Fatal(err)
 	}
-	invalidated, err = compactStore.Replace(revision, "review/invalidate", compact)
+	invalidated, err := compactStore.Replace(revision, "review/invalidate", compact)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,6 +66,19 @@ func TestInvalidatePristineLegacyAndCompactAreTerminalAndIdempotent(t *testing.T
 	if _, err := compact.Receipt(); err == nil {
 		t.Fatal("invalidated compact review produced a receipt")
 	}
+}
+
+func readLegacyAuthorityBytes(t *testing.T, store Store, revision string) ([]byte, []byte) {
+	t.Helper()
+	head, err := os.ReadFile(filepath.Join(store.Dir, "HEAD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := os.ReadFile(filepath.Join(store.Dir, "events", revision[len("sha256:"):]+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return head, event
 }
 
 func TestInvalidatePristineRejectsLiveCandidateDriftWithoutMutation(t *testing.T) {

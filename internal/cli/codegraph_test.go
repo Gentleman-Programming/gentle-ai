@@ -27,9 +27,7 @@ func TestRunCodeGraphInitValidatesCanonicalProjectAndPropagatesInitFailure(t *te
 		codeGraphTempDir = originalTemp
 	})
 	codeGraphGitTopLevel = func(path string) (string, error) {
-		if path != root {
-			t.Fatalf("git root path = %q, want %q", path, root)
-		}
+		assertSameFile(t, path, root)
 		return root, nil
 	}
 	codeGraphUserHomeDir = func() (string, error) { return filepath.Join(workspace, "home"), nil }
@@ -44,10 +42,11 @@ func TestRunCodeGraphInitValidatesCanonicalProjectAndPropagatesInitFailure(t *te
 	if err := RunCodeGraph([]string{"init", "--cwd", root}, &output); err != nil {
 		t.Fatalf("RunCodeGraph() error = %v", err)
 	}
-	if got, want := strings.Join(called, " "), "codegraph init "+root; got != want {
-		t.Fatalf("command = %q, want %q", got, want)
+	if len(called) != 3 || called[0] != "codegraph" || called[1] != "init" {
+		t.Fatalf("command = %v, want codegraph init <root>", called)
 	}
-	if !strings.Contains(output.String(), root) {
+	assertSameFile(t, called[2], root)
+	if !strings.Contains(output.String(), called[2]) {
 		t.Fatalf("output = %q, want canonical root", output.String())
 	}
 
@@ -95,7 +94,8 @@ func TestRunCodeGraphInitRejectsUnsafeOrUnrecognizedRoots(t *testing.T) {
 	codeGraphTempDir = func() string { return temp }
 	codeGraphInit = func(string, ...string) error { t.Fatal("codegraph init must not run for rejected roots"); return nil }
 
-	for _, path := range []string{"", string(filepath.Separator), home, temp, outside, symlink, filepath.Join(workspace, "not-a-project")} {
+	volumeRoot := filepath.VolumeName(workspace) + string(filepath.Separator)
+	for _, path := range []string{"", volumeRoot, home, temp, outside, symlink, filepath.Join(workspace, "not-a-project")} {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			if err := RunCodeGraph([]string{"init", "--cwd", path}, &bytes.Buffer{}); err == nil {
 				t.Fatalf("RunCodeGraph(%q) error = nil, want rejection", path)
@@ -126,15 +126,27 @@ func TestRunCodeGraphInitAcceptsProjectBelowHome(t *testing.T) {
 	codeGraphUserHomeDir = func() (string, error) { return home, nil }
 	codeGraphTempDir = func() string { return filepath.Join(workspace, "temporary") }
 
-	called := false
+	var calledRoot string
 	codeGraphInit = func(name string, args ...string) error {
-		called = name == "codegraph" && len(args) == 2 && args[0] == "init" && args[1] == root
+		if name == "codegraph" && len(args) == 2 && args[0] == "init" {
+			calledRoot = args[1]
+		}
 		return nil
 	}
 	if err := RunCodeGraph([]string{"init", "--cwd", root}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("RunCodeGraph() error = %v", err)
 	}
-	if !called {
+	if calledRoot == "" {
 		t.Fatal("codegraph init was not called for a project below HOME")
+	}
+	assertSameFile(t, calledRoot, root)
+}
+
+func assertSameFile(t *testing.T, got, want string) {
+	t.Helper()
+	gotInfo, gotErr := os.Stat(got)
+	wantInfo, wantErr := os.Stat(want)
+	if gotErr != nil || wantErr != nil || !os.SameFile(gotInfo, wantInfo) {
+		t.Fatalf("paths %q and %q do not identify the same file: %v, %v", got, want, gotErr, wantErr)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -640,6 +641,57 @@ func TestComponentSyncStepRunsGGAInjectWithoutBinaryInstall(t *testing.T) {
 	}
 }
 
+func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:     []string{"claude-code", "opencode"},
+		SelectionConfigured: true,
+		Components: []model.ComponentID{
+			model.ComponentClaudeTheme,
+			model.ComponentOpenCodeGentleLogo,
+		},
+		Persona: "neutral",
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
+	})
+
+	wantFiles := []string{
+		filepath.Join(home, ".claude", "themes", "gentleman.json"),
+		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
+		filepath.Join(home, ".config", "opencode", "tui.json"),
+	}
+
+	first, err := RunSync([]string{"--agents", "claude-code,opencode"})
+	if err != nil {
+		t.Fatalf("RunSync() first error = %v", err)
+	}
+	if !reflect.DeepEqual(first.ChangedFiles, wantFiles) {
+		t.Fatalf("first ChangedFiles = %#v, want %#v", first.ChangedFiles, wantFiles)
+	}
+	for _, path := range wantFiles {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("managed visual component file %q was not refreshed: %v", path, err)
+		}
+	}
+
+	second, err := RunSync([]string{"--agents", "claude-code,opencode"})
+	if err != nil {
+		t.Fatalf("RunSync() second error = %v", err)
+	}
+	if !second.NoOp || second.FilesChanged != 0 || len(second.ChangedFiles) != 0 {
+		t.Fatalf("second sync = NoOp %v, FilesChanged %d, ChangedFiles %#v; want idempotent no-op", second.NoOp, second.FilesChanged, second.ChangedFiles)
+	}
+}
+
 func TestCodeGraphGuidanceSyncStepRefreshesOldMarkerWhenConfigured(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
@@ -872,6 +924,9 @@ func TestCodeGraphGuidanceSyncStepPreservesBrokenSymlinkChain(t *testing.T) {
 }
 
 func TestRestoreSyncFilesNeverWidensZeroMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("exact zero-mode restoration is a POSIX permission contract")
+	}
 	tests := []struct {
 		name  string
 		setup func(t *testing.T) (string, syncFileSnapshot)

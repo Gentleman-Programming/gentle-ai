@@ -1,6 +1,8 @@
 package communitytool
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -8,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
@@ -16,6 +19,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if mode := os.Getenv("GENTLE_AI_CODEGRAPH_TEST_HELPER"); mode != "" {
+		runCodeGraphTestHelper(mode)
+		os.Exit(0)
+	}
 	codeGraphPackageLookPath = func(name string) (string, error) {
 		if name == "npm" {
 			return "/bin/npm", nil
@@ -44,6 +51,25 @@ func TestMain(m *testing.M) {
 		}, nil
 	}
 	os.Exit(m.Run())
+}
+
+func runCodeGraphTestHelper(mode string) {
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		request := scanner.Text()
+		if mode == "stall-initialize" || mode == "stall-tools-list" && strings.Contains(request, `"id":2`) {
+			time.Sleep(24 * time.Hour)
+		}
+		response := os.Getenv("GENTLE_AI_CODEGRAPH_TEST_RESPONSE")
+		if response == "" && strings.Contains(request, `"id":1`) {
+			response = `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}`
+		} else if response == "" && strings.Contains(request, `"id":2`) {
+			response = `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"codegraph_explore","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"maxFiles":{"type":"integer"},"projectPath":{"type":"string"}},"required":["query"]}}]}}`
+		}
+		if response != "" {
+			fmt.Fprintln(os.Stdout, response)
+		}
+	}
 }
 
 func TestDefinitionsIncludesCodeGraph(t *testing.T) {
@@ -220,9 +246,13 @@ func TestInstallWithHomeReportsWorkspaceChildAndOwnershipTarget(t *testing.T) {
 	if result.PiCodeGraph == nil || len(result.PiCodeGraph.Children) != 1 || result.PiCodeGraph.Children[0].Target != target {
 		t.Fatalf("workspace Pi result = %#v, want target %q", result.PiCodeGraph, target)
 	}
-	manifest, err := os.ReadFile(filepath.Join(home, ".gentle-ai", "pi-codegraph.json"))
-	if err != nil || !strings.Contains(string(manifest), target) {
-		t.Fatalf("ownership manifest = %q, err=%v, want workspace target", manifest, err)
+	manifestData, err := os.ReadFile(filepath.Join(home, ".gentle-ai", "pi-codegraph.json"))
+	var manifest piCodeGraphManifest
+	if err != nil || json.Unmarshal(manifestData, &manifest) != nil {
+		t.Fatalf("ownership manifest = %q, err=%v", manifestData, err)
+	}
+	if _, ok := manifest.Children[target]; !ok {
+		t.Fatalf("ownership manifest children = %v, want workspace target %q", manifest.Children, target)
 	}
 }
 

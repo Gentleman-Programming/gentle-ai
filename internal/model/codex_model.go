@@ -98,7 +98,6 @@ var codexPresetMatrix = map[CodexPresetKey]map[string]CodexCarrilDefault{
 	},
 }
 
-
 // CodexOrchestratorAssignment is the explicit top-level Codex session model
 // selected by a Gentle AI preset. It is separate from delegated SDD carriles.
 type CodexOrchestratorAssignment struct {
@@ -215,6 +214,7 @@ type CodexTierGroup struct {
 // resolveProfileAssignments agree on the same canonical tier values:
 //
 // These efforts are Gentle AI workload policy, not Codex defaults.
+//
 //	Carril      LowCost  Recommended  Powerful
 //	sdd-strong  medium   medium       high
 //	sdd-mid     medium         medium             high

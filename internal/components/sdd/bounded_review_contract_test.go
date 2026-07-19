@@ -13,8 +13,10 @@ import (
 var boundedReviewRequiredClauses = []string{
 	"Parent orchestrator and native CLI only",
 	"gentle-ai review start",
-	"gentle-ai review finalize --result <file>",
-	"Native Go assigns missing lens/IDs",
+	"selected lens once in the foreground",
+	"gentle-ai review capture-result",
+	"repeated `--result-artifact '<manifest-json>'` arguments",
+	"Native Go validates, canonicalizes, persists, hashes, reopens, and binds results",
 	"Only `introduced`, `behavior-activated`, or `worsened`",
 	"Route `pre-existing` and `base-only` to follow-ups; `unknown` escalates",
 	"one correction transaction",
@@ -101,6 +103,23 @@ func TestBoundedReviewContractDoesNotEnforceModelPolicy(t *testing.T) {
 	for _, forbidden := range []string{"MUST use model", "required provider", "enforced effort", "mandatory profile"} {
 		if strings.Contains(content, forbidden) {
 			t.Errorf("bounded review contract enforces model policy with %q", forbidden)
+		}
+	}
+}
+
+func TestBoundedReviewContractListsOnlySupportedLifecycleGates(t *testing.T) {
+	content := boundedReviewContract()
+	for _, gate := range []string{"post-apply", "pre-commit", "pre-push", "pre-pr", "release"} {
+		if !strings.Contains(content, gate) {
+			t.Errorf("contract missing supported gate %q", gate)
+		}
+	}
+	if strings.Contains(content, "archive, incident") {
+		t.Error("contract promises archive as a lifecycle CLI gate")
+	}
+	for _, clause := range []string{"structured status", "reviewGate.result: allow", "approved receipt"} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("contract missing archive readiness check %q", clause)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -121,7 +122,11 @@ func TestBackupTargetsSnapshotPiManifestOverlayDuringDeselection(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(manifest), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(manifest, []byte(`{"children":{"`+overlay+`":{"after":"managed","afterHash":"hash","overlay":true}}}`), 0o600); err != nil {
+	payload, err := json.Marshal(map[string]any{"children": map[string]any{overlay: map[string]any{"after": "managed", "afterHash": "hash", "overlay": true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -159,7 +164,11 @@ func TestPiCodeGraphReconcileStepRollbackRemovesDynamicPackageOverlay(t *testing
 	if err := os.MkdirAll(filepath.Dir(manifest), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(manifest, []byte(`{"children":{"`+overlay+`":{"after":"owned overlay\n","afterHash":"c7455d95571450daf45e091de82bf35230a8016c09c60b15b2b84cfde219669f","overlay":true}}}`), 0o600); err != nil {
+	payload, err := json.Marshal(map[string]any{"children": map[string]any{overlay: map[string]any{"after": "owned overlay\n", "afterHash": "c7455d95571450daf45e091de82bf35230a8016c09c60b15b2b84cfde219669f", "overlay": true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
 

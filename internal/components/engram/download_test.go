@@ -20,6 +20,15 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
+func TestMain(m *testing.M) {
+	if os.Getenv("GENTLE_AI_FAKE_GO") == "1" {
+		data := fmt.Sprintf("GONOSUMDB=%s\nGOPRIVATE=%s\nGONOPROXY=%s\n", os.Getenv("GONOSUMDB"), os.Getenv("GOPRIVATE"), os.Getenv("GONOPROXY"))
+		_ = os.WriteFile(os.Getenv("GO_ENV_RECORD"), []byte(data), 0o600)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
 // --- test helpers ---
 
 // sha256Hex returns the SHA256 hex digest of data.
@@ -1234,7 +1243,7 @@ func TestEngramGoInstallFromMainCanonicalizesModuleCasing(t *testing.T) {
 // This matters when GOBIN is set via `go env -w GOBIN=...` (stored in Go's
 // env file) but NOT exported into the shell environment.
 func TestEngramGoInstallFromMain_UsesGoEnvForBinDir(t *testing.T) {
-	const fakeInstallDir = "/custom/gobin/via/go-env"
+	fakeInstallDir := filepath.Join(t.TempDir(), "custom", "gobin", "via", "go-env")
 
 	origGoEnvFn := engramGoEnvFn
 	t.Cleanup(func() { engramGoEnvFn = origGoEnvFn })
@@ -1279,10 +1288,26 @@ func TestEngramGoInstallFromMain_BypassesPublicGoProxy(t *testing.T) {
 	goPath := filepath.Join(binDir, "go")
 	recordPath := filepath.Join(t.TempDir(), "go-env.txt")
 	fakeGo := filepath.Join(binDir, "go")
-	script := "#!/usr/bin/env bash\n" +
-		"printf 'GONOSUMDB=%s\\nGOPRIVATE=%s\\nGONOPROXY=%s\\n' \"${GONOSUMDB:-}\" \"${GOPRIVATE:-}\" \"${GONOPROXY:-}\" > \"$GO_ENV_RECORD\"\n"
-	if err := os.WriteFile(fakeGo, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	if runtime.GOOS == "windows" {
+		fakeGo += ".exe"
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(executable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fakeGo, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("GENTLE_AI_FAKE_GO", "1")
+	} else {
+		script := "#!/usr/bin/env bash\n" +
+			"printf 'GONOSUMDB=%s\\nGOPRIVATE=%s\\nGONOPROXY=%s\\n' \"${GONOSUMDB:-}\" \"${GOPRIVATE:-}\" \"${GONOPROXY:-}\" > \"$GO_ENV_RECORD\"\n"
+		if err := os.WriteFile(fakeGo, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GO_ENV_RECORD", recordPath)

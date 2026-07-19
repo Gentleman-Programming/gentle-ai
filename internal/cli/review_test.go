@@ -203,6 +203,29 @@ func TestReviewSubcommandHelpLabelsLegacyMutationReadOnly(t *testing.T) {
 	}
 }
 
+func TestReviewGateActionScopeChangedRequiresExplicitMaintainerAction(t *testing.T) {
+	for _, tt := range []struct {
+		result reviewtransaction.GateResult
+		want   string
+	}{
+		{reviewtransaction.GateAllow, "continue"},
+		{reviewtransaction.GateScopeChanged, "explicit-maintainer-action"},
+		{reviewtransaction.GateInvalidated, "explicit-maintainer-action"},
+		{reviewtransaction.GateEscalated, "stop"},
+	} {
+		t.Run(string(tt.result), func(t *testing.T) {
+			result := ReviewValidateResult{Result: tt.result, Allowed: tt.result == reviewtransaction.GateAllow, Action: reviewGateAction(tt.result)}
+			payload, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Action != tt.want || result.Allowed != (tt.result == reviewtransaction.GateAllow) || strings.Contains(string(payload), "create-new-lineage") {
+				t.Fatalf("gate result = %s", payload)
+			}
+		})
+	}
+}
+
 type legacyCLIFixture struct {
 	repo, lineage, policyPath, ledgerPath, evidencePath, receiptPath string
 	store                                                            reviewtransaction.Store
@@ -235,7 +258,7 @@ func newLegacyCLIFixture(t *testing.T, lineage string) legacyCLIFixture {
 		t.Fatal(err)
 	}
 	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
 	})
 	if err != nil {
 		t.Fatal(err)

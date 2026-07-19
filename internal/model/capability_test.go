@@ -4,7 +4,7 @@ import "testing"
 
 func TestModelCapability(t *testing.T) {
 	tests := []struct {
-		modelID       string
+		modelID        string
 		wantCapability string
 	}{
 		{"gemini-3-flash", "small"},
@@ -13,9 +13,9 @@ func TestModelCapability(t *testing.T) {
 		{"claude-sonnet-4", "capable"},
 		{"gpt-4o", "capable"},
 		{"", "capable"},
-		{"GEMINI-3-FLASH", "small"},   // case-insensitive
-		{"GPT-4O-MINI", "small"},      // case-insensitive
-		{"Claude-Haiku", "small"},     // case-insensitive
+		{"GEMINI-3-FLASH", "small"}, // case-insensitive
+		{"GPT-4O-MINI", "small"},    // case-insensitive
+		{"Claude-Haiku", "small"},   // case-insensitive
 		{"anthropic/claude-haiku-3-5", "small"},
 		{"openai/gpt-4o-mini-2024-07-18", "small"},
 		{"google/gemini-2.0-flash", "small"},

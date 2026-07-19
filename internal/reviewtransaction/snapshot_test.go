@@ -6,9 +6,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestCanonicalPathsRejectsDuplicateInput(t *testing.T) {
+	if _, err := canonicalPaths([]string{"tracked.txt", "tracked.txt"}); err == nil {
+		t.Fatal("canonicalPaths duplicate input error = nil")
+	}
+}
 
 func TestSnapshotBuilderCurrentChangesIsCompleteAndPreservesRealIndex(t *testing.T) {
 	if testing.Short() {
@@ -154,10 +161,12 @@ func TestSnapshotBuilderStagedProjectionPreservesExactIndexFidelity(t *testing.T
 		t.Fatal(err)
 	}
 	gitSnapshot(t, repo, "add", "-A", "--", "rename-old.txt", "renamed.txt")
-	if err := os.Chmod(filepath.Join(repo, "mode.txt"), 0o755); err != nil {
-		t.Fatal(err)
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(filepath.Join(repo, "mode.txt"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gitSnapshot(t, repo, "add", "--", "mode.txt")
 	}
-	gitSnapshot(t, repo, "add", "--", "mode.txt")
 	if err := os.Symlink("tracked.txt", filepath.Join(repo, "link.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -179,8 +188,10 @@ func TestSnapshotBuilderStagedProjectionPreservesExactIndexFidelity(t *testing.T
 	if !gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":added.txt") || gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":deleted.txt") || !gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":renamed.txt") || gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":rename-old.txt") {
 		t.Fatal("staged candidate does not retain add/delete/rename index entries")
 	}
-	if got := gitSnapshot(t, repo, "ls-tree", snapshot.CandidateTree, "mode.txt"); !strings.HasPrefix(got, "100755 ") {
-		t.Fatalf("staged mode entry = %q", got)
+	if runtime.GOOS != "windows" {
+		if got := gitSnapshot(t, repo, "ls-tree", snapshot.CandidateTree, "mode.txt"); !strings.HasPrefix(got, "100755 ") {
+			t.Fatalf("staged mode entry = %q", got)
+		}
 	}
 	if got := gitSnapshot(t, repo, "ls-tree", snapshot.CandidateTree, "link.txt"); !strings.HasPrefix(got, "120000 ") {
 		t.Fatalf("staged symlink entry = %q", got)
@@ -418,14 +429,16 @@ func TestBaseDiffPreservesIntendedAuthorityAfterTrackedTransition(t *testing.T) 
 	if err != nil || drifted.CandidateTree == reviewed.CandidateTree || drifted.IntendedUntrackedProof == reviewed.IntendedUntrackedProof {
 		t.Fatalf("content drift did not change authority: %#v, err=%v", drifted, err)
 	}
-	if err := os.Chmod(filepath.Join(repo, "delivery.txt"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	gitSnapshot(t, repo, "add", "delivery.txt")
-	gitSnapshot(t, repo, "commit", "-m", "mode drift")
-	modeDrifted, err := builder.Build(context.Background(), target)
-	if err != nil || modeDrifted.IntendedUntrackedProof == drifted.IntendedUntrackedProof {
-		t.Fatalf("mode drift did not change proof: %#v, err=%v", modeDrifted, err)
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(filepath.Join(repo, "delivery.txt"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gitSnapshot(t, repo, "add", "delivery.txt")
+		gitSnapshot(t, repo, "commit", "-m", "mode drift")
+		modeDrifted, err := builder.Build(context.Background(), target)
+		if err != nil || modeDrifted.IntendedUntrackedProof == drifted.IntendedUntrackedProof {
+			t.Fatalf("mode drift did not change proof: %#v, err=%v", modeDrifted, err)
+		}
 	}
 	gitSnapshot(t, repo, "rm", "delivery.txt")
 	gitSnapshot(t, repo, "commit", "-m", "path drift")
@@ -506,6 +519,59 @@ func TestSnapshotDiffStatsExcludeGeneratedGoldensOnlyFromAuthoredLines(t *testin
 	}
 	if !generated {
 		t.Fatalf("DiffStats() did not recognize generated golden: %#v", stats)
+	}
+}
+
+func TestSnapshotDiffStatsIncludesCanonicalRawModesForModeOnlyChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Git worktree executable-bit transitions are POSIX-only")
+	}
+	repo := initSnapshotRepo(t)
+	gitSnapshot(t, repo, "config", "core.filemode", "true")
+	if err := os.Chmod(filepath.Join(repo, "tracked.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := (SnapshotBuilder{Repo: repo}).DiffStats(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []DiffStat{{Path: "tracked.txt", OldMode: "100644", NewMode: "100755", ModeOnly: true}}
+	if !reflect.DeepEqual(stats, want) {
+		t.Fatalf("DiffStats() = %#v, want %#v", stats, want)
+	}
+	if lines, err := CountChangedLines(stats); err != nil || lines != 0 {
+		t.Fatalf("CountChangedLines(mode-only) = %d, %v; want 0, nil", lines, err)
+	}
+}
+
+func TestSnapshotDiffStatsDistinguishesContentAndModeChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Git worktree executable-bit transitions are POSIX-only")
+	}
+	repo := initSnapshotRepo(t)
+	gitSnapshot(t, repo, "config", "core.filemode", "true")
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	if err := os.Chmod(filepath.Join(repo, "tracked.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := (SnapshotBuilder{Repo: repo}).DiffStats(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].OldMode != "100644" || stats[0].NewMode != "100755" || stats[0].ModeOnly || stats[0].Additions != 1 || stats[0].Deletions != 1 {
+		t.Fatalf("content-plus-mode DiffStats() = %#v", stats)
 	}
 }
 
@@ -620,6 +686,42 @@ func TestSnapshotBuilderExactRevisionIgnoresReplacementObjects(t *testing.T) {
 	}
 	if snapshot.CandidateTree != strings.TrimSpace(gitSnapshot(t, repo, "--no-replace-objects", "rev-parse", originalCommit+"^{tree}")) {
 		t.Fatalf("CandidateTree = %q, want the original commit tree", snapshot.CandidateTree)
+	}
+}
+
+func TestBaseWorkspaceOverlayFreezesFullBoundaryWithoutMutation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "committed.txt", "committed\n")
+	gitSnapshot(t, repo, "add", "committed.txt")
+	gitSnapshot(t, repo, "commit", "-m", "branch")
+	writeSnapshotFile(t, repo, "tracked.txt", "staged\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	writeSnapshotFile(t, repo, "tracked.txt", "workspace wins\n")
+	writeSnapshotFile(t, repo, "new.txt", "intended\n")
+
+	beforeIndex := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
+	beforeStatus := gitSnapshot(t, repo, "status", "--porcelain=v1")
+	target := Target{Kind: TargetBaseWorkspaceOverlay, BaseRef: base, IntendedUntracked: []string{"new.txt"}}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot.Paths, []string{"committed.txt", "new.txt", "tracked.txt"}) || gitSnapshot(t, repo, "show", snapshot.CandidateTree+":tracked.txt") != "workspace wins\n" {
+		t.Fatalf("overlay snapshot = %#v", snapshot)
+	}
+	if strings.TrimSpace(gitSnapshot(t, repo, "write-tree")) != beforeIndex || gitSnapshot(t, repo, "status", "--porcelain=v1") != beforeStatus {
+		t.Fatal("overlay snapshot mutated the real index or worktree")
+	}
+
+	headBase, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetBaseWorkspaceOverlay, BaseRef: "HEAD", IntendedUntracked: []string{"new.txt"}})
+	if err != nil || headBase.CandidateTree != snapshot.CandidateTree || headBase.Identity == snapshot.Identity {
+		t.Fatalf("base identity binding = %#v, %v", headBase, err)
+	}
+	writeSnapshotFile(t, repo, "new.txt", "changed bytes\n")
+	changed, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil || changed.Identity == snapshot.Identity {
+		t.Fatalf("byte identity binding = %#v, %v", changed, err)
 	}
 }
 

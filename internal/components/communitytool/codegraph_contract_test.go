@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -204,7 +205,7 @@ func TestCodeGraphRollbackRestoresBytesModesAndRemovesCreatedFiles(t *testing.T)
 	}
 	data, _ := os.ReadFile(global)
 	info, _ := os.Stat(global)
-	if string(data) != `{"theme":"dark"}` || info.Mode().Perm() != 0o600 {
+	if string(data) != `{"theme":"dark"}` || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("rollback global = %q mode %o", data, info.Mode().Perm())
 	}
 	if _, err := os.Stat(prompt); !os.IsNotExist(err) {
@@ -282,7 +283,7 @@ func TestCodeGraphSnapshotRoundTripIsIdempotent(t *testing.T) {
 	}
 	data, _ := os.ReadFile(path)
 	info, _ := os.Stat(path)
-	if string(data) != `{"mcpServers":{"sibling":{"command":"x"}}}` || info.Mode().Perm() != 0o640 {
+	if string(data) != `{"mcpServers":{"sibling":{"command":"x"}}}` || runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
 		t.Fatalf("round trip = %q mode %o", data, info.Mode().Perm())
 	}
 }

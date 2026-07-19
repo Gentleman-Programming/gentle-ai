@@ -26,17 +26,17 @@ one tier before acting:
    least standard tier.
 2. **Standard diff**: run exactly ONE lens — the risk-table row matching the
    dominant risk; do not add lenses.
-3. **Hot path or large diff**: run the full 4R fan-out; never at pre-commit
-   or pre-push.
+3. **Hot path or large operational diff**: run the full 4R fan-out; never at
+   pre-commit or pre-push. Pure human documentation above 400 authored lines
+   runs only `review-readability`.
 
 - At **pre-commit**, always: trivial diff → no lens; otherwise run exactly ONE
   lens selected by the risk table (default `review-readability`); never the
   full 4R fan-out here.
-- At **pre-pr**: trivial diff → no lens; else if the diff touches
-  auth/update/security/payments paths OR exceeds 400 changed lines, run all
-  four 4R lenses using the adapter's execution mode (parallel with dedicated
-  agents; sequential inline); else run exactly ONE lens selected by the risk
-  table.
+- At **pre-pr**: validate the existing content-bound receipt; reviewer lenses
+  run only inside explicit `review/start(target)`. At START, hot paths and
+  diffs above 400 authored lines outside pure human documentation run all four
+  4R lenses; large pure human documentation runs only `review-readability`.
 - ...
 <!-- /gentle-ai:trigger-rules -->
 ```
@@ -72,10 +72,22 @@ The orchestrator triages every diff into exactly one tier before acting:
 - Every non-trivial diff runs exactly one lens: the risk-table row matching the dominant risk (clear naming, structure, maintainability, or small refactors → `review-readability`; behavior, state, tests, determinism, or regressions → `review-reliability`; shell/process integration, partial failures, recovery, or degraded dependencies → `review-resilience`; security, permissions, data exposure/loss, architecture, or dependencies → `review-risk`). If multiple rows match, the orchestrator picks the single highest-impact row; it never adds lenses.
   Cost: ~1x. This is the everyday tier for `pre-commit`, `pre-push`, and off-hot-path `pre-pr` diffs.
 
-**Tier 3 — Hot path or large diff → full 4R fan-out (pre-pr only)**
+**Tier 3 — Hot path or large operational diff → full 4R fan-out**
 
-- `pre-pr` on `**/auth/**`, `**/update/**`, `**/security/**`, or `**/payments/**` paths, OR when the diff exceeds 400 changed lines: run all four 4R review lenses (`review-risk`, `review-resilience`, `review-readability`, `review-reliability`) using the adapter's execution mode — parallel when dedicated agents exist, sequential inside inline adapters.
-  Cost: ~4x. Reserved for high-blast-radius changes; the fan-out never fires at `pre-commit` or `pre-push` (this prohibition is enforced by rule-set validation).
+- Inside explicit `review/start(target)`, auth/update/security/payments paths or
+  more than 400 authored lines in code, configuration, prompts, agent rules,
+  workflows, runtime instruction docs, mixed content, or active content run all
+  four 4R lenses (`review-risk`, `review-resilience`, `review-readability`,
+  `review-reliability`). Pure human documentation above 400 lines runs only
+  `review-readability`.
+  Cost: ~4x for full 4R and ~1x for large pure documentation. Lifecycle gates
+  validate the receipt and never launch reviewers.
+
+For ad-hoc 4R outside a native ordinary transaction, after a fix rerun only the
+originating lens or lenses that produced open verified BLOCKER/CRITICAL
+findings. Do not rerun clean lenses or lenses with only WARNING/SUGGESTION
+findings. Native ordinary review keeps its targeted validator and never reruns
+initial lenses.
 
 **High-stakes SDD phases**
 

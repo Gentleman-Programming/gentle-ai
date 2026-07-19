@@ -557,3 +557,331 @@ func TestRemoveTOMLTableKeys_Idempotent(t *testing.T) {
 		t.Fatalf("RemoveTOMLTableKeys is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
 	}
 }
+
+func TestRemoveTOMLTableTreeRemovesTableAndSubtables(t *testing.T) {
+	input := `model = "gpt-5.5"
+
+[permissions.gentle-dev]
+description = "injected"
+
+[permissions.gentle-dev.network]
+enabled = true
+
+[permissions.gentle-dev.filesystem.":workspace_roots"]
+"." = "write"
+
+[mcp_servers.engram]
+command = "engram"
+`
+	want := `model = "gpt-5.5"
+
+[mcp_servers.engram]
+command = "engram"
+`
+	if got := RemoveTOMLTableTree(input, "permissions.gentle-dev"); got != want {
+		t.Fatalf("RemoveTOMLTableTree() = %q, want %q", got, want)
+	}
+}
+
+func TestRemoveTOMLTableTreePreservesSimilarlyNamedTables(t *testing.T) {
+	input := `[permissions.gentle-dev]
+a = 1
+
+[permissions.gentle-devtools]
+b = 2
+
+[permissions.custom]
+c = 3
+`
+	want := `[permissions.gentle-devtools]
+b = 2
+
+[permissions.custom]
+c = 3
+`
+	if got := RemoveTOMLTableTree(input, "permissions.gentle-dev"); got != want {
+		t.Fatalf("RemoveTOMLTableTree() = %q, want %q", got, want)
+	}
+}
+
+func TestRemoveTOMLTableTreeWithoutTargetIsByteIdentical(t *testing.T) {
+	input := "custom = true\n\n[other] # keep\nkey = \"value\""
+	if got := RemoveTOMLTableTree(input, "permissions.gentle-dev"); got != input {
+		t.Fatalf("RemoveTOMLTableTree() = %q, want untouched %q", got, input)
+	}
+}
+
+func TestRemoveTOMLTableTreeRemovesTopLevelDottedKeys(t *testing.T) {
+	input := `permissions.gentle-dev.workspace_roots."~" = true
+permissions.custom.workspace_roots."~" = true
+
+[other]
+permissions.gentle-dev.x = 1
+`
+	want := `permissions.custom.workspace_roots."~" = true
+
+[other]
+permissions.gentle-dev.x = 1
+`
+	if got := RemoveTOMLTableTree(input, "permissions.gentle-dev"); got != want {
+		t.Fatalf("RemoveTOMLTableTree() = %q, want %q", got, want)
+	}
+}
+
+func TestRemoveTopLevelTOMLKeyIfValueRemovesExactMatch(t *testing.T) {
+	input := `model = "gpt-5.5"
+approval_policy = "on-request"
+
+[table]
+approval_policy = "on-request"
+`
+	want := `model = "gpt-5.5"
+
+[table]
+approval_policy = "on-request"
+`
+	if got := RemoveTopLevelTOMLKeyIfValue(input, "approval_policy", "\"on-request\""); got != want {
+		t.Fatalf("RemoveTopLevelTOMLKeyIfValue() = %q, want %q", got, want)
+	}
+}
+
+func TestRemoveTopLevelTOMLKeyIfValueKeepsCustomizedValue(t *testing.T) {
+	input := "approval_policy = \"never\"\ndefault_permissions = \"other\"\n"
+	got := RemoveTopLevelTOMLKeyIfValue(input, "approval_policy", "\"on-request\"")
+	got = RemoveTopLevelTOMLKeyIfValue(got, "default_permissions", "\"gentle-dev\"")
+	if got != input {
+		t.Fatalf("RemoveTopLevelTOMLKeyIfValue() = %q, want untouched %q", got, input)
+	}
+}
+
+func TestRemoveTOMLTableTreeRecognizesQuotedHeaderSegments(t *testing.T) {
+	input := `[permissions."gentle-dev".workspace_roots]
+"~" = true
+
+[permissions.'gentle-dev'.filesystem]
+":minimal" = "read"
+
+[permissions."custom".workspace_roots]
+"~" = true
+`
+	want := `[permissions."custom".workspace_roots]
+"~" = true
+`
+	if got := RemoveTOMLTableTree(input, "permissions.gentle-dev"); got != want {
+		t.Fatalf("RemoveTOMLTableTree() = %q, want %q", got, want)
+	}
+}
+
+func TestRemoveTOMLTableTreeRemovesQuotedDottedKeys(t *testing.T) {
+	input := `permissions."gentle-dev".workspace_roots."~" = true
+permissions.gentle-dev.workspace_roots."~/project" = true
+permissions."custom".workspace_roots."~" = true
+
+[other]
+"gentle-dev" = true
+`
+	want := `permissions."custom".workspace_roots."~" = true
+
+[other]
+"gentle-dev" = true
+`
+	if got := RemoveTOMLTableTree(input, "permissions.gentle-dev"); got != want {
+		t.Fatalf("RemoveTOMLTableTree() = %q, want %q", got, want)
+	}
+}
+
+func TestRemoveTOMLTableTreeKeepsUserContentAfterMalformedHeader(t *testing.T) {
+	input := "[permissions.gentle-dev]\na = 1\n\n[bad header no closing bracket\nb = 2\n"
+	want := "[bad header no closing bracket\nb = 2\n"
+	if got := RemoveTOMLTableTree(input, "permissions.gentle-dev"); got != want {
+		t.Fatalf("RemoveTOMLTableTree() = %q, want %q", got, want)
+	}
+}
+
+func TestRemoveTOMLTableTreeMalformedHeaderBeforeMatchIsByteIdentical(t *testing.T) {
+	input := "[broken header\npermissions.gentle-dev.x = 1\n"
+	if got := RemoveTOMLTableTree(input, "permissions.gentle-dev"); got != input {
+		t.Fatalf("RemoveTOMLTableTree() = %q, want untouched %q", got, input)
+	}
+}
+
+func TestRemoveTopLevelTOMLKeyIfValueRecognizesQuotedKey(t *testing.T) {
+	input := `"approval_policy" = "on-request"
+model = "gpt-5.5"
+`
+	want := `model = "gpt-5.5"
+`
+	if got := RemoveTopLevelTOMLKeyIfValue(input, "approval_policy", "\"on-request\""); got != want {
+		t.Fatalf("RemoveTopLevelTOMLKeyIfValue() = %q, want %q", got, want)
+	}
+}
+
+func TestRemoveTOMLTableTreeIgnoresHeadersInsideMultilineBasicStrings(t *testing.T) {
+	input := `message = """
+[permissions.gentle-dev]
+user content
+"""
+permissions.gentle-dev.workspace_roots."~" = true
+[other]
+keep = true
+`
+	want := `message = """
+[permissions.gentle-dev]
+user content
+"""
+[other]
+keep = true
+`
+	if got := RemoveTOMLTableTree(input, "permissions.gentle-dev"); got != want {
+		t.Fatalf("RemoveTOMLTableTree() = %q, want %q", got, want)
+	}
+}
+
+func TestRemoveTopLevelTOMLKeyIfValueIgnoresHeadersInsideMultilineLiteralStrings(t *testing.T) {
+	input := `message = '''
+[table]
+user content
+'''
+approval_policy = "on-request"
+`
+	want := `message = '''
+[table]
+user content
+'''
+`
+	if got := RemoveTopLevelTOMLKeyIfValue(input, "approval_policy", "\"on-request\""); got != want {
+		t.Fatalf("RemoveTopLevelTOMLKeyIfValue() = %q, want %q", got, want)
+	}
+}
+
+func TestTOMLRemovalRejectsGoOnlyEscapesInQuotedKeys(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		remove func(string) string
+	}{
+		{
+			name:  "top-level key with hexadecimal escape",
+			input: "\"approval\\x5fpolicy\" = \"on-request\"\n",
+			remove: func(input string) string {
+				return RemoveTopLevelTOMLKeyIfValue(input, "approval_policy", "\"on-request\"")
+			},
+		},
+		{
+			name:  "table key part with hexadecimal escape",
+			input: "[permissions.\"gentle\\x2ddev\"]\nkeep = true\n",
+			remove: func(input string) string {
+				return RemoveTOMLTableTree(input, "permissions.gentle-dev")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.remove(tt.input); got != tt.input {
+				t.Fatalf("removal changed malformed TOML to %q, want untouched %q", got, tt.input)
+			}
+		})
+	}
+}
+
+func TestRemoveTOMLTableTreeRemovesMultilineDottedAssignments(t *testing.T) {
+	tests := []struct {
+		name, assignment string
+	}{
+		{"basic", "permissions.gentle-dev.note = \"\"\"\n[target content]\n\"\"\"\n"},
+		{"literal", "permissions.gentle-dev.note = '''\n[target content]\n'''\n"},
+	}
+	want := `message = """
+[not-a-header]
+"""
+[other]
+keep = true
+`
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RemoveTOMLTableTree(tt.assignment+want, "permissions.gentle-dev"); got != want {
+				t.Fatalf("RemoveTOMLTableTree() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestRemoveTOMLTableTreeRemovesMultilineArrayAssignment(t *testing.T) {
+	input := `permissions.gentle-dev.rules = ["""
+  ] multiline string bracket
+  """,
+  "[string bracket]",
+  # ] comment bracket
+  [
+    "nested",
+  ],
+]
+unrelated = [
+  "]",
+  # [ comment bracket
+  "keep",
+]
+[other]
+keep = true
+`
+	want := `unrelated = [
+  "]",
+  # [ comment bracket
+  "keep",
+]
+[other]
+keep = true
+`
+	if got := RemoveTOMLTableTree(input, "permissions.gentle-dev"); got != want {
+		t.Fatalf("RemoveTOMLTableTree() = %q, want %q", got, want)
+	}
+}
+
+func TestRemoveTOMLTableTreeRemovesNestedArrayInsideTargetTable(t *testing.T) {
+	input := `[permissions.gentle-dev]
+rules = [
+  ["nested"],
+]
+[other]
+keep = true
+`
+	want := `[other]
+keep = true
+`
+	if got := RemoveTOMLTableTree(input, "permissions.gentle-dev"); got != want {
+		t.Fatalf("RemoveTOMLTableTree() = %q, want %q", got, want)
+	}
+}
+
+func TestRemoveTopLevelTOMLKeysAfterNestedArray(t *testing.T) {
+	input := `matrix = [
+  ["[string bracket]"],
+  # ] comment bracket
+  [
+    "nested",
+  ],
+]
+approval_policy = "on-request"
+default_permissions = "gentle-dev"
+[other]
+approval_policy = "on-request"
+default_permissions = "gentle-dev"
+`
+	want := `matrix = [
+  ["[string bracket]"],
+  # ] comment bracket
+  [
+    "nested",
+  ],
+]
+[other]
+approval_policy = "on-request"
+default_permissions = "gentle-dev"
+`
+	got := RemoveTopLevelTOMLKeyIfValue(input, "approval_policy", "\"on-request\"")
+	got = RemoveTopLevelTOMLKeyIfValue(got, "default_permissions", "\"gentle-dev\"")
+	if got != want {
+		t.Fatalf("top-level cleanup = %q, want %q", got, want)
+	}
+}

@@ -166,6 +166,7 @@ type GateContext struct {
 	Release               *ReleaseEvidence            `json:"release,omitempty"`
 	PrePRBoundary         *PrePRBoundarySelection     `json:"pre_pr_boundary,omitempty"`
 	Denial                *GateDenial                 `json:"denial,omitempty"`
+	ScopeChange           *GateScopeChangeDiagnostics `json:"scope_change,omitempty"`
 }
 
 // GateDenial identifies the non-authorizing validation stage that rejected a
@@ -173,6 +174,25 @@ type GateContext struct {
 type GateDenial struct {
 	Stage string `json:"stage"`
 	Code  string `json:"code"`
+}
+
+type GateTargetEvidence struct {
+	BaseTree      string   `json:"base_tree"`
+	CandidateTree string   `json:"candidate_tree"`
+	PathsDigest   string   `json:"paths_digest"`
+	Paths         []string `json:"paths"`
+}
+
+type GateScopeChangeDiagnostics struct {
+	Expected               GateTargetEvidence `json:"expected"`
+	Actual                 GateTargetEvidence `json:"actual"`
+	DifferingPaths         []string           `json:"differing_paths"`
+	DifferingPathCount     int                `json:"differing_path_count"`
+	DifferingPathsDigest   string             `json:"differing_paths_digest"`
+	PredecessorLineageID   string             `json:"predecessor_lineage_id"`
+	PredecessorRevision    string             `json:"predecessor_revision"`
+	RecoveryOperation      string             `json:"recovery_operation"`
+	RecoveryRequiredInputs []string           `json:"recovery_required_inputs"`
 }
 
 func validateDerivedGate(receipt Receipt, context GateContext) GateResult {
@@ -388,5 +408,7 @@ func validSHA256(value string) bool {
 }
 
 func validGitTree(value string) bool {
-	return gitTreePattern.MatchString(value)
+	// Git reserves the all-zero OID as the null object; it never names a real
+	// tree or commit, so it is rejected even though it is syntactically hex.
+	return gitTreePattern.MatchString(value) && strings.Trim(value, "0") != ""
 }

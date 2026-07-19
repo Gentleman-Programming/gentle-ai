@@ -80,7 +80,7 @@ func BuildNativeGateRequest(ctx context.Context, repo string, input NativeGateRe
 		request.Target = Target{Kind: TargetCurrentChanges, IntendedUntracked: intended}
 	case GatePrePush:
 		deliveryBaseTree := map[TargetKind]string{TargetCurrentChanges: transaction.Snapshot.BaseTree}[transaction.Snapshot.Kind]
-		target, push, err := buildPushTarget(ctx, repo, input.BaseRef, deliveryBaseTree)
+		target, push, err := buildPushTarget(ctx, repo, input.BaseRef, deliveryBaseTree, transaction.Snapshot.BaseTree)
 		if err != nil {
 			return GateRequest{}, err
 		}

@@ -13,9 +13,9 @@ func TestAgentAntigravity(t *testing.T) {
 // 1.1 — all six TriggerEvent constants exist with correct string values.
 func TestTriggerEvent_ClosedSet(t *testing.T) {
 	events := []struct {
-		name  string
-		got   TriggerEvent
-		want  string
+		name string
+		got  TriggerEvent
+		want string
 	}{
 		{"EventPreCommit", EventPreCommit, "pre-commit"},
 		{"EventPrePush", EventPrePush, "pre-push"},

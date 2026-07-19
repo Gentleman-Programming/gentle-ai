@@ -956,7 +956,7 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 		}
 		prompt, _ := reviewerPrompt(name)
 		agent["prompt"] = prompt
-		agent["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": false, "task": false}
+		agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
 	}
 
 	for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
@@ -965,12 +965,12 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 			continue
 		}
 		agent["prompt"] = judgmentDayReviewerContract()
-		agent["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": false, "task": false}
+		agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
 	}
 
 	if refuter, ok := agentsMap[opencode.ReviewRefuterAgent].(map[string]any); ok {
 		refuter["prompt"] = "You are the detached read-only refuter for exactly ONE transaction-wide inferential batch. Receive every inferential severe neutral claim and proof reference, return one corroborated | refuted | inconclusive result per finding, add no findings, modify nothing, return one complete result, and terminate. Missing or malformed entries are inconclusive."
-		refuter["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": false, "task": false}
+		refuter["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
 	}
 }
 
@@ -1105,7 +1105,8 @@ Do not pass these rules to child agents as permission to spawn more agents; chil
 
 1. **Trivial diff** (ONLY documentation, comments, formatting, or typo fixes in strings — zero executable code and zero configuration changes): run no lens. Any diff touching executable code or configuration is at least standard tier.
 2. **Standard diff**: run exactly ONE lens — the row in the table below that matches the dominant risk. If multiple rows match, pick the single highest-impact row; do not add lenses.
-3. **Hot path** (the diff touches auth/update/security/payments paths) **or >400 changed lines**: run the full 4R set — ` + "`review-risk`" + `, ` + "`review-resilience`" + `, ` + "`review-readability`" + `, ` + "`review-reliability`" + `.
+3. **Hot path** (the diff touches auth/update/security/payments paths) **or >400 changed lines outside pure human documentation**: run the full 4R set — ` + "`review-risk`" + `, ` + "`review-resilience`" + `, ` + "`review-readability`" + `, ` + "`review-reliability`" + `.
+4. **Large pure human documentation** (>400 authored lines with no code, configuration, prompts, agent rules, workflows, runtime instruction docs, mixed content, or active content): run only ` + "`review-readability`" + `.
 
 | Risk signal | Review lens |
 | --- | --- |
@@ -1115,6 +1116,8 @@ Do not pass these rules to child agents as permission to spawn more agents; chil
 | Security, permissions, data exposure/loss, architecture, or dependencies | ` + "`review-risk`" + ` |
 
 Full 4R is reserved for tier 3; a standard diff never fans out to multiple lenses.
+
+For ad-hoc 4R outside a native ordinary transaction, after a fix rerun only the originating lens(es) that produced open verified BLOCKER/CRITICAL findings. Never rerun clean lenses or lenses with only WARNING/SUGGESTION findings. Native ordinary review keeps its targeted validator and never reruns initial lenses.
 <!-- /gentle-ai:delegation-hard-gates-migration -->
 `
 
@@ -1617,7 +1620,7 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 		}
 	}
 
-	for _, name := range []string{"model-variants.ts", "skill-registry.ts"} {
+	for _, name := range []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
 		content := assets.MustRead("opencode/plugins/" + name)
 		pluginPath := filepath.Join(pluginsDir, name)
 

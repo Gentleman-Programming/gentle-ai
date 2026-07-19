@@ -118,6 +118,7 @@ func TestBuildConfigDifferentProviders(t *testing.T) {
 
 func TestInjectWritesConfigAndAgents(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 
 	result, err := Inject(home, []model.AgentID{model.AgentClaudeCode})
 	if err != nil {
@@ -162,6 +163,7 @@ func TestInjectWritesConfigAndAgents(t *testing.T) {
 
 func TestInjectIsIdempotent(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 
 	first, err := Inject(home, []model.AgentID{model.AgentOpenCode})
 	if err != nil {
@@ -238,10 +240,10 @@ func TestGGAConfigDirDarwin(t *testing.T) {
 
 func TestGGAConfigDirWindows(t *testing.T) {
 	tests := []struct {
-		name        string
-		homeDir     string
-		appDataEnv  string
-		wantSuffix  string
+		name       string
+		homeDir    string
+		appDataEnv string
+		wantSuffix string
 	}{
 		{
 			name:       "APPDATA set to standard roaming path",

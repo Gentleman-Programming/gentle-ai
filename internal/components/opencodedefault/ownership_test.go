@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 )
+
 func check(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
