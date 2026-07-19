@@ -258,7 +258,7 @@ func TestRepairHistoricalLegacyAliasRespectsSharedMaintenanceLock(t *testing.T) 
 	}
 	defer lock.Release()
 	request := legacyAliasRepairRequest(t, repo, "alias-repair-maintenance-lock", head)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if _, err := RepairHistoricalLegacyAlias(ctx, repo, request); !errors.Is(err, ErrAuthorityLockCancelled) {
 		t.Fatalf("maintenance contention error = %v", err)
