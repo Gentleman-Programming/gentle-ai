@@ -324,8 +324,9 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 			if strings.TrimSpace(recovery.MaintainerAuthorization) == "" {
 				return errors.New("correction-required scope recovery requires explicit maintainer authorization")
 			}
-			if !compactRecoveryAddsGenesisPath(predecessor.State, successor.InitialSnapshot) {
-				return errors.New("correction-required scope recovery requires repository-derived path expansion")
+			if !compactRecoveryAddsGenesisPath(predecessor.State, successor.InitialSnapshot) &&
+				!compactRecoveryContractsGenesisPaths(predecessor.State, successor.InitialSnapshot) {
+				return errors.New("correction-required scope recovery requires repository-derived path expansion or pure genesis-scope contraction")
 			}
 		default:
 			return errors.New("scope-changed recovery requires an approved or correction-required predecessor")
@@ -404,6 +405,22 @@ func compactRecoveryAddsGenesisPath(predecessor CompactState, live Snapshot) boo
 		}
 	}
 	return false
+}
+
+// compactRecoveryContractsGenesisPaths reports whether the live repository
+// scope is a pure contraction of predecessor genesis scope: a non-empty strict
+// subset with no live path outside genesis. Disjoint or overlapping-different
+// path sets never qualify; they remain governed by the expansion rule.
+func compactRecoveryContractsGenesisPaths(predecessor CompactState, live Snapshot) bool {
+	paths, pathErr := canonicalPaths(live.Paths)
+	genesis, genesisErr := canonicalPaths(predecessor.GenesisPaths)
+	if pathErr != nil || genesisErr != nil || !equalStrings(paths, live.Paths) || !equalStrings(genesis, predecessor.GenesisPaths) {
+		return false
+	}
+	if len(paths) == 0 || len(paths) >= len(genesis) {
+		return false
+	}
+	return pathsAreSubset(paths, genesis) == nil
 }
 
 func CompactAuthorityLeaves(ctx context.Context, repo string) ([]CompactStore, error) {
@@ -838,7 +855,8 @@ const (
 // classifyCompactCorrectionTarget keeps correction ownership bound to the
 // original delivery boundary even when in-genesis bytes change. START may only
 // resume an authorized continuation; otherwise the existing authority blocks a
-// fresh budget. Repository-derived path expansion remains an explicit recovery.
+// fresh budget. Repository-derived path expansion, and a pure non-empty
+// contraction of genesis scope, remain an explicit recovery.
 func classifyCompactCorrectionTarget(ctx context.Context, repo string, existing, requested CompactState) compactCorrectionTargetClaim {
 	live := requested.InitialSnapshot
 	if existing.State != StateCorrectionRequired ||
@@ -862,6 +880,9 @@ func classifyCompactCorrectionTarget(ctx context.Context, repo string, existing,
 	}
 	if compactStartCorrectionResume(ctx, repo, existing, requested) {
 		return compactCorrectionTargetResume
+	}
+	if compactRecoveryContractsGenesisPaths(existing, live) {
+		return compactCorrectionTargetRecover
 	}
 	return compactCorrectionTargetBlocked
 }
