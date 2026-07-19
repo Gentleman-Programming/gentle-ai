@@ -7016,3 +7016,74 @@ func TestMigrateLegacyOpenCodeCommandPromptNoOp(t *testing.T) {
 		}
 	}
 }
+
+// TestRefreshInstalledOpenCodePluginsSkipsSymlinksAndDirectories pins the
+// Lstat safety property of RefreshInstalledOpenCodePlugins: only regular
+// files at managed plugin paths are refreshed. A symlink must be skipped
+// without following it (the user-owned target must stay untouched) and a
+// directory at a plugin path must be left alone.
+func TestRefreshInstalledOpenCodePluginsSkipsSymlinksAndDirectories(t *testing.T) {
+	home := t.TempDir()
+	pluginsDir := filepath.Join(home, ".config", "opencode", "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugins) error = %v", err)
+	}
+
+	// Symlink at a managed plugin path, pointing at a user file.
+	userFile := filepath.Join(home, "user-owned.ts")
+	userContent := []byte("// user-owned content, must never be overwritten")
+	if err := os.WriteFile(userFile, userContent, 0o644); err != nil {
+		t.Fatalf("WriteFile(user file) error = %v", err)
+	}
+	symlinkPath := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+	if err := os.Symlink(userFile, symlinkPath); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	// Directory at a managed plugin path.
+	dirPath := filepath.Join(pluginsDir, "model-variants.ts")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(dir plugin path) error = %v", err)
+	}
+
+	// Stale regular file — the only one that must be refreshed.
+	regularPath := filepath.Join(pluginsDir, "skill-registry.ts")
+	if err := os.WriteFile(regularPath, []byte("// stale"), 0o644); err != nil {
+		t.Fatalf("WriteFile(regular plugin) error = %v", err)
+	}
+
+	result, err := RefreshInstalledOpenCodePlugins(home, opencodeAdapter())
+	if err != nil {
+		t.Fatalf("RefreshInstalledOpenCodePlugins() error = %v", err)
+	}
+
+	// Symlink stays a symlink and its target is untouched.
+	if info, lerr := os.Lstat(symlinkPath); lerr != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("symlink plugin path must remain a symlink; info = %v, err = %v", info, lerr)
+	}
+	if got, rerr := os.ReadFile(userFile); rerr != nil || !bytes.Equal(got, userContent) {
+		t.Errorf("symlink target was modified: content = %q, err = %v", got, rerr)
+	}
+
+	// Directory stays a directory.
+	if info, serr := os.Lstat(dirPath); serr != nil || !info.IsDir() {
+		t.Errorf("directory plugin path must remain a directory; info = %v, err = %v", info, serr)
+	}
+
+	// Regular stale file is refreshed byte-equal to the embedded asset.
+	got, rerr := os.ReadFile(regularPath)
+	if rerr != nil {
+		t.Fatalf("ReadFile(regular plugin) error = %v", rerr)
+	}
+	if string(got) != assets.MustRead("opencode/plugins/skill-registry.ts") {
+		t.Errorf("regular stale plugin was not refreshed to the embedded asset")
+	}
+	if !result.Changed {
+		t.Errorf("result.Changed = false, want true (regular plugin refreshed)")
+	}
+	for _, file := range result.Files {
+		if file == symlinkPath || file == dirPath {
+			t.Errorf("result.Files must not report skipped path %q; files = %v", file, result.Files)
+		}
+	}
+}

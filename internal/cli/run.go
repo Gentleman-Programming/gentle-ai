@@ -1714,11 +1714,13 @@ func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
 }
 
 func openCodeSDDPluginPaths(targetDir string) []string {
-	return []string{
-		filepath.Join(targetDir, ".config", "opencode", "plugins", "background-agents.ts"),
-		filepath.Join(targetDir, ".config", "opencode", "plugins", "model-variants.ts"),
-		filepath.Join(targetDir, ".config", "opencode", "plugins", "skill-registry.ts"),
+	// Legacy plugin first: installOpenCodePlugins removes it, and verification
+	// asserts its absence (isLegacyOpenCodeBackgroundAgentsPlugin).
+	paths := []string{filepath.Join(targetDir, ".config", "opencode", "plugins", "background-agents.ts")}
+	for _, name := range sdd.ManagedOpenCodePluginNames() {
+		paths = append(paths, filepath.Join(targetDir, ".config", "opencode", "plugins", name))
 	}
+	return paths
 }
 
 type postApplyVerificationInput struct {
