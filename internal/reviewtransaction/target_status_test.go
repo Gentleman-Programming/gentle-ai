@@ -655,7 +655,7 @@ func storeLegacyReviewingStatus(t *testing.T, repo, lineage string, snapshot Sna
 }
 
 func TestTargetStatusActionDecisionRequiredReturnsDecideAction(t *testing.T) {
-	action, replay := targetStatusAction(StateDecisionRequired)
+	action, replay, _ := targetStatusAction(StateDecisionRequired)
 	if action != TargetStatusActionDecide {
 		t.Fatalf("targetStatusAction(decision_required) action = %q, want %q", action, TargetStatusActionDecide)
 	}
