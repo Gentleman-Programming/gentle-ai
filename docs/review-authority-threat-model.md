@@ -50,7 +50,15 @@ Synthetic Git trees used by persisted snapshots remain subject to repository obj
 - A local hash chain presented as protection from the out-of-scope actor.
 - Mandatory bundles, policy mirrors, ledger mirrors, evidence mirrors, fix-delta mirrors, or gate-context mirrors for ordinary review.
 
-Legacy v1 chains and bundles remain readable for compatibility, but their history cannot be appended, rewritten, repaired, or migrated in place.
+Legacy v1 chains and bundles remain readable for compatibility, but their history cannot be appended, rewritten, or migrated in place. The sole repair exception is an audited whole-lineage quarantine described below; it never makes the historical bytes valid.
+
+## Historical Alias Quarantine
+
+`gentle-ai review repair-legacy-alias` is a narrow maintenance operation for a legacy-v1 lineage whose replay fails solely with `unsupported historical v1 operation alias`. It accepts only the approved historical aliases `review/validate-fix` and `review/complete-fix`, replays every other event normally, and requires the exact current `HEAD` revision, diagnostic `unsupported historical v1 operation alias`, and disposition `quarantine-approved-historical-alias`.
+
+The maintainer authorization is an exact LF-only eight-line binding with schema `gentle-ai.review-legacy-alias-repair-authorization/v1`, followed by `repository`, `lineage`, `revision`, `diagnostic`, `disposition`, `actor`, and `reason`. The operation refuses unknown aliases, semantic corruption, mixed v1/v2 lineage identity, malformed authorization, stale revisions, and active or shared-maintenance-lock contention.
+
+On success it moves the complete immutable lineage into `review-transactions/quarantine/`, writes a prepared then committed audit record with the re-derived chain identity and alias-event revisions, and reads the inventory back. It does not delete or rewrite authority. The status becomes complete/authoritative only if the remaining inventory is independently clean; unrelated invalid, incomplete, compact-v2, or graph authority continues to fail closed.
 
 ## Recovery And Rollback
 

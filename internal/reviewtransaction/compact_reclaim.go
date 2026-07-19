@@ -63,6 +63,9 @@ type CompactReclaimRecord struct {
 	// MalformedLegacyFreeze carries the natively re-derived semantic replay
 	// failure for a shipped legacy-v1 findings-freeze event.
 	MalformedLegacyFreeze *LegacyMalformedFreezeProof `json:"malformed_legacy_freeze,omitempty"`
+	// LegacyAliasRepair carries the natively re-derived proof for the narrow
+	// historical v1 operation-alias quarantine.
+	LegacyAliasRepair *LegacyAliasRepairProof `json:"legacy_alias_repair,omitempty"`
 }
 
 // compactAuthoritativeArtifact reports whether a store-entry name carries

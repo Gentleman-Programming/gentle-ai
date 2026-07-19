@@ -338,7 +338,7 @@ func TestRunArgsDispatchesCompactReviewFacadeBeforePlatformValidation(t *testing
 	if err := RunArgs([]string{"review", "--help"}, &output); err != nil {
 		t.Fatalf("RunArgs(review --help) error = %v", err)
 	}
-	if !strings.Contains(output.String(), "review <capabilities|start|finalize|validate|status|invalidate|abandon|recover|reclaim|reconcile-authority|quarantine-legacy|schema|bind-sdd>") {
+	if !strings.Contains(output.String(), "review <capabilities|start|finalize|validate|status|invalidate|abandon|recover|reclaim|reconcile-authority|quarantine-legacy|repair-legacy-alias|schema|bind-sdd>") {
 		t.Fatalf("compact review help missing:\n%s", output.String())
 	}
 }
