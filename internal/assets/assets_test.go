@@ -426,17 +426,39 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 	for _, want := range []string{
 		`spawn("gentle-ai"`,
 		`"review", "capture-result"`,
+		`"review", "preserve-result"`,
 		`"--lineage", binding.lineage`,
 		`"--target", binding.target`,
 		`"--lens", binding.lens`,
 		`"--order", String(binding.order)`,
 		`"--input", "-"`,
+		`"--preflight"`,
+		`GENTLE_AI_REVIEW_CWD`,
 		`"tool.execute.before"`,
 		`output.args.background === true`,
+		`await preflightCapture(captureCwd(worktree, directory), parseBinding(output.args.prompt, output.args.subagent_type))`,
 		`!BINDING.test(input.args.prompt)`,
 		`const lens = input.args.subagent_type`,
 		`const binding = parseBinding(input.args.prompt, lens)`,
-		`output.output = await captureResult`,
+		`const cwd = captureCwd(worktree, directory)`,
+		// The replayable payload is extracted exactly once before capture, so a
+		// capture failure preserves the extracted strict JSON, never the task
+		// envelope that `review capture-result --input` would reject on replay.
+		`result = reviewerResult(output.output)`,
+		`output.output = await captureResult(cwd, binding, result)`,
+		`throw await preservedCaptureFailure(cwd, binding, result, cause)`,
+		// Envelope extraction itself can fail; only then is the raw envelope
+		// preserved, under a distinct extraction-failure cause.
+		`throw await preservedCaptureFailure(cwd, binding, output.output, cause)`,
+		`raw reviewer result preserved for recovery`,
+		`raw reviewer result could not be preserved`,
+		// Double failure (capture and preserve both failed) must embed the
+		// bounded raw payload in the thrown error so the transcript retains it.
+		`raw reviewer result follows for manual recovery`,
+		`PRESERVE_EMBED_LIMIT`,
+		// An older installed gentle-ai without --preflight must degrade
+		// gracefully instead of hard-blocking every bound lens launch.
+		`flag provided but not defined`,
 		`export default ReviewResultArtifactsPlugin`,
 	} {
 		if !strings.Contains(source, want) {

@@ -515,6 +515,22 @@ func CompactAuthoritativeStore(ctx context.Context, repo, lineageID string) (Com
 	return CompactStore{Dir: dir, lineageID: lineageID, repo: root, lockPath: filepath.Join(versionRoot, "LOCK")}, nil
 }
 
+// CompactIncidentsDir returns the durable raw-result incident directory for
+// one lineage beside the compact authority root. It validates only the
+// lineage shape and never requires the lineage to hold authority under repo,
+// so incident preservation still works when capture was attempted from a
+// repository that does not own the reviewing lineage.
+func CompactIncidentsDir(ctx context.Context, repo, lineageID string) (string, error) {
+	if err := validateLineageID(lineageID); err != nil {
+		return "", err
+	}
+	base, _, err := reviewAuthorityRoot(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "incidents", lineageID), nil
+}
+
 func DiscoverCompactStores(ctx context.Context, repo string) ([]CompactStore, error) {
 	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {
