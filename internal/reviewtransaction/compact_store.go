@@ -37,6 +37,10 @@ var compactStartLockPollInterval = 25 * time.Millisecond
 
 var ErrLegacyReadOnly = errors.New("legacy v1 review lineage is read-only")
 
+// errCompactRecoveryTargetUnchanged identifies the unchanged-target recovery
+// anomaly so reconcile-authority can gate quarantine to exactly this class.
+var errCompactRecoveryTargetUnchanged = errors.New("escalated recovery successor target has not changed")
+
 // ErrHistoricalCompatReadOnly denies ordinary mutation of authority loaded
 // through the retired-field compatibility path.
 var ErrHistoricalCompatReadOnly = errors.New("historical compatibility authority is read-only")
@@ -340,7 +344,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 			return errors.New("recovery requires an escalated predecessor")
 		}
 		if !compactEscalatedRecoveryTargetChanged(predecessor.State.CurrentSnapshot, successor.InitialSnapshot) {
-			return errors.New("escalated recovery successor target has not changed")
+			return errCompactRecoveryTargetUnchanged
 		}
 		if recovery.MaintainerAuthorization != compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
 			return compactRecoveryAuthorizationError(successor.InitialSnapshot)

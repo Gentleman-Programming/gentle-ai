@@ -48,6 +48,9 @@ type CompactReclaimRecord struct {
 	SourcePath     string    `json:"source_path"`
 	QuarantinePath string    `json:"quarantine_path"`
 	Residue        []string  `json:"residue"`
+	// InvalidRecoveryEdge carries the natively re-derived edge-invalidity
+	// proof; it is set only for reconcile-authority quarantines.
+	InvalidRecoveryEdge *CompactInvalidRecoveryEdgeProof `json:"invalid_recovery_edge,omitempty"`
 }
 
 // compactAuthoritativeArtifact reports whether a store-entry name carries
@@ -108,7 +111,7 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 	residue := make([]string, 0, len(items))
 	for _, item := range items {
 		if compactAuthoritativeArtifact(item.Name()) {
-			return CompactReclaimRecord{}, fmt.Errorf("review reclaim refused: store entry %q holds authoritative artifact %q", request.LineageID, item.Name())
+			return CompactReclaimRecord{}, fmt.Errorf("review reclaim refused: store entry %q holds authoritative artifact %q; an invalid recovery successor is quarantined with review reconcile-authority", request.LineageID, item.Name())
 		}
 		residue = append(residue, item.Name())
 	}
@@ -116,6 +119,19 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 	if request.ReclaimedAt.IsZero() {
 		request.ReclaimedAt = time.Now().UTC()
 	}
+	return quarantineCompactStoreEntry(base, dir, CompactReclaimRecord{
+		Schema: CompactReclaimRecordSchema, Status: CompactReclaimPrepared, LineageID: request.LineageID,
+		Reason: strings.TrimSpace(request.Reason), Actor: strings.TrimSpace(request.Actor),
+		ReclaimedAt: request.ReclaimedAt.UTC(), SourcePath: dir, Residue: residue,
+	})
+}
+
+// quarantineCompactStoreEntry runs the shared two-phase audited move for one
+// store entry: create the quarantine directory, persist the prepared record,
+// rename the entry into residue/, then rewrite the record as committed. On
+// partial failure after the prepared record persisted, it returns the
+// populated prepared record alongside a non-nil error.
+func quarantineCompactStoreEntry(base, dir string, record CompactReclaimRecord) (CompactReclaimRecord, error) {
 	quarantineRoot := filepath.Join(base, "quarantine")
 	if err := os.MkdirAll(quarantineRoot, 0o755); err != nil {
 		return CompactReclaimRecord{}, err
@@ -125,12 +141,12 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 		return CompactReclaimRecord{}, err
 	}
 	if quarantineRootInfo.Mode()&os.ModeSymlink != 0 || !quarantineRootInfo.IsDir() {
-		return CompactReclaimRecord{}, fmt.Errorf("review reclaim refused unsafe quarantine root %q", quarantineRoot)
+		return CompactReclaimRecord{}, fmt.Errorf("review quarantine refused unsafe quarantine root %q", quarantineRoot)
 	}
 	if err := SyncReviewDirectory(base); err != nil {
 		return CompactReclaimRecord{}, fmt.Errorf("sync review authority root after quarantine creation: %w", err)
 	}
-	quarantineDir, err := os.MkdirTemp(quarantineRoot, request.LineageID+"-")
+	quarantineDir, err := os.MkdirTemp(quarantineRoot, record.LineageID+"-")
 	if err != nil {
 		return CompactReclaimRecord{}, err
 	}
@@ -146,19 +162,14 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 	if err := SyncReviewDirectory(quarantineRoot); err != nil {
 		return CompactReclaimRecord{}, cleanupUnprepared(fmt.Errorf("sync quarantine root after reclaim directory creation: %w", err))
 	}
-	record := CompactReclaimRecord{
-		Schema: CompactReclaimRecordSchema, Status: CompactReclaimPrepared, LineageID: request.LineageID,
-		Reason: strings.TrimSpace(request.Reason), Actor: strings.TrimSpace(request.Actor),
-		ReclaimedAt: request.ReclaimedAt.UTC(), SourcePath: dir,
-		QuarantinePath: quarantineDir, Residue: residue,
-	}
+	record.QuarantinePath = quarantineDir
 	if err := persistReclaimRecord(record); err != nil {
 		return CompactReclaimRecord{}, cleanupUnprepared(err)
 	}
 	if err := reclaimQuarantineResidue(dir, filepath.Join(quarantineDir, "residue")); err != nil {
 		return record, fmt.Errorf("reclaim was prepared at %s but quarantining the residue failed: %w", quarantineDir, err)
 	}
-	if err := SyncReviewDirectory(versionRoot); err != nil {
+	if err := SyncReviewDirectory(filepath.Dir(dir)); err != nil {
 		return record, fmt.Errorf("residue was quarantined at %s but syncing the source version root failed: %w", quarantineDir, err)
 	}
 	if err := SyncReviewDirectory(quarantineDir); err != nil {
