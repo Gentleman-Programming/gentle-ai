@@ -1277,6 +1277,21 @@ func TestStoreLoadChainBindsGenesisHeadAndOrderedIdentity(t *testing.T) {
 	}
 }
 
+func TestLegalStateTransition_DecisionRequiredToEscalated(t *testing.T) {
+	if !legalStateTransition(StateDecisionRequired, StateEscalated) {
+		t.Fatalf("legalStateTransition(%q, %q) = false, want true", StateDecisionRequired, StateEscalated)
+	}
+}
+
+func TestValidateSuccessorRejectsDecisionRequiredFeatureMutation(t *testing.T) {
+	previous := *newTestTransaction(t, ModeOrdinary4R)
+	next := previous
+	next.DecisionRequiredEnabled = !previous.DecisionRequiredEnabled
+	if err := validateSuccessor(previous, next, "review/start"); err == nil {
+		t.Fatal("validateSuccessor() accepted a changed decision-required feature selection")
+	}
+}
+
 func TestValidateSuccessorRejectsTamperedOutOfScopeFixSnapshot(t *testing.T) {
 	previous := ordinaryAtFixing(t)
 	next := *previous

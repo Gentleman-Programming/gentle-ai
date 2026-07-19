@@ -400,7 +400,8 @@ func TestTransactionCausalityRoundTripAndLegacyReadCompatibility(t *testing.T) {
 	}
 }
 
-func TestApplyRefuterOutcomesAllInconclusiveEntersDecisionRequired(t *testing.T) {
+func newAllInconclusiveOrdinaryTransaction(t *testing.T) *Transaction {
+	t.Helper()
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	if err := tx.StartReview(); err != nil {
 		t.Fatal(err)
@@ -421,8 +422,22 @@ func TestApplyRefuterOutcomesAllInconclusiveEntersDecisionRequired(t *testing.T)
 	}); err != nil {
 		t.Fatalf("ApplyRefuterOutcomes() error = %v", err)
 	}
+	return tx
+}
+
+func TestApplyRefuterOutcomesWithFlagOffRoutesToEscalated(t *testing.T) {
+	t.Setenv("GENTLE_AI_REVIEW_DECISION_REQUIRED", "")
+	tx := newAllInconclusiveOrdinaryTransaction(t)
+	if tx.State != StateEscalated {
+		t.Fatalf("State = %q with feature flag off, want %q", tx.State, StateEscalated)
+	}
+}
+
+func TestApplyRefuterOutcomesWithFlagOnRoutesToDecisionRequired(t *testing.T) {
+	t.Setenv("GENTLE_AI_REVIEW_DECISION_REQUIRED", "1")
+	tx := newAllInconclusiveOrdinaryTransaction(t)
 	if tx.State != StateDecisionRequired {
-		t.Fatalf("State = %q, want %q", tx.State, StateDecisionRequired)
+		t.Fatalf("State = %q with feature flag on, want %q", tx.State, StateDecisionRequired)
 	}
 	if tx.Counters.RefuterBatches != 1 || len(tx.PendingRefuterIDs) != 0 {
 		t.Fatalf("refuter batch counters = %#v pending=%v", tx.Counters, tx.PendingRefuterIDs)
@@ -461,6 +476,7 @@ func TestApplyRefuterOutcomesMixedInconclusiveStillEscalates(t *testing.T) {
 }
 
 func TestTransactionValidateAcceptsDecisionRequiredState(t *testing.T) {
+	t.Setenv("GENTLE_AI_REVIEW_DECISION_REQUIRED", "1")
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	if err := tx.StartReview(); err != nil {
 		t.Fatal(err)

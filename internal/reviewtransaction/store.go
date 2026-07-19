@@ -482,6 +482,9 @@ func validateSuccessor(previous, next Transaction, operation string) error {
 	if previous.LineageID != next.LineageID || previous.Generation != next.Generation || previous.Mode != next.Mode {
 		return fmt.Errorf("%w: lineage, generation, and mode are immutable", ErrInvalidSuccessor)
 	}
+	if previous.DecisionRequiredEnabled != next.DecisionRequiredEnabled {
+		return fmt.Errorf("%w: decision-required feature selection is immutable", ErrInvalidSuccessor)
+	}
 	if previous.BaseTree != next.BaseTree || previous.InitialReviewTree != next.InitialReviewTree || previous.PathsDigest != next.PathsDigest || previous.PolicyHash != next.PolicyHash {
 		return fmt.Errorf("%w: initial target and policy are immutable", ErrInvalidSuccessor)
 	}
@@ -850,7 +853,7 @@ func legalStateTransition(previous, next State) bool {
 		StateFixValidating:          {StateReadyFinalVerification, StateFixRequired, StateEscalated},
 		StateReadyFinalVerification: {StateFinalVerifying, StateEscalated},
 		StateFinalVerifying:         {StateApproved, StateEscalated},
-		StateDecisionRequired:       {StateDecisionRequired},
+		StateDecisionRequired:       {StateDecisionRequired, StateDecisionCarryOn, StateEscalated},
 	}
 	for _, candidate := range allowed[previous] {
 		if candidate == next {

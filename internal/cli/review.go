@@ -624,9 +624,6 @@ func runReviewDecide(ctx context.Context, args []string, stdout io.Writer) error
 		return fmt.Errorf("load authoritative review transaction: %w", err)
 	}
 	current := chain.Records[len(chain.Records)-1].Transaction
-	if current.State != reviewtransaction.StateDecisionRequired {
-		return fmt.Errorf("review decide requires the lineage to be in decision_required, got %q", current.State)
-	}
 	if chain.HeadRevision != *expectedRevision {
 		return fmt.Errorf("review decide revision mismatch: expected %q, current %q", *expectedRevision, chain.HeadRevision)
 	}
@@ -643,6 +640,9 @@ func runReviewDecide(ctx context.Context, args []string, stdout io.Writer) error
 			Idempotent: true, Payload: *existing,
 		})
 	}
+	if current.State != reviewtransaction.StateDecisionRequired {
+		return fmt.Errorf("review decide requires the lineage to be in decision_required, got %q", current.State)
+	}
 
 	next := current
 	identitySum := sha256DecideSha256(current.Snapshot.Identity)
@@ -655,6 +655,12 @@ func runReviewDecide(ctx context.Context, args []string, stdout io.Writer) error
 		SHA256:    identitySum,
 	}
 	next.Decision = &payload
+	switch payload.Decision {
+	case "continue":
+		next.State = reviewtransaction.StateDecisionCarryOn
+	case "stop":
+		next.State = reviewtransaction.StateEscalated
+	}
 
 	revision, err := store.Append(chain.HeadRevision, reviewtransaction.Record{
 		Operation:   "review/decide",

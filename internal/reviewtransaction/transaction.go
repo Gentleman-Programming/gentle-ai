@@ -8,12 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 )
 
 const TransactionSchema = "gentle-ai.review-transaction/v1"
 const DecisionPayloadSchema = "gentle-ai.review-decide/v1"
+
+const reviewDecisionRequiredFeatureEnv = "GENTLE_AI_REVIEW_DECISION_REQUIRED"
 
 type Mode string
 
@@ -49,6 +52,9 @@ const (
 	StateEscalated              State = "escalated"
 	StateInvalidated            State = "invalidated"
 	StateDecisionRequired       State = "decision_required"
+	// StateDecisionCarryOn records a user-approved handoff. A future consumer
+	// advances the remaining resolved work; this slice only persists the handoff.
+	StateDecisionCarryOn State = "decision_carry_on"
 )
 
 // DecisionPayload records one user resolution of a decision_required pause.
@@ -219,6 +225,7 @@ type Transaction struct {
 	OriginalCriteria        *ValidationCheck           `json:"original_criteria,omitempty"`
 	CorrectionRegression    *ValidationCheck           `json:"correction_regression,omitempty"`
 	Decision                *DecisionPayload           `json:"decision,omitempty"`
+	DecisionRequiredEnabled bool                       `json:"decision_required_enabled,omitempty"`
 	RiskLevel               RiskLevel                  `json:"risk_level,omitempty"`
 	SelectedLenses          []string                   `json:"selected_lenses,omitempty"`
 	LensResults             []LensResult               `json:"lens_results,omitempty"`
@@ -257,7 +264,8 @@ func NewTransaction(start Start) (*Transaction, error) {
 		BaseTree:     start.Snapshot.BaseTree, PathsDigest: start.Snapshot.PathsDigest,
 		InitialReviewTree: start.Snapshot.CandidateTree, FinalCandidateTree: start.Snapshot.CandidateTree,
 		FixDeltaHash: EmptyFixDeltaHash, PolicyHash: start.PolicyHash,
-		Findings: []Finding{}, Classifications: map[string]FindingEvidence{},
+		DecisionRequiredEnabled: reviewDecisionRequiredFeatureEnabled(),
+		Findings:                []Finding{}, Classifications: map[string]FindingEvidence{},
 		Outcomes: map[string]EvidenceOutcome{}, FixFindingIDs: []string{}, PendingRefuterIDs: []string{},
 		FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, JudgeProofs: []JudgeProof{},
 	}
@@ -277,6 +285,15 @@ func NewTransaction(start Start) (*Transaction, error) {
 		transaction.CorrectionBudget = &budget
 	}
 	return transaction, nil
+}
+
+func reviewDecisionRequiredFeatureEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(reviewDecisionRequiredFeatureEnv))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func NewLineage(previousLineageID string, start Start) (*Transaction, error) {
@@ -665,7 +682,7 @@ func (transaction *Transaction) ApplyRefuterOutcomes(results []EvidenceResult) e
 				break
 			}
 		}
-		if allInconclusive {
+		if allInconclusive && transaction.DecisionRequiredEnabled {
 			transaction.State = StateDecisionRequired
 		} else {
 			transaction.State = StateEscalated
@@ -1112,7 +1129,7 @@ func (transaction *Transaction) validate() error {
 	switch transaction.State {
 	case StateUnreviewed, StateReviewing, StateJudgesConfirmed, StateFindingsFrozen, StateEvidenceClassified,
 		StateFixRequired, StateFixing, StateFixValidating, StateReadyFinalVerification,
-		StateFinalVerifying, StateApproved, StateEscalated, StateInvalidated, StateDecisionRequired:
+		StateFinalVerifying, StateApproved, StateEscalated, StateInvalidated, StateDecisionRequired, StateDecisionCarryOn:
 	default:
 		return fmt.Errorf("invalid transaction state %q", transaction.State)
 	}
@@ -1268,9 +1285,6 @@ func validateDecisionPayload(payload *DecisionPayload, lineageID string, state S
 	if payload == nil {
 		return nil
 	}
-	if state != StateDecisionRequired {
-		return errors.New("decision payload is only valid while the transaction is in decision_required")
-	}
 	if payload.Schema != DecisionPayloadSchema {
 		return fmt.Errorf("decision payload has unsupported schema %q", payload.Schema)
 	}
@@ -1281,7 +1295,14 @@ func validateDecisionPayload(payload *DecisionPayload, lineageID string, state S
 		return errors.New("decision payload revision must be a lowercase SHA-256 identity")
 	}
 	switch payload.Decision {
-	case "continue", "stop":
+	case "continue":
+		if state != StateDecisionRequired && state != StateDecisionCarryOn {
+			return errors.New("continue decision payload requires decision_required or decision_carry_on state")
+		}
+	case "stop":
+		if state != StateDecisionRequired && state != StateEscalated {
+			return errors.New("stop decision payload requires decision_required or escalated state")
+		}
 	default:
 		return fmt.Errorf("decision payload decision must be continue or stop, got %q", payload.Decision)
 	}
@@ -1716,7 +1737,7 @@ func (transaction *Transaction) validateFindingState(findings, severe map[string
 	if transaction.State != StateEvidenceClassified && len(pendingSet) != 0 {
 		return errors.New("pending refuter findings cannot survive outside evidence_classified")
 	}
-	if transaction.State != StateEscalated && transaction.State != StateDecisionRequired {
+	if transaction.State != StateEscalated && transaction.State != StateDecisionRequired && transaction.State != StateDecisionCarryOn {
 		for id, outcome := range transaction.Outcomes {
 			if _, severeFinding := severe[id]; severeFinding && outcome == OutcomeInconclusive {
 				return fmt.Errorf("inconclusive severe finding %q requires terminal escalation", id)

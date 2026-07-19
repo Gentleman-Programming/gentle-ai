@@ -25,6 +25,7 @@ type decideCLIFixture struct {
 
 func newDecideCLIFixture(t *testing.T, lineage string, outcomes []reviewtransaction.EvidenceOutcome) decideCLIFixture {
 	t.Helper()
+	t.Setenv("GENTLE_AI_REVIEW_DECISION_REQUIRED", "1")
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -143,8 +144,79 @@ func TestRunReviewDecideAcceptsMatchingRevisionAndEmitsAuditEntry(t *testing.T) 
 	if last.Operation != "review/decide" {
 		t.Fatalf("last operation = %q, want review/decide", last.Operation)
 	}
-	if last.Transaction.State != reviewtransaction.StateDecisionRequired || last.Transaction.Decision == nil {
-		t.Fatalf("last transaction state = %q decision = %v", last.Transaction.State, last.Transaction.Decision)
+	if last.Transaction.Decision == nil {
+		t.Fatalf("last transaction decision = nil, want persisted decision")
+	}
+}
+
+func TestRunReviewDecideStopMovesToEscalated(t *testing.T) {
+	fixture := newDecideCLIFixture(t, "decide-stop-escalates", []reviewtransaction.EvidenceOutcome{
+		reviewtransaction.OutcomeInconclusive, reviewtransaction.OutcomeInconclusive,
+	})
+	if err := RunReviewDecide([]string{
+		"--cwd", fixture.repo, "--lineage", fixture.lineage,
+		"--expected-revision", fixture.head,
+		"--decision", "stop", "--reason", "maintainer stops inconclusive review",
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("RunReviewDecide(stop) error = %v", err)
+	}
+
+	chain, err := fixture.store.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := chain.Records[len(chain.Records)-1].Transaction
+	if stored.State != reviewtransaction.StateEscalated {
+		t.Fatalf("stored state = %q, want %q", stored.State, reviewtransaction.StateEscalated)
+	}
+}
+
+func TestRunReviewDecideContinueMovesForward(t *testing.T) {
+	fixture := newDecideCLIFixture(t, "decide-continue-carries-on", []reviewtransaction.EvidenceOutcome{
+		reviewtransaction.OutcomeInconclusive, reviewtransaction.OutcomeInconclusive,
+	})
+	if err := RunReviewDecide([]string{
+		"--cwd", fixture.repo, "--lineage", fixture.lineage,
+		"--expected-revision", fixture.head,
+		"--decision", "continue", "--reason", "maintainer accepts bounded continuation",
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("RunReviewDecide(continue) error = %v", err)
+	}
+
+	chain, err := fixture.store.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := chain.Records[len(chain.Records)-1].Transaction
+	want := reviewtransaction.State("decision_carry_on")
+	if stored.State != want {
+		t.Fatalf("stored state = %q, want forward state %q", stored.State, want)
+	}
+}
+
+func TestRunReviewDecideCanProduceReceiptAfterStop(t *testing.T) {
+	fixture := newDecideCLIFixture(t, "decide-stop-receipt", []reviewtransaction.EvidenceOutcome{
+		reviewtransaction.OutcomeInconclusive, reviewtransaction.OutcomeInconclusive,
+	})
+	if err := RunReviewDecide([]string{
+		"--cwd", fixture.repo, "--lineage", fixture.lineage,
+		"--expected-revision", fixture.head,
+		"--decision", "stop", "--reason", "preserve terminal escalation path",
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("RunReviewDecide(stop) error = %v", err)
+	}
+
+	chain, err := fixture.store.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := chain.Records[len(chain.Records)-1].Transaction
+	receipt, err := stored.Receipt()
+	if err != nil {
+		t.Fatalf("Receipt() after stop error = %v (state %q)", err, stored.State)
+	}
+	if receipt.TerminalState != reviewtransaction.TerminalEscalated {
+		t.Fatalf("receipt terminal state = %q, want %q", receipt.TerminalState, reviewtransaction.TerminalEscalated)
 	}
 }
 
