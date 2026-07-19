@@ -267,6 +267,30 @@ func (state CompactState) Validate() error {
 	return nil
 }
 
+// LedgerHash derives the canonical findings-ledger binding of the
+// authoritative compact record. Compact authority never persists a separate
+// ledger artifact: the frozen findings themselves are the ledger, validated by
+// Validate as the exact concatenation of the completed lens results. When at
+// least one finding was frozen, the binding is the SHA-256 of the canonical
+// gentle-ai.review-ledger/v1 bytes for exactly those findings, so auditors can
+// reconstruct and verify it from the persisted state. A pristine lineage — one
+// whose completed review froze no findings at all — has no ledger content to
+// bind and keeps the honest empty-input hash (SHA-256 of zero bytes); it never
+// fabricates a canonical empty-ledger artifact that was not persisted.
+func (state CompactState) LedgerHash() string {
+	if len(state.Findings) == 0 {
+		return EmptyFixDeltaHash
+	}
+	// CanonicalLedger only fails for a nil findings array, which the length
+	// guard above already excludes.
+	ledger, err := CanonicalLedger(state.Findings)
+	if err != nil {
+		return EmptyFixDeltaHash
+	}
+	sum := sha256.Sum256(ledger)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 func validateCompactSnapshotMetadata(snapshot Snapshot) error {
 	paths, err := canonicalPaths(snapshot.Paths)
 	if err != nil || !equalStrings(paths, snapshot.Paths) || snapshot.PathsDigest != digestPaths(paths) {

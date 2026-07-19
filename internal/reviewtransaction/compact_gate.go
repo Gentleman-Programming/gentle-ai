@@ -174,11 +174,14 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if err != nil || !compactReceiptEqual(authoritative, receipt) {
 		return invalid("compact receipt does not match current authority")
 	}
+	// The findings are immutable once loaded; derive their ledger binding once
+	// so every context emitted below is consistent by construction.
+	ledgerHash := record.State.LedgerHash()
 	denialContext := GateContext{
 		Gate: input.Gate, LineageID: receipt.LineageID, Generation: receipt.Generation,
 		StoreRevision: record.Revision, GenesisRevision: record.Revision, ChainIdentity: record.Revision, BundleDigest: record.Revision,
 		BaseTree: receipt.BaseTree, CandidateTree: receipt.FinalCandidateTree, PathsDigest: receipt.PathsDigest,
-		FixDeltaHash: receipt.FixDeltaHash, PolicyHash: receipt.PolicyHash, LedgerHash: EmptyFixDeltaHash, EvidenceHash: receipt.EvidenceHash,
+		FixDeltaHash: receipt.FixDeltaHash, PolicyHash: receipt.PolicyHash, LedgerHash: ledgerHash, EvidenceHash: receipt.EvidenceHash,
 	}
 	if input.Gate == GatePrePR && strings.TrimSpace(input.BaseRef) != "" {
 		denialContext.PrePRBoundary = &PrePRBoundarySelection{Source: PrePRBoundaryExplicit, Selector: strings.TrimSpace(input.BaseRef)}
@@ -275,7 +278,7 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		StoreRevision: record.Revision, GenesisRevision: record.Revision, ChainIdentity: record.Revision, BundleDigest: record.Revision,
 		BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree, PathsDigest: snapshot.PathsDigest,
 		FixDeltaHash: record.State.FixDeltaHash, PolicyHash: record.State.PolicyHash,
-		LedgerHash: EmptyFixDeltaHash, EvidenceHash: record.State.EvidenceHash,
+		LedgerHash: ledgerHash, EvidenceHash: record.State.EvidenceHash,
 		BaseRelationshipValid: baseRelationshipValid, BaseAdvance: compatibility,
 	}
 	if request.Gate == GatePrePR && resolvedPrePR != nil {

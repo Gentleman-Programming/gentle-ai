@@ -227,6 +227,16 @@ func deriveCompactPrePRChain(ctx context.Context, repo string, input NativeGateR
 		evidenceHashes[index] = member.receipt.EvidenceHash
 	}
 	boundary := refs.Selection
+	// LedgerHash deliberately stays the empty-input hash while its siblings
+	// are compactPrePRChainValuesHash compositions: (a) no per-member receipt
+	// binds a ledger (CompactReceipt carries no ledger field), so a
+	// synthesized chain digest would be a fabricated value nothing verifies;
+	// (b) the only LedgerHash consumer that compares persisted contexts —
+	// sddstatus boundGateContextMatches — evaluates GatePostApply only, never
+	// GatePrePR; and (c) another version-divergent context field would widen
+	// the mixed-binary compatibility surface. If a future change composes
+	// compactPrePRChainValuesHash("ledger", ...) here, it must also consider
+	// the sddstatus legacy empty-ledger compatibility shim.
 	gateContext := GateContext{
 		Gate: GatePrePR, LineageID: last.receipt.LineageID, Generation: last.receipt.Generation,
 		StoreRevision: last.record.Revision, GenesisRevision: path[0].record.Revision,

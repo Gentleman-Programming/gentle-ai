@@ -149,7 +149,7 @@ func validateBoundReview(ctx context.Context, repo, change string) (ReviewBindin
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
 	}
 	evaluation := reviewtransaction.EvaluateCompactGate(ctx, root, receipt, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: binding.Lineage})
-	if evaluation.Result != reviewtransaction.GateAllow || !reflect.DeepEqual(evaluation.Context, binding.GateContext) {
+	if evaluation.Result != reviewtransaction.GateAllow || !boundGateContextMatches(binding.GateContext, evaluation.Context) {
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact post-apply gate context changed")
 	}
 	bindingFinalAuthorizationHook()
@@ -166,10 +166,33 @@ func validateBoundReview(ctx context.Context, repo, change string) (ReviewBindin
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact receipt does not match final authority")
 	}
 	finalGate := reviewtransaction.EvaluateCompactGate(ctx, root, finalReceiptValue, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: binding.Lineage})
-	if finalGate.Result != reviewtransaction.GateAllow || !reflect.DeepEqual(finalGate.Context, binding.GateContext) {
+	if finalGate.Result != reviewtransaction.GateAllow || !boundGateContextMatches(binding.GateContext, finalGate.Context) {
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact post-apply gate changed during final authorization")
 	}
 	return binding, finalGate, nil
+}
+
+// boundGateContextMatches compares a persisted binding gate context against
+// the live post-apply evaluation. Bindings persisted before compact gate
+// contexts bound the frozen findings ledger recorded the empty-input hash in
+// ledger_hash; they stay valid against a now-populated live context because
+// the findings ledger itself is still pinned by the authority state through
+// AuthorityRevision and ReceiptHash. Every other divergence — including any
+// non-empty ledger hash that does not match the live binding — still fails.
+// The reverse mix is a known residual this side cannot repair: a binding
+// written by a ledger-binding binary but validated by an older binary
+// deterministically fails closed here ("bound compact post-apply gate context
+// changed"), because the older binary hardcodes the empty hash in its live
+// context; the remedy is upgrading that older binary.
+func boundGateContextMatches(bound, live reviewtransaction.GateContext) bool {
+	if reflect.DeepEqual(bound, live) {
+		return true
+	}
+	if bound.LedgerHash != reviewtransaction.EmptyFixDeltaHash {
+		return false
+	}
+	bound.LedgerHash = live.LedgerHash
+	return reflect.DeepEqual(bound, live)
 }
 
 func bindingExists(ctx context.Context, repo, change string) (bool, error) {

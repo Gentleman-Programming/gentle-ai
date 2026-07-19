@@ -1457,7 +1457,7 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 					StoreRevision: record.Revision, GenesisRevision: record.Revision, ChainIdentity: record.Revision, BundleDigest: record.Revision,
 					BaseTree: assessment.Actual.BaseTree, CandidateTree: assessment.Actual.CandidateTree, PathsDigest: assessment.Actual.PathsDigest,
 					FixDeltaHash: record.State.FixDeltaHash, PolicyHash: record.State.PolicyHash,
-					LedgerHash: reviewtransaction.EmptyFixDeltaHash, EvidenceHash: record.State.EvidenceHash,
+					LedgerHash: record.State.LedgerHash(), EvidenceHash: record.State.EvidenceHash,
 					Denial: &reviewtransaction.GateDenial{Stage: "receipt-binding", Code: "candidate-or-paths-mismatch"}, ScopeChange: &diagnostics,
 				},
 			})
