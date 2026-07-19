@@ -56,6 +56,10 @@ type CompactReclaimRecord struct {
 	// pre-contract authorization proof; it is set only for reconcile-authority
 	// quarantines of the malformed-recovery-authorization class.
 	MalformedRecoveryAuthorization *CompactMalformedRecoveryAuthorizationProof `json:"malformed_recovery_authorization,omitempty"`
+	// PristineAbandonment carries the natively re-derived pristineness proof;
+	// it is set only for review-abandon quarantines of pristine reviewing or
+	// pristine invalidated lineages.
+	PristineAbandonment *CompactPristineAbandonmentProof `json:"pristine_abandonment,omitempty"`
 }
 
 // compactAuthoritativeArtifact reports whether a store-entry name carries

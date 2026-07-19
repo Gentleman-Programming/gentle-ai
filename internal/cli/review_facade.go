@@ -224,7 +224,7 @@ var reviewFacadeCommittedTransitionHook = func(context.Context, string, string, 
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capabilities|start|finalize|validate|status|invalidate|recover|reclaim|reconcile-authority|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capabilities|start|finalize|validate|status|invalidate|abandon|recover|reclaim|reconcile-authority|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go.")
 		_, _ = fmt.Fprintln(stdout, "Additive headless capabilities: gentle-ai review capture-result (with --preflight) and gentle-ai review preserve-result.")
 		return nil
 	}
@@ -307,6 +307,8 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewStatus(args[1:], stdout)
 	case "invalidate":
 		return RunReviewInvalidate(args[1:], stdout)
+	case "abandon":
+		return RunReviewAbandon(args[1:], stdout)
 	case "recover":
 		return RunReviewRecover(args[1:], stdout)
 	case "reclaim":
