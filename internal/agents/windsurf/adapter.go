@@ -77,6 +77,10 @@ func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 // GlobalConfigDir returns the root of Windsurf's AI configuration directory.
 // This is cross-platform and always lives under the user's home directory.
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
+	devin := filepath.Join(homeDir, ".codeium", "devin")
+	if stat, err := os.Stat(devin); err == nil && stat.IsDir() {
+		return devin
+	}
 	return filepath.Join(homeDir, ".codeium", "windsurf")
 }
 
@@ -106,17 +110,29 @@ func (a *Adapter) SettingsPath(homeDir string) string {
 func (a *Adapter) windsurfUserDir(homeDir string) string {
 	switch runtime.GOOS {
 	case "darwin":
+		devin := filepath.Join(homeDir, "Library", "Application Support", "Devin", "User")
+		if stat, err := os.Stat(devin); err == nil && stat.IsDir() {
+			return devin
+		}
 		return filepath.Join(homeDir, "Library", "Application Support", "Windsurf", "User")
 	case "windows":
 		appData := os.Getenv("APPDATA")
 		if appData == "" {
 			appData = filepath.Join(homeDir, "AppData", "Roaming")
 		}
+		devin := filepath.Join(appData, "Devin", "User")
+		if stat, err := os.Stat(devin); err == nil && stat.IsDir() {
+			return devin
+		}
 		return filepath.Join(appData, "Windsurf", "User")
 	default: // linux and others
 		xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
 		if xdgConfigHome == "" {
 			xdgConfigHome = filepath.Join(homeDir, ".config")
+		}
+		devin := filepath.Join(xdgConfigHome, "Devin", "User")
+		if stat, err := os.Stat(devin); err == nil && stat.IsDir() {
+			return devin
 		}
 		return filepath.Join(xdgConfigHome, "Windsurf", "User")
 	}
