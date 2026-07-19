@@ -244,6 +244,27 @@ func TestRunArgsInstallHelpPrintsInstallSpecificHelp(t *testing.T) {
 	}
 }
 
+func TestRunArgsDoctorHelpPrintsDoctorSpecificHelp(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error {
+		return fmt.Errorf("platform validation should not run for doctor help")
+	}
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{"doctor", "--help"}, &buf)
+	if err != nil {
+		t.Fatalf("RunArgs(doctor --help) error = %v", err)
+	}
+
+	out := buf.String()
+	for _, want := range []string{"USAGE", "gentle-ai doctor", "--footprint"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor help missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
 func TestRunArgsSDDStatusIsDispatchedBeforePlatformValidation(t *testing.T) {
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })

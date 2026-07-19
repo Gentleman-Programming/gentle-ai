@@ -112,6 +112,11 @@ func RunArgs(args []string, stdout io.Writer) error {
 				cli.PrintInstallHelp(stdout)
 				return nil
 			}
+		case "doctor":
+			if hasHelpFlag(args[1:]) {
+				cli.PrintDoctorHelp(stdout)
+				return nil
+			}
 		}
 	}
 
@@ -260,7 +265,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 	case "restore":
 		return cli.RunRestore(args[1:], stdout)
 	case "doctor":
-		return cli.RunDoctor(context.Background(), stdout)
+		return cli.RunDoctor(context.Background(), args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown command %q — run 'gentle-ai help' for available commands", args[0])
 	}

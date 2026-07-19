@@ -10,6 +10,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
 // --- checkOneTool ---
@@ -473,7 +479,7 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
 
 	var buf bytes.Buffer
-	if err := RunDoctor(context.Background(), &buf); err != nil {
+	if err := RunDoctor(context.Background(), nil, &buf); err != nil {
 		t.Fatalf("RunDoctor returned error: %v", err)
 	}
 
@@ -495,8 +501,591 @@ func TestRunDoctor_HomeDirError(t *testing.T) {
 	osUserHomeDirDoctor = func() (string, error) { return "", errors.New("no home dir") }
 
 	var buf bytes.Buffer
-	err := RunDoctor(context.Background(), &buf)
+	err := RunDoctor(context.Background(), nil, &buf)
 	if err == nil {
 		t.Error("expected error when home dir fails")
+	}
+}
+
+// --- estimateTokens ---
+
+func TestEstimateTokens(t *testing.T) {
+	tests := []struct {
+		name  string
+		chars int
+		want  int
+	}{
+		{name: "zero chars", chars: 0, want: 0},
+		{name: "exact multiple of four", chars: 400, want: 100},
+		{name: "non-multiple rounds down", chars: 10, want: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := estimateTokens(tt.chars)
+			if got != tt.want {
+				t.Errorf("estimateTokens(%d) = %d, want %d", tt.chars, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- collectFootprint / footprintCheckResult ---
+
+func footprintSubsetRegistry() (*agents.Registry, error) {
+	return agents.NewRegistry(claude.NewAdapter(), opencode.NewAdapter())
+}
+
+func writeDoctorState(t *testing.T, homeDir string, agentIDs []string) {
+	t.Helper()
+	stateDir := filepath.Join(homeDir, ".gentle-ai")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	quoted := make([]string, len(agentIDs))
+	for i, id := range agentIDs {
+		quoted[i] = `"` + id + `"`
+	}
+	payload := `{"installed_agents":[` + strings.Join(quoted, ",") + `]}`
+	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeDoctorFixture(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setupFootprintSeams(t *testing.T, homeDir string) {
+	t.Helper()
+	origHome := osUserHomeDirDoctor
+	origRegistry := newDoctorRegistry
+	t.Cleanup(func() {
+		osUserHomeDirDoctor = origHome
+		newDoctorRegistry = origRegistry
+	})
+	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
+	newDoctorRegistry = footprintSubsetRegistry
+}
+
+func TestCollectFootprint(t *testing.T) {
+	tests := []struct {
+		name       string
+		agentIDs   []string // nil skips writing state.json entirely
+		fixtures   map[string]string
+		wantStatus CheckStatus
+		check      func(t *testing.T, sum FootprintSummary, result CheckResult)
+	}{
+		{
+			name:     "healthy two agents",
+			agentIDs: []string{"claude-code", "opencode"},
+			fixtures: map[string]string{
+				"claude-code": "<!-- gentle-ai:persona -->\nsome persona text\n<!-- /gentle-ai:persona -->\n",
+				"opencode":    "<!-- gentle-ai:engram-protocol -->\nprotocol text here\n<!-- /gentle-ai:engram-protocol -->\n",
+			},
+			wantStatus: CheckStatusPass,
+			check: func(t *testing.T, sum FootprintSummary, result CheckResult) {
+				if sum.TotalBlocks != 2 || sum.AgentsCovered != 2 {
+					t.Fatalf("expected 2 blocks across 2 agents, got %d/%d", sum.TotalBlocks, sum.AgentsCovered)
+				}
+				if sum.HasFail || sum.HasWarn {
+					t.Fatalf("expected no anomalies, got HasFail=%v HasWarn=%v", sum.HasFail, sum.HasWarn)
+				}
+				if !strings.Contains(result.Detail, "2 block") {
+					t.Errorf("expected detail to mention block count, got %q", result.Detail)
+				}
+			},
+		},
+		{
+			name:       "orphan open fails",
+			agentIDs:   []string{"claude-code"},
+			fixtures:   map[string]string{"claude-code": "<!-- gentle-ai:persona -->\nunclosed content\n"},
+			wantStatus: CheckStatusFail,
+			check: func(t *testing.T, sum FootprintSummary, result CheckResult) {
+				if !sum.HasFail {
+					t.Fatal("expected HasFail true for unclosed marker")
+				}
+				if !strings.Contains(result.Detail, "claude-code") || !strings.Contains(result.Detail, "persona") {
+					t.Errorf("expected detail to name agent and section id, got %q", result.Detail)
+				}
+				if result.Remedy == "" {
+					t.Error("expected non-empty remedy")
+				}
+			},
+		},
+		{
+			name:       "mismatch anomaly fails",
+			agentIDs:   []string{"claude-code"},
+			fixtures:   map[string]string{"claude-code": "<!-- gentle-ai:persona -->\ncontent\n<!-- /gentle-ai:other -->\n"},
+			wantStatus: CheckStatusFail,
+			check: func(t *testing.T, sum FootprintSummary, result CheckResult) {
+				if !sum.HasFail {
+					t.Fatal("expected HasFail true for id mismatch")
+				}
+				if !strings.Contains(result.Detail, "claude-code") || !strings.Contains(result.Detail, "other") {
+					t.Errorf("expected detail to name agent and the offending closer id, got %q", result.Detail)
+				}
+				if result.Remedy == "" {
+					t.Error("expected non-empty remedy")
+				}
+			},
+		},
+		{
+			name:       "stray closer warns",
+			agentIDs:   []string{"claude-code"},
+			fixtures:   map[string]string{"claude-code": "<!-- /gentle-ai:persona -->\nsome text\n"},
+			wantStatus: CheckStatusWarn,
+			check: func(t *testing.T, sum FootprintSummary, result CheckResult) {
+				if sum.HasFail {
+					t.Fatal("expected HasFail false for stray closer")
+				}
+				if !sum.HasWarn {
+					t.Fatal("expected HasWarn true for stray closer")
+				}
+			},
+		},
+		{
+			name:       "state missing",
+			wantStatus: CheckStatusWarn,
+			check: func(t *testing.T, sum FootprintSummary, result CheckResult) {
+				if !sum.StateMissing {
+					t.Fatal("expected StateMissing true")
+				}
+				if !strings.Contains(result.Remedy, "install") {
+					t.Errorf("expected install remedy, got %q", result.Remedy)
+				}
+			},
+		},
+		{
+			name:       "no agents",
+			agentIDs:   []string{},
+			wantStatus: CheckStatusWarn,
+			check: func(t *testing.T, sum FootprintSummary, result CheckResult) {
+				if !sum.NoAgents {
+					t.Fatal("expected NoAgents true")
+				}
+			},
+		},
+		{
+			name:       "unresolved agent is tracked but not scanned",
+			agentIDs:   []string{"unknown-agent"},
+			wantStatus: CheckStatusPass,
+			check: func(t *testing.T, sum FootprintSummary, result CheckResult) {
+				if len(sum.Agents) != 1 || !sum.Agents[0].Unresolved {
+					t.Fatalf("expected 1 unresolved agent entry, got %+v", sum.Agents)
+				}
+				if sum.AgentsCovered != 0 {
+					t.Errorf("expected unresolved agent not counted in AgentsCovered, got %d", sum.AgentsCovered)
+				}
+			},
+		},
+		{
+			name:       "absent instruction file is informational",
+			agentIDs:   []string{"claude-code"},
+			wantStatus: CheckStatusPass,
+			check: func(t *testing.T, sum FootprintSummary, result CheckResult) {
+				if len(sum.Agents) != 1 || sum.Agents[0].Present {
+					t.Fatalf("expected Present false when instruction file is absent, got %+v", sum.Agents)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			setupFootprintSeams(t, homeDir)
+			if tt.agentIDs != nil {
+				writeDoctorState(t, homeDir, tt.agentIDs)
+			}
+			reg, _ := footprintSubsetRegistry()
+			for id, content := range tt.fixtures {
+				adapter, ok := reg.Get(model.AgentID(id))
+				if !ok {
+					t.Fatalf("no adapter for %q in subset registry", id)
+				}
+				writeDoctorFixture(t, adapter.SystemPromptFile(homeDir), content)
+			}
+
+			sum := collectFootprint(homeDir)
+			result := footprintCheckResult(sum)
+			if result.Status != tt.wantStatus {
+				t.Fatalf("expected status %s, got %s: %s", tt.wantStatus, result.Status, result.Detail)
+			}
+			tt.check(t, sum, result)
+		})
+	}
+}
+
+func TestCollectFootprint_MalformedStateJSONIsNotConflatedWithEmptyAgents(t *testing.T) {
+	homeDir := t.TempDir()
+	setupFootprintSeams(t, homeDir)
+	stateDir := filepath.Join(homeDir, ".gentle-ai")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte("not-json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sum := collectFootprint(homeDir)
+	result := footprintCheckResult(sum)
+
+	if !sum.StateUnreadable {
+		t.Fatal("expected StateUnreadable true for malformed state.json")
+	}
+	if sum.NoAgents {
+		t.Fatal("expected NoAgents false for malformed state.json — must not conflate a corrupt state file with a genuinely empty agent list")
+	}
+	if result.Status != CheckStatusFail {
+		t.Errorf("expected Fail status for malformed state.json (mirroring checkStateJSON's severity), got %s", result.Status)
+	}
+	if strings.Contains(result.Detail, "no installed agents") {
+		t.Errorf("malformed state.json must not reuse the NoAgents wording, got detail=%q", result.Detail)
+	}
+	if result.Remedy == "Run 'gentle-ai install' to configure agents" {
+		t.Errorf("malformed state.json must not reuse the NoAgents remedy verbatim, got remedy=%q", result.Remedy)
+	}
+}
+
+func TestCollectFootprint_RegistryConstructionFailureIsWarnNotNoAgents(t *testing.T) {
+	homeDir := t.TempDir()
+	origRegistry := newDoctorRegistry
+	t.Cleanup(func() { newDoctorRegistry = origRegistry })
+	newDoctorRegistry = func() (*agents.Registry, error) {
+		return nil, errors.New("registry construction failed")
+	}
+
+	sum := collectFootprint(homeDir)
+	result := footprintCheckResult(sum)
+
+	if !sum.RegistryUnavailable {
+		t.Fatal("expected RegistryUnavailable true when newDoctorRegistry fails")
+	}
+	if sum.NoAgents {
+		t.Fatal("expected NoAgents false when registry construction fails")
+	}
+	if result.Status != CheckStatusWarn {
+		t.Errorf("expected Warn status for registry construction failure, got %s", result.Status)
+	}
+}
+
+// setupRunDoctorMocks stubs the four seams RunDoctor's non-footprint checks
+// depend on (tool lookup, disk space, Engram HTTP, PATH dirs) so integration
+// tests can focus on footprint behavior without those checks failing/warning.
+func setupRunDoctorMocks(t *testing.T) {
+	t.Helper()
+	origLookPath := lookPathFn
+	origAvail := availableBytesFn
+	origHTTP := httpGetFn
+	origPathDirs := pathDirsFn
+	t.Cleanup(func() {
+		lookPathFn = origLookPath
+		availableBytesFn = origAvail
+		httpGetFn = origHTTP
+		pathDirsFn = origPathDirs
+	})
+	lookPathFn = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+	availableBytesFn = func(string) (int64, error) { return 1024 * 1024 * 1024, nil }
+	httpGetFn = func(string, time.Duration) (int, error) { return 200, nil }
+	pathDirsFn = func() []string { return []string{"/usr/local/bin"} }
+}
+
+// --- ParseDoctorFlags ---
+
+func TestParseDoctorFlags(t *testing.T) {
+	tests := []struct {
+		name          string
+		args          []string
+		wantFootprint bool
+		wantErr       bool
+	}{
+		{name: "nil args defaults to false", args: nil, wantFootprint: false},
+		{name: "empty args defaults to false", args: []string{}, wantFootprint: false},
+		{name: "footprint flag enables detail", args: []string{"--footprint"}, wantFootprint: true},
+		{name: "footprint=false stays disabled", args: []string{"--footprint=false"}, wantFootprint: false},
+		{name: "unknown flag errors", args: []string{"--bogus"}, wantErr: true},
+		{name: "unexpected positional argument errors", args: []string{"extra"}, wantErr: true},
+		{name: "--help returns flag.ErrHelp", args: []string{"--help"}, wantErr: true},
+		{name: "-h returns flag.ErrHelp", args: []string{"-h"}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseDoctorFlags(tt.args)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.Footprint != tt.wantFootprint {
+				t.Errorf("Footprint = %v, want %v", got.Footprint, tt.wantFootprint)
+			}
+		})
+	}
+}
+
+func TestRunDoctor_HelpFlagPrintsUsageWithoutError(t *testing.T) {
+	var buf bytes.Buffer
+	if err := RunDoctor(context.Background(), []string{"--help"}, &buf); err != nil {
+		t.Fatalf("RunDoctor with --help should not return an error, got: %v", err)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "gentle-ai doctor") {
+		t.Errorf("expected usage text mentioning the command, got:\n%s", output)
+	}
+	if !strings.Contains(output, "--footprint") {
+		t.Errorf("expected usage text to document --footprint, got:\n%s", output)
+	}
+}
+
+// --- renderFootprintDetail ---
+
+func TestRenderFootprintDetail(t *testing.T) {
+	tests := []struct {
+		name    string
+		summary FootprintSummary
+		wantAll []string
+	}{
+		{
+			name: "healthy agent with blocks",
+			summary: FootprintSummary{
+				Agents: []AgentFootprint{
+					{
+						AgentID: "claude-code",
+						Path:    "/home/user/.claude/CLAUDE.md",
+						Present: true,
+						Sections: []filemerge.Section{
+							{ID: "persona", CharCount: 400, LineCount: 10},
+						},
+						CharCount: 400,
+						LineCount: 10,
+						TokenEst:  100,
+					},
+				},
+				TotalBlocks:   1,
+				AgentsCovered: 1,
+				TotalTokenEst: 100,
+			},
+			wantAll: []string{
+				"Managed block footprint",
+				"claude-code",
+				"/home/user/.claude/CLAUDE.md",
+				"persona",
+				"10",
+				"400",
+				"100",
+				"TOTAL",
+			},
+		},
+		{
+			name: "absent instruction file gets a note",
+			summary: FootprintSummary{
+				Agents: []AgentFootprint{
+					{AgentID: "opencode", Path: "/home/user/.config/opencode/AGENTS.md", Present: false},
+				},
+			},
+			wantAll: []string{"opencode", "absent"},
+		},
+		{
+			name: "unresolved agent gets a note",
+			summary: FootprintSummary{
+				Agents: []AgentFootprint{
+					{AgentID: "unknown-agent", Unresolved: true},
+				},
+			},
+			wantAll: []string{"unknown-agent", "unresolved"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			renderFootprintDetail(&buf, tt.summary)
+			output := buf.String()
+			for _, want := range tt.wantAll {
+				if !strings.Contains(output, want) {
+					t.Errorf("expected output to contain %q, got:\n%s", want, output)
+				}
+			}
+		})
+	}
+}
+
+// --- RunDoctor --footprint integration ---
+
+func TestRunDoctor_FootprintFlag(t *testing.T) {
+	homeDir := t.TempDir()
+	setupFootprintSeams(t, homeDir)
+	writeDoctorState(t, homeDir, []string{"claude-code"})
+	reg, _ := footprintSubsetRegistry()
+	adapter, ok := reg.Get(model.AgentID("claude-code"))
+	if !ok {
+		t.Fatal("no adapter for claude-code in subset registry")
+	}
+	writeDoctorFixture(t, adapter.SystemPromptFile(homeDir), "<!-- gentle-ai:persona -->\nsome persona text\n<!-- /gentle-ai:persona -->\n")
+	setupRunDoctorMocks(t)
+
+	var withFlag bytes.Buffer
+	if err := RunDoctor(context.Background(), []string{"--footprint"}, &withFlag); err != nil {
+		t.Fatalf("RunDoctor returned error: %v", err)
+	}
+	withFlagOutput := withFlag.String()
+	if !strings.Contains(withFlagOutput, "managed:footprint") {
+		t.Error("expected compact managed:footprint line in output")
+	}
+	if !strings.Contains(withFlagOutput, "Managed block footprint") {
+		t.Error("expected detail table header when --footprint is set")
+	}
+	if !strings.Contains(withFlagOutput, "persona") {
+		t.Error("expected persona section id in detail table")
+	}
+
+	var withoutFlag bytes.Buffer
+	if err := RunDoctor(context.Background(), nil, &withoutFlag); err != nil {
+		t.Fatalf("RunDoctor returned error: %v", err)
+	}
+	withoutFlagOutput := withoutFlag.String()
+	if !strings.Contains(withoutFlagOutput, "managed:footprint") {
+		t.Error("expected compact managed:footprint line in output")
+	}
+	if strings.Contains(withoutFlagOutput, "Managed block footprint") {
+		t.Error("expected no detail table header without --footprint")
+	}
+}
+
+// --- safeCollectFootprint / panic isolation ---
+
+func TestRunDoctor_FootprintPanicIsRecoveredWithoutLosingOtherChecks(t *testing.T) {
+	setupRunDoctorMocks(t)
+	homeDir := t.TempDir()
+	origHomeDir := osUserHomeDirDoctor
+	origRegistry := newDoctorRegistry
+	t.Cleanup(func() {
+		osUserHomeDirDoctor = origHomeDir
+		newDoctorRegistry = origRegistry
+	})
+	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
+	newDoctorRegistry = func() (*agents.Registry, error) {
+		panic("simulated footprint scan crash")
+	}
+
+	var buf bytes.Buffer
+	if err := RunDoctor(context.Background(), nil, &buf); err != nil {
+		t.Fatalf("RunDoctor returned error: %v", err)
+	}
+
+	output := buf.String()
+	for _, name := range []string{"tool:gentle-ai", "state:json", "engram:reachable", "disk:space"} {
+		if !strings.Contains(output, name) {
+			t.Errorf("expected other check %q to still appear after footprint panic, got:\n%s", name, output)
+		}
+	}
+	if !strings.Contains(output, "managed:footprint") {
+		t.Error("expected a managed:footprint entry explaining the recovery")
+	}
+	if !strings.Contains(output, "recovered") {
+		t.Error("expected footprint entry to explain the panic was recovered")
+	}
+}
+
+func TestRunDoctor_FootprintFlagSkipsDetailTableOnPanic(t *testing.T) {
+	setupRunDoctorMocks(t)
+	homeDir := t.TempDir()
+	origHomeDir := osUserHomeDirDoctor
+	origRegistry := newDoctorRegistry
+	t.Cleanup(func() {
+		osUserHomeDirDoctor = origHomeDir
+		newDoctorRegistry = origRegistry
+	})
+	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
+	newDoctorRegistry = func() (*agents.Registry, error) {
+		panic("simulated footprint scan crash")
+	}
+
+	var buf bytes.Buffer
+	if err := RunDoctor(context.Background(), []string{"--footprint"}, &buf); err != nil {
+		t.Fatalf("RunDoctor returned error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "recovered") {
+		t.Error("expected footprint entry to explain the panic was recovered")
+	}
+	if strings.Contains(output, "Managed block footprint") {
+		t.Error("expected the --footprint detail table to be skipped after a recovered panic, but it was rendered")
+	}
+}
+
+// --- RunDoctor overall status reflects a broken marker end-to-end ---
+
+func TestRunDoctor_FootprintFailureDegradesOverallStatus(t *testing.T) {
+	homeDir := t.TempDir()
+	setupFootprintSeams(t, homeDir)
+	writeDoctorState(t, homeDir, []string{"claude-code"})
+	reg, _ := footprintSubsetRegistry()
+	adapter, ok := reg.Get(model.AgentID("claude-code"))
+	if !ok {
+		t.Fatal("no adapter for claude-code in subset registry")
+	}
+	writeDoctorFixture(t, adapter.SystemPromptFile(homeDir), "<!-- gentle-ai:persona -->\nunclosed content\n")
+	setupRunDoctorMocks(t)
+
+	var buf bytes.Buffer
+	if err := RunDoctor(context.Background(), nil, &buf); err != nil {
+		t.Fatalf("RunDoctor returned error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "managed:footprint") {
+		t.Error("expected managed:footprint check in output")
+	}
+	if !strings.Contains(output, "broken managed block marker") {
+		t.Errorf("expected the broken marker detail in output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Status:  unhealthy") {
+		t.Errorf("expected overall Status to flip to unhealthy from the broken marker, got:\n%s", output)
+	}
+}
+
+// --- RunDoctor --footprint on a genuinely fresh install (no state.json at all) ---
+
+func TestRunDoctor_FootprintFlagFreshInstallNoStateFile(t *testing.T) {
+	setupRunDoctorMocks(t)
+	homeDir := t.TempDir()
+	origHomeDir := osUserHomeDirDoctor
+	t.Cleanup(func() { osUserHomeDirDoctor = origHomeDir })
+	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
+
+	var buf bytes.Buffer
+	if err := RunDoctor(context.Background(), []string{"--footprint"}, &buf); err != nil {
+		t.Fatalf("RunDoctor returned error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "managed:footprint") {
+		t.Error("expected compact managed:footprint line in output")
+	}
+	if !strings.Contains(output, "state file not found") {
+		t.Error("expected footprint detail to explain the missing state file")
+	}
+	if !strings.Contains(output, "Managed block footprint") {
+		t.Error("expected detail table header when --footprint is set")
+	}
+	if strings.Contains(output, "<nil>") || strings.Contains(output, "panic") {
+		t.Errorf("expected no garbage/panic output in the detail table, got:\n%s", output)
+	}
+	if !strings.Contains(output, "TOTAL") {
+		t.Error("expected a well-formed TOTAL line even with zero agents scanned")
 	}
 }
