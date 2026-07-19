@@ -54,11 +54,18 @@ const compactRecoveryAuthorizationSchema = "gentle-ai.review-recovery-authorizat
 // through the retired-field compatibility path.
 var ErrHistoricalCompatReadOnly = errors.New("historical compatibility authority is read-only")
 
-// compactRetiredStateFields lists top-level compact state fields persisted by
-// older builds and removed from the current schema. Historical records that
-// carry them load read-only; new authority state never persists them.
-var compactRetiredStateFields = map[string]struct{}{
-	"zero_edit_escalation": {},
+// compactRetiredStateFieldPaths lists dot-separated compact state field paths
+// persisted by older builds and removed from the current schema. Each path is
+// tolerated only at its exact nesting level: "zero_edit_escalation" at the
+// state top level and "recovery.review_start" nested inside the recovery
+// provenance object. Historical records that carry them load read-only with
+// the retired content dropped from the in-memory view only; the persisted
+// bytes, including the retired recovered-start provenance, remain untouched
+// on disk because the tolerant read never rewrites authority. New authority
+// state never persists these fields.
+var compactRetiredStateFieldPaths = map[string]struct{}{
+	"zero_edit_escalation":  {},
+	"recovery.review_start": {},
 }
 
 // LegacyReadOnlyError is the typed ordinary-mutation denial for historical
@@ -1241,24 +1248,28 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 
 // retiredCompactFieldError reports whether a strict decode failure names a
 // retired compatibility field, so only genuine historical records pay the
-// tolerant second parse.
+// tolerant second parse. The decoder error only carries the leaf field name;
+// the tolerant parse then enforces the exact nesting level of each path.
 func retiredCompactFieldError(err error) bool {
 	message := err.Error()
 	if !strings.Contains(message, "unknown field") {
 		return false
 	}
-	for name := range compactRetiredStateFields {
-		if strings.Contains(message, `"`+name+`"`) {
+	for path := range compactRetiredStateFieldPaths {
+		segments := strings.Split(path, ".")
+		if strings.Contains(message, `"`+segments[len(segments)-1]+`"`) {
 			return true
 		}
 	}
 	return false
 }
 
-// parseHistoricalCompactRecord tolerates only retired top-level state fields
-// from older builds. The persisted revision must bind the exact historical
-// state bytes, so loading preserves revisions and provenance without ever
-// rewriting or re-hashing persisted authority.
+// parseHistoricalCompactRecord tolerates only retired state field paths from
+// older builds, each removed at its exact nesting level. The persisted
+// revision must bind the exact historical state bytes, so loading preserves
+// revisions and provenance without ever rewriting or re-hashing persisted
+// authority; retired content such as recovery.review_start stays intact on
+// disk and is only dropped from the decoded in-memory view.
 func parseHistoricalCompactRecord(payload []byte) (CompactRecord, error) {
 	var envelope struct {
 		Schema   string          `json:"schema"`
@@ -1279,10 +1290,13 @@ func parseHistoricalCompactRecord(payload []byte) (CompactRecord, error) {
 		return CompactRecord{}, err
 	}
 	retired := false
-	for name := range compactRetiredStateFields {
-		if _, exists := fields[name]; exists {
+	for path := range compactRetiredStateFieldPaths {
+		deleted, deleteErr := deleteRetiredCompactField(fields, strings.Split(path, "."))
+		if deleteErr != nil {
+			return CompactRecord{}, deleteErr
+		}
+		if deleted {
 			retired = true
-			delete(fields, name)
 		}
 	}
 	if !retired {
@@ -1311,6 +1325,36 @@ func parseHistoricalCompactRecord(payload []byte) (CompactRecord, error) {
 		return CompactRecord{}, errors.New("compact review state checksum mismatch")
 	}
 	return CompactRecord{Schema: envelope.Schema, Revision: envelope.Revision, State: state, HistoricalCompat: true}, nil
+}
+
+// deleteRetiredCompactField removes one retired field at the exact nesting
+// level its dot-path names, mutating only the in-memory field view used for
+// the tolerant re-decode. A retired leaf name appearing at any other level
+// stays in place and keeps failing strict decoding.
+func deleteRetiredCompactField(fields map[string]json.RawMessage, path []string) (bool, error) {
+	name := path[0]
+	raw, exists := fields[name]
+	if !exists {
+		return false, nil
+	}
+	if len(path) == 1 {
+		delete(fields, name)
+		return true, nil
+	}
+	var nested map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &nested); err != nil {
+		return false, err
+	}
+	deleted, err := deleteRetiredCompactField(nested, path[1:])
+	if err != nil || !deleted {
+		return deleted, err
+	}
+	updated, err := json.Marshal(nested)
+	if err != nil {
+		return false, err
+	}
+	fields[name] = updated
+	return true, nil
 }
 
 func appendCompactTrace(path string, entry CompactTraceEntry) error {
