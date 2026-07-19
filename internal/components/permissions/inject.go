@@ -3,11 +3,18 @@ package permissions
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
+
+var codexPermissionsGOOS = runtime.GOOS
+var codexPermissionsLookPath = exec.LookPath
 
 type InjectionResult struct {
 	Changed bool
@@ -196,10 +203,22 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	} {
 		merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", path, `"read"`)
 	}
-	for _, path := range []string{
-		`":tmpdir"`,
-		`":slash_tmp"`,
-	} {
+	writePaths := []string{`":tmpdir"`, `":slash_tmp"`}
+	if codexPermissionsGOOS == "windows" {
+		writePaths = append(writePaths,
+			`"~/AppData/Local/OpenAI/Codex/**"`,
+			resolveWindowsCodexPackagePath(),
+			`"~/AppData/Local/engram/**"`,
+		)
+	} else if codexPermissionsGOOS == "darwin" {
+		writePaths = append(writePaths,
+			`"~/Library/Application Support/com.openai.chat/**"`,
+			`"~/Library/Caches/com.openai.chat/**"`,
+			`"~/Library/Application Support/OpenAI.Codex/**"`,
+			`"~/Library/Application Support/engram/**"`,
+		)
+	}
+	for _, path := range writePaths {
 		merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", path, `"write"`)
 	}
 
@@ -264,4 +283,22 @@ var osReadFile = func(path string) ([]byte, error) {
 	}
 
 	return content, nil
+}
+
+func resolveWindowsCodexPackagePath() string {
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		return `"~/AppData/Local/Packages/OpenAI.Codex_2p2nqsd0c76g0/**"`
+	}
+	packagesDir := filepath.Join(localAppData, "Packages")
+	entries, err := os.ReadDir(packagesDir)
+	if err != nil {
+		return `"~/AppData/Local/Packages/OpenAI.Codex_2p2nqsd0c76g0/**"`
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(strings.ToLower(entry.Name()), "openai.codex_") {
+			return fmt.Sprintf(`"~/AppData/Local/Packages/%s/**"`, entry.Name())
+		}
+	}
+	return `"~/AppData/Local/Packages/OpenAI.Codex_2p2nqsd0c76g0/**"`
 }

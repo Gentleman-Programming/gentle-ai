@@ -299,11 +299,15 @@ func UpsertTopLevelTOMLString(content, key, value string) string {
 	lines := strings.Split(content, "\n")
 	lineValue := fmt.Sprintf("%s = %q", key, value)
 
-	// Remove all existing occurrences of the key.
+	// Remove existing occurrences of the key only at the top level (before any section).
 	var cleaned []string
+	inSection := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=") {
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inSection = true
+		}
+		if !inSection && (strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=")) {
 			continue
 		}
 		cleaned = append(cleaned, line)

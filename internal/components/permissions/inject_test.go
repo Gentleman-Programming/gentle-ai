@@ -412,6 +412,10 @@ func TestInjectCodexPermissionsAllowsEnvExamples(t *testing.T) {
 }
 
 func TestInjectCodexPermissionsProfileIsIdempotent(t *testing.T) {
+	origGOOS := codexPermissionsGOOS
+	codexPermissionsGOOS = "linux"
+	t.Cleanup(func() { codexPermissionsGOOS = origGOOS })
+
 	home := t.TempDir()
 	configPath := filepath.Join(home, ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
@@ -444,13 +448,12 @@ args = ["mcp", "--tools=agent"]
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
-	if second.Changed {
-		t.Fatal("Inject() second changed = true")
-	}
-
 	secondContent, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("ReadFile() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("Inject() second changed = true")
 	}
 	if string(firstContent) != string(secondContent) {
 		t.Fatalf("Codex permissions injection is not idempotent:\nfirst:\n%s\nsecond:\n%s", firstContent, secondContent)
@@ -475,6 +478,142 @@ args = ["mcp", "--tools=agent"]
 }
 
 func TestInjectCodexPermissionsRemovesInvalidGitWriteRules(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	initial := `[permissions.gentle-dev.filesystem.":workspace_roots"]
+"**/.git" = "write"
+"**/.git/**" = "write"
+"**/.env" = "deny"
+"**/.env.local" = "deny"
+"**/.env.*.local" = "deny"
+"**/*.pem" = "deny"
+"**/*.key" = "deny"
+"**/secrets/*" = "deny"
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := Inject(home, codexAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, `".git/**" = "write"`) {
+		t.Fatalf("config.toml missing valid git write rule; got:\n%s", text)
+	}
+	for _, invalidGitRule := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`} {
+		if strings.Contains(text, invalidGitRule) {
+			t.Fatalf("config.toml still contains invalid git write rule %q; got:\n%s", invalidGitRule, text)
+		}
+	}
+
+	for _, denyRule := range []string{
+		`"**/.env" = "deny"`,
+		`"**/.env.local" = "deny"`,
+		`"**/.env.*.local" = "deny"`,
+		`"**/.aws/credentials" = "deny"`,
+		`"**/.config/gh/hosts.yml" = "deny"`,
+		`"**/.credentials/**" = "deny"`,
+		`"**/.ssh/**" = "deny"`,
+		`"**/Library/Keychains/**" = "deny"`,
+		`"**/credentials.json" = "deny"`,
+		`"**/*.pem" = "deny"`,
+		`"**/*.key" = "deny"`,
+		`"**/secrets/**" = "deny"`,
+	} {
+		if strings.Count(text, denyRule) != 1 {
+			t.Fatalf("config.toml should preserve deny rule %q exactly once; got:\n%s", denyRule, text)
+		}
+	}
+}
+
+func TestInjectCodexPermissionsPlatformPaths(t *testing.T) {
+	tests := []struct {
+		name      string
+		goos      string
+		wantPaths []string
+	}{
+		{
+			name: "Windows paths injected",
+			goos: "windows",
+			wantPaths: []string{
+				`"~/AppData/Local/OpenAI/Codex/**" = "write"`,
+				`"~/AppData/Local/Packages/OpenAI.Codex_2p2nqsd0c76g0/**" = "write"`,
+				`"~/AppData/Local/engram/**" = "write"`,
+			},
+		},
+		{
+			name: "Darwin paths injected",
+			goos: "darwin",
+			wantPaths: []string{
+				`"~/Library/Application Support/com.openai.chat/**" = "write"`,
+				`"~/Library/Caches/com.openai.chat/**" = "write"`,
+				`"~/Library/Application Support/OpenAI.Codex/**" = "write"`,
+				`"~/Library/Application Support/engram/**" = "write"`,
+			},
+		},
+		{
+			name:      "Other OS gets no extra paths",
+			goos:      "linux",
+			wantPaths: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			origGOOS := codexPermissionsGOOS
+			codexPermissionsGOOS = tt.goos
+			t.Cleanup(func() { codexPermissionsGOOS = origGOOS })
+
+			home := t.TempDir()
+			configPath := filepath.Join(home, ".codex", "config.toml")
+			if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			if err := os.WriteFile(configPath, []byte(""), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			_, err := Inject(home, codexAdapter())
+			if err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+
+			content, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
+			}
+			text := string(content)
+
+			filesystemSection := tomlSection(text, "[permissions.gentle-dev.filesystem]")
+			if len(tt.wantPaths) == 0 {
+				for _, path := range []string{`OpenAI`, `com.openai.chat`, `engram`} {
+					if strings.Contains(filesystemSection, path) {
+						t.Errorf("expected no app cache paths for OS %s, got:\n%s", tt.goos, filesystemSection)
+					}
+				}
+			} else {
+				for _, path := range tt.wantPaths {
+					if !strings.Contains(filesystemSection, path) {
+						t.Errorf("missing expected path %q in gentle-dev filesystem section; got:\n%s", path, filesystemSection)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestInjectCodexPermissionsRelocatesSecretDeniesToWorkspaceRootsTable(t *testing.T) {
 	home := t.TempDir()
 	configPath := filepath.Join(home, ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
@@ -820,4 +959,25 @@ func TestInjectOpenCodePreservesExistingDenyRules(t *testing.T) {
 	if readNode["**/.ssh/**"] != "deny" {
 		t.Errorf("default read deny rule '**/.ssh/**' was not added; got: %v", readNode)
 	}
+}
+
+func tomlSection(text, sectionHeader string) string {
+	lines := strings.Split(text, "\n")
+	var sectionLines []string
+	inSection := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			if trimmed == sectionHeader {
+				inSection = true
+				continue
+			} else if inSection {
+				break
+			}
+		}
+		if inSection {
+			sectionLines = append(sectionLines, line)
+		}
+	}
+	return strings.Join(sectionLines, "\n")
 }
