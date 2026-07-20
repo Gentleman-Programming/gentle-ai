@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -102,6 +103,9 @@ func CountVersionCallsForTest(t interface {
 }
 
 func VerifyHealth(ctx context.Context, baseURL string) error {
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = os.Getenv("ENGRAM_BASE_URL")
+	}
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = "http://127.0.0.1:7437"
 	}

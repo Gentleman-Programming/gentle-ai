@@ -44,6 +44,19 @@ func TestVerifyHealth(t *testing.T) {
 	}
 }
 
+func TestVerifyHealthEnvVar(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	t.Setenv("ENGRAM_BASE_URL", server.URL)
+
+	if err := VerifyHealth(context.Background(), ""); err != nil {
+		t.Fatalf("VerifyHealth() with ENGRAM_BASE_URL error = %v", err)
+	}
+}
+
 func TestVerifyVersionCommandUsesTimeoutAndProvidedBinary(t *testing.T) {
 	original := runVersionCommand
 	t.Cleanup(func() { runVersionCommand = original })
