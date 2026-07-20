@@ -2264,3 +2264,60 @@ func newCompactRevisionState(t *testing.T, repo, lineage string) CompactState {
 	}
 	return state
 }
+
+func TestStartCompactAuthorityBlocksSameScopeChangedCandidateWithoutRecovery(t *testing.T) {
+	repo := initSnapshotRepo(t)
+
+	// Create base files
+	writeSnapshotFile(t, repo, "path_1.txt", "one\n")
+	writeSnapshotFile(t, repo, "path_2.txt", "two\n")
+	writeSnapshotFile(t, repo, "path_3.txt", "three\n")
+	writeSnapshotFile(t, repo, "path_4.txt", "four\n")
+	gitSnapshot(t, repo, "add", ".")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+
+	// Change all files to create an approved leaf with 4-path scope
+	writeSnapshotFile(t, repo, "path_1.txt", "one-changed\n")
+	writeSnapshotFile(t, repo, "path_2.txt", "two-changed\n")
+	writeSnapshotFile(t, repo, "path_3.txt", "three-changed\n")
+	writeSnapshotFile(t, repo, "path_4.txt", "four-changed\n")
+
+	// Create an approved leaf
+	approved, _, _ := approvedCompactCurrentChangesFixture(t, repo, "compact-start-approved-same-scope", []string{})
+
+	// Change content in 2 of those 4 paths (same paths, different candidate tree)
+	writeSnapshotFile(t, repo, "path_1.txt", "one-changed-again\n")
+	writeSnapshotFile(t, repo, "path_2.txt", "two-changed-again\n")
+
+	requested := newCompactTestState(t, repo, "compact-start-requested")
+
+	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
+	if err != nil || result.Action != CompactStartBlocked || result.Record.State.LineageID != approved.LineageID {
+		t.Fatalf("start same scope changed candidate = %#v, %v", result, err)
+	}
+}
+
+func TestStartCompactAuthorityCreatesUnrelatedTargetWithChangedPaths(t *testing.T) {
+	repo := initSnapshotRepo(t)
+
+	// Create base files
+	writeSnapshotFile(t, repo, "path_1.txt", "one\n")
+	writeSnapshotFile(t, repo, "path_2.txt", "two\n")
+	gitSnapshot(t, repo, "add", ".")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+
+	// Change path_1.txt to create an approved leaf with 1-path scope
+	writeSnapshotFile(t, repo, "path_1.txt", "one-changed\n")
+	approvedCompactCurrentChangesFixture(t, repo, "compact-start-approved-path1", []string{})
+
+	// Revert path_1.txt and change path_2.txt instead (completely different path scope)
+	writeSnapshotFile(t, repo, "path_1.txt", "one\n")
+	writeSnapshotFile(t, repo, "path_2.txt", "two-changed\n")
+
+	requested := newCompactTestState(t, repo, "compact-start-requested-path2")
+
+	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
+	if err != nil || result.Action != CompactStartCreated {
+		t.Fatalf("start unrelated target = %#v, %v", result, err)
+	}
+}

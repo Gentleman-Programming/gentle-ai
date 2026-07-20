@@ -669,6 +669,14 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 		if compactStartClaimsTarget(ctx, requestedStore.repo, existing, request.State) {
 			claimants = append(claimants, store)
 			requestedClaims = requestedClaims || store.lineageID == request.State.LineageID
+			continue
+		}
+		// If an approved leaf has matching delivery scope but a changed candidate tree,
+		// it requires explicit predecessor-bound recovery — block creation.
+		if existing.State == StateApproved && compactStartDeliveryScopeMatches(existing, request.State) &&
+			request.State.InitialSnapshot.CandidateTree != existing.InitialSnapshot.CandidateTree &&
+			request.State.InitialSnapshot.CandidateTree != existing.CurrentSnapshot.CandidateTree {
+			return CompactStartResult{Record: records[store.lineageID], Action: CompactStartBlocked}, nil
 		}
 	}
 	if len(recoveryCandidates) > 0 {
