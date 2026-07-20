@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sysproc"
 )
 
 // execCommandContext is a package-level seam over exec.CommandContext,
@@ -15,7 +17,11 @@ import (
 // override the spawned process (e.g. substitute a short-lived real process
 // for "engram setup --help") while exercising the real, unfaked
 // runProtocolProbeCommand body under `go test -race` (JD-012).
-var execCommandContext = exec.CommandContext
+var execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	sysproc.HideConsole(cmd)
+	return cmd
+}
 
 // protocolProbeTimeout is the hard deadline for ProbeProtocolFlag. It exists
 // so a menu-printing old engram binary (see design.md Decision 4 Open

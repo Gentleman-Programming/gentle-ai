@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/internal/sysproc"
 )
 
 type SystemInfo struct {
@@ -69,7 +71,9 @@ func Detect(ctx context.Context) (DetectionResult, error) {
 // detectNpmWritable checks if npm's global prefix is under the user's home
 // directory (nvm, fnm, volta, etc.), meaning sudo is not needed for global installs.
 func detectNpmWritable(homeDir string) bool {
-	out, err := exec.Command("npm", "config", "get", "prefix").Output()
+	cmd := exec.Command("npm", "config", "get", "prefix")
+	sysproc.HideConsole(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return false
 	}

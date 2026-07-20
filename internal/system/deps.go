@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/gentleman-programming/gentle-ai/internal/sysproc"
 )
 
 // Dependency represents a system prerequisite with detection and install metadata.
@@ -143,6 +145,7 @@ func detectSingleDep(ctx context.Context, dep Dependency) Dependency {
 
 	// Run version command to extract version string.
 	cmd := exec.CommandContext(ctx, dep.DetectCmd[0], dep.DetectCmd[1:]...)
+	sysproc.HideConsole(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		// Binary exists but version command failed — still mark as installed.

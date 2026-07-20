@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sysproc"
 )
 
 type TargetKind string
@@ -1468,6 +1469,7 @@ func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, st
 	commandContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	command := gitCommandContext(commandContext, "git", append([]string{"--no-replace-objects", "-C", repo}, args...)...)
+	sysproc.HideConsole(command)
 	command.Cancel = nil
 	command.WaitDelay = gitCommandWaitDelay
 	command.Env = sanitizedGitEnvironmentForRun(os.Environ(), extraEnv, isolateConfig)

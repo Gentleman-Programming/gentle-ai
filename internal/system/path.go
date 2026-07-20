@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/internal/sysproc"
 )
 
 // AddToUserPath adds a directory to the Windows user PATH persistently.
@@ -57,6 +59,7 @@ func AddToUserPath(dir string) error {
 		safeDir, safeDir,
 	)
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	sysproc.HideConsole(cmd)
 	return cmd.Run()
 }
 
@@ -86,6 +89,7 @@ func PrioritizeUserPath(dir string) error {
 		safeDir,
 	)
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	sysproc.HideConsole(cmd)
 	return cmd.Run()
 }
 
@@ -98,6 +102,7 @@ func UserPathEntries(goos string) ([]string, error) {
 	}
 
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", `[Environment]::GetEnvironmentVariable('PATH', 'User')`)
+	sysproc.HideConsole(cmd)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err

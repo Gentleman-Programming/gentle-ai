@@ -7,11 +7,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/internal/sysproc"
 )
 
 var (
 	codeGraphGitTopLevel = defaultCodeGraphGitTopLevel
-	codeGraphInit        = func(name string, args ...string) error { return exec.Command(name, args...).Run() }
+	codeGraphInit        = func(name string, args ...string) error {
+		cmd := exec.Command(name, args...)
+		sysproc.HideConsole(cmd)
+		return cmd.Run()
+	}
 	codeGraphUserHomeDir = os.UserHomeDir
 	codeGraphTempDir     = os.TempDir
 )
@@ -107,7 +113,9 @@ func pathIsWithin(parent, child string) bool {
 }
 
 func defaultCodeGraphGitTopLevel(path string) (string, error) {
-	output, err := exec.Command("git", "-C", path, "rev-parse", "--show-toplevel").Output()
+	cmd := exec.Command("git", "-C", path, "rev-parse", "--show-toplevel")
+	sysproc.HideConsole(cmd)
+	output, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}

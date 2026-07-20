@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/internal/sysproc"
 )
 
 // httpClient is the HTTP client used for GitHub API calls.
@@ -50,6 +52,7 @@ func resolveGitHubToken() string {
 	if ghPath, err := ghLookPath("gh"); err == nil {
 		var out bytes.Buffer
 		cmd := exec.Command(ghPath, "auth", "token")
+		sysproc.HideConsole(cmd)
 		cmd.Stdout = &out
 		if err := cmd.Run(); err == nil {
 			if token := strings.TrimSpace(out.String()); token != "" {

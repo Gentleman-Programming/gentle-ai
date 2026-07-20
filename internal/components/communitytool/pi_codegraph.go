@@ -19,6 +19,10 @@ import (
 
 	piagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sysproc"
+
+	piagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 )
 
 const (
@@ -518,6 +522,7 @@ func probePiCodeGraphMCPWithAgentDirContext(ctx context.Context, mcpPath, agentD
 		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("Pi MCP adapter extension is unavailable at %q: %w", adapterPath, err)
 	}
 	command := exec.CommandContext(ctx, "codegraph", "serve", "--mcp")
+	sysproc.HideConsole(command)
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		return PiCodeGraphMCPProbeResult{}, err

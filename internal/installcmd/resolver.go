@@ -11,6 +11,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sysproc"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 // cmdLookPath, osStat, osGetenv, and cmdGoVersion are package-level vars for testability.
@@ -18,7 +22,9 @@ var cmdLookPath = exec.LookPath
 var osStat = os.Stat
 var osGetenv = os.Getenv
 var cmdGoVersion = func() ([]byte, error) {
-	return exec.Command("go", "version").Output()
+	cmd := exec.Command("go", "version")
+	sysproc.HideConsole(cmd)
+	return cmd.Output()
 }
 
 // CommandSequence represents an ordered list of commands to run in sequence.
