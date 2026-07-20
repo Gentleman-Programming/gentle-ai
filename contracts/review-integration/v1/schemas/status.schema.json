@@ -67,10 +67,63 @@
       "additionalProperties": false,
       "required": ["required"],
       "properties": { "required": { "const": true } }
-    }
+    },
+    "eligibility": { "$ref": "#/$defs/action_eligibility" }
   },
   "$defs": {
-    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "action_eligibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_actions", "forbidden_actions"],
+      "properties": {
+        "allowed_actions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["action", "reason_code", "required_inputs"],
+            "properties": {
+              "action": { "enum": ["stop", "review.start", "review.finalize", "review.validate", "review.recover"] },
+              "reason_code": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+              "required_inputs": { "type": "array", "items": { "type": "string", "pattern": "^[a-z0-9_]+$" } },
+              "disposition": { "enum": ["scope_changed", "invalidated", "escalated"] },
+              "binding": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["lineage_id", "revision", "target_identity"],
+                "properties": {
+                  "lineage_id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+                  "revision": { "$ref": "#/$defs/sha256" },
+                  "target_identity": { "$ref": "#/$defs/sha256" }
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": { "properties": { "action": { "const": "review.recover" } }, "required": ["action"] },
+                "then": { "required": ["disposition", "binding"] },
+                "else": { "not": { "anyOf": [{ "required": ["disposition"] }, { "required": ["binding"] }] } }
+              }
+            ]
+          }
+        },
+        "forbidden_actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["action", "reason_code"],
+            "properties": {
+              "action": { "enum": ["review.abandon", "review.finalize", "review.invalidate", "review.quarantine-legacy", "review.reclaim", "review.reconcile-authority", "review.recover", "review.start", "review.validate"] },
+              "reason_code": { "type": "string", "pattern": "^[a-z0-9_]+$" }
+            }
+          }
+        }
+      }
+    }
   },
   "allOf": [
     {

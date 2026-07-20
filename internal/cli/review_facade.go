@@ -340,6 +340,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	flags := newReviewFlagSet("review status", stdout, "Read every compact-v2 and shipped legacy-v1 authority from the shared Git common directory without mutation.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
+	actionEligibility := flags.Bool("action-eligibility", false, "include optional machine-readable review action eligibility in negotiated output")
 	lineage := flags.String("lineage", "", "optional explicit lineage selector for negotiated target status")
 	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "negotiated target projection: workspace or staged")
 	baseRef := flags.String("base-ref", "", "optional negotiated immutable base-to-HEAD target")
@@ -405,10 +406,16 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			return errors.New("--base-tree does not identify an exact Git tree object")
 		}
 		result := newReviewTargetStatusResult(native)
+		if *actionEligibility {
+			result.Eligibility = newReviewActionEligibility(result)
+		}
 		if err := result.Validate(); err != nil {
 			return fmt.Errorf("validate negotiated review status: %w", err)
 		}
 		return encodeReviewJSON(stdout, result)
+	}
+	if *actionEligibility {
+		return errors.New("--action-eligibility requires --contract")
 	}
 	if strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) {
 		return errors.New("review status target selectors require --contract")
@@ -847,6 +854,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	flags := newReviewFlagSet("review finalize", stdout, "Canonicalize reviewer output and evidence, perform required native transitions, and materialize the terminal receipt.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
+	actionEligibility := flags.Bool("action-eligibility", false, "include optional machine-readable review action eligibility in negotiated output")
 	lineage := flags.String("lineage", "", "optional lineage override when discovery is ambiguous")
 	validationPath := flags.String("validation", "", "targeted correction validation JSON file or - for stdin")
 	refuterPath := flags.String("refuter", "", "optional refuter outcomes JSON file or - for stdin")
@@ -870,6 +878,9 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	negotiated, err := reviewIntegrationNegotiation(flags, *contract)
 	if err != nil {
 		return err
+	}
+	if *actionEligibility && !negotiated {
+		return errors.New("--action-eligibility requires --contract")
 	}
 	if countFacadeStdin(resultPaths, *validationPath, *refuterPath, *evidencePath) > 1 {
 		return reviewPreflightError(errors.New("review finalize accepts stdin for only one input"))
@@ -986,7 +997,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		if err := reviewFacadeSyncDirectory(filepath.Dir(store.FinalizeAttemptJournalPath())); err != nil {
 			return fmt.Errorf("sync completed finalize journal directory: %w", err)
 		}
-		return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>")
+		return encodeCompactFacadeFinalize(stdout, negotiated, *actionEligibility, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>")
 	}
 	var attempt reviewtransaction.FinalizeAttempt
 	attemptLoaded := false
@@ -1012,7 +1023,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 				if err := store.CompleteFinalizeAttempt(attempt.Request.RequestDigest); err != nil {
 					return err
 				}
-				return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "continue the current review state")
+				return encodeCompactFacadeFinalize(stdout, negotiated, *actionEligibility, state, record.Revision, store, "continue the current review state")
 			}
 		}
 	}
@@ -1074,10 +1085,10 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	}
 
 	if state.State != reviewtransaction.StateApproved && state.State != reviewtransaction.StateEscalated {
-		return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "continue the current review state")
+		return encodeCompactFacadeFinalize(stdout, negotiated, *actionEligibility, state, record.Revision, store, "continue the current review state")
 	}
 	if terminalAtEntry && terminalReceiptExists {
-		return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>")
+		return encodeCompactFacadeFinalize(stdout, negotiated, *actionEligibility, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>")
 	}
 	receipt := terminalReceipt
 	if !terminalAtEntry {
@@ -1099,7 +1110,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	if err := store.MarkFinalizeAttemptReceiptPublished(requestDigest); err != nil {
 		return err
 	}
-	return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>")
+	return encodeCompactFacadeFinalize(stdout, negotiated, *actionEligibility, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>")
 }
 
 func facadeFinalizeTransitionIndex(attempt *reviewtransaction.FinalizeAttempt, revision string) int {
@@ -2008,7 +2019,11 @@ func facadeArtifactPaths(store reviewtransaction.Store) facadeArtifacts {
 	}
 }
 
-func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, state reviewtransaction.CompactState, revision string, store reviewtransaction.CompactStore, action string) error {
+func encodeCompactFacadeFinalize(stdout io.Writer, negotiated, actionEligibility bool, state reviewtransaction.CompactState, revision string, store reviewtransaction.CompactStore, action string) error {
+	var eligibility *ReviewActionEligibility
+	if actionEligibility {
+		eligibility = reviewStopEligibility(reviewActionForbiddenFinalizeStatus, []string{"target_scoped_status"})
+	}
 	result := ReviewFacadeFinalizeResult{
 		Operation: "review/finalize", LineageID: state.LineageID, State: state.State, Action: action, StoreRevision: revision,
 	}
@@ -2017,7 +2032,7 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, state review
 	}
 	public := ReviewIntegrationFinalizeResult{
 		Operation: result.Operation, LineageID: result.LineageID, State: result.State,
-		Action: result.Action, StoreRevision: result.StoreRevision,
+		Action: result.Action, StoreRevision: result.StoreRevision, Eligibility: eligibility,
 	}
 	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationFinalize, result, public)
 }

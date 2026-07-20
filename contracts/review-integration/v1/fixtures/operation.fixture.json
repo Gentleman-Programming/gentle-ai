@@ -7,6 +7,55 @@
     "lineage_id": "review-operation-fixture",
     "state": "approved",
     "action": "validate delivery with gentle-ai review validate --gate <gate>",
-    "store_revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    "store_revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "eligibility": {
+      "allowed_actions": [
+        {
+          "action": "stop",
+          "reason_code": "forbidden_finalize_requires_target_status",
+          "required_inputs": [
+            "target_scoped_status"
+          ]
+        }
+      ],
+      "forbidden_actions": [
+        {
+          "action": "review.abandon",
+          "reason_code": "forbidden_finalize_requires_target_status"
+        },
+        {
+          "action": "review.finalize",
+          "reason_code": "forbidden_finalize_requires_target_status"
+        },
+        {
+          "action": "review.invalidate",
+          "reason_code": "forbidden_finalize_requires_target_status"
+        },
+        {
+          "action": "review.quarantine-legacy",
+          "reason_code": "forbidden_finalize_requires_target_status"
+        },
+        {
+          "action": "review.reclaim",
+          "reason_code": "forbidden_finalize_requires_target_status"
+        },
+        {
+          "action": "review.reconcile-authority",
+          "reason_code": "forbidden_finalize_requires_target_status"
+        },
+        {
+          "action": "review.recover",
+          "reason_code": "forbidden_finalize_requires_target_status"
+        },
+        {
+          "action": "review.start",
+          "reason_code": "forbidden_finalize_requires_target_status"
+        },
+        {
+          "action": "review.validate",
+          "reason_code": "forbidden_finalize_requires_target_status"
+        }
+      ]
+    }
   }
 }

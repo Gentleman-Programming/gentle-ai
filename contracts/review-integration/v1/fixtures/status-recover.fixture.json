@@ -38,5 +38,62 @@
     "initial_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
     "current_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
   },
-  "candidates": []
+  "candidates": [],
+  "eligibility": {
+    "allowed_actions": [
+      {
+        "action": "review.recover",
+        "reason_code": "eligible_recovery",
+        "required_inputs": [
+          "predecessor_lineage",
+          "expected_predecessor_revision",
+          "successor_lineage",
+          "disposition",
+          "reason",
+          "actor",
+          "maintainer_authorization"
+        ],
+        "disposition": "scope_changed",
+        "binding": {
+          "lineage_id": "review-status-recover-fixture",
+          "revision": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390",
+          "target_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
+        }
+      }
+    ],
+    "forbidden_actions": [
+      {
+        "action": "review.abandon",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.finalize",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.invalidate",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.quarantine-legacy",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.reclaim",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.reconcile-authority",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.start",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.validate",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      }
+    ]
+  }
 }

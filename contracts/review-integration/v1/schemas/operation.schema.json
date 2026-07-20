@@ -31,7 +31,8 @@
         "lineage_id": {"type": "string", "minLength": 1},
         "state": {"type": "string", "minLength": 1},
         "action": {"type": "string", "minLength": 1},
-        "store_revision": {"$ref": "#/$defs/sha256"}
+        "store_revision": {"$ref": "#/$defs/sha256"},
+        "eligibility": {"$ref": "status.schema.json#/$defs/action_eligibility"}
       }
     },
     "validate": {

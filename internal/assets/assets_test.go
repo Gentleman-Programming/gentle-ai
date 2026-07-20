@@ -1000,6 +1000,28 @@ func TestNonClaudeSDDOrchestratorChainStrategyParity(t *testing.T) {
 	}
 }
 
+func TestSDDOrchestratorsRouteReviewActionsOnlyFromNativeEligibility(t *testing.T) {
+	paths := []string{
+		"antigravity/sdd-orchestrator.md", "claude/sdd-orchestrator.md", "codex/sdd-orchestrator.md",
+		"cursor/sdd-orchestrator.md", "gemini/sdd-orchestrator.md", "generic/sdd-orchestrator.md",
+		"hermes/sdd-orchestrator.md", "kimi/sdd-orchestrator.md", "kiro/sdd-orchestrator.md",
+		"opencode/sdd-orchestrator.md", "qwen/sdd-orchestrator.md", "windsurf/sdd-orchestrator.md",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			for _, required := range []string{
+				"--action-eligibility", "eligibility.allowed_actions", "eligibility.forbidden_actions", "reason codes",
+				"never infer an authorization, binding, or template from prose, state, or a statusline",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing native eligibility routing guard %q", path, required)
+				}
+			}
+		})
+	}
+}
+
 func TestPlatformNativeSDDOrchestratorsAvoidOpenCodePersistenceClaims(t *testing.T) {
 	tests := []struct {
 		path     string

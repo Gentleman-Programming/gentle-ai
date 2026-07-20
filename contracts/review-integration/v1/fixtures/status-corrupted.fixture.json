@@ -25,5 +25,52 @@
     "initial_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
     "current_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
   },
-  "candidates": []
+  "candidates": [],
+  "eligibility": {
+    "allowed_actions": [
+      {
+        "action": "stop",
+        "reason_code": "forbidden_manual_intervention_required",
+        "required_inputs": []
+      }
+    ],
+    "forbidden_actions": [
+      {
+        "action": "review.abandon",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.finalize",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.invalidate",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.quarantine-legacy",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.reclaim",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.reconcile-authority",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.recover",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.start",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.validate",
+        "reason_code": "forbidden_corrupted_authority"
+      }
+    ]
+  }
 }

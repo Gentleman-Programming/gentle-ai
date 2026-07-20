@@ -714,11 +714,12 @@ type ReviewIntegrationOperationResult struct {
 // ReviewIntegrationFinalizeResult preserves the existing finalize semantics
 // while excluding the provider-private receipt path from negotiated output.
 type ReviewIntegrationFinalizeResult struct {
-	Operation     string                  `json:"operation"`
-	LineageID     string                  `json:"lineage_id"`
-	State         reviewtransaction.State `json:"state"`
-	Action        string                  `json:"action"`
-	StoreRevision string                  `json:"store_revision"`
+	Operation     string                   `json:"operation"`
+	LineageID     string                   `json:"lineage_id"`
+	State         reviewtransaction.State  `json:"state"`
+	Action        string                   `json:"action"`
+	StoreRevision string                   `json:"store_revision"`
+	Eligibility   *ReviewActionEligibility `json:"eligibility,omitempty"`
 }
 
 func reviewIntegrationNegotiation(flags *flag.FlagSet, contract string) (bool, error) {
@@ -780,6 +781,11 @@ func (result ReviewIntegrationOperationResult) Validate() error {
 		if finalized.Operation != "review/finalize" || strings.TrimSpace(finalized.LineageID) == "" ||
 			strings.TrimSpace(finalized.Action) == "" || !validReviewCapabilitySHA256(finalized.StoreRevision) || strings.TrimSpace(string(finalized.State)) == "" {
 			return errors.New("negotiated finalize result is incomplete")
+		}
+		if finalized.Eligibility != nil {
+			if err := finalized.Eligibility.ValidateFinalize(); err != nil {
+				return fmt.Errorf("negotiated finalize result action eligibility: %w", err)
+			}
 		}
 	case ReviewIntegrationOperationValidate:
 		var validated ReviewValidateResult
