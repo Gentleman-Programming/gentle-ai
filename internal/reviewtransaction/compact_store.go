@@ -687,6 +687,9 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 		record := records[store.lineageID]
 		switch record.State.State {
 		case StateReviewing:
+			if store.lineageID != request.State.LineageID {
+				continue
+			}
 			if record.State.InitialSnapshot.CandidateTree != request.State.InitialSnapshot.CandidateTree {
 				continue
 			}

@@ -511,8 +511,8 @@ func TestStartCompactAuthoritySelectsProjectionSpecificBaseDiffAuthorityAfterCom
 		t.Run(tt.name, func(t *testing.T) {
 			requested := newCompactStartStateForTarget(t, repo, "compact-start-"+tt.name+"-base-request", Target{Kind: TargetBaseDiff, Projection: tt.projection, BaseRef: base, IntendedUntracked: []string{}})
 			result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
-			if err != nil || result.Action != CompactStartResumed || result.Record.State.LineageID != tt.want {
-				t.Fatalf("%s base-diff authority selection = %#v, %v", tt.name, result, err)
+			if err != nil || result.Action != CompactStartCreated || result.Record.State.LineageID != requested.LineageID {
+				t.Fatalf("%s base-diff authority selection should create new = %#v, %v", tt.name, result, err)
 			}
 		})
 	}
@@ -611,7 +611,6 @@ func TestStartCompactAuthorityConcurrentlyConvergesOnOneEquivalentAuthority(t *t
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 	first := newCompactTestState(t, repo, "compact-start-first")
 	second := first
-	second.LineageID = "compact-start-second"
 
 	type outcome struct {
 		result CompactStartResult
@@ -719,14 +718,31 @@ func TestStartCompactAuthorityResumesMatchingAuthorityAmongUnrelatedLeaves(t *te
 	requested := newCompactTestState(t, repo, "compact-start-replay")
 
 	resumed, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
-	if err != nil || resumed.Action != CompactStartResumed || resumed.Record.State.LineageID != existing.LineageID {
-		t.Fatalf("resume matching authority = %#v, %v", resumed, err)
+	if err != nil || resumed.Action != CompactStartCreated || resumed.Record.State.LineageID != requested.LineageID {
+		t.Fatalf("matching candidate but different lineage should create new = %#v, %v", resumed, err)
 	}
 	conflicting := requested
 	conflicting.PolicyHash = hash("2")
 	blocked, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: conflicting})
 	if err != nil || blocked.Action != CompactStartBlocked || blocked.Record.State.LineageID != existing.LineageID {
 		t.Fatalf("same candidate metadata conflict = %#v, %v", blocked, err)
+	}
+}
+
+func TestStartCompactAuthorityDoesNotResumeOrphanedSiblingLineage(t *testing.T) {
+	repo := initSnapshotRepo(t)
+
+	writeSnapshotFile(t, repo, "tracked.txt", "requested candidate\n")
+	stale := newCompactTestState(t, repo, "compact-start-stale-sibling")
+	storeCompactStartAuthority(t, repo, stale)
+
+	// Since we haven't changed the file, the candidate tree will be exactly the same.
+	// But we use a different lineage ID (e.g., this is a different auto-derived lineage)
+	requested := newCompactTestState(t, repo, "compact-start-requested-lineage")
+
+	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
+	if err != nil || result.Action != CompactStartCreated || result.Record.State.LineageID != requested.LineageID {
+		t.Fatalf("did not create new authority for orphaned sibling lineage: %#v, %v", result, err)
 	}
 }
 
@@ -841,8 +857,8 @@ func TestStartCompactAuthorityResumesEquivalentCurrentChangesAndBaseDiff(t *test
 	requested := newCompactStartStateForTarget(t, repo, "compact-start-base-diff-request", Target{Kind: TargetBaseDiff, BaseRef: "HEAD", IntendedUntracked: []string{"new.txt"}})
 
 	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
-	if err != nil || result.Action != CompactStartResumed || result.Record.State.LineageID != existing.LineageID {
-		t.Fatalf("equivalent current-changes/base-diff start = %#v, %v", result, err)
+	if err != nil || result.Action != CompactStartCreated || result.Record.State.LineageID != requested.LineageID {
+		t.Fatalf("equivalent current-changes/base-diff start should create new = %#v, %v", result, err)
 	}
 }
 
