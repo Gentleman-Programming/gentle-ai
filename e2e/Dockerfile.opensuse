@@ -1,0 +1,73 @@
+# syntax=docker/dockerfile:1
+# Dockerfile.opensuse — E2E test image for gentle-ai on openSUSE Tumbleweed
+# Builds the binary from source and runs the E2E test suite as a non-root user.
+FROM opensuse/tumbleweed:latest
+
+# ---------------------------------------------------------------------------
+# System dependencies (includes npm/node for claude-code tests)
+# ---------------------------------------------------------------------------
+# Tumbleweed is rolling-release: its native nodejs+npm packages track current
+# LTS, so no NodeSource setup is needed (unlike Ubuntu 22.04 / Fedora).
+# The build is CGO_ENABLED=0 pure Go, so no development-tools pattern either.
+RUN zypper --non-interactive refresh && \
+    zypper --non-interactive install --no-recommends \
+        git \
+        curl \
+        sudo \
+        ca-certificates \
+        nodejs \
+        npm \
+    && zypper clean --all
+
+# ---------------------------------------------------------------------------
+# Install Go (match go.mod version)
+# ---------------------------------------------------------------------------
+ARG GO_VERSION=1.25.10
+ARG TARGETARCH
+RUN arch="${TARGETARCH:-amd64}" && \
+    curl -fsSLo "/tmp/go${GO_VERSION}.linux-${arch}.tar.gz" \
+      "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" && \
+    tar -C /usr/local -xzf "/tmp/go${GO_VERSION}.linux-${arch}.tar.gz" && \
+    rm "/tmp/go${GO_VERSION}.linux-${arch}.tar.gz"
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+# ---------------------------------------------------------------------------
+# Create non-root test user with passwordless sudo
+# ---------------------------------------------------------------------------
+RUN useradd -m -s /bin/bash testuser && \
+    echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# ---------------------------------------------------------------------------
+# Copy project source and build
+# ---------------------------------------------------------------------------
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/root/go/pkg/mod \
+    go mod download
+COPY . .
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/root/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH:-amd64}" \
+    go build -o /usr/local/bin/gentle-ai ./cmd/gentle-ai
+
+# ---------------------------------------------------------------------------
+# Prepare test environment
+# ---------------------------------------------------------------------------
+COPY e2e/lib.sh     /home/testuser/e2e/lib.sh
+COPY e2e/e2e_test.sh /home/testuser/e2e/e2e_test.sh
+RUN chmod +x /home/testuser/e2e/e2e_test.sh /home/testuser/e2e/lib.sh && \
+    chown -R testuser:testuser /home/testuser
+
+USER testuser
+
+# Ensure go install binaries are on PATH for testuser
+ENV GOPATH="/home/testuser/go"
+ENV PATH="${GOPATH}/bin:/usr/local/go/bin:${PATH}"
+
+WORKDIR /home/testuser
+
+# ---------------------------------------------------------------------------
+# Default: run Tier 1 tests only
+# ---------------------------------------------------------------------------
+CMD ["./e2e/e2e_test.sh"]

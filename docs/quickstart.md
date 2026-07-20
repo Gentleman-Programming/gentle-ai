@@ -98,4 +98,4 @@ Optional wrapper tools for extra defense:
 If you run the installer on an unsupported OS or Linux distro, it exits immediately with an error:
 
 - `unsupported operating system: only macOS, Linux, and Windows are supported (detected <os>)`
-- `unsupported linux distro: Linux support is limited to Ubuntu/Debian, Arch, and Fedora/RHEL family (detected <distro>)`
+- `unsupported linux distro: Linux support is limited to Ubuntu/Debian, Arch, Fedora/RHEL, and openSUSE/SUSE family (detected <distro>)`

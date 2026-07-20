@@ -90,6 +90,23 @@ func TestDetectFromInputsMarksArchSupported(t *testing.T) {
 	}
 }
 
+func TestDetectFromInputsMarksOpenSUSESupported(t *testing.T) {
+	osRelease := "ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n"
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, nil, nil)
+
+	if !result.System.Supported {
+		t.Fatalf("expected opensuse linux to be supported")
+	}
+
+	if result.System.Profile.LinuxDistro != LinuxDistroOpenSUSE {
+		t.Fatalf("expected opensuse distro, got %q", result.System.Profile.LinuxDistro)
+	}
+
+	if result.System.Profile.PackageManager != "zypper" {
+		t.Fatalf("expected zypper package manager, got %q", result.System.Profile.PackageManager)
+	}
+}
+
 // --- Batch E: Comprehensive platform detection matrix ---
 
 func TestDetectLinuxDistroMatrix(t *testing.T) {
@@ -167,6 +184,26 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			name:       "nobara via id_like token",
 			osRelease:  "ID=custom-linux\nID_LIKE=\"nobara\"\n",
 			wantDistro: LinuxDistroFedora,
+		},
+		{
+			name:       "opensuse tumbleweed",
+			osRelease:  "ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\nVERSION_ID=\"20260717\"\n",
+			wantDistro: LinuxDistroOpenSUSE,
+		},
+		{
+			name:       "opensuse leap",
+			osRelease:  "ID=\"opensuse-leap\"\nID_LIKE=\"suse opensuse\"\nVERSION_ID=\"15.6\"\n",
+			wantDistro: LinuxDistroOpenSUSE,
+		},
+		{
+			name:       "opensuse slowroll",
+			osRelease:  "ID=\"opensuse-slowroll\"\nID_LIKE=\"opensuse suse\"\n",
+			wantDistro: LinuxDistroOpenSUSE,
+		},
+		{
+			name:       "suse derivative via id_like token",
+			osRelease:  "ID=custom-linux\nID_LIKE=\"suse\"\n",
+			wantDistro: LinuxDistroOpenSUSE,
 		},
 		{
 			name:       "empty os-release",
@@ -267,6 +304,15 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			wantOS:        "linux",
 			wantPM:        "dnf",
 			wantDistro:    LinuxDistroFedora,
+			wantSupported: true,
+		},
+		{
+			name:          "opensuse profile",
+			goos:          "linux",
+			osRelease:     "ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n",
+			wantOS:        "linux",
+			wantPM:        "zypper",
+			wantDistro:    LinuxDistroOpenSUSE,
 			wantSupported: true,
 		},
 		{

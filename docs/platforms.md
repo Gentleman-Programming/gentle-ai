@@ -10,9 +10,10 @@
 | Linux (Ubuntu/Debian) | apt | Supported |
 | Linux (Arch) | pacman | Supported |
 | Linux (Fedora/RHEL family) | dnf | Supported |
+| Linux (openSUSE Tumbleweed/Leap/Slowroll, SUSE MicroOS) | zypper | Supported |
 | Windows 10/11 | PowerShell installer | Supported |
 
-Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, CentOS Stream, Rocky Linux, AlmaLinux, etc.).
+Derivatives are detected via both `ID` prefix and `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, CentOS Stream, Rocky Linux, AlmaLinux, openSUSE Slowroll, openSUSE MicroOS, SUSE SLE, etc.).
 
 Release artifacts are produced by CI. Windows users should install through the PowerShell installer so Gentle AI's built-in updater owns the same binary it installed.
 

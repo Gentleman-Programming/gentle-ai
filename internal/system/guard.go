@@ -27,7 +27,7 @@ func EnsureSupportedPlatform(profile PlatformProfile) error {
 	}
 
 	if profile.OS == "linux" && !profile.Supported {
-		return fmt.Errorf("%w: Linux support is limited to Ubuntu/Debian, Arch, and Fedora/RHEL family (detected %s)", ErrUnsupportedLinuxDistro, profile.LinuxDistro)
+		return fmt.Errorf("%w: Linux support is limited to Ubuntu/Debian, Arch, Fedora/RHEL, and openSUSE/SUSE family (detected %s)", ErrUnsupportedLinuxDistro, profile.LinuxDistro)
 	}
 
 	return nil

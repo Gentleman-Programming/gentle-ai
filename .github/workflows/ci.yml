@@ -101,6 +101,8 @@ jobs:
             dockerfile: Dockerfile.arch
           - name: fedora
             dockerfile: Dockerfile.fedora
+          - name: opensuse
+            dockerfile: Dockerfile.opensuse
     steps:
       - name: Require successful Go format
         if: needs.go-format.result != 'success'

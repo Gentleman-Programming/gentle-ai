@@ -26,11 +26,12 @@ type PlatformProfile struct {
 }
 
 const (
-	LinuxDistroUnknown = "unknown"
-	LinuxDistroUbuntu  = "ubuntu"
-	LinuxDistroDebian  = "debian"
-	LinuxDistroArch    = "arch"
-	LinuxDistroFedora  = "fedora"
+	LinuxDistroUnknown  = "unknown"
+	LinuxDistroUbuntu   = "ubuntu"
+	LinuxDistroDebian   = "debian"
+	LinuxDistroArch     = "arch"
+	LinuxDistroFedora   = "fedora"
+	LinuxDistroOpenSUSE = "opensuse"
 )
 
 type DetectionResult struct {
@@ -148,6 +149,9 @@ func resolvePlatformProfile(goos, linuxOSRelease string, tools map[string]ToolSt
 		case LinuxDistroFedora:
 			profile.PackageManager = "dnf"
 			profile.Supported = true
+		case LinuxDistroOpenSUSE:
+			profile.PackageManager = "zypper"
+			profile.Supported = true
 		default:
 			profile.PackageManager = ""
 			profile.Supported = false
@@ -204,6 +208,10 @@ func detectLinuxDistro(linuxOSRelease string) string {
 		return LinuxDistroFedora
 	}
 
+	if isSUSELike(id, idLike) {
+		return LinuxDistroOpenSUSE
+	}
+
 	return LinuxDistroUnknown
 }
 
@@ -242,6 +250,23 @@ func isFedoraLike(id, idLike string) bool {
 
 	for _, token := range strings.Fields(idLike) {
 		if token == LinuxDistroFedora || token == "rhel" || token == "centos" || token == "rocky" || token == "almalinux" || token == "nobara" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isSUSELike detects the openSUSE/SUSE family. Covers Tumbleweed, Leap,
+// Slowroll, MicroOS and derivatives via ID prefix (opensuse, opensuse-*)
+// or the "opensuse"/"suse" ID_LIKE tokens they all declare.
+func isSUSELike(id, idLike string) bool {
+	if id == LinuxDistroOpenSUSE || strings.HasPrefix(id, LinuxDistroOpenSUSE+"-") {
+		return true
+	}
+
+	for _, token := range strings.Fields(idLike) {
+		if token == LinuxDistroOpenSUSE || token == "suse" {
 			return true
 		}
 	}
