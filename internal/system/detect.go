@@ -41,7 +41,7 @@ type DetectionResult struct {
 }
 
 func IsSupportedOS(goos string) bool {
-	return goos == "darwin" || goos == "linux" || goos == "windows"
+	return goos == "darwin" || goos == "linux" || goos == "windows" || goos == "android"
 }
 
 func Detect(ctx context.Context) (DetectionResult, error) {
@@ -102,7 +102,7 @@ func detectFromInputs(goos, arch, shell, linuxOSRelease string, tools map[string
 }
 
 func osReleaseContent(goos string) (string, error) {
-	if goos != "linux" {
+	if goos != "linux" && goos != "android" {
 		return "", nil
 	}
 
@@ -153,6 +153,11 @@ func resolvePlatformProfile(goos, linuxOSRelease string, tools map[string]ToolSt
 			profile.Supported = false
 		}
 
+		return profile
+	case "android":
+		// Android/Termux uses pkg package manager
+		profile.PackageManager = "pkg"
+		profile.Supported = true
 		return profile
 	case "windows":
 		profile.PackageManager = "winget"

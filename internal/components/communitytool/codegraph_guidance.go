@@ -249,6 +249,10 @@ func CodeGraphManagedPaths(homeDir string) []string {
 }
 
 func NeedsOpenCodeCodeGraphReconcile(homeDir string) bool {
+	// Skip OpenCode reconciliation on Android/Termux - native binary uses serve --mcp directly
+	if isAndroid() {
+		return false
+	}
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
 		return false

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -474,9 +475,23 @@ func defaultPnpmGlobalBin() (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
+var isAndroidOverride func() bool
+
+func isAndroid() bool {
+	if isAndroidOverride != nil {
+		return isAndroidOverride()
+	}
+	return runtime.GOOS == "android"
+}
+
 func detectCodeGraphPackageManager(detector Detector) (string, error) {
 	if detector == nil {
 		detector = DetectorFunc(exec.LookPath)
+	}
+	// On Android/Termux, CodeGraph is installed via cargo (native binary),
+	// not via npm/pnpm. Return "android" to signal native binary.
+	if isAndroid() {
+		return "android", nil
 	}
 	if _, err := detector.LookPath("npm"); err == nil {
 		return "npm", nil
@@ -495,13 +510,30 @@ func detectCodeGraphPackageManager(detector Detector) (string, error) {
 }
 
 func codeGraphCommands(packageManager string, targets []string) [][]string {
-	installCommand := []string{"npm", "install", "-g", "@colbymchenry/codegraph@latest"}
-	if packageManager == "pnpm" {
-		installCommand = []string{"pnpm", "add", "-g", "@colbymchenry/codegraph@latest"}
+	switch packageManager {
+	case "npm":
+		installCommand := []string{"npm", "install", "-g", "@colbymchenry/codegraph@latest"}
+		install := []string{"codegraph", "install", "--yes"}
+		if len(targets) > 0 {
+			install = []string{"codegraph", "install", "--target", strings.Join(targets, ","), "--location", "global", "--yes"}
+		}
+		return [][]string{installCommand, install}
+	case "pnpm":
+		installCommand := []string{"pnpm", "add", "-g", "@colbymchenry/codegraph@latest"}
+		install := []string{"codegraph", "install", "--yes"}
+		if len(targets) > 0 {
+			install = []string{"codegraph", "install", "--target", strings.Join(targets, ","), "--location", "global", "--yes"}
+		}
+		return [][]string{installCommand, install}
+	case "android":
+		// Native Rust binary already installed via cargo; no npm install needed
+		return [][]string{{"true"}, {}} // no-op
+	default:
+		installCommand := []string{"npm", "install", "-g", "@colbymchenry/codegraph@latest"}
+		install := []string{"codegraph", "install", "--yes"}
+		if len(targets) > 0 {
+			install = []string{"codegraph", "install", "--target", strings.Join(targets, ","), "--location", "global", "--yes"}
+		}
+		return [][]string{installCommand, install}
 	}
-	install := []string{"codegraph", "install", "--yes"}
-	if len(targets) > 0 {
-		install = []string{"codegraph", "install", "--target", strings.Join(targets, ","), "--location", "global", "--yes"}
-	}
-	return [][]string{installCommand, install}
 }

@@ -11,6 +11,7 @@ func TestIsSupportedOS(t *testing.T) {
 		{name: "darwin is supported", goos: "darwin", want: true},
 		{name: "linux is supported", goos: "linux", want: true},
 		{name: "windows is supported", goos: "windows", want: true},
+		{name: "android is supported", goos: "android", want: true},
 	}
 
 	for _, tc := range tests {
@@ -87,6 +88,22 @@ func TestDetectFromInputsMarksArchSupported(t *testing.T) {
 
 	if result.System.Profile.PackageManager != "pacman" {
 		t.Fatalf("expected pacman package manager, got %q", result.System.Profile.PackageManager)
+	}
+}
+
+func TestDetectFromInputsMarksAndroidSupported(t *testing.T) {
+	result := detectFromInputs("android", "arm64", "/data/data/com.termux/files/usr/bin/bash", "", nil, nil)
+
+	if !result.System.Supported {
+		t.Fatalf("expected supported system for android")
+	}
+
+	if result.System.OS != "android" {
+		t.Fatalf("expected OS android, got %q", result.System.OS)
+	}
+
+	if result.System.Profile.PackageManager != "pkg" {
+		t.Fatalf("expected pkg package manager for android, got %q", result.System.Profile.PackageManager)
 	}
 }
 
@@ -274,6 +291,13 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			goos:          "windows",
 			wantOS:        "windows",
 			wantPM:        "winget",
+			wantSupported: true,
+		},
+		{
+			name:          "android profile",
+			goos:          "android",
+			wantOS:        "android",
+			wantPM:        "pkg",
 			wantSupported: true,
 		},
 		{

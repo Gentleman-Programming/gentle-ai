@@ -19,6 +19,23 @@ import (
 	piagent "github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 )
+// codeGraphBinaryPath returns the path to the codegraph binary.
+// On Android/Termux, it prefers the absolute path ~/.local/bin/codegraph
+// if it exists, otherwise falls back to "codegraph" (relying on PATH).
+func codeGraphBinaryPath() string {
+	// On Android/Termux, the native binary is typically at ~/.local/bin/codegraph
+	if isAndroid() {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			candidate := filepath.Join(homeDir, ".local", "bin", "codegraph")
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+	// Fallback: use "codegraph" from PATH
+	return "codegraph"
+}
 
 const (
 	piCodeGraphToolMarker     = "<!-- gentle-ai:pi-codegraph-tool -->"
@@ -516,7 +533,7 @@ func probePiCodeGraphMCPWithAgentDirContext(ctx context.Context, mcpPath, agentD
 	if _, err := os.Stat(adapterPath); err != nil {
 		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("Pi MCP adapter extension is unavailable at %q: %w", adapterPath, err)
 	}
-	command := exec.CommandContext(ctx, "codegraph", "serve", "--mcp")
+	command := exec.CommandContext(ctx, codeGraphBinaryPath(), "serve", "--mcp")
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		return PiCodeGraphMCPProbeResult{}, err

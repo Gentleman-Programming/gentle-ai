@@ -32,6 +32,7 @@ func TestMain(m *testing.M) {
 	codeGraphPnpmGlobalBin = func() (string, error) {
 		return "/bin", nil
 	}
+	isAndroidOverride = func() bool { return false }
 	piCodeGraphEffectiveMCPProbe = func(string) (PiCodeGraphMCPProbeResult, error) {
 		return PiCodeGraphMCPProbeResult{
 			AdapterAvailable: true,
