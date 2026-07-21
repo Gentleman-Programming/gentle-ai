@@ -158,6 +158,21 @@ func TestInspectCompactAuthorityReadOnlyInvariant(t *testing.T) {
 	}
 }
 
+func TestInspectCompactAuthoritySyntheticCoverage(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	combinedRecoveryFixture(t, repo, nil)
+	report, err := InspectCompactAuthority(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Summary.TotalEdges != 1 || report.Summary.InvalidEdges != 1 || report.Summary.ValidEdges != 0 || len(report.Edges) != 1 {
+		t.Fatalf("synthetic inspection = %#v", report)
+	}
+	if report.Edges[0].AnomalyClass != "unchanged_target,malformed_recovery_authorization" {
+		t.Fatalf("synthetic anomaly class = %q", report.Edges[0].AnomalyClass)
+	}
+}
+
 func TestInspectCompactAuthorityLoadError(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	validInspectRecoveryFixture(t, repo)
