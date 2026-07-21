@@ -1,197 +1,204 @@
 package reviewtransaction
 
 import (
-	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
-func validInspectRecoveryFixture(t *testing.T, repo string) (CompactRecord, CompactStore, CompactRecord, CompactStore) {
-	t.Helper()
-	return poisonedRecoveryFixture(t, repo, func(state *CompactState) {
-		writeSnapshotFile(t, repo, "tracked.txt", "valid recovery target\n")
-		changed := newCompactTestState(t, repo, state.LineageID)
-		state.InitialSnapshot, state.CurrentSnapshot = changed.InitialSnapshot, changed.CurrentSnapshot
-		state.GenesisPaths = changed.GenesisPaths
-		state.Recovery.MaintainerAuthorization = compactRecoveryAuthorizationBinding(
-			state.Recovery.PredecessorLineageID, state.Recovery.PredecessorRevision,
-			state.InitialSnapshot.Identity, state.Recovery.Actor, state.Recovery.Reason)
+func TestInspectCompactRecoveryEdges(t *testing.T) {
+	t.Run("empty authority", func(t *testing.T) {
+		report, err := InspectCompactRecoveryEdges(context.Background(), initSnapshotRepo(t))
+		if err != nil || !report.Complete || !report.Valid || report.Edges == nil || report.EntryDiagnostics == nil || report.Totals != (CompactRecoveryInspectionTotals{}) {
+			t.Fatalf("empty inspection = %#v, err=%v", report, err)
+		}
+	})
+	t.Run("all decodable edges and entry failures", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		_, _, _, validStore := inspectRecoveryPair(t, repo, "a-valid", false, "")
+		inspectRecoveryPair(t, repo, "b-unchanged", true, "")
+		inspectRecoveryPair(t, repo, "c-malformed", false, "legacy approval")
+		_, danglingStore, _, _ := inspectRecoveryPair(t, repo, "d-dangling", false, "")
+		inspectNoError(t, os.RemoveAll(danglingStore.Dir))
+		forkRoot, _, _, _ := inspectRecoveryPair(t, repo, "e-fork", false, "")
+		writeSnapshotFile(t, repo, "tracked.txt", "fork sibling\n")
+		inspectRecoverySuccessor(t, repo, forkRoot, "e-fork-sibling", "")
+		inspectRecoveryCycle(t, repo)
+		base, _, err := reviewAuthorityRoot(context.Background(), repo)
+		inspectNoError(t, err)
+		const secretPath = "/private/secret/logical/path"
+		broken := filepath.Join(base, "v2", "broken-entry")
+		inspectNoError(t, os.MkdirAll(broken, 0o755))
+		brokenState := newCompactTestState(t, repo, "broken-entry")
+		brokenState.GenesisPaths = []string{secretPath}
+		_, brokenPayload, err := makeCompactRecord(brokenState)
+		inspectNoError(t, err)
+		brokenPath := filepath.Join(broken, compactStateFileName)
+		inspectNoError(t, os.WriteFile(brokenPath, brokenPayload, 0o644))
+		before := inspectReadState(t, validStore.StatePath()) + inspectReadState(t, brokenPath)
+		first, err := InspectCompactRecoveryEdges(context.Background(), repo)
+		inspectNoError(t, err)
+		second, err := InspectCompactRecoveryEdges(context.Background(), repo)
+		inspectNoError(t, err)
+		firstJSON, _ := json.Marshal(first)
+		secondJSON, _ := json.Marshal(second)
+		if !reflect.DeepEqual(first, second) || string(firstJSON) != string(secondJSON) {
+			t.Fatalf("repeat inspection is not deterministic:\n%s\n%s", firstJSON, secondJSON)
+		}
+		if before != inspectReadState(t, validStore.StatePath())+inspectReadState(t, brokenPath) {
+			t.Fatal("inspection mutated compact authority bytes")
+		}
+		wantTotals := CompactRecoveryInspectionTotals{CompactEntries: 13, LoadedEntries: 12, Edges: 8, ValidEdges: 1, InvalidEdges: 7, EntryDiagnostics: 1}
+		if first.Totals != wantTotals || first.Complete || first.Valid || len(first.EntryDiagnostics) != 1 || first.EntryDiagnostics[0].LineageID != "broken-entry" {
+			t.Fatalf("inspection summary = %#v, want totals %#v and one broken entry", first, wantTotals)
+		}
+		if strings.Contains(string(firstJSON), "legacy approval") || strings.Contains(string(firstJSON), secretPath) {
+			t.Fatal("inspection exposed raw authorization or a persisted logical path")
+		}
+		if first.EntryDiagnostics[0].Problem != compactInspectionEntryMalformed {
+			t.Fatalf("entry diagnostic = %#v", first.EntryDiagnostics[0])
+		}
+		checks := []struct {
+			successor string
+			valid     bool
+			anomaly   string
+			problems  []string
+		}{
+			{"a-valid-successor", true, "", nil},
+			{"b-unchanged-successor", false, compactRecoveryEdgeUnchangedTarget, nil},
+			{"c-malformed-successor", false, compactRecoveryEdgeMalformedAuthorization, nil},
+			{"d-dangling-successor", false, "", []string{"missing predecessor"}},
+			{"e-fork-successor", false, "", []string{"recovery fork"}},
+			{"e-fork-sibling", false, "", []string{"recovery fork"}},
+			{"cycle-a", false, "", []string{"recovery cycle", "recovery predecessor revision mismatch"}},
+			{"cycle-b", false, "", []string{"recovery cycle", "recovery predecessor revision mismatch"}},
+		}
+		for _, check := range checks {
+			edge := inspectedEdge(t, first, check.successor)
+			if edge.Valid != check.valid || check.anomaly != "" && !slices.Contains(edge.AnomalyClasses, check.anomaly) {
+				t.Fatalf("edge %q = %#v", check.successor, edge)
+			}
+			for _, problem := range check.problems {
+				if !slices.Contains(edge.Problems, problem) {
+					t.Fatalf("edge %q problems = %#v, want %q", check.successor, edge.Problems, problem)
+				}
+			}
+		}
 	})
 }
-
-func TestInspectCompactAuthorityEmpty(t *testing.T) {
-	report, err := InspectCompactAuthority(context.Background(), initSnapshotRepo(t))
-	if err != nil {
-		t.Fatal(err)
+func TestCompactRecoveryInspectionCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := InspectCompactRecoveryEdges(ctx, initSnapshotRepo(t)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("entry traversal cancellation error = %v", err)
 	}
-	if report.Summary != (CompactAuthorityInspectionSummary{}) || len(report.Edges) != 0 || len(report.Diagnostics) != 0 {
-		t.Fatalf("empty inspection = %#v", report)
+	tests := []struct {
+		name   string
+		checks int
+		edges  []CompactRecoveryEdgeInspection
+		run    func(context.Context, []CompactRecoveryEdgeInspection) error
+	}{
+		{"fork sibling marking", 3, []CompactRecoveryEdgeInspection{{PredecessorLineageID: "root", SuccessorLineageID: "a", Valid: true}, {PredecessorLineageID: "root", SuccessorLineageID: "b", Valid: true}}, markCompactRecoveryForks},
+		{"cycle participant marking", 6, []CompactRecoveryEdgeInspection{{PredecessorLineageID: "b", SuccessorLineageID: "a", Valid: true}, {PredecessorLineageID: "a", SuccessorLineageID: "b", Valid: true}}, markCompactRecoveryCycles},
 	}
-}
-
-func TestInspectCompactAuthorityAllValid(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	validInspectRecoveryFixture(t, repo)
-	report, err := InspectCompactAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.run(&cancelAfterChecksContext{Context: context.Background(), remaining: tt.checks}, tt.edges); !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation error = %v", err)
+			}
+			if slices.ContainsFunc(tt.edges, func(edge CompactRecoveryEdgeInspection) bool { return !edge.Valid || len(edge.Problems) != 0 }) {
+				t.Fatalf("edges mutated after mid-pass cancellation: %#v", tt.edges)
+			}
+		})
 	}
-	if report.Summary.TotalEdges != 1 || report.Summary.ValidEdges != 1 || report.Summary.InvalidEdges != 0 || len(report.Edges) != 0 {
-		t.Fatalf("valid inspection = %#v", report)
-	}
-}
-
-func TestInspectCompactAuthorityUnchangedTarget(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	_, _, successor, _ := poisonedRecoveryFixture(t, repo, nil)
-	report, err := InspectCompactAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Edges) != 1 || report.Edges[0].SuccessorLineageID != successor.State.LineageID || report.Edges[0].AnomalyClass != "unchanged_target" || !strings.HasPrefix(report.Edges[0].ValidationError, "escalated recovery successor target has not changed") {
-		t.Fatalf("unchanged-target inspection = %#v", report)
+	values := []string{"c", "b", "a"}
+	if err := sortCompactInspection(&cancelAfterChecksContext{Context: context.Background(), remaining: 1}, values, cmp.Compare[string]); !errors.Is(err, context.Canceled) {
+		t.Fatalf("mid-sort cancellation error = %v", err)
 	}
 }
 
-func TestInspectCompactAuthorityMalformedAuthorization(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	_, _, successor, _ := preContractRecoveryFixture(t, repo, preContractFixtureAuthorization, nil)
-	report, err := InspectCompactAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Edges) != 1 || report.Edges[0].SuccessorLineageID != successor.State.LineageID || report.Edges[0].AnomalyClass != "malformed_recovery_authorization" {
-		t.Fatalf("malformed-authorization inspection = %#v", report)
-	}
+type cancelAfterChecksContext struct {
+	context.Context
+	remaining int
 }
 
-func TestInspectCompactAuthorityCombinedAnomalies(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	_, _, successor, _ := combinedRecoveryFixture(t, repo, nil)
-	report, err := InspectCompactAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
+func (ctx *cancelAfterChecksContext) Err() error {
+	if ctx.remaining == 0 {
+		return context.Canceled
 	}
-	if len(report.Edges) != 1 || report.Edges[0].SuccessorLineageID != successor.State.LineageID || report.Edges[0].AnomalyClass != "unchanged_target,malformed_recovery_authorization" {
-		t.Fatalf("combined inspection = %#v", report)
-	}
+	ctx.remaining--
+	return nil
 }
-
-func TestInspectCompactAuthorityMultipleInvalid(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	_, _, successor, _ := poisonedRecoveryFixture(t, repo, nil)
-	second := successor.State
-	second.LineageID = "inspect-successor-a"
-	secondStore, err := CompactAuthoritativeStore(context.Background(), repo, second.LineageID)
-	if err != nil {
-		t.Fatal(err)
+func inspectRecoveryPair(t *testing.T, repo, prefix string, unchanged bool, authorization string) (CompactRecord, CompactStore, CompactRecord, CompactStore) {
+	t.Helper()
+	state := correctedCompactTestState(t, repo, prefix+"-predecessor")
+	state.State = StateEscalated
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	inspectNoError(t, err)
+	predecessor := writeCompactFixtureRecord(t, store, state)
+	if !unchanged {
+		writeSnapshotFile(t, repo, "tracked.txt", prefix+" successor\n")
 	}
-	writeCompactFixtureRecord(t, secondStore, second)
-	report, err := InspectCompactAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.Summary.InvalidEdges != 2 || len(report.Edges) != 2 || report.Edges[0].SuccessorLineageID > report.Edges[1].SuccessorLineageID {
-		t.Fatalf("multiple invalid inspection = %#v", report)
-	}
+	successor, successorStore := inspectRecoverySuccessor(t, repo, predecessor, prefix+"-successor", authorization)
+	return predecessor, store, successor, successorStore
 }
-
-func TestInspectCompactAuthorityDeterminism(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	_, _, successor, _ := poisonedRecoveryFixture(t, repo, nil)
-	second := successor.State
-	second.LineageID = "inspect-successor-a"
-	store, err := CompactAuthoritativeStore(context.Background(), repo, second.LineageID)
-	if err != nil {
-		t.Fatal(err)
+func inspectRecoverySuccessor(t *testing.T, repo string, predecessor CompactRecord, lineage, authorization string) (CompactRecord, CompactStore) {
+	t.Helper()
+	state := newCompactTestState(t, repo, lineage)
+	state.Generation = predecessor.State.Generation + 1
+	state.Recovery = &CompactRecoveryProvenance{
+		PredecessorLineageID: predecessor.State.LineageID, PredecessorRevision: predecessor.Revision,
+		Disposition: RecoveryEscalated, Reason: "retry", Actor: "maintainer@example.com",
+		RecoveredAt: time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC), MaintainerAuthorization: authorization,
 	}
-	writeCompactFixtureRecord(t, store, second)
-	first, err := InspectCompactAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
+	if authorization == "" {
+		state.Recovery.MaintainerAuthorization = compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, state.InitialSnapshot.Identity, state.Recovery.Actor, state.Recovery.Reason)
 	}
-	secondReport, err := InspectCompactAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	firstJSON, _ := json.Marshal(first)
-	secondJSON, _ := json.Marshal(secondReport)
-	golden, err := os.ReadFile(filepath.Join("testdata", "inspect_authority_determinism.golden"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(firstJSON, secondJSON) || !bytes.Equal(firstJSON, golden) {
-		t.Fatalf("inspection JSON is not deterministic\nfirst=%s\ngolden=%s", firstJSON, golden)
-	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, lineage)
+	inspectNoError(t, err)
+	return writeCompactFixtureRecord(t, store, state), store
 }
-
-func TestInspectCompactAuthorityReadOnlyInvariant(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	_, predecessorStore, _, successorStore := poisonedRecoveryFixture(t, repo, nil)
-	paths := []string{predecessorStore.StatePath(), successorStore.StatePath()}
-	before := make([][]byte, len(paths))
-	mtimes := make([]int64, len(paths))
-	for i, path := range paths {
-		payload, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
+func inspectRecoveryCycle(t *testing.T, repo string) {
+	t.Helper()
+	for _, edge := range []struct{ lineage, predecessor, revision string }{{"cycle-a", "cycle-b", "a"}, {"cycle-b", "cycle-a", "b"}} {
+		state := newCompactTestState(t, repo, edge.lineage)
+		state.Recovery = &CompactRecoveryProvenance{
+			PredecessorLineageID: edge.predecessor, PredecessorRevision: hash(edge.revision),
+			Disposition: RecoveryInvalidated, Reason: "cycle fixture", Actor: "maintainer@example.com",
+			RecoveredAt: time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC),
 		}
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		before[i], mtimes[i] = payload, info.ModTime().UnixNano()
+		store, err := CompactAuthoritativeStore(context.Background(), repo, edge.lineage)
+		inspectNoError(t, err)
+		writeCompactFixtureRecord(t, store, state)
 	}
-	if _, err := InspectCompactAuthority(context.Background(), repo); err != nil {
-		t.Fatal(err)
-	}
-	for i, path := range paths {
-		payload, _ := os.ReadFile(path)
-		info, _ := os.Stat(path)
-		if !bytes.Equal(payload, before[i]) || info.ModTime().UnixNano() != mtimes[i] {
-			t.Fatalf("inspection mutated %s", path)
+}
+func inspectReadState(t *testing.T, path string) string {
+	t.Helper()
+	payload, err := os.ReadFile(path)
+	inspectNoError(t, err)
+	return string(payload)
+}
+func inspectedEdge(t *testing.T, report CompactRecoveryInspectionReport, successor string) CompactRecoveryEdgeInspection {
+	t.Helper()
+	for _, edge := range report.Edges {
+		if edge.SuccessorLineageID == successor {
+			return edge
 		}
 	}
+	t.Fatalf("edge %q was omitted: %#v", successor, report.Edges)
+	return CompactRecoveryEdgeInspection{}
 }
-
-func TestInspectCompactAuthoritySyntheticCoverage(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	combinedRecoveryFixture(t, repo, nil)
-	report, err := InspectCompactAuthority(context.Background(), repo)
+func inspectNoError(t *testing.T, err error) {
+	t.Helper()
 	if err != nil {
 		t.Fatal(err)
-	}
-	if report.Summary.TotalEdges != 1 || report.Summary.InvalidEdges != 1 || report.Summary.ValidEdges != 0 || len(report.Edges) != 1 {
-		t.Fatalf("synthetic inspection = %#v", report)
-	}
-	if report.Edges[0].AnomalyClass != "unchanged_target,malformed_recovery_authorization" {
-		t.Fatalf("synthetic anomaly class = %q", report.Edges[0].AnomalyClass)
-	}
-}
-
-func TestInspectCompactAuthorityLoadError(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	validInspectRecoveryFixture(t, repo)
-	root, _, err := reviewAuthorityRoot(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bad := filepath.Join(root, "v2", "inspect-corrupt")
-	if err := os.MkdirAll(bad, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(bad, "review-state.json"), []byte("not json\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	report, err := InspectCompactAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.Summary.TotalEdges != 1 || len(report.Diagnostics) != 1 || report.Diagnostics[0].Code != "load_failure" || report.Diagnostics[0].Message == "" {
-		t.Fatalf("load-error inspection = %#v", report)
 	}
 }
