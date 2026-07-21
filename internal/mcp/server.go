@@ -1,8 +1,8 @@
 package mcp
 
 import (
-	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -41,6 +41,9 @@ func (s *Server) RegisterTool(tool Tool, handler ToolHandler) {
 
 // registerDefaultTools populates default SDD reasoning tools into the server.
 func (s *Server) registerDefaultTools() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	defaultHandlers := map[string]ToolHandler{
 		"sdd_explore": HandleSDDExplore,
 		"sdd_review":  HandleSDDReview,
@@ -59,28 +62,28 @@ func (s *Server) registerDefaultTools() {
 }
 
 // Serve starts processing stdio JSON-RPC 2.0 requests from r and writing responses to w.
-// Uses a 2MB buffer (MaxBufferSize) to prevent payload truncation for large payloads.
+// Uses json.NewDecoder to naturally handle multiline / pretty-printed JSON payloads.
 func (s *Server) Serve(r io.Reader, w io.Writer) error {
 	s.mu.Lock()
 	s.writer = w
 	s.mu.Unlock()
 
-	scanner := bufio.NewScanner(r)
-	buf := make([]byte, 64*1024)
-	scanner.Buffer(buf, MaxBufferSize)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	dec := json.NewDecoder(r)
+	for {
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			if writeErr := s.writeError(nil, ErrCodeParseError, "Parse error: invalid JSON payload", nil); writeErr != nil {
+				return writeErr
+			}
+			return nil
 		}
-		_ = s.handleMessage(line)
+		if err := s.handleMessage(raw); err != nil {
+			return err
+		}
 	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("mcp scanner error: %w", err)
-	}
-	return nil
 }
 
 func (s *Server) handleMessage(data []byte) error {
@@ -91,10 +94,7 @@ func (s *Server) handleMessage(data []byte) error {
 
 	// Validate JSON-RPC version
 	if req.JSONRPC != JSONRPCVersion {
-		if req.ID != nil {
-			return s.writeError(req.ID, ErrCodeInvalidRequest, "Invalid JSON-RPC version, expected '2.0'", nil)
-		}
-		return nil
+		return s.writeError(req.ID, ErrCodeInvalidRequest, "Invalid JSON-RPC version, expected '2.0'", nil)
 	}
 
 	switch req.Method {
@@ -153,6 +153,10 @@ func (s *Server) handleMessage(data []byte) error {
 
 		res, err := handler(params.Arguments)
 		if err != nil {
+			var rpcErr *RPCError
+			if errors.As(err, &rpcErr) {
+				return s.writeError(req.ID, rpcErr.Code, rpcErr.Message, rpcErr.Data)
+			}
 			return s.writeResult(req.ID, ToolCallResult{
 				Content: []TextContent{{Type: "text", Text: fmt.Sprintf("Tool execution error: %v", err)}},
 				IsError: true,
@@ -167,11 +171,7 @@ func (s *Server) handleMessage(data []byte) error {
 		return s.writeResult(req.ID, res)
 
 	default:
-		// If req.ID is present, return MethodNotFound error.
-		if req.ID != nil {
-			return s.writeError(req.ID, ErrCodeMethodNotFound, fmt.Sprintf("Method not found: %s", req.Method), nil)
-		}
-		return nil
+		return s.writeError(req.ID, ErrCodeMethodNotFound, fmt.Sprintf("Method not found: %s", req.Method), nil)
 	}
 }
 
@@ -188,6 +188,9 @@ func (s *Server) writeResult(id interface{}, result interface{}) error {
 }
 
 func (s *Server) writeError(id interface{}, code int, message string, data interface{}) error {
+	if id == nil {
+		return nil
+	}
 	resp := Response{
 		JSONRPC: JSONRPCVersion,
 		ID:      id,

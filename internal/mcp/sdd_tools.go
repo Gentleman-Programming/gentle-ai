@@ -118,16 +118,56 @@ func DefaultSDDTools() []Tool {
 	}
 }
 
+func getStringArg(args map[string]interface{}, key string, required bool) (string, error) {
+	if args == nil {
+		if required {
+			return "", &RPCError{
+				Code:    ErrCodeInvalidParams,
+				Message: fmt.Sprintf("missing required string parameter '%s'", key),
+			}
+		}
+		return "", nil
+	}
+
+	val, exists := args[key]
+	if !exists || val == nil {
+		if required {
+			return "", &RPCError{
+				Code:    ErrCodeInvalidParams,
+				Message: fmt.Sprintf("missing required string parameter '%s'", key),
+			}
+		}
+		return "", nil
+	}
+
+	strVal, ok := val.(string)
+	if !ok {
+		return "", &RPCError{
+			Code:    ErrCodeInvalidParams,
+			Message: fmt.Sprintf("parameter '%s' must be a string, got %T", key, val),
+		}
+	}
+
+	if required && strings.TrimSpace(strVal) == "" {
+		return "", &RPCError{
+			Code:    ErrCodeInvalidParams,
+			Message: fmt.Sprintf("required string parameter '%s' cannot be empty", key),
+		}
+	}
+
+	return strVal, nil
+}
+
 // HandleSDDExplore executes the sdd_explore reasoning tool.
 func HandleSDDExplore(args map[string]interface{}) (*ToolCallResult, error) {
-	topic, _ := args["topic"].(string)
-	if strings.TrimSpace(topic) == "" {
-		return &ToolCallResult{
-			Content: []TextContent{{Type: "text", Text: "Error: 'topic' parameter is required for sdd_explore"}},
-			IsError: true,
-		}, nil
+	topic, err := getStringArg(args, "topic", true)
+	if err != nil {
+		return nil, err
 	}
-	ctxVal, _ := args["context"].(string)
+	ctxVal, err := getStringArg(args, "context", false)
+	if err != nil {
+		return nil, err
+	}
 
 	var sb strings.Builder
 	sb.WriteString("## SDD Exploration Protocol (Reasoning Tool)\n\n")
@@ -149,8 +189,14 @@ func HandleSDDExplore(args map[string]interface{}) (*ToolCallResult, error) {
 
 // HandleSDDReview executes the sdd_review reasoning tool.
 func HandleSDDReview(args map[string]interface{}) (*ToolCallResult, error) {
-	artifact, _ := args["artifact"].(string)
-	focus, _ := args["focus"].(string)
+	artifact, err := getStringArg(args, "artifact", false)
+	if err != nil {
+		return nil, err
+	}
+	focus, err := getStringArg(args, "focus", false)
+	if err != nil {
+		return nil, err
+	}
 	if focus == "" {
 		focus = "4r"
 	}
@@ -175,14 +221,14 @@ func HandleSDDReview(args map[string]interface{}) (*ToolCallResult, error) {
 
 // HandleSDDPropose executes the sdd_propose reasoning tool.
 func HandleSDDPropose(args map[string]interface{}) (*ToolCallResult, error) {
-	change, _ := args["change"].(string)
-	if strings.TrimSpace(change) == "" {
-		return &ToolCallResult{
-			Content: []TextContent{{Type: "text", Text: "Error: 'change' parameter is required for sdd_propose"}},
-			IsError: true,
-		}, nil
+	change, err := getStringArg(args, "change", true)
+	if err != nil {
+		return nil, err
 	}
-	scope, _ := args["scope"].(string)
+	scope, err := getStringArg(args, "scope", false)
+	if err != nil {
+		return nil, err
+	}
 
 	var sb strings.Builder
 	sb.WriteString("## SDD Proposal Protocol\n\n")
@@ -203,17 +249,21 @@ func HandleSDDPropose(args map[string]interface{}) (*ToolCallResult, error) {
 
 // HandleSDDSpec executes the sdd_spec reasoning tool.
 func HandleSDDSpec(args map[string]interface{}) (*ToolCallResult, error) {
-	feature, _ := args["feature"].(string)
-	if strings.TrimSpace(feature) == "" {
-		return &ToolCallResult{
-			Content: []TextContent{{Type: "text", Text: "Error: 'feature' parameter is required for sdd_spec"}},
-			IsError: true,
-		}, nil
+	feature, err := getStringArg(args, "feature", true)
+	if err != nil {
+		return nil, err
+	}
+	reqsVal, err := getStringArg(args, "requirements", false)
+	if err != nil {
+		return nil, err
 	}
 
 	var sb strings.Builder
 	sb.WriteString("## SDD Specification Protocol\n\n")
 	sb.WriteString(fmt.Sprintf("**Feature**: %s\n", feature))
+	if reqsVal != "" {
+		sb.WriteString(fmt.Sprintf("**Requirements**: %s\n", reqsVal))
+	}
 	sb.WriteString("\n### Guidelines:\n")
 	sb.WriteString("- Formulate detailed functional requirements and acceptance criteria.\n")
 	sb.WriteString("- Define edge cases, error conditions, and API contracts.\n")
@@ -226,17 +276,21 @@ func HandleSDDSpec(args map[string]interface{}) (*ToolCallResult, error) {
 
 // HandleSDDDesign executes the sdd_design reasoning tool.
 func HandleSDDDesign(args map[string]interface{}) (*ToolCallResult, error) {
-	spec, _ := args["spec"].(string)
-	if strings.TrimSpace(spec) == "" {
-		return &ToolCallResult{
-			Content: []TextContent{{Type: "text", Text: "Error: 'spec' parameter is required for sdd_design"}},
-			IsError: true,
-		}, nil
+	spec, err := getStringArg(args, "spec", true)
+	if err != nil {
+		return nil, err
+	}
+	archVal, err := getStringArg(args, "architecture", false)
+	if err != nil {
+		return nil, err
 	}
 
 	var sb strings.Builder
 	sb.WriteString("## SDD Technical Design Protocol\n\n")
 	sb.WriteString(fmt.Sprintf("**Target Spec**: %s\n", spec))
+	if archVal != "" {
+		sb.WriteString(fmt.Sprintf("**Architecture**: %s\n", archVal))
+	}
 	sb.WriteString("\n### Guidelines:\n")
 	sb.WriteString("- Detail package layout, data structures, and function signatures.\n")
 	sb.WriteString("- Document concurrency, state management, and error handling strategies.\n")
@@ -249,17 +303,21 @@ func HandleSDDDesign(args map[string]interface{}) (*ToolCallResult, error) {
 
 // HandleSDDTasks executes the sdd_tasks reasoning tool.
 func HandleSDDTasks(args map[string]interface{}) (*ToolCallResult, error) {
-	design, _ := args["design"].(string)
-	if strings.TrimSpace(design) == "" {
-		return &ToolCallResult{
-			Content: []TextContent{{Type: "text", Text: "Error: 'design' parameter is required for sdd_tasks"}},
-			IsError: true,
-		}, nil
+	design, err := getStringArg(args, "design", true)
+	if err != nil {
+		return nil, err
+	}
+	phasesVal, err := getStringArg(args, "phases", false)
+	if err != nil {
+		return nil, err
 	}
 
 	var sb strings.Builder
 	sb.WriteString("## SDD Task Breakdown Protocol\n\n")
 	sb.WriteString(fmt.Sprintf("**Design Reference**: %s\n", design))
+	if phasesVal != "" {
+		sb.WriteString(fmt.Sprintf("**Phases**: %s\n", phasesVal))
+	}
 	sb.WriteString("\n### Guidelines:\n")
 	sb.WriteString("- Create incremental, testable tasks for implementation.\n")
 	sb.WriteString("- Mark tasks with verification criteria and dependencies.\n")

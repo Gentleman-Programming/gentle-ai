@@ -44,6 +44,10 @@ type RPCError struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
+func (e *RPCError) Error() string {
+	return e.Message
+}
+
 // ServerInfo defines the server details returned during MCP initialize.
 type ServerInfo struct {
 	Name    string `json:"name"`
