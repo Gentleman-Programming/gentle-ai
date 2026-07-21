@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/storage"
@@ -111,6 +112,18 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
 	)
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
+
+	// engram MCP handshake lifecycle version gate (#1019). Wired inline
+	// alongside the existing checks; see internal/components/engram/doctor.go.
+	// Convert from the engram-local MCPVersionCheck to cli.CheckResult to keep
+	// imports one-way (engram does not import cli).
+	engramLifecycle := engram.CheckEngramMCPVersion(ctx)
+	report.Checks = append(report.Checks, CheckResult{
+		Name:   engramLifecycle.Name,
+		Status: CheckStatus(engramLifecycle.Status),
+		Detail: engramLifecycle.Detail,
+		Remedy: engramLifecycle.Remedy,
+	})
 
 	renderDoctorReport(w, report)
 	return nil
