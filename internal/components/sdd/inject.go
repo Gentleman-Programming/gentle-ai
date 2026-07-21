@@ -1739,6 +1739,10 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 	if err != nil {
 		return mergeJSONResult{}, err
 	}
+	merged, err = PropagateTopLevelPermissions(merged)
+	if err != nil {
+		return mergeJSONResult{}, err
+	}
 
 	writeResult, err := filemerge.WriteFileAtomic(path, merged, 0o644)
 	if err != nil {
@@ -1872,7 +1876,8 @@ func mergePermissionRules(topValue, agentValue any) (any, bool) {
 				result[pattern] = action
 			}
 		}
-		return result, !reflect.DeepEqual(agentValue, result)
+		normalized, _, _ := normalizedPermissionValue(result)
+		return normalized, !reflect.DeepEqual(agentValue, normalized)
 	}
 	if agentValue != nil {
 		if _, isMap := agentValue.(map[string]any); !isMap {
@@ -1968,15 +1973,6 @@ func PropagateTopLevelPermissions(jsonBytes []byte) ([]byte, error) {
 	}
 
 	changed := false
-	if topIsMap {
-		for category, topValue := range topPerms {
-			normalized, _, valid := normalizedPermissionValue(topValue)
-			if valid && !reflect.DeepEqual(topValue, normalized) {
-				topPerms[category] = normalized
-				changed = true
-			}
-		}
-	}
 	for agentKey, agentValue := range agents {
 		if agentKey != "gentle-orchestrator" && !strings.HasPrefix(agentKey, "sdd-orchestrator-") {
 			continue

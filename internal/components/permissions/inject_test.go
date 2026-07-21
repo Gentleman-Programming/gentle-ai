@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -153,14 +154,14 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestInjectOpenCodeBackfillsOrchestratorPermissionsAfterSDD(t *testing.T) {
+func TestSDDInjectPreservesOrchestratorPermissionsAfterPermissionInjection(t *testing.T) {
 	home := t.TempDir()
 	adapter := opencodeAdapter()
-	if _, err := sdd.Inject(home, adapter, ""); err != nil {
-		t.Fatalf("SDD Inject() error = %v", err)
-	}
 	if _, err := Inject(home, adapter); err != nil {
 		t.Fatalf("Permission Inject() error = %v", err)
+	}
+	if _, err := sdd.Inject(home, adapter, ""); err != nil {
+		t.Fatalf("SDD Inject() error = %v", err)
 	}
 
 	content, err := os.ReadFile(adapter.SettingsPath(home))
@@ -171,6 +172,14 @@ func TestInjectOpenCodeBackfillsOrchestratorPermissionsAfterSDD(t *testing.T) {
 	if err := json.Unmarshal(content, &root); err != nil {
 		t.Fatal(err)
 	}
+	var overlay map[string]any
+	if err := json.Unmarshal(openCodeOverlayJSON, &overlay); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(root["permission"], overlay["permission"]) {
+		t.Fatalf("top-level permission mutated during propagation\ngot:  %#v\nwant: %#v", root["permission"], overlay["permission"])
+	}
+
 	topRead := root["permission"].(map[string]any)["read"].(map[string]any)
 	agents := root["agent"].(map[string]any)
 	for name, value := range agents {

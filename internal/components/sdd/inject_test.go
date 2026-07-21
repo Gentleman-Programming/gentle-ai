@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -5021,6 +5022,7 @@ func TestMergeJSONFileReturnsMergedBytes(t *testing.T) {
 func TestPropagateTopLevelPermissions(t *testing.T) {
 	tests := []struct{ name, input, want string }{
 		{"map deny wins", `{"permission":{"read":{"*":"deny","secret.txt":"allow"}},"agent":{"gentle-orchestrator":{"permission":{"read":"allow"}},"sdd-orchestrator-x":{"permission":{"read":"allow"}}}}`, `{"read":{"*":"deny","secret.txt":"deny"}}`},
+		{"map deny overrides ask exceptions", `{"permission":{"read":{"*":"deny"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"*":"ask","secret.txt":"allow"}}},"sdd-orchestrator-x":{"permission":{"read":{"*":"ask","secret.txt":"allow"}}}}}`, `{"read":{"*":"deny","secret.txt":"deny"}}`},
 		{"overlapping map deny wins", `{"permission":{"read":{"**/config/*.sh":"deny"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"**/config/deploy.sh":"allow"}}},"sdd-orchestrator-x":{"permission":{"read":{"**/config/deploy.sh":"allow"}}}}}`, `{"read":{"**/config/*.sh":"deny","**/config/deploy.sh":"deny"}}`},
 		{"map ask preserves deny", `{"permission":{"read":{"*.env":"ask"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"*.env":"deny"}}},"sdd-orchestrator-x":{"permission":{"read":{"*.env":"deny"}}}}}`, `{"read":{"*.env":"deny"}}`},
 		{"invalid nested values are preserved", `{"permission":{"read":{"*.key":"deny","bad-array":["deny"],"bad-object":{"nested":"deny"}}},"agent":{"gentle-orchestrator":{"permission":{"read":{"*.key":"allow","bad-array":["allow"],"bad-object":{}}}},"sdd-orchestrator-x":{"permission":{"read":{"*.key":"allow","bad-array":["allow"],"bad-object":{}}}}}}`, `{"read":{"*.key":"deny","bad-array":["allow"],"bad-object":{}}}`},
@@ -5032,6 +5034,10 @@ func TestPropagateTopLevelPermissions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var original map[string]any
+			if err := json.Unmarshal([]byte(tt.input), &original); err != nil {
+				t.Fatal(err)
+			}
 			first, err := PropagateTopLevelPermissions([]byte(tt.input))
 			if err != nil {
 				t.Fatal(err)
@@ -5043,6 +5049,9 @@ func TestPropagateTopLevelPermissions(t *testing.T) {
 			var root map[string]any
 			if err := json.Unmarshal(first, &root); err != nil {
 				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(root["permission"], original["permission"]) {
+				t.Fatalf("top-level permission mutated\ngot:  %#v\nwant: %#v", root["permission"], original["permission"])
 			}
 			for _, name := range []string{"gentle-orchestrator", "sdd-orchestrator-x"} {
 				got, _ := json.Marshal(root["agent"].(map[string]any)[name].(map[string]any)["permission"])
