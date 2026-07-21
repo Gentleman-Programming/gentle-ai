@@ -1808,7 +1808,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		profileCount := len(m.UninstallProfilesAvailable)
 		engramScopeOptionCount := 0
 		if m.shouldShowUninstallEngramScopeSelection() {
-			engramScopeOptionCount = 2
+			engramScopeOptionCount = 3
 		}
 		continueIdx := profileCount + engramScopeOptionCount
 		switch {
@@ -2932,6 +2932,14 @@ func executeExternalCommand(commandFn func(string, ...string) *exec.Cmd, name st
 	return nil
 }
 
+// startUninstall builds the tea.Cmd that runs the uninstall pipeline against
+// the captured agent/component/profile selections. The "None" scope path
+// (empty UninstallEngramScope) routes through uninstallFn for agents and
+// components without invoking the Engram step, then removes profiles via a
+// direct removeProfileAgentsFn call. This avoids calling
+// uninstallWithProfilesFn with a nil scope — the service treats that as
+// Global cleanup, which would wipe the user's Engram data even when they
+// opted out.
 func (m Model) startUninstall() tea.Cmd {
 	uninstallFn := m.UninstallFn
 	uninstallWithProfilesFn := m.UninstallWithProfilesFn
@@ -2941,6 +2949,7 @@ func (m Model) startUninstall() tea.Cmd {
 	profileNamesToRemove := append([]string(nil), m.UninstallProfilesToRemove...)
 	engramScope := m.UninstallEngramScope
 	profileSelectionUsed := m.UninstallProfileSelection || len(profileNamesToRemove) > 0
+	engramCleanupSkipped := engramScope == ""
 	mode := m.UninstallMode
 	return func() tea.Msg {
 		if uninstallFn == nil && uninstallWithProfilesFn == nil {
@@ -2951,9 +2960,25 @@ func (m Model) startUninstall() tea.Cmd {
 			result componentuninstall.Result
 			err    error
 		)
-		if uninstallWithProfilesFn != nil && profileSelectionUsed {
+		switch {
+		case engramCleanupSkipped:
+			// None: do not invoke the Engram step at all. Use uninstallFn for
+			// agents/components; remove profiles separately if requested.
+			result, err = uninstallFn(agentIDs, componentIDs)
+			if err == nil && len(profileNamesToRemove) > 0 {
+				settingsPath := opencode.DefaultSettingsPath()
+				for _, profileName := range profileNamesToRemove {
+					if removeErr := removeProfileAgentsFn(settingsPath, profileName); removeErr != nil {
+						// Surface the profile removal failure but don't fail the
+						// uninstall — agents/components are already gone.
+						result.ManualActions = append(result.ManualActions,
+							fmt.Sprintf("Profile %q removal failed (%s); remove manually with 'gentle-ai profile delete'.", profileName, removeErr.Error()))
+					}
+				}
+			}
+		case uninstallWithProfilesFn != nil && profileSelectionUsed:
 			result, err = uninstallWithProfilesFn(agentIDs, componentIDs, profileNamesToRemove, engramScope)
-		} else {
+		default:
 			result, err = uninstallFn(agentIDs, componentIDs)
 		}
 		if err != nil {
@@ -3565,7 +3590,7 @@ func (m Model) optionCount() int {
 	case ScreenUninstallProfiles:
 		count := len(m.UninstallProfilesAvailable) + 2
 		if m.shouldShowUninstallEngramScopeSelection() {
-			count += 2
+			count += 3
 		}
 		return count
 	case ScreenUninstallConfirm:
@@ -3784,18 +3809,24 @@ func (m *Model) toggleCurrentUninstallProfile() {
 	m.UninstallProfilesToRemove = append(m.UninstallProfilesToRemove, profileName)
 }
 
+// toggleCurrentUninstallEngramScope advances UninstallEngramScope through the
+// three-state cycle None -> Project -> Global -> None when the cursor sits on
+// the scope section. The cycle preserves the cursor position on the same row;
+// the radio-button rendering reflects the current scope regardless of which
+// row the cursor is on within the section.
 func (m *Model) toggleCurrentUninstallEngramScope() {
 	profileCount := len(m.UninstallProfilesAvailable)
 	if m.Cursor < profileCount || !m.shouldShowUninstallEngramScopeSelection() {
 		return
 	}
-	idx := m.Cursor - profileCount
-	if idx == 0 {
+	switch m.UninstallEngramScope {
+	case "":
 		m.UninstallEngramScope = model.EngramUninstallScopeProject
-		return
-	}
-	if idx == 1 {
+	case model.EngramUninstallScopeProject:
 		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	default:
+		// Includes EngramUninstallScopeGlobal and any future value: wrap to None.
+		m.UninstallEngramScope = ""
 	}
 }
 
