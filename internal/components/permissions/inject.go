@@ -3,6 +3,7 @@ package permissions
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
@@ -139,6 +140,14 @@ var codexLegacyPermissionValues = [][2]string{
 	{`permissions.gentle-dev.filesystem.":workspace_roots"."."`, `"write"`},
 	{`permissions.gentle-dev.filesystem.":workspace_roots".".git/**"`, `"write"`},
 	{`permissions.gentle-dev.filesystem.":workspace_roots"."**/.env"`, `"deny"`},
+	{`permissions.gentle-dev.filesystem.":workspace_roots"."**/.env.local"`, `"deny"`},
+	{`permissions.gentle-dev.filesystem.":workspace_roots"."**/.env.*.local"`, `"deny"`},
+	{`permissions.gentle-dev.filesystem.":workspace_roots"."**/.ssh/**"`, `"deny"`},
+	{`permissions.gentle-dev.filesystem.":workspace_roots"."**/.credentials/**"`, `"deny"`},
+	{`permissions.gentle-dev.filesystem.":workspace_roots"."**/credentials.json"`, `"deny"`},
+	{`permissions.gentle-dev.filesystem.":workspace_roots"."**/.aws/credentials"`, `"deny"`},
+	{`permissions.gentle-dev.filesystem.":workspace_roots"."**/.config/gh/hosts.yml"`, `"deny"`},
+	{`permissions.gentle-dev.filesystem.":workspace_roots"."**/secrets/**"`, `"deny"`},
 	{`permissions.gentle-dev.filesystem.":workspace_roots"."**/*.pem"`, `"deny"`},
 	{`permissions.gentle-dev.filesystem.":workspace_roots"."**/*.key"`, `"deny"`},
 	{`permissions.gentle-dev.workspace_roots."~"`, `true`},
@@ -229,11 +238,13 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	}
 
 	cleaned := filemerge.RemoveTopLevelTOMLKeyIfValue(string(baseTOML), "approval_policy", "\"on-request\"")
-	cleaned = filemerge.RemoveTopLevelTOMLKeyIfValue(cleaned, "default_permissions", "\"gentle-dev\"")
 	for _, legacy := range codexLegacyPermissionValues {
 		cleaned = filemerge.RemoveTOMLKeyIfValue(cleaned, legacy[0], legacy[1])
 	}
 	cleaned = filemerge.RemoveEmptyTOMLTableTree(cleaned, "permissions.gentle-dev")
+	if !codexConfigHasGentleDevPermissionProfile(cleaned) {
+		cleaned = filemerge.RemoveTopLevelTOMLKeyIfValue(cleaned, "default_permissions", "\"gentle-dev\"")
+	}
 	if cleaned == string(baseTOML) {
 		return InjectionResult{}, nil
 	}
@@ -244,6 +255,11 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	}
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{configPath}}, nil
+}
+
+func codexConfigHasGentleDevPermissionProfile(content string) bool {
+	return strings.Contains(content, "permissions.gentle-dev") ||
+		strings.Contains(content, `permissions."gentle-dev"`)
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {

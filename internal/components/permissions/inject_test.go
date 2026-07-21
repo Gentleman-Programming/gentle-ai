@@ -374,6 +374,59 @@ func TestInjectAntigravitySkipsPermissions(t *testing.T) {
 	}
 }
 
+func TestInjectCodexRemovesIntermediateGentleDevProfile(t *testing.T) {
+	home := t.TempDir()
+	initial := `model = "gpt-5.6-sol"
+
+[permissions.gentle-dev]
+
+[permissions.gentle-dev.network]
+
+[permissions.gentle-dev.network.domains]
+
+[permissions.gentle-dev.filesystem]
+
+[permissions.gentle-dev.filesystem.":workspace_roots"]
+"**/.config/gh/hosts.yml" = "deny"
+"**/.aws/credentials" = "deny"
+"**/credentials.json" = "deny"
+"**/.credentials/**" = "deny"
+"**/.ssh/**" = "deny"
+"**/secrets/**" = "deny"
+"**/.env.*.local" = "deny"
+"**/.env.local" = "deny"
+
+[permissions.gentle-dev.workspace_roots]
+
+[mcp_servers.engram]
+command = "engram"
+args = ["mcp", "--tools=agent"]
+`
+	want := `model = "gpt-5.6-sol"
+
+[mcp_servers.engram]
+command = "engram"
+args = ["mcp", "--tools=agent"]
+`
+	configPath := writeCodexConfig(t, home, initial)
+
+	result, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() changed = false, want true")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config.toml: %v", err)
+	}
+	if string(content) != want {
+		t.Fatalf("cleaned config.toml = %q, want %q", content, want)
+	}
+}
+
 func TestInjectCodexRemovesInjectedGentleDevProfile(t *testing.T) {
 	home := t.TempDir()
 	configPath := writeCodexConfig(t, home, codexInjectedLegacyConfig)
@@ -453,6 +506,7 @@ user_note = "keep"
 "~/custom" = "write"
 `
 	want := `approval_policy = "never"
+default_permissions = "gentle-dev"
 
 [permissions.custom]
 description = "user profile"
@@ -500,7 +554,7 @@ func TestInjectCodexPreservesUserOwnedDottedValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "permissions.gentle-dev.custom_flag = true\n"; string(content) != want {
+	if want := "default_permissions = \"gentle-dev\"\npermissions.gentle-dev.custom_flag = true\n"; string(content) != want {
 		t.Fatalf("cleaned config.toml = %q, want %q", content, want)
 	}
 }
