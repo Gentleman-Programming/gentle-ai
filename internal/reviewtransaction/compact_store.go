@@ -44,7 +44,7 @@ var errCompactRecoveryTargetUnchanged = errors.New("escalated recovery successor
 // errCompactRecoveryAuthorizationInexact identifies the escalated-recovery
 // authorization-binding anomaly so reconcile-authority can gate quarantine of
 // historical pre-contract free-form authorizations to exactly this class.
-var errCompactRecoveryAuthorizationInexact = errors.New("escalated recovery requires an exact maintainer authorization binding")
+var errCompactRecoveryAuthorizationInexact = errors.New("escalated recovery requires an exact maintainer authorization binding: six LF-joined lines — line 1 is the literal schema " + compactRecoveryAuthorizationSchema + ", then key=value lines predecessor_lineage=<id>, predecessor_revision=<rev>, target_identity=<sha256>, actor=<actor>, reason=<text>")
 
 // compactRecoveryAuthorizationSchema is the first line of the exact six-line
 // escalated-recovery maintainer authorization binding.

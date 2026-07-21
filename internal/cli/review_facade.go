@@ -475,6 +475,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	actor := flags.String("actor", "", "recovery actor")
 	projectionFlag := flags.String("projection", "", "successor projection: workspace or staged (default: predecessor projection)")
 	authorization := flags.String("maintainer-authorization", "", "exact six-line LF-only binding: gentle-ai.review-recovery-authorization/v1, predecessor_lineage, predecessor_revision, target_identity, actor, reason")
+	authorizationFile := flags.String("maintainer-authorization-file", "", "read the maintainer authorization binding from this file, or - for stdin (avoids passing the multi-line value as a shell argument on Windows)")
 	policySource := flags.String("policy", "", "optional review policy file")
 	focus := flags.String("focus", "reliability", "dominant standard-risk focus; large pure documentation always uses readability")
 	baseRef := flags.String("base-ref", "", "optional base revision for immutable base-to-HEAD review")
@@ -488,6 +489,17 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected review recover argument %q", flags.Arg(0))
+	}
+	if strings.TrimSpace(*authorizationFile) != "" {
+		if strings.TrimSpace(*authorization) != "" {
+			return errors.New("provide the maintainer authorization via either --maintainer-authorization or --maintainer-authorization-file, not both")
+		}
+		payload, readErr := readFacadeBytes(strings.TrimSpace(*authorizationFile))
+		if readErr != nil {
+			return fmt.Errorf("read maintainer authorization file: %w", readErr)
+		}
+		// The canonical binding has no trailing newline; strip one an editor may add.
+		*authorization = strings.TrimRight(string(payload), "\r\n")
 	}
 	if strings.TrimSpace(*predecessor) == "" || strings.TrimSpace(*expected) == "" || strings.TrimSpace(*successor) == "" || strings.TrimSpace(*reason) == "" || strings.TrimSpace(*actor) == "" || strings.TrimSpace(*disposition) == "" {
 		return errors.New("review recover requires --predecessor-lineage, --expected-predecessor-revision, --successor-lineage, --disposition, --reason, and --actor")
