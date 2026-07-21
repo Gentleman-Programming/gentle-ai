@@ -118,8 +118,8 @@ func TestInspectCompactAuthorityDeterminism(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstJSON, _ := json.MarshalIndent(first, "", "  ")
-	secondJSON, _ := json.MarshalIndent(secondReport, "", "  ")
+	firstJSON, _ := json.Marshal(first)
+	secondJSON, _ := json.Marshal(secondReport)
 	golden, err := os.ReadFile(filepath.Join("testdata", "inspect_authority_determinism.golden"))
 	if err != nil {
 		t.Fatal(err)
