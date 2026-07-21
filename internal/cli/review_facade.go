@@ -550,7 +550,8 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	if !*releaseScope && (baseDiff || overlay) && snapshot.BaseTree != predecessorRecord.State.InitialSnapshot.BaseTree {
 		return errors.New("recovery base-ref does not match predecessor base")
 	}
-	if !*releaseScope && (baseDiff || overlay) && snapshot.Identity == predecessorRecord.State.InitialSnapshot.Identity {
+	if !*releaseScope && reviewtransaction.RecoveryDisposition(*disposition) != reviewtransaction.RecoveryInvalidated &&
+		(baseDiff || overlay) && snapshot.Identity == predecessorRecord.State.InitialSnapshot.Identity {
 		return errors.New("recovery scope has not changed")
 	}
 	assessment, err := (reviewtransaction.SnapshotBuilder{Repo: root}).AssessSnapshotRisk(context.Background(), snapshot)

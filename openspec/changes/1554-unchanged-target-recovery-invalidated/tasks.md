@@ -34,13 +34,13 @@ Chain strategy: pending
 
 ## Phase 2: GREEN — Minimal Production Change
 
-- [ ] 2.1 In `internal/cli/review_facade.go` (~553-555), change the gate condition to add `&& reviewtransaction.RecoveryDisposition(*disposition) != reviewtransaction.RecoveryInvalidated`, matching the `RecoveryDisposition(*disposition)` conversion precedent at line 512. Do not touch lines 518-519 (`--committed-only`/`--base-ref` matching check) or line 550-552 (base-tree guard).
-- [ ] 2.2 Run `go test ./internal/cli/... -run TestUnchangedTargetRecovery -v`. Confirm 1.2 now passes (admitted, delegated to `validateCompactRecoveryEdge`'s `RecoveryInvalidated` case) and 1.3/1.4/1.5/1.6 still pass unchanged.
+- [x] 2.1 In `internal/cli/review_facade.go` (~553-555), change the gate condition to add `&& reviewtransaction.RecoveryDisposition(*disposition) != reviewtransaction.RecoveryInvalidated`, matching the `RecoveryDisposition(*disposition)` conversion precedent at line 512. Do not touch lines 518-519 (`--committed-only`/`--base-ref` matching check) or line 550-552 (base-tree guard).
+- [x] 2.2 Run `go test ./internal/cli/... -run TestUnchangedTargetRecovery -v`. Confirm 1.2 now passes (admitted, delegated to `validateCompactRecoveryEdge`'s `RecoveryInvalidated` case) and 1.3/1.4/1.5/1.6 still pass unchanged.
 
 ## Phase 3: Regression Safety Net
 
-- [ ] 3.1 Confirm `TestEscalatedRecoveryRequiresChangedTarget` (existing package-level test locking `errCompactRecoveryTargetUnchanged`) still passes unmodified — proves the #1419/#1429 invariant is untouched.
-- [ ] 3.2 Grep the diff for any edit outside the single conjunct on the gate line and outside the new test file; if found, revert and re-scope.
+- [x] 3.1 Confirm `TestEscalatedRecoveryRequiresChangedTarget` (existing package-level test locking `errCompactRecoveryTargetUnchanged`) still passes unmodified — proves the #1419/#1429 invariant is untouched.
+- [x] 3.2 Grep the diff for any edit outside the single conjunct on the gate line and outside the new test file; if found, revert and re-scope.
 
 ## Phase 4: Verification
 
