@@ -10,6 +10,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/claudedesktop"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
@@ -28,10 +29,11 @@ func cursorAdapter(t *testing.T) agents.Adapter {
 	return adapter
 }
 
-func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
-func claudeAdapter() agents.Adapter      { return claude.NewAdapter() }
-func hermesAdapter() agents.Adapter      { return hermes.NewAdapter() }
-func kilocodeAdapter() agents.Adapter    { return kilocode.NewAdapter() }
+func antigravityAdapter() agents.Adapter     { return antigravity.NewAdapter() }
+func claudeAdapter() agents.Adapter          { return claude.NewAdapter() }
+func claudeDesktopAdapter() agents.Adapter   { return claudedesktop.NewAdapter() }
+func hermesAdapter() agents.Adapter          { return hermes.NewAdapter() }
+func kilocodeAdapter() agents.Adapter        { return kilocode.NewAdapter() }
 func kimiAdapter() agents.Adapter        { return kimi.NewAdapter() }
 func openclawAdapter() agents.Adapter    { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter    { return opencode.NewAdapter() }
@@ -1034,5 +1036,180 @@ func TestInjectHermesPreservesExistingTopLevelKeys(t *testing.T) {
 	text2 := string(content2)
 	if !strings.Contains(text2, "model: claude") {
 		t.Fatalf("config.yaml lost pre-existing key on second Inject:\n%s", text2)
+	}
+}
+
+// TestInjectClaudeDesktopMergesGentleAIAndContext7AndIsIdempotent verifies that Inject(claude-desktop)
+// auto-injects gentle-ai and context7 into claude_desktop_config.json, and is idempotent.
+func TestInjectClaudeDesktopMergesGentleAIAndContext7AndIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	adapter := claudeDesktopAdapter()
+	configPath := adapter.SettingsPath(home)
+
+	first, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(claude-desktop) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(claude-desktop) first changed = false; want true")
+	}
+
+	second, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(claude-desktop) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(claude-desktop) second changed = true; want false (idempotent)")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", configPath, err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("Unmarshal(%s) error = %v", configPath, err)
+	}
+
+	mcpServers, ok := parsed["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s missing mcpServers key; got %#v", configPath, parsed)
+	}
+
+	gentleAI, ok := mcpServers["gentle-ai"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s mcpServers missing gentle-ai entry; got %#v", configPath, mcpServers)
+	}
+	if gentleAI["command"] == "" {
+		t.Fatalf("gentle-ai entry command is empty")
+	}
+	args, _ := gentleAI["args"].([]any)
+	if len(args) != 1 || args[0] != "mcp" {
+		t.Fatalf("gentle-ai entry args = %#v; want [mcp]", gentleAI["args"])
+	}
+
+	context7, ok := mcpServers["context7"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s mcpServers missing context7 entry; got %#v", configPath, mcpServers)
+	}
+	if context7["command"] != "npx" {
+		t.Fatalf("context7 entry command = %#v; want npx", context7["command"])
+	}
+}
+
+// TestInjectClaudeDesktopPreservesExistingEngramAndCustomMCPEntries verifies that Inject(claude-desktop)
+// preserves existing engram and user-defined MCP server entries in claude_desktop_config.json.
+func TestInjectClaudeDesktopPreservesExistingEngramAndCustomMCPEntries(t *testing.T) {
+	home := t.TempDir()
+	adapter := claudeDesktopAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	existing := `{
+  "mcpServers": {
+    "engram": {
+      "command": "/custom/path/engram",
+      "args": ["mcp", "--tools=agent"]
+    },
+    "custom-server": {
+      "command": "node",
+      "args": ["server.js"]
+    }
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	result, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(claude-desktop) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject(claude-desktop) changed = false; want true")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("Unmarshal error = %v", err)
+	}
+
+	mcpServers, ok := parsed["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing mcpServers key")
+	}
+
+	if _, ok := mcpServers["gentle-ai"]; !ok {
+		t.Fatalf("missing gentle-ai entry after injection")
+	}
+	if _, ok := mcpServers["context7"]; !ok {
+		t.Fatalf("missing context7 entry after injection")
+	}
+	if _, ok := mcpServers["custom-server"]; !ok {
+		t.Fatalf("custom-server entry was lost after injection")
+	}
+
+	engram, ok := mcpServers["engram"].(map[string]any)
+	if !ok {
+		t.Fatalf("engram entry was lost after injection")
+	}
+	if engram["command"] != "/custom/path/engram" {
+		t.Fatalf("engram entry command = %#v; want /custom/path/engram (preserved)", engram["command"])
+	}
+}
+
+func TestInjectClaudeDesktopAvoidsStaleHomebrewCellarPath(t *testing.T) {
+	home := t.TempDir()
+	adapter := claudeDesktopAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	existing := `{
+  "mcpServers": {
+    "gentle-ai": {
+      "command": "/opt/homebrew/Cellar/gentle-ai/1.2.3/bin/gentle-ai",
+      "args": ["mcp"]
+    }
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	origLookPath := GentleAILookPath
+	GentleAILookPath = func(file string) (string, error) {
+		return "/opt/homebrew/bin/gentle-ai", nil
+	}
+	t.Cleanup(func() { GentleAILookPath = origLookPath })
+
+	result, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(claude-desktop) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject(claude-desktop) changed = false; want true (should replace cellar path)")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile error = %v", err)
+	}
+
+	var parsed map[string]any
+	json.Unmarshal(content, &parsed)
+	mcpServers := parsed["mcpServers"].(map[string]any)
+	gentleAI := mcpServers["gentle-ai"].(map[string]any)
+	if gentleAI["command"] != "/opt/homebrew/bin/gentle-ai" {
+		t.Fatalf("gentle-ai command = %#v; want /opt/homebrew/bin/gentle-ai", gentleAI["command"])
 	}
 }

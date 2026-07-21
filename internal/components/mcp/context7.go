@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/gentleman-programming/gentle-ai/internal/versions"
@@ -76,4 +77,33 @@ func KimiContext7OverlayJSON() []byte {
 	content := make([]byte, len(kimiContext7OverlayJSON))
 	copy(content, kimiContext7OverlayJSON)
 	return content
+}
+
+// ClaudeDesktopOverlayJSON returns the overlay JSON for claude_desktop_config.json,
+// containing context7 and gentle-ai MCP server configurations.
+func ClaudeDesktopOverlayJSON(gentleAICmd string) []byte {
+	if gentleAICmd == "" {
+		gentleAICmd = "gentle-ai"
+	}
+	cfg := map[string]any{
+		"mcpServers": map[string]any{
+			"context7": map[string]any{
+				"command": "npx",
+				"args": []string{
+					"-y",
+					"--package=@upstash/context7-mcp@" + versions.Context7MCP,
+					"--",
+					"context7-mcp",
+				},
+			},
+			"gentle-ai": map[string]any{
+				"command": gentleAICmd,
+				"args": []string{
+					"mcp",
+				},
+			},
+		},
+	}
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	return append(b, '\n')
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/internal/mcp"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
@@ -78,6 +79,13 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "help", "--help", "-h":
 			printHelp(stdout, Version)
 			return nil
+		case "mcp":
+			if hasHelpFlag(args[1:]) {
+				printHelp(stdout, Version)
+				return nil
+			}
+			server := mcp.NewServer()
+			return server.Serve(os.Stdin, stdout)
 		case "uninstall":
 			if len(args) >= 2 && args[1] == "opencode-plugin" {
 				_, err := cli.RunUninstallOpenCodePlugin(args[2:], stdout)

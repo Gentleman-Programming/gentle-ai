@@ -1097,10 +1097,9 @@ func TestProfileFallbackAgreesWithRenderFallback(t *testing.T) {
 
 // ─── Codex multi-agent config injection tests ────────────────────────────────
 
-// TestInjectCodexMultiAgentDefaultOn asserts that after a plain Inject call,
-// config.toml contains [features] with multi_agent = true. Codex SDD enables
-// multi-agent delegation by default so the per-phase reasoning_effort table applies.
-func TestInjectCodexMultiAgentDefaultOn(t *testing.T) {
+// TestInjectCodexMultiAgentDefaultOff asserts that after a plain Inject call
+// (CodexMultiAgent default false), config.toml contains [features] with multi_agent = false.
+func TestInjectCodexMultiAgentDefaultOff(t *testing.T) {
 	validCodexRuntime(t)
 	home := t.TempDir()
 
@@ -1117,11 +1116,11 @@ func TestInjectCodexMultiAgentDefaultOn(t *testing.T) {
 	if !strings.Contains(text, "[features]") {
 		t.Fatalf("config.toml missing [features] section; got:\n%s", text)
 	}
-	if !strings.Contains(text, "multi_agent = true") {
-		t.Fatalf("config.toml missing multi_agent = true (enabled by default); got:\n%s", text)
+	if !strings.Contains(text, "multi_agent = false") {
+		t.Fatalf("config.toml missing multi_agent = false (default value); got:\n%s", text)
 	}
-	if strings.Contains(text, "multi_agent = false") {
-		t.Fatalf("config.toml must NOT have multi_agent = false by default; got:\n%s", text)
+	if strings.Contains(text, "multi_agent = true") {
+		t.Fatalf("config.toml must NOT have multi_agent = true by default; got:\n%s", text)
 	}
 }
 
@@ -2285,5 +2284,27 @@ func TestInjectCodexNilOrchestratorAssignmentPreservesTopLevelModel(t *testing.T
 	}
 	if !strings.Contains(string(content), `model = "user-model"`) || !strings.Contains(string(content), `model_reasoning_effort = "high"`) {
 		t.Fatalf("nil assignment clobbered top-level model:\n%s", content)
+	}
+}
+
+func TestKilocodeEngramInjectionAndIsStandardAgent(t *testing.T) {
+	if !isStandardAgent(model.AgentKilocode) {
+		t.Fatalf("isStandardAgent(AgentKilocode) = false, want true")
+	}
+
+	raw := []byte(`{
+		"mcp": {
+			"engram": {
+				"type": "local",
+				"command": ["/custom/path/engram", "mcp", "--tools=agent"]
+			}
+		}
+	}`)
+	cmd, ok := existingMergedEngramCommand(raw, model.AgentKilocode)
+	if !ok {
+		t.Fatalf("existingMergedEngramCommand failed for AgentKilocode")
+	}
+	if cmd != "/custom/path/engram" {
+		t.Fatalf("existingMergedEngramCommand = %q, want /custom/path/engram", cmd)
 	}
 }

@@ -2225,3 +2225,45 @@ func TestCustomClearRoundTripLeavesFutureSyncInPreserveMode(t *testing.T) {
 		t.Fatalf("future sync did not return to preserve mode: assignment=%#v clear=%v", future.CodexOrchestratorAssignment, future.ClearCodexOrchestratorAssignment)
 	}
 }
+
+// TestRunArgsMCPDispatchesServer verifies that `gentle-ai mcp` command is registered
+// and dispatches the stdio MCP server cleanly.
+func TestRunArgsMCPDispatchesServer(t *testing.T) {
+	var stdout bytes.Buffer
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("Pipe error = %v", err)
+	}
+	w.Close()
+
+	origStdin := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = origStdin })
+
+	runErr := RunArgs([]string{"mcp"}, &stdout)
+	if runErr != nil {
+		t.Fatalf("RunArgs(['mcp']) returned error: %v", runErr)
+	}
+}
+
+func TestRunArgsMCPHelp(t *testing.T) {
+	var stdout bytes.Buffer
+
+	runErr := RunArgs([]string{"mcp", "--help"}, &stdout)
+	if runErr != nil {
+		t.Fatalf("RunArgs(['mcp', '--help']) returned error: %v", runErr)
+	}
+	if !strings.Contains(stdout.String(), "USAGE") {
+		t.Fatalf("expected CLI help output for mcp --help, got: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	runErr = RunArgs([]string{"mcp", "-h"}, &stdout)
+	if runErr != nil {
+		t.Fatalf("RunArgs(['mcp', '-h']) returned error: %v", runErr)
+	}
+	if !strings.Contains(stdout.String(), "USAGE") {
+		t.Fatalf("expected CLI help output for mcp -h, got: %q", stdout.String())
+	}
+}

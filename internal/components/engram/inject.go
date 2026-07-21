@@ -322,6 +322,9 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		// present instead of silently overwriting it with the relative "engram".
 		// See: https://github.com/Gentleman-Programming/gentle-ai/issues (engram absolute path regression)
 		mcpPath := adapter.MCPConfigPath(configHomeDir, "engram")
+		if mcpPath == "" {
+			break
+		}
 		cmd := stableEngramCommandForMergedConfig(mcpPath, adapter.Agent())
 		content := buildSeparateMCPContent(mcpPath, engramServerJSONWithCmd(cmd))
 		mcpWrite, err := filemerge.WriteFileAtomic(mcpPath, content, 0o644)
@@ -384,6 +387,9 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		// Hermes: upsert the engram MCP server block under mcp_servers: in
 		// ~/.hermes/config.yaml via the comment-preserving YAML string helpers.
 		configPath := adapter.MCPConfigPath(configHomeDir, "engram")
+		if configPath == "" {
+			break
+		}
 		existing, readErr := readFileOrEmpty(configPath)
 		if readErr != nil {
 			return InjectionResult{}, readErr
@@ -448,7 +454,11 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		// orchestrator asset gracefully falls back to solo execution if the multi-agent
 		// tools are unavailable in the session. agents.max_threads/max_depth carry
 		// conservative defaults.
-		withFeatures := filemerge.UpsertTOMLTableKey(existing, "features", "multi_agent", "true")
+		multiAgentVal := "false"
+		if opts.CodexMultiAgent {
+			multiAgentVal = "true"
+		}
+		withFeatures := filemerge.UpsertTOMLTableKey(existing, "features", "multi_agent", multiAgentVal)
 		withMaxThreads := filemerge.UpsertTOMLTableKey(withFeatures, "agents", "max_threads", "4")
 		withMaxDepth := filemerge.UpsertTOMLTableKey(withMaxThreads, "agents", "max_depth", "2")
 
@@ -711,7 +721,7 @@ func existingMergedEngramCommand(raw []byte, agentID model.AgentID) (string, boo
 
 	var server any
 	switch agentID {
-	case model.AgentOpenCode:
+	case model.AgentOpenCode, model.AgentKilocode:
 		mcp, ok := root["mcp"].(map[string]any)
 		if !ok {
 			return "", false
@@ -772,7 +782,7 @@ func executableFromCommandValue(command any) (string, bool) {
 
 func isStandardAgent(id model.AgentID) bool {
 	switch id {
-	case model.AgentOpenCode, model.AgentQwenCode, model.AgentCodex, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentClaudeCode, model.AgentOpenClaw, model.AgentHermes:
+	case model.AgentOpenCode, model.AgentKilocode, model.AgentQwenCode, model.AgentCodex, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentClaudeCode, model.AgentOpenClaw, model.AgentHermes, model.AgentClaudeDesktop:
 		return true
 	default:
 		return false
