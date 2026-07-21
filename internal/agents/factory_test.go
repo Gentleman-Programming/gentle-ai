@@ -71,6 +71,7 @@ func TestDefaultRegistrySupportedAgentsMatchesFactoryAgents(t *testing.T) {
 	want := []model.AgentID{
 		model.AgentAntigravity,
 		model.AgentClaudeCode,
+		model.AgentClaudeDesktop,
 		model.AgentCodex,
 		model.AgentCursor,
 		model.AgentGeminiCLI,
@@ -89,6 +90,33 @@ func TestDefaultRegistrySupportedAgentsMatchesFactoryAgents(t *testing.T) {
 
 	if got := registry.SupportedAgents(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("SupportedAgents() = %v, want %v", got, want)
+	}
+}
+
+func TestFactoryResolvesClaudeDesktopAdapter(t *testing.T) {
+	adapter, err := NewAdapter(model.AgentClaudeDesktop)
+	if err != nil {
+		t.Fatalf("NewAdapter(%q) returned error: %v", model.AgentClaudeDesktop, err)
+	}
+
+	if got := adapter.Agent(); got != model.AgentClaudeDesktop {
+		t.Fatalf("adapter.Agent() = %q, want %q", got, model.AgentClaudeDesktop)
+	}
+}
+
+func TestDefaultRegistryIncludesClaudeDesktop(t *testing.T) {
+	registry, err := NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("NewDefaultRegistry() returned error: %v", err)
+	}
+
+	adapter, ok := registry.Get(model.AgentClaudeDesktop)
+	if !ok {
+		t.Fatalf("registry missing %s adapter", model.AgentClaudeDesktop)
+	}
+
+	if got := adapter.Agent(); got != model.AgentClaudeDesktop {
+		t.Fatalf("registry adapter.Agent() = %q, want %q", got, model.AgentClaudeDesktop)
 	}
 }
 
