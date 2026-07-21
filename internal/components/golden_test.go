@@ -937,8 +937,8 @@ func TestGoldenEngram_Antigravity(t *testing.T) {
 		t.Fatalf("engram.Inject(antigravity) changed = false")
 	}
 
-	// MCP config written to ~/.gemini/antigravity-cli/mcp_config.json.
-	mcpJSON := readTestFile(t, filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json"))
+	// MCP config written to the Antigravity plugin directory.
+	mcpJSON := readTestFile(t, filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json"))
 	assertGolden(t, "engram-antigravity-mcp.golden", mcpJSON)
 
 	// GEMINI.md must contain the engram-protocol section.

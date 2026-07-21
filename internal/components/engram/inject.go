@@ -1,7 +1,9 @@
 package engram
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -129,17 +131,11 @@ func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 			},
 		}
 	} else {
-		args := []string{"mcp", "--tools=agent"}
-		if agentID == model.AgentAntigravity {
-			// Antigravity should launch the default Engram MCP server without
-			// narrowing the exposed tool set.
-			args = []string{"mcp"}
-		}
 		cfg = map[string]any{
 			"mcpServers": map[string]any{
 				"engram": map[string]any{
 					"command": cmd,
-					"args":    args,
+					"args":    []string{"mcp", "--tools=agent"},
 				},
 			},
 		}
@@ -262,36 +258,183 @@ func ensureJSONFileIfMissing(path string) (filemerge.WriteResult, error) {
 	return filemerge.WriteFileAtomic(path, []byte("{}\n"), 0o644)
 }
 
-func installAntigravityEngramPlugin(homeDir, engramCommand string) (bool, []string, error) {
-	pluginDir := filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram")
-	files := make([]string, 0, 3)
+type fileImage struct {
+	data   []byte
+	exists bool
+}
+
+var antigravityWriteFile = filemerge.WriteFileAtomic
+
+func readImage(path string) (fileImage, error) {
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return fileImage{}, nil
+	}
+	return fileImage{data: b, exists: err == nil}, err
+}
+
+func sameImage(a, b fileImage) bool { return a.exists == b.exists && bytes.Equal(a.data, b.data) }
+
+func activeAntigravityManifest(image fileImage, desired []byte) bool {
+	return image.exists && bytes.Equal(image.data, desired)
+}
+
+func writeReconciled(path string, before fileImage, desired []byte) (bool, string, error) {
+	r, err := antigravityWriteFile(path, desired, 0o644)
+	if err == nil {
+		return r.Changed, "post-replacement", nil
+	}
+	after, readErr := readImage(path)
+	if readErr != nil {
+		return false, "unknown", errors.Join(err, fmt.Errorf("reread %q after atomic-write error: %w", path, readErr))
+	}
+	state := "unknown"
+	if sameImage(after, before) {
+		state = "pre-replacement"
+	} else if after.exists && bytes.Equal(after.data, desired) {
+		state = "post-replacement"
+	}
+	return !sameImage(before, after), state, fmt.Errorf("atomic write %q failed; observed %s: %w", path, state, err)
+}
+
+func antigravityConfigs(globalPath, pluginPath string) (fileImage, []byte, string, bool, error) {
+	global, err := readImage(globalPath)
+	if err != nil {
+		return global, nil, "", false, fmt.Errorf("read Antigravity global config %q: %w", globalPath, err)
+	}
+	root := map[string]json.RawMessage{}
+	if global.exists && json.Unmarshal(global.data, &root) != nil {
+		return global, nil, "", false, fmt.Errorf("parse Antigravity global config %q", globalPath)
+	}
+	if global.exists && root == nil {
+		return global, nil, "", false, fmt.Errorf("parse Antigravity global config %q: expected object", globalPath)
+	}
+	servers := map[string]json.RawMessage{}
+	if raw, ok := root["mcpServers"]; ok && json.Unmarshal(raw, &servers) != nil {
+		return global, nil, "", false, fmt.Errorf("parse Antigravity global mcpServers %q", globalPath)
+	}
+	if servers == nil {
+		return global, nil, "", false, fmt.Errorf("parse Antigravity global mcpServers %q: expected object", globalPath)
+	}
+	_, migrate := servers["engram"]
+	legacy, _ := existingMergedEngramCommand(global.data, model.AgentAntigravity)
+	delete(servers, "engram")
+	if migrate {
+		root["mcpServers"], _ = json.Marshal(servers)
+	}
+	globalDesired, _ := json.MarshalIndent(root, "", "  ")
+	globalDesired = append(globalDesired, '\n')
+
+	plugin, err := readImage(pluginPath)
+	if err != nil {
+		return global, nil, "", false, fmt.Errorf("read Antigravity plugin config %q: %w", pluginPath, err)
+	}
+	root, servers = map[string]json.RawMessage{}, map[string]json.RawMessage{}
+	if plugin.exists && json.Unmarshal(plugin.data, &root) != nil {
+		return global, nil, "", false, fmt.Errorf("parse Antigravity plugin config %q", pluginPath)
+	}
+	if plugin.exists && root == nil {
+		return global, nil, "", false, fmt.Errorf("parse Antigravity plugin config %q: expected object", pluginPath)
+	}
+	if raw, ok := root["mcpServers"]; ok && json.Unmarshal(raw, &servers) != nil {
+		return global, nil, "", false, fmt.Errorf("parse Antigravity plugin mcpServers %q", pluginPath)
+	}
+	if servers == nil {
+		return global, nil, "", false, fmt.Errorf("parse Antigravity plugin mcpServers %q: expected object", pluginPath)
+	}
+	cmd, ok := existingMergedEngramCommand(plugin.data, model.AgentAntigravity)
+	if !ok {
+		cmd = legacy
+	}
+	if cmd == "" {
+		cmd = preferredAntigravityEngramCommand()
+	}
+	cmd = stableEngramCommandForExisting(cmd, model.AgentAntigravity)
+	servers["engram"], _ = json.Marshal(map[string]any{"command": cmd, "args": []string{"mcp", "--tools=agent"}})
+	root["mcpServers"], _ = json.Marshal(servers)
+	pluginDesired, _ := json.MarshalIndent(root, "", "  ")
+	return global, append(pluginDesired, '\n'), string(globalDesired), migrate, nil
+}
+
+func installAntigravityEngramPlugin(homeDir string, adapter agents.Adapter) (bool, []string, error) {
+	globalPath := adapter.MCPConfigPath(homeDir, "engram")
+	pluginDir := filepath.Join(filepath.Dir(globalPath), "plugins", "gentle-ai-engram")
+	manifestPath, mcpPath := filepath.Join(pluginDir, "plugin.json"), filepath.Join(pluginDir, "mcp_config.json")
+	globalBefore, pluginMCP, globalDesired, migrate, err := antigravityConfigs(globalPath, mcpPath)
+	if err != nil {
+		return false, nil, err
+	}
+	manifestBefore, err := readImage(manifestPath)
+	if err != nil {
+		return false, nil, fmt.Errorf("read Antigravity manifest %q: %w", manifestPath, err)
+	}
+	files := []string{mcpPath, filepath.Join(pluginDir, "hooks.json"), adapter.SettingsPath(homeDir), manifestPath}
 	changed := false
-
-	pluginPath := filepath.Join(pluginDir, "plugin.json")
-	pluginWrite, err := filemerge.WriteFileAtomic(pluginPath, []byte(antigravityEngramPluginJSON), 0o644)
-	if err != nil {
-		return false, nil, fmt.Errorf("write Antigravity Engram plugin manifest: %w", err)
+	for i, content := range [][]byte{pluginMCP, antigravityEngramHooksJSON(), []byte("{}\n")} {
+		before, readErr := readImage(files[i])
+		if readErr != nil {
+			return false, nil, fmt.Errorf("read staging target %q: %w", files[i], readErr)
+		}
+		if i == 2 && before.exists {
+			continue
+		}
+		wrote, _, writeErr := writeReconciled(files[i], before, content)
+		changed = changed || wrote
+		if writeErr != nil {
+			observed := fmt.Errorf("observed global active=%v at %q, manifest active=%v at %q", globalBefore.exists, globalPath, manifestBefore.exists, manifestPath)
+			if !globalBefore.exists && !manifestBefore.exists {
+				observed = errors.Join(observed, fmt.Errorf("no active registration; manual recovery required"))
+			}
+			return false, nil, errors.Join(writeErr, observed)
+		}
 	}
-	changed = changed || pluginWrite.Changed
-	files = append(files, pluginPath)
 
-	pluginMCPPath := filepath.Join(pluginDir, "mcp_config.json")
-	mcpWrite, err := filemerge.WriteFileAtomic(pluginMCPPath, engramOverlayJSON(model.AgentAntigravity, engramCommand), 0o644)
-	if err != nil {
-		return false, nil, fmt.Errorf("write Antigravity Engram plugin MCP config: %w", err)
+	var primary error
+	if migrate {
+		wrote, state, writeErr := writeReconciled(globalPath, globalBefore, []byte(globalDesired))
+		changed = changed || wrote
+		if writeErr != nil {
+			if state != "post-replacement" {
+				return false, nil, errors.Join(writeErr, fmt.Errorf("manifest %q active=%v", manifestPath, manifestBefore.exists))
+			}
+			primary = writeErr
+		}
+		files = append(files, globalPath)
 	}
-	changed = changed || mcpWrite.Changed
-	files = append(files, pluginMCPPath)
 
-	hooksPath := filepath.Join(pluginDir, "hooks.json")
-	hooksWrite, err := filemerge.WriteFileAtomic(hooksPath, antigravityEngramHooksJSON(), 0o644)
-	if err != nil {
-		return false, nil, fmt.Errorf("write Antigravity Engram hooks: %w", err)
+	manifestDesired := []byte(antigravityEngramPluginJSON)
+	wrote, state, activateErr := writeReconciled(manifestPath, manifestBefore, manifestDesired)
+	changed = changed || wrote
+	if activateErr == nil {
+		return changed, files, primary
 	}
-	changed = changed || hooksWrite.Changed
-	files = append(files, hooksPath)
-
-	return changed, files, nil
+	primary = errors.Join(primary, activateErr)
+	if state == "post-replacement" || activeAntigravityManifest(manifestBefore, manifestDesired) {
+		return false, nil, errors.Join(primary, fmt.Errorf("plugin-only registration observed at %q", manifestPath))
+	}
+	if !migrate {
+		return false, nil, errors.Join(primary, fmt.Errorf("manifest inactive and no prior global registration; manual recovery required"))
+	}
+	currentGlobal, readErr := readImage(globalPath)
+	if readErr != nil {
+		return false, nil, errors.Join(primary, fmt.Errorf("observe global %q before rollback: %w; manual recovery required", globalPath, readErr))
+	}
+	_, rollbackState, rollbackErr := writeReconciled(globalPath, currentGlobal, globalBefore.data)
+	if rollbackErr == nil || rollbackState == "post-replacement" {
+		return false, nil, errors.Join(primary, rollbackErr, fmt.Errorf("global registration restored exactly at %q", globalPath))
+	}
+	if rollbackState == "pre-replacement" {
+		currentManifest, readErr := readImage(manifestPath)
+		if readErr != nil {
+			return false, nil, errors.Join(primary, rollbackErr, fmt.Errorf("observe manifest %q before roll-forward: %w; manual recovery required", manifestPath, readErr))
+		}
+		_, rollState, rollErr := writeReconciled(manifestPath, currentManifest, manifestDesired)
+		if rollErr == nil || rollState == "post-replacement" {
+			return false, nil, errors.Join(primary, rollbackErr, rollErr, fmt.Errorf("rollback failed; converged plugin-only at %q", manifestPath))
+		}
+		rollbackErr = errors.Join(rollbackErr, rollErr)
+	}
+	return false, nil, errors.Join(primary, rollbackErr, fmt.Errorf("unknown state at global %q and manifest %q; manual recovery required", globalPath, manifestPath))
 }
 
 func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
@@ -349,6 +492,15 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		if mcpPath == "" {
 			break
 		}
+		if adapter.Agent() == model.AgentAntigravity {
+			pluginChanged, pluginFiles, pluginErr := installAntigravityEngramPlugin(configHomeDir, adapter)
+			if pluginErr != nil {
+				return InjectionResult{}, pluginErr
+			}
+			changed = changed || pluginChanged
+			files = append(files, pluginFiles...)
+			break
+		}
 		engramCommand := stableEngramCommandForMergedConfig(mcpPath, adapter.Agent())
 		var overlay []byte
 		if adapter.Agent() == model.AgentVSCodeCopilot {
@@ -363,22 +515,6 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		}
 		changed = changed || mcpWrite.Changed
 		files = append(files, mcpPath)
-
-		if adapter.Agent() == model.AgentAntigravity {
-			settingsWrite, settingsErr := ensureJSONFileIfMissing(adapter.SettingsPath(configHomeDir))
-			if settingsErr != nil {
-				return InjectionResult{}, fmt.Errorf("ensure Antigravity settings: %w", settingsErr)
-			}
-			changed = changed || settingsWrite.Changed
-			files = append(files, adapter.SettingsPath(configHomeDir))
-
-			pluginChanged, pluginFiles, pluginErr := installAntigravityEngramPlugin(configHomeDir, engramCommand)
-			if pluginErr != nil {
-				return InjectionResult{}, pluginErr
-			}
-			changed = changed || pluginChanged
-			files = append(files, pluginFiles...)
-		}
 
 	case model.StrategyMergeIntoYAML:
 		// Hermes: upsert the engram MCP server block under mcp_servers: in
@@ -686,6 +822,14 @@ func preferredStableEngramCommand() string {
 	return "engram"
 }
 
+func preferredAntigravityEngramCommand() string {
+	p, err := EngramLookPath("engram")
+	if err == nil && isAbsoluteEngramPath(p) {
+		return p
+	}
+	return preferredStableEngramCommand()
+}
+
 func existingMergedEngramCommand(raw []byte, agentID model.AgentID) (string, bool) {
 	if len(raw) == 0 {
 		return "", false
@@ -844,7 +988,7 @@ func isEngramCommand(cmd string) bool {
 // isAbsoluteEngramPath reports whether path is an absolute filesystem path
 // that points to an engram binary.
 func isAbsoluteEngramPath(path string) bool {
-	return filepath.IsAbs(path) && isEngramCommand(path)
+	return (filepath.IsAbs(path) || strings.HasPrefix(filepath.ToSlash(path), "/")) && isEngramCommand(path)
 }
 
 func isVersionedHomebrewCellarPath(path string) bool {
@@ -854,7 +998,7 @@ func isVersionedHomebrewCellarPath(path string) bool {
 
 func isStableHomebrewEngramPath(path string) bool {
 	clean := filepath.ToSlash(filepath.Clean(path))
-	return (clean == "/opt/homebrew/bin/engram" || clean == "/usr/local/bin/engram") && isEngramCommand(clean)
+	return (clean == "/opt/homebrew/bin/engram" || clean == "/usr/local/bin/engram" || clean == "/home/linuxbrew/.linuxbrew/bin/engram") && isEngramCommand(clean)
 }
 
 // resolveProfileAssignments builds the []codex.ProfileAssignment slice used
