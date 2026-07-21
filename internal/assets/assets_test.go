@@ -11,6 +11,7 @@ import (
 func TestOrchestratorsRequireNonSkippableGeneralDelegationTriggers(t *testing.T) {
 	paths := []string{
 		"claude/sdd-orchestrator.md",
+		"claudedesktop/sdd-orchestrator.md",
 		"opencode/sdd-orchestrator.md",
 		"codex/sdd-orchestrator.md",
 	}
@@ -85,7 +86,7 @@ func TestOrchestratorsRequireNonSkippableGeneralDelegationTriggers(t *testing.T)
 }
 
 func TestOrchestratorLifecycleGatesRetainKnownLineage(t *testing.T) {
-	for _, agent := range []string{"antigravity", "claude", "codex", "cursor", "gemini", "generic", "hermes", "kimi", "kiro", "opencode", "qwen", "windsurf"} {
+	for _, agent := range []string{"antigravity", "claude", "claudedesktop", "codex", "cursor", "gemini", "generic", "hermes", "kimi", "kiro", "opencode", "qwen", "windsurf"} {
 		content := MustRead(agent + "/sdd-orchestrator.md")
 		if !strings.Contains(content, "--lineage <known-lineage>") || strings.Contains(content, "Let the facade discover authority") {
 			t.Errorf("%s orchestrator does not retain exact lineage", agent)
@@ -95,9 +96,10 @@ func TestOrchestratorLifecycleGatesRetainKnownLineage(t *testing.T) {
 
 func TestOrchestratorsRejectDelegationBypassLanguage(t *testing.T) {
 	contents := map[string]string{
-		"claude/sdd-orchestrator.md":   MustRead("claude/sdd-orchestrator.md"),
-		"opencode/sdd-orchestrator.md": MustRead("opencode/sdd-orchestrator.md"),
-		"codex/sdd-orchestrator.md":    MustRead("codex/sdd-orchestrator.md"),
+		"claude/sdd-orchestrator.md":        MustRead("claude/sdd-orchestrator.md"),
+		"claudedesktop/sdd-orchestrator.md": MustRead("claudedesktop/sdd-orchestrator.md"),
+		"opencode/sdd-orchestrator.md":      MustRead("opencode/sdd-orchestrator.md"),
+		"codex/sdd-orchestrator.md":         MustRead("codex/sdd-orchestrator.md"),
 	}
 	for path, content := range contents {
 		for _, forbidden := range []string{
@@ -188,6 +190,9 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"claude/output-style-neutral.md",
 		"claude/persona-gentleman.md",
 		"claude/sdd-orchestrator.md",
+
+		// Claude Desktop agent files
+		"claudedesktop/sdd-orchestrator.md",
 		"claude/commands/sdd-apply.md",
 		"claude/commands/sdd-archive.md",
 		"claude/commands/sdd-continue.md",
@@ -966,6 +971,7 @@ func TestNonClaudeSDDOrchestratorChainStrategyParity(t *testing.T) {
 		propagationScope string
 	}{
 		{path: "codex/sdd-orchestrator.md", propagationScope: "prompt"},
+		{path: "claudedesktop/sdd-orchestrator.md", propagationScope: "Claude Desktop prompt"},
 		{path: "gemini/sdd-orchestrator.md", propagationScope: "prompt"},
 		{path: "qwen/sdd-orchestrator.md", propagationScope: "prompt"},
 		{path: "generic/sdd-orchestrator.md", propagationScope: "prompt"},
@@ -1003,7 +1009,7 @@ func TestNonClaudeSDDOrchestratorChainStrategyParity(t *testing.T) {
 
 func TestSDDOrchestratorsUseTheZeroHelpNativeTransitionBootstrap(t *testing.T) {
 	paths := []string{
-		"antigravity/sdd-orchestrator.md", "claude/sdd-orchestrator.md", "codex/sdd-orchestrator.md",
+		"antigravity/sdd-orchestrator.md", "claude/sdd-orchestrator.md", "claudedesktop/sdd-orchestrator.md", "codex/sdd-orchestrator.md",
 		"cursor/sdd-orchestrator.md", "gemini/sdd-orchestrator.md", "generic/sdd-orchestrator.md",
 		"hermes/sdd-orchestrator.md", "kimi/sdd-orchestrator.md", "kiro/sdd-orchestrator.md",
 		"opencode/sdd-orchestrator.md", "qwen/sdd-orchestrator.md", "windsurf/sdd-orchestrator.md",
@@ -1037,6 +1043,7 @@ func TestPlatformNativeSDDOrchestratorsAvoidOpenCodePersistenceClaims(t *testing
 		{path: "kiro/sdd-orchestrator.md", required: []string{"Kiro phase context", "native Kiro subagent context", "approval"}},
 		{path: "windsurf/sdd-orchestrator.md", required: []string{"solo-agent", "inline phase context", "There are no sub-agents"}},
 		{path: "antigravity/sdd-orchestrator.md", required: []string{"define_subagent", "invoke_subagent", "dynamic subagent context", "enable_mcp_tools: true"}},
+		{path: "claudedesktop/sdd-orchestrator.md", required: []string{"native MCP Tools", "sdd/{change}/handoff", "Claude Desktop prompt"}},
 	}
 
 	for _, tc := range tests {
@@ -1061,6 +1068,43 @@ func TestPlatformNativeSDDOrchestratorsAvoidOpenCodePersistenceClaims(t *testing
 				}
 			}
 		})
+	}
+}
+
+func TestClaudeDesktopSDDOrchestratorContract(t *testing.T) {
+	content, err := Read("claudedesktop/sdd-orchestrator.md")
+	if err != nil {
+		t.Fatalf("Read(claudedesktop/sdd-orchestrator.md) error = %v", err)
+	}
+
+	requiredPhrases := []string{
+		"Claude Desktop Native MCP Reasoning & Handoff Protocol",
+		"native MCP Tools",
+		"Conectores",
+		"sdd_explore",
+		"sdd_review",
+		"sdd-init",
+		"sdd-propose",
+		"sdd-spec",
+		"sdd-design",
+		"sdd-tasks",
+		"sdd-apply",
+		"sdd-verify",
+		"jd-fix-agent",
+		"sdd/{change}/handoff",
+		"mem_save",
+		"Language Domain Contract",
+		"Mandatory Delegation Triggers",
+		"Lifecycle receipt rule",
+		"Chain Strategy",
+		"stacked-to-main",
+		"feature-branch-chain",
+	}
+
+	for _, want := range requiredPhrases {
+		if !strings.Contains(content, want) {
+			t.Errorf("claudedesktop/sdd-orchestrator.md missing required contract wording %q", want)
+		}
 	}
 }
 
@@ -1657,6 +1701,7 @@ func TestOrchestratorsRequireAutomaticGatekeeper(t *testing.T) {
 	paths := []string{
 		"antigravity/sdd-orchestrator.md",
 		"claude/sdd-orchestrator.md",
+		"claudedesktop/sdd-orchestrator.md",
 		"codex/sdd-orchestrator.md",
 		"cursor/sdd-orchestrator.md",
 		"gemini/sdd-orchestrator.md",
@@ -1727,6 +1772,7 @@ func TestSDDOrchestratorsRouteFreshReviewsToConcreteReviewLenses(t *testing.T) {
 	paths := []string{
 		"antigravity/sdd-orchestrator.md",
 		"claude/sdd-orchestrator.md",
+		"claudedesktop/sdd-orchestrator.md",
 		"codex/sdd-orchestrator.md",
 		"cursor/sdd-orchestrator.md",
 		"gemini/sdd-orchestrator.md",
@@ -1929,6 +1975,7 @@ func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 	for _, assetPath := range []string{
 		"generic/sdd-orchestrator.md",
 		"claude/sdd-orchestrator.md",
+		"claudedesktop/sdd-orchestrator.md",
 		"opencode/sdd-orchestrator.md",
 		"gemini/sdd-orchestrator.md",
 		"codex/sdd-orchestrator.md",

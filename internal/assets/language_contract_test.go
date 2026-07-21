@@ -128,6 +128,7 @@ func TestSupportedAgentSDDLanguageMatrix(t *testing.T) {
 		path  string
 	}{
 		{agent: "claude-code", path: "claude/sdd-orchestrator.md"},
+		{agent: "claude-desktop", path: "claudedesktop/sdd-orchestrator.md"},
 		{agent: "opencode", path: "opencode/sdd-orchestrator.md"},
 		{agent: "kilocode", path: "opencode/sdd-orchestrator.md"},
 		{agent: "gemini-cli", path: "gemini/sdd-orchestrator.md"},
