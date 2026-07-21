@@ -44,8 +44,8 @@ Chain strategy: pending
 
 ## Phase 4: Verification
 
-- [ ] 4.1 Run `go test ./internal/cli/...` (full package) and `go test ./internal/reviewtransaction/...` — no regressions.
-- [ ] 4.2 Run `go test ./...` (full suite).
-- [ ] 4.3 Run `go vet ./...`.
-- [ ] 4.4 Run `git diff --stat` and confirm total changed lines stay well under the 400-line review budget.
-- [ ] 4.5 Confirm no `git push` or GitHub interaction occurred (hard constraint from proposal/spec).
+- [x] 4.1 Run `go test ./internal/cli/...` (full package) and `go test ./internal/reviewtransaction/...` — no regressions.
+- [x] 4.2 Run `go test ./...` (full suite).
+- [x] 4.3 Run `go vet ./...`.
+- [x] 4.4 Run `git diff --stat` and confirm total changed lines stay well under the 400-line review budget.
+- [x] 4.5 Confirm no `git push` or GitHub interaction occurred (hard constraint from proposal/spec).
