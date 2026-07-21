@@ -371,6 +371,19 @@ func TestComponentPathsContext7ClaudeUsesSettingsFile(t *testing.T) {
 	}
 }
 
+func TestComponentPathsContext7ClaudeRespectsWorkspaceScope(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentClaudeCode})
+
+	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{}, adapters, model.ComponentContext7)
+
+	want := filepath.Join(workspace, ".claude", "settings.json")
+	if !containsPath(paths, want) {
+		t.Fatalf("componentPathsWithWorkspaceScoped(context7,claude) with ScopeWorkspace missing %q\npaths=%v", want, paths)
+	}
+}
+
 // TestComponentPathsEngramCodexIncludesConfigTOML verifies that componentPaths
 // for ComponentEngram + Codex reports ~/.codex/config.toml as a backup target.
 func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
