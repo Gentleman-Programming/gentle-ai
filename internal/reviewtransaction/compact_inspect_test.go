@@ -83,14 +83,9 @@ func TestInspectCompactAuthorityCombinedAnomalies(t *testing.T) {
 
 func TestInspectCompactAuthorityMultipleInvalid(t *testing.T) {
 	repo := initSnapshotRepo(t)
-	predecessor, _, _, _ := poisonedRecoveryFixture(t, repo, nil)
-	second := newCompactTestState(t, repo, "inspect-successor-a")
-	second.Generation = predecessor.State.Generation + 1
-	second.Recovery = &CompactRecoveryProvenance{
-		PredecessorLineageID: predecessor.State.LineageID, PredecessorRevision: predecessor.Revision,
-		Disposition: RecoveryEscalated, Reason: "retry terminal validator", Actor: "maintainer@example.com",
-		MaintainerAuthorization: compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, second.InitialSnapshot.Identity, "maintainer@example.com", "retry terminal validator"),
-	}
+	_, _, successor, _ := poisonedRecoveryFixture(t, repo, nil)
+	second := successor.State
+	second.LineageID = "inspect-successor-a"
 	secondStore, err := CompactAuthoritativeStore(context.Background(), repo, second.LineageID)
 	if err != nil {
 		t.Fatal(err)
@@ -107,10 +102,9 @@ func TestInspectCompactAuthorityMultipleInvalid(t *testing.T) {
 
 func TestInspectCompactAuthorityDeterminism(t *testing.T) {
 	repo := initSnapshotRepo(t)
-	predecessor, _, _, _ := poisonedRecoveryFixture(t, repo, nil)
-	second := newCompactTestState(t, repo, "inspect-successor-a")
-	second.Generation = predecessor.State.Generation + 1
-	second.Recovery = &CompactRecoveryProvenance{PredecessorLineageID: predecessor.State.LineageID, PredecessorRevision: predecessor.Revision, Disposition: RecoveryEscalated, Reason: "retry terminal validator", Actor: "maintainer@example.com", MaintainerAuthorization: compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, second.InitialSnapshot.Identity, "maintainer@example.com", "retry terminal validator")}
+	_, _, successor, _ := poisonedRecoveryFixture(t, repo, nil)
+	second := successor.State
+	second.LineageID = "inspect-successor-a"
 	store, err := CompactAuthoritativeStore(context.Background(), repo, second.LineageID)
 	if err != nil {
 		t.Fatal(err)

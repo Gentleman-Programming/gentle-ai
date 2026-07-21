@@ -539,6 +539,81 @@ type CompactAuthorityInspection struct {
 	Diagnostics []InspectionDiagnostic            `json:"diagnostics"`
 }
 
+func InspectCompactAuthority(ctx context.Context, repo string) (CompactAuthorityInspection, error) {
+	stores, err := DiscoverCompactStores(ctx, repo)
+	if err != nil {
+		return CompactAuthorityInspection{}, err
+	}
+	report := CompactAuthorityInspection{
+		Edges: []CompactAuthorityInspectionEdge{}, Diagnostics: []InspectionDiagnostic{},
+	}
+	records := make(map[string]CompactRecord, len(stores))
+	for _, store := range stores {
+		record, loadErr := store.Load()
+		if loadErr != nil {
+			report.Diagnostics = append(report.Diagnostics, InspectionDiagnostic{Code: "load_failure", Path: store.Dir, Message: loadErr.Error()})
+			continue
+		}
+		records[record.State.LineageID] = record
+	}
+	for _, store := range stores {
+		successor, ok := records[store.lineageID]
+		if !ok || successor.State.Recovery == nil {
+			continue
+		}
+		predecessor, ok := records[successor.State.Recovery.PredecessorLineageID]
+		if !ok {
+			report.Diagnostics = append(report.Diagnostics, InspectionDiagnostic{Code: "missing_predecessor", Path: store.Dir, Message: "recovery predecessor is unavailable"})
+			continue
+		}
+		report.Summary.TotalEdges++
+		edgeErr := validateCompactRecoveryEdge(predecessor, successor.State)
+		if edgeErr == nil {
+			report.Summary.ValidEdges++
+			continue
+		}
+		report.Summary.InvalidEdges++
+		report.Edges = append(report.Edges, CompactAuthorityInspectionEdge{
+			PredecessorLineageID: predecessor.State.LineageID, PredecessorRevision: predecessor.Revision,
+			SuccessorLineageID: successor.State.LineageID, SuccessorRevision: successor.Revision,
+			AnomalyClass: compactInspectionAnomalyClass(predecessor, successor.State, edgeErr), ValidationError: edgeErr.Error(),
+		})
+	}
+	sort.Slice(report.Edges, func(i, j int) bool {
+		if report.Edges[i].SuccessorLineageID == report.Edges[j].SuccessorLineageID {
+			return report.Edges[i].SuccessorRevision < report.Edges[j].SuccessorRevision
+		}
+		return report.Edges[i].SuccessorLineageID < report.Edges[j].SuccessorLineageID
+	})
+	sort.Slice(report.Diagnostics, func(i, j int) bool { return report.Diagnostics[i].Path < report.Diagnostics[j].Path })
+	return report, nil
+}
+
+func compactInspectionAnomalyClass(predecessor CompactRecord, successor CompactState, edgeErr error) string {
+	unchanged := errors.Is(edgeErr, errCompactRecoveryTargetUnchanged)
+	authorization := errors.Is(edgeErr, errCompactRecoveryAuthorizationInexact)
+	if unchanged && successor.Recovery != nil {
+		recovery := successor.Recovery
+		exact := compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason)
+		if recovery.MaintainerAuthorization != exact && !strings.HasPrefix(recovery.MaintainerAuthorization, compactRecoveryAuthorizationSchema) {
+			repaired, provenance := successor, *recovery
+			provenance.MaintainerAuthorization, repaired.Recovery = exact, &provenance
+			authorization = errors.Is(compactRecoveryAuthorizationError(successor.InitialSnapshot), errCompactRecoveryAuthorizationInexact) &&
+				errors.Is(validateCompactRecoveryEdge(predecessor, repaired), errCompactRecoveryTargetUnchanged)
+		}
+	}
+	switch {
+	case unchanged && authorization:
+		return "unchanged_target,malformed_recovery_authorization"
+	case unchanged:
+		return "unchanged_target"
+	case authorization:
+		return "malformed_recovery_authorization"
+	default:
+		return ""
+	}
+}
+
 func CompactLineageSuperseded(ctx context.Context, repo, lineageID string) (bool, error) {
 	stores, err := DiscoverCompactStores(ctx, repo)
 	if err != nil {
