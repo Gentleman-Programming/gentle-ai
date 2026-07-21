@@ -44,7 +44,7 @@ func (a *Adapter) Tier() model.SupportTier { return model.TierFull }
 func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, string, bool, error) {
 	configDir := a.GlobalConfigDir(homeDir)
 	configFile := a.MCPConfigPath(homeDir, "")
-	
+
 	statFile := a.statPath(configFile)
 	if statFile.err == nil {
 		return true, "", configFile, true, nil

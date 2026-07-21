@@ -29,14 +29,14 @@ func cursorAdapter(t *testing.T) agents.Adapter {
 	return adapter
 }
 
-func antigravityAdapter() agents.Adapter     { return antigravity.NewAdapter() }
-func claudeAdapter() agents.Adapter          { return claude.NewAdapter() }
-func claudeDesktopAdapter() agents.Adapter   { return claudedesktop.NewAdapter() }
-func hermesAdapter() agents.Adapter          { return hermes.NewAdapter() }
-func kilocodeAdapter() agents.Adapter        { return kilocode.NewAdapter() }
-func kimiAdapter() agents.Adapter        { return kimi.NewAdapter() }
-func openclawAdapter() agents.Adapter    { return openclaw.NewAdapter() }
-func opencodeAdapter() agents.Adapter    { return opencode.NewAdapter() }
+func antigravityAdapter() agents.Adapter   { return antigravity.NewAdapter() }
+func claudeAdapter() agents.Adapter        { return claude.NewAdapter() }
+func claudeDesktopAdapter() agents.Adapter { return claudedesktop.NewAdapter() }
+func hermesAdapter() agents.Adapter        { return hermes.NewAdapter() }
+func kilocodeAdapter() agents.Adapter      { return kilocode.NewAdapter() }
+func kimiAdapter() agents.Adapter          { return kimi.NewAdapter() }
+func openclawAdapter() agents.Adapter      { return openclaw.NewAdapter() }
+func opencodeAdapter() agents.Adapter      { return opencode.NewAdapter() }
 
 func assertOnlyKeys(t *testing.T, path string, object map[string]any, keys ...string) {
 	t.Helper()
