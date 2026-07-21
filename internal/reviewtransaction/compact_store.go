@@ -512,6 +512,33 @@ func compactAuthorityLeaves(records map[string]CompactRecord, storeByLineage map
 	return leaves, nil
 }
 
+type CompactAuthorityInspectionSummary struct {
+	TotalEdges   int `json:"total_edges"`
+	ValidEdges   int `json:"valid_edges"`
+	InvalidEdges int `json:"invalid_edges"`
+}
+
+type CompactAuthorityInspectionEdge struct {
+	PredecessorLineageID string `json:"predecessor_lineage_id"`
+	PredecessorRevision  string `json:"predecessor_revision"`
+	SuccessorLineageID   string `json:"successor_lineage_id"`
+	SuccessorRevision    string `json:"successor_revision"`
+	AnomalyClass         string `json:"anomaly_class"`
+	ValidationError      string `json:"validation_error"`
+}
+
+type InspectionDiagnostic struct {
+	Code    string `json:"code"`
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
+type CompactAuthorityInspection struct {
+	Summary     CompactAuthorityInspectionSummary `json:"summary"`
+	Edges       []CompactAuthorityInspectionEdge  `json:"edges"`
+	Diagnostics []InspectionDiagnostic            `json:"diagnostics"`
+}
+
 func CompactLineageSuperseded(ctx context.Context, repo, lineageID string) (bool, error) {
 	stores, err := DiscoverCompactStores(ctx, repo)
 	if err != nil {
