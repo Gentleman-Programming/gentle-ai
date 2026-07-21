@@ -2,6 +2,10 @@ package reviewtransaction
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +27,94 @@ type chainedRecoveryFixture struct {
 	rootStore CompactStore
 	leaf      CompactState
 	receipt   CompactReceipt
+}
+
+type chainedRecoveryAdvanceFixture struct {
+	*chainedRecoveryFixture
+	input       NativeGateRequestInput
+	attestation prePRCIAttestation
+	privateKey  ed25519.PrivateKey
+}
+
+func chainedScopeRecoveryAdvanceFixture(t *testing.T) *chainedRecoveryAdvanceFixture {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.md")
+	policy := []byte("pre_pr_ci_issuer: trusted-ci\npre_pr_ci_ed25519_public_key: " + base64.StdEncoding.EncodeToString(publicKey) + "\n")
+	if err := os.WriteFile(policyPath, policy, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := initSnapshotRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	remote := configurePublicationRemote(t, repo, branch)
+	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	root := correctedCompactTestState(t, repo, "chained-recovery-advanced-root")
+	persistCorrectedCompactFixture(t, repo, root)
+	rootStore, err := CompactAuthoritativeStore(context.Background(), repo, root.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed delivery")
+	leaf := newCompactTestState(t, repo, "chained-recovery-advanced-leaf")
+	leaf.Generation = 2
+	leaf.PolicyHash = hashArtifactPayload(policy)
+	leaf, receipt := recoverApprovedCompactSuccessorState(t, repo, root.LineageID, leaf)
+	fixture := &chainedRecoveryFixture{
+		repo: repo, remote: remote, branch: branch, baseRef: "origin/" + branch,
+		root: root, rootStore: rootStore, leaf: leaf, receipt: receipt,
+	}
+
+	side := t.TempDir()
+	gitSnapshot(t, repo, "clone", remote, side)
+	gitSnapshot(t, side, "config", "user.email", "side@example.com")
+	gitSnapshot(t, side, "config", "user.name", "Side")
+	writeSnapshotFile(t, side, "base-only.txt", "unrelated boundary advance\n")
+	gitSnapshot(t, side, "add", "base-only.txt")
+	gitSnapshot(t, side, "commit", "-m", "boundary advance")
+	gitSnapshot(t, side, "push", "origin", "HEAD:"+branch)
+	newBase := strings.TrimSpace(gitSnapshot(t, side, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "fetch", "origin")
+	merged, err := runGit(context.Background(), repo, nil, nil, "merge-tree", "--write-tree", newBase, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(string(merged))
+	if len(fields) == 0 {
+		t.Fatal("missing merged tree")
+	}
+	attestationPath := filepath.Join(dir, "attestation.json")
+	advance := &chainedRecoveryAdvanceFixture{
+		chainedRecoveryFixture: fixture,
+		input: NativeGateRequestInput{
+			Gate: GatePrePR, LineageID: leaf.LineageID, BaseRef: fixture.baseRef,
+			PolicyArtifact: policyPath, PrePRCIAttestation: attestationPath,
+		},
+		attestation: prePRCIAttestation{
+			Schema: prePRCIAttestationSchema, Issuer: "trusted-ci", MergedTree: fields[0], Status: "success",
+		},
+		privateKey: privateKey,
+	}
+	advance.writeAttestation(t)
+	return advance
+}
+
+func (fixture *chainedRecoveryAdvanceFixture) writeAttestation(t *testing.T) {
+	t.Helper()
+	fixture.attestation.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.privateKey, prePRCIAttestationPreimage(fixture.attestation)))
+	payload, err := json.Marshal(fixture.attestation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fixture.input.PrePRCIAttestation, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func chainedScopeRecoveryFixture(t *testing.T) *chainedRecoveryFixture {
@@ -418,4 +510,77 @@ func TestCompactChainedRecoveryRebindRejectsAdvancedBoundary(t *testing.T) {
 	if got.Result == GateAllow {
 		t.Fatalf("advanced boundary rebind = %#v", got)
 	}
+}
+
+func TestCompactPrePRChainedRecoveryAdvancedBaseRequiresAttestedFullBinding(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, fixture *chainedRecoveryAdvanceFixture)
+		allow  bool
+	}{
+		{name: "valid signed disjoint advance", allow: true},
+		{name: "missing attestation", mutate: func(t *testing.T, fixture *chainedRecoveryAdvanceFixture) {
+			fixture.input.PrePRCIAttestation = ""
+		}},
+		{name: "invalid signature", mutate: func(t *testing.T, fixture *chainedRecoveryAdvanceFixture) {
+			fixture.attestation.Signature = base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize))
+			payload, err := json.Marshal(fixture.attestation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(fixture.input.PrePRCIAttestation, payload, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "wrong merged tree", mutate: func(t *testing.T, fixture *chainedRecoveryAdvanceFixture) {
+			fixture.attestation.MergedTree = fixture.receipt.FinalCandidateTree
+			fixture.writeAttestation(t)
+		}},
+		{name: "valid attestation does not rescue invalid delivery chain", mutate: func(t *testing.T, fixture *chainedRecoveryAdvanceFixture) {
+			writeSnapshotFile(t, fixture.repo, "outside.txt", "unreviewed\n")
+			gitSnapshot(t, fixture.repo, "add", "outside.txt")
+			gitSnapshot(t, fixture.repo, "commit", "-m", "unreviewed intermediate")
+			if err := os.Remove(filepath.Join(fixture.repo, "outside.txt")); err != nil {
+				t.Fatal(err)
+			}
+			gitSnapshot(t, fixture.repo, "add", "-A")
+			gitSnapshot(t, fixture.repo, "commit", "-m", "revert unreviewed intermediate")
+			merged, err := runGit(context.Background(), fixture.repo, nil, nil, "merge-tree", "--write-tree", fixture.input.BaseRef, "HEAD")
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.attestation.MergedTree = strings.Fields(string(merged))[0]
+			fixture.writeAttestation(t)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := chainedScopeRecoveryAdvanceFixture(t)
+			if tt.mutate != nil {
+				tt.mutate(t, fixture)
+			}
+			got := EvaluateCompactGate(context.Background(), fixture.repo, fixture.receipt, fixture.input)
+			if (got.Result == GateAllow) != tt.allow {
+				t.Fatalf("advanced chained recovery = %#v, want allow %t", got, tt.allow)
+			}
+			if tt.allow && (got.Context.BaseAdvance == nil || got.Context.BaseAdvance.Status != baseAdvanceCompatibleStatus) {
+				t.Fatalf("advanced chained recovery proof = %#v", got.Context.BaseAdvance)
+			}
+			fixture.input.LineageID = ""
+			assessment, err := AssessCompactGateTarget(context.Background(), fixture.repo, fixture.leaf, fixture.input)
+			if err != nil || (assessment.Applicability == CompactGateTargetExact) != tt.allow {
+				t.Fatalf("lineage-less advanced recovery assessment = %#v, %v", assessment, err)
+			}
+		})
+	}
+
+	t.Run("unchanged base does not require attestation", func(t *testing.T) {
+		fixture := chainedScopeRecoveryFixture(t)
+		got := EvaluateCompactGate(context.Background(), fixture.repo, fixture.receipt, NativeGateRequestInput{
+			Gate: GatePrePR, LineageID: fixture.leaf.LineageID, BaseRef: fixture.baseRef,
+		})
+		if got.Result != GateAllow {
+			t.Fatalf("unchanged chained recovery base = %#v", got)
+		}
+	})
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 )
 
 // CompactRecoveryBindingDomain separates every hash the composed
@@ -217,6 +218,42 @@ func verifyCompactRecoveryDelivery(ctx context.Context, repo string, binding com
 		return errors.New("recovery chain final tree does not equal the delivered candidate")
 	}
 	return nil
+}
+
+// verifyCompactRecoveryAdvancedBaseDelivery anchors a compatible publication
+// base advance to the original recovery-chain merge base, not the advanced
+// selected boundary. The attestation authorizes the merge result; this still
+// proves every original delivery segment independently.
+func verifyCompactRecoveryAdvancedBaseDelivery(ctx context.Context, repo string, binding compactRecoveryBinding, refs *resolvedPrePRRefs, finalTree string) error {
+	if refs == nil {
+		return errors.New("resolved pre-PR refs are missing")
+	}
+	mergeBase, err := runGit(ctx, repo, nil, nil, "merge-base", refs.Selection.Commit, refs.HeadCommit)
+	if err != nil {
+		return err
+	}
+	baseCommit := strings.TrimSpace(string(mergeBase))
+	baseTree, err := (SnapshotBuilder{Repo: repo}).resolveTree(ctx, baseCommit)
+	if err != nil {
+		return err
+	}
+	if baseTree != binding.BaseTree {
+		return errors.New("original merge base does not carry the composed recovery base tree")
+	}
+	return verifyCompactRecoveryDelivery(ctx, repo, binding, finalTree, baseCommit, refs.HeadCommit)
+}
+
+// compactRecoveryAdvancedBaseEligible proves the narrow signed pre-PR advance
+// that a composed recovery chain may use without changing chain composition.
+func compactRecoveryAdvancedBaseEligible(ctx context.Context, repo string, binding compactRecoveryBinding, receipt Receipt, request GateRequest, snapshot Snapshot, refs *resolvedPrePRRefs, preimages gateArtifactPreimages, finalTree string) (BaseAdvanceCompatibility, bool) {
+	if request.Gate != GatePrePR || refs == nil || refs.Selection.Source != PrePRBoundaryExplicit || snapshot.BaseTree == receipt.BaseTree || snapshot.CandidateTree != finalTree {
+		return BaseAdvanceCompatibility{}, false
+	}
+	proof, err := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, refs, preimages)
+	if err != nil || proof.Status != baseAdvanceCompatibleStatus || !proof.Compatible || verifyCompactRecoveryAdvancedBaseDelivery(ctx, repo, binding, refs, finalTree) != nil {
+		return BaseAdvanceCompatibility{}, false
+	}
+	return proof, true
 }
 
 func verifyCompactOverlappingRecoveryMember(ctx context.Context, builder SnapshotBuilder, commits []compactPrePRChainCommitProof, finalIndex int, member CompactState) error {
