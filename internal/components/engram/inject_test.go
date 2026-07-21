@@ -1,6 +1,7 @@
 package engram
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/qwen"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
@@ -573,7 +575,7 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 		t.Fatalf("Inject(antigravity) changed = false")
 	}
 
-	cliMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json")
+	cliMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
 	content, err := os.ReadFile(cliMCPPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", cliMCPPath, err)
@@ -582,8 +584,8 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 	if !strings.Contains(text, `"args": [`) || !strings.Contains(text, `"mcp"`) {
 		t.Fatalf("Antigravity MCP config must launch Engram MCP; got:\n%s", text)
 	}
-	if strings.Contains(text, `--tools=`) {
-		t.Fatalf("Antigravity should use Engram's default MCP invocation without tool-profile flags; got:\n%s", text)
+	if !strings.Contains(text, `--tools=agent`) {
+		t.Fatalf("Antigravity should expose agent tools; got:\n%s", text)
 	}
 
 	pluginPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "plugin.json")
@@ -597,8 +599,8 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 		t.Fatalf("ReadFile(%q) error = %v", pluginMCPPath, err)
 	}
 	pluginMCPText := string(pluginMCPContent)
-	if !strings.Contains(pluginMCPText, `"mcp"`) || strings.Contains(pluginMCPText, `--tools=`) {
-		t.Fatalf("Antigravity Engram plugin MCP config should expose default Engram MCP tools; got:\n%s", pluginMCPText)
+	if !strings.Contains(pluginMCPText, `"mcp"`) || !strings.Contains(pluginMCPText, `--tools=agent`) {
+		t.Fatalf("Antigravity Engram plugin MCP config should expose agent tools; got:\n%s", pluginMCPText)
 	}
 
 	hooksPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "hooks.json")
@@ -625,14 +627,15 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 		}
 	}
 
-	desktopMCPPath := filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")
-	if _, err := os.Stat(desktopMCPPath); !os.IsNotExist(err) {
-		t.Fatalf("legacy desktop MCP path %q should not be written for antigravity; stat err = %v", desktopMCPPath, err)
+	globalMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json")
+	if _, err := os.Stat(globalMCPPath); !os.IsNotExist(err) {
+		t.Fatalf("global MCP path %q should not be written for antigravity; stat err = %v", globalMCPPath, err)
 	}
 }
 
 func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T) {
 	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".gemini", "settings.json"), `{"keep":true}`)
 
 	first, err := Inject(home, antigravityAdapter())
 	if err != nil {
@@ -647,7 +650,7 @@ func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
 	}
-	if strings.TrimSpace(string(got)) != "{}" {
+	if string(got) != "{}\n" {
 		t.Fatalf("antigravity settings = %q, want empty JSON object", got)
 	}
 
@@ -657,6 +660,139 @@ func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T
 	}
 	if second.Changed {
 		t.Fatalf("Inject(antigravity) second changed = true; want false")
+	}
+}
+
+func TestInjectAntigravityConvergesToSelectedPlugin(t *testing.T) {
+	for _, variant := range []string{"antigravity-cli", "antigravity-desktop"} {
+		t.Run(variant, func(t *testing.T) {
+			home := t.TempDir()
+			mockEngramLookPath(t, "/home/linuxbrew/.linuxbrew/bin/engram", "")
+			dir := filepath.Join(home, ".gemini", variant)
+			if variant == "antigravity-desktop" {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			global := filepath.Join(dir, "mcp_config.json")
+			writeFile(t, global, `{"theme":"dark","mcpServers":{"other":{"command":"other"},"engram":{"command":"/home/linuxbrew/.linuxbrew/Cellar/engram/1.2.3/bin/engram"}}}`)
+			plugin := filepath.Join(dir, "plugins", "gentle-ai-engram", "mcp_config.json")
+			writeFile(t, plugin, `{"custom":true,"mcpServers":{"sibling":{"command":"sibling"},"engram":{"command":"/home/linuxbrew/.linuxbrew/Cellar/engram/1.0/bin/engram","env":{"OLD":"1"}}}}`)
+			settings := filepath.Join(dir, "settings.json")
+			writeFile(t, settings, `{"keep":true}`)
+			if _, err := Inject(home, antigravityAdapter()); err != nil {
+				t.Fatal(err)
+			}
+			g, p := readJSONFile(t, global), readJSONFile(t, plugin)
+			if g["theme"] != "dark" {
+				t.Fatalf("global root fields lost: %v", g)
+			}
+			servers := g["mcpServers"].(map[string]any)
+			if _, ok := servers["engram"]; ok || servers["other"] == nil {
+				t.Fatalf("global servers not preserved/migrated: %v", servers)
+			}
+			if p["custom"] != true || p["mcpServers"].(map[string]any)["sibling"] == nil {
+				t.Fatalf("plugin fields lost: %v", p)
+			}
+			assertNestedString(t, p, "/home/linuxbrew/.linuxbrew/bin/engram", "mcpServers", "engram", "command")
+			assertNestedStrings(t, p, []string{"mcp", "--tools=agent"}, "mcpServers", "engram", "args")
+			if _, ok := p["mcpServers"].(map[string]any)["engram"].(map[string]any)["env"]; ok {
+				t.Fatal("stale Engram fields preserved")
+			}
+			if got, _ := os.ReadFile(settings); string(got) != `{"keep":true}` {
+				t.Fatalf("settings changed: %s", got)
+			}
+			if second, err := Inject(home, antigravityAdapter()); err != nil || second.Changed {
+				t.Fatalf("second Inject = %+v, %v", second, err)
+			}
+		})
+	}
+}
+
+func TestInjectAntigravityPreservesAbsoluteEngramLookPath(t *testing.T) {
+	home := t.TempDir()
+	command := "/home/user/.local/bin/engram"
+	mockEngramLookPath(t, command, "")
+	if first, err := Inject(home, antigravityAdapter()); err != nil || !first.Changed {
+		t.Fatalf("first Inject = %+v, %v", first, err)
+	}
+	plugin := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
+	assertNestedString(t, readJSONFile(t, plugin), command, "mcpServers", "engram", "command")
+	if second, err := Inject(home, antigravityAdapter()); err != nil || second.Changed {
+		t.Fatalf("second Inject = %+v, %v", second, err)
+	}
+}
+
+func TestInjectAntigravityRecoversWriteFailures(t *testing.T) {
+	tests := []struct {
+		name, global, manifest string
+		rollback               bool
+		pluginOnly             bool
+	}{
+		{"global pre-replacement", "pre", "", false, false},
+		{"global post-rename sync", "post", "", false, true},
+		{"manifest pre-replacement", "", "pre", false, false},
+		{"invalid manifest before failure", "", "pre-invalid", false, false},
+		{"manifest post-rename sync", "", "post", false, true},
+		{"rollback failure rolls forward", "", "pre", true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			dir := filepath.Join(home, ".gemini", "antigravity-cli")
+			global, manifest := filepath.Join(dir, "mcp_config.json"), filepath.Join(dir, "plugins", "gentle-ai-engram", "plugin.json")
+			original := []byte("{\"root\":1,\"mcpServers\":{\"engram\":{\"command\":\"engram\"},\"other\":{}}}\n")
+			writeFile(t, global, string(original))
+			if tt.manifest == "pre-invalid" {
+				writeFile(t, manifest, "invalid")
+			}
+			actual, manifestCalls := antigravityWriteFile, 0
+			antigravityWriteFile = func(path string, content []byte, mode os.FileMode) (filemerge.WriteResult, error) {
+				if path == global && bytes.Equal(content, original) && tt.rollback {
+					return filemerge.WriteResult{}, fmt.Errorf("rollback fail")
+				}
+				if path == global && !bytes.Equal(content, original) && tt.global != "" {
+					if tt.global == "pre" {
+						return filemerge.WriteResult{}, fmt.Errorf("global fail")
+					}
+					r, _ := actual(path, content, mode)
+					return r, fmt.Errorf("global sync fail")
+				}
+				if path == manifest && tt.manifest != "" {
+					manifestCalls++
+					if manifestCalls == 1 {
+						if tt.manifest == "pre" || tt.manifest == "pre-invalid" {
+							return filemerge.WriteResult{}, fmt.Errorf("manifest fail")
+						}
+						r, _ := actual(path, content, mode)
+						return r, fmt.Errorf("manifest sync fail")
+					}
+				}
+				return actual(path, content, mode)
+			}
+			t.Cleanup(func() { antigravityWriteFile = actual })
+			_, err := Inject(home, antigravityAdapter())
+			if err == nil {
+				t.Fatal("Inject error = nil")
+			}
+			gotGlobal, _ := os.ReadFile(global)
+			_, manifestErr := os.Stat(manifest)
+			if tt.pluginOnly {
+				if bytes.Contains(gotGlobal, []byte(`"engram"`)) || manifestErr != nil {
+					t.Fatalf("not plugin-only: global=%s manifest=%v err=%v", gotGlobal, manifestErr, err)
+				}
+			} else if !bytes.Equal(gotGlobal, original) || tt.manifest != "pre-invalid" && !os.IsNotExist(manifestErr) {
+				t.Fatalf("original not restored: global=%s manifest=%v err=%v", gotGlobal, manifestErr, err)
+			}
+			if tt.manifest == "pre-invalid" {
+				if got, _ := os.ReadFile(manifest); string(got) != "invalid" {
+					t.Fatalf("manifest before-image not restored: %q", got)
+				}
+			}
+			if tt.rollback && (!strings.Contains(err.Error(), "rollback fail") || !strings.Contains(err.Error(), "converged plugin-only")) {
+				t.Fatalf("recovery error lacks joined state: %v", err)
+			}
+		})
 	}
 }
 
