@@ -171,8 +171,21 @@ func RenderUninstallComponents(selected []model.ComponentID, cursor int) string 
 	return b.String()
 }
 
+// uninstallEngramScopeOptions returns the cleanup options offered to the user
+// during uninstall. The "None" option (empty scope) is always prepended so
+// the user can explicitly skip Engram cleanup even when both Project and
+// Global cleanup are available; the Project option only appears when the
+// current workspace has a .engram/ directory to remove.
+//
+// Note: the caller decides whether to display these options at all by
+// gating on ComponentEngram selection in UninstallComponents.
 func uninstallEngramScopeOptions(projectScopeAvailable bool) []UninstallEngramScopeOption {
-	options := make([]UninstallEngramScopeOption, 0, 2)
+	options := make([]UninstallEngramScopeOption, 0, 3)
+	options = append(options, UninstallEngramScopeOption{
+		Scope:       "",
+		Label:       "No Engram cleanup",
+		Description: "Skip Engram cleanup; remove profiles only",
+	})
 	if projectScopeAvailable {
 		options = append(options, UninstallEngramScopeOption{
 			Scope:       model.EngramUninstallScopeProject,
@@ -188,7 +201,13 @@ func uninstallEngramScopeOptions(projectScopeAvailable bool) []UninstallEngramSc
 	return options
 }
 
-func RenderUninstallProfiles(available []string, selected []string, engramProjectScopeAvailable bool, selectedEngramScope model.EngramUninstallScope, cursor int) string {
+// RenderUninstallProfiles renders the ScreenUninstallProfiles view: a list of
+// removable OpenCode SDD profiles followed (when applicable) by the Engram
+// cleanup scope picker. The scope section is only displayed when the user has
+// selected ComponentEngram in UninstallComponents AND the workspace exposes a
+// project-scoped Engram directory; this avoids presenting a meaningless choice
+// when Engram cleanup is not in play.
+func RenderUninstallProfiles(available []string, selected []string, engramProjectScopeAvailable bool, uninstallComponents []model.ComponentID, selectedEngramScope model.EngramUninstallScope, cursor int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Uninstall Scope Selection"))
@@ -213,8 +232,9 @@ func RenderUninstallProfiles(available []string, selected []string, engramProjec
 	}
 
 	engramScopeOptions := uninstallEngramScopeOptions(engramProjectScopeAvailable)
+	showEngramScopeSection := hasSelectedComponent(uninstallComponents, model.ComponentEngram) && engramProjectScopeAvailable
 	engramScopeDisplayed := 0
-	if len(engramScopeOptions) > 1 {
+	if showEngramScopeSection {
 		engramScopeDisplayed = len(engramScopeOptions)
 		if len(available) > 0 {
 			b.WriteString("\n")
@@ -223,7 +243,7 @@ func RenderUninstallProfiles(available []string, selected []string, engramProjec
 		b.WriteString("\n")
 		for idx, option := range engramScopeOptions {
 			focused := len(available)+idx == cursor
-			checked := selectedEngramScope == option.Scope
+			checked := string(selectedEngramScope) == string(option.Scope)
 			b.WriteString(renderCheckbox(option.Label, checked, focused))
 			b.WriteString(styles.SubtextStyle.Render("    " + option.Description))
 			b.WriteString("\n")
