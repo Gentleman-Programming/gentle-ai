@@ -55,30 +55,20 @@ type MCPVersionCheck struct {
 //
 // Behaviour matrix (spec R5 + R7 + R8):
 //
+//	dormant threshold (0.0.0) → PASS (no WARN ever, even if binary is missing)
 //	parse failure OR version command failure → WARN (never FAIL)
 //	installed < MinEngramVersionForHealthyLifecycle   → WARN (with #1019 + remedy)
 //	installed >= MinEngramVersionForHealthyLifecycle  → PASS
 //
 // The threshold default is "0.0.0" so the check is dormant in production
 // until the upstream engram fix is published and the constant is flipped.
+// Dormant short-circuits BEFORE invoking VerifyVersionCommand, so a missing
+// binary does not surface a spurious WARN while the check is off (spec S8).
 func CheckEngramMCPVersion(ctx context.Context) MCPVersionCheck {
 	// ctx is reserved for downstream seam reuse; VerifyVersionCommand (which
 	// verify.go locks byte-identical) builds its own timeout context, so we
 	// pass only "engram". When verify.go ever accepts ctx, drop the discard.
 	_ = ctx
-	raw, err := VerifyVersionCommand("engram")
-	if err != nil {
-		// Version command failed (binary missing, exec error, timeout).
-		// Emit WARN — never FAIL — so an inaccessible binary cannot brick
-		// the doctor exit code (spec R7).
-		return MCPVersionCheck{
-			Name:   mcpLifecycleVersionCheckName,
-			Status: CheckStatusWarn,
-			Detail: fmt.Sprintf("could not read engram version: %v", err),
-			Remedy: "Install engram (go install github.com/gentleman-programming/engram/cmd/engram@latest) " +
-				"and ensure it is on $PATH so the MCP lifecycle version can be inspected.",
-		}
-	}
 
 	thresholdMajor, thresholdMinor, thresholdPatch, thresholdOK := parseStrictSemver(MinEngramVersionForHealthyLifecycle)
 	if !thresholdOK {
@@ -91,15 +81,29 @@ func CheckEngramMCPVersion(ctx context.Context) MCPVersionCheck {
 		}
 	}
 
-	// Dormant threshold ("0.0.0"): the check is silent per spec S8. Even an
-	// unparseable version output is PASS because there is no comparison to
-	// make — the operator has not flipped the switch yet, so we do not
-	// surface parse warnings either.
+	// Dormant threshold ("0.0.0"): the check is silent per spec S8. We
+	// return PASS BEFORE invoking VerifyVersionCommand so a missing binary
+	// does not surface a spurious WARN while the check is off. The operator
+	// has not flipped the switch yet, so there is no comparison to make.
 	if thresholdMajor == 0 && thresholdMinor == 0 && thresholdPatch == 0 {
 		return MCPVersionCheck{
 			Name:   mcpLifecycleVersionCheckName,
 			Status: CheckStatusPass,
 			Detail: "engram-mcp-lifecycle-version check is dormant (threshold 0.0.0); set MinEngramVersionForHealthyLifecycle to the engram release that shipped notifications/initialized to enable it",
+		}
+	}
+
+	raw, err := VerifyVersionCommand("engram")
+	if err != nil {
+		// Version command failed (binary missing, exec error, timeout).
+		// Emit WARN — never FAIL — so an inaccessible binary cannot brick
+		// the doctor exit code (spec R7).
+		return MCPVersionCheck{
+			Name:   mcpLifecycleVersionCheckName,
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("could not read engram version: %v", err),
+			Remedy: "Install engram (go install github.com/gentleman-programming/engram/cmd/engram@latest) " +
+				"and ensure it is on $PATH so the MCP lifecycle version can be inspected.",
 		}
 	}
 
