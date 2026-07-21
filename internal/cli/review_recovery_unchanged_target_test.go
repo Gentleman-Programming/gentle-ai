@@ -108,13 +108,32 @@ func TestUnchangedTargetRecovery_EscalatedStillBlocked(t *testing.T) {
 
 func TestUnchangedTargetRecovery_ScopeChangedStillBlocked(t *testing.T) {
 	repo, baseRef, predecessor := newUnchangedTargetRecoveryFixture(t)
+	predecessorStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, predecessor.State.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(predecessorStore.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	successorLineage := "review-scope-changed-unchanged"
 	var output bytes.Buffer
-	err := RunReview([]string{"recover", "--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,
-		"--expected-predecessor-revision", predecessor.Revision, "--successor-lineage", "review-scope-changed-unchanged",
+	err = RunReview([]string{"recover", "--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,
+		"--expected-predecessor-revision", predecessor.Revision, "--successor-lineage", successorLineage,
 		"--disposition", "scope_changed", "--reason", "attempted scope-changed retry", "--actor", "maintainer",
 		"--base-ref", baseRef, "--committed-only"}, &output)
 	if err == nil || err.Error() != "recovery scope has not changed" {
 		t.Fatalf("unchanged-target scope_changed recovery = %v", err)
+	}
+	after, err := os.ReadFile(predecessorStore.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("predecessor state mutated by rejected scope_changed recovery")
+	}
+	if _, statErr := os.Stat(filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", successorLineage)); !os.IsNotExist(statErr) {
+		t.Fatalf("successor persisted despite rejected scope_changed recovery: %v", statErr)
 	}
 }
 
@@ -133,6 +152,45 @@ func TestUnchangedTargetRecovery_BaseMismatchStillBlocked(t *testing.T) {
 		"--base-ref", advancedBaseRef, "--committed-only"}, &output)
 	if err == nil || err.Error() != "recovery base-ref does not match predecessor base" {
 		t.Fatalf("base mismatch invalidated recovery = %v", err)
+	}
+}
+
+func TestUnchangedTargetRecovery_BaseMismatchStillBlockedForScopeChanged(t *testing.T) {
+	repo, _, predecessor := newUnchangedTargetRecoveryFixture(t)
+	if err := os.WriteFile(filepath.Join(repo, "other.txt"), []byte("advanced base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "--", "other.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "advance base")
+	advancedBaseRef := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	var output bytes.Buffer
+	err := RunReview([]string{"recover", "--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,
+		"--expected-predecessor-revision", predecessor.Revision, "--successor-lineage", "review-base-mismatch-scope-changed",
+		"--disposition", "scope_changed", "--reason", "base mismatch check", "--actor", "maintainer",
+		"--base-ref", advancedBaseRef, "--committed-only"}, &output)
+	if err == nil || err.Error() != "recovery base-ref does not match predecessor base" {
+		t.Fatalf("base mismatch scope_changed recovery = %v", err)
+	}
+}
+
+func TestUnchangedTargetRecovery_BaseMismatchStillBlockedForEscalated(t *testing.T) {
+	repo, _, predecessor := newUnchangedTargetRecoveryFixture(t)
+	if err := os.WriteFile(filepath.Join(repo, "other.txt"), []byte("advanced base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "--", "other.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "advance base")
+	advancedBaseRef := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + predecessor.State.LineageID +
+		"\npredecessor_revision=" + predecessor.Revision + "\ntarget_identity=" + predecessor.State.InitialSnapshot.Identity +
+		"\nactor=maintainer\nreason=base mismatch check"
+	var output bytes.Buffer
+	err := RunReview([]string{"recover", "--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,
+		"--expected-predecessor-revision", predecessor.Revision, "--successor-lineage", "review-base-mismatch-escalated",
+		"--disposition", "escalated", "--reason", "base mismatch check", "--actor", "maintainer",
+		"--maintainer-authorization", authorization, "--base-ref", advancedBaseRef, "--committed-only"}, &output)
+	if err == nil || err.Error() != "recovery base-ref does not match predecessor base" {
+		t.Fatalf("base mismatch escalated recovery = %v", err)
 	}
 }
 
