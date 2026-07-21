@@ -665,13 +665,14 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 	}
 
 	return Model{
-		Screen:               ScreenWelcome,
-		Version:              version,
-		Selection:            selection,
-		Detection:            detection,
-		UninstallAgents:      agents,
-		UninstallComponents:  defaultUninstallComponents(),
-		UninstallEngramScope: model.EngramUninstallScopeGlobal,
+		Screen:              ScreenWelcome,
+		Version:             version,
+		Selection:           selection,
+		Detection:           detection,
+		UninstallAgents:     agents,
+		UninstallComponents: defaultUninstallComponents(),
+		// Default to "" (None) so the user opts in to Engram cleanup explicitly.
+		UninstallEngramScope: "",
 		Progress: NewProgressState([]string{
 			"Install dependencies",
 			"Configure selected agents",
@@ -2657,7 +2658,8 @@ func (m Model) withResetUninstallState() Model {
 	m.UninstallProfilesToRemove = nil
 	m.UninstallProfileSelection = false
 	m.UninstallEngramProjectScopeAvailable = false
-	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	// Reset to "" (None) so a fresh uninstall flow starts with no Engram cleanup.
+	m.UninstallEngramScope = ""
 	m.UninstallResult = componentuninstall.Result{}
 	m.UninstallErr = nil
 	m.SyncCleanInstallFiles = nil
@@ -3014,9 +3016,15 @@ func (m Model) startUninstall() tea.Cmd {
 	}
 }
 
+// refreshUninstallProfiles re-reads the project's OpenCode SDD profiles and
+// re-evaluates whether a project-scoped .engram/ directory exists. It also
+// resets UninstallEngramScope to the empty ("None") default, so a fresh entry
+// into the uninstall flow requires the user to opt in to Engram cleanup
+// explicitly — preventing accidental data loss when the user only wanted
+// profile removal.
 func (m *Model) refreshUninstallProfiles() {
 	m.UninstallEngramProjectScopeAvailable = m.detectProjectEngramData()
-	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	m.UninstallEngramScope = ""
 
 	if !m.hasDetectedOpenCode() {
 		m.UninstallProfilesAvailable = nil
@@ -3503,7 +3511,7 @@ func (m *Model) setScreen(next Screen) {
 		m.refreshUninstallProfiles()
 		m.UninstallProfilesToRemove = nil
 		m.UninstallProfileSelection = false
-		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+		// UninstallEngramScope is already reset to "" by refreshUninstallProfiles.
 	}
 }
 
