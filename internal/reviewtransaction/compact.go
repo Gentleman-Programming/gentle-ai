@@ -24,6 +24,19 @@ const (
 	StateValidating                     State = "validating"
 	MaxCompactCorrectionAttempts              = 1
 	historicalCompactCorrectionAttempts       = 3
+	// StateDecisionRequired is the v2-only pause state reached by an
+	// all-inconclusive CompleteReview when the GENTLE_AI_REVIEW_DECISION_REQUIRED
+	// feature flag is enabled. A lineage in this state is awaiting a user
+	// decision (`continue` or `stop`) issued via `review decide`. The literal
+	// is the externally-visible contract used by `review inspect-authority`
+	// and the persisted journal; mutating it would silently shift every
+	// previously persisted lineage's state.
+	StateDecisionRequired State = "decision_required"
+	// StateDecisionCarryOn is the v2-only forward state reached when a user
+	// authorizes exactly one bounded adjudication call via `review decide
+	// --decision continue`. Self-loops are forbidden because the bounded
+	// action is single-shot.
+	StateDecisionCarryOn State = "decision_carry_on"
 )
 
 var ErrCompactCorrectionConsumed = errors.New("ordinary compact correction already consumed")
@@ -411,6 +424,19 @@ func (state CompactState) Validate() error {
 			return errors.New("approved compact state requires verification evidence")
 		}
 	case StateEscalated:
+	case StateDecisionRequired:
+	// StateDecisionRequired is a pause-only state: the lineage is awaiting
+	// a user decision (`review decide`) and carries no additional
+	// invariant beyond what the scope/evidence-budget guard above already
+	// enforces. The case body is intentionally empty: any tighter rule
+	// would couple the state machine to the payload schema (PR #2) and
+	// reproduce the #1433 defect where v1 wiring leaked into v2.
+	case StateDecisionCarryOn:
+	// StateDecisionCarryOn is a forward-only state: the lineage is held for
+	// exactly one bounded adjudication call and the successor is selected
+	// by the validateCompactSuccessor operation switch. Like
+	// StateDecisionRequired this case is intentionally empty; the payload
+	// shape is validated by the per-operation arm of validateCompactSuccessor.
 	default:
 		return fmt.Errorf("invalid compact review state %q", state.State)
 	}

@@ -1375,7 +1375,7 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 			return fmt.Errorf("%w: invalidation must retain a pristine reviewing authority", ErrInvalidSuccessor)
 		}
 	case "review/complete-review":
-		if previous.State != StateReviewing || next.State != StateCorrectionRequired && next.State != StateValidating && next.State != StateEscalated {
+		if previous.State != StateReviewing || next.State != StateCorrectionRequired && next.State != StateValidating && next.State != StateEscalated && next.State != StateDecisionRequired {
 			return fmt.Errorf("%w: invalid compact review completion", ErrInvalidSuccessor)
 		}
 		if !snapshotsEqual(previous.CurrentSnapshot, next.CurrentSnapshot) || next.ProposedCorrectionLines != nil || next.ActualCorrectionLines != nil || next.FixDeltaHash != EmptyFixDeltaHash || next.OriginalCriteria != nil || next.EvidenceHash != "" {
@@ -1461,6 +1461,45 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		expected.EvidenceHash = next.EvidenceHash
 		if !compactStateEqual(expected, next) {
 			return fmt.Errorf("%w: compact verification changed unrelated state", ErrInvalidSuccessor)
+		}
+	case CompactDecideOperation:
+		// Edges 2, 3, 4 from the canonical truth table (engram obs #21219):
+		// DecisionRequired -> DecisionRequired (idempotent re-apply),
+		// DecisionRequired -> Escalated (--decision stop), and
+		// DecisionRequired -> DecisionCarryOn (--decision continue). The
+		// successor is allowed to differ from the predecessor only in the
+		// State field; everything else is carried byte-identical so the
+		// authority revision hash covers the immutable payload.
+		if previous.State != StateDecisionRequired {
+			return fmt.Errorf("%w: a review/decide transaction must originate from decision_required", ErrInvalidSuccessor)
+		}
+		if !legalDecisionStateTransition(previous.State, next.State, operation) {
+			return fmt.Errorf("%w: illegal compact decision state transition %q -> %q", ErrInvalidSuccessor, previous.State, next.State)
+		}
+		expected := previous
+		expected.State = next.State
+		if !compactStateEqual(expected, next) {
+			return fmt.Errorf("%w: review/decide changed unrelated state", ErrInvalidSuccessor)
+		}
+	case CompactDecisionAdjudicateBatchOperation:
+		// Edges 5, 6, 7 from the canonical truth table (engram obs #21219):
+		// DecisionCarryOn -> Validating (unresolved remain),
+		// DecisionCarryOn -> Approved (all severe resolved),
+		// DecisionCarryOn -> Escalated (adjudicator unavailable). The
+		// self-loop DecisionCarryOn -> DecisionCarryOn is forbidden
+		// because the bounded action is single-shot; legalDecisionStateTransition
+		// rejects it because the lookup table does not contain the
+		// self-loop row.
+		if previous.State != StateDecisionCarryOn {
+			return fmt.Errorf("%w: a decision-adjudicate-batch transaction must originate from decision_carry_on", ErrInvalidSuccessor)
+		}
+		if !legalDecisionStateTransition(previous.State, next.State, operation) {
+			return fmt.Errorf("%w: illegal compact decision-adjudicate state transition %q -> %q", ErrInvalidSuccessor, previous.State, next.State)
+		}
+		expected := previous
+		expected.State = next.State
+		if !compactStateEqual(expected, next) {
+			return fmt.Errorf("%w: decision-adjudicate-batch changed unrelated state", ErrInvalidSuccessor)
 		}
 	default:
 		return fmt.Errorf("%w: unsupported compact operation %q", ErrInvalidSuccessor, operation)
