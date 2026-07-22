@@ -51,3 +51,37 @@ func TestNormalizeInstallFlagsPrintsAliasRemapNotice(t *testing.T) {
 		t.Fatalf("notice not printed; got %q", buf.String())
 	}
 }
+
+func TestNormalizeInstallFlagsPersonaFlagForcesPersonaComponent(t *testing.T) {
+	input, err := NormalizeInstallFlags(InstallFlags{
+		Persona:    "neutral",
+		Components: []string{string(model.ComponentEngram)},
+	}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("NormalizeInstallFlags() error = %v", err)
+	}
+	found := false
+	for _, component := range input.Selection.Components {
+		if component == model.ComponentPersona {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("explicit --persona must force the persona component; got %v", input.Selection.Components)
+	}
+}
+
+func TestNormalizeInstallFlagsCustomPersonaDoesNotForceComponent(t *testing.T) {
+	input, err := NormalizeInstallFlags(InstallFlags{
+		Persona:    "custom",
+		Components: []string{string(model.ComponentEngram)},
+	}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("NormalizeInstallFlags() error = %v", err)
+	}
+	for _, component := range input.Selection.Components {
+		if component == model.ComponentPersona {
+			t.Fatal("--persona custom means unmanaged; it must not force the persona component")
+		}
+	}
+}

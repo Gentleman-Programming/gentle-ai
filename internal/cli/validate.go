@@ -55,6 +55,21 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 		components = piOnlyComponents()
 	}
 
+	// An explicit --persona is a direct request to apply that persona: force
+	// the persona component even when --component narrows the set. PersonaCustom
+	// means "keep the persona unmanaged", so it never forces the component.
+	if strings.TrimSpace(flags.Persona) != "" && persona != model.PersonaCustom {
+		hasPersona := false
+		for _, component := range components {
+			if component == model.ComponentPersona {
+				hasPersona = true
+			}
+		}
+		if !hasPersona {
+			components = append(components, model.ComponentPersona)
+		}
+	}
+
 	selection.Components = components
 
 	skills, err := normalizeSkills(flags.Skills)
