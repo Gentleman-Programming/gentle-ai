@@ -45,7 +45,12 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "pi", Path: filepath.Join(homeDir, ".pi")},
 		{Agent: "trae-ide", Path: filepath.Join(homeDir, ".trae")},
 		{Agent: "hermes", Path: filepath.Join(homeDir, ".hermes")},
+		{Agent: "claude-desktop", Path: claudeDesktopGlobalConfigDir(homeDir)},
 	}
+}
+
+func claudeDesktopGlobalConfigDir(homeDir string) string {
+	return filepath.Join(homeDir, "Library", "Application Support", "Claude")
 }
 
 // vscodeCopilotGlobalConfigDir returns ~/.copilot, the GlobalConfigDir used by
