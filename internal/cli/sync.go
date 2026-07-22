@@ -1366,7 +1366,7 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 		return
 	}
 	if persisted != "" {
-		if id, err := normalizePersona(persisted); err == nil {
+		if id, _, err := normalizePersona(persisted); err == nil {
 			selection.Persona = id
 			return
 		}
