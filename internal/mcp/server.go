@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -97,6 +98,13 @@ func (s *Server) Serve(r io.Reader, w io.Writer) error {
 		}
 
 		buf.Write(line)
+		if buf.Len() > maxBufferCap {
+			buf.Reset()
+			if writeErr := s.writeError(nil, ErrCodeParseError, "Parse error: payload exceeds maximum allowed size", nil); writeErr != nil {
+				return writeErr
+			}
+			continue
+		}
 		trimmed := bytes.TrimSpace(buf.Bytes())
 		if len(trimmed) == 0 {
 			buf.Reset()
@@ -141,15 +149,14 @@ func (s *Server) Serve(r io.Reader, w io.Writer) error {
 	}
 }
 
+const maxBufferCap = 4 * 1024 * 1024 // 4MB
+
 func isIncompleteJSON(err error, data []byte) bool {
 	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
 		return true
 	}
-	var syntaxErr *json.SyntaxError
-	if errors.As(err, &syntaxErr) {
-		return syntaxErr.Offset >= int64(len(data))
-	}
-	return false
+	msg := err.Error()
+	return strings.Contains(msg, "unexpected end of JSON input") || strings.Contains(msg, "unexpected EOF")
 }
 
 func (s *Server) handleMessage(data []byte) error {
