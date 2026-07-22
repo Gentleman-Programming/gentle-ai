@@ -472,15 +472,18 @@ func TestServer2MBPayloadHandling(t *testing.T) {
 func TestServerJSONRPCErrorHandling(t *testing.T) {
 	server := mcp.NewServer()
 
-	t.Run("Parse Error ignored for notification or handled cleanly", func(t *testing.T) {
+	t.Run("Parse Error emits response with id null", func(t *testing.T) {
 		reqJSON := `{"jsonrpc":"2.0", invalid json` + "\n"
 		in := strings.NewReader(reqJSON)
 		out := &bytes.Buffer{}
 
 		_ = server.Serve(in, out)
-		// Parse Error has id == nil so writeError returns nil (no reply to notifications / unparseable JSON without ID)
-		if out.Len() != 0 {
-			t.Errorf("Expected 0 bytes output for notification parse error, got: %s", out.String())
+		resp := parseResponse(t, out.Bytes())
+		if resp.Error == nil || resp.Error.Code != mcp.ErrCodeParseError {
+			t.Errorf("Expected ErrCodeParseError (-32700), got: %v", resp.Error)
+		}
+		if resp.ID != nil {
+			t.Errorf("Expected ID nil (null), got: %v", resp.ID)
 		}
 	})
 
@@ -555,5 +558,38 @@ func TestServerCustomToolRegistration(t *testing.T) {
 
 	if len(callResult.Content) == 0 || callResult.Content[0].Text != "Custom response" {
 		t.Errorf("Expected custom response text, got %v", callResult.Content)
+	}
+}
+
+func TestServerRecoversFromMalformedJSON(t *testing.T) {
+	server := mcp.NewServer()
+
+	reqJSON := "invalid json payload\n" + `{"jsonrpc":"2.0","id":42,"method":"ping"}` + "\n"
+	in := strings.NewReader(reqJSON)
+	out := &bytes.Buffer{}
+
+	if err := server.Serve(in, out); err != nil {
+		t.Fatalf("Serve returned error: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("Expected 2 response lines, got %d: %s", len(lines), out.String())
+	}
+
+	resp1 := parseResponse(t, []byte(lines[0]))
+	if resp1.Error == nil || resp1.Error.Code != mcp.ErrCodeParseError {
+		t.Errorf("Expected first response ErrCodeParseError, got: %v", resp1.Error)
+	}
+	if resp1.ID != nil {
+		t.Errorf("Expected first response ID nil, got: %v", resp1.ID)
+	}
+
+	resp2 := parseResponse(t, []byte(lines[1]))
+	if resp2.Error != nil {
+		t.Errorf("Expected second response no error, got: %v", resp2.Error)
+	}
+	if resp2.ID != float64(42) {
+		t.Errorf("Expected second response ID 42, got: %v", resp2.ID)
 	}
 }

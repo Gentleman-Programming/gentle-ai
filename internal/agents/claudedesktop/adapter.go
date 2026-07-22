@@ -46,7 +46,7 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 	configFile := a.MCPConfigPath(homeDir, "")
 
 	statFile := a.statPath(configFile)
-	if statFile.err == nil {
+	if statFile.err == nil && !statFile.isDir {
 		return true, "", configFile, true, nil
 	}
 
@@ -136,8 +136,8 @@ func (a *Adapter) CommandsDir(_ string) string    { return "" }
 func (a *Adapter) SupportsSubAgents() bool        { return false }
 func (a *Adapter) SubAgentsDir(_ string) string   { return "" }
 func (a *Adapter) EmbeddedSubAgentsDir() string   { return "" }
-func (a *Adapter) SupportsSkills() bool           { return true }
-func (a *Adapter) SupportsSystemPrompt() bool     { return true }
+func (a *Adapter) SupportsSkills() bool           { return false }
+func (a *Adapter) SupportsSystemPrompt() bool     { return false }
 func (a *Adapter) SupportsMCP() bool              { return true }
 
 type AgentNotInstallableError struct{ Agent model.AgentID }

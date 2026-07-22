@@ -78,7 +78,7 @@ func (s *Server) Serve(r io.Reader, w io.Writer) error {
 			if writeErr := s.writeError(nil, ErrCodeParseError, "Parse error: invalid JSON payload", nil); writeErr != nil {
 				return writeErr
 			}
-			return nil
+			continue
 		}
 		if err := s.handleMessage(raw); err != nil {
 			return err
@@ -188,7 +188,7 @@ func (s *Server) writeResult(id interface{}, result interface{}) error {
 }
 
 func (s *Server) writeError(id interface{}, code int, message string, data interface{}) error {
-	if id == nil {
+	if id == nil && code != ErrCodeParseError {
 		return nil
 	}
 	resp := Response{

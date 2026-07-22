@@ -53,11 +53,11 @@ func TestAdapter_Capabilities(t *testing.T) {
 	if !adapter.SupportsMCP() {
 		t.Error("SupportsMCP() = false, want true")
 	}
-	if !adapter.SupportsSkills() {
-		t.Error("SupportsSkills() = false, want true")
+	if adapter.SupportsSkills() {
+		t.Error("SupportsSkills() = true, want false")
 	}
-	if !adapter.SupportsSystemPrompt() {
-		t.Error("SupportsSystemPrompt() = false, want true")
+	if adapter.SupportsSystemPrompt() {
+		t.Error("SupportsSystemPrompt() = true, want false")
 	}
 	if adapter.SupportsAutoInstall() {
 		t.Error("SupportsAutoInstall() = true, want false")

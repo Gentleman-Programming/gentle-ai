@@ -1186,11 +1186,11 @@ func TestInjectClaudeDesktopAvoidsStaleHomebrewCellarPath(t *testing.T) {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 
-	origLookPath := GentleAILookPath
-	GentleAILookPath = func(file string) (string, error) {
+	origLookPath := gentleAILookPath
+	gentleAILookPath = func(file string) (string, error) {
 		return "/opt/homebrew/bin/gentle-ai", nil
 	}
-	t.Cleanup(func() { GentleAILookPath = origLookPath })
+	t.Cleanup(func() { gentleAILookPath = origLookPath })
 
 	result, err := Inject(home, adapter)
 	if err != nil {

@@ -146,7 +146,7 @@ func injectMergeIntoSettings(homeDir string, adapter agents.Adapter) (InjectionR
 	return InjectionResult{Changed: settingsWrite.Changed, Files: []string{settingsPath}}, nil
 }
 
-var GentleAILookPath = exec.LookPath
+var gentleAILookPath = exec.LookPath
 
 func isGentleAICommand(cmd string) bool {
 	if cmd == "" {
@@ -159,18 +159,13 @@ func isGentleAICommand(cmd string) bool {
 	return base == "gentle-ai"
 }
 
-func isVersionedHomebrewCellarPath(path string) bool {
-	clean := filepath.ToSlash(filepath.Clean(path))
-	return strings.Contains(clean, "/Cellar/gentle-ai/") && isGentleAICommand(clean)
-}
-
 func isStableHomebrewGentleAIPath(path string) bool {
 	clean := filepath.ToSlash(filepath.Clean(path))
 	return (clean == "/opt/homebrew/bin/gentle-ai" || clean == "/usr/local/bin/gentle-ai") && isGentleAICommand(clean)
 }
 
 func preferredStableGentleAICommand() string {
-	p, err := GentleAILookPath("gentle-ai")
+	p, err := gentleAILookPath("gentle-ai")
 	if err == nil && isStableHomebrewGentleAIPath(p) {
 		return p
 	}
@@ -178,27 +173,11 @@ func preferredStableGentleAICommand() string {
 }
 
 func resolveGentleAICommand() string {
-	p, err := GentleAILookPath("gentle-ai")
-	if err != nil || p == "" {
-		return "gentle-ai"
-	}
-	if isVersionedHomebrewCellarPath(p) {
-		if stable := preferredStableGentleAICommand(); stable != "" {
-			return stable
-		}
-		return "gentle-ai"
-	}
-	return p
+	return preferredStableGentleAICommand()
 }
 
-func stableGentleAICommandForExisting(cmd string) string {
-	if isVersionedHomebrewCellarPath(cmd) {
-		if stable := preferredStableGentleAICommand(); stable != "" {
-			return stable
-		}
-		return "gentle-ai"
-	}
-	return cmd
+func stableGentleAICommandForExisting(_ string) string {
+	return preferredStableGentleAICommand()
 }
 
 func injectClaudeDesktopMergeIntoSettings(settingsPath string) (InjectionResult, error) {
