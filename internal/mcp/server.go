@@ -1,6 +1,8 @@
 package mcp
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,37 +78,78 @@ func (s *Server) registerDefaultTools() {
 }
 
 // Serve starts processing stdio JSON-RPC 2.0 requests from r and writing responses to w.
-// Uses json.NewDecoder to naturally handle multiline / pretty-printed JSON payloads.
+// Uses bufio.Reader to process stdio payloads line-by-line and recover cleanly from parse errors.
 func (s *Server) Serve(r io.Reader, w io.Writer) error {
 	s.mu.Lock()
 	s.writer = w
 	s.mu.Unlock()
 
-	dec := json.NewDecoder(r)
+	reader := bufio.NewReader(r)
+	var buf bytes.Buffer
+
 	for {
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
-			if errors.Is(err, io.EOF) {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) == 0 && readErr != nil {
+			if errors.Is(readErr, io.EOF) {
 				return nil
 			}
+			return readErr
+		}
+
+		buf.Write(line)
+		trimmed := bytes.TrimSpace(buf.Bytes())
+		if len(trimmed) == 0 {
+			buf.Reset()
+			if readErr != nil {
+				if errors.Is(readErr, io.EOF) {
+					return nil
+				}
+				return readErr
+			}
+			continue
+		}
+
+		var raw json.RawMessage
+		if err := json.Unmarshal(trimmed, &raw); err != nil {
+			if isIncompleteJSON(err, trimmed) && readErr == nil {
+				continue
+			}
+			buf.Reset()
 			if writeErr := s.writeError(nil, ErrCodeParseError, "Parse error: invalid JSON payload", nil); writeErr != nil {
 				return writeErr
 			}
-			mr := io.MultiReader(dec.Buffered(), r)
-			buf := make([]byte, 1)
-			for {
-				_, readErr := mr.Read(buf)
-				if readErr != nil || buf[0] == '\n' {
-					break
+			if readErr != nil {
+				if errors.Is(readErr, io.EOF) {
+					return nil
 				}
+				return readErr
 			}
-			dec = json.NewDecoder(mr)
 			continue
 		}
+
+		buf.Reset()
 		if err := s.handleMessage(raw); err != nil {
 			return err
 		}
+
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
+			return readErr
+		}
 	}
+}
+
+func isIncompleteJSON(err error, data []byte) bool {
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return true
+	}
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return syntaxErr.Offset >= int64(len(data))
+	}
+	return false
 }
 
 func (s *Server) handleMessage(data []byte) error {

@@ -594,6 +594,39 @@ func TestServerRecoversFromMalformedJSON(t *testing.T) {
 	}
 }
 
+func TestServerRecoversFromConsecutiveMalformedJSON(t *testing.T) {
+	server := mcp.NewServer()
+
+	reqJSON := "invalid json 1\ninvalid json 2\ninvalid json 3\n" + `{"jsonrpc":"2.0","id":42,"method":"ping"}` + "\n"
+	in := strings.NewReader(reqJSON)
+	out := &bytes.Buffer{}
+
+	if err := server.Serve(in, out); err != nil {
+		t.Fatalf("Serve returned error: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("Expected 4 response lines, got %d: %s", len(lines), out.String())
+	}
+
+	for i := 0; i < 3; i++ {
+		resp := parseResponse(t, []byte(lines[i]))
+		if resp.Error == nil || resp.Error.Code != mcp.ErrCodeParseError {
+			t.Errorf("Expected response %d ErrCodeParseError, got: %v", i+1, resp.Error)
+		}
+	}
+
+	resp := parseResponse(t, []byte(lines[3]))
+	if resp.Error != nil {
+		t.Errorf("Expected last response no error, got: %v", resp.Error)
+	}
+	if resp.ID != float64(42) {
+		t.Errorf("Expected last response ID 42, got: %v", resp.ID)
+	}
+}
+
+
 func TestServerSetVersionAndProtocolVersionValidation(t *testing.T) {
 	t.Run("Custom version threaded into serverInfo", func(t *testing.T) {
 		server := mcp.NewServer()

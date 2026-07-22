@@ -1043,7 +1043,7 @@ func TestPlatformNativeSDDOrchestratorsAvoidOpenCodePersistenceClaims(t *testing
 		{path: "kiro/sdd-orchestrator.md", required: []string{"Kiro phase context", "native Kiro subagent context", "approval"}},
 		{path: "windsurf/sdd-orchestrator.md", required: []string{"solo-agent", "inline phase context", "There are no sub-agents"}},
 		{path: "antigravity/sdd-orchestrator.md", required: []string{"define_subagent", "invoke_subagent", "dynamic subagent context", "enable_mcp_tools: true"}},
-		{path: "claudedesktop/sdd-orchestrator.md", required: []string{"native MCP Tools", "sdd/{change}/handoff", "Claude Desktop prompt"}},
+		{path: "claudedesktop/sdd-orchestrator.md", required: []string{"native MCP Tools", "sdd/{change-name}/handoff", "Claude Desktop prompt"}},
 	}
 
 	for _, tc := range tests {
@@ -1091,7 +1091,7 @@ func TestClaudeDesktopSDDOrchestratorContract(t *testing.T) {
 		"sdd-apply",
 		"sdd-verify",
 		"jd-fix-agent",
-		"sdd/{change}/handoff",
+		"sdd/{change-name}/handoff",
 		"mem_save",
 		"Language Domain Contract",
 		"Mandatory Delegation Triggers",
