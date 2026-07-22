@@ -733,6 +733,7 @@ func TestInjectAntigravityRecoversWriteFailures(t *testing.T) {
 		{"global post-rename sync", "post", "", false, true},
 		{"manifest pre-replacement", "", "pre", false, false},
 		{"invalid manifest before failure", "", "pre-invalid", false, false},
+		{"older valid manifest before failure", "", "pre-valid", false, true},
 		{"manifest post-rename sync", "", "post", false, true},
 		{"rollback failure rolls forward", "", "pre", true, true},
 	}
@@ -743,8 +744,8 @@ func TestInjectAntigravityRecoversWriteFailures(t *testing.T) {
 			global, manifest := filepath.Join(dir, "mcp_config.json"), filepath.Join(dir, "plugins", "gentle-ai-engram", "plugin.json")
 			original := []byte("{\"root\":1,\"mcpServers\":{\"engram\":{\"command\":\"engram\"},\"other\":{}}}\n")
 			writeFile(t, global, string(original))
-			if tt.manifest == "pre-invalid" {
-				writeFile(t, manifest, "invalid")
+			if strings.HasPrefix(tt.manifest, "pre-") {
+				writeFile(t, manifest, map[string]string{"pre-invalid": "invalid", "pre-valid": `{"name":"gentle-ai-engram","version":"0.0.1"}`}[tt.manifest])
 			}
 			actual, manifestCalls := antigravityWriteFile, 0
 			antigravityWriteFile = func(path string, content []byte, mode os.FileMode) (filemerge.WriteResult, error) {
@@ -761,7 +762,7 @@ func TestInjectAntigravityRecoversWriteFailures(t *testing.T) {
 				if path == manifest && tt.manifest != "" {
 					manifestCalls++
 					if manifestCalls == 1 {
-						if tt.manifest == "pre" || tt.manifest == "pre-invalid" {
+						if strings.HasPrefix(tt.manifest, "pre") {
 							return filemerge.WriteResult{}, fmt.Errorf("manifest fail")
 						}
 						r, _ := actual(path, content, mode)
