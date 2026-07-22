@@ -1378,6 +1378,22 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 	selection.Persona = model.PersonaNeutral
 }
 
+// migratePersistedPersonaAlias rewrites a persisted legacy
+// gentleman-neutral-artifacts persona to neutral, printing the remap notice
+// once. State that predates persona persistence, explicit gentleman state,
+// and unreadable state are untouched.
+func migratePersistedPersonaAlias(homeDir string, persisted *state.InstallState, persistedErr error) error {
+	if persistedErr != nil || persisted.Persona != string(model.PersonaGentlemanNeutralArtifacts) {
+		return nil
+	}
+	fmt.Fprintln(personaNoticeWriter, personaAliasRemapNotice)
+	persisted.Persona = string(model.PersonaNeutral)
+	if err := state.Write(homeDir, *persisted); err != nil {
+		return fmt.Errorf("persist remapped persona: %w", err)
+	}
+	return nil
+}
+
 // RunSyncWithSelection is the programmatic entry point for sync.
 // It skips flag parsing and agent discovery — the caller provides the homeDir
 // and a fully-built Selection (agents + components + options).
@@ -1459,6 +1475,10 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 		if err := state.Write(homeDir, persistedState); err != nil {
 			return result, fmt.Errorf("persist migrated community tool selection: %w", err)
 		}
+	}
+
+	if err := migratePersistedPersonaAlias(homeDir, &persistedState, persistedStateErr); err != nil {
+		return result, err
 	}
 
 	return result, nil
