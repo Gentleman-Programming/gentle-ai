@@ -275,8 +275,11 @@ func readImage(path string) (fileImage, error) {
 
 func sameImage(a, b fileImage) bool { return a.exists == b.exists && bytes.Equal(a.data, b.data) }
 
-func activeAntigravityManifest(image fileImage, desired []byte) bool {
-	return image.exists && bytes.Equal(image.data, desired)
+func activeAntigravityManifest(image fileImage) bool {
+	var manifest struct {
+		Name string `json:"name"`
+	}
+	return image.exists && json.Unmarshal(image.data, &manifest) == nil && manifest.Name == "gentle-ai-engram"
 }
 
 func writeReconciled(path string, before fileImage, desired []byte) (bool, string, error) {
@@ -409,7 +412,7 @@ func installAntigravityEngramPlugin(homeDir string, adapter agents.Adapter) (boo
 		return changed, files, primary
 	}
 	primary = errors.Join(primary, activateErr)
-	if state == "post-replacement" || activeAntigravityManifest(manifestBefore, manifestDesired) {
+	if state == "post-replacement" || activeAntigravityManifest(manifestBefore) {
 		return false, nil, errors.Join(primary, fmt.Errorf("plugin-only registration observed at %q", manifestPath))
 	}
 	if !migrate {
