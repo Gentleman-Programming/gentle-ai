@@ -488,8 +488,11 @@ func shouldStripManagedLegacyPersona(existing string) bool {
 	return strings.Contains(existing, "<!-- gentle-ai:persona -->")
 }
 
+// isGentlemanConversationPersona reports whether the persona keeps the voseo
+// conversation tone. The gentleman-neutral-artifacts legacy alias is remapped
+// to neutral (see normalizePersona) and is intentionally NOT gentleman here.
 func isGentlemanConversationPersona(persona model.PersonaID) bool {
-	return persona == model.PersonaGentleman || persona == model.PersonaGentlemanNeutralArtifacts
+	return persona == model.PersonaGentleman
 }
 
 // residualChannel reports whether the adapter already delivers tone/language/
@@ -506,7 +509,7 @@ func residualChannel(adapter agents.Adapter) bool {
 // personaContent returns the persona asset for the given agent and persona.
 func personaContent(agent model.AgentID, persona model.PersonaID, residualContentAvailable bool) string {
 	switch persona {
-	case model.PersonaNeutral:
+	case model.PersonaNeutral, model.PersonaGentlemanNeutralArtifacts:
 		return neutralPersonaContent(agent, residualContentAvailable)
 	case model.PersonaCustom:
 		return ""
