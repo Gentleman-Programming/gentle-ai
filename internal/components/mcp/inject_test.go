@@ -1213,3 +1213,125 @@ func TestInjectClaudeDesktopAvoidsStaleHomebrewCellarPath(t *testing.T) {
 		t.Fatalf("gentle-ai command = %#v; want /opt/homebrew/bin/gentle-ai", gentleAI["command"])
 	}
 }
+
+func TestInjectClaudeDesktopPreservesCustomAbsoluteNonCellarGentleAIPath(t *testing.T) {
+	home := t.TempDir()
+	adapter := claudeDesktopAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	customCmd := filepath.Join(home, "custom", "bin", "gentle-ai")
+	existing := `{
+  "mcpServers": {
+    "gentle-ai": {
+      "command": "` + strings.ReplaceAll(customCmd, `\`, `\\`) + `",
+      "args": ["mcp"]
+    }
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	result, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(claude-desktop) error = %v", err)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile error = %v", err)
+	}
+
+	var parsed map[string]any
+	json.Unmarshal(content, &parsed)
+	mcpServers := parsed["mcpServers"].(map[string]any)
+	gentleAI := mcpServers["gentle-ai"].(map[string]any)
+	if gentleAI["command"] != customCmd {
+		t.Fatalf("gentle-ai command = %#v; want %q (custom absolute path preserved)", gentleAI["command"], customCmd)
+	}
+	_ = result
+}
+
+func TestInjectClaudeDesktopPreservesRelativeGentleAICommand(t *testing.T) {
+	home := t.TempDir()
+	adapter := claudeDesktopAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	existing := `{
+  "mcpServers": {
+    "gentle-ai": {
+      "command": "gentle-ai",
+      "args": ["mcp"]
+    }
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	result, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(claude-desktop) error = %v", err)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile error = %v", err)
+	}
+
+	var parsed map[string]any
+	json.Unmarshal(content, &parsed)
+	mcpServers := parsed["mcpServers"].(map[string]any)
+	gentleAI := mcpServers["gentle-ai"].(map[string]any)
+	if gentleAI["command"] != "gentle-ai" {
+		t.Fatalf("gentle-ai command = %#v; want %q (relative command preserved)", gentleAI["command"], "gentle-ai")
+	}
+	_ = result
+}
+
+func TestInjectClaudeDesktopPreservesCustomWrapperPath(t *testing.T) {
+	home := t.TempDir()
+	adapter := claudeDesktopAdapter()
+	configPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	wrapperPath := "/usr/local/bin/gentle-ai-wrapper"
+	existing := `{
+  "mcpServers": {
+    "gentle-ai": {
+      "command": "` + wrapperPath + `",
+      "args": ["mcp"]
+    }
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	result, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(claude-desktop) error = %v", err)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile error = %v", err)
+	}
+
+	var parsed map[string]any
+	json.Unmarshal(content, &parsed)
+	mcpServers := parsed["mcpServers"].(map[string]any)
+	gentleAI := mcpServers["gentle-ai"].(map[string]any)
+	if gentleAI["command"] != wrapperPath {
+		t.Fatalf("gentle-ai command = %#v; want %q (custom wrapper path preserved)", gentleAI["command"], wrapperPath)
+	}
+	_ = result
+}

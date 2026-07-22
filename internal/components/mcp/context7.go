@@ -37,42 +37,49 @@ var antigravityContext7OverlayJSON = []byte("{\n  \"mcpServers\": {\n    \"conte
 // deep merge into this managed MCP server entry.
 var kimiContext7OverlayJSON = []byte("{\n  \"mcpServers\": {\n    \"context7\": {\n      \"__replace__\": {\n        \"transport\": \"http\",\n        \"url\": \"https://mcp.context7.com/mcp\"\n      }\n    }\n  }\n}\n")
 
+// DefaultContext7ServerJSON returns the default standalone Context7 server JSON configuration.
 func DefaultContext7ServerJSON() []byte {
 	content := make([]byte, len(defaultContext7ServerJSON))
 	copy(content, defaultContext7ServerJSON)
 	return content
 }
 
+// DefaultContext7OverlayJSON returns the default mcpServers overlay JSON containing Context7.
 func DefaultContext7OverlayJSON() []byte {
 	content := make([]byte, len(defaultContext7OverlayJSON))
 	copy(content, defaultContext7OverlayJSON)
 	return content
 }
 
+// OpenCodeContext7OverlayJSON returns the opencode.json overlay JSON for Context7.
 func OpenCodeContext7OverlayJSON() []byte {
 	content := make([]byte, len(openCodeContext7OverlayJSON))
 	copy(content, openCodeContext7OverlayJSON)
 	return content
 }
 
+// OpenClawContext7OverlayJSON returns the openclaw.json overlay JSON for Context7.
 func OpenClawContext7OverlayJSON() []byte {
 	content := make([]byte, len(openClawContext7OverlayJSON))
 	copy(content, openClawContext7OverlayJSON)
 	return content
 }
 
+// VSCodeContext7OverlayJSON returns the VS Code mcp.json overlay JSON for Context7.
 func VSCodeContext7OverlayJSON() []byte {
 	content := make([]byte, len(vsCodeContext7OverlayJSON))
 	copy(content, vsCodeContext7OverlayJSON)
 	return content
 }
 
+// AntigravityContext7OverlayJSON returns the Antigravity mcp_config.json overlay JSON for Context7.
 func AntigravityContext7OverlayJSON() []byte {
 	content := make([]byte, len(antigravityContext7OverlayJSON))
 	copy(content, antigravityContext7OverlayJSON)
 	return content
 }
 
+// KimiContext7OverlayJSON returns the Kimi mcp.json overlay JSON for Context7.
 func KimiContext7OverlayJSON() []byte {
 	content := make([]byte, len(kimiContext7OverlayJSON))
 	copy(content, kimiContext7OverlayJSON)

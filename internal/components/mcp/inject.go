@@ -15,11 +15,13 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
 
+// InjectionResult records the outcome of an MCP configuration injection operation.
 type InjectionResult struct {
 	Changed bool
 	Files   []string
 }
 
+// Inject configures MCP server settings for the given adapter according to its Strategy.
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	if !adapter.SupportsMCP() {
 		return InjectionResult{}, nil
@@ -176,23 +178,55 @@ func resolveGentleAICommand() string {
 	return preferredStableGentleAICommand()
 }
 
-func stableGentleAICommandForExisting(_ string) string {
+func isVersionedHomebrewCellarPath(path string) bool {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	return strings.Contains(clean, "/Cellar/")
+}
+
+func stableGentleAICommandForExisting(existing string) string {
+	if existing != "" && !isVersionedHomebrewCellarPath(existing) {
+		return existing
+	}
 	return preferredStableGentleAICommand()
 }
 
 func injectClaudeDesktopMergeIntoSettings(settingsPath string) (InjectionResult, error) {
 	cmd := resolveGentleAICommand()
 	baseJSON, err := osReadFile(settingsPath)
-	if err == nil && len(baseJSON) > 0 {
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	fileExisted := baseJSON != nil
+	var backupBytes []byte
+	backupPath := settingsPath + ".bak"
+
+	if fileExisted {
+		backupBytes = baseJSON
 		if existingCmd, ok := existingMergedGentleAICommand(baseJSON); ok {
 			cmd = stableGentleAICommandForExisting(existingCmd)
+		}
+		if err := os.WriteFile(backupPath, backupBytes, 0o644); err != nil {
+			return InjectionResult{}, fmt.Errorf("write backup settings %q: %w", backupPath, err)
 		}
 	}
 
 	overlay := ClaudeDesktopOverlayJSON(cmd)
 	settingsWrite, err := mergeJSONFile(settingsPath, overlay)
 	if err != nil {
+		if fileExisted {
+			if _, restoreErr := filemerge.WriteFileAtomic(settingsPath, backupBytes, 0o644); restoreErr != nil {
+				return InjectionResult{}, fmt.Errorf("merge json error: %w; restore backup failed: %v", err, restoreErr)
+			}
+		} else {
+			if rmErr := os.Remove(settingsPath); rmErr != nil && !os.IsNotExist(rmErr) {
+				return InjectionResult{}, fmt.Errorf("merge json error: %w; remove settings failed: %v", err, rmErr)
+			}
+		}
 		return InjectionResult{}, err
+	}
+
+	if fileExisted {
+		_ = os.Remove(backupPath)
 	}
 
 	return InjectionResult{Changed: settingsWrite.Changed, Files: []string{settingsPath}}, nil

@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
 type SystemInfo struct {
@@ -16,14 +18,8 @@ type SystemInfo struct {
 	Profile   PlatformProfile
 }
 
-type PlatformProfile struct {
-	OS             string
-	LinuxDistro    string
-	PackageManager string
-	NpmWritable    bool // true when npm global prefix is user-writable (nvm/fnm/volta)
-	GoAvailable    bool // true when `go` is found on PATH (used for auto-detect: brew → go-install → binary)
-	Supported      bool
-}
+// PlatformProfile is a type alias to model.PlatformProfile for backward compatibility.
+type PlatformProfile = model.PlatformProfile
 
 const (
 	LinuxDistroUnknown = "unknown"

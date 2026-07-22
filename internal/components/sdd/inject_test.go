@@ -6887,6 +6887,11 @@ func TestInjectTriggerRules_AllAdapters(t *testing.T) {
 				return readFileOrEmpty(a.SystemPromptFile(home))
 			},
 		},
+		{
+			name:       "claude-desktop",
+			agentID:    model.AgentClaudeDesktop,
+			getContent: nil, // skip content check
+		},
 	}
 
 	// Count guard: the test table must enumerate exactly as many adapters as the

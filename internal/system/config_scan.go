@@ -3,7 +3,8 @@ package system
 import (
 	"os"
 	"path/filepath"
-	"runtime"
+
+	"github.com/gentleman-programming/gentle-ai/internal/agents/claudedesktop"
 )
 
 // ConfigState records the filesystem presence of an agent's global config directory.
@@ -51,22 +52,7 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 }
 
 func claudeDesktopGlobalConfigDir(homeDir string) string {
-	switch runtime.GOOS {
-	case "darwin":
-		return filepath.Join(homeDir, "Library", "Application Support", "Claude")
-	case "windows":
-		appData := os.Getenv("APPDATA")
-		if appData == "" {
-			appData = filepath.Join(homeDir, "AppData", "Roaming")
-		}
-		return filepath.Join(appData, "Claude")
-	default: // linux and others
-		xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
-		if xdgConfigHome == "" {
-			xdgConfigHome = filepath.Join(homeDir, ".config")
-		}
-		return filepath.Join(xdgConfigHome, "Claude")
-	}
+	return claudedesktop.GlobalConfigDir(homeDir)
 }
 
 // vscodeCopilotGlobalConfigDir returns ~/.copilot, the GlobalConfigDir used by

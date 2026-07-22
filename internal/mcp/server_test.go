@@ -593,3 +593,45 @@ func TestServerRecoversFromMalformedJSON(t *testing.T) {
 		t.Errorf("Expected second response ID 42, got: %v", resp2.ID)
 	}
 }
+
+func TestServerSetVersionAndProtocolVersionValidation(t *testing.T) {
+	t.Run("Custom version threaded into serverInfo", func(t *testing.T) {
+		server := mcp.NewServer()
+		server.SetVersion("2.5.0")
+
+		reqJSON := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}` + "\n"
+		in := strings.NewReader(reqJSON)
+		out := &bytes.Buffer{}
+
+		if err := server.Serve(in, out); err != nil {
+			t.Fatalf("Serve error: %v", err)
+		}
+
+		resp := parseResponse(t, out.Bytes())
+		var initResult mcp.InitializeResult
+		rawResult, _ := json.Marshal(resp.Result)
+		_ = json.Unmarshal(rawResult, &initResult)
+
+		if initResult.ServerInfo.Version != "2.5.0" {
+			t.Errorf("Expected version '2.5.0', got %q", initResult.ServerInfo.Version)
+		}
+	})
+
+	t.Run("Unsupported protocol version returns error", func(t *testing.T) {
+		server := mcp.NewServer()
+
+		reqJSON := `{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}` + "\n"
+		in := strings.NewReader(reqJSON)
+		out := &bytes.Buffer{}
+
+		if err := server.Serve(in, out); err != nil {
+			t.Fatalf("Serve error: %v", err)
+		}
+
+		resp := parseResponse(t, out.Bytes())
+		if resp.Error == nil || resp.Error.Code != mcp.ErrCodeInvalidParams {
+			t.Errorf("Expected ErrCodeInvalidParams, got: %v", resp.Error)
+		}
+	})
+}
+

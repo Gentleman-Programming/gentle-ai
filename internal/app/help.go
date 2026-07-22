@@ -16,6 +16,7 @@ COMMANDS
   install      Configure AI coding agents on this machine
   uninstall    Remove Gentle AI managed files from this machine
   sync         Sync agent configs and skills to current version
+  mcp          Start stdio JSON-RPC MCP server for Claude Desktop
   skill-registry refresh
                Refresh .atl/skill-registry.md with cache-hit fast path
   sdd-status [change]
@@ -54,5 +55,22 @@ FLAGS
 
 Run 'gentle-ai help' for this message.
 Documentation: https://github.com/Gentleman-Programming/gentle-ai
+`, version)
+}
+
+// printMCPHelp prints dedicated help text describing the stdio JSON-RPC MCP server for Claude Desktop.
+func printMCPHelp(w io.Writer, version string) {
+	fmt.Fprintf(w, `gentle-ai mcp — Stdio JSON-RPC MCP server for Claude Desktop (%s)
+
+USAGE
+  gentle-ai mcp
+
+DESCRIPTION
+  Runs the Model Context Protocol (MCP) server over standard I/O (stdio).
+  Exposes SDD workflow tools (sdd_explore, sdd_review, sdd_propose, sdd_spec, sdd_design, sdd_tasks)
+  and system integration primitives for Claude Desktop and compatible MCP clients.
+
+FLAGS
+  --help, -h    Show MCP server help
 `, version)
 }

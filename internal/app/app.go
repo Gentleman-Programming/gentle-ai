@@ -57,10 +57,12 @@ var (
 	}
 )
 
+// Run executes the gentle-ai CLI application using os.Args and os.Stdout.
 func Run() error {
 	return RunArgs(os.Args[1:], os.Stdout)
 }
 
+// RunArgs parses arguments and executes the requested gentle-ai command, outputting to stdout.
 func RunArgs(args []string, stdout io.Writer) error {
 	// Propagate the build-time version to the CLI and upgrade layers so backup
 	// manifests record which version of gentle-ai created them.
@@ -81,10 +83,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return nil
 		case "mcp":
 			if hasHelpFlag(args[1:]) {
-				printHelp(stdout, Version)
+				printMCPHelp(stdout, Version)
 				return nil
 			}
-			server := mcp.NewServer()
+			server := mcp.NewServer(Version)
 			return server.Serve(os.Stdin, stdout)
 		case "uninstall":
 			if len(args) >= 2 && args[1] == "opencode-plugin" {

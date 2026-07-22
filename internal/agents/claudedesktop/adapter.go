@@ -7,7 +7,6 @@ import (
 	"runtime"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
 
 type statResult struct {
@@ -29,13 +28,17 @@ type Adapter struct {
 	statPath func(string) statResult
 }
 
+// NewAdapter creates a new Adapter instance for Claude Desktop.
 func NewAdapter() *Adapter {
 	return &Adapter{statPath: defaultStat}
 }
 
 // --- Identity ---
 
-func (a *Adapter) Agent() model.AgentID    { return model.AgentClaudeDesktop }
+// Agent returns model.AgentClaudeDesktop.
+func (a *Adapter) Agent() model.AgentID { return model.AgentClaudeDesktop }
+
+// Tier returns model.TierFull.
 func (a *Adapter) Tier() model.SupportTier { return model.TierFull }
 
 // --- Detection ---
@@ -48,6 +51,8 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 	statFile := a.statPath(configFile)
 	if statFile.err == nil && !statFile.isDir {
 		return true, "", configFile, true, nil
+	} else if statFile.err != nil && !os.IsNotExist(statFile.err) {
+		return false, "", "", false, statFile.err
 	}
 
 	statDir := a.statPath(configDir)
@@ -62,53 +67,18 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 
 // --- Installation ---
 
+// SupportsAutoInstall reports whether Claude Desktop supports automated installation.
 func (a *Adapter) SupportsAutoInstall() bool { return false }
 
-func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
+// InstallCommand returns an error because Claude Desktop is a GUI app and cannot be installed via CLI.
+func (a *Adapter) InstallCommand(_ model.PlatformProfile) ([][]string, error) {
 	return nil, AgentNotInstallableError{Agent: model.AgentClaudeDesktop}
 }
 
 // --- Config paths ---
 
-// GlobalConfigDir returns the OS-specific Claude Desktop config directory.
-func (a *Adapter) GlobalConfigDir(homeDir string) string {
-	return a.claudeUserDir(homeDir)
-}
-
-func (a *Adapter) SystemPromptDir(homeDir string) string {
-	return a.claudeUserDir(homeDir)
-}
-
-func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(a.claudeUserDir(homeDir), "instructions.md")
-}
-
-func (a *Adapter) SkillsDir(homeDir string) string {
-	return filepath.Join(a.claudeUserDir(homeDir), "skills")
-}
-
-func (a *Adapter) SettingsPath(homeDir string) string {
-	return filepath.Join(a.claudeUserDir(homeDir), "claude_desktop_config.json")
-}
-
-// --- Config strategies ---
-
-func (a *Adapter) SystemPromptStrategy() model.SystemPromptStrategy {
-	return model.StrategyInstructionsFile
-}
-
-func (a *Adapter) MCPStrategy() model.MCPStrategy {
-	return model.StrategyMergeIntoSettings
-}
-
-// --- MCP ---
-
-func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
-	return filepath.Join(a.claudeUserDir(homeDir), "claude_desktop_config.json")
-}
-
-// claudeUserDir returns the OS-specific Claude Desktop User config directory.
-func (a *Adapter) claudeUserDir(homeDir string) string {
+// GlobalConfigDir returns the OS-specific Claude Desktop User config directory.
+func GlobalConfigDir(homeDir string) string {
 	switch runtime.GOOS {
 	case "darwin":
 		return filepath.Join(homeDir, "Library", "Application Support", "Claude")
@@ -127,21 +97,92 @@ func (a *Adapter) claudeUserDir(homeDir string) string {
 	}
 }
 
+// GlobalConfigDir returns the OS-specific Claude Desktop config directory.
+func (a *Adapter) GlobalConfigDir(homeDir string) string {
+	return GlobalConfigDir(homeDir)
+}
+
+// SystemPromptDir returns the directory containing system prompt instructions for Claude Desktop.
+func (a *Adapter) SystemPromptDir(homeDir string) string {
+	return GlobalConfigDir(homeDir)
+}
+
+// SystemPromptFile returns the path to instructions.md for Claude Desktop.
+func (a *Adapter) SystemPromptFile(homeDir string) string {
+	return filepath.Join(GlobalConfigDir(homeDir), "instructions.md")
+}
+
+// SkillsDir returns the path to the skills directory for Claude Desktop.
+func (a *Adapter) SkillsDir(homeDir string) string {
+	return filepath.Join(GlobalConfigDir(homeDir), "skills")
+}
+
+// SettingsPath returns the path to claude_desktop_config.json.
+func (a *Adapter) SettingsPath(homeDir string) string {
+	return filepath.Join(GlobalConfigDir(homeDir), "claude_desktop_config.json")
+}
+
+// --- Config strategies ---
+
+// SystemPromptStrategy returns the system prompt strategy for Claude Desktop.
+func (a *Adapter) SystemPromptStrategy() model.SystemPromptStrategy {
+	return model.StrategyInstructionsFile
+}
+
+// MCPStrategy returns the MCP strategy for Claude Desktop.
+func (a *Adapter) MCPStrategy() model.MCPStrategy {
+	return model.StrategyMergeIntoSettings
+}
+
+// --- MCP ---
+
+// MCPConfigPath returns the path to the MCP configuration file for Claude Desktop.
+func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
+	return filepath.Join(GlobalConfigDir(homeDir), "claude_desktop_config.json")
+}
+
+func (a *Adapter) claudeUserDir(homeDir string) string {
+	return GlobalConfigDir(homeDir)
+}
+
 // --- Optional capabilities ---
 
-func (a *Adapter) SupportsOutputStyles() bool     { return false }
+// SupportsOutputStyles reports whether Claude Desktop supports custom output styles.
+func (a *Adapter) SupportsOutputStyles() bool { return false }
+
+// OutputStyleDir returns the directory for custom output styles.
 func (a *Adapter) OutputStyleDir(_ string) string { return "" }
-func (a *Adapter) SupportsSlashCommands() bool    { return false }
-func (a *Adapter) CommandsDir(_ string) string    { return "" }
-func (a *Adapter) SupportsSubAgents() bool        { return false }
-func (a *Adapter) SubAgentsDir(_ string) string   { return "" }
-func (a *Adapter) EmbeddedSubAgentsDir() string   { return "" }
-func (a *Adapter) SupportsSkills() bool           { return false }
-func (a *Adapter) SupportsSystemPrompt() bool     { return false }
-func (a *Adapter) SupportsMCP() bool              { return true }
 
-type AgentNotInstallableError struct{ Agent model.AgentID }
+// SupportsSlashCommands reports whether Claude Desktop supports slash commands.
+func (a *Adapter) SupportsSlashCommands() bool { return false }
 
+// CommandsDir returns the directory for slash commands.
+func (a *Adapter) CommandsDir(_ string) string { return "" }
+
+// SupportsSubAgents reports whether Claude Desktop supports sub-agents.
+func (a *Adapter) SupportsSubAgents() bool { return false }
+
+// SubAgentsDir returns the directory for sub-agents.
+func (a *Adapter) SubAgentsDir(_ string) string { return "" }
+
+// EmbeddedSubAgentsDir returns the directory for embedded sub-agents.
+func (a *Adapter) EmbeddedSubAgentsDir() string { return "" }
+
+// SupportsSkills reports whether Claude Desktop supports skills.
+func (a *Adapter) SupportsSkills() bool { return false }
+
+// SupportsSystemPrompt reports whether Claude Desktop supports system prompts.
+func (a *Adapter) SupportsSystemPrompt() bool { return false }
+
+// SupportsMCP reports whether Claude Desktop supports Model Context Protocol.
+func (a *Adapter) SupportsMCP() bool { return true }
+
+// AgentNotInstallableError is returned when InstallCommand is called on a desktop-only agent.
+type AgentNotInstallableError struct {
+	Agent model.AgentID
+}
+
+// Error formats the AgentNotInstallableError message.
 func (e AgentNotInstallableError) Error() string {
 	return "agent " + string(e.Agent) + " is a desktop app and cannot be installed via CLI"
 }
@@ -150,3 +191,5 @@ func defaultStat(path string) statResult {
 	info, err := os.Stat(path)
 	return statResult{isDir: err == nil && info.IsDir(), err: err}
 }
+
+

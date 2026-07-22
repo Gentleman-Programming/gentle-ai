@@ -18,17 +18,31 @@ type Server struct {
 	tools    map[string]Tool
 	handlers map[string]ToolHandler
 	writer   io.Writer
+	version  string
 }
 
 // NewServer creates a new Server pre-populated with standard SDD reasoning tools.
-func NewServer() *Server {
+// An optional build version string can be supplied; defaults to "1.0.0" if omitted.
+func NewServer(version ...string) *Server {
+	ver := "1.0.0"
+	if len(version) > 0 && version[0] != "" {
+		ver = version[0]
+	}
 	s := &Server{
 		tools:    make(map[string]Tool),
 		handlers: make(map[string]ToolHandler),
+		version:  ver,
 	}
 
 	s.registerDefaultTools()
 	return s
+}
+
+// SetVersion sets the build version string returned in serverInfo during initialize.
+func (s *Server) SetVersion(version string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.version = version
 }
 
 // RegisterTool registers a new MCP tool with its execution handler.
@@ -78,6 +92,15 @@ func (s *Server) Serve(r io.Reader, w io.Writer) error {
 			if writeErr := s.writeError(nil, ErrCodeParseError, "Parse error: invalid JSON payload", nil); writeErr != nil {
 				return writeErr
 			}
+			mr := io.MultiReader(dec.Buffered(), r)
+			buf := make([]byte, 1)
+			for {
+				_, readErr := mr.Read(buf)
+				if readErr != nil || buf[0] == '\n' {
+					break
+				}
+			}
+			dec = json.NewDecoder(mr)
 			continue
 		}
 		if err := s.handleMessage(raw); err != nil {
@@ -99,6 +122,23 @@ func (s *Server) handleMessage(data []byte) error {
 
 	switch req.Method {
 	case "initialize":
+		var params struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		if len(req.Params) > 0 {
+			_ = json.Unmarshal(req.Params, &params)
+		}
+		if params.ProtocolVersion != "" && params.ProtocolVersion != "2024-11-05" {
+			return s.writeError(req.ID, ErrCodeInvalidParams, fmt.Sprintf("Unsupported protocol version: %s", params.ProtocolVersion), nil)
+		}
+
+		s.mu.RLock()
+		ver := s.version
+		s.mu.RUnlock()
+		if ver == "" {
+			ver = "1.0.0"
+		}
+
 		result := InitializeResult{
 			ProtocolVersion: "2024-11-05",
 			Capabilities: ServerCapabilities{
@@ -106,7 +146,7 @@ func (s *Server) handleMessage(data []byte) error {
 			},
 			ServerInfo: ServerInfo{
 				Name:    "gentle-ai",
-				Version: "1.0.0",
+				Version: ver,
 			},
 		}
 		return s.writeResult(req.ID, result)

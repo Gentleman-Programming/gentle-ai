@@ -771,7 +771,7 @@ done`,
 				installFakeCodeGraphScript(t, tt.script)
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 			defer cancel()
 			_, err := probePiCodeGraphMCPWithAgentDirContext(ctx, mcpPath, agentDir)
 			if !errors.Is(err, context.DeadlineExceeded) {

@@ -41,6 +41,7 @@ type RPCError struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
+// Error returns the error message for RPCError.
 func (e *RPCError) Error() string {
 	return e.Message
 }

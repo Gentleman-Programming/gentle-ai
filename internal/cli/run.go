@@ -1045,10 +1045,7 @@ func (s componentApplyStep) Run() error {
 				}
 			}
 			engramOpts := engram.InjectOptions{
-				CodexOrchestratorAssignment: s.selection.CodexOrchestratorAssignment,
-				CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
-				CodexModelAssignments:       s.selection.CodexModelAssignments,
-				Version:                     engramVersion,
+				Version: engramVersion,
 			}
 			var err error
 			if adapter.Agent() == model.AgentOpenClaw {

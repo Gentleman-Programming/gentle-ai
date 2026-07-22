@@ -823,11 +823,7 @@ func (s componentSyncStep) Run() error {
 	case model.ComponentEngram:
 		// Sync: inject MCP config + system prompt protocol only.
 		// NO binary install. NO engram setup.
-		engramOpts := engram.InjectOptions{
-			CodexOrchestratorAssignment: s.selection.CodexOrchestratorAssignment,
-			CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
-			CodexModelAssignments:       s.selection.CodexModelAssignments,
-		}
+		engramOpts := engram.InjectOptions{}
 		for _, adapter := range adapters {
 			var res engram.InjectionResult
 			var err error

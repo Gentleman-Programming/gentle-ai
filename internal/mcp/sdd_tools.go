@@ -5,6 +5,16 @@ import (
 	"strings"
 )
 
+func requiredFromParams(params []sddParamConfig) []string {
+	var req []string
+	for _, p := range params {
+		if p.required {
+			req = append(req, p.key)
+		}
+	}
+	return req
+}
+
 // DefaultSDDTools returns all pre-packaged SDD reasoning tools for MCP.
 func DefaultSDDTools() []Tool {
 	return []Tool{
@@ -23,7 +33,7 @@ func DefaultSDDTools() []Tool {
 						Description: "Optional background context, constraints, or specific files to inspect.",
 					},
 				},
-				Required: []string{"topic"},
+				Required: requiredFromParams(sddExploreConfig.params),
 			},
 		},
 		{
@@ -39,8 +49,10 @@ func DefaultSDDTools() []Tool {
 					"focus": {
 						Type:        "string",
 						Description: "Optional focus area for review (e.g. '4r', 'architecture', 'security', 'correctness').",
+						Enum:        []string{"4r", "architecture", "security", "correctness"},
 					},
 				},
+				Required: requiredFromParams(sddReviewConfig.params),
 			},
 		},
 		{
@@ -58,7 +70,7 @@ func DefaultSDDTools() []Tool {
 						Description: "Optional scope boundaries and non-goals.",
 					},
 				},
-				Required: []string{"change"},
+				Required: requiredFromParams(sddProposeConfig.params),
 			},
 		},
 		{
@@ -76,7 +88,7 @@ func DefaultSDDTools() []Tool {
 						Description: "Optional specific requirements or user stories.",
 					},
 				},
-				Required: []string{"feature"},
+				Required: requiredFromParams(sddSpecConfig.params),
 			},
 		},
 		{
@@ -94,7 +106,7 @@ func DefaultSDDTools() []Tool {
 						Description: "Optional architectural constraints or component details.",
 					},
 				},
-				Required: []string{"spec"},
+				Required: requiredFromParams(sddDesignConfig.params),
 			},
 		},
 		{
@@ -112,7 +124,7 @@ func DefaultSDDTools() []Tool {
 						Description: "Optional execution phases or sequencing guidance.",
 					},
 				},
-				Required: []string{"design"},
+				Required: requiredFromParams(sddTasksConfig.params),
 			},
 		},
 	}

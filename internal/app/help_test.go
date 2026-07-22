@@ -11,7 +11,7 @@ func TestHelpContainsAllCommands(t *testing.T) {
 	printHelp(&buf, "v1.0.0-test")
 	output := buf.String()
 
-	commands := []string{"install", "uninstall", "sync", "sdd-status", "sdd-continue", "review start", "review finalize", "review validate", "review status", "review-start", "review-resume", "review-bundle-export", "review-bundle-import", "review-validate", "update", "upgrade", "restore", "version"}
+	commands := []string{"install", "uninstall", "sync", "mcp", "sdd-status", "sdd-continue", "review start", "review finalize", "review validate", "review status", "review-start", "review-resume", "review-bundle-export", "review-bundle-import", "review-validate", "update", "upgrade", "restore", "version"}
 	for _, cmd := range commands {
 		if !strings.Contains(output, cmd) {
 			t.Errorf("help output missing command %q", cmd)
@@ -79,5 +79,28 @@ func TestHelpCommandsHeadingIsAligned(t *testing.T) {
 	printHelp(&buf, "v1.2.3")
 	if !strings.Contains(buf.String(), "\nCOMMANDS\n  install") {
 		t.Fatalf("help output has inconsistent command indentation:\n%s", buf.String())
+	}
+}
+
+func TestMCPHelpOutput(t *testing.T) {
+	var buf bytes.Buffer
+	printMCPHelp(&buf, "v2.0.0-test")
+	output := buf.String()
+
+	for _, want := range []string{
+		"gentle-ai mcp",
+		"v2.0.0-test",
+		"Stdio JSON-RPC MCP server for Claude Desktop",
+		"sdd_explore",
+		"sdd_review",
+		"sdd_propose",
+		"sdd_spec",
+		"sdd_design",
+		"sdd_tasks",
+		"--help, -h",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("mcp help output missing %q:\n%s", want, output)
+		}
 	}
 }

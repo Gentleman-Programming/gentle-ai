@@ -48,6 +48,7 @@ var codeGraphCompatibilityTable = map[model.AgentID]codeGraphCompatibility{
 	model.AgentOpenClaw:      excludedCompatibility(model.AgentOpenClaw),
 	model.AgentPi:            reconciledCompatibility(model.AgentPi, ""),
 	model.AgentTrae:          excludedCompatibility(model.AgentTrae),
+	model.AgentClaudeDesktop: excludedCompatibility(model.AgentClaudeDesktop),
 	model.AgentHermes:        nativeCompatibility(model.AgentHermes, "hermes"),
 }
 

@@ -1153,7 +1153,15 @@ Homebrew's Linux sandbox requires rootless Bubblewrap and unprivileged user name
 // --- verify exec.Cmd.Run() failure is correctly wrapped ---
 func TestRunStrategy_ExecErrorWrapped(t *testing.T) {
 	origExecCommand := execCommand
-	t.Cleanup(func() { execCommand = origExecCommand })
+	origOwnership := homebrewOwnershipDetector
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		homebrewOwnershipDetector = origOwnership
+	})
+
+	homebrewOwnershipDetector = func(string) (update.HomebrewOwnership, error) {
+		return update.HomebrewFormula, nil
+	}
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		return mockCmd("false")
