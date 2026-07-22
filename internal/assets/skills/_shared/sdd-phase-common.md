@@ -119,6 +119,7 @@ Close your **final report message** (the return envelope) with a `## Key Learnin
 **Format**: numbered list with 1–5 items. Each item is a standalone factual sentence that is ≥20 characters and ≥4 words.
 
 **Example**:
+
 ```markdown
 ## Key Learnings
 

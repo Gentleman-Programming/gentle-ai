@@ -30,6 +30,7 @@ func TestKeyLearningsClosingRequiredForGenericDelegations(t *testing.T) {
 		"generic agents (Explore, general-purpose)",
 		"close its final message with a `## Key Learnings` section",
 		"1–5 numbered items",
+		"standalone factual sentence",
 		"≥4 words and ≥20 characters",
 		"enables engram passive capture",
 	} {
@@ -39,27 +40,66 @@ func TestKeyLearningsClosingRequiredForGenericDelegations(t *testing.T) {
 	}
 }
 
+// keyLearningsSection extracts the "## F. Key Learnings Closing" section of
+// sdd-phase-common.md (from its header to the next same-level header or EOF).
+func keyLearningsSection(t *testing.T, content string) string {
+	t.Helper()
+	const header = "## F. Key Learnings Closing"
+	start := strings.Index(content, header)
+	if start < 0 {
+		t.Fatalf("sdd-phase-common.md missing section %q", header)
+	}
+	section := content[start:]
+	// Stop at the next lettered section header (e.g. "## G. ..."); a plain
+	// "\n## " boundary would truncate at the `## Key Learnings` line inside
+	// the fenced example.
+	if loc := regexp.MustCompile(`\n## [A-Z]\. `).FindStringIndex(section[len(header):]); loc != nil {
+		section = section[:len(header)+loc[0]]
+	}
+	return section
+}
+
+// passiveCaptureSection extracts the marked passive-capture block of
+// engram/protocol.md.
+func passiveCaptureSection(t *testing.T, content string) string {
+	t.Helper()
+	const open, close = "<!-- section:passive-capture -->", "<!-- /section:passive-capture -->"
+	start := strings.Index(content, open)
+	end := strings.Index(content, close)
+	if start < 0 || end < 0 || end <= start {
+		t.Fatalf("engram/protocol.md missing marked passive-capture section")
+	}
+	return content[start:end]
+}
+
 func TestKeyLearningsContractConsistencyWithEngramProtocol(t *testing.T) {
-	sddCommon := assets.MustRead("skills/_shared/sdd-phase-common.md")
-	engramProtocol := assets.MustRead("engram/protocol.md")
+	sddSection := keyLearningsSection(t, assets.MustRead("skills/_shared/sdd-phase-common.md"))
+	engramSection := passiveCaptureSection(t, assets.MustRead("engram/protocol.md"))
 
-	// Both must use the exact header token "## Key Learnings"
-	if !strings.Contains(sddCommon, "## Key Learnings") {
-		t.Errorf("sdd-phase-common.md does not use header token '## Key Learnings'")
+	// Both contract blocks must use the same header token; the engram
+	// extractor treats the trailing colon as optional.
+	headerToken := regexp.MustCompile("## Key Learnings:?")
+	if !headerToken.MatchString(sddSection) {
+		t.Errorf("sdd-phase-common.md Key Learnings section does not use header token '## Key Learnings'")
 	}
-	if !strings.Contains(engramProtocol, "## Key Learnings:") && !strings.Contains(engramProtocol, "## Key Learnings") {
-		t.Errorf("engram/protocol.md does not contain 'Key Learnings' header variant")
+	if !headerToken.MatchString(engramSection) {
+		t.Errorf("engram/protocol.md passive-capture section does not use header token '## Key Learnings'")
 	}
 
-	// sdd-phase-common.md must document the minimum length/word requirement for items
+	// The SDD contract block must document the minimum length/word rules.
 	hasLengthRule := regexp.MustCompile(`(?i)(\d+\s+character|\d+\s+word)`)
-	if !hasLengthRule.MatchString(sddCommon) {
-		t.Errorf("sdd-phase-common.md missing minimum-length rules for items")
+	if !hasLengthRule.MatchString(sddSection) {
+		t.Errorf("sdd-phase-common.md Key Learnings section missing minimum-length rules for items")
 	}
 
-	// engram/protocol.md section must describe passive capture with examples
-	if !strings.Contains(engramProtocol, "PASSIVE CAPTURE") && !strings.Contains(engramProtocol, "passive-capture") {
-		t.Errorf("engram/protocol.md missing passive-capture section")
+	// Both contract blocks must describe automatic extraction by engram.
+	for name, section := range map[string]string{
+		"sdd-phase-common.md": sddSection,
+		"engram/protocol.md":  engramSection,
+	} {
+		if !strings.Contains(section, "automatically extract") {
+			t.Errorf("%s contract block missing automatic-extraction wording", name)
+		}
 	}
 }
 
