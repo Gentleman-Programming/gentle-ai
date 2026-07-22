@@ -10,8 +10,10 @@ preempting the disposition-aware package validation. This blocks legitimate
 `--disposition invalidated` recovery of an unchanged target (e.g. redoing a review that
 was invalidated by external evidence like a base advance or new CVE, against the same
 candidate) even though the package-level `validateCompactRecoveryEdge` `RecoveryInvalidated`
-case imposes NO changed-target requirement. Issue #1554 is not `status:approved`; this is
-a local-only NARROW slice.
+case imposes NO changed-target requirement. Issue #1554 carries `status:approved` (approved
+scope: the narrow `--disposition escalated` final-verification-retry contract); this slice
+covers the independent, lower-risk `invalidated`-disposition sub-bug flagged as safe to fix
+on its own in the issue's first comment, kept intentionally narrow.
 
 ## Scope
 
@@ -26,7 +28,7 @@ a local-only NARROW slice.
   `errCompactRecoveryTargetUnchanged` invariant (#1419/#1429 security invariant — MUST NOT weaken).
 - `--disposition scope_changed` (see Approach — verified must stay gated).
 - Any change to the `RecoveryDisposition` enum, the `v1` authorization binding schema, or `ReconcileInvalidRecoveryEdge`.
-- Pushing to any remote / opening or updating any PR (hard constraint).
+- The `--disposition escalated` / dedicated `review retry-final-verification` operation (separate, larger, tracked against the same issue).
 
 ## Capabilities
 
@@ -75,7 +77,7 @@ Single-file, single-condition change: revert the `review_facade.go` edit and dro
 
 ## Success Criteria
 
-- [ ] Unchanged-target `review recover --disposition invalidated` on a base-diff/overlay predecessor succeeds.
-- [ ] Unchanged-target `escalated` and `scope_changed` recovery still rejected.
-- [ ] Base-tree mismatch guard still enforced for all dispositions.
-- [ ] No remote push / PR performed.
+- [x] Unchanged-target `review recover --disposition invalidated` on a base-diff/overlay predecessor succeeds.
+- [x] Unchanged-target `escalated` and `scope_changed` recovery still rejected.
+- [x] Base-tree mismatch guard still enforced for all dispositions.
+- [x] Opened as PR 1 of a 2-PR stack against #1554.
