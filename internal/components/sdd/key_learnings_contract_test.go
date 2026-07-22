@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 )
 
 func TestKeyLearningsClosingContractExistsInSddPhaseCommon(t *testing.T) {
@@ -41,7 +42,8 @@ func TestKeyLearningsClosingRequiredForGenericDelegations(t *testing.T) {
 }
 
 // keyLearningsSection extracts the "## F. Key Learnings Closing" section of
-// sdd-phase-common.md (from its header to the next same-level header or EOF).
+// sdd-phase-common.md (from its header to the next lettered section header,
+// e.g. "## G. ...", or EOF).
 func keyLearningsSection(t *testing.T, content string) string {
 	t.Helper()
 	const header = "## F. Key Learnings Closing"
@@ -59,20 +61,20 @@ func keyLearningsSection(t *testing.T, content string) string {
 	return section
 }
 
-// passiveCaptureSection extracts the marked passive-capture block of
-// engram/protocol.md.
+// passiveCaptureSection extracts the passive-capture section body of
+// engram/protocol.md using the same extractor as production. The extractor
+// silently returns the full content when markers are missing or malformed,
+// so assert that a real extraction happened.
 func passiveCaptureSection(t *testing.T, content string) string {
 	t.Helper()
-	const open, close = "<!-- section:passive-capture -->", "<!-- /section:passive-capture -->"
-	start := strings.Index(content, open)
-	end := strings.Index(content, close)
-	if start < 0 || end < 0 || end <= start {
-		t.Fatalf("engram/protocol.md missing marked passive-capture section")
+	section := filemerge.ExtractHTMLCommentSection(content, "passive-capture")
+	if section == content {
+		t.Fatalf("engram/protocol.md missing or malformed passive-capture section markers")
 	}
-	return content[start:end]
+	return section
 }
 
-func TestKeyLearningsContractConsistencyWithEngramProtocol(t *testing.T) {
+func TestKeyLearningsHeaderAndWordingConsistencyWithEngramProtocol(t *testing.T) {
 	sddSection := keyLearningsSection(t, assets.MustRead("skills/_shared/sdd-phase-common.md"))
 	engramSection := passiveCaptureSection(t, assets.MustRead("engram/protocol.md"))
 
