@@ -26,7 +26,7 @@ var allAgents = []Agent{
 	{ID: model.AgentPi, Name: "Pi", Tier: model.TierFull, ConfigPath: "~/.pi"},
 	{ID: model.AgentTrae, Name: "Trae IDE", Tier: model.TierFull, ConfigPath: "~/.trae"},
 	{ID: model.AgentHermes, Name: "Hermes", Tier: model.TierFull, ConfigPath: "~/.hermes"},
-	{ID: model.AgentClaudeDesktop, Name: "Claude Desktop", Tier: model.TierFull, ConfigPath: "~/Library/Application Support/Claude"},
+	{ID: model.AgentClaudeDesktop, Name: "Claude Desktop", Tier: model.TierFull, ConfigPath: "~/.config/Claude"},
 }
 
 // mvpAgents are the original MVP agents (Claude Code, OpenCode).

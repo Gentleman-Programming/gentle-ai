@@ -7,6 +7,7 @@ import (
 	"runtime"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
 
 type statResult struct {
@@ -71,7 +72,7 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 func (a *Adapter) SupportsAutoInstall() bool { return false }
 
 // InstallCommand returns an error because Claude Desktop is a GUI app and cannot be installed via CLI.
-func (a *Adapter) InstallCommand(_ model.PlatformProfile) ([][]string, error) {
+func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 	return nil, AgentNotInstallableError{Agent: model.AgentClaudeDesktop}
 }
 
@@ -150,9 +151,6 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 	return filepath.Join(GlobalConfigDir(homeDir), "claude_desktop_config.json")
 }
 
-func (a *Adapter) claudeUserDir(homeDir string) string {
-	return GlobalConfigDir(homeDir)
-}
 
 // --- Optional capabilities ---
 

@@ -2,12 +2,14 @@ package claudedesktop
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
 
 func TestAdapter_Identity(t *testing.T) {
@@ -97,5 +99,21 @@ func TestAdapter_UnsupportedDirsReturnEmpty(t *testing.T) {
 	}
 	if got := adapter.SkillsDir(home); got != "" {
 		t.Errorf("SkillsDir() = %q, want \"\"", got)
+	}
+}
+
+func TestAdapter_InstallCommand(t *testing.T) {
+	adapter := NewAdapter()
+	commands, err := adapter.InstallCommand(system.PlatformProfile{})
+	if err == nil {
+		t.Fatalf("InstallCommand() expected error, got nil")
+	}
+	if commands != nil {
+		t.Fatalf("InstallCommand() commands = %v, want nil", commands)
+	}
+
+	var notInstallable AgentNotInstallableError
+	if !errors.As(err, &notInstallable) {
+		t.Fatalf("InstallCommand() error type = %T, want AgentNotInstallableError", err)
 	}
 }
