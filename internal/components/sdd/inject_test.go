@@ -5021,14 +5021,15 @@ func TestMergeJSONFileReturnsMergedBytes(t *testing.T) {
 
 func TestPropagateTopLevelPermissions(t *testing.T) {
 	tests := []struct{ name, input, want string }{
-		{"map deny wins", `{"permission":{"read":{"*":"deny","secret.txt":"allow"}},"agent":{"gentle-orchestrator":{"permission":{"read":"allow"}},"sdd-orchestrator-x":{"permission":{"read":"allow"}}}}`, `{"read":{"*":"deny","secret.txt":"deny"}}`},
+		{"stock allow preserves sensitive deny", `{"permission":{"read":{"*":"allow","**/.env":"deny"}},"agent":{"gentle-orchestrator":{"permission":{"read":"allow"}},"sdd-orchestrator-x":{"permission":{"read":"allow"}}}}`, `{"read":{"*":"allow","**/.env":"deny"}}`},
+		{"broad deny defeats conflicting agent allow", `{"permission":{"read":{"*":"deny"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"secret.txt":"allow"}}},"sdd-orchestrator-x":{"permission":{"read":{"secret.txt":"allow"}}}}}`, `{"read":{"*":"deny","secret.txt":"deny"}}`},
 		{"map deny overrides ask exceptions", `{"permission":{"read":{"*":"deny"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"*":"ask","secret.txt":"allow"}}},"sdd-orchestrator-x":{"permission":{"read":{"*":"ask","secret.txt":"allow"}}}}}`, `{"read":{"*":"deny","secret.txt":"deny"}}`},
 		{"overlapping map deny wins", `{"permission":{"read":{"**/config/*.sh":"deny"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"**/config/deploy.sh":"allow"}}},"sdd-orchestrator-x":{"permission":{"read":{"**/config/deploy.sh":"allow"}}}}}`, `{"read":{"**/config/*.sh":"deny","**/config/deploy.sh":"deny"}}`},
 		{"map ask preserves deny", `{"permission":{"read":{"*.env":"ask"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"*.env":"deny"}}},"sdd-orchestrator-x":{"permission":{"read":{"*.env":"deny"}}}}}`, `{"read":{"*.env":"deny"}}`},
 		{"invalid nested values are preserved", `{"permission":{"read":{"*.key":"deny","bad-array":["deny"],"bad-object":{"nested":"deny"}}},"agent":{"gentle-orchestrator":{"permission":{"read":{"*.key":"allow","bad-array":["allow"],"bad-object":{}}}},"sdd-orchestrator-x":{"permission":{"read":{"*.key":"allow","bad-array":["allow"],"bad-object":{}}}}}}`, `{"read":{"*.key":"deny","bad-array":["allow"],"bad-object":{}}}`},
 		{"scalar deny blocks map allows", `{"permission":"deny","agent":{"gentle-orchestrator":{"permission":{"*":"allow","secret.txt":"allow"}},"sdd-orchestrator-x":{"permission":{"*":"allow","secret.txt":"allow"}}}}`, `{"*":"deny","secret.txt":"deny"}`},
 		{"scalar ask overrides allow", `{"permission":"ask","agent":{"gentle-orchestrator":{"permission":"allow"},"sdd-orchestrator-x":{"permission":"allow"}}}`, `"ask"`},
-		{"scalar ask preserves map deny", `{"permission":"ask","agent":{"gentle-orchestrator":{"permission":{"*.env":"deny"}},"sdd-orchestrator-x":{"permission":{"*.env":"deny"}}}}`, `{"*":"deny","*.env":"deny"}`},
+		{"scalar ask preserves map deny", `{"permission":"ask","agent":{"gentle-orchestrator":{"permission":{"*.env":"deny"}},"sdd-orchestrator-x":{"permission":{"*.env":"deny"}}}}`, `{"*":"ask","*.env":"deny"}`},
 		{"scalar allow fills missing permission", `{"permission":"allow","agent":{"gentle-orchestrator":{},"sdd-orchestrator-x":{}}}`, `"allow"`},
 		{"malformed scalar is skipped", `{"permission":"invalid","agent":{"gentle-orchestrator":{"permission":"allow"},"sdd-orchestrator-x":{"permission":"allow"}}}`, `"allow"`},
 	}
@@ -5060,6 +5061,28 @@ func TestPropagateTopLevelPermissions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPropagateTopLevelPermissionsPreservesRuleOrder(t *testing.T) {
+	input := []byte(`{"permission":{"read":{"**/generated/**":"deny","*":"allow"}},"agent":{"gentle-orchestrator":{"permission":{"read":"allow"}}}}`)
+
+	got, err := PropagateTopLevelPermissions(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const orderedPermission = `"permission":{"read":{"**/generated/**":"deny","*":"allow"}}`
+	if !bytes.Contains(got, []byte(orderedPermission)) {
+		t.Fatalf("top-level permission order changed\ngot:  %s\nwant fragment: %s", got, orderedPermission)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(got, &root); err != nil {
+		t.Fatal(err)
+	}
+	agentPermission := root["agent"].(map[string]any)["gentle-orchestrator"].(map[string]any)["permission"]
+	if _, ok := agentPermission.(map[string]any); !ok {
+		t.Fatalf("agent permission = %#v, want propagated permission map", agentPermission)
 	}
 }
 

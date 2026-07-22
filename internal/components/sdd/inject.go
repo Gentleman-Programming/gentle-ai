@@ -1,13 +1,12 @@
 package sdd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
-	"sort"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -1807,38 +1806,34 @@ func permissionPatternsOverlap(a, b string) bool {
 	}
 	return overlap(0, 0)
 }
-func sortedPermissionPatterns(rules map[string]string) []string {
-	patterns := make([]string, 0, len(rules))
-	for pattern := range rules {
-		patterns = append(patterns, pattern)
-	}
-	sort.Strings(patterns)
-	return patterns
-}
-func normalizePermissionRules(rules map[string]string) map[string]string {
-	normalized := make(map[string]string, len(rules))
-	for pattern, action := range rules {
-		normalized[pattern] = action
-	}
-	patterns := sortedPermissionPatterns(normalized)
-	for changed := true; changed; {
-		changed = false
-		for i, pattern := range patterns {
-			for _, other := range patterns[i+1:] {
-				if !permissionPatternsOverlap(pattern, other) {
-					continue
-				}
-				stronger := normalized[pattern]
-				if permissionRank(normalized[other]) > permissionRank(stronger) {
-					stronger = normalized[other]
-				}
-				if normalized[pattern] != stronger || normalized[other] != stronger {
-					normalized[pattern], normalized[other], changed = stronger, stronger, true
-				}
-			}
+func permissionPatternCovers(broader, narrower string) bool {
+	type state struct{ broader, narrower int }
+	memo := map[state]bool{}
+	seen := map[state]bool{}
+	var covers func(int, int) bool
+	covers = func(i, j int) bool {
+		s := state{i, j}
+		if seen[s] {
+			return memo[s]
 		}
+		seen[s] = true
+		var result bool
+		switch {
+		case i == len(broader):
+			result = j == len(narrower)
+		case broader[i] == '*':
+			result = covers(i+1, j) || (j < len(narrower) && covers(i, j+1))
+		case j == len(narrower) || narrower[j] == '*':
+			result = false
+		case broader[i] == '?':
+			result = covers(i+1, j+1)
+		case narrower[j] != '?' && broader[i] == narrower[j]:
+			result = covers(i+1, j+1)
+		}
+		memo[s] = result
+		return result
 	}
-	return normalized
+	return covers(0, 0)
 }
 
 func normalizedPermissionValue(value any) (any, map[string]string, bool) {
@@ -1846,38 +1841,13 @@ func normalizedPermissionValue(value any) (any, map[string]string, bool) {
 	if !ok {
 		return value, nil, false
 	}
-	normalized := normalizePermissionRules(rules)
-	raw, isMap := value.(map[string]any)
-	if !isMap {
-		return value, normalized, true
-	}
-	result := make(map[string]any, len(raw))
-	for pattern, action := range raw {
-		result[pattern] = action
-	}
-	for pattern, action := range normalized {
-		result[pattern] = action
-	}
-	return result, normalized, true
+	return value, rules, true
 }
 
 func mergePermissionRules(topValue, agentValue any) (any, bool) {
 	_, top, ok := normalizedPermissionValue(topValue)
 	if !ok {
 		return agentValue, false
-	}
-	if raw, isMap := agentValue.(map[string]any); isMap && raw["*"] == "ask" {
-		result := make(map[string]any, len(raw)+len(top))
-		for pattern, action := range raw {
-			result[pattern] = action
-		}
-		for pattern, action := range top {
-			if permissionRank(action) > permissionRank("ask") {
-				result[pattern] = action
-			}
-		}
-		normalized, _, _ := normalizedPermissionValue(result)
-		return normalized, !reflect.DeepEqual(agentValue, normalized)
 	}
 	if agentValue != nil {
 		if _, isMap := agentValue.(map[string]any); !isMap {
@@ -1902,7 +1872,15 @@ func mergePermissionRules(topValue, agentValue any) (any, bool) {
 			merged[key] = action
 		}
 	}
-	merged = normalizePermissionRules(merged)
+	for agentPattern := range agent {
+		for topPattern, topAction := range top {
+			if permissionRank(topAction) <= permissionRank(merged[agentPattern]) ||
+				!permissionPatternCovers(topPattern, agentPattern) {
+				continue
+			}
+			merged[agentPattern] = topAction
+		}
+	}
 	if len(merged) == 1 {
 		if action, only := merged["*"]; only {
 			if old, ok := agentValue.(string); ok && old == action {
@@ -1956,19 +1934,22 @@ func PropagateTopLevelPermissions(jsonBytes []byte) ([]byte, error) {
 	if len(jsonBytes) == 0 {
 		return jsonBytes, nil
 	}
-	var root map[string]any
+	var root map[string]json.RawMessage
 	if err := json.Unmarshal(jsonBytes, &root); err != nil {
 		return nil, err
 	}
-	topValue := root["permission"]
+	var topValue any
+	if err := json.Unmarshal(root["permission"], &topValue); err != nil {
+		return jsonBytes, nil
+	}
 	topPerms, topIsMap := topValue.(map[string]any)
 	if !topIsMap {
 		if _, valid := permissionRules(topValue); !valid {
 			return jsonBytes, nil
 		}
 	}
-	agents, ok := root["agent"].(map[string]any)
-	if !ok {
+	var agents map[string]any
+	if err := json.Unmarshal(root["agent"], &agents); err != nil || agents == nil {
 		return jsonBytes, nil
 	}
 
@@ -2038,11 +2019,46 @@ func PropagateTopLevelPermissions(jsonBytes []byte) ([]byte, error) {
 		return jsonBytes, nil
 	}
 
-	res, err := json.MarshalIndent(root, "", "  ")
+	res, err := json.MarshalIndent(agents, "", "  ")
 	if err != nil {
 		return nil, err
 	}
-	return append(res, '\n'), nil
+	start, end, err := topLevelJSONValueRange(jsonBytes, "agent")
+	if err != nil {
+		return nil, err
+	}
+	result := make([]byte, 0, len(jsonBytes)-(end-start)+len(res))
+	result = append(result, jsonBytes[:start]...)
+	result = append(result, res...)
+	result = append(result, jsonBytes[end:]...)
+	return result, nil
+}
+
+func topLevelJSONValueRange(data []byte, target string) (int, int, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if _, err := decoder.Token(); err != nil {
+		return 0, 0, err
+	}
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return 0, 0, err
+		}
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			return 0, 0, err
+		}
+		if key != target {
+			continue
+		}
+		end := int(decoder.InputOffset())
+		start := end - len(raw)
+		if start < 0 || !bytes.Equal(data[start:end], raw) {
+			return 0, 0, fmt.Errorf("locate top-level JSON value %q", target)
+		}
+		return start, end, nil
+	}
+	return 0, 0, fmt.Errorf("top-level JSON value %q not found", target)
 }
 
 // defaultOpenCodeShareDisabled adds a defensive OpenCode default for SDD
