@@ -151,7 +151,6 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 	return filepath.Join(GlobalConfigDir(homeDir), "claude_desktop_config.json")
 }
 
-
 // --- Optional capabilities ---
 
 // SupportsOutputStyles reports whether Claude Desktop supports custom output styles.
@@ -198,5 +197,3 @@ func defaultStat(path string) statResult {
 	info, err := os.Stat(path)
 	return statResult{isDir: err == nil && info.IsDir(), err: err}
 }
-
-

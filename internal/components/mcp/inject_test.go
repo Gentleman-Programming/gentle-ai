@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1095,6 +1097,67 @@ func TestInjectClaudeDesktopMergesGentleAIAndContext7AndIsIdempotent(t *testing.
 	}
 	if context7["command"] != "npx" {
 		t.Fatalf("context7 entry command = %#v; want npx", context7["command"])
+	}
+}
+
+func TestInjectClaudeDesktopEnforces0600Permissions(t *testing.T) {
+	home := t.TempDir()
+	adapter := claudeDesktopAdapter()
+	configPath := adapter.SettingsPath(home)
+
+	// 1. New file creation
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatalf("Inject(claude-desktop) error = %v", err)
+	}
+
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("Stat(%s) error = %v", configPath, err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("configPath permission = %o; want 0600", info.Mode().Perm())
+	}
+
+	// 2. Existing file update (pre-existing 0644 file upgraded to 0600)
+	if err := os.WriteFile(configPath, []byte(`{"mcpServers":{}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatalf("Inject(claude-desktop) error = %v", err)
+	}
+	info, err = os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("Stat(%s) error = %v", configPath, err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("updated configPath permission = %o; want 0600", info.Mode().Perm())
+	}
+
+	// 3. Backup file permissions created during merge and cleaned up on error
+	backupPath := configPath + ".bak"
+	if err := os.WriteFile(configPath, []byte(`{"mcpServers":{}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	origReadFile := osReadFile
+	defer func() { osReadFile = origReadFile }()
+	calls := 0
+	osReadFile = func(path string) ([]byte, error) {
+		calls++
+		if calls == 2 {
+			return nil, fmt.Errorf("simulated error during merge")
+		}
+		return origReadFile(path)
+	}
+
+	_, err = Inject(home, adapter)
+	if err == nil {
+		t.Fatalf("expected error when osReadFile fails on second call")
+	}
+
+	// Backup file should be cleaned up on error
+	if _, err := os.Stat(backupPath); !os.IsNotExist(err) {
+		t.Fatalf("backup file %q should be removed on error", backupPath)
 	}
 }
 

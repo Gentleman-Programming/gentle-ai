@@ -217,6 +217,12 @@ func InjectWithPromptDir(configHomeDir, promptDir string, adapter agents.Adapter
 	return injectWithOptions(configHomeDir, promptDir, adapter, InjectOptions{})
 }
 
+// InjectWithPromptDirWithOptions is like InjectWithPromptDir but accepts additional options
+// such as Codex model assignments.
+func InjectWithPromptDirWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
+	return injectWithOptions(configHomeDir, promptDir, adapter, opts)
+}
+
 const antigravityEngramPluginJSON = `{
   "name": "gentle-ai-engram",
   "description": "Loads Engram MCP memory tools for Antigravity sessions.",

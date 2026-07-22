@@ -205,18 +205,22 @@ func injectClaudeDesktopMergeIntoSettings(settingsPath string) (InjectionResult,
 		if existingCmd, ok := existingMergedGentleAICommand(baseJSON); ok {
 			cmd = stableGentleAICommandForExisting(existingCmd)
 		}
-		if err := os.WriteFile(backupPath, backupBytes, 0o644); err != nil {
+		if err := os.WriteFile(backupPath, backupBytes, 0o600); err != nil {
 			return InjectionResult{}, fmt.Errorf("write backup settings %q: %w", backupPath, err)
 		}
+		_ = os.Chmod(backupPath, 0o600)
 	}
 
 	overlay := ClaudeDesktopOverlayJSON(cmd)
-	settingsWrite, err := mergeJSONFile(settingsPath, overlay)
+	settingsWrite, err := mergeJSONFileMode(settingsPath, overlay, 0o600)
 	if err != nil {
 		if fileExisted {
-			if _, restoreErr := filemerge.WriteFileAtomic(settingsPath, backupBytes, 0o644); restoreErr != nil {
+			if _, restoreErr := filemerge.WriteFileAtomic(settingsPath, backupBytes, 0o600); restoreErr != nil {
+				_ = os.Remove(backupPath)
 				return InjectionResult{}, fmt.Errorf("merge json error: %w; restore backup failed: %v", err, restoreErr)
 			}
+			_ = os.Chmod(settingsPath, 0o600)
+			_ = os.Remove(backupPath)
 		} else {
 			if rmErr := os.Remove(settingsPath); rmErr != nil && !os.IsNotExist(rmErr) {
 				return InjectionResult{}, fmt.Errorf("merge json error: %w; remove settings failed: %v", err, rmErr)
@@ -227,6 +231,10 @@ func injectClaudeDesktopMergeIntoSettings(settingsPath string) (InjectionResult,
 
 	if fileExisted {
 		_ = os.Remove(backupPath)
+	}
+
+	if err := os.Chmod(settingsPath, 0o600); err != nil && !os.IsNotExist(err) {
+		return InjectionResult{}, fmt.Errorf("chmod settings %q: %w", settingsPath, err)
 	}
 
 	return InjectionResult{Changed: settingsWrite.Changed, Files: []string{settingsPath}}, nil
@@ -420,6 +428,10 @@ func injectMCPConfigFile(homeDir string, adapter agents.Adapter) (InjectionResul
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
+	return mergeJSONFileMode(path, overlay, 0o644)
+}
+
+func mergeJSONFileMode(path string, overlay []byte, mode os.FileMode) (filemerge.WriteResult, error) {
 	baseJSON, err := osReadFile(path)
 	if err != nil {
 		return filemerge.WriteResult{}, err
@@ -430,7 +442,7 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, err
 	}
 
-	return filemerge.WriteFileAtomic(path, merged, 0o644)
+	return filemerge.WriteFileAtomic(path, merged, mode)
 }
 
 var osReadFile = func(path string) ([]byte, error) {

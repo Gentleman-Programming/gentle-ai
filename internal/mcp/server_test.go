@@ -626,7 +626,6 @@ func TestServerRecoversFromConsecutiveMalformedJSON(t *testing.T) {
 	}
 }
 
-
 func TestServerSetVersionAndProtocolVersionValidation(t *testing.T) {
 	t.Run("Custom version threaded into serverInfo", func(t *testing.T) {
 		server := mcp.NewServer()
@@ -667,4 +666,3 @@ func TestServerSetVersionAndProtocolVersionValidation(t *testing.T) {
 		}
 	})
 }
-

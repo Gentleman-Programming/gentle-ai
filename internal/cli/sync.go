@@ -823,12 +823,16 @@ func (s componentSyncStep) Run() error {
 	case model.ComponentEngram:
 		// Sync: inject MCP config + system prompt protocol only.
 		// NO binary install. NO engram setup.
-		engramOpts := engram.InjectOptions{}
+		engramOpts := engram.InjectOptions{
+			CodexOrchestratorAssignment: s.selection.CodexOrchestratorAssignment,
+			CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
+			CodexModelAssignments:       s.selection.CodexModelAssignments,
+		}
 		for _, adapter := range adapters {
 			var res engram.InjectionResult
 			var err error
 			if adapter.Agent() == model.AgentOpenClaw {
-				res, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
+				res, err = engram.InjectWithPromptDirWithOptions(s.homeDir, s.workspaceDir, adapter, engramOpts)
 			} else {
 				targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
 				res, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
