@@ -84,3 +84,18 @@ func TestAdapter_Detect(t *testing.T) {
 		t.Errorf("Detect() configPath = %v, want base claude_desktop_config.json", configPath)
 	}
 }
+
+func TestAdapter_UnsupportedDirsReturnEmpty(t *testing.T) {
+	adapter := NewAdapter()
+	home := "/home/user"
+
+	if got := adapter.SystemPromptDir(home); got != "" {
+		t.Errorf("SystemPromptDir() = %q, want \"\"", got)
+	}
+	if got := adapter.SystemPromptFile(home); got != "" {
+		t.Errorf("SystemPromptFile() = %q, want \"\"", got)
+	}
+	if got := adapter.SkillsDir(home); got != "" {
+		t.Errorf("SkillsDir() = %q, want \"\"", got)
+	}
+}

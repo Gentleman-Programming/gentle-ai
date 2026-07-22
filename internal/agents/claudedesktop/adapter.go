@@ -104,16 +104,25 @@ func (a *Adapter) GlobalConfigDir(homeDir string) string {
 
 // SystemPromptDir returns the directory containing system prompt instructions for Claude Desktop.
 func (a *Adapter) SystemPromptDir(homeDir string) string {
+	if !a.SupportsSystemPrompt() {
+		return ""
+	}
 	return GlobalConfigDir(homeDir)
 }
 
 // SystemPromptFile returns the path to instructions.md for Claude Desktop.
 func (a *Adapter) SystemPromptFile(homeDir string) string {
+	if !a.SupportsSystemPrompt() {
+		return ""
+	}
 	return filepath.Join(GlobalConfigDir(homeDir), "instructions.md")
 }
 
 // SkillsDir returns the path to the skills directory for Claude Desktop.
 func (a *Adapter) SkillsDir(homeDir string) string {
+	if !a.SupportsSkills() {
+		return ""
+	}
 	return filepath.Join(GlobalConfigDir(homeDir), "skills")
 }
 
