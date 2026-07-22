@@ -3,6 +3,7 @@ package screens
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1322,5 +1323,17 @@ func TestModelPickerRowsForProfile(t *testing.T) {
 				t.Fatalf("profile rows must use global reviewer %q, got: %v", reviewAgent, rows)
 			}
 		}
+	}
+}
+
+func TestEffortOptionsFromLevels_SemanticIntensitySorting(t *testing.T) {
+	// Raw levels coming from plugin in alphabetical order
+	raw := []string{"max", "high", "low", "xhigh", "medium"}
+
+	got := effortOptionsFromLevels(raw)
+	want := []string{"default", "low", "medium", "high", "xhigh", "max"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("effortOptionsFromLevels(%v) = %v, want %v", raw, got, want)
 	}
 }

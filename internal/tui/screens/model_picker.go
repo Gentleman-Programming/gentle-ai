@@ -519,19 +519,45 @@ func selectedModelPickerAgent(state ModelPickerState) string {
 	return row
 }
 
+var effortRank = map[string]int{
+	"low":    1,
+	"medium": 2,
+	"high":   3,
+	"xhigh":  4,
+	"max":    5,
+}
+
 // effortOptionsFromLevels returns the effort picker options in display order.
 // The first entry ("default") maps to an empty Effort string (provider default).
-// Levels that are literally "default" are excluded to prevent a duplicate entry
-// that would produce Effort="default" (a non-empty string) instead of Effort=""
-// when the user selects the first item.
+// Levels that are literally "default" are excluded to prevent a duplicate entry.
+// Effort levels are sorted semantically by intensity (low -> medium -> high -> xhigh -> max).
 func effortOptionsFromLevels(levels []string) []string {
-	opts := make([]string, 0, len(levels)+1)
-	opts = append(opts, "default")
+	filtered := make([]string, 0, len(levels))
 	for _, level := range levels {
 		if level != "default" {
-			opts = append(opts, level)
+			filtered = append(filtered, level)
 		}
 	}
+
+	sort.SliceStable(filtered, func(i, j int) bool {
+		rI, hasI := effortRank[strings.ToLower(filtered[i])]
+		rJ, hasJ := effortRank[strings.ToLower(filtered[j])]
+
+		if hasI && hasJ {
+			return rI < rJ
+		}
+		if hasI {
+			return true
+		}
+		if hasJ {
+			return false
+		}
+		return filtered[i] < filtered[j]
+	})
+
+	opts := make([]string, 0, len(filtered)+1)
+	opts = append(opts, "default")
+	opts = append(opts, filtered...)
 	return opts
 }
 
