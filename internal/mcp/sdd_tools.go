@@ -158,172 +158,162 @@ func getStringArg(args map[string]interface{}, key string, required bool) (strin
 	return strVal, nil
 }
 
-// HandleSDDExplore executes the sdd_explore reasoning tool.
-func HandleSDDExplore(args map[string]interface{}) (*ToolCallResult, error) {
-	topic, err := getStringArg(args, "topic", true)
-	if err != nil {
-		return nil, err
-	}
-	ctxVal, err := getStringArg(args, "context", false)
-	if err != nil {
-		return nil, err
+type sddParamConfig struct {
+	key        string
+	label      string
+	required   bool
+	defaultVal string
+}
+
+type sddToolConfig struct {
+	title           string
+	params          []sddParamConfig
+	guidelinesTitle string
+	guidelines      []string
+}
+
+func handleSDDTool(cfg sddToolConfig, args map[string]interface{}) (*ToolCallResult, error) {
+	var sb strings.Builder
+	sb.WriteString(cfg.title)
+
+	for _, p := range cfg.params {
+		val, err := getStringArg(args, p.key, p.required)
+		if err != nil {
+			return nil, err
+		}
+		if val == "" && p.defaultVal != "" {
+			val = p.defaultVal
+		}
+		if val != "" {
+			sb.WriteString(fmt.Sprintf("**%s**: %s\n", p.label, val))
+		}
 	}
 
-	var sb strings.Builder
-	sb.WriteString("## SDD Exploration Protocol (Reasoning Tool)\n\n")
-	sb.WriteString(fmt.Sprintf("**Topic**: %s\n", topic))
-	if ctxVal != "" {
-		sb.WriteString(fmt.Sprintf("**Context**: %s\n", ctxVal))
+	if cfg.guidelinesTitle != "" {
+		sb.WriteString(fmt.Sprintf("\n%s\n", cfg.guidelinesTitle))
 	}
-	sb.WriteString("\n### Exploration Guidelines:\n")
-	sb.WriteString("1. **Codebase Inspection**: Locate relevant packages, interfaces, and entry points.\n")
-	sb.WriteString("2. **Contract Analysis**: Examine input/output data structures, errors, and side effects.\n")
-	sb.WriteString("3. **Risk Assessment**: Identify architectural dependencies and potential failure points.\n")
-	sb.WriteString("4. **Synthesis**: Document findings and prepare clear recommendations for proposal/design.\n")
+
+	for _, g := range cfg.guidelines {
+		sb.WriteString(fmt.Sprintf("%s\n", g))
+	}
 
 	return &ToolCallResult{
 		Content: []TextContent{{Type: "text", Text: sb.String()}},
 		IsError: false,
 	}, nil
+}
+
+var (
+	sddExploreConfig = sddToolConfig{
+		title: "## SDD Exploration Protocol (Reasoning Tool)\n\n",
+		params: []sddParamConfig{
+			{key: "topic", label: "Topic", required: true},
+			{key: "context", label: "Context", required: false},
+		},
+		guidelinesTitle: "### Exploration Guidelines:",
+		guidelines: []string{
+			"1. **Codebase Inspection**: Locate relevant packages, interfaces, and entry points.",
+			"2. **Contract Analysis**: Examine input/output data structures, errors, and side effects.",
+			"3. **Risk Assessment**: Identify architectural dependencies and potential failure points.",
+			"4. **Synthesis**: Document findings and prepare clear recommendations for proposal/design.",
+		},
+	}
+
+	sddReviewConfig = sddToolConfig{
+		title: "## SDD 4R Review Protocol (Reasoning Tool)\n\n",
+		params: []sddParamConfig{
+			{key: "artifact", label: "Target Artifact", required: false},
+			{key: "focus", label: "Focus Area", required: false, defaultVal: "4r"},
+		},
+		guidelinesTitle: "### 4R Protocol Steps:",
+		guidelines: []string{
+			"- **Read**: Inspect source code and artifacts thoroughly without assumptions or line skipping.",
+			"- **Reason**: Evaluate correctness, invariants, edge cases, error paths, and non-functional requirements.",
+			"- **Reconcile**: Validate alignment with design specifications, interfaces, and project guidelines.",
+			"- **Report**: Provide actionable, precise, and objective review feedback with line citations.",
+		},
+	}
+
+	sddProposeConfig = sddToolConfig{
+		title: "## SDD Proposal Protocol\n\n",
+		params: []sddParamConfig{
+			{key: "change", label: "Proposed Change", required: true},
+			{key: "scope", label: "Scope & Boundaries", required: false},
+		},
+		guidelinesTitle: "### Guidelines:",
+		guidelines: []string{
+			"- Define problem statement and motivation.",
+			"- Outline key architectural decisions and alternative approaches considered.",
+			"- List success criteria and explicit non-goals.",
+		},
+	}
+
+	sddSpecConfig = sddToolConfig{
+		title: "## SDD Specification Protocol\n\n",
+		params: []sddParamConfig{
+			{key: "feature", label: "Feature", required: true},
+			{key: "requirements", label: "Requirements", required: false},
+		},
+		guidelinesTitle: "### Guidelines:",
+		guidelines: []string{
+			"- Formulate detailed functional requirements and acceptance criteria.",
+			"- Define edge cases, error conditions, and API contracts.",
+		},
+	}
+
+	sddDesignConfig = sddToolConfig{
+		title: "## SDD Technical Design Protocol\n\n",
+		params: []sddParamConfig{
+			{key: "spec", label: "Target Spec", required: true},
+			{key: "architecture", label: "Architecture", required: false},
+		},
+		guidelinesTitle: "### Guidelines:",
+		guidelines: []string{
+			"- Detail package layout, data structures, and function signatures.",
+			"- Document concurrency, state management, and error handling strategies.",
+		},
+	}
+
+	sddTasksConfig = sddToolConfig{
+		title: "## SDD Task Breakdown Protocol\n\n",
+		params: []sddParamConfig{
+			{key: "design", label: "Design Reference", required: true},
+			{key: "phases", label: "Phases", required: false},
+		},
+		guidelinesTitle: "### Guidelines:",
+		guidelines: []string{
+			"- Create incremental, testable tasks for implementation.",
+			"- Mark tasks with verification criteria and dependencies.",
+		},
+	}
+)
+
+// HandleSDDExplore executes the sdd_explore reasoning tool.
+func HandleSDDExplore(args map[string]interface{}) (*ToolCallResult, error) {
+	return handleSDDTool(sddExploreConfig, args)
 }
 
 // HandleSDDReview executes the sdd_review reasoning tool.
 func HandleSDDReview(args map[string]interface{}) (*ToolCallResult, error) {
-	artifact, err := getStringArg(args, "artifact", false)
-	if err != nil {
-		return nil, err
-	}
-	focus, err := getStringArg(args, "focus", false)
-	if err != nil {
-		return nil, err
-	}
-	if focus == "" {
-		focus = "4r"
-	}
-
-	var sb strings.Builder
-	sb.WriteString("## SDD 4R Review Protocol (Reasoning Tool)\n\n")
-	if artifact != "" {
-		sb.WriteString(fmt.Sprintf("**Target Artifact**: %s\n", artifact))
-	}
-	sb.WriteString(fmt.Sprintf("**Focus Area**: %s\n\n", focus))
-	sb.WriteString("### 4R Protocol Steps:\n")
-	sb.WriteString("- **Read**: Inspect source code and artifacts thoroughly without assumptions or line skipping.\n")
-	sb.WriteString("- **Reason**: Evaluate correctness, invariants, edge cases, error paths, and non-functional requirements.\n")
-	sb.WriteString("- **Reconcile**: Validate alignment with design specifications, interfaces, and project guidelines.\n")
-	sb.WriteString("- **Report**: Provide actionable, precise, and objective review feedback with line citations.\n")
-
-	return &ToolCallResult{
-		Content: []TextContent{{Type: "text", Text: sb.String()}},
-		IsError: false,
-	}, nil
+	return handleSDDTool(sddReviewConfig, args)
 }
 
 // HandleSDDPropose executes the sdd_propose reasoning tool.
 func HandleSDDPropose(args map[string]interface{}) (*ToolCallResult, error) {
-	change, err := getStringArg(args, "change", true)
-	if err != nil {
-		return nil, err
-	}
-	scope, err := getStringArg(args, "scope", false)
-	if err != nil {
-		return nil, err
-	}
-
-	var sb strings.Builder
-	sb.WriteString("## SDD Proposal Protocol\n\n")
-	sb.WriteString(fmt.Sprintf("**Proposed Change**: %s\n", change))
-	if scope != "" {
-		sb.WriteString(fmt.Sprintf("**Scope & Boundaries**: %s\n", scope))
-	}
-	sb.WriteString("\n### Guidelines:\n")
-	sb.WriteString("- Define problem statement and motivation.\n")
-	sb.WriteString("- Outline key architectural decisions and alternative approaches considered.\n")
-	sb.WriteString("- List success criteria and explicit non-goals.\n")
-
-	return &ToolCallResult{
-		Content: []TextContent{{Type: "text", Text: sb.String()}},
-		IsError: false,
-	}, nil
+	return handleSDDTool(sddProposeConfig, args)
 }
 
 // HandleSDDSpec executes the sdd_spec reasoning tool.
 func HandleSDDSpec(args map[string]interface{}) (*ToolCallResult, error) {
-	feature, err := getStringArg(args, "feature", true)
-	if err != nil {
-		return nil, err
-	}
-	reqsVal, err := getStringArg(args, "requirements", false)
-	if err != nil {
-		return nil, err
-	}
-
-	var sb strings.Builder
-	sb.WriteString("## SDD Specification Protocol\n\n")
-	sb.WriteString(fmt.Sprintf("**Feature**: %s\n", feature))
-	if reqsVal != "" {
-		sb.WriteString(fmt.Sprintf("**Requirements**: %s\n", reqsVal))
-	}
-	sb.WriteString("\n### Guidelines:\n")
-	sb.WriteString("- Formulate detailed functional requirements and acceptance criteria.\n")
-	sb.WriteString("- Define edge cases, error conditions, and API contracts.\n")
-
-	return &ToolCallResult{
-		Content: []TextContent{{Type: "text", Text: sb.String()}},
-		IsError: false,
-	}, nil
+	return handleSDDTool(sddSpecConfig, args)
 }
 
 // HandleSDDDesign executes the sdd_design reasoning tool.
 func HandleSDDDesign(args map[string]interface{}) (*ToolCallResult, error) {
-	spec, err := getStringArg(args, "spec", true)
-	if err != nil {
-		return nil, err
-	}
-	archVal, err := getStringArg(args, "architecture", false)
-	if err != nil {
-		return nil, err
-	}
-
-	var sb strings.Builder
-	sb.WriteString("## SDD Technical Design Protocol\n\n")
-	sb.WriteString(fmt.Sprintf("**Target Spec**: %s\n", spec))
-	if archVal != "" {
-		sb.WriteString(fmt.Sprintf("**Architecture**: %s\n", archVal))
-	}
-	sb.WriteString("\n### Guidelines:\n")
-	sb.WriteString("- Detail package layout, data structures, and function signatures.\n")
-	sb.WriteString("- Document concurrency, state management, and error handling strategies.\n")
-
-	return &ToolCallResult{
-		Content: []TextContent{{Type: "text", Text: sb.String()}},
-		IsError: false,
-	}, nil
+	return handleSDDTool(sddDesignConfig, args)
 }
 
 // HandleSDDTasks executes the sdd_tasks reasoning tool.
 func HandleSDDTasks(args map[string]interface{}) (*ToolCallResult, error) {
-	design, err := getStringArg(args, "design", true)
-	if err != nil {
-		return nil, err
-	}
-	phasesVal, err := getStringArg(args, "phases", false)
-	if err != nil {
-		return nil, err
-	}
-
-	var sb strings.Builder
-	sb.WriteString("## SDD Task Breakdown Protocol\n\n")
-	sb.WriteString(fmt.Sprintf("**Design Reference**: %s\n", design))
-	if phasesVal != "" {
-		sb.WriteString(fmt.Sprintf("**Phases**: %s\n", phasesVal))
-	}
-	sb.WriteString("\n### Guidelines:\n")
-	sb.WriteString("- Create incremental, testable tasks for implementation.\n")
-	sb.WriteString("- Mark tasks with verification criteria and dependencies.\n")
-
-	return &ToolCallResult{
-		Content: []TextContent{{Type: "text", Text: sb.String()}},
-		IsError: false,
-	}, nil
+	return handleSDDTool(sddTasksConfig, args)
 }

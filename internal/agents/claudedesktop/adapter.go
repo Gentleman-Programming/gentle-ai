@@ -140,9 +140,7 @@ func (a *Adapter) SupportsSkills() bool           { return true }
 func (a *Adapter) SupportsSystemPrompt() bool     { return true }
 func (a *Adapter) SupportsMCP() bool              { return true }
 
-type AgentNotInstallableError struct {
-	Agent model.AgentID
-}
+type AgentNotInstallableError struct{ Agent model.AgentID }
 
 func (e AgentNotInstallableError) Error() string {
 	return "agent " + string(e.Agent) + " is a desktop app and cannot be installed via CLI"
@@ -150,8 +148,5 @@ func (e AgentNotInstallableError) Error() string {
 
 func defaultStat(path string) statResult {
 	info, err := os.Stat(path)
-	if err != nil {
-		return statResult{err: err}
-	}
-	return statResult{isDir: info.IsDir()}
+	return statResult{isDir: err == nil && info.IsDir(), err: err}
 }

@@ -5,9 +5,6 @@ import (
 )
 
 const (
-	// MaxBufferSize defines the maximum scanner buffer size (2MB) to prevent truncation of large payloads.
-	MaxBufferSize = 2 * 1024 * 1024
-
 	// JSONRPCVersion is the supported JSON-RPC version string.
 	JSONRPCVersion = "2.0"
 )
