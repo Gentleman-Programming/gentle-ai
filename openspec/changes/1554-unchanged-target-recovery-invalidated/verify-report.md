@@ -2,7 +2,7 @@
 
 **Change**: `1554-unchanged-target-recovery-invalidated`
 **Mode**: OpenSpec file artifacts (proposal.md, spec.md, design.md, tasks.md all present)
-**Verdict**: PASS WITH WARNINGS (0 CRITICAL, 2 WARNING, 0 SUGGESTION)
+**Verdict**: PASS WITH WARNINGS (0 CRITICAL, 2 WARNING, 0 SUGGESTION) — **both WARNINGs closed post-report, see Addendum below.**
 
 ## Command Evidence
 
@@ -85,3 +85,18 @@ Matches design.md's prescribed AFTER state verbatim, at the design's own correct
 ## Final Verdict
 
 **PASS WITH WARNINGS.** The single-conjunct production edit exactly matches design.md's prescribed fix at the corrected line numbers, the #1419/#1429 escalated invariant package is provably untouched (empty diff) and its lock test passes unmodified, all 5 new regression tests plus the full existing suite pass with a clean cache, and every checked tasks.md box corresponds to real, independently-reproduced work. The two WARNINGs are test-coverage asymmetries already implicitly scoped by design.md itself, not implementation defects — safe to proceed to human review, but worth calling out explicitly rather than smoothing over.
+
+## Addendum (post-report): both WARNINGs closed
+
+`test(review): close coverage gaps flagged by sdd-verify` landed after this report was
+written and closed both WARNINGs. Re-verified:
+
+- **Warning 1 resolved**: `ScopeChangedStillBlocked` now asserts the same
+  persistence-immutability proof as the escalated test (byte-identical state file
+  before/after, plus `os.IsNotExist` on the would-be successor path).
+- **Warning 2 resolved**: `BaseMismatchStillBlockedForScopeChanged` and
+  `BaseMismatchStillBlockedForEscalated` now cover the base-tree guard for those two
+  dispositions, alongside the pre-existing invalidated case.
+- Suite is 7 tests, not 5, all passing (`-run TestUnchangedTargetRecovery -v`, 7/7 PASS).
+
+Revised verdict: **PASS, no open warnings.**
