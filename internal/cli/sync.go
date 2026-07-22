@@ -667,7 +667,7 @@ func managedOutputStyleName(persona model.PersonaID) string {
 	switch {
 	case isGentlemanConversationPersona(persona):
 		return "Gentleman"
-	case persona == model.PersonaNeutral:
+	case persona == model.PersonaNeutral, persona == model.PersonaGentlemanNeutralArtifacts:
 		return "Neutral"
 	default:
 		return ""
