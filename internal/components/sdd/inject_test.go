@@ -5268,6 +5268,17 @@ func TestPropagateTopLevelPermissionsConvergesWithCoupledOverlaps(t *testing.T) 
 				"data.md": "deny",
 			},
 		},
+		{
+			name:  "survivor and restoration obligations converge together",
+			top:   []orderedPermissionRule{{pattern: "??", action: "deny"}, {pattern: "?*", action: "allow"}},
+			agent: []orderedPermissionRule{{pattern: "b*", action: "ask"}, {pattern: "??", action: "ask"}, {pattern: "*a*", action: "allow"}},
+			values: map[string]string{
+				"aa":  "deny",
+				"ba":  "deny",
+				"bb":  "deny",
+				"bzz": "ask",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -5296,52 +5307,190 @@ func TestPropagateTopLevelPermissionsConvergesWithCoupledOverlaps(t *testing.T) 
 
 func TestPropagateTopLevelPermissionsSeededCompositionNeverWeakensInputs(t *testing.T) {
 	patterns := []string{
-		"*", "?", "a", "b", "a*", "b*", "*a", "*b", "a?", "?a",
-		"*?", "?*", "a*b", "*a*", "ab*", "*ab", "*.md", "public/**",
+		"*", "**", "?", "??", "a", "b", "a*", "b*", "*a", "*b",
+		"a?", "?a", "*?", "?*", "a*b", "*a*", "ab*", "*ab",
+		"*.md", "**/*.md", "public/**", "private/**", "a/**", "**/a",
 	}
 	actions := []string{"allow", "ask", "deny"}
 	values := []string{
 		"", "a", "b", "aa", "ab", "ba", "bb", "alpha", "beta",
-		"notes.md", "restricted.md", "public/readme.md", "private/readme.md",
+		"notes.md", "a/notes.md", "public/readme.md", "private/readme.md",
+		"a/b", "x/a", "x/y/a",
 	}
-	rng := rand.New(rand.NewSource(9562026))
-	makeRules := func(count int) []orderedPermissionRule {
-		rules := make([]orderedPermissionRule, 0, count)
-		for i := 0; i < count; i++ {
-			rules = append(rules, orderedPermissionRule{
-				pattern: patterns[rng.Intn(len(patterns))],
-				action:  actions[rng.Intn(len(actions))],
-			})
-		}
-		return rules
-	}
+	for _, seed := range []int64{9562026, 0x956c0de} {
+		t.Run(fmt.Sprintf("seed-%x", seed), func(t *testing.T) {
+			t.Parallel()
+			rng := rand.New(rand.NewSource(seed))
+			makeRules := func() []orderedPermissionRule {
+				count := 1 + rng.Intn(5)
+				rules := make([]orderedPermissionRule, 0, count)
+				for range count {
+					rules = append(rules, orderedPermissionRule{
+						pattern: patterns[rng.Intn(len(patterns))],
+						action:  actions[rng.Intn(len(actions))],
+					})
+				}
+				return rules
+			}
 
-	for iteration := 0; iteration < 20_000; iteration++ {
-		top := makeRules(1 + rng.Intn(4))
-		agent := makeRules(1 + rng.Intn(4))
-		first, err := PropagateTopLevelPermissions(orderedPermissionCompositionPayload(top, agent))
-		if err != nil {
-			t.Fatalf("iteration %d: %v", iteration, err)
-		}
-		second, err := PropagateTopLevelPermissions(first)
-		if err != nil {
-			t.Fatalf("iteration %d second propagation: %v", iteration, err)
-		}
-		if !bytes.Equal(first, second) {
-			t.Fatalf("iteration %d did not converge in one cycle: top=%#v agent=%#v\nfirst:  %s\nsecond: %s", iteration, top, agent, first, second)
-		}
-		merged := orderedPermissionRulesAt(t, first, "agent", "gentle-orchestrator", "permission", "review")
-		for _, value := range values {
-			topAction := effectivePermissionAction(top, value)
-			agentAction := effectivePermissionAction(agent, value)
-			mergedAction := effectivePermissionAction(merged, value)
-			if effectivePermissionRank(mergedAction) < effectivePermissionRank(topAction) ||
-				effectivePermissionRank(mergedAction) < effectivePermissionRank(agentAction) {
-				t.Fatalf("seed 9562026 iteration=%d value=%q weakened input: top=%#v agent=%#v merged=%#v actions(top=%q agent=%q merged=%q)",
-					iteration, value, top, agent, merged, topAction, agentAction, mergedAction)
+			for iteration := 0; iteration < 50_000; iteration++ {
+				top := makeRules()
+				agent := makeRules()
+				topRaw := json.RawMessage(encodeOrderedPermissionRules(top))
+				agentRaw := json.RawMessage(encodeOrderedPermissionRules(agent))
+				first, _, err := mergePermissionRules(topRaw, agentRaw)
+				if err != nil {
+					t.Fatalf("iteration %d: %v", iteration, err)
+				}
+				second, _, err := mergePermissionRules(topRaw, first)
+				if err != nil {
+					t.Fatalf("iteration %d second composition: %v", iteration, err)
+				}
+				if !bytes.Equal(first, second) {
+					t.Fatalf("seed %x iteration %d did not converge in one cycle: top=%#v agent=%#v\nfirst:  %s\nsecond: %s", seed, iteration, top, agent, first, second)
+				}
+				repeated, _, err := mergePermissionRules(topRaw, agentRaw)
+				if err != nil || !bytes.Equal(first, repeated) {
+					t.Fatalf("seed %x iteration %d was non-deterministic: err=%v\nfirst: %s\nagain: %s", seed, iteration, err, first, repeated)
+				}
+				merged := orderedPermissionRulesFromRaw(t, first)
+				for _, value := range values {
+					topAction := effectivePermissionAction(top, value)
+					agentAction := effectivePermissionAction(agent, value)
+					mergedAction := effectivePermissionAction(merged, value)
+					if effectivePermissionRank(mergedAction) < effectivePermissionRank(topAction) ||
+						effectivePermissionRank(mergedAction) < effectivePermissionRank(agentAction) {
+						t.Fatalf("seed %x iteration=%d value=%q weakened input: top=%#v agent=%#v merged=%#v actions(top=%q agent=%q merged=%q)",
+							seed, iteration, value, top, agent, merged, topAction, agentAction, mergedAction)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPermissionPatternRelationsAreConservative(t *testing.T) {
+	patterns := boundedPermissionStrings([]byte{'a', 'b', '*', '?'}, 3)
+	values := boundedPermissionStrings([]byte{'a', 'b'}, 6)
+
+	for _, broader := range patterns {
+		for _, narrower := range patterns {
+			overlapWitness := false
+			for _, value := range values {
+				if permissionPatternMatches(broader, value) &&
+					permissionPatternMatches(narrower, value) {
+					overlapWitness = true
+					break
+				}
+			}
+			switch relation := permissionPatternsOverlapRelation(broader, narrower); relation {
+			case permissionRelationYes:
+				if !overlapWitness {
+					t.Fatalf("overlap(%q, %q) = YES without bounded witness", broader, narrower)
+				}
+			case permissionRelationNo:
+				if overlapWitness {
+					t.Fatalf("overlap(%q, %q) = NO despite witness", broader, narrower)
+				}
+			}
+
+			if permissionPatternCoversRelation(broader, narrower) != permissionRelationYes {
+				continue
+			}
+			for _, value := range values {
+				if permissionPatternMatches(narrower, value) &&
+					!permissionPatternMatches(broader, value) {
+					t.Fatalf("covers(%q, %q) = YES but %q is not covered", broader, narrower, value)
+				}
 			}
 		}
 	}
+
+	overBudget := strings.Repeat("a", 256)
+	if relation := permissionPatternsOverlapRelation(overBudget, overBudget); relation != permissionRelationUnknown {
+		t.Fatalf("over-budget overlap relation = %v, want UNKNOWN", relation)
+	}
+	if !permissionPatternsOverlap(overBudget, overBudget) {
+		t.Fatal("UNKNOWN overlap was treated as disjoint")
+	}
+	if relation := permissionPatternCoversRelation(overBudget, overBudget); relation != permissionRelationUnknown {
+		t.Fatalf("over-budget coverage relation = %v, want UNKNOWN", relation)
+	}
+	if permissionPatternCovers(overBudget, overBudget) {
+		t.Fatal("UNKNOWN coverage was accepted as proof")
+	}
+}
+
+func TestPermissionRuleSolverMaintainsMonotoneBound(t *testing.T) {
+	tests := []struct {
+		name  string
+		top   []orderedPermissionRule
+		agent []orderedPermissionRule
+	}{
+		{
+			name:  "coupled restoration",
+			top:   []orderedPermissionRule{{pattern: "*a*", action: "deny"}, {pattern: "*a", action: "ask"}},
+			agent: []orderedPermissionRule{{pattern: "*.md", action: "ask"}, {pattern: "*a*", action: "allow"}},
+		},
+		{
+			name:  "survivor restoration dependency",
+			top:   []orderedPermissionRule{{pattern: "??", action: "deny"}, {pattern: "?*", action: "allow"}},
+			agent: []orderedPermissionRule{{pattern: "b*", action: "ask"}, {pattern: "??", action: "ask"}, {pattern: "*a*", action: "allow"}},
+		},
+		{
+			name:  "ordered duplicate restriction",
+			top:   []orderedPermissionRule{{pattern: "a", action: "deny"}, {pattern: "a*", action: "allow"}},
+			agent: []orderedPermissionRule{{pattern: "a", action: "ask"}, {pattern: "a", action: "deny"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			top := make([]permissionRule, len(tt.top))
+			for index, rule := range tt.top {
+				top[index] = permissionRule{pattern: rule.pattern, action: rule.action}
+			}
+			fields := make([]orderedJSONField, len(tt.agent))
+			for index, rule := range tt.agent {
+				fields[index] = orderedJSONField{
+					key:   rule.pattern,
+					value: permissionActionRaw(rule.action),
+				}
+			}
+
+			state, verified := solvePermissionRuleStates(top, fields)
+			if !verified {
+				t.Fatal("solver state was not independently verified")
+			}
+			if state.transitions > state.maxTransitions {
+				t.Fatalf("solver transitions = %d, structural bound = %d", state.transitions, state.maxTransitions)
+			}
+			for index, rule := range state.rules {
+				if rule.dropped && (rule.originalRank != permissionRank("allow") || rule.mustSurvive) {
+					t.Fatalf("rule %d was illegally dropped: %#v", index, rule)
+				}
+				if !rule.dropped && rule.requiredRank < rule.originalRank {
+					t.Fatalf("rule %d rank decreased: %#v", index, rule)
+				}
+			}
+		})
+	}
+}
+
+func boundedPermissionStrings(alphabet []byte, maxLength int) []string {
+	values := []string{""}
+	frontier := []string{""}
+	for range maxLength {
+		next := make([]string, 0, len(frontier)*len(alphabet))
+		for _, prefix := range frontier {
+			for _, char := range alphabet {
+				next = append(next, prefix+string(char))
+			}
+		}
+		values = append(values, next...)
+		frontier = next
+	}
+	return values
 }
 
 func TestPropagateTopLevelPermissionsUnsupportedShapesAreNoops(t *testing.T) {
@@ -5366,6 +5515,16 @@ func TestPropagateTopLevelPermissionsUnsupportedShapesAreNoops(t *testing.T) {
 	}
 	if _, err := PropagateTopLevelPermissions([]byte(`{"permission":`)); err == nil {
 		t.Fatal("malformed root JSON was accepted")
+	}
+
+	top := json.RawMessage(`{"*":"deny"}`)
+	agent := json.RawMessage(`{"prefix*":"allow","opaque*":{"nested":"allow"}}`)
+	got, changed, err := mergePermissionRules(top, agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed || !bytes.Equal(got, agent) {
+		t.Fatalf("mixed opaque overlap was partially rewritten: changed=%t input=%s output=%s", changed, agent, got)
 	}
 }
 
@@ -5444,7 +5603,11 @@ func orderedPermissionRulesAt(t *testing.T, data []byte, keys ...string) []order
 		}
 		current = next
 	}
+	return orderedPermissionRulesFromRaw(t, current)
+}
 
+func orderedPermissionRulesFromRaw(t *testing.T, current json.RawMessage) []orderedPermissionRule {
+	t.Helper()
 	decoder := json.NewDecoder(bytes.NewReader(current))
 	token, err := decoder.Token()
 	if err != nil || token != json.Delim('{') {

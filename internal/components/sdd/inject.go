@@ -1936,242 +1936,533 @@ func permissionRank(action string) int {
 		return -1
 	}
 }
-func permissionPatternsOverlap(a, b string) bool {
-	type state struct{ a, b int }
-	memo := map[state]bool{}
-	seen := map[state]bool{}
-	var overlap func(int, int) bool
-	overlap = func(i, j int) bool {
-		s := state{i, j}
-		if seen[s] {
-			return memo[s]
-		}
-		seen[s] = true
-		var result bool
-		switch {
-		case i == len(a) && j == len(b):
-			result = true
-		case i < len(a) && a[i] == '*':
-			result = overlap(i+1, j) || (j < len(b) && overlap(i, j+1))
-		case j < len(b) && b[j] == '*':
-			result = overlap(i, j+1) || (i < len(a) && overlap(i+1, j))
-		case i < len(a) && j < len(b) && (a[i] == '?' || b[j] == '?' || a[i] == b[j]):
-			result = overlap(i+1, j+1)
-		}
-		memo[s] = result
-		return result
+
+type permissionRelation uint8
+
+const (
+	permissionRelationUnknown permissionRelation = iota
+	permissionRelationNo
+	permissionRelationYes
+
+	maxPermissionRelationStates = 64 * 1024
+)
+
+func permissionRelationExceedsBudget(a, b string) bool {
+	aStates := len(a) + 1
+	bStates := len(b) + 1
+	return aStates > maxPermissionRelationStates ||
+		bStates > maxPermissionRelationStates/aStates
+}
+
+func permissionPatternsOverlapRelation(a, b string) permissionRelation {
+	if permissionRelationExceedsBudget(a, b) {
+		return permissionRelationUnknown
 	}
-	return overlap(0, 0)
+
+	type state struct{ a, b int }
+	queue := []state{{}}
+	seen := map[state]bool{{}: true}
+	enqueue := func(next state) {
+		if !seen[next] {
+			seen[next] = true
+			queue = append(queue, next)
+		}
+	}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if current.a == len(a) && current.b == len(b) {
+			return permissionRelationYes
+		}
+
+		if current.a < len(a) && a[current.a] == '*' {
+			enqueue(state{a: current.a + 1, b: current.b})
+		}
+		if current.b < len(b) && b[current.b] == '*' {
+			enqueue(state{a: current.a, b: current.b + 1})
+		}
+		if current.a == len(a) || current.b == len(b) {
+			continue
+		}
+
+		aToken := a[current.a]
+		bToken := b[current.b]
+		aAny := aToken == '*' || aToken == '?'
+		bAny := bToken == '*' || bToken == '?'
+		if !aAny && !bAny && aToken != bToken {
+			continue
+		}
+
+		nextA := current.a + 1
+		if aToken == '*' {
+			nextA = current.a
+		}
+		nextB := current.b + 1
+		if bToken == '*' {
+			nextB = current.b
+		}
+		enqueue(state{a: nextA, b: nextB})
+	}
+	return permissionRelationNo
+}
+
+func permissionPatternsOverlap(a, b string) bool {
+	// UNKNOWN overlap is a possible overlap. It must never be used to prove
+	// that two permission regions are independent.
+	return permissionPatternsOverlapRelation(a, b) != permissionRelationNo
+}
+
+func permissionPatternCoversRelation(broader, narrower string) permissionRelation {
+	if permissionRelationExceedsBudget(broader, narrower) {
+		return permissionRelationUnknown
+	}
+	if broader == narrower {
+		return permissionRelationYes
+	}
+	if broader != "" && strings.Trim(broader, "*") == "" {
+		return permissionRelationYes
+	}
+	if !strings.ContainsAny(narrower, "*?") {
+		// A literal narrower pattern denotes one value, so overlap is exactly
+		// the coverage question for that singleton.
+		return permissionPatternsOverlapRelation(broader, narrower)
+	}
+	if strings.Contains(broader, "*") || strings.Contains(narrower, "*") {
+		return permissionRelationUnknown
+	}
+	if len(broader) != len(narrower) {
+		return permissionRelationNo
+	}
+	for index := range len(broader) {
+		switch {
+		case broader[index] == '?':
+			continue
+		case narrower[index] == '?':
+			return permissionRelationNo
+		case broader[index] != narrower[index]:
+			return permissionRelationNo
+		}
+	}
+	return permissionRelationYes
 }
 
 func permissionPatternCovers(broader, narrower string) bool {
-	type state struct{ broader, narrower int }
-	memo := map[state]bool{}
-	seen := map[state]bool{}
-	var covers func(int, int) bool
-	covers = func(i, j int) bool {
-		s := state{i, j}
-		if seen[s] {
-			return memo[s]
-		}
-		seen[s] = true
-		var result bool
-		switch {
-		case i == len(broader):
-			result = j == len(narrower)
-		case broader[i] == '*':
-			result = covers(i+1, j) || (j < len(narrower) && covers(i, j+1))
-		case j == len(narrower) || narrower[j] == '*':
-			result = false
-		case broader[i] == '?':
-			result = covers(i+1, j+1)
-		case narrower[j] != '?' && broader[i] == narrower[j]:
-			result = covers(i+1, j+1)
-		}
-		memo[s] = result
-		return result
-	}
-	return covers(0, 0)
+	// UNKNOWN coverage is never sufficient evidence that the broader pattern
+	// protects the complete narrower region.
+	return permissionPatternCoversRelation(broader, narrower) == permissionRelationYes
 }
 
-func effectiveAgentRuleAction(field orderedJSONField, required string) (string, bool) {
-	var action string
-	if err := json.Unmarshal(field.value, &action); err != nil || permissionRank(action) < 0 {
-		return "", false
-	}
-	if permissionRank(required) > permissionRank(action) {
-		action = required
-	}
-	return action, true
+type permissionTopObligation struct {
+	rule     permissionRule
+	complete bool
 }
 
-func laterExactAgentRulePreserves(
-	fields []orderedJSONField,
-	required []string,
-	start int,
+func conservativePermissionTopObligations(topRules []permissionRule, pattern string) []permissionTopObligation {
+	lastOverlap := -1
+	for index, topRule := range topRules {
+		if permissionPatternsOverlap(topRule.pattern, pattern) {
+			lastOverlap = index
+		}
+	}
+	if lastOverlap < 0 {
+		return nil
+	}
+	if permissionPatternCovers(topRules[lastOverlap].pattern, pattern) {
+		return []permissionTopObligation{{
+			rule:     topRules[lastOverlap],
+			complete: true,
+		}}
+	}
+
+	obligations := make([]permissionTopObligation, 0, len(topRules))
+	for _, topRule := range topRules {
+		if permissionPatternsOverlap(topRule.pattern, pattern) {
+			obligations = append(obligations, permissionTopObligation{rule: topRule})
+		}
+	}
+	return obligations
+}
+
+type permissionAgentRuleState struct {
+	field          orderedJSONField
+	originalAction string
+	originalRank   int
+	requiredRank   int
+	dropped        bool
+	mustSurvive    bool
+	valid          bool
+}
+
+type permissionRuleSolverState struct {
+	rules          []permissionAgentRuleState
+	transitions    int
+	maxTransitions int
+}
+
+func newPermissionRuleSolverState(fields []orderedJSONField) permissionRuleSolverState {
+	state := permissionRuleSolverState{
+		rules: make([]permissionAgentRuleState, len(fields)),
+	}
+	validRules := 0
+	for index, field := range fields {
+		rule := permissionAgentRuleState{field: field}
+		if err := json.Unmarshal(field.value, &rule.originalAction); err == nil {
+			rule.originalRank = permissionRank(rule.originalAction)
+			rule.requiredRank = rule.originalRank
+			rule.valid = rule.originalRank >= 0
+		}
+		if rule.valid {
+			validRules++
+		}
+		state.rules[index] = rule
+	}
+	state.maxTransitions = 4 * validRules
+	return state
+}
+
+func (s *permissionRuleSolverState) setMustSurvive(index int) bool {
+	if s.rules[index].mustSurvive {
+		return false
+	}
+	s.rules[index].mustSurvive = true
+	s.transitions++
+	return true
+}
+
+func (s *permissionRuleSolverState) raiseRequiredRank(index, rank int) bool {
+	rule := &s.rules[index]
+	if rule.dropped || rank <= rule.requiredRank {
+		return false
+	}
+	s.transitions += rank - rule.requiredRank
+	rule.requiredRank = rank
+	return true
+}
+
+func (s *permissionRuleSolverState) drop(index int) bool {
+	rule := &s.rules[index]
+	if rule.dropped {
+		return false
+	}
+	rule.dropped = true
+	s.transitions++
+	return true
+}
+
+func (s permissionRuleSolverState) withinTransitionBound() bool {
+	return s.transitions <= s.maxTransitions
+}
+
+func rightmostPermissionRestorer(
+	rules []permissionAgentRuleState,
 	current int,
-	topRule permissionRule,
-) (int, bool) {
-	for candidateIndex := current + 1; candidateIndex < len(fields); candidateIndex++ {
-		field := fields[candidateIndex]
-		if field.key != topRule.pattern {
-			continue
+	pattern string,
+) int {
+	for index := len(rules) - 1; index > current; index-- {
+		rule := rules[index]
+		if !rule.dropped && rule.valid && rule.field.key == pattern {
+			return index
 		}
-		action, ok := effectiveAgentRuleAction(field, required[candidateIndex])
-		if !ok {
-			continue
-		}
-		candidateRank := max(permissionRank(action), permissionRank(topRule.action))
+	}
+	return -1
+}
 
-		safe := true
-		for relativeIndex, prior := range fields[start:candidateIndex] {
-			priorIndex := start + relativeIndex
-			if priorAction, valid := effectiveAgentRuleAction(prior, required[priorIndex]); valid &&
-				permissionPatternsOverlap(prior.key, topRule.pattern) &&
-				permissionRank(priorAction) > candidateRank {
-				safe = false
-				break
+func permissivePermissionRuleMustDrop(
+	rule permissionAgentRuleState,
+	obligations []permissionTopObligation,
+) bool {
+	if rule.originalRank != permissionRank("allow") || rule.mustSurvive {
+		return false
+	}
+	// Raising a permissive agent pattern across multiple ordered repository
+	// regions could mask a later repository exception. Dropping the permissive
+	// rule preserves the complete repository sequence. With one intersecting
+	// region, raising cannot mask a distinct repository exception.
+	return len(obligations) > 1
+}
+
+func (s *permissionRuleSolverState) saturate(topRules []permissionRule) bool {
+	for {
+		requiredRank := make([]int, len(s.rules))
+		mustSurvive := make([]bool, len(s.rules))
+		dropRank := make([]int, len(s.rules))
+
+		for index, rule := range s.rules {
+			if rule.dropped || !rule.valid {
+				continue
+			}
+			obligations := conservativePermissionTopObligations(topRules, rule.field.key)
+			for _, obligation := range obligations {
+				rank := permissionRank(obligation.rule.action)
+				if rule.requiredRank >= rank {
+					continue
+				}
+				if obligation.complete {
+					requiredRank[index] = max(requiredRank[index], rank)
+					continue
+				}
+
+				restorer := rightmostPermissionRestorer(s.rules, index, obligation.rule.pattern)
+				if restorer < 0 {
+					if permissivePermissionRuleMustDrop(rule, obligations) {
+						dropRank[index] = max(dropRank[index], rank)
+					} else {
+						requiredRank[index] = max(requiredRank[index], rank)
+					}
+					continue
+				}
+
+				mustSurvive[restorer] = true
+				requiredRank[restorer] = max(requiredRank[restorer], rank)
+				for later := restorer + 1; later < len(s.rules); later++ {
+					laterRule := s.rules[later]
+					if laterRule.dropped || !laterRule.valid ||
+						laterRule.requiredRank >= rank ||
+						!permissionPatternsOverlap(laterRule.field.key, obligation.rule.pattern) {
+						continue
+					}
+					if laterRule.originalRank == permissionRank("allow") && !laterRule.mustSurvive {
+						dropRank[later] = max(dropRank[later], rank)
+					} else {
+						requiredRank[later] = max(requiredRank[later], rank)
+					}
+				}
 			}
 		}
-		if !safe {
+
+		changed := false
+		for index, required := range mustSurvive {
+			if required {
+				changed = s.setMustSurvive(index) || changed
+			}
+		}
+		for index := range s.rules {
+			if s.rules[index].dropped || !s.rules[index].valid {
+				continue
+			}
+			targetRank := requiredRank[index]
+			if dropRank[index] > 0 {
+				if s.rules[index].mustSurvive {
+					targetRank = max(targetRank, dropRank[index])
+				} else {
+					changed = s.drop(index) || changed
+					continue
+				}
+			}
+			changed = s.raiseRequiredRank(index, targetRank) || changed
+		}
+		if !s.withinTransitionBound() {
+			return false
+		}
+		if !changed {
+			return true
+		}
+	}
+}
+
+func finalPermissionRestorer(
+	rules []permissionAgentRuleState,
+	current int,
+	obligation permissionRule,
+) bool {
+	rank := permissionRank(obligation.action)
+	for restorer := len(rules) - 1; restorer > current; restorer-- {
+		candidate := rules[restorer]
+		if candidate.dropped || !candidate.valid ||
+			candidate.field.key != obligation.pattern ||
+			candidate.requiredRank < rank {
 			continue
 		}
-		for laterIndex, later := range fields[candidateIndex+1:] {
-			if laterAction, valid := effectiveAgentRuleAction(
-				later,
-				required[candidateIndex+1+laterIndex],
-			); valid &&
-				permissionPatternsOverlap(later.key, topRule.pattern) &&
-				permissionRank(laterAction) < permissionRank(topRule.action) {
+
+		safe := true
+		for later := restorer + 1; later < len(rules); later++ {
+			laterRule := rules[later]
+			if laterRule.dropped || !laterRule.valid {
+				continue
+			}
+			if permissionPatternsOverlap(laterRule.field.key, obligation.pattern) &&
+				laterRule.requiredRank < rank {
 				safe = false
 				break
 			}
 		}
 		if safe {
-			return candidateIndex, true
-		}
-	}
-	return -1, false
-}
-
-func requiredAgentRestorations(fields []orderedJSONField, topRules []permissionRule, start int) []string {
-	required := make([]string, len(fields))
-	for relativeIndex, field := range fields[start:] {
-		current := start + relativeIndex
-		action, valid := effectiveAgentRuleAction(field, "")
-		if !valid || permissionRank(action) <= permissionRank("allow") {
-			continue
-		}
-
-		lastOverlap := -1
-		lastOverlapCovers := false
-		for topIndex, topRule := range topRules {
-			if permissionPatternsOverlap(topRule.pattern, field.key) {
-				lastOverlap = topIndex
-				lastOverlapCovers = permissionPatternCovers(topRule.pattern, field.key)
-			}
-		}
-		if lastOverlap < 0 {
-			continue
-		}
-		if lastOverlapCovers {
-			if permissionRank(topRules[lastOverlap].action) > permissionRank(action) {
-				required[current] = topRules[lastOverlap].action
-			}
-			continue
-		}
-		for _, topRule := range topRules {
-			if permissionPatternsOverlap(topRule.pattern, field.key) &&
-				permissionRank(topRule.action) > permissionRank(required[current]) &&
-				permissionRank(topRule.action) > permissionRank(action) {
-				required[current] = topRule.action
-			}
-		}
-	}
-
-	for changed := true; changed; {
-		changed = false
-		for relativeIndex, field := range fields[start:] {
-			current := start + relativeIndex
-			action, valid := effectiveAgentRuleAction(field, required[current])
-			if !valid {
-				continue
-			}
-			for _, topRule := range topRules {
-				if permissionRank(topRule.action) <= permissionRank(action) ||
-					!permissionPatternsOverlap(topRule.pattern, field.key) {
-					continue
-				}
-				restorationIndex, preserves := laterExactAgentRulePreserves(
-					fields,
-					required,
-					start,
-					current,
-					topRule,
-				)
-				if preserves &&
-					permissionRank(topRule.action) > permissionRank(required[restorationIndex]) {
-					required[restorationIndex] = topRule.action
-					changed = true
-				}
-			}
-		}
-	}
-	return required
-}
-
-func laterRepositoryRuleWeakens(rules []permissionRule, exactIndex int, pattern string, actionRank int) bool {
-	for _, later := range rules[exactIndex+1:] {
-		if permissionPatternsOverlap(later.pattern, pattern) &&
-			permissionRank(later.action) < actionRank {
 			return true
 		}
 	}
 	return false
 }
 
-func canonicalPermissionTopPrefixLength(top permissionValue, agent orderedJSONObject) (int, bool) {
-	topExact := make(map[string]int, len(top.rules))
-	for index, rule := range top.rules {
-		topExact[rule.pattern] = index
+func verifyPermissionRuleSolverState(
+	topRules []permissionRule,
+	state permissionRuleSolverState,
+) bool {
+	topOwnedPatterns := make(map[string]bool, len(topRules))
+	for _, topRule := range topRules {
+		topOwnedPatterns[topRule.pattern] = true
 	}
-
-	for boundary := len(agent.fields); boundary >= 0; boundary-- {
-		replaced := make(map[string]bool, len(agent.fields)-boundary)
-		for _, field := range agent.fields[boundary:] {
-			var action string
-			if err := json.Unmarshal(field.value, &action); err == nil && permissionRank(action) >= 0 {
-				replaced[field.key] = true
+	for index, rule := range state.rules {
+		if rule.dropped {
+			if rule.originalRank != permissionRank("allow") || rule.mustSurvive {
+				return false
 			}
-		}
-
-		expected := make([]permissionRule, 0, len(top.rules))
-		for index, rule := range top.rules {
-			if topExact[rule.pattern] == index && replaced[rule.pattern] {
-				continue
-			}
-			expected = append(expected, rule)
-		}
-		if len(expected) != boundary {
 			continue
 		}
-
-		matches := true
-		for index, rule := range expected {
-			var action string
-			field := agent.fields[index]
-			if field.key != rule.pattern ||
-				json.Unmarshal(field.value, &action) != nil ||
-				action != rule.action {
-				matches = false
-				break
+		if !rule.valid {
+			if topOwnedPatterns[rule.field.key] {
+				// Emission keeps the authoritative top rule and omits this
+				// unsupported exact shadow, matching the existing fail-closed
+				// behavior for invalid exact suffixes.
+				continue
+			}
+			for _, topRule := range topRules {
+				if permissionPatternsOverlap(topRule.pattern, rule.field.key) {
+					// An opaque overlapping field cannot participate in a
+					// restoration proof. Refuse a partial category rewrite.
+					return false
+				}
+			}
+			continue
+		}
+		if rule.requiredRank < rule.originalRank {
+			return false
+		}
+		for _, obligation := range conservativePermissionTopObligations(topRules, rule.field.key) {
+			rank := permissionRank(obligation.rule.action)
+			if rule.requiredRank >= rank {
+				continue
+			}
+			if obligation.complete || !finalPermissionRestorer(
+				state.rules,
+				index,
+				obligation.rule,
+			) {
+				return false
 			}
 		}
-		if matches {
-			return boundary, true
+	}
+	return true
+}
+
+func (s *permissionRuleSolverState) applyConservativeFallback(topRules []permissionRule) bool {
+	changed := false
+	for index, rule := range s.rules {
+		if rule.dropped || !rule.valid {
+			continue
+		}
+		obligations := conservativePermissionTopObligations(topRules, rule.field.key)
+		for _, obligation := range obligations {
+			rank := permissionRank(obligation.rule.action)
+			if rule.requiredRank >= rank {
+				continue
+			}
+			if permissivePermissionRuleMustDrop(rule, obligations) {
+				changed = s.drop(index) || changed
+				break
+			}
+			changed = s.raiseRequiredRank(index, rank) || changed
 		}
 	}
-	return 0, false
+	return changed
+}
+
+func solvePermissionRuleStates(
+	topRules []permissionRule,
+	fields []orderedJSONField,
+) (permissionRuleSolverState, bool) {
+	state := newPermissionRuleSolverState(fields)
+	for {
+		if !state.saturate(topRules) {
+			return state, false
+		}
+		if verifyPermissionRuleSolverState(topRules, state) {
+			return state, true
+		}
+		if !state.applyConservativeFallback(topRules) || !state.withinTransitionBound() {
+			return state, false
+		}
+	}
+}
+
+func permissionActionForRank(rank int) string {
+	switch rank {
+	case permissionRank("deny"):
+		return "deny"
+	case permissionRank("ask"):
+		return "ask"
+	default:
+		return "allow"
+	}
+}
+
+func canonicalPermissionTopPrefixLength(top permissionValue, agent orderedJSONObject) (int, bool) {
+	if len(top.rules) == 0 {
+		return 0, false
+	}
+	if len(agent.fields) < len(top.rules) {
+		return 0, false
+	}
+	for index, rule := range top.rules {
+		field := agent.fields[index]
+		var action string
+		if field.key != rule.pattern ||
+			json.Unmarshal(field.value, &action) != nil ||
+			action != rule.action {
+			return 0, false
+		}
+	}
+	return len(top.rules), true
+}
+
+func liftedScalarPermissionObject(top permissionValue, scalar string) orderedJSONObject {
+	result := orderedJSONObject{}
+	hasWildcard := false
+	for _, rule := range top.rules {
+		action := rule.action
+		if permissionRank(scalar) > permissionRank(action) {
+			action = scalar
+		}
+		if rule.pattern == "*" {
+			hasWildcard = true
+		}
+		result.fields = append(result.fields, orderedJSONField{
+			key:   rule.pattern,
+			value: permissionActionRaw(action),
+		})
+	}
+	if !hasWildcard {
+		result.fields = append([]orderedJSONField{{
+			key:   "*",
+			value: permissionActionRaw(scalar),
+		}}, result.fields...)
+	}
+	return result
+}
+
+func equalOrderedPermissionObjects(a, b orderedJSONObject) bool {
+	if len(a.fields) != len(b.fields) {
+		return false
+	}
+	for index := range a.fields {
+		if a.fields[index].key != b.fields[index].key ||
+			!equalJSONBytes(a.fields[index].value, b.fields[index].value) {
+			return false
+		}
+	}
+	return true
+}
+
+func isCanonicalLiftedScalarPermission(top permissionValue, agent orderedJSONObject) bool {
+	if top.scalar != "" || len(top.rules) == 0 {
+		return false
+	}
+	for _, scalar := range []string{"allow", "default", "ask", "deny"} {
+		if equalOrderedPermissionObjects(agent, liftedScalarPermissionObject(top, scalar)) {
+			return true
+		}
+	}
+	return false
 }
 
 func mergePermissionRules(topRaw, agentRaw json.RawMessage) (json.RawMessage, bool, error) {
@@ -2197,174 +2488,55 @@ func mergePermissionRules(topRaw, agentRaw json.RawMessage) (json.RawMessage, bo
 			return merged, !equalJSONBytes(agentRaw, merged), nil
 		}
 
-		result := orderedJSONObject{}
-		hasWildcard := false
-		for _, rule := range top.rules {
-			action := rule.action
-			if permissionRank(agent.scalar) > permissionRank(action) {
-				action = agent.scalar
-			}
-			if rule.pattern == "*" {
-				hasWildcard = true
-			}
-			result.fields = append(result.fields, orderedJSONField{
-				key:   rule.pattern,
-				value: permissionActionRaw(action),
-			})
-		}
-		if !hasWildcard {
-			result.fields = append([]orderedJSONField{{
-				key:   "*",
-				value: permissionActionRaw(agent.scalar),
-			}}, result.fields...)
-		}
+		result := liftedScalarPermissionObject(top, agent.scalar)
 		merged, err := json.Marshal(result)
 		if err != nil {
 			return nil, false, err
 		}
 		return merged, !equalJSONBytes(agentRaw, merged), nil
 	}
-
-	topExact := make(map[string]int, len(top.rules))
-	for i, rule := range top.rules {
-		topExact[rule.pattern] = i
+	if isCanonicalLiftedScalarPermission(top, agent.object) {
+		return agentRaw, false, nil
 	}
-	skipTop := make([]bool, len(top.rules))
-	var afterTop []orderedJSONField
-	topPrefixLength, hasCanonicalTopPrefix := canonicalPermissionTopPrefixLength(top, agent.object)
-	agentRulesStart := 0
-	if hasCanonicalTopPrefix {
-		agentRulesStart = topPrefixLength
+
+	topOwnedPatterns := make(map[string]bool, len(top.rules))
+	for _, rule := range top.rules {
+		topOwnedPatterns[rule.pattern] = true
 	}
-	requiredRestoration := requiredAgentRestorations(agent.object.fields, top.rules, agentRulesStart)
-
-	for agentIndex, field := range agent.object.fields {
-		if agentIndex < topPrefixLength {
-			continue
-		}
-		var action string
-		if err := json.Unmarshal(field.value, &action); err != nil || permissionRank(action) < 0 {
-			if _, topOwnsPattern := topExact[field.key]; !topOwnsPattern {
-				afterTop = append(afterTop, field)
-			}
-			continue
-		}
-
-		lastOverlap := -1
-		lastOverlapCovers := false
-		for i, topRule := range top.rules {
-			if !permissionPatternsOverlap(topRule.pattern, field.key) {
-				continue
-			}
-			lastOverlap = i
-			lastOverlapCovers = permissionPatternCovers(topRule.pattern, field.key)
-		}
-
-		mergedAction := action
-		if required := requiredRestoration[agentIndex]; permissionRank(required) > permissionRank(mergedAction) {
-			mergedAction = required
-		}
-		dropAgentRule := false
-		if lastOverlap >= 0 && lastOverlapCovers {
-			if permissionRank(top.rules[lastOverlap].action) > permissionRank(mergedAction) {
-				mergedAction = top.rules[lastOverlap].action
-			}
-		} else if lastOverlap >= 0 {
-			// A partial or conservatively unproven overlap cannot safely leave a
-			// weaker agent rule last. Preserve it only when a later exact agent
-			// rule restores every stricter repository pattern; otherwise
-			// strengthen the complete agent pattern and fail closed.
-			for _, topRule := range top.rules {
-				if permissionRank(topRule.action) <= permissionRank(mergedAction) ||
-					!permissionPatternsOverlap(topRule.pattern, field.key) {
-					continue
-				}
-				if _, preserves := laterExactAgentRulePreserves(
-					agent.object.fields,
-					requiredRestoration,
-					agentRulesStart,
-					agentIndex,
-					topRule,
-				); preserves {
-					continue
-				}
-				if permissionRank(mergedAction) == permissionRank("allow") {
-					// Removing a permissive rule cannot weaken the agent policy,
-					// and leaves repository exceptions in their original order.
-					dropAgentRule = true
-					break
-				}
-				mergedAction = topRule.action
-			}
-		}
-		if dropAgentRule {
-			continue
-		}
-		exact := topExact[field.key]
-		exactExists := false
-		if index, ok := topExact[field.key]; ok {
-			exact = index
-			exactExists = true
-		}
-		mergedField := orderedJSONField{
-			key:   field.key,
-			value: permissionActionRaw(mergedAction),
-		}
-		if exactExists {
-			topRank := permissionRank(top.rules[exact].action)
-			mergedRank := permissionRank(mergedAction)
-			hasWeakerPrior := false
-			highestPriorAction := ""
-			for _, prior := range afterTop {
-				var priorAction string
-				if err := json.Unmarshal(prior.value, &priorAction); err != nil ||
-					!permissionPatternsOverlap(prior.key, field.key) {
-					continue
-				}
-				if permissionRank(priorAction) < mergedRank {
-					hasWeakerPrior = true
-				}
-				if permissionRank(priorAction) > permissionRank(highestPriorAction) {
-					highestPriorAction = priorAction
-				}
-			}
-
-			if mergedRank == topRank {
-				mustRemainAfterTop := requiredRestoration[agentIndex] != "" ||
-					(hasCanonicalTopPrefix && agentIndex >= topPrefixLength) ||
-					laterRepositoryRuleWeakens(top.rules, exact, field.key, mergedRank)
-				if !mustRemainAfterTop &&
-					(permissionRank(highestPriorAction) > mergedRank || !hasWeakerPrior) {
-					// This is an already-propagated repository copy, or moving
-					// it later would weaken a stricter agent rule. Keep the
-					// repository copy in canonical order.
-					continue
-				}
-			}
-			if permissionRank(highestPriorAction) > mergedRank {
-				// Retain a stricter agent exact rule, but never let it weaken an
-				// even stricter earlier agent rule on their overlap.
-				mergedAction = highestPriorAction
-				mergedField.value = permissionActionRaw(mergedAction)
-			}
-			skipTop[exact] = true
-		}
-		afterTop = append(afterTop, mergedField)
+	topPrefixLength, _ := canonicalPermissionTopPrefixLength(top, agent.object)
+	agentFields := agent.object.fields[topPrefixLength:]
+	state, verified := solvePermissionRuleStates(top.rules, agentFields)
+	if !verified {
+		// Mixed opaque values are not partially interpreted. If the independent
+		// verifier cannot certify the monotone state, leave the category intact.
+		return agentRaw, false, nil
 	}
 
 	result := orderedJSONObject{
-		fields: make([]orderedJSONField, 0, len(top.rules)+len(afterTop)),
+		fields: make([]orderedJSONField, 0, len(top.rules)+len(state.rules)),
 	}
-	for i, rule := range top.rules {
-		if skipTop[i] {
-			continue
-		}
+	for _, rule := range top.rules {
 		result.fields = append(result.fields, orderedJSONField{
 			key:   rule.pattern,
 			value: permissionActionRaw(rule.action),
 		})
 	}
-	result.fields = append(result.fields, afterTop...)
+	for _, rule := range state.rules {
+		if !rule.valid {
+			if !topOwnedPatterns[rule.field.key] {
+				result.fields = append(result.fields, rule.field)
+			}
+			continue
+		}
+		if rule.dropped {
+			continue
+		}
+		field := rule.field
+		if rule.requiredRank > rule.originalRank {
+			field.value = permissionActionRaw(permissionActionForRank(rule.requiredRank))
+		}
+		result.fields = append(result.fields, field)
+	}
 
 	var merged json.RawMessage
 	var err error
