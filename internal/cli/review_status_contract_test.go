@@ -624,6 +624,12 @@ func TestNegotiatedStatusBindsRecoveryDispositionToRecoverAction(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("scope-changed recover status rejected: %v", err)
 	}
+	stopped := base()
+	transition := reviewStopTransition("native_stop_required")
+	stopped.NextTransition = &transition
+	if err := stopped.Validate(); err == nil || !strings.Contains(err.Error(), "recover status cannot stop") {
+		t.Fatalf("recover status accepted a stop transition: %v", err)
+	}
 	for _, disposition := range []reviewtransaction.RecoveryDisposition{
 		reviewtransaction.RecoveryScopeChanged, reviewtransaction.RecoveryInvalidated, reviewtransaction.RecoveryEscalated,
 	} {

@@ -193,6 +193,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			Arguments: reviewBindingArguments(binding),
 		})
 	case reviewtransaction.StateEscalated:
+		if status.Action == reviewtransaction.TargetStatusActionRecover {
+			return reviewRecoveryCollection(status, binding, input)
+		}
 		return reviewStopTransition("escalated_authority")
 	default:
 		if status.Action == reviewtransaction.TargetStatusActionReconcileFinalize {
