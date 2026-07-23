@@ -1315,11 +1315,13 @@ func migratePersistedPersonaAlias(homeDir string, persisted *state.InstallState,
 	if persistedErr != nil || persisted.Persona != string(model.PersonaGentlemanNeutralArtifacts) {
 		return nil
 	}
-	fmt.Fprintln(personaNoticeWriter, personaAliasRemapNotice)
 	persisted.Persona = string(model.PersonaNeutral)
 	if err := state.Write(homeDir, *persisted); err != nil {
 		return fmt.Errorf("persist remapped persona: %w", err)
 	}
+	// Notice only after the rewrite is durably persisted: a failed write must
+	// not tell the user the remap happened.
+	fmt.Fprintln(personaNoticeWriter, personaAliasRemapNotice)
 	return nil
 }
 
@@ -1341,6 +1343,14 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 		var persistedPersona string
 		persistedPersona = persistedState.Persona
 		applyResolvedPersona(&selection, persistedPersona)
+	}
+
+	// Migrate a persisted legacy alias BEFORE any early return: a no-agent
+	// no-op sync and a failing pipeline must still leave state.json remapped,
+	// otherwise the one-time migration never fires for those users. State
+	// records intent — the next sync applies the neutral assets.
+	if err := migratePersistedPersonaAlias(homeDir, &persistedState, persistedStateErr); err != nil {
+		return SyncResult{Agents: agentIDs, Selection: selection}, err
 	}
 
 	result := SyncResult{
@@ -1404,10 +1414,6 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 		if err := state.Write(homeDir, persistedState); err != nil {
 			return result, fmt.Errorf("persist migrated community tool selection: %w", err)
 		}
-	}
-
-	if err := migratePersistedPersonaAlias(homeDir, &persistedState, persistedStateErr); err != nil {
-		return result, err
 	}
 
 	return result, nil

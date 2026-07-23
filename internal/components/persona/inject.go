@@ -61,6 +61,14 @@ func InjectForSync(homeDir string, adapter agents.Adapter, persona model.Persona
 // syncManaged is the internal flag previously called `markdownOnly`.
 // When true the OpenCode/Kilocode agent overlay is skipped (see InjectForSync).
 func injectInternal(homeDir string, adapter agents.Adapter, persona model.PersonaID, syncManaged bool) (InjectionResult, error) {
+	// Normalize the legacy alias at the single entry point so every branch
+	// below (persona content, output-style write, Kimi module selection,
+	// cleanup) sees one canonical neutral identity. CLI callers already pass
+	// normalized IDs (cli.normalizePersona, internal/cli/validate.go); this
+	// guards direct callers.
+	if persona == model.PersonaGentlemanNeutralArtifacts {
+		persona = model.PersonaNeutral
+	}
 	if !adapter.SupportsSystemPrompt() {
 		return InjectionResult{}, nil
 	}
@@ -490,7 +498,8 @@ func shouldStripManagedLegacyPersona(existing string) bool {
 
 // isGentlemanConversationPersona reports whether the persona keeps the voseo
 // conversation tone. The gentleman-neutral-artifacts legacy alias is remapped
-// to neutral (see normalizePersona) and is intentionally NOT gentleman here.
+// to neutral (cli.normalizePersona in internal/cli/validate.go, mirrored at
+// the injectInternal entry) and is intentionally NOT gentleman here.
 func isGentlemanConversationPersona(persona model.PersonaID) bool {
 	return persona == model.PersonaGentleman
 }
