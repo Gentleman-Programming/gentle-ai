@@ -90,3 +90,37 @@ func TestApplyResolvedPersonaAliasResolution(t *testing.T) {
 		})
 	}
 }
+
+// TestRunSyncWithSelectionMigratesAliasOnNoOpSync pins the early-return path:
+// a sync that discovers zero agents must still migrate a persisted legacy
+// alias, otherwise the one-time migration never fires for those users.
+func TestRunSyncWithSelectionMigratesAliasOnNoOpSync(t *testing.T) {
+	var buf bytes.Buffer
+	previous := personaNoticeWriter
+	personaNoticeWriter = &buf
+	defer func() { personaNoticeWriter = previous }()
+
+	homeDir := t.TempDir()
+	if err := state.Write(homeDir, state.InstallState{Persona: string(model.PersonaGentlemanNeutralArtifacts)}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	result, err := RunSyncWithSelection(homeDir, model.Selection{})
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+	if !result.NoOp {
+		t.Fatal("zero-agent sync must report NoOp")
+	}
+
+	reread, err := state.Read(homeDir)
+	if err != nil {
+		t.Fatalf("re-read state: %v", err)
+	}
+	if reread.Persona != string(model.PersonaNeutral) {
+		t.Fatalf("persisted persona = %q, want %q after no-op sync", reread.Persona, model.PersonaNeutral)
+	}
+	if !strings.Contains(buf.String(), personaAliasRemapNotice) {
+		t.Fatalf("notice not printed on no-op sync; got %q", buf.String())
+	}
+}
