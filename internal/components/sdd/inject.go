@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -481,12 +482,39 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				mergedSettingsBytes = profileResult.merged
 			}
 			if defaultPlan != nil {
-				defaultChanged, defaultErr := defaultPlan.Apply()
+				settingsBeforeDefault, readErr := readFileOrEmpty(settingsPath)
+				if readErr != nil {
+					return InjectionResult{}, readErr
+				}
+				ownershipPath := opencodedefault.OwnershipPath(settingsPath)
+				ownershipBeforeDefault, readErr := readFileOrEmpty(ownershipPath)
+				if readErr != nil {
+					return InjectionResult{}, readErr
+				}
+				_, defaultErr := defaultPlan.Apply()
 				if defaultErr != nil {
 					return InjectionResult{}, defaultErr
 				}
-				changed = changed || defaultChanged
-				files = append(files, opencodedefault.OwnershipPath(settingsPath))
+				settingsAfterDefault, readErr := readFileOrEmpty(settingsPath)
+				if readErr != nil {
+					return InjectionResult{}, readErr
+				}
+				propagatedSettings, defaultErr := PropagateTopLevelPermissions([]byte(settingsAfterDefault))
+				if defaultErr != nil {
+					return InjectionResult{}, defaultErr
+				}
+				if _, defaultErr = filemerge.WriteFileAtomic(settingsPath, propagatedSettings, 0o644); defaultErr != nil {
+					return InjectionResult{}, defaultErr
+				}
+				ownershipAfterDefault, readErr := readFileOrEmpty(ownershipPath)
+				if readErr != nil {
+					return InjectionResult{}, readErr
+				}
+				changed = changed ||
+					settingsBeforeDefault != string(propagatedSettings) ||
+					ownershipBeforeDefault != ownershipAfterDefault
+				mergedSettingsBytes = propagatedSettings
+				files = append(files, ownershipPath)
 			}
 		}
 	}
@@ -1751,22 +1779,147 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 	return mergeJSONResult{writeResult: writeResult, merged: merged}, nil
 }
 
-func permissionRules(value any) (map[string]string, bool) {
-	if action, ok := value.(string); ok && permissionRank(action) >= 0 {
-		return map[string]string{"*": action}, true
+type orderedJSONField struct {
+	key   string
+	value json.RawMessage
+}
+
+type orderedJSONObject struct {
+	fields []orderedJSONField
+}
+
+func parseOrderedJSONObject(data []byte) (orderedJSONObject, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return orderedJSONObject{}, err
 	}
-	raw, ok := value.(map[string]any)
-	if !ok {
-		return nil, false
+	if token != json.Delim('{') {
+		return orderedJSONObject{}, fmt.Errorf("expected JSON object")
 	}
-	rules := make(map[string]string, len(raw))
-	for pattern, value := range raw {
-		if action, ok := value.(string); ok && permissionRank(action) >= 0 {
-			rules[pattern] = action
+	var object orderedJSONObject
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return orderedJSONObject{}, err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return orderedJSONObject{}, fmt.Errorf("expected JSON object key")
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return orderedJSONObject{}, err
+		}
+		object.fields = append(object.fields, orderedJSONField{
+			key:   key,
+			value: append(json.RawMessage(nil), value...),
+		})
+	}
+	if _, err := decoder.Token(); err != nil {
+		return orderedJSONObject{}, err
+	}
+	return object, nil
+}
+
+func (o orderedJSONObject) MarshalJSON() ([]byte, error) {
+	var result bytes.Buffer
+	result.WriteByte('{')
+	for i, field := range o.fields {
+		if i > 0 {
+			result.WriteByte(',')
+		}
+		key, err := json.Marshal(field.key)
+		if err != nil {
+			return nil, err
+		}
+		if !json.Valid(field.value) {
+			return nil, fmt.Errorf("invalid JSON value for %q", field.key)
+		}
+		result.Write(key)
+		result.WriteByte(':')
+		result.Write(field.value)
+	}
+	result.WriteByte('}')
+	return result.Bytes(), nil
+}
+
+func (o orderedJSONObject) get(key string) (json.RawMessage, bool) {
+	for i := len(o.fields) - 1; i >= 0; i-- {
+		if o.fields[i].key == key {
+			return o.fields[i].value, true
 		}
 	}
-	return rules, len(rules) > 0
+	return nil, false
 }
+
+func (o *orderedJSONObject) set(key string, value json.RawMessage) bool {
+	for i := len(o.fields) - 1; i >= 0; i-- {
+		if o.fields[i].key != key {
+			continue
+		}
+		if equalJSONBytes(o.fields[i].value, value) {
+			return false
+		}
+		o.fields[i].value = append(json.RawMessage(nil), value...)
+		return true
+	}
+	o.fields = append(o.fields, orderedJSONField{
+		key:   key,
+		value: append(json.RawMessage(nil), value...),
+	})
+	return true
+}
+
+func equalJSONBytes(a, b []byte) bool {
+	var compactA, compactB bytes.Buffer
+	if json.Compact(&compactA, a) != nil || json.Compact(&compactB, b) != nil {
+		return bytes.Equal(a, b)
+	}
+	return bytes.Equal(compactA.Bytes(), compactB.Bytes())
+}
+
+type permissionRule struct {
+	pattern string
+	action  string
+}
+
+type permissionValue struct {
+	scalar   string
+	object   orderedJSONObject
+	rules    []permissionRule
+	isObject bool
+	valid    bool
+}
+
+func parsePermissionValue(raw json.RawMessage) permissionValue {
+	var action string
+	if err := json.Unmarshal(raw, &action); err == nil && permissionRank(action) >= 0 {
+		return permissionValue{
+			scalar: action,
+			rules:  []permissionRule{{pattern: "*", action: action}},
+			valid:  true,
+		}
+	}
+	object, err := parseOrderedJSONObject(raw)
+	if err != nil {
+		return permissionValue{}
+	}
+	value := permissionValue{object: object, isObject: true}
+	for _, field := range object.fields {
+		if err := json.Unmarshal(field.value, &action); err == nil && permissionRank(action) >= 0 {
+			value.rules = append(value.rules, permissionRule{pattern: field.key, action: action})
+		}
+	}
+	value.valid = len(value.rules) > 0
+	return value
+}
+
+func permissionActionRaw(action string) json.RawMessage {
+	raw, _ := json.Marshal(action)
+	return raw
+}
+
 func permissionRank(action string) int {
 	switch action {
 	case "deny":
@@ -1806,6 +1959,7 @@ func permissionPatternsOverlap(a, b string) bool {
 	}
 	return overlap(0, 0)
 }
+
 func permissionPatternCovers(broader, narrower string) bool {
 	type state struct{ broader, narrower int }
 	memo := map[state]bool{}
@@ -1836,96 +1990,175 @@ func permissionPatternCovers(broader, narrower string) bool {
 	return covers(0, 0)
 }
 
-func normalizedPermissionValue(value any) (any, map[string]string, bool) {
-	rules, ok := permissionRules(value)
-	if !ok {
-		return value, nil, false
+func mergePermissionRules(topRaw, agentRaw json.RawMessage) (json.RawMessage, bool, error) {
+	top := parsePermissionValue(topRaw)
+	if !top.valid {
+		return agentRaw, false, nil
 	}
-	return value, rules, true
-}
-
-func mergePermissionRules(topValue, agentValue any) (any, bool) {
-	_, top, ok := normalizedPermissionValue(topValue)
-	if !ok {
-		return agentValue, false
+	agent := parsePermissionValue(agentRaw)
+	if len(bytes.TrimSpace(agentRaw)) > 0 &&
+		!bytes.Equal(bytes.TrimSpace(agentRaw), []byte("null")) &&
+		!agent.valid &&
+		!agent.isObject {
+		// An unknown scalar has no safe merge semantics.
+		return agentRaw, false, nil
 	}
-	if agentValue != nil {
-		if _, isMap := agentValue.(map[string]any); !isMap {
-			if _, valid := permissionRules(agentValue); !valid {
-				// An unknown scalar has no safe merge semantics; retaining it cannot
-				// weaken an existing restriction.
-				return agentValue, false
+	if agent.scalar != "" {
+		if top.scalar != "" {
+			action := top.scalar
+			if permissionRank(agent.scalar) > permissionRank(action) {
+				action = agent.scalar
 			}
+			merged := permissionActionRaw(action)
+			return merged, !equalJSONBytes(agentRaw, merged), nil
 		}
+
+		result := orderedJSONObject{}
+		hasWildcard := false
+		for _, rule := range top.rules {
+			action := rule.action
+			if permissionRank(agent.scalar) > permissionRank(action) {
+				action = agent.scalar
+			}
+			if rule.pattern == "*" {
+				hasWildcard = true
+			}
+			result.fields = append(result.fields, orderedJSONField{
+				key:   rule.pattern,
+				value: permissionActionRaw(action),
+			})
+		}
+		if !hasWildcard {
+			result.fields = append([]orderedJSONField{{
+				key:   "*",
+				value: permissionActionRaw(agent.scalar),
+			}}, result.fields...)
+		}
+		merged, err := json.Marshal(result)
+		if err != nil {
+			return nil, false, err
+		}
+		return merged, !equalJSONBytes(agentRaw, merged), nil
 	}
 
-	agent, hasAgent := permissionRules(agentValue)
-	if !hasAgent {
-		agent = map[string]string{}
+	topExact := make(map[string]int, len(top.rules))
+	for i, rule := range top.rules {
+		topExact[rule.pattern] = i
 	}
-	merged := make(map[string]string, len(top)+len(agent))
-	for key, action := range agent {
-		merged[key] = action
-	}
-	for key, action := range top {
-		if current, exists := merged[key]; !exists || permissionRank(action) > permissionRank(current) {
-			merged[key] = action
+	skipTop := make([]bool, len(top.rules))
+	var afterTop []orderedJSONField
+
+	for _, field := range agent.object.fields {
+		var action string
+		if err := json.Unmarshal(field.value, &action); err != nil || permissionRank(action) < 0 {
+			if _, topOwnsPattern := topExact[field.key]; !topOwnsPattern {
+				afterTop = append(afterTop, field)
+			}
+			continue
 		}
-	}
-	for agentPattern := range agent {
-		for topPattern, topAction := range top {
-			if permissionRank(topAction) <= permissionRank(merged[agentPattern]) ||
-				!permissionPatternCovers(topPattern, agentPattern) {
+		if exact, ok := topExact[field.key]; ok && action == top.rules[exact].action {
+			// Serializers may reorder a previously propagated copy of the
+			// top-level rule. Emit that copy once, in authoritative top-level
+			// order, rather than treating it as an agent-specific override.
+			continue
+		}
+
+		lastOverlap := -1
+		lastOverlapCovers := false
+		for i, topRule := range top.rules {
+			if !permissionPatternsOverlap(topRule.pattern, field.key) {
 				continue
 			}
-			merged[agentPattern] = topAction
+			lastOverlap = i
+			lastOverlapCovers = permissionPatternCovers(topRule.pattern, field.key)
+		}
+
+		mergedAction := action
+		if lastOverlap >= 0 && lastOverlapCovers &&
+			permissionRank(top.rules[lastOverlap].action) > permissionRank(mergedAction) {
+			mergedAction = top.rules[lastOverlap].action
+		}
+		exact := topExact[field.key]
+		exactExists := false
+		if index, ok := topExact[field.key]; ok {
+			exact = index
+			exactExists = true
+		}
+		mergedField := orderedJSONField{
+			key:   field.key,
+			value: permissionActionRaw(mergedAction),
+		}
+		if exactExists {
+			skipTop[exact] = true
+		}
+		afterTop = append(afterTop, mergedField)
+	}
+
+	result := orderedJSONObject{
+		fields: make([]orderedJSONField, 0, len(top.rules)+len(afterTop)),
+	}
+	for i, rule := range top.rules {
+		if skipTop[i] {
+			continue
+		}
+		result.fields = append(result.fields, orderedJSONField{
+			key:   rule.pattern,
+			value: permissionActionRaw(rule.action),
+		})
+	}
+	result.fields = append(result.fields, afterTop...)
+
+	var merged json.RawMessage
+	var err error
+	if top.scalar != "" && !agent.isObject && len(result.fields) == 1 && result.fields[0].key == "*" {
+		merged = append(json.RawMessage(nil), result.fields[0].value...)
+	} else {
+		merged, err = json.Marshal(result)
+		if err != nil {
+			return nil, false, err
 		}
 	}
-	if len(merged) == 1 {
-		if action, only := merged["*"]; only {
-			if old, ok := agentValue.(string); ok && old == action {
-				return agentValue, false
-			}
-			if _, topIsScalar := topValue.(string); topIsScalar {
-				return action, agentValue != action
-			}
-		}
-	}
-	result := make(map[string]any, len(merged))
-	if raw, ok := agentValue.(map[string]any); ok {
-		for pattern, action := range raw {
-			result[pattern] = action
-		}
-	}
-	unchanged := hasAgent && len(agent) == len(merged)
-	for key, action := range merged {
-		result[key] = action
-		unchanged = unchanged && agent[key] == action
-	}
-	if unchanged {
-		return agentValue, false
-	}
-	return result, true
+	return merged, !equalJSONBytes(agentRaw, merged), nil
 }
 
-func mergeAskPermissionRules(topValue any) (any, bool) {
-	_, top, ok := normalizedPermissionValue(topValue)
-	if !ok {
-		return nil, false
+func canonicalPermissionCategories(top, agent orderedJSONObject) orderedJSONObject {
+	values := make(map[string]json.RawMessage, len(agent.fields))
+	for _, field := range agent.fields {
+		values[field.key] = field.value
 	}
-	if action, scalar := topValue.(string); scalar {
-		if permissionRank(action) >= permissionRank("ask") {
-			return action, action != "ask"
+
+	result := orderedJSONObject{fields: make([]orderedJSONField, 0, len(values))}
+	seen := make(map[string]bool, len(values))
+	appendCategory := func(key string) {
+		if seen[key] {
+			return
 		}
-		return "ask", true
+		value, ok := values[key]
+		if !ok {
+			return
+		}
+		result.fields = append(result.fields, orderedJSONField{key: key, value: value})
+		seen[key] = true
 	}
-	result := map[string]any{"*": "ask"}
-	for pattern, action := range top {
-		if permissionRank(action) > permissionRank("ask") {
-			result[pattern] = action
+
+	// A scalar agent permission becomes the outer wildcard fallback. Keep it
+	// first, followed by managed top-level categories in their source order.
+	appendCategory("*")
+	for _, field := range top.fields {
+		appendCategory(field.key)
+	}
+
+	remaining := make([]string, 0, len(values)-len(seen))
+	for key := range values {
+		if !seen[key] {
+			remaining = append(remaining, key)
 		}
 	}
-	return result, true
+	sort.Strings(remaining)
+	for _, key := range remaining {
+		appendCategory(key)
+	}
+	return result
 }
 
 // PropagateTopLevelPermissions applies top-level restrictions to orchestrator
@@ -1938,92 +2171,108 @@ func PropagateTopLevelPermissions(jsonBytes []byte) ([]byte, error) {
 	if err := json.Unmarshal(jsonBytes, &root); err != nil {
 		return nil, err
 	}
-	var topValue any
-	if err := json.Unmarshal(root["permission"], &topValue); err != nil {
+	topRaw, hasTopPermissions := root["permission"]
+	if !hasTopPermissions {
 		return jsonBytes, nil
 	}
-	topPerms, topIsMap := topValue.(map[string]any)
-	if !topIsMap {
-		if _, valid := permissionRules(topValue); !valid {
-			return jsonBytes, nil
-		}
+	topScalar := parsePermissionValue(topRaw)
+	topPerms, topMapErr := parseOrderedJSONObject(topRaw)
+	topIsMap := topMapErr == nil
+	if !topIsMap && topScalar.scalar == "" {
+		return jsonBytes, nil
 	}
-	var agents map[string]any
-	if err := json.Unmarshal(root["agent"], &agents); err != nil || agents == nil {
+	agents, err := parseOrderedJSONObject(root["agent"])
+	if err != nil {
 		return jsonBytes, nil
 	}
 
 	changed := false
-	for agentKey, agentValue := range agents {
-		if agentKey != "gentle-orchestrator" && !strings.HasPrefix(agentKey, "sdd-orchestrator-") {
+	for i := range agents.fields {
+		agentField := &agents.fields[i]
+		if agentField.key != "gentle-orchestrator" && !strings.HasPrefix(agentField.key, "sdd-orchestrator-") {
 			continue
 		}
-		agent, ok := agentValue.(map[string]any)
-		if !ok {
+		agent, err := parseOrderedJSONObject(agentField.value)
+		if err != nil {
 			continue
 		}
+		agentPermission, hasAgentPermission := agent.get("permission")
 		if !topIsMap {
-			merged, permissionChanged := mergePermissionRules(topValue, agent["permission"])
+			merged, permissionChanged, err := mergePermissionRules(topRaw, agentPermission)
+			if err != nil {
+				return nil, err
+			}
 			if permissionChanged {
-				agent["permission"] = merged
+				agent.set("permission", merged)
+				agentField.value, err = json.Marshal(agent)
+				if err != nil {
+					return nil, err
+				}
 				changed = true
 			}
 			continue
 		}
-		agentPerms, _ := agent["permission"].(map[string]any)
-		if agentPerms == nil {
-			if action, scalar := agent["permission"].(string); scalar {
-				switch action {
-				case "deny":
-					continue
-				case "ask":
-					agentPerms = map[string]any{}
-					for category, topValue := range topPerms {
-						merged, categoryChanged := mergeAskPermissionRules(topValue)
-						if categoryChanged {
-							agentPerms[category] = merged
-						}
-					}
-					if len(agentPerms) > 0 {
-						agent["permission"] = agentPerms
-						changed = true
-					}
-					continue
-				case "allow", "default":
-				default:
-					continue
-				}
-			} else if agent["permission"] != nil {
+
+		var agentPerms orderedJSONObject
+		fallback := parsePermissionValue(agentPermission).scalar
+		if fallback != "" {
+			if fallback == "deny" {
+				continue
+			}
+			agentPerms.set("*", permissionActionRaw(fallback))
+		} else if hasAgentPermission && !bytes.Equal(bytes.TrimSpace(agentPermission), []byte("null")) {
+			agentPerms, err = parseOrderedJSONObject(agentPermission)
+			if err != nil {
 				continue
 			}
 		}
-		for category, topValue := range topPerms {
-			var agentValue any
-			if agentPerms != nil {
-				agentValue = agentPerms[category]
+
+		hasMergeableTop := false
+		for _, topCategory := range topPerms.fields {
+			if !parsePermissionValue(topCategory.value).valid {
+				continue
 			}
-			merged, categoryChanged := mergePermissionRules(topValue, agentValue)
+			hasMergeableTop = true
+			agentCategory, hasAgentCategory := agentPerms.get(topCategory.key)
+			if !hasAgentCategory && fallback != "" {
+				agentCategory = permissionActionRaw(fallback)
+			}
+			merged, categoryChanged, err := mergePermissionRules(topCategory.value, agentCategory)
+			if err != nil {
+				return nil, err
+			}
 			if !categoryChanged {
 				continue
 			}
-			if agentPerms == nil {
-				agentPerms = map[string]any{}
-				agent["permission"] = agentPerms
-			}
-			agentPerms[category] = merged
-			changed = true
+			agentPerms.set(topCategory.key, merged)
 		}
+		if !hasMergeableTop {
+			continue
+		}
+		mergedPermissions, err := json.Marshal(canonicalPermissionCategories(topPerms, agentPerms))
+		if err != nil {
+			return nil, err
+		}
+		if equalJSONBytes(agentPermission, mergedPermissions) {
+			continue
+		}
+		agent.set("permission", mergedPermissions)
+		agentField.value, err = json.Marshal(agent)
+		if err != nil {
+			return nil, err
+		}
+		changed = true
 	}
 
 	if !changed {
 		return jsonBytes, nil
 	}
 
-	res, err := json.MarshalIndent(agents, "", "  ")
+	start, end, err := topLevelJSONValueRange(jsonBytes, "agent")
 	if err != nil {
 		return nil, err
 	}
-	start, end, err := topLevelJSONValueRange(jsonBytes, "agent")
+	res, err := json.MarshalIndent(agents, jsonLineIndent(jsonBytes, start), "  ")
 	if err != nil {
 		return nil, err
 	}
@@ -2032,6 +2281,15 @@ func PropagateTopLevelPermissions(jsonBytes []byte) ([]byte, error) {
 	result = append(result, res...)
 	result = append(result, jsonBytes[end:]...)
 	return result, nil
+}
+
+func jsonLineIndent(data []byte, offset int) string {
+	lineStart := bytes.LastIndexByte(data[:offset], '\n') + 1
+	end := lineStart
+	for end < offset && (data[end] == ' ' || data[end] == '\t') {
+		end++
+	}
+	return string(data[lineStart:end])
 }
 
 func topLevelJSONValueRange(data []byte, target string) (int, int, error) {

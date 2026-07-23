@@ -1,6 +1,7 @@
 package permissions
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -192,6 +193,48 @@ func TestInjectOpenCodeBackfillsOrchestratorPermissionsAfterSDD(t *testing.T) {
 				t.Fatalf("%s read[%q] = %v, want propagated deny", name, pattern, read[pattern])
 			}
 		}
+	}
+}
+
+func TestInjectOpenCodeProductionOrderIsByteIdempotent(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+
+	if _, err := sdd.Inject(home, adapter, ""); err != nil {
+		t.Fatalf("first SDD Inject() error = %v", err)
+	}
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatalf("first Permission Inject() error = %v", err)
+	}
+	settingsPath := adapter.SettingsPath(home)
+	first, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secondSDD, err := sdd.Inject(home, adapter, "")
+	if err != nil {
+		t.Fatalf("second SDD Inject() error = %v", err)
+	}
+	secondPermissions, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("second Permission Inject() error = %v", err)
+	}
+	second, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if secondSDD.Changed || secondPermissions.Changed || !bytes.Equal(first, second) {
+		offset := 0
+		for offset < len(first) && offset < len(second) && first[offset] == second[offset] {
+			offset++
+		}
+		start := max(0, offset-80)
+		firstEnd := min(len(first), offset+160)
+		secondEnd := min(len(second), offset+160)
+		t.Fatalf("second production cycle changed: sdd=%t permissions=%t, byte offset=%d\nfirst:  %q\nsecond: %q",
+			secondSDD.Changed, secondPermissions.Changed, offset, first[start:firstEnd], second[start:secondEnd])
 	}
 }
 

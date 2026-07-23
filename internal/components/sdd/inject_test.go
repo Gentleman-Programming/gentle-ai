@@ -5089,6 +5089,164 @@ func TestPropagateTopLevelPermissionsPreservesRuleOrder(t *testing.T) {
 	}
 }
 
+func TestInjectPreservesEffectiveOrderedPermissionRules(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		path  string
+		top   string
+		agent string
+	}{
+		{
+			name:  "later top-level allow exception survives broader deny",
+			input: `{"permission":{"read":{"*":"deny","public/**":"allow"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"public/**":"allow"}}}}}`,
+			path:  "public/readme.md",
+			top:   "allow",
+			agent: "allow",
+		},
+		{
+			name:  "existing agent deny survives later overlapping allow",
+			input: `{"permission":{"read":{"*":"allow","?draft.md":"allow"}},"agent":{"gentle-orchestrator":{"permission":{"read":{".draft.md":"deny"}}}}}`,
+			path:  ".draft.md",
+			top:   "allow",
+			agent: "deny",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			adapter := opencodeAdapter()
+			settingsPath := adapter.SettingsPath(home)
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(tt.input), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := Inject(home, adapter, model.SDDModeMulti); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			topRules := orderedPermissionRulesAt(t, got, "permission", "read")
+			if topAction := effectivePermissionAction(topRules, tt.path); topAction != tt.top {
+				t.Fatalf("top-level effective read(%q) = %q, want %q", tt.path, topAction, tt.top)
+			}
+			agentRules := orderedPermissionRulesAt(t, got, "agent", "gentle-orchestrator", "permission", "read")
+			if agentAction := effectivePermissionAction(agentRules, tt.path); agentAction != tt.agent {
+				t.Fatalf("agent effective read(%q) = %q, want %q\noutput=%s", tt.path, agentAction, tt.agent, got)
+			}
+		})
+	}
+}
+
+func TestInjectPreservesAgentScalarPermissionFallback(t *testing.T) {
+	input := []byte(`{"permission":{"read":{"*":"allow","**/generated/**":"deny"}},"agent":{"gentle-orchestrator":{"permission":"ask"}}}`)
+	got, err := PropagateTopLevelPermissions(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(got, &root); err != nil {
+		t.Fatal(err)
+	}
+	permission := root["agent"].(map[string]any)["gentle-orchestrator"].(map[string]any)["permission"].(map[string]any)
+	if fallback := permission["*"]; fallback != "ask" {
+		t.Fatalf("agent-wide fallback = %v, want ask\noutput=%s", fallback, got)
+	}
+	readRules := orderedPermissionRulesAt(t, got, "agent", "gentle-orchestrator", "permission", "read")
+	if action := effectivePermissionAction(readRules, "notes.md"); action != "ask" {
+		t.Fatalf("regular read action = %q, want ask", action)
+	}
+	if action := effectivePermissionAction(readRules, "build/generated/output.txt"); action != "deny" {
+		t.Fatalf("generated read action = %q, want deny", action)
+	}
+}
+
+type orderedPermissionRule struct {
+	pattern string
+	action  string
+}
+
+func orderedPermissionRulesAt(t *testing.T, data []byte, keys ...string) []orderedPermissionRule {
+	t.Helper()
+	current := json.RawMessage(data)
+	for _, key := range keys {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(current, &object); err != nil {
+			t.Fatal(err)
+		}
+		next, ok := object[key]
+		if !ok {
+			t.Fatalf("missing permission key %q", key)
+		}
+		current = next
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(current))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		t.Fatalf("permission rules are not an object: token=%v err=%v raw=%s", token, err, current)
+	}
+	var rules []orderedPermissionRule
+	for decoder.More() {
+		patternToken, err := decoder.Token()
+		if err != nil {
+			t.Fatal(err)
+		}
+		pattern, ok := patternToken.(string)
+		if !ok {
+			t.Fatalf("permission pattern token = %T, want string", patternToken)
+		}
+		var action string
+		if err := decoder.Decode(&action); err != nil {
+			t.Fatal(err)
+		}
+		rules = append(rules, orderedPermissionRule{pattern: pattern, action: action})
+	}
+	return rules
+}
+
+func effectivePermissionAction(rules []orderedPermissionRule, value string) string {
+	var action string
+	for _, rule := range rules {
+		if permissionPatternMatches(rule.pattern, value) {
+			action = rule.action
+		}
+	}
+	return action
+}
+
+func permissionPatternMatches(pattern, value string) bool {
+	type state struct{ pattern, value int }
+	memo := map[state]bool{}
+	seen := map[state]bool{}
+	var match func(int, int) bool
+	match = func(i, j int) bool {
+		s := state{i, j}
+		if seen[s] {
+			return memo[s]
+		}
+		seen[s] = true
+		switch {
+		case i == len(pattern):
+			memo[s] = j == len(value)
+		case pattern[i] == '*':
+			memo[s] = match(i+1, j) || (j < len(value) && match(i, j+1))
+		case j < len(value) && (pattern[i] == '?' || pattern[i] == value[j]):
+			memo[s] = match(i+1, j+1)
+		}
+		return memo[s]
+	}
+	return match(0, 0)
+}
+
 // ---------------------------------------------------------------------------
 // Fix 1: Cursor sub-agent files written to disk
 // ---------------------------------------------------------------------------
