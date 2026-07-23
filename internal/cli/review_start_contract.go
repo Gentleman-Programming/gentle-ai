@@ -17,28 +17,29 @@ const ReviewIntegrationStartSchemaID = "https://gentle-ai.dev/contracts/review-i
 // ReviewIntegrationStartResult is the explicitly negotiated START response.
 // The legacy ReviewFacadeStartResult remains byte- and schema-compatible.
 type ReviewIntegrationStartResult struct {
-	Schema              string                                        `json:"schema"`
-	Contract            string                                        `json:"contract"`
-	Operation           string                                        `json:"operation"`
-	Action              string                                        `json:"action"`
-	LensesRequired      bool                                          `json:"lenses_required"`
-	LineageID           string                                        `json:"lineage_id"`
-	State               reviewtransaction.State                       `json:"state"`
-	RiskLevel           reviewtransaction.RiskLevel                   `json:"risk_level"`
-	SelectedLenses      []string                                      `json:"selected_lenses"`
-	Projection          reviewtransaction.Projection                  `json:"projection"`
-	TargetMode          reviewtransaction.TargetKind                  `json:"target_mode,omitempty"`
-	TargetIdentity      string                                        `json:"target_identity,omitempty"`
-	BaseTree            string                                        `json:"base_tree,omitempty"`
-	CandidateTree       string                                        `json:"candidate_tree,omitempty"`
-	ChangedFiles        int                                           `json:"changed_files"`
-	ChangedLines        int                                           `json:"changed_lines"`
-	CorrectionBudget    int                                           `json:"correction_budget"`
-	RiskReasons         []reviewtransaction.RiskReason                `json:"risk_reasons"`
-	ArtifactSubjects    []reviewtransaction.ArtifactSubject           `json:"artifact_subjects"`
-	CandidateDiff       *reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff,omitempty"`
-	ChangedPathManifest *[]reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest,omitempty"`
-	RepositoryContext   *ReviewRepositoryContextReference             `json:"repository_context,omitempty"`
+	Schema               string                                        `json:"schema"`
+	Contract             string                                        `json:"contract"`
+	Operation            string                                        `json:"operation"`
+	Action               string                                        `json:"action"`
+	LensesRequired       bool                                          `json:"lenses_required"`
+	LineageID            string                                        `json:"lineage_id"`
+	State                reviewtransaction.State                       `json:"state"`
+	RiskLevel            reviewtransaction.RiskLevel                   `json:"risk_level"`
+	SelectedLenses       []string                                      `json:"selected_lenses"`
+	Projection           reviewtransaction.Projection                  `json:"projection"`
+	TargetMode           reviewtransaction.TargetKind                  `json:"target_mode,omitempty"`
+	TargetIdentity       string                                        `json:"target_identity,omitempty"`
+	BaseTree             string                                        `json:"base_tree,omitempty"`
+	CandidateTree        string                                        `json:"candidate_tree,omitempty"`
+	ChangedFiles         int                                           `json:"changed_files"`
+	ChangedLines         int                                           `json:"changed_lines"`
+	CorrectionBudget     int                                           `json:"correction_budget"`
+	RiskReasons          []reviewtransaction.RiskReason                `json:"risk_reasons"`
+	ArtifactSubjects     []reviewtransaction.ArtifactSubject           `json:"artifact_subjects"`
+	ReviewerTaskBindings []string                                      `json:"reviewer_task_bindings,omitempty"`
+	CandidateDiff        *reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff,omitempty"`
+	ChangedPathManifest  *[]reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest,omitempty"`
+	RepositoryContext    *ReviewRepositoryContextReference             `json:"repository_context,omitempty"`
 }
 
 // ReviewRepositoryContextReference is the path-free provider context that a
@@ -64,7 +65,7 @@ func newReviewIntegrationStartResult(legacy ReviewFacadeStartResult, assessment 
 		State: legacy.State, RiskLevel: legacy.RiskLevel, SelectedLenses: append([]string{}, legacy.SelectedLenses...),
 		Projection: legacy.Projection, ChangedFiles: legacy.ChangedFiles, ChangedLines: legacy.ChangedLines,
 		CorrectionBudget: legacy.CorrectionBudget, RiskReasons: append([]reviewtransaction.RiskReason{}, assessment.Reasons...),
-		ArtifactSubjects: []reviewtransaction.ArtifactSubject{}, RepositoryContext: repositoryContext,
+		ArtifactSubjects: []reviewtransaction.ArtifactSubject{}, ReviewerTaskBindings: []string{}, RepositoryContext: repositoryContext,
 	}
 	if targetMode == reviewtransaction.TargetBaseWorkspaceOverlay {
 		result.TargetMode = targetMode
@@ -91,12 +92,20 @@ func newReviewIntegrationStartResult(legacy ReviewFacadeStartResult, assessment 
 				SelectedLenses:  append([]string{}, legacy.SelectedLenses...),
 			}
 			result.ArtifactSubjects = make([]reviewtransaction.ArtifactSubject, len(legacy.SelectedLenses))
+			result.ReviewerTaskBindings = make([]string, len(legacy.SelectedLenses))
 			for order, lens := range legacy.SelectedLenses {
 				result.ArtifactSubjects[order], err = reviewtransaction.NewArtifactSubject(
 					subjectState, repositoryContext.Revision, *frozenContext, lens, order, "",
 				)
 				if err != nil {
 					return ReviewIntegrationStartResult{}, fmt.Errorf("derive artifact subject %d: %w", order, err)
+				}
+				result.ReviewerTaskBindings[order], err = renderReviewTaskBinding(ReviewTransitionBinding{
+					LineageID: legacy.LineageID, Revision: repositoryContext.Revision,
+					TargetIdentity: repositoryContext.TargetIdentity, RepositoryContext: repositoryContext.Handle,
+				}, result.ArtifactSubjects[order])
+				if err != nil {
+					return ReviewIntegrationStartResult{}, fmt.Errorf("render reviewer task binding %d: %w", order, err)
 				}
 			}
 		}
@@ -191,10 +200,10 @@ func (result ReviewIntegrationStartResult) Validate() error {
 		return errors.New("negotiated START repository context does not match the active reviewing authority")
 	}
 	if needsRepositoryContext {
-		if len(result.ArtifactSubjects) != len(result.SelectedLenses) {
+		if len(result.ArtifactSubjects) != len(result.SelectedLenses) || result.ReviewerTaskBindings != nil && len(result.ReviewerTaskBindings) != len(result.SelectedLenses) {
 			return errors.New("negotiated START requires one provider artifact subject per selected lens")
 		}
-	} else if len(result.ArtifactSubjects) != 0 {
+	} else if len(result.ArtifactSubjects) != 0 || len(result.ReviewerTaskBindings) != 0 {
 		return errors.New("negotiated START cannot expose artifact subjects outside an active reviewing authority")
 	}
 	if result.RepositoryContext != nil {
@@ -231,6 +240,13 @@ func (result ReviewIntegrationStartResult) Validate() error {
 			manifestDigest, digestErr := reviewtransaction.ChangedPathManifestDigest(manifest)
 			if digestErr != nil || subject.ChangedPathManifestSHA256 != manifestDigest {
 				return fmt.Errorf("negotiated START artifact subject %d does not match changed-path manifest", order)
+			}
+			wantBinding, bindingErr := renderReviewTaskBinding(ReviewTransitionBinding{
+				LineageID: result.LineageID, Revision: result.RepositoryContext.Revision,
+				TargetIdentity: result.RepositoryContext.TargetIdentity, RepositoryContext: result.RepositoryContext.Handle,
+			}, subject)
+			if bindingErr != nil || result.ReviewerTaskBindings != nil && result.ReviewerTaskBindings[order] != wantBinding {
+				return fmt.Errorf("negotiated START reviewer task binding %d does not match frozen authority", order)
 			}
 		}
 	}

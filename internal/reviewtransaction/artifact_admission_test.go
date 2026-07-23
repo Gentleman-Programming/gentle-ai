@@ -100,6 +100,10 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 		{name: "non ASCII finding id", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings[0].ID = "R3-é"
 		}, decision: ArtifactAdmissionBindingMismatch},
+		{name: "invalid canonical token", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result = LensResult{}
+			r.CanonicalResult = &CanonicalArtifactLensResult{}
+		}, decision: ArtifactAdmissionIncomplete},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -151,6 +151,7 @@
               "value": "0"
             }
           ],
+          "reviewer_task_binding": "GENTLE_AI_REVIEW_BINDING {\"lineage\":\"review-status-fixture\",\"target\":\"sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6\",\"lens\":\"review-reliability\",\"order\":0,\"revision\":\"sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390\",\"repository_context\":\"rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"subject_hash\":\"sha256:fe57db2ea45a33c7e852d039e8af3291c3bc31911f0c92a710b5fef547b1999d\"}",
           "artifact_subject": {
             "schema": "gentle-ai.review-artifact-subject/v1",
             "subject_hash": "sha256:fe57db2ea45a33c7e852d039e8af3291c3bc31911f0c92a710b5fef547b1999d",

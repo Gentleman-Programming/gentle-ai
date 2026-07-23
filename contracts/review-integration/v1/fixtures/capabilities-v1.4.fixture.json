@@ -59,6 +59,7 @@
     "gentle-ai.review-integration.repair/v1",
     "gentle-ai.review-integration.start/v2",
     "gentle-ai.review-integration.status/v2",
+    "gentle-ai.review-verification-evidence/v1",
     "gentle-ai.review-receipt/v1",
     "gentle-ai.review-receipt/v2",
     "gentle-ai.review-result-artifact/v2",

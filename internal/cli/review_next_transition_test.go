@@ -15,21 +15,32 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
 
-func TestValidatingEvidenceCollectionUnblocksFinalizeAndPreCommit(t *testing.T) {
-	repo, started, _, record, _ := capturedArtifact(t)
+func TestReviewEvidenceRuntimeHarnessReachesTerminalReceipt(t *testing.T) {
+	repo, started, store, record, _ := capturedArtifact(t)
 	finalize := []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID, "--captured-results"}
 	var first bytes.Buffer
 	if err := RunReviewFacadeFinalize(finalize, &first); err != nil {
 		t.Fatal(err)
 	}
-	var repeated bytes.Buffer
-	if err := RunReviewFacadeFinalize(finalize, &repeated); err != nil {
+	before, err := store.Load()
+	if err != nil {
 		t.Fatal(err)
 	}
-	var repeatedResult ReviewIntegrationFinalizeResult
-	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, repeated.Bytes()).Result, &repeatedResult)
-	if repeatedResult.State != reviewtransaction.StateValidating || repeatedResult.NextTransition == nil || repeatedResult.NextTransition.Kind != reviewNextTransitionCollect || repeatedResult.NextTransition.ReasonCode != "verification_evidence_required" {
-		t.Fatalf("repeated finalize made no-progress recommendation = %#v", repeatedResult)
+	var stale bytes.Buffer
+	err = RunReview(append([]string{"finalize"}, finalize...), &stale)
+	if err == nil {
+		t.Fatal("stale --captured-results finalize succeeded")
+	}
+	failure := decodeReviewIntegrationFailure(t, stale.Bytes())
+	if failure.Code != "invalid_request" || failure.MutationOutcome != ReviewMutationNotStarted || failure.NextAction != "review.status" || failure.LineageID != started.LineageID {
+		t.Fatalf("stale captured-results failure = %#v", failure)
+	}
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("stale captured-results mutated authority:\nbefore=%#v\nafter=%#v", before, after)
 	}
 
 	statusArgs := []string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID}
@@ -39,15 +50,30 @@ func TestValidatingEvidenceCollectionUnblocksFinalizeAndPreCommit(t *testing.T) 
 	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, waiting.Bytes(), &status)
-	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 || status.NextTransition.Collect.Inputs[0].CaptureOperation != "review.capture-evidence" {
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "verification_evidence_required" || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
 		t.Fatalf("validating status = %#v", status.NextTransition)
 	}
+	input := status.NextTransition.Collect.Inputs[0]
+	if input.Name != "evidence" || input.Schema != reviewVerificationEvidenceSchemaName || input.CaptureOperation != "review.capture-evidence" ||
+		!reflect.DeepEqual(input.Arguments, []ReviewTransitionArgument{{Name: "lineage", Value: started.LineageID}, {Name: "expected-revision", Value: status.Authority.Revision}, {Name: "target", Value: reviewAuthorityTargetIdentity(status)}}) {
+		t.Fatalf("verification evidence input = %#v", input)
+	}
 	evidence := filepath.Join(t.TempDir(), "evidence.txt")
-	if err := os.WriteFile(evidence, []byte("verification passed\n"), 0o600); err != nil {
+	writeReviewCLIJSON(t, evidence, reviewVerificationEvidence{
+		Schema:  reviewVerificationEvidenceSchemaName,
+		Outcome: reviewVerificationPassed,
+		Checks:  []reviewVerificationCheck{{Name: "focused tests", Status: reviewVerificationPassed, Command: "go test ./internal/cli", Evidence: []string{"ok github.com/gentleman-programming/gentle-ai/internal/cli"}}},
+	})
+	captureArgs := []string{"capture-evidence", "--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--expected-revision", status.Authority.Revision, "--input", evidence}
+	var captured, recaptured bytes.Buffer
+	if err := RunReview(captureArgs, &captured); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReview([]string{"capture-evidence", "--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--expected-revision", status.Authority.Revision, "--input", evidence}, &bytes.Buffer{}); err != nil {
+	if err := RunReview(captureArgs, &recaptured); err != nil {
 		t.Fatal(err)
+	}
+	if captured.String() != recaptured.String() {
+		t.Fatalf("idempotent evidence capture changed output:\n%s\n%s", captured.String(), recaptured.String())
 	}
 	var ready bytes.Buffer
 	if err := RunReview(statusArgs, &ready); err != nil {
@@ -58,13 +84,33 @@ func TestValidatingEvidenceCollectionUnblocksFinalizeAndPreCommit(t *testing.T) 
 		t.Fatalf("evidence-ready status = %#v", status.NextTransition)
 	}
 	var terminal bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID, "--captured-evidence"}, &terminal); err != nil {
+	if err := RunReviewFacadeFinalize([]string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID}, &terminal); err != nil {
 		t.Fatal(err)
 	}
 	var finalized ReviewIntegrationFinalizeResult
 	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, terminal.Bytes()).Result, &finalized)
 	if finalized.State != reviewtransaction.StateApproved {
 		t.Fatalf("captured evidence finalize state = %q, want approved", finalized.State)
+	}
+	receiptPayload, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := reviewtransaction.ParseCompactReceipt(receiptPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.LineageID != started.LineageID || receipt.InitialReviewTree != record.State.InitialSnapshot.CandidateTree || receipt.FinalCandidateTree != record.State.CurrentSnapshot.CandidateTree || receipt.PathsDigest != record.State.InitialSnapshot.PathsDigest {
+		t.Fatalf("terminal receipt lost lineage or target identity = %#v", receipt)
+	}
+	var replay bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID}, &replay); err != nil {
+		t.Fatal(err)
+	}
+	var replayed ReviewIntegrationFinalizeResult
+	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, replay.Bytes()).Result, &replayed)
+	if replayed.State != reviewtransaction.StateApproved || replayed.StoreRevision != finalized.StoreRevision {
+		t.Fatalf("terminal replay = %#v, original revision %q", replayed, finalized.StoreRevision)
 	}
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
 	if err := RunReview([]string{"validate", "--cwd", repo, "--lineage", started.LineageID, "--gate", string(reviewtransaction.GatePreCommit)}, &bytes.Buffer{}); err != nil {
@@ -278,7 +324,24 @@ func historicalRoutingCandidate(value int) string {
 }
 
 func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *testing.T) {
-	repo, started, _, record := newArtifactReview(t, true)
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("provider-bound candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := runNegotiatedReviewStart(t, repo, "review-provider-task-binding")
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed := runNegotiatedReviewStart(t, repo, started.LineageID)
+	if resumed.Action != string(reviewtransaction.CompactStartResumed) ||
+		!reflect.DeepEqual(resumed.ReviewerTaskBindings, started.ReviewerTaskBindings) {
+		t.Fatalf("resumed START task bindings changed:\ncreated=%#v\nresumed=%#v", started.ReviewerTaskBindings, resumed.ReviewerTaskBindings)
+	}
 	var output bytes.Buffer
 	if err := RunReview([]string{
 		"status", "--contract", ReviewIntegrationContractV1, "--next-transition",
@@ -288,6 +351,20 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	legacyPayload, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacyStatus ReviewTargetStatusResult
+	if err := json.Unmarshal(legacyPayload, &legacyStatus); err != nil {
+		t.Fatal(err)
+	}
+	for index := range legacyStatus.NextTransition.Collect.Inputs {
+		legacyStatus.NextTransition.Collect.Inputs[index].ReviewerTaskBinding = ""
+	}
+	if err := legacyStatus.Validate(); err != nil {
+		t.Fatalf("Validate() rejected additive-minor STATUS without reviewer task bindings: %v", err)
+	}
 	if status.NextTransition == nil || status.NextTransition.Collect == nil ||
 		len(status.NextTransition.Collect.Inputs) != len(record.State.SelectedLenses) {
 		t.Fatalf("restart transition = %#v", status.NextTransition)
@@ -297,6 +374,16 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 		t.Fatal(err)
 	}
 	for order, input := range status.NextTransition.Collect.Inputs {
+		if len(started.ReviewerTaskBindings) != len(record.State.SelectedLenses) ||
+			input.ReviewerTaskBinding != started.ReviewerTaskBindings[order] ||
+			!strings.HasPrefix(input.ReviewerTaskBinding, "GENTLE_AI_REVIEW_BINDING {") ||
+			strings.Contains(input.ReviewerTaskBinding, repo) || strings.Contains(input.ReviewerTaskBinding, "tracked.txt") {
+			t.Fatalf("restart reviewer binding %d = %q, START bindings %#v", order, input.ReviewerTaskBinding, started.ReviewerTaskBindings)
+		}
+		var binding map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(input.ReviewerTaskBinding, "GENTLE_AI_REVIEW_BINDING ")), &binding); err != nil {
+			t.Fatalf("decode reviewer binding %d: %v", order, err)
+		}
 		payload, err := json.Marshal(input)
 		if err != nil {
 			t.Fatal(err)
@@ -326,6 +413,14 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 			subject.TargetIdentity != record.State.InitialSnapshot.Identity || subject.Lens != record.State.SelectedLenses[order] ||
 			subject.SelectedOrder != order || subject.CandidateDiffSHA256 != wantContext.CandidateDiff.SHA256 {
 			t.Fatalf("restart subject %d = %#v", order, subject)
+		}
+		wantBinding := map[string]any{
+			"lens": subject.Lens, "lineage": subject.LineageID, "order": float64(subject.SelectedOrder),
+			"repository_context": started.RepositoryContext.Handle, "revision": subject.AuthorityRevision,
+			"subject_hash": subject.SubjectHash, "target": subject.TargetIdentity,
+		}
+		if !reflect.DeepEqual(binding, wantBinding) {
+			t.Fatalf("restart reviewer binding %d = %#v, want %#v", order, binding, wantBinding)
 		}
 		if !reflect.DeepEqual(diff, wantContext.CandidateDiff) || !reflect.DeepEqual(manifest, wantContext.ChangedPathManifest) {
 			t.Fatalf("restart context %d differs from frozen candidate\ngot diff=%#v manifest=%#v\nwant diff=%#v manifest=%#v", order, diff, manifest, wantContext.CandidateDiff, wantContext.ChangedPathManifest)

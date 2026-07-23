@@ -101,6 +101,11 @@
       "maxItems": 4,
       "items": {"$ref": "#/$defs/artifact_subject"}
     },
+    "reviewer_task_bindings": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {"type": "string", "pattern": "^GENTLE_AI_REVIEW_BINDING \\{"}
+    },
     "candidate_diff": {"$ref": "#/$defs/frozen_candidate_diff"},
     "changed_path_manifest": {
       "type": "array",

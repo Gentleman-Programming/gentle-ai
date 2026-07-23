@@ -40,6 +40,7 @@ expected_contract = [
     contract_root / "fixtures/status-v2-unrelated.fixture.json",
     contract_root / "fixtures/status-v2.fixture.json",
     contract_root / "fixtures/status.fixture.json",
+	contract_root / "fixtures/verification-evidence.fixture.json",
 	contract_root / "schemas/admitted-result.schema.json",
 	contract_root / "schemas/artifact-subject.schema.json",
 	contract_root / "schemas/authority-repair-assessment.schema.json",
@@ -60,6 +61,7 @@ expected_contract = [
     contract_root / "schemas/status-v2.schema.json",
     contract_root / "schemas/status.schema.json",
     contract_root / "schemas/targeted-validation-request.schema.json",
+	contract_root / "schemas/verification-evidence.schema.json",
 ]
 expected_names = sorted(path.as_posix() for path in expected_contract)
 

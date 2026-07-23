@@ -47,7 +47,7 @@ type reviewIntegrationOperationMetadata struct {
 var reviewIntegrationOperationRegistry = []reviewIntegrationOperationMetadata{
 	{Command: "bind-sdd", Operation: ReviewIntegrationOperationBindSDD, Label: "Review BIND-SDD", ValueFlags: []string{"cwd", "change", "lineage", "expected-binding-revision"}, MutatesAuthority: true, JoinOnTimeout: true, TimeoutRetryable: true},
 	{Command: "capabilities", Operation: "review.capabilities", Label: "Review CAPABILITIES"},
-	{Command: "finalize", Operation: ReviewIntegrationOperationFinalize, Label: "Review FINALIZE", ValueFlags: []string{"cwd", "lineage", "validation", "refuter", "evidence", "trace", "result"}, BoolFlags: []string{"failed"}, IntFlags: []string{"correction-lines"}, MutatesAuthority: true},
+	{Command: "finalize", Operation: ReviewIntegrationOperationFinalize, Label: "Review FINALIZE", ValueFlags: []string{"cwd", "lineage", "validation", "refuter", "evidence", "trace", "result", "result-artifact", "result-artifact-file"}, BoolFlags: []string{"failed", "captured-results", "captured-evidence", "action-eligibility", "next-transition"}, IntFlags: []string{"correction-lines"}, MutatesAuthority: true},
 	{Command: "repair", Operation: "review.repair", Label: "Review REPAIR", ValueFlags: []string{"cwd", "class", "lineage", "expected-revision", "cause", "disposition", "repository-binding", "actor", "reason", "maintainer-authorization"}, BoolFlags: []string{"preflight"}, MutatesAuthority: true, JoinOnTimeout: true, ReadOnlyFlag: "preflight"},
 	{Command: "retry-final-verification", Operation: ReviewIntegrationOperationRetryFinalVerification, Label: "Review RETRY-FINAL-VERIFICATION", ValueFlags: []string{"cwd", "predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "incident", "actor", "reason", "maintainer-authorization"}, MutatesAuthority: true, JoinOnTimeout: true},
 	{Command: "start", Operation: "review.start", Label: "Review START", ValueFlags: []string{"cwd", "target", "lineage", "policy", "focus", "base-ref", "projection", "trace"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
@@ -450,6 +450,15 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 	if errors.As(runErr, &preflight) {
 		preflightFailure := newReviewIntegrationPreflightFailure(operation, "invalid_request", "The negotiated review request is invalid.")
 		preflightFailure.LineageID = failure.LineageID
+		var staleResults *staleCapturedResultsError
+		if errors.As(runErr, &staleResults) {
+			preflightFailure.Message = "Captured reviewer results are valid only while reviewing; query the current native next transition."
+			preflightFailure.AuthorityApplicability = "current_target"
+			preflightFailure.RetrySafe = false
+			preflightFailure.Replayability = reviewtransaction.ReplayabilityNotReplayable
+			preflightFailure.RequiredInputs = []string{"lineage_id"}
+			preflightFailure.NextAction = "review.status"
+		}
 		return preflightFailure
 	}
 	var legacy *reviewtransaction.LegacyReadOnlyError

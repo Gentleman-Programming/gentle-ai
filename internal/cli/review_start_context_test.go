@@ -117,12 +117,22 @@ func TestNegotiatedReviewStartContextValidationDistinguishesMissingAndEmpty(t *t
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 	writeReviewStartCandidate(t, repo, "z.txt", "second candidate\n", 0o644)
 	valid := runNegotiatedReviewStart(t, repo, "review-start-context-validation")
+	legacy := valid
+	legacy.ReviewerTaskBindings = nil
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("Validate() rejected additive-minor START without reviewer task bindings: %v", err)
+	}
 
 	for _, test := range []struct {
 		name   string
 		mutate func(*ReviewIntegrationStartResult)
 	}{
 		{name: "missing artifact subjects", mutate: func(result *ReviewIntegrationStartResult) { result.ArtifactSubjects = nil }},
+		{name: "reviewer task binding mismatch", mutate: func(result *ReviewIntegrationStartResult) {
+			bindings := append([]string(nil), result.ReviewerTaskBindings...)
+			bindings[0] = strings.Replace(bindings[0], `"order":0`, `"order":1`, 1)
+			result.ReviewerTaskBindings = bindings
+		}},
 		{name: "artifact subject mismatch", mutate: func(result *ReviewIntegrationStartResult) {
 			subjects := append([]reviewtransaction.ArtifactSubject(nil), result.ArtifactSubjects...)
 			subjects[0].SubjectHash = "sha256:" + strings.Repeat("0", 64)
@@ -197,6 +207,7 @@ func TestNegotiatedReviewStartContextValidationDistinguishesMissingAndEmpty(t *t
 	valid.RiskLevel = reviewtransaction.RiskLow
 	valid.SelectedLenses = []string{}
 	valid.ArtifactSubjects = []reviewtransaction.ArtifactSubject{}
+	valid.ReviewerTaskBindings = []string{}
 	valid.ChangedFiles = 0
 	valid.ChangedLines = 0
 	valid.CorrectionBudget = 0

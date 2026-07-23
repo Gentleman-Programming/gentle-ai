@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/verification-evidence.schema.json",
+  "title": "Gentle AI final verification evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "outcome", "checks"],
+  "properties": {
+    "schema": { "const": "gentle-ai.review-verification-evidence/v1" },
+    "outcome": { "enum": ["passed", "failed"] },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status", "evidence"],
+        "properties": {
+          "name": { "type": "string", "pattern": "\\S" },
+          "status": { "enum": ["passed", "failed"] },
+          "command": { "type": "string", "pattern": "\\S" },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "pattern": "\\S" }
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schema": "gentle-ai.review-verification-evidence/v1",
+      "outcome": "passed",
+      "checks": [
+        {
+          "name": "focused tests",
+          "status": "passed",
+          "command": "go test ./internal/cli",
+          "evidence": ["ok github.com/gentleman-programming/gentle-ai/internal/cli"]
+        }
+      ]
+    }
+  ]
+}

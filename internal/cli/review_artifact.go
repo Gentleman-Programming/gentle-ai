@@ -59,6 +59,14 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 	if err != nil || len(payload) == 0 || len(payload) > reviewResultArtifactLimit {
 		return reviewPreflightError(errors.New("final verification evidence is required"))
 	}
+	var evidence *reviewVerificationEvidence
+	if reviewVerificationEvidencePayload(payload) {
+		parsed, canonical, parseErr := parseReviewVerificationEvidence(payload)
+		if parseErr != nil {
+			return reviewPreflightError(parseErr)
+		}
+		evidence, payload = &parsed, canonical
+	}
 	dir := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir)
 	if err := ensureReviewerArtifactDir(dir); err != nil {
 		return err
@@ -98,20 +106,45 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 			return err
 		}
 	}
-	return encodeReviewJSON(stdout, map[string]any{"schema": "gentle-ai.review-verification-evidence/v1", "capability": "review.native_final_evidence", "sha256": facadePayloadHash(payload), "lineage_id": state.LineageID, "target_identity": state.CurrentSnapshot.Identity, "revision": record.Revision})
+	result := map[string]any{"schema": reviewVerificationEvidenceSchemaName, "capability": "review.native_final_evidence", "sha256": facadePayloadHash(payload), "lineage_id": state.LineageID, "target_identity": state.CurrentSnapshot.Identity, "revision": record.Revision}
+	if evidence != nil {
+		result["outcome"] = evidence.Outcome
+	}
+	return encodeReviewJSON(stdout, result)
+}
+
+func reviewVerificationEvidencePayload(payload []byte) bool {
+	var identity struct {
+		Schema string `json:"schema"`
+	}
+	return json.Unmarshal(payload, &identity) == nil && identity.Schema == reviewVerificationEvidenceSchemaName
 }
 
 func readCapturedFinalEvidence(storeDir string, state reviewtransaction.CompactState, revision string) ([]byte, error) {
+	payload, found, err := discoverCapturedFinalEvidence(storeDir)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, errors.New("captured final evidence is unavailable or unsafe")
+	}
+	return payload, nil
+}
+
+func discoverCapturedFinalEvidence(storeDir string) ([]byte, bool, error) {
 	path := filepath.Join(storeDir, reviewtransaction.CompactFinalEvidenceDir, reviewtransaction.CompactFinalEvidenceFile)
 	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !reviewArtifactModeSafe(info.Mode(), false) {
-		return nil, errors.New("captured final evidence is unavailable or unsafe")
+		return nil, false, errors.New("captured final evidence is unavailable or unsafe")
 	}
 	payload, err := os.ReadFile(path)
 	if err != nil || len(payload) == 0 || len(payload) > reviewResultArtifactLimit {
-		return nil, errors.New("captured final evidence is invalid")
+		return nil, false, errors.New("captured final evidence is invalid")
 	}
-	return payload, nil
+	return payload, true, nil
 }
 
 type reviewResultArtifact struct {
@@ -296,23 +329,32 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if result.Findings == nil || result.Evidence == nil {
 		return reviewPreflightError(errors.New("reviewer result requires explicit findings and evidence arrays"))
 	}
-	if _, err := prepareCompactReviewerResults(reviewtransaction.CompactState{SelectedLenses: []string{*lens}}, []facadeReviewerResult{result}, facadeRefuterResult{}); err != nil {
+	if result.Lens != "" {
+		providedLens, lensErr := nativeFacadeReviewerLens(result.Lens)
+		if lensErr != nil || providedLens != *lens {
+			return reviewPreflightError(fmt.Errorf("reviewer result lens %q does not match selected lens %q", result.Lens, *lens))
+		}
+	}
+	nativeResult := result.nativeLensResult()
+	nativeResult.Lens = *lens
+	canonical, err := reviewtransaction.NewCanonicalArtifactLensResult(nativeResult)
+	if err != nil {
 		return reviewPreflightError(err)
 	}
+	nativeResult = canonical.Result()
+	result = result.withCanonicalLensResult(nativeResult)
 	canonicalResult, err := json.Marshal(result)
 	if err != nil {
 		return err
 	}
 	canonicalResult = append(canonicalResult, '\n')
-	nativeResult := result.nativeLensResult()
-	nativeResult.Lens = *lens
 	candidateCausalIDs, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, nativeResult)
 	if err != nil {
 		return reviewPreflightError(err)
 	}
 	_, admission, err := reviewtransaction.AdmitArtifact(reviewtransaction.ArtifactAdmissionRequest{
 		ExpectedSubject: subject, FrozenContext: frozen, EchoedSubjectHash: result.SubjectHash,
-		Inspection: result.Inspection, Result: nativeResult, CandidateCausalFindingIDs: candidateCausalIDs,
+		Inspection: result.Inspection, CanonicalResult: &canonical, CandidateCausalFindingIDs: candidateCausalIDs,
 		RawPayload: rawPayload, CanonicalPayload: canonicalResult,
 	})
 	if err != nil {
@@ -779,9 +821,13 @@ func decodeAdmittedReviewerResult(payload []byte, expected reviewtransaction.Art
 	canonical = append(canonical, '\n')
 	native := envelope.Result.nativeLensResult()
 	native.Lens = expected.Lens
+	canonicalResult, err := reviewtransaction.NewCanonicalArtifactLensResult(native)
+	if err != nil {
+		return facadeReviewerResult{}, err
+	}
 	result, revalidated, err := reviewtransaction.AdmitArtifact(reviewtransaction.ArtifactAdmissionRequest{
 		ExpectedSubject: expected, FrozenContext: frozen, EchoedSubjectHash: envelope.Result.SubjectHash,
-		Inspection: envelope.Result.Inspection, Result: native,
+		Inspection: envelope.Result.Inspection, CanonicalResult: &canonicalResult,
 		CandidateCausalFindingIDs: envelope.Admission.CandidateCausalFindingIDs,
 		RawPayload:                canonical, CanonicalPayload: canonical,
 	})

@@ -27,6 +27,18 @@ interface ReviewCapturePreflight {
   changed_path_manifest: Array<Record<string, unknown>>
 }
 
+function validManifestPath(path: unknown): path is string {
+  return typeof path === "string" && path !== "" && !path.startsWith("/") && !path.includes("\\") &&
+    path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..")
+}
+
+function bindingKey(binding: ReviewBinding): string {
+  return JSON.stringify([
+    binding.lineage, binding.target, binding.lens, binding.order,
+    binding.revision ?? "", binding.repository_context ?? "",
+  ])
+}
+
 function parseBinding(prompt: unknown, lens: string): ReviewBinding {
   const match = BINDING.exec(typeof prompt === "string" ? prompt : "")
   if (!match) throw new Error("review task is missing GENTLE_AI_REVIEW_BINDING")
@@ -139,9 +151,11 @@ async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<Re
     }
     const value = parsed as Record<string, unknown>
     const subject = value.artifact_subject as Record<string, unknown> | undefined
+    const manifest = value.changed_path_manifest as Array<Record<string, unknown>> | undefined
     if (!subject || typeof subject.subject_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.subject_hash) ||
         !value.candidate_diff || typeof value.candidate_diff !== "object" || Array.isArray(value.candidate_diff) ||
-        !Array.isArray(value.changed_path_manifest) || value.changed_path_manifest.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))) {
+        !Array.isArray(manifest) || manifest.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry) || !validManifestPath(entry.path)) ||
+        new Set(manifest.map((entry) => entry.path)).size !== manifest.length) {
       throw new Error("review capture preflight returned incomplete frozen candidate context")
     }
     if (binding.subject_hash && subject.subject_hash !== binding.subject_hash) {
@@ -169,10 +183,13 @@ async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<Re
   }
 }
 
-async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<string> {
+async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<{prompt: string, preflight?: ReviewCapturePreflight}> {
   const binding = parseBinding(prompt, lens)
   const preflight = await preflightCapture(cwd, binding)
-  if (!preflight) return prompt
+  if (!preflight) {
+    if (binding.subject_hash) throw new Error("provider-bound review task requires capture preflight")
+    return { prompt }
+  }
   const injectedBinding = { ...binding, subject_hash: preflight.artifact_subject.subject_hash }
   const boundPrompt = prompt.replace(BINDING, `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(injectedBinding)}\n`)
   const frozen = JSON.stringify({
@@ -180,7 +197,40 @@ async function injectReviewerContext(prompt: string, lens: string, cwd: string):
     candidate_diff: preflight.candidate_diff,
     changed_path_manifest: preflight.changed_path_manifest,
   })
-  return `${boundPrompt.trimEnd()}\n${FROZEN_CONTEXT}${frozen}`
+  return { prompt: `${boundPrompt.trimEnd()}\n${FROZEN_CONTEXT}${frozen}`, preflight }
+}
+
+function enrichedReviewerResult(binding: ReviewBinding, result: string, preflight: ReviewCapturePreflight | undefined): string {
+  if (!preflight) {
+    if (binding.subject_hash) throw new Error("review task is missing retained provider context")
+    return result
+  }
+  if (binding.subject_hash !== preflight.artifact_subject.subject_hash) {
+    throw new Error("review task binding does not match retained provider context")
+  }
+  const paths = preflight.changed_path_manifest.map((entry) => entry.path)
+  if (paths.some((path) => typeof path !== "string" || path === "")) {
+    throw new Error("retained provider context contains a malformed changed-path manifest")
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(result)
+  } catch {
+    throw new Error("reviewer result is not strict JSON")
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("reviewer result must be an object")
+  }
+  const value = parsed as Record<string, unknown>
+  if (Object.keys(value).sort().join(",") !== "evidence,findings" || !Array.isArray(value.findings) || !Array.isArray(value.evidence)) {
+    throw new Error("reviewer result must contain only findings and evidence")
+  }
+  return JSON.stringify({
+    subject_hash: preflight.artifact_subject.subject_hash,
+    inspection: { status: "completed", paths },
+    findings: value.findings,
+    evidence: value.evidence,
+  })
 }
 
 function preserveResult(cwd: string, binding: ReviewBinding, raw: string, cls?: string): Promise<string> {
@@ -250,18 +300,24 @@ async function preservedCaptureFailure(cwd: string, binding: ReviewBinding, raw:
   }
 }
 
-const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => ({
+const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
+  const retainedPreflight = new Map<string, ReviewCapturePreflight>()
+  return {
   "tool.execute.before": async (input, output) => {
     if (input.tool !== "task" || typeof output.args?.subagent_type !== "string" ||
         !REVIEW_AGENTS.has(output.args.subagent_type) || !BINDING.test(output.args.prompt)) return
     if (output.args.background === true) {
       throw new Error("bound review tasks must run in the foreground for native result capture")
     }
-    output.args.prompt = await injectReviewerContext(
+    const injected = await injectReviewerContext(
       output.args.prompt,
       output.args.subagent_type,
       captureCwd(worktree, directory),
     )
+    output.args.prompt = injected.prompt
+    if (injected.preflight) {
+      retainedPreflight.set(bindingKey(parseBinding(output.args.prompt, output.args.subagent_type)), injected.preflight)
+    }
   },
   "tool.execute.after": async (input, output) => {
     if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
@@ -283,11 +339,16 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => (
       throw await preservedCaptureFailure(cwd, binding, output.output, cause)
     }
     try {
+      const key = bindingKey(binding)
+      const preflight = retainedPreflight.get(key)
+      retainedPreflight.delete(key)
+      result = enrichedReviewerResult(binding, result, preflight)
       output.output = await captureResult(cwd, binding, result)
     } catch (cause) {
       throw await preservedCaptureFailure(cwd, binding, result, cause)
     }
   },
-})
+  }
+}
 
 export default ReviewResultArtifactsPlugin

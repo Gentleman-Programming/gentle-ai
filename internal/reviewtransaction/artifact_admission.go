@@ -55,12 +55,36 @@ type ArtifactAdmissionRequest struct {
 	EchoedSubjectHash string
 	Inspection        ArtifactInspection
 	Result            LensResult
+	CanonicalResult   *CanonicalArtifactLensResult
 	// CandidateCausalFindingIDs is the canonical set whose claimed candidate
 	// causality the provider verified against repository-derived changed-line
 	// evidence before admission.
 	CandidateCausalFindingIDs []string
 	RawPayload                []byte
 	CanonicalPayload          []byte
+}
+
+// CanonicalArtifactLensResult carries one provider-canonicalized result across
+// repository causal verification and artifact admission without regenerating
+// finding identities at either boundary.
+type CanonicalArtifactLensResult struct {
+	result LensResult
+	valid  bool
+}
+
+func NewCanonicalArtifactLensResult(result LensResult) (CanonicalArtifactLensResult, error) {
+	canonical, err := CanonicalCompactLensResult(result)
+	if err != nil {
+		return CanonicalArtifactLensResult{}, err
+	}
+	if err := validateCanonicalArtifactFindingIDs(canonical); err != nil {
+		return CanonicalArtifactLensResult{}, err
+	}
+	return CanonicalArtifactLensResult{result: cloneArtifactLensResult(canonical), valid: true}, nil
+}
+
+func (canonical CanonicalArtifactLensResult) Result() LensResult {
+	return cloneArtifactLensResult(canonical.result)
 }
 
 // ArtifactAdmissionError exposes the stable native decision without requiring
@@ -157,9 +181,17 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 	if !equalStrings(inspectionPaths, wantPaths) {
 		return fail(ArtifactAdmissionIncomplete, "reviewer inspection did not cover the complete frozen path manifest")
 	}
-	canonical, err := CanonicalCompactLensResult(request.Result)
-	if err != nil {
-		return fail(ArtifactAdmissionIncomplete, err.Error())
+	canonical := LensResult{}
+	if request.CanonicalResult != nil {
+		if !request.CanonicalResult.valid {
+			return fail(ArtifactAdmissionIncomplete, "canonical reviewer result is invalid")
+		}
+		canonical = request.CanonicalResult.Result()
+	} else {
+		canonical, err = CanonicalCompactLensResult(request.Result)
+		if err != nil {
+			return fail(ArtifactAdmissionIncomplete, err.Error())
+		}
 	}
 	wantPrefix := map[string]string{LensRisk: "R1-", LensReadability: "R2-", LensReliability: "R3-", LensResilience: "R4-"}[canonical.Lens]
 	seenFindingIDs := make(map[string]struct{}, len(canonical.Findings))
@@ -210,6 +242,34 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 	admission.Decision, admission.ResultHash = ArtifactAdmissionCompleted, canonical.ResultHash
 	admission.CandidateCausalFindingIDs = verifiedIDs
 	return canonical, admission, nil
+}
+
+func cloneArtifactLensResult(result LensResult) LensResult {
+	clone := result
+	clone.Findings = append([]Finding(nil), result.Findings...)
+	for index := range clone.Findings {
+		clone.Findings[index].ProofRefs = append([]string(nil), result.Findings[index].ProofRefs...)
+	}
+	clone.Evidence = append([]string(nil), result.Evidence...)
+	return clone
+}
+
+func validateCanonicalArtifactFindingIDs(result LensResult) error {
+	wantPrefix := map[string]string{LensRisk: "R1-", LensReadability: "R2-", LensReliability: "R3-", LensResilience: "R4-"}[result.Lens]
+	seen := make(map[string]struct{}, len(result.Findings))
+	for index, finding := range result.Findings {
+		if !artifactFindingID.MatchString(finding.ID) {
+			return fmt.Errorf("lens result finding[%d] ID does not match the native ASCII schema", index)
+		}
+		if !strings.HasPrefix(finding.ID, wantPrefix) {
+			return fmt.Errorf("lens result finding[%d] ID is not bound to %q", index, result.Lens)
+		}
+		if _, duplicate := seen[finding.ID]; duplicate {
+			return fmt.Errorf("lens result finding[%d] repeats finding ID %q", index, finding.ID)
+		}
+		seen[finding.ID] = struct{}{}
+	}
+	return nil
 }
 
 func payloadSHA256(payload []byte) string {

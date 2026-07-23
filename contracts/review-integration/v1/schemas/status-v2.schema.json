@@ -142,6 +142,7 @@
       "properties": {
         "name": { "type": "string", "pattern": "^[a-z0-9_]+$" }, "schema": { "type": "string", "minLength": 1 }, "capture_operation": { "type": "string", "minLength": 1 },
         "arguments": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/transition_argument" } },
+        "reviewer_task_binding": { "type": "string", "pattern": "^GENTLE_AI_REVIEW_BINDING \\{" },
         "artifact_subject": { "$ref": "artifact-subject.schema.json" },
         "candidate_diff": { "$ref": "start-v2.schema.json#/$defs/frozen_candidate_diff" },
         "changed_path_manifest": { "type": "array", "uniqueItems": true, "items": { "$ref": "start-v2.schema.json#/$defs/changed_path" } },
@@ -159,10 +160,15 @@
           "else": {
             "allOf": [
               { "not": { "required": ["artifact_subject"] } },
+              { "not": { "required": ["reviewer_task_binding"] } },
               { "not": { "required": ["candidate_diff"] } },
               { "not": { "required": ["changed_path_manifest"] } }
             ]
           }
+        },
+        {
+          "if": { "properties": { "capture_operation": { "const": "review.capture-evidence" } }, "required": ["capture_operation"] },
+          "then": { "properties": { "schema": { "const": "gentle-ai.review-verification-evidence/v1" } } }
         }
       ]
     },

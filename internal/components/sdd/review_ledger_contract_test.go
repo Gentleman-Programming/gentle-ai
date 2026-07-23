@@ -181,8 +181,8 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		wantChars     int
 		maxCharacters int
 	}{
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 7_085, maxCharacters: 7_200},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 14_078, maxCharacters: 16_000},
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 7_181, maxCharacters: 7_200},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 14_174, maxCharacters: 16_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

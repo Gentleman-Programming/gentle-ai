@@ -253,6 +253,12 @@ When a release merge retains an approved `current-changes` candidate but expands
 
 Malformed reviewer JSON, missing required reviewer arrays, canonicalization failures, and selected-lens mismatches are deterministic preflight failures. Negotiated finalize reports `invalid_request`, `mutation_outcome: not_started`, `retry_safe: true`, `replayability: not_replayable`, and `next_action: correct_request`, while preserving a valid requested lineage for target-scoped recovery. Correct the payload before retrying; do not run authority repair.
 
+### Complete final verification from validating
+
+When negotiated status emits `collect / verification_evidence_required`, use its exact `review.capture-evidence` operation and lineage, target, and expected-revision arguments. Obtain the public payload contract with `gentle-ai review schema verification-evidence`, write the provider-owned `gentle-ai.review-verification-evidence/v1` payload to a file, and pass that file with `--input`. The provider records check names, statuses, optional commands, and concrete result evidence; native capture canonicalizes the JSON and derives all bindings and hashes.
+
+After capture, status emits `execute / captured_verification_evidence_ready`. Lineage-only `review finalize` also discovers the same canonical evidence after restart, derives pass or failure from structured evidence, and publishes or discovers the terminal receipt idempotently. Do not replay `--captured-results` after authority leaves `reviewing`: negotiated finalize rejects that stale selector without mutation and directs the caller to `review.status` for the current transition.
+
 ### Reopen unusable validating results without another budget
 
 `gentle-ai review reopen-results` is a bounded maintenance operation for an uncorrected validating authority whose historical reviewer artifact was unadmitted or whose preserved evidence says candidate inspection was unavailable. It never starts a lineage or recalculates target, tier, lenses, changed-line count, or correction budget.
@@ -304,8 +310,8 @@ Pi adoption, fallback retirement, package pinning, and Pi release sequencing are
 
 Each release archive contains:
 
-- `contracts/review-integration/v1/schemas/` — twenty strict JSON Schemas, including preserved capability protocols v1.0–v1.3, current v1.4, versioned START/status/result-artifact contracts, final-verification incident, classified repair, provider subject/admission, and targeted validation.
-- `contracts/review-integration/v1/fixtures/` — twenty-four deterministic conformance fixtures, including all five capability minors, preserved v1 plus current v2 START/status examples, the final-verification incident and retry projection, classified repair preflight, and typed failure envelopes.
+- `contracts/review-integration/v1/schemas/` — twenty-one strict JSON Schemas, including preserved capability protocols v1.0–v1.3, current v1.4, versioned START/status/result-artifact contracts, final-verification evidence and incident, classified repair, provider subject/admission, and targeted validation.
+- `contracts/review-integration/v1/fixtures/` — twenty-five deterministic conformance fixtures, including all five capability minors, preserved v1 plus current v2 START/status examples, final-verification evidence, the final-verification incident and retry projection, classified repair preflight, and typed failure envelopes.
 - `docs/review-integration.md` — this ownership and consumption guide.
 
 Repository maintainers can verify source inventory or a complete GoReleaser snapshot:

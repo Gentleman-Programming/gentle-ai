@@ -774,7 +774,14 @@ func (transition ReviewNextTransition) Validate() error {
 				if _, err := input.CandidateDiff.Bytes(); err != nil {
 					return errors.New("review capture transition candidate diff is invalid")
 				}
-			} else if input.ArtifactSubject != nil || input.CandidateDiff != nil || input.ChangedPathManifest != nil {
+				wantBinding, bindingErr := renderReviewTaskBinding(ReviewTransitionBinding{
+					LineageID: arguments["lineage"], Revision: arguments["expected-revision"], TargetIdentity: arguments["target"],
+					RepositoryContext: arguments["repository-context"],
+				}, *subject)
+				if bindingErr != nil || input.ReviewerTaskBinding != "" && input.ReviewerTaskBinding != wantBinding {
+					return errors.New("review capture transition task binding is invalid")
+				}
+			} else if input.ArtifactSubject != nil || input.CandidateDiff != nil || input.ChangedPathManifest != nil || input.ReviewerTaskBinding != "" {
 				return errors.New("non-reviewer collection transition contains frozen reviewer context")
 			}
 			if input.CaptureOperation == "external.run_targeted_validation" && input.ValidationRequest == nil {

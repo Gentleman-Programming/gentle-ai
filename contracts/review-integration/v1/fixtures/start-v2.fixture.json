@@ -70,6 +70,12 @@
       "selected_order": 3
     }
   ],
+  "reviewer_task_bindings": [
+    "GENTLE_AI_REVIEW_BINDING {\"lineage\":\"review-start-fixture\",\"target\":\"sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5\",\"lens\":\"review-risk\",\"order\":0,\"revision\":\"sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c\",\"repository_context\":\"rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"subject_hash\":\"sha256:38a55988f6b3ae6f520690d52fd29255f425a4048b0f8694de3a80c5daf265cd\"}",
+    "GENTLE_AI_REVIEW_BINDING {\"lineage\":\"review-start-fixture\",\"target\":\"sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5\",\"lens\":\"review-resilience\",\"order\":1,\"revision\":\"sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c\",\"repository_context\":\"rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"subject_hash\":\"sha256:06d86f981a8c0b16c2179696d467c8157580214ad72c952adee423fe596d2c21\"}",
+    "GENTLE_AI_REVIEW_BINDING {\"lineage\":\"review-start-fixture\",\"target\":\"sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5\",\"lens\":\"review-readability\",\"order\":2,\"revision\":\"sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c\",\"repository_context\":\"rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"subject_hash\":\"sha256:beacbf1eed52620ef7686087f8944cbc2304d71abf13281267efe9e4de20fb1e\"}",
+    "GENTLE_AI_REVIEW_BINDING {\"lineage\":\"review-start-fixture\",\"target\":\"sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5\",\"lens\":\"review-reliability\",\"order\":3,\"revision\":\"sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c\",\"repository_context\":\"rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"subject_hash\":\"sha256:61a10b133e3f7a8ccad1d0f1d58989df75d2330ad530690137de625bfd10eec8\"}"
+  ],
   "candidate_diff": {
     "encoding": "base64",
     "data": "ZGlmZiAtLWdpdCBhL3NjcmlwdHMvZGVwbG95LnNoIGIvc2NyaXB0cy9kZXBsb3kuc2gKbmV3IGZpbGUgbW9kZSAxMDA2NDQKaW5kZXggMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMC4uMjhiM2FjMTI4ZmJiZWFmZmY0OWEzMjYxMDVmOGVhYzg1YzZjNzdhMQotLS0gL2Rldi9udWxsCisrKyBiL3NjcmlwdHMvZGVwbG95LnNoCkBAIC0wLDAgKzEgQEAKK2VjaG8gZGVwbG95Cg==",

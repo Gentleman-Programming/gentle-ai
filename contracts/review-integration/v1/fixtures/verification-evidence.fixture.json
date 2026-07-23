@@ -1,0 +1,12 @@
+{
+  "schema": "gentle-ai.review-verification-evidence/v1",
+  "outcome": "passed",
+  "checks": [
+    {
+      "name": "focused tests",
+      "status": "passed",
+      "command": "go test ./internal/cli",
+      "evidence": ["ok github.com/gentleman-programming/gentle-ai/internal/cli"]
+    }
+  ]
+}

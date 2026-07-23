@@ -202,6 +202,160 @@ func TestReviewCaptureResultFinalizePreservesCausalClassification(t *testing.T) 
 	}
 }
 
+func TestReviewCaptureResultCanonicalFindingIDMatrixHarness(t *testing.T) {
+	repo, started, store, record := newArtifactReview(t, true)
+	wantIDs := map[string]string{
+		reviewtransaction.LensRisk:        "R1-001",
+		reviewtransaction.LensResilience:  "R4-001",
+		reviewtransaction.LensReadability: "R2-001",
+		reviewtransaction.LensReliability: "R3-001",
+	}
+	for order, lens := range record.State.SelectedLenses {
+		result := admittedReviewerResultForTest(t, repo, record, lens, order)
+		severity := "CRITICAL"
+		if lens == reviewtransaction.LensRisk || lens == reviewtransaction.LensReliability {
+			severity = "BLOCKER"
+		}
+		class := reviewtransaction.EvidenceDeterministic
+		causality := reviewtransaction.CausalIntroduced
+		if lens == reviewtransaction.LensResilience {
+			severity, class, causality = "WARNING", "", ""
+		}
+		result.Findings = []facadeFinding{{
+			Location: "service-token.ts:1", Severity: severity, Claim: "candidate-specific finding",
+			ProofRefs: []string{"service-token.ts:1 changed hunk"}, EvidenceClass: class, CausalDisposition: causality,
+		}}
+		input := filepath.Join(t.TempDir(), fmt.Sprintf("%02d-%s.json", order, lens))
+		writeReviewCLIJSON(t, input, result)
+		raw, err := os.ReadFile(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		args := []string{
+			"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+			"--lens", lens, "--order", fmt.Sprint(order), "--input", input,
+		}
+		var captured, replay bytes.Buffer
+		if err := RunReviewCaptureResult(args, &captured); err != nil {
+			t.Fatalf("capture omitted %s finding ID: %v", lens, err)
+		}
+		if err := RunReviewCaptureResult(args, &replay); err != nil || captured.String() != replay.String() {
+			t.Fatalf("exact raw replay for %s changed: %v", lens, err)
+		}
+		var artifact reviewResultArtifact
+		decodeStrictReviewJSON(t, captured.Bytes(), &artifact)
+		envelopePayload, err := os.ReadFile(artifact.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var envelope admittedReviewerResult
+		decodeStrictReviewJSON(t, envelopePayload, &envelope)
+		if got := envelope.Result.Findings[0].ID; got != wantIDs[lens] {
+			t.Fatalf("%s canonical finding ID = %q, want %q", lens, got, wantIDs[lens])
+		}
+		wantCausal := []string{}
+		if facadeSevere(severity) {
+			wantCausal = []string{wantIDs[lens]}
+		}
+		if !reflect.DeepEqual(envelope.Admission.CandidateCausalFindingIDs, wantCausal) || envelope.Admission.RawSHA256 != facadePayloadHash(raw) {
+			t.Fatalf("%s admission = %#v, raw hash %q", lens, envelope.Admission, facadePayloadHash(raw))
+		}
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Revision != record.Revision || loaded.State.State != reviewtransaction.StateReviewing || len(entries) != 8 {
+		t.Fatalf("four-slot capture mutated lifecycle or missed artifact/digest files: record=%#v entries=%d", loaded, len(entries))
+	}
+}
+
+func TestReviewCaptureResultCanonicalFindingIDOwnership(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		findings   []facadeFinding
+		wantIDs    []string
+		wantCausal []string
+		wantReject bool
+	}{
+		{
+			name: "explicit ID preserved", wantIDs: []string{"R3-explicit"}, wantCausal: []string{"R3-explicit"},
+			findings: []facadeFinding{{ID: "R3-explicit", Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate failure", ProofRefs: []string{"tracked.txt:1 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced}},
+		},
+		{
+			name: "multiple omitted IDs keep order", wantIDs: []string{"R3-001", "R3-002"}, wantCausal: []string{},
+			findings: []facadeFinding{
+				{Location: "tracked.txt:1", Severity: "WARNING", Claim: "first implicit identity", ProofRefs: []string{"tracked.txt:1 changed hunk"}},
+				{Location: "tracked.txt:1", Severity: "WARNING", Claim: "second implicit identity", ProofRefs: []string{"tracked.txt:1 changed hunk"}},
+			},
+		},
+		{
+			name: "explicit and implicit collision rejected", wantReject: true,
+			findings: []facadeFinding{
+				{Location: "tracked.txt:1", Severity: "WARNING", Claim: "implicit identity", ProofRefs: []string{"tracked.txt:1 changed hunk"}},
+				{ID: "R3-001", Location: "tracked.txt:1", Severity: "WARNING", Claim: "explicit collision", ProofRefs: []string{"tracked.txt:1 changed hunk"}},
+			},
+		},
+		{
+			name: "duplicate explicit IDs rejected", wantReject: true,
+			findings: []facadeFinding{
+				{ID: "R3-duplicate", Location: "tracked.txt:1", Severity: "WARNING", Claim: "first explicit identity", ProofRefs: []string{"tracked.txt:1 changed hunk"}},
+				{ID: "R3-duplicate", Location: "tracked.txt:1", Severity: "WARNING", Claim: "duplicate explicit identity", ProofRefs: []string{"tracked.txt:1 changed hunk"}},
+			},
+		},
+		{
+			name: "wrong lens prefix rejected", wantReject: true,
+			findings: []facadeFinding{{ID: "R1-001", Location: "tracked.txt:1", Severity: "WARNING", Claim: "cross-lens identity", ProofRefs: []string{"tracked.txt:1 changed hunk"}}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, started, store, record := newArtifactReview(t, false)
+			lens := record.State.SelectedLenses[0]
+			result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+			result.Findings = test.findings
+			input := filepath.Join(t.TempDir(), "result.json")
+			writeReviewCLIJSON(t, input, result)
+			var output bytes.Buffer
+			err := RunReviewCaptureResult([]string{
+				"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+				"--lens", lens, "--order", "0", "--input", input,
+			}, &output)
+			if test.wantReject {
+				if err == nil {
+					t.Fatal("invalid finding identity was captured")
+				}
+				if _, statErr := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir)); !os.IsNotExist(statErr) {
+					t.Fatalf("rejection consumed result slot: %v", statErr)
+				}
+				assertArtifactRevision(t, store, record.Revision)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var artifact reviewResultArtifact
+			decodeStrictReviewJSON(t, output.Bytes(), &artifact)
+			payload, err := os.ReadFile(artifact.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var envelope admittedReviewerResult
+			decodeStrictReviewJSON(t, payload, &envelope)
+			gotIDs := make([]string, len(envelope.Result.Findings))
+			for index, finding := range envelope.Result.Findings {
+				gotIDs[index] = finding.ID
+			}
+			if !reflect.DeepEqual(gotIDs, test.wantIDs) || !reflect.DeepEqual(envelope.Admission.CandidateCausalFindingIDs, test.wantCausal) {
+				t.Fatalf("canonical identities = %v admission=%v, want %v/%v", gotIDs, envelope.Admission.CandidateCausalFindingIDs, test.wantIDs, test.wantCausal)
+			}
+		})
+	}
+}
+
 func TestReviewFinalizeArtifactFiles(t *testing.T) {
 	for _, tt := range []struct {
 		name     string

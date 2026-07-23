@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -41,6 +43,7 @@ type ReviewTransitionInput struct {
 	Schema              string                                        `json:"schema"`
 	CaptureOperation    string                                        `json:"capture_operation"`
 	Arguments           []ReviewTransitionArgument                    `json:"arguments"`
+	ReviewerTaskBinding string                                        `json:"reviewer_task_binding,omitempty"`
 	ArtifactSubject     *reviewtransaction.ArtifactSubject            `json:"artifact_subject,omitempty"`
 	CandidateDiff       *reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff,omitempty"`
 	ChangedPathManifest *[]reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest,omitempty"`
@@ -62,6 +65,34 @@ type ReviewTransitionBinding struct {
 	Revision          string `json:"revision,omitempty"`
 	TargetIdentity    string `json:"target_identity"`
 	RepositoryContext string `json:"repository_context,omitempty"`
+}
+
+const reviewTaskBindingPrefix = "GENTLE_AI_REVIEW_BINDING "
+
+type reviewTaskBinding struct {
+	Lineage           string `json:"lineage"`
+	Target            string `json:"target"`
+	Lens              string `json:"lens"`
+	Order             int    `json:"order"`
+	Revision          string `json:"revision"`
+	RepositoryContext string `json:"repository_context"`
+	SubjectHash       string `json:"subject_hash"`
+}
+
+func renderReviewTaskBinding(binding ReviewTransitionBinding, subject reviewtransaction.ArtifactSubject) (string, error) {
+	if reviewtransaction.ValidateArtifactSubject(subject) != nil || binding.LineageID != subject.LineageID ||
+		binding.Revision != subject.AuthorityRevision || binding.TargetIdentity != subject.TargetIdentity ||
+		reviewtransaction.ValidateReviewRepositoryContextHandle(binding.RepositoryContext) != nil {
+		return "", errors.New("review task binding does not match provider-owned transition context")
+	}
+	payload, err := json.Marshal(reviewTaskBinding{
+		Lineage: binding.LineageID, Target: binding.TargetIdentity, Lens: subject.Lens, Order: subject.SelectedOrder,
+		Revision: binding.Revision, RepositoryContext: binding.RepositoryContext, SubjectHash: subject.SubjectHash,
+	})
+	if err != nil {
+		return "", fmt.Errorf("encode provider-owned review task binding: %w", err)
+	}
+	return reviewTaskBindingPrefix + string(payload), nil
 }
 
 // ReviewTransitionArtifact deliberately excludes the provider-owned path. The
@@ -160,7 +191,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			return reviewExecuteTransition("native_low_risk_verification", "review.finalize", []ReviewTransitionArgument{{Name: "lineage", Value: binding.LineageID}}, []ReviewTransitionArgument{{Name: "state", Value: "validating"}, {Name: "risk_level", Value: "low"}}, binding, nil)
 		}
 		return reviewCollectTransition("verification_evidence_required", ReviewTransitionInput{
-			Name: "evidence", Schema: "gentle-ai.review-verification-evidence/v1", CaptureOperation: "review.capture-evidence",
+			Name: "evidence", Schema: reviewVerificationEvidenceSchemaName, CaptureOperation: "review.capture-evidence",
 			Arguments: reviewBindingArguments(binding),
 		})
 	case reviewtransaction.StateInvalidated:
@@ -268,6 +299,10 @@ func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int,
 		manifest := append([]reviewtransaction.ChangedPathManifestEntry(nil), context.FrozenContext.ChangedPathManifest...)
 		if manifest == nil {
 			manifest = []reviewtransaction.ChangedPathManifestEntry{}
+		}
+		taskBinding, err := renderReviewTaskBinding(binding, subject)
+		if err == nil {
+			input.ReviewerTaskBinding = taskBinding
 		}
 		input.ArtifactSubject, input.CandidateDiff, input.ChangedPathManifest = &subject, &diff, &manifest
 	}
