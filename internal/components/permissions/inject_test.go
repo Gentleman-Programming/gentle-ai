@@ -154,14 +154,14 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestSDDInjectPreservesOrchestratorPermissionsAfterPermissionInjection(t *testing.T) {
+func TestInjectOpenCodeBackfillsOrchestratorPermissionsAfterSDD(t *testing.T) {
 	home := t.TempDir()
 	adapter := opencodeAdapter()
-	if _, err := Inject(home, adapter); err != nil {
-		t.Fatalf("Permission Inject() error = %v", err)
-	}
 	if _, err := sdd.Inject(home, adapter, ""); err != nil {
 		t.Fatalf("SDD Inject() error = %v", err)
+	}
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatalf("Permission Inject() error = %v", err)
 	}
 
 	content, err := os.ReadFile(adapter.SettingsPath(home))
