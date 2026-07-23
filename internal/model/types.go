@@ -56,13 +56,13 @@ const (
 	UninstallModeCleanInstall UninstallMode = "clean-install"
 )
 
-// EngramUninstallScope selects the scope of Engram cleanup performed by the
-// uninstall flow. The zero value (empty string) represents "None" — the user
-// explicitly opted out of any Engram cleanup, so neither the workspace's
-// .engram/ directory nor the global Engram MCP/system prompt integration
-// is removed. The service layer treats "" as a sentinel for no-op Engram
-// removal, which lets the TUI skip the Engram step without changing service
-// signatures.
+// EngramUninstallScope selects the scope of Engram cleanup. The zero
+// value ("") represents "None" — the user opted out of any Engram cleanup.
+// IMPORTANT: "" is NOT a service-level no-op. The uninstall service
+// treats an empty component list as "all components" and would still
+// trigger global Engram cleanup if ComponentEngram reached it. The TUI
+// enforces None via startUninstall's engramCleanupSkipped branch;
+// callers MUST NOT pass "" as a service cleanup request.
 type EngramUninstallScope string
 
 const (

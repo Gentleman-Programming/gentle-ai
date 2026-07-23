@@ -1762,7 +1762,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				for _, component := range allComponents {
 					m.UninstallComponents = append(m.UninstallComponents, component.ID)
 				}
-				if m.shouldShowUninstallSubSelection() {
+				// Full modes imply global Engram cleanup; auto-route only when
+				// profiles exist. ComponentEngram reachability is handled by
+				// shouldShowUninstallSubSelection (Partial-mode routing).
+				if m.shouldShowUninstallProfilesSelection() {
 					m.selectAllUninstallProfiles()
 					m.UninstallProfileSelection = true
 					m.setScreen(ScreenUninstallProfiles)
@@ -2971,17 +2974,19 @@ func (m Model) startUninstall() tea.Cmd {
 		)
 		switch {
 		case engramCleanupSkipped:
-			// None: filter ComponentEngram out of componentIDs before delegating
-			// to uninstallFn — the service treats Engram as a global cleanup
-			// target, so leaving it in would wipe the user's Engram data
-			// despite the explicit opt-out. Profile removal runs separately.
+			// None: filter ComponentEngram out of componentIDs — service treats
+			// Engram as a global cleanup target. Skip uninstallFn when the
+			// filtered slice is empty (service treats [] as "all components"
+			// and would still trigger Global cleanup). Profile removal runs.
 			componentsWithoutEngram := make([]model.ComponentID, 0, len(componentIDs))
 			for _, c := range componentIDs {
 				if c != model.ComponentEngram {
 					componentsWithoutEngram = append(componentsWithoutEngram, c)
 				}
 			}
-			result, err = uninstallFn(agentIDs, componentsWithoutEngram)
+			if len(componentsWithoutEngram) > 0 {
+				result, err = uninstallFn(agentIDs, componentsWithoutEngram)
+			}
 			if err == nil && len(profileNamesToRemove) > 0 {
 				settingsPath := opencode.DefaultSettingsPath()
 				for _, profileName := range profileNamesToRemove {
@@ -4542,8 +4547,15 @@ func (m Model) shouldShowUninstallEngramScopeSelection() bool {
 	return m.UninstallEngramProjectScopeAvailable
 }
 
+// shouldShowUninstallSubSelection reports whether the uninstall flow must
+// route through ScreenUninstallProfiles. Reachable when profiles exist
+// OR ComponentEngram is selected — without project scope, the user still
+// must choose None vs Global.
 func (m Model) shouldShowUninstallSubSelection() bool {
-	return m.shouldShowUninstallProfilesSelection() || m.shouldShowUninstallEngramScopeSelection()
+	if m.shouldShowUninstallProfilesSelection() {
+		return true
+	}
+	return hasSelectedComponent(m.UninstallComponents, model.ComponentEngram)
 }
 
 func (m *Model) selectAllUninstallProfiles() {

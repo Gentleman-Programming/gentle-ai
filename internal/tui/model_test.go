@@ -2313,6 +2313,39 @@ func TestStartUninstall_NoneScopeProfileRemovalFailureSurfacesAsManualAction(t *
 	}
 }
 
+// TestStartUninstall_NoneScopeEngramOnlySkipsUninstallFn (C1 regression):
+// with only ComponentEngram selected and scope=None, the filtered slice
+// is empty. Service treats [] as "all components"; startUninstall must
+// skip UninstallFn entirely while still removing requested profiles.
+func TestStartUninstall_NoneScopeEngramOnlySkipsUninstallFn(t *testing.T) {
+	originalRemove := removeProfileAgentsFn
+	removedNames := []string{}
+	removeProfileAgentsFn = func(settingsPath, profileName string) error {
+		removedNames = append(removedNames, profileName)
+		return nil
+	}
+	t.Cleanup(func() { removeProfileAgentsFn = originalRemove })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.UninstallProfilesToRemove = []string{"cheap"}
+	m.UninstallEngramScope = ""
+	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		t.Fatalf("UninstallFn must NOT be called when Engram-only selection + scope=None (would expand to all components via service). Got agentIDs=%v componentIDs=%v", agentIDs, componentIDs)
+		return componentuninstall.Result{}, nil
+	}
+
+	msg := m.startUninstall()().(UninstallDoneMsg)
+	if msg.Err != nil {
+		t.Fatalf("UninstallDoneMsg.Err = %v, want nil (no managed-component uninstall was performed)", msg.Err)
+	}
+	if !reflect.DeepEqual(removedNames, []string{"cheap"}) {
+		t.Fatalf("removeProfileAgentsFn removed %v, want [cheap] (profile removal must still run when Engram is the only selected component)", removedNames)
+	}
+}
+
 // TestToggleUninstallEninstallEngramScope_CyclesNoneProjectGlobal verifies
 // that toggleCurrentUninstallEngramScope advances UninstallEngramScope
 // through the three-state cycle None -> Project -> Global -> None.
@@ -2381,6 +2414,37 @@ func TestUninstallComponents_ContinueWithEngramProjectScopeNavigatesToSubSelecti
 	}
 	if !state.UninstallEngramProjectScopeAvailable {
 		t.Fatal("UninstallEngramProjectScopeAvailable = false, want true")
+	}
+	if state.UninstallEngramScope != "" {
+		t.Fatalf("UninstallEngramScope = %q, want %q (None default)", state.UninstallEngramScope, "")
+	}
+}
+
+// TestUninstallComponents_ContinueWithEngramNoProjectScopeStillReachable
+// (C2 regression): ComponentEngram selected, no .engram/ directory —
+// user must STILL reach the profile/scope screen to choose None/Global.
+// Old gate via shouldShowUninstallEngramScopeSelection hid the screen
+// exactly when the user most needs to opt in or out.
+func TestUninstallComponents_ContinueWithEngramNoProjectScopeStillReachable(t *testing.T) {
+	tempWorkspace := t.TempDir() // no .engram/ directory
+	restoreGetwd := setOSGetwdForTest(tempWorkspace, nil)
+	defer restoreGetwd()
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallComponents
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.Cursor = len(screens.UninstallComponentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUninstallProfiles {
+		t.Fatalf("screen = %v, want %v (profile/scope screen must be reachable even without project scope)", state.Screen, ScreenUninstallProfiles)
+	}
+	if state.UninstallEngramProjectScopeAvailable {
+		t.Fatal("UninstallEngramProjectScopeAvailable = true, want false")
 	}
 	if state.UninstallEngramScope != "" {
 		t.Fatalf("UninstallEngramScope = %q, want %q (None default)", state.UninstallEngramScope, "")
