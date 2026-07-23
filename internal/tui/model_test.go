@@ -1979,7 +1979,12 @@ func TestUninstallProfiles_ContinueNavigatesToConfirm(t *testing.T) {
 	m.Screen = ScreenUninstallProfiles
 	m.UninstallProfilesAvailable = []string{"cheap"}
 	m.UninstallProfilesToRemove = []string{"cheap"}
-	m.Cursor = len(m.UninstallProfilesAvailable)
+	// NewModel initializes UninstallComponents to the full default set (which
+	// includes ComponentEngram) and leaves UninstallEngramProjectScopeAvailable
+	// false. With the scope section now rendered whenever ComponentEngram is
+	// selected, the layout is: 1 profile row + 2 scope rows (None/Global) +
+	// Continue. Cursor 3 lands on Continue.
+	m.Cursor = len(m.UninstallProfilesAvailable) + 2
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
@@ -2217,7 +2222,9 @@ func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
 // that when the user opts out of Engram cleanup (empty UninstallEngramScope),
 // startUninstall routes through uninstallFn for agents/components without
 // invoking the Engram step, and removes profiles via removeProfileAgentsFn
-// for each requested profile name.
+// for each requested profile name. The componentIDs handed to UninstallFn
+// must NOT contain ComponentEngram — leaving it in would trigger a global
+// Engram cleanup via the service layer and wipe the user's opt-out.
 func TestStartUninstall_NoneScopeSkipsEngramAndRemovesProfilesSeparately(t *testing.T) {
 	originalRemove := removeProfileAgentsFn
 	removedNames := []string{}
@@ -2230,7 +2237,7 @@ func TestStartUninstall_NoneScopeSkipsEngramAndRemovesProfilesSeparately(t *test
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.UninstallMode = model.UninstallModePartial
 	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
-	m.UninstallComponents = []model.ComponentID{model.ComponentSDD, model.ComponentEngram}
+	m.UninstallComponents = []model.ComponentID{model.ComponentSDD, model.ComponentEngram, model.ComponentPersona}
 	m.UninstallProfilesToRemove = []string{"cheap", "fast"}
 	m.UninstallEngramScope = ""
 
@@ -2240,8 +2247,10 @@ func TestStartUninstall_NoneScopeSkipsEngramAndRemovesProfilesSeparately(t *test
 		return componentuninstall.Result{}, nil
 	}
 	uninstallFnCalled := false
+	var uninstallFnComponents []model.ComponentID
 	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
 		uninstallFnCalled = true
+		uninstallFnComponents = append([]model.ComponentID(nil), componentIDs...)
 		return componentuninstall.Result{}, nil
 	}
 
@@ -2254,6 +2263,13 @@ func TestStartUninstall_NoneScopeSkipsEngramAndRemovesProfilesSeparately(t *test
 	}
 	if !uninstallFnCalled {
 		t.Fatal("UninstallFn should be called for agents/components when scope is None")
+	}
+	if hasSelectedComponent(uninstallFnComponents, model.ComponentEngram) {
+		t.Fatalf("UninstallFn received components %v; ComponentEngram must be filtered out when scope is None", uninstallFnComponents)
+	}
+	wantComponents := []model.ComponentID{model.ComponentSDD, model.ComponentPersona}
+	if !reflect.DeepEqual(uninstallFnComponents, wantComponents) {
+		t.Fatalf("UninstallFn components = %v, want %v (Engram filtered, others preserved)", uninstallFnComponents, wantComponents)
 	}
 	if !reflect.DeepEqual(removedNames, []string{"cheap", "fast"}) {
 		t.Fatalf("removeProfileAgentsFn removed %v, want [cheap fast]", removedNames)

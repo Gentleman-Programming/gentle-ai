@@ -203,10 +203,10 @@ func uninstallEngramScopeOptions(projectScopeAvailable bool) []UninstallEngramSc
 
 // RenderUninstallProfiles renders the ScreenUninstallProfiles view: a list of
 // removable OpenCode SDD profiles followed (when applicable) by the Engram
-// cleanup scope picker. The scope section is only displayed when the user has
-// selected ComponentEngram in UninstallComponents AND the workspace exposes a
-// project-scoped Engram directory; this avoids presenting a meaningless choice
-// when Engram cleanup is not in play.
+// cleanup scope picker. The scope section is displayed whenever the user has
+// selected ComponentEngram in UninstallComponents; the Project option is only
+// listed when the workspace exposes a project-scoped Engram directory
+// (engramProjectScopeAvailable), while None and Global are always available.
 func RenderUninstallProfiles(available []string, selected []string, engramProjectScopeAvailable bool, uninstallComponents []model.ComponentID, selectedEngramScope model.EngramUninstallScope, cursor int) string {
 	var b strings.Builder
 
@@ -232,7 +232,7 @@ func RenderUninstallProfiles(available []string, selected []string, engramProjec
 	}
 
 	engramScopeOptions := uninstallEngramScopeOptions(engramProjectScopeAvailable)
-	showEngramScopeSection := hasSelectedComponent(uninstallComponents, model.ComponentEngram) && engramProjectScopeAvailable
+	showEngramScopeSection := hasSelectedComponent(uninstallComponents, model.ComponentEngram)
 	engramScopeDisplayed := 0
 	if showEngramScopeSection {
 		engramScopeDisplayed = len(engramScopeOptions)

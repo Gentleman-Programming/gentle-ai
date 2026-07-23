@@ -1808,8 +1808,15 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 	case ScreenUninstallProfiles:
 		profileCount := len(m.UninstallProfilesAvailable)
 		engramScopeOptionCount := 0
-		if m.shouldShowUninstallEngramScopeSelection() {
-			engramScopeOptionCount = 3
+		// Scope row count: 3 (None/Project/Global) if project scope available,
+		// 2 (None/Global) otherwise. See RenderUninstallProfiles for the matching
+		// render-side predicate.
+		if hasSelectedComponent(m.UninstallComponents, model.ComponentEngram) {
+			if m.UninstallEngramProjectScopeAvailable {
+				engramScopeOptionCount = 3
+			} else {
+				engramScopeOptionCount = 2
+			}
 		}
 		continueIdx := profileCount + engramScopeOptionCount
 		switch {
@@ -2964,9 +2971,17 @@ func (m Model) startUninstall() tea.Cmd {
 		)
 		switch {
 		case engramCleanupSkipped:
-			// None: do not invoke the Engram step at all. Use uninstallFn for
-			// agents/components; remove profiles separately if requested.
-			result, err = uninstallFn(agentIDs, componentIDs)
+			// None: filter ComponentEngram out of componentIDs before delegating
+			// to uninstallFn — the service treats Engram as a global cleanup
+			// target, so leaving it in would wipe the user's Engram data
+			// despite the explicit opt-out. Profile removal runs separately.
+			componentsWithoutEngram := make([]model.ComponentID, 0, len(componentIDs))
+			for _, c := range componentIDs {
+				if c != model.ComponentEngram {
+					componentsWithoutEngram = append(componentsWithoutEngram, c)
+				}
+			}
+			result, err = uninstallFn(agentIDs, componentsWithoutEngram)
 			if err == nil && len(profileNamesToRemove) > 0 {
 				settingsPath := opencode.DefaultSettingsPath()
 				for _, profileName := range profileNamesToRemove {
@@ -3597,8 +3612,14 @@ func (m Model) optionCount() int {
 		return len(screens.UninstallComponentOptions()) + 2
 	case ScreenUninstallProfiles:
 		count := len(m.UninstallProfilesAvailable) + 2
-		if m.shouldShowUninstallEngramScopeSelection() {
-			count += 3
+		// Scope row count: 3 (None/Project/Global) if project scope available,
+		// 2 (None/Global) otherwise. Matches the render-side predicate.
+		if hasSelectedComponent(m.UninstallComponents, model.ComponentEngram) {
+			if m.UninstallEngramProjectScopeAvailable {
+				count += 3
+			} else {
+				count += 2
+			}
 		}
 		return count
 	case ScreenUninstallConfirm:
@@ -3817,19 +3838,22 @@ func (m *Model) toggleCurrentUninstallProfile() {
 	m.UninstallProfilesToRemove = append(m.UninstallProfilesToRemove, profileName)
 }
 
-// toggleCurrentUninstallEngramScope advances UninstallEngramScope through the
-// three-state cycle None -> Project -> Global -> None when the cursor sits on
-// the scope section. The cycle preserves the cursor position on the same row;
-// the radio-button rendering reflects the current scope regardless of which
-// row the cursor is on within the section.
+// toggleCurrentUninstallEngramScope advances UninstallEninstallScope through
+// None -> Project -> Global -> None when the cursor sits on the scope
+// section. When no project-scoped Engram data exists, the Project row is
+// not rendered and the cycle collapses to None -> Global -> None.
 func (m *Model) toggleCurrentUninstallEngramScope() {
 	profileCount := len(m.UninstallProfilesAvailable)
-	if m.Cursor < profileCount || !m.shouldShowUninstallEngramScopeSelection() {
+	if m.Cursor < profileCount || !hasSelectedComponent(m.UninstallComponents, model.ComponentEngram) {
 		return
 	}
 	switch m.UninstallEngramScope {
 	case "":
-		m.UninstallEngramScope = model.EngramUninstallScopeProject
+		if m.UninstallEngramProjectScopeAvailable {
+			m.UninstallEngramScope = model.EngramUninstallScopeProject
+		} else {
+			m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+		}
 	case model.EngramUninstallScopeProject:
 		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
 	default:
