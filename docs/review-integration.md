@@ -15,9 +15,11 @@ gentle-ai review capabilities \
 
 The response identifies the protocol major, package and build identity, executable SHA-256, operations, five gates, projections, schemas, mandatory and optional features, and compatibility window. The executable digest is self-reported evidence; compare it with the published release manifest before trusting the binary.
 
-Protocol v1.4 advertises `gentle-ai.review-integration.capabilities/v1.4` and adds `one_shot_final_verification_retry`, operation `review.retry_final_verification`, and incident schema `gentle-ai.review-final-verification-incident/v1`. This is a dedicated provider-owned retry for one exact completed failed final-verification tooling incident; it does not relax generic recovery.
+Protocol v1.5 advertises `gentle-ai.review-integration.capabilities/v1.5` and adds `failure_ambiguity_candidates`. Repository operations that pass `--protocol-minor 5` receive `gentle-ai.review-integration.failure/v2`; its `receipt_ambiguous` response includes sorted candidate lineage IDs and routes directly to `review.validate`. Omitting the flag preserves strict `failure/v1` and stops without requesting unavailable lineage IDs.
 
-Protocol v1.3 introduced `provider_artifact_admission`, `validating_result_reopen`, `recovered_correction_evidence`, and `classified_authority_repair`. START v2 supplies one provider-owned `ArtifactSubject` per selected lens. Result artifact v2 and status v2 expose the admitted subject hash and completed admission decision. Status v2 also requires a bounded `gentle-ai.review-authority-repair-assessment/v1`; `review.repair` publishes the matching strict preflight and execution contract. The durable admitted-result envelope preserves raw and canonical payload identities, the result identity, and repository-verified candidate-causal finding IDs. Exact accounting-only recovery may reuse that evidence only when the corrected predecessor bytes are the successor's exact initial target. Protocol v1.0 through v1.3 capability schemas and fixtures remain packaged unchanged. Consumers must reject an unknown schema/minor identity they do not support; v1.4 consumers validate the v1.4 schema before relying on these features.
+Protocol v1.4 added `one_shot_final_verification_retry`, operation `review.retry_final_verification`, and incident schema `gentle-ai.review-final-verification-incident/v1`. This is a dedicated provider-owned retry for one exact completed failed final-verification tooling incident; it does not relax generic recovery.
+
+Protocol v1.3 introduced `provider_artifact_admission`, `validating_result_reopen`, `recovered_correction_evidence`, and `classified_authority_repair`. START v2 supplies one provider-owned `ArtifactSubject` per selected lens. Result artifact v2 and status v2 expose the admitted subject hash and completed admission decision. Status v2 also requires a bounded `gentle-ai.review-authority-repair-assessment/v1`; `review.repair` publishes the matching strict preflight and execution contract. The durable admitted-result envelope preserves raw and canonical payload identities, the result identity, and repository-verified candidate-causal finding IDs. Exact accounting-only recovery may reuse that evidence only when the corrected predecessor bytes are the successor's exact initial target. Protocol v1.0 through v1.4 capability schemas and fixtures remain packaged unchanged. Consumers must reject an unknown schema/minor identity they do not support; v1.5 consumers validate the v1.5 schema before relying on these features.
 
 The v1.2 artifact remains the compatibility record for `native_frozen_candidate_context`, `opaque_repository_context`, and `provider_targeted_validation_request`. Frozen context supplies the exact candidate diff and changed-path manifest. Opaque repository context lets an external actor return results without receiving or rediscovering a repository path. Provider-targeted validation supplies the exact corrected candidate and frozen finding IDs to validate. START v1, status v1, and result-artifact v1 schemas and fixtures remain packaged byte-identically; v1.3 advertises their v2 successors rather than changing those identities in place.
 
@@ -212,7 +214,7 @@ Persistent compact `LOCK` JSON is advisory diagnostics, not current-holder proof
 
 ### Preserve the uniform failure envelope
 
-Every failed operation explicitly negotiated through `gentle-ai.review-integration/v1` emits `gentle-ai.review-integration.failure/v1` and still exits nonzero. Capabilities uses this envelope by default; repository operations use it when `--contract` is present. Unnegotiated command errors retain their compatibility behavior.
+Every failed operation explicitly negotiated through `gentle-ai.review-integration/v1` emits a versioned failure envelope and still exits nonzero. Protocol minors through 1.4 emit `gentle-ai.review-integration.failure/v1`; protocol 1.5 emits `failure/v2`. Capabilities uses the v1 envelope by default; repository operations use the negotiated minor when `--contract` is present. Unnegotiated command errors retain their compatibility behavior.
 
 | Field | Runtime meaning |
 | --- | --- |
@@ -304,8 +306,8 @@ Pi adoption, fallback retirement, package pinning, and Pi release sequencing are
 
 Each release archive contains:
 
-- `contracts/review-integration/v1/schemas/` — twenty strict JSON Schemas, including preserved capability protocols v1.0–v1.3, current v1.4, versioned START/status/result-artifact contracts, final-verification incident, classified repair, provider subject/admission, and targeted validation.
-- `contracts/review-integration/v1/fixtures/` — twenty-four deterministic conformance fixtures, including all five capability minors, preserved v1 plus current v2 START/status examples, the final-verification incident and retry projection, classified repair preflight, and typed failure envelopes.
+- `contracts/review-integration/v1/schemas/` — twenty-two strict JSON Schemas, including preserved capability protocols v1.0-v1.4, current v1.5, both failure envelopes, versioned START/status/result-artifact contracts, final-verification incident, classified repair, provider subject/admission, and targeted validation.
+- `contracts/review-integration/v1/fixtures/` — twenty-five deterministic conformance fixtures, including all six capability minors, preserved v1 plus current v2 START/status examples, the final-verification incident and retry projection, classified repair preflight, and typed failure envelopes.
 - `docs/review-integration.md` — this ownership and consumption guide.
 
 Repository maintainers can verify source inventory or a complete GoReleaser snapshot:

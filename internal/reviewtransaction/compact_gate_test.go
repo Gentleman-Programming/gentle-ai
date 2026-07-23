@@ -441,20 +441,24 @@ func TestCompactFixDiffRejectsInexactCorrectionBinding(t *testing.T) {
 	}
 }
 
-func TestCompactCorrectedBaseDiffPrePushAllowsOnlyExactSquashedFullDelivery(t *testing.T) {
+func TestCompactCorrectedBaseDiffPrePushAllowsExactFullDelivery(t *testing.T) {
 	tests := []struct {
-		name      string
-		extraPath bool
-		wrongBase bool
-		wantAllow bool
+		name       string
+		twoCommit  bool
+		extraPath  bool
+		wrongBase  bool
+		wrongFinal bool
+		wantAllow  bool
 	}{
-		{name: "exact genesis delivery", wantAllow: true},
+		{name: "exact squashed delivery", wantAllow: true},
+		{name: "exact two commit delivery", twoCommit: true, wantAllow: true},
 		{name: "extra path", extraPath: true},
 		{name: "wrong base", wrongBase: true},
+		{name: "wrong final tree", wrongFinal: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, state, receipt, baseRef := approvedCompactSquashedFixDiffFixture(t, "compact-squashed-"+strings.ReplaceAll(tt.name, " ", "-"), tt.extraPath, tt.wrongBase)
+			repo, state, receipt, baseRef := approvedCompactFullFixDiffFixture(t, "compact-full-"+strings.ReplaceAll(tt.name, " ", "-"), tt.twoCommit, tt.extraPath, tt.wrongBase, tt.wrongFinal)
 			input := NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: baseRef}
 			assessment, err := AssessCompactGateTarget(context.Background(), repo, state, input)
 			if err != nil {
@@ -462,13 +466,13 @@ func TestCompactCorrectedBaseDiffPrePushAllowsOnlyExactSquashedFullDelivery(t *t
 			}
 			got := EvaluateCompactGate(context.Background(), repo, receipt, input)
 			if tt.wantAllow && (got.Result != GateAllow || !got.Context.BaseRelationshipValid || got.Context.BaseTree != state.InitialSnapshot.BaseTree || got.Context.CandidateTree != receipt.FinalCandidateTree) {
-				t.Fatalf("exact squashed full delivery = %#v", got)
+				t.Fatalf("exact corrected full delivery = %#v", got)
 			}
 			if tt.wantAllow && assessment.Applicability != CompactGateTargetExact {
-				t.Fatalf("exact squashed full delivery assessment = %#v", assessment)
+				t.Fatalf("exact corrected full delivery assessment = %#v", assessment)
 			}
 			if !tt.wantAllow && (got.Result == GateAllow || assessment.Applicability == CompactGateTargetExact) {
-				t.Fatalf("inexact squashed full delivery = %#v", got)
+				t.Fatalf("inexact corrected full delivery = %#v", got)
 			}
 		})
 	}
@@ -1457,21 +1461,29 @@ func approvedCompactFixDiffFixtureWithCorrection(t *testing.T, lineage, correcti
 	return repo, state, receipt, "origin/" + branch
 }
 
-func approvedCompactSquashedFixDiffFixture(t *testing.T, lineage string, extraPath, wrongBase bool) (string, CompactState, CompactReceipt, string) {
+func approvedCompactFullFixDiffFixture(t *testing.T, lineage string, twoCommit, extraPath, wrongBase, wrongFinal bool) (string, CompactState, CompactReceipt, string) {
 	t.Helper()
 	repo, state, receipt, baseRef := approvedCompactFixDiffFixtureWithCorrection(t, lineage, "corrected other\n")
 	baseCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD^"))
 	if extraPath {
 		writeSnapshotFile(t, repo, "extra.go", "package extra\n")
 	}
-	gitSnapshot(t, repo, "add", "-A")
-	finalTree := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
+	if wrongFinal {
+		writeSnapshotFile(t, repo, "tracked.txt", "changed after correction approval\n")
+	}
 	publicationBase := baseCommit
 	if wrongBase {
 		publicationBase = strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", baseCommit+"^"))
 	}
-	finalCommit := strings.TrimSpace(gitSnapshot(t, repo, "commit-tree", finalTree, "-p", publicationBase, "-m", "squashed full delivery"))
-	gitSnapshot(t, repo, "update-ref", "HEAD", finalCommit)
+	if twoCommit {
+		gitSnapshot(t, repo, "add", "-A")
+		gitSnapshot(t, repo, "commit", "-m", "approved correction")
+	} else {
+		gitSnapshot(t, repo, "add", "-A")
+		finalTree := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
+		finalCommit := strings.TrimSpace(gitSnapshot(t, repo, "commit-tree", finalTree, "-p", publicationBase, "-m", "squashed full delivery"))
+		gitSnapshot(t, repo, "update-ref", "HEAD", finalCommit)
+	}
 	remote := strings.TrimSpace(gitSnapshot(t, repo, "remote", "get-url", "origin"))
 	gitSnapshot(t, repo, "--git-dir", remote, "update-ref", "refs/heads/"+strings.TrimPrefix(baseRef, "origin/"), publicationBase)
 	return repo, state, receipt, baseRef

@@ -25,8 +25,10 @@ const ReviewIntegrationCapabilitiesSchemaV12 = "gentle-ai.review-integration.cap
 const ReviewIntegrationCapabilitiesSchemaIDV12 = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities-v1.2.schema.json"
 const ReviewIntegrationCapabilitiesSchemaV13 = "gentle-ai.review-integration.capabilities/v1.3"
 const ReviewIntegrationCapabilitiesSchemaIDV13 = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities-v1.3.schema.json"
-const ReviewIntegrationCapabilitiesSchema = "gentle-ai.review-integration.capabilities/v1.4"
-const ReviewIntegrationCapabilitiesSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities-v1.4.schema.json"
+const ReviewIntegrationCapabilitiesSchemaV14 = "gentle-ai.review-integration.capabilities/v1.4"
+const ReviewIntegrationCapabilitiesSchemaIDV14 = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities-v1.4.schema.json"
+const ReviewIntegrationCapabilitiesSchema = "gentle-ai.review-integration.capabilities/v1.5"
+const ReviewIntegrationCapabilitiesSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities-v1.5.schema.json"
 
 const (
 	reviewRefuterSchemaID   = "https://gentle-ai.dev/schema/review/refuter/v1"
@@ -183,7 +185,7 @@ func reviewCapabilitiesStaticSurface() ReviewCapabilitiesResult {
 	return ReviewCapabilitiesResult{
 		Schema:     ReviewIntegrationCapabilitiesSchema,
 		Contract:   ReviewIntegrationContractV1,
-		Protocol:   ReviewCapabilitiesProtocol{Major: 1, Minor: 4},
+		Protocol:   ReviewCapabilitiesProtocol{Major: 1, Minor: 5},
 		Operations: reviewIntegrationOperationNames(),
 		Gates: []string{
 			string(reviewtransaction.GatePostApply), string(reviewtransaction.GatePreCommit), string(reviewtransaction.GatePrePush),
@@ -198,6 +200,7 @@ func reviewCapabilitiesStaticSurface() ReviewCapabilitiesResult {
 			reviewtransaction.GateRequestSchema,
 			ReviewIntegrationCapabilitiesSchema,
 			ReviewIntegrationFailureSchema,
+			ReviewIntegrationFailureSchemaV2,
 			reviewtransaction.FinalVerificationIncidentSchema,
 			ReviewIntegrationOperationSchema,
 			ReviewIntegrationProjectionSchema,
@@ -230,6 +233,7 @@ func reviewCapabilitiesStaticSurface() ReviewCapabilitiesResult {
 				{Name: "bounded_process_waits", Supported: true, Requires: []string{"uniform_failure_envelope"}},
 				{Name: "classified_authority_repair", Supported: true, Requires: []string{"native_next_transition", "uniform_failure_envelope"}},
 				{Name: "exact_gate_receipt_discovery", Supported: true, Requires: []string{"five_delivery_gates"}},
+				{Name: "failure_ambiguity_candidates", Supported: true, Requires: []string{"uniform_failure_envelope"}},
 				{Name: "native_frozen_candidate_context", Supported: true, Requires: []string{"immutable_snapshot"}},
 				{Name: "native_low_risk_verification", Supported: true, Requires: []string{"compact_v2_authority"}},
 				{Name: "native_next_transition", Supported: true, Requires: []string{"target_scoped_status"}},

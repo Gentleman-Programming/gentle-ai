@@ -29,15 +29,20 @@ result_path = pathlib.Path(sys.argv[1])
 outside = pathlib.Path(sys.argv[2])
 document = json.loads(result_path.read_text(encoding="utf-8"))
 
-assert document["schema"] == "gentle-ai.review-integration.capabilities/v1.4"
+assert document["schema"] == "gentle-ai.review-integration.capabilities/v1.5"
 assert document["contract"] == "gentle-ai.review-integration/v1"
-assert document["protocol"] == {"major": 1, "minor": 4}
+assert document["protocol"] == {"major": 1, "minor": 5}
 assert document["gates"] == ["post-apply", "pre-commit", "pre-push", "pre-pr", "release"]
 assert document["projections"] == ["staged", "workspace"]
 assert document["executable"]["evidence"] == "self-reported"
 assert document["executable"]["verification"] == "compare-with-published-manifest"
 assert re.fullmatch(r"sha256:[0-9a-f]{64}", document["executable"]["sha256"])
 features = {feature["name"]: feature for feature in document["features"]["optional"]}
+assert features["failure_ambiguity_candidates"] == {
+    "name": "failure_ambiguity_candidates",
+    "supported": True,
+    "requires": ["uniform_failure_envelope"],
+}
 assert features["classified_authority_repair"] == {
     "name": "classified_authority_repair",
     "supported": True,
@@ -84,6 +89,8 @@ assert "gentle-ai.review-targeted-validation-request/v1" in document["schemas"]
 assert "gentle-ai.review-authority-repair-assessment/v1" in document["schemas"]
 assert "gentle-ai.review-integration.repair/v1" in document["schemas"]
 assert "gentle-ai.review-final-verification-incident/v1" in document["schemas"]
+assert "gentle-ai.review-integration.failure/v1" in document["schemas"]
+assert "gentle-ai.review-integration.failure/v2" in document["schemas"]
 assert "review.repair" in document["operations"]
 assert "review.retry_final_verification" in document["operations"]
 assert list(outside.iterdir()) == []

@@ -146,7 +146,6 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 	}
 
 	candidates := []targetStatusCandidate{}
-	scopeChangedCandidates := []targetStatusCandidate{}
 	for lineage, candidate := range view.compact {
 		if request.LineageID != "" && request.LineageID != lineage {
 			continue
@@ -161,14 +160,26 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			candidates = append(candidates, candidate)
 			continue
 		}
-		if state.State == StateApproved && candidate.receiptPublished && candidate.receiptCanonical {
+		if state.State == StateApproved && candidate.receiptPublished {
 			eligible, eligibilityErr := compactApprovedStagedScopeRecovery(ctx, repo, state, live)
 			if eligibilityErr != nil {
 				return targetStatusFailure(base, eligibilityErr)
 			}
 			if eligible {
-				candidate.correctionRecovery = true
-				candidate.recoveryDisposition = RecoveryScopeChanged
+				if candidate.receiptCanonical {
+					candidate.correctionRecovery = true
+					candidate.recoveryDisposition = RecoveryScopeChanged
+				}
+				candidates = append(candidates, candidate)
+				continue
+			}
+			requested := state
+			requested.InitialSnapshot = live
+			if state.CurrentSnapshot.CandidateTree != live.CandidateTree && compactStartDeliveryScopeMatches(state, requested) {
+				if candidate.receiptCanonical {
+					candidate.correctionRecovery = true
+					candidate.recoveryDisposition = RecoveryScopeChanged
+				}
 				candidates = append(candidates, candidate)
 				continue
 			}
@@ -207,11 +218,6 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			candidates = append(candidates, candidate)
 			continue
 		}
-		if request.LineageID == "" && candidate.receiptPublished && (state.State == StateApproved || state.State == StateEscalated) {
-			if projectCompactTerminalHistory(state, live) == compactTerminalHistoryScopeChanged {
-				scopeChangedCandidates = append(scopeChangedCandidates, candidate)
-			}
-		}
 	}
 	for lineage, candidate := range view.legacy {
 		if request.LineageID != "" && request.LineageID != lineage {
@@ -240,17 +246,16 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		}
 		return candidates[i].version < candidates[j].version
 	})
-	sort.Slice(scopeChangedCandidates, func(i, j int) bool {
-		return scopeChangedCandidates[i].lineage < scopeChangedCandidates[j].lineage
-	})
-	if len(candidates) == 0 && len(scopeChangedCandidates) > 1 {
-		base.Applicability = TargetApplicabilityAmbiguous
-		base.Action = TargetStatusActionSelectLineage
-		base.Replayability = ReplayabilityStatusRequired
-		for _, candidate := range scopeChangedCandidates {
-			base.CandidateLineageIDs = append(base.CandidateLineageIDs, candidate.lineage)
+	actionable := candidates[:0]
+	for _, candidate := range candidates {
+		ambiguityOnly := candidate.compact != nil && candidate.compact.State.State == StateApproved && candidate.receiptPublished &&
+			!candidate.receiptCanonical && base.TargetIdentity != candidate.compact.State.CurrentSnapshot.Identity
+		if !ambiguityOnly {
+			actionable = append(actionable, candidate)
 		}
-		return base, nil
+	}
+	if len(actionable) > 0 {
+		candidates = actionable
 	}
 	switch len(candidates) {
 	case 0:
@@ -261,6 +266,15 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		}
 		return base, nil
 	case 1:
+		if candidate := candidates[0]; candidate.compact != nil && candidate.compact.State.State == StateApproved && candidate.receiptPublished &&
+			!candidate.receiptCanonical && base.TargetIdentity != candidate.compact.State.CurrentSnapshot.Identity {
+			base.Applicability = TargetApplicabilityUnrelated
+			base.Action, base.Replayability = TargetStatusActionStart, ReplayabilityNotReplayable
+			if live.Kind == TargetBaseWorkspaceOverlay && live.Projection == ProjectionStaged {
+				base.Action, base.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+			}
+			return base, nil
+		}
 		return targetStatusForCandidate(base, candidates[0]), nil
 	default:
 		base.Applicability = TargetApplicabilityAmbiguous

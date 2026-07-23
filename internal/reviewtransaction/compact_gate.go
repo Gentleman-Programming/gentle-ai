@@ -79,14 +79,14 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 		return assessment, fmt.Errorf("build compact gate target: %w", err)
 	}
 	assessment.Actual = snapshot
-	squashedFixDelivery := compactSquashedFixDelivery(request.Gate, state, snapshot, resolvedPrePR, state.CurrentSnapshot.CandidateTree)
+	correctedFullDelivery := compactCorrectedFullDelivery(request.Gate, state, snapshot, resolvedPrePR, state.CurrentSnapshot.CandidateTree)
 	strictBinding := request.Gate == GatePostApply || request.Gate == GatePreCommit ||
 		request.Gate == GatePrePush && state.InitialSnapshot.Kind != TargetCurrentChanges
 	pathsMatch := pathsAreSubset(snapshot.Paths, state.GenesisPaths) == nil
 	baseMatches := snapshot.BaseTree == state.CurrentSnapshot.BaseTree || request.Target.Kind == TargetFixDiff
 	if strictBinding {
-		pathsMatch = snapshot.PathsDigest == state.CurrentSnapshot.PathsDigest || squashedFixDelivery
-		baseMatches = snapshot.BaseTree == state.CurrentSnapshot.BaseTree || squashedFixDelivery
+		pathsMatch = snapshot.PathsDigest == state.CurrentSnapshot.PathsDigest || correctedFullDelivery
+		baseMatches = snapshot.BaseTree == state.CurrentSnapshot.BaseTree || correctedFullDelivery
 	}
 	if request.Gate == GatePrePR {
 		// A base advance is authorized only by the later evidence-bearing gate
@@ -129,10 +129,10 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	return assessment, nil
 }
 
-func compactSquashedFixDelivery(gate GateKind, state CompactState, snapshot Snapshot, refs *resolvedPrePRRefs, finalCandidateTree string) bool {
-	return gate == GatePrePush && state.CurrentSnapshot.Kind == TargetFixDiff && refs != nil && refs.DeliveredCommitCount == 1 &&
+func compactCorrectedFullDelivery(gate GateKind, state CompactState, snapshot Snapshot, refs *resolvedPrePRRefs, finalCandidateTree string) bool {
+	return gate == GatePrePush && state.CurrentSnapshot.Kind == TargetFixDiff && refs != nil &&
 		snapshot.CandidateTree == finalCandidateTree && snapshot.BaseTree == state.InitialSnapshot.BaseTree &&
-		equalStrings(snapshot.Paths, state.GenesisPaths) && snapshot.PathsDigest == digestPaths(state.GenesisPaths)
+		pathsAreSubset(snapshot.Paths, state.GenesisPaths) == nil
 }
 
 func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceipt, input NativeGateRequestInput) NativeGateEvaluation {
@@ -311,11 +311,11 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		}
 	}
 	binding := record.State.CurrentSnapshot
-	squashedFixDelivery := compactSquashedFixDelivery(request.Gate, record.State, snapshot, resolvedPrePR, receipt.FinalCandidateTree)
+	correctedFullDelivery := compactCorrectedFullDelivery(request.Gate, record.State, snapshot, resolvedPrePR, receipt.FinalCandidateTree)
 	strictBinding := request.Gate == GatePostApply || request.Gate == GatePreCommit || request.Gate == GatePrePush && record.State.InitialSnapshot.Kind != TargetCurrentChanges
 	baseRelationshipValid := snapshot.BaseTree == receipt.BaseTree || request.Target.Kind == TargetFixDiff
 	if strictBinding {
-		baseRelationshipValid = snapshot.BaseTree == binding.BaseTree || squashedFixDelivery
+		baseRelationshipValid = snapshot.BaseTree == binding.BaseTree || correctedFullDelivery
 	}
 	gateContext := GateContext{
 		Gate: request.Gate, LineageID: receipt.LineageID, Generation: receipt.Generation,
@@ -331,11 +331,11 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	}
 	pathsMismatch := pathsAreSubset(snapshot.Paths, record.State.GenesisPaths) != nil && !compatibleAdvance
 	if strictBinding {
-		pathsMismatch = snapshot.PathsDigest != binding.PathsDigest && !squashedFixDelivery
+		pathsMismatch = snapshot.PathsDigest != binding.PathsDigest && !correctedFullDelivery
 	}
 	baseMismatch := snapshot.BaseTree != receipt.BaseTree && request.Target.Kind != TargetFixDiff && !compatibleAdvance
 	if strictBinding {
-		baseMismatch = snapshot.BaseTree != binding.BaseTree && !squashedFixDelivery
+		baseMismatch = snapshot.BaseTree != binding.BaseTree && !correctedFullDelivery
 	}
 	// A scope_changed recovery successor freezes only its own pristine scope,
 	// so a delivery already covered by its receipt-bound predecessors would be

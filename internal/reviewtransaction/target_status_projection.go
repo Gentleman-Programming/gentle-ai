@@ -270,41 +270,6 @@ func loadLegacyTargetStatusCandidates(ctx context.Context, repo, lineageID strin
 	return candidates, nil
 }
 
-type compactTerminalHistoryProjection uint8
-
-const (
-	compactTerminalHistoryUnrelated compactTerminalHistoryProjection = iota
-	compactTerminalHistoryScopeChanged
-)
-
-// projectCompactTerminalHistory compares receipt-validated historical
-// authority with the one request-scoped live snapshot. Frozen intended paths
-// remain historical proof; they are never replayed against current tracking or
-// filesystem membership.
-func projectCompactTerminalHistory(state CompactState, live Snapshot) compactTerminalHistoryProjection {
-	if live.BaseTree == state.CurrentSnapshot.CandidateTree {
-		// The reviewed bytes and modes are now the immutable HEAD base. A clean
-		// target or a disjoint next slice is not an applicability claim on the
-		// historical receipt.
-		if len(live.Paths) == 0 || classifyCompactPathSetRelation(state.GenesisPaths, live.Paths) == compactPathsDisjoint {
-			return compactTerminalHistoryUnrelated
-		}
-		return compactTerminalHistoryScopeChanged
-	}
-
-	relation := classifyCompactTargetRelation(state.CurrentSnapshot, live, state.GenesisPaths, compactTargetRelationEvidence{})
-	if relation.Kind != compactTargetUnsafe {
-		return compactTerminalHistoryScopeChanged
-	}
-	// A projection, kind, or base mismatch can make the aggregate relation
-	// unsafe even when live work still contracts or overlaps immutable genesis
-	// scope. That is related evolution and must not be claimed as unrelated.
-	if len(live.Paths) > 0 && relation.Paths != compactPathsDisjoint && relation.Paths != compactPathsInvalid {
-		return compactTerminalHistoryScopeChanged
-	}
-	return compactTerminalHistoryUnrelated
-}
-
 func compactLiveTargetMatchesValidatedSnapshot(state CompactState, live Snapshot, requireCurrentCandidate bool) bool {
 	initial := state.InitialSnapshot
 	proof := initial.IntendedUntrackedProof

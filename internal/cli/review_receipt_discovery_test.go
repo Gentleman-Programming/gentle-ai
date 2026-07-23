@@ -28,6 +28,56 @@ func assertScopeChangeRecovery(t *testing.T, failure ReviewIntegrationFailure, l
 	}
 }
 
+func TestReviewStartRespectsProtocolOptionBoundary(t *testing.T) {
+	minor, filtered, err := reviewIntegrationProtocol([]string{"--protocol-minor", "5", "--cwd", "repo"})
+	if err != nil || minor != 5 || !reflect.DeepEqual(filtered, []string{"--cwd", "repo"}) {
+		t.Fatalf("pre-boundary protocol negotiation = %d, %#v, %v", minor, filtered, err)
+	}
+
+	for _, positional := range [][]string{{"--protocol-minor=5"}, {"--protocol-minor", "5"}} {
+		t.Run(strings.Join(positional, "_"), func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			args := []string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", "review-positional-protocol", "--"}
+			var output bytes.Buffer
+			if err := RunReview(append(args, positional...), &output); err == nil {
+				t.Fatal("post-boundary protocol minor succeeded")
+			}
+			failure := decodeReviewIntegrationFailure(t, output.Bytes())
+			if failure.Schema != ReviewIntegrationFailureSchema || failure.MutationOutcome != ReviewMutationNotStarted {
+				t.Fatalf("post-boundary protocol minor failure = %#v", failure)
+			}
+			stores, err := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+			if err != nil || len(stores) != 0 {
+				t.Fatalf("post-boundary authority stores = %#v, %v", stores, err)
+			}
+		})
+	}
+}
+
+func TestUnnegotiatedProtocolMinorRejectsBeforeAuthorityMutation(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := RunReview([]string{"start", "--cwd", repo, "--lineage", "review-unnegotiated-start", "--protocol-minor", "5"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("unnegotiated START succeeded")
+	}
+	stores, err := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	if err != nil || len(stores) != 0 {
+		t.Fatalf("authority stores after rejected START = %#v, %v", stores, err)
+	}
+
+	started := startReviewOperationFixture(t, repo, "review-unnegotiated-invalidate")
+	if err := RunReview([]string{"invalidate", "--cwd", repo, "--lineage", started.LineageID, "--reason", "must not run", "--protocol-minor=5"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("unnegotiated INVALIDATE succeeded")
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil || record.State.State != reviewtransaction.StateReviewing {
+		t.Fatalf("authority after rejected INVALIDATE = %#v, %v", record, err)
+	}
+}
+
 func TestUnqualifiedGateDiscoverySelectsOneExactReceiptAcrossUnrelatedHistory(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	first, _ := approveDiscoveryMarkdown(t, repo, "review-discovery-first", "docs/first.md", "first\n")
@@ -379,7 +429,7 @@ func TestUnqualifiedGateDiscoveryRejectsMultipleExactReceiptsButExplicitLineageI
 	}
 	failure := decodeReviewIntegrationFailure(t, output.Bytes())
 	if failure.Code != "receipt_ambiguous" || failure.AuthorityApplicability != "ambiguous" || failure.RetrySafe ||
-		len(failure.RequiredInputs) != 1 || failure.RequiredInputs[0] != "lineage_id" {
+		len(failure.RequiredInputs) != 0 || failure.NextAction != "stop" || len(failure.Candidates) != 0 {
 		t.Fatalf("ambiguous receipt failure = %#v", failure)
 	}
 
@@ -397,9 +447,10 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 		name       string
 		projection reviewtransaction.Projection
 		gate       reviewtransaction.GateKind
+		status     reviewtransaction.TargetApplicability
 	}{
-		{name: "workspace", projection: reviewtransaction.ProjectionWorkspace, gate: reviewtransaction.GatePostApply},
-		{name: "staged", projection: reviewtransaction.ProjectionStaged, gate: reviewtransaction.GatePreCommit},
+		{name: "workspace", projection: reviewtransaction.ProjectionWorkspace, gate: reviewtransaction.GatePostApply, status: reviewtransaction.TargetApplicabilityUnrelated},
+		{name: "staged", projection: reviewtransaction.ProjectionStaged, gate: reviewtransaction.GatePreCommit, status: reviewtransaction.TargetApplicabilityAmbiguous},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
@@ -423,17 +474,32 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 
 			var output bytes.Buffer
 			err := RunReview([]string{
-				"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--gate", string(tt.gate),
+				"validate", "--contract", ReviewIntegrationContractV1, "--protocol-minor", "4", "--cwd", repo, "--gate", string(tt.gate),
 			}, &output)
 			if err == nil {
 				t.Fatal("multiple scope-changed receipts were selected implicitly")
 			}
 			failure := decodeReviewIntegrationFailure(t, output.Bytes())
 			if failure.Code != "receipt_ambiguous" || failure.AuthorityApplicability != "ambiguous" || failure.Context != nil || failure.RetrySafe ||
-				failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "review.status" ||
-				!reflect.DeepEqual(failure.RequiredInputs, []string{"lineage_id"}) {
+				failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "stop" ||
+				len(failure.RequiredInputs) != 0 || len(failure.Candidates) != 0 {
 				t.Fatalf("multiple scope-changed failure = %#v", failure)
 			}
+			validateFinalVerificationContractSchema(t, "failure.schema.json", output.Bytes())
+
+			output.Reset()
+			err = RunReview([]string{
+				"validate", "--contract", ReviewIntegrationContractV1, "--protocol-minor", "5", "--cwd", repo, "--gate", string(tt.gate),
+			}, &output)
+			if err == nil {
+				t.Fatal("protocol 1.5 multiple scope-changed receipts were selected implicitly")
+			}
+			current := decodeReviewIntegrationFailure(t, output.Bytes())
+			if current.Schema != ReviewIntegrationFailureSchemaV2 || current.NextAction != ReviewIntegrationOperationValidate ||
+				!reflect.DeepEqual(current.RequiredInputs, []string{"lineage_id"}) || !reflect.DeepEqual(current.Candidates, lineages) {
+				t.Fatalf("protocol 1.5 multiple scope-changed failure = %#v", current)
+			}
+			validateFinalVerificationContractSchema(t, "failure-v2.schema.json", output.Bytes())
 
 			output.Reset()
 			if err := RunReview([]string{
@@ -443,8 +509,10 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 			}
 			var status ReviewTargetStatusResult
 			decodeStrictReviewJSON(t, output.Bytes(), &status)
-			if status.Applicability != reviewtransaction.TargetApplicabilityAmbiguous || status.Action != reviewtransaction.TargetStatusActionSelectLineage ||
-				status.Replayability != reviewtransaction.ReplayabilityStatusRequired || !reflect.DeepEqual(status.Candidates, lineages) {
+			if status.Applicability != tt.status || tt.status == reviewtransaction.TargetApplicabilityUnrelated &&
+				(status.Action != reviewtransaction.TargetStatusActionStart || status.Replayability != reviewtransaction.ReplayabilityNotReplayable || len(status.Candidates) != 0) ||
+				tt.status == reviewtransaction.TargetApplicabilityAmbiguous && (status.Action != reviewtransaction.TargetStatusActionSelectLineage ||
+					status.Replayability != reviewtransaction.ReplayabilityStatusRequired || !reflect.DeepEqual(status.Candidates, lineages)) {
 				t.Fatalf("multiple scope-changed status = %#v", status)
 			}
 

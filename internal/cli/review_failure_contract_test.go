@@ -88,6 +88,37 @@ func TestNegotiatedReviewContractFailuresArePreMutationAndLegacyErrorsStayCompat
 	}
 }
 
+func TestProtocolMinorRequiresNegotiationAndNegotiatedFailuresAreVersioned(t *testing.T) {
+	for _, tt := range []struct {
+		name, minor, schema string
+	}{
+		{name: "minor 4", minor: "4", schema: ReviewIntegrationFailureSchema},
+		{name: "minor 5", minor: "5", schema: ReviewIntegrationFailureSchemaV2},
+		{name: "malformed", minor: "nope", schema: ReviewIntegrationFailureSchema},
+		{name: "unsupported", minor: "6", schema: ReviewIntegrationFailureSchema},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunReview([]string{"start", "--contract", ReviewIntegrationContractV1, "--protocol-minor", tt.minor, "unexpected"}, &output)
+			if err == nil {
+				t.Fatal("invalid negotiated request succeeded")
+			}
+			failure := decodeReviewIntegrationFailure(t, output.Bytes())
+			if failure.Schema != tt.schema || failure.Code != "invalid_request" || failure.MutationOutcome != ReviewMutationNotStarted {
+				t.Fatalf("failure = %#v", failure)
+			}
+		})
+	}
+
+	var output bytes.Buffer
+	if err := RunReview([]string{"start", "--contract", ReviewIntegrationContractV1, "--protocol-minor"}, &output); err == nil {
+		t.Fatal("missing negotiated protocol minor succeeded")
+	}
+	if failure := decodeReviewIntegrationFailure(t, output.Bytes()); failure.Schema != ReviewIntegrationFailureSchema || failure.MutationOutcome != ReviewMutationNotStarted {
+		t.Fatalf("missing protocol minor failure = %#v", failure)
+	}
+}
+
 func TestNegotiatedReviewFailuresPreserveRequestedLineage(t *testing.T) {
 	lineage := "review-requested-lineage"
 	tests := []struct {
@@ -950,6 +981,9 @@ func TestReviewIntegrationFailureSchemaAndFixtureAreStrict(t *testing.T) {
 	inputs := schemaStringArray(t, schema["properties"].(map[string]any)["required_inputs"].(map[string]any)["items"].(map[string]any)["enum"])
 	if !containsString(inputs, "base_ref") {
 		t.Fatalf("failure required_inputs vocabulary = %v", inputs)
+	}
+	if _, ok := schema["properties"].(map[string]any)["candidates"]; ok {
+		t.Fatal("failure/v1 schema contains the v2 candidates field")
 	}
 	fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "failure.fixture.json"))
 	if err != nil {
