@@ -908,6 +908,7 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 	// needs the same search-order rule the orchestrator gets; task artifact
 	// references alone are not enough.
 	injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentsMap, codeGraphGuidance)
+	injectLanguageContractIntoOpenCodeSubagentPrompts(agentsMap)
 
 	result, err := json.MarshalIndent(overlay, "", "  ")
 	if err != nil {

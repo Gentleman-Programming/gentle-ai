@@ -329,7 +329,12 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// valid, but an explicit maintainer-authorized native recovery or reset that
 	// the runtime supports is no longer overridden. Kilocode renders that shared
 	// orchestrator contract, so the hash moved again. Deliberate, not drift.
-	const want = "1c2c5b386122f9438bec5ccfcf65a95b6b38cb55d141a47db166561230b8cc5d"
+	//
+	// The canonical artifact language contract is appended to all eight agent
+	// prompts (+458 characters each); no key is added, removed, or otherwise
+	// changed. The hash is recomputed from the rebased tree. Deliberate, not
+	// drift.
+	const want = "84af52f28c48471060423f641604f0b8ba098ce22fa5ba35e98dd34d41ba2557"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -549,8 +554,13 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// session boundary: no restart, child process, special session, or
 		// OPENCODE_DISABLE_* variable. Ceilings are unchanged: both rows keep
 		// more than 15% headroom.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_521, maxCharacters: 23_600},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 31_210, maxCharacters: 36_000},
+		//
+		// +458 per lens injects the canonical artifact language contract into every
+		// rendered sub-agent prompt, so executors no longer depend on the orchestrator
+		// remembering to forward it. The ceilings move to preserve the required 15%
+		// headroom after that deliberate increase.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_979, maxCharacters: 24_200},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 33_042, maxCharacters: 38_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

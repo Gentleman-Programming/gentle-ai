@@ -204,3 +204,24 @@ func injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap map[string]any,
 		agent["prompt"] = injectCodeGraphGuidanceIntoPrompt(prompt, guidance)
 	}
 }
+
+// injectLanguageContractIntoOpenCodeSubagentPrompts applies the canonical
+// executor language contract to OpenCode's JSON-embedded sub-agent prompts.
+// Primary-mode agents keep the persona channel's own rules; {file:...}
+// indirections are resolved elsewhere and stay untouched.
+func injectLanguageContractIntoOpenCodeSubagentPrompts(agentMap map[string]any) {
+	for _, agentRaw := range agentMap {
+		agent, ok := agentRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if mode, _ := agent["mode"].(string); mode == "primary" {
+			continue
+		}
+		prompt, ok := agent["prompt"].(string)
+		if !ok || strings.HasPrefix(prompt, "{file:") {
+			continue
+		}
+		agent["prompt"] = injectLanguageContractIntoPrompt(prompt)
+	}
+}
