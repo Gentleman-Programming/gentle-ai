@@ -97,7 +97,6 @@ type targetStatusCandidate struct {
 	legacyStore        *Store
 	receiptIdentity    string
 	receiptPublished   bool
-	receiptCanonical   bool
 	receiptReplayable  bool
 	pendingFinalize    bool
 	correctionRecovery bool
@@ -146,7 +145,6 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 	}
 
 	candidates := []targetStatusCandidate{}
-	scopeChangedCandidates := []targetStatusCandidate{}
 	for lineage, candidate := range view.compact {
 		if request.LineageID != "" && request.LineageID != lineage {
 			continue
@@ -161,12 +159,20 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			candidates = append(candidates, candidate)
 			continue
 		}
-		if state.State == StateApproved && candidate.receiptPublished && candidate.receiptCanonical {
+		if state.State == StateApproved && candidate.receiptPublished {
 			eligible, eligibilityErr := compactApprovedStagedScopeRecovery(ctx, repo, state, live)
 			if eligibilityErr != nil {
 				return targetStatusFailure(base, eligibilityErr)
 			}
 			if eligible {
+				candidate.correctionRecovery = true
+				candidate.recoveryDisposition = RecoveryScopeChanged
+				candidates = append(candidates, candidate)
+				continue
+			}
+			requested := state
+			requested.InitialSnapshot = live
+			if state.CurrentSnapshot.CandidateTree != live.CandidateTree && compactStartDeliveryScopeMatches(state, requested) {
 				candidate.correctionRecovery = true
 				candidate.recoveryDisposition = RecoveryScopeChanged
 				candidates = append(candidates, candidate)
@@ -207,11 +213,6 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			candidates = append(candidates, candidate)
 			continue
 		}
-		if request.LineageID == "" && candidate.receiptPublished && (state.State == StateApproved || state.State == StateEscalated) {
-			if projectCompactTerminalHistory(state, live) == compactTerminalHistoryScopeChanged {
-				scopeChangedCandidates = append(scopeChangedCandidates, candidate)
-			}
-		}
 	}
 	for lineage, candidate := range view.legacy {
 		if request.LineageID != "" && request.LineageID != lineage {
@@ -240,18 +241,6 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		}
 		return candidates[i].version < candidates[j].version
 	})
-	sort.Slice(scopeChangedCandidates, func(i, j int) bool {
-		return scopeChangedCandidates[i].lineage < scopeChangedCandidates[j].lineage
-	})
-	if len(candidates) == 0 && len(scopeChangedCandidates) > 1 {
-		base.Applicability = TargetApplicabilityAmbiguous
-		base.Action = TargetStatusActionSelectLineage
-		base.Replayability = ReplayabilityStatusRequired
-		for _, candidate := range scopeChangedCandidates {
-			base.CandidateLineageIDs = append(base.CandidateLineageIDs, candidate.lineage)
-		}
-		return base, nil
-	}
 	switch len(candidates) {
 	case 0:
 		base.Applicability = TargetApplicabilityUnrelated

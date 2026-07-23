@@ -397,9 +397,10 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 		name       string
 		projection reviewtransaction.Projection
 		gate       reviewtransaction.GateKind
+		status     reviewtransaction.TargetApplicability
 	}{
-		{name: "workspace", projection: reviewtransaction.ProjectionWorkspace, gate: reviewtransaction.GatePostApply},
-		{name: "staged", projection: reviewtransaction.ProjectionStaged, gate: reviewtransaction.GatePreCommit},
+		{name: "workspace", projection: reviewtransaction.ProjectionWorkspace, gate: reviewtransaction.GatePostApply, status: reviewtransaction.TargetApplicabilityUnrelated},
+		{name: "staged", projection: reviewtransaction.ProjectionStaged, gate: reviewtransaction.GatePreCommit, status: reviewtransaction.TargetApplicabilityAmbiguous},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
@@ -443,8 +444,9 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 			}
 			var status ReviewTargetStatusResult
 			decodeStrictReviewJSON(t, output.Bytes(), &status)
-			if status.Applicability != reviewtransaction.TargetApplicabilityAmbiguous || status.Action != reviewtransaction.TargetStatusActionSelectLineage ||
-				status.Replayability != reviewtransaction.ReplayabilityStatusRequired || !reflect.DeepEqual(status.Candidates, lineages) {
+			if status.Applicability != tt.status || tt.status == reviewtransaction.TargetApplicabilityAmbiguous &&
+				(status.Action != reviewtransaction.TargetStatusActionSelectLineage || status.Replayability != reviewtransaction.ReplayabilityStatusRequired ||
+					!reflect.DeepEqual(status.Candidates, lineages)) {
 				t.Fatalf("multiple scope-changed status = %#v", status)
 			}
 

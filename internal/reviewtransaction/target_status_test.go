@@ -230,6 +230,188 @@ func TestAssessTargetStatusClassifiesAllApplicabilityStates(t *testing.T) {
 	})
 }
 
+func TestHistoricalAuthorityDoesNotMakeFreshBaseDiffAmbiguous(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "historical\n")
+	historical := newCompactTestState(t, repo, "historical-template")
+	results := make([]LensResult, len(historical.SelectedLenses))
+	for index, lens := range historical.SelectedLenses {
+		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
+	}
+	if err := historical.CompleteReview(CompactReviewInput{LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := historical.CompleteVerification([]byte("verified\n"), true); err != nil {
+		t.Fatal(err)
+	}
+	lineages := make([]string, 20)
+	authorityBefore := map[string][]byte{}
+	rememberAuthority := func(path string) {
+		payload, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		authorityBefore[path] = payload
+	}
+	for index := range lineages {
+		lineages[index] = fmt.Sprintf("historical-%02d", index)
+		candidate := historical
+		candidate.LineageID = lineages[index]
+		store := writeTerminalTargetStatusAuthority(t, repo, candidate)
+		rememberAuthority(store.StatePath())
+		rememberAuthority(store.ReceiptPath())
+	}
+	if err := runSnapshotGit(repo, "add", "tracked.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runSnapshotGit(repo, "commit", "-m", "historical target"); err != nil {
+		t.Fatal(err)
+	}
+
+	zero := newCompactTestState(t, repo, "approved-zero-path")
+	if err := zero.CompleteReview(CompactReviewInput{LensResults: []LensResult{}, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := zero.CompleteVerification([]byte("verified\n"), true); err != nil {
+		t.Fatal(err)
+	}
+	zeroStore := writeTerminalTargetStatusAuthority(t, repo, zero)
+	rememberAuthority(zeroStore.StatePath())
+	rememberAuthority(zeroStore.ReceiptPath())
+
+	writeSnapshotFile(t, repo, "tracked.txt", "fresh base diff\n")
+	if err := runSnapshotGit(repo, "add", "tracked.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runSnapshotGit(repo, "commit", "-m", "fresh target"); err != nil {
+		t.Fatal(err)
+	}
+	target := Target{Kind: TargetBaseDiff, BaseRef: "HEAD~1", IntendedUntracked: []string{}}
+	live, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, lineage := range append(lineages, zero.LineageID) {
+		status, statusErr := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target, LineageID: lineage})
+		if statusErr != nil || status.Applicability != TargetApplicabilityUnrelated || status.Action != TargetStatusActionStart {
+			t.Fatalf("explicit status for %q = %#v, %v", lineage, status, statusErr)
+		}
+	}
+
+	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Applicability != TargetApplicabilityUnrelated || status.Action != TargetStatusActionStart || len(status.CandidateLineageIDs) != 0 {
+		t.Fatalf("unqualified status = %#v", status)
+	}
+	risk, lines, err := (SnapshotBuilder{Repo: repo}).ClassifySnapshotRisk(context.Background(), live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lenses := []string{}
+	if risk == RiskMedium {
+		lenses = []string{LensReliability}
+	} else if risk == RiskHigh {
+		lenses = append([]string(nil), supportedLenses...)
+	}
+	started, err := NewCompactState(Start{LineageID: "fresh-base-diff", Mode: ModeOrdinaryBounded, Generation: 1, Snapshot: live, PolicyHash: hash("1"), RiskLevel: risk, SelectedLenses: lenses, OriginalChangedLines: &lines})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: started})
+	if err != nil || result.Action != CompactStartCreated || result.Record.State.InitialSnapshot.Identity != status.TargetIdentity {
+		t.Fatalf("START = %#v, %v; status = %#v", result, err, status)
+	}
+	for path, before := range authorityBefore {
+		if after, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(before, after) {
+			t.Fatalf("historical authority changed at %q: %v", path, readErr)
+		}
+	}
+}
+
+func TestApprovedSamePathHistoryBehindInterveningBaseIsUnrelated(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "historical\n")
+	historical := newCompactTestState(t, repo, "historical-same-path")
+	results := make([]LensResult, len(historical.SelectedLenses))
+	for index, lens := range historical.SelectedLenses {
+		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
+	}
+	if err := historical.CompleteReview(CompactReviewInput{LensResults: results}); err != nil {
+		t.Fatal(err)
+	}
+	if err := historical.CompleteVerification([]byte("verified\n"), true); err != nil {
+		t.Fatal(err)
+	}
+	writeTerminalTargetStatusAuthority(t, repo, historical)
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "historical target")
+	writeSnapshotFile(t, repo, "tracked.txt", "intervening base\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "intervening base")
+	writeSnapshotFile(t, repo, "tracked.txt", "fresh target\n")
+
+	target := Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}
+	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target})
+	if err != nil || status.Applicability != TargetApplicabilityUnrelated || status.Action != TargetStatusActionStart {
+		t.Fatalf("STATUS = %#v, %v", status, err)
+	}
+	requested := newCompactTestState(t, repo, "fresh-same-path")
+	started, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
+	if err != nil || started.Action != CompactStartCreated || started.Record.State.LineageID != requested.LineageID {
+		t.Fatalf("START = %#v, %v", started, err)
+	}
+}
+
+func TestApprovedScopeRelationDoesNotAuthorizeRecovery(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		overlap bool
+	}{
+		{name: "contraction"},
+		{name: "overlap", overlap: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			writeSnapshotFile(t, repo, "a.go", "package a\n")
+			writeSnapshotFile(t, repo, "b.go", "package b\n")
+			approved := newCompactStartStateForTarget(t, repo, "approved-"+tt.name, Target{
+				Kind: TargetCurrentChanges, IntendedUntracked: []string{"a.go", "b.go"},
+			})
+			results := make([]LensResult, len(approved.SelectedLenses))
+			for i, lens := range approved.SelectedLenses {
+				results[i] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
+			}
+			if err := approved.CompleteReview(CompactReviewInput{LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := approved.CompleteVerification([]byte("verified\n"), true); err != nil {
+				t.Fatal(err)
+			}
+			writeTerminalTargetStatusAuthority(t, repo, approved)
+			if err := os.Remove(filepath.Join(repo, "b.go")); err != nil {
+				t.Fatal(err)
+			}
+			intended := []string{"a.go"}
+			if tt.overlap {
+				writeSnapshotFile(t, repo, "x.go", "package x\n")
+				intended = append(intended, "x.go")
+			}
+			target := Target{Kind: TargetCurrentChanges, IntendedUntracked: intended}
+			status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target})
+			if err != nil || status.Applicability != TargetApplicabilityUnrelated || status.Action != TargetStatusActionStart {
+				t.Fatalf("STATUS = %#v, %v", status, err)
+			}
+			requested := newCompactStartStateForTarget(t, repo, "fresh-"+tt.name, target)
+			started, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
+			if err != nil || started.Action != CompactStartCreated || started.Record.State.LineageID != requested.LineageID {
+				t.Fatalf("START = %#v, %v", started, err)
+			}
+		})
+	}
+}
+
 func TestAssessTargetStatusRecognizesAuthorizedCorrection(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfour\n")
@@ -650,6 +832,36 @@ func TestAssessTargetStatusReportsAmbiguousApprovedStagedScopeExpansion(t *testi
 	if got.Applicability != TargetApplicabilityAmbiguous || got.Action != TargetStatusActionSelectLineage ||
 		!equalStrings(got.CandidateLineageIDs, []string{"staged-status-first", "staged-status-second"}) {
 		t.Fatalf("ambiguous staged scope status = %#v", got)
+	}
+}
+
+func TestApprovedNoncanonicalRecoveryCandidatesStayAmbiguous(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed\n")
+	first, firstStore, _ := approvedCompactCurrentChangesFixture(t, repo, "noncanonical-first", []string{})
+	second := first
+	second.LineageID = "noncanonical-second"
+	secondStore := writeTerminalTargetStatusAuthority(t, repo, second)
+	for _, store := range []CompactStore{firstStore, secondStore} {
+		receipt, err := os.ReadFile(store.ReceiptPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(store.ReceiptPath(), append(receipt, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSnapshotFile(t, repo, "tracked.txt", "changed candidate\n")
+	target := Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}
+	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target})
+	if err != nil || status.Applicability != TargetApplicabilityAmbiguous || status.Action != TargetStatusActionSelectLineage ||
+		!reflect.DeepEqual(status.CandidateLineageIDs, []string{first.LineageID, second.LineageID}) {
+		t.Fatalf("STATUS = %#v, %v", status, err)
+	}
+	requested := newCompactTestState(t, repo, "noncanonical-fresh")
+	started, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
+	if err != nil || started.Action != CompactStartBlocked {
+		t.Fatalf("START = %#v, %v", started, err)
 	}
 }
 
