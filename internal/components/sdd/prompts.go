@@ -120,6 +120,21 @@ func injectCodeGraphGuidanceIntoPrompt(prompt, guidance string) string {
 	return filemerge.InjectMarkdownSection(prompt, "codegraph-guidance", guidance)
 }
 
+// agentLanguageContract returns the canonical executor language contract
+// (issue #1702 defect 4). Single source of truth: injected into every
+// rendered sub-agent prompt so executors spawned inside a non-English
+// conversation never mimic its dialect when writing artifacts.
+func agentLanguageContract() string {
+	return assets.MustRead("generic/agent-language-contract.md")
+}
+
+// injectLanguageContractIntoPrompt appends the canonical language contract
+// as a managed markdown section. Marker-bound, so re-rendering an already
+// injected prompt is a no-op (same mechanism as the CodeGraph guidance).
+func injectLanguageContractIntoPrompt(prompt string) string {
+	return filemerge.InjectMarkdownSection(prompt, "agent-language-contract", strings.TrimSpace(agentLanguageContract()))
+}
+
 func injectCodeGraphToolGrantIntoPrompt(prompt string, agentID model.AgentID, guidance string) string {
 	if strings.TrimSpace(guidance) == "" {
 		return prompt
