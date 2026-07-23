@@ -1796,6 +1796,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.toggleCurrentUninstallComponent()
 		case m.Cursor == componentCount && len(m.UninstallComponents) > 0:
 			m.refreshUninstallProfiles()
+			// Partial-mode routing: when no profiles exist but ComponentEngram
+			// is selected, scope selection still must be reachable so the user
+			// can opt in or out (None vs Global) instead of being silently
+			// dropped on Confirm with a default scope they never chose.
 			if m.shouldShowUninstallSubSelection() {
 				m.selectAllUninstallProfiles()
 				m.UninstallProfileSelection = true
@@ -2985,6 +2989,14 @@ func (m Model) startUninstall() tea.Cmd {
 				}
 			}
 			if len(componentsWithoutEngram) > 0 {
+				// Defensive guard: the initial nil check covers both UninstallFn
+				// and UninstallWithProfilesFn together, but in this branch we
+				// call UninstallFn directly when the filtered slice is non-empty.
+				// Mirroring the initial guard locally keeps the surface area
+				// explicit even if the unified check changes later.
+				if uninstallFn == nil {
+					return UninstallDoneMsg{Err: fmt.Errorf("uninstall function not configured")}
+				}
 				result, err = uninstallFn(agentIDs, componentsWithoutEngram)
 			}
 			if err == nil && len(profileNamesToRemove) > 0 {
