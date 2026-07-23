@@ -8,7 +8,7 @@
 
 Closes #
 
-<!-- Replace the # above with the issue number, e.g.: Closes #42 -->
+<!-- Replace the # above with the issue number, e.g.: Closes #<NUMBER> -->
 
 ---
 
