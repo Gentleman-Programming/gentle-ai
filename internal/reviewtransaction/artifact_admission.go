@@ -161,8 +161,9 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 	if err != nil {
 		return fail(ArtifactAdmissionIncomplete, err.Error())
 	}
-	wantPrefix := map[string]string{LensRisk: "R1-", LensReadability: "R2-", LensReliability: "R3-", LensResilience: "R4-"}[canonical.Lens]
-	seenFindingIDs := make(map[string]struct{}, len(canonical.Findings))
+	if decision, diagnostic := ValidateArtifactFindingIDs(canonical); decision != ArtifactAdmissionCompleted {
+		return fail(decision, diagnostic)
+	}
 	wantCandidateCausalIDs := make([]string, 0)
 	for _, evidence := range canonical.Evidence {
 		if evidenceReportsUnavailableInspection(evidence) {
@@ -173,16 +174,6 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 		}
 	}
 	for _, finding := range canonical.Findings {
-		if !artifactFindingID.MatchString(finding.ID) {
-			return fail(ArtifactAdmissionBindingMismatch, "reviewer finding ID does not match the native ASCII schema")
-		}
-		if !strings.HasPrefix(finding.ID, wantPrefix) {
-			return fail(ArtifactAdmissionBindingMismatch, "reviewer finding ID is not bound to the selected lens")
-		}
-		if _, duplicate := seenFindingIDs[finding.ID]; duplicate {
-			return fail(ArtifactAdmissionAmbiguous, "reviewer result repeats a finding ID")
-		}
-		seenFindingIDs[finding.ID] = struct{}{}
 		if !findingLocationInGenesis(finding.Location, wantPaths) {
 			return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
 		}
@@ -210,6 +201,26 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 	admission.Decision, admission.ResultHash = ArtifactAdmissionCompleted, canonical.ResultHash
 	admission.CandidateCausalFindingIDs = verifiedIDs
 	return canonical, admission, nil
+}
+
+// ValidateArtifactFindingIDs enforces the provider-owned identity rules before
+// repository-derived classification and again during artifact admission.
+func ValidateArtifactFindingIDs(result LensResult) (ArtifactAdmissionDecision, string) {
+	wantPrefix := map[string]string{LensRisk: "R1-", LensReadability: "R2-", LensReliability: "R3-", LensResilience: "R4-"}[result.Lens]
+	seen := make(map[string]struct{}, len(result.Findings))
+	for _, finding := range result.Findings {
+		if !artifactFindingID.MatchString(finding.ID) {
+			return ArtifactAdmissionBindingMismatch, "reviewer finding ID does not match the native ASCII schema"
+		}
+		if !strings.HasPrefix(finding.ID, wantPrefix) {
+			return ArtifactAdmissionBindingMismatch, "reviewer finding ID is not bound to the selected lens"
+		}
+		if _, duplicate := seen[finding.ID]; duplicate {
+			return ArtifactAdmissionAmbiguous, "reviewer result repeats a finding ID"
+		}
+		seen[finding.ID] = struct{}{}
+	}
+	return ArtifactAdmissionCompleted, ""
 }
 
 func payloadSHA256(payload []byte) string {

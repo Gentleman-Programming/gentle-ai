@@ -2210,6 +2210,20 @@ func (result facadeReviewerResult) nativeLensResult() reviewtransaction.LensResu
 	return reviewtransaction.LensResult{Lens: result.Lens, Findings: findings, Evidence: result.Evidence}
 }
 
+func (result facadeReviewerResult) withCanonicalLensResult(canonical reviewtransaction.LensResult) facadeReviewerResult {
+	result.Lens = canonical.Lens
+	result.Evidence = append([]string(nil), canonical.Evidence...)
+	result.Findings = make([]facadeFinding, len(canonical.Findings))
+	for index, finding := range canonical.Findings {
+		result.Findings[index] = facadeFinding{
+			ID: finding.ID, Lens: finding.Lens, Location: finding.Location, Severity: finding.Severity,
+			Claim: finding.Claim, ProofRefs: append([]string(nil), finding.ProofRefs...),
+			EvidenceClass: finding.EvidenceClass, CausalDisposition: finding.CausalDisposition,
+		}
+	}
+	return result
+}
+
 func (result facadeValidationResult) native(tx reviewtransaction.Transaction) (reviewtransaction.ScopedValidationResult, error) {
 	if len(result.OriginalCriteria.Evidence) == 0 || len(result.CorrectionRegression.Evidence) == 0 {
 		return reviewtransaction.ScopedValidationResult{}, errors.New("targeted validation requires original_criteria and correction_regression evidence")

@@ -299,13 +299,21 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if _, err := prepareCompactReviewerResults(reviewtransaction.CompactState{SelectedLenses: []string{*lens}}, []facadeReviewerResult{result}, facadeRefuterResult{}); err != nil {
 		return reviewPreflightError(err)
 	}
+	nativeResult := result.nativeLensResult()
+	nativeResult.Lens = *lens
+	nativeResult, err = reviewtransaction.CanonicalCompactLensResult(nativeResult)
+	if err != nil {
+		return reviewPreflightError(err)
+	}
+	if decision, diagnostic := reviewtransaction.ValidateArtifactFindingIDs(nativeResult); decision != reviewtransaction.ArtifactAdmissionCompleted {
+		return reviewPreflightError(fmt.Errorf("reviewer artifact admission %s: %s", decision, diagnostic))
+	}
+	result = result.withCanonicalLensResult(nativeResult)
 	canonicalResult, err := json.Marshal(result)
 	if err != nil {
 		return err
 	}
 	canonicalResult = append(canonicalResult, '\n')
-	nativeResult := result.nativeLensResult()
-	nativeResult.Lens = *lens
 	candidateCausalIDs, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, nativeResult)
 	if err != nil {
 		return reviewPreflightError(err)
