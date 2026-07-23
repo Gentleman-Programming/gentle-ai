@@ -558,3 +558,121 @@ func advanceChainedRecoveryBoundary(t *testing.T, fixture *chainedRecoveryFixtur
 	gitSnapshot(t, fixture.repo, "fetch", "origin")
 	return strings.TrimSpace(gitSnapshot(t, side, "rev-parse", "HEAD"))
 }
+
+// TestParseCompactRecoveryAuthorizationBinding5FieldForm proves the parser
+// accepts the canonical 5-field binding (without successor_lineage) and
+// round-trips its fields exactly.
+func TestParseCompactRecoveryAuthorizationBinding5FieldForm(t *testing.T) {
+	binding := compactRecoveryAuthorizationBinding("lineage-A", "rev-X", "target-Y", "alice@example.com", "supersede stale review")
+	lineage, revision, target, successor, actor, reason, ok := parseCompactRecoveryAuthorizationBinding(binding)
+	if !ok {
+		t.Fatalf("parser rejected a 5-field binding produced by the canonical constructor")
+	}
+	if lineage != "lineage-A" || revision != "rev-X" || target != "target-Y" ||
+		actor != "alice@example.com" || reason != "supersede stale review" {
+		t.Fatalf("parser fields = (%q,%q,%q,%q,%q), want (lineage-A,rev-X,target-Y,,alice@example.com,supersede stale review)", lineage, revision, target, actor, reason)
+	}
+	if successor != "" {
+		t.Fatalf("parser successor_lineage = %q, want empty", successor)
+	}
+}
+
+// TestParseCompactRecoveryAuthorizationBinding6FieldForm proves the parser
+// accepts the 6-field binding with successor_lineage and exposes it on
+// the returned tuple.
+func TestParseCompactRecoveryAuthorizationBinding6FieldForm(t *testing.T) {
+	binding := compactApprovedStagedScopeRecoveryAuthorizationBinding(
+		"lineage-A", "rev-X", "target-Y", "lineage-B-successor", "alice@example.com", "staged scope expansion")
+	lineage, revision, target, successor, actor, reason, ok := parseCompactRecoveryAuthorizationBinding(binding)
+	if !ok {
+		t.Fatalf("parser rejected a 6-field binding produced by the canonical constructor")
+	}
+	if lineage != "lineage-A" || revision != "rev-X" || target != "target-Y" ||
+		successor != "lineage-B-successor" || actor != "alice@example.com" || reason != "staged scope expansion" {
+		t.Fatalf("parser fields do not match the constructor output")
+	}
+}
+
+// TestParseCompactRecoveryAuthorizationBindingToleratesReorderingAndWhitespace
+// proves the parser accepts arbitrary field order and flexible whitespace
+// around the key=value separators.
+func TestParseCompactRecoveryAuthorizationBindingToleratesReorderingAndWhitespace(t *testing.T) {
+	cases := []string{
+		// trailing LF
+		compactRecoveryAuthorizationBinding("lineage-A", "rev-X", "target-Y", "alice", "reason") + "\n",
+		// leading empty line
+		"\n" + compactRecoveryAuthorizationBinding("lineage-A", "rev-X", "target-Y", "alice", "reason"),
+		// trailing empty lines
+		compactRecoveryAuthorizationBinding("lineage-A", "rev-X", "target-Y", "alice", "reason") + "\n\n",
+		// field order: reason first
+		"gentle-ai.review-recovery-authorization/v1\nreason=reason\nactor=alice\ntarget_identity=target-Y\npredecessor_revision=rev-X\npredecessor_lineage=lineage-A",
+		// generous whitespace around `=`
+		"gentle-ai.review-recovery-authorization/v1\n  predecessor_lineage = lineage-A  \n\tpredecessor_revision\t=\trev-X\n target_identity=target-Y\nactor=alice\nreason=reason",
+		// extra unknown field
+		compactRecoveryAuthorizationBinding("lineage-A", "rev-X", "target-Y", "alice", "reason") + "\nnotes=optional",
+	}
+	for index, binding := range cases {
+		if lineage, revision, target, _, actor, reason, ok := parseCompactRecoveryAuthorizationBinding(binding); !ok ||
+			lineage != "lineage-A" || revision != "rev-X" || target != "target-Y" || actor != "alice" || reason != "reason" {
+			t.Fatalf("case %d failed: ok=%v fields=(%q,%q,%q,%q,%q)", index, ok, lineage, revision, target, actor, reason)
+		}
+	}
+}
+
+// TestParseCompactRecoveryAuthorizationBindingRejectsInvalidForms proves the
+// parser refuses missing schema header, missing required field, and a binding
+// that does not start with the schema header.
+func TestParseCompactRecoveryAuthorizationBindingRejectsInvalidForms(t *testing.T) {
+	cases := []string{
+		"",                                                              // empty
+		"random text",                                                   // not the schema
+		"gentle-ai.review-recovery-authorization/v1",                     // schema but no fields
+		"gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=A", // missing required fields
+		"gentle-ai.review-decide-payload/v1\npredecessor_lineage=A\npredecessor_revision=R\ntarget_identity=T\nactor=a\nreason=r", // wrong schema
+	}
+	for index, binding := range cases {
+		if _, _, _, _, _, _, ok := parseCompactRecoveryAuthorizationBinding(binding); ok {
+			t.Fatalf("case %d accepted an invalid binding:\n%s", index, binding)
+		}
+	}
+}
+
+// TestCompactRecoveryAuthorizationMatchesAcceptsEquivalentForms proves the
+// matcher returns true for canonical, re-ordered, whitespace-tolerant, and
+// 6-field-with-successor bindings; and returns false for fields that differ.
+func TestCompactRecoveryAuthorizationMatchesAcceptsEquivalentForms(t *testing.T) {
+	expected := compactRecoveryAuthorizationBinding("lineage-A", "rev-X", "target-Y", "alice", "reason")
+	cases := []string{
+		expected,                                                      // canonical
+		expected + "\n",                                               // trailing LF
+		expected + "\n\n",                                             // trailing empty lines
+		"gentle-ai.review-recovery-authorization/v1\nreason=reason\nactor=alice\ntarget_identity=target-Y\npredecessor_revision=rev-X\npredecessor_lineage=lineage-A", // re-ordered
+	}
+	for index, binding := range cases {
+		if !compactRecoveryAuthorizationMatches(binding, "lineage-A", "rev-X", "target-Y", "alice", "reason") {
+			t.Fatalf("case %d: matcher rejected an equivalent binding", index)
+		}
+	}
+}
+
+// TestCompactRecoveryAuthorizationMatchesRejectsMismatchedFields proves the
+// matcher returns false when any required field differs from the expected
+// values, even if the binding otherwise parses cleanly.
+func TestCompactRecoveryAuthorizationMatchesRejectsMismatchedFields(t *testing.T) {
+	base := compactRecoveryAuthorizationBinding("lineage-A", "rev-X", "target-Y", "alice", "reason")
+	cases := map[string]string{
+		"wrong predecessor_lineage":  strings.Replace(base, "predecessor_lineage=lineage-A", "predecessor_lineage=lineage-Z", 1),
+		"wrong predecessor_revision":  strings.Replace(base, "predecessor_revision=rev-X", "predecessor_revision=rev-Z", 1),
+		"wrong target_identity":       strings.Replace(base, "target_identity=target-Y", "target_identity=target-Z", 1),
+		"wrong actor":                 strings.Replace(base, "actor=alice", "actor=bob", 1),
+		"wrong reason":                strings.Replace(base, "reason=reason", "reason=something-else", 1),
+		"unparseable schema header":    "different-prefix/v1\npredecessor_lineage=lineage-A\npredecessor_revision=rev-X\ntarget_identity=target-Y\nactor=alice\nreason=reason",
+		"missing required field":      "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=lineage-A\npredecessor_revision=rev-X\ntarget_identity=target-Y\nactor=alice",
+	}
+	for name, binding := range cases {
+		if compactRecoveryAuthorizationMatches(binding, "lineage-A", "rev-X", "target-Y", "alice", "reason") {
+			t.Fatalf("%s: matcher accepted a mismatched binding:\n%s", name, binding)
+		}
+	}
+}
+

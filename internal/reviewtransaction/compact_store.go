@@ -233,7 +233,7 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 			return CompactRecord{}, errors.New("approved staged scope recovery is not a complete same-base index expansion")
 		}
 	}
-	if predecessor.State.State == StateCorrectionRequired && request.Disposition != RecoveryEscalated && request.MaintainerAuthorization != compactRecoveryAuthorizationBinding(request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason) {
+	if predecessor.State.State == StateCorrectionRequired && request.Disposition != RecoveryEscalated && !compactRecoveryAuthorizationMatches(request.MaintainerAuthorization, request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason) {
 		return CompactRecord{}, errors.New("correction-required scope recovery requires an exact maintainer authorization binding")
 	}
 	if !sameRecoveryProjection(predecessor.State.InitialSnapshot.Projection, request.Successor.InitialSnapshot.Projection) &&
@@ -242,7 +242,7 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	}
 	if !sameRecoveryProjection(predecessor.State.InitialSnapshot.Projection, request.Successor.InitialSnapshot.Projection) &&
 		!stagedScopeRecovery &&
-		request.MaintainerAuthorization != compactRecoveryAuthorizationBinding(request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason) {
+		!compactRecoveryAuthorizationMatches(request.MaintainerAuthorization, request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason) {
 		return CompactRecord{}, compactRecoveryAuthorizationError(request.Successor.InitialSnapshot)
 	}
 	existing, existingErr := successorStore.Load()
@@ -456,7 +456,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 		}
 	case RecoveryEscalated:
 		if recovery.Evidence != nil {
-			if recovery.MaintainerAuthorization != compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
+			if !compactRecoveryAuthorizationMatches(recovery.MaintainerAuthorization, predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
 				return compactRecoveryAuthorizationError(successor.InitialSnapshot)
 			}
 			if err := validateCompactRecoveredEvidenceEdge(predecessor, successor); err != nil {
@@ -471,7 +471,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 		if !compactEscalatedRecoveryTargetChanged(predecessor.State.CurrentSnapshot, successor.InitialSnapshot) {
 			return errCompactRecoveryTargetUnchanged
 		}
-		if recovery.MaintainerAuthorization != compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
+		if !compactRecoveryAuthorizationMatches(recovery.MaintainerAuthorization, predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
 			return compactRecoveryAuthorizationError(successor.InitialSnapshot)
 		}
 	case RecoveryFinalVerificationRetry:
@@ -499,6 +499,55 @@ func compactRecoveryAuthorizationBinding(lineage, revision, targetIdentity, acto
 	return compactRecoveryAuthorizationSchema + "\npredecessor_lineage=" + lineage +
 		"\npredecessor_revision=" + revision + "\ntarget_identity=" + targetIdentity +
 		"\nactor=" + strings.TrimSpace(actor) + "\nreason=" + strings.TrimSpace(reason)
+}
+
+// parseCompactRecoveryAuthorizationBinding parses a maintainer authorization binding
+// for compact recovery. The binding starts with the schema header and continues with
+// key=value pairs, one per line. It tolerates trailing whitespace, optional fields,
+// field reordering, and either the 5-field form (without successor_lineage) or the
+// 6-field form (with successor_lineage). Returns ok=false when the schema header is
+// missing or any required field is absent.
+func parseCompactRecoveryAuthorizationBinding(s string) (lineage, revision, targetIdentity, successor, actor, reason string, ok bool) {
+	prefix := compactRecoveryAuthorizationSchema + "\n"
+	body := strings.TrimLeft(s, "\r\n\t ")
+	if !strings.HasPrefix(body, prefix) {
+		return "", "", "", "", "", "", false
+	}
+	body = body[len(prefix):]
+	fields := map[string]string{}
+	for _, line := range strings.Split(body, "\n") {
+		k, v, hasEq := strings.Cut(line, "=")
+		if !hasEq {
+			continue
+		}
+		fields[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+	lineage, lok := fields["predecessor_lineage"]
+	revision, rok := fields["predecessor_revision"]
+	targetIdentity, tok := fields["target_identity"]
+	actor, aok := fields["actor"]
+	reason, rok2 := fields["reason"]
+	if !lok || !rok || !tok || !aok || !rok2 {
+		return "", "", "", "", "", "", false
+	}
+	successor = fields["successor_lineage"]
+	return lineage, revision, targetIdentity, successor, actor, reason, true
+}
+
+// compactRecoveryAuthorizationMatches reports whether the user-supplied binding string
+// parses cleanly and matches the expected required fields. Field reordering, trailing
+// whitespace, and the optional successor_lineage field are tolerated; missing required
+// fields, wrong schema header, or any field mismatch rejects.
+func compactRecoveryAuthorizationMatches(s, lineage, revision, targetIdentity, actor, reason string) bool {
+	parsedLineage, parsedRevision, parsedTarget, _, parsedActor, parsedReason, ok := parseCompactRecoveryAuthorizationBinding(s)
+	if !ok {
+		return false
+	}
+	return parsedLineage == lineage &&
+		parsedRevision == revision &&
+		parsedTarget == targetIdentity &&
+		parsedActor == actor &&
+		parsedReason == reason
 }
 
 func compactApprovedStagedScopeRecoveryAuthorizationBinding(lineage, revision, targetIdentity, successor, actor, reason string) string {
