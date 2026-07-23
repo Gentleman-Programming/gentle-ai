@@ -444,21 +444,24 @@ func TestCompactFixDiffRejectsInexactCorrectionBinding(t *testing.T) {
 func TestCompactCorrectedBaseDiffPrePushAllowsExactFullDelivery(t *testing.T) {
 	tests := []struct {
 		name       string
-		twoCommit  bool
+		topology   string
 		extraPath  bool
 		wrongBase  bool
 		wrongFinal bool
 		wantAllow  bool
 	}{
 		{name: "exact squashed delivery", wantAllow: true},
-		{name: "exact two commit delivery", twoCommit: true, wantAllow: true},
+		{name: "reviewed candidate then correction", topology: "two", wantAllow: true},
+		{name: "secret in first tree", topology: "secret"},
+		{name: "wrong first tree", topology: "wrong-first"},
+		{name: "three commits", topology: "three"},
 		{name: "extra path", extraPath: true},
 		{name: "wrong base", wrongBase: true},
 		{name: "wrong final tree", wrongFinal: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, state, receipt, baseRef := approvedCompactFullFixDiffFixture(t, "compact-full-"+strings.ReplaceAll(tt.name, " ", "-"), tt.twoCommit, tt.extraPath, tt.wrongBase, tt.wrongFinal)
+			repo, state, receipt, baseRef := approvedCompactFullFixDiffFixture(t, "compact-full-"+strings.ReplaceAll(tt.name, " ", "-"), tt.topology, tt.extraPath, tt.wrongBase, tt.wrongFinal)
 			input := NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: baseRef}
 			assessment, err := AssessCompactGateTarget(context.Background(), repo, state, input)
 			if err != nil {
@@ -1461,7 +1464,7 @@ func approvedCompactFixDiffFixtureWithCorrection(t *testing.T, lineage, correcti
 	return repo, state, receipt, "origin/" + branch
 }
 
-func approvedCompactFullFixDiffFixture(t *testing.T, lineage string, twoCommit, extraPath, wrongBase, wrongFinal bool) (string, CompactState, CompactReceipt, string) {
+func approvedCompactFullFixDiffFixture(t *testing.T, lineage, topology string, extraPath, wrongBase, wrongFinal bool) (string, CompactState, CompactReceipt, string) {
 	t.Helper()
 	repo, state, receipt, baseRef := approvedCompactFixDiffFixtureWithCorrection(t, lineage, "corrected other\n")
 	baseCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD^"))
@@ -1475,10 +1478,30 @@ func approvedCompactFullFixDiffFixture(t *testing.T, lineage string, twoCommit, 
 	if wrongBase {
 		publicationBase = strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", baseCommit+"^"))
 	}
-	if twoCommit {
+	switch topology {
+	case "two":
 		gitSnapshot(t, repo, "add", "-A")
 		gitSnapshot(t, repo, "commit", "-m", "approved correction")
-	} else {
+	case "secret", "wrong-first":
+		finalTree := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
+		content := "unreviewed bytes\n"
+		if topology == "secret" {
+			content = "SECRET=must-not-publish\n"
+		}
+		writeSnapshotFile(t, repo, "tracked.txt", content)
+		gitSnapshot(t, repo, "add", "tracked.txt")
+		firstTree := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
+		first := strings.TrimSpace(gitSnapshot(t, repo, "commit-tree", firstTree, "-p", publicationBase, "-m", "unreviewed first tree"))
+		final := strings.TrimSpace(gitSnapshot(t, repo, "commit-tree", finalTree, "-p", first, "-m", "restore approved final tree"))
+		gitSnapshot(t, repo, "update-ref", "HEAD", final)
+	case "three":
+		writeSnapshotFile(t, repo, "tracked.txt", "transient unreviewed bytes\n")
+		gitSnapshot(t, repo, "add", "tracked.txt")
+		gitSnapshot(t, repo, "commit", "-m", "transient intermediate tree")
+		writeSnapshotFile(t, repo, "tracked.txt", "base\n")
+		gitSnapshot(t, repo, "add", "-A")
+		gitSnapshot(t, repo, "commit", "-m", "approved correction")
+	default:
 		gitSnapshot(t, repo, "add", "-A")
 		finalTree := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
 		finalCommit := strings.TrimSpace(gitSnapshot(t, repo, "commit-tree", finalTree, "-p", publicationBase, "-m", "squashed full delivery"))

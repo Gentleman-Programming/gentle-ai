@@ -79,7 +79,7 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 		return assessment, fmt.Errorf("build compact gate target: %w", err)
 	}
 	assessment.Actual = snapshot
-	correctedFullDelivery := compactCorrectedFullDelivery(request.Gate, state, snapshot, resolvedPrePR, state.CurrentSnapshot.CandidateTree)
+	correctedFullDelivery := compactCorrectedFullDelivery(ctx, repo, request.Gate, state, snapshot, resolvedPrePR, state.CurrentSnapshot.CandidateTree)
 	strictBinding := request.Gate == GatePostApply || request.Gate == GatePreCommit ||
 		request.Gate == GatePrePush && state.InitialSnapshot.Kind != TargetCurrentChanges
 	pathsMatch := pathsAreSubset(snapshot.Paths, state.GenesisPaths) == nil
@@ -129,10 +129,28 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	return assessment, nil
 }
 
-func compactCorrectedFullDelivery(gate GateKind, state CompactState, snapshot Snapshot, refs *resolvedPrePRRefs, finalCandidateTree string) bool {
-	return gate == GatePrePush && state.CurrentSnapshot.Kind == TargetFixDiff && refs != nil &&
-		snapshot.CandidateTree == finalCandidateTree && snapshot.BaseTree == state.InitialSnapshot.BaseTree &&
-		pathsAreSubset(snapshot.Paths, state.GenesisPaths) == nil
+func compactCorrectedFullDelivery(ctx context.Context, repo string, gate GateKind, state CompactState, snapshot Snapshot, refs *resolvedPrePRRefs, finalCandidateTree string) bool {
+	if gate != GatePrePush || state.CurrentSnapshot.Kind != TargetFixDiff || refs == nil ||
+		snapshot.CandidateTree != finalCandidateTree || snapshot.BaseTree != state.InitialSnapshot.BaseTree ||
+		pathsAreSubset(snapshot.Paths, state.GenesisPaths) != nil {
+		return false
+	}
+	if refs.DeliveredCommitCount == 1 {
+		return true
+	}
+	if refs.DeliveredCommitCount != 2 {
+		return false
+	}
+	output, err := runGit(ctx, repo, nil, nil, "rev-list", "--reverse", "--parents", refs.BaseCommit+".."+refs.HeadCommit)
+	if err != nil {
+		return false
+	}
+	lines := strings.Fields(string(output))
+	if len(lines) != 4 || lines[1] != refs.BaseCommit || lines[2] != refs.HeadCommit || lines[3] != lines[0] {
+		return false
+	}
+	firstTree, err := runGit(ctx, repo, nil, nil, "rev-parse", lines[0]+"^{tree}")
+	return err == nil && strings.TrimSpace(string(firstTree)) == state.InitialSnapshot.CandidateTree
 }
 
 func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceipt, input NativeGateRequestInput) NativeGateEvaluation {
@@ -311,7 +329,7 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		}
 	}
 	binding := record.State.CurrentSnapshot
-	correctedFullDelivery := compactCorrectedFullDelivery(request.Gate, record.State, snapshot, resolvedPrePR, receipt.FinalCandidateTree)
+	correctedFullDelivery := compactCorrectedFullDelivery(ctx, repo, request.Gate, record.State, snapshot, resolvedPrePR, receipt.FinalCandidateTree)
 	strictBinding := request.Gate == GatePostApply || request.Gate == GatePreCommit || request.Gate == GatePrePush && record.State.InitialSnapshot.Kind != TargetCurrentChanges
 	baseRelationshipValid := snapshot.BaseTree == receipt.BaseTree || request.Target.Kind == TargetFixDiff
 	if strictBinding {
