@@ -2391,6 +2391,47 @@ func TestToggleUninstallEngramScope_CyclesNoneProjectGlobal(t *testing.T) {
 	}
 }
 
+// TestToggleUninstallEngramScope_NoneAdvancesToGlobalWhenNoProjectScope
+// verifies that when the workspace has no .engram/ directory (so the Project
+// option is not rendered), toggleCurrentUninstallEngramScope collapses the
+// cycle to None -> Global -> None instead of stepping through the unavailable
+// Project row.
+func TestToggleUninstallEngramScope_NoneAdvancesToGlobalWhenNoProjectScope(t *testing.T) {
+	tempWorkspace := t.TempDir()
+	// No .engram/ directory created: UninstallEngramProjectScopeAvailable stays false.
+	restoreGetwd := setOSGetwdForTest(tempWorkspace, nil)
+	defer restoreGetwd()
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallProfiles
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.UninstallProfilesAvailable = []string{"cheap"}
+	m.UninstallEngramScope = ""
+	m.refreshUninstallProfiles()
+	if m.UninstallEngramProjectScopeAvailable {
+		t.Fatalf("setup: UninstallEngramProjectScopeAvailable = true, want false (no .engram/ dir)")
+	}
+	m.Cursor = len(m.UninstallProfilesAvailable) // cursor on the scope row (None)
+
+	cases := []struct {
+		name string
+		want model.EngramUninstallScope
+	}{
+		{"None -> Global", model.EngramUninstallScopeGlobal},
+		{"Global -> None", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m.toggleCurrentUninstallEngramScope()
+			if m.UninstallEngramScope != tc.want {
+				t.Fatalf("UninstallEngramScope = %q, want %q", m.UninstallEngramScope, tc.want)
+			}
+		})
+	}
+}
+
 func TestUninstallComponents_ContinueWithEngramProjectScopeNavigatesToSubSelection(t *testing.T) {
 	tempWorkspace := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tempWorkspace, ".engram"), 0o755); err != nil {
