@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -5111,6 +5112,31 @@ func TestInjectPreservesEffectiveOrderedPermissionRules(t *testing.T) {
 			top:   "allow",
 			agent: "deny",
 		},
+		{
+			name:  "equal agent deny survives later repository allow",
+			input: `{"permission":{"read":{"a":"deny","a*":"allow"}},"agent":{"gentle-orchestrator":{"permission":{"task":{"*":"deny","sdd-apply":"allow"},"read":{"a":"deny"}}}}}`,
+			path:  "a",
+			top:   "allow",
+			agent: "deny",
+		},
+		{
+			name:  "equal agent ask survives later repository allow",
+			input: `{"permission":{"read":{"a":"ask","a*":"allow"}},"agent":{"gentle-orchestrator":{"permission":{"task":{"*":"deny","sdd-apply":"allow"},"read":{"a":"ask"}}}}}`,
+			path:  "a",
+			top:   "allow",
+			agent: "ask",
+		},
+		{
+			name: "equal agent deny survives JSONC normalization",
+			input: `{
+				// Ordered rules remain security-significant after comments are removed.
+				"permission":{"read":{"a":"deny","a*":"allow",},},
+				"agent":{"gentle-orchestrator":{"permission":{"read":{"a":"deny",},},},},
+			}`,
+			path:  "a",
+			top:   "allow",
+			agent: "deny",
+		},
 	}
 
 	for _, tt := range tests {
@@ -5209,6 +5235,140 @@ func TestPropagateTopLevelPermissionsFailsClosedWithoutLosingRuleOrder(t *testin
 	}
 }
 
+func TestPropagateTopLevelPermissionsConvergesWithCoupledOverlaps(t *testing.T) {
+	tests := []struct {
+		name   string
+		top    []orderedPermissionRule
+		agent  []orderedPermissionRule
+		values map[string]string
+	}{
+		{
+			name:  "equal deny after later repository allow",
+			top:   []orderedPermissionRule{{pattern: "a", action: "deny"}, {pattern: "a*", action: "allow"}},
+			agent: []orderedPermissionRule{{pattern: "a", action: "deny"}},
+			values: map[string]string{
+				"a":  "deny",
+				"ab": "allow",
+			},
+		},
+		{
+			name:  "equal ask after later repository allow",
+			top:   []orderedPermissionRule{{pattern: "a", action: "ask"}, {pattern: "a*", action: "allow"}},
+			agent: []orderedPermissionRule{{pattern: "a", action: "ask"}},
+			values: map[string]string{
+				"a":  "ask",
+				"ab": "allow",
+			},
+		},
+		{
+			name:  "later exact restoration survives composition",
+			top:   []orderedPermissionRule{{pattern: "*a*", action: "deny"}, {pattern: "*a", action: "ask"}},
+			agent: []orderedPermissionRule{{pattern: "*.md", action: "ask"}, {pattern: "*a*", action: "allow"}},
+			values: map[string]string{
+				"data.md": "deny",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := orderedPermissionCompositionPayload(tt.top, tt.agent)
+			first, err := PropagateTopLevelPermissions(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := PropagateTopLevelPermissions(first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(first, second) {
+				t.Fatalf("second propagation changed bytes\nfirst:  %s\nsecond: %s", first, second)
+			}
+			rules := orderedPermissionRulesAt(t, first, "agent", "gentle-orchestrator", "permission", "review")
+			for value, want := range tt.values {
+				if action := effectivePermissionAction(rules, value); action != want {
+					t.Fatalf("effective review(%q) = %q, want %q; rules=%#v output=%s", value, action, want, rules, first)
+				}
+			}
+		})
+	}
+}
+
+func TestPropagateTopLevelPermissionsSeededCompositionNeverWeakensInputs(t *testing.T) {
+	patterns := []string{
+		"*", "?", "a", "b", "a*", "b*", "*a", "*b", "a?", "?a",
+		"*?", "?*", "a*b", "*a*", "ab*", "*ab", "*.md", "public/**",
+	}
+	actions := []string{"allow", "ask", "deny"}
+	values := []string{
+		"", "a", "b", "aa", "ab", "ba", "bb", "alpha", "beta",
+		"notes.md", "restricted.md", "public/readme.md", "private/readme.md",
+	}
+	rng := rand.New(rand.NewSource(9562026))
+	makeRules := func(count int) []orderedPermissionRule {
+		rules := make([]orderedPermissionRule, 0, count)
+		for i := 0; i < count; i++ {
+			rules = append(rules, orderedPermissionRule{
+				pattern: patterns[rng.Intn(len(patterns))],
+				action:  actions[rng.Intn(len(actions))],
+			})
+		}
+		return rules
+	}
+
+	for iteration := 0; iteration < 20_000; iteration++ {
+		top := makeRules(1 + rng.Intn(4))
+		agent := makeRules(1 + rng.Intn(4))
+		first, err := PropagateTopLevelPermissions(orderedPermissionCompositionPayload(top, agent))
+		if err != nil {
+			t.Fatalf("iteration %d: %v", iteration, err)
+		}
+		second, err := PropagateTopLevelPermissions(first)
+		if err != nil {
+			t.Fatalf("iteration %d second propagation: %v", iteration, err)
+		}
+		if !bytes.Equal(first, second) {
+			t.Fatalf("iteration %d did not converge in one cycle: top=%#v agent=%#v\nfirst:  %s\nsecond: %s", iteration, top, agent, first, second)
+		}
+		merged := orderedPermissionRulesAt(t, first, "agent", "gentle-orchestrator", "permission", "review")
+		for _, value := range values {
+			topAction := effectivePermissionAction(top, value)
+			agentAction := effectivePermissionAction(agent, value)
+			mergedAction := effectivePermissionAction(merged, value)
+			if effectivePermissionRank(mergedAction) < effectivePermissionRank(topAction) ||
+				effectivePermissionRank(mergedAction) < effectivePermissionRank(agentAction) {
+				t.Fatalf("seed 9562026 iteration=%d value=%q weakened input: top=%#v agent=%#v merged=%#v actions(top=%q agent=%q merged=%q)",
+					iteration, value, top, agent, merged, topAction, agentAction, mergedAction)
+			}
+		}
+	}
+}
+
+func TestPropagateTopLevelPermissionsUnsupportedShapesAreNoops(t *testing.T) {
+	noops := [][]byte{
+		nil,
+		{},
+		[]byte(`{}`),
+		[]byte(`{"permission":[],"agent":{"gentle-orchestrator":{"permission":{"read":{"*":"deny"}}}}}`),
+		[]byte(`{"permission":{"read":[]},"agent":{"gentle-orchestrator":{"permission":{"read":{"*":"allow"}}}}}`),
+		[]byte(`{"permission":{"read":{"*":"deny"}},"agent":[]}`),
+		[]byte(`{"permission":{"read":{"*":"deny"}},"agent":{"gentle-orchestrator":[]}}`),
+		[]byte(`{"permission":{"read":{"*":"deny"}},"agent":{"gentle-orchestrator":{"permission":"unknown"}}}`),
+	}
+	for index, input := range noops {
+		got, err := PropagateTopLevelPermissions(input)
+		if err != nil {
+			t.Fatalf("case %d: %v", index, err)
+		}
+		if !bytes.Equal(got, input) {
+			t.Fatalf("case %d changed unsupported shape: input=%q output=%q", index, input, got)
+		}
+	}
+	if _, err := PropagateTopLevelPermissions([]byte(`{"permission":`)); err == nil {
+		t.Fatal("malformed root JSON was accepted")
+	}
+}
+
 func TestInjectPreservesAgentScalarPermissionFallback(t *testing.T) {
 	input := []byte(`{"permission":{"read":{"*":"allow","**/generated/**":"deny"}},"agent":{"gentle-orchestrator":{"permission":"ask"}}}`)
 	got, err := PropagateTopLevelPermissions(input)
@@ -5236,6 +5396,38 @@ func TestInjectPreservesAgentScalarPermissionFallback(t *testing.T) {
 type orderedPermissionRule struct {
 	pattern string
 	action  string
+}
+
+func orderedPermissionCompositionPayload(top, agent []orderedPermissionRule) []byte {
+	return []byte(fmt.Sprintf(
+		`{"permission":{"review":%s},"agent":{"gentle-orchestrator":{"permission":{"task":{"*":"deny","sdd-apply":"allow"},"review":%s}}}}`,
+		encodeOrderedPermissionRules(top),
+		encodeOrderedPermissionRules(agent),
+	))
+}
+
+func encodeOrderedPermissionRules(rules []orderedPermissionRule) string {
+	var result strings.Builder
+	result.WriteByte('{')
+	for index, rule := range rules {
+		if index > 0 {
+			result.WriteByte(',')
+		}
+		pattern, _ := json.Marshal(rule.pattern)
+		action, _ := json.Marshal(rule.action)
+		result.Write(pattern)
+		result.WriteByte(':')
+		result.Write(action)
+	}
+	result.WriteByte('}')
+	return result.String()
+}
+
+func effectivePermissionRank(action string) int {
+	if action == "" {
+		return permissionRank("allow")
+	}
+	return permissionRank(action)
 }
 
 func orderedPermissionRulesAt(t *testing.T, data []byte, keys ...string) []orderedPermissionRule {

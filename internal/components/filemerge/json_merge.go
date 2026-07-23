@@ -60,6 +60,13 @@ func normalizeJSON(raw []byte) []byte {
 	return stripTrailingCommas(withoutComments)
 }
 
+// NormalizeJSONC removes comments and trailing commas without reordering
+// object fields. Callers that need ordered decoding can normalize first and
+// then use encoding/json while preserving last-match-wins object order.
+func NormalizeJSONC(raw []byte) []byte {
+	return normalizeJSON(raw)
+}
+
 func stripJSONComments(raw []byte) []byte {
 	out := make([]byte, 0, len(raw))
 	inString := false

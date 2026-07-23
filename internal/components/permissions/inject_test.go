@@ -326,6 +326,55 @@ func TestInjectOpenCodeOrderSensitivePoliciesStaySafeAndByteIdempotent(t *testin
 	}
 }
 
+func TestInjectOpenCodeCoupledOverlapConvergesInOneCycle(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	settingsPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := []byte(`{
+		"permission":{"review":{"*a*":"deny","*a":"ask"}},
+		"agent":{"gentle-orchestrator":{"permission":{
+			"task":{"*":"deny","sdd-apply":"allow"},
+			"review":{"*.md":"ask","*a*":"allow"}
+		}}}
+	}`)
+	if err := os.WriteFile(settingsPath, seed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	firstResult, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRules := orderedOpenCodePermissionRulesAt(t, first, "gentle-orchestrator", "review")
+	if action := effectiveOpenCodePermissionAction(firstRules, "data.md"); action != "deny" {
+		t.Fatalf("first cycle weakened review(data.md) to %q, want deny; rules=%#v", action, firstRules)
+	}
+
+	secondResult, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !firstResult.Changed {
+		t.Fatal("first production permission cycle reported unchanged")
+	}
+	if secondResult.Changed || !bytes.Equal(first, second) {
+		secondRules := orderedOpenCodePermissionRulesAt(t, second, "gentle-orchestrator", "review")
+		t.Fatalf("second production permission cycle changed: changed=%t bytesEqual=%t firstRules=%#v secondRules=%#v",
+			secondResult.Changed, bytes.Equal(first, second), firstRules, secondRules)
+	}
+}
+
 type openCodePermissionRule struct {
 	pattern string
 	action  string

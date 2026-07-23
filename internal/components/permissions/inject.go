@@ -182,7 +182,7 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}
-	merged, err = sdd.PropagateTopLevelPermissions(merged)
+	merged, err = sdd.MergeTopLevelPermissions(baseJSON, overlay, merged)
 	if err != nil {
 		return filemerge.WriteResult{}, fmt.Errorf("propagate orchestrator permissions: %w", err)
 	}
