@@ -238,6 +238,172 @@ func TestInjectOpenCodeProductionOrderIsByteIdempotent(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeOrderSensitivePoliciesStaySafeAndByteIdempotent(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	settingsPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	const agentPermissions = `"permission":{
+		"review-exact":{"*":"allow","secret.txt":"deny"},
+		"review-partial":{"*.md":"allow"},
+		"review-unproven":{"a*":"allow"}
+	}`
+	seed := []byte(`{
+		"permission":{
+			"review-exact":{"secret.txt":"deny"},
+			"review-partial":{"*":"deny","public/**":"allow"},
+			"review-unproven":{"*?":"deny"}
+		},
+		"agent":{
+			"gentle-orchestrator":{` + agentPermissions + `},
+			"sdd-orchestrator-cheap":{` + agentPermissions + `},
+			"sdd-orchestrator-custom":{` + agentPermissions + `}
+		}
+	}`)
+	if err := os.WriteFile(settingsPath, seed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := sdd.InjectOptions{Profiles: []model.Profile{
+		{Name: "cheap", OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"}},
+		{Name: "custom", OrchestratorModel: model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5"}},
+	}}
+	runCycle := func(label string) (bool, bool, []byte) {
+		t.Helper()
+		sddResult, err := sdd.Inject(home, adapter, model.SDDModeMulti, opts)
+		if err != nil {
+			t.Fatalf("%s SDD Inject() error = %v", label, err)
+		}
+		permissionResult, err := Inject(home, adapter)
+		if err != nil {
+			t.Fatalf("%s Permission Inject() error = %v", label, err)
+		}
+		content, err := os.ReadFile(settingsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sddResult.Changed, permissionResult.Changed, content
+	}
+
+	_, _, first := runCycle("first")
+	for _, name := range []string{"gentle-orchestrator", "sdd-orchestrator-cheap", "sdd-orchestrator-custom"} {
+		exact := orderedOpenCodePermissionRulesAt(t, first, name, "review-exact")
+		if action := effectiveOpenCodePermissionAction(exact, "secret.txt"); action != "deny" {
+			t.Fatalf("%s exact collision weakened secret.txt to %q; rules=%#v", name, action, exact)
+		}
+		if action := effectiveOpenCodePermissionAction(exact, "notes.txt"); action != "allow" {
+			t.Fatalf("%s exact collision over-restricted notes.txt to %q; rules=%#v", name, action, exact)
+		}
+
+		partial := orderedOpenCodePermissionRulesAt(t, first, name, "review-partial")
+		if action := effectiveOpenCodePermissionAction(partial, "restricted.md"); action != "deny" {
+			t.Fatalf("%s partial overlap weakened restricted.md to %q; rules=%#v", name, action, partial)
+		}
+		if action := effectiveOpenCodePermissionAction(partial, "public/readme.md"); action != "allow" {
+			t.Fatalf("%s partial overlap lost public exception with %q; rules=%#v", name, action, partial)
+		}
+
+		unproven := orderedOpenCodePermissionRulesAt(t, first, name, "review-unproven")
+		if action := effectiveOpenCodePermissionAction(unproven, "alpha"); action != "deny" {
+			t.Fatalf("%s unproven coverage weakened alpha to %q; rules=%#v", name, action, unproven)
+		}
+	}
+
+	secondSDDChanged, secondPermissionsChanged, second := runCycle("second")
+	if secondSDDChanged || secondPermissionsChanged || !bytes.Equal(first, second) {
+		offset := 0
+		for offset < len(first) && offset < len(second) && first[offset] == second[offset] {
+			offset++
+		}
+		start := max(0, offset-80)
+		firstEnd := min(len(first), offset+240)
+		secondEnd := min(len(second), offset+240)
+		t.Fatalf("second production cycle changed: sdd=%t permissions=%t byte offset=%d\nfirst:  %q\nsecond: %q",
+			secondSDDChanged, secondPermissionsChanged, offset, first[start:firstEnd], second[start:secondEnd])
+	}
+}
+
+type openCodePermissionRule struct {
+	pattern string
+	action  string
+}
+
+func orderedOpenCodePermissionRulesAt(t *testing.T, data []byte, agent, category string) []openCodePermissionRule {
+	t.Helper()
+	current := json.RawMessage(data)
+	for _, key := range []string{"agent", agent, "permission", category} {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(current, &object); err != nil {
+			t.Fatal(err)
+		}
+		next, ok := object[key]
+		if !ok {
+			t.Fatalf("missing permission key %q", key)
+		}
+		current = next
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(current))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		t.Fatalf("permission rules are not an object: token=%v err=%v raw=%s", token, err, current)
+	}
+	var rules []openCodePermissionRule
+	for decoder.More() {
+		patternToken, err := decoder.Token()
+		if err != nil {
+			t.Fatal(err)
+		}
+		pattern, ok := patternToken.(string)
+		if !ok {
+			t.Fatalf("permission pattern token = %T, want string", patternToken)
+		}
+		var action string
+		if err := decoder.Decode(&action); err != nil {
+			t.Fatal(err)
+		}
+		rules = append(rules, openCodePermissionRule{pattern: pattern, action: action})
+	}
+	return rules
+}
+
+func effectiveOpenCodePermissionAction(rules []openCodePermissionRule, value string) string {
+	var action string
+	for _, rule := range rules {
+		if openCodePermissionPatternMatches(rule.pattern, value) {
+			action = rule.action
+		}
+	}
+	return action
+}
+
+func openCodePermissionPatternMatches(pattern, value string) bool {
+	type state struct{ pattern, value int }
+	memo := map[state]bool{}
+	seen := map[state]bool{}
+	var match func(int, int) bool
+	match = func(i, j int) bool {
+		s := state{i, j}
+		if seen[s] {
+			return memo[s]
+		}
+		seen[s] = true
+		switch {
+		case i == len(pattern):
+			memo[s] = j == len(value)
+		case pattern[i] == '*':
+			memo[s] = match(i+1, j) || (j < len(value) && match(i, j+1))
+		case j < len(value) && (pattern[i] == '?' || pattern[i] == value[j]):
+			memo[s] = match(i+1, j+1)
+		}
+		return memo[s]
+	}
+	return match(0, 0)
+}
+
 func TestInjectAddsEnvToDenyList(t *testing.T) {
 	home := t.TempDir()
 

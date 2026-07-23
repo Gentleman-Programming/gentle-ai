@@ -1990,6 +1990,51 @@ func permissionPatternCovers(broader, narrower string) bool {
 	return covers(0, 0)
 }
 
+func laterExactAgentRulePreserves(fields []orderedJSONField, current int, topRule permissionRule) bool {
+	for candidateIndex := current + 1; candidateIndex < len(fields); candidateIndex++ {
+		field := fields[candidateIndex]
+		if field.key != topRule.pattern {
+			continue
+		}
+		var action string
+		if err := json.Unmarshal(field.value, &action); err != nil {
+			continue
+		}
+		actionRank := permissionRank(action)
+		if actionRank < 0 {
+			continue
+		}
+		candidateRank := max(actionRank, permissionRank(topRule.action))
+
+		safe := true
+		for _, prior := range fields[:candidateIndex] {
+			var priorAction string
+			if err := json.Unmarshal(prior.value, &priorAction); err == nil &&
+				permissionPatternsOverlap(prior.key, topRule.pattern) &&
+				permissionRank(priorAction) > candidateRank {
+				safe = false
+				break
+			}
+		}
+		if !safe {
+			continue
+		}
+		for _, later := range fields[candidateIndex+1:] {
+			var laterAction string
+			if err := json.Unmarshal(later.value, &laterAction); err == nil &&
+				permissionPatternsOverlap(later.key, topRule.pattern) &&
+				permissionRank(laterAction) < permissionRank(topRule.action) {
+				safe = false
+				break
+			}
+		}
+		if safe {
+			return true
+		}
+	}
+	return false
+}
+
 func mergePermissionRules(topRaw, agentRaw json.RawMessage) (json.RawMessage, bool, error) {
 	top := parsePermissionValue(topRaw)
 	if !top.valid {
@@ -2048,18 +2093,12 @@ func mergePermissionRules(topRaw, agentRaw json.RawMessage) (json.RawMessage, bo
 	skipTop := make([]bool, len(top.rules))
 	var afterTop []orderedJSONField
 
-	for _, field := range agent.object.fields {
+	for agentIndex, field := range agent.object.fields {
 		var action string
 		if err := json.Unmarshal(field.value, &action); err != nil || permissionRank(action) < 0 {
 			if _, topOwnsPattern := topExact[field.key]; !topOwnsPattern {
 				afterTop = append(afterTop, field)
 			}
-			continue
-		}
-		if exact, ok := topExact[field.key]; ok && action == top.rules[exact].action {
-			// Serializers may reorder a previously propagated copy of the
-			// top-level rule. Emit that copy once, in authoritative top-level
-			// order, rather than treating it as an agent-specific override.
 			continue
 		}
 
@@ -2074,9 +2113,33 @@ func mergePermissionRules(topRaw, agentRaw json.RawMessage) (json.RawMessage, bo
 		}
 
 		mergedAction := action
-		if lastOverlap >= 0 && lastOverlapCovers &&
-			permissionRank(top.rules[lastOverlap].action) > permissionRank(mergedAction) {
-			mergedAction = top.rules[lastOverlap].action
+		dropAgentRule := false
+		if lastOverlap >= 0 && lastOverlapCovers {
+			if permissionRank(top.rules[lastOverlap].action) > permissionRank(mergedAction) {
+				mergedAction = top.rules[lastOverlap].action
+			}
+		} else if lastOverlap >= 0 {
+			// A partial or conservatively unproven overlap cannot safely leave a
+			// weaker agent rule last. Preserve it only when a later exact agent
+			// rule restores every stricter repository pattern; otherwise
+			// strengthen the complete agent pattern and fail closed.
+			for _, topRule := range top.rules {
+				if permissionRank(topRule.action) <= permissionRank(mergedAction) ||
+					!permissionPatternsOverlap(topRule.pattern, field.key) ||
+					laterExactAgentRulePreserves(agent.object.fields, agentIndex, topRule) {
+					continue
+				}
+				if permissionRank(mergedAction) == permissionRank("allow") {
+					// Removing a permissive rule cannot weaken the agent policy,
+					// and leaves repository exceptions in their original order.
+					dropAgentRule = true
+					break
+				}
+				mergedAction = topRule.action
+			}
+		}
+		if dropAgentRule {
+			continue
 		}
 		exact := topExact[field.key]
 		exactExists := false
@@ -2089,6 +2152,37 @@ func mergePermissionRules(topRaw, agentRaw json.RawMessage) (json.RawMessage, bo
 			value: permissionActionRaw(mergedAction),
 		}
 		if exactExists {
+			topRank := permissionRank(top.rules[exact].action)
+			mergedRank := permissionRank(mergedAction)
+			hasWeakerPrior := false
+			highestPriorAction := ""
+			for _, prior := range afterTop {
+				var priorAction string
+				if err := json.Unmarshal(prior.value, &priorAction); err != nil ||
+					!permissionPatternsOverlap(prior.key, field.key) {
+					continue
+				}
+				if permissionRank(priorAction) < mergedRank {
+					hasWeakerPrior = true
+				}
+				if permissionRank(priorAction) > permissionRank(highestPriorAction) {
+					highestPriorAction = priorAction
+				}
+			}
+
+			if mergedRank == topRank {
+				if permissionRank(highestPriorAction) > mergedRank || !hasWeakerPrior {
+					// This is an already-propagated repository copy, or moving
+					// it later would weaken a stricter agent rule. Keep the
+					// repository copy in canonical order.
+					continue
+				}
+			} else if permissionRank(highestPriorAction) > mergedRank {
+				// Retain a stricter agent exact rule, but never let it weaken an
+				// even stricter earlier agent rule on their overlap.
+				mergedAction = highestPriorAction
+				mergedField.value = permissionActionRaw(mergedAction)
+			}
 			skipTop[exact] = true
 		}
 		afterTop = append(afterTop, mergedField)

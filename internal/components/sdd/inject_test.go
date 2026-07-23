@@ -5145,6 +5145,70 @@ func TestInjectPreservesEffectiveOrderedPermissionRules(t *testing.T) {
 	}
 }
 
+func TestPropagateTopLevelPermissionsFailsClosedWithoutLosingRuleOrder(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		path      string
+		want      string
+		alsoPath  string
+		alsoWant  string
+		wantRules []orderedPermissionRule
+	}{
+		{
+			name:  "equal final deny remains after intervening allow",
+			input: `{"permission":{"read":{"secret.txt":"deny"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"*":"allow","secret.txt":"deny"}}}}}`,
+			path:  "secret.txt",
+			want:  "deny",
+			wantRules: []orderedPermissionRule{
+				{pattern: "*", action: "allow"},
+				{pattern: "secret.txt", action: "deny"},
+			},
+		},
+		{
+			name:     "partial overlap cannot append weaker allow",
+			input:    `{"permission":{"read":{"*":"deny","public/**":"allow"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"*.md":"allow"}}}}}`,
+			path:     "restricted.md",
+			want:     "deny",
+			alsoPath: "public/readme.md",
+			alsoWant: "allow",
+		},
+		{
+			name:  "unproven coverage cannot append weaker allow",
+			input: `{"permission":{"read":{"*?":"deny"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"a*":"allow"}}}}}`,
+			path:  "alpha",
+			want:  "deny",
+		},
+		{
+			name:  "invalid exact suffix cannot justify weaker wildcard",
+			input: `{"permission":{"read":{"secret.txt":"deny"}},"agent":{"gentle-orchestrator":{"permission":{"read":{"*":"allow","secret.txt":"invalid"}}}}}`,
+			path:  "secret.txt",
+			want:  "deny",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := PropagateTopLevelPermissions([]byte(tt.input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rules := orderedPermissionRulesAt(t, got, "agent", "gentle-orchestrator", "permission", "read")
+			if action := effectivePermissionAction(rules, tt.path); action != tt.want {
+				t.Fatalf("effective read(%q) = %q, want %q\nrules=%#v\noutput=%s", tt.path, action, tt.want, rules, got)
+			}
+			if tt.alsoPath != "" {
+				if action := effectivePermissionAction(rules, tt.alsoPath); action != tt.alsoWant {
+					t.Fatalf("effective read(%q) = %q, want %q\nrules=%#v\noutput=%s", tt.alsoPath, action, tt.alsoWant, rules, got)
+				}
+			}
+			if tt.wantRules != nil && !reflect.DeepEqual(rules, tt.wantRules) {
+				t.Fatalf("ordered rules = %#v, want %#v", rules, tt.wantRules)
+			}
+		})
+	}
+}
+
 func TestInjectPreservesAgentScalarPermissionFallback(t *testing.T) {
 	input := []byte(`{"permission":{"read":{"*":"allow","**/generated/**":"deny"}},"agent":{"gentle-orchestrator":{"permission":"ask"}}}`)
 	got, err := PropagateTopLevelPermissions(input)
