@@ -98,6 +98,10 @@ func WriteSharedPromptFiles(homeDir string, phaseCapabilities map[string]string,
 		// that don't yet have conditional sections).
 		content := extractModelSection(skillContent, capability)
 		content = injectCodeGraphGuidanceIntoPrompt(content, guidance)
+		// OpenCode phases reference these shared files via {file:...}
+		// indirection, which the in-settings injection deliberately skips —
+		// the contract must land here or those executors would miss it.
+		content = injectLanguageContractIntoPrompt(content)
 
 		path := filepath.Join(promptDir, phase+".md")
 		result, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)

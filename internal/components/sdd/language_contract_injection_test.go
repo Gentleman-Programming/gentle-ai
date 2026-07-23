@@ -1,6 +1,8 @@
 package sdd
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -12,11 +14,12 @@ func TestInjectLanguageContractIntoPromptAppendsCanonicalBlock(t *testing.T) {
 	prompt := "---\nname: sdd-apply\n---\n\nDo the work.\n"
 	got := injectLanguageContractIntoPrompt(prompt)
 
-	if !strings.Contains(got, "Generated artifacts (code, comments, UI copy, docs, specs, tests, commit messages, memory entries) default to English.") {
-		t.Fatalf("contract text missing from injected prompt:\n%s", got)
-	}
-	if !strings.Contains(got, "Never use regional slang or dialect-specific grammar in any artifact") {
-		t.Fatalf("dialect prohibition missing from injected prompt:\n%s", got)
+	// Assert against the canonical asset itself, not duplicated fragments:
+	// the whole contract (English default, explicit-Spanish register, dialect
+	// prohibition) must survive injection verbatim, and wording tweaks to the
+	// asset stay single-sourced.
+	if canonical := strings.TrimSpace(agentLanguageContract()); !strings.Contains(got, canonical) {
+		t.Fatalf("canonical contract missing from injected prompt:\ncontract:\n%s\nprompt:\n%s", canonical, got)
 	}
 	if !strings.Contains(got, "agent-language-contract") {
 		t.Fatalf("managed section marker missing — injection must be marker-bound for idempotence:\n%s", got)
@@ -67,5 +70,34 @@ func TestInjectLanguageContractIntoOpenCodeSubagentPrompts(t *testing.T) {
 	verify := agentMap["sdd-verify"].(map[string]any)["prompt"].(string)
 	if verify != "{file:./AGENTS.md}" {
 		t.Fatalf("file-indirection prompt must be untouched, got %q", verify)
+	}
+}
+
+// TestWriteSharedPromptFilesCarryLanguageContract pins the {file:...} gap:
+// OpenCode phases that load shared prompt files through file indirection skip
+// the in-settings injection, so the shared files themselves must carry the
+// canonical contract.
+func TestWriteSharedPromptFilesCarryLanguageContract(t *testing.T) {
+	homeDir := t.TempDir()
+	if _, err := WriteSharedPromptFiles(homeDir, nil); err != nil {
+		t.Fatalf("WriteSharedPromptFiles() error = %v", err)
+	}
+
+	entries, err := os.ReadDir(SharedPromptDir(homeDir))
+	if err != nil {
+		t.Fatalf("read shared prompt dir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("no shared prompt files written")
+	}
+	canonical := strings.TrimSpace(agentLanguageContract())
+	for _, entry := range entries {
+		content, err := os.ReadFile(filepath.Join(SharedPromptDir(homeDir), entry.Name()))
+		if err != nil {
+			t.Fatalf("read %s: %v", entry.Name(), err)
+		}
+		if !strings.Contains(string(content), canonical) {
+			t.Errorf("%s: missing canonical language contract", entry.Name())
+		}
 	}
 }
