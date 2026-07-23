@@ -458,13 +458,38 @@ install_binary() {
 
     # Install binary
     info "Installing to ${install_dir}/${BINARY_NAME}..."
-    if cp "${tmpdir}/${BINARY_NAME}" "${install_dir}/${BINARY_NAME}" 2>/dev/null; then
-        chmod +x "${install_dir}/${BINARY_NAME}"
+    local stage_file="${install_dir}/.${BINARY_NAME}.tmp.$$"
+
+    cleanup_stage() {
+        rm -f "$stage_file" 2>/dev/null
+    }
+    trap cleanup_stage EXIT
+
+    if cp "${tmpdir}/${BINARY_NAME}" "$stage_file" 2>/dev/null && \
+       chmod +x "$stage_file" 2>/dev/null && \
+       mv -f "$stage_file" "${install_dir}/${BINARY_NAME}" 2>/dev/null; then
+        trap - EXIT
     elif command -v sudo &>/dev/null; then
         warn "Permission denied. Trying with sudo..."
-        sudo cp "${tmpdir}/${BINARY_NAME}" "${install_dir}/${BINARY_NAME}"
-        sudo chmod +x "${install_dir}/${BINARY_NAME}"
+        local sudo_stage_file="${install_dir}/.${BINARY_NAME}.tmp.sudo.$$"
+        cleanup_sudo_stage() {
+            sudo rm -f "$sudo_stage_file" 2>/dev/null
+            rm -f "$stage_file" 2>/dev/null
+        }
+        trap cleanup_sudo_stage EXIT
+
+        if sudo cp "${tmpdir}/${BINARY_NAME}" "$sudo_stage_file" && \
+           sudo chmod +x "$sudo_stage_file" && \
+           sudo mv -f "$sudo_stage_file" "${install_dir}/${BINARY_NAME}"; then
+            trap - EXIT
+        else
+            cleanup_sudo_stage
+            trap - EXIT
+            fatal "Cannot write to ${install_dir} even with sudo."
+        fi
     else
+        cleanup_stage
+        trap - EXIT
         fatal "Cannot write to ${install_dir}. Run with sudo or use --dir to specify a writable directory."
     fi
 
