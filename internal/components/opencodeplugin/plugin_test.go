@@ -155,3 +155,50 @@ func TestInstallGentleLogoWritesLocalTUIPluginAndRegistersAbsolutePath(t *testin
 		t.Fatalf("plugin registration = %#v, want absolute %q", root.Plugin, pluginPath)
 	}
 }
+
+func TestInstallGentleLogoRollsBackSourceWhenRegistrationFails(t *testing.T) {
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create malformed tui.json so ensureTUIPlugin returns a JSON parse error
+	tuiPath := filepath.Join(configDir, "tui.json")
+	if err := os.WriteFile(tuiPath, []byte("invalid json {{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pluginPath := filepath.Join(configDir, "tui-plugins", "gentle-logo.tsx")
+
+	// Case 1: File did not exist before -> should be removed on failure
+	_, err := Install(home, model.OpenCodePluginGentleLogo)
+	if err == nil {
+		t.Fatal("Install(GentleLogo) error = nil, want parse error")
+	}
+	if _, statErr := os.Stat(pluginPath); !os.IsNotExist(statErr) {
+		t.Fatalf("Install(GentleLogo) left orphan plugin file after registration failure: %v", statErr)
+	}
+
+	// Case 2: File existed before -> should be restored to original content on failure
+	pluginDir := filepath.Join(configDir, "tui-plugins")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalContent := []byte("// previous custom content")
+	if err := os.WriteFile(pluginPath, originalContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Install(home, model.OpenCodePluginGentleLogo)
+	if err == nil {
+		t.Fatal("Install(GentleLogo) error = nil, want parse error")
+	}
+	data, readErr := os.ReadFile(pluginPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile(pluginPath) error = %v", readErr)
+	}
+	if string(data) != string(originalContent) {
+		t.Fatalf("pluginPath content = %q, want restored original %q", string(data), string(originalContent))
+	}
+}

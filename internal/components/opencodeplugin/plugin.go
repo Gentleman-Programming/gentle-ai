@@ -158,12 +158,24 @@ func installGentleLogo(homeDir string) (Result, error) {
 	pluginPath := filepath.Join(pluginDir, gentleLogoPluginFile)
 	tuiPath := filepath.Join(opencodeDir, "tui.json")
 
+	existed := false
+	var previousContent []byte
+	if data, err := os.ReadFile(pluginPath); err == nil {
+		existed = true
+		previousContent = data
+	}
+
 	pluginWrite, err := filemerge.WriteFileAtomic(pluginPath, []byte(gentleLogoPluginSource), 0o644)
 	if err != nil {
 		return Result{}, fmt.Errorf("write Gentle Logo TUI plugin: %w", err)
 	}
 	tuiChanged, err := ensureTUIPlugin(tuiPath, pluginPath)
 	if err != nil {
+		if existed {
+			_ = os.WriteFile(pluginPath, previousContent, 0o644)
+		} else {
+			_ = os.Remove(pluginPath)
+		}
 		return Result{}, err
 	}
 
