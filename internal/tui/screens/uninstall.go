@@ -171,14 +171,8 @@ func RenderUninstallComponents(selected []model.ComponentID, cursor int) string 
 	return b.String()
 }
 
-// uninstallEngramScopeOptions returns the cleanup options offered to the user
-// during uninstall. The "None" option (empty scope) is always prepended so
-// the user can explicitly skip Engram cleanup even when both Project and
-// Global cleanup are available; the Project option only appears when the
-// current workspace has a .engram/ directory to remove.
-//
-// Note: the caller decides whether to display these options at all by
-// gating on ComponentEngram selection in UninstallComponents.
+// uninstallEngramScopeOptions always offers None and Global, plus Project
+// when the workspace has project-scoped Engram data.
 func uninstallEngramScopeOptions(projectScopeAvailable bool) []UninstallEngramScopeOption {
 	options := make([]UninstallEngramScopeOption, 0, 3)
 	options = append(options, UninstallEngramScopeOption{
@@ -201,12 +195,8 @@ func uninstallEngramScopeOptions(projectScopeAvailable bool) []UninstallEngramSc
 	return options
 }
 
-// RenderUninstallProfiles renders the ScreenUninstallProfiles view: a list of
-// removable OpenCode SDD profiles followed (when applicable) by the Engram
-// cleanup scope picker. The scope section is displayed whenever the user has
-// selected ComponentEngram in UninstallComponents; the Project option is only
-// listed when the workspace exposes a project-scoped Engram directory
-// (engramProjectScopeAvailable), while None and Global are always available.
+// RenderUninstallProfiles renders profile removal and the selected Engram
+// cleanup scope when ComponentEngram is selected.
 func RenderUninstallProfiles(available []string, selected []string, engramProjectScopeAvailable bool, uninstallComponents []model.ComponentID, selectedEngramScope model.EngramUninstallScope, cursor int) string {
 	var b strings.Builder
 

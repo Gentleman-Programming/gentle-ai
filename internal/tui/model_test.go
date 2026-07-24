@@ -1830,7 +1830,7 @@ func TestUninstallModeScreen_PartialNavigatesToAgentSelection(t *testing.T) {
 	}
 }
 
-func TestUninstallModeScreen_FullNavigatesToConfirm(t *testing.T) {
+func TestUninstallModeScreen_FullRequiresEngramScopeDecision(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstallMode
 	m.Cursor = 1 // Full Uninstall option
@@ -1838,8 +1838,8 @@ func TestUninstallModeScreen_FullNavigatesToConfirm(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallConfirm {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	if state.Screen != ScreenUninstallProfiles {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
 	}
 	if state.UninstallMode != model.UninstallModeFull {
 		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModeFull)
@@ -1851,9 +1851,10 @@ func TestUninstallModeScreen_FullNavigatesToConfirm(t *testing.T) {
 	if len(state.UninstallComponents) == 0 {
 		t.Fatal("UninstallComponents should be populated for Full mode")
 	}
+	assertFullModeEngramScopeFlow(t, state)
 }
 
-func TestUninstallModeScreen_FullRemoveNavigatesToConfirm(t *testing.T) {
+func TestUninstallModeScreen_FullRemoveRequiresEngramScopeDecision(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstallMode
 	m.Cursor = 2 // Full Uninstall & Remove Binary option
@@ -1861,8 +1862,8 @@ func TestUninstallModeScreen_FullRemoveNavigatesToConfirm(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallConfirm {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	if state.Screen != ScreenUninstallProfiles {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
 	}
 	if state.UninstallMode != model.UninstallModeFullRemove {
 		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModeFullRemove)
@@ -1873,9 +1874,10 @@ func TestUninstallModeScreen_FullRemoveNavigatesToConfirm(t *testing.T) {
 	if len(state.UninstallComponents) == 0 {
 		t.Fatal("UninstallComponents should be populated for FullRemove mode")
 	}
+	assertFullModeEngramScopeFlow(t, state)
 }
 
-func TestUninstallModeScreen_CleanInstallNavigatesToConfirm(t *testing.T) {
+func TestUninstallModeScreen_CleanInstallRequiresEngramScopeDecision(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstallMode
 	m.Cursor = 3 // Full Uninstall + Clean Install option
@@ -1883,8 +1885,8 @@ func TestUninstallModeScreen_CleanInstallNavigatesToConfirm(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallConfirm {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	if state.Screen != ScreenUninstallProfiles {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
 	}
 	if state.UninstallMode != model.UninstallModeCleanInstall {
 		t.Fatalf("UninstallMode = %v, want %v", state.UninstallMode, model.UninstallModeCleanInstall)
@@ -1894,6 +1896,52 @@ func TestUninstallModeScreen_CleanInstallNavigatesToConfirm(t *testing.T) {
 	}
 	if len(state.UninstallComponents) == 0 {
 		t.Fatal("UninstallComponents should be populated for CleanInstall mode")
+	}
+	assertFullModeEngramScopeFlow(t, state)
+}
+
+func assertFullModeEngramScopeFlow(t *testing.T, state Model) {
+	t.Helper()
+	if len(state.UninstallProfilesAvailable) != 0 || state.UninstallEngramScope != "" {
+		t.Fatalf("initial profiles/scope = (%v, %q), want (none, None)", state.UninstallProfilesAvailable, state.UninstallEngramScope)
+	}
+	state.Cursor = 0
+	updated, _ := state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.UninstallEngramProjectScopeAvailable {
+		updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		state = updated.(Model)
+	}
+	if state.UninstallEngramScope != model.EngramUninstallScopeGlobal {
+		t.Fatalf("scope = %q, want %q", state.UninstallEngramScope, model.EngramUninstallScopeGlobal)
+	}
+	state.Cursor = 2
+	if state.UninstallEngramProjectScopeAvailable {
+		state.Cursor++
+	}
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenUninstallConfirm {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+
+	var dispatchedScope model.EngramUninstallScope
+	state.UninstallWithProfilesFn = func(_ []model.AgentID, _ []model.ComponentID, _ []string, scope model.EngramUninstallScope) (componentuninstall.Result, error) {
+		dispatchedScope = scope
+		return componentuninstall.Result{}, nil
+	}
+	state.UninstallFn = func([]model.AgentID, []model.ComponentID) (componentuninstall.Result, error) {
+		t.Fatal("UninstallFn should not handle explicit Global scope")
+		return componentuninstall.Result{}, nil
+	}
+	state.SyncFn = func(*model.SyncOverrides) ([]string, error) { return nil, nil }
+	restoreExecutable := setOSExecutableForTest("gentle-ai", nil)
+	restoreRemove := setOSRemoveForTest(func(string) error { return nil })
+	defer restoreExecutable()
+	defer restoreRemove()
+	msg := state.startUninstall()().(UninstallDoneMsg)
+	if msg.Err != nil || msg.SyncErr != nil || dispatchedScope != model.EngramUninstallScopeGlobal {
+		t.Fatalf("dispatch = (scope %q, err %v, sync err %v), want (Global, nil, nil)", dispatchedScope, msg.Err, msg.SyncErr)
 	}
 }
 
@@ -1979,11 +2027,7 @@ func TestUninstallProfiles_ContinueNavigatesToConfirm(t *testing.T) {
 	m.Screen = ScreenUninstallProfiles
 	m.UninstallProfilesAvailable = []string{"cheap"}
 	m.UninstallProfilesToRemove = []string{"cheap"}
-	// NewModel initializes UninstallComponents to the full default set (which
-	// includes ComponentEngram) and leaves UninstallEngramProjectScopeAvailable
-	// false. With the scope section now rendered whenever ComponentEngram is
-	// selected, the layout is: 1 profile row + 2 scope rows (None/Global) +
-	// Continue. Cursor 3 lands on Continue.
+	// One profile, None/Global scope rows, then Continue.
 	m.Cursor = len(m.UninstallProfilesAvailable) + 2
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -2218,13 +2262,8 @@ func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
 	}
 }
 
-// TestStartUninstall_NoneScopeSkipsEngramAndRemovesProfilesSeparately verifies
-// that when the user opts out of Engram cleanup (empty UninstallEngramScope),
-// startUninstall routes through uninstallFn for agents/components without
-// invoking the Engram step, and removes profiles via removeProfileAgentsFn
-// for each requested profile name. The componentIDs handed to UninstallFn
-// must NOT contain ComponentEngram — leaving it in would trigger a global
-// Engram cleanup via the service layer and wipe the user's opt-out.
+// None scope removes profiles separately and never dispatches Engram to the
+// uninstall service.
 func TestStartUninstall_NoneScopeSkipsEngramAndRemovesProfilesSeparately(t *testing.T) {
 	originalRemove := removeProfileAgentsFn
 	removedNames := []string{}
@@ -2279,10 +2318,7 @@ func TestStartUninstall_NoneScopeSkipsEngramAndRemovesProfilesSeparately(t *test
 	}
 }
 
-// TestStartUninstall_NoneScopeProfileRemovalFailureSurfacesAsManualAction
-// verifies that when removeProfileAgentsFn fails for a profile under the
-// None-scope path, the failure is surfaced via result.ManualActions instead
-// of failing the whole uninstall.
+// Profile removal failures under None scope become manual actions.
 func TestStartUninstall_NoneScopeProfileRemovalFailureSurfacesAsManualAction(t *testing.T) {
 	originalRemove := removeProfileAgentsFn
 	removeProfileAgentsFn = func(settingsPath, profileName string) error {
@@ -2313,10 +2349,8 @@ func TestStartUninstall_NoneScopeProfileRemovalFailureSurfacesAsManualAction(t *
 	}
 }
 
-// TestStartUninstall_NoneScopeEngramOnlySkipsUninstallFn (C1 regression):
-// with only ComponentEngram selected and scope=None, the filtered slice
-// is empty. Service treats [] as "all components"; startUninstall must
-// skip UninstallFn entirely while still removing requested profiles.
+// Engram-only None scope must not dispatch an empty component slice, which
+// the service interprets as all components.
 func TestStartUninstall_NoneScopeEngramOnlySkipsUninstallFn(t *testing.T) {
 	originalRemove := removeProfileAgentsFn
 	removedNames := []string{}
@@ -2346,9 +2380,7 @@ func TestStartUninstall_NoneScopeEngramOnlySkipsUninstallFn(t *testing.T) {
 	}
 }
 
-// TestToggleUninstallEninstallEngramScope_CyclesNoneProjectGlobal verifies
-// that toggleCurrentUninstallEngramScope advances UninstallEngramScope
-// through the three-state cycle None -> Project -> Global -> None.
+// Scope cycles None -> Project -> Global -> None.
 func TestToggleUninstallEngramScope_CyclesNoneProjectGlobal(t *testing.T) {
 	tempWorkspace := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tempWorkspace, ".engram"), 0o755); err != nil {
@@ -2365,8 +2397,6 @@ func TestToggleUninstallEngramScope_CyclesNoneProjectGlobal(t *testing.T) {
 	m.UninstallProfilesAvailable = []string{"cheap", "fast"}
 	m.UninstallProfilesToRemove = nil
 	m.UninstallEngramScope = ""
-	// Refresh so UninstallEngramProjectScopeAvailable reflects the .engram/ dir
-	// in the mocked cwd; the toggle guards on this flag.
 	m.refreshUninstallProfiles()
 	if !m.shouldShowUninstallEngramScopeSelection() {
 		t.Fatalf("setup: scope selection should be available after refresh, got ProjectScopeAvailable=%v", m.UninstallEngramProjectScopeAvailable)
@@ -2420,11 +2450,7 @@ func TestUninstallComponents_ContinueWithEngramProjectScopeNavigatesToSubSelecti
 	}
 }
 
-// TestUninstallComponents_ContinueWithEngramNoProjectScopeStillReachable
-// (C2 regression): ComponentEngram selected, no .engram/ directory —
-// user must STILL reach the profile/scope screen to choose None/Global.
-// Old gate via shouldShowUninstallEngramScopeSelection hid the screen
-// exactly when the user most needs to opt in or out.
+// Without project scope, Partial mode still offers None and Global.
 func TestUninstallComponents_ContinueWithEngramNoProjectScopeStillReachable(t *testing.T) {
 	tempWorkspace := t.TempDir() // no .engram/ directory
 	restoreGetwd := setOSGetwdForTest(tempWorkspace, nil)
