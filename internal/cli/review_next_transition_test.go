@@ -411,18 +411,21 @@ func TestEscalatedRecoveryNextTransition(t *testing.T) {
 	for _, tt := range []struct {
 		name          string
 		action        reviewtransaction.TargetStatusAction
+		disposition   reviewtransaction.RecoveryDisposition
 		input         reviewNextTransitionInput
 		wantKind      string
 		wantReason    string
 		wantOperation string
 	}{
-		{name: "changed target collects authorization", action: reviewtransaction.TargetStatusActionRecover, wantKind: reviewNextTransitionCollect, wantReason: "recovery_authorization_required"},
-		{name: "changed target with exact authorization executes recovery", action: reviewtransaction.TargetStatusActionRecover, input: reviewNextTransitionInput{Successor: "escalated-successor", Reason: "authorized recovery", Actor: "maintainer", Authorization: canonicalAuthorization}, wantKind: reviewNextTransitionExecute, wantReason: "recovery_authorized", wantOperation: "review.recover"},
-		{name: "unchanged target stops", action: reviewtransaction.TargetStatusActionStop, wantKind: reviewNextTransitionStop, wantReason: "native_stop_required"},
+		{name: "changed target collects authorization", action: reviewtransaction.TargetStatusActionRecover, disposition: reviewtransaction.RecoveryEscalated, wantKind: reviewNextTransitionCollect, wantReason: "recovery_authorization_required"},
+		{name: "changed target with exact authorization executes recovery", action: reviewtransaction.TargetStatusActionRecover, disposition: reviewtransaction.RecoveryEscalated, input: reviewNextTransitionInput{Successor: "escalated-successor", Reason: "authorized recovery", Actor: "maintainer", Authorization: canonicalAuthorization}, wantKind: reviewNextTransitionExecute, wantReason: "recovery_authorized", wantOperation: "review.recover"},
+		{name: "unchanged target stops", action: reviewtransaction.TargetStatusActionStop, disposition: "", wantKind: reviewNextTransitionStop, wantReason: "native_stop_required"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			status.Action = tt.action
-			got := newReviewNextTransition(status, nil, nil, false, nil, tt.input)
+			testStatus := status
+			testStatus.Action = tt.action
+			testStatus.ActionDisposition = tt.disposition
+			got := newReviewNextTransition(testStatus, nil, nil, false, nil, tt.input)
 			if got.Kind != tt.wantKind || got.ReasonCode != tt.wantReason || got.Execute != nil && got.Execute.Operation != tt.wantOperation {
 				t.Fatalf("next transition = %#v", got)
 			}
