@@ -206,7 +206,10 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 // ValidateArtifactFindingIDs enforces the provider-owned identity rules before
 // repository-derived classification and again during artifact admission.
 func ValidateArtifactFindingIDs(result LensResult) (ArtifactAdmissionDecision, string) {
-	wantPrefix := map[string]string{LensRisk: "R1-", LensReadability: "R2-", LensReliability: "R3-", LensResilience: "R4-"}[result.Lens]
+	wantPrefix, recognized := map[string]string{LensRisk: "R1-", LensReadability: "R2-", LensReliability: "R3-", LensResilience: "R4-"}[result.Lens]
+	if !recognized {
+		return ArtifactAdmissionBindingMismatch, "reviewer finding ID is not bound to the selected lens"
+	}
 	seen := make(map[string]struct{}, len(result.Findings))
 	for _, finding := range result.Findings {
 		if !artifactFindingID.MatchString(finding.ID) {

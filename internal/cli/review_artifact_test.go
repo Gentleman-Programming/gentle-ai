@@ -631,26 +631,45 @@ func TestReviewArtifactSubstitutionFailsBeforeMutation(t *testing.T) {
 func TestReviewCaptureResultConcurrentSelectedLenses(t *testing.T) {
 	repo, started, store, record := newArtifactReview(t, true)
 	manifests := make([]string, len(record.State.SelectedLenses))
+	inputs := make([]string, len(record.State.SelectedLenses))
+	for order := range inputs {
+		inputs[order] = filepath.Join(t.TempDir(), fmt.Sprintf("%d.json", order))
+	}
+	errs := make(chan error, len(record.State.SelectedLenses))
 	var wg sync.WaitGroup
 	for order, lens := range record.State.SelectedLenses {
 		wg.Add(1)
-		go func() {
+		go func(order int, lens, input string) {
 			defer wg.Done()
-			input := filepath.Join(t.TempDir(), fmt.Sprintf("%d.json", order))
-			result := admittedReviewerResultForTest(t, repo, record, lens, order)
-			result.Findings = []facadeFinding{{Location: "service-token.ts:1", Severity: "WARNING", Claim: "concurrent finding", ProofRefs: []string{"service-token.ts:1 observation"}}}
-			payload, _ := json.Marshal(result)
-			_ = os.WriteFile(input, payload, 0o600)
-			var output bytes.Buffer
-			err := RunReviewCaptureResult([]string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", fmt.Sprint(order), "--input", input}, &output)
+			result, err := admittedReviewerResultForTestErr(repo, record, lens, order)
 			if err != nil {
-				t.Errorf("capture %s: %v", lens, err)
+				errs <- err
+				return
+			}
+			result.Findings = []facadeFinding{{Location: "service-token.ts:1", Severity: "WARNING", Claim: "concurrent finding", ProofRefs: []string{"service-token.ts:1 observation"}}}
+			payload, err := json.Marshal(result)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if err := os.WriteFile(input, payload, 0o600); err != nil {
+				errs <- err
+				return
+			}
+			var output bytes.Buffer
+			err = RunReviewCaptureResult([]string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", fmt.Sprint(order), "--input", input}, &output)
+			if err != nil {
+				errs <- fmt.Errorf("capture %s: %w", lens, err)
 				return
 			}
 			manifests[order] = strings.TrimSpace(output.String())
-		}()
+		}(order, lens, inputs[order])
 	}
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
 	if _, err := readFacadeReviewerArtifacts(context.Background(), repo, manifests, store.Dir, record.State, record.Revision); err != nil {
 		t.Fatal(err)
 	}
@@ -725,13 +744,21 @@ func admittedReviewerPayloadForTest(t *testing.T, repo string, record reviewtran
 
 func admittedReviewerResultForTest(t *testing.T, repo string, record reviewtransaction.CompactRecord, lens string, order int) facadeReviewerResult {
 	t.Helper()
-	frozen, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).FrozenCandidateContext(context.Background(), record.State.InitialSnapshot)
+	result, err := admittedReviewerResultForTestErr(repo, record, lens, order)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return result
+}
+
+func admittedReviewerResultForTestErr(repo string, record reviewtransaction.CompactRecord, lens string, order int) (facadeReviewerResult, error) {
+	frozen, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).FrozenCandidateContext(context.Background(), record.State.InitialSnapshot)
+	if err != nil {
+		return facadeReviewerResult{}, err
+	}
 	subject, err := reviewtransaction.NewArtifactSubject(record.State, record.Revision, frozen, lens, order, "")
 	if err != nil {
-		t.Fatal(err)
+		return facadeReviewerResult{}, err
 	}
 	paths := make([]string, len(frozen.ChangedPathManifest))
 	for index, entry := range frozen.ChangedPathManifest {
@@ -741,7 +768,7 @@ func admittedReviewerResultForTest(t *testing.T, repo string, record reviewtrans
 		SubjectHash: subject.SubjectHash,
 		Inspection:  reviewtransaction.ArtifactInspection{Status: reviewtransaction.ArtifactInspectionCompleted, Paths: paths},
 		Findings:    []facadeFinding{}, Evidence: []string{"inspection: reviewed every frozen candidate path"},
-	}
+	}, nil
 }
 
 func capturedArtifact(t *testing.T) (string, ReviewFacadeStartResult, reviewtransaction.CompactStore, reviewtransaction.CompactRecord, reviewResultArtifact) {

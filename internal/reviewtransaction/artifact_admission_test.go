@@ -52,6 +52,13 @@ func TestExtractBoundedSingleJSONObject(t *testing.T) {
 	}
 }
 
+func TestValidateArtifactFindingIDsRejectsUnknownLens(t *testing.T) {
+	decision, diagnostic := ValidateArtifactFindingIDs(LensResult{Lens: "review-unknown"})
+	if decision != ArtifactAdmissionBindingMismatch || diagnostic != "reviewer finding ID is not bound to the selected lens" {
+		t.Fatalf("ValidateArtifactFindingIDs() = %q, %q; want binding mismatch with selected-lens diagnostic", decision, diagnostic)
+	}
+}
+
 func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 	_, _, request := admittedArtifactFixture(t)
 	canonical, admission, err := AdmitArtifact(request)
