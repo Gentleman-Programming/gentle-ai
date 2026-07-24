@@ -23,6 +23,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
@@ -3777,6 +3778,62 @@ func TestSyncPersonaPathsDeclareManagedClaudeOutputStyle(t *testing.T) {
 				t.Fatalf("syncPersonaPaths(%q) included wrong managed style %q; got %v", tt.persona, tt.unwanted, paths)
 			}
 		})
+	}
+}
+
+// TestSyncBackupTargetsCaptureBothManagedOutputStyles pins the persona-switch
+// backup fix: the pre-sync snapshot must capture BOTH managed output-style
+// files so switching personas (which removes the previously selected file) can
+// be rolled back. Verification stays on the selected file (asserted by
+// TestSyncPersonaPathsDeclareManagedClaudeOutputStyle).
+func TestSyncBackupTargetsCaptureBothManagedOutputStyles(t *testing.T) {
+	home := t.TempDir()
+	reg, _ := agents.NewDefaultRegistry()
+	a, _ := reg.Get(model.AgentClaudeCode)
+
+	gentleman := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
+	neutral := filepath.Join(home, ".claude", "output-styles", "neutral.md")
+
+	for _, persona := range []model.PersonaID{model.PersonaGentleman, model.PersonaNeutral} {
+		selection := model.Selection{Persona: persona, Components: []model.ComponentID{model.ComponentPersona}}
+		targets, err := syncBackupTargets(home, "", selection, []agents.Adapter{a})
+		if err != nil {
+			t.Fatalf("syncBackupTargets(%q) error = %v", persona, err)
+		}
+
+		if !containsPath(targets, gentleman) {
+			t.Errorf("syncBackupTargets(%q) missing gentleman.md; got %v", persona, targets)
+		}
+		if !containsPath(targets, neutral) {
+			t.Errorf("syncBackupTargets(%q) missing neutral.md; got %v", persona, targets)
+		}
+	}
+}
+
+// TestBackupTargetsCaptureBothManagedOutputStyles is the install-side twin.
+func TestBackupTargetsCaptureBothManagedOutputStyles(t *testing.T) {
+	home := t.TempDir()
+
+	gentleman := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
+	neutral := filepath.Join(home, ".claude", "output-styles", "neutral.md")
+
+	for _, persona := range []model.PersonaID{model.PersonaGentleman, model.PersonaNeutral} {
+		selection := model.Selection{Persona: persona, Components: []model.ComponentID{model.ComponentPersona}}
+		resolved := planner.ResolvedPlan{
+			Agents:            []model.AgentID{model.AgentClaudeCode},
+			OrderedComponents: []model.ComponentID{model.ComponentPersona},
+		}
+		targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+		if err != nil {
+			t.Fatalf("backupTargets(%q) error = %v", persona, err)
+		}
+
+		if !containsPath(targets, gentleman) {
+			t.Errorf("backupTargets(%q) missing gentleman.md; got %v", persona, targets)
+		}
+		if !containsPath(targets, neutral) {
+			t.Errorf("backupTargets(%q) missing neutral.md; got %v", persona, targets)
+		}
 	}
 }
 
