@@ -497,8 +497,9 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [ok]  state:json                     state file OK — 1 agent(s) installed: claude-code
   [ok]  engram:reachable               engram health endpoint OK at http://localhost:7437/health (HTTP 200)
   [ok]  disk:space                     1024 MB free on %s filesystem
+  [ok]  engram-mcp-lifecycle-version   engram-mcp-lifecycle-version check is dormant (threshold 0.0.0); set MinEngramVersionForHealthyLifecycle to the engram release that shipped notifications/initialized to enable it
 
-Summary: 7 passed, 0 failed, 0 warnings
+Summary: 8 passed, 0 failed, 0 warnings
 Status:  healthy
 `, filepath.Join(homeDir, ".gentle-ai"))
 	if got := buf.String(); got != want {
