@@ -350,7 +350,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 		if err := result.validateNextTransitionTargets(); err != nil {
 			return err
 		}
-		if result.Action == reviewtransaction.TargetStatusActionRecover && result.NextTransition.Kind == reviewNextTransitionStop {
+		if result.Action == reviewtransaction.TargetStatusActionRecover && result.NextTransition.Kind == reviewNextTransitionStop && result.NextTransition.ReasonCode == "native_stop_required" {
 			return errors.New("recover status cannot stop its next transition")
 		}
 		transitionRequest := reviewTransitionValidationRequest(result.NextTransition)
