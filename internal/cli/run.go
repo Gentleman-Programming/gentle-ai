@@ -1823,6 +1823,16 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 				}
 			}
 		}
+		// Persona backup captures every managed output-style file, not just the
+		// selected one, so a failed persona switch can restore the file its
+		// cleanup removed. Backup-only: verification stays on the selected file.
+		if component == model.ComponentPersona {
+			for _, path := range managedOutputStyleBackupPaths(selection, adapters, func(a agents.Adapter) string {
+				return a.OutputStyleDir(componentPathDirScoped(homeDir, workspaceDir, scope, a, model.ComponentPersona))
+			}) {
+				paths[path] = struct{}{}
+			}
+		}
 	}
 	// Routing guidance is delivered per agent outside the component loop, so a
 	// selection whose components do not happen to cover the same file would be
