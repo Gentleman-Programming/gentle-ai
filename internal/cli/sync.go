@@ -1383,7 +1383,7 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 // once. State that predates persona persistence, explicit gentleman state,
 // and unreadable state are untouched.
 func migratePersistedPersonaAlias(homeDir string, persisted *state.InstallState, persistedErr error) error {
-	if persistedErr != nil || persisted.Persona != string(model.PersonaGentlemanNeutralArtifacts) {
+	if persistedErr != nil || persisted == nil || persisted.Persona != string(model.PersonaGentlemanNeutralArtifacts) {
 		return nil
 	}
 	persisted.Persona = string(model.PersonaNeutral)
