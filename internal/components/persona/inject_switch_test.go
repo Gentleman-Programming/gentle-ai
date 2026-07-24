@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 // testOutputStyleAdapter is a minimal test adapter that supports output styles.
@@ -200,8 +200,10 @@ func TestInjectSwitchToleratesMalformedSettings(t *testing.T) {
 	if _, err := Inject(homeDir, adapter, model.PersonaGentleman); err != nil {
 		t.Fatalf("gentleman install: %v", err)
 	}
-	// Simulate a user-managed JSONC settings file (comments are invalid JSON).
-	malformed := []byte("{\n  // user comment\n  \"outputStyle\": \"Gentleman\"\n}\n")
+	// Seed genuinely non-JSON content. JSONC comments and trailing commas are
+	// normalized by the merge helper (filemerge.normalizeJSON), so they would
+	// not exercise the tolerate-malformed path. Bare text does.
+	malformed := []byte("this is not json at all\n")
 	if err := os.WriteFile(adapter.SettingsPath(homeDir), malformed, 0o644); err != nil {
 		t.Fatalf("seed malformed settings: %v", err)
 	}
