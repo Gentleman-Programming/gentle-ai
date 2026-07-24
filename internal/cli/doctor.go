@@ -116,13 +116,15 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	// engram MCP handshake lifecycle version gate (#1019). Wired inline
 	// alongside the existing checks; see internal/components/engram/doctor.go.
 	// Convert from the engram-local MCPVersionCheck to cli.CheckResult to keep
-	// imports one-way (engram does not import cli).
+	// imports one-way (engram does not import cli). The doctor framework's
+	// Result struct expects typed CheckID / *Remedy; MCPVersionCheck carries
+	// strings, so coerce at the boundary.
 	engramLifecycle := engram.CheckEngramMCPVersion(ctx)
 	report.Checks = append(report.Checks, CheckResult{
-		Name:   engramLifecycle.Name,
+		Name:   doctor.CheckID(engramLifecycle.Name),
 		Status: CheckStatus(engramLifecycle.Status),
 		Detail: engramLifecycle.Detail,
-		Remedy: engramLifecycle.Remedy,
+		Remedy: nilOrEngramRemedy(engramLifecycle.Remedy),
 	})
 
 	renderDoctorReport(w, report)
@@ -511,4 +513,19 @@ func statusIcon(s CheckStatus) string {
 	default:
 		return "[??]"
 	}
+}
+
+// nilOrEngramRemedy converts the engram MCPVersionCheck's free-form remedy
+// string into the doctor framework's typed *Remedy. Empty remedy yields nil;
+// non-empty remedy yields a RemedyInstallTool-tagged entry because every
+// current engram lifecycle remedy is an install/upgrade operation (install
+// engram, update to a release that prints strict semver, or upgrade to the
+// known-good threshold version). Mapping to a single ID keeps the conversion
+// lossless at the message level; richer RemedyID classification can be added
+// when the engram check starts emitting categories.
+func nilOrEngramRemedy(s string) *doctor.Remedy {
+	if s == "" {
+		return nil
+	}
+	return doctor.NewRemedy(doctor.RemedyInstallTool, s)
 }
