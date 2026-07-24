@@ -499,6 +499,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				"persistence-contract.md",
 				"engram-convention.md",
 				"openspec-convention.md",
+				"review-ledger-contract.md",
 				"sdd-phase-common.md",
 				"sdd-status-contract.md",
 				"skill-resolver.md",

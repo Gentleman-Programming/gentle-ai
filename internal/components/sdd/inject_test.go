@@ -3505,6 +3505,7 @@ func TestInjectWritesAllSharedFilesToDisk(t *testing.T) {
 		"persistence-contract.md",
 		"engram-convention.md",
 		"openspec-convention.md",
+		"review-ledger-contract.md",
 		"sdd-phase-common.md",
 		"sdd-status-contract.md",
 		"skill-resolver.md",
@@ -3561,9 +3562,57 @@ func TestInjectSharedDirCreatedWithAllFiles(t *testing.T) {
 		names[e.Name()] = true
 	}
 
-	for _, want := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md", "sdd-status-contract.md", "skill-resolver.md"} {
+	for _, want := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "review-ledger-contract.md", "sdd-phase-common.md", "sdd-status-contract.md", "skill-resolver.md"} {
 		if !names[want] {
 			t.Errorf("_shared directory missing %q after Inject()", want)
+		}
+	}
+}
+
+// TestInjectDeploysEveryEmbeddedSharedFile is a regression test for a class of
+// bug where a file physically present in the embedded skills/_shared/ asset
+// directory is never added to the sharedFiles deployment list inside Inject(),
+// so it silently never reaches disk (sync still exits 0, doctor does not catch
+// it). Instead of hardcoding filenames — which would not have caught the next
+// missing file either — this test discovers the ground truth directly from the
+// embedded FS and asserts every entry found there was actually written to disk
+// by Inject(). See gentleman-programming/gentle-ai#1485.
+func TestInjectDeploysEveryEmbeddedSharedFile(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+
+	entries, err := assets.FS.ReadDir("skills/_shared")
+	if err != nil {
+		t.Fatalf("ReadDir(skills/_shared) error = %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("precondition failed: embedded skills/_shared directory is empty")
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), ""); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	sharedDir := filepath.Join(home, ".config", "opencode", "skills", "_shared")
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		wantPath := "skills/_shared/" + entry.Name()
+		wantContent, readErr := assets.Read(wantPath)
+		if readErr != nil {
+			t.Fatalf("assets.Read(%q) error = %v", wantPath, readErr)
+		}
+
+		gotPath := filepath.Join(sharedDir, entry.Name())
+		gotContent, statErr := os.ReadFile(gotPath)
+		if statErr != nil {
+			t.Errorf("embedded shared file %q was never deployed to disk (missing from Inject()'s deployment list): %v", entry.Name(), statErr)
+			continue
+		}
+		if string(gotContent) != wantContent {
+			t.Errorf("deployed shared file %q content does not match embedded asset", entry.Name())
 		}
 	}
 }
