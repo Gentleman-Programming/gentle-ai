@@ -13,6 +13,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/freebuff"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
@@ -25,7 +26,8 @@ import (
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
 )
 
-func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
+func claudeAdapter() agents.Adapter    { return claude.NewAdapter() }
+func freebuffAdapter() agents.Adapter  { return freebuff.NewAdapter() }
 func hermesAdapter() agents.Adapter   { return hermes.NewAdapter() }
 func kilocodeAdapter() agents.Adapter { return kilocode.NewAdapter() }
 func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
@@ -6908,6 +6910,13 @@ func TestInjectTriggerRules_AllAdapters(t *testing.T) {
 		{
 			name:    "hermes",
 			agentID: model.AgentHermes,
+			getContent: func(home string, a agents.Adapter) (string, error) {
+				return readFileOrEmpty(a.SystemPromptFile(home))
+			},
+		},
+		{
+			name:    "freebuff",
+			agentID: model.AgentFreebuff,
 			getContent: func(home string, a agents.Adapter) (string, error) {
 				return readFileOrEmpty(a.SystemPromptFile(home))
 			},

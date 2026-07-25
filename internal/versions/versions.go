@@ -27,3 +27,7 @@ const Context7MCP = "2.2.5"
 
 // renovate: datasource=github-releases depName=Gentleman-Programming/gentleman-guardian-angel
 const GGAVersion = "2.10.1"
+
+// renovate: datasource=npm depName=freebuff
+const Freebuff = "0.0.124"
+

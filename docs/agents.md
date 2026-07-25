@@ -24,6 +24,7 @@
 | Trae            | `trae-ide`       | Yes          | Yes | Solo-agent                       | No            | No             | `~/.trae`                           |
 | Pi              | `pi`             | Yes          | Yes | Full (package-managed subagents) | No            | Yes            | `~/.pi`                             |
 | Hermes          | `hermes`         | Yes          | Yes | Full (delegate_task ephemeral)   | No            | No             | `~/.hermes`                         |
+| Freebuff        | `freebuff`       | Yes          | Yes | Solo-agent                       | No            | Yes            | `~/.agents`                         |
 
 Most agents receive the **full SDD orchestrator** policy, plus skill files written to their skills directory. Most receive it through their system prompt; OpenCode and Kilo Code receive it through the OpenCode-compatible `opencode.json` agent overlay. Pi is the exception: Gentle AI installs Pi packages, and `gentle-pi` owns Pi skills, prompts, SDD agents, and chains at runtime. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
 
@@ -74,11 +75,11 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 
 ## SDD Mode Support
 
-| Feature          | Claude Code | OpenCode | Kilo Code | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE | Qwen Code | OpenClaw | Trae |   Pi    | Hermes |
-| ---------------- | :---------: | :------: | :-------: | :--------: | :----: | :-------------: | :---: | :------: | :---------: | :------: | :-------: | :------: | :--: | :-----: | :----: |
-| SDD orchestrator |     Yes     |   Yes    |    Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     |   Yes    |    Yes    |   Yes    | Yes  |   Yes   |  Yes   |
-| Single-mode SDD  |     Yes     |   Yes    |    Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     |   Yes    |    Yes    |   Yes    | Yes  |   Yes   |  Yes   |
-| Multi-mode SDD   |      —      |   Yes    |    Yes    |     —      |   —    |        —        |   —   |    —     |      —      |  Yes\*   |     —     |    —     |  —   | Yes\*\* |   —    |
+| Feature          | Claude Code | OpenCode | Kilo Code | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE | Qwen Code | OpenClaw | Trae |   Pi    | Hermes | Freebuff |
+| ---------------- | :---------: | :------: | :-------: | :--------: | :----: | :-------------: | :---: | :------: | :---------: | :------: | :-------: | :------: | :--: | :-----: | :----: | :------: |
+| SDD orchestrator |     Yes     |   Yes    |    Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     |   Yes    |    Yes    |   Yes    | Yes  |   Yes   |  Yes   |   Yes    |
+| Single-mode SDD  |     Yes     |   Yes    |    Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     |   Yes    |    Yes    |   Yes    | Yes  |   Yes   |  Yes   |   Yes    |
+| Multi-mode SDD   |      —      |   Yes    |    Yes    |     —      |   —    |        —        |   —   |    —     |      —      |  Yes\*   |     —     |    —     |  —   | Yes\*\* |   —    |    —     |
 
 **Multi-mode** (assigning different AI models to each SDD phase) is supported by **OpenCode** and **Kilo Code** through the OpenCode-compatible multi-mode overlay, and by **Kiro IDE** through native subagent `model:` frontmatter. All other agents run in **single-mode** — the orchestrator manages everything using whatever model the agent is already running.
 
@@ -288,3 +289,17 @@ The full delegation decision table lives in `~/.hermes/skills/hermes-ephemeral-d
 - **Profiles**: Hermes does not support multi-mode SDD (no per-phase model routing). Single-mode only.
 - **Memory**: Hermes has a native memory and skill-learning loop. Engram complements it — Engram provides cross-agent, cross-session memory protocol so knowledge is portable across all agents, not just Hermes.
 - **Persona markers and identity behavior**: The `<!-- gentle-ai:persona -->` / `<!-- /gentle-ai:persona -->` markers in `SOUL.md` tell gentle-ai which section it manages — they delimit where the persona content is written and updated on sync. The markers alone do NOT guarantee that Hermes answers identity questions ("who are you?", "quién eres?") as Gentle AI. That guarantee comes from the explicit `## Identity` section inside the managed persona content, which instructs Hermes to identify itself as **Gentle AI running on Hermes Agent** in any language. If the user has written a manual `## Identity` section OUTSIDE the managed markers, it is preserved by gentle-ai but may conflict with the managed identity instruction — the managed block is what gentle-ai guarantees, and any manual identity section outside the markers may need cleanup to avoid contradiction.
+
+### Freebuff
+
+- **Detection**: gentle-ai detects the `freebuff` binary on `PATH` and the config root at `~/.agents` independently. The binary is the primary install signal; the config directory is created by gentle-ai on first sync.
+- **Install**: `npm install -g freebuff@<version>` with `--ignore-scripts` to prevent supply-chain attacks via postinstall hooks. On Linux with a system-owned npm prefix, `sudo` is prepended automatically.
+- **Config path**: `~/.agents/` (mcp.json, knowledge.md, skills/)
+- **MCP config**: Engram is injected into `~/.agents/mcp.json` as a JSON `mcpServers` entry (`StrategyMCPConfigFile`), consistent with Claude, Windsurf, and Kiro.
+- **System prompt**: SDD orchestrator and persona are written to `~/.agents/knowledge.md` via markdown section markers. Freebuff reads `knowledge.md` with highest priority — before `AGENTS.md` — making it the primary system prompt target.
+- **Skills**: `~/.agents/skills/` — gentle-ai writes SDD phase skills here. Skills in this directory are automatically discovered by Freebuff.
+- **Sub-agents**: Not supported. Freebuff is a solo-agent; it does not support the `delegate_task` primitive or native sub-agent spawning.
+- **Output styles / slash commands**: Not supported.
+- **Profiles**: Single-mode only (no per-phase model routing). Freebuff always runs in FREE mode — open-source models (DeepSeek, Kimi, MiniMax), no subscription required.
+- **Memory**: Engram provides cross-agent, cross-session memory protocol. Since Freebuff has no native memory system, Engram is the primary persistence layer for context across sessions.
+
