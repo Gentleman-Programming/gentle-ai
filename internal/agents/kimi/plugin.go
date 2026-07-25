@@ -96,25 +96,31 @@ func buildManifest(version string) KimiPluginManifest {
 	}
 }
 
-// installedFile matches the Kimi Code CLI plugin registry schema.
+// installedRecord holds the fields gentle-ai manages in a Kimi Code CLI plugin
+// registry entry. The registry is otherwise treated as opaque JSON so fields
+// added by Kimi Code (or other tools) are preserved on rewrite.
 // See: https://www.kimi.com/code/docs/en/kimi-code-cli/configuration/data-locations.html
-type installedFile struct {
-	Version int               `json:"version"`
-	Plugins []installedRecord `json:"plugins"`
+type installedRecord map[string]json.RawMessage
+
+func (r installedRecord) stringField(key string) string {
+	var value string
+	if raw, ok := r[key]; ok {
+		_ = json.Unmarshal(raw, &value)
+	}
+	return value
 }
 
-type installedRecord struct {
-	ID          string `json:"id"`
-	Root        string `json:"root"`
-	Source      string `json:"source"`
-	Enabled     bool   `json:"enabled"`
-	InstalledAt string `json:"installedAt"`
-	UpdatedAt   string `json:"updatedAt,omitempty"`
+func (r installedRecord) setField(key string, value any) {
+	// Marshal of string/bool literals cannot fail.
+	raw, _ := json.Marshal(value)
+	r[key] = raw
 }
 
 // registerPlugin records the gentle-ai plugin in Kimi Code CLI's installed.json
-// so it is loaded on startup. It preserves existing entries and updates the
-// gentle-ai record in place.
+// so it is loaded on startup. It preserves existing entries — including fields
+// this version of gentle-ai does not know about — and updates the gentle-ai
+// record in place. A corrupt registry is a hard error: silently rewriting it
+// would wipe every other plugin's registration.
 func (a *Adapter) registerPlugin(homeDir string) error {
 	pluginDir, err := filepath.Abs(a.PluginDir(homeDir))
 	if err != nil {
@@ -122,41 +128,55 @@ func (a *Adapter) registerPlugin(homeDir string) error {
 	}
 
 	installedPath := filepath.Join(a.resolveConfigDir(homeDir), "plugins", "installed.json")
-	var file installedFile
+	root := map[string]json.RawMessage{}
+	var plugins []installedRecord
 	if data, err := os.ReadFile(installedPath); err == nil {
-		_ = json.Unmarshal(data, &file)
+		if err := json.Unmarshal(data, &root); err != nil {
+			return fmt.Errorf("parse installed.json (refusing to overwrite existing registry): %w", err)
+		}
+		if raw, ok := root["plugins"]; ok {
+			if err := json.Unmarshal(raw, &plugins); err != nil {
+				return fmt.Errorf("parse installed.json plugins (refusing to overwrite existing registry): %w", err)
+			}
+		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("read installed.json: %w", err)
 	}
-	if file.Version == 0 {
-		file.Version = 1
+	if _, ok := root["version"]; !ok {
+		root["version"] = json.RawMessage("1")
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	found := false
-	for i := range file.Plugins {
-		if file.Plugins[i].ID == "gentle-ai" {
-			file.Plugins[i].Root = pluginDir
-			file.Plugins[i].Enabled = true
-			file.Plugins[i].UpdatedAt = now
-			if file.Plugins[i].InstalledAt == "" {
-				file.Plugins[i].InstalledAt = now
+	for _, record := range plugins {
+		if record.stringField("id") == "gentle-ai" {
+			record.setField("root", pluginDir)
+			record.setField("enabled", true)
+			record.setField("updatedAt", now)
+			if record.stringField("installedAt") == "" {
+				record.setField("installedAt", now)
 			}
 			found = true
 			break
 		}
 	}
 	if !found {
-		file.Plugins = append(file.Plugins, installedRecord{
-			ID:          "gentle-ai",
-			Root:        pluginDir,
-			Source:      "local-path",
-			Enabled:     true,
-			InstalledAt: now,
-		})
+		record := installedRecord{}
+		record.setField("id", "gentle-ai")
+		record.setField("root", pluginDir)
+		record.setField("source", "local-path")
+		record.setField("enabled", true)
+		record.setField("installedAt", now)
+		plugins = append(plugins, record)
 	}
 
-	out, err := json.MarshalIndent(file, "", "  ")
+	pluginsRaw, err := json.Marshal(plugins)
+	if err != nil {
+		return fmt.Errorf("marshal installed.json plugins: %w", err)
+	}
+	root["plugins"] = pluginsRaw
+
+	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal installed.json: %w", err)
 	}

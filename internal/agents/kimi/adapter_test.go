@@ -2,6 +2,7 @@ package kimi
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -32,9 +33,16 @@ func TestAdapter_Tier(t *testing.T) {
 	}
 }
 
-func TestAdapter_ConfigPaths(t *testing.T) {
-	a := NewAdapter()
+func TestAdapter_ConfigPaths_Legacy(t *testing.T) {
 	homeDir := "/home/test"
+	legacyDir := filepath.Join(homeDir, ".kimi")
+	a := NewAdapter()
+	a.statPath = func(path string) statResult {
+		if path == legacyDir {
+			return statResult{isDir: true}
+		}
+		return statResult{err: os.ErrNotExist}
+	}
 
 	tests := []struct {
 		name     string
@@ -56,6 +64,25 @@ func TestAdapter_ConfigPaths(t *testing.T) {
 				t.Errorf("%s = %v, want %v", tt.name, tt.got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestAdapter_ConfigPaths_FreshDefaultsToKimiCode(t *testing.T) {
+	// Neither ~/.kimi-code nor ~/.kimi exists: a fresh machine must resolve to
+	// ~/.kimi-code because that is what the npm-installed kimi-code CLI reads.
+	homeDir := t.TempDir()
+	t.Setenv("KIMI_CODE_HOME", "")
+	a := NewAdapter()
+
+	want := filepath.Join(homeDir, ".kimi-code")
+	if got := a.GlobalConfigDir(homeDir); got != want {
+		t.Errorf("GlobalConfigDir() fresh = %v, want %v", got, want)
+	}
+	if got := ConfigPath(homeDir); got != want {
+		t.Errorf("ConfigPath() fresh = %v, want %v", got, want)
+	}
+	if !a.usesKimiCodeLayout(homeDir) {
+		t.Error("usesKimiCodeLayout() fresh = false, want true")
 	}
 }
 
@@ -109,7 +136,7 @@ func TestAdapter_MCPConfigPath(t *testing.T) {
 	serverName := "test-server"
 
 	got := a.MCPConfigPath(homeDir, serverName)
-	expected := filepath.Join(homeDir, ".kimi", "mcp.json")
+	expected := filepath.Join(homeDir, ".kimi-code", "mcp.json")
 
 	if got != expected {
 		t.Errorf("MCPConfigPath() = %v, want %v", got, expected)
@@ -186,7 +213,7 @@ func TestAdapter_Detect_KimiNotInstalled(t *testing.T) {
 	if configFound {
 		t.Error("Detect() configFound = true, want false")
 	}
-	if configPath != filepath.Join(tmpDir, ".kimi") {
+	if configPath != filepath.Join(tmpDir, ".kimi-code") {
 		t.Errorf("Detect() configPath wrong: %v", configPath)
 	}
 }
@@ -227,9 +254,10 @@ func TestAdapter_Detect_FallbackPaths(t *testing.T) {
 }
 
 func TestConfigPath(t *testing.T) {
+	// No existing config directories: fresh default is ~/.kimi-code.
 	homeDir := "/home/test"
 	got := ConfigPath(homeDir)
-	expected := filepath.Join(homeDir, ".kimi")
+	expected := filepath.Join(homeDir, ".kimi-code")
 	if got != expected {
 		t.Errorf("ConfigPath() = %v, want %v", got, expected)
 	}
@@ -366,13 +394,23 @@ func TestAdapter_PostInstallMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAdapter()
 			// Mock homeDir relative to expected path style.
 			// We use a safe path like /tmp/test which filepath.FromSlash will normalize
 			// to \tmp\test on Windows.
 			homeDir := "/tmp/test"
 			if tt.os == "windows" {
 				homeDir = `C:\Users\test`
+			}
+
+			// The gentleman.yaml usage line is only printed for the legacy
+			// layout, so mock ~/.kimi as an existing directory.
+			legacyDir := filepath.Join(homeDir, ".kimi")
+			a := NewAdapter()
+			a.statPath = func(path string) statResult {
+				if path == legacyDir {
+					return statResult{isDir: true}
+				}
+				return statResult{err: os.ErrNotExist}
 			}
 
 			msg := a.PostInstallMessage(homeDir)
@@ -450,9 +488,9 @@ func TestAdapter_KIMI_CODE_HOME_FallbackOnInvalid(t *testing.T) {
 
 	a := NewAdapter()
 	got := a.resolveConfigDir(tmpDir)
-	expected := filepath.Join(tmpDir, ".kimi")
+	expected := filepath.Join(tmpDir, ".kimi-code")
 	if got != expected {
-		t.Errorf("resolveConfigDir() with invalid env = %v, want %v (fallback)", got, expected)
+		t.Errorf("resolveConfigDir() with invalid env = %v, want %v (fresh fallback)", got, expected)
 	}
 }
 
@@ -505,10 +543,16 @@ func TestAdapter_AllSkillsDirs_KimiCode(t *testing.T) {
 
 func TestAdapter_AllSkillsDirs_Legacy(t *testing.T) {
 	homeDir := "/home/test"
+	legacyDir := filepath.Join(homeDir, ".kimi")
 
 	a := &Adapter{
-		lookPath:    LookPathOverride,
-		statPath:    defaultStat,
+		lookPath: LookPathOverride,
+		statPath: func(path string) statResult {
+			if path == legacyDir {
+				return statResult{isDir: true}
+			}
+			return statResult{err: os.ErrNotExist}
+		},
 		pathExists:  func(path string) bool { return false },
 		userHomeDir: os.UserHomeDir,
 	}
@@ -887,7 +931,10 @@ func TestBootstrapTemplate_CallsInstallPlugin_KimiCode(t *testing.T) {
 
 func TestBootstrapTemplate_NoInstallPlugin_Legacy(t *testing.T) {
 	tmpDir := t.TempDir()
-	// No .kimi-code dir — legacy adapter.
+	// Legacy layout: ~/.kimi exists and ~/.kimi-code does not.
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".kimi"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	a := &Adapter{
 		lookPath:    LookPathOverride,
 		statPath:    defaultStat,
@@ -911,5 +958,30 @@ func TestBootstrapTemplate_NoInstallPlugin_Legacy(t *testing.T) {
 func TestVersions_GentleAI_IsNonEmpty(t *testing.T) {
 	if versions.GentleAI == "" {
 		t.Error("versions.GentleAI is empty")
+	}
+}
+
+func TestResolveConfigTOMLContent_DeniesCredentialFiles(t *testing.T) {
+	content := resolveConfigTOMLContent()
+
+	for _, pattern := range sensitiveFilePatterns {
+		for _, tool := range []string{"Read", "Write", "Edit"} {
+			rule := fmt.Sprintf("decision = \"deny\"\npattern = \"%s(%s)\"", tool, pattern)
+			if !strings.Contains(content, rule) {
+				t.Errorf("config.toml missing deny rule for %s(%s)", tool, pattern)
+			}
+		}
+	}
+
+	// The broad allows and the Bash ask must still be present; Kimi evaluates
+	// deny > ask > allow so the denies above always win.
+	for _, rule := range []string{
+		"decision = \"allow\"\npattern = \"Write\"",
+		"decision = \"allow\"\npattern = \"Edit\"",
+		"decision = \"ask\"\npattern = \"Bash\"",
+	} {
+		if !strings.Contains(content, rule) {
+			t.Errorf("config.toml missing expected rule:\n%s", rule)
+		}
 	}
 }

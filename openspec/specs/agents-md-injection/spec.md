@@ -25,7 +25,7 @@ directory.
 
 #### Scenario: Legacy returns correct path
 
-- GIVEN legacy Kimi is detected (no `~/.kimi-code` and no `KIMI_CODE_HOME`)
+- GIVEN legacy Kimi is detected (`~/.kimi` exists, no `~/.kimi-code`, and no `KIMI_CODE_HOME`)
 - WHEN `AGENTSMDPath(homeDir)` is called
 - THEN it returns `{homeDir}/.kimi/AGENTS.md`
 

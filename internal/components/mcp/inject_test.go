@@ -1148,7 +1148,7 @@ func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
 		t.Fatalf("Inject(kimi) second changed = true")
 	}
 
-	path := filepath.Join(home, ".kimi", "mcp.json")
+	path := filepath.Join(home, ".kimi-code", "mcp.json")
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile(kimi mcp.json) error = %v", err)

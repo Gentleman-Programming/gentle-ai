@@ -186,7 +186,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 ### Kimi Code
 
 - Current kimi-code (Node.js) installs via npm: `npm install -g @moonshot-ai/kimi-code` (requires Node.js >= 22.19.0). The legacy Python CLI used `uv tool install kimi-cli`.
-- Config root is `~/.kimi-code` (current kimi-code; overridable via `KIMI_CODE_HOME`). gentle-ai falls back to `~/.kimi` for legacy installs.
+- Config root is `~/.kimi-code` (current kimi-code; overridable via `KIMI_CODE_HOME`). gentle-ai uses `~/.kimi` only when that legacy directory exists without `~/.kimi-code`; a fresh machine defaults to `~/.kimi-code`.
 - Root custom agent at `{config-root}/agents/gentleman.yaml` with `system_prompt_path: ../AGENTS.md`
 - Global system prompt at `{config-root}/AGENTS.md` — a thin Jinja template that includes modular prompt files:
   `persona.md`, `output-style.md`, `engram-protocol.md`, `sdd-orchestrator.md`
