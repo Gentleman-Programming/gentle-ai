@@ -315,9 +315,11 @@ func AgentConfigPath(homeDir string) string { return filepath.Join(ConfigPath(ho
 func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 	paths := []string{
 		a.SettingsPath(homeDir),
+		filepath.Join(ConfigPath(homeDir), piSettingsFile),
 		filepath.Join(ConfigPath(homeDir), piNPMDirectory, piNPMPackageFile),
 	}
 	overlays := [][]byte{
+		nil,
 		nil,
 		mustJSON(map[string]any{
 			"dependencies": map[string]any{
@@ -351,6 +353,22 @@ func mergePiSettingsFile(path string) (filemerge.WriteResult, error) {
 	}
 
 	settings["packages"] = appendPiPackage(settings["packages"], piMCPAdapterPackageSpec)
+
+	// If we are writing the global settings.json (~/.pi/settings.json),
+	// sync packages from agent settings (~/.pi/agent/settings.json) to make them discoverable.
+	dir := filepath.Dir(path)
+	if filepath.Base(dir) == ".pi" {
+		agentSettingsPath := filepath.Join(dir, "agent", "settings.json")
+		if agentSettings, err := readPiJSONObject(agentSettingsPath); err == nil {
+			if agentPkgs, ok := agentSettings["packages"].([]any); ok && len(agentPkgs) > 0 {
+				for _, pkg := range agentPkgs {
+					if pkgStr, ok := pkg.(string); ok {
+						settings["packages"] = appendPiPackage(settings["packages"], pkgStr)
+					}
+				}
+			}
+		}
+	}
 
 	encoded, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {

@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const readyMessage = "You're ready. Run `claude` or `opencode` and start building."
+const readyMessage = "You're ready. Run `claude`, `opencode`, or `pi` and start building."
 
 type Report struct {
 	Checks    []CheckResult
