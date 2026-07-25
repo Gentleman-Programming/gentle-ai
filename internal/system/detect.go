@@ -212,6 +212,12 @@ func isUbuntuLike(id, idLike string) bool {
 		return true
 	}
 
+	// Deepin and UOS are Debian-based distros that use apt but may not
+	// always set ID_LIKE=debian in their os-release files.
+	if id == "deepin" || id == "uos" {
+		return true
+	}
+
 	for _, token := range strings.Fields(idLike) {
 		if token == LinuxDistroUbuntu || token == LinuxDistroDebian {
 			return true

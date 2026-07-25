@@ -169,6 +169,26 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			wantDistro: LinuxDistroFedora,
 		},
 		{
+			name:       "deepin (debian-based)",
+			osRelease:  "ID=deepin\nID_LIKE=\"debian\"\nVERSION_ID=\"20.9\"\n",
+			wantDistro: LinuxDistroUbuntu,
+		},
+		{
+			name:       "uos (debian-based)",
+			osRelease:  "ID=uos\nID_LIKE=\"debian\"\nVERSION_ID=\"20\"\n",
+			wantDistro: LinuxDistroUbuntu,
+		},
+		{
+			name:       "deepin without ID_LIKE",
+			osRelease:  "ID=deepin\nVERSION_ID=\"23\"\n",
+			wantDistro: LinuxDistroUbuntu,
+		},
+		{
+			name:       "uos without ID_LIKE",
+			osRelease:  "ID=uos\nVERSION_ID=\"25\"\n",
+			wantDistro: LinuxDistroUbuntu,
+		},
+		{
 			name:       "empty os-release",
 			osRelease:  "",
 			wantDistro: LinuxDistroUnknown,
@@ -191,6 +211,26 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 		{
 			name:       "quoted values are handled",
 			osRelease:  "ID=\"ubuntu\"\nID_LIKE=\"debian\"\n",
+			wantDistro: LinuxDistroUbuntu,
+		},
+		{
+			name:       "deepin (debian-based)",
+			osRelease:  "ID=deepin\nID_LIKE=\"debian\"\nVERSION_ID=\"20.9\"\n",
+			wantDistro: LinuxDistroUbuntu,
+		},
+		{
+			name:       "uos (debian-based)",
+			osRelease:  "ID=uos\nID_LIKE=\"debian\"\nVERSION_ID=\"20\"\n",
+			wantDistro: LinuxDistroUbuntu,
+		},
+		{
+			name:       "deepin without ID_LIKE",
+			osRelease:  "ID=deepin\nVERSION_ID=\"23\"\n",
+			wantDistro: LinuxDistroUbuntu,
+		},
+		{
+			name:       "uos without ID_LIKE",
+			osRelease:  "ID=uos\nVERSION_ID=\"25\"\n",
 			wantDistro: LinuxDistroUbuntu,
 		},
 	}
@@ -284,6 +324,24 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			wantPM:        "",
 			wantDistro:    LinuxDistroUnknown,
 			wantSupported: false,
+		},
+		{
+			name:          "deepin profile uses apt",
+			goos:          "linux",
+			osRelease:     "ID=deepin\nID_LIKE=\"debian\"\n",
+			wantOS:        "linux",
+			wantPM:        "apt",
+			wantDistro:    LinuxDistroUbuntu,
+			wantSupported: true,
+		},
+		{
+			name:          "uos profile uses apt",
+			goos:          "linux",
+			osRelease:     "ID=uos\nID_LIKE=\"debian\"\n",
+			wantOS:        "linux",
+			wantPM:        "apt",
+			wantDistro:    LinuxDistroUbuntu,
+			wantSupported: true,
 		},
 	}
 
