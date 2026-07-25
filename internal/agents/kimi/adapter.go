@@ -140,8 +140,12 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 // --- Config paths ---
 
 // resolveConfigDir returns the configuration directory for Kimi.
-// It checks KIMI_CODE_HOME env var first, then prefers ~/.kimi-code (current kimi-code)
-// when present, falling back to ~/.kimi (legacy).
+// Priority: KIMI_CODE_HOME env var (when it points at an existing directory),
+// then ~/.kimi-code (current kimi-code), then ~/.kimi — but only when that
+// legacy directory actually exists. On a fresh machine with neither directory,
+// it defaults to ~/.kimi-code because that is what the npm-installed kimi-code
+// CLI reads; defaulting to the legacy tree would strand every bootstrapped
+// config file where the installed product never looks.
 func (a *Adapter) resolveConfigDir(homeDir string) string {
 	if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" {
 		if info, err := os.Stat(envDir); err == nil && info.IsDir() {
@@ -152,19 +156,28 @@ func (a *Adapter) resolveConfigDir(homeDir string) string {
 	if stat := a.statPath(kimiCodeDir); stat.err == nil && stat.isDir {
 		return kimiCodeDir
 	}
-	return filepath.Join(homeDir, ".kimi")
+	legacyDir := filepath.Join(homeDir, ".kimi")
+	if stat := a.statPath(legacyDir); stat.err == nil && stat.isDir {
+		return legacyDir
+	}
+	return kimiCodeDir
 }
 
-// usesKimiCodeLayout reports whether the current Node.js-based kimi-code layout is installed.
-// It checks KIMI_CODE_HOME first, then falls back to ~/.kimi-code detection.
+// usesKimiCodeLayout reports whether the current Node.js-based kimi-code layout applies.
+// It checks KIMI_CODE_HOME first, then ~/.kimi-code. The legacy layout only applies
+// when ~/.kimi exists without ~/.kimi-code; a fresh machine (neither directory) is
+// treated as kimi-code because that is the product gentle-ai auto-installs.
 func (a *Adapter) usesKimiCodeLayout(homeDir string) bool {
 	if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" {
 		if st := a.statPath(envDir); st.err == nil && st.isDir {
 			return true
 		}
 	}
-	st := a.statPath(filepath.Join(homeDir, ".kimi-code"))
-	return st.err == nil && st.isDir
+	if st := a.statPath(filepath.Join(homeDir, ".kimi-code")); st.err == nil && st.isDir {
+		return true
+	}
+	st := a.statPath(filepath.Join(homeDir, ".kimi"))
+	return !(st.err == nil && st.isDir)
 }
 
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
@@ -369,7 +382,11 @@ func ConfigPath(homeDir string) string {
 	if info, err := os.Stat(kimiCodeDir); err == nil && info.IsDir() {
 		return kimiCodeDir
 	}
-	return filepath.Join(homeDir, ".kimi")
+	legacyDir := filepath.Join(homeDir, ".kimi")
+	if info, err := os.Stat(legacyDir); err == nil && info.IsDir() {
+		return legacyDir
+	}
+	return kimiCodeDir
 }
 
 func binaryName() string {
@@ -438,13 +455,43 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 	return nil
 }
 
-// resolveConfigTOMLContent returns the default TOML config for Kimi Code.
-// It enables skill merging and sets permission rules: auto-approve safe tools,
-// require manual approval for Bash.
-func resolveConfigTOMLContent() string {
-	return `default_permission_mode = "manual"
-merge_all_available_skills = true
+// sensitiveFilePatterns are the credential/secret path patterns denied for
+// Read/Write/Edit in the generated config.toml. They mirror the deny lists the
+// permissions component injects for other agents (see
+// internal/components/permissions/inject.go); Kimi bypasses that overlay
+// because its permissions live in config.toml, so the guards are inlined here.
+var sensitiveFilePatterns = []string{
+	".env",
+	".env.*",
+	"**/.env",
+	"**/.env.*",
+	".ssh/*",
+	"**/.ssh/**",
+	".credentials/*",
+	"Library/Keychains/*",
+	".aws/credentials",
+	".config/gh/hosts.yml",
+	"**/*.pem",
+	"**/*.key",
+	"**/secrets/*",
+}
 
+// resolveConfigTOMLContent returns the default TOML config for Kimi Code.
+// It enables skill merging and sets permission rules: deny access to
+// credential files, auto-approve safe tools, require manual approval for Bash.
+// Kimi evaluates deny > ask > allow regardless of rule order, so the broad
+// Write/Edit allows never override the credential denies.
+func resolveConfigTOMLContent() string {
+	var b strings.Builder
+	b.WriteString(`default_permission_mode = "manual"
+merge_all_available_skills = true
+`)
+	for _, pattern := range sensitiveFilePatterns {
+		for _, tool := range []string{"Read", "Write", "Edit"} {
+			fmt.Fprintf(&b, "\n[[permission.rules]]\ndecision = \"deny\"\npattern = \"%s(%s)\"\n", tool, pattern)
+		}
+	}
+	b.WriteString(`
 [[permission.rules]]
 decision = "allow"
 pattern = "Read"
@@ -472,7 +519,8 @@ pattern = "Agent"
 [[permission.rules]]
 decision = "ask"
 pattern = "Bash"
-`
+`)
+	return b.String()
 }
 
 // configTOMLKimiCodeExtras returns the additional TOML content appended to config.toml

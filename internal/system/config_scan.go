@@ -28,15 +28,22 @@ type ConfigState struct {
 // until the import cycle is resolved and ScanConfigs can delegate directly to
 // agents.DiscoverInstalled.
 func knownAgentConfigDirs(homeDir string) []ConfigState {
-	// Kimi Code (Node.js) uses ~/.kimi-code; legacy (Python/uv) uses ~/.kimi.
-	// We prefer the kimi-code directory when present for detection purposes.
+	// Kimi Code (Node.js) uses ~/.kimi-code (or KIMI_CODE_HOME); legacy
+	// (Python/uv) uses ~/.kimi. Mirrors kimi.Adapter.resolveConfigDir: env
+	// override first, then ~/.kimi-code, then ~/.kimi only when it exists.
 	kimiDir := filepath.Join(homeDir, ".kimi-code")
-	if info, err := os.Stat(kimiDir); err != nil {
-		if os.IsNotExist(err) {
-			kimiDir = filepath.Join(homeDir, ".kimi")
+	if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" {
+		if info, err := os.Stat(envDir); err == nil && info.IsDir() {
+			kimiDir = envDir
 		}
-	} else if !info.IsDir() {
-		kimiDir = filepath.Join(homeDir, ".kimi")
+	}
+	if kimiDir == filepath.Join(homeDir, ".kimi-code") {
+		if info, err := os.Stat(kimiDir); err != nil || !info.IsDir() {
+			legacyDir := filepath.Join(homeDir, ".kimi")
+			if info, err := os.Stat(legacyDir); err == nil && info.IsDir() {
+				kimiDir = legacyDir
+			}
+		}
 	}
 
 	return []ConfigState{

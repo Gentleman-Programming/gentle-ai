@@ -10,7 +10,14 @@ Defines requirements for comprehensive current Kimi Code adapter integration: en
 
 ### Requirement: KIMI_CODE_HOME Environment Override
 
-`resolveConfigDir` MUST check the `KIMI_CODE_HOME` environment variable before falling back to `~/.kimi-code` (current kimi-code) or `~/.kimi` (legacy). The standalone `ConfigPath` function MUST apply the same priority.
+`resolveConfigDir` MUST check the `KIMI_CODE_HOME` environment variable first, then `~/.kimi-code` (current kimi-code), then `~/.kimi` (legacy) — the legacy path applies only when that directory exists. When neither directory exists (fresh machine), resolution MUST default to `~/.kimi-code`, because that is the config root of the npm-installed kimi-code CLI that gentle-ai auto-installs. The standalone `ConfigPath` function MUST apply the same priority.
+
+#### Scenario: Fresh machine defaults to kimi-code
+
+- GIVEN neither `~/.kimi-code` nor `~/.kimi` exists and `KIMI_CODE_HOME` is unset
+- WHEN `resolveConfigDir(homeDir)` is called
+- THEN the returned path is `{homeDir}/.kimi-code`
+- AND `usesKimiCodeLayout(homeDir)` returns true
 
 #### Scenario: KIMI_CODE_HOME set to valid directory
 
@@ -42,9 +49,8 @@ Defines requirements for comprehensive current Kimi Code adapter integration: en
 - GIVEN no `config.toml` exists in the resolved config directory
 - WHEN `BootstrapTemplate(homeDir)` is called
 - THEN `config.toml` contains `merge_all_available_skills = true`
-- AND it contains a `[permissions]` block with `auto_approve_file_read = true`
-- AND it contains `auto_approve_file_write = true`
-- AND it contains `require_approval_shell = true`
+- AND it contains `[[permission.rules]]` entries that allow `Read`, `Grep`, `Glob`, `Write`, `Edit`, and `Agent`
+- AND it contains an `ask` rule for `Bash`
 
 #### Scenario: Existing config.toml is not overwritten
 
@@ -93,7 +99,7 @@ The adapter MUST expose an `AllSkillsDirs(homeDir) []string` method returning al
 
 #### Scenario: Legacy returns only shared skill directory
 
-- GIVEN legacy Kimi is detected (no `~/.kimi-code`)
+- GIVEN legacy Kimi is detected (`~/.kimi` exists and `~/.kimi-code` does not)
 - WHEN `AllSkillsDirs(homeDir)` is called
 - THEN it returns `{homeDir}/.config/agents/skills` as the single entry
 
@@ -101,17 +107,20 @@ The adapter MUST expose an `AllSkillsDirs(homeDir) []string` method returning al
 
 ### Requirement: Permission Rule Defaults
 
-The generated `config.toml` MUST include a `[permissions]` section that auto-approves safe operations (file reads, file writes) and requires manual approval for shell and network operations.
+The generated `config.toml` MUST include `[[permission.rules]]` entries that auto-approve safe tools (`Read`, `Grep`, `Glob`, `Write`, `Edit`, `Agent`) and require manual approval for `Bash`. Because Kimi bypasses the permissions component overlay (its permissions live in `config.toml`), the generated config MUST also include `deny` rules for `Read`, `Write`, and `Edit` on credential and secret file patterns equivalent to the deny lists injected for other agents (`.env`, `.env.*`, `.ssh`, `.credentials`, `Library/Keychains`, `.aws/credentials`, `.config/gh/hosts.yml`, `**/*.pem`, `**/*.key`, `**/secrets/*`). Kimi evaluates `deny > ask > allow` regardless of rule order, so the broad allows never override these denies.
 
-#### Scenario: Permission block present in generated config
+#### Scenario: Permission rules present in generated config
 
 - GIVEN a fresh install with no existing `config.toml`
 - WHEN `BootstrapTemplate` writes `config.toml`
-- THEN the file contains `[permissions]` section
-- AND `auto_approve_file_read = true`
-- AND `auto_approve_file_write = true`
-- AND `require_approval_shell = true`
-- AND `require_approval_network = true`
+- THEN the file contains `allow` rules for `Read`, `Grep`, `Glob`, `Write`, `Edit`, and `Agent`
+- AND an `ask` rule for `Bash`
+
+#### Scenario: Credential files are denied
+
+- GIVEN a fresh install with no existing `config.toml`
+- WHEN `BootstrapTemplate` writes `config.toml`
+- THEN the file contains `deny` rules for `Read`, `Write`, and `Edit` on each sensitive file pattern (e.g. `Read(.env)`, `Write(**/*.pem)`, `Edit(.ssh/*)`)
 
 ---
 
@@ -166,7 +175,7 @@ The `SkillsDir` method MUST return the plugin skills subdirectory for current ki
 
 #### Scenario: Legacy SkillsDir unchanged
 
-- GIVEN legacy Kimi is detected (no `~/.kimi-code`)
+- GIVEN legacy Kimi is detected (`~/.kimi` exists and `~/.kimi-code` does not)
 - WHEN `SkillsDir(homeDir)` is called
 - THEN it returns `{homeDir}/.config/agents/skills`
 

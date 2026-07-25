@@ -2330,8 +2330,10 @@ func TestRunInstallKimiBootstrapsHub(t *testing.T) {
 		t.Fatalf("RunInstall() error = %v", err)
 	}
 
-	// Verify that AGENTS.md was created in the agent's config dir.
-	hubPath := filepath.Join(home, ".kimi", "AGENTS.md")
+	// Verify that AGENTS.md was created in the agent's config dir. A fresh
+	// home (no ~/.kimi-code and no ~/.kimi) must bootstrap into ~/.kimi-code —
+	// the tree the npm-installed kimi-code CLI actually reads.
+	hubPath := filepath.Join(home, ".kimi-code", "AGENTS.md")
 	if _, err := os.Stat(hubPath); err != nil {
 		t.Fatalf("expected Kimi prompt hub file %q to be bootstrapped: %v", hubPath, err)
 	}
@@ -2458,7 +2460,7 @@ func TestRunInstallKimiAlreadyInstalledSkipsPreflight(t *testing.T) {
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	hubPath := filepath.Join(home, ".kimi", "AGENTS.md")
+	hubPath := filepath.Join(home, ".kimi-code", "AGENTS.md")
 	if _, err := os.Stat(hubPath); err != nil {
 		t.Fatalf("expected Kimi prompt hub file %q to be bootstrapped: %v", hubPath, err)
 	}

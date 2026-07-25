@@ -229,13 +229,19 @@ func TestAllSkillsDirs_LegacyUnchanged(t *testing.T) {
 	}
 }
 
-// newLegacyAdapter creates a test Adapter without the kimi-code layout (no .kimi-code dir).
+// newLegacyAdapter creates a test Adapter with the legacy layout: ~/.kimi
+// exists and ~/.kimi-code does not. (A home with neither directory is treated
+// as a fresh kimi-code install, not legacy.)
 func newLegacyAdapter(homeDir string) *kimi.Adapter {
+	legacyDir := filepath.Join(homeDir, ".kimi")
 	return kimi.NewTestAdapter(
 		kimi.WithStatPath(func(path string) kimi.StatResult {
+			if path == legacyDir {
+				return kimi.StatResult{IsDir: true}
+			}
 			return kimi.StatResult{Err: os.ErrNotExist}
 		}),
-		kimi.WithPathExists(func(path string) bool { return false }),
+		kimi.WithPathExists(func(path string) bool { return path == legacyDir }),
 	)
 }
 
@@ -468,4 +474,109 @@ func hasManifestKey(data []byte, key string) bool {
 	}
 	_, ok := raw[key]
 	return ok
+}
+
+func TestInstallPlugin_CorruptInstalledJSONFailsWithoutOverwrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	kimiCodeDir := filepath.Join(tmpDir, ".kimi-code")
+	pluginsDir := filepath.Join(kimiCodeDir, "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := []byte("{ this is not json")
+	installedPath := filepath.Join(pluginsDir, "installed.json")
+	if err := os.WriteFile(installedPath, corrupt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := newKimiCodeAdapter(t, tmpDir)
+	if err := a.InstallPlugin(tmpDir, "1.0.0"); err == nil {
+		t.Fatal("InstallPlugin() expected error for corrupt installed.json, got nil")
+	}
+
+	data, err := os.ReadFile(installedPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(data) != string(corrupt) {
+		t.Errorf("corrupt installed.json was overwritten:\n%s", data)
+	}
+}
+
+func TestInstallPlugin_PreservesUnknownInstalledJSONFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	kimiCodeDir := filepath.Join(tmpDir, ".kimi-code")
+	pluginsDir := filepath.Join(kimiCodeDir, "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{
+  "version": 2,
+  "registryMeta": {"managedBy": "kimi"},
+  "plugins": [
+    {"id": "other-plugin", "root": "/opt/other", "enabled": true, "futureField": "keep-me"},
+    {"id": "gentle-ai", "root": "/old/root", "enabled": false, "installedAt": "2025-01-01T00:00:00Z", "config": {"nested": true}}
+  ]
+}
+`
+	installedPath := filepath.Join(pluginsDir, "installed.json")
+	if err := os.WriteFile(installedPath, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := newKimiCodeAdapter(t, tmpDir)
+	if err := a.InstallPlugin(tmpDir, "1.0.0"); err != nil {
+		t.Fatalf("InstallPlugin() error = %v", err)
+	}
+
+	data, err := os.ReadFile(installedPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var out struct {
+		Version      int              `json:"version"`
+		RegistryMeta map[string]any   `json:"registryMeta"`
+		Plugins      []map[string]any `json:"plugins"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("installed.json invalid after rewrite: %v", err)
+	}
+
+	if out.Version != 2 {
+		t.Errorf("version = %d, want 2 (preserved)", out.Version)
+	}
+	if out.RegistryMeta["managedBy"] != "kimi" {
+		t.Errorf("registryMeta lost on rewrite: %#v", out.RegistryMeta)
+	}
+	if len(out.Plugins) != 2 {
+		t.Fatalf("plugins length = %d, want 2: %#v", len(out.Plugins), out.Plugins)
+	}
+
+	var other, gentle map[string]any
+	for _, p := range out.Plugins {
+		switch p["id"] {
+		case "other-plugin":
+			other = p
+		case "gentle-ai":
+			gentle = p
+		}
+	}
+	if other == nil || gentle == nil {
+		t.Fatalf("missing plugin records: %#v", out.Plugins)
+	}
+	if other["futureField"] != "keep-me" {
+		t.Errorf("other-plugin unknown field lost: %#v", other)
+	}
+	if gentle["enabled"] != true {
+		t.Errorf("gentle-ai enabled = %v, want true", gentle["enabled"])
+	}
+	if gentle["root"] == "/old/root" {
+		t.Error("gentle-ai root was not updated")
+	}
+	if gentle["installedAt"] != "2025-01-01T00:00:00Z" {
+		t.Errorf("gentle-ai installedAt changed: %v", gentle["installedAt"])
+	}
+	if cfg, ok := gentle["config"].(map[string]any); !ok || cfg["nested"] != true {
+		t.Errorf("gentle-ai unknown config field lost: %#v", gentle["config"])
+	}
 }

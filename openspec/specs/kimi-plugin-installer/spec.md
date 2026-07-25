@@ -76,7 +76,7 @@ The adapter MUST generate a `kimi.plugin.json` manifest containing `name`, `vers
 
 ### Requirement: kimi-code Layout Detection Guard
 
-The adapter MUST detect current kimi-code by checking for the `~/.kimi-code` directory. Legacy installs MUST NOT attempt plugin-based installation.
+The adapter MUST treat an install as current kimi-code when `KIMI_CODE_HOME` points at an existing directory, when `~/.kimi-code` exists, or when neither `~/.kimi-code` nor legacy `~/.kimi` exists (fresh machine — gentle-ai auto-installs the npm kimi-code CLI). Legacy installs (`~/.kimi` exists without `~/.kimi-code`) MUST NOT attempt plugin-based installation.
 
 #### Scenario: current kimi-code detected enables plugin path
 
@@ -86,7 +86,7 @@ The adapter MUST detect current kimi-code by checking for the `~/.kimi-code` dir
 
 #### Scenario: Legacy install falls back to flat skills
 
-- GIVEN `~/.kimi-code` directory does not exist
+- GIVEN `~/.kimi` exists and `~/.kimi-code` does not
 - WHEN the adapter resolves the skills directory
 - THEN it returns `~/.config/agents/skills` (legacy path)
 
@@ -103,6 +103,25 @@ If plugin directory creation fails due to filesystem permissions, the adapter MU
 - THEN the SDD inject component catches the error
 - AND falls back to `SkillsDir(homeDir)` for skill placement
 - AND a warning is logged indicating the fallback
+
+---
+
+### Requirement: installed.json Registry Preservation
+
+`InstallPlugin` MUST register the gentle-ai plugin in Kimi Code's `plugins/installed.json` without destroying data it does not own. Unknown top-level fields and unknown per-plugin fields MUST be preserved on rewrite. If the existing registry cannot be parsed, `InstallPlugin` MUST fail with an error instead of overwriting the file.
+
+#### Scenario: Unknown fields survive re-registration
+
+- GIVEN `installed.json` contains another plugin's record and fields gentle-ai does not know about
+- WHEN `InstallPlugin` re-registers the gentle-ai plugin
+- THEN the other plugin's record and all unknown fields remain intact
+
+#### Scenario: Corrupt registry is not overwritten
+
+- GIVEN `installed.json` exists but contains invalid JSON
+- WHEN `InstallPlugin` is called
+- THEN it returns an error
+- AND the corrupt file content is left unmodified
 
 ---
 
@@ -141,6 +160,7 @@ type PluginInstaller interface {
 - Unit tests for manifest struct serialization (all required fields present)
 - Unit tests for `PluginDir` and `PluginManifestPath` path resolution
 - Unit tests for `InstallPlugin` creating directory + writing manifest
-- Unit tests for legacy fallback (no `~/.kimi-code`)
+- Unit tests for legacy fallback (`~/.kimi` exists without `~/.kimi-code`)
 - Unit tests for permission failure graceful fallback
+- Unit tests for installed.json preservation (unknown fields kept, corrupt registry rejected)
 - Integration test verifying manifest JSON schema matches current Kimi Code expectations

@@ -128,7 +128,7 @@ func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testin
 	}
 
 	// AGENTS.md should be the static Jinja template (includes + variable placeholders).
-	templatePath := filepath.Join(home, ".kimi", "AGENTS.md")
+	templatePath := filepath.Join(home, ".kimi-code", "AGENTS.md")
 	content, err := os.ReadFile(templatePath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", templatePath, err)
@@ -149,7 +149,7 @@ func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testin
 	}
 
 	// output-style.md module should contain the Gentleman style content.
-	outputStylePath := filepath.Join(home, ".kimi", "output-style.md")
+	outputStylePath := filepath.Join(home, ".kimi-code", "output-style.md")
 	styleContent, err := os.ReadFile(outputStylePath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", outputStylePath, err)
@@ -173,7 +173,7 @@ func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testin
 
 	// persona.md module should exist and be the residual — tone/language now
 	// lives exclusively in the reconciled output-style.md module checked above.
-	personaPath := filepath.Join(home, ".kimi", "persona.md")
+	personaPath := filepath.Join(home, ".kimi-code", "persona.md")
 	personaFileBytes, err := os.ReadFile(personaPath)
 	if err != nil {
 		t.Fatalf("persona.md not written: %v", err)
@@ -1028,7 +1028,7 @@ func TestInjectKimiNeutralWritesMeaningfulOutputStyle(t *testing.T) {
 		t.Fatal("Inject(kimi neutral) changed = false")
 	}
 
-	outputStylePath := filepath.Join(home, ".kimi", "output-style.md")
+	outputStylePath := filepath.Join(home, ".kimi-code", "output-style.md")
 	content, err := os.ReadFile(outputStylePath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", outputStylePath, err)
@@ -2095,7 +2095,7 @@ func TestInjectKimi_SwitchGentlemanToNeutral_NoResidualPersonaContent(t *testing
 		t.Fatalf("Inject(neutral) error = %v", err)
 	}
 
-	outputStylePath := filepath.Join(home, ".kimi", "output-style.md")
+	outputStylePath := filepath.Join(home, ".kimi-code", "output-style.md")
 	data, err := os.ReadFile(outputStylePath)
 	if err != nil {
 		t.Fatalf("ReadFile(output-style.md) error = %v", err)

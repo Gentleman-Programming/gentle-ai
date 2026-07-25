@@ -2016,7 +2016,7 @@ func TestInjectKimiKiroWindsurfAntigravityPreserveNativeChainStrategyWording(t *
 			name:    "kimi",
 			agentID: model.AgentKimi,
 			promptPath: func(home string, _ agents.Adapter) string {
-				return filepath.Join(home, ".kimi", "sdd-orchestrator.md")
+				return filepath.Join(home, ".kimi-code", "sdd-orchestrator.md")
 			},
 			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "/skill:sdd-*", "multiagent:Task", "custom-agent prompt", "treat `chained-pr` (registry skill `gentle-ai-chained-pr`) as a required skill match"},
 			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation"},
@@ -6124,7 +6124,7 @@ func TestInjectWritesNativeReviewAgentFiles(t *testing.T) {
 		{
 			name:      "kimi",
 			adapter:   kimiAdapter(),
-			agentsDir: func(home string) string { return filepath.Join(home, ".kimi", "agents") },
+			agentsDir: func(home string) string { return filepath.Join(home, ".kimi-code", "agents") },
 			extraExts: []string{".yaml"},
 			extraContains: map[string]string{
 				".yaml": "system_prompt_path: ./",
@@ -8222,7 +8222,7 @@ func TestInjectTriggerRules_JinjaModule(t *testing.T) {
 		t.Fatalf("Inject(kimi) error = %v", err)
 	}
 
-	modulePath := filepath.Join(home, ".kimi", "trigger-rules.md")
+	modulePath := filepath.Join(home, ".kimi-code", "trigger-rules.md")
 	content, err := os.ReadFile(modulePath)
 	if err != nil {
 		t.Fatalf("ReadFile(trigger-rules.md) error = %v", err)
@@ -8383,7 +8383,7 @@ func TestInjectTriggerRules_AllAdapters(t *testing.T) {
 			getContent: func(home string, _ agents.Adapter) (string, error) {
 				// Kimi uses StrategyJinjaModules: trigger-rules is written as a
 				// standalone module file, not injected into the base template via markers.
-				return readFileOrEmpty(filepath.Join(home, ".kimi", "trigger-rules.md"))
+				return readFileOrEmpty(filepath.Join(home, ".kimi-code", "trigger-rules.md"))
 			},
 		},
 		{

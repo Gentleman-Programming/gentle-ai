@@ -5334,8 +5334,9 @@ func agentBuilderSkillsDir(agentID model.AgentID) (string, bool) {
 	case model.AgentKimi:
 		// Agent Builder writes user skills. That is {config-root}/skills for
 		// current kimi-code (including KIMI_CODE_HOME), not the managed plugin
-		// SkillsDir under plugins/managed/gentle-ai/skills. Legacy falls back to
-		// the shared agents skills path.
+		// SkillsDir under plugins/managed/gentle-ai/skills. Mirrors
+		// kimi.Adapter.resolveConfigDir: only an existing legacy ~/.kimi (with
+		// no ~/.kimi-code) falls back to the shared agents skills path.
 		if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" {
 			if info, err := os.Stat(envDir); err == nil && info.IsDir() {
 				return filepath.Join(envDir, "skills"), true
@@ -5345,7 +5346,10 @@ func agentBuilderSkillsDir(agentID model.AgentID) (string, bool) {
 		if info, err := os.Stat(kimiCodeDir); err == nil && info.IsDir() {
 			return filepath.Join(kimiCodeDir, "skills"), true
 		}
-		return filepath.Join(home, ".config", "agents", "skills"), true
+		if info, err := os.Stat(filepath.Join(home, ".kimi")); err == nil && info.IsDir() {
+			return filepath.Join(home, ".config", "agents", "skills"), true
+		}
+		return filepath.Join(kimiCodeDir, "skills"), true
 	default:
 		return "", false
 	}
