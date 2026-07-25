@@ -46,6 +46,15 @@ var definitions = []Definition{
 		Repo:        "sdd-engram-plugin",
 		Description: "OpenCode TUI for SDD profiles and Engram memories",
 	},
+	{
+		ID:          model.OpenCodePluginDCP,
+		Name:        "Dynamic Context Pruning",
+		PackageName: "opencode-dynamic-context-pruning",
+		RepoURL:     "https://github.com/Opencode-DCP/opencode-dynamic-context-pruning",
+		Owner:       "Opencode-DCP",
+		Repo:        "opencode-dynamic-context-pruning",
+		Description: "Intelligently manages conversation context to optimize token usage with zero-cost automatic strategies",
+	},
 }
 
 const gentleLogoPluginFile = "gentle-logo.tsx"
