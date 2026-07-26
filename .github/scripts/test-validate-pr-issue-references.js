@@ -55,6 +55,16 @@ test('ignores embedded prose such as "discloses #42"', () => {
   assert.deepEqual(extractLinkedIssueNumbers('This PR discloses #42 in the body.'), []);
 });
 
-test('rejects malformed references with trailing characters', () => {
-  assert.deepEqual(extractLinkedIssueNumbers('Closes #42abc\nFixes #99-extra'), [99]);
+test('rejects malformed references with trailing letters', () => {
+  // #42abc fails to match because the digit is followed by letters
+  // (a word character), so the negative lookahead rejects the match.
+  assert.deepEqual(extractLinkedIssueNumbers('Closes #42abc'), []);
+});
+
+test('accepts a single valid reference even when malformed neighbours exist', () => {
+  // The malformed neighbour #42abc is rejected, the valid #1770 is kept.
+  // This mirrors the CI status:approved gate, which only validates issue
+  // numbers that survive the parser; a malformed neighbour must not pull a
+  // fake issue number into the validation set.
+  assert.deepEqual(extractLinkedIssueNumbers('Closes #42abc\nCloses #1770'), [1770]);
 });

@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
-const CLOSING_REFERENCE_PATTERN = /(^|[^A-Za-z0-9_])(?:closes|fixes|resolves)\s+#(\d+)\b/gi;
+const CLOSING_REFERENCE_PATTERN = /(^|[^A-Za-z0-9_])(?:closes|fixes|resolves)\s+#(\d+)(?![A-Za-z0-9_])/gi;
 
 /**
  * Remove HTML comments from a Markdown string.
