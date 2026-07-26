@@ -46,3 +46,15 @@ test('treats closing references in code fences as visible', () => {
 
   assert.deepEqual(extractLinkedIssueNumbers(body), [42]);
 });
+
+test('extracts a visible Fixes #N reference', () => {
+  assert.deepEqual(extractLinkedIssueNumbers('Fixes #1770'), [1770]);
+});
+
+test('ignores embedded prose such as "discloses #42"', () => {
+  assert.deepEqual(extractLinkedIssueNumbers('This PR discloses #42 in the body.'), []);
+});
+
+test('rejects malformed references with trailing characters', () => {
+  assert.deepEqual(extractLinkedIssueNumbers('Closes #42abc\nFixes #99-extra'), [99]);
+});
