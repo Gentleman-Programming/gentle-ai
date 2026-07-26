@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
-const CLOSING_REFERENCE_PATTERN = /(?:closes|fixes|resolves)\s+#(\d+)/gi;
+const CLOSING_REFERENCE_PATTERN = /(^|[^A-Za-z0-9_])(?:closes|fixes|resolves)\s+#(\d+)\b/gi;
 
 /**
  * Remove HTML comments from a Markdown string.
@@ -23,10 +23,12 @@ function stripHtmlComments(markdown) {
  */
 function extractLinkedIssueNumbers(body) {
   const visibleBody = stripHtmlComments(body);
-
-  return [...visibleBody.matchAll(CLOSING_REFERENCE_PATTERN)].map((match) =>
-    Number.parseInt(match[1], 10),
-  );
+  const numbers = [];
+  for (const match of visibleBody.matchAll(CLOSING_REFERENCE_PATTERN)) {
+    // group 1 is the leading boundary; group 2 is the issue number
+    numbers.push(Number.parseInt(match[2], 10));
+  }
+  return numbers;
 }
 
 module.exports = {
