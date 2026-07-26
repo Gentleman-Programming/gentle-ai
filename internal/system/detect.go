@@ -186,7 +186,13 @@ func detectLinuxDistro(linuxOSRelease string) string {
 		}
 
 		key := strings.ToUpper(strings.TrimSpace(parts[0]))
-		value := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+		value := strings.TrimSpace(parts[1])
+		if len(value) >= 2 {
+			first, last := value[0], value[len(value)-1]
+			if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+				value = value[1 : len(value)-1]
+			}
+		}
 		fields[key] = strings.ToLower(value)
 	}
 

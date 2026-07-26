@@ -218,6 +218,26 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			osRelease:  "ID=funtoo\nID_LIKE='gentoo'\n",
 			wantDistro: LinuxDistroGentoo,
 		},
+		{
+			name:       "quoted value with internal apostrophe preserved",
+			osRelease:  `ID="ubunt'u"` + "\nID_LIKE=debian\n",
+			wantDistro: LinuxDistroUbuntu,
+		},
+		{
+			name:       "trailing apostrophe not treated as outer quote marker",
+			osRelease:  "ID=ubuntu'orphan\n",
+			wantDistro: LinuxDistroUnknown,
+		},
+		{
+			name:       "opening single quote without closing is not stripped",
+			osRelease:  "ID='gentoo\n",
+			wantDistro: LinuxDistroUnknown,
+		},
+		{
+			name:       "embedded apostrophes in bare value do not match distro",
+			osRelease:  "ID=ge'nt'oo\n",
+			wantDistro: LinuxDistroUnknown,
+		},
 	}
 
 	for _, tc := range tests {
