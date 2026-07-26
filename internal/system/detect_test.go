@@ -193,6 +193,31 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			osRelease:  "ID=\"ubuntu\"\nID_LIKE=\"debian\"\n",
 			wantDistro: LinuxDistroUbuntu,
 		},
+		{
+			name:       "gentoo bare ID",
+			osRelease:  "ID=gentoo\n",
+			wantDistro: LinuxDistroGentoo,
+		},
+		{
+			name:       "gentoo double-quoted ID",
+			osRelease:  "ID=\"gentoo\"\n",
+			wantDistro: LinuxDistroGentoo,
+		},
+		{
+			name:       "gentoo single-quoted ID",
+			osRelease:  "ID='gentoo'\n",
+			wantDistro: LinuxDistroGentoo,
+		},
+		{
+			name:       "calculate linux derivative of gentoo",
+			osRelease:  "ID=calculate\nID_LIKE=\"gentoo sabayon\"\n",
+			wantDistro: LinuxDistroGentoo,
+		},
+		{
+			name:       "funtoo derivative of gentoo",
+			osRelease:  "ID=funtoo\nID_LIKE='gentoo'\n",
+			wantDistro: LinuxDistroGentoo,
+		},
 	}
 
 	for _, tc := range tests {
@@ -284,6 +309,15 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			wantPM:        "",
 			wantDistro:    LinuxDistroUnknown,
 			wantSupported: false,
+		},
+		{
+			name:          "gentoo profile",
+			goos:          "linux",
+			osRelease:     "ID=gentoo\n",
+			wantOS:        "linux",
+			wantPM:        "emerge",
+			wantDistro:    LinuxDistroGentoo,
+			wantSupported: true,
 		},
 	}
 

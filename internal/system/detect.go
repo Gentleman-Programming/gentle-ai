@@ -31,6 +31,7 @@ const (
 	LinuxDistroDebian  = "debian"
 	LinuxDistroArch    = "arch"
 	LinuxDistroFedora  = "fedora"
+	LinuxDistroGentoo  = "gentoo"
 )
 
 type DetectionResult struct {
@@ -148,6 +149,9 @@ func resolvePlatformProfile(goos, linuxOSRelease string, tools map[string]ToolSt
 		case LinuxDistroFedora:
 			profile.PackageManager = "dnf"
 			profile.Supported = true
+		case LinuxDistroGentoo:
+			profile.PackageManager = "emerge"
+			profile.Supported = true
 		default:
 			profile.PackageManager = ""
 			profile.Supported = false
@@ -182,7 +186,7 @@ func detectLinuxDistro(linuxOSRelease string) string {
 		}
 
 		key := strings.ToUpper(strings.TrimSpace(parts[0]))
-		value := strings.Trim(strings.TrimSpace(parts[1]), `"`)
+		value := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
 		fields[key] = strings.ToLower(value)
 	}
 
@@ -202,6 +206,10 @@ func detectLinuxDistro(linuxOSRelease string) string {
 
 	if isFedoraLike(id, idLike) {
 		return LinuxDistroFedora
+	}
+
+	if isGentooLike(id, idLike) {
+		return LinuxDistroGentoo
 	}
 
 	return LinuxDistroUnknown
@@ -242,6 +250,20 @@ func isFedoraLike(id, idLike string) bool {
 
 	for _, token := range strings.Fields(idLike) {
 		if token == LinuxDistroFedora || token == "rhel" || token == "centos" || token == "rocky" || token == "almalinux" || token == "nobara" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isGentooLike(id, idLike string) bool {
+	if id == LinuxDistroGentoo {
+		return true
+	}
+
+	for _, token := range strings.Fields(idLike) {
+		if token == LinuxDistroGentoo {
 			return true
 		}
 	}
