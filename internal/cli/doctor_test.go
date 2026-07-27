@@ -261,6 +261,70 @@ func TestExecutableExtensionsFor(t *testing.T) {
 	}
 }
 
+// --- doctorToolCopies ---
+
+// writeFakeTool creates an executable file named tool inside dir.
+func writeFakeTool(t *testing.T, dir, tool string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write %s in %s: %v", tool, dir, err)
+	}
+}
+
+// A usrmerge layout (/bin -> /usr/bin) puts both paths in PATH while holding a
+// single binary. Reporting that as a duplicate produces a warning whose only
+// remedy would be deleting a system symlink, so the copies must collapse.
+func TestDoctorToolCopiesDeduplicatesSymlinkedDirs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("usrmerge-style symlinked PATH directories are a POSIX layout")
+	}
+
+	root := t.TempDir()
+	realDir := filepath.Join(root, "usr", "bin")
+	writeFakeTool(t, realDir, "code")
+
+	linkDir := filepath.Join(root, "bin")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlinks unsupported on this filesystem: %v", err)
+	}
+
+	got := doctorToolCopies("code", []string{realDir, linkDir})
+	if len(got) != 1 {
+		t.Fatalf("symlinked PATH dirs must report one copy, got %d: %v", len(got), got)
+	}
+}
+
+// The dedup must not blind the check: genuinely distinct directories each
+// holding their own binary are a real ambiguity and must still be reported.
+func TestDoctorToolCopiesReportsDistinctDirs(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "local", "bin")
+	second := filepath.Join(root, "opt", "bin")
+	writeFakeTool(t, first, "code")
+	writeFakeTool(t, second, "code")
+
+	got := doctorToolCopies("code", []string{first, second})
+	if len(got) != 2 {
+		t.Fatalf("distinct dirs must report two copies, got %d: %v", len(got), got)
+	}
+}
+
+// A PATH entry that does not exist cannot be resolved, and must not make the
+// scan drop the copies it did find.
+func TestDoctorToolCopiesToleratesMissingDirs(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "usr", "bin")
+	writeFakeTool(t, realDir, "code")
+
+	got := doctorToolCopies("code", []string{filepath.Join(root, "absent"), realDir})
+	if len(got) != 1 {
+		t.Fatalf("missing PATH dir must be skipped, got %d: %v", len(got), got)
+	}
+}
+
 // --- checkStateJSON ---
 
 func TestCheckStateJSON_Missing(t *testing.T) {

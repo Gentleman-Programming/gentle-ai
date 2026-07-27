@@ -278,7 +278,7 @@ func doctorToolCopies(tool string, pathDirs []string) []string {
 	seenDirs := make(map[string]struct{}, len(pathDirs))
 	copies := make([]string, 0, len(pathDirs))
 	for _, dir := range pathDirs {
-		cleanDir := filepath.Clean(dir)
+		cleanDir := doctorCanonicalDir(dir)
 		if _, seen := seenDirs[cleanDir]; seen {
 			continue
 		}
@@ -288,6 +288,20 @@ func doctorToolCopies(tool string, pathDirs []string) []string {
 		}
 	}
 	return copies
+}
+
+// doctorCanonicalDir resolves dir to its real filesystem location so that PATH
+// entries pointing at the same directory through a symlink collapse into a
+// single entry. Distributions that merge /bin into /usr/bin (usrmerge) ship
+// both paths in PATH, and a purely lexical Clean reports one binary as two
+// copies -- a duplicate warning the user cannot act on, because the remedy
+// would be deleting a system symlink. Unresolvable paths fall back to the
+// lexical form so a directory that does not exist still dedups against itself.
+func doctorCanonicalDir(dir string) string {
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		return resolved
+	}
+	return filepath.Clean(dir)
 }
 
 // executableExtensions returns the filename suffixes to probe when scanning a
