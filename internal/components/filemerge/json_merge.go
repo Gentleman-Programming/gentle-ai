@@ -30,6 +30,20 @@ func MergeJSONObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 	return append(encoded, '\n'), nil
 }
 
+// MergeJSONObjectsStrict merges like MergeJSONObjects but refuses to proceed
+// when the base document cannot be decoded, instead of falling back to an empty
+// base. Use it for files that carry irreplaceable user state: Claude Code's
+// ~/.claude.json holds the authenticated session and per-project trust
+// settings, so silently rewriting it from an empty object would sign the user
+// out rather than lose a reproducible config.
+func MergeJSONObjectsStrict(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
+	if _, err := unmarshalJSONObject(baseJSON); err != nil {
+		return nil, fmt.Errorf("refusing to rewrite malformed json base: %w", err)
+	}
+
+	return MergeJSONObjects(baseJSON, overlayJSON)
+}
+
 func unmarshalJSONObject(raw []byte) (map[string]any, error) {
 	object := map[string]any{}
 	if len(bytes.TrimSpace(raw)) == 0 {

@@ -114,6 +114,56 @@ func TestMergeJSONObjectsMalformedBaseReturnsOverlayOnly(t *testing.T) {
 	}
 }
 
+func TestMergeJSONObjectsStrictRefusesMalformedBase(t *testing.T) {
+	// The lenient path treats a broken base as {}, which is right for a config
+	// the installer can regenerate. A file such as Claude Code's ~/.claude.json
+	// carries the authenticated session, so the strict path must fail instead.
+	bases := [][]byte{
+		[]byte(`allow: all`),
+		[]byte(`{"oauthAccount": {"accountUuid": "abc"`),
+		[]byte(`a`),
+	}
+
+	for _, base := range bases {
+		t.Run(string(base), func(t *testing.T) {
+			merged, err := MergeJSONObjectsStrict(base, []byte(`{"mcpServers":{"context7":{"command":"npx"}}}`))
+			if err == nil {
+				t.Fatalf("MergeJSONObjectsStrict() error = nil, merged = %s; want a refusal", merged)
+			}
+			if merged != nil {
+				t.Fatalf("MergeJSONObjectsStrict() merged = %s; want nil on refusal", merged)
+			}
+		})
+	}
+}
+
+func TestMergeJSONObjectsStrictMergesParsableBase(t *testing.T) {
+	base := []byte(`{"oauthAccount":{"accountUuid":"abc"},"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
+
+	merged, err := MergeJSONObjectsStrict(base, []byte(`{"mcpServers":{"context7":{"command":"npx"}}}`))
+	if err != nil {
+		t.Fatalf("MergeJSONObjectsStrict() error = %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(merged, &got); err != nil {
+		t.Fatalf("merged result is not valid JSON: %v", err)
+	}
+	if _, ok := got["oauthAccount"]; !ok {
+		t.Fatalf("strict merge dropped oauthAccount; got keys: %v", got)
+	}
+
+	servers, ok := got["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatalf("merged result missing mcpServers; got: %v", got)
+	}
+	for _, name := range []string{"codegraph", "context7"} {
+		if _, ok := servers[name]; !ok {
+			t.Fatalf("mcpServers missing %q; got: %v", name, servers)
+		}
+	}
+}
+
 // ─── __replace__ sentinel tests ───────────────────────────────────────────────
 
 func TestMergeJSONObjectsReplaceSentinelErasesBaseKeys(t *testing.T) {
