@@ -405,6 +405,53 @@ func TestComponentOperationsContext7ClaudeRemovesSettingsAndManagedLegacyFile(t 
 	}
 }
 
+func TestComponentOperationsContext7ClaudeClearsRegistryWithoutDeletingTheFile(t *testing.T) {
+	// ~/.claude.json holds the authenticated session alongside the MCP servers.
+	// Even a registry whose only remaining content is the managed entry must be
+	// left in place — deleting it would sign the user out of Claude Code.
+	homeDir := t.TempDir()
+
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("Claude adapter not found in registry")
+	}
+
+	registryPath := agents.MCPRegistryPath(adapter, homeDir)
+	if registryPath == "" {
+		t.Fatal("Claude adapter reports no MCP registry path")
+	}
+	if err := os.WriteFile(registryPath, []byte(`{"mcpServers":{"context7":{"command":"npx"}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(registry) error = %v", err)
+	}
+
+	ops, targets, err := svc.componentOperations(adapter, model.ComponentContext7)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	if !slices.Contains(targets, registryPath) {
+		t.Fatalf("targets = %#v, want the MCP registry path %q", targets, registryPath)
+	}
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("operation %v on %q error = %v", op.typeID, op.path, err)
+		}
+	}
+
+	if _, err := os.Stat(registryPath); err != nil {
+		t.Fatalf("%q must survive uninstall; stat err = %v", registryPath, err)
+	}
+	registry := readJSONFileForTest(t, registryPath)
+	if servers, ok := registry["mcpServers"].(map[string]any); ok {
+		if _, still := servers["context7"]; still {
+			t.Fatalf("registry still contains mcpServers.context7: %#v", registry)
+		}
+	}
+}
+
 func TestComponentOperationsContext7ClaudePreservesCustomLegacyFile(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()

@@ -119,6 +119,13 @@ func (a *Adapter) MCPConfigPath(homeDir string, serverName string) string {
 	return filepath.Join(homeDir, ".claude", "mcp", serverName+".json")
 }
 
+// MCPRegistryPath satisfies agents.MCPRegistryPathProvider. Components use it
+// to write MCP servers where Claude Code actually reads them; MCPConfigPath is
+// kept for cleaning up registrations earlier versions left behind.
+func (a *Adapter) MCPRegistryPath(homeDir string) string {
+	return MCPRegistryPath(homeDir)
+}
+
 // --- Optional capabilities ---
 
 func (a *Adapter) SupportsOutputStyles() bool {

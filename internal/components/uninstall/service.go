@@ -721,8 +721,10 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 func context7Targets(adapter agents.Adapter, homeDir string) []string {
 	switch adapter.MCPStrategy() {
 	case model.StrategySeparateMCPFiles:
-		if adapter.Agent() == model.AgentClaudeCode {
-			return []string{adapter.SettingsPath(homeDir), adapter.MCPConfigPath(homeDir, "context7")}
+		if registryPath := agents.MCPRegistryPath(adapter, homeDir); registryPath != "" {
+			// SettingsPath and MCPConfigPath stay listed so registrations written
+			// by earlier versions, which never reached the registry, are cleaned up.
+			return []string{registryPath, adapter.SettingsPath(homeDir), adapter.MCPConfigPath(homeDir, "context7")}
 		}
 		return []string{adapter.MCPConfigPath(homeDir, "context7")}
 	case model.StrategyMergeIntoSettings, model.StrategyMCPConfigFile:
@@ -735,9 +737,14 @@ func context7Targets(adapter agents.Adapter, homeDir string) []string {
 func context7Operations(adapter agents.Adapter, homeDir string) []operation {
 	switch adapter.MCPStrategy() {
 	case model.StrategySeparateMCPFiles:
-		if adapter.Agent() == model.AgentClaudeCode {
+		if registryPath := agents.MCPRegistryPath(adapter, homeDir); registryPath != "" {
 			legacyPath := adapter.MCPConfigPath(homeDir, "context7")
-			return []operation{rewriteJSONFile(adapter.SettingsPath(homeDir), jsonPath{"mcpServers", "context7"}), removeManagedContext7File(legacyPath), removeDirIfEmpty(filepath.Dir(legacyPath))}
+			return []operation{
+				rewriteMCPRegistryFile(registryPath, jsonPath{"mcpServers", "context7"}),
+				rewriteJSONFile(adapter.SettingsPath(homeDir), jsonPath{"mcpServers", "context7"}),
+				removeManagedContext7File(legacyPath),
+				removeDirIfEmpty(filepath.Dir(legacyPath)),
+			}
 		}
 		path := adapter.MCPConfigPath(homeDir, "context7")
 		return []operation{removeFile(path), removeDirIfEmpty(filepath.Dir(path))}
@@ -836,6 +843,38 @@ func rewriteMarkdownFile(path string, mutate func(content string) (string, bool)
 			}
 			_, err = filemerge.WriteFileAtomic(path, []byte(updated), 0o644)
 			if err != nil {
+				return false, false, err
+			}
+			return true, false, nil
+		},
+	}
+}
+
+// rewriteMCPRegistryFile removes jsonPaths from an agent's MCP registry file
+// without ever deleting it. rewriteJSONFile drops a file that cleans out to an
+// empty object, which is right for a config gentle-ai created but wrong for
+// Claude Code's ~/.claude.json: that file also carries the authenticated
+// session, so an uninstall must leave "{}" behind rather than sign the user out.
+func rewriteMCPRegistryFile(path string, jsonPaths ...jsonPath) operation {
+	return operation{
+		typeID: opRewriteFile,
+		path:   path,
+		apply: func(path string) (bool, bool, error) {
+			raw, err := readManagedFile(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return false, false, nil
+				}
+				return false, false, fmt.Errorf("read json file %q: %w", path, err)
+			}
+			updated, changed, err := removeJSONPaths(raw, jsonPaths...)
+			if err != nil {
+				return false, false, fmt.Errorf("clean json file %q: %w", path, err)
+			}
+			if !changed {
+				return false, false, nil
+			}
+			if _, err := filemerge.WriteFileAtomic(path, updated, 0o644); err != nil {
 				return false, false, err
 			}
 			return true, false, nil

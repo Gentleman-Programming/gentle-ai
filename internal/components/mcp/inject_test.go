@@ -111,7 +111,7 @@ func assertOpenCodeRemoteContext7Schema(t *testing.T, path string) {
 
 // readMCPServersContext7Entry reads the mcpServers.context7 object used by
 // agents that store Context7 under an mcpServers-based config file.
-func readMCPServersContext7Entry(t *testing.T, path string) map[string]any {
+func readJSONObject(t *testing.T, path string) map[string]any {
 	t.Helper()
 
 	content, err := os.ReadFile(path)
@@ -123,6 +123,14 @@ func readMCPServersContext7Entry(t *testing.T, path string) map[string]any {
 	if err := json.Unmarshal(content, &parsed); err != nil {
 		t.Fatalf("Unmarshal(%q) error = %v", path, err)
 	}
+
+	return parsed
+}
+
+func readMCPServersContext7Entry(t *testing.T, path string) map[string]any {
+	t.Helper()
+
+	parsed := readJSONObject(t, path)
 
 	mcpServers, ok := parsed["mcpServers"].(map[string]any)
 	if !ok {
@@ -476,14 +484,11 @@ func TestInjectOpenCodePreservesOtherMCPEntriesWhenReplacingContext7(t *testing.
 	}
 }
 
-func TestInjectClaudeMergesContext7IntoSettingsAndIsIdempotent(t *testing.T) {
+func TestInjectClaudeMergesContext7IntoRegistryAndIsIdempotent(t *testing.T) {
 	home := t.TempDir()
-	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(settings dir) error = %v", err)
-	}
-	if err := os.WriteFile(settingsPath, []byte(`{"theme":"dark"}`), 0o644); err != nil {
-		t.Fatalf("WriteFile(settings) error = %v", err)
+	registryPath := claude.MCPRegistryPath(home)
+	if err := os.WriteFile(registryPath, []byte(`{"oauthAccount":{"accountUuid":"abc"},"projects":{"/tmp/x":{"allowedTools":[]}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(registry) error = %v", err)
 	}
 
 	first, err := Inject(home, claudeAdapter())
@@ -502,12 +507,63 @@ func TestInjectClaudeMergesContext7IntoSettingsAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Inject() second changed = true")
 	}
 
-	context7 := readMCPServersContext7Entry(t, settingsPath)
+	context7 := readMCPServersContext7Entry(t, registryPath)
 	if got := context7["command"]; got != "npx" {
 		t.Fatalf("mcpServers.context7.command = %#v; want npx", got)
 	}
+
+	// The session and per-project state living in the same file must survive.
+	root := readJSONObject(t, registryPath)
+	if _, ok := root["oauthAccount"]; !ok {
+		t.Fatalf("oauthAccount was dropped from %q", registryPath)
+	}
+	if _, ok := root["projects"]; !ok {
+		t.Fatalf("projects was dropped from %q", registryPath)
+	}
+
+	// Neither location Claude Code ignores may be written.
 	if _, err := os.Stat(filepath.Join(home, ".claude", "mcp", "context7.json")); !os.IsNotExist(err) {
 		t.Fatalf("Claude Context7 must not be written to ~/.claude/mcp/context7.json; stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("Claude Context7 must not be written to ~/.claude/settings.json; stat err = %v", err)
+	}
+}
+
+func TestInjectClaudeCreatesRegistryWhenMissing(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	context7 := readMCPServersContext7Entry(t, claude.MCPRegistryPath(home))
+	if got := context7["command"]; got != "npx" {
+		t.Fatalf("mcpServers.context7.command = %#v; want npx", got)
+	}
+}
+
+func TestInjectClaudeRefusesToRewriteMalformedRegistry(t *testing.T) {
+	// ~/.claude.json carries the authenticated session. Unlike a reproducible
+	// mcp.json, a base we cannot parse must abort the injection rather than be
+	// replaced with an overlay-only document.
+	home := t.TempDir()
+	registryPath := claude.MCPRegistryPath(home)
+	malformed := []byte("not json at all")
+	if err := os.WriteFile(registryPath, malformed, 0o644); err != nil {
+		t.Fatalf("WriteFile(malformed registry) error = %v", err)
+	}
+
+	if _, err := Inject(home, claudeAdapter()); err == nil {
+		t.Fatalf("Inject() error = nil; want a refusal to rewrite the malformed registry")
+	}
+
+	content, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(registry) error = %v", err)
+	}
+	if string(content) != string(malformed) {
+		t.Fatalf("registry was rewritten; got %q, want %q", content, malformed)
 	}
 }
 
@@ -527,7 +583,7 @@ func TestInjectClaudeLeavesLegacyContext7FileForExplicitUninstallCleanup(t *test
 	if _, err := os.Stat(legacyPath); err != nil {
 		t.Fatalf("legacy context7 file should be left for explicit uninstall cleanup: %v", err)
 	}
-	readMCPServersContext7Entry(t, filepath.Join(home, ".claude", "settings.json"))
+	readMCPServersContext7Entry(t, claude.MCPRegistryPath(home))
 }
 
 func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {

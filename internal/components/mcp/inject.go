@@ -23,8 +23,8 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 
 	switch adapter.MCPStrategy() {
 	case model.StrategySeparateMCPFiles:
-		if adapter.Agent() == model.AgentClaudeCode {
-			return injectMergeIntoSettings(homeDir, adapter)
+		if registryPath := agents.MCPRegistryPath(adapter, homeDir); registryPath != "" {
+			return injectMCPRegistry(registryPath)
 		}
 		return injectSeparateFile(homeDir, adapter)
 	case model.StrategyMergeIntoSettings:
@@ -94,6 +94,29 @@ func injectYAMLFile(homeDir string, adapter agents.Adapter) (InjectionResult, er
 	}
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{configPath}}, nil
+}
+
+// injectMCPRegistry merges the mcpServers-wrapped Context7 entry into the
+// agent's MCP registry file (Claude Code's ~/.claude.json). That file also
+// holds the user's session and per-project settings, so the merge is strict: a
+// base that cannot be parsed aborts the injection instead of replacing it.
+func injectMCPRegistry(registryPath string) (InjectionResult, error) {
+	baseJSON, err := osReadFile(registryPath)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	merged, err := filemerge.MergeJSONObjectsStrict(baseJSON, DefaultContext7OverlayJSON())
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("merge MCP registry %q: %w", registryPath, err)
+	}
+
+	writeResult, err := filemerge.WriteFileAtomic(registryPath, merged, 0o644)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	return InjectionResult{Changed: writeResult.Changed, Files: []string{registryPath}}, nil
 }
 
 // injectSeparateFile writes a standalone JSON file per MCP server.

@@ -65,3 +65,23 @@ type Adapter interface {
 type EffectiveCodeGraphWiringDetector interface {
 	EffectiveCodeGraphWiring(homeDir string) (path string, configured bool)
 }
+
+// MCPRegistryPathProvider is an optional adapter capability for agents that
+// load MCP servers from a dedicated registry file instead of from the settings
+// file their other configuration lives in. Claude Code is the case in point: it
+// reads user-scope MCP servers from ~/.claude.json only.
+type MCPRegistryPathProvider interface {
+	MCPRegistryPath(homeDir string) string
+}
+
+// MCPRegistryPath returns the adapter's MCP registry file, or an empty string
+// when the agent has none and its MCPStrategy alone decides where MCP servers
+// are written.
+func MCPRegistryPath(adapter Adapter, homeDir string) string {
+	provider, ok := adapter.(MCPRegistryPathProvider)
+	if !ok {
+		return ""
+	}
+
+	return provider.MCPRegistryPath(homeDir)
+}

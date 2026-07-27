@@ -355,19 +355,24 @@ func TestComponentPathsContext7KimiIncludesMCPConfig(t *testing.T) {
 	}
 }
 
-func TestComponentPathsContext7ClaudeUsesSettingsFile(t *testing.T) {
+func TestComponentPathsContext7ClaudeUsesMCPRegistry(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentClaudeCode})
 
 	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentContext7)
 
-	want := filepath.Join(home, ".claude", "settings.json")
+	// Verification and backup must track the file the injector actually writes.
+	want := filepath.Join(home, ".claude.json")
 	if !containsPath(paths, want) {
 		t.Fatalf("componentPaths(context7,claude) missing %q\npaths=%v", want, paths)
 	}
-	legacy := filepath.Join(home, ".claude", "mcp", "context7.json")
-	if containsPath(paths, legacy) {
-		t.Fatalf("componentPaths(context7,claude) should not verify legacy path %q\npaths=%v", legacy, paths)
+	for _, unwanted := range []string{
+		filepath.Join(home, ".claude", "settings.json"),
+		filepath.Join(home, ".claude", "mcp", "context7.json"),
+	} {
+		if containsPath(paths, unwanted) {
+			t.Fatalf("componentPaths(context7,claude) should not verify %q\npaths=%v", unwanted, paths)
+		}
 	}
 }
 
