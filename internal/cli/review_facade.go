@@ -456,11 +456,11 @@ var reviewFacadeOperationTimeout = 25 * time.Second
 // reviewFacadeStartOperationTimeout is the deadline for review.start only.
 // START performs full candidate construction (snapshot, hashing, frozen
 // context) over the real workspace, which can exceed the shared 25s facade
-// deadline for a valid large candidate. It is a fixed constant, not a
+// deadline for a valid large candidate. It is a fixed deadline, not a
 // configurable timeout framework: every other operation keeps using
-// reviewFacadeOperationTimeout unchanged, including the two existing tests
-// that mutate that var directly.
-const reviewFacadeStartOperationTimeout = 120 * time.Second
+// reviewFacadeOperationTimeout unchanged, and tests mutate this var directly
+// exactly like reviewFacadeOperationTimeout.
+var reviewFacadeStartOperationTimeout = 120 * time.Second
 
 // reviewFacadeOperationDeadline selects the operation-scoped deadline.
 // review.start uses its own larger constant; every other operation keeps

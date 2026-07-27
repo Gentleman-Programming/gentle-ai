@@ -327,6 +327,7 @@ func (builder SnapshotBuilder) activePassiveContentPaths(ctx context.Context, sn
 		}
 		return active, nil
 	}
+	names := make([]string, 0, len(candidates)*2)
 	for _, stat := range candidates {
 		for _, version := range []struct {
 			tree string
@@ -335,17 +336,67 @@ func (builder SnapshotBuilder) activePassiveContentPaths(ctx context.Context, sn
 			if version.mode == "" || version.mode == "000000" {
 				continue
 			}
-			content, err := runGit(ctx, repo, nil, nil, "cat-file", "blob", version.tree+":"+stat.Path)
-			if err != nil {
-				return nil, fmt.Errorf("read immutable passive candidate %q: %w", stat.Path, err)
+			names = append(names, version.tree+":"+stat.Path)
+		}
+	}
+	contents, err := batchBlobContents(ctx, repo, names)
+	if err != nil {
+		return nil, err
+	}
+	for _, stat := range candidates {
+		for _, version := range []struct {
+			tree string
+			mode string
+		}{{tree: snapshot.BaseTree, mode: stat.OldMode}, {tree: snapshot.CandidateTree, mode: stat.NewMode}} {
+			if version.mode == "" || version.mode == "000000" {
+				continue
 			}
-			if !isPassiveDocumentContent(stat.Path, content) {
+			if !isPassiveDocumentContent(stat.Path, contents[version.tree+":"+stat.Path]) {
 				active[stat.Path] = struct{}{}
 				break
 			}
 		}
 	}
 	return active, nil
+}
+
+// batchBlobContents reads every named immutable blob through one cat-file
+// --batch subprocess instead of one subprocess per object. The caller bounds
+// the total content bytes before requesting them.
+func batchBlobContents(ctx context.Context, repo string, names []string) (map[string][]byte, error) {
+	contents := make(map[string][]byte, len(names))
+	if len(names) == 0 {
+		return contents, nil
+	}
+	stdin := make([]byte, 0, len(names)*64)
+	for _, name := range names {
+		stdin = append(stdin, name...)
+		stdin = append(stdin, '\n')
+	}
+	output, err := runGit(ctx, repo, nil, stdin, "cat-file", "--batch")
+	if err != nil {
+		return nil, err
+	}
+	rest := output
+	for _, name := range names {
+		newline := bytes.IndexByte(rest, '\n')
+		if newline < 0 {
+			return nil, fmt.Errorf("read immutable passive candidate %q: truncated cat-file batch header", name)
+		}
+		header := string(rest[:newline])
+		rest = rest[newline+1:]
+		fields := strings.Fields(header)
+		if len(fields) != 3 || fields[1] != "blob" {
+			return nil, fmt.Errorf("read immutable passive candidate %q: unexpected cat-file batch header %q", name, header)
+		}
+		size, parseErr := strconv.ParseInt(fields[2], 10, 64)
+		if parseErr != nil || size < 0 || int64(len(rest)) < size+1 {
+			return nil, fmt.Errorf("read immutable passive candidate %q: invalid cat-file batch content", name)
+		}
+		contents[name] = rest[:size]
+		rest = rest[size+1:]
+	}
+	return contents, nil
 }
 
 // isPassiveDocumentContent proves a document is inert from its own bytes.

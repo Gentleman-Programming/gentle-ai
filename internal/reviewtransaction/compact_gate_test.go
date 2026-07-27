@@ -741,7 +741,7 @@ func TestCompactCommittedNextSliceIntendedFilterPropagatesGitInfraFailure(t *tes
 	t.Cleanup(func() { gitProcessTreeStarter = originalStarter })
 	gitProcessTreeStarter = func(command *exec.Cmd) (func() error, error) {
 		for _, arg := range command.Args {
-			if arg == "--error-unmatch" {
+			if arg == "--cached" {
 				return nil, errors.New("job object creation rejected")
 			}
 		}

@@ -205,13 +205,19 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 
 func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intended []string) (string, string, error) {
 	tracked := 0
-	for _, logicalPath := range intended {
-		output, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", "HEAD", "--", literalPathspec(logicalPath))
+	if len(intended) > 0 {
+		output, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-r", "-z", "HEAD")
 		if err != nil {
 			return "", "", err
 		}
-		if len(output) > 0 {
-			tracked++
+		entries, err := parseTreeEntries(output)
+		if err != nil {
+			return "", "", err
+		}
+		for _, logicalPath := range intended {
+			if _, present := entries[logicalPath]; present {
+				tracked++
+			}
 		}
 	}
 	if tracked != 0 && tracked != len(intended) {
@@ -874,12 +880,19 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 	}
 
 	stagedIntended := 0
-	for _, logicalPath := range intended {
-		if _, err := runGit(ctx, builder.Repo, nil, nil, "ls-files", "--error-unmatch", "--", literalPathspec(logicalPath)); err == nil {
-			if !allowStagedIntended {
-				return "", "", "", fmt.Errorf("intended-untracked path %q is already tracked", logicalPath)
+	if len(intended) > 0 {
+		trackedOutput, err := runGit(ctx, builder.Repo, nil, nil, "ls-files", "-z")
+		if err != nil {
+			return "", "", "", err
+		}
+		tracked := nulSeparatedPathSet(trackedOutput)
+		for _, logicalPath := range intended {
+			if _, isTracked := tracked[logicalPath]; isTracked {
+				if !allowStagedIntended {
+					return "", "", "", fmt.Errorf("intended-untracked path %q is already tracked", logicalPath)
+				}
+				stagedIntended++
 			}
-			stagedIntended++
 		}
 	}
 	if stagedIntended > 0 && stagedIntended != len(intended) {
@@ -1076,14 +1089,26 @@ func (builder SnapshotBuilder) changedPaths(ctx context.Context, baseTree, candi
 }
 
 func (builder SnapshotBuilder) rejectIgnoredIntended(ctx context.Context, intended []string) error {
+	if len(intended) == 0 {
+		return nil
+	}
+	stdin := make([]byte, 0, len(intended)*32)
 	for _, logicalPath := range intended {
-		_, err := runGit(ctx, builder.Repo, nil, nil, "check-ignore", "--quiet", "--no-index", "--", logicalPath)
-		if err == nil {
-			return fmt.Errorf("intended-untracked path %q is ignored", logicalPath)
-		}
+		stdin = append(stdin, logicalPath...)
+		stdin = append(stdin, 0)
+	}
+	output, err := runGit(ctx, builder.Repo, nil, stdin, "check-ignore", "-z", "--stdin", "--no-index")
+	if err != nil {
 		var exitErr *exec.ExitError
-		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
-			return err
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return nil
+		}
+		return err
+	}
+	ignored := nulSeparatedPathSet(output)
+	for _, logicalPath := range intended {
+		if _, isIgnored := ignored[logicalPath]; isIgnored {
+			return fmt.Errorf("intended-untracked path %q is ignored", logicalPath)
 		}
 	}
 	return nil
@@ -1092,18 +1117,58 @@ func (builder SnapshotBuilder) rejectIgnoredIntended(ctx context.Context, intend
 func (builder SnapshotBuilder) untrackedProof(ctx context.Context, candidateTree string, intended []string) (string, error) {
 	hash := sha256.New()
 	hash.Write([]byte("gentle-ai.intended-untracked/v1\x00"))
+	if len(intended) == 0 {
+		return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+	}
+	output, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-r", "-z", candidateTree)
+	if err != nil {
+		return "", err
+	}
+	entries, err := parseTreeEntries(output)
+	if err != nil {
+		return "", err
+	}
 	for _, logicalPath := range intended {
-		output, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", candidateTree, "--", literalPathspec(logicalPath))
-		if err != nil {
-			return "", err
-		}
-		if len(output) == 0 {
+		entry, present := entries[logicalPath]
+		if !present {
 			return "", fmt.Errorf("intended-untracked path %q is absent from candidate tree", logicalPath)
 		}
 		writeLengthPrefixed(hash, []byte(logicalPath))
-		writeLengthPrefixed(hash, output)
+		writeLengthPrefixed(hash, entry)
 	}
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// parseTreeEntries maps each path in NUL-terminated ls-tree output to its
+// complete entry bytes, including the terminating NUL, keyed by the path after
+// the first tab.
+func parseTreeEntries(output []byte) (map[string][]byte, error) {
+	records := bytes.Split(output, []byte{0})
+	entries := make(map[string][]byte, len(records))
+	for _, record := range records {
+		if len(record) == 0 {
+			continue
+		}
+		tab := bytes.IndexByte(record, '\t')
+		if tab < 0 {
+			return nil, fmt.Errorf("unexpected tree entry %q", record)
+		}
+		entry := make([]byte, 0, len(record)+1)
+		entry = append(append(entry, record...), 0)
+		entries[string(record[tab+1:])] = entry
+	}
+	return entries, nil
+}
+
+func nulSeparatedPathSet(output []byte) map[string]struct{} {
+	records := bytes.Split(output, []byte{0})
+	paths := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		if len(record) > 0 {
+			paths[string(record)] = struct{}{}
+		}
+	}
+	return paths
 }
 
 func literalPathspec(logicalPath string) string {

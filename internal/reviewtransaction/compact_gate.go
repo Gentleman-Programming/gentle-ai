@@ -826,16 +826,18 @@ func buildCompactGateRequestWithPushBase(ctx context.Context, repo string, state
 // propagate so the gate fails instead of misclassifying scope.
 func compactStillUntrackedIntended(ctx context.Context, repo string, intended []string) ([]string, error) {
 	remaining := []string{}
+	if len(intended) == 0 {
+		return remaining, nil
+	}
+	output, err := runGit(ctx, repo, nil, nil, "ls-files", "-z", "--cached")
+	if err != nil {
+		return nil, fmt.Errorf("classify intended-untracked paths: %w", err)
+	}
+	tracked := nulSeparatedPathSet(output)
 	for _, logicalPath := range intended {
-		_, err := runGit(ctx, repo, nil, nil, "ls-files", "--error-unmatch", "--", literalPathspec(logicalPath))
-		if err == nil {
-			continue
+		if _, isTracked := tracked[logicalPath]; !isTracked {
+			remaining = append(remaining, logicalPath)
 		}
-		var lookup *GitCommandError
-		if !errors.As(err, &lookup) || lookup.ExitCode != 1 {
-			return nil, fmt.Errorf("classify intended-untracked path %q: %w", logicalPath, err)
-		}
-		remaining = append(remaining, logicalPath)
 	}
 	return remaining, nil
 }

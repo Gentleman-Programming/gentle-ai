@@ -37,33 +37,28 @@ func currentChangesTargetIdentity(t *testing.T, repo string) string {
 	return snapshot.Identity
 }
 
-// organicLargeWorkspaceE2EEnvironment gates the deliberately heavy
-// large-workspace review/start proof below. Building a several-thousand-file
-// candidate launches one Git subprocess per intended-untracked path
-// (untrackedProof) plus per-changed-path diff work, twice over (once for
-// this test's own target-identity precompute, once inside review/start
-// itself): that is what reliably pushes real candidate construction past
-// the shared 25s facade deadline without an artificial delay hook, but Git
-// subprocess-spawn throughput is wildly platform-dependent. At 5,000 files
-// it blew the Windows CI job budget even though the behavior it proved was
-// correct (community report on issue 1778's Windows CI leg). Keep it out of
-// the default CI path; opt in locally or from a dedicated job with
-// GENTLE_AI_LARGE_WORKSPACE_E2E=1. The always-on, deterministic proof of the
-// same deadline-selection wiring is TestReviewFacadeOperationDeadlineSelector
-// in internal/cli/review_facade_test.go: it asserts review.start resolves to
-// reviewFacadeStartOperationTimeout while every other operation keeps
-// reviewFacadeOperationTimeout, with no dependency on real elapsed time or
-// process-spawn throughput. That unit test alone catches a regression to the
-// deadline-selection wiring (e.g. review.start silently falling back to the
-// shared deadline); only this gated end-to-end test catches the original
-// 1778 symptom itself — a valid large candidate actually being cut off
-// mid-sweep — and only when it is run.
+// organicLargeWorkspaceE2EEnvironment gates the large-workspace review/start
+// proof below. Candidate construction now batches its per-intended-path Git
+// queries into whole-tree listings instead of spawning one Git subprocess per
+// path, so a several-thousand-file candidate no longer burns the Windows CI
+// job budget the way the per-path loops did (community report on issue 1778's
+// Windows CI leg); the fixture is still deliberately heavy, so keep it out of
+// the default CI path and opt in locally or from a dedicated job with
+// GENTLE_AI_LARGE_WORKSPACE_E2E=1. The always-on, deterministic proofs are
+// TestReviewFacadeOperationDeadlineSelector in internal/cli/review_facade_test.go
+// (review.start resolves to reviewFacadeStartOperationTimeout while every other
+// operation keeps reviewFacadeOperationTimeout) and
+// TestNegotiatedStartSurvivesSharedDeadline in internal/cli (a start that
+// outlives the shared deadline completes while status is still cut off). Only
+// this gated end-to-end test catches a regression back to per-path subprocess
+// loops on a real repository — and only when it is run.
 const organicLargeWorkspaceE2EEnvironment = "GENTLE_AI_LARGE_WORKSPACE_E2E"
 
-// TestOrganicReviewStartDeadlineHeadroom proves Group E (1778): review/start
-// uses its own start-scoped deadline instead of the shared 25s facade
-// deadline, so a valid candidate whose construction takes longer than 25s
-// still completes instead of being cut off mid-sweep.
+// TestOrganicReviewStartDeadlineHeadroom proves Group E (1778): a negotiated
+// review/start on a valid large workspace completes within the platform
+// budget, because candidate construction batches its per-intended-path Git
+// queries into whole-tree listings instead of spawning one Git subprocess per
+// path.
 func TestOrganicReviewStartDeadlineHeadroom(t *testing.T) {
 	t.Run("issue-1778", func(t *testing.T) {
 		if os.Getenv(organicLargeWorkspaceE2EEnvironment) != "1" {
@@ -72,12 +67,10 @@ func TestOrganicReviewStartDeadlineHeadroom(t *testing.T) {
 		harness := newOrganicHarness(t)
 		lineage := "organic-start-deadline-headroom"
 
-		// The shared facade operation deadline every other operation keeps using
-		// is 25s. Real candidate construction is dominated by one Git subprocess
-		// per intended-untracked path (untrackedProof) plus per-changed-path diff
-		// work in the frozen candidate context, so a workspace with enough new
-		// files reliably pushes construction past that shared deadline without
-		// needing an artificial delay hook.
+		// A bounded large-workspace performance fixture: enough intended-
+		// untracked files that any regression back to per-path Git subprocess
+		// loops blows the explicit platform budget below, most visibly on
+		// Windows where process spawns are expensive.
 		const headroomFiles = 5000
 		files := make(map[string]string, headroomFiles)
 		for index := 0; index < headroomFiles; index++ {
@@ -109,15 +102,7 @@ func TestOrganicReviewStartDeadlineHeadroom(t *testing.T) {
 		if elapsed >= organicLocalTimeout {
 			t.Fatalf("negotiated review start took %s, want less than the harness local timeout %s", elapsed, organicLocalTimeout)
 		}
-		// No lower-bound elapsed assertion: this must never fail just because
-		// candidate construction got faster. Log instead, so a maintainer can
-		// tell whether headroomFiles still needs bumping to keep exercising
-		// the past-25s window this test exists to cover.
-		if elapsed <= 25*time.Second {
-			t.Logf("negotiated review start on a %d-file candidate completed in %s, at or under the shared 25s facade deadline: candidate construction got faster, so this run no longer proves start-scoped deadline headroom (consider raising headroomFiles)", headroomFiles, elapsed)
-		} else {
-			t.Logf("negotiated review start on a %d-file candidate completed in %s, past the shared 25s facade deadline and under the start-scoped deadline", headroomFiles, elapsed)
-		}
+		t.Logf("negotiated review start on a %d-file candidate completed in %s, under the platform budget %s", headroomFiles, elapsed, organicLocalTimeout)
 
 		harness.assertSingleReviewLineage(lineage)
 		harness.assertNoSDDArtifacts()

@@ -3,6 +3,8 @@ package reviewtransaction
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -1436,6 +1438,84 @@ func TestSnapshotRepoTemplateInitializesOnceConcurrently(t *testing.T) {
 	}
 	if template == "" {
 		t.Fatal("snapshotRepoTemplate() returned an empty path")
+	}
+}
+
+// TestUntrackedProofBatchedListingMatchesPerPathReference proves the batched
+// single recursive ls-tree listing in untrackedProof reproduces the historical
+// per-path `ls-tree -z <tree> -- :(literal)<path>` algorithm byte for byte,
+// so snapshot identities never change across the batching (issue-1778).
+func TestUntrackedProofBatchedListingMatchesPerPathReference(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	intended := []string{"bulk/a.txt", "deep/nested/b.txt"}
+	for index := 0; index < 48; index++ {
+		intended = append(intended, fmt.Sprintf("bulk/reference-%02d.txt", index))
+	}
+	for _, logicalPath := range intended {
+		writeSnapshotFile(t, repo, logicalPath, "reference content for "+logicalPath+"\n")
+	}
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind:              TargetCurrentChanges,
+		IntendedUntracked: intended,
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(snapshot.IntendedUntracked) != len(intended) {
+		t.Fatalf("IntendedUntracked = %d paths, want %d", len(snapshot.IntendedUntracked), len(intended))
+	}
+
+	hash := sha256.New()
+	hash.Write([]byte("gentle-ai.intended-untracked/v1\x00"))
+	for _, logicalPath := range snapshot.IntendedUntracked {
+		entry, err := runGit(context.Background(), repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(logicalPath))
+		if err != nil {
+			t.Fatalf("per-path reference ls-tree for %q: %v", logicalPath, err)
+		}
+		if len(entry) == 0 {
+			t.Fatalf("per-path reference ls-tree for %q returned no entry", logicalPath)
+		}
+		writeLengthPrefixed(hash, []byte(logicalPath))
+		writeLengthPrefixed(hash, entry)
+	}
+	reference := "sha256:" + hex.EncodeToString(hash.Sum(nil))
+	if snapshot.IntendedUntrackedProof != reference {
+		t.Fatalf("batched untracked proof = %s, want per-path reference %s", snapshot.IntendedUntrackedProof, reference)
+	}
+}
+
+func TestUntrackedProofReportsFirstAbsentIntendedPath(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "bulk/a.txt", "present\n")
+	builder := SnapshotBuilder{Repo: repo}
+	snapshot, err := builder.Build(context.Background(), Target{
+		Kind:              TargetCurrentChanges,
+		IntendedUntracked: []string{"bulk/a.txt"},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	_, err = builder.untrackedProof(context.Background(), snapshot.CandidateTree, []string{"absent-a.txt", "absent-b.txt", "bulk/a.txt"})
+	if err == nil || !strings.Contains(err.Error(), `intended-untracked path "absent-a.txt" is absent from candidate tree`) {
+		t.Fatalf("untracked proof absent-path error = %v, want the first absent path in intended order", err)
+	}
+}
+
+func TestSnapshotBuilderRejectsFirstIgnoredIntendedPathInOrder(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, ".gitignore", "ignored-dir/\n")
+	writeSnapshotFile(t, repo, "ignored-dir/a.txt", "ignored a\n")
+	writeSnapshotFile(t, repo, "ignored-dir/b.txt", "ignored b\n")
+	_, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind:              TargetCurrentChanges,
+		IntendedUntracked: []string{"ignored-dir/b.txt", "ignored-dir/a.txt"},
+	})
+	if err == nil || !strings.Contains(err.Error(), `intended-untracked path "ignored-dir/a.txt" is ignored`) {
+		t.Fatalf("ignored intended path error = %v, want the first ignored path in intended order", err)
 	}
 }
 
