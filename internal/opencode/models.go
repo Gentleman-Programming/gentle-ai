@@ -336,16 +336,6 @@ type ConfigProvider struct {
 	Models map[string]ConfigModel `json:"models"`
 }
 
-type OpenAIModel struct {
-	ID string `json:"id"`
-}
-
-type OpenAIModelsResponse struct {
-	Data []OpenAIModel `json:"data"`
-}
-
-// FetchDynamicModels queries the OpenAI-compatible /v1/models endpoint of a local provider
-// to fetch actually loaded model IDs. That response does not advertise tool-call support.
 func FetchDynamicModels(ctx context.Context, baseURL string) ([]ConfigModel, error) {
 	if baseURL == "" {
 		return nil, errors.New("empty baseURL")
@@ -365,7 +355,11 @@ func FetchDynamicModels(ctx context.Context, baseURL string) ([]ConfigModel, err
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	var res OpenAIModelsResponse
+	var res struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, err
 	}

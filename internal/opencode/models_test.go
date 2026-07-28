@@ -10,7 +10,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 )
 
 const fixtureJSON = `{
@@ -588,22 +587,13 @@ func TestLoadConfigProvidersInvalidJSON(t *testing.T) {
 	}
 }
 
-// FetchDynamicModels
 func TestFetchDynamicModels(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
-			"data": [
-				{"id": "qwen2.5-coder-7b-instruct", "object": "model", "owned_by": "lmstudio"}
-			]
-		}`))
+		_, _ = w.Write([]byte(`{"data":[{"id":"qwen2.5-coder-7b-instruct"}]}`))
 	}))
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	models, err := FetchDynamicModels(ctx, server.URL)
+	models, err := FetchDynamicModels(context.Background(), server.URL)
 	if err != nil {
 		t.Fatalf("FetchDynamicModels failed: %v", err)
 	}

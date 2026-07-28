@@ -29,11 +29,9 @@ const (
 // maxVisibleItems is the maximum number of items shown in scrollable sub-lists.
 const maxVisibleItems = 10
 const maxVisiblePhaseRows = 16
-const defaultLMStudioBaseURL = "http://127.0.0.1:1234/v1"
 
 var fetchDynamicModels = opencode.FetchDynamicModels
 
-// LMStudioDiscoveryMsg reports the asynchronous result of probing LM Studio.
 type LMStudioDiscoveryMsg struct {
 	BaseURL string
 	Models  []opencode.ConfigModel
@@ -90,17 +88,13 @@ type ModelPickerState struct {
 	// agents alongside SDD rows.
 	ForProfile bool
 
-	lmStudioURL        string
-	lmStudioConfig     opencode.ConfigProvider
-	lmStudioCatalog    opencode.Provider
-	customProviderIDs  []string
-	lmStudioDiscovered bool
+	lmStudioURL       string
+	lmStudioConfig    opencode.ConfigProvider
+	lmStudioCatalog   opencode.Provider
+	customProviderIDs []string
 }
 
-// NewModelPickerState initializes the picker state from the models cache,
-// merging any custom providers defined in the OpenCode settings file. LM Studio
-// discovery is deliberately deferred to DiscoverLMStudioCmd so rendering is never
-// blocked on local network I/O.
+// NewModelPickerState initializes the picker state from cache and settings.
 func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState {
 	providers, err := opencode.LoadModelsOrEmpty(cachePath)
 	if err != nil {
@@ -112,7 +106,7 @@ func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState
 	lmStudioConfig := configProviders["lmstudio"]
 	lmStudioURL := lmStudioConfig.URL
 	if lmStudioURL == "" {
-		lmStudioURL = defaultLMStudioBaseURL
+		lmStudioURL = "http://127.0.0.1:1234/v1"
 	}
 
 	if len(configProviders) > 0 {
@@ -144,8 +138,6 @@ func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState
 	return state
 }
 
-// DiscoverLMStudioCmd probes the configured LM Studio endpoint without blocking
-// Bubble Tea's update loop. It is started whenever the picker is opened.
 func (state ModelPickerState) DiscoverLMStudioCmd() tea.Cmd {
 	baseURL := state.lmStudioURL
 	return func() tea.Msg {
@@ -156,7 +148,6 @@ func (state ModelPickerState) DiscoverLMStudioCmd() tea.Cmd {
 	}
 }
 
-// Update applies asynchronous picker messages.
 func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 	discovery, ok := msg.(LMStudioDiscoveryMsg)
 	if !ok {
@@ -181,7 +172,7 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 		if id == "" {
 			continue
 		}
-		metadata, known := state.lmStudioCatalog.Models[id]
+		metadata := state.lmStudioCatalog.Models[id]
 		if configured, ok := state.lmStudioConfig.Models[id]; ok {
 			metadata.ToolCall = configured.ToolCall
 			if configured.Name != "" {
@@ -192,14 +183,11 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 		if metadata.Name == "" {
 			metadata.Name = id
 		}
-		if !known {
-			metadata.Family = ""
-		}
 		provider.Models[id] = metadata
 	}
 
 	state.Providers["lmstudio"] = provider
-	state.lmStudioDiscovered = true
+	state.customProviderIDs = append(state.customProviderIDs, "lmstudio")
 	state.refreshAvailableModels()
 	if len(discovery.Models) > 0 && len(opencode.FilterModelsForSDD(provider)) == 0 {
 		state.ConfigWarning = appendConfigWarning(state.ConfigWarning, "LM Studio models need tool_call: true in provider.lmstudio.models for SDD.")
@@ -209,9 +197,6 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 
 func (state *ModelPickerState) refreshAvailableModels() {
 	customIDs := append([]string(nil), state.customProviderIDs...)
-	if state.lmStudioDiscovered {
-		customIDs = append(customIDs, "lmstudio")
-	}
 	state.AvailableIDs = opencode.DetectAvailableProviders(state.Providers, customIDs...)
 	state.SDDModels = make(map[string][]opencode.Model, len(state.AvailableIDs))
 	for _, id := range state.AvailableIDs {

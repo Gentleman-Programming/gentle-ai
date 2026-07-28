@@ -1143,11 +1143,7 @@ func TestNewModelPickerStateCollisionCustomWins(t *testing.T) {
 
 func lmStudioState(t *testing.T, catalog, settings string) ModelPickerState {
 	t.Helper()
-	settingsPath := filepath.Join(t.TempDir(), "missing.json")
-	if settings != "" {
-		settingsPath = writeTempFile(t, "opencode.json", settings)
-	}
-	return NewModelPickerState(writeTempFile(t, "models.json", catalog), settingsPath)
+	return NewModelPickerState(writeTempFile(t, "models.json", catalog), writeTempFile(t, "opencode.json", settings))
 }
 
 func TestLMStudioDiscovery(t *testing.T) {
@@ -1155,23 +1151,19 @@ func TestLMStudioDiscovery(t *testing.T) {
 	const configured = `{"provider":{"lmstudio":{"models":{"loaded-config":{"name":"User metadata","tool_call":true}}}}}`
 	for _, tt := range []struct {
 		name, catalog, settings, url string
-		models                       []string
+		models                       []opencode.ConfigModel
 		err                          error
 		command                      bool
 	}{
-		{"async default URL", catalogJSON, "", defaultLMStudioBaseURL, nil, nil, true},
+		{"async default URL", catalogJSON, `{}`, "http://127.0.0.1:1234/v1", nil, nil, true},
 		{"async configured URL", catalogJSON, `{"provider":{"lmstudio":{"url":"http://gateway:1234/v1"}}}`, "http://gateway:1234/v1", nil, nil, true},
-		{"loaded IDs use configured and catalog metadata", catalog, configured, "", []string{"loaded-config", "loaded-static", "unknown"}, nil, false},
-		{"unknown capability warns", `{}`, "", "", []string{"unknown"}, nil, false},
-		{"failure keeps fallback", `{"lmstudio":{"models":{"catalog":{"id":"catalog","tool_call":true}}}}`, `{"provider":{"lmstudio":{"models":{"configured":{"tool_call":true}}}}}`, "", nil, errors.New("connection refused"), false},
-		{"stale endpoint is ignored", `{}`, `{"provider":{"lmstudio":{"url":"http://gateway:1234/v1"}}}`, defaultLMStudioBaseURL, []string{"stale-model"}, nil, false},
+		{"loaded IDs use configured and catalog metadata", catalog, configured, "http://127.0.0.1:1234/v1", []opencode.ConfigModel{{Name: "loaded-config"}, {Name: "loaded-static"}, {Name: "unknown"}}, nil, false},
+		{"unknown capability warns", `{}`, `{}`, "http://127.0.0.1:1234/v1", []opencode.ConfigModel{{Name: "unknown"}}, nil, false},
+		{"failure keeps fallback", `{"lmstudio":{"models":{"catalog":{"id":"catalog","tool_call":true}}}}`, `{"provider":{"lmstudio":{"models":{"configured":{"tool_call":true}}}}}`, "http://127.0.0.1:1234/v1", nil, errors.New("connection refused"), false},
+		{"stale endpoint is ignored", `{}`, `{"provider":{"lmstudio":{"url":"http://gateway:1234/v1"}}}`, "http://127.0.0.1:1234/v1", []opencode.ConfigModel{{Name: "stale-model"}}, nil, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			state := lmStudioState(t, tt.catalog, tt.settings)
-			models := make([]opencode.ConfigModel, len(tt.models))
-			for i, id := range tt.models {
-				models[i].Name = id
-			}
 			if tt.command {
 				calls, gotURL := 0, ""
 				original := fetchDynamicModels
@@ -1190,7 +1182,7 @@ func TestLMStudioDiscovery(t *testing.T) {
 				}
 				return
 			}
-			state = state.Update(LMStudioDiscoveryMsg{BaseURL: firstNonEmpty(tt.url, state.lmStudioURL), Models: models, Err: tt.err})
+			state = state.Update(LMStudioDiscoveryMsg{BaseURL: tt.url, Models: tt.models, Err: tt.err})
 			lm := state.Providers["lmstudio"]
 			switch tt.name {
 			case "loaded IDs use configured and catalog metadata":
@@ -1212,13 +1204,6 @@ func TestLMStudioDiscovery(t *testing.T) {
 			}
 		})
 	}
-}
-
-func firstNonEmpty(value, fallback string) string {
-	if value != "" {
-		return value
-	}
-	return fallback
 }
 
 // providerKeys returns the keys of a Provider map for test error messages.

@@ -2139,8 +2139,6 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.Selection.SDDMode = options[m.Cursor]
 			if m.Selection.SDDMode == model.SDDModeMulti {
 				// SDDModeMulti: initialize ModelPicker explicitly and transition to it.
-				// Multi mode always includes the picker, even without a static cache,
-				// because config and LM Studio discovery can provide models.
 				discoveryCmd := m.initializeModelPicker()
 				m.Selection.ModelAssignments = nil
 				m.setScreen(ScreenModelPicker)
