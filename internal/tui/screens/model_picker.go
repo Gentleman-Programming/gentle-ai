@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
@@ -28,6 +29,16 @@ const (
 // maxVisibleItems is the maximum number of items shown in scrollable sub-lists.
 const maxVisibleItems = 10
 const maxVisiblePhaseRows = 16
+const defaultLMStudioBaseURL = "http://127.0.0.1:1234/v1"
+
+var fetchDynamicModels = opencode.FetchDynamicModels
+
+// LMStudioDiscoveryMsg reports the asynchronous result of probing LM Studio.
+type LMStudioDiscoveryMsg struct {
+	BaseURL string
+	Models  []opencode.ConfigModel
+	Err     error
+}
 
 // ProviderEntry holds a provider ID, display name, and model count for the provider list.
 type ProviderEntry struct {
@@ -78,10 +89,18 @@ type ModelPickerState struct {
 	// When true, the row list still includes optional profile-scoped Judgment Day
 	// agents alongside SDD rows.
 	ForProfile bool
+
+	lmStudioURL        string
+	lmStudioConfig     opencode.ConfigProvider
+	lmStudioCatalog    opencode.Provider
+	customProviderIDs  []string
+	lmStudioDiscovered bool
 }
 
 // NewModelPickerState initializes the picker state from the models cache,
-// merging any custom providers defined in the OpenCode settings file.
+// merging any custom providers defined in the OpenCode settings file. LM Studio
+// discovery is deliberately deferred to DiscoverLMStudioCmd so rendering is never
+// blocked on local network I/O.
 func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState {
 	providers, err := opencode.LoadModelsOrEmpty(cachePath)
 	if err != nil {
@@ -89,23 +108,11 @@ func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState
 	}
 
 	configProviders, configErr := opencode.LoadConfigProviders(settingsPath)
-	if lm, ok := configProviders["lmstudio"]; ok {
-		url := lm.URL
-		if url == "" {
-			url = "http://127.0.0.1:1234/v1"
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		dynModels, err := opencode.FetchDynamicModels(ctx, url)
-		cancel()
-		if err == nil && len(dynModels) > 0 {
-			if lm.Models == nil {
-				lm.Models = make(map[string]opencode.ConfigModel)
-			}
-			for _, m := range dynModels {
-				lm.Models[m.Name] = m
-			}
-			configProviders["lmstudio"] = lm
-		}
+	lmStudioCatalog := providers["lmstudio"]
+	lmStudioConfig := configProviders["lmstudio"]
+	lmStudioURL := lmStudioConfig.URL
+	if lmStudioURL == "" {
+		lmStudioURL = defaultLMStudioBaseURL
 	}
 
 	if len(configProviders) > 0 {
@@ -119,25 +126,104 @@ func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState
 		customIDs = append(customIDs, id)
 	}
 
-	available := opencode.DetectAvailableProviders(providers, customIDs...)
-
-	sddModels := make(map[string][]opencode.Model, len(available))
-	for _, id := range available {
-		sddModels[id] = opencode.FilterModelsForSDD(providers[id])
-	}
-
 	var configWarning string
 	if configErr != nil {
 		configWarning = fmt.Sprintf("Could not load custom providers from opencode.json: %v", configErr)
 	}
 
-	return ModelPickerState{
-		Providers:     providers,
-		AvailableIDs:  available,
-		SDDModels:     sddModels,
-		ConfigWarning: configWarning,
-		Mode:          ModePhaseList,
+	state := ModelPickerState{
+		Providers:         providers,
+		ConfigWarning:     configWarning,
+		Mode:              ModePhaseList,
+		lmStudioURL:       lmStudioURL,
+		lmStudioConfig:    lmStudioConfig,
+		lmStudioCatalog:   lmStudioCatalog,
+		customProviderIDs: customIDs,
 	}
+	state.refreshAvailableModels()
+	return state
+}
+
+// DiscoverLMStudioCmd probes the configured LM Studio endpoint without blocking
+// Bubble Tea's update loop. It is started whenever the picker is opened.
+func (state ModelPickerState) DiscoverLMStudioCmd() tea.Cmd {
+	baseURL := state.lmStudioURL
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		models, err := fetchDynamicModels(ctx, baseURL)
+		return LMStudioDiscoveryMsg{BaseURL: baseURL, Models: models, Err: err}
+	}
+}
+
+// Update applies asynchronous picker messages.
+func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
+	discovery, ok := msg.(LMStudioDiscoveryMsg)
+	if !ok {
+		return state
+	}
+	if discovery.BaseURL != state.lmStudioURL {
+		return state
+	}
+	if discovery.Err != nil {
+		state.ConfigWarning = appendConfigWarning(state.ConfigWarning, "LM Studio discovery failed; using configured models.")
+		return state
+	}
+
+	provider := state.lmStudioCatalog
+	provider.ID = "lmstudio"
+	if provider.Name == "" {
+		provider.Name = "LM Studio"
+	}
+	provider.Models = make(map[string]opencode.Model, len(discovery.Models))
+	for _, discovered := range discovery.Models {
+		id := discovered.Name
+		if id == "" {
+			continue
+		}
+		metadata, known := state.lmStudioCatalog.Models[id]
+		if configured, ok := state.lmStudioConfig.Models[id]; ok {
+			metadata.ToolCall = configured.ToolCall
+			if configured.Name != "" {
+				metadata.Name = configured.Name
+			}
+		}
+		metadata.ID = id
+		if metadata.Name == "" {
+			metadata.Name = id
+		}
+		if !known {
+			metadata.Family = ""
+		}
+		provider.Models[id] = metadata
+	}
+
+	state.Providers["lmstudio"] = provider
+	state.lmStudioDiscovered = true
+	state.refreshAvailableModels()
+	if len(discovery.Models) > 0 && len(opencode.FilterModelsForSDD(provider)) == 0 {
+		state.ConfigWarning = appendConfigWarning(state.ConfigWarning, "LM Studio models need tool_call: true in provider.lmstudio.models for SDD.")
+	}
+	return state
+}
+
+func (state *ModelPickerState) refreshAvailableModels() {
+	customIDs := append([]string(nil), state.customProviderIDs...)
+	if state.lmStudioDiscovered {
+		customIDs = append(customIDs, "lmstudio")
+	}
+	state.AvailableIDs = opencode.DetectAvailableProviders(state.Providers, customIDs...)
+	state.SDDModels = make(map[string][]opencode.Model, len(state.AvailableIDs))
+	for _, id := range state.AvailableIDs {
+		state.SDDModels[id] = opencode.FilterModelsForSDD(state.Providers[id])
+	}
+}
+
+func appendConfigWarning(existing, warning string) string {
+	if existing == "" {
+		return warning
+	}
+	return existing + "\n" + warning
 }
 
 // SDDOrchestratorPhase is the key used for the base OpenCode SDD coordinator model assignment.

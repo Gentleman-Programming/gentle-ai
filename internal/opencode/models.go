@@ -344,8 +344,8 @@ type OpenAIModelsResponse struct {
 	Data []OpenAIModel `json:"data"`
 }
 
-// FetchDynamicModels queries the OpenAI-compatible /v1/models endpoint of a local provider (like LM Studio or Ollama)
-// to fetch actually loaded models.
+// FetchDynamicModels queries the OpenAI-compatible /v1/models endpoint of a local provider
+// to fetch actually loaded model IDs. That response does not advertise tool-call support.
 func FetchDynamicModels(ctx context.Context, baseURL string) ([]ConfigModel, error) {
 	if baseURL == "" {
 		return nil, errors.New("empty baseURL")
@@ -372,7 +372,7 @@ func FetchDynamicModels(ctx context.Context, baseURL string) ([]ConfigModel, err
 
 	models := make([]ConfigModel, 0, len(res.Data))
 	for _, m := range res.Data {
-		models = append(models, ConfigModel{Name: m.ID, ToolCall: true})
+		models = append(models, ConfigModel{Name: m.ID})
 	}
 	return models, nil
 }

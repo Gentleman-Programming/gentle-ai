@@ -608,7 +608,7 @@ func TestFetchDynamicModels(t *testing.T) {
 		t.Fatalf("FetchDynamicModels failed: %v", err)
 	}
 
-	if len(models) != 1 || models[0].Name != "qwen2.5-coder-7b-instruct" || !models[0].ToolCall {
+	if len(models) != 1 || models[0].Name != "qwen2.5-coder-7b-instruct" || models[0].ToolCall {
 		t.Fatalf("unexpected models returned: %v", models)
 	}
 }
