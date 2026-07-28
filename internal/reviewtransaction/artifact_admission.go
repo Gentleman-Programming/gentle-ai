@@ -688,6 +688,9 @@ func evidenceReportsUnavailableInspection(value string) bool {
 		"candidate unavailable", "candidate was unavailable", "immutable candidate unavailable",
 		"could not inspect", "unable to inspect", "was not inspected", "not inspected",
 		"no candidate contents were available", "no candidate content was available",
+		"read denied", "read permission denied", "denied by filesystem", "denied by its filesystem",
+		"cannot read diff", "cannot read manifest", "unable to read diff", "unable to read manifest",
+		"file access denied", "filesystem access denied", "read capability denied",
 	} {
 		if strings.Contains(value, phrase) {
 			return true
