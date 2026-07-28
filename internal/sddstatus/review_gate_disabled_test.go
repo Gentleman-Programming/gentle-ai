@@ -258,3 +258,37 @@ func TestDisabledSwitchDoesNotUnblockArchiveForNonReviewReasons(t *testing.T) {
 		t.Fatalf("archive gating never ran, so there is no gate to report: %#v", status.ReviewGate)
 	}
 }
+
+// TestDisabledReviewModeDoesNotBlockPreVerifyRouting is the regression guard for
+// issue-1932: when review mode is disabled, completing apply must leave verify
+// ready without forcing an implicit review/start obligation before independent
+// verification can run.
+func TestDisabledReviewModeDoesNotBlockPreVerifyRouting(t *testing.T) {
+	root := t.TempDir()
+	seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
+	// verifyReport is deliberately absent: apply is complete, verify is not run yet.
+	runSDDStatusGit(t, root, "init", "-q")
+	runSDDStatusGit(t, root, "config", "user.email", "status@example.com")
+	runSDDStatusGit(t, root, "config", "user.name", "Status Test")
+	runSDDStatusGit(t, root, "add", ".")
+	runSDDStatusGit(t, root, "commit", "-qm", "base")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.ApplyState != ApplyAllDone {
+		t.Fatalf("fixture ApplyState = %q, want %q", status.ApplyState, ApplyAllDone)
+	}
+	if status.Dependencies.Verify != DependencyReady {
+		t.Fatalf("disabled Verify = %q, want ready", status.Dependencies.Verify)
+	}
+	if status.NextRecommended != "verify" {
+		t.Fatalf("disabled NextRecommended = %q, want verify", status.NextRecommended)
+	}
+	for _, reason := range status.BlockedReasons {
+		if strings.Contains(reason, "explicit bounded review/start(target) is required") {
+			t.Fatalf("disabled BlockedReasons contains review/start requirement: %v", status.BlockedReasons)
+		}
+	}
+}
