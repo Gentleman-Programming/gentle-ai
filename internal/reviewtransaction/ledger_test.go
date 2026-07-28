@@ -1,6 +1,7 @@
 package reviewtransaction
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -84,5 +85,31 @@ func TestFreezeFindingsNormalizesWhitespacePaddedIDBeforeBindingLedgerHash(t *te
 	}
 	if tx.LedgerHash != wantLedgerHash || tx.LedgerFindingsHash != wantFindingsHash {
 		t.Fatalf("ledger bindings = %q, %q; want %q, %q", tx.LedgerHash, tx.LedgerFindingsHash, wantLedgerHash, wantFindingsHash)
+	}
+}
+
+func TestLegacyTransactionLedgerHashUsesStableCausalFieldProjection(t *testing.T) {
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	findings := []Finding{{
+		ID: "R1-001", Lens: "risk", Location: "security/auth.go:42", Severity: "CRITICAL",
+		Claim: "candidate bypasses authorization", ProofRefs: []string{"diff: security/auth.go:42"},
+		EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalIntroduced,
+	}}
+	ledger, err := CanonicalLedger(findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.FreezeFindings(findings, ledger, ""); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseTransaction(payload); err != nil {
+		t.Fatalf("causal-field transaction no longer validates against its stable v1 ledger projection: %v", err)
 	}
 }

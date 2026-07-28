@@ -99,24 +99,43 @@ func (store CompactStore) PendingFinalizeAttempt() (*FinalizeAttempt, error) {
 // PendingFinalizeAttemptReadOnly never acquires or rewrites LOCK, so status
 // remains observational even while a writer owns the compact authority.
 func (store CompactStore) PendingFinalizeAttemptReadOnly() (*FinalizeAttempt, error) {
+	_, journal, exists, err := store.loadFinalizeAttemptJournalReadOnly(context.Background())
+	if err != nil || !exists {
+		return nil, err
+	}
+	return latestPendingFinalizeAttempt(journal), nil
+}
+
+func (store CompactStore) loadFinalizeAttemptJournalReadOnly(ctx context.Context) ([]byte, finalizeAttemptJournal, bool, error) {
+	maintenance, err := store.acquireReadMaintenance(ctx)
+	if err != nil {
+		return nil, finalizeAttemptJournal{}, false, err
+	}
+	if maintenance != nil {
+		defer maintenance.Release()
+	}
 	payload, err := os.ReadFile(store.FinalizeAttemptJournalPath())
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, finalizeAttemptJournal{}, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, finalizeAttemptJournal{}, false, err
 	}
 	journal, err := parseFinalizeAttemptJournal(payload, store.lineageID)
 	if err != nil {
-		return nil, err
+		return payload, finalizeAttemptJournal{}, true, err
 	}
+	return payload, journal, true, nil
+}
+
+func latestPendingFinalizeAttempt(journal finalizeAttemptJournal) *FinalizeAttempt {
 	for index := len(journal.Attempts) - 1; index >= 0; index-- {
 		if !journal.Attempts[index].Completed {
 			attempt := journal.Attempts[index]
-			return &attempt, nil
+			return &attempt
 		}
 	}
-	return nil, nil
+	return nil
 }
 
 // BeginFinalizeAttempt durably records the request before its first native
@@ -181,14 +200,6 @@ func sameFinalizeAttemptPayload(left, right FinalizeAttemptRequest) bool {
 		left.EvidenceDigest == right.EvidenceDigest && left.FailedDigest == right.FailedDigest
 }
 
-func (store CompactStore) loadCompactRecordLocked() (CompactRecord, error) {
-	payload, err := os.ReadFile(store.StatePath())
-	if err != nil {
-		return CompactRecord{}, err
-	}
-	return parseCompactRecord(payload, store.lineageID)
-}
-
 func finalizeAttemptMayResume(attempt FinalizeAttempt, request FinalizeAttemptRequest, current CompactRecord) bool {
 	if current.Revision == attempt.Request.ExpectedRevision {
 		return request.ExpectedRevision == attempt.Request.ExpectedRevision
@@ -234,25 +245,38 @@ func (store CompactStore) PlanFinalizeAttemptTransition(requestDigest, operation
 	return revision, err
 }
 
+// MarkFinalizeAttemptReceiptPublished and CompleteFinalizeAttempt are the
+// post-terminal completion flags. Both are monotonic and idempotent, so their
+// writers wait out transient advisory contention instead of refusing — a
+// competitor holding the lock is completing the same bookkeeping. The
+// pre-commit journal writers (Reconcile/Plan/Record) keep the instant refusal.
 func (store CompactStore) MarkFinalizeAttemptReceiptPublished(requestDigest string) error {
-	return store.updateFinalizeAttempt(requestDigest, func(attempt *FinalizeAttempt) error {
+	return store.updateFinalizeAttemptWith(convergentCompletionStoreLock, requestDigest, func(attempt *FinalizeAttempt) error {
 		attempt.ReceiptPublished = true
 		return nil
 	})
 }
 
 func (store CompactStore) CompleteFinalizeAttempt(requestDigest string) error {
-	return store.updateFinalizeAttempt(requestDigest, func(attempt *FinalizeAttempt) error {
+	return store.updateFinalizeAttemptWith(convergentCompletionStoreLock, requestDigest, func(attempt *FinalizeAttempt) error {
 		attempt.Completed = true
 		return nil
 	})
 }
 
+func convergentCompletionStoreLock(path string) (*storeLock, error) {
+	return acquireStoreLockForConvergentCompletion(context.Background(), path)
+}
+
 func (store CompactStore) updateFinalizeAttempt(requestDigest string, update func(*FinalizeAttempt) error) error {
+	return store.updateFinalizeAttemptWith(acquireStoreLock, requestDigest, update)
+}
+
+func (store CompactStore) updateFinalizeAttemptWith(acquire func(string) (*storeLock, error), requestDigest string, update func(*FinalizeAttempt) error) error {
 	if !validSHA256(requestDigest) {
 		return errors.New("invalid finalize attempt request digest")
 	}
-	lock, err := acquireStoreLock(store.lockPath)
+	lock, err := acquire(store.lockPath)
 	if err != nil {
 		return err
 	}

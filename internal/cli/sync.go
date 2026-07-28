@@ -14,24 +14,24 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	opencodeagent "github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/internal/components/mcp"
-	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
-	"github.com/gentleman-programming/gentle-ai/internal/components/permissions"
-	"github.com/gentleman-programming/gentle-ai/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/internal/components/theme"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
-	"github.com/gentleman-programming/gentle-ai/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	opencodeagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/permissions"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
 
 // SyncFlags holds parsed CLI flags for the sync command.
@@ -85,8 +85,15 @@ type SyncResult struct {
 func ParseSyncFlags(args []string) (SyncFlags, error) {
 	var opts SyncFlags
 
+	// Usage is captured (not discarded) so a mistyped flag error can carry the
+	// FlagSet's own canonical usage text (install/sync surface audit finding
+	// 4): the flag package's failf() calls fs.usage() on every parse error
+	// (undefined flag, bad value, or -h/--help itself), so capturing
+	// fs.Output() gives the exact registered-flag list without hand-listing
+	// it anywhere that could drift.
+	var usage bytes.Buffer
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
-	fs.SetOutput(ioDiscard{})
+	fs.SetOutput(&usage)
 	registerListFlag(fs, "agent", &opts.Agents)
 	registerListFlag(fs, "agents", &opts.Agents)
 	registerListFlag(fs, "skill", &opts.Skills)
@@ -101,7 +108,18 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	registerListFlag(fs, "profile-phase", &opts.rawProfilePhases)
 
 	if err := fs.Parse(args); err != nil {
-		return SyncFlags{}, err
+		// The flag package's own failf/usage() may have already printed the
+		// error text once before the "Usage of sync:" block; trim that
+		// duplicate so the wrapped error below does not repeat it.
+		usageText := usage.String()
+		if idx := strings.Index(usageText, "Usage of "); idx >= 0 {
+			usageText = usageText[idx:]
+		}
+		usageText = strings.TrimRight(usageText, "\n")
+		if usageText != "" {
+			return SyncFlags{}, fmt.Errorf("%w — run `gentle-ai sync --help` for the supported flags:\n%s", err, usageText)
+		}
+		return SyncFlags{}, fmt.Errorf("%w — run `gentle-ai sync --help` for the supported flags", err)
 	}
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -119,7 +137,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	})
 
 	if fs.NArg() > 0 {
-		return SyncFlags{}, fmt.Errorf("unexpected sync argument %q", fs.Arg(0))
+		return SyncFlags{}, fmt.Errorf("unexpected sync argument %q — pass agents with the --agent %s flag, not a positional argument", fs.Arg(0), fs.Arg(0))
 	}
 
 	strategy, err := parseProfileSyncStrategy(opts.SDDProfileStrategy)
@@ -488,6 +506,22 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		})
 	}
 
+	// Routing guidance is refreshed per agent and outside the component loop, for
+	// the same reason install schedules it there: a persisted selection without
+	// the optional SDD component must still leave every agent able to choose an
+	// implementation route (issue #1794). It runs after the components so the
+	// refreshed SDD assets are already on disk when guidance is merged.
+	for _, agent := range r.agentIDs {
+		apply = append(apply, agentRoutingGuidanceStep{
+			id:           "sync:agent-guidance:" + string(agent),
+			agent:        agent,
+			homeDir:      r.homeDir,
+			workspaceDir: r.workspaceDir,
+			scope:        ScopeGlobal,
+			changedFiles: &r.changedFiles,
+		})
+	}
+
 	// Managed OpenCode-compatible plugins are versioned runtime artifacts tied
 	// to the installed binary (OpenCode and Kilocode receive them). When the
 	// persisted selection lacks the SDD component, no SDD step is planned and
@@ -527,6 +561,13 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
+	}
+	// Routing guidance is refreshed per agent outside the component loop, at
+	// ScopeGlobal like the step itself. A persisted selection whose components
+	// do not cover the same file would otherwise be rewritten without a
+	// snapshot and could never be rolled back (issue #1794).
+	for _, path := range routingGuidancePaths(homeDir, workspaceDir, ScopeGlobal, adapters) {
+		paths[path] = struct{}{}
 	}
 	// Managed OpenCode-compatible plugin paths are part of sync's
 	// backup/snapshot contract whenever a plugin-receiving agent (OpenCode,
@@ -823,10 +864,19 @@ func (s componentSyncStep) Run() error {
 	case model.ComponentEngram:
 		// Sync: inject MCP config + system prompt protocol only.
 		// NO binary install. NO engram setup.
+		//
+		// Resolve the installed engram version exactly like the install path
+		// (internal/cli/run.go) so InjectOptions.Version feeds the same
+		// Decision 1 slim/full gate (bug #1824): without it every sync
+		// silently re-inflated the slim Claude Code engram-protocol section
+		// back to the full one. Errors are intentionally ignored — an empty
+		// version safely falls back to the full section.
+		engramVersion, _ := resolveEngramVersion("engram")
 		engramOpts := engram.InjectOptions{
 			CodexOrchestratorAssignment: s.selection.CodexOrchestratorAssignment,
 			CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
 			CodexModelAssignments:       s.selection.CodexModelAssignments,
+			Version:                     engramVersion,
 		}
 		for _, adapter := range adapters {
 			var res engram.InjectionResult
@@ -1319,6 +1369,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 
 	// Post-apply verification reuses the same component paths as install.
 	result.Verify = runPostSyncVerification(homeDir, rt.workspaceDir, selection)
+	result.Verify = withFailedSyncVerificationNote(result.Verify)
 	if !result.Verify.Ready {
 		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
@@ -1350,7 +1401,11 @@ func RunSync(args []string) (SyncResult, error) {
 	// Resolve agents: explicit flag takes precedence over auto-discovery.
 	var agentIDs []model.AgentID
 	if len(flags.Agents) > 0 {
-		agentIDs = asAgentIDs(flags.Agents)
+		parsed, err := asAgentIDs(flags.Agents)
+		if err != nil {
+			return SyncResult{}, err
+		}
+		agentIDs = parsed
 	} else {
 		agentIDs = DiscoverAgents(homeDir)
 	}
@@ -1571,6 +1626,23 @@ func RenderSyncReport(result SyncResult) string {
 	}
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// withFailedSyncVerificationNote replaces the generic
+// verify.VerificationIssuesMessage with one naming the concrete command that
+// retries a failed sync: `gentle-ai sync`. Unlike the install path, sync has
+// no per-agent retry command -- rerunning `gentle-ai sync` re-applies every
+// discovered/persisted agent, so no agent list is needed.
+//
+// It is scoped to exactly the generic failure text so it never clobbers a
+// FinalNote that was already customized, mirroring
+// withFailedVerificationNote's install-path guard.
+func withFailedSyncVerificationNote(report verify.Report) verify.Report {
+	if report.Ready || report.FinalNote != verify.VerificationIssuesMessage {
+		return report
+	}
+	report.FinalNote = verify.VerificationIssuesMessageForCommand("gentle-ai sync")
+	return report
 }
 
 // runPostSyncVerification verifies that managed files exist after sync.

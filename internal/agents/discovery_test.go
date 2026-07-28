@@ -6,8 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 // stubAdapter is a minimal Adapter implementation for discovery tests.
@@ -17,9 +18,14 @@ type stubAdapter struct {
 	configDir string // value returned by GlobalConfigDir (may be empty)
 }
 
-func (s stubAdapter) Agent() model.AgentID      { return s.agent }
-func (s stubAdapter) Tier() model.SupportTier   { return model.TierFull }
-func (s stubAdapter) SupportsAutoInstall() bool { return false }
+func (s stubAdapter) Agent() model.AgentID    { return s.agent }
+func (s stubAdapter) Tier() model.SupportTier { return model.TierFull }
+func (s stubAdapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.MustForAgent(s.agent)
+}
+func (s stubAdapter) SupportsAutoInstall() bool {
+	return s.CapabilityManifest().Features.AutoInstall
+}
 func (s stubAdapter) Detect(_ context.Context, _ string) (bool, string, string, bool, error) {
 	info, err := os.Stat(s.configDir)
 	return false, "", s.configDir, err == nil && info.IsDir(), nil
@@ -39,16 +45,28 @@ func (s stubAdapter) SystemPromptStrategy() model.SystemPromptStrategy {
 }
 func (s stubAdapter) MCPStrategy() model.MCPStrategy          { return model.StrategySeparateMCPFiles }
 func (s stubAdapter) MCPConfigPath(_ string, _ string) string { return "" }
-func (s stubAdapter) SupportsOutputStyles() bool              { return false }
-func (s stubAdapter) OutputStyleDir(_ string) string          { return "" }
-func (s stubAdapter) SupportsSlashCommands() bool             { return false }
-func (s stubAdapter) CommandsDir(_ string) string             { return "" }
-func (s stubAdapter) SupportsSubAgents() bool                 { return false }
-func (s stubAdapter) SubAgentsDir(_ string) string            { return "" }
-func (s stubAdapter) EmbeddedSubAgentsDir() string            { return "" }
-func (s stubAdapter) SupportsSkills() bool                    { return true }
-func (s stubAdapter) SupportsSystemPrompt() bool              { return true }
-func (s stubAdapter) SupportsMCP() bool                       { return true }
+func (s stubAdapter) SupportsOutputStyles() bool {
+	return s.CapabilityManifest().Features.OutputStyles
+}
+func (s stubAdapter) OutputStyleDir(_ string) string { return "" }
+func (s stubAdapter) SupportsSlashCommands() bool {
+	return s.CapabilityManifest().Features.SlashCommands
+}
+func (s stubAdapter) CommandsDir(_ string) string { return "" }
+func (s stubAdapter) SupportsSubAgents() bool {
+	return s.CapabilityManifest().Features.FileSubAgents
+}
+func (s stubAdapter) SubAgentsDir(_ string) string { return "" }
+func (s stubAdapter) EmbeddedSubAgentsDir() string { return "" }
+func (s stubAdapter) SupportsSkills() bool {
+	return s.CapabilityManifest().Features.Skills
+}
+func (s stubAdapter) SupportsSystemPrompt() bool {
+	return s.CapabilityManifest().Features.SystemPrompt
+}
+func (s stubAdapter) SupportsMCP() bool {
+	return s.CapabilityManifest().Features.MCP
+}
 
 // newStubRegistry creates a Registry from stub adapters.
 func newStubRegistry(t *testing.T, adapters ...stubAdapter) *Registry {

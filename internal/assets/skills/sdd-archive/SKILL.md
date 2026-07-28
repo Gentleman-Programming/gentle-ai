@@ -39,7 +39,31 @@ From the orchestrator:
 - Change name
 - Artifact store mode (`engram | openspec | hybrid | none`)
 - Structured status from `skills/_shared/sdd-status-contract.md`, including artifact paths, task progress, dependency states, and actionContext
+- Explicit final-state facts for work completed after intermediate artifacts were persisted (verify warnings fixed in later commits, blockers resolved, updated test counts), when the orchestrator has them
 - Any explicit intentional archive override text from the user/orchestrator
+
+## Final-State Authority
+
+The archive report is the terminal record of the cycle. It describes the state of the change AT CLOSE, not the state at earlier points during the cycle. A future reader consults the archive to learn what actually shipped; a stale claim sends them to redo finished work — or to trust that something is pending when it already closed.
+
+`apply-progress` and `verify-report` are intermediate snapshots. Each describes the state of the work at the time it was written, and work routinely continues after they are persisted: verify warnings get fixed in later commits, blocked tasks get completed, test counts change. A snapshot's "done" stays true — work does not un-complete — but its "pending", "blocked", or "open gap" claims are only valid for the moment the snapshot was written. Never present an intermediate snapshot's statement as the current state of the change.
+
+When sources disagree about a fact, rank them — most authoritative first:
+
+1. **Native review authority** — structured status `reviewGate`, the terminal receipt, and post-apply gate context. Validated delivery facts; they win for everything they cover.
+2. **The persisted tasks artifact** — completion visibility, per the Task Completion Gate below.
+3. **Explicit final-state facts in the orchestrator's launch prompt** — e.g. "these verify warnings were fixed in later commits", "this blocker was resolved and the gate passed". The launch prompt is the most recent account of the change and outranks intermediate snapshots.
+4. **`verify-report` and `apply-progress`** — intermediate snapshots. Lowest rank: valid history of what was true at their time, never evidence of final state.
+
+Reporting rules that follow:
+
+- When a higher-ranked source says done/fixed/resolved and a lower-ranked snapshot says pending/blocked/open, report the final state and cite where the fix landed (commit, later evidence). Do NOT echo the stale claim.
+- When a contradiction cannot be ranked — e.g. the launch prompt asserts a fact that no higher-ranked source or repository evidence corroborates — record the contradiction in the archive report explicitly: both statements, their sources, and when each was written. Never resolve it silently in either direction.
+- Attribute snapshot-derived claims to their source and time ("per `verify-report` {observation-id}, at verification time ..."). Do not restate them in bare present tense as current facts.
+- Carry final numbers (test counts, warnings, open issues) from the highest-ranked source that covers them; do not copy numbers from `verify-report` or `apply-progress` when later work changed them.
+- Never merge distinct defects or failures into a single causal story. A cause is recorded as confirmed only with evidence; otherwise record the failure as undiagnosed.
+
+This hierarchy governs how the archive REPORTS facts. It does not weaken gates: CRITICAL issues in `verify-report` still block archive with no prompt override (a claim that a CRITICAL was fixed requires re-running `sdd-verify`, not a prompt assertion), and the Native Review Receipt Gate and Task Completion Gate below keep their own authority rules.
 
 ## Execution and Persistence Contract
 
@@ -198,6 +222,7 @@ Ready for the next change.
 
 ## Rules
 
+- The archive report reflects FINAL state per the Final-State Authority hierarchy: never echo stale `verify-report`/`apply-progress` claims as current facts, and record unrankable contradictions explicitly instead of resolving them silently
 - NEVER archive a change that has CRITICAL issues in its verification report
 - If the user explicitly approves a non-critical partial archive or stale-checkbox reconciliation, record the exact reason in the archive report and mark the archive as intentional-with-warnings
 - NEVER archive completed work while `tasks.md` / the tasks observation still shows stale unchecked implementation tasks

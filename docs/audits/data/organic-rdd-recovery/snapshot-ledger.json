@@ -1,0 +1,2342 @@
+{
+  "backlog": [
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 77
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 95
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 110
+    },
+    {
+      "action": "I2",
+      "context": "DSR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 111
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 128
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 140
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 197
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 207
+    },
+    {
+      "action": "I4",
+      "context": "ACI",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 249
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 254
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 259
+    },
+    {
+      "action": "I1",
+      "context": "SDD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 261
+    },
+    {
+      "action": "I2",
+      "context": "SDD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 262
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 268
+    },
+    {
+      "action": "I4",
+      "context": "ACI",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 273
+    },
+    {
+      "action": "I4",
+      "context": "HCR",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 276
+    },
+    {
+      "action": "I4",
+      "context": "HCR",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 279
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 298
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 306
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 315
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 334
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 366
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 375
+    },
+    {
+      "action": "I2",
+      "context": "DSR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 393
+    },
+    {
+      "action": "I1",
+      "context": "SDD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 428
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 443
+    },
+    {
+      "action": "I2",
+      "context": "DSR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 444
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 445
+    },
+    {
+      "action": "I3",
+      "context": "HCR",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 452
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 502
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 504
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 516
+    },
+    {
+      "action": "I4",
+      "context": "PAD",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 523
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 533
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 535
+    },
+    {
+      "action": "I2",
+      "context": "HCR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 541
+    },
+    {
+      "action": "I2",
+      "context": "HCR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 545
+    },
+    {
+      "action": "I2",
+      "context": "DSR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 570
+    },
+    {
+      "action": "I3",
+      "context": "ACI",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 591
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 602
+    },
+    {
+      "action": "I1",
+      "context": "SDD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 608
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 610
+    },
+    {
+      "action": "I3",
+      "context": "DSR",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 617
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 620
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 633
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 653
+    },
+    {
+      "action": "I4",
+      "context": "DSR",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 676
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 702
+    },
+    {
+      "action": "I5",
+      "context": "MCA",
+      "disposition": "already-solved",
+      "kind": "issue",
+      "number": 703
+    },
+    {
+      "action": "I2",
+      "context": "HCR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 705
+    },
+    {
+      "action": "I2",
+      "context": "HCR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 707
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 713
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 720
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 721
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 722
+    },
+    {
+      "action": "I2",
+      "context": "HCR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 724
+    },
+    {
+      "action": "I5",
+      "context": "HCR",
+      "disposition": "already-solved",
+      "kind": "issue",
+      "number": 727
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 728
+    },
+    {
+      "action": "I4",
+      "context": "ACI",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 730
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 735
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 736
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 742
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 743
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 744
+    },
+    {
+      "action": "I1",
+      "context": "MCA",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 771
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 779
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 782
+    },
+    {
+      "action": "I4",
+      "context": "EPD",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 787
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 797
+    },
+    {
+      "action": "I1",
+      "context": "SDD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 810
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 828
+    },
+    {
+      "action": "I4",
+      "context": "HCR",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 832
+    },
+    {
+      "action": "I2",
+      "context": "MCA",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 838
+    },
+    {
+      "action": "I2",
+      "context": "SDD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 841
+    },
+    {
+      "action": "I1",
+      "context": "SDD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 848
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 851
+    },
+    {
+      "action": "I2",
+      "context": "PAD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 858
+    },
+    {
+      "action": "I2",
+      "context": "SDD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 869
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 896
+    },
+    {
+      "action": "I2",
+      "context": "SDD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 903
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 910
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 912
+    },
+    {
+      "action": "I4",
+      "context": "PAD",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 914
+    },
+    {
+      "action": "I2",
+      "context": "MMI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 921
+    },
+    {
+      "action": "I4",
+      "context": "HCR",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 926
+    },
+    {
+      "action": "I2",
+      "context": "HCR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 927
+    },
+    {
+      "action": "I3",
+      "context": "PAD",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 931
+    },
+    {
+      "action": "I1",
+      "context": "MCA",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 934
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 945
+    },
+    {
+      "action": "I2",
+      "context": "PAD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 949
+    },
+    {
+      "action": "I1",
+      "context": "MCA",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 950
+    },
+    {
+      "action": "I5",
+      "context": "PAD",
+      "disposition": "already-solved",
+      "kind": "issue",
+      "number": 966
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 968
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 969
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 974
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 981
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 984
+    },
+    {
+      "action": "I2",
+      "context": "SDD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 985
+    },
+    {
+      "action": "I2",
+      "context": "SDD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 986
+    },
+    {
+      "action": "I2",
+      "context": "SDD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 994
+    },
+    {
+      "action": "I3",
+      "context": "PAD",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 995
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 999
+    },
+    {
+      "action": "I4",
+      "context": "PAD",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1009
+    },
+    {
+      "action": "I2",
+      "context": "SDD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1013
+    },
+    {
+      "action": "I1",
+      "context": "MCA",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1015
+    },
+    {
+      "action": "I4",
+      "context": "HCR",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1017
+    },
+    {
+      "action": "I1",
+      "context": "EPD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1018
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1019
+    },
+    {
+      "action": "I2",
+      "context": "SDD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1020
+    },
+    {
+      "action": "I4",
+      "context": "PAD",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1021
+    },
+    {
+      "action": "I1",
+      "context": "ACI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1024
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1033
+    },
+    {
+      "action": "I3",
+      "context": "PAD",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1037
+    },
+    {
+      "action": "I3",
+      "context": "PAD",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1051
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1074
+    },
+    {
+      "action": "I2",
+      "context": "DSR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1078
+    },
+    {
+      "action": "I1",
+      "context": "MCA",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1087
+    },
+    {
+      "action": "I1",
+      "context": "SDD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1130
+    },
+    {
+      "action": "I1",
+      "context": "SDD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1178
+    },
+    {
+      "action": "I3",
+      "context": "PAD",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1183
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1194
+    },
+    {
+      "action": "I1",
+      "context": "EPD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1197
+    },
+    {
+      "action": "I6",
+      "context": "EPD",
+      "disposition": "close",
+      "kind": "issue",
+      "number": 1204
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1209
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1212
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1213
+    },
+    {
+      "action": "I2",
+      "context": "RAR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1222
+    },
+    {
+      "action": "I1",
+      "context": "SDD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1223
+    },
+    {
+      "action": "I2",
+      "context": "RAR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1227
+    },
+    {
+      "action": "I3",
+      "context": "ACI",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1237
+    },
+    {
+      "action": "I4",
+      "context": "MMI",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1241
+    },
+    {
+      "action": "I2",
+      "context": "RAR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1247
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1248
+    },
+    {
+      "action": "I5",
+      "context": "RAR",
+      "disposition": "already-solved",
+      "kind": "issue",
+      "number": 1250
+    },
+    {
+      "action": "I2",
+      "context": "SDD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1263
+    },
+    {
+      "action": "I2",
+      "context": "RAR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1265
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1273
+    },
+    {
+      "action": "I3",
+      "context": "ACI",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1274
+    },
+    {
+      "action": "I4",
+      "context": "MMI",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1281
+    },
+    {
+      "action": "I2",
+      "context": "EPD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1286
+    },
+    {
+      "action": "I4",
+      "context": "ACI",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1290
+    },
+    {
+      "action": "I3",
+      "context": "ACI",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1291
+    },
+    {
+      "action": "I4",
+      "context": "MMI",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1298
+    },
+    {
+      "action": "I2",
+      "context": "SDD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1302
+    },
+    {
+      "action": "I2",
+      "context": "EPD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1308
+    },
+    {
+      "action": "I6",
+      "context": "RAR",
+      "disposition": "close",
+      "kind": "issue",
+      "number": 1358
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1374
+    },
+    {
+      "action": "I2",
+      "context": "RAR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1380
+    },
+    {
+      "action": "I2",
+      "context": "EPD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1385
+    },
+    {
+      "action": "I2",
+      "context": "RAR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1405
+    },
+    {
+      "action": "I6",
+      "context": "RAR",
+      "disposition": "close",
+      "kind": "issue",
+      "number": 1443
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1466
+    },
+    {
+      "action": "I2",
+      "context": "RAR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1471
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1485
+    },
+    {
+      "action": "I2",
+      "context": "RAR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1529
+    },
+    {
+      "action": "I3",
+      "context": "RAR",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1530
+    },
+    {
+      "action": "I2",
+      "context": "RAR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1531
+    },
+    {
+      "action": "I2",
+      "context": "DSR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1542
+    },
+    {
+      "action": "I5",
+      "context": "MMI",
+      "disposition": "already-solved",
+      "kind": "issue",
+      "number": 1546
+    },
+    {
+      "action": "I2",
+      "context": "DSR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1562
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1577
+    },
+    {
+      "action": "I2",
+      "context": "EPD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1586
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1589
+    },
+    {
+      "action": "I5",
+      "context": "RAR",
+      "disposition": "already-solved",
+      "kind": "issue",
+      "number": 1596
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1597
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1603
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1611
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1612
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1618
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1623
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1625
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1635
+    },
+    {
+      "action": "I3",
+      "context": "RAR",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1639
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1641
+    },
+    {
+      "action": "I4",
+      "context": "EPD",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1644
+    },
+    {
+      "action": "I3",
+      "context": "RAR",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1645
+    },
+    {
+      "action": "I4",
+      "context": "ACI",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1648
+    },
+    {
+      "action": "I1",
+      "context": "SDD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1649
+    },
+    {
+      "action": "I3",
+      "context": "RAR",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1656
+    },
+    {
+      "action": "I2",
+      "context": "EPD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1658
+    },
+    {
+      "action": "I5",
+      "context": "RAR",
+      "disposition": "already-solved",
+      "kind": "issue",
+      "number": 1660
+    },
+    {
+      "action": "I1",
+      "context": "EPD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1663
+    },
+    {
+      "action": "I4",
+      "context": "MMI",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1664
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1666
+    },
+    {
+      "action": "I4",
+      "context": "HCR",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1669
+    },
+    {
+      "action": "I2",
+      "context": "RAR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1671
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1672
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1673
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1675
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1676
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1677
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1678
+    },
+    {
+      "action": "I1",
+      "context": "EPD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1680
+    },
+    {
+      "action": "I3",
+      "context": "HCR",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1682
+    },
+    {
+      "action": "I3",
+      "context": "SDD",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1688
+    },
+    {
+      "action": "I1",
+      "context": "EPD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1689
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1690
+    },
+    {
+      "action": "I3",
+      "context": "RAR",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1697
+    },
+    {
+      "action": "I4",
+      "context": "ACI",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1698
+    },
+    {
+      "action": "I1",
+      "context": "EPD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1699
+    },
+    {
+      "action": "I2",
+      "context": "RAR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1700
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1702
+    },
+    {
+      "action": "I1",
+      "context": "SDD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1703
+    },
+    {
+      "action": "I1",
+      "context": "EPD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1710
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1717
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1718
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1719
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1720
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1721
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1722
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1723
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1724
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1725
+    },
+    {
+      "action": "I1",
+      "context": "MMI",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1726
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1727
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1728
+    },
+    {
+      "action": "I2",
+      "context": "SDD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1730
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1731
+    },
+    {
+      "action": "I1",
+      "context": "DSR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1732
+    },
+    {
+      "action": "I2",
+      "context": "DSR",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1734
+    },
+    {
+      "action": "I2",
+      "context": "ACI",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1739
+    },
+    {
+      "action": "I2",
+      "context": "EPD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1742
+    },
+    {
+      "action": "I1",
+      "context": "EPD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1743
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1744
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1745
+    },
+    {
+      "action": "I2",
+      "context": "EPD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1757
+    },
+    {
+      "action": "I4",
+      "context": "EPD",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1763
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1766
+    },
+    {
+      "action": "I1",
+      "context": "SDD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1767
+    },
+    {
+      "action": "I4",
+      "context": "PAD",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1770
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1771
+    },
+    {
+      "action": "I3",
+      "context": "RAR",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1772
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1773
+    },
+    {
+      "action": "I1",
+      "context": "SDD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1774
+    },
+    {
+      "action": "I1",
+      "context": "EPD",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1775
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1778
+    },
+    {
+      "action": "I2",
+      "context": "EPD",
+      "disposition": "needs-design",
+      "kind": "issue",
+      "number": 1780
+    },
+    {
+      "action": "I1",
+      "context": "HCR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1781
+    },
+    {
+      "action": "I1",
+      "context": "RAR",
+      "disposition": "covered-by-systemic-fix",
+      "kind": "issue",
+      "number": 1782
+    },
+    {
+      "action": "I3",
+      "context": "HCR",
+      "disposition": "needs-info",
+      "kind": "issue",
+      "number": 1784
+    },
+    {
+      "action": "I4",
+      "context": "HCR",
+      "disposition": "valid-standalone",
+      "kind": "issue",
+      "number": 1785
+    },
+    {
+      "action": "P4",
+      "context": "ACI",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 688
+    },
+    {
+      "action": "P1",
+      "context": "ACI",
+      "disposition": "candidate-carrier",
+      "kind": "pull_request",
+      "number": 708
+    },
+    {
+      "action": "P4",
+      "context": "ACI",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 731
+    },
+    {
+      "action": "P3",
+      "context": "ACI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 732
+    },
+    {
+      "action": "P4",
+      "context": "MMI",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 738
+    },
+    {
+      "action": "P4",
+      "context": "ACI",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 740
+    },
+    {
+      "action": "P3",
+      "context": "HCR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 765
+    },
+    {
+      "action": "P4",
+      "context": "ACI",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 840
+    },
+    {
+      "action": "P4",
+      "context": "ACI",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 852
+    },
+    {
+      "action": "P1",
+      "context": "HCR",
+      "disposition": "candidate-carrier",
+      "kind": "pull_request",
+      "number": 905
+    },
+    {
+      "action": "P3",
+      "context": "ACI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 918
+    },
+    {
+      "action": "P3",
+      "context": "DSR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 946
+    },
+    {
+      "action": "P6",
+      "context": "EPD",
+      "disposition": "candidate-carrier",
+      "kind": "pull_request",
+      "number": 956
+    },
+    {
+      "action": "P4",
+      "context": "MMI",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 973
+    },
+    {
+      "action": "P3",
+      "context": "HCR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 975
+    },
+    {
+      "action": "P1",
+      "context": "DSR",
+      "disposition": "candidate-carrier",
+      "kind": "pull_request",
+      "number": 976
+    },
+    {
+      "action": "P4",
+      "context": "SDD",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 979
+    },
+    {
+      "action": "P5",
+      "context": "DSR",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 996
+    },
+    {
+      "action": "P12",
+      "context": "HCR",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1023
+    },
+    {
+      "action": "P5",
+      "context": "DSR",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1053
+    },
+    {
+      "action": "P4",
+      "context": "DSR",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1059
+    },
+    {
+      "action": "P14",
+      "context": "HCR",
+      "disposition": "merge-ready-metadata-only",
+      "kind": "pull_request",
+      "number": 1063
+    },
+    {
+      "action": "P14",
+      "context": "MMI",
+      "disposition": "merge-ready-metadata-only",
+      "kind": "pull_request",
+      "number": 1064
+    },
+    {
+      "action": "P3",
+      "context": "HCR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1068
+    },
+    {
+      "action": "P1",
+      "context": "EPD",
+      "disposition": "candidate-carrier",
+      "kind": "pull_request",
+      "number": 1069
+    },
+    {
+      "action": "P3",
+      "context": "PAD",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1070
+    },
+    {
+      "action": "P4",
+      "context": "EPD",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1071
+    },
+    {
+      "action": "P4",
+      "context": "EPD",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1072
+    },
+    {
+      "action": "P4",
+      "context": "EPD",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1073
+    },
+    {
+      "action": "P3",
+      "context": "PAD",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1076
+    },
+    {
+      "action": "P1",
+      "context": "DSR",
+      "disposition": "candidate-carrier",
+      "kind": "pull_request",
+      "number": 1077
+    },
+    {
+      "action": "P14",
+      "context": "SDD",
+      "disposition": "merge-ready-metadata-only",
+      "kind": "pull_request",
+      "number": 1079
+    },
+    {
+      "action": "P14",
+      "context": "PAD",
+      "disposition": "merge-ready-metadata-only",
+      "kind": "pull_request",
+      "number": 1080
+    },
+    {
+      "action": "P5",
+      "context": "HCR",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1085
+    },
+    {
+      "action": "P1",
+      "context": "MCA",
+      "disposition": "candidate-carrier",
+      "kind": "pull_request",
+      "number": 1086
+    },
+    {
+      "action": "P14",
+      "context": "SDD",
+      "disposition": "merge-ready-metadata-only",
+      "kind": "pull_request",
+      "number": 1105
+    },
+    {
+      "action": "P3",
+      "context": "HCR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1108
+    },
+    {
+      "action": "P3",
+      "context": "SDD",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1180
+    },
+    {
+      "action": "P14",
+      "context": "PAD",
+      "disposition": "merge-ready-metadata-only",
+      "kind": "pull_request",
+      "number": 1219
+    },
+    {
+      "action": "P3",
+      "context": "HCR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1251
+    },
+    {
+      "action": "P4",
+      "context": "MCA",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1280
+    },
+    {
+      "action": "P3",
+      "context": "HCR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1284
+    },
+    {
+      "action": "P3",
+      "context": "DSR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1287
+    },
+    {
+      "action": "P7",
+      "context": "HCR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1297
+    },
+    {
+      "action": "P5",
+      "context": "ACI",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1357
+    },
+    {
+      "action": "P1",
+      "context": "DSR",
+      "disposition": "candidate-carrier",
+      "kind": "pull_request",
+      "number": 1359
+    },
+    {
+      "action": "P5",
+      "context": "MMI",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1442
+    },
+    {
+      "action": "P4",
+      "context": "DSR",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1486
+    },
+    {
+      "action": "P3",
+      "context": "MMI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1487
+    },
+    {
+      "action": "P4",
+      "context": "SDD",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1488
+    },
+    {
+      "action": "P3",
+      "context": "ACI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1489
+    },
+    {
+      "action": "P3",
+      "context": "MMI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1490
+    },
+    {
+      "action": "P3",
+      "context": "ACI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1491
+    },
+    {
+      "action": "P3",
+      "context": "ACI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1492
+    },
+    {
+      "action": "P5",
+      "context": "ACI",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1494
+    },
+    {
+      "action": "P5",
+      "context": "ACI",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1497
+    },
+    {
+      "action": "P5",
+      "context": "ACI",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1500
+    },
+    {
+      "action": "P5",
+      "context": "ACI",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1501
+    },
+    {
+      "action": "P4",
+      "context": "MMI",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1507
+    },
+    {
+      "action": "P1",
+      "context": "MMI",
+      "disposition": "candidate-carrier",
+      "kind": "pull_request",
+      "number": 1508
+    },
+    {
+      "action": "P2",
+      "context": "ACI",
+      "disposition": "merge-ready-metadata-only",
+      "kind": "pull_request",
+      "number": 1556
+    },
+    {
+      "action": "P2",
+      "context": "DSR",
+      "disposition": "merge-ready-metadata-only",
+      "kind": "pull_request",
+      "number": 1565
+    },
+    {
+      "action": "P1",
+      "context": "ACI",
+      "disposition": "candidate-carrier",
+      "kind": "pull_request",
+      "number": 1574
+    },
+    {
+      "action": "P1",
+      "context": "SDD",
+      "disposition": "candidate-carrier",
+      "kind": "pull_request",
+      "number": 1595
+    },
+    {
+      "action": "P4",
+      "context": "EPD",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1608
+    },
+    {
+      "action": "P2",
+      "context": "MMI",
+      "disposition": "merge-ready-metadata-only",
+      "kind": "pull_request",
+      "number": 1617
+    },
+    {
+      "action": "P4",
+      "context": "DSR",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1622
+    },
+    {
+      "action": "P9",
+      "context": "MMI",
+      "disposition": "candidate-carrier",
+      "kind": "pull_request",
+      "number": 1624
+    },
+    {
+      "action": "P3",
+      "context": "DSR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1630
+    },
+    {
+      "action": "P8",
+      "context": "HCR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1642
+    },
+    {
+      "action": "P2",
+      "context": "DSR",
+      "disposition": "merge-ready-metadata-only",
+      "kind": "pull_request",
+      "number": 1643
+    },
+    {
+      "action": "P5",
+      "context": "HCR",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1661
+    },
+    {
+      "action": "P2",
+      "context": "ACI",
+      "disposition": "merge-ready-metadata-only",
+      "kind": "pull_request",
+      "number": 1695
+    },
+    {
+      "action": "P5",
+      "context": "RAR",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1696
+    },
+    {
+      "action": "P5",
+      "context": "SDD",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1707
+    },
+    {
+      "action": "P3",
+      "context": "ACI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1709
+    },
+    {
+      "action": "P3",
+      "context": "ACI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1711
+    },
+    {
+      "action": "P4",
+      "context": "ACI",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1712
+    },
+    {
+      "action": "P4",
+      "context": "ACI",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1713
+    },
+    {
+      "action": "P3",
+      "context": "HCR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1748
+    },
+    {
+      "action": "P4",
+      "context": "ACI",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1749
+    },
+    {
+      "action": "P4",
+      "context": "ACI",
+      "disposition": "superseded-by-systemic-fix",
+      "kind": "pull_request",
+      "number": 1750
+    },
+    {
+      "action": "P3",
+      "context": "HCR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1751
+    },
+    {
+      "action": "P3",
+      "context": "MMI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1752
+    },
+    {
+      "action": "P3",
+      "context": "MMI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1753
+    },
+    {
+      "action": "P3",
+      "context": "RAR",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1755
+    },
+    {
+      "action": "P10",
+      "context": "MMI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1756
+    },
+    {
+      "action": "P11",
+      "context": "MMI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1764
+    },
+    {
+      "action": "P13",
+      "context": "RAR",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1769
+    },
+    {
+      "action": "P3",
+      "context": "MMI",
+      "disposition": "request-changes",
+      "kind": "pull_request",
+      "number": 1777
+    },
+    {
+      "action": "P2",
+      "context": "ACI",
+      "disposition": "merge-ready-metadata-only",
+      "kind": "pull_request",
+      "number": 1779
+    },
+    {
+      "action": "P5",
+      "context": "RAR",
+      "disposition": "close",
+      "kind": "pull_request",
+      "number": 1783
+    }
+  ],
+  "reconciliation": {
+    "collisionPrs": 74,
+    "decompositions": 16,
+    "issues": 241,
+    "overlaps": 499,
+    "pullRequests": 92
+  }
+}

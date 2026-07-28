@@ -46,20 +46,20 @@ Required preflight choices:
 
 1. **Execution mode**: `interactive` or `auto`.
 2. **Artifact store**: `openspec`, `engram`, or `hybrid` when Engram is callable. If Engram is unavailable, offer only file/inline-safe choices.
-3. **Chained PR strategy**: `auto-forecast`, `ask-always`, `single-pr-default`, or `force-chained`.
+3. **Chained PR strategy**: the canonical `delivery_strategy` — `ask-on-risk`, `auto-chain`, `single-pr`, or `exception-ok`. The preflight menu offers the first three; `exception-ok` is reachable only when the user explicitly accepts `size:exception`.
 4. **Review budget**: maximum changed lines before stopping for reviewer-burden approval.
 
 User-facing preflight question format:
 
-Use the built-in `AskUserQuestion` tool for SDD Session Preflight. Do NOT render the full preflight menu as plain chat text.
+Use the built-in `AskUserQuestion` tool for SDD Session Preflight only when it is available in the current interactive runtime and all four groups are exactly representable. While that native route is usable, do NOT render a duplicate plain-chat menu. If the tool is unavailable, denied, the runtime is noninteractive, or the prompt is unrepresentable, follow the Lossless Blocking Prompts fallback in the orchestrator rule and STOP.
 
-Ask all four preflight groups in one single `AskUserQuestion` tool call so Claude Code can render the groups as one interactive prompt. Do NOT run this as a sequential wizard. Do NOT issue four separate `AskUserQuestion` tool calls.
+When the native route is representable, ask all four preflight groups in one single `AskUserQuestion` tool call so Claude Code can render the groups as one interactive prompt. Do NOT run this as a sequential wizard. Do NOT issue four separate `AskUserQuestion` tool calls.
 
 The single `AskUserQuestion` tool call must contain these four localized groups in this order:
 
 1. Pace: Interactive, Automatic.
 2. Artifacts: OpenSpec, Engram, Both.
-3. PRs: Ask me, Single PR, Chained, Auto.
+3. PRs: Ask me, Single PR, Auto.
 4. Review: 400 lines, 800 lines, Other.
 
 Match the user's current language and active persona for question labels and descriptions. Treat the preflight UI as direct orchestrator conversation, not as a generated technical artifact. Technical artifacts still default to English, but this UI follows the user's conversation language/persona. Do NOT mix languages inside one grouped question.
@@ -76,8 +76,10 @@ Map answers to canonical values:
 
 - Pace: Interactive -> `interactive`; Automatic -> `auto`.
 - Artifacts: OpenSpec -> `openspec`; Engram -> `engram`; Both -> `hybrid`.
-- PRs: Ask me -> `ask-always`; Single PR -> `single-pr-default`; Chained -> `force-chained`; Auto -> `auto-forecast`.
+- PRs: Ask me -> `ask-on-risk`; Single PR -> `single-pr`; Auto -> `auto-chain`.
 - Review: 400 lines -> `review_budget_lines: 400`; 800 lines -> `review_budget_lines: 800`; Other -> ask one follow-up for the number.
+
+The PR canonical values are exactly the `delivery_strategy` domain `sdd-tasks` and `sdd-apply` accept; never emit a value outside it. The preflight offers no separate chained option because `delivery_strategy` is only consulted once the tasks forecast flags review-budget risk: below that line there is nothing to chain, and above it `Auto` already resolves to `auto-chain` without asking again.
 
 Hard gate rules:
 
@@ -115,7 +117,7 @@ This is collected by `SDD Session Preflight`. If missing, enforce the hard gate 
 - **Automatic** (`auto`): phases run back-to-back without pausing, but the orchestrator gatekeeper validates after each phase before launching the next.
 - **Interactive** (`interactive`): after each phase, show a concise summary and ask whether to adjust or continue.
 
-Default to **Interactive** when unspecified. Interactive approval is phase-scoped; words like "continue", "dale", or "go on" approve only the immediate next phase.
+If the user doesn't specify, default to **Automatic**. After scope approval, expect zero further prompts on the happy path and at most one actionable prompt per recoverable failure; the gatekeeper summarizes phase progress instead of interrupting except on a second consecutive gate failure or a genuine scope/product decision. Interactive approval is phase-scoped; words like "continue", "dale", or "go on" approve only the immediate next phase.
 
 Before the `sdd-propose` phase in interactive mode, offer the user a proposal question round focused on business/product understanding, business problem, business rules, outcomes, implications and impact, edge cases, scope boundaries, non-goals, constraints, and product tradeoffs. Do not ask about test commands, PR shape, changed-line budget, or other harness mechanics unless the user explicitly asks.
 
@@ -139,6 +141,16 @@ Hybrid validation:
 
 On gate failure, re-run the same phase exactly once with specific corrective feedback. If the second result fails, STOP the automatic chain and report; do not advance dependent phases.
 
+### Native Runtime Attempt Authority (MANDATORY)
+
+Use the provider-owned Git-common-dir runtime ledger for every runtime-bearing `sdd-apply`, `sdd-verify`, or remediation continuation. It is the single attempt/budget authority for both OpenSpec and Engram; never persist caller-authored counters in OpenSpec files, Engram topics, prompts, or Pi state.
+
+1. Before any actor or harness launch, read `gentle-ai sdd-attempt status --cwd <repo> --change <change>`. Treat its exact `revision`, `active_attempt`, `decision_required`, and `next_action` as authoritative.
+2. If `active_attempt` is populated, do not launch again. Finish that charged ordinal with `gentle-ai sdd-attempt finish --cwd <repo> --change <change> --expected-revision <revision> ...`, recording passed, failed, or interrupted outcome plus evidence revision, diagnosis, harness disposition, cleanup evidence, and process evidence.
+3. If `decision_required` is true, stop execution and report the native diagnosis/budget state. Only an explicit maintainer scope decision may call `gentle-ai sdd-attempt reset --cwd <repo> --change <change> --expected-revision <revision> ...`; a renamed work unit or new process never resets cumulative budgets.
+4. When `next_action` is `begin`, consume the ordinal before launch with `gentle-ai sdd-attempt begin --cwd <repo> --change <change> --expected-revision <revision> ...`. After `next_action: complete`, never rerun the same objective; a genuinely distinct objective requires an explicit reset.
+5. A passing bound remediation MUST add `--expected-binding-revision`, `--successor-lineage`, and `--remediates-evidence-revision` to `gentle-ai sdd-attempt finish`; read their values from `gentle-ai sdd-attempt status --cwd <repo> --change <change>` as `binding_revision`, `binding.lineage`, and `evidence_revision`. When the corrected candidate is already approved on the bound lineage, the lineage the binding already names is itself the successor — do not run `review recover` to mint a distinct one, which is correctly refused for an unchanged approved scope and for a same-lineage successor. The native command charges the attempt, persists evidence, and binds the approved successor in one HEAD CAS; do not publish those steps separately.
+
 ### Artifact Store Mode
 
 This is collected by `SDD Session Preflight`. If missing, enforce the hard gate before any phase work. Cache the collected store (`engram`, `openspec`, `hybrid`, or `none`) for the session. If unspecified, default to `engram` when Engram is available; otherwise use `none` and explain the persistence limitation.
@@ -152,9 +164,9 @@ On the first SDD chain request in a session, ask once for delivery strategy and 
 - `ask-on-risk` — default; ask only when the tasks forecast detects review-budget risk.
 - `auto-chain` — automatically split into chained/stacked PR slices when needed.
 - `single-pr` — proceed as one PR only if the size is within budget.
-- `exception-ok` — user accepts `size:exception` when over budget.
+- `exception-ok` — user accepts `size:exception` when over budget. The preflight menu cannot select this; it is reached only when the user explicitly accepts `size:exception`, either up front or when `ask-on-risk` stops to ask.
 
-Pass `delivery_strategy` to `sdd-tasks` and `sdd-apply`.
+These four are the whole domain. Pass `delivery_strategy` to `sdd-tasks` and `sdd-apply`.
 
 ### Chain Strategy
 
@@ -190,6 +202,8 @@ If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimat
 - `auto-chain`: split automatically; ask for `chain_strategy` only if missing.
 - `single-pr`: stop and require/record `size:exception` before apply.
 - `exception-ok`: continue and tell `sdd-apply` this run uses `size:exception`.
+
+Any other `delivery_strategy` value is invalid. Do NOT pick the nearest branch and do NOT proceed: STOP, report the unrecognised value, and re-collect the delivery strategy before launching `sdd-apply`.
 
 Always pass the resolved `delivery_strategy`, `chain_strategy`, and PR boundary/exception to `sdd-apply`.
 
@@ -266,6 +280,10 @@ When launching `sdd-apply` or `sdd-verify`, search for testing capabilities (`sd
 ### Apply-Progress Continuity (MANDATORY)
 
 When launching `sdd-apply` after prior batches, search for `sdd/{change-name}/apply-progress`. If it exists, tell the sub-agent to read it first, merge new progress into it, and save the combined result. Do not overwrite.
+
+### Archive Final-State Handoff (MANDATORY)
+
+When launching `sdd-archive`, forward explicit final-state facts for any work completed after `apply-progress` or `verify-report` were persisted — verify warnings fixed in later commits, blockers resolved, tasks finished, updated test or issue counts — with commit or evidence references where available. Those two artifacts are intermediate snapshots, valid at the time they were written; the archive report records the state at close, and explicit final-state facts in the `sdd-archive` launch prompt outrank stale snapshot claims.
 
 ### Topic Keys
 

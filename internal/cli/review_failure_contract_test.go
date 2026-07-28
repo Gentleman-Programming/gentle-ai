@@ -10,12 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/internal/sddstatus"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
 func TestNegotiatedReviewFailuresUseOneEnvelopeAcrossRoutes(t *testing.T) {
@@ -129,7 +130,13 @@ func TestNegotiatedReviewFailuresPreserveRequestedLineage(t *testing.T) {
 	receiptConflict := newReviewIntegrationFailure(
 		ReviewIntegrationOperationFinalize,
 		[]string{"--lineage", lineage},
-		newFacadeReceiptPublicationError(lineage, "", &reviewtransaction.ImmutablePublicationConflictError{Cause: errors.New("conflict")}),
+		// review_facade.go:1516,1685,1734,1738,1741 (organic-dx Phase 5 task
+		// 5.5): newFacadeReceiptPublicationError now threads ctx/root to
+		// generate a tool-fault defect report on a genuine conflict; "." is
+		// not a real repository, so report generation fails closed to an
+		// empty clause here, which is exactly what this test already
+		// asserts nothing about (it never pinned the exact .Error() text).
+		newFacadeReceiptPublicationError(context.Background(), ".", lineage, "", &reviewtransaction.ImmutablePublicationConflictError{Cause: errors.New("conflict")}),
 	)
 	if receiptConflict.Code != "receipt_publication_conflict" || receiptConflict.MutationOutcome != ReviewMutationCommitted ||
 		receiptConflict.Replayability != reviewtransaction.ReplayabilityManualActionRequired || receiptConflict.RetrySafe ||
@@ -145,6 +152,25 @@ func TestNegotiatedReviewFailuresPreserveRequestedLineage(t *testing.T) {
 	})
 	if !negotiated || routed == nil || routed.LineageID != lineage || routed.Code != "empty_contract" {
 		t.Fatalf("routed preflight failure = %#v, negotiated %v", routed, negotiated)
+	}
+}
+
+func TestNegotiatedBindSDDClassifiesBindingRevisionConflictBeforePublication(t *testing.T) {
+	expected := "sha256:" + strings.Repeat("a", 64)
+	failure := newReviewIntegrationFailure(
+		ReviewIntegrationOperationBindSDD,
+		[]string{"--cwd", ".", "--change", "thin", "--lineage", "review-thin", "--expected-binding-revision", expected},
+		&sddstatus.BindingRevisionConflictError{Expected: expected, Current: ""},
+	)
+	if failure.Code != "binding_revision_conflict" || failure.Phase != "pre_native" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe ||
+		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != ReviewIntegrationOperationBindSDD ||
+		failure.Context == nil || failure.Context.BindingRevision == nil || failure.Context.BindingRevision.Expected != expected ||
+		failure.Context.BindingRevision.Current != "" {
+		t.Fatalf("typed binding conflict failure = %#v", failure)
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -164,8 +190,10 @@ func TestNegotiatedFailureLineageUsesCanonicalFlagParsing(t *testing.T) {
 		{name: "duplicate last wins", operation: ReviewIntegrationOperationFinalize, args: []string{"--lineage", "review-first", "--lineage=review-second"}, want: "review-second"},
 		{name: "duplicate malformed last clears", operation: ReviewIntegrationOperationFinalize, args: []string{"--lineage", "review-first", "--lineage=-invalid"}},
 		{name: "unknown flag fails closed", operation: ReviewIntegrationOperationFinalize, args: []string{"--unknown", "value", "--lineage", "review-hidden"}},
+		{name: "unknown flag after lineage fails closed", operation: ReviewIntegrationOperationFinalize, args: []string{"--lineage", "review-hidden", "--unknown", "value"}},
 		{name: "over maximum length", operation: ReviewIntegrationOperationFinalize, args: []string{"--lineage", "r" + strings.Repeat("a", 128)}},
 		{name: "start boolean before lineage", operation: "review.start", args: []string{"--committed-only", "--lineage", "review-start"}, want: "review-start"},
+		{name: "repair boolean before lineage", operation: "review.repair", args: []string{"--preflight=false", "--lineage", "review-repair"}, want: "review-repair"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -174,6 +202,46 @@ func TestNegotiatedFailureLineageUsesCanonicalFlagParsing(t *testing.T) {
 				t.Fatalf("lineage_id = %q, want %q", failure.LineageID, tt.want)
 			}
 		})
+	}
+}
+
+func TestReviewIntegrationOperationRegistryOwnsPublishedAndFailurePolicy(t *testing.T) {
+	wantOperations := []string{
+		"review.bind_sdd", "review.capabilities", "review.finalize", "review.repair", "review.retry_final_verification", "review.start", "review.status", "review.validate",
+	}
+	if got := reviewIntegrationOperationNames(); !reflect.DeepEqual(got, wantOperations) ||
+		!reflect.DeepEqual(reviewCapabilitiesStaticSurface().Operations, wantOperations) {
+		t.Fatalf("operation registry surface = %v", got)
+	}
+	commands := map[string]struct{}{}
+	operations := map[string]struct{}{}
+	for _, metadata := range reviewIntegrationOperationRegistry {
+		if metadata.Command == "" || metadata.Operation == "" || metadata.Label == "" {
+			t.Fatalf("incomplete operation metadata: %#v", metadata)
+		}
+		if _, duplicate := commands[metadata.Command]; duplicate {
+			t.Fatalf("duplicate operation command %q", metadata.Command)
+		}
+		if _, duplicate := operations[metadata.Operation]; duplicate {
+			t.Fatalf("duplicate operation name %q", metadata.Operation)
+		}
+		commands[metadata.Command], operations[metadata.Operation] = struct{}{}, struct{}{}
+		byCommand, commandOK := reviewIntegrationOperationByCommand(metadata.Command)
+		byName, nameOK := reviewIntegrationOperationByName(metadata.Operation)
+		if !commandOK || !nameOK || byCommand.Operation != metadata.Operation || byName.Command != metadata.Command ||
+			!validReviewIntegrationFailureOperation(metadata.Operation) || reviewLockOperationLabel(metadata.Operation) != metadata.Label {
+			t.Fatalf("operation metadata does not drive every policy lookup: %#v", metadata)
+		}
+		shape := reviewIntegrationOperationFlagShape(metadata.Operation)
+		if shape["contract"] != reviewIntegrationValueFlag {
+			t.Fatalf("operation %q omitted contract flag metadata", metadata.Operation)
+		}
+	}
+	repair, ok := reviewIntegrationOperationByName("review.repair")
+	if !ok || !repair.MutatesAuthority || !repair.JoinOnTimeout || repair.ReadOnlyFlag != "preflight" ||
+		reviewIntegrationOperationMutates(repair, []string{"--preflight=true"}) ||
+		!reviewIntegrationOperationMutates(repair, []string{"--preflight=false"}) {
+		t.Fatalf("repair operation metadata = %#v", repair)
 	}
 }
 
@@ -203,6 +271,97 @@ func TestNegotiatedStartLockFailuresPreservePreMutationRetryTruth(t *testing.T) 
 	}
 }
 
+func TestNegotiatedStatusLockFailuresAreTypedOperationSpecificAndPathFree(t *testing.T) {
+	privatePath := filepath.Join(t.TempDir(), "REVIEW-MAINTENANCE.lock")
+	for _, tt := range []struct {
+		name    string
+		err     error
+		code    string
+		message string
+		retry   bool
+		next    string
+	}{
+		{
+			name: "timeout", err: fmt.Errorf("acquire %s: %w", privatePath, &reviewtransaction.AuthorityLockTimeoutError{Timeout: 2 * time.Second}),
+			code: "authority_lock_timeout", message: "Review STATUS could not acquire the authority lock within the bounded wait.",
+			retry: true, next: "retry_with_bounded_backoff",
+		},
+		{
+			name: "cancelled", err: fmt.Errorf("acquire %s: %w", privatePath, &reviewtransaction.AuthorityLockCancelledError{Cause: context.Canceled}),
+			code: "authority_lock_cancelled", message: "Review STATUS authority lock acquisition was cancelled.", next: "stop",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			failure := newReviewIntegrationFailure("review.status", nil, tt.err)
+			if failure.Code != tt.code || failure.Message != tt.message || failure.Phase != "pre_native" ||
+				failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe != tt.retry ||
+				failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != tt.next {
+				t.Fatalf("STATUS lock failure = %#v", failure)
+			}
+			payload, err := json.Marshal(failure)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(payload, []byte(privatePath)) || bytes.Contains(payload, []byte("Review START")) {
+				t.Fatalf("STATUS lock failure leaked private or wrong-operation detail: %s", payload)
+			}
+			if err := failure.Validate(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestNegotiatedStatusUsesRealMaintenanceLockTruth(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	started := startFacadeReview(t, repo)
+	lockContext, cancelLock := context.WithTimeout(context.Background(), time.Second)
+	defer cancelLock()
+	exclusive, err := reviewtransaction.AcquireReviewMaintenanceExclusive(lockContext, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer exclusive.Release()
+
+	originalTimeout := reviewFacadeOperationTimeout
+	t.Cleanup(func() { reviewFacadeOperationTimeout = originalTimeout })
+	args := []string{
+		"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
+	}
+
+	reviewFacadeOperationTimeout = 3 * time.Second
+	var timeoutOutput bytes.Buffer
+	err = RunReview(args, &timeoutOutput)
+	if err == nil {
+		t.Fatal("STATUS succeeded while exclusive maintenance held")
+	}
+	timeout := decodeReviewIntegrationFailure(t, timeoutOutput.Bytes())
+	if timeout.Code != "authority_lock_timeout" || timeout.MutationOutcome != ReviewMutationNotStarted ||
+		!timeout.RetrySafe || timeout.NextAction != "retry_with_bounded_backoff" {
+		t.Fatalf("real STATUS lock timeout = %#v", timeout)
+	}
+	if strings.Contains(timeoutOutput.String(), repo) {
+		t.Fatalf("real STATUS lock timeout exposed repository path: %s", timeoutOutput.String())
+	}
+	assertNoPrivateReviewOperationFields(t, timeoutOutput.Bytes())
+
+	reviewFacadeOperationTimeout = 50 * time.Millisecond
+	var deadlineOutput bytes.Buffer
+	err = RunReview(args, &deadlineOutput)
+	if err == nil {
+		t.Fatal("STATUS caller deadline succeeded while exclusive maintenance held")
+	}
+	deadline := decodeReviewIntegrationFailure(t, deadlineOutput.Bytes())
+	if deadline.Code != "operation_timeout" || deadline.MutationOutcome != ReviewMutationNotStarted ||
+		deadline.RetrySafe || deadline.NextAction != "stop" {
+		t.Fatalf("STATUS caller deadline = %#v", deadline)
+	}
+	if strings.Contains(deadlineOutput.String(), repo) {
+		t.Fatalf("STATUS caller deadline exposed repository path: %s", deadlineOutput.String())
+	}
+	assertNoPrivateReviewOperationFields(t, deadlineOutput.Bytes())
+}
+
 func TestNegotiatedFacadeAggregateTimeoutPreservesMutationTruth(t *testing.T) {
 	originalRunner := reviewFacadeCommandRunner
 	originalTimeout := reviewFacadeOperationTimeout
@@ -212,13 +371,14 @@ func TestNegotiatedFacadeAggregateTimeoutPreservesMutationTruth(t *testing.T) {
 	})
 	reviewFacadeOperationTimeout = 25 * time.Millisecond
 	for _, tt := range []struct {
-		name          string
-		args          []string
-		phase         string
-		mutation      ReviewMutationOutcome
-		replayability reviewtransaction.Replayability
-		nextAction    string
-		lineage       string
+		name           string
+		args           []string
+		phase          string
+		mutation       ReviewMutationOutcome
+		replayability  reviewtransaction.Replayability
+		nextAction     string
+		lineage        string
+		waitsForWorker bool
 	}{
 		{
 			name: "read only", args: []string{"status", "--contract", ReviewIntegrationContractV1},
@@ -230,13 +390,20 @@ func TestNegotiatedFacadeAggregateTimeoutPreservesMutationTruth(t *testing.T) {
 			phase: "native_running", mutation: ReviewMutationUnknown,
 			replayability: reviewtransaction.ReplayabilityStatusRequired, nextAction: "review.status", lineage: "review-timeout",
 		},
+		{
+			name: "repair execution", args: []string{"repair", "--contract", ReviewIntegrationContractV1, "--preflight=false", "--lineage", "repair-timeout"},
+			phase: "native_running", mutation: ReviewMutationUnknown,
+			replayability: reviewtransaction.ReplayabilityStatusRequired, nextAction: "review.status", lineage: "repair-timeout", waitsForWorker: true,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			reviewFacadeCommandRunner = func(context.Context, []string, io.Writer) error { time.Sleep(100 * time.Millisecond); return nil }
 			started := time.Now()
 			var output bytes.Buffer
 			err := RunReview(tt.args, &output)
-			if elapsed := time.Since(started); elapsed > 75*time.Millisecond {
+			if elapsed := time.Since(started); tt.waitsForWorker && elapsed < 75*time.Millisecond {
+				t.Fatalf("aggregate facade timeout returned before mutating worker joined: %s", elapsed)
+			} else if !tt.waitsForWorker && elapsed > 75*time.Millisecond {
 				t.Fatalf("aggregate facade timeout took %s", elapsed)
 			}
 			if err == nil {
@@ -246,6 +413,52 @@ func TestNegotiatedFacadeAggregateTimeoutPreservesMutationTruth(t *testing.T) {
 			if failure.Code != "operation_timeout" || failure.Phase != tt.phase || failure.MutationOutcome != tt.mutation ||
 				failure.RetrySafe || failure.Replayability != tt.replayability || failure.NextAction != tt.nextAction || failure.LineageID != tt.lineage {
 				t.Fatalf("timeout failure = %#v", failure)
+			}
+		})
+	}
+}
+
+func TestNegotiatedRepairProgressFailurePreservesOpaqueReplayTruth(t *testing.T) {
+	base := reviewtransaction.ClassifiedAuthorityRepairExecution{
+		Class:     reviewtransaction.AuthorityRepairClassLegacyV1HistoricalAlias,
+		LineageID: "repair-progress", Revision: "sha256:" + strings.Repeat("a", 64),
+		ChainIdentity:    "sha256:" + strings.Repeat("b", 64),
+		Cause:            reviewtransaction.AuthorityRepairCauseUnsupportedHistoricalV1OperationAlias,
+		Disposition:      reviewtransaction.AuthorityRepairDispositionQuarantineHistoricalAlias,
+		AssessmentDigest: "sha256:" + strings.Repeat("c", 64), RequestDigest: "sha256:" + strings.Repeat("d", 64),
+		RecordIdentity: "sha256:" + strings.Repeat("e", 64),
+	}
+	for _, tt := range []struct {
+		name          string
+		status        string
+		phase         string
+		mutation      ReviewMutationOutcome
+		replayability reviewtransaction.Replayability
+		nextAction    string
+		exactReplay   bool
+	}{
+		{name: "prepared", status: reviewtransaction.CompactReclaimPrepared, phase: "native_running", mutation: ReviewMutationUnknown, replayability: reviewtransaction.ReplayabilityExactReplaySafe, nextAction: "review.repair", exactReplay: true},
+		{name: "committed verified", status: reviewtransaction.CompactReclaimCommitted, phase: "native_committed", mutation: ReviewMutationCommitted, replayability: reviewtransaction.ReplayabilityExactReplaySafe, nextAction: "review.repair", exactReplay: true},
+		{name: "committed unverified", status: reviewtransaction.CompactReclaimCommitted, phase: "native_committed", mutation: ReviewMutationCommitted, replayability: reviewtransaction.ReplayabilityStatusRequired, nextAction: "review.status"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			progress := base
+			progress.Status = tt.status
+			failure := newReviewIntegrationFailure("review.repair", []string{"--lineage", progress.LineageID}, &reviewtransaction.ClassifiedAuthorityRepairProgressError{
+				Progress: progress, ExactReplaySafe: tt.exactReplay, Cause: context.DeadlineExceeded,
+			})
+			if failure.Code != "operation_timeout" || failure.Phase != tt.phase || failure.MutationOutcome != tt.mutation ||
+				failure.Replayability != tt.replayability || failure.NextAction != tt.nextAction || failure.RetrySafe != tt.exactReplay ||
+				failure.LineageID != progress.LineageID || failure.RequestDigest != progress.RequestDigest || failure.ProgressIdentity != progress.RecordIdentity {
+				t.Fatalf("%s repair progress failure = %#v", tt.name, failure)
+			}
+			if err := failure.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			withoutProgress := failure
+			withoutProgress.ProgressIdentity = ""
+			if err := withoutProgress.Validate(); err == nil {
+				t.Fatal("repair progress failure accepted a request digest without its progress identity")
 			}
 		})
 	}
@@ -348,6 +561,26 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 	}
 }
 
+// TestNegotiatedStoreLockPreAcquisitionFailureIsNotStarted proves 1781: a
+// failure that happens before the authoritative store lock is acquired must
+// classify as not-started, exactly like the pre-mutation Git failure family,
+// instead of falling through to the generic unknown-mutation catch-all.
+func TestNegotiatedStoreLockPreAcquisitionFailureIsNotStarted(t *testing.T) {
+	err := &reviewtransaction.StoreLockPreAcquisitionError{Err: errors.New("permission denied")}
+	failure := newReviewIntegrationFailure("review.start", []string{"--lineage", "review-lock-boundary"}, err)
+	// organic-dx Phase 3b task 3b.5: this is advisory lock contention, not
+	// damage — the same wait-and-retry route authority_lock_timeout already
+	// names, contrasted here since previously this refusal named nothing.
+	if failure.Code != "store_lock_unavailable" || failure.Phase != "pre_native" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe ||
+		failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "retry_with_bounded_backoff" {
+		t.Fatalf("pre-lock-acquisition failure = %#v, want a not-started, retry-with-bounded-backoff classification", failure)
+	}
+	if !strings.Contains(failure.Message, "permission denied") {
+		t.Fatalf("pre-lock-acquisition failure message masks cause: %q", failure.Message)
+	}
+}
+
 func TestNegotiatedStatusProcessControlFailureIsTypedAndDiagnosable(t *testing.T) {
 	originalRunner := reviewFacadeCommandRunner
 	t.Cleanup(func() { reviewFacadeCommandRunner = originalRunner })
@@ -443,7 +676,16 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 	t.Setenv(reviewGitHelperStatePathEnv, store.StatePath())
 	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
 	oldTimeout := reviewFacadeOperationTimeout
-	reviewFacadeOperationTimeout = time.Second
+	// The aggregate budget must comfortably exceed the per-git-command timeout
+	// (localGitCommandTimeout, 15s) plus the slowest-runner overhead of reaching
+	// the committed begin-fix transition. The injected helper stalls longer than
+	// the per-git-command timeout (see reviewGitProcessHelperExitCode), so the
+	// per-git-command timeout deterministically fires first and is classified as
+	// git_command_timeout in the native_committed phase. A tight 1s budget raced
+	// the aggregate operation_timeout ahead of that sub-operation timeout on slow
+	// Windows runners; 25s removes the race without slowing the exit, which is
+	// bounded by the 15s per-git-command timeout regardless of this budget.
+	reviewFacadeOperationTimeout = 25 * time.Second
 	t.Cleanup(func() { reviewFacadeOperationTimeout = oldTimeout })
 	oldTransitionHook := reviewFacadeCommittedTransitionHook
 	reviewFacadeCommittedTransitionHook = func(ctx context.Context, hookRepo, operation, _ string) error {
@@ -460,9 +702,12 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 	t.Cleanup(func() { reviewFacadeCommittedTransitionHook = oldTransitionHook })
 
 	tracePath := filepath.Join(t.TempDir(), "finalize-trace.jsonl")
+	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, []string{resultPath}); err != nil {
+		t.Fatalf("capture reviewer result: %v", err)
+	}
 	args := []string{
 		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
-		"--result", resultPath, "--correction-lines", "2", "--validation", validationPath, "--trace", tracePath,
+		"--captured-results=true", "--correction-lines", "2", "--validation", validationPath, "--trace", tracePath,
 	}
 	var output bytes.Buffer
 	if err := RunReview(args, &output); err == nil {
@@ -546,7 +791,12 @@ func reviewGitProcessHelperExitCode() (int, bool) {
 		return 0, false
 	}
 	if payload, err := os.ReadFile(os.Getenv(reviewGitHelperStatePathEnv)); err == nil && strings.Contains(string(payload), `"proposed_correction_lines":`) {
-		time.Sleep(10 * time.Second)
+		// Stall well beyond the per-git-command timeout (localGitCommandTimeout,
+		// 15s) so that the bounded Git subprocess is cut by that per-command
+		// timeout rather than completing on its own. This keeps the post-commit
+		// failure classified as git_command_timeout deterministically instead of
+		// racing the aggregate operation budget on slow runners.
+		time.Sleep(30 * time.Second)
 		return 0, true
 	}
 	command := exec.Command(os.Getenv(reviewGitHelperRealGitEnv), os.Args[1:]...)
@@ -597,9 +847,14 @@ func TestNegotiatedLegacyReadOnlyFailurePreservesTypedCauseAcrossMutationRoutes(
 			if err := failure.Validate(); err != nil {
 				t.Fatal(err)
 			}
+			// organic-dx Phase 3b task 3b.4: the negotiated envelope now
+			// carries the same "choose a new lineage for compact authority"
+			// route the non-negotiated START collision already names
+			// (review_facade.go:1080), instead of a bare stop.
 			if failure.Code != reviewtransaction.LegacyReadOnlyErrorCode || failure.MutationOutcome != ReviewMutationNotStarted ||
 				failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityNotReplayable ||
-				failure.NextAction != "stop" || strings.Contains(failure.Message, secret) || strings.Contains(failure.Message, "/tmp/") {
+				failure.NextAction != "review.start" || !strings.Contains(failure.Message, "choose a new lineage for compact authority") ||
+				strings.Contains(failure.Message, secret) || strings.Contains(failure.Message, "/tmp/") {
 				t.Fatalf("legacy negotiated failure = %#v", failure)
 			}
 			publicErr := newReviewIntegrationFailureError(failure, runErr)
@@ -652,7 +907,7 @@ func TestNegotiatedReceiptPublicationFailureIsSanitizedAndExactlyReplayable(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	finalizeArgs := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, started)...)
+	finalizeArgs := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, repo, started)...)
 	if err := RunReviewFacadeFinalize(finalizeArgs, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -726,6 +981,10 @@ func TestReviewIntegrationFailureSchemaAndFixtureAreStrict(t *testing.T) {
 		schema["$id"] != ReviewIntegrationFailureSchemaID || schema["additionalProperties"] != false {
 		t.Fatalf("failure schema header = %#v", schema)
 	}
+	inputs := schemaStringArray(t, schema["properties"].(map[string]any)["required_inputs"].(map[string]any)["items"].(map[string]any)["enum"])
+	if !containsString(inputs, "base_ref") {
+		t.Fatalf("failure required_inputs vocabulary = %v", inputs)
+	}
 	fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "failure.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -752,6 +1011,85 @@ func TestReviewIntegrationFailureSchemaAndFixtureAreStrict(t *testing.T) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&ReviewIntegrationFailure{}); err == nil {
 		t.Fatal("strict failure decoder accepted a private scope-change field")
+	}
+
+	bindingFixture, err := os.ReadFile(filepath.Join(root, "fixtures", "binding-revision-conflict.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindingFailure := decodeReviewIntegrationFailure(t, bindingFixture)
+	if bindingFailure.Operation != ReviewIntegrationOperationBindSDD || bindingFailure.Code != "binding_revision_conflict" ||
+		bindingFailure.Phase != "pre_native" || bindingFailure.MutationOutcome != ReviewMutationNotStarted ||
+		bindingFailure.Context == nil || bindingFailure.Context.BindingRevision == nil ||
+		bindingFailure.Context.BindingRevision.Expected != "sha256:"+strings.Repeat("a", 64) ||
+		bindingFailure.Context.BindingRevision.Current != "" {
+		t.Fatalf("binding revision conflict fixture = %#v", bindingFailure)
+	}
+	bindingFailure.Context.BindingRevision.Expected = "invalid"
+	if err := bindingFailure.Validate(); err == nil {
+		t.Fatal("binding revision conflict fixture accepted a malformed expected revision")
+	}
+	var bindingRaw map[string]any
+	if err := json.Unmarshal(bindingFixture, &bindingRaw); err != nil {
+		t.Fatal(err)
+	}
+	bindingRaw["context"].(map[string]any)["binding_revision"].(map[string]any)["authority_revision"] = "sha256:" + strings.Repeat("b", 64)
+	malformedBinding, err := json.Marshal(bindingRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindingDecoder := json.NewDecoder(bytes.NewReader(malformedBinding))
+	bindingDecoder.DisallowUnknownFields()
+	if err := bindingDecoder.Decode(&ReviewIntegrationFailure{}); err == nil {
+		t.Fatal("strict failure decoder accepted a private binding-revision field")
+	}
+}
+
+func TestReviewIntegrationFailureMapsTargetResolutionBeforeGateDenial(t *testing.T) {
+	targetErr := &reviewtransaction.GateTargetResolutionError{
+		RequiredInput: "base_ref",
+		Err:           errors.New("configured upstream is missing; pass --base-ref <remote>/<branch>"),
+	}
+	failure := newReviewIntegrationFailure(ReviewIntegrationOperationValidate, nil, ReviewGateDeniedError{
+		Result: reviewtransaction.GateInvalidated,
+		Cause:  targetErr,
+	})
+	if failure.Phase != "pre_native" || failure.Code != "target_resolution_failed" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "not_evaluated" ||
+		!failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityNotReplayable ||
+		!reflect.DeepEqual(failure.RequiredInputs, []string{"base_ref"}) || failure.NextAction != "correct_request" ||
+		!strings.Contains(failure.Message, "--base-ref") {
+		t.Fatalf("target-resolution failure mapping = %#v", failure)
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatalf("target-resolution failure validation = %v", err)
+	}
+}
+
+// TestNewReviewIntegrationFailureCause is the RED-first proof for 1666/1807:
+// the operation_outcome_unknown default envelope used to discard the real
+// native cause behind a fixed placeholder message. Code, Message, and
+// MutationOutcome stay byte-identical; the wrapped cause is now additive.
+func TestNewReviewIntegrationFailureCause(t *testing.T) {
+	runErr := errors.New("unexpected native repository state: dangling worktree lock file")
+	failure := newReviewIntegrationFailure("review.start", nil, runErr)
+	if failure.Code != "operation_outcome_unknown" || failure.Phase != "native_running" ||
+		failure.MutationOutcome != ReviewMutationUnknown ||
+		failure.Message != "The negotiated review operation failed without authoritative mutation evidence." {
+		t.Fatalf("operation_outcome_unknown envelope changed byte-identical fields = %#v", failure)
+	}
+	if failure.Cause != runErr.Error() {
+		t.Fatalf("failure.Cause = %q, want the wrapped native cause %q", failure.Cause, runErr.Error())
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatalf("operation_outcome_unknown failure with cause validation = %v", err)
+	}
+
+	// The read-only catch-all stays content-free: it must never leak the raw
+	// cause, which is exactly why it resets the message to a canned string.
+	readOnly := newReviewIntegrationFailure("review.status", nil, runErr)
+	if readOnly.Cause != "" {
+		t.Fatalf("read-only catch-all leaked cause = %q", readOnly.Cause)
 	}
 }
 

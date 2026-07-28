@@ -5,20 +5,30 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 var boundedReviewRequiredClauses = []string{
 	"Parent orchestrator and native CLI only",
 	"gentle-ai review start",
 	"selected lens once in the foreground",
+	"assembled from this exact START response as one JSON object",
+	"`lineage` from `lineage_id`, `target` from `target_identity`, `lens`/`order` from `lens_bindings`",
 	"gentle-ai review capture-result",
-	"repeated `--result-artifact '<manifest-json>'` arguments",
+	"repeated `--result-artifact-file <path>` arguments",
+	"BOM-less UTF-8 on Windows PowerShell 5.1",
+	"POSIX inline `--result-artifact '<manifest-json>'` form remains compatible",
 	"Native Go validates, canonicalizes, persists, hashes, reopens, and binds results",
 	"Only `introduced`, `behavior-activated`, or `worsened`",
 	"Route `pre-existing` and `base-only` to follow-ups; `unknown` escalates",
+	"canonical four-lens selection is long work",
+	"one cost/side-effect forecast",
+	"four reviewer model runs",
+	"--consent relay",
+	"Lossless Blocking Prompt",
+	"not the kill switch",
 	"one correction transaction",
 	"positive `--correction-lines` forecast before editing",
 	"one read-only scoped fix validator",
@@ -40,6 +50,12 @@ func TestBoundedReviewContractRendersForEverySupportedAgent(t *testing.T) {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			content := renderSDDOrchestratorAsset(agent.ID)
 			assertTextContainsClauses(t, string(agent.ID), content, boundedReviewRequiredClauses)
+			// The retired WorkRun commands are gone from the assets, so nothing
+			// here may require them. internal/assets/assets_test.go owns the
+			// inverse assertion that they never come back.
+			if strings.Contains(content, runtimeAgentIDPlaceholder) {
+				t.Errorf("rendered %s retains runtime agent placeholder", agent.ID)
+			}
 			for _, forbidden := range []string{"review-start", "review-step", "review-resume", "review-validate", "review-bundle-export", "review-bundle-import"} {
 				if strings.Contains(content, forbidden) {
 					t.Errorf("rendered %s exposes lower-level compatibility command %q", agent.ID, forbidden)
@@ -69,13 +85,59 @@ func TestBoundedReviewContractRendersForEverySupportedAgent(t *testing.T) {
 	}
 }
 
+func TestPreservedSharedOrchestratorSubstitutesRuntimeAgentIdentity(t *testing.T) {
+	t.Parallel()
+
+	preserved := strings.Join([]string{
+		"Bind this to the dedicated `sdd-orchestrator` agent only.",
+		runtimeAgentIDPlaceholder,
+	}, "\n")
+	rendered := renderPreservedOpenCodeOrchestratorPrompt(
+		preserved,
+		model.AgentKilocode,
+	)
+	if !strings.Contains(rendered, "Bind this to the dedicated `gentle-orchestrator` agent only.") {
+		t.Fatalf("preserved prompt lost its migration:\n%s", rendered)
+	}
+	if strings.Contains(rendered, runtimeAgentIDPlaceholder) {
+		t.Fatal("preserved prompt retained runtime agent placeholder")
+	}
+	if !strings.Contains(rendered, string(model.AgentKilocode)) {
+		t.Fatalf("preserved prompt missing runtime agent identity:\n%s", rendered)
+	}
+}
+
+// The retired WorkRun commands no longer exist, so a preserved prompt that
+// still mentions them must pass through migration untouched instead of being
+// rewritten into a better-formed invocation of a deleted command.
+func TestPreservedSharedOrchestratorLeavesRetiredWorkCommandsUntouched(t *testing.T) {
+	t.Parallel()
+
+	retired := []string{
+		"gentle-ai work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v2 --json",
+		"gentle-ai work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json",
+	}
+	rendered := renderPreservedOpenCodeOrchestratorPrompt(
+		strings.Join(retired, "\n"),
+		model.AgentKilocode,
+	)
+	for _, command := range retired {
+		if !strings.Contains(rendered, command) {
+			t.Fatalf("preserved prompt rewrote retired command %q:\n%s", command, rendered)
+		}
+	}
+	if strings.Contains(rendered, "--agent "+string(model.AgentKilocode)) {
+		t.Fatalf("preserved prompt injected an adapter identity into a retired command:\n%s", rendered)
+	}
+}
+
 func TestRenderedReviewersAreReadOnlyAndSingleResult(t *testing.T) {
 	for _, family := range []string{"claude", "cursor", "kimi", "kiro"} {
 		for _, lens := range []string{"risk", "readability", "reliability", "resilience"} {
 			path := family + "/agents/review-" + lens + ".md"
 			t.Run(family+"/"+lens, func(t *testing.T) {
 				content := renderBoundedReviewAsset(path)
-				for _, want := range []string{"read-only reviewer", "immutable candidate diff once", "## Candidate-Causal Admission", "Return one JSON object and no prose", nativeReviewerResultSchema, "Never emit summary, skill_resolution, or any other unknown field", "evidence contains only genuine inspection evidence"} {
+				for _, want := range []string{"read-only reviewer", "immutable candidate diff once", "## Candidate-Causal Admission", "Return one JSON object and no prose", `"subject_hash":"<artifact_subject.subject_hash>"`, `"inspection":{"status":"completed","paths":["<every changed_path_manifest.path in exact order>"]}`, "Never emit summary, skill_resolution, or any other unknown field", "evidence contains only genuine inspection evidence"} {
 					if !strings.Contains(content, want) {
 						t.Errorf("%s missing %q", path, want)
 					}

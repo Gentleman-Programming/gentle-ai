@@ -16,8 +16,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
 // --- test helpers ---
@@ -318,7 +318,10 @@ func TestFindBinaryInTar(t *testing.T) {
 // --- TestExpectedChecksumFor ---
 
 func TestExpectedChecksumFor(t *testing.T) {
-	content := "abc123  gentle-ai_1.0.0_darwin_arm64.tar.gz\ndef456  gentle-ai_1.0.0_linux_amd64.tar.gz\n"
+	firstDigest := strings.Repeat("a", sha256.Size*2)
+	secondDigest := strings.Repeat("b", sha256.Size*2)
+	content := firstDigest + "  gentle-ai_1.0.0_darwin_arm64.tar.gz\n" +
+		secondDigest + "  gentle-ai_1.0.0_linux_amd64.tar.gz\n"
 
 	tests := []struct {
 		name     string
@@ -331,13 +334,13 @@ func TestExpectedChecksumFor(t *testing.T) {
 			name:     "found first entry",
 			content:  content,
 			filename: "gentle-ai_1.0.0_darwin_arm64.tar.gz",
-			want:     "abc123",
+			want:     firstDigest,
 		},
 		{
 			name:     "found second entry",
 			content:  content,
 			filename: "gentle-ai_1.0.0_linux_amd64.tar.gz",
-			want:     "def456",
+			want:     secondDigest,
 		},
 		{
 			name:     "not found returns error",
@@ -431,7 +434,7 @@ func TestDownloadToFile(t *testing.T) {
 	httpClient = server.Client()
 
 	outPath := filepath.Join(t.TempDir(), "downloaded.tar.gz")
-	gotDigest, err := downloadToFile(context.Background(), server.URL+"/file", outPath)
+	gotDigest, err := downloadToFile(context.Background(), server.URL+"/file", outPath, maxReleaseArchiveBytes)
 	if err != nil {
 		t.Fatalf("downloadToFile: %v", err)
 	}
@@ -453,6 +456,7 @@ func TestDownload_ChecksumVerification(t *testing.T) {
 	}
 
 	binaryName := "fake-tool"
+	privateKey := useTestReleaseKey(t)
 	tarPath := makeFakeTarGz(t, binaryName)
 	tarContent, err := os.ReadFile(tarPath)
 	if err != nil {
@@ -482,7 +486,7 @@ func TestDownload_ChecksumVerification(t *testing.T) {
 		},
 		{
 			name:            "checksum mismatch returns error",
-			checksumsBody:   fmt.Sprintf("%s  %s\n", "deadbeefdeadbeef", archiveName),
+			checksumsBody:   fmt.Sprintf("%s  %s\n", strings.Repeat("b", sha256.Size*2), archiveName),
 			checksumsStatus: http.StatusOK,
 			wantErr:         true,
 			errContains:     "checksum mismatch",
@@ -492,11 +496,11 @@ func TestDownload_ChecksumVerification(t *testing.T) {
 			checksumsBody:   "",
 			checksumsStatus: http.StatusNotFound,
 			wantErr:         true,
-			errContains:     "checksums.txt unavailable",
+			errContains:     "fetch checksums.txt",
 		},
 		{
 			name:            "archive not in checksums.txt returns error",
-			checksumsBody:   "abc123  other-tool_1.0.0_linux_amd64.tar.gz\n",
+			checksumsBody:   strings.Repeat("a", sha256.Size*2) + "  other-tool_1.0.0_linux_amd64.tar.gz\n",
 			checksumsStatus: http.StatusOK,
 			wantErr:         true,
 			errContains:     "not listed in checksums.txt",
@@ -505,11 +509,16 @@ func TestDownload_ChecksumVerification(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			signature := signTestManifest(t, privateKey, []byte(tc.checksumsBody), "test-owner", binaryName, "1.0.0")
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if strings.HasSuffix(r.URL.Path, "checksums.txt") {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "checksums.txt"):
 					w.WriteHeader(tc.checksumsStatus)
 					fmt.Fprint(w, tc.checksumsBody)
-				} else {
+				case strings.HasSuffix(r.URL.Path, "checksums.txt.minisig"):
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write(signature)
+				default:
 					w.WriteHeader(http.StatusOK)
 					w.Write(tarContent) //nolint:errcheck
 				}
@@ -524,15 +533,20 @@ func TestDownload_ChecksumVerification(t *testing.T) {
 			// Mock URL builders to redirect to the test server.
 			origAssetURLFn := resolveAssetURLFn
 			origChecksumURLFn := resolveChecksumURLFn
+			origSignatureURLFn := resolveSignatureURLFn
 			t.Cleanup(func() {
 				resolveAssetURLFn = origAssetURLFn
 				resolveChecksumURLFn = origChecksumURLFn
+				resolveSignatureURLFn = origSignatureURLFn
 			})
 			resolveAssetURLFn = func(owner, repo, version, goos, goarch string) string {
 				return server.URL + "/" + archiveName
 			}
 			resolveChecksumURLFn = func(owner, repo, version string) string {
 				return server.URL + "/checksums.txt"
+			}
+			resolveSignatureURLFn = func(owner, repo, version string) string {
+				return server.URL + "/checksums.txt.minisig"
 			}
 
 			// Mock lookPathFn with a real temp binary (atomicReplace needs a valid path).

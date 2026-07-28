@@ -8,8 +8,30 @@
     "target_mode": ["target_identity", "base_tree", "candidate_tree"],
     "target_identity": ["target_mode", "base_tree", "candidate_tree"],
     "base_tree": ["target_mode", "target_identity", "candidate_tree"],
-    "candidate_tree": ["target_mode", "target_identity", "base_tree"]
+    "candidate_tree": ["target_mode", "target_identity", "base_tree"],
+    "candidate_diff": ["changed_path_manifest"],
+    "changed_path_manifest": ["candidate_diff"]
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"selected_lenses": {"minItems": 1}},
+        "required": ["selected_lenses"]
+      },
+      "then": {"required": ["candidate_diff", "changed_path_manifest"]}
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {"enum": ["created", "resumed"]},
+          "state": {"const": "reviewing"}
+        },
+        "required": ["action", "state"]
+      },
+      "then": {"required": ["repository_context"]},
+      "else": {"not": {"required": ["repository_context"]}}
+    }
+  ],
   "required": [
     "schema",
     "contract",
@@ -70,9 +92,65 @@
       "minItems": 1,
       "uniqueItems": true,
       "items": {"$ref": "#/$defs/risk_reason"}
+    },
+    "candidate_diff": {"$ref": "#/$defs/frozen_candidate_diff"},
+    "changed_path_manifest": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/changed_path"}
+    },
+    "repository_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "handle", "revision", "target_identity"],
+      "properties": {
+        "capability": {"const": "review.opaque_repository_context"},
+        "handle": {"type": "string", "pattern": "^rctx1_[0-9a-f]{64}$"},
+        "revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "target_identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
     }
   },
   "$defs": {
+    "frozen_candidate_diff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["encoding", "data", "sha256", "byte_size"],
+      "properties": {
+        "encoding": {"const": "base64"},
+        "data": {
+          "type": "string",
+          "maxLength": 5592408,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        },
+        "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "byte_size": {"type": "integer", "minimum": 0, "maximum": 4194304}
+      }
+    },
+    "changed_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "status",
+        "old_mode",
+        "new_mode",
+        "deleted",
+        "type_changed",
+        "mode_only",
+        "intended_untracked"
+      ],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "status": {"enum": ["A", "D", "M", "T"]},
+        "old_mode": {"type": "string", "pattern": "^[0-7]{6}$"},
+        "new_mode": {"type": "string", "pattern": "^[0-7]{6}$"},
+        "deleted": {"type": "boolean"},
+        "type_changed": {"type": "boolean"},
+        "mode_only": {"type": "boolean"},
+        "intended_untracked": {"type": "boolean"}
+      }
+    },
     "risk_reason": {
       "type": "object",
       "additionalProperties": false,

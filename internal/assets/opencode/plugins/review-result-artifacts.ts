@@ -3,6 +3,7 @@ import { spawn } from "node:child_process"
 
 const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-readability", "review-reliability"])
 const BINDING = /^GENTLE_AI_REVIEW_BINDING (\{[^\n]+\})(?:\n|$)/
+const FROZEN_CONTEXT = "GENTLE_AI_FROZEN_CANDIDATE_CONTEXT "
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
 
@@ -11,6 +12,19 @@ type ReviewBinding = {
   target: string
   lens: string
   order: number
+  revision?: string
+  repository_context?: string
+  subject_hash?: string
+}
+
+interface ReviewArtifactSubject {
+  subject_hash: string
+}
+
+interface ReviewCapturePreflight {
+  artifact_subject: ReviewArtifactSubject
+  candidate_diff: Record<string, unknown>
+  changed_path_manifest: Array<Record<string, unknown>>
 }
 
 function parseBinding(prompt: unknown, lens: string): ReviewBinding {
@@ -28,9 +42,16 @@ function parseBinding(prompt: unknown, lens: string): ReviewBinding {
   }
   const value = binding as Record<string, unknown>
   const fields = Object.keys(value).sort().join(",")
-  if (fields !== "lens,lineage,order,target" ||
+  const legacy = fields === "lens,lineage,order,target"
+  const legacyBound = fields === "lens,lineage,order,subject_hash,target"
+  const priorCurrent = fields === "lens,lineage,order,repository_context,revision,target"
+  const current = fields === "lens,lineage,order,repository_context,revision,subject_hash,target"
+  if ((!legacy && !legacyBound && !priorCurrent && !current) ||
       typeof value.lineage !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.lineage) ||
       typeof value.target !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.target) ||
+      ((priorCurrent || current) && (typeof value.revision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.revision) ||
+        typeof value.repository_context !== "string" || !/^rctx1_[a-f0-9]{64}$/.test(value.repository_context))) ||
+      ((legacyBound || current) && (typeof value.subject_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.subject_hash))) ||
       value.lens !== lens || !Number.isSafeInteger(value.order) || (value.order as number) < 0) {
     throw new Error("review task binding does not match the selected lens")
   }
@@ -45,10 +66,18 @@ function reviewerResult(output: unknown): string {
     if (TASK_TAG.test(trimmed)) throw new Error("reviewer output contains a malformed task result envelope")
     return trimmed
   }
-  if (envelope[1].trim() === "" || TASK_TAG.test(envelope[1])) {
-    throw new Error("reviewer task result is empty or contains a nested envelope")
+  if (envelope[1].trim() === "") {
+    throw Object.assign(new Error("reviewer task result is empty"), { reviewClass: "empty_result" })
+  }
+  if (TASK_TAG.test(envelope[1])) {
+    throw Object.assign(new Error("reviewer task result contains a nested task envelope"), { reviewClass: "nested_envelope" })
   }
   return envelope[1]
+}
+
+function extractionClass(cause: unknown): string | undefined {
+  const value = (cause as { reviewClass?: unknown } | null)?.reviewClass
+  return typeof value === "string" ? value : undefined
 }
 
 function captureCwd(worktree: string | undefined, directory: string): string {
@@ -77,53 +106,138 @@ function runNative(cwd: string, args: string[], stdin: string): Promise<string> 
   })
 }
 
+function repositoryBindingArgs(cwd: string, binding: ReviewBinding): string[] {
+  if (binding.repository_context && binding.revision) {
+    return ["--repository-context", binding.repository_context, "--expected-revision", binding.revision]
+  }
+  return ["--cwd", cwd]
+}
+
 function captureResult(cwd: string, binding: ReviewBinding, result: string): Promise<string> {
   return runNative(cwd, [
-    "review", "capture-result", "--cwd", cwd,
+    "review", "capture-result", ...repositoryBindingArgs(cwd, binding),
     "--lineage", binding.lineage, "--target", binding.target,
     "--lens", binding.lens, "--order", String(binding.order), "--input", "-",
   ], result)
 }
 
-async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<void> {
+async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<ReviewCapturePreflight | undefined> {
   try {
-    await runNative(cwd, [
-      "review", "capture-result", "--cwd", cwd,
+    const response = await runNative(cwd, [
+      "review", "capture-result", ...repositoryBindingArgs(cwd, binding),
       "--lineage", binding.lineage, "--target", binding.target,
       "--lens", binding.lens, "--order", String(binding.order), "--preflight",
     ], "")
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(response)
+    } catch {
+      throw new Error("review capture preflight returned malformed artifact-subject JSON")
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("review capture preflight returned malformed artifact-subject JSON")
+    }
+    const value = parsed as Record<string, unknown>
+    const subject = value.artifact_subject as Record<string, unknown> | undefined
+    if (!subject || typeof subject.subject_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.subject_hash) ||
+        !value.candidate_diff || typeof value.candidate_diff !== "object" || Array.isArray(value.candidate_diff) ||
+        !Array.isArray(value.changed_path_manifest) || value.changed_path_manifest.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))) {
+      throw new Error("review capture preflight returned incomplete frozen candidate context")
+    }
+    if (binding.subject_hash && subject.subject_hash !== binding.subject_hash) {
+      throw new Error("review capture preflight returned a different artifact subject")
+    }
+    return value as unknown as ReviewCapturePreflight
   } catch (cause) {
     // An older installed gentle-ai binary rejects the flag itself ("flag
     // provided but not defined: -preflight"). That is version skew, not a
     // binding problem: degrade gracefully and let the real capture path
     // behave exactly as it did before preflight existed.
     const message = errorMessage(cause)
-    if (message.includes("flag provided but not defined") && message.includes("-preflight")) return
+    if (message.includes("flag provided but not defined") && message.includes("-preflight")) return undefined
+    const scope = binding.repository_context ? "the provider-issued repository context" : cwd
+    const recovery = gitTrustRefusal(binding, cause)
+      ? GIT_TRUST_REFUSAL_RECOVERY
+      : binding.repository_context
+      ? `Refresh the exact native next_transition for lineage ${binding.lineage} before relaunching the lens.`
+      : `If lineage ${binding.lineage} was started in a different repository (for example a nested one), ` +
+        `set GENTLE_AI_REVIEW_CWD to that repository and relaunch the lens.`
     throw new Error(
-      `review capture preflight failed for lens ${binding.lens} under ${cwd}: ${errorMessage(cause)}. ` +
+      `review capture preflight failed for lens ${binding.lens} under ${scope}: ` +
+      `${sessionErrorMessage(binding, cause, "repository_context_preflight_failed")}. ` +
       `The reviewer was not launched, so its exactly-once invocation is preserved. ` +
-      `If lineage ${binding.lineage} was started in a different repository (for example a nested one), ` +
-      `set GENTLE_AI_REVIEW_CWD to that repository and relaunch the lens.`,
+      recovery,
     )
   }
 }
 
-function preserveResult(cwd: string, binding: ReviewBinding, raw: string): Promise<string> {
-  return runNative(cwd, [
-    "review", "preserve-result", "--cwd", cwd,
+async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<string> {
+  const binding = parseBinding(prompt, lens)
+  const preflight = await preflightCapture(cwd, binding)
+  if (!preflight) return prompt
+  const injectedBinding = { ...binding, subject_hash: preflight.artifact_subject.subject_hash }
+  const boundPrompt = prompt.replace(BINDING, `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(injectedBinding)}\n`)
+  const frozen = JSON.stringify({
+    artifact_subject: preflight.artifact_subject,
+    candidate_diff: preflight.candidate_diff,
+    changed_path_manifest: preflight.changed_path_manifest,
+  })
+  return `${boundPrompt.trimEnd()}\n${FROZEN_CONTEXT}${frozen}`
+}
+
+function preserveResult(cwd: string, binding: ReviewBinding, raw: string, cls?: string): Promise<string> {
+  const args = [
+    "review", "preserve-result", ...repositoryBindingArgs(cwd, binding),
     "--lineage", binding.lineage, "--target", binding.target,
     "--lens", binding.lens, "--order", String(binding.order), "--input", "-",
-  ], raw)
+  ]
+  if (typeof cls === "string" && cls !== "") args.push("--class", cls)
+  return runNative(cwd, args, raw)
 }
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
+// GIT_TRUST_REFUSAL_CODE is the typed, path-free code the native CLI emits
+// when Git itself declines to open the bound repository because it is owned by
+// a different account. It is the one native code an opaque binding surfaces,
+// because the generic message ("refresh the exact native next_transition") is
+// not merely vague for this cause: refreshing a transition cannot change the
+// Git trust context of an already-running host process.
+const GIT_TRUST_REFUSAL_CODE = "git_repository_untrusted"
+
+// GIT_TRUST_REFUSAL_MESSAGE is authored here rather than forwarded from the
+// native stderr, so the opaque path keeps its absolute rule that no native
+// text ever reaches the session transcript. It mirrors the native wording in
+// internal/cli/review_incident.go.
+// It carries its own instruction, so every surface that renders it — including
+// the post-launch capture path, which appends no separate recovery line —
+// tells the caller something they can actually carry out.
+const GIT_TRUST_REFUSAL_MESSAGE =
+  `${GIT_TRUST_REFUSAL_CODE}: Git declined to open the bound repository in this process because it is owned by a ` +
+  `different account; gentle-ai never provisions a safe.directory exception and never bypasses that protection. ` +
+  `Restart the host process under a Git context that already trusts that repository.`
+
+const GIT_TRUST_REFUSAL_RECOVERY =
+  "Relaunch the lens once the host process runs under a Git context that trusts that repository."
+
+function gitTrustRefusal(binding: ReviewBinding, cause: unknown): boolean {
+  return Boolean(binding.repository_context) && new RegExp(`\\b${GIT_TRUST_REFUSAL_CODE}\\b`).test(errorMessage(cause))
+}
+
+function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string): string {
+  if (!binding.repository_context) return errorMessage(cause)
+  if (gitTrustRefusal(binding, cause)) return GIT_TRUST_REFUSAL_MESSAGE
+  return `${code}: provider-owned review operation failed; refresh the exact native next_transition or retry the same opaque binding`
+}
+
 function preservedReference(manifest: string): string {
   try {
-    const parsed = JSON.parse(manifest) as { path?: unknown }
+    const parsed = JSON.parse(manifest) as { reference?: unknown; path?: unknown; sha256?: unknown }
+    if (parsed && typeof parsed.reference === "string" && parsed.reference !== "") return parsed.reference
     if (parsed && typeof parsed.path === "string" && parsed.path !== "") return parsed.path
+    if (parsed && typeof parsed.sha256 === "string" && parsed.sha256 !== "") return parsed.sha256
   } catch {
     // fall through to the full manifest
   }
@@ -141,17 +255,24 @@ function embeddedRawPayload(raw: string): string {
 }
 
 async function preservedCaptureFailure(cwd: string, binding: ReviewBinding, raw: unknown, cause: unknown): Promise<Error> {
+  const captureFailure = sessionErrorMessage(binding, cause, "repository_context_capture_failed")
   if (typeof raw !== "string" || raw.trim() === "") {
-    return new Error(`${errorMessage(cause)}; no raw reviewer result was available to preserve`)
+    return new Error(`${captureFailure}; no raw reviewer result was available to preserve`)
   }
   try {
-    const manifest = await preserveResult(cwd, binding, raw)
-    return new Error(`${errorMessage(cause)}; raw reviewer result preserved for recovery at ${preservedReference(manifest)}`)
+    const reviewClass = extractionClass(cause)
+    const manifest = await preserveResult(cwd, binding, raw, reviewClass)
+    return new Error(`${captureFailure}; raw reviewer result preserved for recovery as ${preservedReference(manifest)}`)
   } catch (preserveCause) {
-    // Double failure: durable preservation itself failed, so the transcript
-    // is the only remaining copy — embed the bounded payload in the error.
+    const preserveFailure = sessionErrorMessage(binding, preserveCause, "repository_context_preserve_failed")
+    // Double failure: durable preservation itself failed, so the transcript is
+    // the only remaining copy — embed the bounded payload in the error. Both
+    // bindings need this identically: captureResult and preserveResult resolve
+    // the same repository through the same binding path, so one environmental
+    // refusal can fail both, and an opaque binding that omitted the payload
+    // had no equivalent transcript fallback left.
     return new Error(
-      `${errorMessage(cause)}; raw reviewer result could not be preserved: ${errorMessage(preserveCause)}; ` +
+      `${captureFailure}; raw reviewer result could not be preserved: ${preserveFailure}; ` +
       `raw reviewer result follows for manual recovery:\n${embeddedRawPayload(raw)}`,
     )
   }
@@ -164,7 +285,11 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => (
     if (output.args.background === true) {
       throw new Error("bound review tasks must run in the foreground for native result capture")
     }
-    await preflightCapture(captureCwd(worktree, directory), parseBinding(output.args.prompt, output.args.subagent_type))
+    output.args.prompt = await injectReviewerContext(
+      output.args.prompt,
+      output.args.subagent_type,
+      captureCwd(worktree, directory),
+    )
   },
   "tool.execute.after": async (input, output) => {
     if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return

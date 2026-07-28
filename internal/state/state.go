@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 const stateDir = ".gentle-ai"
@@ -114,6 +114,21 @@ type InstallState struct {
 	// False (zero value) = no deferred sync pending. Omitted from JSON when
 	// false for backward-compatibility with existing state files.
 	PendingSync bool `json:"pending_sync,omitempty"`
+
+	// RDDMode is the global, user-owned review-driven-development kill switch
+	// ("on"|"off"). It lives in uncommitted user state precisely so that no
+	// repository can ship, share, or force a review policy onto a clone.
+	// Empty means the user never expressed a preference, which preserves the
+	// historical enabled behavior for state files that predate the switch.
+	// The value is deliberately kept as a plain string: reviewtransaction owns
+	// validation and fails closed on anything it does not recognise.
+	RDDMode string `json:"rdd_mode,omitempty"`
+
+	// RDDModeRecordedAt is the candidate cutoff for the global mode. Re-enabling
+	// must only affect future candidates, so the moment the current value was
+	// recorded is authority, not a cosmetic audit field. Nil for state files
+	// written before the switch existed.
+	RDDModeRecordedAt *time.Time `json:"rdd_mode_recorded_at,omitempty"`
 }
 
 // Path returns the absolute path to the state file for the given home directory.
@@ -198,6 +213,8 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		Persona:                     existing.Persona,
 		LastUpdateCheck:             existing.LastUpdateCheck,
 		PendingSync:                 existing.PendingSync,
+		RDDMode:                     existing.RDDMode,
+		RDDModeRecordedAt:           existing.RDDModeRecordedAt,
 	}
 }
 

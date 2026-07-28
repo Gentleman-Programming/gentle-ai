@@ -1,0 +1,827 @@
+{
+  "deletions": [
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "contracts/work-routing/v1/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/app/work_provider_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_advance.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_advance_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_capabilities.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_command_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_flags.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_reconcile.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_reconcile_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_route.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_route_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_runtime_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_start.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_status.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_status_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_transition.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/work_transition_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/reviewtransaction/rar_plan_authority.go",
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "earlyDeviation": true,
+      "noRetainedInvariant": false,
+      "path": "internal/cli/work_verification_decide.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/reviewtransaction/rar_plan_authority.go",
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "earlyDeviation": true,
+      "noRetainedInvariant": false,
+      "path": "internal/cli/work_verification_decide_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/components/agentguidance/routing.go",
+      "destinationProof": [
+        "internal/components/agentguidance/routing_test.go"
+      ],
+      "earlyDeviation": false,
+      "noRetainedInvariant": false,
+      "path": "internal/components/sdd/triggerrules.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/components/agentguidance/routing_test.go",
+      "destinationProof": [
+        "internal/components/agentguidance/routing_test.go"
+      ],
+      "earlyDeviation": false,
+      "noRetainedInvariant": false,
+      "path": "internal/components/sdd/triggerrules_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/reviewtransaction/gate.go",
+      "destinationProof": [
+        "internal/reviewtransaction/pr_command_boundary_test.go"
+      ],
+      "earlyDeviation": true,
+      "noRetainedInvariant": false,
+      "path": "internal/deliveryadmission/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/evidence/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/hostruntime/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/mutationintegrity/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/sddstatus/workrun_binding.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/sddstatus/workrun_binding_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/reviewtransaction/",
+      "destinationProof": [
+        "internal/reviewtransaction/gate_test.go",
+        "internal/reviewtransaction/receipt_test.go"
+      ],
+      "earlyDeviation": true,
+      "noRetainedInvariant": false,
+      "path": "internal/workprovider/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/workprovider/pad_candidate_catalog.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/workprovider/pad_git_object_authority.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/workprovider/productive_advance_path_unix.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/workprovider/productive_advance_path_windows.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/reviewtransaction/",
+      "destinationProof": [
+        "internal/reviewtransaction/rdd_mode_test.go",
+        "internal/reviewtransaction/authority_repair_test.go",
+        "internal/reviewtransaction/compact_batch_reconcile_journal_test.go"
+      ],
+      "earlyDeviation": true,
+      "noRetainedInvariant": false,
+      "path": "internal/workprovider/productive_advance_recovery_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/reviewtransaction/rar_plan_authority.go",
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "earlyDeviation": true,
+      "noRetainedInvariant": false,
+      "path": "internal/workprovider/productive_verification_consent.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/workprovider/runtime_policy_provisioner.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/reviewtransaction/",
+      "destinationProof": [
+        "internal/reviewtransaction/store_test.go",
+        "internal/reviewtransaction/rar_path_safety_windows_test.go"
+      ],
+      "earlyDeviation": true,
+      "noRetainedInvariant": false,
+      "path": "internal/workrun/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/workrun/path_safety.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/workrun/path_safety_unix.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/workrun/path_safety_windows.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "noRetainedInvariant": true,
+      "path": "internal/workrun/store.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/reviewtransaction/rar_plan_authority.go",
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "earlyDeviation": true,
+      "noRetainedInvariant": false,
+      "path": "internal/workrun/verification_consent.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    }
+  ]
+}

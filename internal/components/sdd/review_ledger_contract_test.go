@@ -9,8 +9,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 var requiredLedgerClauses = boundedReviewRequiredClauses
@@ -181,8 +181,47 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		wantChars     int
 		maxCharacters int
 	}{
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 6_994, maxCharacters: 7_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 14_185, maxCharacters: 16_000},
+		// wantChars grew by 110 (7,085 -> 7,195 / 14,078 -> 14,188) when the
+		// review-ledger-contract.md GENTLE_AI_REVIEW_BINDING sentence was
+		// corrected: it previously claimed START emits that field verbatim,
+		// which no emitter does; it now says how to assemble it from START's
+		// own lineage_id/target_identity/lens_bindings fields (issue: docs vs
+		// emitter mismatch reported alongside the review-start hint gap).
+		//
+		// wantChars then grew by 737 per lens (7,195 -> 7,932 / 14,188 ->
+		// 17,136) when each lens prompt gained its own input and output
+		// contract. Two field reports cost a review each because the prompt
+		// left both unsaid: one lens returned findings/evidence with no
+		// subject_hash and no inspection, and one reported inspection.status
+		// "access_failure" after trying to generate the candidate diff and
+		// verify its SHA-256 itself, which its declared read-only tools never
+		// permitted. The prompt now names GENTLE_AI_REVIEW_BINDING as the only
+		// source of subject_hash, forbids inventing it, says the diff and
+		// manifest arrive in the prompt, and states that there are no
+		// execution tools. This is a deliberate contract change, not drift.
+		//
+		// wantChars then grew by 871 (7,932 -> 8,803 / 17,136 -> 18,007) when
+		// review-ledger-contract.md gained the per-candidate consent relay
+		// paragraph (the negotiated `--consent relay` question is a Lossless
+		// Blocking Prompt the orchestrator must relay losslessly, and a
+		// decline is not the kill switch) and the 4R cost-forecast rule (a
+		// canonical four-lens selection is long work: one forecast — four
+		// reviewer model runs, the frozen correction budget, the bounded
+		// correction — before the first lens). Both close field gaps where an
+		// agent launched a 4R review with no consent relayed and no cost
+		// warning. This is a deliberate contract change, not drift.
+		//
+		// maxCharacters is NOT a second copy of wantChars. wantChars catches
+		// every byte of change and must be updated by hand with a reason; the
+		// ceiling exists only to catch the rendering silently giving up on
+		// compression — the fall-through branch in renderBoundedReviewAsset
+		// injects the whole orchestrator contract into an agent it does not
+		// recognize, which is what beforeChars measures (42,301 / 106,998, the
+		// un-rendered protocol). The ceilings below sit ~15% above the pins so
+		// an ordinary wording fix never touches them, and 4-5x below the
+		// un-rendered sizes so a renderer regression still fails loudly.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 8_803, maxCharacters: 10_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 18_007, maxCharacters: 20_500},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

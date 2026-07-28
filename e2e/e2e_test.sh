@@ -606,8 +606,11 @@ test_cc_persona_custom_does_nothing() {
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component persona --persona custom 2>&1; then
-        # Custom persona should NOT create CLAUDE.md (persona does nothing).
-        assert_file_not_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md not created by custom persona"
+        # CLAUDE.md may exist: routing guidance is scheduled per agent and
+        # deliberately outside the component loop, so every configured agent
+        # receives it. What `--persona custom` promises is that no personality
+        # is imposed, so assert that instead of the file's absence.
+        assert_file_not_contains "$HOME/.claude/CLAUDE.md" "Senior Architect\|Rioplatense\|voseo" "CLAUDE.md carries no tone content under custom"
         # No output-style file either.
         assert_file_not_exists "$HOME/.claude/output-styles/gentleman.md" "No output-style for custom"
     else
@@ -1531,9 +1534,19 @@ test_edge_theme_not_in_presets() {
     if $BINARY install --agent claude-code --component theme --persona neutral 2>&1; then
         assert_file_exists "$HOME/.claude/settings.json" "Theme creates settings.json"
         assert_file_contains "$HOME/.claude/settings.json" '"theme"' "Theme key present"
-        # No other components should be created
+        # No other component should be created. CLAUDE.md itself is not proof
+        # of one: routing guidance is scheduled per agent, outside the
+        # component loop, so every configured agent gets it. What proves no
+        # component ran is that agent-routing is the ONLY managed section in
+        # the file.
         if [ -f "$HOME/.claude/CLAUDE.md" ]; then
-            log_fail "Theme-only install should NOT create CLAUDE.md"
+            local sections
+            sections=$(grep -o '<!-- gentle-ai:[a-z-]* -->' "$HOME/.claude/CLAUDE.md" | sort -u | tr '\n' ' ')
+            if [ "$(printf '%s' "$sections" | xargs)" = "<!-- gentle-ai:agent-routing -->" ]; then
+                log_pass "Theme-only: CLAUDE.md carries routing guidance and no component section"
+            else
+                log_fail "Theme-only install wrote component sections: $sections"
+            fi
         else
             log_pass "Theme-only: no CLAUDE.md (correct)"
         fi

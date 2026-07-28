@@ -11,6 +11,58 @@ import (
 	"time"
 )
 
+func TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline(t *testing.T) {
+	err := &AuthorityLockCancelledError{Cause: context.DeadlineExceeded}
+	if !errors.Is(err, ErrAuthorityLockCancelled) {
+		t.Fatal("lock cancellation lost its typed authority sentinel")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("lock cancellation masked the caller deadline")
+	}
+}
+
+func TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "status-lock-cancelled")
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace("", "review/start", state); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockContext, releaseContext := context.WithTimeout(context.Background(), time.Second)
+	defer releaseContext()
+	exclusive, err := AcquireReviewMaintenanceExclusive(lockContext, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer exclusive.Release()
+
+	loadContext, cancelLoad := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancelLoad)
+	started := time.Now()
+	_, err = store.LoadContext(loadContext)
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("cancelled status load took %s", elapsed)
+	}
+	var cancelled *AuthorityLockCancelledError
+	if !errors.As(err, &cancelled) || !errors.Is(err, ErrAuthorityLockCancelled) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled status load = %#v", err)
+	}
+	after, readErr := os.ReadFile(store.StatePath())
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("cancelled status load changed authority bytes")
+	}
+}
+
 func TestMaintenanceLockModesAndRelease(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "gentle-ai", "review-transactions", "MAINTENANCE.lock")
 	shared, err := acquireMaintenanceLock(context.Background(), path, maintenanceShared)
@@ -76,6 +128,30 @@ func TestMaintenanceLockRejectsSymlinksAndStaleBytesAreNotOwnership(t *testing.T
 	}
 	if _, err := acquireMaintenanceLock(context.Background(), path, maintenanceShared); err == nil {
 		t.Fatal("symlinked maintenance lock was accepted")
+	}
+}
+
+func TestEnsureMaintenanceLockPathRejectsRelativePaths(t *testing.T) {
+	for _, path := range []string{
+		"MAINTENANCE.lock",
+		"review-transactions/MAINTENANCE.lock",
+		"./review-transactions/MAINTENANCE.lock",
+	} {
+		t.Run(path, func(t *testing.T) {
+			if err := ensureMaintenanceLockPath(path); err == nil {
+				t.Fatal("relative maintenance lock path was accepted")
+			}
+		})
+	}
+}
+
+func TestEnsureMaintenanceLockPathAcceptsCanonicalAbsolutePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gentle-ai", "REVIEW-MAINTENANCE.lock")
+	if err := ensureMaintenanceLockPath(path); err != nil {
+		t.Fatalf("canonical absolute maintenance lock path was rejected: %v", err)
+	}
+	if info, err := os.Stat(filepath.Dir(path)); err != nil || !info.IsDir() {
+		t.Fatalf("maintenance lock directory = %v, %v", info, err)
 	}
 }
 

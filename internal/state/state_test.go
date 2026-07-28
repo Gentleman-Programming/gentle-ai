@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 // TestMergeAgents verifies that MergeAgents appends new agents to existing
@@ -913,6 +913,80 @@ func TestMergeAgents_PreservesPendingSync(t *testing.T) {
 	merged := MergeAgents(existing, []string{"opencode"})
 	if !merged.PendingSync {
 		t.Errorf("MergeAgents did not preserve PendingSync: got false, want true")
+	}
+}
+
+// TestRDDMode_RoundTrip verifies the global review-driven-development kill
+// switch survives a write/read cycle in uncommitted user state.
+func TestRDDMode_RoundTrip(t *testing.T) {
+	home := t.TempDir()
+	recorded := time.Now().UTC().Truncate(time.Second)
+	s := InstallState{
+		InstalledAgents:   []string{"claude-code"},
+		RDDMode:           "off",
+		RDDModeRecordedAt: &recorded,
+	}
+	if err := Write(home, s); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	got, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got.RDDMode != "off" {
+		t.Errorf("RDDMode = %q after round-trip, want %q", got.RDDMode, "off")
+	}
+	if got.RDDModeRecordedAt == nil || !got.RDDModeRecordedAt.Equal(recorded) {
+		t.Errorf("RDDModeRecordedAt = %v, want %v", got.RDDModeRecordedAt, recorded)
+	}
+	data, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !contains(string(data), "rdd_mode") || !contains(string(data), "rdd_mode_recorded_at") {
+		t.Errorf("JSON must contain the rdd mode keys; got:\n%s", data)
+	}
+}
+
+// TestRDDMode_BackwardCompat verifies that state files written before the kill
+// switch existed still read cleanly with an unconfigured mode.
+func TestRDDMode_BackwardCompat(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, stateDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacy := `{"installed_agents":["claude-code"]}` + "\n"
+	if err := os.WriteFile(Path(home), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	s, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if s.RDDMode != "" || s.RDDModeRecordedAt != nil {
+		t.Errorf("legacy state = %q/%v, want an unconfigured global mode", s.RDDMode, s.RDDModeRecordedAt)
+	}
+	data, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if contains(string(data), "rdd_mode") {
+		t.Error("reading legacy state must not rewrite it with rdd mode keys")
+	}
+}
+
+// TestMergeAgents_PreservesRDDMode verifies an incremental agent install never
+// silently drops the user's kill-switch choice.
+func TestMergeAgents_PreservesRDDMode(t *testing.T) {
+	recorded := time.Now().UTC()
+	existing := InstallState{
+		InstalledAgents:   []string{"claude-code"},
+		RDDMode:           "off",
+		RDDModeRecordedAt: &recorded,
+	}
+	merged := MergeAgents(existing, []string{"opencode"})
+	if merged.RDDMode != "off" || merged.RDDModeRecordedAt == nil || !merged.RDDModeRecordedAt.Equal(recorded) {
+		t.Errorf("MergeAgents dropped the global mode: %q/%v", merged.RDDMode, merged.RDDModeRecordedAt)
 	}
 }
 

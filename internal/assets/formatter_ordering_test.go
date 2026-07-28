@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 func TestSDDOrchestratorsRequireSafeFormatterOrdering(t *testing.T) {
@@ -45,7 +47,14 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 
 	jobs := []struct{ id, next string }{
 		{id: "unit-tests", next: "windows-runtime"},
-		{id: "windows-runtime", next: "e2e-tests"},
+		{id: "windows-runtime", next: "darwin-runtime"},
+		// darwin-runtime is a required check like its siblings, so it owes the
+		// same fail-closed contract. Listing it here is also what keeps the
+		// section slicing honest: a job this list does not know about gets
+		// swallowed into its predecessor's section, and its own guard step
+		// then reads as the predecessor bypassing the format gate.
+		{id: "darwin-runtime", next: "organic-runtime-e2e"},
+		{id: "organic-runtime-e2e", next: "e2e-tests"},
 		{id: "e2e-tests"},
 	}
 	for _, job := range jobs {
@@ -74,6 +83,63 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 				t.Fatalf("%s can bypass the failed format guard", job.id)
 			}
 		})
+	}
+}
+
+func TestOrganicRuntimeE2EUsesInstalledOpenCodePin(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	install := "npm install --global opencode-ai@" + versions.OpenCode
+	if strings.Count(string(data), install) != 1 {
+		t.Fatalf("organic runtime E2E must install exact supported OpenCode pin %q once", install)
+	}
+}
+
+func TestWindowsReleaseBlockerCannotSkipOwnerRebinding(t *testing.T) {
+	workflow, err := os.ReadFile(filepath.Join(
+		"..",
+		"..",
+		".github",
+		"workflows",
+		"ci.yml",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"TestRARPrivateOwnerRemainsTokenUserOnly",
+		`GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER: "1"`,
+	} {
+		if !strings.Contains(string(workflow), required) {
+			t.Fatalf(
+				"Windows release-blocker workflow missing %q",
+				required,
+			)
+		}
+	}
+	if strings.Contains(string(workflow), "internal/deliveryadmission") {
+		t.Fatal(
+			"Windows release-blocker workflow still tests the retired deliveryadmission package",
+		)
+	}
+
+	testSource, err := os.ReadFile(filepath.Join(
+		"..",
+		"reviewtransaction",
+		"rar_path_safety_windows_test.go",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(
+		string(testSource),
+		`os.Getenv("GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER") == "1"`,
+	) {
+		t.Fatal(
+			"native Windows owner-rebinding test can skip the release precondition",
+		)
 	}
 }
 

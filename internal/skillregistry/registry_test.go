@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/antigravity"
 )
 
 func TestRegenerateWritesRegistryAndCacheThenHitsCache(t *testing.T) {
@@ -177,6 +179,157 @@ description: OpenCode copy
 	}
 }
 
+func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
+	type fixtureSkill struct {
+		scope       string
+		path        string
+		name        string
+		description string
+	}
+	type expectedSkill struct {
+		scope       string
+		path        string
+		name        string
+		description string
+	}
+	tests := []struct {
+		name          string
+		skills        []fixtureSkill
+		want          []expectedSkill
+		activeVariant string
+	}{
+		{
+			name: "CLI only",
+			skills: []fixtureSkill{
+				{scope: "user", path: ".gemini/antigravity-cli/skills/cli-only/SKILL.md", name: "cli-only", description: "CLI only"},
+			},
+			want: []expectedSkill{
+				{scope: "user", path: ".gemini/antigravity-cli/skills/cli-only/SKILL.md", name: "cli-only", description: "CLI only"},
+			},
+			activeVariant: ".gemini/antigravity-cli/skills",
+		},
+		{
+			name: "Desktop only",
+			skills: []fixtureSkill{
+				{scope: "user", path: ".gemini/antigravity-desktop/skills/desktop-only/SKILL.md", name: "desktop-only", description: "Desktop only"},
+			},
+			want: []expectedSkill{
+				{scope: "user", path: ".gemini/antigravity-desktop/skills/desktop-only/SKILL.md", name: "desktop-only", description: "Desktop only"},
+			},
+			activeVariant: ".gemini/antigravity-desktop/skills",
+		},
+		{
+			name: "both variants preserve compatibility roots and precedence",
+			skills: []fixtureSkill{
+				{scope: "user", path: ".gemini/antigravity-cli/skills/cli-only/SKILL.md", name: "cli-only", description: "CLI only"},
+				{scope: "user", path: ".gemini/antigravity-cli/skills/duplicate/SKILL.md", name: "duplicate", description: "CLI duplicate"},
+				{scope: "user", path: ".gemini/antigravity-desktop/skills/desktop-only/SKILL.md", name: "desktop-only", description: "Desktop only"},
+				{scope: "user", path: ".gemini/antigravity-desktop/skills/duplicate/SKILL.md", name: "duplicate", description: "Desktop duplicate"},
+				{scope: "user", path: ".gemini/antigravity-desktop/skills/project-wins/SKILL.md", name: "project-wins", description: "Desktop user copy"},
+				{scope: "user", path: ".gemini/antigravity/skills/legacy-only/SKILL.md", name: "legacy-only", description: "Legacy only"},
+				{scope: "user", path: ".gemini/skills/shared-only/SKILL.md", name: "shared-only", description: "Shared only"},
+				{scope: "project", path: "skills/project-wins/SKILL.md", name: "project-wins", description: "Project copy"},
+			},
+			want: []expectedSkill{
+				{scope: "user", path: ".gemini/antigravity-cli/skills/cli-only/SKILL.md", name: "cli-only", description: "CLI only"},
+				{scope: "user", path: ".gemini/antigravity-desktop/skills/desktop-only/SKILL.md", name: "desktop-only", description: "Desktop only"},
+				{scope: "user", path: ".gemini/antigravity-desktop/skills/duplicate/SKILL.md", name: "duplicate", description: "Desktop duplicate"},
+				{scope: "user", path: ".gemini/antigravity/skills/legacy-only/SKILL.md", name: "legacy-only", description: "Legacy only"},
+				{scope: "project", path: "skills/project-wins/SKILL.md", name: "project-wins", description: "Project copy"},
+				{scope: "user", path: ".gemini/skills/shared-only/SKILL.md", name: "shared-only", description: "Shared only"},
+			},
+			activeVariant: ".gemini/antigravity-desktop/skills",
+		},
+		{
+			name: "missing variant directories preserve shared and legacy roots",
+			skills: []fixtureSkill{
+				{scope: "user", path: ".gemini/antigravity/skills/legacy-only/SKILL.md", name: "legacy-only", description: "Legacy only"},
+				{scope: "user", path: ".gemini/skills/shared-only/SKILL.md", name: "shared-only", description: "Shared only"},
+			},
+			want: []expectedSkill{
+				{scope: "user", path: ".gemini/antigravity/skills/legacy-only/SKILL.md", name: "legacy-only", description: "Legacy only"},
+				{scope: "user", path: ".gemini/skills/shared-only/SKILL.md", name: "shared-only", description: "Shared only"},
+			},
+			activeVariant: ".gemini/antigravity-cli/skills",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cwd := t.TempDir()
+			home := t.TempDir()
+			pathFor := func(scope, path string) string {
+				if scope == "project" {
+					return filepath.Join(cwd, filepath.FromSlash(path))
+				}
+				return filepath.Join(home, filepath.FromSlash(path))
+			}
+
+			all := make([]SkillEntry, len(tt.skills))
+			for i, skill := range tt.skills {
+				writeSkill(t, pathFor(skill.scope, skill.path), "---\nname: "+skill.name+"\ndescription: "+skill.description+"\n---\n")
+				all[i] = SkillEntry{
+					Name:        skill.name,
+					Path:        pathFor(skill.scope, skill.path),
+					Description: skill.description,
+				}
+			}
+
+			activeSkillsDir := antigravity.NewAdapter().SkillsDir(home)
+			if want := filepath.Join(home, filepath.FromSlash(tt.activeVariant)); activeSkillsDir != want {
+				t.Fatalf("active Antigravity skills dir = %q, want %q", activeSkillsDir, want)
+			}
+
+			want := make([]SkillEntry, len(tt.want))
+			for i, skill := range tt.want {
+				want[i] = SkillEntry{
+					Name:        skill.name,
+					Path:        pathFor(skill.scope, skill.path),
+					Description: skill.description,
+				}
+			}
+			t.Run("List", func(t *testing.T) {
+				assertSkillEntries(t, List(cwd, home), want)
+				assertSkillEntries(t, List(cwd, home), want)
+			})
+
+			t.Run("Regenerate", func(t *testing.T) {
+				first, err := Regenerate(cwd, home, false)
+				if err != nil {
+					t.Fatalf("Regenerate() error = %v", err)
+				}
+				if !first.Regenerated || first.SkillCount != len(want) || first.Reason != "fingerprint-changed" {
+					t.Fatalf("first result = %#v, want %d regenerated skills", first, len(want))
+				}
+				registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
+				assertRegistrySkills(t, registry, want, all)
+
+				second, err := Regenerate(cwd, home, false)
+				if err != nil {
+					t.Fatalf("second Regenerate() error = %v", err)
+				}
+				if second.Regenerated || second.Reason != "cache-hit" {
+					t.Fatalf("second result = %#v, want unchanged cache hit", second)
+				}
+				if got := readFile(t, filepath.Join(cwd, RegistryRelPath)); got != registry {
+					t.Fatal("registry changed on deterministic cache-hit run")
+				}
+
+				forced, err := Regenerate(cwd, home, true)
+				if err != nil {
+					t.Fatalf("forced Regenerate() error = %v", err)
+				}
+				if !forced.Regenerated || forced.SkillCount != len(want) || forced.Reason != "forced" {
+					t.Fatalf("forced result = %#v, want %d regenerated skills", forced, len(want))
+				}
+				if got := readFile(t, filepath.Join(cwd, RegistryRelPath)); got != registry {
+					t.Fatal("registry changed on deterministic forced regeneration")
+				}
+			})
+		})
+	}
+}
+
 func TestUserSkillDirsIncludesSupportedAgentSkillLocations(t *testing.T) {
 	home := t.TempDir()
 	dirs := UserSkillDirs(home)
@@ -187,6 +340,8 @@ func TestUserSkillDirsIncludesSupportedAgentSkillLocations(t *testing.T) {
 		filepath.Join(home, ".claude", "skills"),
 		filepath.Join(home, ".gemini", "skills"),
 		filepath.Join(home, ".gemini", "antigravity", "skills"),
+		filepath.Join(home, ".gemini", "antigravity-cli", "skills"),
+		filepath.Join(home, ".gemini", "antigravity-desktop", "skills"),
 		filepath.Join(home, ".cursor", "skills"),
 		filepath.Join(home, ".copilot", "skills"),
 		filepath.Join(home, ".codex", "skills"),
@@ -529,4 +684,43 @@ func containsPath(paths []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func assertSkillEntries(t *testing.T, got, want []SkillEntry) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("len(entries) = %d, want %d\nentries = %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("entries[%d] = %#v, want %#v\nall entries = %#v", i, got[i], want[i], got)
+		}
+	}
+}
+
+func assertRegistrySkills(
+	t *testing.T,
+	registry string,
+	want []SkillEntry,
+	all []SkillEntry,
+) {
+	t.Helper()
+	lastIndex := -1
+	selected := make(map[string]bool, len(want))
+	for _, skill := range want {
+		selected[skill.Path] = true
+		index := strings.Index(registry, "`"+skill.Path+"`")
+		if index == -1 {
+			t.Fatalf("registry missing selected skill %q:\n%s", skill.Path, registry)
+		}
+		if index <= lastIndex {
+			t.Fatalf("registry skills are not in deterministic name order:\n%s", registry)
+		}
+		lastIndex = index
+	}
+	for _, skill := range all {
+		if !selected[skill.Path] && strings.Contains(registry, "`"+skill.Path+"`") {
+			t.Fatalf("registry includes lower-precedence skill %q:\n%s", skill.Path, registry)
+		}
+	}
 }

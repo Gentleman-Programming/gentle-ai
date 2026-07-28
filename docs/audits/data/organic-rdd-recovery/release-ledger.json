@@ -1,0 +1,3390 @@
+{
+  "backlog": [
+    {
+      "kind": "issue",
+      "number": 77
+    },
+    {
+      "kind": "issue",
+      "number": 95
+    },
+    {
+      "kind": "issue",
+      "number": 110
+    },
+    {
+      "kind": "issue",
+      "number": 111
+    },
+    {
+      "kind": "issue",
+      "number": 128
+    },
+    {
+      "kind": "issue",
+      "number": 140
+    },
+    {
+      "kind": "issue",
+      "number": 197
+    },
+    {
+      "kind": "issue",
+      "number": 207
+    },
+    {
+      "kind": "issue",
+      "number": 249
+    },
+    {
+      "kind": "issue",
+      "number": 254
+    },
+    {
+      "kind": "issue",
+      "number": 259
+    },
+    {
+      "kind": "issue",
+      "number": 261
+    },
+    {
+      "kind": "issue",
+      "number": 262
+    },
+    {
+      "kind": "issue",
+      "number": 268
+    },
+    {
+      "kind": "issue",
+      "number": 273
+    },
+    {
+      "kind": "issue",
+      "number": 276
+    },
+    {
+      "kind": "issue",
+      "number": 279
+    },
+    {
+      "kind": "issue",
+      "number": 298
+    },
+    {
+      "kind": "issue",
+      "number": 306
+    },
+    {
+      "kind": "issue",
+      "number": 315
+    },
+    {
+      "kind": "issue",
+      "number": 334
+    },
+    {
+      "kind": "issue",
+      "number": 366
+    },
+    {
+      "kind": "issue",
+      "number": 375
+    },
+    {
+      "kind": "issue",
+      "number": 393
+    },
+    {
+      "kind": "issue",
+      "number": 428
+    },
+    {
+      "kind": "issue",
+      "number": 443
+    },
+    {
+      "kind": "issue",
+      "number": 444
+    },
+    {
+      "kind": "issue",
+      "number": 445
+    },
+    {
+      "kind": "issue",
+      "number": 452
+    },
+    {
+      "kind": "issue",
+      "number": 502
+    },
+    {
+      "kind": "issue",
+      "number": 504
+    },
+    {
+      "kind": "issue",
+      "number": 516
+    },
+    {
+      "kind": "issue",
+      "number": 523
+    },
+    {
+      "kind": "issue",
+      "number": 533
+    },
+    {
+      "kind": "issue",
+      "number": 535
+    },
+    {
+      "kind": "issue",
+      "number": 541
+    },
+    {
+      "kind": "issue",
+      "number": 545
+    },
+    {
+      "kind": "issue",
+      "number": 570
+    },
+    {
+      "kind": "issue",
+      "number": 591
+    },
+    {
+      "kind": "issue",
+      "number": 602
+    },
+    {
+      "kind": "issue",
+      "number": 608
+    },
+    {
+      "kind": "issue",
+      "number": 610
+    },
+    {
+      "kind": "issue",
+      "number": 617
+    },
+    {
+      "kind": "issue",
+      "number": 620
+    },
+    {
+      "kind": "issue",
+      "number": 633
+    },
+    {
+      "kind": "issue",
+      "number": 653
+    },
+    {
+      "kind": "issue",
+      "number": 676
+    },
+    {
+      "kind": "issue",
+      "number": 702
+    },
+    {
+      "kind": "issue",
+      "number": 703
+    },
+    {
+      "kind": "issue",
+      "number": 705
+    },
+    {
+      "kind": "issue",
+      "number": 707
+    },
+    {
+      "kind": "issue",
+      "number": 713
+    },
+    {
+      "kind": "issue",
+      "number": 720
+    },
+    {
+      "kind": "issue",
+      "number": 721
+    },
+    {
+      "kind": "issue",
+      "number": 722
+    },
+    {
+      "kind": "issue",
+      "number": 724
+    },
+    {
+      "kind": "issue",
+      "number": 727
+    },
+    {
+      "kind": "issue",
+      "number": 728
+    },
+    {
+      "kind": "issue",
+      "number": 730
+    },
+    {
+      "kind": "issue",
+      "number": 735
+    },
+    {
+      "kind": "issue",
+      "number": 736
+    },
+    {
+      "kind": "issue",
+      "number": 742
+    },
+    {
+      "kind": "issue",
+      "number": 743
+    },
+    {
+      "kind": "issue",
+      "number": 744
+    },
+    {
+      "kind": "issue",
+      "number": 771
+    },
+    {
+      "kind": "issue",
+      "number": 779
+    },
+    {
+      "kind": "issue",
+      "number": 782
+    },
+    {
+      "kind": "issue",
+      "number": 787
+    },
+    {
+      "kind": "issue",
+      "number": 797
+    },
+    {
+      "kind": "issue",
+      "number": 810
+    },
+    {
+      "kind": "issue",
+      "number": 828
+    },
+    {
+      "kind": "issue",
+      "number": 832
+    },
+    {
+      "kind": "issue",
+      "number": 838
+    },
+    {
+      "kind": "issue",
+      "number": 841
+    },
+    {
+      "kind": "issue",
+      "number": 848
+    },
+    {
+      "kind": "issue",
+      "number": 851
+    },
+    {
+      "kind": "issue",
+      "number": 858
+    },
+    {
+      "kind": "issue",
+      "number": 869
+    },
+    {
+      "kind": "issue",
+      "number": 896
+    },
+    {
+      "kind": "issue",
+      "number": 903
+    },
+    {
+      "kind": "issue",
+      "number": 910
+    },
+    {
+      "kind": "issue",
+      "number": 912
+    },
+    {
+      "kind": "issue",
+      "number": 914
+    },
+    {
+      "kind": "issue",
+      "number": 921
+    },
+    {
+      "kind": "issue",
+      "number": 926
+    },
+    {
+      "kind": "issue",
+      "number": 927
+    },
+    {
+      "kind": "issue",
+      "number": 931
+    },
+    {
+      "kind": "issue",
+      "number": 934
+    },
+    {
+      "kind": "issue",
+      "number": 945
+    },
+    {
+      "kind": "issue",
+      "number": 949
+    },
+    {
+      "kind": "issue",
+      "number": 950
+    },
+    {
+      "kind": "issue",
+      "number": 966
+    },
+    {
+      "kind": "issue",
+      "number": 968
+    },
+    {
+      "kind": "issue",
+      "number": 969
+    },
+    {
+      "kind": "issue",
+      "number": 974
+    },
+    {
+      "kind": "issue",
+      "number": 981
+    },
+    {
+      "kind": "issue",
+      "number": 984
+    },
+    {
+      "kind": "issue",
+      "number": 985
+    },
+    {
+      "kind": "issue",
+      "number": 986
+    },
+    {
+      "kind": "issue",
+      "number": 994
+    },
+    {
+      "kind": "issue",
+      "number": 995
+    },
+    {
+      "kind": "issue",
+      "number": 999
+    },
+    {
+      "kind": "issue",
+      "number": 1009
+    },
+    {
+      "kind": "issue",
+      "number": 1013
+    },
+    {
+      "kind": "issue",
+      "number": 1015
+    },
+    {
+      "kind": "issue",
+      "number": 1017
+    },
+    {
+      "kind": "issue",
+      "number": 1018
+    },
+    {
+      "kind": "issue",
+      "number": 1019
+    },
+    {
+      "kind": "issue",
+      "number": 1020
+    },
+    {
+      "kind": "issue",
+      "number": 1021
+    },
+    {
+      "kind": "issue",
+      "number": 1024
+    },
+    {
+      "kind": "issue",
+      "number": 1033
+    },
+    {
+      "kind": "issue",
+      "number": 1037
+    },
+    {
+      "kind": "issue",
+      "number": 1051
+    },
+    {
+      "kind": "issue",
+      "number": 1074
+    },
+    {
+      "kind": "issue",
+      "number": 1078
+    },
+    {
+      "kind": "issue",
+      "number": 1087
+    },
+    {
+      "kind": "issue",
+      "number": 1130
+    },
+    {
+      "kind": "issue",
+      "number": 1178
+    },
+    {
+      "kind": "issue",
+      "number": 1183
+    },
+    {
+      "kind": "issue",
+      "number": 1194
+    },
+    {
+      "kind": "issue",
+      "number": 1197
+    },
+    {
+      "kind": "issue",
+      "number": 1204
+    },
+    {
+      "kind": "issue",
+      "number": 1209
+    },
+    {
+      "kind": "issue",
+      "number": 1212
+    },
+    {
+      "kind": "issue",
+      "number": 1213
+    },
+    {
+      "kind": "issue",
+      "number": 1222
+    },
+    {
+      "kind": "issue",
+      "number": 1223
+    },
+    {
+      "kind": "issue",
+      "number": 1227
+    },
+    {
+      "kind": "issue",
+      "number": 1237
+    },
+    {
+      "kind": "issue",
+      "number": 1241
+    },
+    {
+      "kind": "issue",
+      "number": 1247
+    },
+    {
+      "kind": "issue",
+      "number": 1248
+    },
+    {
+      "kind": "issue",
+      "number": 1250
+    },
+    {
+      "kind": "issue",
+      "number": 1263
+    },
+    {
+      "kind": "issue",
+      "number": 1265
+    },
+    {
+      "kind": "issue",
+      "number": 1273
+    },
+    {
+      "kind": "issue",
+      "number": 1274
+    },
+    {
+      "kind": "issue",
+      "number": 1281
+    },
+    {
+      "kind": "issue",
+      "number": 1286
+    },
+    {
+      "kind": "issue",
+      "number": 1290
+    },
+    {
+      "kind": "issue",
+      "number": 1291
+    },
+    {
+      "kind": "issue",
+      "number": 1298
+    },
+    {
+      "kind": "issue",
+      "number": 1302
+    },
+    {
+      "kind": "issue",
+      "number": 1308
+    },
+    {
+      "kind": "issue",
+      "number": 1358
+    },
+    {
+      "kind": "issue",
+      "number": 1374
+    },
+    {
+      "kind": "issue",
+      "number": 1380
+    },
+    {
+      "kind": "issue",
+      "number": 1385
+    },
+    {
+      "kind": "issue",
+      "number": 1405
+    },
+    {
+      "kind": "issue",
+      "number": 1443
+    },
+    {
+      "kind": "issue",
+      "number": 1466
+    },
+    {
+      "kind": "issue",
+      "number": 1471
+    },
+    {
+      "kind": "issue",
+      "number": 1485
+    },
+    {
+      "kind": "issue",
+      "number": 1529
+    },
+    {
+      "kind": "issue",
+      "number": 1530
+    },
+    {
+      "kind": "issue",
+      "number": 1531
+    },
+    {
+      "kind": "issue",
+      "number": 1542
+    },
+    {
+      "kind": "issue",
+      "number": 1546
+    },
+    {
+      "kind": "issue",
+      "number": 1562
+    },
+    {
+      "kind": "issue",
+      "number": 1577
+    },
+    {
+      "kind": "issue",
+      "number": 1586
+    },
+    {
+      "kind": "issue",
+      "number": 1589
+    },
+    {
+      "kind": "issue",
+      "number": 1596
+    },
+    {
+      "kind": "issue",
+      "number": 1597
+    },
+    {
+      "kind": "issue",
+      "number": 1603
+    },
+    {
+      "kind": "issue",
+      "number": 1611
+    },
+    {
+      "kind": "issue",
+      "number": 1612
+    },
+    {
+      "kind": "issue",
+      "number": 1618
+    },
+    {
+      "kind": "issue",
+      "number": 1623
+    },
+    {
+      "kind": "issue",
+      "number": 1625
+    },
+    {
+      "kind": "issue",
+      "number": 1635
+    },
+    {
+      "kind": "issue",
+      "number": 1639
+    },
+    {
+      "kind": "issue",
+      "number": 1641
+    },
+    {
+      "kind": "issue",
+      "number": 1644
+    },
+    {
+      "kind": "issue",
+      "number": 1645
+    },
+    {
+      "kind": "issue",
+      "number": 1648
+    },
+    {
+      "kind": "issue",
+      "number": 1649
+    },
+    {
+      "kind": "issue",
+      "number": 1656
+    },
+    {
+      "kind": "issue",
+      "number": 1658
+    },
+    {
+      "kind": "issue",
+      "number": 1660
+    },
+    {
+      "kind": "issue",
+      "number": 1663
+    },
+    {
+      "kind": "issue",
+      "number": 1664
+    },
+    {
+      "kind": "issue",
+      "number": 1666
+    },
+    {
+      "kind": "issue",
+      "number": 1669
+    },
+    {
+      "kind": "issue",
+      "number": 1671
+    },
+    {
+      "kind": "issue",
+      "number": 1672
+    },
+    {
+      "kind": "issue",
+      "number": 1673
+    },
+    {
+      "kind": "issue",
+      "number": 1675
+    },
+    {
+      "kind": "issue",
+      "number": 1676
+    },
+    {
+      "kind": "issue",
+      "number": 1677
+    },
+    {
+      "kind": "issue",
+      "number": 1678
+    },
+    {
+      "kind": "issue",
+      "number": 1680
+    },
+    {
+      "kind": "issue",
+      "number": 1682
+    },
+    {
+      "kind": "issue",
+      "number": 1688
+    },
+    {
+      "kind": "issue",
+      "number": 1689
+    },
+    {
+      "kind": "issue",
+      "number": 1690
+    },
+    {
+      "kind": "issue",
+      "number": 1697
+    },
+    {
+      "kind": "issue",
+      "number": 1698
+    },
+    {
+      "kind": "issue",
+      "number": 1699
+    },
+    {
+      "kind": "issue",
+      "number": 1700
+    },
+    {
+      "kind": "issue",
+      "number": 1702
+    },
+    {
+      "kind": "issue",
+      "number": 1703
+    },
+    {
+      "kind": "issue",
+      "number": 1710
+    },
+    {
+      "kind": "issue",
+      "number": 1717
+    },
+    {
+      "kind": "issue",
+      "number": 1718
+    },
+    {
+      "kind": "issue",
+      "number": 1719
+    },
+    {
+      "kind": "issue",
+      "number": 1720
+    },
+    {
+      "kind": "issue",
+      "number": 1721
+    },
+    {
+      "kind": "issue",
+      "number": 1722
+    },
+    {
+      "kind": "issue",
+      "number": 1723
+    },
+    {
+      "kind": "issue",
+      "number": 1724
+    },
+    {
+      "kind": "issue",
+      "number": 1725
+    },
+    {
+      "kind": "issue",
+      "number": 1726
+    },
+    {
+      "kind": "issue",
+      "number": 1727
+    },
+    {
+      "kind": "issue",
+      "number": 1728
+    },
+    {
+      "kind": "issue",
+      "number": 1730
+    },
+    {
+      "kind": "issue",
+      "number": 1731
+    },
+    {
+      "kind": "issue",
+      "number": 1732
+    },
+    {
+      "kind": "issue",
+      "number": 1734
+    },
+    {
+      "kind": "issue",
+      "number": 1739
+    },
+    {
+      "kind": "issue",
+      "number": 1742
+    },
+    {
+      "kind": "issue",
+      "number": 1743
+    },
+    {
+      "kind": "issue",
+      "number": 1744
+    },
+    {
+      "kind": "issue",
+      "number": 1745
+    },
+    {
+      "kind": "issue",
+      "number": 1757
+    },
+    {
+      "kind": "issue",
+      "number": 1763
+    },
+    {
+      "kind": "issue",
+      "number": 1766
+    },
+    {
+      "kind": "issue",
+      "number": 1767
+    },
+    {
+      "kind": "issue",
+      "number": 1770
+    },
+    {
+      "kind": "issue",
+      "number": 1771
+    },
+    {
+      "kind": "issue",
+      "number": 1772
+    },
+    {
+      "kind": "issue",
+      "number": 1773
+    },
+    {
+      "kind": "issue",
+      "number": 1774
+    },
+    {
+      "kind": "issue",
+      "number": 1775
+    },
+    {
+      "kind": "issue",
+      "number": 1778
+    },
+    {
+      "kind": "issue",
+      "number": 1780
+    },
+    {
+      "kind": "issue",
+      "number": 1781
+    },
+    {
+      "kind": "issue",
+      "number": 1782
+    },
+    {
+      "kind": "issue",
+      "number": 1784
+    },
+    {
+      "kind": "issue",
+      "number": 1785
+    },
+    {
+      "kind": "pull_request",
+      "number": 688
+    },
+    {
+      "kind": "pull_request",
+      "number": 708
+    },
+    {
+      "kind": "pull_request",
+      "number": 731
+    },
+    {
+      "kind": "pull_request",
+      "number": 732
+    },
+    {
+      "kind": "pull_request",
+      "number": 738
+    },
+    {
+      "kind": "pull_request",
+      "number": 740
+    },
+    {
+      "kind": "pull_request",
+      "number": 765
+    },
+    {
+      "kind": "pull_request",
+      "number": 840
+    },
+    {
+      "kind": "pull_request",
+      "number": 852
+    },
+    {
+      "kind": "pull_request",
+      "number": 905
+    },
+    {
+      "kind": "pull_request",
+      "number": 918
+    },
+    {
+      "kind": "pull_request",
+      "number": 946
+    },
+    {
+      "kind": "pull_request",
+      "number": 956
+    },
+    {
+      "kind": "pull_request",
+      "number": 973
+    },
+    {
+      "kind": "pull_request",
+      "number": 975
+    },
+    {
+      "kind": "pull_request",
+      "number": 976
+    },
+    {
+      "kind": "pull_request",
+      "number": 979
+    },
+    {
+      "kind": "pull_request",
+      "number": 996
+    },
+    {
+      "kind": "pull_request",
+      "number": 1023
+    },
+    {
+      "kind": "pull_request",
+      "number": 1053
+    },
+    {
+      "kind": "pull_request",
+      "number": 1059
+    },
+    {
+      "kind": "pull_request",
+      "number": 1063
+    },
+    {
+      "kind": "pull_request",
+      "number": 1064
+    },
+    {
+      "kind": "pull_request",
+      "number": 1068
+    },
+    {
+      "kind": "pull_request",
+      "number": 1069
+    },
+    {
+      "kind": "pull_request",
+      "number": 1070
+    },
+    {
+      "kind": "pull_request",
+      "number": 1071
+    },
+    {
+      "kind": "pull_request",
+      "number": 1072
+    },
+    {
+      "kind": "pull_request",
+      "number": 1073
+    },
+    {
+      "kind": "pull_request",
+      "number": 1076
+    },
+    {
+      "kind": "pull_request",
+      "number": 1077
+    },
+    {
+      "kind": "pull_request",
+      "number": 1079
+    },
+    {
+      "kind": "pull_request",
+      "number": 1080
+    },
+    {
+      "kind": "pull_request",
+      "number": 1085
+    },
+    {
+      "kind": "pull_request",
+      "number": 1086
+    },
+    {
+      "kind": "pull_request",
+      "number": 1105
+    },
+    {
+      "kind": "pull_request",
+      "number": 1108
+    },
+    {
+      "kind": "pull_request",
+      "number": 1180
+    },
+    {
+      "kind": "pull_request",
+      "number": 1219
+    },
+    {
+      "kind": "pull_request",
+      "number": 1251
+    },
+    {
+      "kind": "pull_request",
+      "number": 1280
+    },
+    {
+      "kind": "pull_request",
+      "number": 1284
+    },
+    {
+      "kind": "pull_request",
+      "number": 1287
+    },
+    {
+      "kind": "pull_request",
+      "number": 1297
+    },
+    {
+      "kind": "pull_request",
+      "number": 1357
+    },
+    {
+      "kind": "pull_request",
+      "number": 1359
+    },
+    {
+      "kind": "pull_request",
+      "number": 1442
+    },
+    {
+      "kind": "pull_request",
+      "number": 1486
+    },
+    {
+      "kind": "pull_request",
+      "number": 1487
+    },
+    {
+      "kind": "pull_request",
+      "number": 1488
+    },
+    {
+      "kind": "pull_request",
+      "number": 1489
+    },
+    {
+      "kind": "pull_request",
+      "number": 1490
+    },
+    {
+      "kind": "pull_request",
+      "number": 1491
+    },
+    {
+      "kind": "pull_request",
+      "number": 1492
+    },
+    {
+      "kind": "pull_request",
+      "number": 1494
+    },
+    {
+      "kind": "pull_request",
+      "number": 1497
+    },
+    {
+      "kind": "pull_request",
+      "number": 1500
+    },
+    {
+      "kind": "pull_request",
+      "number": 1501
+    },
+    {
+      "kind": "pull_request",
+      "number": 1507
+    },
+    {
+      "kind": "pull_request",
+      "number": 1508
+    },
+    {
+      "kind": "pull_request",
+      "number": 1556
+    },
+    {
+      "kind": "pull_request",
+      "number": 1565
+    },
+    {
+      "kind": "pull_request",
+      "number": 1574
+    },
+    {
+      "kind": "pull_request",
+      "number": 1595
+    },
+    {
+      "kind": "pull_request",
+      "number": 1608
+    },
+    {
+      "kind": "pull_request",
+      "number": 1617
+    },
+    {
+      "kind": "pull_request",
+      "number": 1622
+    },
+    {
+      "kind": "pull_request",
+      "number": 1624
+    },
+    {
+      "kind": "pull_request",
+      "number": 1630
+    },
+    {
+      "kind": "pull_request",
+      "number": 1642
+    },
+    {
+      "kind": "pull_request",
+      "number": 1643
+    },
+    {
+      "kind": "pull_request",
+      "number": 1661
+    },
+    {
+      "kind": "pull_request",
+      "number": 1695
+    },
+    {
+      "kind": "pull_request",
+      "number": 1696
+    },
+    {
+      "kind": "pull_request",
+      "number": 1707
+    },
+    {
+      "kind": "pull_request",
+      "number": 1709
+    },
+    {
+      "kind": "pull_request",
+      "number": 1711
+    },
+    {
+      "kind": "pull_request",
+      "number": 1712
+    },
+    {
+      "kind": "pull_request",
+      "number": 1713
+    },
+    {
+      "kind": "pull_request",
+      "number": 1748
+    },
+    {
+      "kind": "pull_request",
+      "number": 1749
+    },
+    {
+      "kind": "pull_request",
+      "number": 1750
+    },
+    {
+      "kind": "pull_request",
+      "number": 1751
+    },
+    {
+      "kind": "pull_request",
+      "number": 1752
+    },
+    {
+      "kind": "pull_request",
+      "number": 1753
+    },
+    {
+      "kind": "pull_request",
+      "number": 1755
+    },
+    {
+      "kind": "pull_request",
+      "number": 1756
+    },
+    {
+      "kind": "pull_request",
+      "number": 1764
+    },
+    {
+      "kind": "pull_request",
+      "number": 1769
+    },
+    {
+      "kind": "pull_request",
+      "number": 1777
+    },
+    {
+      "kind": "pull_request",
+      "number": 1779
+    },
+    {
+      "kind": "pull_request",
+      "number": 1783
+    }
+  ],
+  "releases": [
+    {
+      "earlyDeviation": true,
+      "path": "contracts/work-routing/v1/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "docs/trigger-rules.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "e2e/organicruntime/organic_runtime_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/agents/capabilitymanifest/manifest.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/agents/capabilitymanifest/manifest_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/app/app.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/app/app_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/app/help.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/app/help_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/app/work_provider_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/antigravity/sdd-orchestrator.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/assets_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/claude/sdd-orchestrator.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/codex/sdd-orchestrator.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/cursor/sdd-orchestrator.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/gemini/sdd-orchestrator.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/generic/sdd-orchestrator.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/hermes/sdd-orchestrator.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/kimi/sdd-orchestrator.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/kiro/sdd-orchestrator.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/opencode/sdd-orchestrator.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/qwen/sdd-orchestrator.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/skills/_shared/review-ledger-contract.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/assets/windsurf/sdd-orchestrator.md",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/catalog/bounded_review_triggers_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/catalog/release_event_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/catalog/triggers.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/catalog/triggers_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/doctor.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/doctor_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/review.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/review_facade.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/review_mode.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/review_mode_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/review_next_transition.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/review_status_contract.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/review_verification_decide.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/review_verification_decide_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/run.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/run_component_paths_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/sdd_attempt.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/sync.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/cli/sync_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_advance.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_advance_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_capabilities.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_command_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_flags.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_reconcile.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_reconcile_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_route.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_route_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_runtime_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_start.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_status.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_status_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_transition.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_transition_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_verification_decide.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/cli/work_verification_decide_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/components/agentguidance/inject.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/components/agentguidance/inject_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/components/agentguidance/routing.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/components/agentguidance/routing_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/components/agentguidance/status.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/components/agentguidance/status_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/components/golden_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/components/sdd/bounded_review_contract_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/components/sdd/boundedreview.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/components/sdd/inject.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/components/sdd/inject_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/components/sdd/triggerrules.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/components/sdd/triggerrules_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/deliveryadmission/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/doctor/doctor.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/doctor/doctor_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/evidence/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/hostruntime/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/model/types.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/mutationintegrity/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/reviewtransaction/compact_reviewer_capture.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/reviewtransaction/compact_reviewer_capture_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/reviewtransaction/rar_plan_authority.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/reviewtransaction/rar_plan_authority_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/reviewtransaction/rdd_mode.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/reviewtransaction/rdd_mode_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/reviewtransaction/risk.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/reviewtransaction/risk_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/reviewtransaction/verification_consent.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/reviewtransaction/verification_consent_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/reviewtransaction/verification_contract.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/reviewtransaction/verification_contract_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/sddstatus/runtime_ledger.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/sddstatus/runtime_ledger_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/sddstatus/workrun_binding.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/sddstatus/workrun_binding_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/state/state.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/state/state_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "internal/testdata/golden/trigger-rules-default.golden",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workprovider/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workprovider/pad_candidate_catalog.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workprovider/pad_git_object_authority.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workprovider/productive_advance_path_unix.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workprovider/productive_advance_path_windows.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workprovider/productive_advance_recovery_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workprovider/productive_verification_consent.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workprovider/runtime_policy_provisioner.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workrun/",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workrun/path_safety.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workrun/path_safety_unix.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workrun/path_safety_windows.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workrun/store.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": true,
+      "path": "internal/workrun/verification_consent.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "path": "testdata/golden/organic-routing-manifest.json",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    }
+  ]
+}

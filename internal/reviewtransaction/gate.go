@@ -111,6 +111,15 @@ type NativeGateEvaluation struct {
 	Reason  string
 	Context GateContext
 	Cause   error `json:"-"`
+	// Contended reports that this evaluation reached no verdict at all: the
+	// read-only final-authorization window could not obtain the advisory
+	// authority lock within its bounded wait, so nothing about the candidate
+	// was decided (1861). A gate that lost a lock has not found damage, so the
+	// caller must surface Cause — an *AuthorityLockTimeoutError — instead of
+	// publishing Result, which stays `invalidated` only so an emitter that has
+	// not been taught about contention degrades to the previous behavior
+	// rather than to an unpublished enum value.
+	Contended bool `json:"-"`
 }
 
 var finalGateAuthorizationHook = func() {}
@@ -303,6 +312,28 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 	if request.Gate == GatePrePR && result != GateAllow {
 		gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: string(result)}
 	}
+	if result == GateScopeChanged {
+		// validateDerivedGate is a pure receipt-vs-context comparison and
+		// cannot attach diagnostics itself, but this call site already holds
+		// ctx and repo, exactly like the compact gate path does when it
+		// derives GateScopeChangeDiagnostics. Reuse the same exported
+		// derivation — never a second copy of the diff/digest logic — by
+		// shaping the legacy transaction's bound scope as the minimal
+		// CompactState it actually reads (LineageID, CurrentSnapshot). A
+		// derivation failure (for example a transient Git fault) leaves
+		// ScopeChange nil rather than fabricating a recovery continuation.
+		// The shaped CompactState carries no InitialSnapshot, so the
+		// gate-conditional committed base-diff recommendation never arms here:
+		// a legacy-v1 transaction does not record the target kind that binds
+		// the pre-push one-commit delivery rule, and a recommendation this
+		// path cannot prove would be exactly the dead-end this derivation
+		// exists to remove.
+		if diagnostics, diagnosticsErr := CompactScopeChangeDiagnostics(ctx, repo, CompactState{
+			LineageID: record.Transaction.LineageID, CurrentSnapshot: record.Transaction.Snapshot,
+		}, revision, snapshot, request.Gate); diagnosticsErr == nil {
+			gateContext.ScopeChange = &diagnostics
+		}
+	}
 	if result == GateAllow {
 		finalGateAuthorizationHook()
 		finalSnapshot, finalRefs, err := buildLifecycleSnapshot(ctx, repo, request)
@@ -316,6 +347,8 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 
 type resolvedPrePRRefs struct {
 	Selection            PrePRBoundarySelection
+	TrackingBoundary     PrePRBoundarySelection
+	TrackingPresent      bool
 	HeadCommit           string
 	BaseCommit           string
 	DeliveredCommitCount int
@@ -392,6 +425,56 @@ func prePRBoundaryForRequest(ctx context.Context, repo string, request GateReque
 	return selectPrePRBoundary(ctx, repo, "")
 }
 
+// shellUnsafeBoundaryRefCharacters lists every POSIX shell metacharacter plus
+// the glob and brace-expansion characters. The gate binds boundary selectors as
+// structured fields and launches Git only through an argv, but a bound selector
+// is replayed verbatim into whatever process consumes it (`check-ref-format`,
+// `ls-remote`, `merge-base`, `rev-list`), so a selector that carries `;`,
+// `&&`, `$(...)`, a backtick, a redirection, or a glob would become a composed
+// command the moment any consumer is less careful than the gate. Git ref names
+// never need these characters, so rejecting the whole set costs nothing and
+// fails closed.
+const shellUnsafeBoundaryRefCharacters = "|&;<>()$`\\\"'*?[]{}!"
+
+// errCommandLikeBoundaryRef marks a publication-boundary selector that only
+// means something to a shell or an argument parser, never to Git.
+var errCommandLikeBoundaryRef = errors.New("boundary ref must be a structured ref, not a command")
+
+// validateBoundaryRefSelector hardens the refs that name the PR head and its
+// destination — the "PR commands" threat-matrix boundary. Beyond the ordinary
+// token rules (printable ASCII, no surrounding whitespace, bounded length) it
+// rejects three families that only mean something to a shell or an argument
+// parser:
+//
+//  1. Composed-shell forms, via shellUnsafeBoundaryRefCharacters.
+//     Environment-prefix forms (`env VAR=x refs/heads/main`,
+//     `GIT_DIR=/tmp refs/heads/main`) are already rejected by the token rule
+//     because they contain whitespace.
+//  2. Argument injection: a leading `-` would still be read as an option by a
+//     structured argument list, so `--upload-pack=id` can never be a ref.
+//  3. Selector and traversal forms Git itself forbids in ref names: `..`
+//     escapes the ref namespace and `@{` is a reflog/upstream selector.
+//
+// The rule deliberately keeps `:`, `/`, `.`, `-`, `_`, `+`, `,`, `%` and `@`
+// legal, because it is a shell/argument boundary, not a ref-name policy;
+// `git check-ref-format` still governs branch resolution downstream.
+func validateBoundaryRefSelector(name, value string) error {
+	if value == "" || value != strings.TrimSpace(value) || len(value) > 512 {
+		return fmt.Errorf("%w: %s", errCommandLikeBoundaryRef, name)
+	}
+	for _, character := range value {
+		if character < 0x21 || character > 0x7e {
+			return fmt.Errorf("%w: %s", errCommandLikeBoundaryRef, name)
+		}
+	}
+	if strings.ContainsAny(value, shellUnsafeBoundaryRefCharacters) ||
+		strings.HasPrefix(value, "-") ||
+		strings.Contains(value, "..") || strings.Contains(value, "@{") {
+		return fmt.Errorf("%w: %s", errCommandLikeBoundaryRef, name)
+	}
+	return nil
+}
+
 func selectPrePRBoundary(ctx context.Context, repo, selector string) (PrePRBoundarySelection, error) {
 	selector = strings.TrimSpace(selector)
 	var selection PrePRBoundarySelection
@@ -399,6 +482,9 @@ func selectPrePRBoundary(ctx context.Context, repo, selector string) (PrePRBound
 	if selector != "" {
 		if filepath.IsAbs(selector) {
 			return PrePRBoundarySelection{}, errors.New("explicit pre-PR base selector must not be an absolute path")
+		}
+		if err := validateBoundaryRefSelector("pre-PR base selector", selector); err != nil {
+			return PrePRBoundarySelection{}, err
 		}
 		selection, err = resolveAdvertisedSelector(ctx, repo, selector, PrePRBoundaryExplicit)
 	} else {
@@ -419,9 +505,20 @@ func selectPrePRBoundary(ctx context.Context, repo, selector string) (PrePRBound
 	}
 	bases, mergeErr := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, selection.Commit)
 	if mergeBases := strings.Fields(string(bases)); mergeErr != nil || len(mergeBases) != 1 {
-		return PrePRBoundarySelection{}, fmt.Errorf("publication base has %d merge bases; pass --base-ref <remote>/<branch>", len(mergeBases))
+		message := fmt.Sprintf("publication base has %d merge bases; pass --base-ref <remote>/<branch>", len(mergeBases))
+		if mergeErr != nil {
+			// A Git fault says nothing about the selector, so it keeps failing
+			// closed instead of promising that a flag resolves it.
+			return PrePRBoundarySelection{}, errors.New(message)
+		}
+		return PrePRBoundarySelection{}, baseRefTargetResolutionError(message)
 	}
 	return selection, nil
+}
+
+func ValidatePrePRBoundarySelector(ctx context.Context, repo, selector string) error {
+	_, err := selectPrePRBoundary(ctx, repo, selector)
+	return err
 }
 
 func buildPrePRTarget(ctx context.Context, repo, selector, ciAttestation string, intendedUntracked []string) (Target, *PrePRRequest, error) {
@@ -446,7 +543,7 @@ func publicationRemoteConfigured(ctx context.Context, repo string) (bool, error)
 func resolveAuthoritativePublicationBase(ctx context.Context, repo string) (string, string, string, error) {
 	remote, configured, err := publicationRemote(ctx, repo)
 	if err != nil || !configured {
-		return "", "", "", errors.New("publication target remote is not configured; pass --base-ref <remote>/<branch>")
+		return "", "", "", baseRefTargetResolutionError("publication target remote is not configured; pass --base-ref <remote>/<branch>")
 	}
 	output, err := runGit(ctx, repo, nil, nil, "ls-remote", "--symref", remote, "HEAD")
 	if err != nil {
@@ -460,7 +557,7 @@ func resolveAuthoritativePublicationBase(ctx context.Context, repo string) (stri
 		}
 	}
 	if ref == "" {
-		return "", "", "", errors.New("publication target default branch is unavailable; pass --base-ref <remote>/<branch>")
+		return "", "", "", baseRefTargetResolutionError("publication target default branch is unavailable; pass --base-ref <remote>/<branch>")
 	}
 	selection, err := advertisedRemoteRef(ctx, repo, remote, ref, remote+"/"+strings.TrimPrefix(ref, "refs/heads/"), PrePRBoundaryPublicationDefault)
 	if err != nil {
@@ -469,14 +566,57 @@ func resolveAuthoritativePublicationBase(ctx context.Context, repo string) (stri
 	return selection.RemoteRef, selection.Remote, selection.Commit, nil
 }
 
-func resolveTrackingUpstreamBase(ctx context.Context, repo string) (string, string, string, error) {
-	branch := currentBranch(ctx, repo)
-	if branch == "" {
-		return "", "", "", errors.New("configured upstream is unavailable on detached HEAD; pass --base-ref <remote>/<branch>")
+// GateTargetResolutionError reports a semantic target-selection failure that
+// the caller can correct by supplying the named input. It does not represent
+// receipt-authority corruption or a Git process failure.
+type GateTargetResolutionError struct {
+	RequiredInput string
+	Err           error
+}
+
+func (err *GateTargetResolutionError) Error() string {
+	if err == nil || err.Err == nil {
+		return "review gate target resolution failed"
 	}
-	remote, ref, ok := configuredUpstreamRef(ctx, repo, branch)
+	return err.Err.Error()
+}
+
+func (err *GateTargetResolutionError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Err
+}
+
+// baseRefTargetResolutionError types a publication-boundary failure the caller
+// resolves by supplying --base-ref <remote>/<branch>. Every producer of that
+// sentence types itself here: an untyped one is classified downstream as an
+// unexplained assessment failure and reported as a damaged authority store,
+// which is a repair instruction for a repository that needs a flag (#1861
+// sibling).
+func baseRefTargetResolutionError(message string) error {
+	return &GateTargetResolutionError{RequiredInput: "base_ref", Err: errors.New(message)}
+}
+
+func resolveTrackingUpstreamBase(ctx context.Context, repo string) (string, string, string, error) {
+	branchOutput, err := runGit(ctx, repo, nil, nil, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		var commandErr *GitCommandError
+		if errors.As(err, &commandErr) && commandErr.ExitCode == 1 {
+			return "", "", "", baseRefTargetResolutionError("configured upstream is unavailable on detached HEAD; pass --base-ref <remote>/<branch>")
+		}
+		return "", "", "", fmt.Errorf("resolve configured tracking branch: %w", err)
+	}
+	branch := strings.TrimSpace(string(branchOutput))
+	if branch == "" {
+		return "", "", "", baseRefTargetResolutionError("configured upstream is unavailable on detached HEAD; pass --base-ref <remote>/<branch>")
+	}
+	remote, ref, ok, err := configuredUpstreamRef(ctx, repo, branch)
+	if err != nil {
+		return "", "", "", fmt.Errorf("resolve configured tracking ref: %w", err)
+	}
 	if !ok {
-		return "", "", "", errors.New("configured upstream is missing or ambiguous; pass --base-ref <remote>/<branch>")
+		return "", "", "", baseRefTargetResolutionError("configured upstream is missing or ambiguous; pass --base-ref <remote>/<branch>")
 	}
 	selection, err := advertisedRemoteRef(ctx, repo, remote, ref, remote+"/"+strings.TrimPrefix(ref, "refs/heads/"), PrePRBoundaryPublicationDefault)
 	if err != nil {
@@ -521,7 +661,7 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 		}
 	}
 	if len(matches) != 1 {
-		return PrePRBoundarySelection{}, fmt.Errorf("explicit pre-PR base %q is missing or ambiguous on advertised remote branches; pass --base-ref <remote>/<branch>", selector)
+		return PrePRBoundarySelection{}, baseRefTargetResolutionError(fmt.Sprintf("explicit pre-PR base %q is missing or ambiguous on advertised remote branches; pass --base-ref <remote>/<branch>", selector))
 	}
 	local, err := resolveCommit(ctx, repo, matches[0].Commit)
 	if err != nil || local != matches[0].Commit {
@@ -541,7 +681,7 @@ func advertisedRemoteRef(ctx context.Context, repo, remote, ref, selector string
 	}
 	fields := strings.Fields(string(output))
 	if len(fields) != 2 || fields[1] != ref || !validGitTree(fields[0]) {
-		return PrePRBoundarySelection{}, fmt.Errorf("base selector %q is not a current advertised remote branch; pass --base-ref <remote>/<branch>", selector)
+		return PrePRBoundarySelection{}, baseRefTargetResolutionError(fmt.Sprintf("base selector %q is not a current advertised remote branch; pass --base-ref <remote>/<branch>", selector))
 	}
 	local, err := resolveCommit(ctx, repo, fields[0])
 	if err != nil || local != fields[0] {
@@ -624,6 +764,109 @@ func currentBranch(ctx context.Context, repo string) string {
 	return strings.TrimSpace(string(output))
 }
 
+// ErrReviewedDeliveryNotOneCommit reports the deterministic pre-push delivery
+// shape rule for current-changes receipts: the candidate publishes a range
+// that is not exactly one commit beyond the reviewed base the receipt froze.
+// It is a typed statement about candidate shape versus the reviewed receipt —
+// never about authority integrity — so receipt discovery can classify it as a
+// receipt/scope mismatch instead of corruption. Infrastructure or derivation
+// failures while computing the shape stay untyped and keep failing closed.
+var ErrReviewedDeliveryNotOneCommit = errors.New("reviewed delivery is not exactly one commit from its reviewed base")
+
+// GateDeliveryBaseResolutionError reports that the reviewed candidate's base
+// commit could not be uniquely located inside the publication range: either
+// no commit in range carries the reviewed tree, or more than one does. This
+// is the "published delivery" release blocker — a receipt that stopped
+// governing a candidate that already moved, not authority damage — so
+// discovery classifies it with the scope-changed family instead of the
+// corruption catch-all.
+type GateDeliveryBaseResolutionError struct {
+	Err error
+}
+
+func (err *GateDeliveryBaseResolutionError) Error() string {
+	if err == nil || err.Err == nil {
+		return "reviewed delivery base could not be resolved in the publication range"
+	}
+	return err.Err.Error()
+}
+
+func (err *GateDeliveryBaseResolutionError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Err
+}
+
+// PrePushDeliversNothing reports whether a pre-push event would publish no new
+// commit at all, so the gate has nothing to approve and nothing to refuse.
+//
+// The permissive answer is `(true, nil)` and it is reachable only from a
+// COMPLETE derivation. Every step that fails -- a detached HEAD, a missing or
+// ambiguous tracking upstream, an unreachable remote, an advertised tip that is
+// not fetched locally, a non-unique merge base, an unconfigured push
+// destination -- returns `(false, err)`. A caller that drops the error still
+// reads false, so a derivation the product could not compute can never be
+// mistaken for an empty range. That separation is the whole safety property:
+// "empty" and "unknown" must never share a branch, because only one of them is
+// safe to allow.
+//
+// Emptiness itself is the OID equality `merge-base(HEAD, boundary) == HEAD`,
+// not a rev-list that returned no lines. The merge base is by definition an
+// ancestor of HEAD, so the two are equivalent, but the equality compares two
+// commit ids that were each already resolved successfully and introduces no
+// failure mode of its own. The boundary is the LIVE advertised remote tip
+// (ls-remote), never the local remote-tracking ref, so a stale or never-fetched
+// tracking ref cannot manufacture emptiness.
+//
+// Emptiness against the boundary is necessary but NOT sufficient, because the
+// boundary and the push destination come from independent configuration: the
+// boundary from the branch's tracking upstream (branch.<name>.merge), the
+// destination from branch.<name>.pushRemote, remote.pushDefault, or
+// branch.<name>.remote. A branch fully published on `origin` whose pushRemote
+// is a fork has an empty range against origin while `git push` would deliver
+// every commit to a fork that has none of them. The destination identity must
+// therefore equal the boundary's, mirroring the rule the empty-remote bootstrap
+// path already enforces. Identity is the normalized repository URL, so two
+// remote names for the same repository are correctly treated as one.
+//
+// Scope: this answers only "is any commit transferred". The gate model has
+// never bound the refspec a push will use -- `review validate` receives none --
+// so a push that names extra refs (tags, `push.default=matching`) is out of
+// range here exactly as it is out of range for an ordinary allow.
+func PrePushDeliversNothing(ctx context.Context, repo, selector string) (bool, error) {
+	selection, err := selectPrePushBoundary(ctx, repo, selector)
+	if err != nil {
+		return false, err
+	}
+	if selection.Source == PrePRBoundaryEmptyRemoteBootstrap {
+		// An empty remote has published nothing, so every commit reachable from
+		// HEAD is still undelivered. This is never an empty range.
+		return false, nil
+	}
+	head, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		return false, err
+	}
+	bases, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, selection.Commit)
+	mergeBases := strings.Fields(string(bases))
+	if err != nil || len(mergeBases) != 1 {
+		return false, baseRefTargetResolutionError(fmt.Sprintf("publication base has %d merge bases; pass --base-ref <remote>/<branch>", len(mergeBases)))
+	}
+	if mergeBases[0] != head {
+		return false, nil
+	}
+	pushRemote, configured, err := publicationRemote(ctx, repo)
+	if err != nil || !configured {
+		return false, baseRefTargetResolutionError("push destination remote is not configured; pass --base-ref <remote>/<branch>")
+	}
+	pushIdentity, err := pushRepositoryIdentity(ctx, repo, pushRemote)
+	if err != nil {
+		return false, err
+	}
+	return pushIdentity == selection.RemoteIdentity, nil
+}
+
 func buildPushTarget(ctx context.Context, repo, selector, deliveryBaseTree, reviewedBaseTree string) (Target, *PushRequest, error) {
 	selection, err := selectPrePushBoundary(ctx, repo, selector)
 	if err != nil {
@@ -639,11 +882,11 @@ func buildPushTarget(ctx context.Context, repo, selector, deliveryBaseTree, revi
 	bases, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, selection.Commit)
 	mergeBases := strings.Fields(string(bases))
 	if err != nil || len(mergeBases) != 1 {
-		return Target{}, nil, fmt.Errorf("publication base has %d merge bases; pass --base-ref <remote>/<branch>", len(mergeBases))
+		return Target{}, nil, baseRefTargetResolutionError(fmt.Sprintf("publication base has %d merge bases; pass --base-ref <remote>/<branch>", len(mergeBases)))
 	}
 	pushRemote, configured, err := publicationRemote(ctx, repo)
 	if err != nil || !configured {
-		return Target{}, nil, errors.New("push destination remote is not configured")
+		return Target{}, nil, baseRefTargetResolutionError("push destination remote is not configured; pass --base-ref <remote>/<branch>")
 	}
 	pushIdentity, err := pushRepositoryIdentity(ctx, repo, pushRemote)
 	if err != nil {
@@ -653,9 +896,18 @@ func buildPushTarget(ctx context.Context, repo, selector, deliveryBaseTree, revi
 	base := push.MergeBase
 	if deliveryBaseTree != "" {
 		base, err = reviewedDeliveryBase(ctx, repo, push.MergeBase, head, deliveryBaseTree)
+		if err != nil {
+			return Target{}, nil, fmt.Errorf("could not derive the reviewed delivery base: %w", err)
+		}
 		count, countErr := commitCount(ctx, repo, base, head)
-		if err != nil || countErr != nil || count != 1 {
-			return Target{}, nil, errors.New("reviewed delivery is not exactly one commit from its reviewed base")
+		if countErr != nil {
+			return Target{}, nil, fmt.Errorf("could not derive the reviewed delivery commit count: %w", countErr)
+		}
+		if count != 1 {
+			// The base commit resolved and the range counted: this outcome is
+			// the deterministic shape rule itself, so it carries the typed
+			// sentinel instead of an opaque derivation failure.
+			return Target{}, nil, ErrReviewedDeliveryNotOneCommit
 		}
 	}
 	return Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: []string{}}, push, nil
@@ -676,16 +928,60 @@ func selectPrePushBoundary(ctx context.Context, repo, selector string) (PrePRBou
 	return PrePRBoundarySelection{Source: PrePRBoundaryPublicationDefault, Selector: ref, Commit: commit, Remote: remote, RemoteRef: ref, RemoteIdentity: identity}, err
 }
 
+func resolvePrePushTrackingBoundary(ctx context.Context, repo string, selected PrePRBoundarySelection) (PrePRBoundarySelection, bool, error) {
+	switch selected.Source {
+	case PrePRBoundaryEmptyRemoteBootstrap:
+		return PrePRBoundarySelection{}, false, nil
+	case PrePRBoundaryPublicationDefault:
+		return selected, true, nil
+	case PrePRBoundaryExplicit:
+	default:
+		return PrePRBoundarySelection{}, false, errors.New("unsupported pre-push boundary source")
+	}
+	branchOutput, err := runGit(ctx, repo, nil, nil, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		var commandErr *GitCommandError
+		if errors.As(err, &commandErr) && commandErr.ExitCode == 1 {
+			return PrePRBoundarySelection{}, false, nil
+		}
+		return PrePRBoundarySelection{}, false, fmt.Errorf("resolve configured tracking branch: %w", err)
+	}
+	branch := strings.TrimSpace(string(branchOutput))
+	upstream, err := runGit(ctx, repo, nil, nil, "for-each-ref", "--format=%(upstream:remotename)%00%(upstream:remoteref)", "refs/heads/"+branch)
+	if err != nil {
+		return PrePRBoundarySelection{}, false, fmt.Errorf("resolve configured tracking ref: %w", err)
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(upstream)), "\x00", 2)
+	if len(parts) == 2 && parts[0] == "" && parts[1] == "" {
+		return PrePRBoundarySelection{}, false, nil
+	}
+	if len(parts) != 2 || parts[0] == "" || !strings.HasPrefix(parts[1], "refs/heads/") {
+		return PrePRBoundarySelection{}, false, errors.New("configured tracking upstream is not a remote branch")
+	}
+	remote, ref := parts[0], parts[1]
+	if _, empty := emptyRemoteBootstrapBoundary(ctx, repo); empty {
+		return PrePRBoundarySelection{}, false, nil
+	}
+	tracking, err := advertisedRemoteRef(ctx, repo, remote, ref, remote+"/"+strings.TrimPrefix(ref, "refs/heads/"), PrePRBoundaryPublicationDefault)
+	if err != nil {
+		return PrePRBoundarySelection{}, false, fmt.Errorf("resolve configured tracking boundary: %w", err)
+	}
+	return tracking, true, nil
+}
+
 // configuredUpstreamRef resolves the configured upstream remote and branch
 // ref for a local branch. It reports false when the upstream is missing,
-// ambiguous, or not a branch ref.
-func configuredUpstreamRef(ctx context.Context, repo, branch string) (string, string, bool) {
+// ambiguous, or not a branch ref, and preserves Git execution failures.
+func configuredUpstreamRef(ctx context.Context, repo, branch string) (string, string, bool, error) {
 	output, err := runGit(ctx, repo, nil, nil, "for-each-ref", "--format=%(upstream:remotename)%00%(upstream:remoteref)", "refs/heads/"+branch)
-	parts := strings.SplitN(strings.TrimSpace(string(output)), "\x00", 2)
-	if err != nil || len(parts) != 2 || parts[0] == "" || !strings.HasPrefix(parts[1], "refs/heads/") {
-		return "", "", false
+	if err != nil {
+		return "", "", false, err
 	}
-	return parts[0], parts[1], true
+	parts := strings.SplitN(strings.TrimSpace(string(output)), "\x00", 2)
+	if len(parts) != 2 || parts[0] == "" || !strings.HasPrefix(parts[1], "refs/heads/") {
+		return "", "", false, nil
+	}
+	return parts[0], parts[1], true, nil
 }
 
 // emptyRemoteBootstrapBoundary recognizes the first-publication case only:
@@ -702,8 +998,8 @@ func emptyRemoteBootstrapBoundary(ctx context.Context, repo string) (PrePRBounda
 	if branch == "" {
 		return PrePRBoundarySelection{}, false
 	}
-	remote, ref, ok := configuredUpstreamRef(ctx, repo, branch)
-	if !ok {
+	remote, ref, ok, err := configuredUpstreamRef(ctx, repo, branch)
+	if err != nil || !ok {
 		return PrePRBoundarySelection{}, false
 	}
 	advertised, err := runGit(ctx, repo, nil, nil, "ls-remote", remote)
@@ -773,8 +1069,11 @@ func buildBootstrapPushTarget(ctx context.Context, repo string, selection PrePRB
 	}
 	if deliveryBaseTree != "" {
 		count, countErr := commitCount(ctx, repo, base, head)
-		if countErr != nil || count != 1 {
-			return Target{}, nil, errors.New("reviewed delivery is not exactly one commit from its reviewed base")
+		if countErr != nil {
+			return Target{}, nil, fmt.Errorf("could not derive the reviewed delivery commit count: %w", countErr)
+		}
+		if count != 1 {
+			return Target{}, nil, ErrReviewedDeliveryNotOneCommit
 		}
 	}
 	return Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: []string{}}, push, nil
@@ -988,7 +1287,7 @@ func reviewedDeliveryBase(ctx context.Context, repo, publicationBase, head, revi
 		}
 	}
 	if len(matches) != 1 {
-		return "", errors.New("reviewed delivery base commit is missing or ambiguous in publication range")
+		return "", &GateDeliveryBaseResolutionError{Err: errors.New("reviewed delivery base commit is missing or ambiguous in publication range")}
 	}
 	return matches[0], nil
 }
@@ -1013,6 +1312,10 @@ func prePushTargetForRequest(ctx context.Context, repo string, request GateReque
 	if request.Target.Kind == TargetBaseDiff && request.Target.BaseRef != "" && request.Target.BaseRef != target.BaseRef {
 		return Target{}, nil, errors.New("committed publication merge base changed during validation")
 	}
+	tracking, trackingPresent, err := resolvePrePushTrackingBoundary(ctx, repo, push.Boundary)
+	if err != nil {
+		return Target{}, nil, err
+	}
 	head, err := resolveCommit(ctx, repo, "HEAD")
 	if err != nil {
 		return Target{}, nil, err
@@ -1029,7 +1332,10 @@ func prePushTargetForRequest(ctx context.Context, repo string, request GateReque
 		// that publication-range and ancestry-disclosure checks scope to.
 		baseCommit = target.BaseRef
 	}
-	return target, &resolvedPrePRRefs{Selection: push.Boundary, HeadCommit: head, BaseCommit: baseCommit, DeliveredCommitCount: count, PushRemote: push.PushRemote}, nil
+	return target, &resolvedPrePRRefs{
+		Selection: push.Boundary, TrackingBoundary: tracking, TrackingPresent: trackingPresent,
+		HeadCommit: head, BaseCommit: baseCommit, DeliveredCommitCount: count, PushRemote: push.PushRemote,
+	}, nil
 }
 
 func commitCount(ctx context.Context, repo, base, head string) (int, error) {
@@ -1103,6 +1409,14 @@ func validateGateRequest(request GateRequest) error {
 	}
 	if !validSHA256(request.StoreRevision) || !validSHA256(request.GenesisRevision) || !validSHA256(request.ChainIdentity) || !validSHA256(request.BundleDigest) {
 		return errors.New("gate request requires the exact authoritative store revision, genesis, chain identity, and bundle digest")
+	}
+	// The target base ref is replayed verbatim as a Git argv element before the
+	// pre-PR boundary re-resolution runs, so it is held to the same
+	// structured-ref rule as an explicit boundary selector.
+	if request.Target.BaseRef != "" {
+		if err := validateBoundaryRefSelector("target base ref", request.Target.BaseRef); err != nil {
+			return err
+		}
 	}
 	if request.Gate == GateRelease && request.Release == nil {
 		return errors.New("release gate requires an immutable release request")
@@ -1250,6 +1564,15 @@ func readGateArtifactPreimages(request GateRequest) (gateArtifactPreimages, erro
 	return result, nil
 }
 
+// rereadGateArtifactPreimages deliberately ignores any request-local preimage
+// cache. Final authorization uses it for path-backed evidence whose current
+// bytes, presence, signature, and trust binding must still match the proof
+// derived earlier in the gate evaluation.
+func rereadGateArtifactPreimages(request GateRequest) (gateArtifactPreimages, error) {
+	request.preimages = nil
+	return readGateArtifactPreimages(request)
+}
+
 func hasArtifactSource(path, content string) bool {
 	return strings.TrimSpace(path) != "" || content != ""
 }
@@ -1303,6 +1626,27 @@ func decodeStrictJSON(payload []byte, destination any, label string) error {
 
 func HashLedgerArtifact(path string) (string, error) {
 	return hashLedgerArtifact(path)
+}
+
+// EscalationAccountingReasonTemplate is the single source of truth for the
+// escalation accounting sentence. The organic gate surface renders it through
+// compactEscalatedGateReason, the SDD-bound surface through
+// sddstatus.resolveBoundedRemediation (which aliases this constant), and the
+// organic-dx narration registry samples it, so the surfaces cannot drift.
+const EscalationAccountingReasonTemplate = "compact review authority is escalated (%s): spent %d, remaining %d, total %d correction lines"
+
+// compactEscalatedGateReason names why a compact authority is terminally
+// escalated in the numbers the frozen state already carries, instead of the
+// bare terminal sentence that told an operator nothing about the budget they
+// crossed. A state with no derivable escalation cause keeps that bare sentence
+// rather than reporting accounting this cannot prove.
+func compactEscalatedGateReason(state CompactState) string {
+	accounting := state.EscalationAccounting()
+	if accounting.Cause == "" {
+		return nativeGateReason(GateEscalated)
+	}
+	return fmt.Sprintf(EscalationAccountingReasonTemplate,
+		accounting.Cause, accounting.Spent, accounting.Remaining, accounting.Total)
 }
 
 func nativeGateReason(result GateResult) string {

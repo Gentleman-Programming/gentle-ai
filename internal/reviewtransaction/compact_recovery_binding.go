@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 )
 
 // CompactRecoveryBindingDomain separates every hash the composed
@@ -256,6 +257,10 @@ func verifyCompactOverlappingRecoveryMember(ctx context.Context, builder Snapsho
 // full publication history must be covered by the chain. Any failure keeps
 // the caller's original denial.
 func rebindCompactRecoveryDelivery(ctx context.Context, repo string, state CompactState, snapshot Snapshot, finalTree, baseCommit, headCommit string) (compactRecoveryBinding, bool) {
+	return rebindCompactRecoveryDeliveryWithCompatibility(ctx, repo, state, snapshot, finalTree, baseCommit, headCommit, nil)
+}
+
+func rebindCompactRecoveryDeliveryWithCompatibility(ctx context.Context, repo string, state CompactState, snapshot Snapshot, finalTree, baseCommit, headCommit string, compatibility *BaseAdvanceCompatibility) (compactRecoveryBinding, bool) {
 	if snapshot.CandidateTree != finalTree || baseCommit == "" || headCommit == "" {
 		return compactRecoveryBinding{}, false
 	}
@@ -263,11 +268,71 @@ func rebindCompactRecoveryDelivery(ctx context.Context, repo string, state Compa
 	if err != nil || !ok {
 		return compactRecoveryBinding{}, false
 	}
-	if snapshot.BaseTree != binding.BaseTree || pathsAreSubset(snapshot.Paths, binding.GenesisPaths) != nil {
-		return compactRecoveryBinding{}, false
-	}
-	if verifyCompactRecoveryDelivery(ctx, repo, binding, finalTree, baseCommit, headCommit) != nil {
+	if verifyCompactRecoveryRelationDelivery(ctx, repo, binding, snapshot, finalTree, baseCommit, headCommit, compatibility) != nil {
 		return compactRecoveryBinding{}, false
 	}
 	return binding, true
+}
+
+func deriveCompactRecoveryAdvanceCompatibility(ctx context.Context, repo string, binding compactRecoveryBinding, request GateRequest, snapshot Snapshot, refs *resolvedPrePRRefs, preimages gateArtifactPreimages) (BaseAdvanceCompatibility, error) {
+	frozen, err := compactRecoveryRelationSnapshot(ctx, repo, binding, snapshot, snapshot.CandidateTree)
+	if err != nil {
+		return BaseAdvanceCompatibility{}, err
+	}
+	synthetic := Receipt{
+		BaseTree: binding.BaseTree, FinalCandidateTree: snapshot.CandidateTree,
+		PathsDigest: frozen.PathsDigest,
+	}
+	proof, err := deriveBaseAdvanceCompatibility(ctx, repo, synthetic, request, snapshot, refs, preimages)
+	if err != nil {
+		return BaseAdvanceCompatibility{}, err
+	}
+	relation := classifyCompactTargetRelation(frozen, snapshot, binding.GenesisPaths, compactTargetRelationEvidence{CompatibleAdvance: &proof})
+	if relation.Kind != compactTargetCompatibleAdvance {
+		return BaseAdvanceCompatibility{}, errors.New("composed recovery target is not a compatible base advance")
+	}
+	return proof, nil
+}
+
+func verifyCompactRecoveryRelationDelivery(ctx context.Context, repo string, binding compactRecoveryBinding, snapshot Snapshot, finalTree, baseCommit, headCommit string, compatibility *BaseAdvanceCompatibility) error {
+	if snapshot.CandidateTree != finalTree || baseCommit == "" || headCommit == "" {
+		return errors.New("recovery delivery relation inputs are incomplete")
+	}
+	frozen, err := compactRecoveryRelationSnapshot(ctx, repo, binding, snapshot, finalTree)
+	if err != nil {
+		return err
+	}
+	relation := classifyCompactTargetRelation(frozen, snapshot, binding.GenesisPaths, compactTargetRelationEvidence{CompatibleAdvance: compatibility})
+	deliveryBaseCommit := baseCommit
+	switch relation.Kind {
+	case compactTargetCompatibleAdvance:
+		if compatibility == nil || compatibility.Status != baseAdvanceCompatibleStatus {
+			return errors.New("advanced recovery delivery requires trusted CI attestation")
+		}
+		mergeBase, mergeErr := runGit(ctx, repo, nil, nil, "merge-base", baseCommit, headCommit)
+		if mergeErr != nil {
+			return mergeErr
+		}
+		deliveryBaseCommit = strings.TrimSpace(string(mergeBase))
+	case compactTargetSame, compactTargetProvableContraction, compactTargetChangedScope:
+		if compatibility != nil || snapshot.BaseTree != binding.BaseTree || pathsAreSubset(snapshot.Paths, binding.GenesisPaths) != nil {
+			return errors.New("live recovery delivery does not match its composed base and scope")
+		}
+	default:
+		return errors.New("live recovery delivery relation is not authorizable")
+	}
+	return verifyCompactRecoveryDelivery(ctx, repo, binding, finalTree, deliveryBaseCommit, headCommit)
+}
+
+func compactRecoveryRelationSnapshot(ctx context.Context, repo string, binding compactRecoveryBinding, live Snapshot, finalTree string) (Snapshot, error) {
+	paths, err := (SnapshotBuilder{Repo: repo}).changedPaths(ctx, binding.BaseTree, finalTree)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	frozen := live
+	frozen.BaseTree = binding.BaseTree
+	frozen.CandidateTree = finalTree
+	frozen.Paths = paths
+	frozen.PathsDigest = digestPaths(paths)
+	return frozen, nil
 }

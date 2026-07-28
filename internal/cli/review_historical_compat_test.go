@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func injectCLIRetiredZeroEditEscalation(t *testing.T, statePath string) {
@@ -191,7 +191,7 @@ func TestReviewFacadeExplicitFinalizeCompletesWithHistoricalZeroEditEscalationRe
 	if err := os.WriteFile(evidencePath, []byte("go test ./...: pass\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	args := append([]string{"--cwd", repo, "--lineage", historical.LineageID}, facadeReviewerResultArgs(t, historical)...)
+	args := append([]string{"--cwd", repo, "--lineage", historical.LineageID}, facadeReviewerResultArgs(t, repo, historical)...)
 	if err := RunReviewFacadeFinalize(append(args, "--evidence", evidencePath), io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestReviewFacadeExplicitFinalizeCompletesWithHistoricalZeroEditEscalationRe
 	if err := os.WriteFile(currentEvidence, []byte("go test ./...: pass\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	finalizeArgs := append([]string{"--cwd", repo, "--lineage", current.LineageID}, facadeReviewerResultArgs(t, current)...)
+	finalizeArgs := append([]string{"--cwd", repo, "--lineage", current.LineageID}, facadeReviewerResultArgs(t, repo, current)...)
 	var output bytes.Buffer
 	if err := RunReviewFacadeFinalize(append(finalizeArgs, "--evidence", currentEvidence), &output); err != nil {
 		t.Fatalf("explicit-lineage finalize with unrelated historical record: %v", err)

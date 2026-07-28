@@ -98,6 +98,100 @@ func combinedReconcileFixtureRequest(predecessor, successor CompactRecord) Compa
 	return request
 }
 
+func TestClassifyCompactRecoveryEdgeAnomalies(t *testing.T) {
+	setUnchangedTarget := func(predecessor CompactRecord, successor *CompactRecord) {
+		successor.State.InitialSnapshot = predecessor.State.CurrentSnapshot
+		successor.State.CurrentSnapshot = predecessor.State.CurrentSnapshot
+		successor.State.GenesisPaths = append([]string(nil), predecessor.State.GenesisPaths...)
+		recovery := successor.State.Recovery
+		recovery.MaintainerAuthorization = compactRecoveryAuthorizationBinding(
+			recovery.PredecessorLineageID, recovery.PredecessorRevision,
+			successor.State.InitialSnapshot.Identity, recovery.Actor, recovery.Reason)
+	}
+
+	tests := []struct {
+		name                    string
+		mutate                  func(CompactRecord, *CompactRecord)
+		wantValid               bool
+		wantAnomalies           string
+		wantRefusal             string
+		wantAuthorizationDigest bool
+	}{
+		{name: "valid edge", wantValid: true},
+		{
+			name: "unchanged target",
+			mutate: func(predecessor CompactRecord, successor *CompactRecord) {
+				setUnchangedTarget(predecessor, successor)
+			},
+			wantAnomalies: compactRecoveryEdgeUnchangedTarget,
+		},
+		{
+			name: "malformed recovery authorization",
+			mutate: func(_ CompactRecord, successor *CompactRecord) {
+				successor.State.Recovery.MaintainerAuthorization = preContractFixtureAuthorization
+			},
+			wantAnomalies: compactRecoveryEdgeMalformedAuthorization, wantAuthorizationDigest: true,
+		},
+		{
+			name: "dual anomaly in canonical order",
+			mutate: func(predecessor CompactRecord, successor *CompactRecord) {
+				setUnchangedTarget(predecessor, successor)
+				successor.State.Recovery.MaintainerAuthorization = preContractFixtureAuthorization
+			},
+			wantAnomalies: compactCombinedRecoveryAnomalies, wantAuthorizationDigest: true,
+		},
+		{
+			name: "schema-prefixed different-content authorization is non-reconcilable corruption",
+			mutate: func(_ CompactRecord, successor *CompactRecord) {
+				recovery := successor.State.Recovery
+				recovery.MaintainerAuthorization = compactRecoveryAuthorizationBinding(
+					recovery.PredecessorLineageID, recovery.PredecessorRevision,
+					successor.State.InitialSnapshot.Identity, recovery.Actor, "different reason")
+			},
+			wantRefusal: "corruption, not a pre-contract authorization",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			predecessor, _, successor, _ := preContractRecoveryFixture(t, repo, "placeholder", func(state *CompactState) {
+				recovery := state.Recovery
+				recovery.MaintainerAuthorization = compactRecoveryAuthorizationBinding(
+					recovery.PredecessorLineageID, recovery.PredecessorRevision,
+					state.InitialSnapshot.Identity, recovery.Actor, recovery.Reason)
+			})
+			if tt.mutate != nil {
+				tt.mutate(predecessor, &successor)
+			}
+			var err error
+			successor, _, err = makeCompactRecord(successor.State)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			got := classifyCompactRecoveryEdgeAnomalies(predecessor, successor)
+			if got.Valid != tt.wantValid || strings.Join(got.Anomalies, ",") != tt.wantAnomalies {
+				t.Fatalf("classification = %#v, want valid=%t anomalies=%q", got, tt.wantValid, tt.wantAnomalies)
+			}
+			if tt.wantRefusal == "" && got.NonReconcilableError != nil {
+				t.Fatalf("unexpected non-reconcilable error: %v", got.NonReconcilableError)
+			}
+			if tt.wantRefusal != "" && (got.NonReconcilableError == nil || !strings.Contains(got.NonReconcilableError.Error(), tt.wantRefusal)) {
+				t.Fatalf("non-reconcilable error = %v, want substring %q", got.NonReconcilableError, tt.wantRefusal)
+			}
+			wantDigest := ""
+			if tt.wantAuthorizationDigest {
+				digest := sha256.Sum256([]byte(preContractFixtureAuthorization))
+				wantDigest = "sha256:" + hex.EncodeToString(digest[:])
+			}
+			if got.RecordedAuthorizationSHA256 != wantDigest {
+				t.Fatalf("authorization proof = %q, want %q", got.RecordedAuthorizationSHA256, wantDigest)
+			}
+		})
+	}
+}
+
 func TestReconcileInvalidRecoveryEdgeQuarantinesSuccessorAndRestoresAuthority(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	predecessor, predecessorStore, successor, successorStore := poisonedRecoveryFixture(t, repo, nil)

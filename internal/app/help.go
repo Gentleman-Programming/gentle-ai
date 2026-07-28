@@ -22,12 +22,28 @@ COMMANDS
                Print native SDD phase status for orchestrators
   sdd-continue [change]
                Print native SDD dispatcher routing output
+  sdd-attempt <status|begin|finish|reset> --cwd <repo> --change <change>
+               Read or mutate the artifact-store-agnostic runtime-attempt ledger
+  sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>
+               Validate exact verification-report bytes without persistence
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>]
-  review finalize [--cwd <repo>] [--result <review.json> ...] [--evidence <path>]
+  review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>
+               Admit one reviewer result; every selected lens needs one
+  review finalize [--cwd <repo>] [--captured-results] [--evidence <path>]
   review validate --gate <gate> [--cwd <repo>]
                Normal review path; ordinary authority is compact state plus receipt
   review status [--cwd <repo>]
                Read-only inventory of compact-v2 and shipped legacy-v1 authority
+  review repair --preflight [--cwd <repo>]
+               Classify the complete authority inventory before provider-owned repair
+  review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone>]
+               User-owned kill switch; off wins, no clone inherits an override,
+               status never mutates, and re-enabling applies to future candidates only
+               'review start' asks once per clone before a review that would do work;
+               accepting the review records that answer, 'not now' applies to that candidate only
+               and persists nothing, turning reviews off for good needs a deliberate
+               'gentle-ai review mode disable', and a session without a terminal reviews
+               the change and says so instead of asking
 
 COMPATIBILITY COMMANDS
   review-start --cwd <repo> --lineage <id> --policy-file <path>

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
@@ -33,9 +33,9 @@ func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
 
 	startedAt := time.Now()
 	var startOutput bytes.Buffer
-	if err := RunReview([]string{
+	if err := RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
-	}, &startOutput); err != nil {
+	}), &startOutput); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewIntegrationStartResult
@@ -149,32 +149,36 @@ func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
 	}
 }
 
-func TestStaticMDXRequiresReviewerEvidence(t *testing.T) {
+// TestActiveMDXRequiresReviewerEvidence pins the content-classified boundary for
+// MDX: runtime syntax withdraws the passive nomination its extension carries, so
+// the candidate becomes one consolidated review that cannot finalize on
+// structural readback alone.
+func TestActiveMDXRequiresReviewerEvidence(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	path := filepath.Join(repo, "docs", "guide.mdx")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("# Static guide\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("import Widget from './widget'\n\n# Active guide\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReview([]string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo}, &output); err != nil {
+	if err := RunReview(boundNegotiatedStartArgs(t, []string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo}), &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewIntegrationStartResult
 	decodeStrictReviewJSON(t, output.Bytes(), &started)
 	if started.RiskLevel != reviewtransaction.RiskMedium || len(started.SelectedLenses) != 1 {
-		t.Fatalf("static MDX START = %#v", started)
+		t.Fatalf("active MDX START = %#v", started)
 	}
 	output.Reset()
 	if err := RunReview([]string{"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID}, &output); err == nil {
-		t.Fatal("empty static MDX FINALIZE succeeded")
+		t.Fatal("empty active MDX FINALIZE succeeded")
 	}
 	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	record, _ := store.Load()
 	if record.State.State != reviewtransaction.StateReviewing {
-		t.Fatalf("empty static MDX FINALIZE persisted %q", record.State.State)
+		t.Fatalf("empty active MDX FINALIZE persisted %q", record.State.State)
 	}
 }
 
@@ -224,9 +228,9 @@ func TestLowRiskNativeVerificationSupportsStagedProjection(t *testing.T) {
 	runReviewCLIGit(t, repo, "add", "--", "docs/staged-guide.md")
 
 	var output bytes.Buffer
-	if err := RunReview([]string{
+	if err := RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--projection", "staged",
-	}, &output); err != nil {
+	}), &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewIntegrationStartResult
@@ -295,7 +299,7 @@ func TestMediumReviewCannotApproveWithoutExternalEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{
+	if err := finalizeReviewCLIArgs(t, repo, []string{
 		"--cwd", repo, "--lineage", started.LineageID, "--result", result,
 	}, &output); err != nil {
 		t.Fatal(err)

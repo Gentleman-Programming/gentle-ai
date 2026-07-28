@@ -144,13 +144,16 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - MCP servers (Engram and Context7) are upserted as `[mcp_servers.<name>]` blocks in `~/.codex/config.toml`
 - SDD model-selection profiles written as separate files at `~/.codex/<name>.config.toml`. GPT-5.6 defaults require Codex >= 0.144.0 (the separate-file mechanism itself is available since 0.134.0). Select a profile at runtime via `codex --profile <name>`:
 
-  Model and effort defaults vary together by preset. These effort levels are Gentle AI workload policy, not Codex defaults. Every curated preset also assigns the main orchestrator/session to `gpt-5.6-sol` / `low`; Custom and legacy state preserve existing top-level settings:
+  Model and effort defaults vary together by preset. These effort levels are Gentle AI workload policy, not Codex defaults. The carriles split by what the phase actually does: `sdd-strong` phases reason over context delivered to them, `sdd-mid` phases write code in an agentic loop where effort matters more than raw model strength, and `sdd-cheap` phases do structured transcription with short context and verifiable output, so they buy effort instead of a bigger model.
+
+  Every curated preset runs the main orchestrator/session at `medium` effort — it plans, routes and adjudicates rather than doing the delegated work. The orchestrator *model* varies: Low-cost runs it on `gpt-5.6-terra` so a Plus plan can still afford `gpt-5.6-sol` in the strong carril, where the reasoning pays. Custom and legacy state preserve existing top-level settings:
 
   | Profile | Low-cost | Recommended | Powerful | SDD phases |
   |---------|----------|-------------|----------|------------|
-  | `sdd-strong` | `gpt-5.6-terra` / `medium` | `gpt-5.6-sol` / `medium` | `gpt-5.6-sol` / `high` | propose, design, verify, judge |
-  | `sdd-mid` | `gpt-5.6-terra` / `medium` | `gpt-5.6-terra` / `medium` | `gpt-5.6-terra` / `high` | apply, fix-agent |
-  | `sdd-cheap` | `gpt-5.6-luna` / `low` | `gpt-5.6-luna` / `low` | `gpt-5.6-luna` / `low` | explore, spec, tasks, archive, onboard |
+  | Orchestrator | `gpt-5.6-terra` / `medium` | `gpt-5.6-sol` / `medium` | `gpt-5.6-sol` / `medium` | main session |
+  | `sdd-strong` | `gpt-5.6-sol` / `medium` | `gpt-5.6-sol` / `medium` | `gpt-5.6-sol` / `xhigh` | explore, propose, design, verify, judge |
+  | `sdd-mid` | `gpt-5.6-terra` / `medium` | `gpt-5.6-terra` / `high` | `gpt-5.6-sol` / `high` | apply, fix-agent |
+  | `sdd-cheap` | `gpt-5.6-luna` / `high` | `gpt-5.6-luna` / `high` | `gpt-5.6-luna` / `high` | spec, tasks, archive, onboard |
 
 - Explicit saved Codex model assignments are preserved on sync, including older pinned IDs such as `gpt-5.5` or `gpt-5.4-mini`. The narrow exception is the exact former implicit-default tuple (`sdd-strong=gpt-5.5`, `sdd-mid=gpt-5.5`, `sdd-cheap=gpt-5.4-mini`), which sync treats as Recommended and upgrades to the current GPT-5.6 tuple; partial, extended, or otherwise different maps remain custom and unchanged.
 - GPT-5.6 `max` reasoning effort and `ultra` mode are intentionally not enabled by this default update. `max` requires confirmed Codex support; `ultra` changes orchestration semantics and needs separate design.

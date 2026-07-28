@@ -4,29 +4,199 @@ on:
   push:
     tags:
       - "v*"
+      # Pre-release tags (v2.2.0-rc.1, v3.0.0-beta.2, ...) are for community
+      # testing, never for publication: preflight only accepts exact stable
+      # semver, so triggering on them can only ever turn the repo red.
+      - "!v*-*"
 
+# Read-only is the workflow default. Only the publication job receives the one
+# write capability GoReleaser needs.
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  goreleaser:
-    runs-on: ubuntu-latest
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+      - name: Checkout exact tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 0
+          # The preflight requires refs/tags/<tag> to be the annotated tag
+          # object. actions/checkout fetches with --no-tags by default, so
+          # without this the tag ref never exists on the runner and the
+          # annotation check dies on a tag that IS annotated. Never caught
+          # before v2.2.0: no stable tag was cut between this preflight
+          # landing on 2026-07-22 and that release.
+          fetch-tags: true
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89  # v7.2.2
+      - name: Mark release distribution snapshot start
+        run: |
+          set -euo pipefail
+          run_id="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:${GITHUB_JOB}"
+          marker="$RUNNER_TEMP/gentle-ai-release-policy-snapshot-start"
+          rm -f -- "$marker"
+          umask 077
+          printf '%s\n' "$run_id" >"$marker"
+          printf 'RELEASE_POLICY_SNAPSHOT_MARKER=%s\n' "$marker" >>"$GITHUB_ENV"
+          printf 'RELEASE_POLICY_SNAPSHOT_RUN_ID=%s\n' "$run_id" >>"$GITHUB_ENV"
+
+      - name: Resolve release distribution plan without publishing
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: "~> v2"
+          version: v2.15.2
+          args: release --snapshot --clean --skip=sign,publish
+        env:
+          MINISIGN_PUBLIC_KEYS_CANONICAL: release-policy-validation-only
+
+      - name: Verify release distribution policy
+        run: ./scripts/verify-release-distribution-policy.sh
+
+      - name: Verify tag, main, trust anchors, and module immutability
+        run: ./scripts/release-preflight.sh
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Go format
+        run: go run ./internal/gofmtcheck
+
+  release:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: write
+    # GitHub token permissions are job-scoped. Within this write-scoped job no
+    # run step receives the token, checkout credentials are not persisted, and
+    # only GoReleaser receives it explicitly for the publication boundary.
+    steps:
+      - name: Checkout exact tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          # The preflight requires refs/tags/<tag> to be the annotated tag
+          # object. actions/checkout fetches with --no-tags by default, so
+          # without this the tag ref never exists on the runner and the
+          # annotation check dies on a tag that IS annotated. Never caught
+          # before v2.2.0: no stable tag was cut between this preflight
+          # landing on 2026-07-22 and that release.
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Recheck immutable release provenance
+        env:
+          MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
+        run: ./scripts/release-preflight.sh
+
+      - name: Export canonical release trust anchors
+        id: trust-anchors
+        env:
+          MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
+        run: |
+          set -euo pipefail
+          canonical=$(./scripts/canonicalize-release-public-keys.sh)
+          printf 'canonical=%s\n' "$canonical" >>"$GITHUB_OUTPUT"
+
+      - name: Configure ephemeral signing paths
+        run: |
+          printf 'MINISIGN_SECRET_KEY_FILE=%s/gentle-ai-release.key\n' "$RUNNER_TEMP" >>"$GITHUB_ENV"
+          printf 'MINISIGN_SIGNING_PUBLIC_KEY_FILE=%s/gentle-ai-release-signing.pub\n' "$RUNNER_TEMP" >>"$GITHUB_ENV"
+
+      - name: Install Minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y minisign
+
+      - name: Materialize signing key
+        env:
+          SIGNING_KEY_B64: ${{ secrets.MINISIGN_SECRET_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$SIGNING_KEY_B64"
+          printf '%s' "$SIGNING_KEY_B64" | base64 --decode >"$MINISIGN_SECRET_KEY_FILE"
+          test -s "$MINISIGN_SECRET_KEY_FILE"
+          chmod 600 "$MINISIGN_SECRET_KEY_FILE"
+
+      - name: Verify signing credential and identity binding
+        env:
+          MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
+          MINISIGN_PUBLIC_KEYS_CANONICAL: ${{ steps.trust-anchors.outputs.canonical }}
+        run: ./scripts/release-signing-preflight.sh
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.15.2
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          MINISIGN_SECRET_KEY_FILE: ${{ env.MINISIGN_SECRET_KEY_FILE }}
+          MINISIGN_PUBLIC_KEYS_CANONICAL: ${{ steps.trust-anchors.outputs.canonical }}
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          if command -v shred >/dev/null 2>&1; then
+            shred --remove "$MINISIGN_SECRET_KEY_FILE" 2>/dev/null || true
+          else
+            rm -f "$MINISIGN_SECRET_KEY_FILE"
+          fi
+          rm -f "$MINISIGN_SIGNING_PUBLIC_KEY_FILE"
+
+  verify:
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          # The preflight requires refs/tags/<tag> to be the annotated tag
+          # object. actions/checkout fetches with --no-tags by default, so
+          # without this the tag ref never exists on the runner and the
+          # annotation check dies on a tag that IS annotated. Never caught
+          # before v2.2.0: no stable tag was cut between this preflight
+          # landing on 2026-07-22 and that release.
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install Minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y minisign
+
+      - name: Verify published assets from GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
+        run: ./scripts/verify-release-assets.sh

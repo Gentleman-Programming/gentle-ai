@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestFlatReviewStartRejectsBeforeCreatingLegacyAuthority(t *testing.T) {
@@ -211,7 +211,12 @@ func TestReviewGateActionScopeChangedRequiresExplicitMaintainerAction(t *testing
 		{reviewtransaction.GateAllow, "continue"},
 		{reviewtransaction.GateScopeChanged, "explicit-maintainer-action"},
 		{reviewtransaction.GateInvalidated, "explicit-maintainer-action"},
-		{reviewtransaction.GateEscalated, "stop"},
+		// organic-dx Phase 3b task 3b.3: STATUS already re-derives escalated
+		// recovery eligibility (accounting-only, changed-target, or
+		// final-verification-retry), so the gate denial now names
+		// review.status instead of a bare stop that told the caller nothing
+		// it did not already know.
+		{reviewtransaction.GateEscalated, "review.status"},
 	} {
 		t.Run(string(tt.result), func(t *testing.T) {
 			result := ReviewValidateResult{Result: tt.result, Allowed: tt.result == reviewtransaction.GateAllow, Action: reviewGateAction(tt.result)}

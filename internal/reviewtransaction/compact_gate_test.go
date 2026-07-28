@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,71 @@ import (
 	"strings"
 	"testing"
 )
+
+// TestCompactEscalatedGateReasonCarriesEscalationAccounting pins the organic
+// half of the escalation-accounting contract the testing guide's Flow 17
+// promises. The SDD-bound surface (sddstatus.resolveBoundedRemediation) has
+// always rendered spent, remaining and total; the organic gate used to render
+// the bare "transaction or external evidence is terminally escalated" with no
+// numbers at all, so the accounting frozen in the state was unreachable from
+// every non-SDD surface. Both now render EscalationAccountingReasonTemplate,
+// which is why they cannot drift.
+func TestCompactEscalatedGateReasonCarriesEscalationAccounting(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := accountingOnlyEscalatedState(t, repo, "escalated-gate-accounting")
+	if state.State != StateEscalated {
+		t.Fatalf("fixture state = %q, want escalated", state.State)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err := makeCompactRecord(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := state.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+		t.Fatal(err)
+	}
+
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{
+		Gate: GatePostApply, LineageID: state.LineageID,
+	})
+	if got.Result != GateEscalated {
+		t.Fatalf("escalated gate = %#v, want GateEscalated", got)
+	}
+	accounting := state.EscalationAccounting()
+	want := fmt.Sprintf(EscalationAccountingReasonTemplate,
+		accounting.Cause, accounting.Spent, accounting.Remaining, accounting.Total)
+	if got.Reason != want {
+		t.Fatalf("escalated gate reason = %q, want %q", got.Reason, want)
+	}
+	for _, label := range []string{"spent ", "remaining ", "total "} {
+		if !strings.Contains(got.Reason, label) {
+			t.Fatalf("escalated gate reason = %q, want it to name %q", got.Reason, label)
+		}
+	}
+}
+
+// TestCompactEscalatedGateReasonFallsBackWithoutDerivableCause pins that the
+// generic terminal reason survives for an escalated receipt whose authority
+// exposes no derivable escalation cause, so this never invents accounting it
+// cannot prove.
+func TestCompactEscalatedGateReasonFallsBackWithoutDerivableCause(t *testing.T) {
+	if got := compactEscalatedGateReason(CompactState{State: StateApproved}); got != nativeGateReason(GateEscalated) {
+		t.Fatalf("reason without a derivable cause = %q, want %q", got, nativeGateReason(GateEscalated))
+	}
+}
 
 func TestLegacyCurrentChangesGateRejectsCallerProjectionMismatch(t *testing.T) {
 	for _, gate := range []GateKind{GatePostApply, GatePreCommit} {
@@ -927,6 +993,105 @@ func TestValidateReviewedPublicationRangeAllowsRepeatedApprovedPathAcrossMergeHi
 	}
 }
 
+func TestValidateReviewedPublicationRangeExcludesReviewedAndTrackingHistory(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	base := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+	gitSnapshot(t, repo, "checkout", "-qb", "reviewed-base", base)
+	writeSnapshotFile(t, repo, "reviewed-only.txt", "reviewed ancestry\n")
+	gitSnapshot(t, repo, "add", "reviewed-only.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed ancestry")
+	reviewed := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+	gitSnapshot(t, repo, "checkout", "-qb", "tracking-tip", base)
+	writeSnapshotFile(t, repo, "upstream-only.txt", "tracking ancestry\n")
+	gitSnapshot(t, repo, "add", "upstream-only.txt")
+	gitSnapshot(t, repo, "commit", "-m", "tracking ancestry")
+	tracking := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+	gitSnapshot(t, repo, "checkout", "-qb", "feature", reviewed)
+	writeSnapshotFile(t, repo, "approved.txt", "reviewed feature\n")
+	gitSnapshot(t, repo, "add", "approved.txt")
+	gitSnapshot(t, repo, "commit", "-m", "reviewed feature")
+	gitSnapshot(t, repo, "merge", "--no-edit", "tracking-tip")
+	head := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+	refs := &resolvedPrePRRefs{
+		Selection:  PrePRBoundarySelection{Source: PrePRBoundaryExplicit, Commit: reviewed},
+		HeadCommit: head, BaseCommit: reviewed,
+		TrackingBoundary: PrePRBoundarySelection{Source: PrePRBoundaryPublicationDefault, Commit: tracking},
+		TrackingPresent:  true,
+	}
+	if err := validateReviewedPublicationRange(context.Background(), repo, []string{"approved.txt"}, refs); err != nil {
+		t.Fatalf("dual-anchor publication range: %v", err)
+	}
+
+	gitSnapshot(t, repo, "reset", "--hard", "HEAD^")
+	gitSnapshot(t, repo, "merge", "--no-commit", "tracking-tip")
+	if err := os.Remove(filepath.Join(repo, "upstream-only.txt")); err != nil {
+		t.Fatal(err)
+	}
+	gitSnapshot(t, repo, "add", "-A")
+	gitSnapshot(t, repo, "commit", "-m", "delete tracking path in merge")
+	refs.HeadCommit = trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	if err := validateReviewedPublicationRange(context.Background(), repo, []string{"approved.txt"}, refs); err == nil || !strings.Contains(err.Error(), "upstream-only.txt") {
+		t.Fatalf("one-parent-equal merge deletion = %v", err)
+	}
+
+	gitSnapshot(t, repo, "checkout", "-qb", "tracking-ahead", refs.HeadCommit)
+	gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "tracking ahead")
+	refs.TrackingBoundary.Commit = trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	if err := validateReviewedPublicationRange(context.Background(), repo, []string{"approved.txt"}, refs); err == nil || !strings.Contains(err.Error(), "contains HEAD") {
+		t.Fatalf("tracking descendant exclusion = %v", err)
+	}
+}
+
+func TestSplitNullSeparatedPathsPreservesNewline(t *testing.T) {
+	want := []string{"line\nbreak.txt", "space name.txt"}
+	if got := splitNullSeparatedPaths([]byte("line\nbreak.txt\x00space name.txt\x00")); !reflect.DeepEqual(got, want) {
+		t.Fatalf("NUL path parsing = %#v, want %#v", got, want)
+	}
+}
+
+func TestValidateReviewedPublicationRangePreservesPathSemantics(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "old.txt", "rename me\n")
+	writeSnapshotFile(t, repo, "deleted.txt", "delete me\n")
+	gitSnapshot(t, repo, "add", "old.txt", "deleted.txt")
+	gitSnapshot(t, repo, "commit", "-m", "path base")
+	base := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+	if err := os.Rename(filepath.Join(repo, "old.txt"), filepath.Join(repo, "renamed.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(repo, "deleted.txt")); err != nil {
+		t.Fatal(err)
+	}
+	special := "space name.txt"
+	writeSnapshotFile(t, repo, special, "NUL-delimited path\n")
+	gitSnapshot(t, repo, "add", "-A")
+	gitSnapshot(t, repo, "commit", "-m", "rename delete and special path")
+	head := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	refs := &resolvedPrePRRefs{
+		Selection:  PrePRBoundarySelection{Source: PrePRBoundaryExplicit, Commit: base},
+		BaseCommit: base, HeadCommit: head,
+	}
+	all, err := canonicalPaths([]string{"old.txt", "renamed.txt", "deleted.txt", special})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateReviewedPublicationRange(context.Background(), repo, all, refs); err != nil {
+		t.Fatalf("complete rename/delete/special-path scope: %v", err)
+	}
+	for index, missing := range all {
+		genesis := append([]string{}, all[:index]...)
+		genesis = append(genesis, all[index+1:]...)
+		if err := validateReviewedPublicationRange(context.Background(), repo, genesis, refs); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("correction path %q", missing)) {
+			t.Fatalf("missing path %q error = %v", missing, err)
+		}
+	}
+}
+
 func TestCompactPrePushAllowsCurrentChangesWithoutTransientCorrectionBaseCommit(t *testing.T) {
 	repo, state, receipt, baseRef := approvedCompactSubsetDeliveryFixture(t, "compact-subset-pre-push")
 	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: baseRef})
@@ -1128,6 +1293,53 @@ func TestCompactPrePRGateInvalidatesSelectedBaseAndHeadRaces(t *testing.T) {
 	}
 }
 
+func TestCompactPrePRCompatibleAdvanceRevalidatesArtifactsAtFinalAuthorization(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		mutate func(t *testing.T, fixture *compatiblePrePRFixture)
+	}{
+		{name: "policy replaced", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			if err := os.WriteFile(fixture.policyPath, []byte("replaced policy\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "policy removed", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			if err := os.Remove(fixture.policyPath); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "attestation replaced", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			if err := os.WriteFile(fixture.attestationPath, []byte(`{}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "attestation removed", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			if err := os.Remove(fixture.attestationPath); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
+			state, receipt := approvedCompactPrePRFixture(t, fixture)
+			originalHook := finalGateAuthorizationHook
+			finalGateAuthorizationHook = func() {
+				finalGateAuthorizationHook = originalHook
+				tt.mutate(t, fixture)
+			}
+			t.Cleanup(func() { finalGateAuthorizationHook = originalHook })
+
+			got := EvaluateCompactGate(context.Background(), fixture.repo, receipt, NativeGateRequestInput{
+				Gate: GatePrePR, LineageID: state.LineageID, BaseRef: "main",
+				PolicyArtifact: fixture.policyPath, PrePRCIAttestation: fixture.attestationPath,
+			})
+			if got.Result != GateInvalidated {
+				t.Fatalf("artifact mutation during final authorization = %#v", got)
+			}
+		})
+	}
+}
+
 func approvedCompactRevisionFixture(t *testing.T, repo, lineage string) (CompactState, CompactStore, CompactReceipt) {
 	t.Helper()
 	state := newCompactRevisionState(t, repo, lineage)
@@ -1280,7 +1492,7 @@ func approvedCompactFixDiffFixtureWithCorrection(t *testing.T, lineage, correcti
 		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true},
 		CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true},
 	}
-	if err := state.CompleteCorrection(fix, 1, validation); err != nil {
+	if err := state.CompleteCorrection(fix, 1, bindTargetedValidationForTest(validation, fix)); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.CompleteVerification([]byte("independent correction verification passed\n"), true); err != nil {
@@ -1367,7 +1579,7 @@ func approvedCompactSubsetDeliveryFixture(t *testing.T, lineage string) (string,
 	}
 	fixHash := FixDeltaHashForSnapshot(fix)
 	validation := ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, OriginalCriteria: ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true}, CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true}}
-	if err := state.CompleteCorrection(fix, 1, validation); err != nil {
+	if err := state.CompleteCorrection(fix, 1, bindTargetedValidationForTest(validation, fix)); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.CompleteVerification([]byte("tests pass\n"), true); err != nil {

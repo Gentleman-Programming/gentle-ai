@@ -1,0 +1,107 @@
+{
+  "schema": "gentle-ai.review-integration.status/v2",
+  "contract": "gentle-ai.review-integration/v1",
+  "operation": "review.status",
+  "applicability": "corrupted",
+  "receipt": {
+    "status": "not_applicable"
+  },
+  "action": "repair_authority",
+  "replayability": "manual_action_required",
+  "target_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+  "projection": {
+    "schema": "gentle-ai.review-integration.projection/v1",
+    "kind": "current-changes",
+    "projection": "workspace",
+    "base_tree": "3e21a205dd9b55021aeae87965092623807e455f",
+    "initial_review_tree": "1c3325617279b38743f073302ba190fc421b5a09",
+    "current_candidate_tree": "1c3325617279b38743f073302ba190fc421b5a09",
+    "paths_digest": "sha256:b93fca961a97d240c2b7023e98772f49ebd2995eda7db07043270b57bed75d71",
+    "paths": [
+      "tracked.txt"
+    ],
+    "intended_untracked": [],
+    "intended_untracked_proof": "sha256:b97229718d4c7fe50a8892eb474ae5aa6491697bccb400e3e31dbaca4894d2f3",
+    "initial_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+    "current_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
+  },
+  "repair": {
+    "schema": "gentle-ai.review-authority-repair-assessment/v1",
+    "status": "unsupported",
+    "counts": {
+      "lineages": 0,
+      "compact_lineages": 0,
+      "legacy_lineages": 0,
+      "events": 0,
+      "bytes": 0,
+      "eligible_candidates": 0,
+      "unsupported_lineages": 0,
+      "conflicts": 0
+    },
+    "supported_operations": [
+      "review/complete-fix",
+      "review/validate-fix"
+    ],
+    "authorization_schema": "gentle-ai.review-repair-authorization/v1"
+  },
+  "candidates": [],
+  "eligibility": {
+    "allowed_actions": [
+      {
+        "action": "stop",
+        "reason_code": "forbidden_manual_intervention_required",
+        "required_inputs": []
+      }
+    ],
+    "forbidden_actions": [
+      {
+        "action": "review.abandon",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.finalize",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.invalidate",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.quarantine-legacy",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.reclaim",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.reconcile-authority",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.reconcile-authority-batch",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.recover",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.repair",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.retry_final_verification",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.start",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.validate",
+        "reason_code": "forbidden_corrupted_authority"
+      }
+    ]
+  }
+}

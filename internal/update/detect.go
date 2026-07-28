@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -72,26 +73,32 @@ func detectInstalledVersion(ctx context.Context, tool ToolInfo, currentBuildVers
 	execBinary, execArgs := buildExecCmd(binary, tool.DetectCmd[1:])
 	cmd := execCommand(execBinary, execArgs...)
 
-	// Kill the subprocess when the context fires. We use a goroutine because
-	// the testable execCommand var returns a plain *exec.Cmd (not CommandContext).
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-detectCtx.Done():
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
-		case <-done:
-		}
-	}()
-
-	out, err := cmd.Output()
-	close(done)
+	// Start and wait on the command in this execution path so no goroutine reads
+	// mutable exec.Cmd state while Start initializes it. The cancellation callback
+	// only receives the concurrency-safe Process after Start has completed.
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := detectCtx.Err(); err != nil {
+		return ""
+	}
+	if err := cmd.Start(); err != nil {
+		return ""
+	}
+	process := cmd.Process
+	killDone := make(chan struct{})
+	stopKill := context.AfterFunc(detectCtx, func() {
+		defer close(killDone)
+		_ = process.Kill()
+	})
+	err := cmd.Wait()
+	if !stopKill() {
+		<-killDone
+	}
 	if err != nil {
 		return "" // command failed or timed out — binary exists but version unknown
 	}
 
-	return parseVersionFromOutput(strings.TrimSpace(string(out)))
+	return parseVersionFromOutput(strings.TrimSpace(out.String()))
 }
 
 // findFallbackBinary checks the tool's FallbackPaths for a binary that exists

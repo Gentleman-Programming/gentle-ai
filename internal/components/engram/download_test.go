@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 func TestMain(m *testing.M) {
@@ -1193,8 +1193,8 @@ func TestCanonicalEngramGoInstallPackagePreservesDeclaredModuleCasing(t *testing
 		},
 		{
 			name: "unrelated package remains unchanged",
-			pkg:  "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest",
-			want: "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest",
+			pkg:  "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest",
+			want: "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest",
 		},
 	}
 

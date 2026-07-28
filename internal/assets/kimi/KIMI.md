@@ -6,7 +6,7 @@
 
 {% include "sdd-orchestrator.md" ignore missing %}
 {% include "strict-tdd-mode.md" ignore missing %}
-{% include "trigger-rules.md" ignore missing %}
+{% include "agent-routing.md" ignore missing %}
 
 ## Project Instructions
 
