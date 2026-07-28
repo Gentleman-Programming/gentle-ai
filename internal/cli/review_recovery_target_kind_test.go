@@ -254,3 +254,46 @@ func reviewRecoverBaseDiffSuccessorIdentity(t *testing.T, repo, baseRef string) 
 	}
 	return snapshot.Identity
 }
+
+func TestEscalatedStatusRequiresChangedTargetAndExplicitRecoveryAuthorization(t *testing.T) {
+	repo, _, predecessor := escalatedCurrentChangesRecoveryFixture(t, "escalated-recovery-binding")
+
+	unchanged := selectorTransitionStatus(t, repo, "--lineage", predecessor.State.LineageID)
+	if unchanged.Action != reviewtransaction.TargetStatusActionStop || unchanged.NextTransition == nil ||
+		unchanged.NextTransition.Kind != reviewNextTransitionStop {
+		t.Fatalf("unchanged escalated status = %#v, want STOP", unchanged)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nmaterially-changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed := selectorTransitionStatus(t, repo, "--lineage", predecessor.State.LineageID)
+	if changed.Action != reviewtransaction.TargetStatusActionRecover || changed.ActionDisposition != reviewtransaction.RecoveryEscalated ||
+		changed.NextTransition == nil || changed.NextTransition.Kind != reviewNextTransitionCollect {
+		t.Fatalf("changed escalated status without authorization = %#v, want bound authorization collection", changed)
+	}
+	const successor = "escalated-recovery-successor"
+	const actor = "maintainer"
+	const reason = "abandon escalated candidate after material change"
+	authorization := reviewTransitionRecoveryAuthorization(ReviewTransitionBinding{
+		LineageID: predecessor.State.LineageID, Revision: predecessor.Revision, TargetIdentity: changed.TargetIdentity,
+	}, successor, actor, reason)
+	authorized := selectorTransitionStatus(t, repo,
+		"--lineage", predecessor.State.LineageID,
+		"--recovery-successor-lineage", successor,
+		"--recovery-actor", actor,
+		"--recovery-reason", reason,
+		"--recovery-authorization", authorization,
+	)
+	if authorized.NextTransition == nil || authorized.NextTransition.Kind != reviewNextTransitionExecute ||
+		authorized.NextTransition.Execute == nil || authorized.NextTransition.Execute.Operation != "review.recover" {
+		t.Fatalf("explicitly authorized escalated recovery = %#v, want exact native RECOVER", authorized.NextTransition)
+	}
+	payload := executeSelectorTransition(t, repo, authorized)
+	var recovered ReviewRecoverResult
+	decodeStrictReviewJSON(t, payload, &recovered)
+	if recovered.LineageID != successor || recovered.State != reviewtransaction.StateReviewing ||
+		recovered.Recovery.PredecessorLineageID != predecessor.State.LineageID || recovered.Recovery.Disposition != reviewtransaction.RecoveryEscalated {
+		t.Fatalf("recovered successor = %s", payload)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -90,6 +91,66 @@ func TestFinalizeNextTransitionBindsCorrectedCurrentSnapshot(t *testing.T) {
 	arguments := transition.Collect.Inputs[0].Arguments
 	if len(arguments) != 3 || arguments[2].Name != "target" || arguments[2].Value != currentTarget {
 		t.Fatalf("corrected validating target arguments = %#v, want current snapshot %q", arguments, currentTarget)
+	}
+}
+
+func TestCorrectedValidatingStatusCaptureTransitionRunsEndToEnd(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nwrong\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	reviewer := filepath.Join(t.TempDir(), "reviewer.json")
+	writeReviewCLIJSON(t, reviewer, facadeReviewerResult{Findings: []facadeFinding{{
+		Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "wrong value",
+		ProofRefs: []string{"candidate-only failure"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+		CausalDisposition: reviewtransaction.CausalIntroduced,
+	}}, Evidence: []string{"focused differential failure"}})
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--result", reviewer, "--correction-lines", "2"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	validation := filepath.Join(t.TempDir(), "validation.json")
+	writeReviewCLIJSON(t, validation, facadeValidationResult{
+		OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"acceptance passes"}},
+		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"regression passes"}},
+		FollowUps:            []reviewtransaction.FollowUp{},
+	})
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validation}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+
+	status := selectorTransitionStatus(t, repo, "--lineage", started.LineageID)
+	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("corrected validating status transition = %#v", status.NextTransition)
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	if input.CaptureOperation != "review.capture-evidence" {
+		t.Fatalf("capture operation = %q, want review.capture-evidence", input.CaptureOperation)
+	}
+	arguments, err := reviewTransitionArgumentMap(input.Arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if arguments["target"] != record.State.CurrentSnapshot.Identity || arguments["target"] == status.TargetIdentity {
+		t.Fatalf("emitted capture target = %q, authority current = %q, live workspace = %q", arguments["target"], record.State.CurrentSnapshot.Identity, status.TargetIdentity)
+	}
+	evidence := filepath.Join(t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(evidence, []byte("verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReview([]string{
+		"capture-evidence", "--cwd", repo, "--lineage", arguments["lineage"], "--target", arguments["target"],
+		"--expected-revision", arguments["expected-revision"], "--input", evidence,
+	}, io.Discard); err != nil {
+		t.Fatalf("status-emitted capture transition failed: %v", err)
 	}
 }
 
