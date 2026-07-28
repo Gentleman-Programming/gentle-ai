@@ -44,6 +44,7 @@ type SyncFlags struct {
 	IncludePermissions bool
 	IncludeTheme       bool
 	DryRun             bool
+	Scope              string
 	// Profiles holds named SDD profiles parsed from --profile flags.
 	// Each entry is populated by parseProfileFlag and augmented by
 	// parseProfilePhaseFlag.
@@ -104,6 +105,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	fs.BoolVar(&opts.IncludePermissions, "include-permissions", false, "include permissions component in sync")
 	fs.BoolVar(&opts.IncludeTheme, "include-theme", false, "include theme component in sync")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
+	fs.StringVar(&opts.Scope, "scope", "", "sync scope: global (default) or workspace — env: GENTLE_AI_INSTALL_SCOPE")
 	registerListFlag(fs, "profile", &opts.rawProfiles)
 	registerListFlag(fs, "profile-phase", &opts.rawProfilePhases)
 
@@ -154,6 +156,12 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 		}
 		opts.Profiles = profiles
 	}
+
+	resolvedScope, err := ResolveInstallScope(opts.Scope)
+	if err != nil {
+		return SyncFlags{}, err
+	}
+	opts.Scope = string(resolvedScope)
 
 	return opts, nil
 }
@@ -444,6 +452,7 @@ func DiscoverAgents(homeDir string) []model.AgentID {
 type syncRuntime struct {
 	homeDir      string
 	workspaceDir string
+	scope        InstallScope
 	selection    model.Selection
 	agentIDs     []model.AgentID
 	backupRoot   string
@@ -452,7 +461,7 @@ type syncRuntime struct {
 	changedFiles []string // accumulates candidate paths reported by component injectors
 }
 
-func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
+func newSyncRuntime(homeDir string, scope InstallScope, selection model.Selection) (*syncRuntime, error) {
 	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
 	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
@@ -464,6 +473,7 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 	return &syncRuntime{
 		homeDir:      homeDir,
 		workspaceDir: workspaceDir,
+		scope:        scope,
 		selection:    selection,
 		agentIDs:     selection.Agents,
 		backupRoot:   backupRoot,
@@ -473,7 +483,7 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 
 func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	adapters := resolveAdapters(r.agentIDs)
-	targets := syncBackupTargets(r.homeDir, r.workspaceDir, r.selection, adapters)
+	targets := syncBackupTargets(r.homeDir, r.workspaceDir, r.scope, r.selection, adapters)
 	r.managedPaths = targets
 
 	prepare := []pipeline.Step{
@@ -500,6 +510,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			component:    component,
 			homeDir:      r.homeDir,
 			workspaceDir: r.workspaceDir,
+			scope:        r.scope,
 			agents:       r.agentIDs,
 			selection:    r.selection,
 			changedFiles: &r.changedFiles,
@@ -517,7 +528,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			agent:        agent,
 			homeDir:      r.homeDir,
 			workspaceDir: r.workspaceDir,
-			scope:        ScopeGlobal,
+			scope:        r.scope,
 			changedFiles: &r.changedFiles,
 		})
 	}
@@ -555,18 +566,18 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 // before sync executes. Uses syncComponentPaths so that the backup/verify
 // contract matches the actual files sync touches (which differ from install
 // for ComponentPersona — see syncComponentPaths).
-func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) []string {
+func syncBackupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter) []string {
 	paths := map[string]struct{}{}
 	for _, component := range selection.Components {
-		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
+		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, scope, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
 	}
 	// Routing guidance is refreshed per agent outside the component loop, at
-	// ScopeGlobal like the step itself. A persisted selection whose components
+	// the same scope as the step itself. A persisted selection whose components
 	// do not cover the same file would otherwise be rewritten without a
 	// snapshot and could never be rolled back (issue #1794).
-	for _, path := range routingGuidancePaths(homeDir, workspaceDir, ScopeGlobal, adapters) {
+	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, adapters) {
 		paths[path] = struct{}{}
 	}
 	// Managed OpenCode-compatible plugin paths are part of sync's
@@ -606,15 +617,15 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 // merges remain install-only because they conflict with SDD's writes to the
 // same file). Sync therefore must NOT declare those JSON paths or the post-sync
 // verification will look for files sync never promised to write.
-func syncComponentPaths(homeDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
-	return syncComponentPathsWithWorkspace(homeDir, "", selection, adapters, component)
+func syncComponentPaths(homeDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
+	return syncComponentPathsWithWorkspace(homeDir, "", scope, selection, adapters, component)
 }
 
-func syncComponentPathsWithWorkspace(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
+func syncComponentPathsWithWorkspace(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	if component == model.ComponentPersona {
-		return syncPersonaPathsWithWorkspace(homeDir, workspaceDir, selection, adapters)
+		return syncPersonaPathsWithWorkspace(homeDir, workspaceDir, scope, selection, adapters)
 	}
-	return componentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component)
+	return componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component)
 }
 
 // syncPersonaPaths returns the file paths that ComponentPersona writes during
@@ -625,17 +636,17 @@ func syncComponentPathsWithWorkspace(homeDir, workspaceDir string, selection mod
 //
 // Step 2 (OpenCode/Kilocode agent definition in opencode.json) is install-only
 // and intentionally NOT declared here.
-func syncPersonaPaths(homeDir string, selection model.Selection, adapters []agents.Adapter) []string {
-	return syncPersonaPathsWithWorkspace(homeDir, "", selection, adapters)
+func syncPersonaPaths(homeDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter) []string {
+	return syncPersonaPathsWithWorkspace(homeDir, "", scope, selection, adapters)
 }
 
-func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) []string {
+func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter) []string {
 	if selection.Persona == model.PersonaCustom {
 		return nil
 	}
 	paths := []string{}
 	for _, adapter := range adapters {
-		targetDir := componentInjectionDir(homeDir, workspaceDir, adapter)
+		targetDir := componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
 		if adapter.Agent() == model.AgentOpenClaw {
 			paths = append(paths, filepath.Join(targetDir, "SOUL.md"))
 			continue
@@ -690,6 +701,7 @@ type componentSyncStep struct {
 	component    model.ComponentID
 	homeDir      string
 	workspaceDir string
+	scope        InstallScope
 	agents       []model.AgentID
 	selection    model.Selection
 	changedFiles *[]string // accumulates absolute paths of files that actually changed
@@ -884,7 +896,7 @@ func (s componentSyncStep) Run() error {
 			if adapter.Agent() == model.AgentOpenClaw {
 				res, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
 			} else {
-				targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+				targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 				res, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
 			}
 			if err != nil {
@@ -940,7 +952,7 @@ func (s componentSyncStep) Run() error {
 		}
 
 		for _, adapter := range adapters {
-			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments:           s.selection.ModelAssignments,
 				ClaudeModelAssignments:             s.selection.ClaudeModelAssignments,
@@ -1023,7 +1035,7 @@ func (s componentSyncStep) Run() error {
 		// merge conflicts with SDD's writes to the same settings file and
 		// remains an install-only concern.
 		for _, adapter := range adapters {
-			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 			res, err := persona.InjectForSync(targetDir, adapter, s.selection.Persona)
 			if err != nil {
 				return fmt.Errorf("sync persona for %q: %w", adapter.Agent(), err)
@@ -1300,10 +1312,10 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 }
 
 // RunSyncWithSelection is the programmatic entry point for sync.
-// It skips flag parsing and agent discovery — the caller provides the homeDir
-// and a fully-built Selection (agents + components + options).
+// It skips flag parsing and agent discovery — the caller provides the homeDir,
+// scope, and a fully-built Selection (agents + components + options).
 // This is the function the TUI calls directly to avoid CLI flag parsing.
-func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult, error) {
+func RunSyncWithSelection(homeDir string, scope InstallScope, selection model.Selection) (SyncResult, error) {
 	agentIDs := selection.Agents
 	persistedState, persistedStateErr := state.Read(homeDir)
 	restorePersistedCommunityTools(homeDir, &selection, persistedState)
@@ -1332,7 +1344,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 		return result, nil
 	}
 
-	rt, err := newSyncRuntime(homeDir, selection)
+	rt, err := newSyncRuntime(homeDir, scope, selection)
 	if err != nil {
 		return result, err
 	}
@@ -1368,7 +1380,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	}
 
 	// Post-apply verification reuses the same component paths as install.
-	result.Verify = runPostSyncVerification(homeDir, rt.workspaceDir, selection)
+	result.Verify = runPostSyncVerification(homeDir, rt.workspaceDir, scope, selection)
 	result.Verify = withFailedSyncVerificationNote(result.Verify)
 	if !result.Verify.Ready {
 		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
@@ -1505,7 +1517,7 @@ func RunSync(args []string) (SyncResult, error) {
 			result.NoOp = true
 			return result, nil
 		}
-		rt, err := newSyncRuntime(homeDir, selection)
+		rt, err := newSyncRuntime(homeDir, InstallScope(flags.Scope), selection)
 		if err != nil {
 			return result, err
 		}
@@ -1513,7 +1525,7 @@ func RunSync(args []string) (SyncResult, error) {
 		return result, nil
 	}
 
-	result, err := RunSyncWithSelection(homeDir, selection)
+	result, err := RunSyncWithSelection(homeDir, InstallScope(flags.Scope), selection)
 	if err != nil {
 		return result, err
 	}
@@ -1646,12 +1658,12 @@ func withFailedSyncVerificationNote(report verify.Report) verify.Report {
 }
 
 // runPostSyncVerification verifies that managed files exist after sync.
-func runPostSyncVerification(homeDir, workspaceDir string, selection model.Selection) verify.Report {
+func runPostSyncVerification(homeDir, workspaceDir string, scope InstallScope, selection model.Selection) verify.Report {
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(selection.Agents)
 
 	for _, component := range selection.Components {
-		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
+		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, scope, selection, adapters, component) {
 			currentPath := path
 			if isLegacyOpenCodeBackgroundAgentsPlugin(currentPath) {
 				checks = append(checks, verify.Check{

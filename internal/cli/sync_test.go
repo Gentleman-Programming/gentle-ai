@@ -1010,7 +1010,7 @@ func TestSyncBackupTargetsIncludeManagedOpenCodePluginsWithoutSDD(t *testing.T) 
 		Components: []model.ComponentID{model.ComponentEngram},
 	}
 
-	targets := syncBackupTargets(home, "", sel, resolveAdapters(sel.Agents))
+	targets := syncBackupTargets(home, "", ScopeGlobal, sel, resolveAdapters(sel.Agents))
 
 	for _, configDir := range []string{"opencode", "kilo"} {
 		for _, plugin := range []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
@@ -1528,7 +1528,7 @@ func TestSyncRuntimeAddsCodeGraphStepsOnlyWhenSelected(t *testing.T) {
 		Agents:         []model.AgentID{model.AgentOpenCode},
 		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
 	}
-	rt, err := newSyncRuntime(home, selected)
+	rt, err := newSyncRuntime(home, ScopeGlobal, selected)
 	if err != nil {
 		t.Fatalf("newSyncRuntime() error = %v", err)
 	}
@@ -1540,7 +1540,7 @@ func TestSyncRuntimeAddsCodeGraphStepsOnlyWhenSelected(t *testing.T) {
 		t.Fatal("sync plan missing selected Pi CodeGraph step")
 	}
 
-	rt, err = newSyncRuntime(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}})
+	rt, err = newSyncRuntime(home, ScopeGlobal, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}})
 	if err != nil {
 		t.Fatalf("newSyncRuntime() error = %v", err)
 	}
@@ -1552,7 +1552,7 @@ func TestSyncRuntimeAddsCodeGraphStepsOnlyWhenSelected(t *testing.T) {
 		t.Fatal("sync plan included Pi CodeGraph without explicit selection")
 	}
 
-	paths := syncBackupTargets(home, "", selected, resolveAdapters([]model.AgentID{model.AgentOpenCode}))
+	paths := syncBackupTargets(home, "", ScopeGlobal, selected, resolveAdapters([]model.AgentID{model.AgentOpenCode}))
 	for _, path := range paths {
 		if path == filepath.Join(home, ".config", "opencode", "AGENTS.md") {
 			return
@@ -1630,7 +1630,7 @@ func TestRunSyncMigratesLegacyManagedCodeGraphSelection(t *testing.T) {
 	t.Cleanup(func() { cmdLookPath = restoreLookPath })
 	cmdLookPath = func(string) (string, error) { return "/bin/codegraph", nil }
 
-	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
+	result, err := RunSyncWithSelection(home, ScopeGlobal, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
@@ -1661,7 +1661,7 @@ func TestRunSyncMigratesLegacyManagedPiCodeGraphSelection(t *testing.T) {
 	}
 	t.Cleanup(func() { refreshPiCodeGraphIfConfigured = previousRefresh })
 
-	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
+	result, err := RunSyncWithSelection(home, ScopeGlobal, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
@@ -1699,7 +1699,7 @@ func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) 
 	}
 	t.Cleanup(func() { refreshPiCodeGraphIfConfigured = previousRefresh })
 
-	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
+	result, err := RunSyncWithSelection(home, ScopeGlobal, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
 	if err == nil || !strings.Contains(err.Error(), "persist migrated community tool selection") {
 		t.Fatalf("RunSyncWithSelection() error = %v, want migration persistence failure", err)
 	}
@@ -2323,7 +2323,7 @@ func TestRunSyncWithProfilesIntegration(t *testing.T) {
 	}
 
 	// Run 1: fresh home.
-	result1, err := RunSyncWithSelection(home, sel)
+	result1, err := RunSyncWithSelection(home, ScopeGlobal, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() run1 error = %v", err)
 	}
@@ -2396,7 +2396,7 @@ func TestRunSyncWithProfilesIntegration(t *testing.T) {
 	// Note: The second sync with profiles will re-generate the overlay, but since
 	// DetectProfiles is called when no explicit profiles are provided (normal re-sync),
 	// we run with the SAME selection (profiles still provided) to test idempotency.
-	result2, err := RunSyncWithSelection(home, sel)
+	result2, err := RunSyncWithSelection(home, ScopeGlobal, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() run2 error = %v", err)
 	}
@@ -2455,7 +2455,7 @@ func TestRunSyncDetectsExistingProfilesOnRegularSync(t *testing.T) {
 		},
 	}
 
-	_, err := RunSyncWithSelection(home, selWithProfile)
+	_, err := RunSyncWithSelection(home, ScopeGlobal, selWithProfile)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() run1 error = %v", err)
 	}
@@ -2489,7 +2489,7 @@ func TestRunSyncDetectsExistingProfilesOnRegularSync(t *testing.T) {
 		// No Profiles field — triggers DetectProfiles path.
 	}
 
-	result2, err := RunSyncWithSelection(home, selNoProfiles)
+	result2, err := RunSyncWithSelection(home, ScopeGlobal, selNoProfiles)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() run2 (no explicit profiles) error = %v", err)
 	}
@@ -2560,7 +2560,7 @@ func TestRunSyncExternalSingleActiveSkipsDetectAndPreservesOrchestratorPrompt(t 
 		SDDProfileStrategy: model.SDDProfileStrategyExternalSingleActive,
 	}
 
-	if _, err := RunSyncWithSelection(home, sel); err != nil {
+	if _, err := RunSyncWithSelection(home, ScopeGlobal, sel); err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
 
@@ -2625,7 +2625,7 @@ func TestRunSyncWithSelection_NoAgentsIsNoOp(t *testing.T) {
 		Components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram},
 	}
 
-	result, err := RunSyncWithSelection(home, sel)
+	result, err := RunSyncWithSelection(home, ScopeGlobal, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() with no agents: error = %v", err)
 	}
@@ -2654,7 +2654,7 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 		SDDMode:    model.SDDModeSingle,
 	}
 
-	result, err := RunSyncWithSelection(home, sel)
+	result, err := RunSyncWithSelection(home, ScopeGlobal, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
@@ -2741,7 +2741,7 @@ func TestRunSyncWithSelection_FilesChangedOnFreshHome(t *testing.T) {
 		SDDMode:    model.SDDModeSingle,
 	}
 
-	result, err := RunSyncWithSelection(home, sel)
+	result, err := RunSyncWithSelection(home, ScopeGlobal, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
@@ -2779,7 +2779,7 @@ func TestRunSyncWithSelection_IsIdempotent(t *testing.T) {
 	}
 
 	// Run 1: files written.
-	result1, err := RunSyncWithSelection(home, sel)
+	result1, err := RunSyncWithSelection(home, ScopeGlobal, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() run1 error = %v", err)
 	}
@@ -2792,7 +2792,7 @@ func TestRunSyncWithSelection_IsIdempotent(t *testing.T) {
 	}
 
 	// Run 2: nothing changed.
-	result2, err := RunSyncWithSelection(home, sel)
+	result2, err := RunSyncWithSelection(home, ScopeGlobal, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() run2 error = %v", err)
 	}
@@ -2827,7 +2827,7 @@ func TestRunSyncWithSelection_SelectionAgentsForwarded(t *testing.T) {
 		Components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram, model.ComponentContext7, model.ComponentGGA, model.ComponentSkills},
 	}
 
-	result, err := RunSyncWithSelection(home, sel)
+	result, err := RunSyncWithSelection(home, ScopeGlobal, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
@@ -3549,7 +3549,7 @@ func TestSyncPersonaPathsExcludeOpenCodeAgentJson(t *testing.T) {
 	reg, _ := agents.NewDefaultRegistry()
 	a, _ := reg.Get(model.AgentOpenCode)
 
-	paths := syncPersonaPaths(home, model.Selection{Persona: model.PersonaGentleman}, []agents.Adapter{a})
+	paths := syncPersonaPaths(home, ScopeGlobal, model.Selection{Persona: model.PersonaGentleman}, []agents.Adapter{a})
 
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	for _, p := range paths {
@@ -3589,7 +3589,7 @@ func TestSyncPersonaPathsDeclareManagedClaudeOutputStyle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			paths := syncPersonaPaths(home, model.Selection{Persona: tt.persona}, []agents.Adapter{a})
+			paths := syncPersonaPaths(home, ScopeGlobal, model.Selection{Persona: tt.persona}, []agents.Adapter{a})
 
 			if !containsPath(paths, tt.wantStyle) {
 				t.Fatalf("syncPersonaPaths(%q) missing managed style %q; got %v", tt.persona, tt.wantStyle, paths)
@@ -3728,7 +3728,7 @@ func TestRunSyncWithSelection_PersonaResolvesFromStateNeutral(t *testing.T) {
 		Persona:    "", // empty — the bug scenario
 	}
 
-	result, err := RunSyncWithSelection(home, sel)
+	result, err := RunSyncWithSelection(home, ScopeGlobal, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
@@ -3760,7 +3760,7 @@ func TestRunSyncWithSelection_PersonaResolvesFromStateCustom(t *testing.T) {
 		Persona:    "",
 	}
 
-	result, err := RunSyncWithSelection(home, sel)
+	result, err := RunSyncWithSelection(home, ScopeGlobal, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
@@ -3792,7 +3792,7 @@ func TestRunSyncWithSelection_PersonaFallsBackToNeutralWhenStateHasNone(t *testi
 		Persona:    "",
 	}
 
-	result, err := RunSyncWithSelection(home, sel)
+	result, err := RunSyncWithSelection(home, ScopeGlobal, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
@@ -3827,7 +3827,7 @@ func TestRunSyncWithSelection_ExplicitPersonaWinsOverState(t *testing.T) {
 		Persona:    model.PersonaNeutral, // explicit — must not be overridden by state
 	}
 
-	result, err := RunSyncWithSelection(home, sel)
+	result, err := RunSyncWithSelection(home, ScopeGlobal, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
@@ -3863,7 +3863,7 @@ func TestRunSyncWithSelection_UnknownPersistedPersonaFallsBackToNeutral(t *testi
 		Persona:    "", // empty — resolution from state must happen
 	}
 
-	result, err := RunSyncWithSelection(home, sel)
+	result, err := RunSyncWithSelection(home, ScopeGlobal, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
@@ -4337,7 +4337,7 @@ func TestRunSync_RestoresCodexPhaseModelAssignments(t *testing.T) {
 func runSyncInjectionSteps(t *testing.T, home string, selection model.Selection) []string {
 	t.Helper()
 
-	rt, err := newSyncRuntime(home, selection)
+	rt, err := newSyncRuntime(home, ScopeGlobal, selection)
 	if err != nil {
 		t.Fatalf("newSyncRuntime() error = %v", err)
 	}
@@ -4353,7 +4353,7 @@ func runSyncInjectionSteps(t *testing.T, home string, selection model.Selection)
 func runSyncComponentSteps(t *testing.T, home string, selection model.Selection) {
 	t.Helper()
 
-	rt, err := newSyncRuntime(home, selection)
+	rt, err := newSyncRuntime(home, ScopeGlobal, selection)
 	if err != nil {
 		t.Fatalf("newSyncRuntime() error = %v", err)
 	}
@@ -4488,7 +4488,7 @@ func TestSyncBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *test
 	agent := model.AgentClaudeCode
 	selection := model.Selection{Agents: []model.AgentID{agent}}
 
-	targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	targets := syncBackupTargets(home, "", ScopeGlobal, selection, resolveAdapters(selection.Agents))
 
 	routing, err := agentguidance.RoutingPaths(home, agent)
 	if err != nil {
@@ -4512,7 +4512,7 @@ func TestSyncBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 		SDDMode:    model.SDDModeSingle,
 	}
 
-	targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	targets := syncBackupTargets(home, "", ScopeGlobal, selection, resolveAdapters(selection.Agents))
 
 	assertNoDuplicatePaths(t, "syncBackupTargets", targets)
 }

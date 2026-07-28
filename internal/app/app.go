@@ -608,7 +608,7 @@ func tuiSync(homeDir string) tui.SyncFunc {
 
 		applyOverrides(&selection, overrides)
 
-		result, err := cli.RunSyncWithSelection(homeDir, selection)
+		result, err := cli.RunSyncWithSelection(homeDir, cli.ScopeGlobal, selection)
 		if err != nil {
 			return nil, err
 		}

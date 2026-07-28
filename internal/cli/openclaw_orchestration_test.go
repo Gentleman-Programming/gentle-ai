@@ -207,7 +207,7 @@ func TestSyncRuntimeOpenClawUsesConfiguredActiveWorkspace(t *testing.T) {
 		Persona:    model.PersonaGentleman,
 		StrictTDD:  true,
 	}
-	rt, err := newSyncRuntime(home, selection)
+	rt, err := newSyncRuntime(home, ScopeGlobal, selection)
 	if err != nil {
 		t.Fatalf("newSyncRuntime() error = %v", err)
 	}
