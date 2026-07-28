@@ -28,8 +28,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sysproc"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
