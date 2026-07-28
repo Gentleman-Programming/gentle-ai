@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/sysproc"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sysproc"
 )
 
 // httpClient is the HTTP client used for GitHub API calls.

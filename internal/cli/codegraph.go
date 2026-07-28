@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/sysproc"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sysproc"
 )
 
 var (

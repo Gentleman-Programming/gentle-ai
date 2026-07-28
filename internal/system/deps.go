@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gentleman-programming/gentle-ai/internal/sysproc"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sysproc"
 )
 
 // Dependency represents a system prerequisite with detection and install metadata.

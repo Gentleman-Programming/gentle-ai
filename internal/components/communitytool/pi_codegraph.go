@@ -20,9 +20,6 @@ import (
 	piagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sysproc"
-
-	piagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 )
 
 const (

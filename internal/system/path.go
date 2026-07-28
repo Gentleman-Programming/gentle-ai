@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/sysproc"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sysproc"
 )
 
 // AddToUserPath adds a directory to the Windows user PATH persistently.

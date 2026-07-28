@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/sysproc"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sysproc"
 )
 
 type SystemInfo struct {
