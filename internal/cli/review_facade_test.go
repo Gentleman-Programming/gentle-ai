@@ -2040,6 +2040,20 @@ func TestReviewBindSDDRequiresExplicitInputs(t *testing.T) {
 	}
 }
 
+func TestReviewBindSDDHelpUsesArtifactStoreNeutralLanguage(t *testing.T) {
+	var output bytes.Buffer
+	if err := RunReview([]string{"bind-sdd", "--help"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	help := output.String()
+	if !strings.Contains(help, "approved compact lineage to an SDD change") || !strings.Contains(help, "SDD change") {
+		t.Fatalf("bind-sdd help is not artifact-store neutral:\n%s", help)
+	}
+	if strings.Contains(help, "OpenSpec") {
+		t.Fatalf("bind-sdd help still requires OpenSpec:\n%s", help)
+	}
+}
+
 func TestReviewBindSDDAcceptsEqualsFormForEmptyExpectedRevision(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	for path, content := range map[string]string{"tasks.md": "- [x] 1.1 Done\n", "proposal.md": "# Proposal\n", "design.md": "# Design\n", "specs/binding/spec.md": "# Spec\n"} {

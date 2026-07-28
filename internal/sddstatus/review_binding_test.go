@@ -52,6 +52,54 @@ func TestBindApprovedReviewCASAndLiveEvidence(t *testing.T) {
 	}
 }
 
+func TestBindApprovedReviewBindsPureEngramCompactAuthority(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	approved := createApprovedRuntimeAuthority(t, repo, "approved-engram", 1)
+
+	binding, err := BindApprovedReview(context.Background(), repo, "engram-change", approved.State.LineageID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.AuthorityRevision != approved.Revision || binding.GateContext.Gate != reviewtransaction.GatePostApply {
+		t.Fatalf("pure Engram binding = %#v", binding)
+	}
+	assertNativeBinding(t, mustRuntimeStore(t, repo, "engram-change"), binding.Revision)
+
+	replayed, err := BindApprovedReview(context.Background(), repo, "engram-change", approved.State.LineageID, "")
+	if err != nil {
+		t.Fatalf("exact pure Engram replay: %v", err)
+	}
+	if replayed.Revision != binding.Revision {
+		t.Fatalf("replayed binding revision = %q, want %q", replayed.Revision, binding.Revision)
+	}
+
+	successor := createApprovedRuntimeAuthority(t, repo, "approved-engram-successor", 2)
+	if _, err := BindApprovedReview(context.Background(), repo, "engram-change", successor.State.LineageID, ""); err == nil {
+		t.Fatal("pure Engram binding replacement accepted without current binding revision")
+	} else {
+		var conflict *BindingRevisionConflictError
+		if !errors.As(err, &conflict) || conflict.Current != binding.Revision {
+			t.Fatalf("pure Engram stale CAS error = %#v, want current %q", err, binding.Revision)
+		}
+	}
+}
+
+func TestBindApprovedReviewBindsEngramChangeAlongsideOtherOpenSpecChanges(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	write(t, filepath.Join(repo, "openspec", "changes", "other-change", "tasks.md"), "- [x] 1.1 Done\n")
+	runSDDStatusGit(t, repo, "add", "openspec/changes/other-change/tasks.md")
+	approved := createApprovedRuntimeAuthority(t, repo, "approved-engram", 1)
+
+	binding, err := BindApprovedReview(context.Background(), repo, "engram-change", approved.State.LineageID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.AuthorityRevision != approved.Revision || binding.GateContext.Gate != reviewtransaction.GatePostApply {
+		t.Fatalf("mixed repository Engram binding = %#v", binding)
+	}
+	assertNativeBinding(t, mustRuntimeStore(t, repo, "engram-change"), binding.Revision)
+}
+
 func TestBindApprovedReviewUsesNestedOpenSpecPlanningWorkspace(t *testing.T) {
 	root := t.TempDir()
 	planningRoot := filepath.Join(root, "packages", "app")
