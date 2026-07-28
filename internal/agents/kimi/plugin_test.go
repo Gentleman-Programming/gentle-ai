@@ -254,9 +254,20 @@ func newKimiCodeAdapter(t *testing.T, homeDir string) *kimi.Adapter {
 			if path == kimiCodeDir {
 				return kimi.StatResult{IsDir: true}
 			}
+			if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" && path == envDir {
+				return kimi.StatResult{IsDir: true}
+			}
 			return kimi.StatResult{Err: os.ErrNotExist}
 		}),
-		kimi.WithPathExists(func(path string) bool { return path == kimiCodeDir }),
+		kimi.WithPathExists(func(path string) bool {
+			if path == kimiCodeDir {
+				return true
+			}
+			if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" && path == envDir {
+				return true
+			}
+			return false
+		}),
 	)
 }
 

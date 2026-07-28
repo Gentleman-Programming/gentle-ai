@@ -148,7 +148,7 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 // config file where the installed product never looks.
 func (a *Adapter) resolveConfigDir(homeDir string) string {
 	if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" {
-		if info, err := os.Stat(envDir); err == nil && info.IsDir() {
+		if stat := a.statPath(envDir); stat.err == nil && stat.isDir {
 			return envDir
 		}
 	}
