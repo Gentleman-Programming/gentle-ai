@@ -126,6 +126,105 @@ func TestValidateCompactFinalVerificationRetryEdgeAcceptsOnlyExactLifecycleEvide
 	}
 }
 
+func TestValidateCompactFinalVerificationRetryEdgeRejectsProtectedFieldMutationsAcrossAcceptedLifecycles(t *testing.T) {
+	baselines := []struct {
+		name     string
+		state    State
+		evidence string
+	}{
+		{name: "validating empty", state: StateValidating},
+		{name: "approved valid hash", state: StateApproved, evidence: hash("approved")},
+		{name: "escalated valid hash", state: StateEscalated, evidence: hash("escalated")},
+	}
+	mutations := []struct {
+		name   string
+		mutate func(*CompactState)
+	}{
+		{name: "snapshot target", mutate: func(state *CompactState) { state.InitialSnapshot.Identity = hash("forged-snapshot") }},
+		{name: "policy risk", mutate: func(state *CompactState) { state.PolicyHash = hash("forged-policy") }},
+		{name: "lenses results", mutate: func(state *CompactState) {
+			state.LensResults = append(state.LensResults, LensResult{Lens: "review-forged"})
+		}},
+		{name: "findings outcomes", mutate: func(state *CompactState) { state.Findings = append(state.Findings, Finding{ID: "forged-finding"}) }},
+		{name: "correction history budgets", mutate: func(state *CompactState) { state.CorrectionBudget++ }},
+		{name: "recovery proof authorization", mutate: func(state *CompactState) { state.Recovery.MaintainerAuthorization = "forged-authorization" }},
+		{name: "lineage generation", mutate: func(state *CompactState) { state.Generation++ }},
+	}
+
+	for _, baseline := range baselines {
+		for _, mutation := range mutations {
+			t.Run(baseline.name+"/"+mutation.name, func(t *testing.T) {
+				fixture := newFinalVerificationRetryFixture(t, "retry-mutation-source", "retry-mutation-successor")
+				source, err := deriveFinalVerificationRetrySourceLocked(context.Background(), fixture.store, fixture.predecessor)
+				if err != nil {
+					t.Fatal(err)
+				}
+				successor, err := finalVerificationRetrySuccessor(fixture.predecessor, fixture.request, source, fixture.request.RecoveredAt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				successor.State, successor.EvidenceHash = baseline.state, baseline.evidence
+				mutation.mutate(&successor)
+				if err := validateCompactFinalVerificationRetryEdge(fixture.predecessor, successor); err == nil {
+					t.Fatal("protected-field mutation was accepted")
+				}
+			})
+		}
+	}
+}
+
+func TestValidateCompactFinalVerificationRetryEdgeRejectsForgedSourceFinalizeAttempt(t *testing.T) {
+	mutations := []struct {
+		name   string
+		rehash bool
+		mutate func(*CompactFinalVerificationRetryProof)
+	}{
+		{name: "evidence digest", mutate: func(proof *CompactFinalVerificationRetryProof) {
+			proof.SourceFinalizeAttempt.Request.EvidenceDigest = hash("forged-evidence")
+		}},
+		{name: "request digest", mutate: func(proof *CompactFinalVerificationRetryProof) {
+			proof.SourceFinalizeAttempt.Request.RequestDigest = hash("forged-request")
+		}},
+		{name: "request lineage", mutate: func(proof *CompactFinalVerificationRetryProof) {
+			proof.SourceFinalizeAttempt.Request.LineageID = "forged-lineage"
+		}},
+		{name: "request lineage canonical", rehash: true, mutate: func(proof *CompactFinalVerificationRetryProof) {
+			proof.SourceFinalizeAttempt.Request.LineageID = "forged-lineage"
+		}},
+		{name: "candidate binding", mutate: func(proof *CompactFinalVerificationRetryProof) {
+			proof.SourceFinalizeAttempt.Request.CandidateDigest = hash("forged-candidate")
+		}},
+		{name: "failed binding", mutate: func(proof *CompactFinalVerificationRetryProof) {
+			proof.SourceFinalizeAttempt.Request.FailedDigest = hash("forged-failed")
+		}},
+	}
+
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			fixture := newFinalVerificationRetryFixture(t, "retry-proof-source", "retry-proof-successor")
+			source, err := deriveFinalVerificationRetrySourceLocked(context.Background(), fixture.store, fixture.predecessor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			successor, err := finalVerificationRetrySuccessor(fixture.predecessor, fixture.request, source, fixture.request.RecoveredAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutation.mutate(successor.Recovery.FinalVerificationRetry)
+			if mutation.rehash {
+				proof := successor.Recovery.FinalVerificationRetry
+				proof.SourceFinalizeAttempt.Request.RequestDigest = FinalizeAttemptRequestDigest(proof.SourceFinalizeAttempt.Request)
+				proof.FinalizeRequestDigest = proof.SourceFinalizeAttempt.Request.RequestDigest
+				proof.Incident.FinalizeRequestDigest = proof.FinalizeRequestDigest
+				proof.IncidentDigest = FinalVerificationIncidentDigest(proof.Incident)
+			}
+			if err := validateCompactFinalVerificationRetryEdge(fixture.predecessor, successor); err == nil {
+				t.Fatal("forged source FINALIZE attempt was accepted")
+			}
+		})
+	}
+}
+
 func TestRetryCompactFinalVerificationUsesCorrectedCurrentSnapshot(t *testing.T) {
 	fixture := newCorrectedFinalVerificationRetryFixture(t, "retry-corrected-source", "retry-corrected-successor")
 	if snapshotsEqual(fixture.predecessor.State.InitialSnapshot, fixture.predecessor.State.CurrentSnapshot) {

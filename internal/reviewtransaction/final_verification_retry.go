@@ -441,6 +441,9 @@ func validateCompactFinalVerificationRetryProofShape(successor CompactState, rec
 		return errors.New("final-verification retry incident does not bind its source proof")
 	}
 	attempt := proof.SourceFinalizeAttempt
+	if err := validateFinalizeAttemptRequest(recovery.PredecessorLineageID, attempt.Request); err != nil {
+		return err
+	}
 	if !attempt.Completed || !attempt.ReceiptPublished || len(attempt.Transitions) == 0 || !finalVerificationAttemptHasRevisionContinuity(attempt) {
 		return errors.New("final-verification retry source FINALIZE attempt is incomplete")
 	}
@@ -492,7 +495,8 @@ func validateCompactFinalVerificationRetryEdge(predecessor CompactRecord, succes
 		return err
 	}
 	proof := recovery.FinalVerificationRetry
-	if proof.FailedEvidenceHash != predecessor.State.EvidenceHash || proof.TargetIdentity != predecessor.State.CurrentSnapshot.Identity ||
+	if recovery.PredecessorLineageID != predecessor.State.LineageID || recovery.PredecessorRevision != predecessor.Revision ||
+		proof.FailedEvidenceHash != predecessor.State.EvidenceHash || proof.TargetIdentity != predecessor.State.CurrentSnapshot.Identity ||
 		proof.TerminalRevision != predecessor.Revision {
 		return errors.New("final-verification retry proof does not bind its predecessor")
 	}
@@ -500,7 +504,7 @@ func validateCompactFinalVerificationRetryEdge(predecessor CompactRecord, succes
 	if err != nil {
 		return err
 	}
-	want.LineageID, want.Generation, want.State, want.EvidenceHash, want.Recovery = successor.LineageID, successor.Generation, StateValidating, "", successor.Recovery
+	want.LineageID, want.Generation, want.State, want.EvidenceHash, want.Recovery = successor.LineageID, predecessor.State.Generation+1, StateValidating, "", successor.Recovery
 	if !compactStateEqual(want, normalizedSuccessor) {
 		return errors.New("final-verification retry successor changed frozen authority or budget state")
 	}
