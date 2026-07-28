@@ -380,7 +380,7 @@ const reviewGateFreshReviewContinuation = "run the fresh full review of the curr
 // of delivered history, so the continuation it names carries the base-ref
 // selector whose commit value only the operator knows.
 const reviewGateEmptyReceiptReason = "the terminal review receipt froze an empty candidate and covers no delivered content; " +
-	reviewGateFreshReviewContinuation + " --base-ref <commit>"
+	reviewGateFreshReviewContinuation + " --base-ref <commit> --committed-only"
 
 // reviewGateAmbiguousGovernanceReason is the one multi-receipt shape that
 // still blocks: several terminal receipts each exactly govern the identical
