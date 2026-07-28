@@ -127,10 +127,12 @@ const reviewStartEmptyCandidateHint = "the candidate has no pending changes; alr
 // and artifact_subjects that only the negotiated form returns, so the hint
 // names the exact rerun invocation, reusing this same response's own
 // target_identity and projection instead of only describing the requirement.
-func reviewStartNegotiateContractHint(targetIdentity string, projection reviewtransaction.Projection) string {
+func reviewStartNegotiateContractHint(snapshot reviewtransaction.Snapshot) string {
+	arguments := reviewStartArgumentsForTarget(snapshot.Identity, snapshot.Kind, facadeProjection(snapshot.Projection), snapshot.BaseTree, "")
+	command := reviewTransitionCommandLine("review.start", reviewTokenizedTransitionArguments(arguments))
 	return fmt.Sprintf(
-		"this response's selected lenses require the frozen candidate diff, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `gentle-ai review start --contract %s --target %s --projection %s` to receive them",
-		ReviewIntegrationContractV1, targetIdentity, projection,
+		"this response's selected lenses require the frozen candidate diff, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `%s` to receive them",
+		command,
 	)
 }
 
@@ -1588,7 +1590,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			case legacyResult.ChangedFiles == 0 && target.Kind == reviewtransaction.TargetCurrentChanges:
 				legacyResult.Hint = reviewStartEmptyCandidateHint
 			case legacyResult.LensesRequired:
-				legacyResult.Hint = reviewStartNegotiateContractHint(legacyResult.TargetIdentity, legacyResult.Projection)
+				legacyResult.Hint = reviewStartNegotiateContractHint(authority.InitialSnapshot)
 			}
 		}
 		return encodeReviewJSON(stdout, legacyResult)

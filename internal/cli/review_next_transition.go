@@ -375,16 +375,20 @@ type reviewTransitionSelector struct {
 }
 
 func reviewStartArguments(status ReviewTargetStatusResult, lineage string) []ReviewTransitionArgument {
+	return reviewStartArgumentsForTarget(status.TargetIdentity, status.Projection.Kind, status.Projection.Projection, status.Projection.BaseTree, lineage)
+}
+
+func reviewStartArgumentsForTarget(targetIdentity string, kind reviewtransaction.TargetKind, projection reviewtransaction.Projection, baseTree, lineage string) []ReviewTransitionArgument {
 	arguments := []ReviewTransitionArgument{
 		{Name: "contract", Value: ReviewIntegrationContractV1},
-		{Name: "target", Value: status.TargetIdentity},
-		{Name: "projection", Value: string(status.Projection.Projection)},
+		{Name: "target", Value: targetIdentity},
+		{Name: "projection", Value: string(projection)},
 	}
-	switch status.Projection.Kind {
+	switch kind {
 	case reviewtransaction.TargetBaseDiff:
-		arguments = append(arguments, ReviewTransitionArgument{Name: "base-ref", Value: status.Projection.BaseTree}, ReviewTransitionArgument{Name: "committed-only", Value: "true"})
+		arguments = append(arguments, ReviewTransitionArgument{Name: "base-ref", Value: baseTree}, ReviewTransitionArgument{Name: "committed-only", Value: "true"})
 	case reviewtransaction.TargetBaseWorkspaceOverlay:
-		arguments = append(arguments, ReviewTransitionArgument{Name: "base-ref", Value: status.Projection.BaseTree}, ReviewTransitionArgument{Name: "workspace-overlay", Value: "true"})
+		arguments = append(arguments, ReviewTransitionArgument{Name: "base-ref", Value: baseTree}, ReviewTransitionArgument{Name: "workspace-overlay", Value: "true"})
 	}
 	if strings.TrimSpace(lineage) != "" {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "lineage", Value: lineage})

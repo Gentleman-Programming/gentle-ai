@@ -308,8 +308,48 @@ func TestReviewFacadeStartLensesRequiredHintsNegotiatedContract(t *testing.T) {
 	if !started.LensesRequired || len(started.SelectedLenses) == 0 {
 		t.Fatalf("service-token start lenses_required = %v, selected_lenses = %v, want lenses selected", started.LensesRequired, started.SelectedLenses)
 	}
-	wantCommand := fmt.Sprintf("gentle-ai review start --contract %s --target %s --projection %s", ReviewIntegrationContractV1, started.TargetIdentity, started.Projection)
+	wantCommand := fmt.Sprintf("gentle-ai review start --contract=%s --target=%s --projection=%s", ReviewIntegrationContractV1, started.TargetIdentity, started.Projection)
 	if !strings.Contains(started.Hint, wantCommand) {
 		t.Fatalf("lenses-required start hint = %q, want it to contain %q", started.Hint, wantCommand)
+	}
+}
+
+func TestReviewFacadeStartBaseDiffHintResumesFrozenTarget(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'candidate'\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "service-token.ts")
+	runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
+
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", base, "--committed-only"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	if err := json.Unmarshal(output.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	_, command, found := strings.Cut(started.Hint, "`")
+	if !found {
+		t.Fatalf("base-diff START hint does not contain a runnable command: %q", started.Hint)
+	}
+	command, _, found = strings.Cut(command, "`")
+	if !found {
+		t.Fatalf("base-diff START hint does not terminate its runnable command: %q", started.Hint)
+	}
+	argv := strings.Fields(command)
+	if len(argv) < 3 || !reflect.DeepEqual(argv[:3], []string{"gentle-ai", "review", "start"}) {
+		t.Fatalf("base-diff START hint command = %q", command)
+	}
+
+	var rerunOutput bytes.Buffer
+	args := append(append([]string(nil), argv[2:]...), "--cwd="+repo)
+	if err := RunReview(args, &rerunOutput); err != nil {
+		t.Fatalf("run emitted base-diff START hint: %v\n%s", err, rerunOutput.String())
+	}
+	rerun := decodeNegotiatedReviewStart(t, rerunOutput.Bytes())
+	if rerun.Action != string(reviewtransaction.CompactStartResumed) || rerun.LineageID != started.LineageID ||
+		len(rerun.ArtifactSubjects) == 0 || rerun.ArtifactSubjects[0].TargetIdentity != started.TargetIdentity {
+		t.Fatalf("emitted hint resumed %#v, want lineage %q and target %q", rerun, started.LineageID, started.TargetIdentity)
 	}
 }
