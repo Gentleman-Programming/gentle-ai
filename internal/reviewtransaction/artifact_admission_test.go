@@ -88,14 +88,14 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 			r.FrozenContext.repositoryPaths = []string{"internal/a.go"}
 		}, decision: ArtifactAdmissionBindingMismatch},
 		{name: "out of scope finding", mutate: func(r *ArtifactAdmissionRequest) { r.Result.Findings[0].Location = "unrelated/old.go:3" }, decision: ArtifactAdmissionOutOfScope},
-		{name: "out of scope proof", mutate: func(r *ArtifactAdmissionRequest) {
-			r.Result.Findings[0].ProofRefs = []string{"diff: unrelated/old.go:3"}
+		// proof_refs and evidence are scoped to the frozen repository manifest, not the
+		// changed-path manifest. A malformed (non-canonical) path token is rejected;
+		// a valid repository path outside the diff is admitted.
+		{name: "proof ref with non-canonical path is out of scope", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Findings[0].ProofRefs = []string{"./internal/a.go:3"}
 		}, decision: ArtifactAdmissionOutOfScope},
-		{name: "root path evidence outside scope", mutate: func(r *ArtifactAdmissionRequest) {
-			r.Result.Evidence = append(r.Result.Evidence, "diff: secret.go:42")
-		}, decision: ArtifactAdmissionOutOfScope},
-		{name: "root path proof outside scope", mutate: func(r *ArtifactAdmissionRequest) {
-			r.Result.Findings[0].ProofRefs = []string{"diff: secret.go:42"}
+		{name: "evidence with non-canonical path is out of scope", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Evidence = append(r.Result.Evidence, "./internal/a.go:42")
 		}, decision: ArtifactAdmissionOutOfScope},
 		{name: "non ASCII finding id", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings[0].ID = "R3-é"
@@ -191,6 +191,7 @@ func TestAdmitArtifactOmittedSubjectDiagnosticNamesContinuation(t *testing.T) {
 }
 
 func TestReferenceOutsideScopeRecognizesOnlyStructuredRepositoryPaths(t *testing.T) {
+	// allowed is the changed-path manifest subset; repository is the full frozen snapshot.
 	allowed := map[string]struct{}{
 		"docs/naïve guide.md": {},
 		"internal/a.go":       {},
@@ -231,5 +232,43 @@ func TestReferenceOutsideScopeRecognizesOnlyStructuredRepositoryPaths(t *testing
 				t.Fatalf("referenceOutsideScope(%q) = %v, want %v", tt.value, got, tt.outside)
 			}
 		})
+	}
+}
+
+func TestAdmitArtifactAllowsProofRefsToUnmodifiedRepositoryFiles(t *testing.T) {
+	_, _, request := admittedArtifactFixture(t)
+	// Finding location remains inside changed-path manifest.
+	request.Result.Findings[0].Location = "internal/a.go:10"
+	// ProofRef references an unmodified repository file outside the changed-path manifest.
+	request.Result.Findings[0].ProofRefs = []string{"internal/secret.go:42"}
+
+	canonical, admission, err := AdmitArtifact(request)
+	if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+		t.Fatalf("AdmitArtifact() = %q, %v; want completed when proof_ref references valid repository path", admission.Decision, err)
+	}
+	if len(canonical.Findings[0].ProofRefs) != 1 || canonical.Findings[0].ProofRefs[0] != "internal/secret.go:42" {
+		t.Fatalf("AdmitArtifact() proofRefs = %v, want [internal/secret.go:42]", canonical.Findings[0].ProofRefs)
+	}
+}
+
+func TestAdmitArtifactAllowsEvidenceToUnmodifiedRepositoryFiles(t *testing.T) {
+	_, _, request := admittedArtifactFixture(t)
+	// Evidence references an unmodified repository file outside the changed-path manifest.
+	request.Result.Evidence = append(request.Result.Evidence, "supporting evidence: internal/secret.go:42")
+
+	_, admission, err := AdmitArtifact(request)
+	if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+		t.Fatalf("AdmitArtifact() = %q, %v; want completed when evidence references valid repository path", admission.Decision, err)
+	}
+}
+
+func TestAdmitArtifactRejectsProofRefToPathAbsentFromRepository(t *testing.T) {
+	_, _, request := admittedArtifactFixture(t)
+	// ProofRef references a path not in the frozen repository manifest at all.
+	request.Result.Findings[0].ProofRefs = []string{"completely-absent.go:42"}
+
+	_, admission, err := AdmitArtifact(request)
+	if err == nil || admission.Decision != ArtifactAdmissionOutOfScope {
+		t.Fatalf("AdmitArtifact() = %q, %v; want out_of_scope for proof_ref absent from repository", admission.Decision, err)
 	}
 }

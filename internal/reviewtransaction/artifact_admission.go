@@ -197,7 +197,7 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 		if evidenceReportsUnavailableInspection(evidence) {
 			return fail(ArtifactAdmissionIncomplete, "reviewer evidence reports that candidate inspection was unavailable")
 		}
-		if referenceOutsideScope(evidence, allowed, repository) {
+		if proofReferenceIsMalformed(evidence, repository) {
 			return fail(ArtifactAdmissionOutOfScope, "reviewer evidence references a path outside the frozen candidate")
 		}
 	}
@@ -216,7 +216,7 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 			return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
 		}
 		for _, proof := range finding.ProofRefs {
-			if referenceOutsideScope(proof, allowed, repository) {
+			if proofReferenceIsMalformed(proof, repository) {
 				return fail(ArtifactAdmissionOutOfScope, "reviewer proof references a path outside the frozen candidate")
 			}
 		}
@@ -431,6 +431,30 @@ func evidenceReportsUnavailableInspection(value string) bool {
 		"no candidate contents were available", "no candidate content was available",
 	} {
 		if strings.Contains(value, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// proofReferenceIsMalformed reports whether a proof or evidence string contains
+// a token that is structurally malformed (non-canonical path form) or that
+// references a path-shaped token absent from the frozen repository manifest.
+// Unlike referenceOutsideScope, it does not reject tokens referencing
+// repository files that fall outside the changed-path manifest; supporting
+// proof is permitted to cite any file in the frozen repository, not only the
+// diff. Tokens that are not path-shaped are ignored, preserving free-form prose.
+func proofReferenceIsMalformed(value string, repository map[string]struct{}) bool {
+	for _, token := range artifactReferenceTokens(value) {
+		path, known, malformed := artifactRepositoryPathReference(token, repository)
+		if malformed {
+			return true
+		}
+		// path is non-empty only when the token is path-shaped (has a dot,
+		// slash, or is quoted). An unknown path-shaped token is rejected so
+		// proofs cannot reference files that were never part of the frozen
+		// repository snapshot.
+		if path != "" && !known {
 			return true
 		}
 	}
