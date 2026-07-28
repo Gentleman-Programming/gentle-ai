@@ -7355,6 +7355,17 @@ func TestPickerBackRowRegression(t *testing.T) {
 	}
 }
 
+func TestGoBackCustomModelPickerStartsDiscovery(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen, m.Selection.Preset, m.Selection.SDDMode = ScreenStrictTDD, model.PresetCustom, model.SDDModeMulti
+	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := updated.(Model); got.Screen != ScreenModelPicker || cmd == nil {
+		t.Fatalf("screen/cmd = %v/%v", got.Screen, cmd)
+	}
+}
+
 // TestStrictTDDForward verifies the StrictTDD Continue path for all flow variants.
 // Per design step 8: OpenCodePlugins guard fires first; custom goes to SkillPicker
 // or Review; non-custom advances via pickerNextScreen (→ DependencyTree).

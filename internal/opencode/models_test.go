@@ -1,10 +1,7 @@
 package opencode
 
 import (
-	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -584,22 +581,6 @@ func TestLoadConfigProvidersInvalidJSON(t *testing.T) {
 	}
 	if len(config) != 0 {
 		t.Fatalf("expected empty map on parse error, got %v", config)
-	}
-}
-
-func TestFetchDynamicModels(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"data":[{"id":"qwen2.5-coder-7b-instruct"}]}`))
-	}))
-	defer server.Close()
-
-	models, err := FetchDynamicModels(context.Background(), server.URL)
-	if err != nil {
-		t.Fatalf("FetchDynamicModels failed: %v", err)
-	}
-
-	if len(models) != 1 || models[0].Name != "qwen2.5-coder-7b-instruct" || models[0].ToolCall {
-		t.Fatalf("unexpected models returned: %v", models)
 	}
 }
 

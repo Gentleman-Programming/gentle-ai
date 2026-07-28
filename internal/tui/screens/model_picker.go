@@ -96,9 +96,9 @@ type ModelPickerState struct {
 
 // NewModelPickerState initializes the picker state from cache and settings.
 func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState {
-	providers, err := opencode.LoadModelsOrEmpty(cachePath)
-	if err != nil {
-		return ModelPickerState{}
+	providers, cacheErr := opencode.LoadModelsOrEmpty(cachePath)
+	if cacheErr != nil {
+		providers = map[string]opencode.Provider{}
 	}
 
 	configProviders, configErr := opencode.LoadConfigProviders(settingsPath)
@@ -121,8 +121,11 @@ func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState
 	}
 
 	var configWarning string
+	if cacheErr != nil {
+		configWarning = fmt.Sprintf("Could not load model cache: %v", cacheErr)
+	}
 	if configErr != nil {
-		configWarning = fmt.Sprintf("Could not load custom providers from opencode.json: %v", configErr)
+		configWarning = appendConfigWarning(configWarning, fmt.Sprintf("Could not load custom providers from opencode.json: %v", configErr))
 	}
 
 	state := ModelPickerState{

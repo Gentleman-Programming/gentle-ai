@@ -1526,12 +1526,9 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if _, ok := m.GentleAIUpgradeVersion(); ok {
 			return m, tea.Quit
 		}
-		previousScreen := m.Screen
-		m = m.goBack()
-		if previousScreen != ScreenModelPicker && m.Screen == ScreenModelPicker {
-			return m, m.ModelPicker.DiscoverLMStudioCmd()
-		}
-		return m, nil
+		var cmd tea.Cmd
+		m = m.goBack(&cmd)
+		return m, cmd
 	case " ":
 		switch m.Screen {
 		case ScreenAgents:
@@ -3148,7 +3145,7 @@ func buildProgressLabels(resolved planner.ResolvedPlan, communityTools []model.C
 	return labels
 }
 
-func (m Model) goBack() Model {
+func (m Model) goBack(cmd *tea.Cmd) Model {
 	// Block navigation while an operation (upgrade/sync/uninstall) is running.
 	if m.OperationRunning {
 		return m
@@ -3290,7 +3287,7 @@ func (m Model) goBack() Model {
 				m.setScreen(ScreenStrictTDD)
 			} else if m.shouldShowSDDModeScreen() {
 				if m.Selection.SDDMode == model.SDDModeMulti {
-					m.applyPickerEntry(ScreenModelPicker)
+					*cmd = m.applyPickerEntry(ScreenModelPicker)
 				} else {
 					m.setScreen(ScreenSDDMode)
 				}
@@ -3339,7 +3336,7 @@ func (m Model) goBack() Model {
 	// early-return BEFORE the slice walk.
 	if m.Screen == ScreenStrictTDD {
 		if prev, ok := m.pickerPreviousScreen(); ok {
-			m.applyPickerEntry(prev)
+			*cmd = m.applyPickerEntry(prev)
 			return m
 		}
 	}
@@ -3396,7 +3393,7 @@ func (m Model) goBack() Model {
 		}
 		if m.shouldShowSDDModeScreen() {
 			if m.Selection.SDDMode == model.SDDModeMulti {
-				m.applyPickerEntry(ScreenModelPicker)
+				*cmd = m.applyPickerEntry(ScreenModelPicker)
 			} else {
 				m.setScreen(ScreenSDDMode)
 			}
