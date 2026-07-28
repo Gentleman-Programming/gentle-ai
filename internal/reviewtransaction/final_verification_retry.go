@@ -460,6 +460,24 @@ func validateCompactFinalVerificationRetryProofShape(successor CompactState, rec
 	return nil
 }
 
+func validateAndNormalizeFinalVerificationRetrySuccessorLifecycle(successor CompactState) (CompactState, error) {
+	switch successor.State {
+	case StateValidating:
+		if successor.EvidenceHash != "" {
+			return CompactState{}, errors.New("final-verification retry validating successor must not contain evidence")
+		}
+	case StateApproved, StateEscalated:
+		if !validSHA256(successor.EvidenceHash) {
+			return CompactState{}, errors.New("final-verification retry terminal successor requires a valid evidence hash")
+		}
+	default:
+		return CompactState{}, errors.New("final-verification retry successor has an unsupported lifecycle state")
+	}
+	successor.State = StateValidating
+	successor.EvidenceHash = ""
+	return successor, nil
+}
+
 func validateCompactFinalVerificationRetryEdge(predecessor CompactRecord, successor CompactState) error {
 	recovery := successor.Recovery
 	if recovery == nil || recovery.Disposition != RecoveryFinalVerificationRetry || recovery.FinalVerificationRetry == nil ||
@@ -467,6 +485,10 @@ func validateCompactFinalVerificationRetryEdge(predecessor CompactRecord, succes
 		return errors.New("final-verification retry requires an escalated failed-verification predecessor")
 	}
 	if err := validateCompactFinalVerificationRetryProofShape(successor, *recovery); err != nil {
+		return err
+	}
+	normalizedSuccessor, err := validateAndNormalizeFinalVerificationRetrySuccessorLifecycle(successor)
+	if err != nil {
 		return err
 	}
 	proof := recovery.FinalVerificationRetry
@@ -479,7 +501,7 @@ func validateCompactFinalVerificationRetryEdge(predecessor CompactRecord, succes
 		return err
 	}
 	want.LineageID, want.Generation, want.State, want.EvidenceHash, want.Recovery = successor.LineageID, successor.Generation, StateValidating, "", successor.Recovery
-	if !compactStateEqual(want, successor) {
+	if !compactStateEqual(want, normalizedSuccessor) {
 		return errors.New("final-verification retry successor changed frozen authority or budget state")
 	}
 	return nil

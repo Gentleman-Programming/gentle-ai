@@ -77,6 +77,55 @@ func TestRetryCompactFinalVerificationCreatesOnlyOneFrozenValidatingSuccessor(t 
 	}
 }
 
+func TestValidateCompactFinalVerificationRetryEdgeAcceptsOnlyExactLifecycleEvidencePairs(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		state     State
+		evidence  string
+		wantError bool
+	}{
+		{name: "validating with empty evidence", state: StateValidating, evidence: ""},
+		{name: "approved with valid evidence", state: StateApproved, evidence: hash("a")},
+		{name: "escalated with valid evidence", state: StateEscalated, evidence: hash("b")},
+		{name: "validating with evidence", state: StateValidating, evidence: hash("c"), wantError: true},
+		{name: "approved with empty evidence", state: StateApproved, evidence: "", wantError: true},
+		{name: "escalated with empty evidence", state: StateEscalated, evidence: "", wantError: true},
+		{name: "approved with malformed evidence", state: StateApproved, evidence: "sha256:not-a-digest", wantError: true},
+		{name: "escalated with uppercase evidence", state: StateEscalated, evidence: strings.ToUpper(hash("d")), wantError: true},
+		{name: "unsupported state with valid evidence", state: StateReviewing, evidence: hash("e"), wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newFinalVerificationRetryFixture(t, "retry-edge-source", "retry-edge-successor")
+			source, err := deriveFinalVerificationRetrySourceLocked(context.Background(), fixture.store, fixture.predecessor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			successor, err := finalVerificationRetrySuccessor(fixture.predecessor, fixture.request, source, fixture.request.RecoveredAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			successor.State = tt.state
+			successor.EvidenceHash = tt.evidence
+			if !tt.wantError {
+				normalized, err := validateAndNormalizeFinalVerificationRetrySuccessorLifecycle(successor)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := fixture.predecessor.State
+				want.LineageID, want.Generation, want.State, want.EvidenceHash, want.Recovery = successor.LineageID, successor.Generation, StateValidating, "", successor.Recovery
+				if !compactStateEqual(want, normalized) {
+					t.Fatalf("lifecycle normalization changed frozen authority\ngot=%#v\nwant=%#v", normalized, want)
+				}
+			}
+
+			err = validateCompactFinalVerificationRetryEdge(fixture.predecessor, successor)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("validateCompactFinalVerificationRetryEdge() error = %v, want error %t", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestRetryCompactFinalVerificationUsesCorrectedCurrentSnapshot(t *testing.T) {
 	fixture := newCorrectedFinalVerificationRetryFixture(t, "retry-corrected-source", "retry-corrected-successor")
 	if snapshotsEqual(fixture.predecessor.State.InitialSnapshot, fixture.predecessor.State.CurrentSnapshot) {
