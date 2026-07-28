@@ -106,6 +106,18 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 			r.Result.Findings = []Finding{}
 			r.Result.Evidence = []string{"Cannot read diff: file access denied."}
 		}, decision: ArtifactAdmissionIncomplete},
+		{name: "cannot read manifest", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Findings = []Finding{}
+			r.Result.Evidence = []string{"Error: cannot read manifest."}
+		}, decision: ArtifactAdmissionIncomplete},
+		{name: "filesystem access denied", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Findings = []Finding{}
+			r.Result.Evidence = []string{"Filesystem access denied during candidate inspection."}
+		}, decision: ArtifactAdmissionIncomplete},
+		{name: "read capability denied", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Findings = []Finding{}
+			r.Result.Evidence = []string{"Read capability denied for frozen context."}
+		}, decision: ArtifactAdmissionIncomplete},
 		{name: "partial inspection", mutate: func(r *ArtifactAdmissionRequest) { r.Inspection.Paths = []string{"internal/a.go"} }, decision: ArtifactAdmissionIncomplete},
 		{name: "repository authority missing", mutate: func(r *ArtifactAdmissionRequest) {
 			r.FrozenContext.repositoryRoot = ""
