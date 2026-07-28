@@ -39,6 +39,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sysproc"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
 
 type InstallResult struct {

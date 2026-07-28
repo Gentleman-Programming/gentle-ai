@@ -32,6 +32,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sysproc"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
 
 // SyncFlags holds parsed CLI flags for the sync command.
