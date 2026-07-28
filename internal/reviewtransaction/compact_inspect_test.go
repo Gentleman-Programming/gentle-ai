@@ -1,6 +1,7 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -93,6 +94,152 @@ func TestInspectCompactRecoveryEdges(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestFinalVerificationRetryTerminalAuthorityTraversesReadOnlyGraphSurfaces(t *testing.T) {
+	for _, terminal := range []struct {
+		name     string
+		approved bool
+	}{
+		{name: "approved", approved: true},
+		{name: "escalated", approved: false},
+	} {
+		t.Run(terminal.name, func(t *testing.T) {
+			fixture, successor, store, receipt := terminalFinalVerificationRetryFixture(t, terminal.name, terminal.approved)
+			beforeState := readRetryAuthorityBytes(t, store)
+			beforeRevision := successor.Revision
+
+			if err := validateCompactFinalVerificationRetryEdge(fixture.predecessor, successor.State); err != nil {
+				t.Fatalf("direct retry edge validation: %v", err)
+			}
+			inventory, err := InventoryAuthority(context.Background(), fixture.repo)
+			if err != nil || !inventory.Complete || !inventory.Authoritative {
+				t.Fatalf("authority inventory = %#v, %v", inventory, err)
+			}
+			leaves, err := CompactAuthorityLeaves(context.Background(), fixture.repo)
+			if err != nil || len(leaves) != 1 || leaves[0].lineageID != successor.State.LineageID {
+				t.Fatalf("authority leaves = %#v, %v", leaves, err)
+			}
+			inspection, err := InspectCompactRecoveryEdges(context.Background(), fixture.repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			edge := inspectedEdge(t, inspection, successor.State.LineageID)
+			if !edge.Valid || len(edge.AnomalyClasses) != 0 || len(edge.Problems) != 0 {
+				t.Fatalf("retry inspection edge = %#v", edge)
+			}
+			payload, err := os.ReadFile(store.ReceiptPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			discovered, err := ParseCompactReceipt(payload)
+			if err != nil || !compactReceiptEqual(discovered, receipt) {
+				t.Fatalf("discovered retry receipt = %#v, %v", discovered, err)
+			}
+			after := mustLoadCompactRecord(t, store)
+			if after.Revision != beforeRevision || !bytes.Equal(beforeState["state"], readRetryAuthorityBytes(t, store)["state"]) ||
+				!bytes.Equal(beforeState["receipt"], readRetryAuthorityBytes(t, store)["receipt"]) {
+				t.Fatal("read-only retry traversal rewrote authority state, receipt, or revision")
+			}
+		})
+	}
+}
+
+func TestFinalVerificationRetryCorruptionFailsClosedAcrossAuthoritySurfaces(t *testing.T) {
+	mutations := []struct {
+		name   string
+		mutate func(*CompactState)
+	}{
+		{name: "lifecycle", mutate: func(state *CompactState) { state.State = StateValidating }},
+		{name: "frozen policy", mutate: func(state *CompactState) { state.PolicyHash = payloadDigest([]byte("forged-policy")) }},
+		{name: "source proof", mutate: func(state *CompactState) {
+			state.Recovery.FinalVerificationRetry.FailedEvidenceHash = payloadDigest([]byte("forged-proof"))
+		}},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			fixture, successor, store, receipt := terminalFinalVerificationRetryFixture(t, "corrupted-"+strings.ReplaceAll(mutation.name, " ", "-"), true)
+			mutation.mutate(&successor.State)
+			_, payload, err := makeCompactRecord(successor.State)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			inventory, err := InventoryAuthority(context.Background(), fixture.repo)
+			quarantined := slices.ContainsFunc(inventory.Diagnostics, func(diagnostic AuthorityInventoryDiagnostic) bool {
+				return strings.Contains(diagnostic.Path, successor.State.LineageID)
+			})
+			if err != nil || inventory.Authoritative && !quarantined {
+				t.Fatalf("corrupted authority inventory = %#v, %v", inventory, err)
+			}
+			leaves, leafErr := CompactAuthorityLeaves(context.Background(), fixture.repo)
+			if leafErr == nil && slices.ContainsFunc(leaves, func(leaf CompactStore) bool { return leaf.lineageID == successor.State.LineageID }) {
+				t.Fatalf("corrupted retry authority was accepted as a leaf: %#v", leaves)
+			}
+			inspection, err := InspectCompactRecoveryEdges(context.Background(), fixture.repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, edge := range inspection.Edges {
+				if edge.SuccessorLineageID == successor.State.LineageID && edge.Valid {
+					t.Fatalf("corrupted retry inspection = %#v", inspection)
+				}
+			}
+			if len(inspection.Edges) == 0 && !slices.ContainsFunc(inspection.EntryDiagnostics, func(diagnostic CompactRecoveryEntryDiagnostic) bool {
+				return diagnostic.LineageID == successor.State.LineageID
+			}) {
+				t.Fatalf("corrupted retry was neither rejected nor diagnosed: %#v", inspection)
+			}
+			if gate := EvaluateCompactGate(context.Background(), fixture.repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: receipt.LineageID}); gate.Result != GateInvalidated {
+				t.Fatalf("corrupted retry gate = %#v", gate)
+			}
+		})
+	}
+}
+
+func terminalFinalVerificationRetryFixture(t *testing.T, suffix string, approved bool) (finalVerificationRetryFixture, CompactRecord, CompactStore, CompactReceipt) {
+	t.Helper()
+	fixture := newFinalVerificationRetryFixture(t, "retry-graph-source-"+suffix, "retry-graph-successor-"+suffix)
+	successor, err := RetryCompactFinalVerification(context.Background(), fixture.repo, fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := successor.State.CompleteVerification([]byte("retry terminal verification\n"), approved); err != nil {
+		t.Fatal(err)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), fixture.repo, successor.State.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := store.Replace(successor.Revision, "review/complete-verification", successor.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	successor.Revision = revision
+	receipt, err := successor.State.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+		t.Fatal(err)
+	}
+	return fixture, successor, store, receipt
+}
+
+func readRetryAuthorityBytes(t *testing.T, store CompactStore) map[string][]byte {
+	t.Helper()
+	result := map[string][]byte{}
+	for name, path := range map[string]string{"state": store.StatePath(), "receipt": store.ReceiptPath()} {
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result[name] = payload
+	}
+	return result
 }
 func TestCompactRecoveryInspectionCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

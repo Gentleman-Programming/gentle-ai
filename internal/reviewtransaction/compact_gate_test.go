@@ -80,6 +80,35 @@ func TestCompactEscalatedGateReasonFallsBackWithoutDerivableCause(t *testing.T) 
 	}
 }
 
+func TestFinalVerificationRetryTerminalReceiptsKeepNormalGateOutcomes(t *testing.T) {
+	for _, terminal := range []struct {
+		name     string
+		approved bool
+		want     GateResult
+	}{
+		{name: "approved", approved: true, want: GateAllow},
+		{name: "escalated", approved: false, want: GateEscalated},
+	} {
+		t.Run(terminal.name, func(t *testing.T) {
+			fixture, successor, store, receipt := terminalFinalVerificationRetryFixture(t, "gate-"+terminal.name, terminal.approved)
+			before := readRetryAuthorityBytes(t, store)
+			for _, gate := range []GateKind{GatePostApply, GatePreCommit} {
+				t.Run(string(gate), func(t *testing.T) {
+					got := EvaluateCompactGate(context.Background(), fixture.repo, receipt, NativeGateRequestInput{Gate: gate, LineageID: successor.State.LineageID})
+					if got.Result != terminal.want {
+						t.Fatalf("%s retry gate = %#v, want %q", terminal.name, got, terminal.want)
+					}
+				})
+			}
+			after := mustLoadCompactRecord(t, store)
+			if after.Revision != successor.Revision || !bytes.Equal(before["state"], readRetryAuthorityBytes(t, store)["state"]) ||
+				!bytes.Equal(before["receipt"], readRetryAuthorityBytes(t, store)["receipt"]) {
+				t.Fatal("gate evaluation rewrote retry authority state, receipt, or revision")
+			}
+		})
+	}
+}
+
 func TestLegacyCurrentChangesGateRejectsCallerProjectionMismatch(t *testing.T) {
 	for _, gate := range []GateKind{GatePostApply, GatePreCommit} {
 		t.Run(string(gate), func(t *testing.T) {
