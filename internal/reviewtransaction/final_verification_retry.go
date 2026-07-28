@@ -467,14 +467,14 @@ func validateAndNormalizeFinalVerificationRetrySuccessorLifecycle(successor Comp
 	switch successor.State {
 	case StateValidating:
 		if successor.EvidenceHash != "" {
-			return CompactState{}, errors.New("final-verification retry validating successor must not contain evidence")
+			return CompactState{}, errors.New("final-verification retry validating successor must not contain evidence") // refusal:by-design world-action: the persisted authority shape is invalid; no gentle-ai command can make forged authority valid
 		}
 	case StateApproved, StateEscalated:
 		if !validSHA256(successor.EvidenceHash) {
-			return CompactState{}, errors.New("final-verification retry terminal successor requires a valid evidence hash")
+			return CompactState{}, errors.New("final-verification retry terminal successor requires a valid evidence hash") // refusal:by-design world-action: the persisted authority shape is invalid; no gentle-ai command can make forged authority valid
 		}
 	default:
-		return CompactState{}, errors.New("final-verification retry successor has an unsupported lifecycle state")
+		return CompactState{}, errors.New("final-verification retry successor has an unsupported lifecycle state") // refusal:by-design world-action: the persisted authority shape is invalid; no gentle-ai command can make forged authority valid
 	}
 	successor.State = StateValidating
 	successor.EvidenceHash = ""
