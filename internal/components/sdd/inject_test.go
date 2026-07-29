@@ -929,6 +929,36 @@ The words TOTALMENTE obligatorio here belong to the user.`
 	}
 }
 
+func TestEnsurePreservedOpenCodeDelegationHardGatesCarriesTrustedExplorationPolicy(t *testing.T) {
+	const userTail = "\n\n#### User-Owned Tail\n\nKEEP_THESE_BYTES"
+	for _, testCase := range []struct {
+		name   string
+		prompt string
+	}{
+		{"marked legacy block", previouslyInstalledDelegationHardGates("USER_HEAD") + userTail},
+		{"unmarked legacy block", "### Mandatory Delegation Triggers (Non-Skippable)\n\nlegacy" + userTail},
+		{"fresh custom prompt", "USER_HEAD" + userTail},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := ensurePreservedOpenCodeDelegationHardGates(testCase.prompt)
+			for _, required := range []string{
+				"complete, current exploration handoff", "targeted verification of cited evidence and affected change surfaces",
+				"incomplete, stale, untrustworthy, or mismatched", "narrowly scoped exploration", "implementation, review, apply, or verification handoffs",
+			} {
+				if !strings.Contains(got, required) {
+					t.Fatalf("migration missing trusted-exploration policy %q:\n%s", required, got)
+				}
+			}
+			if strings.Count(got, "complete, current exploration handoff") != 1 || strings.Count(got, "<!-- gentle-ai:delegation-hard-gates-migration -->") != 1 {
+				t.Fatalf("migration must contain one corrected managed block:\n%s", got)
+			}
+			if !strings.Contains(got, userTail) || ensurePreservedOpenCodeDelegationHardGates(got) != got {
+				t.Fatalf("migration must preserve user-owned tail and be idempotent:\n%s", got)
+			}
+		})
+	}
+}
+
 // Vocabulary from the retired work-routing contracts. A preserved prompt is a
 // user-visible artifact, so none of it may survive a migration: the commands it
 // names no longer exist and would send the orchestrator after dead authority.
