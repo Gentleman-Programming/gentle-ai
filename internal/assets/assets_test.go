@@ -123,11 +123,14 @@ func TestSDDOrchestratorsCarryTrustedExplorationHandoffGuards(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			content := MustRead(path)
 			start := strings.Index(content, "#### Mandatory Delegation Triggers")
-			end := strings.Index(content[start:], "#### Native Checking Contract")
-			if start < 0 || end < 0 {
+			if start < 0 {
 				t.Fatalf("%s missing bounded mandatory delegation section", path)
 			}
-			delegation := content[start : start+end]
+			relativeEnd := strings.Index(content[start:], "#### Native Checking Contract")
+			if relativeEnd <= 0 {
+				t.Fatalf("%s missing valid bounded mandatory delegation section end", path)
+			}
+			delegation := content[start : start+relativeEnd]
 			for _, required := range []string{
 				"complete, current exploration handoff", "root cause", "actionable paths or symbols", "suppress broad rereads",
 				"targeted verification", "cited evidence", "affected change surfaces",

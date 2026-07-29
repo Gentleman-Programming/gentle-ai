@@ -932,30 +932,66 @@ The words TOTALMENTE obligatorio here belong to the user.`
 func TestEnsurePreservedOpenCodeDelegationHardGatesCarriesTrustedExplorationPolicy(t *testing.T) {
 	const userTail = "\n\n#### User-Owned Tail\n\nKEEP_THESE_BYTES"
 	for _, testCase := range []struct {
-		name   string
-		prompt string
+		name          string
+		prompt        string
+		markedInPlace bool
 	}{
-		{"marked legacy block", previouslyInstalledDelegationHardGates("USER_HEAD") + userTail},
-		{"unmarked legacy block", "### Mandatory Delegation Triggers (Non-Skippable)\n\nlegacy" + userTail},
-		{"fresh custom prompt", "USER_HEAD" + userTail},
+		{"marked legacy block", previouslyInstalledDelegationHardGates("USER_HEAD") + userTail, true},
+		{"unmarked legacy block", "### Mandatory Delegation Triggers (Non-Skippable)\n\nlegacy" + userTail, false},
+		{"fresh custom prompt", "USER_HEAD" + userTail, false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			got := ensurePreservedOpenCodeDelegationHardGates(testCase.prompt)
+			managedStart := strings.Index(got, "<!-- gentle-ai:delegation-hard-gates-migration -->")
+			managedEnd := strings.Index(got, "<!-- /gentle-ai:delegation-hard-gates-migration -->")
+			if managedStart < 0 || managedEnd <= managedStart {
+				t.Fatalf("migration missing valid managed block:\n%s", got)
+			}
+			managed := got[managedStart:managedEnd]
 			for _, required := range []string{
 				"complete, current exploration handoff", "targeted verification of cited evidence and affected change surfaces",
 				"incomplete, stale, untrustworthy, or mismatched", "narrowly scoped exploration", "implementation, review, apply, or verification handoffs",
 			} {
-				if !strings.Contains(got, required) {
+				if !strings.Contains(managed, required) {
 					t.Fatalf("migration missing trusted-exploration policy %q:\n%s", required, got)
 				}
 			}
-			if strings.Count(got, "complete, current exploration handoff") != 1 || strings.Count(got, "<!-- gentle-ai:delegation-hard-gates-migration -->") != 1 {
+			if strings.Count(managed, "complete, current exploration handoff") != 1 {
 				t.Fatalf("migration must contain one corrected managed block:\n%s", got)
 			}
-			if !strings.Contains(got, userTail) || ensurePreservedOpenCodeDelegationHardGates(got) != got {
-				t.Fatalf("migration must preserve user-owned tail and be idempotent:\n%s", got)
+			if strings.Count(got, userTail) != 1 {
+				t.Fatalf("migration must preserve user-owned tail exactly once:\n%s", got)
+			}
+			if testCase.markedInPlace {
+				if !strings.HasSuffix(got, userTail) {
+					t.Fatalf("marked migration must leave user-owned tail as the final suffix:\n%s", got)
+				}
+			} else {
+				tailEnd := strings.Index(got, userTail) + len(userTail)
+				if !strings.HasPrefix(got[tailEnd:], "\n\n<!-- gentle-ai:delegation-hard-gates-migration -->") {
+					t.Fatalf("append migration must place the managed block directly after the user-owned tail:\n%s", got)
+				}
+			}
+			if ensurePreservedOpenCodeDelegationHardGates(got) != got {
+				t.Fatalf("migration is not idempotent:\n%s", got)
 			}
 		})
+	}
+}
+
+func TestEnsurePreservedOpenCodeDelegationHardGatesIgnoresCompleteLookingUserTail(t *testing.T) {
+	const incomplete = "<!-- gentle-ai:delegation-hard-gates-migration -->\n" +
+		"### Mandatory Delegation Triggers (Non-Skippable)\n" +
+		"<!-- /gentle-ai:delegation-hard-gates-migration -->"
+	const userTail = "\n\n#### User-Owned Policy\nfully mandatory\nBounded read rule\n" +
+		"complete, current exploration handoff\n" + nativeReviewAuthorityRuleText
+
+	got := ensurePreservedOpenCodeDelegationHardGates(incomplete + userTail)
+	if strings.HasSuffix(got, incomplete+userTail) {
+		t.Fatal("incomplete managed block incorrectly passed fast path because of user-owned tail")
+	}
+	if !strings.Contains(got, "4-file rule") {
+		t.Fatal("incomplete managed block was not replaced with the canonical managed policy")
 	}
 }
 
