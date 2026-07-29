@@ -163,7 +163,12 @@ func TestGuardFlowLinuxDryRunPropagatesDecision(t *testing.T) {
 
 func TestRunArgsNoCommandLaunchesTUI(t *testing.T) {
 	origRunTUI := runTUI
-	t.Cleanup(func() { runTUI = origRunTUI })
+	origStdinIsTerminal := stdinIsTerminal
+	t.Cleanup(func() {
+		runTUI = origRunTUI
+		stdinIsTerminal = origStdinIsTerminal
+	})
+	stdinIsTerminal = func() bool { return true }
 	runTUI = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
 		return nil, errors.New("mock TUI error: no TTY")
 	}

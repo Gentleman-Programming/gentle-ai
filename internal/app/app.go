@@ -30,6 +30,14 @@ import (
 // Version is set from main via ldflags at build time.
 var Version = "dev"
 
+// ErrNoTTYForTUI is returned when the interactive TUI has no terminal.
+var ErrNoTTYForTUI = errors.New("gentle-ai: no TTY available; use --help to see non-interactive commands")
+
+var stdinIsTerminal = func() bool {
+	fd := os.Stdin.Fd()
+	return isattyFn(fd) || isCygwinTerminalFn(fd)
+}
+
 var (
 	updateCheckAll            = update.CheckAll
 	updateCheckFiltered       = update.CheckFiltered
@@ -124,6 +132,13 @@ func RunArgs(args []string, stdout io.Writer) error {
 		}
 	}
 
+	// The no-args path launches the TUI. Check its prerequisite before platform
+	// detection so headless callers always receive the actionable error.
+	isTUIFlow := len(args) == 0
+	if isTUIFlow && !stdinIsTerminal() {
+		return ErrNoTTYForTUI
+	}
+
 	if err := ensureCurrentOSSupported(); err != nil {
 		return err
 	}
@@ -153,7 +168,6 @@ func RunArgs(args []string, stdout io.Writer) error {
 	// CLI/TUI dispatch. Errors are non-fatal — logged and swallowed.
 	// Skip auto-upgrade on TUI entry (len(args) == 0) to avoid silently
 	// replacing the binary while the user expects a clean TUI launch (#696).
-	isTUIFlow := len(args) == 0
 	if !isTUIFlow && !isExplicitUpdateFlow(args) {
 		if err := selfUpdateFn(context.Background(), Version, resolveProfile(), stdout); err != nil {
 			_, _ = fmt.Fprintf(stdout, "Warning: self-update failed: %v\n", err)

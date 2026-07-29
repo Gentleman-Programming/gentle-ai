@@ -32,8 +32,11 @@ const (
 	envYesUpdate      = "GENTLE_AI_YES"
 )
 
-// isattyFn is a package-level var for TTY detection, injectable for tests.
-var isattyFn = func(fd uintptr) bool { return isatty.IsTerminal(fd) }
+// Terminal detection seams are injectable for tests.
+var (
+	isattyFn           = isatty.IsTerminal
+	isCygwinTerminalFn = isatty.IsCygwinTerminal
+)
 
 // selfUpdateYesFn returns true when the caller wants the upgrade to proceed
 // without an interactive prompt. Set GENTLE_AI_YES=1 for scripted upgrades.

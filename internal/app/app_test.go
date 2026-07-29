@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -1381,17 +1382,20 @@ func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
 	origDetect := detectSystem
 	origEnsure := ensureCurrentOSSupported
 	origRunTUI := runTUI
+	origStdinIsTerminal := stdinIsTerminal
 	t.Cleanup(func() {
 		selfUpdateFn = origSelfUpdate
 		detectSystem = origDetect
 		ensureCurrentOSSupported = origEnsure
 		runTUI = origRunTUI
+		stdinIsTerminal = origStdinIsTerminal
 	})
 
 	ensureCurrentOSSupported = func() error { return nil }
 	detectSystem = func(context.Context) (system.DetectionResult, error) {
 		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
 	}
+	stdinIsTerminal = func() bool { return true }
 
 	// Return the same model to avoid nil dereference if RunArgs inspects it.
 	tuiCalled := 0
@@ -1416,6 +1420,83 @@ func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
 	}
 	if tuiCalled != 1 {
 		t.Fatalf("runTUI should be called exactly once for TUI flow; got %d call(s)", tuiCalled)
+	}
+}
+
+func TestStdinIsTerminal(t *testing.T) {
+	origIsTerminal := isattyFn
+	origIsCygwinTerminal := isCygwinTerminalFn
+	t.Cleanup(func() {
+		isattyFn = origIsTerminal
+		isCygwinTerminalFn = origIsCygwinTerminal
+	})
+
+	tests := []struct {
+		name     string
+		terminal bool
+		cygwin   bool
+		want     bool
+	}{
+		{name: "neither terminal", want: false},
+		{name: "native terminal", terminal: true, want: true},
+		{name: "Cygwin terminal", cygwin: true, want: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isattyFn = func(uintptr) bool { return tc.terminal }
+			isCygwinTerminalFn = func(uintptr) bool { return tc.cygwin }
+			if got := stdinIsTerminal(); got != tc.want {
+				t.Fatalf("stdinIsTerminal() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunArgsNoTTYReturnsBeforePlatformDetection(t *testing.T) {
+	origStdinIsTerminal := stdinIsTerminal
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	t.Cleanup(func() {
+		stdinIsTerminal = origStdinIsTerminal
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+	})
+
+	stdinIsTerminal = func() bool { return false }
+	ensureCurrentOSSupported = func() error {
+		t.Fatal("ensureCurrentOSSupported called for no-TTY TUI flow")
+		return nil
+	}
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		t.Fatal("detectSystem called for no-TTY TUI flow")
+		return system.DetectionResult{}, nil
+	}
+
+	err := RunArgs(nil, io.Discard)
+	if !errors.Is(err, ErrNoTTYForTUI) {
+		t.Fatalf("RunArgs(nil) error = %v, want ErrNoTTYForTUI", err)
+	}
+	if !strings.Contains(err.Error(), "--help") {
+		t.Fatalf("RunArgs(nil) error = %q, want --help guidance", err)
+	}
+}
+
+func TestRunArgsInfoCommandsBypassTTYGuard(t *testing.T) {
+	origStdinIsTerminal := stdinIsTerminal
+	t.Cleanup(func() { stdinIsTerminal = origStdinIsTerminal })
+	stdinIsTerminal = func() bool { return false }
+
+	for _, arg := range []string{"version", "--version", "-v", "help", "--help", "-h"} {
+		t.Run(arg, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunArgs([]string{arg}, &output); err != nil {
+				t.Fatalf("RunArgs(%q) error = %v", arg, err)
+			}
+			if output.Len() == 0 {
+				t.Fatalf("RunArgs(%q) produced no output", arg)
+			}
+		})
 	}
 }
 
@@ -1801,7 +1882,15 @@ func writeAppSDDStatusFile(t *testing.T, path string, content string) {
 // TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult verifies that when the TUI
 // reports a successful gentle-ai upgrade, RunArgs calls restartAfterGentleAIUpgrade
 // which (after task 4.6) prints the restart guidance message instead of re-execing.
+func withTerminal(t *testing.T) {
+	t.Helper()
+	original := stdinIsTerminal
+	stdinIsTerminal = func() bool { return true }
+	t.Cleanup(func() { stdinIsTerminal = original })
+}
+
 func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
+	withTerminal(t)
 	origDetect := detectSystem
 	origEnsure := ensureCurrentOSSupported
 	origRunTUI := runTUI
@@ -1843,6 +1932,7 @@ func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
 // state.json has PendingSync=true, RunArgs (TUI path / no args) calls
 // the deferred sync runner and writes PendingSync=false on success.
 func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
+	withTerminal(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -1906,6 +1996,7 @@ func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
 // TestRunArgs_PendingSync_LeavesSetOnFailure verifies that when the deferred
 // sync fails, PendingSync remains true so the next launch retries idempotently.
 func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
+	withTerminal(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -1971,6 +2062,7 @@ func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
 // error is printed to stdout and RunArgs does not return an error.
 // This guards against silently swallowed write failures (Issue 2).
 func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
+	withTerminal(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2034,6 +2126,7 @@ func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
 // TestRunArgs_NoPendingSync_NoSyncCall verifies that when PendingSync=false,
 // the deferred sync runner is NOT called (no extra sync on a normal launch).
 func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
+	withTerminal(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
