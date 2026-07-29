@@ -327,6 +327,7 @@ func setLocalRDDMode(
 			"%w: expected %q but the %s head is %q", ErrRDDModeRevisionMismatch, expectedRevision, localRDDModeLabel(source), current)
 	}
 	if head.Generation >= rddModeMaxGeneration {
+		// refusal:by-design world-action: exhausted immutable generation space has no unused slot, and no runnable continuation can safely repair it without overwriting authority history
 		return failedClosedRDDModeStatus(source), fmt.Errorf("%s review mode generation space is exhausted", localRDDModeLabel(source))
 	}
 

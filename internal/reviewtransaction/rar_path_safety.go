@@ -42,9 +42,11 @@ func ensureRARRepositoryRootAt(base, root, want, baseLabel string, create bool) 
 	if err != nil || relative == "." || relative == ".." ||
 		strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
 		filepath.IsAbs(relative) {
+		// refusal:by-design world-action: an escaped authority root violates the containment invariant, and no runnable continuation can safely repair that authority binding
 		return fmt.Errorf("RAR authority root escapes the %s", baseLabel)
 	}
 	if relative != want {
+		// refusal:by-design world-action: a noncanonical authority root violates the canonical-path invariant, and no runnable continuation can safely repair that authority binding
 		return fmt.Errorf("RAR authority root is not the canonical %s path", baseLabel)
 	}
 	if err := validateRARRepositoryParent(base); err != nil {
