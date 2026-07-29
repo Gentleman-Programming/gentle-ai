@@ -301,7 +301,7 @@ Review feedback should be warm, direct, and useful quickly. Start with the actio
 - [ ] Commits are organized by deliverable work unit
 - [ ] All unit tests pass (`go test ./...`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
-- [ ] Benchmark run completed, or this change is not applicable to the benchmark (explain why in the Test Plan).
+- [ ] Benchmark validation completed, or this change is not applicable to the benchmark (explain why in the Test Plan).
 - [ ] Commits follow Conventional Commits format
 - [ ] Code is self-reviewed
 
