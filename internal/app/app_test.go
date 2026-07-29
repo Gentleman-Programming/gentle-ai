@@ -1477,8 +1477,10 @@ func TestRunArgsNoTTYReturnsBeforePlatformDetection(t *testing.T) {
 	if !errors.Is(err, ErrNoTTYForTUI) {
 		t.Fatalf("RunArgs(nil) error = %v, want ErrNoTTYForTUI", err)
 	}
-	if !strings.Contains(err.Error(), "--help") {
-		t.Fatalf("RunArgs(nil) error = %q, want --help guidance", err)
+	for _, want := range []string{"--version", "update check", "--help"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("RunArgs(nil) error = %q, want guidance containing %q", err, want)
+		}
 	}
 }
 

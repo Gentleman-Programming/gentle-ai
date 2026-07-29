@@ -31,7 +31,7 @@ import (
 var Version = "dev"
 
 // ErrNoTTYForTUI is returned when the interactive TUI has no terminal.
-var ErrNoTTYForTUI = errors.New("gentle-ai: no TTY available; use --help to see non-interactive commands")
+var ErrNoTTYForTUI = errors.New("gentle-ai: no TTY available; use --version, update check, or --help for non-interactive commands")
 
 var stdinIsTerminal = func() bool {
 	fd := os.Stdin.Fd()
