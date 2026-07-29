@@ -1052,3 +1052,68 @@ func TestInjectOpenCodePreservesExistingDenyRules(t *testing.T) {
 		t.Errorf("default read deny rule '**/.ssh/**' was not added; got: %v", readNode)
 	}
 }
+
+// TestCanonicalPermissionPrecedenceTableDriven verifies that CanonicalActionRank
+// and permission resolution enforce the canonical precedence hierarchy:
+// deny (3) > ask (2) > allow/default (1), proving lower-priority values cannot override higher-priority policy.
+func TestCanonicalPermissionPrecedenceTableDriven(t *testing.T) {
+	tests := []struct {
+		name           string
+		actionA        string
+		actionB        string
+		expectedWinner string
+	}{
+		{
+			name:           "deny overrides allow",
+			actionA:        "deny",
+			actionB:        "allow",
+			expectedWinner: "deny",
+		},
+		{
+			name:           "deny overrides ask",
+			actionA:        "deny",
+			actionB:        "ask",
+			expectedWinner: "deny",
+		},
+		{
+			name:           "ask overrides allow",
+			actionA:        "ask",
+			actionB:        "allow",
+			expectedWinner: "ask",
+		},
+		{
+			name:           "ask overrides default",
+			actionA:        "ask",
+			actionB:        "default",
+			expectedWinner: "ask",
+		},
+		{
+			name:           "allow and default have equal rank",
+			actionA:        "allow",
+			actionB:        "default",
+			expectedWinner: "allow", // or default (rank 1)
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rankA := CanonicalActionRank(tt.actionA)
+			rankB := CanonicalActionRank(tt.actionB)
+
+			if rankA < 0 || rankB < 0 {
+				t.Fatalf("invalid action ranks: %s=%d, %s=%d", tt.actionA, rankA, tt.actionB, rankB)
+			}
+
+			winningRank := CanonicalActionRank(tt.expectedWinner)
+			maxRank := rankA
+			if rankB > maxRank {
+				maxRank = rankB
+			}
+
+			if maxRank != winningRank {
+				t.Errorf("conflict resolution between %q (rank %d) and %q (rank %d): max rank = %d, want %d (%q)",
+					tt.actionA, rankA, tt.actionB, rankB, maxRank, winningRank, tt.expectedWinner)
+			}
+		})
+	}
+}

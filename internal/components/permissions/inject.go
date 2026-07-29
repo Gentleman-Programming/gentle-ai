@@ -15,6 +15,36 @@ type InjectionResult struct {
 	Files   []string
 }
 
+// Canonical Action Precedence Table:
+//
+// The resolution of conflicting permission actions across scopes (global, workspace,
+// agent, category, or pattern level) is governed by a single deterministic hierarchy:
+//
+//   Rank 3: "deny"    (Highest priority — security boundary; restrictive rules win)
+//   Rank 2: "ask"     (Interactive prompt required)
+//   Rank 1: "allow" / "default" (Permissive execution)
+//   Rank 0 / < 0: Unknown / Unset
+//
+// Absolute Policy Precedence Rules:
+// 1. Lower-priority actions (e.g. "allow" or "ask") CANNOT override or weaken higher-priority policies (e.g. "deny").
+// 2. Global/top-level restrictions propagate to sub-agents and orchestrators, preventing agent-level configurations from overriding global security boundaries.
+// 3. For pattern collisions or object merges, when actions collide on equivalent or overlapping scopes, the highest rank wins (deny > ask > allow/default).
+
+// CanonicalActionRank returns the numeric precedence rank for a permission action string.
+// Restrictive actions have higher ranks to ensure lower-priority settings cannot override higher-priority policy.
+func CanonicalActionRank(action string) int {
+	switch action {
+	case "deny":
+		return 3
+	case "ask":
+		return 2
+	case "allow", "default":
+		return 1
+	default:
+		return -1
+	}
+}
+
 // TargetPath returns the file path that permission injection creates or updates
 // for the adapter, or an empty string when the agent has no supported
 // permission injection target. Codex has no target: gentle-ai relies on Codex's
