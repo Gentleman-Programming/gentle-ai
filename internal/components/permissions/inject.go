@@ -6,6 +6,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
@@ -180,6 +181,10 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
+	}
+	merged, err = sdd.PropagateTopLevelPermissions(merged)
+	if err != nil {
+		return filemerge.WriteResult{}, fmt.Errorf("propagate orchestrator permissions: %w", err)
 	}
 
 	return filemerge.WriteFileAtomic(path, merged, 0o644)

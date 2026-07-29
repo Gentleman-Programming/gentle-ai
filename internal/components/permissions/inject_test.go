@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
@@ -149,6 +150,39 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 	if !strings.Contains(text, `"read"`) {
 		t.Fatal("opencode.json permission missing read section")
+	}
+}
+
+func TestInjectOpenCodeBackfillsOrchestratorPermissionsAfterSDD(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	if _, err := sdd.Inject(home, adapter, ""); err != nil {
+		t.Fatalf("SDD Inject() error = %v", err)
+	}
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatalf("Permission Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(adapter.SettingsPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatal(err)
+	}
+	topRead := root["permission"].(map[string]any)["read"].(map[string]any)
+	agents := root["agent"].(map[string]any)
+	for name, value := range agents {
+		if name != "gentle-orchestrator" && !strings.HasPrefix(name, "sdd-orchestrator-") {
+			continue
+		}
+		read := value.(map[string]any)["permission"].(map[string]any)["read"].(map[string]any)
+		for pattern, action := range topRead {
+			if action == "deny" && read[pattern] != "deny" {
+				t.Fatalf("%s read[%q] = %v, want propagated deny", name, pattern, read[pattern])
+			}
+		}
 	}
 }
 

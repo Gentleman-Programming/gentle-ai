@@ -1740,11 +1740,6 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 		return mergeJSONResult{}, err
 	}
 
-	merged, err = propagateTopLevelPermissions(merged)
-	if err != nil {
-		return mergeJSONResult{}, err
-	}
-
 	writeResult, err := filemerge.WriteFileAtomic(path, merged, 0o644)
 	if err != nil {
 		return mergeJSONResult{}, err
@@ -1950,7 +1945,9 @@ func mergeAskPermissionRules(topValue any) (any, bool) {
 	return result, true
 }
 
-func propagateTopLevelPermissions(jsonBytes []byte) ([]byte, error) {
+// PropagateTopLevelPermissions applies top-level restrictions to orchestrator
+// agents whose permission blocks would otherwise shadow them.
+func PropagateTopLevelPermissions(jsonBytes []byte) ([]byte, error) {
 	if len(jsonBytes) == 0 {
 		return jsonBytes, nil
 	}

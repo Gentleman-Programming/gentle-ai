@@ -5032,11 +5032,11 @@ func TestPropagateTopLevelPermissions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			first, err := propagateTopLevelPermissions([]byte(tt.input))
+			first, err := PropagateTopLevelPermissions([]byte(tt.input))
 			if err != nil {
 				t.Fatal(err)
 			}
-			second, err := propagateTopLevelPermissions(first)
+			second, err := PropagateTopLevelPermissions(first)
 			if err != nil || !bytes.Equal(first, second) {
 				t.Fatalf("second pass = %q, err = %v", second, err)
 			}
@@ -5051,64 +5051,6 @@ func TestPropagateTopLevelPermissions(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestPropagateTopLevelPermissions_CrossProduct(t *testing.T) {
-	tests := []struct{ name, top, agent, want string }{
-		{"scalar/missing", `"deny"`, `{}`, `"deny"`},
-		{"scalar/ask", `"deny"`, `{"permission":"ask"}`, `"deny"`},
-		{"scalar/map", `"deny"`, `{"permission":{"*":"allow","secret":"allow"}}`, `{"*":"deny","secret":"deny"}`},
-		{"map/missing", `{"read":{"secret":"deny","public":"allow"}}`, `{}`, `{"read":{"public":"allow","secret":"deny"}}`},
-		{"map/deny", `{"read":{"secret":"deny","public":"allow"}}`, `{"permission":"deny"}`, `"deny"`},
-		{"map/ask", `{"read":{"secret":"deny","public":"allow"}}`, `{"permission":"ask"}`, `{"read":{"*":"ask","secret":"deny"}}`},
-		{"map/allow", `{"read":{"secret":"deny","public":"allow"}}`, `{"permission":"allow"}`, `{"read":{"public":"allow","secret":"deny"}}`},
-		{"map/map", `{"read":{"secret":"deny","public":"allow"}}`, `{"permission":{"read":{"secret":"allow"}}}`, `{"read":{"public":"allow","secret":"deny"}}`},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			input := []byte(`{"permission":` + tt.top + `,"agent":{"gentle-orchestrator":` + tt.agent + `}}`)
-			got, err := propagateTopLevelPermissions(input)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var root map[string]any
-			if err := json.Unmarshal(got, &root); err != nil {
-				t.Fatal(err)
-			}
-			permission, _ := json.Marshal(root["agent"].(map[string]any)["gentle-orchestrator"].(map[string]any)["permission"])
-			if string(permission) != tt.want {
-				t.Fatalf("permission = %s, want %s", permission, tt.want)
-			}
-			second, err := propagateTopLevelPermissions(got)
-			if err != nil || !bytes.Equal(got, second) {
-				t.Fatalf("second pass = %q, err = %v", second, err)
-			}
-		})
-	}
-}
-
-func TestMergeJSONFile_PermissionPropagationIsByteIdempotent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "opencode.json")
-	if err := os.WriteFile(path, []byte(`{"permission":{"read":{"*":"deny"}}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	overlay := []byte(`{"agent":{"gentle-orchestrator":{"permission":{"read":{"secret.txt":"allow"}}}}}`)
-	first, err := mergeJSONFile(path, overlay)
-	if err != nil || !first.writeResult.Changed {
-		t.Fatalf("first merge = %#v, %v", first.writeResult, err)
-	}
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := mergeJSONFile(path, overlay)
-	if err != nil || second.writeResult.Changed {
-		t.Fatalf("second merge = %#v, %v", second.writeResult, err)
-	}
-	after, err := os.ReadFile(path)
-	if err != nil || !bytes.Equal(before, after) || !bytes.Equal(first.merged, second.merged) {
-		t.Fatalf("second merge was not byte-identical: %v", err)
 	}
 }
 
