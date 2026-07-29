@@ -7,37 +7,64 @@ import (
 	"strings"
 )
 
+const maxSymlinkDepth = 255
+
 func ResolveExisting(path string) (string, bool, error) {
-	info, err := os.Lstat(path)
+	pathAbs, err := filepath.Abs(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return path, false, nil
-		}
-		return "", false, fmt.Errorf("stat file %q: %w", path, err)
+		return "", false, fmt.Errorf("resolve absolute path %q: %w", path, err)
 	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		return path, true, nil
+	return resolvePath(filepath.Clean(pathAbs), filepath.Clean(pathAbs), 0)
+}
+
+func resolvePath(path, original string, depth int) (string, bool, error) {
+	if depth > maxSymlinkDepth {
+		return "", false, fmt.Errorf("resolve symlink %q: too many links", original)
 	}
 
-	root, err := AllowedRoot(path)
-	if err != nil {
-		return "", false, err
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return "", false, fmt.Errorf("resolve symlink %q: %w", path, err)
+	current, parts := pathRootAndParts(path)
+	for i, part := range parts {
+		candidate := filepath.Join(current, part)
+		info, err := os.Lstat(candidate)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return filepath.Join(append([]string{candidate}, parts[i+1:]...)...), false, nil
+			}
+			return "", false, fmt.Errorf("stat file %q: %w", candidate, err)
 		}
-		target, readErr := DanglingTarget(path)
-		if readErr != nil {
-			return "", false, readErr
+		if info.Mode()&os.ModeSymlink == 0 {
+			current = candidate
+			continue
 		}
-		return target, false, EnsureWithinRoot(target, root, path)
+
+		target, err := DanglingTarget(candidate)
+		if err != nil {
+			return "", false, err
+		}
+		root, err := AllowedRoot(candidate)
+		if err != nil {
+			return "", false, err
+		}
+		if err := EnsureWithinRoot(target, root, candidate); err != nil {
+			return "", false, err
+		}
+		return resolvePath(filepath.Join(append([]string{target}, parts[i+1:]...)...), original, depth+1)
 	}
-	if err := EnsureWithinRoot(resolved, root, path); err != nil {
-		return "", false, err
+	return current, true, nil
+}
+
+func pathRootAndParts(path string) (string, []string) {
+	volume := filepath.VolumeName(path)
+	rest := strings.TrimPrefix(path, volume)
+	root := volume
+	if filepath.IsAbs(path) {
+		root += string(filepath.Separator)
+		rest = strings.TrimLeft(rest, string(filepath.Separator))
 	}
-	return resolved, true, nil
+	if rest == "" {
+		return root, nil
+	}
+	return root, strings.Split(rest, string(filepath.Separator))
 }
 
 func AllowedRoot(path string) (string, error) {
