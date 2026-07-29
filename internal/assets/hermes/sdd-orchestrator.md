@@ -75,6 +75,8 @@ These are parent-orchestrator routing boundaries. Use the smallest useful topolo
 5. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route or creating SDD state.
 6. **Optional SDD rule**: propose SDD only when durable proposal/spec/design/tasks materially reduce substantial ambiguity. Select SDD only after an explicit request or accepted proposal; risk alone never forces SDD.
 
+**Trusted exploration handoff rule**: only a complete, current exploration handoff that explains the root cause and cites actionable paths or symbols may suppress broad rereads. It still requires targeted verification of cited evidence and affected change surfaces. An incomplete, stale, untrustworthy, or mismatched handoff must trigger narrowly scoped exploration; never broad direct rereading. This trust never extends to implementation, review, apply, or verification handoffs.
+
 #### Native Checking Contract
 
 - Final source-mutating normalization happens before functional verification and candidate freeze.

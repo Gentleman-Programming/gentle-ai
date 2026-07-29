@@ -113,6 +113,35 @@ func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 	}
 }
 
+func TestSDDOrchestratorsCarryTrustedExplorationHandoffGuards(t *testing.T) {
+	paths := allSDDOrchestratorAssetPaths(t)
+	if len(paths) != 12 {
+		t.Fatalf("trusted-exploration coverage sees %d orchestrators, want 12", len(paths))
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			start := strings.Index(content, "#### Mandatory Delegation Triggers")
+			end := strings.Index(content[start:], "#### Native Checking Contract")
+			if start < 0 || end < 0 {
+				t.Fatalf("%s missing bounded mandatory delegation section", path)
+			}
+			delegation := content[start : start+end]
+			for _, required := range []string{
+				"complete, current exploration handoff", "root cause", "actionable paths or symbols", "suppress broad rereads",
+				"targeted verification", "cited evidence", "affected change surfaces",
+				"incomplete, stale, untrustworthy, or mismatched", "narrowly scoped exploration", "never broad direct rereading",
+				"implementation, review, apply, or verification handoffs",
+			} {
+				if !strings.Contains(delegation, required) {
+					t.Fatalf("%s missing trusted-exploration guard %q", path, required)
+				}
+			}
+		})
+	}
+}
+
 func TestOrchestratorsRejectDelegationBypassLanguage(t *testing.T) {
 	contents := map[string]string{
 		"claude/sdd-orchestrator.md":   MustRead("claude/sdd-orchestrator.md"),
