@@ -1454,13 +1454,6 @@ func runGitLimited(ctx context.Context, repo string, extraEnv []string, stdin []
 	return runGitCaptured(ctx, repo, extraEnv, stdin, outputLimit, true, false, args...)
 }
 
-func runGitRange(ctx context.Context, repo string, extraEnv []string, offset, length int, args ...string) ([]byte, int, error) {
-	if offset < 0 || length <= 0 {
-		return nil, 0, errors.New("git output range is invalid") // refusal:by-design world-action: only internal callers construct this range; the exit is a code fix, not a command
-	}
-	return runGitCapturedRange(ctx, repo, extraEnv, nil, offset, length, true, false, false, args...)
-}
-
 func runGitCaptured(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputLimit int, isolateConfig, rejectStderr bool, args ...string) ([]byte, error) {
 	output, _, err := runGitCapturedRange(ctx, repo, extraEnv, stdin, 0, outputLimit, isolateConfig, rejectStderr, true, args...)
 	return output, err

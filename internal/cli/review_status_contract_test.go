@@ -337,7 +337,7 @@ func TestReviewActionEligibilityStopsWithoutCompleteExecutionInputs(t *testing.T
 			Revision: "sha256:" + strings.Repeat("a", 64), OriginalChangedLines: 2, Tier: reviewtransaction.RiskMedium, CorrectionBudget: 1,
 			Action: action, Replayability: replayability,
 		}
-		status := newReviewTargetStatusResult(native)
+		status := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 		status.Projection = publishedStatusFixtureProjection(t)
 		status.TargetIdentity = status.Projection.CurrentSnapshotIdentity
 		status.Eligibility = newReviewActionEligibility(status)
@@ -617,7 +617,7 @@ func TestNegotiatedStatusPreservesManualRecoveryAuthorityContext(t *testing.T) {
 		Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryEscalated,
 		Replayability: reviewtransaction.ReplayabilityManualActionRequired,
 	}
-	got := newReviewTargetStatusResult(native)
+	got := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 	if got.Action != reviewtransaction.TargetStatusActionRecover || got.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
 		got.ActionDisposition != reviewtransaction.RecoveryEscalated ||
 		got.Authority == nil || got.Authority.LineageID != native.LineageID || got.Authority.Revision != native.Revision {
@@ -637,7 +637,7 @@ func TestNegotiatedStatusBindsRecoveryDispositionToRecoverAction(t *testing.T) {
 			Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryScopeChanged,
 			Replayability: reviewtransaction.ReplayabilityManualActionRequired,
 		}
-		result := newReviewTargetStatusResult(native)
+		result := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 		result.Projection = publishedStatusFixtureProjection(t)
 		result.TargetIdentity = result.Projection.CurrentSnapshotIdentity
 		result.Eligibility = newReviewActionEligibility(result)
@@ -688,7 +688,7 @@ func TestReviewActionEligibilityFailsClosedForEscalatedAuthority(t *testing.T) {
 			Revision: "sha256:" + strings.Repeat("a", 64), OriginalChangedLines: 2, Tier: reviewtransaction.RiskMedium, CorrectionBudget: 1,
 			Action: action, ActionDisposition: disposition, Replayability: replayability,
 		}
-		status := newReviewTargetStatusResult(native)
+		status := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 		status.Projection = publishedStatusFixtureProjection(t)
 		status.TargetIdentity = status.Projection.CurrentSnapshotIdentity
 		status.Eligibility = newReviewActionEligibility(status)
@@ -759,7 +759,7 @@ func TestNegotiatedStatusOffersRecoveryForAccountingOnlyEscalatedUnchangedTarget
 		Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryEscalated,
 		Replayability: reviewtransaction.ReplayabilityManualActionRequired,
 	}
-	status := newReviewTargetStatusResult(native)
+	status := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 	status.Projection = publishedStatusFixtureProjection(t)
 	status.TargetIdentity = status.Projection.CurrentSnapshotIdentity
 	status.Eligibility = newReviewActionEligibility(status)
@@ -808,12 +808,12 @@ func TestNegotiatedLegacyReceiptStatusNeverUsesCompactPublicationPending(t *test
 		State:            reviewtransaction.StateApproved,
 		ReceiptIdentity:  "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
-	present := newReviewTargetStatusResult(native)
+	present := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 	if present.Receipt.Status != ReviewReceiptPresent || present.Receipt.Identity != native.ReceiptIdentity {
 		t.Fatalf("approved legacy receipt = %#v", present.Receipt)
 	}
 	native.ReceiptIdentity = ""
-	missing := newReviewTargetStatusResult(native)
+	missing := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 	if missing.Receipt.Status == ReviewReceiptPublicationPending || missing.Receipt.Identity != "" {
 		t.Fatalf("legacy receipt inherited compact publication semantics: %#v", missing.Receipt)
 	}

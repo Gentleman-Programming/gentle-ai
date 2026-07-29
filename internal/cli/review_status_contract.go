@@ -169,10 +169,6 @@ type ReviewTargetStatusProjection struct {
 	CurrentSnapshotIdentity string                       `json:"current_snapshot_identity"`
 }
 
-func newReviewTargetStatusResult(native reviewtransaction.TargetStatusResult) ReviewTargetStatusResult {
-	return newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
-}
-
 func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatusResult, contract string) ReviewTargetStatusResult {
 	schema := ReviewIntegrationStatusSchema
 	if contract == ReviewIntegrationContractV1 {
