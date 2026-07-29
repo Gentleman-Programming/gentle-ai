@@ -26,7 +26,6 @@ const (
 	FinalVerificationRetryAuthorizationSchema         = "gentle-ai.review-final-verification-retry-authorization/v1"
 	CompactFinalEvidenceDir                           = "final-evidence"
 	CompactFinalEvidenceFile                          = "verification.txt"
-	compactFinalEvidenceLimit                         = 4 << 20
 )
 
 var finalVerificationRetryAfterFirstLiveValidation = func() {}
@@ -240,55 +239,8 @@ func validateExactFinalVerificationRetryAuthorization(request FinalVerificationR
 	return nil
 }
 
-func finalVerificationEvidencePathForStore(store CompactStore) string {
-	return filepath.Join(store.Dir, CompactFinalEvidenceDir, CompactFinalEvidenceFile)
-}
-
 func compactPrivateArtifactMode(mode os.FileMode, directory bool) bool {
 	return runtime.GOOS == "windows" || mode.Perm()&0o077 == 0 && (!directory || mode.Perm()&0o700 == 0o700)
-}
-
-func readCompactFailedFinalEvidence(store CompactStore) ([]byte, error) {
-	dir := filepath.Join(store.Dir, CompactFinalEvidenceDir)
-	dirInfo, err := os.Lstat(dir)
-	if err != nil || !dirInfo.IsDir() || dirInfo.Mode()&os.ModeSymlink != 0 || !compactPrivateArtifactMode(dirInfo.Mode(), true) {
-		return nil, errors.New("failed final-verification evidence directory is unavailable or unsafe")
-	}
-	path := finalVerificationEvidencePathForStore(store)
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !compactPrivateArtifactMode(info.Mode(), false) {
-		return nil, errors.New("failed final-verification evidence is unavailable or unsafe")
-	}
-	finalVerificationRetryEvidenceAfterLstat()
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	opened, err := file.Stat()
-	if err != nil || !opened.Mode().IsRegular() || !compactPrivateArtifactMode(opened.Mode(), false) || !os.SameFile(info, opened) {
-		return nil, errors.New("failed final-verification evidence changed before read")
-	}
-	dirOpened, err := os.Lstat(dir)
-	if err != nil || !dirOpened.IsDir() || dirOpened.Mode()&os.ModeSymlink != 0 ||
-		!compactPrivateArtifactMode(dirOpened.Mode(), true) || !os.SameFile(dirInfo, dirOpened) {
-		return nil, errors.New("failed final-verification evidence directory changed before read")
-	}
-	payload, err := io.ReadAll(io.LimitReader(file, compactFinalEvidenceLimit+1))
-	if err != nil || len(payload) == 0 || len(payload) > compactFinalEvidenceLimit {
-		return nil, errors.New("failed final-verification evidence is empty or exceeds the native limit")
-	}
-	after, err := os.Lstat(path)
-	if err != nil || !after.Mode().IsRegular() || after.Mode()&os.ModeSymlink != 0 ||
-		!compactPrivateArtifactMode(after.Mode(), false) || !os.SameFile(opened, after) {
-		return nil, errors.New("failed final-verification evidence changed during read")
-	}
-	dirAfter, err := os.Lstat(dir)
-	if err != nil || !dirAfter.IsDir() || dirAfter.Mode()&os.ModeSymlink != 0 ||
-		!compactPrivateArtifactMode(dirAfter.Mode(), true) || !os.SameFile(dirInfo, dirAfter) {
-		return nil, errors.New("failed final-verification evidence directory changed during read")
-	}
-	return payload, nil
 }
 
 func finalVerificationAttemptHasRevisionContinuity(attempt FinalizeAttempt) bool {
