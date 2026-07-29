@@ -755,6 +755,31 @@ func TestResolveAdvertisedSelectorPreservesRemoteIdentityFailure(t *testing.T) {
 	}
 }
 
+func TestResolveAdvertisedSelectorSkipsUnselectedRemoteIdentityFailure(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	configurePublicationRemote(t, repo, branch)
+	gitSnapshot(t, repo, "remote", "add", "backup", filepath.Join(t.TempDir(), "backup.git"))
+
+	original := gitCommandContext
+	t.Setenv("GENTLE_AI_TEST_GIT_PATH_FAIL", "1")
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if slicesContain(args, "config") && slicesContain(args, "remote.backup.url") {
+			return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGitAuthorityPathHelperProcess$")
+		}
+		return original(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = original })
+
+	selection, err := resolveAdvertisedSelector(context.Background(), repo, "origin/"+branch, PrePRBoundaryExplicit)
+	if err != nil {
+		t.Fatalf("explicit selected remote resolution error = %T %v", err, err)
+	}
+	if selection.Remote != "origin" || selection.RemoteRef != "refs/heads/"+branch {
+		t.Fatalf("selection = %#v, want origin/%s", selection, branch)
+	}
+}
+
 func TestResolveAdvertisedSelectorPreservesRemoteQueryFailure(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	branch := currentBranch(context.Background(), repo)
@@ -796,7 +821,9 @@ func TestResolveAdvertisedSelectorClassifiesZeroAndMultipleMatches(t *testing.T)
 
 			_, err := resolveAdvertisedSelector(context.Background(), repo, selector, PrePRBoundaryExplicit)
 			var targetErr *GateTargetResolutionError
-			if !errors.As(err, &targetErr) || targetErr.RequiredInput != "base_ref" {
+			var gitErr *GitCommandError
+			var processErr *GitProcessControlError
+			if !errors.As(err, &targetErr) || targetErr.RequiredInput != "base_ref" || errors.As(err, &gitErr) || errors.As(err, &processErr) {
 				t.Fatalf("%s selector error = %T %v, want semantic target resolution", tt.name, err, err)
 			}
 		})

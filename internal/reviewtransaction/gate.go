@@ -633,10 +633,6 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 	remotes := strings.Fields(string(output))
 	matches := []PrePRBoundarySelection{}
 	for _, remote := range remotes {
-		identity, identityErr := remoteRepositoryIdentity(ctx, repo, remote)
-		if identityErr != nil {
-			return PrePRBoundarySelection{}, identityErr
-		}
 		branch := selector
 		if strings.HasPrefix(selector, remote+"/") {
 			branch = strings.TrimPrefix(selector, remote+"/")
@@ -647,6 +643,10 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 			branch = ""
 		} else if _, err := runGit(ctx, repo, nil, nil, "check-ref-format", "--branch", branch); err != nil {
 			continue
+		}
+		identity, identityErr := remoteRepositoryIdentity(ctx, repo, remote)
+		if identityErr != nil {
+			return PrePRBoundarySelection{}, identityErr
 		}
 		remoteOutput, queryErr := runGit(ctx, repo, nil, nil, "ls-remote", "--heads", remote, branch)
 		if queryErr != nil {
