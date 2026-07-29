@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/audits/data/organic-rdd-recovery/schemas/release-ledger.schema.json",
+  "title": "Organic RDD recovery release ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "backlog",
+    "releases"
+  ],
+  "properties": {
+    "backlog": {
+      "description": "Every snapshot issue and pull request with its standing against the released SHA. An item is listed whether or not it is classified, so an unreviewed backlog cannot read as a fully reviewed one.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "number"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "issue",
+              "pull_request"
+            ]
+          },
+          "number": {"type": "integer", "minimum": 1},
+          "release": {"$ref": "#/$defs/releaseClass"}
+        }
+      }
+    },
+    "releases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "earlyDeviation",
+          "path",
+          "publication"
+        ],
+        "properties": {
+          "earlyDeviation": {"type": "boolean"},
+          "path": {"type": "string", "minLength": 1},
+          "publication": {"$ref": "#/$defs/publication"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "releaseClass": {
+      "description": "Closed classification vocabulary. The property is absent while an item is unclassified, because classification only exists once the released SHA does.",
+      "type": "string",
+      "enum": [
+        "close",
+        "needs_reproduction",
+        "partially_covered",
+        "still_valid",
+        "superseded"
+      ]
+    },
+    "publication": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "present",
+          "ref"
+        ],
+        "properties": {
+          "present": {"type": "boolean"},
+          "ref": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

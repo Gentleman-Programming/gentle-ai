@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 // cmdLookPath, osStat, osGetenv, and cmdGoVersion are package-level vars for testability.
@@ -264,7 +264,7 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 		const tmpDir = "/tmp/gentleman-guardian-angel"
 		return CommandSequence{
 			{"rm", "-rf", tmpDir},
-			{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tmpDir},
+			{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tmpDir},
 			{"bash", tmpDir + "/install.sh"},
 		}, nil
 	case "winget":
@@ -274,10 +274,11 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 		// PowerShell is used for cleanup to avoid cmd.exe quoting issues with
 		// embedded double quotes in the "if exist ... rmdir" approach.
 		cloneDst := filepath.Join(os.TempDir(), "gentleman-guardian-angel")
+		safeCloneDst := powerShellSingleQuotedValue(cloneDst)
 		bash := gitBashPath()
 		return CommandSequence{
-			{"powershell", "-NoProfile", "-Command", fmt.Sprintf("Remove-Item -Recurse -Force -ErrorAction SilentlyContinue '%s'; exit 0", cloneDst)},
-			{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", cloneDst},
+			{"powershell", "-NoProfile", "-Command", fmt.Sprintf("$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath '%s') { Remove-Item -Recurse -Force -LiteralPath '%s' }", safeCloneDst, safeCloneDst)},
+			{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", cloneDst},
 			{bash, bashScriptPath(profile, filepath.Join(cloneDst, "install.sh"))},
 		}, nil
 	default:
@@ -286,6 +287,10 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 			profile.OS, profile.LinuxDistro, profile.PackageManager,
 		)
 	}
+}
+
+func powerShellSingleQuotedValue(value string) string {
+	return strings.ReplaceAll(value, "'", "''")
 }
 
 func bashScriptPath(profile system.PlatformProfile, path string) string {

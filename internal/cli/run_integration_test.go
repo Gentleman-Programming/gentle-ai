@@ -11,13 +11,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/installcmd"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 // missingBinaryLookPath simulates all installable binaries (engram, gga) as
@@ -84,6 +87,38 @@ func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
 	}
 }
 
+func TestRunInstallReturnsStatePersistenceFailure(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	if err := state.Write(home, state.InstallState{}); err != nil {
+		t.Fatal(err)
+	}
+	statePath := state.Path(home)
+	target := filepath.Join(home, ".gentle-ai", "persisted-state.json")
+	if err := os.Rename(statePath, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, statePath); err != nil {
+		t.Skipf("state symlink unavailable: %v", err)
+	}
+
+	_, err := RunInstall([]string{"--agent", "opencode", "--component", "permissions"}, system.DetectionResult{})
+	if err == nil || !strings.Contains(err.Error(), "persist install state") {
+		t.Fatalf("RunInstall() error = %v, want state persistence failure", err)
+	}
+}
+
 func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
@@ -147,6 +182,83 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	}
 }
 
+func TestRunInstallInstallsMissingCodexBeforeRuntimeValidationAndProfileWrite(t *testing.T) {
+	home := t.TempDir()
+	installed := false
+	codexInstallCalls := 0
+	validationCalls := 0
+
+	restoreCodexLookPath := codex.LookPathOverride
+	codex.LookPathOverride = func(string) (string, error) {
+		if installed {
+			return "codex", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { codex.LookPathOverride = restoreCodexLookPath })
+
+	restoreVersionProbe := codex.SetRuntimeVersionProbeForTest(func() ([]byte, error) {
+		validationCalls++
+		if !installed {
+			return nil, exec.ErrNotFound
+		}
+		return []byte("codex-cli 0.144.0"), nil
+	})
+	t.Cleanup(restoreVersionProbe)
+
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(string) (string, error) { return "npm", nil })
+	t.Cleanup(restorePreflightLookPath)
+
+	restoreLookPath := cmdLookPath
+	cmdLookPath = func(name string) (string, error) {
+		if name == "engram" {
+			return filepath.Join(home, "bin", "engram"), nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { cmdLookPath = restoreLookPath })
+
+	restoreDownload := engramDownloadFn
+	engramDownloadFn = func(system.PlatformProfile) (string, error) {
+		t.Fatal("engramDownloadFn must not use the network in this test")
+		return "", nil
+	}
+	t.Cleanup(func() { engramDownloadFn = restoreDownload })
+
+	restoreCommand := runCommand
+	runCommand = func(name string, args ...string) error {
+		if name+" "+strings.Join(args, " ") != "npm install -g --ignore-scripts @openai/codex@0.144.0" {
+			return fmt.Errorf("unexpected install command: %s %s", name, strings.Join(args, " "))
+		}
+		codexInstallCalls++
+		installed = true
+		return nil
+	}
+	t.Cleanup(func() { runCommand = restoreCommand })
+
+	runtime := installRuntime{
+		homeDir: home,
+		resolved: planner.ResolvedPlan{
+			Agents: []model.AgentID{model.AgentCodex}, OrderedComponents: []model.ComponentID{model.ComponentEngram},
+		},
+		profile: system.PlatformProfile{OS: "linux", NpmWritable: true},
+	}
+	for _, step := range runtime.stagePlan().Apply {
+		if err := step.Run(); err != nil {
+			t.Fatalf("install apply step %q error = %v", step.ID(), err)
+		}
+	}
+	if codexInstallCalls != 1 {
+		t.Fatalf("Codex install calls = %d, want exactly 1", codexInstallCalls)
+	}
+	if validationCalls != 1 {
+		t.Fatalf("Codex runtime validation calls = %d, want 1 after install", validationCalls)
+	}
+	for _, name := range []string{"sdd-strong.config.toml", "sdd-mid.config.toml", "sdd-cheap.config.toml"} {
+		assertFileContains(t, filepath.Join(home, ".codex", name), "gpt-5.6-")
+	}
+}
+
 func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 	binDir := t.TempDir()
 	fakePi := filepath.Join(binDir, "pi")
@@ -198,7 +310,6 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 		"pi install npm:pi-mcp-adapter",
 		engramInitCommandForTest(),
 		"pi install npm:pi-subagents-j0k3r",
-		"pi install npm:pi-intercom",
 		"pi install npm:@juicesharp/rpiv-ask-user-question",
 		"pi install npm:pi-web-access",
 		"pi install npm:@juicesharp/rpiv-todo",
@@ -1265,7 +1376,9 @@ func TestRunInstallGGALinuxIncludesTempCleanupBeforeClone(t *testing.T) {
 		if strings.Contains(cmd, "rm -rf /tmp/gentleman-guardian-angel") {
 			cleanupIdx = i
 		}
-		if strings.Contains(cmd, "git clone https://github.com/Gentleman-Programming/gentleman-guardian-angel.git /tmp/gentleman-guardian-angel") {
+		// Match the clone intent (URL + dest) instead of the full literal command,
+		// so the test stays valid when extra flags like --depth/--branch are added.
+		if strings.Contains(cmd, "git") && strings.Contains(cmd, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git") && strings.Contains(cmd, "/tmp/gentleman-guardian-angel") {
 			cloneIdx = i
 		}
 	}

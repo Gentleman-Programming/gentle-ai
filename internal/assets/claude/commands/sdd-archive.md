@@ -14,7 +14,7 @@ TASK:
 Archive the active SDD change. Read the verification report first to confirm the change is ready. Then:
 
 STATUS GATE:
-Read `~/.claude/skills/_shared/sdd-status-contract.md` and produce structured status before acting. If `$ARGUMENTS` is missing or ambiguous, ask the user to choose and STOP. Do not guess. Continue only when verify-report exists, contains no CRITICAL issues, and tasks are complete. CRITICAL verification issues have no override. If unchecked tasks remain, send the change back to `sdd-apply` unless apply-progress/verify-report prove they are stale checkboxes and the orchestrator explicitly requests mechanical reconciliation. If status reports `workspace-planning`, STOP and explain that workspace archive is not supported in this slice. Carry `contextFiles`, task progress, dependency states, and `actionContext` into the native sub-agent prompt when delegating.
+Read `~/.claude/skills/_shared/sdd-status-contract.md` and produce structured status before acting. If `$ARGUMENTS` is missing or ambiguous, ask the user to choose and STOP. Do not guess. Continue only when verify-report exists, contains no CRITICAL issues, tasks are complete, and native `reviewGate.result` is exactly `allow` for the approved content-bound receipt. Missing, pending, scope-changed, invalidated, or escalated receipts block archive with no automatic reviewer launch. CRITICAL verification issues have no override. If unchecked tasks remain, send the change back to `sdd-apply` unless apply-progress/verify-report prove they are stale checkboxes and the orchestrator explicitly requests mechanical reconciliation. If status reports `workspace-planning`, STOP and explain that workspace archive is not supported in this slice. Carry exact transaction/ledger/receipt/gate-context references, `contextFiles`, task progress, dependency states, and `actionContext` into the native sub-agent prompt when delegating.
 
 ENGRAM PERSISTENCE (artifact store mode: engram):
 CRITICAL: mem_search returns 300-char PREVIEWS, not full content. You MUST call mem_get_observation(id) for EVERY artifact.
@@ -31,6 +31,7 @@ STEP B — RETRIEVE FULL CONTENT (mandatory):
   mem_get_observation(id: tasks_id) → full tasks
   mem_get_observation(id: verify_id) → full verification report
 Record all observation IDs in the archive report for traceability.
+Treat `verify-report` and `apply-progress` as intermediate snapshots: the archive report records the state at close per the skill's Final-State Authority section, and explicit final-state facts in your launch prompt outrank stale snapshot claims.
 Save:
   mem_save(title: "sdd/{change-name}/archive-report", topic_key: "sdd/{change-name}/archive-report", type: "architecture", project: "{project}", capture_prompt: false, content: "{archive report with observation IDs}")
   Set capture_prompt: false when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.

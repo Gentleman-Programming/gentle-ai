@@ -1,0 +1,103 @@
+# Darwin release-blocker test manifest — read by scripts/darwin-release-blockers.sh,
+# which the "Darwin Runtime" CI job executes on macos-latest (see .github/workflows/ci.yml).
+#
+# Why this file exists: four macOS defects (#1773, #1781, #1804, #1850) and the
+# #1872 RAR lock convoy shipped because CI never executes Darwin. macOS runners
+# bill ~10x Linux minutes, so this lane runs a curated manifest, never the full
+# suite. The full suite stays on Linux.
+#
+# Selection criterion — a test enters this manifest because its FAILURE MODE is
+# platform-dependent (APFS /var<->/private/var aliasing, Darwin advisory-lock
+# and filesystem timing, ENOTSUP rename fallbacks, Darwin permission semantics,
+# volume case folding), never because it is important. Importance is what the
+# Linux full-suite job already covers. When in doubt, ask: "could this test
+# pass on Linux and fail on a Mac for a reason the test is designed to catch?"
+# If the answer is no, it does not belong here.
+#
+# Format: <package> <TestName> [count=N] [race]   ('#' starts a comment)
+#   count=N  -count for this entry (default 1); used where a defect reproduced
+#            statistically and the reporter's iteration count is the evidence bar.
+#   race     run this entry under -race (concurrency-sensitive entries).
+# Entries sharing package/count/race run as one `go test` invocation.
+#
+# Drift guard: the runner verifies every listed test exists via native
+# `go test -list` before running anything. An entry naming a vanished test
+# fails the job loudly instead of letting `go test -run` match nothing and
+# exit 0. Adding or renaming an entry is a one-line diff, reviewed like code.
+
+# --- #1773: /var vs /private/var repository-path canonicalization -------------
+# macOS $TMPDIR lives under /var/folders, and /var is a symlink to /private/var,
+# so one repository has two valid absolute spellings. These tests only exercise
+# the real alias on Darwin; on Linux they run against a symlink fixture.
+./internal/pathidentity TestSameDirectoryAcceptsTwoSpellingsOfOneDirectory      # core alias identity: both spellings are one directory
+./internal/pathidentity TestContainsAcceptsAPathAddressedThroughAnAliasedAncestor  # containment through an aliased ancestor (/var/... member of /private/var/...)
+./internal/pathidentity TestContainsAcceptsTheRootItself                        # boundary of the containment contract under aliasing
+./internal/pathidentity TestContainsRejectsSiblingsAndAncestors                 # aliasing must not widen containment
+./internal/pathidentity TestContainsAcceptsADescendantThatDoesNotExistYet       # planned paths resolve through the aliased prefix
+./internal/pathidentity TestContainsRejectsEverythingWhenTheRootDoesNotExist    # fail-closed shape of the identity check
+./internal/pathidentity TestSameDirectoryRejectsPathsThatDoNotExist             # identity is decided by the filesystem, not the string
+./internal/pathidentity TestSameDirectoryRejectsRegularFiles                    # directory identity only; files never alias-match
+./internal/pathidentity TestSameDirectoryDefersCaseFoldingToTheVolume           # APFS default is case-insensitive: the volume decides, not the code
+./internal/reviewtransaction TestResolveRepositoryRootAcceptsBothSpellingsOfOneRepository  # #1773 defect shape: authority bound via one spelling, found via the other
+./internal/reviewtransaction TestResolveRepositoryRootStillRejectsAForeignPath  # aliasing must not admit a foreign repository
+./internal/reviewtransaction TestAuthoritativeStorePathsAreCanonicalUnderAnAliasedRepository  # store paths canonicalize once, not per-spelling
+./internal/reviewtransaction TestAcquireLocalStoreLockUnderAnAliasedRepository  # the lock is one lock under either spelling
+./internal/reviewtransaction TestAcquireLocalStoreLockRefusesARawAliasedDirectory  # canonicalization happens before lock acquisition, not never
+./internal/sddstatus TestResolveBindingChangeRootAcceptsAnAliasedRepositoryRoot # SDD binding surface of the same alias defect
+./internal/sddstatus TestResolveBindingChangeRootStillRejectsAForeignWorkspace  # alias acceptance must not weaken workspace identity
+./internal/sddstatus TestBindApprovedReviewThroughAnAliasedSpelling             # end-to-end binding through the aliased spelling
+
+# --- #1781: START EPERM under managed macOS profiles --------------------------
+# Fixed by 8fb1c2c1 (anchored lock walk); managed profiles surface as
+# restricted-permission ancestors and Darwin-specific openat/O_NOFOLLOW errnos.
+./internal/reviewtransaction TestSecureOpenLockParentAnchor                     # the 8fb1c2c1 fix itself: the lock walk anchors instead of walking to /
+./internal/reviewtransaction TestAcquireLocalStoreLockAllowsSearchOnlyAncestor  # search-only (managed-profile-shaped) ancestor must not EPERM the lock
+./internal/reviewtransaction TestAcquireLocalStoreLockCreatesAndReopensWithoutChangingPermissions  # Darwin permission-bit semantics on create/reopen
+./internal/reviewtransaction TestAcquireLocalStoreLockRejectsSymlinkAndPreservesTarget         # O_NOFOLLOW errno differs per platform (ELOOP vs EMLINK shapes)
+./internal/reviewtransaction TestAcquireLocalStoreLockRejectsSymlinkedParentAndPreservesTarget # openat walk vs symlinked parent, Darwin syscall semantics
+./internal/reviewtransaction TestAcquireLocalStoreLockRejectsSymlinkSwapAtOpenBoundary         # TOCTOU at the open boundary is filesystem-timing dependent
+./internal/reviewtransaction TestAcquireLocalStoreLockRejectsNonRegularUnixObject              # non-regular-object errnos differ on Darwin
+./internal/reviewtransaction TestBusyStoreLockProbePreservesExistingUnixInodeAndMetadata       # inode identity of a live lock under Darwin stat semantics
+
+# --- #1804: reviewer-result publication on macOS ExFAT ------------------------
+# These are //go:build darwin — no CI lane has EVER executed them. On ExFAT the
+# exclusive-rename primitive is missing (ENOTSUP) and publication falls back to
+# exclusive-create copy.
+./internal/reviewtransaction TestPublishNoReplaceDarwinRealRenameSucceeds       # the native no-replace rename path on APFS
+./internal/reviewtransaction TestPublishNoReplaceDarwinENOTSUPFallsBackToCopy   # #1804 defect shape: ENOTSUP must fall back, not fail
+./internal/reviewtransaction TestPublishNoReplaceDarwinENOTSUPFallbackNeverReplaces  # the fallback keeps the immutability contract
+./internal/reviewtransaction TestPublishNoReplaceDarwinOtherErrnoPropagatesUnchanged # fallback is ENOTSUP-only; other errnos stay typed
+
+# --- #1850: first-use RuntimeStore contention leaked raw ENOENT ---------------
+# Reporter's Darwin oracle: 181/200 failures pre-fix, 200/200 post-0bcff694.
+# count=20 is the reporter's own reproduction bar (docs/testing guide, Flow 22);
+# the original failure had no data-race report (filesystem race), so the plain
+# high-count run is the reproduction and the race run is the memory-safety net.
+./internal/sddstatus TestRuntimeLedgerCASAllowsOnlyOneConcurrentOrdinal count=20      # the #1850 repro at the reporter's iteration count
+./internal/sddstatus TestRuntimeLedgerCASAllowsOnlyOneConcurrentOrdinal count=3 race  # guide Flow 22 step 3: -race -count=3
+./internal/sddstatus TestRuntimeLedgerCASAllowsOnlyOneConcurrentBudgetReset race      # sibling first-use CAS surface of the same store
+./internal/sddstatus TestRuntimeLedgerLockContentionPreservesTheNonMutationProof race # 21d93207: loser of the lock reports typed contention, proves non-mutation
+./internal/sddstatus TestRuntimeLedgerMutationContentionIsNotDoubleWrapped race       # the reclassification boundary must not widen
+
+# --- #1872: RAR plan-authority lock convoy (fixed by 6457a4a8) ----------------
+# Reproduced ONLY on Darwin: the critical section costs hundreds of ms there
+# (vs ~40ms Linux), making the 2s bounded wait exhaustible. count=20 matches
+# the reporter's reproduction; the fix converges on lock exhaustion, so the
+# high-count plain run is the regression sentinel.
+./internal/reviewtransaction TestRARPlanAuthorityConcurrentExactReplayConverges count=20  # the #1872 repro: 20 concurrent exact-replay publishers, x20
+./internal/reviewtransaction TestRARPlanAuthorityConcurrentExactReplayConverges count=2 race  # memory-safety net over the same convoy
+./internal/reviewtransaction TestRARPlanAuthorityConvergesOnExhaustedLockOverIdenticalPublishedAuthority race  # 6457a4a8: exhausted lock + identical published bytes converges
+./internal/reviewtransaction TestRARPlanAuthorityLockExhaustionWithoutConvergentAuthorityStaysTyped race       # 6457a4a8 no-weaken direction: no convergence proof, typed timeout stays
+
+# --- Advisory-lock timing (Windows Runtime lane precedent) --------------------
+# The #1872 class ("the lock outlives the answer") lives in this surface; these
+# are the flock/process-exit/cancellation timing tests whose failure windows
+# are platform-scheduler and filesystem dependent.
+./internal/reviewtransaction TestStoreLockReportsLiveOwnerAndCannotBeStolen      # live-owner probe under Darwin flock semantics
+./internal/reviewtransaction TestStoreLockRecoversCrashAndCorruptOwnerRecords    # crash recovery depends on platform lock-release behavior
+./internal/reviewtransaction TestStoreLockIsReleasedWhenOwnerProcessExits        # kernel releases flock on exit: timing is per-platform
+./internal/reviewtransaction TestConcurrentStoreLockRecoverersCannotBothWin race # recovery race window is scheduler-dependent
+./internal/reviewtransaction TestCompactStoresShareRepositoryWriteLock race      # shared write lock across stores under Darwin timing
+./internal/reviewtransaction TestCompactStoreRejectsConcurrentLockedWriter race  # exclusive-writer rejection under contention
+./internal/reviewtransaction TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline  # cancellation vs bounded wait ordering
+./internal/reviewtransaction TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance     # read path vs exclusive maintenance lock timing

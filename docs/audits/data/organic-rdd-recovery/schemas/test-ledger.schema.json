@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/audits/data/organic-rdd-recovery/schemas/test-ledger.schema.json",
+  "title": "Organic RDD recovery test ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tests"
+  ],
+  "properties": {
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path"
+        ],
+        "anyOf": [
+          {"required": ["proof"]},
+          {"required": ["destinationProof"]}
+        ],
+        "properties": {
+          "destinationProof": {"$ref": "#/$defs/proof"},
+          "path": {"type": "string", "minLength": 1},
+          "proof": {"$ref": "#/$defs/proof"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "proof": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}

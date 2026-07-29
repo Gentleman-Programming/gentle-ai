@@ -10,14 +10,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
 // engramDownloadFn is the function used to download the engram binary on the stable channel.
@@ -58,28 +59,37 @@ const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 //   - brew profile → brewUpgrade (regardless of tool's declared method)
 //   - go-install method + apt/pacman/other → goInstallUpgrade
 //   - binary method + linux/darwin → binaryUpgrade
-//   - binary method + windows → manualFallback (gentle-ai on Windows uses installerUpgrade instead)
+//   - binary method + windows → manualFallback (gentle-ai explains the signed-distribution hold)
 //   - script method + linux/darwin + gga → ggaScriptUpgrade (git clone approach)
 //   - script method + linux/darwin + other → scriptUpgrade (curl | bash install.sh)
 //   - script method + windows → manualFallback
 //   - OpenCode plugin method → update materialized package in ~/.config/opencode when possible
 //   - unknown method → manualFallback with explicit message
 func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) (bool, error) {
-	if isBetaGentleAIUpgrade(r) && profile.OS != "windows" {
+	ownership := update.HomebrewNone
+	if profile.PackageManager == "brew" && r.Tool.InstallMethod != update.InstallOpenCodePlugin {
+		var err error
+		ownership, err = homebrewOwnershipDetector(r.Tool.Name)
+		if err != nil {
+			return false, fmt.Errorf("detect Homebrew ownership for %s: %w", r.Tool.Name, err)
+		}
+	}
+	if isBetaGentleAIUpgrade(r) && profile.OS != "windows" && ownership == update.HomebrewNone {
 		return false, goInstallMainUpgrade(r.Tool)
 	}
 
 	method := effectiveMethod(r.Tool, profile)
+	if ownership != update.HomebrewNone {
+		method = update.InstallBrew
+	}
 
 	switch method {
 	case update.InstallBrew:
-		return false, brewUpgrade(ctx, r.Tool.Name)
+		return false, brewUpgrade(ctx, r, ownership)
 	case update.InstallGoInstall:
 		return false, goInstallUpgrade(ctx, r.Tool, r.LatestVersion)
 	case update.InstallBinary:
 		return false, binaryUpgrade(ctx, r, profile)
-	case update.InstallInstaller:
-		return installerUpgrade(ctx, r.Tool, r.ReleaseURL, isBetaGentleAIUpgrade(r))
 	case update.InstallScript:
 		// GGA's install.sh expects to run from within a cloned repo — it references
 		// $SCRIPT_DIR/bin/gga and $SCRIPT_DIR/lib/*.sh. The generic scriptUpgrade
@@ -150,12 +160,39 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) error {
 	cmd.Stdin = nil
 	cmd.Env = openCodePluginUpgradeEnv(cmd.Env)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s upgrade %s in %s: %w (output: %s)", pm, pkg, opencodeDir, err, string(out))
+		outStr := string(out)
+		if pm == "npm" && npmErrorCode(outStr) == "ERESOLVE" {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			fmt.Fprintln(os.Stderr, "WARNING: npm reported an ERESOLVE peer dependency conflict; retrying with --legacy-peer-deps")
+			retryCmd := execCommand("npm", append([]string{"install", "--save", "--no-audit", "--no-fund", "--legacy-peer-deps"}, targets...)...)
+			retryCmd.Dir = opencodeDir
+			retryCmd.Stdin = nil
+			retryCmd.Env = openCodePluginUpgradeEnv(retryCmd.Env)
+			if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
+				return fmt.Errorf("%s upgrade %s in %s: retry with --legacy-peer-deps failed: %w (retry output: %s); original error: %v (original output: %s)", pm, pkg, opencodeDir, retryErr, string(retryOut), err, outStr)
+			}
+		} else {
+			return fmt.Errorf("%s upgrade %s in %s: %w (output: %s)", pm, pkg, opencodeDir, err, outStr)
+		}
 	}
 	if err := clearOpenCodePluginPackageCache(homeDir, pkg); err != nil {
 		return fmt.Errorf("clear OpenCode package cache for %s: %w", pkg, err)
 	}
 	return nil
+}
+
+func npmErrorCode(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 4 && fields[0] == "npm" && fields[1] == "error" && fields[2] == "code" {
+			return fields[3]
+		}
+	}
+	return ""
 }
 
 func openCodePluginRegisteredOrMaterialized(opencodeDir, pkg string) (bool, bool, error) {
@@ -308,7 +345,9 @@ func openCodePluginRegisteredPendingHint(pkg string) string {
 // new versions published since the user last ran it. If update fails (e.g. no
 // network), the upgrade is still attempted using the existing cache — a stale
 // cache is better than no upgrade at all.
-func brewUpgrade(ctx context.Context, toolName string) error {
+func brewUpgrade(ctx context.Context, r update.UpdateResult, ownership update.HomebrewOwnership) error {
+	toolName := r.Tool.Name
+	flag := "--" + string(ownership)
 	// Ensure the Gentleman-Programming homebrew tap is present before upgrading.
 	// Non-fatal: brew tap is a no-op when already present; if it fails for any other
 	// reason, the subsequent brew upgrade will surface the real error. See issue #455:
@@ -323,7 +362,7 @@ func brewUpgrade(ctx context.Context, toolName string) error {
 	// our formula/cask, not the whole tap or third-party taps. Older Homebrew versions
 	// may not support `brew trust`, so this is non-fatal and the upgrade output
 	// below remains the source of truth.
-	trustCmd := execCommand("brew", "trust", homebrewTrustFlag(toolName), gentlemanProgrammingTapRef(toolName))
+	trustCmd := execCommand("brew", "trust", flag, gentlemanProgrammingTapRef(toolName))
 	trustCmd.Stdin = nil
 	_ = trustCmd.Run()
 
@@ -333,10 +372,33 @@ func brewUpgrade(ctx context.Context, toolName string) error {
 	updateCmd.Stdin = nil
 	_ = updateCmd.Run() // ignore error intentionally
 
-	upgradeCmd := execCommand("brew", "upgrade", toolName)
+	upgradeCmd := execCommand("brew", "upgrade", flag, toolName)
 	upgradeCmd.Stdin = nil
 	if out, err := upgradeCmd.CombinedOutput(); err != nil {
-		return formatBrewUpgradeError(toolName, err, string(out))
+		return formatBrewUpgradeError(toolName, ownership, err, string(out))
+	}
+	if ownership == update.HomebrewCask {
+		return verifyLegacyCaskTarget(r)
+	}
+	return nil
+}
+
+var brewVersionRegexp = regexp.MustCompile(`\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?`)
+
+func verifyLegacyCaskTarget(r update.UpdateResult) error {
+	migration := legacyCaskMigration(r.Tool.Name)
+	if len(r.Tool.DetectCmd) == 0 {
+		return fmt.Errorf("cannot verify Homebrew cask %s after upgrade; %s", r.Tool.Name, migration)
+	}
+	cmd := execCommand(r.Tool.DetectCmd[0], r.Tool.DetectCmd[1:]...)
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("verify Homebrew cask %s after upgrade: %w; %s", r.Tool.Name, err, migration)
+	}
+	installed := brewVersionRegexp.FindString(string(out))
+	target := brewVersionRegexp.FindString(r.LatestVersion)
+	if installed == "" || target == "" || installed != target {
+		return fmt.Errorf("Homebrew cask %s remains at %q after targeting %q; %s", r.Tool.Name, installed, target, migration)
 	}
 	return nil
 }
@@ -352,20 +414,30 @@ func homebrewTrustFlag(toolName string) string {
 	return "--formula"
 }
 
-func formatBrewUpgradeError(toolName string, err error, output string) error {
-	message := fmt.Sprintf("brew upgrade %s: %v (output: %s)", toolName, err, output)
-	if advice := homebrewFailureAdvice(toolName, output); advice != "" {
+func legacyCaskMigration(toolName string) string {
+	return fmt.Sprintf("migrate the legacy cask to the current formula:\n  brew uninstall --cask %s\n  brew install --formula %s", strings.TrimSpace(toolName), gentlemanProgrammingTapRef(toolName))
+}
+
+func formatBrewUpgradeError(toolName string, ownership update.HomebrewOwnership, err error, output string) error {
+	message := fmt.Sprintf("brew upgrade --%s %s: %v (output: %s)", ownership, toolName, err, output)
+	if advice := homebrewFailureAdvice(toolName, output, ownership); advice != "" {
 		message += "\n\n" + advice
+	}
+	if ownership == update.HomebrewCask {
+		message += "\n\n" + legacyCaskMigration(toolName)
 	}
 	return errors.New(message)
 }
 
-func homebrewFailureAdvice(toolName string, output string) string {
+func homebrewFailureAdvice(toolName string, output string, detected ...update.HomebrewOwnership) string {
 	lower := strings.ToLower(output)
 	ref := gentlemanProgrammingTapRef(toolName)
+	flag := homebrewTrustFlag(toolName)
+	if len(detected) > 0 {
+		flag = "--" + string(detected[0])
+	}
 
 	if strings.Contains(lower, "untrusted tap") || strings.Contains(lower, "tap trust is required") || strings.Contains(lower, "homebrew_require_tap_trust") {
-		flag := homebrewTrustFlag(toolName)
 		artifact := strings.TrimPrefix(flag, "--")
 		if strings.Contains(lower, "--cask") || strings.Contains(lower, "load cask") {
 			flag = "--cask"
@@ -374,23 +446,35 @@ func homebrewFailureAdvice(toolName string, output string) string {
 			flag = "--formula"
 			artifact = "formula"
 		}
-		return fmt.Sprintf("Homebrew requires explicit trust for external taps. Trust only this Gentle AI %s, then retry:\n  brew trust %s %s\n  brew upgrade %s", artifact, flag, ref, toolName)
+		return fmt.Sprintf("Homebrew requires explicit trust for external taps. Trust only this Gentle AI %s, then retry:\n  brew trust %s %s\n  brew upgrade %s %s", artifact, flag, ref, flag, toolName)
 	}
 
 	if strings.Contains(lower, "bubblewrap is installed but cannot create a rootless sandbox") ||
 		strings.Contains(lower, "rootless sandbox") ||
 		strings.Contains(lower, "homebrew_no_sandbox_linux") {
-		return "Homebrew on Linux could not create its Bubblewrap rootless sandbox. This requires an explicit admin/security decision: enabling unprivileged user namespaces lets Homebrew use its sandbox but changes host kernel/AppArmor policy. If acceptable, run:\n  sudo sysctl -w kernel.unprivileged_userns_clone=1\n  sudo sysctl -w user.max_user_namespaces=28633\n  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true\n\nFinal workaround if your distro policy forbids this sandbox:\n  HOMEBREW_NO_SANDBOX_LINUX=1 brew upgrade " + toolName
+		return "Homebrew on Linux could not create its Bubblewrap rootless sandbox. This requires an explicit admin/security decision: enabling unprivileged user namespaces lets Homebrew use its sandbox but changes host kernel/AppArmor policy. If acceptable, run:\n  sudo sysctl -w kernel.unprivileged_userns_clone=1\n  sudo sysctl -w user.max_user_namespaces=28633\n  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true\n\nFinal workaround if your distro policy forbids this sandbox:\n  HOMEBREW_NO_SANDBOX_LINUX=1 brew upgrade " + flag + " " + toolName
 	}
 
 	return ""
 }
 
 // goInstallUpgrade runs `go install <importPath>@v<version>`.
+//
+// `go install` writes to GOBIN (or GOPATH/bin), which is not necessarily the
+// directory the user's shell resolves for the tool. After a successful install
+// the destination is compared against the effective binary so a silent no-op
+// upgrade cannot pass as a clean success. A mismatch, or a destination that
+// cannot be resolved, is reported as a warning — never as a failure, because
+// the new binary genuinely was written.
 func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion string) error {
 	if tool.GoImportPath == "" {
 		return fmt.Errorf("upgrade %q: GoImportPath is empty — cannot run go install", tool.Name)
 	}
+
+	// GOBIN/GOPATH are static Go configuration that `go install` does not
+	// change, so they are read up front; the PATH lookup happens afterwards so
+	// a first-time install resolves correctly.
+	destDir, destErr := goInstallDestinationDir()
 
 	// Pin to the exact release version.
 	target := fmt.Sprintf("%s@v%s", tool.GoImportPath, latestVersion)
@@ -399,6 +483,8 @@ func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion s
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, string(out))
 	}
+
+	warnGoInstallDestination(tool.Name, detectOS(), destDir, destErr)
 	return nil
 }
 
@@ -409,11 +495,23 @@ func isBetaGentleAIUpgrade(r update.UpdateResult) bool {
 		strings.HasPrefix(strings.TrimSpace(r.LatestVersion), "main@")
 }
 
+// goInstallMainUpgrade installs gentle-ai from HEAD on the beta channel. It runs
+// the same `go install` mechanism as goInstallUpgrade and therefore carries the
+// same risk of writing somewhere the shell does not resolve, so it performs the
+// same non-fatal destination verification.
 func goInstallMainUpgrade(tool update.ToolInfo) error {
-	module := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
-	if module == "github.com//" {
-		module = "github.com/gentleman-programming/gentle-ai"
+	repository := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
+	if repository == "github.com//" {
+		repository = "github.com/gentleman-programming/gentle-ai"
 	}
+	// Go derives the module path from the repository plus the major-version
+	// suffix: for major 2 and above the module path must end in /vN or the
+	// toolchain refuses every resolution of that repository, including the
+	// branch pseudo-versions this beta path installs.
+	module := repository + "/v2"
+
+	destDir, destErr := goInstallDestinationDir()
+
 	target := module + "/cmd/gentle-ai@main"
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
@@ -421,6 +519,8 @@ func goInstallMainUpgrade(tool update.ToolInfo) error {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, strings.TrimSpace(string(out)))
 	}
+
+	warnGoInstallDestination(tool.Name, detectOS(), destDir, destErr)
 	return nil
 }
 
@@ -476,10 +576,13 @@ func prependGoPattern(existing, pattern string) string {
 // binaryUpgrade handles binary-release upgrades via GitHub Releases asset download.
 //
 // engram has its own cross-platform binary downloader (DownloadLatestBinary) that
-// works on all platforms including Windows. For tools besides engram and gentle-ai
-// on Windows, a ManualFallbackError is returned so the executor surfaces it as
-// UpgradeSkipped with an actionable hint. (gentle-ai uses InstallInstaller).
+// works on all platforms including Windows. Other Windows binary upgrades return
+// ManualFallbackError so the executor surfaces them as UpgradeSkipped.
 func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
+	if profile.OS == "windows" && r.Tool.Name == "gentle-ai" {
+		return &ManualFallbackError{Hint: gentleAIWindowsSourceInstallHint(r)}
+	}
+
 	// engram: always use its dedicated binary downloader regardless of platform
 	// (except brew, which is handled by effectiveMethod before we get here).
 	if r.Tool.Name == "engram" {
@@ -503,85 +606,10 @@ func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 	return downloadAndReplace(ctx, r, profile)
 }
 
-// installerUpgradeArgs builds the PowerShell command argument list for launching
-// install.ps1 as a detached process. When beta is true, "-Channel beta" is
-// appended after "-File <tmpPath>" so install.ps1 routes to go install @main
-// instead of downloading the latest stable release binary.
-func installerUpgradeArgs(tmpPath string, beta bool) []string {
-	args := []string{
-		"/C",
-		"start",
-		"",
-		"powershell",
-		"-NoProfile",
-		"-NoExit",
-		"-ExecutionPolicy", "Bypass",
-		"-File", tmpPath,
-	}
-	if beta {
-		args = append(args, "-Channel", "beta")
-	}
-	return args
-}
-
-// installerUpgrade launches the PowerShell installer (install.ps1) for gentle-ai on Windows.
-// This is used for the Windows self-replace workaround — the running process
-// exits immediately after launching the installer, which then replaces the binary.
-// When beta is true, "-Channel beta" is passed to install.ps1 so it installs
-// from HEAD via go install @main instead of downloading the latest stable release.
-func installerUpgrade(ctx context.Context, tool update.ToolInfo, releaseURL string, beta bool) (bool, error) {
-	if runtime.GOOS != "windows" {
-		return false, fmt.Errorf("installer upgrade is only supported on Windows")
-	}
-
-	scriptURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/scripts/install.ps1", tool.Owner, tool.Repo)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, scriptURL, nil)
-	if err != nil {
-		return false, fmt.Errorf("download install.ps1: build request: %w", err)
-	}
-
-	resp, err := scriptHTTPClient.Do(req)
-	if err != nil {
-		return false, fmt.Errorf("download install.ps1: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("download install.ps1: HTTP %d from %s", resp.StatusCode, scriptURL)
-	}
-
-	scriptBody, err := io.ReadAll(io.LimitReader(resp.Body, maxScriptSize+1))
-	if err != nil {
-		return false, fmt.Errorf("download install.ps1: read body: %w", err)
-	}
-	if int64(len(scriptBody)) > maxScriptSize {
-		return false, fmt.Errorf("download install.ps1: response body exceeds %d bytes limit", maxScriptSize)
-	}
-
-	// Write to a temporary file instead of passing it to iex directly
-	tmpFile, err := os.CreateTemp("", "gentle-ai-install-*.ps1")
-	if err != nil {
-		return false, fmt.Errorf("create temp script: %w", err)
-	}
-	if _, err := tmpFile.Write(scriptBody); err != nil {
-		tmpFile.Close()
-		return false, fmt.Errorf("write temp script: %w", err)
-	}
-	tmpFile.Close()
-
-	cmd := execCommand("cmd", installerUpgradeArgs(tmpFile.Name(), beta)...)
-
-	fmt.Printf("\nLaunching installer for %s...\n", tool.Name)
-	fmt.Println("gentle-ai will now exit so the installer can replace the binary.")
-
-	if err := cmd.Start(); err != nil {
-		return false, fmt.Errorf("failed to start installer: %w", err)
-	}
-
-	// Mark that we need to exit after the spinner is handled by the caller.
-	// This allows the executor to call sp.Finish(true) before we actually exit.
-	return true, nil
+func gentleAIWindowsSourceInstallHint(r update.UpdateResult) string {
+	return update.WindowsDistributionHoldMessage + " " +
+		"No binary or remote script was downloaded or executed. Install/update from source with Go 1.25.10+:\n  " +
+		update.GentleAISourceInstallCommand(r.LatestVersion)
 }
 
 // engramBinaryUpgrade downloads or installs the latest engram binary.

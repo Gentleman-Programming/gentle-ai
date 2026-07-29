@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/artifact-subject.schema.json",
+  "title": "Gentle AI provider-owned reviewer artifact subject v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "subject_hash",
+    "lineage_id",
+    "authority_revision",
+    "target_identity",
+    "candidate_diff_sha256",
+    "changed_path_manifest_sha256",
+    "lens",
+    "selected_order"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-artifact-subject/v1"},
+    "subject_hash": {"$ref": "#/$defs/sha256"},
+    "lineage_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "authority_revision": {"$ref": "#/$defs/sha256"},
+    "target_identity": {"$ref": "#/$defs/sha256"},
+    "candidate_diff_sha256": {"$ref": "#/$defs/sha256"},
+    "changed_path_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "lens": {"enum": ["review-risk", "review-resilience", "review-readability", "review-reliability"]},
+    "selected_order": {"type": "integer", "minimum": 0, "maximum": 3},
+    "correction_target_identity": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

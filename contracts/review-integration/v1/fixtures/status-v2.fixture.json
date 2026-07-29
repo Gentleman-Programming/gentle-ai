@@ -1,0 +1,193 @@
+{
+  "schema": "gentle-ai.review-integration.status/v2",
+  "contract": "gentle-ai.review-integration/v1",
+  "operation": "review.status",
+  "applicability": "current_target",
+  "authority": {
+    "version": "compact-v2",
+    "lineage_id": "review-status-fixture",
+    "state": "reviewing",
+    "generation": 1,
+    "revision": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390"
+  },
+  "receipt": {
+    "status": "expected_missing"
+  },
+  "action": "finalize",
+  "replayability": "not_replayable",
+  "frozen": {
+    "tier": "medium",
+    "original_changed_lines": 2,
+    "correction_budget": 1
+  },
+  "target_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+  "projection": {
+    "schema": "gentle-ai.review-integration.projection/v1",
+    "kind": "current-changes",
+    "projection": "workspace",
+    "base_tree": "3e21a205dd9b55021aeae87965092623807e455f",
+    "initial_review_tree": "1c3325617279b38743f073302ba190fc421b5a09",
+    "current_candidate_tree": "1c3325617279b38743f073302ba190fc421b5a09",
+    "paths_digest": "sha256:b93fca961a97d240c2b7023e98772f49ebd2995eda7db07043270b57bed75d71",
+    "paths": [
+      "tracked.txt"
+    ],
+    "intended_untracked": [],
+    "intended_untracked_proof": "sha256:b97229718d4c7fe50a8892eb474ae5aa6491697bccb400e3e31dbaca4894d2f3",
+    "initial_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+    "current_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
+  },
+  "repair": {
+    "schema": "gentle-ai.review-authority-repair-assessment/v1",
+    "status": "unsupported",
+    "counts": {
+      "lineages": 0,
+      "compact_lineages": 0,
+      "legacy_lineages": 0,
+      "events": 0,
+      "bytes": 0,
+      "eligible_candidates": 0,
+      "unsupported_lineages": 0,
+      "conflicts": 0
+    },
+    "supported_operations": [
+      "review/complete-fix",
+      "review/validate-fix"
+    ],
+    "authorization_schema": "gentle-ai.review-repair-authorization/v1"
+  },
+  "candidates": [],
+  "eligibility": {
+    "allowed_actions": [
+      {
+        "action": "stop",
+        "reason_code": "forbidden_required_inputs_unavailable",
+        "required_inputs": []
+      }
+    ],
+    "forbidden_actions": [
+      {
+        "action": "review.abandon",
+        "reason_code": "forbidden_required_inputs_unavailable"
+      },
+      {
+        "action": "review.finalize",
+        "reason_code": "forbidden_required_inputs_unavailable"
+      },
+      {
+        "action": "review.invalidate",
+        "reason_code": "forbidden_required_inputs_unavailable"
+      },
+      {
+        "action": "review.quarantine-legacy",
+        "reason_code": "forbidden_required_inputs_unavailable"
+      },
+      {
+        "action": "review.reclaim",
+        "reason_code": "forbidden_required_inputs_unavailable"
+      },
+      {
+        "action": "review.reconcile-authority",
+        "reason_code": "forbidden_required_inputs_unavailable"
+      },
+      {
+        "action": "review.reconcile-authority-batch",
+        "reason_code": "forbidden_required_inputs_unavailable"
+      },
+      {
+        "action": "review.recover",
+        "reason_code": "forbidden_required_inputs_unavailable"
+      },
+      {
+        "action": "review.repair",
+        "reason_code": "forbidden_required_inputs_unavailable"
+      },
+      {
+        "action": "review.retry_final_verification",
+        "reason_code": "forbidden_required_inputs_unavailable"
+      },
+      {
+        "action": "review.start",
+        "reason_code": "forbidden_required_inputs_unavailable"
+      },
+      {
+        "action": "review.validate",
+        "reason_code": "forbidden_required_inputs_unavailable"
+      }
+    ]
+  },
+  "next_transition": {
+    "kind": "collect",
+    "reason_code": "reviewer_results_required",
+    "collect": {
+      "inputs": [
+        {
+          "name": "reviewer_result",
+          "schema": "https://gentle-ai.dev/schema/review/reviewer/v1",
+          "capture_operation": "review.capture-result",
+          "arguments": [
+            {
+              "name": "lineage",
+              "value": "review-status-fixture",
+              "token": "--lineage=review-status-fixture"
+            },
+            {
+              "name": "expected-revision",
+              "value": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390",
+              "token": "--expected-revision=sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390"
+            },
+            {
+              "name": "target",
+              "value": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+              "token": "--target=sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
+            },
+            {
+              "name": "repository-context",
+              "value": "rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "token": "--repository-context=rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "name": "lens",
+              "value": "review-reliability",
+              "token": "--lens=review-reliability"
+            },
+            {
+              "name": "order",
+              "value": "0",
+              "token": "--order=0"
+            }
+          ],
+          "artifact_subject": {
+            "schema": "gentle-ai.review-artifact-subject/v1",
+            "subject_hash": "sha256:fe57db2ea45a33c7e852d039e8af3291c3bc31911f0c92a710b5fef547b1999d",
+            "lineage_id": "review-status-fixture",
+            "authority_revision": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390",
+            "target_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+            "candidate_diff_sha256": "sha256:8ed4bd24d5beb3f73f6026355f6755f5aef7feebcd76447be820860c22bc47c6",
+            "changed_path_manifest_sha256": "sha256:64d028ff676fb4ef10f2d4a3488d568854b364b4cc4399578b5932d144d2347b",
+            "lens": "review-reliability",
+            "selected_order": 0
+          },
+          "candidate_diff": {
+            "encoding": "base64",
+            "data": "ZGlmZiAtLWdpdCBhL3RyYWNrZWQudHh0IGIvdHJhY2tlZC50eHQKaW5kZXggZGY5NjdiOTZhNTc5ZTQ1YTE4YjgyNTE3MzJkMTY4MDRiMmU1NmE1NS4uYzlhZTdiNjlkODZmOWRjOWVjYjRmOTgyM2RkNDJjODA2MThjNjFjZCAxMDA2NDQKLS0tIGEvdHJhY2tlZC50eHQKKysrIGIvdHJhY2tlZC50eHQKQEAgLTEgKzEgQEAKLWJhc2UKK2NhbmRpZGF0ZSBiZWhhdmlvcgo=",
+            "sha256": "sha256:8ed4bd24d5beb3f73f6026355f6755f5aef7feebcd76447be820860c22bc47c6",
+            "byte_size": 209
+          },
+          "changed_path_manifest": [
+            {
+              "path": "tracked.txt",
+              "status": "M",
+              "old_mode": "100644",
+              "new_mode": "100644",
+              "deleted": false,
+              "type_changed": false,
+              "mode_only": false,
+              "intended_untracked": false
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -9,10 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 // profileNameRegex matches valid profile name slugs: lowercase alphanumeric + hyphens,
@@ -64,13 +63,6 @@ var profilePhaseOrder = []string{
 	"sdd-verify",
 	"sdd-archive",
 	"sdd-onboard",
-}
-
-var reviewAgentNames = []string{
-	"review-risk",
-	"review-readability",
-	"review-reliability",
-	"review-resilience",
 }
 
 // ProfilePhaseOrder returns the ordered list of SDD sub-agent phase names.
@@ -237,17 +229,8 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 		return model.ModelAssignment{}
 	}
 
-	// Try colon separator first (standard: "anthropic:claude-sonnet-4"), then slash.
-	idx := strings.Index(modelStr, ":")
-	if idx <= 0 {
-		idx = strings.Index(modelStr, "/")
-	}
-	if idx <= 0 {
-		return model.ModelAssignment{}
-	}
-	providerID := modelStr[:idx]
-	modelID := modelStr[idx+1:]
-	if modelID == "" {
+	providerID, modelID, ok := model.SplitModelSpec(modelStr)
+	if !ok {
 		return model.ModelAssignment{}
 	}
 	effort, _ := agentMap["variant"].(string)
@@ -260,13 +243,9 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 //     sub-agent references and model assignments table), permissions scoped to *-{name}
 //   - sdd-{phase}-{name} (10 agents): subagent mode, hidden, file reference to
 //     the shared prompt at SharedPromptDir(homeDir)/sdd-{phase}.md
-func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuidance ...string) ([]byte, error) {
+func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string, fallbackPhaseAssignments map[string]model.ModelAssignment, codeGraphGuidance string) ([]byte, error) {
 	if profile.Name == "" || profile.Name == "default" {
 		return nil, fmt.Errorf("GenerateProfileOverlay: profile name must be non-empty and not 'default'")
-	}
-	guidance := ""
-	if len(codeGraphGuidance) > 0 {
-		guidance = codeGraphGuidance[0]
 	}
 
 	suffix := "-" + profile.Name
@@ -284,7 +263,9 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 
 	// Orchestrator entry
 	taskPerms := map[string]any{
-		"*": "deny",
+		"*":       "deny",
+		"general": "allow",
+		"explore": "allow",
 	}
 	for _, phase := range profilePhaseOrder {
 		taskPerms[phase+suffix] = "allow"
@@ -299,10 +280,10 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 			taskPerms[jd] = "allow"
 		}
 	}
-	// Add 4R review agent permissions (global, not profile-scoped).
+	// Add native review agent permissions (global, not profile-scoped).
 	// The base overlays define these shared review agents; named profiles only
 	// need permission to delegate to the unsuffixed global agent keys.
-	for _, reviewAgent := range reviewAgentNames {
+	for _, reviewAgent := range opencode.ReviewPhases() {
 		taskPerms[reviewAgent] = "allow"
 	}
 
@@ -327,12 +308,22 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 			},
 		},
 	}
-	if profile.OrchestratorModel.ProviderID != "" && profile.OrchestratorModel.ModelID != "" {
-		orchEntry["model"] = profile.OrchestratorModel.FullID()
+	orchAssignment := profile.OrchestratorModel
+	if orchAssignment.ProviderID == "" || orchAssignment.ModelID == "" {
+		// Fall back to the global gentle-orchestrator assignment (issue #557)
+		// when the profile did not pin its own orchestrator model. This mirrors
+		// how PhaseAssignments are resolved below so generated profile
+		// orchestrators stay consistent with what the TUI shows elsewhere.
+		if fallback, ok := fallbackPhaseAssignments["gentle-orchestrator"]; ok {
+			orchAssignment = fallback
+		}
+	}
+	if orchAssignment.ProviderID != "" && orchAssignment.ModelID != "" {
+		orchEntry["model"] = orchAssignment.FullID()
 		// Always write variant (even "") so the deep merge clears any stale
 		// effort from a previous profile. Mirrors inject.go (case 1).
-		if profile.OrchestratorModel.Effort != "" {
-			orchEntry["variant"] = profile.OrchestratorModel.Effort
+		if orchAssignment.Effort != "" {
+			orchEntry["variant"] = orchAssignment.Effort
 		} else {
 			orchEntry["variant"] = ""
 		}
@@ -340,7 +331,6 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 	agentMap[orchestratorKey] = orchEntry
 
 	// Sub-agent entries
-	promptDir := SharedPromptDir(homeDir)
 	phaseDescriptions := map[string]string{
 		"sdd-init":    "Bootstrap SDD context and project configuration",
 		"sdd-explore": "Investigate codebase and think through ideas",
@@ -356,7 +346,10 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 
 	for _, phase := range profilePhaseOrder {
 		key := phase + suffix
-		prompt := "{file:" + filepath.ToSlash(filepath.Join(promptDir, phase+".md")) + "}"
+		prompt, err := SharedPromptFileRef(settingsPath, homeDir, phase)
+		if err != nil {
+			return nil, fmt.Errorf("build shared prompt file reference for %q: %w", phase, err)
+		}
 		entry := map[string]any{
 			"mode":        "subagent",
 			"hidden":      true,
@@ -369,7 +362,11 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 				"bash":  true,
 			},
 		}
-		if assignment, ok := profile.PhaseAssignments[phase]; ok && assignment.ProviderID != "" && assignment.ModelID != "" {
+		// Issue #557: consult fallback when the profile did not set the phase,
+		// so generated *-{name} agents stay consistent with what the user sees
+		// in the gentle-ai TUI. Profile-level assignments still win.
+		assignment := resolveProfileAssignment(profile, fallbackPhaseAssignments, phase)
+		if assignment.ProviderID != "" && assignment.ModelID != "" {
 			entry["model"] = assignment.FullID()
 			// Always write variant (even "") so the deep merge clears any stale
 			// effort from a previous profile. Mirrors inject.go (case 1).
@@ -383,22 +380,29 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 	}
 
 	for _, jd := range opencode.JDPhases() {
-		assignment, ok := profile.PhaseAssignments[jd]
-		if !ok || assignment.ProviderID == "" || assignment.ModelID == "" {
+		// Profile wins over fallback for JD agents: their perm/task wiring is
+		// profile-scoped (presence toggles delegation to the *-{name} agent vs
+		// the global one). When the profile has not opted in, fall back to
+		// the global JD agent and skip generating the suffixed entry — this
+		// preserves the existing "profile-scoped JD is opt-in" contract that
+		// other tests (e.g. cleanupStaleProfileJDAgents) rely on.
+		profileAssignment, hasProfileKey := profile.PhaseAssignments[jd]
+		hasProfileValue := hasProfileKey && profileAssignment.ProviderID != "" && profileAssignment.ModelID != ""
+		if !hasProfileValue {
 			continue
 		}
 		key := jd + suffix
 		entry := jdProfileAgentEntry(jd)
-		entry["model"] = assignment.FullID()
-		if assignment.Effort != "" {
-			entry["variant"] = assignment.Effort
+		entry["model"] = profileAssignment.FullID()
+		if profileAssignment.Effort != "" {
+			entry["variant"] = profileAssignment.Effort
 		} else {
 			entry["variant"] = ""
 		}
 		agentMap[key] = entry
 	}
 
-	injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap, guidance)
+	injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap, codeGraphGuidance)
 
 	overlay := map[string]any{
 		"agent": agentMap,
@@ -409,6 +413,27 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 		return nil, fmt.Errorf("marshal profile overlay: %w", err)
 	}
 	return append(result, '\n'), nil
+}
+
+// resolveProfileAssignment returns the effective model assignment for a phase:
+// the profile's explicit assignment wins; otherwise the global fallback (e.g.
+// OpenCodeModelAssignments from the TUI's "Configure Models" flow). Returns
+// a zero ModelAssignment when neither side has a usable value.
+//
+// Issue #557 motivated this helper: prior to the fix, the profile overlay
+// silently emitted agents without a model field whenever the user did not
+// re-touch the phase inside the profile picker — surfacing as "Unassigned"
+// in OpenCode while gentle-ai's UI showed the phase as assigned.
+func resolveProfileAssignment(profile model.Profile, fallback map[string]model.ModelAssignment, phase string) model.ModelAssignment {
+	if assignment, ok := profile.PhaseAssignments[phase]; ok && assignment.ProviderID != "" && assignment.ModelID != "" {
+		return assignment
+	}
+	if fallback != nil {
+		if assignment, ok := fallback[phase]; ok && assignment.ProviderID != "" && assignment.ModelID != "" {
+			return assignment
+		}
+	}
+	return model.ModelAssignment{}
 }
 
 func hasProfileAssignment(profile model.Profile, phase string) bool {
@@ -531,7 +556,7 @@ func jdProfileAgentEntry(jd string) map[string]any {
 //  4. Replaces bare sub-agent references (e.g. sdd-init) with suffixed ones
 //     (e.g. sdd-init-{name}) in the prompt text
 func buildProfileOrchestratorPrompt(profile model.Profile) (string, error) {
-	base := assets.MustRead(sddOrchestratorAsset(model.AgentOpenCode))
+	base := renderSDDOrchestratorAsset(model.AgentOpenCode)
 
 	// Extract section based on model capability (derived from model name).
 	capability := "capable"

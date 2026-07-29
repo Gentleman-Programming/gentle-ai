@@ -9,10 +9,10 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 type InjectionResult struct {
@@ -174,9 +174,13 @@ type InjectOptions struct {
 	// Set to true only when the user explicitly opts in via a CLI flag or TUI choice.
 	CodexMultiAgent bool
 
+	// CodexOrchestratorAssignment updates top-level model settings when non-nil.
+	// nil preserves the user's existing main-session configuration.
+	CodexOrchestratorAssignment *model.CodexOrchestratorAssignment
+
 	// CodexCarrilModelAssignments holds the resolved carril→model-id map used
 	// when writing SDD profile .config.toml files. nil/empty = use canonical
-	// defaults (sdd-strong/sdd-mid=gpt-5.5, sdd-cheap=gpt-5.4-mini).
+	// defaults (sdd-strong=gpt-5.6-sol, sdd-mid=gpt-5.6-terra, sdd-cheap=gpt-5.6-luna).
 	CodexCarrilModelAssignments map[string]string
 
 	// CodexModelAssignments holds the resolved phase→effort map used to derive
@@ -402,6 +406,9 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		if configPath == "" {
 			break
 		}
+		if err := codex.ValidateGPT56Runtime(); err != nil {
+			return InjectionResult{}, err
+		}
 
 		// Determine instruction file paths before mutating the config.
 		instructionsPath, compactPath, instrErr := writeCodexInstructionFiles(configHomeDir)
@@ -448,6 +455,10 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		// Step 2 — top-level instruction-file keys (before the first section header).
 		withInstr := filemerge.UpsertTopLevelTOMLString(withMaxDepth, "model_instructions_file", instructionsPath)
 		withCompact := filemerge.UpsertTopLevelTOMLString(withInstr, "experimental_compact_prompt_file", compactPath)
+		if opts.CodexOrchestratorAssignment != nil {
+			withCompact = filemerge.UpsertTopLevelTOMLString(withCompact, "model", opts.CodexOrchestratorAssignment.Model)
+			withCompact = filemerge.UpsertTopLevelTOMLString(withCompact, "model_reasoning_effort", string(opts.CodexOrchestratorAssignment.Effort))
+		}
 
 		// Step 3 — [mcp_servers.engram] block (always last; strip+re-append at EOF).
 		engramCmd := stableEngramCommandForMergedConfig(configPath, adapter.Agent())

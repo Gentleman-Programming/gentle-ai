@@ -1,0 +1,422 @@
+{
+  "tests": [
+    {
+      "path": "e2e/organicruntime/organic_runtime_test.go",
+      "proof": [
+        "e2e/organicruntime/organic_runtime_test.go"
+      ]
+    },
+    {
+      "path": "internal/agents/capabilitymanifest/manifest.go",
+      "proof": [
+        "internal/agents/capabilitymanifest/manifest_test.go"
+      ]
+    },
+    {
+      "path": "internal/agents/capabilitymanifest/manifest_test.go",
+      "proof": [
+        "internal/agents/capabilitymanifest/manifest_test.go"
+      ]
+    },
+    {
+      "path": "internal/app/app.go",
+      "proof": [
+        "internal/app/app_test.go"
+      ]
+    },
+    {
+      "path": "internal/app/app_test.go",
+      "proof": [
+        "internal/app/app_test.go"
+      ]
+    },
+    {
+      "path": "internal/app/help.go",
+      "proof": [
+        "internal/app/help_test.go"
+      ]
+    },
+    {
+      "path": "internal/app/help_test.go",
+      "proof": [
+        "internal/app/help_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/antigravity/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/assets_test.go",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/claude/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/codex/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/cursor/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/gemini/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/generic/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/hermes/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/kimi/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/kiro/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/opencode/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/qwen/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/skills/_shared/review-ledger-contract.md",
+      "proof": [
+        "internal/components/sdd/review_ledger_contract_test.go"
+      ]
+    },
+    {
+      "path": "internal/assets/windsurf/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/doctor.go",
+      "proof": [
+        "internal/cli/doctor_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/doctor_test.go",
+      "proof": [
+        "internal/cli/doctor_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/review.go",
+      "proof": [
+        "internal/cli/review_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/review_facade.go",
+      "proof": [
+        "internal/cli/review_facade_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/review_mode.go",
+      "proof": [
+        "internal/cli/review_mode_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/review_mode_test.go",
+      "proof": [
+        "internal/cli/review_mode_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/review_next_transition.go",
+      "proof": [
+        "internal/cli/review_next_transition_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/review_status_contract.go",
+      "proof": [
+        "internal/cli/review_status_contract_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/run.go",
+      "proof": [
+        "internal/cli/run_component_paths_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/run_component_paths_test.go",
+      "proof": [
+        "internal/cli/run_component_paths_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/sdd_attempt.go",
+      "proof": [
+        "internal/cli/sdd_attempt_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/sync.go",
+      "proof": [
+        "internal/cli/sync_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/sync_test.go",
+      "proof": [
+        "internal/cli/sync_test.go"
+      ]
+    },
+    {
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "path": "internal/cli/work_verification_decide.go"
+    },
+    {
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "path": "internal/cli/work_verification_decide_test.go"
+    },
+    {
+      "path": "internal/components/agentguidance/inject.go",
+      "proof": [
+        "internal/components/agentguidance/inject_test.go"
+      ]
+    },
+    {
+      "path": "internal/components/agentguidance/inject_test.go",
+      "proof": [
+        "internal/components/agentguidance/inject_test.go"
+      ]
+    },
+    {
+      "path": "internal/components/agentguidance/routing.go",
+      "proof": [
+        "internal/components/agentguidance/routing_test.go"
+      ]
+    },
+    {
+      "path": "internal/components/agentguidance/routing_test.go",
+      "proof": [
+        "internal/components/agentguidance/routing_test.go"
+      ]
+    },
+    {
+      "path": "internal/components/golden_test.go",
+      "proof": [
+        "internal/components/golden_test.go"
+      ]
+    },
+    {
+      "path": "internal/components/sdd/bounded_review_contract_test.go",
+      "proof": [
+        "internal/components/sdd/bounded_review_contract_test.go"
+      ]
+    },
+    {
+      "path": "internal/components/sdd/boundedreview.go",
+      "proof": [
+        "internal/components/sdd/bounded_review_contract_test.go"
+      ]
+    },
+    {
+      "path": "internal/components/sdd/inject.go",
+      "proof": [
+        "internal/components/sdd/inject_test.go"
+      ]
+    },
+    {
+      "path": "internal/components/sdd/inject_test.go",
+      "proof": [
+        "internal/components/sdd/inject_test.go"
+      ]
+    },
+    {
+      "destinationProof": [
+        "internal/components/agentguidance/routing_test.go"
+      ],
+      "path": "internal/components/sdd/triggerrules.go"
+    },
+    {
+      "destinationProof": [
+        "internal/components/agentguidance/routing_test.go"
+      ],
+      "path": "internal/components/sdd/triggerrules_test.go"
+    },
+    {
+      "destinationProof": [
+        "internal/reviewtransaction/pr_command_boundary_test.go"
+      ],
+      "path": "internal/deliveryadmission/"
+    },
+    {
+      "path": "internal/doctor/doctor.go",
+      "proof": [
+        "internal/doctor/doctor_test.go"
+      ]
+    },
+    {
+      "path": "internal/doctor/doctor_test.go",
+      "proof": [
+        "internal/doctor/doctor_test.go"
+      ]
+    },
+    {
+      "path": "internal/reviewtransaction/compact_reviewer_capture.go",
+      "proof": [
+        "internal/reviewtransaction/compact_reviewer_capture_test.go"
+      ]
+    },
+    {
+      "path": "internal/reviewtransaction/compact_reviewer_capture_test.go",
+      "proof": [
+        "internal/reviewtransaction/compact_reviewer_capture_test.go"
+      ]
+    },
+    {
+      "path": "internal/reviewtransaction/rar_plan_authority.go",
+      "proof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ]
+    },
+    {
+      "path": "internal/reviewtransaction/rar_plan_authority_test.go",
+      "proof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ]
+    },
+    {
+      "path": "internal/reviewtransaction/rdd_mode.go",
+      "proof": [
+        "internal/reviewtransaction/rdd_mode_test.go"
+      ]
+    },
+    {
+      "path": "internal/reviewtransaction/rdd_mode_test.go",
+      "proof": [
+        "internal/reviewtransaction/rdd_mode_test.go"
+      ]
+    },
+    {
+      "path": "internal/reviewtransaction/risk.go",
+      "proof": [
+        "internal/reviewtransaction/risk_test.go"
+      ]
+    },
+    {
+      "path": "internal/reviewtransaction/risk_test.go",
+      "proof": [
+        "internal/reviewtransaction/risk_test.go"
+      ]
+    },
+    {
+      "path": "internal/reviewtransaction/verification_contract.go",
+      "proof": [
+        "internal/reviewtransaction/verification_contract_test.go"
+      ]
+    },
+    {
+      "path": "internal/reviewtransaction/verification_contract_test.go",
+      "proof": [
+        "internal/reviewtransaction/verification_contract_test.go"
+      ]
+    },
+    {
+      "path": "internal/sddstatus/runtime_ledger.go",
+      "proof": [
+        "internal/sddstatus/runtime_ledger_test.go"
+      ]
+    },
+    {
+      "path": "internal/sddstatus/runtime_ledger_test.go",
+      "proof": [
+        "internal/sddstatus/runtime_ledger_test.go"
+      ]
+    },
+    {
+      "path": "internal/state/state.go",
+      "proof": [
+        "internal/state/state_test.go"
+      ]
+    },
+    {
+      "path": "internal/state/state_test.go",
+      "proof": [
+        "internal/state/state_test.go"
+      ]
+    },
+    {
+      "destinationProof": [
+        "internal/reviewtransaction/gate_test.go",
+        "internal/reviewtransaction/receipt_test.go"
+      ],
+      "path": "internal/workprovider/"
+    },
+    {
+      "destinationProof": [
+        "internal/reviewtransaction/rdd_mode_test.go",
+        "internal/reviewtransaction/authority_repair_test.go",
+        "internal/reviewtransaction/compact_batch_reconcile_journal_test.go"
+      ],
+      "path": "internal/workprovider/productive_advance_recovery_test.go"
+    },
+    {
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "path": "internal/workprovider/productive_verification_consent.go"
+    },
+    {
+      "destinationProof": [
+        "internal/reviewtransaction/store_test.go",
+        "internal/reviewtransaction/rar_path_safety_windows_test.go"
+      ],
+      "path": "internal/workrun/"
+    },
+    {
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "path": "internal/workrun/verification_consent.go"
+    }
+  ]
+}

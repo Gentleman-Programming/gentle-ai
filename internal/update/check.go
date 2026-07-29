@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 var updateChannelEnv = os.Getenv
@@ -58,6 +58,16 @@ func CheckFiltered(ctx context.Context, currentVersion string, profile system.Pl
 // checkSingleTool checks a single tool: detects local version, fetches remote, compares.
 func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion string, profile system.PlatformProfile) UpdateResult {
 	result := UpdateResult{Tool: tool}
+	homebrewOwnership := HomebrewNone
+	if profile.PackageManager == "brew" && strings.TrimSpace(tool.NpmPackage) == "" {
+		var err error
+		homebrewOwnership, err = homebrewOwnershipDetector(tool.Name)
+		if err != nil {
+			result.Status = CheckFailed
+			result.Err = fmt.Errorf("detect Homebrew ownership for %s: %w; inspect `brew list --formula --full-name`, `brew list --cask --full-name`, and `command -v %s`", tool.Name, err, tool.Name)
+			return result
+		}
+	}
 
 	// Run local detection and remote fetch concurrently.
 	var wg sync.WaitGroup
@@ -90,7 +100,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 	wg.Wait()
 
 	result.InstalledVersion = localVersion
-	result.UpdateHint = updateHint(tool, profile)
+	result.UpdateHint = updateHintForOwnership(tool, profile, homebrewOwnership)
 
 	// Handle fetch failure.
 	if fetchErr != nil {

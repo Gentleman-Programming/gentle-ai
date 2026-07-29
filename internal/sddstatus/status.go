@@ -1,6 +1,7 @@
 package sddstatus
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const SchemaName = "gentle-ai.sdd-status"
@@ -55,13 +58,14 @@ const (
 type Phase string
 
 const (
-	PhasePropose Phase = "propose"
-	PhaseSpec    Phase = "spec"
-	PhaseDesign  Phase = "design"
-	PhaseTasks   Phase = "tasks"
-	PhaseApply   Phase = "apply"
-	PhaseVerify  Phase = "verify"
-	PhaseArchive Phase = "archive"
+	PhasePropose   Phase = "propose"
+	PhaseSpec      Phase = "spec"
+	PhaseDesign    Phase = "design"
+	PhaseTasks     Phase = "tasks"
+	PhaseApply     Phase = "apply"
+	PhaseVerify    Phase = "verify"
+	PhaseRemediate Phase = "remediate"
+	PhaseArchive   Phase = "archive"
 )
 
 type ArtifactPaths struct {
@@ -71,6 +75,12 @@ type ArtifactPaths struct {
 	Tasks         []string `json:"tasks"`
 	ApplyProgress []string `json:"applyProgress"`
 	VerifyReport  []string `json:"verifyReport"`
+	ReviewPolicy  []string `json:"reviewPolicy"`
+	ReviewLedger  []string `json:"reviewLedger"`
+	ReviewReceipt []string `json:"reviewReceipt"`
+	ReviewBundle  []string `json:"reviewBundle"`
+	ReviewContext []string `json:"reviewContext"`
+	ReviewState   []string `json:"reviewState"`
 }
 
 type PlanningHome struct {
@@ -83,6 +93,24 @@ type TaskProgress struct {
 	Completed   int  `json:"completed"`
 	Pending     int  `json:"pending"`
 	AllComplete bool `json:"allComplete"`
+}
+
+type blockerReasons struct {
+	expectedPlanning []string
+	genuine          []string
+}
+
+func (reasons blockerReasons) forRoute(nextRecommended string) []string {
+	return reasons.finalize(nextRecommended, reasons.genuine)
+}
+
+func (reasons blockerReasons) finalize(nextRecommended string, accumulated []string) []string {
+	switch Phase(nextRecommended) {
+	case PhasePropose, PhaseSpec, PhaseDesign, PhaseTasks:
+		return append([]string{}, accumulated...)
+	default:
+		return append(append([]string{}, reasons.expectedPlanning...), accumulated...)
+	}
 }
 
 type Dependencies struct {
@@ -110,29 +138,83 @@ type Relationships struct {
 }
 
 type PhaseInstructions struct {
-	Apply   []string `json:"apply"`
-	Verify  []string `json:"verify"`
-	Archive []string `json:"archive"`
+	Apply     []string `json:"apply"`
+	Verify    []string `json:"verify"`
+	Remediate []string `json:"remediate"`
+	Archive   []string `json:"archive"`
+}
+
+// RemediationState describes bounded correction eligibility for a failed
+// verification verdict. CorrectionBudgetRemaining and CorrectionBudgetTotal
+// are deliberately named to be unambiguous with the review-integration
+// contracts' unrelated `correction_budget` field (the frozen total assigned
+// at review start, see internal/cli/review_start_contract.go and
+// review_status_contract.go): neither sddstatus field is ever named plain
+// "correctionBudget" on the wire, so a consumer reading both surfaces cannot
+// mistake a remaining-budget value for a frozen-total value or vice versa.
+type RemediationState struct {
+	Required               bool   `json:"required"`
+	Complete               bool   `json:"complete"`
+	FailedEvidenceRevision string `json:"failedEvidenceRevision"`
+	LineageID              string `json:"lineageId"`
+	Generation             int    `json:"generation"`
+	FixBatch               int    `json:"fixBatch"`
+	// CorrectionBudgetRemaining is CorrectionBudgetTotal minus the compact
+	// review authority's CumulativeCorrectionLines already charged against
+	// it: the correction-line budget still available for this remediation
+	// attempt. Zero when remediation is not compact-bound or not required.
+	CorrectionBudgetRemaining int `json:"correctionBudgetRemaining,omitempty"`
+	// CorrectionBudgetTotal is the frozen total correction-line budget
+	// assigned to the compact review authority at review start
+	// (reviewtransaction.CompactState.CorrectionBudget), unaffected by lines
+	// already spent. Zero when remediation is not compact-bound or not
+	// required.
+	CorrectionBudgetTotal int    `json:"correctionBudgetTotal,omitempty"`
+	Reason                string `json:"reason"`
+}
+
+type ReviewGateState struct {
+	Result reviewtransaction.GateResult `json:"result"`
+	Reason string                       `json:"reason"`
+	// Delivery names what governs the change when the review gate itself
+	// cannot, mirroring the delivery gate's own disposition field
+	// (internal/cli.reviewDeliveryDisposition). It is set only while the
+	// review-driven-development kill switch is off and the change has no
+	// review authority of its own, where it reports
+	// RDDDeliveryDisabledUnmanaged: no review governs this change and it
+	// closes under ordinary repository policy rather than under a receipt.
+	//
+	// It is deliberately a separate field rather than a fifth
+	// reviewtransaction.GateResult. Result keeps reporting only the four
+	// documented gate results, so every consumer that archives on
+	// `reviewGate.result: allow` keeps refusing to read this as an approval,
+	// and every enabled path leaves Delivery empty, which `omitempty` keeps
+	// off the wire exactly as before.
+	Delivery reviewtransaction.RDDDelivery `json:"delivery,omitempty"`
 }
 
 type Status struct {
-	SchemaName        string                   `json:"schemaName"`
-	SchemaVersion     int                      `json:"schemaVersion"`
-	ChangeName        *string                  `json:"changeName"`
-	ArtifactStore     ArtifactStore            `json:"artifactStore"`
-	PlanningHome      PlanningHome             `json:"planningHome"`
-	ChangeRoot        *string                  `json:"changeRoot"`
-	ArtifactPaths     ArtifactPaths            `json:"artifactPaths"`
-	ContextFiles      ArtifactPaths            `json:"contextFiles"`
-	Artifacts         map[string]ArtifactState `json:"artifacts"`
-	TaskProgress      TaskProgress             `json:"taskProgress"`
-	Dependencies      Dependencies             `json:"dependencies"`
-	ApplyState        ApplyState               `json:"applyState"`
-	ActionContext     ActionContext            `json:"actionContext"`
-	Relationships     Relationships            `json:"relationships"`
-	PhaseInstructions *PhaseInstructions       `json:"phaseInstructions,omitempty"`
-	NextRecommended   string                   `json:"nextRecommended"`
-	BlockedReasons    []string                 `json:"blockedReasons"`
+	SchemaName        string                         `json:"schemaName"`
+	SchemaVersion     int                            `json:"schemaVersion"`
+	ChangeName        *string                        `json:"changeName"`
+	ArtifactStore     ArtifactStore                  `json:"artifactStore"`
+	PlanningHome      PlanningHome                   `json:"planningHome"`
+	ChangeRoot        *string                        `json:"changeRoot"`
+	ArtifactPaths     ArtifactPaths                  `json:"artifactPaths"`
+	ContextFiles      ArtifactPaths                  `json:"contextFiles"`
+	Artifacts         map[string]ArtifactState       `json:"artifacts"`
+	TaskProgress      TaskProgress                   `json:"taskProgress"`
+	Dependencies      Dependencies                   `json:"dependencies"`
+	ApplyState        ApplyState                     `json:"applyState"`
+	ActionContext     ActionContext                  `json:"actionContext"`
+	Relationships     Relationships                  `json:"relationships"`
+	RemediationState  RemediationState               `json:"remediationState"`
+	RuntimeStatus     *RuntimeStatus                 `json:"runtimeStatus,omitempty"`
+	ReviewGate        *ReviewGateState               `json:"reviewGate,omitempty"`
+	ReviewTransaction *reviewtransaction.Transaction `json:"reviewTransaction,omitempty"`
+	PhaseInstructions *PhaseInstructions             `json:"phaseInstructions,omitempty"`
+	NextRecommended   string                         `json:"nextRecommended"`
+	BlockedReasons    []string                       `json:"blockedReasons"`
 }
 
 type ResolveOptions struct {
@@ -140,6 +222,24 @@ type ResolveOptions struct {
 	WorkspaceRoot       string
 	ChangeName          string
 	IncludeInstructions bool
+	// ReviewDisabled records that the user's review-driven-development kill
+	// switch is off for this clone. While it is off review-driven development
+	// does not exist, so it must have no implications: the archive gate never
+	// demands a terminal review receipt the operator could not obtain anyway
+	// (review/start is refused while the switch is off), which would otherwise
+	// loop an orchestrator forever on `nextRecommended: "resolve-review"`.
+	//
+	// It removes only the IMPLICIT demand. A change that carries an explicit
+	// review receipt asked for review-driven development to act, so that
+	// receipt is still validated in full: an approved one still governs and a
+	// scope-changed, escalated, or invalidated one still blocks. Nothing here
+	// approves, advances, or invents review authority.
+	//
+	// The zero value enforces, so any caller that does not resolve the switch
+	// keeps today's behavior. The switch itself is read in the CLI layer, which
+	// owns the single source of truth for both of its sources; an unreadable
+	// switch is not a disabled switch and resolves to false.
+	ReviewDisabled bool
 }
 
 type CommandArgs struct {
@@ -147,6 +247,7 @@ type CommandArgs struct {
 	CWD                 string
 	JSON                bool
 	IncludeInstructions bool
+	Contract            string
 }
 
 type engramObservation struct {
@@ -173,7 +274,23 @@ func ParseCommandArgs(args []string) (CommandArgs, error) {
 			}
 			parsed.CWD = args[i+1]
 			i++
+		case "--contract":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return CommandArgs{}, fmt.Errorf("--contract requires a value")
+			}
+			parsed.Contract = args[i+1]
+			i++
+			if err := validateStatusContract(parsed.Contract); err != nil {
+				return CommandArgs{}, err
+			}
 		default:
+			if strings.HasPrefix(arg, "--contract=") {
+				parsed.Contract = strings.TrimPrefix(arg, "--contract=")
+				if err := validateStatusContract(parsed.Contract); err != nil {
+					return CommandArgs{}, err
+				}
+				continue
+			}
 			if strings.HasPrefix(arg, "-") {
 				return CommandArgs{}, fmt.Errorf("unknown sdd-status argument %q", arg)
 			}
@@ -185,6 +302,13 @@ func ParseCommandArgs(args []string) (CommandArgs, error) {
 		}
 	}
 	return parsed, nil
+}
+
+func validateStatusContract(contract string) error {
+	if contract == StatusContractV1 {
+		return nil
+	}
+	return fmt.Errorf("unsupported sdd-status contract %q; supported contract is %s", contract, StatusContractV1)
 }
 
 func ListActiveOpenSpecChanges(cwd string) ([]string, error) {
@@ -226,7 +350,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if changeName == "" {
 		switch len(activeChanges) {
 		case 0:
-			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions); ok || err != nil {
+			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, options.ReviewDisabled); ok || err != nil {
 				return status, err
 			}
 			return blockedStatus(workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
@@ -238,7 +362,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 
 	if !contains(activeChanges, changeName) {
-		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions); ok || err != nil {
+		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, options.ReviewDisabled); ok || err != nil {
 			return status, err
 		}
 		return blockedStatus(workspaceRoot, &changeName, nil, "sdd-new", []string{fmt.Sprintf("Active OpenSpec change not found: %s.", changeName)}, options.IncludeInstructions), nil
@@ -256,32 +380,144 @@ func Resolve(options ResolveOptions) (Status, error) {
 		"tasks":         singleArtifactState(artifactPaths.Tasks),
 		"applyProgress": singleArtifactState(artifactPaths.ApplyProgress),
 		"verifyReport":  singleArtifactState(artifactPaths.VerifyReport),
+		"reviewLedger":  singleArtifactState(artifactPaths.ReviewLedger),
+		"reviewReceipt": singleArtifactState(artifactPaths.ReviewReceipt),
+		"reviewBundle":  singleArtifactState(artifactPaths.ReviewBundle),
+		"reviewContext": singleArtifactState(artifactPaths.ReviewContext),
+		"reviewState":   singleArtifactState(artifactPaths.ReviewState),
 	}
 	taskProgress, err := countTaskProgress(firstPath(artifactPaths.Tasks))
 	if err != nil {
 		return Status{}, err
 	}
 
-	verifyReportPassing, err := reportIsClearlyPassing(firstPath(artifactPaths.VerifyReport))
+	specCounts, err := readSpecCounts(artifactPaths.Specs)
 	if err != nil {
 		return Status{}, err
 	}
+	verifyResult, err := readVerifyResult(firstPath(artifactPaths.VerifyReport), specCounts)
+	if err != nil {
+		return Status{}, err
+	}
+	runtimeStatus, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
+	reviewState, reviewStateReason := readReviewTransaction(firstPath(artifactPaths.ReviewState), "")
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
-	if artifacts["verifyReport"] == ArtifactDone && !verifyReportPassing && applyState != ApplyReady {
-		blockedReasons = append(blockedReasons, "verify-report.md is not clearly passing.")
+	bindingPresent := false
+	if runtimeStatusErr == nil {
+		var bindingPathErr error
+		bindingPresent, bindingPathErr = bindingExists(context.Background(), workspaceRoot, changeName)
+		if bindingPathErr != nil {
+			runtimeStatusErr = fmt.Errorf("read native SDD runtime binding: %w", bindingPathErr)
+		}
 	}
-	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportPassing)
-	nextRecommended := resolveNextRecommended(dependencies, applyState, blockedReasons)
+	// Stale evidence under a live allow authority needs a fresh verification,
+	// not legacy remediation classification against a missing transaction.
+	var staleAllowAuthority *reviewAuthorityEvaluation
+	if !bindingPresent && reviewState == nil && applyState == ApplyAllDone && artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale {
+		evaluation := resolveReviewAuthority(context.Background(), workspaceRoot, firstPath(artifactPaths.ReviewReceipt), "", changeName)
+		if evaluation.Result == reviewtransaction.GateAllow {
+			staleAllowAuthority = &evaluation
+		} else {
+			blockedReasons.genuine = append(blockedReasons.genuine, evaluation.Reason)
+		}
+	}
+	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, verifyResult)
+	remediationRequired := staleAllowAuthority == nil && !runtimeRemediationComplete && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
+	compactRemediation := resolveCompactRemediationAuthority(
+		context.Background(), workspaceRoot, changeName, bindingPresent, remediationRequired && reviewState == nil,
+		firstPath(artifactPaths.ReviewReceipt), "",
+	)
+	remediationState := resolveBoundedRemediation(
+		remediationRequired,
+		verifyResult,
+		reviewState,
+		compactRemediation,
+		reviewStateReason,
+		readText(firstPath(artifactPaths.ApplyProgress)),
+	)
+	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyResult.Passing, remediationState.Complete)
+	nextRecommended := resolveNextRecommended(dependencies, applyState, artifacts["verifyReport"] == ArtifactDone, remediationState)
+	if staleAllowAuthority != nil {
+		dependencies.Verify = DependencyReady
+		dependencies.Archive = DependencyBlocked
+		nextRecommended = "verify"
+	}
+	var boundGate *ReviewGateState
+	bridge := compactPreVerifyBridge{}
+	recoverable := authorityOnlyFailedReport(readText(firstPath(artifactPaths.VerifyReport)))
+	if bindingPresent {
+		_, evaluation, bindingErr := validateBoundReview(context.Background(), workspaceRoot, changeName)
+		if bindingErr == nil {
+			staleEvidence := artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale && reviewState == nil
+			if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || staleEvidence || runtimeRemediationComplete) {
+				dependencies.Verify = DependencyReady
+				dependencies.Archive = DependencyBlocked
+				nextRecommended = "verify"
+				if staleEvidence || runtimeRemediationComplete {
+					remediationState = RemediationState{}
+				}
+			}
+			boundGate = &ReviewGateState{Result: evaluation.Result, Reason: "explicit bound compact authority exactly matches the current repository"}
+		} else {
+			dependencies.Verify = DependencyBlocked
+			dependencies.Archive = DependencyBlocked
+			nextRecommended = "resolve-review"
+			blockedReasons.genuine = append(blockedReasons.genuine, bindingErr.Error())
+		}
+	} else if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || recoverable) && compactBridgeableReviewArtifact(artifacts["reviewState"], reviewStateReason) {
+		fields, _ := authorityFailureFields(readText(firstPath(artifactPaths.VerifyReport)))
+		bridge = discoverCompactPreVerifyAuthority(context.Background(), workspaceRoot, changeName, fields["observed_authority_revision"])
+	}
+	if !bindingPresent && recoverable && bridge.Eligible && authorityChangedSinceReport(readText(firstPath(artifactPaths.VerifyReport)), bridge.Revision) {
+		dependencies.Verify = DependencyReady
+		dependencies.Archive = DependencyBlocked
+		nextRecommended = "verify"
+		remediationState = RemediationState{}
+	}
+	if remediationState.Reason != "" {
+		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
+	}
+	if !bindingPresent {
+		applyPreVerifyCompactBridgeRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, bridge)
+	}
+	if !bindingPresent && !bridge.Eligible && !bridge.Relevant {
+		applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason)
+	}
 
-	status := baseStatus(workspaceRoot, &changeName, &changeRoot, nextRecommended, blockedReasons)
+	status := baseStatus(workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
 	status.Artifacts = artifacts
 	status.TaskProgress = taskProgress
 	status.Dependencies = dependencies
 	status.ApplyState = applyState
+	status.RemediationState = remediationState
+	status.RuntimeStatus = runtimeStatus
+	status.ReviewTransaction = reviewState
+	if !bindingPresent {
+		if staleAllowAuthority != nil {
+			status.ReviewGate = &ReviewGateState{Result: staleAllowAuthority.Result, Reason: staleAllowAuthority.Reason}
+		} else {
+			applyReviewGate(
+				&status,
+				workspaceRoot,
+				firstPath(artifactPaths.ReviewReceipt),
+				"",
+				options.ReviewDisabled,
+			)
+		}
+	}
+	if boundGate != nil {
+		status.ReviewGate = boundGate
+	}
+	if runtimeStatusErr != nil {
+		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
+	} else {
+		applyNativeRuntimeRouting(&status)
+	}
+	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if options.IncludeInstructions {
 		instructions := renderPhaseInstructions(status)
 		status.PhaseInstructions = &instructions
@@ -289,7 +525,153 @@ func Resolve(options ResolveOptions) (Status, error) {
 	return status, nil
 }
 
-func resolveEngramStatus(workspaceRoot string, requestedChange string, includeInstructions bool) (Status, bool, error) {
+func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName string) (*RuntimeStatus, error) {
+	// SDD status remains useful for non-Git planning fixtures and repositories.
+	// A native runtime chain cannot exist without a Git common-dir, so the
+	// absence of a repository means there is no runtime authority to embed.
+	if _, err := (reviewtransaction.SnapshotBuilder{Repo: workspaceRoot}).ResolveRepositoryRoot(ctx); err != nil {
+		if workspaceHasGitMetadata(workspaceRoot) {
+			return nil, fmt.Errorf("resolve Git repository for native SDD runtime authority: %w", err)
+		}
+		return nil, nil
+	}
+	store, err := OpenRuntimeStore(ctx, workspaceRoot, changeName)
+	if err != nil {
+		return nil, fmt.Errorf("open native SDD runtime authority: %w", err)
+	}
+	status, err := store.Status()
+	if err != nil {
+		return nil, fmt.Errorf("read native SDD runtime authority: %w", err)
+	}
+	return &status, nil
+}
+
+func workspaceHasGitMetadata(workspaceRoot string) bool {
+	current := filepath.Clean(workspaceRoot)
+	for {
+		if _, err := os.Lstat(filepath.Join(current, ".git")); err == nil || !os.IsNotExist(err) {
+			return true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false
+		}
+		current = parent
+	}
+}
+
+func nativeRuntimeCompletesRemediation(runtimeStatus *RuntimeStatus, verify verifyResultEvaluation) bool {
+	if runtimeStatus == nil || !runtimeStatus.Complete || runtimeStatus.DecisionRequired || runtimeStatus.ActiveAttempt != nil ||
+		runtimeStatus.Binding == nil || verify.EvidenceRevision == "" || len(runtimeStatus.Attempts) == 0 {
+		return false
+	}
+	last := runtimeStatus.Attempts[len(runtimeStatus.Attempts)-1]
+	return last.Outcome == AttemptPassed && !last.ChangedLineBudgetExceeded &&
+		last.RemediatesEvidenceRevision == verify.EvidenceRevision &&
+		last.EvidenceRevision != "" && last.EvidenceRevision == runtimeStatus.EvidenceRevision
+}
+
+func applyNativeRuntimeErrorRouting(status *Status, runtimeErr error) {
+	if status == nil || runtimeErr == nil {
+		return
+	}
+	change := "<unresolved>"
+	if status.ChangeName != nil {
+		change = *status.ChangeName
+	}
+	reason := fmt.Sprintf(
+		"native SDD runtime authority is unreadable and execution is blocked: %v; do not launch another actor or edit the Git-common-dir authority manually; inspect `gentle-ai sdd-attempt status --cwd %q --change %q` and require explicit maintainer recovery",
+		runtimeErr, status.ActionContext.WorkspaceRoot, change,
+	)
+	status.Dependencies.Apply = DependencyBlocked
+	status.Dependencies.Verify = DependencyBlocked
+	status.Dependencies.Archive = DependencyBlocked
+	status.NextRecommended = "resolve-blockers"
+	status.BlockedReasons = append(status.BlockedReasons, reason)
+}
+
+func applyNativeRuntimeRouting(status *Status) {
+	if status == nil || status.RuntimeStatus == nil {
+		return
+	}
+	runtimeStatus := status.RuntimeStatus
+	change := runtimeStatus.Change
+	if status.ChangeName != nil {
+		change = *status.ChangeName
+	}
+	var reason string
+	switch {
+	case runtimeStatus.DecisionRequired:
+		reason = fmt.Sprintf(
+			"native SDD runtime revision %s requires an explicit maintainer scope decision before more execution; inspect `gentle-ai sdd-attempt status --cwd %q --change %q`, then use `gentle-ai sdd-attempt reset --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --reason \"<maintainer-approved-reason>\" --actor \"<maintainer>\"` only when that reset is authorized",
+			runtimeStatus.Revision, status.ActionContext.WorkspaceRoot, change,
+			status.ActionContext.WorkspaceRoot, change, runtimeStatus.Revision,
+		)
+	case runtimeStatus.ActiveAttempt != nil:
+		reason = fmt.Sprintf(
+			"native SDD runtime attempt %d is active at revision %s; do not launch another continuation and finish the charged attempt with `gentle-ai sdd-attempt finish --cwd %q --change %q --expected-revision %q` plus the required outcome, evidence, diagnosis, harness, cleanup, and process fields%s",
+			runtimeStatus.ActiveAttempt.Ordinal, runtimeStatus.Revision,
+			status.ActionContext.WorkspaceRoot, change, runtimeStatus.Revision,
+			nativeRuntimeRemediationFlagAdvice(runtimeStatus),
+		)
+	default:
+		return
+	}
+	status.Dependencies.Apply = DependencyBlocked
+	status.Dependencies.Verify = DependencyBlocked
+	status.Dependencies.Archive = DependencyBlocked
+	status.NextRecommended = "resolve-blockers"
+	if !contains(status.BlockedReasons, reason) {
+		status.BlockedReasons = append(status.BlockedReasons, reason)
+	}
+}
+
+// nativeRuntimeRemediationFlagAdvice completes the flag set the active-attempt
+// blocker advertises. The six ordinary finish fields close an UNBOUND attempt;
+// a bound attempt whose candidate moved during the attempt is refused until it
+// also carries the remediation trio, so advertising the short set routes the
+// caller straight into that refusal. The values are the ones the ledger
+// already holds, and the unobvious part — that the bound lineage is itself an
+// acceptable --successor-lineage — is stated rather than left to be guessed.
+//
+// It stays silent for an unbound attempt: the trio does not apply there, and a
+// flag set that names an inapplicable route is its own kind of dead end.
+func nativeRuntimeRemediationFlagAdvice(runtimeStatus *RuntimeStatus) string {
+	if runtimeStatus == nil || runtimeStatus.Binding == nil {
+		return ""
+	}
+	// Only the caller knows which evidence a correction repairs when the
+	// objective has not recorded a failed revision yet.
+	remediates := runtimeStatus.EvidenceRevision
+	if remediates == "" {
+		remediates = "<repaired-evidence-sha256>"
+	}
+	return fmt.Sprintf(
+		"; a bound attempt that changed the candidate cannot close as passed on those alone and must also pass --expected-binding-revision %q --successor-lineage %q --remediates-evidence-revision %s, where the bound lineage is itself the successor once the corrected candidate is approved on it",
+		runtimeStatus.Binding.Revision, runtimeStatus.Binding.Lineage, runtimeRemediatesArgument(remediates),
+	)
+}
+
+func authorityOnlyFailedReport(report string) bool {
+	fields, ok := authorityFailureFields(report)
+	return ok && fields["authority_only_failure"] == "true" && fields["missing_review_authority"] == "true" &&
+		fields["substantive_failure"] == "false" && fields["command_failed"] == "false"
+}
+
+func authorityChangedSinceReport(report, revision string) bool {
+	fields, ok := authorityFailureFields(report)
+	return ok && fields["observed_authority_revision"] != revision
+}
+
+func authorityFailureFields(report string) (map[string]string, bool) {
+	parsed, reason := parseVerifyReport(report)
+	if reason != "" || !parsed.AuthorityOnly {
+		return nil, false
+	}
+	return parsed.Fields, true
+}
+
+func resolveEngramStatus(workspaceRoot string, requestedChange string, includeInstructions, reviewDisabled bool) (Status, bool, error) {
 	if !shouldTryEngram(workspaceRoot) {
 		return Status{}, false, nil
 	}
@@ -324,20 +706,100 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		"tasks":         engramArtifactState(artifactsByType["tasks"]),
 		"applyProgress": engramArtifactState(artifactsByType["apply-progress"]),
 		"verifyReport":  engramArtifactState(artifactsByType["verify-report"]),
+		"reviewLedger":  engramArtifactState(artifactsByType["review/ledger"]),
+		"reviewPolicy":  engramArtifactState(artifactsByType["review/policy"]),
+		"reviewReceipt": engramArtifactState(artifactsByType["review/receipt"]),
+		"reviewBundle":  engramArtifactState(artifactsByType["review/chain-bundle"]),
+		"reviewContext": engramArtifactState(artifactsByType["review/gate-context"]),
+		"reviewState":   engramArtifactState(artifactsByType["review/transaction"]),
 	}
 	taskProgress := countTaskProgressText(artifactsByType["tasks"].Content)
-	verifyReportPassing := reportTextIsClearlyPassing(artifactsByType["verify-report"].Content)
+	specCounts := countSpecRequirementsAndScenarios([]string{artifactsByType["spec"].Content})
+	verifyResult := parseVerifyResult(artifactsByType["verify-report"].Content, specCounts)
+	runtimeStatus, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
+	reviewState, reviewStateReason := readReviewTransaction("", artifactsByType["review/transaction"].Content)
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
-	if artifacts["verifyReport"] == ArtifactDone && !verifyReportPassing && applyState != ApplyReady {
-		blockedReasons = append(blockedReasons, "verify-report.md is not clearly passing.")
+	bindingPresent := false
+	if runtimeStatusErr == nil {
+		var bindingPathErr error
+		bindingPresent, bindingPathErr = bindingExists(context.Background(), workspaceRoot, changeName)
+		if bindingPathErr != nil {
+			runtimeStatusErr = fmt.Errorf("read native SDD runtime binding: %w", bindingPathErr)
+		}
 	}
-	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportPassing)
-	nextRecommended := resolveNextRecommended(dependencies, applyState, blockedReasons)
+	// Stale evidence under a live allow authority needs a fresh verification,
+	// not legacy remediation classification against a missing transaction.
+	var staleAllowAuthority *reviewAuthorityEvaluation
+	if !bindingPresent && reviewState == nil && applyState == ApplyAllDone && artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale {
+		evaluation := resolveReviewAuthority(context.Background(), workspaceRoot, "", artifactsByType["review/receipt"].Content, changeName)
+		if evaluation.Result == reviewtransaction.GateAllow {
+			staleAllowAuthority = &evaluation
+		} else {
+			blockedReasons.genuine = append(blockedReasons.genuine, evaluation.Reason)
+		}
+	}
+	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, verifyResult)
+	remediationRequired := staleAllowAuthority == nil && !runtimeRemediationComplete && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
+	compactRemediation := resolveCompactRemediationAuthority(
+		context.Background(), workspaceRoot, changeName, bindingPresent, remediationRequired && reviewState == nil,
+		"", artifactsByType["review/receipt"].Content,
+	)
+	remediationState := resolveBoundedRemediation(
+		remediationRequired,
+		verifyResult,
+		reviewState,
+		compactRemediation,
+		reviewStateReason,
+		artifactsByType["apply-progress"].Content,
+	)
+	if remediationState.Reason != "" {
+		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
+	}
+	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyResult.Passing, remediationState.Complete)
+	nextRecommended := resolveNextRecommended(dependencies, applyState, artifacts["verifyReport"] == ArtifactDone, remediationState)
+	if staleAllowAuthority != nil {
+		dependencies.Verify = DependencyReady
+		dependencies.Archive = DependencyBlocked
+		nextRecommended = "verify"
+	}
+	var boundGate *ReviewGateState
+	bridge := compactPreVerifyBridge{}
+	if bindingPresent {
+		binding, bindingErr := loadEffectiveReviewBinding(context.Background(), workspaceRoot, changeName)
+		if bindingErr == nil {
+			bindingErr = validateRuntimeBoundCandidate(context.Background(), workspaceRoot, binding, binding.GateContext.CandidateTree)
+		}
+		if bindingErr == nil {
+			staleEvidence := artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale && reviewState == nil
+			if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || staleEvidence || runtimeRemediationComplete) {
+				dependencies.Verify = DependencyReady
+				dependencies.Archive = DependencyBlocked
+				nextRecommended = "verify"
+				if staleEvidence || runtimeRemediationComplete {
+					remediationState = RemediationState{}
+				}
+			}
+			boundGate = &ReviewGateState{Result: reviewtransaction.GateAllow, Reason: "explicit bound compact authority exactly matches the current repository"}
+		} else {
+			dependencies.Verify = DependencyBlocked
+			dependencies.Archive = DependencyBlocked
+			nextRecommended = "resolve-review"
+			blockedReasons.genuine = append(blockedReasons.genuine, bindingErr.Error())
+		}
+	} else {
+		if applyState == ApplyAllDone && artifacts["verifyReport"] != ArtifactDone && compactBridgeableReviewArtifact(artifacts["reviewState"], reviewStateReason) {
+			bridge = discoverCompactPreVerifyAuthority(context.Background(), workspaceRoot, changeName, "")
+		}
+		applyPreVerifyCompactBridgeRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, bridge)
+		if !bridge.Eligible && !bridge.Relevant {
+			applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason)
+		}
+	}
 
 	changeRoot := fmt.Sprintf("engram:sdd/%s", changeName)
-	status := baseStatus(workspaceRoot, &changeName, &changeRoot, nextRecommended, blockedReasons)
+	status := baseStatus(workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
 	status.ArtifactStore = ArtifactStoreEngram
 	status.PlanningHome = PlanningHome{Mode: ActionModeRepoLocal, Path: "engram:sdd"}
 	status.ArtifactPaths = artifactPaths
@@ -346,6 +808,31 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	status.TaskProgress = taskProgress
 	status.Dependencies = dependencies
 	status.ApplyState = applyState
+	status.RemediationState = remediationState
+	status.RuntimeStatus = runtimeStatus
+	status.ReviewTransaction = reviewState
+	if !bindingPresent {
+		if staleAllowAuthority != nil {
+			status.ReviewGate = &ReviewGateState{Result: staleAllowAuthority.Result, Reason: staleAllowAuthority.Reason}
+		} else {
+			applyReviewGate(
+				&status,
+				workspaceRoot,
+				"",
+				artifactsByType["review/receipt"].Content,
+				reviewDisabled,
+			)
+		}
+	}
+	if boundGate != nil {
+		status.ReviewGate = boundGate
+	}
+	if runtimeStatusErr != nil {
+		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
+	} else {
+		applyNativeRuntimeRouting(&status)
+	}
+	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if includeInstructions {
 		instructions := renderPhaseInstructions(status)
 		status.PhaseInstructions = &instructions
@@ -353,11 +840,58 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	return status, true, nil
 }
 
+func compactBridgeableReviewArtifact(state ArtifactState, reason string) bool {
+	return state == ArtifactMissing || reason == incompatibleReviewTransactionReason
+}
+
 func blockedEngramStatus(workspaceRoot string, changeName *string, next string, reasons []string, includeInstructions bool) Status {
 	status := blockedStatus(workspaceRoot, changeName, nil, next, reasons, includeInstructions)
 	status.ArtifactStore = ArtifactStoreEngram
 	status.PlanningHome = PlanningHome{Mode: ActionModeRepoLocal, Path: "engram:sdd"}
 	return status
+}
+
+func applyPreVerifyReviewRouting(dependencies *Dependencies, next *string, blockedReasons *blockerReasons, applyState ApplyState, verifyReportDone bool, transaction *reviewtransaction.Transaction, transactionReason string) {
+	if applyState != ApplyAllDone || verifyReportDone {
+		return
+	}
+	if transaction == nil {
+		dependencies.Verify = DependencyBlocked
+		*next = "review"
+		blockedReasons.genuine = append(blockedReasons.genuine, "explicit bounded review/start(target) is required after apply before independent final verification: "+transactionReason)
+		return
+	}
+	switch transaction.State {
+	case reviewtransaction.StateReadyFinalVerification, reviewtransaction.StateFinalVerifying:
+		dependencies.Verify = DependencyReady
+		*next = "verify"
+	case reviewtransaction.StateEscalated, reviewtransaction.StateApproved:
+		dependencies.Verify = DependencyBlocked
+		*next = "resolve-review"
+		blockedReasons.genuine = append(blockedReasons.genuine, fmt.Sprintf("review transaction state %q cannot start missing final verification evidence", transaction.State))
+	default:
+		dependencies.Verify = DependencyBlocked
+		*next = "review"
+		blockedReasons.genuine = append(blockedReasons.genuine, fmt.Sprintf("bounded review transaction is %q; continue it without creating a new budget before final verification", transaction.State))
+	}
+}
+
+func applyPreVerifyCompactBridgeRouting(dependencies *Dependencies, next *string, blockedReasons *blockerReasons, applyState ApplyState, verifyReportDone bool, transaction *reviewtransaction.Transaction, bridge compactPreVerifyBridge) {
+	if applyState != ApplyAllDone || verifyReportDone || transaction != nil {
+		return
+	}
+	if bridge.Eligible {
+		dependencies.Verify = DependencyReady
+		dependencies.Archive = DependencyBlocked
+		*next = "verify"
+		return
+	}
+	if bridge.Relevant {
+		dependencies.Verify = DependencyBlocked
+		dependencies.Archive = DependencyBlocked
+		*next = "resolve-review"
+		blockedReasons.genuine = append(blockedReasons.genuine, bridge.Reason)
+	}
 }
 
 func shouldTryEngram(workspaceRoot string) bool {
@@ -443,7 +977,7 @@ func projectFromGitConfig(content string) string {
 	return ""
 }
 
-var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress|verify-report|state)$`)
+var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress|verify-report|review/(?:transaction|policy|ledger|receipt|chain-bundle|gate-context)|state)$`)
 
 func collectEngramChanges(observations []engramObservation, project string) []string {
 	seen := map[string]bool{}
@@ -504,6 +1038,24 @@ func engramArtifactPaths(changeName string, artifacts map[string]engramObservati
 	if _, ok := artifacts["verify-report"]; ok {
 		paths.VerifyReport = []string{fmt.Sprintf("sdd/%s/verify-report", changeName)}
 	}
+	if _, ok := artifacts["review/ledger"]; ok {
+		paths.ReviewLedger = []string{fmt.Sprintf("sdd/%s/review/ledger", changeName)}
+	}
+	if _, ok := artifacts["review/policy"]; ok {
+		paths.ReviewPolicy = []string{fmt.Sprintf("sdd/%s/review/policy", changeName)}
+	}
+	if _, ok := artifacts["review/receipt"]; ok {
+		paths.ReviewReceipt = []string{fmt.Sprintf("sdd/%s/review/receipt", changeName)}
+	}
+	if _, ok := artifacts["review/chain-bundle"]; ok {
+		paths.ReviewBundle = []string{fmt.Sprintf("sdd/%s/review/chain-bundle", changeName)}
+	}
+	if _, ok := artifacts["review/gate-context"]; ok {
+		paths.ReviewContext = []string{fmt.Sprintf("sdd/%s/review/gate-context", changeName)}
+	}
+	if _, ok := artifacts["review/transaction"]; ok {
+		paths.ReviewState = []string{fmt.Sprintf("sdd/%s/review/transaction", changeName)}
+	}
 	return paths
 }
 
@@ -540,7 +1092,7 @@ func RenderMarkdown(status Status) string {
 		changeName = *status.ChangeName
 	}
 
-	jsonBytes, err := json.MarshalIndent(status, "", "  ")
+	jsonBytes, err := marshalStatusV1Indent(status)
 	if err != nil {
 		jsonBytes = []byte("{}")
 	}
@@ -575,7 +1127,7 @@ func RenderDispatcherMarkdown(status Status) string {
 		changeName = *status.ChangeName
 	}
 
-	jsonBytes, err := json.MarshalIndent(status, "", "  ")
+	jsonBytes, err := marshalStatusV1Indent(status)
 	if err != nil {
 		jsonBytes = []byte("{}")
 	}
@@ -604,8 +1156,9 @@ func RenderDispatcherMarkdown(status Status) string {
 			lines = append(lines, fmt.Sprintf("- %s", reason))
 		}
 	}
-
-	if phase, ok := nextRecommendedPhase(status.NextRecommended); ok {
+	if extra, ok := nonPhaseRoutingInstructions(status); ok {
+		lines = append(lines, extra...)
+	} else if phase, ok := nextRecommendedPhase(status.NextRecommended); ok {
 		lines = append(lines, "", fmt.Sprintf("### Next Phase Instructions: %s", phase))
 		for _, instruction := range instructionsForPhase(status, phase) {
 			lines = append(lines, fmt.Sprintf("- %s", instruction))
@@ -622,7 +1175,7 @@ func RenderNativePhasePrompt(status Status, phase Phase) string {
 		changeName = *status.ChangeName
 	}
 
-	jsonBytes, err := json.MarshalIndent(status, "", "  ")
+	jsonBytes, err := marshalStatusV1Indent(status)
 	if err != nil {
 		jsonBytes = []byte("{}")
 	}
@@ -717,6 +1270,11 @@ func baseStatus(workspaceRoot string, changeName *string, changeRoot *string, ne
 			"tasks":         ArtifactMissing,
 			"applyProgress": ArtifactMissing,
 			"verifyReport":  ArtifactMissing,
+			"reviewLedger":  ArtifactMissing,
+			"reviewReceipt": ArtifactMissing,
+			"reviewBundle":  ArtifactMissing,
+			"reviewContext": ArtifactMissing,
+			"reviewState":   ArtifactMissing,
 		},
 		TaskProgress: TaskProgress{},
 		Dependencies: Dependencies{
@@ -753,6 +1311,12 @@ func resolveArtifactPaths(changeRoot string) (ArtifactPaths, error) {
 	paths.Tasks = existingPath(filepath.Join(changeRoot, "tasks.md"))
 	paths.ApplyProgress = existingPath(filepath.Join(changeRoot, "apply-progress.md"))
 	paths.VerifyReport = existingPath(filepath.Join(changeRoot, "verify-report.md"))
+	paths.ReviewLedger = existingPath(filepath.Join(changeRoot, "reviews", "ledger.json"))
+	paths.ReviewPolicy = existingPath(filepath.Join(changeRoot, "reviews", "policy.md"))
+	paths.ReviewReceipt = existingPath(filepath.Join(changeRoot, "reviews", "receipt.json"))
+	paths.ReviewBundle = existingPath(filepath.Join(changeRoot, "reviews", "chain-bundle.json"))
+	paths.ReviewContext = existingPath(filepath.Join(changeRoot, "reviews", "gate-context.json"))
+	paths.ReviewState = existingPath(filepath.Join(changeRoot, "reviews", "transaction.json"))
 
 	specFiles, err := findSpecFiles(filepath.Join(changeRoot, "specs"))
 	if err != nil {
@@ -770,6 +1334,12 @@ func emptyArtifactPaths() ArtifactPaths {
 		Tasks:         []string{},
 		ApplyProgress: []string{},
 		VerifyReport:  []string{},
+		ReviewLedger:  []string{},
+		ReviewPolicy:  []string{},
+		ReviewReceipt: []string{},
+		ReviewBundle:  []string{},
+		ReviewContext: []string{},
+		ReviewState:   []string{},
 	}
 }
 
@@ -984,22 +1554,22 @@ func countTaskProgressText(content string) TaskProgress {
 	return progress
 }
 
-func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress TaskProgress) []string {
-	var reasons []string
+func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress TaskProgress) blockerReasons {
+	var reasons blockerReasons
 	if artifacts["proposal"] != ArtifactDone {
-		reasons = append(reasons, "proposal.md is missing or partial.")
+		reasons.expectedPlanning = append(reasons.expectedPlanning, "proposal.md is missing or partial.")
 	}
 	if artifacts["specs"] != ArtifactDone {
-		reasons = append(reasons, "specs/**/spec.md is missing or partial.")
+		reasons.expectedPlanning = append(reasons.expectedPlanning, "specs/**/spec.md is missing or partial.")
 	}
 	if artifacts["design"] != ArtifactDone {
-		reasons = append(reasons, "design.md is missing or partial.")
+		reasons.expectedPlanning = append(reasons.expectedPlanning, "design.md is missing or partial.")
 	}
 	if artifacts["tasks"] != ArtifactDone {
-		reasons = append(reasons, "tasks.md is missing or partial.")
+		reasons.expectedPlanning = append(reasons.expectedPlanning, "tasks.md is missing or partial.")
 	}
 	if artifacts["tasks"] == ArtifactDone && taskProgress.Total == 0 {
-		reasons = append(reasons, "tasks.md has no markdown task checkboxes.")
+		reasons.genuine = append(reasons.genuine, "tasks.md has no markdown task checkboxes.")
 	}
 	return reasons
 }
@@ -1014,7 +1584,7 @@ func resolveApplyState(coreReady bool, taskProgress TaskProgress) ApplyState {
 	return ApplyReady
 }
 
-func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskProgress, applyState ApplyState, coreReady bool, verifyReportPassing bool) Dependencies {
+func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskProgress, applyState ApplyState, coreReady bool, verifyReportPassing bool, remediationComplete bool) Dependencies {
 	dependencies := Dependencies{
 		Proposal: artifactDependency(artifacts["proposal"]),
 		Specs:    artifactDependency(artifacts["specs"]),
@@ -1030,11 +1600,10 @@ func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskPr
 		dependencies.Apply = DependencyAllDone
 	}
 
-	applyProgressDone := artifacts["applyProgress"] == ArtifactDone
 	verifyReportDone := artifacts["verifyReport"] == ArtifactDone
 	if verifyReportDone && coreReady && taskProgress.AllComplete && verifyReportPassing {
 		dependencies.Verify = DependencyAllDone
-	} else if coreReady && (applyState == ApplyAllDone || applyProgressDone) {
+	} else if coreReady && applyState == ApplyAllDone && (!verifyReportDone || remediationComplete) {
 		dependencies.Verify = DependencyReady
 	}
 	if dependencies.Verify == DependencyAllDone && taskProgress.AllComplete {
@@ -1050,13 +1619,19 @@ func artifactDependency(state ArtifactState) DependencyState {
 	return DependencyBlocked
 }
 
-func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, _ []string) string {
+func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, verifyReportDone bool, remediation RemediationState) string {
 	// Prefer apply over verify when there is still remaining implementation work.
 	if dependencies.Apply == DependencyReady {
 		return string(PhaseApply)
 	}
 	if dependencies.Verify == DependencyReady {
 		return string(PhaseVerify)
+	}
+	if applyState == ApplyAllDone && verifyReportDone && dependencies.Verify != DependencyAllDone {
+		if remediation.Required {
+			return "remediate"
+		}
+		return "resolve-review"
 	}
 	if dependencies.Verify == DependencyAllDone && applyState == ApplyAllDone {
 		return string(PhaseArchive)
@@ -1088,19 +1663,30 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 	if status.ChangeName != nil {
 		change = *status.ChangeName
 	}
+	runtimeInstructions := nativeRuntimeInstructions(status, change)
+	applyInstructions := []string{
+		fmt.Sprintf("Change: %s", change),
+		fmt.Sprintf("State: %s", status.Dependencies.Apply),
+		"Read proposal, specs, design, and tasks before editing.",
+		"Implement only unchecked tasks and update tasks.md checkboxes as work completes.",
+	}
+	verifyInstructions := []string{
+		fmt.Sprintf("Change: %s", change),
+		fmt.Sprintf("State: %s", status.Dependencies.Verify),
+		"Verify implementation against proposal, specs, design, and task completion.",
+		"Run final verification only after every task is complete; apply-progress never makes final verification ready.",
+	}
+	remediateInstructions := []string{
+		fmt.Sprintf("Change: %s", change),
+		"Remediation is allowed only when the persisted review transaction has remaining mode-specific budget.",
+		"Bind focused tests, runtime harness evidence, and rollback evidence to the exact failed evidence revision.",
+		"A bare remediation envelope or stale failed revision never completes remediation.",
+		"A passing bound remediation MUST finish atomically with --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision so the charged evidence and approved compact successor share one native HEAD CAS.",
+	}
 	return PhaseInstructions{
-		Apply: []string{
-			fmt.Sprintf("Change: %s", change),
-			fmt.Sprintf("State: %s", status.Dependencies.Apply),
-			"Read proposal, specs, design, and tasks before editing.",
-			"Implement only unchecked tasks and update tasks.md checkboxes as work completes.",
-		},
-		Verify: []string{
-			fmt.Sprintf("Change: %s", change),
-			fmt.Sprintf("State: %s", status.Dependencies.Verify),
-			"Verify implementation against proposal, specs, design, and task completion.",
-			"Incomplete tasks remain archive blockers even when apply-progress.md exists.",
-		},
+		Apply:     append(applyInstructions, runtimeInstructions...),
+		Verify:    append(verifyInstructions, runtimeInstructions...),
+		Remediate: append(remediateInstructions, runtimeInstructions...),
 		Archive: []string{
 			fmt.Sprintf("Change: %s", change),
 			fmt.Sprintf("State: %s", status.Dependencies.Archive),
@@ -1109,9 +1695,47 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 	}
 }
 
+func nativeRuntimeInstructions(status Status, change string) []string {
+	workspace := status.ActionContext.WorkspaceRoot
+	return []string{
+		fmt.Sprintf("Before any runtime-bearing apply, verify, or remediation launch, read `gentle-ai sdd-attempt status --cwd %q --change %q`; the Git-common-dir native ledger is authoritative for both OpenSpec and Engram.", workspace, change),
+		fmt.Sprintf("When next_action is begin, consume the ordinal before launch with `gentle-ai sdd-attempt begin --cwd %q --change %q --expected-revision \"<runtime-revision>\" --request-id \"<unique-request-id>\" --work-unit \"<label>\" --evidence-goal \"<stable-goal>\" --max-attempts <count> --max-changed-lines <count>`.", workspace, change),
+		fmt.Sprintf("After every passed, failed, or interrupted run, persist its evidence with `gentle-ai sdd-attempt finish --cwd %q --change %q --expected-revision \"<runtime-revision>\" --request-id \"<unique-request-id>\" --outcome <passed|failed|interrupted> --evidence-revision <sha256> --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`.", workspace, change),
+		"Never launch while active_attempt is populated or decision_required is true. `gentle-ai sdd-attempt reset` is an explicit maintainer scope decision, never an automatic counter reset.",
+	}
+}
+
+// nonPhaseRoutingInstructions renders actionable continuations for
+// next_recommended values that are routing states rather than SDD phases.
+// nextRecommendedPhase() only recognizes real phases, so without this every
+// routing-only next value (e.g. "resolve-review", "select-change") would
+// render its blocked reason with no way out — the blocked reason IS the
+// entire guidance. Where a continuation already exists elsewhere in this
+// file (the "review" operation block), it is reused rather than duplicated.
+func nonPhaseRoutingInstructions(status Status) ([]string, bool) {
+	switch status.NextRecommended {
+	case "review", "resolve-review":
+		return []string{
+			"",
+			"### Next Review Operation",
+			fmt.Sprintf("- Run `gentle-ai review start --cwd %q`; the facade derives intended untracked scope, lineage, tier, lenses, and correction budget from live Git.", status.ActionContext.WorkspaceRoot),
+			"- Pass reviewer result and verification evidence to `gentle-ai review finalize`; do not hand-author lifecycle operation JSON.",
+			"- Continue discovered authority instead of starting another budget, and reconcile existing terminal mirrors only after `gentle-ai review validate --gate post-apply` allows.",
+		}, true
+	case "select-change":
+		return []string{
+			"",
+			"### Next Selection Operation",
+			fmt.Sprintf("- Rerun with an explicit change name from Blocked Reasons above: `gentle-ai sdd-status --cwd %q <change-name>` or `gentle-ai sdd-continue --cwd %q <change-name>`.", status.ActionContext.WorkspaceRoot, status.ActionContext.WorkspaceRoot),
+		}, true
+	default:
+		return nil, false
+	}
+}
+
 func nextRecommendedPhase(next string) (Phase, bool) {
 	switch Phase(next) {
-	case PhasePropose, PhaseSpec, PhaseDesign, PhaseTasks, PhaseApply, PhaseVerify, PhaseArchive:
+	case PhasePropose, PhaseSpec, PhaseDesign, PhaseTasks, PhaseApply, PhaseVerify, PhaseRemediate, PhaseArchive:
 		return Phase(next), true
 	default:
 		return "", false
@@ -1131,6 +1755,8 @@ func dependencyForPhase(status Status, phase Phase) DependencyState {
 	case PhaseApply:
 		return status.Dependencies.Apply
 	case PhaseVerify:
+		return status.Dependencies.Verify
+	case PhaseRemediate:
 		return status.Dependencies.Verify
 	case PhaseArchive:
 		return status.Dependencies.Archive
@@ -1153,6 +1779,8 @@ func instructionsForPhase(status Status, phase Phase) []string {
 		return instructions.Apply
 	case PhaseVerify:
 		return instructions.Verify
+	case PhaseRemediate:
+		return instructions.Remediate
 	case PhaseArchive:
 		return instructions.Archive
 	default:

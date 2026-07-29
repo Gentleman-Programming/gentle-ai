@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }

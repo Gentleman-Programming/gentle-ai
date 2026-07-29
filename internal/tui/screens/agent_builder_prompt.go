@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 )
 
 // RenderABPrompt renders the prompt input screen for the agent builder flow.

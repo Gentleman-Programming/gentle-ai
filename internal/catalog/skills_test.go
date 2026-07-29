@@ -3,8 +3,8 @@ package catalog
 import (
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 // TestMVPSkillsCoverAllPresetSkills ensures every skill that presets.go would

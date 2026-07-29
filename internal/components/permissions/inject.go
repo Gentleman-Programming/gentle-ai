@@ -3,14 +3,11 @@ package permissions
 import (
 	"fmt"
 	"os"
-	"runtime"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
-
-var codexPermissionsGOOS = runtime.GOOS
 
 type InjectionResult struct {
 	Changed bool
@@ -19,11 +16,9 @@ type InjectionResult struct {
 
 // TargetPath returns the file path that permission injection creates or updates
 // for the adapter, or an empty string when the agent has no supported
-// permission injection target.
+// permission injection target. Codex has no target: gentle-ai relies on Codex's
+// built-in default permissions and does not write its permissions config at all.
 func TargetPath(homeDir string, adapter agents.Adapter) string {
-	if adapter.Agent() == model.AgentCodex {
-		return adapter.MCPConfigPath(homeDir, "")
-	}
 	if agentOverlay(adapter.Agent()) == nil {
 		return ""
 	}
@@ -141,7 +136,13 @@ func agentOverlay(id model.AgentID) []byte {
 		// Cursor manages permissions via cli-config.json, not settings.json.
 		return nil
 	case model.AgentCodex:
-		// Codex has no known settings.json path; permissions are skipped.
+		// Codex relies on its built-in default permissions. gentle-ai writes
+		// nothing to Codex's permissions config — not a profile, and not the
+		// legacy cleanup that used to strip one. Codex refuses to load a config
+		// that defines a [permissions.*] profile without default_permissions,
+		// so a cleanup removing the pointer while a user profile survived left
+		// Codex unable to start (#1794). An old gentle-dev profile stays until
+		// its owner removes it.
 		return nil
 	case model.AgentHermes:
 		// Hermes permission format is undocumented — no overlay is injected (§14).
@@ -152,10 +153,6 @@ func agentOverlay(id model.AgentID) []byte {
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	if adapter.Agent() == model.AgentCodex {
-		return injectCodexPermissions(homeDir, adapter)
-	}
-
 	settingsPath := adapter.SettingsPath(homeDir)
 	if settingsPath == "" {
 		return InjectionResult{}, nil
@@ -172,78 +169,6 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	}
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
-}
-
-func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	configPath := adapter.MCPConfigPath(homeDir, "")
-	baseTOML, err := osReadFile(configPath)
-	if err != nil {
-		return InjectionResult{}, err
-	}
-
-	merged := filemerge.UpsertTopLevelTOMLString(string(baseTOML), "approval_policy", "on-request")
-	merged = filemerge.UpsertTopLevelTOMLString(merged, "default_permissions", "gentle-dev")
-	merged = filemerge.RemoveTOMLTableKeys(merged, "permissions.gentle-dev", []string{"extends"})
-	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev", "description", `"Comfortable local development profile with workspace writes, network access, and read-only access to Git and Nix/Home Manager metadata."`)
-	merged = filemerge.RemoveTOMLTableKeys(merged, "permissions.gentle-dev", []string{"glob_scan_max_depth"})
-	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network", "enabled", "true")
-	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network.domains", `"*"`, `"allow"`)
-
-	merged = filemerge.RemoveTOMLTableKeys(merged, `permissions.gentle-dev.filesystem.":root"`, []string{`"."`})
-	secretDenyPaths := []string{
-		`"**/.env"`,
-		`"**/.env.local"`,
-		`"**/.env.*.local"`,
-		`"**/*.pem"`,
-		`"**/*.key"`,
-		`"**/secrets/**"`,
-		`"**/.ssh/**"`,
-		`"**/.credentials/**"`,
-		`"**/credentials.json"`,
-		`"**/.aws/credentials"`,
-		`"**/.config/gh/hosts.yml"`,
-	}
-	merged = filemerge.RemoveTOMLTableKeys(merged, "permissions.gentle-dev.filesystem", secretDenyPaths)
-	merged = filemerge.RemoveTOMLTableKeys(merged, `permissions.gentle-dev.filesystem.":workspace_roots"`, []string{
-		`"**/.git"`,
-		`"**/.git/**"`,
-		`"**/.env.*"`,
-		`"*.env.*"`,
-		`"**/secrets/*"`,
-	})
-
-	readPaths := []string{
-		`":minimal"`,
-		`"~/.config/git"`,
-		`"~/.gitconfig"`,
-		`"~/.local/state/nix/profiles/home-manager/home-path"`,
-		`"~/.nix-profile"`,
-	}
-	if codexPermissionsGOOS != "windows" {
-		readPaths = append(readPaths, `"/nix/store"`)
-	}
-	for _, path := range readPaths {
-		merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", path, `"read"`)
-	}
-	for _, path := range []string{`":tmpdir"`, `":slash_tmp"`} {
-		merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", path, `"write"`)
-	}
-	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", "glob_scan_max_depth", "6")
-	for _, path := range []string{`"."`, `".git/**"`} {
-		merged = filemerge.UpsertTOMLTableKey(merged, `permissions.gentle-dev.filesystem.":workspace_roots"`, path, `"write"`)
-	}
-	for _, path := range secretDenyPaths {
-		merged = filemerge.UpsertTOMLTableKey(merged, `permissions.gentle-dev.filesystem.":workspace_roots"`, path, `"deny"`)
-	}
-
-	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.workspace_roots", `"~"`, "true")
-
-	writeResult, err := filemerge.WriteFileAtomic(configPath, []byte(merged), 0o644)
-	if err != nil {
-		return InjectionResult{}, err
-	}
-
-	return InjectionResult{Changed: writeResult.Changed, Files: []string{configPath}}, nil
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {

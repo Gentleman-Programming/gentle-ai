@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/result-artifact.schema.json",
+  "title": "Gentle AI native reviewer result artifact", "type": "object", "additionalProperties": false,
+  "required": ["schema", "capability", "path", "sha256", "lineage_id", "target_identity", "lens", "selected_order"],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-result-artifact/v1"}, "capability": {"const": "review.native_result_artifact"},
+    "path": {"type": "string", "minLength": 1}, "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "lineage_id": {"type": "string", "minLength": 1},
+    "target_identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "lens": {"type": "string", "minLength": 1}, "selected_order": {"type": "integer", "minimum": 0}
+  }
+}

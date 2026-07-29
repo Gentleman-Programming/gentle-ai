@@ -8,11 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 const (
@@ -35,6 +37,8 @@ var legacyPiSubagentPackageIdentities = map[string]struct{}{
 	"vendor/pi-subagents-fixed": {},
 }
 
+var piWalkDir = filepath.WalkDir
+
 func piSubagentsInstallCommand(system.PlatformProfile) []string {
 	return []string{"pi", "install", piSubagentsJ0k3rPackageSpec}
 }
@@ -48,6 +52,157 @@ type statResult struct {
 type Adapter struct {
 	lookPath func(string) (string, error)
 	statPath func(string) statResult
+}
+
+// CodeGraphPathSet declares the Pi paths owned or inspected by Gentle AI's
+// optional CodeGraph integration. It intentionally contains no gentle-pi path.
+type CodeGraphPathSet struct {
+	AgentDir  string
+	MCPConfig string
+	Manifest  string
+}
+
+// CodeGraphPaths resolves PI_CODING_AGENT_DIR when set, matching Pi's runtime
+// override instead of assuming the default agent directory.
+func CodeGraphPaths(homeDir string) CodeGraphPathSet {
+	agentDir := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR"))
+	if agentDir == "" {
+		agentDir = AgentConfigPath(homeDir)
+	}
+	return CodeGraphPathSet{
+		AgentDir:  agentDir,
+		MCPConfig: filepath.Join(agentDir, piEngramMCPConfigFile),
+		Manifest:  filepath.Join(homeDir, ".gentle-ai", "pi-codegraph.json"),
+	}
+}
+
+// CodeGraphChild is an effective Pi child definition. PackageOwned signals
+// callers to create an overlay rather than mutate package content.
+type CodeGraphChild struct {
+	Name         string
+	Source       string
+	Target       string
+	PackageOwned bool
+}
+
+// EffectiveCodeGraphMCPPath resolves the MCP configuration Pi will apply for a
+// workspace. Later Pi discovery locations override an earlier CodeGraph server;
+// malformed or unreadable participating configuration fails closed.
+func EffectiveCodeGraphMCPPath(homeDir, workspaceDir string) (string, error) {
+	paths := CodeGraphPaths(homeDir)
+	candidates := []string{
+		filepath.Join(homeDir, ".config", "mcp", "mcp.json"),
+		paths.MCPConfig,
+	}
+	if workspaceDir != "" {
+		candidates = append(candidates,
+			filepath.Join(workspaceDir, ".mcp.json"),
+			filepath.Join(workspaceDir, ".pi", "mcp.json"),
+		)
+	}
+
+	effective := paths.MCPConfig
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("read effective Pi MCP config %q: %w", path, err)
+		}
+		root := map[string]any{}
+		if err := json.Unmarshal(data, &root); err != nil {
+			return "", fmt.Errorf("parse effective Pi MCP config %q: %w", path, err)
+		}
+		servers, ok := root["mcpServers"].(map[string]any)
+		if !ok && root["mcpServers"] != nil {
+			return "", fmt.Errorf("parse effective Pi MCP config %q: mcpServers must be an object", path)
+		}
+		if _, configured := servers["codegraph"]; configured {
+			effective = path
+		}
+	}
+	return effective, nil
+}
+
+// DiscoverCodeGraphChildren resolves Pi's user then project child directories.
+// Later directories override an earlier child with the same normalized name.
+func DiscoverCodeGraphChildren(homeDir, workspaceDir string) ([]CodeGraphChild, error) {
+	paths := CodeGraphPaths(homeDir)
+	dirs := []string{
+		filepath.Join(paths.AgentDir, "node_modules"),
+		filepath.Join(paths.AgentDir, "agents"),
+		filepath.Join(paths.AgentDir, "subagents"),
+	}
+	if workspaceDir != "" {
+		dirs = append(dirs,
+			filepath.Join(workspaceDir, ".pi", "agents"),
+			filepath.Join(workspaceDir, ".pi", "subagents"),
+		)
+	}
+	byName := map[string]CodeGraphChild{}
+	for _, dir := range dirs {
+		candidates, err := piChildFiles(dir)
+		if err != nil {
+			return nil, err
+		}
+		for _, source := range candidates {
+			name := normalizeCodeGraphChildIdentity(strings.TrimSuffix(filepath.Base(source), ".md"))
+			packageOwned := strings.Contains(filepath.ToSlash(source), "/node_modules/")
+			target := source
+			if packageOwned {
+				target = filepath.Join(paths.AgentDir, "subagents", filepath.Base(source))
+			}
+			byName[name] = CodeGraphChild{Name: name, Source: source, Target: target, PackageOwned: packageOwned}
+		}
+	}
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	children := make([]CodeGraphChild, 0, len(names))
+	for _, name := range names {
+		children = append(children, byName[name])
+	}
+	return children, nil
+}
+
+// normalizeCodeGraphChildIdentity mirrors Pi's case-insensitive runtime child
+// identity so a later project definition deterministically shadows its user
+// counterpart even when the filenames differ only by case or surrounding space.
+func normalizeCodeGraphChildIdentity(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func piChildFiles(dir string) ([]string, error) {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("read Pi child directory %q: %w", dir, err)
+	}
+	files := []string{}
+	err := piWalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if filepath.Ext(entry.Name()) != ".md" {
+			return nil
+		}
+		parent := filepath.Base(filepath.Dir(path))
+		if parent == "agents" || parent == "subagents" {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read Pi child directory %q: %w", dir, err)
+	}
+	slices.Sort(files)
+	return files, nil
 }
 
 // NewAdapter creates a Pi adapter instance.
@@ -78,7 +233,13 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 	return installed, binaryPath, configPath, stat.isDir, nil
 }
 
-func (a *Adapter) SupportsAutoInstall() bool { return true }
+func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.MustForAgent(model.AgentPi)
+}
+
+func (a *Adapter) SupportsAutoInstall() bool {
+	return a.CapabilityManifest().Features.AutoInstall
+}
 
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
 	return [][]string{
@@ -87,7 +248,6 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 		{"pi", "install", "npm:pi-mcp-adapter"},
 		a.engramInitCommand(),
 		piSubagentsInstallCommand(profile),
-		{"pi", "install", "npm:pi-intercom"},
 		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
 		{"pi", "install", "npm:pi-web-access"},
 		{"pi", "install", "npm:@juicesharp/rpiv-todo"},
@@ -126,25 +286,37 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 	return filepath.Join(AgentConfigPath(homeDir), piEngramMCPConfigFile)
 }
 
-func (a *Adapter) SupportsOutputStyles() bool { return false }
+func (a *Adapter) SupportsOutputStyles() bool {
+	return a.CapabilityManifest().Features.OutputStyles
+}
 
 func (a *Adapter) OutputStyleDir(string) string { return "" }
 
-func (a *Adapter) SupportsSlashCommands() bool { return false }
+func (a *Adapter) SupportsSlashCommands() bool {
+	return a.CapabilityManifest().Features.SlashCommands
+}
 
 func (a *Adapter) CommandsDir(string) string { return "" }
 
-func (a *Adapter) SupportsSubAgents() bool { return false }
+func (a *Adapter) SupportsSubAgents() bool {
+	return a.CapabilityManifest().Features.FileSubAgents
+}
 
 func (a *Adapter) SubAgentsDir(string) string { return "" }
 
 func (a *Adapter) EmbeddedSubAgentsDir() string { return "" }
 
-func (a *Adapter) SupportsSkills() bool { return false }
+func (a *Adapter) SupportsSkills() bool {
+	return a.CapabilityManifest().Features.Skills
+}
 
-func (a *Adapter) SupportsSystemPrompt() bool { return true }
+func (a *Adapter) SupportsSystemPrompt() bool {
+	return a.CapabilityManifest().Features.SystemPrompt
+}
 
-func (a *Adapter) SupportsMCP() bool { return true }
+func (a *Adapter) SupportsMCP() bool {
+	return a.CapabilityManifest().Features.MCP
+}
 
 // ConfigPath returns Pi's global config directory path.
 func ConfigPath(homeDir string) string { return filepath.Join(homeDir, ".pi") }

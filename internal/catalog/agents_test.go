@@ -3,7 +3,7 @@ package catalog
 import (
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 func TestAllAgentsIncludesPi(t *testing.T) {

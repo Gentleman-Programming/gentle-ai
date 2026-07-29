@@ -1,76 +1,123 @@
-# Agent Trigger Rules
+# Organic Implementation Trigger Rules
 
 <- [Back to README](../README.md)
 
----
+Ask for the outcome. Gentle AI keeps already-understood work inline, delegates only
+the actions that benefit from fresh context, and offers SDD only when durable
+planning would materially reduce uncertainty. Verification, review, delivery, and
+lifecycle authority remain native provider responsibilities behind that simple
+interaction.
 
-gentle-ai injects a **trigger-rules** section into every supported agent's system prompt or orchestrator configuration. This section is a set of organic recommendations that guide the AI orchestrator on when to run review and verification agents during the development workflow.
+## Quick path
 
-## What Are Trigger Rules?
+1. Describe the outcome in natural language.
+2. Gentle AI uses the smallest useful implementation route: direct inline,
+   delegated direct, or an optional SDD proposal.
+3. The normal interaction reports only **Working**, **Checking**, **Ready**, or
+   **Needs your decision**.
 
-Trigger rules are **organic recommendations, not hard gates**. gentle-ai renders the rules as plain instruction text and injects them into the agent's prompt; the AI orchestrator decides when and how to act on them. gentle-ai never fires, blocks, or executes any rule itself.
+The user does not choose review internals, hashes, receipts, or lifecycle
+transitions. A question is necessary only when the answer changes requested
+scope, destructive or irreversible impact, permission or security exposure,
+verification cost or external side effects, accepted residual risk, or delivery.
 
-The injected section looks like this in your agent's system-prompt file:
+## Implementation routes
 
-```markdown
-<!-- gentle-ai:trigger-rules -->
-## Agent Trigger Rules
+| Route | Use it when | What happens |
+|---|---|---|
+| **Direct inline** | Deciding or verifying requires **1–3 files**; or the change is **one mechanical, already-understood file** with no research or unresolved design decision. | Keep the bounded action inline. |
+| **Delegated direct** | Understanding requires **4+ files**; reading prepares a write; broad research is needed; or a writer must change **2+ non-trivial files**. | Delegate the narrow exploration and/or one writer needed for that action. |
+| **Optional SDD** | The work has substantial ambiguity, or durable proposal, spec, design, or task artifacts would materially reduce uncertainty. | Propose SDD. Select it only after an explicit request or an accepted proposal. |
 
-These are organic recommendations, not enforced checkpoints. gentle-ai only
-renders this text; the AI orchestrator decides when to act on it.
+The file counts describe the context needed for the current action, not a risk
+score and not an SDD threshold. Risk may strengthen native verification or
+review, but it never forces SDD.
 
-- At **pre-commit**, always, consider running `review-readability`. ...
-- At **pre-pr**, when the diff touches auth/update/security OR exceeds 400
-  changed lines, **strongly recommend** running all four 4R lenses in parallel.
-- ...
-<!-- /gentle-ai:trigger-rules -->
-```
+Delegation also applies per action. Tests, builds, installs, and native review
+actors may use fresh workers without changing the implementation route or
+creating an SDD run. Direct and delegated work create no SDD artifacts, phase
+attempts, or synthetic SDD lifecycle.
 
-## Where the Section Is Injected
+If apparently simple work reveals substantial ambiguity, Gentle AI may offer SDD
+at the next safe boundary. Declining it leads to a safely reduced scope, a
+justified direct or delegated route, or **Needs your decision**—never silent SDD
+enrollment.
 
-| Agent | Location |
-|-------|----------|
-| Claude Code | `~/.claude/CLAUDE.md` (marker section) |
-| Gemini CLI | `~/.gemini/GEMINI.md` (marker section) |
-| Cursor | `~/.cursor/rules/gentle-ai.mdc` (marker section) |
-| VS Code Copilot | `.instructions.md` (marker section) |
-| Codex | `~/.codex/AGENTS.md` (marker section) |
-| Antigravity | `~/.gemini/GEMINI.md` (marker section) |
-| Windsurf | `~/.codeium/windsurf/memories/global_rules.md` (marker section) |
-| Kiro | `~/.kiro/steering/gentle-ai.md` (marker section) |
-| Hermes | `~/.hermes/SOUL.md` (marker section) |
-| OpenCode | `opencode.json` → `agent.gentle-orchestrator.prompt` (inline) |
-| Kilocode | `opencode.json` → `agent.gentle-orchestrator.prompt` (inline) |
-| Kimi | `~/.kimi/trigger-rules.md` (Jinja module, included via `KIMI.md`) |
+## Native progress and authority
 
-## Default Rule Tiers
+| Public state | Meaning |
+|---|---|
+| **Working** | The implementation can still change. |
+| **Checking** | Gentle AI is performing the applicable functional proof and bounded review. |
+| **Ready** | The exact candidate has sufficient evidence for the selected delivery route. |
+| **Needs your decision** | Safe automatic convergence is impossible; Gentle AI presents the cause, impact, and concrete choices. |
 
-The built-in default set follows a three-tier cost model:
+The user still asks only for the outcome. Repository identity, route, policy,
+candidate, delivery mechanism, and authority references remain owner-derived.
+Adapters do not select review lenses, reconstruct recovery policy, or infer
+success from prose. Existing SDD v1 runs continue through their SDD-specific
+status contract; direct and delegated runs do not create or consume an SDD run.
 
-**Tier 1 — Advisory (everyday events)**
+## Review mode
 
-- `pre-commit` and `pre-push`: run `review-readability` as a single advisory lens.
-  Cost: ~1x. Keeps the everyday loop lightweight.
+Review-driven development is user-owned and independent of the implementation
+route:
 
-**Tier 2 — Strong (hot paths / large diffs)**
+| Command | Effect |
+|---|---|
+| `gentle-ai review mode status --cwd <repo>` | Report the global source, clone-local source, deciding source, and effective mode without mutation. |
+| `gentle-ai review mode disable --cwd <repo>` | Disable review-driven development globally. |
+| `gentle-ai review mode disable --scope clone --cwd <repo>` | Disable it only for this clone; no other clone inherits the override. |
+| `gentle-ai review mode enable --cwd <repo>` | Enable it globally for future candidates. |
+| `gentle-ai review mode enable --scope clone --cwd <repo>` | Clear this clone's off-only override. |
 
-- `pre-pr` on `**/auth/**`, `**/update/**`, `**/security/**`, or `**/payments/**` paths, OR when the diff exceeds 400 changed lines: run all four 4R review lenses (`review-risk`, `review-resilience`, `review-readability`, `review-reliability`) in parallel.
-  Cost: ~4x. Reserved for high-risk changes.
+Any disabled source wins. A clone may opt out but cannot require review for the
+user. Interactive starts ask before reviewer work; non-interactive tier-1/tier-2 starts proceed without prompting and report how to disable review mode. Interactive consent is asked
+once per clone. Accepting records that choice; **not now** applies only to that
+candidate and does not change review mode.
 
-**Tier 3 — Strong (high-stakes SDD phases)**
+While review mode is disabled, continue through direct inline, delegated direct,
+or optional SDD routing without starting, retrying, or re-enabling review on the
+user's behalf. Existing exact governing receipts remain authoritative; otherwise native review delivery gates report `disabled/unmanaged` and
+defer to ordinary repository policy without fabricating approval.
 
-- `post-sdd-phase` after the `design` or `apply` phase: run `judgment-day` adversarial verification.
-  Cost: ~4 + 3×findings. Reserved for the SDD phases most likely to introduce architectural debt.
+The current unstable RDD line has two known limitations, both in SDD while
+review mode is disabled. The pre-verify status path can still require review.
+And the native archive gate now reports `disabled/unmanaged` and lets archive
+proceed, but the `sdd-archive` skill still requires `reviewGate.result: allow`
+in its own contract, so an agent following that skill blocks where the product
+no longer does. See
+[Organic RDD known limitations](architecture/organic-rdd.md#9-known-open).
 
-**No built-in binding for `on-ci` and `on-schedule`** — the appropriate agent and cadence for CI and scheduled runs are installation-specific. Both events are part of the supported event vocabulary and can be used in a future override mechanism.
+## Installation and refresh
 
-## Refreshing the Injected Section
+`gentle-ai install` and `gentle-ai sync` project the same canonical rules into
+every supported adapter, independently of whether the optional SDD component is
+selected:
 
-Re-run install or sync after an update to refresh the injected section:
+- Standard adapters receive the managed `agent-routing` marker in their
+  adapter-owned system-prompt file.
+- OpenCode and Kilocode receive it inside
+  `agent.gentle-orchestrator.prompt` in their adapter-owned `opencode.json`.
+- Jinja-backed adapters receive an `agent-routing.md` module included by their
+  managed router template.
 
 ```bash
 gentle-ai install   # full install
-gentle-ai sync      # re-sync only (faster)
+gentle-ai sync      # refresh managed content
 ```
 
-The injection is idempotent — running it twice replaces the existing section without duplication.
+Refresh is idempotent: the managed projection is replaced without duplication.
+
+## Source of truth
+
+The rendered projection comes from
+[`internal/components/agentguidance/routing.go`](../internal/components/agentguidance/routing.go),
+and its adapter delivery is owned by
+[`internal/components/agentguidance/inject.go`](../internal/components/agentguidance/inject.go).
+Canonical route facts come from
+[`internal/agents/capabilitymanifest/manifest.go`](../internal/agents/capabilitymanifest/manifest.go).
+Review mode is implemented in
+[`internal/cli/review_mode.go`](../internal/cli/review_mode.go). The current
+authority and recovery behavior is documented in the
+[Organic RDD architecture](architecture/organic-rdd.md).

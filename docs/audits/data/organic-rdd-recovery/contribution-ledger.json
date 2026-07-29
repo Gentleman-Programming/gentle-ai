@@ -1,0 +1,460 @@
+{
+  "contributions": [
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "contracts/work-routing/v1/"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "docs/trigger-rules.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "e2e/organicruntime/organic_runtime_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/agents/capabilitymanifest/manifest.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/agents/capabilitymanifest/manifest_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/app/app.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/app/app_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/app/help.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/app/help_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/app/work_provider_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/antigravity/sdd-orchestrator.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/assets_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/claude/sdd-orchestrator.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/codex/sdd-orchestrator.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/cursor/sdd-orchestrator.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/gemini/sdd-orchestrator.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/generic/sdd-orchestrator.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/hermes/sdd-orchestrator.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/kimi/sdd-orchestrator.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/kiro/sdd-orchestrator.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/opencode/sdd-orchestrator.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/qwen/sdd-orchestrator.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/skills/_shared/review-ledger-contract.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/assets/windsurf/sdd-orchestrator.md"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/catalog/bounded_review_triggers_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/catalog/release_event_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/catalog/triggers.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/catalog/triggers_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/doctor.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/doctor_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/review.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/review_facade.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/review_mode.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/review_mode_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/review_next_transition.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/review_status_contract.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/review_verification_decide.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/review_verification_decide_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/run.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/run_component_paths_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/sdd_attempt.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/sync.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/sync_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_advance.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_advance_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_capabilities.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_command_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_flags.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_reconcile.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_reconcile_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_route.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_route_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_runtime_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_start.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_status.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_status_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_transition.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_transition_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_verification_decide.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/cli/work_verification_decide_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/components/agentguidance/inject.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/components/agentguidance/inject_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/components/agentguidance/routing.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/components/agentguidance/routing_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/components/agentguidance/status.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/components/agentguidance/status_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/components/golden_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/components/sdd/bounded_review_contract_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/components/sdd/boundedreview.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/components/sdd/inject.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/components/sdd/inject_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/components/sdd/triggerrules.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/components/sdd/triggerrules_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/deliveryadmission/"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/doctor/doctor.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/doctor/doctor_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/evidence/"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/hostruntime/"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/model/types.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/mutationintegrity/"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/reviewtransaction/compact_reviewer_capture.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/reviewtransaction/compact_reviewer_capture_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/reviewtransaction/rar_plan_authority.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/reviewtransaction/rar_plan_authority_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/reviewtransaction/rdd_mode.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/reviewtransaction/rdd_mode_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/reviewtransaction/risk.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/reviewtransaction/risk_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/reviewtransaction/verification_consent.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/reviewtransaction/verification_consent_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/reviewtransaction/verification_contract.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/reviewtransaction/verification_contract_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/sddstatus/runtime_ledger.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/sddstatus/runtime_ledger_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/sddstatus/workrun_binding.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/sddstatus/workrun_binding_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/state/state.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/state/state_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/testdata/golden/trigger-rules-default.golden"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workprovider/"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workprovider/pad_candidate_catalog.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workprovider/pad_git_object_authority.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workprovider/productive_advance_path_unix.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workprovider/productive_advance_path_windows.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workprovider/productive_advance_recovery_test.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workprovider/productive_verification_consent.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workprovider/runtime_policy_provisioner.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workrun/"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workrun/path_safety.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workrun/path_safety_unix.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workrun/path_safety_windows.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workrun/store.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "internal/workrun/verification_consent.go"
+    },
+    {
+      "contributor": "@Alan-TheGentleman",
+      "path": "testdata/golden/organic-routing-manifest.json"
+    }
+  ]
+}

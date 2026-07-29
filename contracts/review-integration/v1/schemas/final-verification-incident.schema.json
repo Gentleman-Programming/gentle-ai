@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/final-verification-incident.schema.json",
+  "title": "Gentle AI final-verification tooling incident",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "class",
+    "lineage_id",
+    "terminal_revision",
+    "validating_revision",
+    "target_identity",
+    "failed_evidence_hash",
+    "finalize_request_digest"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gentle-ai.review-final-verification-incident/v1"
+    },
+    "class": {
+      "const": "procedural_tooling_failure"
+    },
+    "lineage_id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "terminal_revision": {
+      "$ref": "#/$defs/sha256"
+    },
+    "validating_revision": {
+      "$ref": "#/$defs/sha256"
+    },
+    "target_identity": {
+      "$ref": "#/$defs/sha256"
+    },
+    "failed_evidence_hash": {
+      "$ref": "#/$defs/sha256"
+    },
+    "finalize_request_digest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/admitted-result.schema.json",
+  "title": "Gentle AI provider-admitted reviewer result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "subject", "admission", "result"],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-admitted-result/v1"},
+    "subject": {"$ref": "artifact-subject.schema.json"},
+    "admission": {"$ref": "#/$defs/admission"},
+    "result": {"type": "object"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "decision", "subject_hash", "raw_sha256", "canonical_sha256", "result_hash", "candidate_causal_finding_ids"],
+      "properties": {
+        "schema": {"const": "gentle-ai.review-artifact-admission/v1"},
+        "decision": {"const": "completed"},
+        "subject_hash": {"$ref": "#/$defs/sha256"},
+        "raw_sha256": {"$ref": "#/$defs/sha256"},
+        "canonical_sha256": {"$ref": "#/$defs/sha256"},
+        "result_hash": {"$ref": "#/$defs/sha256"},
+        "candidate_causal_finding_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*$"}
+        }
+      }
+    }
+  }
+}

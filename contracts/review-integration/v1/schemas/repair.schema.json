@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/repair.schema.json",
+  "title": "Gentle AI classified authority repair operation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "operation",
+    "mode",
+    "assessment",
+    "required_inputs"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gentle-ai.review-integration.repair/v1"
+    },
+    "contract": {
+      "const": "gentle-ai.review-integration/v1"
+    },
+    "operation": {
+      "const": "review.repair"
+    },
+    "mode": {
+      "enum": [
+        "preflight",
+        "execute"
+      ]
+    },
+    "assessment": {
+      "$ref": "authority-repair-assessment.schema.json"
+    },
+    "provider_inputs": {
+      "$ref": "#/$defs/provider_inputs"
+    },
+    "required_inputs": {
+      "type": "array",
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "actor",
+          "reason",
+          "maintainer_authorization"
+        ]
+      }
+    },
+    "execution": {
+      "$ref": "#/$defs/execution"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "execute"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "required": [
+          "execution"
+        ],
+        "properties": {
+          "required_inputs": {
+            "maxItems": 0
+          }
+        },
+        "not": {
+          "required": [
+            "provider_inputs"
+          ]
+        }
+      },
+      "else": {
+        "not": {
+          "required": [
+            "execution"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "preflight"
+          },
+          "assessment": {
+            "properties": {
+              "status": {
+                "const": "eligible"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "assessment"
+        ]
+      },
+      "then": {
+        "required": [
+          "provider_inputs"
+        ],
+        "properties": {
+          "required_inputs": {
+            "minItems": 3,
+            "maxItems": 3,
+            "prefixItems": [
+              {
+                "const": "actor"
+              },
+              {
+                "const": "reason"
+              },
+              {
+                "const": "maintainer_authorization"
+              }
+            ],
+            "items": false
+          }
+        }
+      },
+      "else": {
+        "if": {
+          "properties": {
+            "mode": {
+              "const": "preflight"
+            }
+          },
+          "required": [
+            "mode"
+          ]
+        },
+        "then": {
+          "properties": {
+            "required_inputs": {
+              "maxItems": 0
+            }
+          },
+          "not": {
+            "required": [
+              "provider_inputs"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "provider_inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "class",
+        "lineage_id",
+        "expected_revision",
+        "cause",
+        "disposition",
+        "repository_binding",
+        "authorization_schema"
+      ],
+      "properties": {
+        "class": {
+          "const": "legacy_v1_historical_alias"
+        },
+        "lineage_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "expected_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cause": {
+          "const": "unsupported_historical_v1_operation_alias"
+        },
+        "disposition": {
+          "const": "quarantine-approved-historical-alias"
+        },
+        "repository_binding": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorization_schema": {
+          "const": "gentle-ai.review-repair-authorization/v1"
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "class",
+        "lineage_id",
+        "revision",
+        "chain_identity",
+        "cause",
+        "disposition",
+        "assessment_digest",
+        "request_digest",
+        "record_identity"
+      ],
+      "properties": {
+        "status": {
+          "const": "committed"
+        },
+        "class": {
+          "const": "legacy_v1_historical_alias"
+        },
+        "lineage_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "chain_identity": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cause": {
+          "const": "unsupported_historical_v1_operation_alias"
+        },
+        "disposition": {
+          "const": "quarantine-approved-historical-alias"
+        },
+        "assessment_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "record_identity": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

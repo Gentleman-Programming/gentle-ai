@@ -4,8 +4,23 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
+
+const WindowsDistributionHoldMessage = "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced."
+
+// GentleAISourceInstallCommand returns the safe source-install fallback for an
+// exact release, beta main build, or the latest release when version is empty.
+func GentleAISourceInstallCommand(version string) string {
+	target := "latest"
+	version = strings.TrimSpace(version)
+	if strings.HasPrefix(version, "main@") {
+		target = "main"
+	} else if version != "" {
+		target = "v" + strings.TrimPrefix(version, "v")
+	}
+	return "go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@" + target
+}
 
 // updateHint returns a platform-specific instruction string for updating the given tool.
 func updateHint(tool ToolInfo, profile system.PlatformProfile) string {
@@ -21,6 +36,13 @@ func updateHint(tool ToolInfo, profile system.PlatformProfile) string {
 	default:
 		return ""
 	}
+}
+
+func updateHintForOwnership(tool ToolInfo, profile system.PlatformProfile, ownership HomebrewOwnership) string {
+	if profile.PackageManager == "brew" && ownership != HomebrewNone {
+		return fmt.Sprintf("brew upgrade --%s %s", ownership, tool.Name)
+	}
+	return updateHint(tool, profile)
 }
 
 func openCodeRegisteredNotMaterializedHint(tool ToolInfo) string {
@@ -42,7 +64,7 @@ func gentleAIHint(profile system.PlatformProfile) string {
 	case "darwin":
 		return "gentle-ai upgrade (downloads pre-built binary)"
 	case "windows":
-		return "irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex"
+		return WindowsDistributionHoldMessage + " Install/update from source with Go 1.25.10+: " + GentleAISourceInstallCommand("")
 	default:
 		return ""
 	}

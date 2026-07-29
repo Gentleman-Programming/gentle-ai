@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/start.schema.json",
+  "title": "Gentle AI negotiated review START response",
+  "type": "object",
+  "additionalProperties": false,
+  "dependentRequired": {
+    "target_mode": ["target_identity", "base_tree", "candidate_tree"],
+    "target_identity": ["target_mode", "base_tree", "candidate_tree"],
+    "base_tree": ["target_mode", "target_identity", "candidate_tree"],
+    "candidate_tree": ["target_mode", "target_identity", "base_tree"],
+    "candidate_diff": ["changed_path_manifest"],
+    "changed_path_manifest": ["candidate_diff"]
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"selected_lenses": {"minItems": 1}},
+        "required": ["selected_lenses"]
+      },
+      "then": {"required": ["candidate_diff", "changed_path_manifest"]}
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {"enum": ["created", "resumed"]},
+          "state": {"const": "reviewing"}
+        },
+        "required": ["action", "state"]
+      },
+      "then": {"required": ["repository_context"]},
+      "else": {"not": {"required": ["repository_context"]}}
+    }
+  ],
+  "required": [
+    "schema",
+    "contract",
+    "operation",
+    "action",
+    "lenses_required",
+    "lineage_id",
+    "state",
+    "risk_level",
+    "selected_lenses",
+    "projection",
+    "changed_files",
+    "changed_lines",
+    "correction_budget",
+    "risk_reasons"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.start/v1"},
+    "contract": {"const": "gentle-ai.review-integration/v1"},
+    "operation": {"const": "review.start"},
+    "action": {"enum": ["created", "resumed", "reuse-receipt", "blocked-scope-action"]},
+    "lenses_required": {"type": "boolean"},
+    "lineage_id": {"type": "string", "minLength": 1},
+    "state": {
+      "enum": [
+        "unreviewed",
+        "reviewing",
+        "judges_confirmed",
+        "findings_frozen",
+        "evidence_classified",
+        "fix_required",
+        "fixing",
+        "fix_validating",
+        "ready_final_verification",
+        "final_verifying",
+        "approved",
+        "escalated",
+        "invalidated"
+      ]
+    },
+    "risk_level": {"enum": ["low", "medium", "high"]},
+    "selected_lenses": {
+      "type": "array",
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {"enum": ["review-risk", "review-resilience", "review-readability", "review-reliability"]}
+    },
+    "projection": {"enum": ["workspace", "staged"]},
+    "target_mode": {"const": "base-workspace-overlay"},
+    "target_identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "base_tree": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+    "candidate_tree": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+    "changed_files": {"type": "integer", "minimum": 0},
+    "changed_lines": {"type": "integer", "minimum": 0},
+    "correction_budget": {"type": "integer", "minimum": 0, "maximum": 200},
+    "risk_reasons": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/risk_reason"}
+    },
+    "candidate_diff": {"$ref": "#/$defs/frozen_candidate_diff"},
+    "changed_path_manifest": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/changed_path"}
+    },
+    "repository_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "handle", "revision", "target_identity"],
+      "properties": {
+        "capability": {"const": "review.opaque_repository_context"},
+        "handle": {"type": "string", "pattern": "^rctx1_[0-9a-f]{64}$"},
+        "revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "target_identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    }
+  },
+  "$defs": {
+    "frozen_candidate_diff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["encoding", "data", "sha256", "byte_size"],
+      "properties": {
+        "encoding": {"const": "base64"},
+        "data": {
+          "type": "string",
+          "maxLength": 5592408,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        },
+        "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "byte_size": {"type": "integer", "minimum": 0, "maximum": 4194304}
+      }
+    },
+    "changed_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "status",
+        "old_mode",
+        "new_mode",
+        "deleted",
+        "type_changed",
+        "mode_only",
+        "intended_untracked"
+      ],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "status": {"enum": ["A", "D", "M", "T"]},
+        "old_mode": {"type": "string", "pattern": "^[0-7]{6}$"},
+        "new_mode": {"type": "string", "pattern": "^[0-7]{6}$"},
+        "deleted": {"type": "boolean"},
+        "type_changed": {"type": "boolean"},
+        "mode_only": {"type": "boolean"},
+        "intended_untracked": {"type": "boolean"}
+      }
+    },
+    "risk_reason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code"],
+      "properties": {
+        "code": {
+          "enum": [
+            "configuration_change",
+            "executable_change",
+            "executable_mode",
+            "hot_path",
+            "large_change",
+            "non_executable_only",
+            "service_token",
+            "shell_source"
+          ]
+        },
+        "signal": {"enum": ["auth", "update", "security", "payments", "permissions", "shell_process"]},
+        "path": {"type": "string", "minLength": 1},
+        "old_mode": {"type": "string", "pattern": "^[0-7]{6}$"},
+        "new_mode": {"type": "string", "pattern": "^[0-7]{6}$"}
+      }
+    }
+  }
+}

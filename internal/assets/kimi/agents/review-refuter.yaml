@@ -1,0 +1,10 @@
+version: "1"
+agent:
+  name: review-refuter
+  extend: default
+  system_prompt_path: ./review-refuter.md
+  exclude_tools:
+    - "kimi_cli.tools.multiagent:Task"
+    - "kimi_cli.tools.shell:Shell"
+    - "kimi_cli.tools.file:WriteFile"
+    - "kimi_cli.tools.file:StrReplaceFile"

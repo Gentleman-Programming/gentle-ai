@@ -9,13 +9,191 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 type stubSnapshotter struct{}
+
+func TestBuildPlanSnapshotsPiManifestAndOwnedOverlay(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	packageChild := filepath.Join(homeDir, ".pi", "agent", "node_modules", "gentle-pi", "subagents", "package.md")
+	if err := os.MkdirAll(filepath.Dir(packageChild), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(packageChild, []byte("---\ntools: bash\n---\npackage\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: homeDir, Selected: true, EffectiveMCPProbe: piCodeGraphProbeForServiceTest}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentPi}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := communitytool.PiCodeGraphPaths(homeDir, "")
+	for _, path := range paths {
+		if !slices.Contains(plan.backupTargets, path) {
+			t.Fatalf("backup targets = %v, missing Pi artifact %q", plan.backupTargets, path)
+		}
+	}
+}
+
+func TestExecutePlanCleansPiBeforeSharedMCPMutation(t *testing.T) {
+	home := t.TempDir()
+	svc, err := NewService(home, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
+	child := filepath.Join(home, ".pi", "agent", "subagents", "worker.md")
+	if err := os.MkdirAll(filepath.Dir(child), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(child, []byte("---\ntools: bash\n---\nwork\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piCodeGraphProbeForServiceTest}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.executePlan(plan{operations: []operation{{path: mcpPath, apply: func(path string) (bool, bool, error) {
+		return true, false, os.WriteFile(path, []byte(`{"mcpServers":{"engram":{"command":"engram"}}}`), 0o600)
+	}}}}, []model.AgentID{model.AgentPi})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := string(mustReadServiceFile(t, mcpPath)); strings.Contains(body, `"codegraph"`) {
+		t.Fatalf("false drift preserved CodeGraph entry: %s", body)
+	}
+	if slices.ContainsFunc(result.ManualActions, func(action string) bool { return strings.Contains(action, "CodeGraph MCP drifted") }) {
+		t.Fatalf("manual actions = %v, want no false drift", result.ManualActions)
+	}
+}
+
+func mustReadServiceFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func TestExecutePlanPiUninstallPreservesPreexistingMarkedUserChildAndUserMCP(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+	mcpPath := filepath.Join(homeDir, ".pi", "agent", "mcp.json")
+	childPath := filepath.Join(homeDir, ".pi", "agent", "subagents", "worker.md")
+	preexisting := "---\ntools: bash, mcp\n---\nuser instructions\n\n<!-- gentle-ai:pi-codegraph-tool -->\npreexisting tool guidance\n<!-- /gentle-ai:pi-codegraph -->\n\n<!-- gentle-ai:pi-codegraph-guidance -->\npreexisting lazy-init guidance\n<!-- /gentle-ai:pi-codegraph -->\n"
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mcpPath, []byte(`{"mcpServers":{"user":{"command":"user-server"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(childPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(childPath, []byte(preexisting), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: homeDir, Selected: true, EffectiveMCPProbe: piCodeGraphProbeForServiceTest}); err != nil {
+		t.Fatalf("ReconcilePiCodeGraph() error = %v", err)
+	}
+
+	result, err := svc.executePlan(plan{}, []model.AgentID{model.AgentPi})
+	if err != nil {
+		t.Fatalf("executePlan() error = %v", err)
+	}
+	if got, err := os.ReadFile(childPath); err != nil || string(got) != preexisting {
+		t.Fatalf("service uninstall child = %q, err = %v; want exact preexisting content", got, err)
+	}
+	if got, err := os.ReadFile(mcpPath); err != nil || !strings.Contains(string(got), "user-server") || strings.Contains(string(got), `"codegraph"`) {
+		t.Fatalf("service uninstall MCP = %q, err = %v", got, err)
+	}
+	if len(result.ManualActions) != 0 {
+		t.Fatalf("service uninstall manual actions = %v, want none", result.ManualActions)
+	}
+	if _, err := svc.executePlan(plan{}, []model.AgentID{model.AgentPi}); err != nil {
+		t.Fatalf("repeat service uninstall error = %v", err)
+	}
+}
+
+func TestExecutePlanPiUninstallPreservesDriftedChildAndGentlePiSource(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+	childPath := filepath.Join(homeDir, ".pi", "agent", "subagents", "worker.md")
+	packageChild := filepath.Join(homeDir, ".pi", "agent", "node_modules", "gentle-pi", "subagents", "package.md")
+	packageBody := "---\ntools: bash\n---\npackage instructions\n"
+	if err := os.MkdirAll(filepath.Dir(childPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(childPath, []byte("---\ntools: bash\n---\nuser instructions\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(packageChild), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(packageChild, []byte(packageBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: homeDir, Selected: true, EffectiveMCPProbe: piCodeGraphProbeForServiceTest}); err != nil {
+		t.Fatalf("ReconcilePiCodeGraph() error = %v", err)
+	}
+	if err := os.WriteFile(childPath, append([]byte("user changed after provision\n"), []byte("keep this\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.executePlan(plan{}, []model.AgentID{model.AgentPi})
+	if err != nil {
+		t.Fatalf("executePlan() error = %v", err)
+	}
+	if got, err := os.ReadFile(childPath); err != nil || !strings.Contains(string(got), "keep this") {
+		t.Fatalf("drifted child was not preserved: %q, err = %v", got, err)
+	}
+	if got, err := os.ReadFile(packageChild); err != nil || string(got) != packageBody {
+		t.Fatalf("gentle-pi package child changed: %q, err = %v", got, err)
+	}
+	if !slices.ContainsFunc(result.ManualActions, func(action string) bool { return strings.Contains(action, "child drifted") }) {
+		t.Fatalf("manual actions = %v, want drift action", result.ManualActions)
+	}
+}
+
+func piCodeGraphProbeForServiceTest(string) (communitytool.PiCodeGraphMCPProbeResult, error) {
+	return communitytool.PiCodeGraphMCPProbeResult{
+		AdapterAvailable: true,
+		Initialized:      true,
+		Tools: []communitytool.PiCodeGraphMCPTool{{
+			Name: "codegraph_explore",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query":       map[string]any{"type": "string"},
+					"maxFiles":    map[string]any{"type": "number"},
+					"projectPath": map[string]any{"type": "string"},
+				},
+				"required": []any{"query"},
+			},
+		}},
+	}, nil
+}
 
 func TestExpandVisualPolishUninstallComponents(t *testing.T) {
 	for _, trigger := range model.VisualPolishComponents() {
@@ -764,6 +942,8 @@ func TestComponentOperationsEngram_GlobalScopeKeepsWorkspaceProjectData(t *testi
 // ~/.codex/engram-compact-prompt.md) MUST stay byte-identical so the
 // uninstaller keeps covering them with no orphaned files left behind.
 func TestComponentOperationsEngram_CodexRemovesConsolidatedProtocolAssetsWithNoOrphans(t *testing.T) {
+	restore := codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil)
+	t.Cleanup(restore)
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/gentleman-programming/gentle-ai/internal/app"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/app"
 )
 
 // version is set by GoReleaser via ldflags at build time.

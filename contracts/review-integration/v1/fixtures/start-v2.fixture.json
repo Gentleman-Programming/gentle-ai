@@ -1,0 +1,97 @@
+{
+  "schema": "gentle-ai.review-integration.start/v2",
+  "contract": "gentle-ai.review-integration/v1",
+  "operation": "review.start",
+  "action": "created",
+  "lenses_required": true,
+  "lineage_id": "review-start-fixture",
+  "state": "reviewing",
+  "risk_level": "high",
+  "selected_lenses": [
+    "review-risk",
+    "review-resilience",
+    "review-readability",
+    "review-reliability"
+  ],
+  "projection": "workspace",
+  "changed_files": 1,
+  "changed_lines": 1,
+  "correction_budget": 1,
+  "risk_reasons": [
+    {
+      "code": "shell_source",
+      "signal": "shell_process",
+      "path": "scripts/deploy.sh"
+    }
+  ],
+  "artifact_subjects": [
+    {
+      "schema": "gentle-ai.review-artifact-subject/v1",
+      "subject_hash": "sha256:38a55988f6b3ae6f520690d52fd29255f425a4048b0f8694de3a80c5daf265cd",
+      "lineage_id": "review-start-fixture",
+      "authority_revision": "sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c",
+      "target_identity": "sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5",
+      "candidate_diff_sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
+      "changed_path_manifest_sha256": "sha256:049219ea30e21c409608ea8527e65bcc6774d764363031a6cf0cb05e35c734ef",
+      "lens": "review-risk",
+      "selected_order": 0
+    },
+    {
+      "schema": "gentle-ai.review-artifact-subject/v1",
+      "subject_hash": "sha256:06d86f981a8c0b16c2179696d467c8157580214ad72c952adee423fe596d2c21",
+      "lineage_id": "review-start-fixture",
+      "authority_revision": "sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c",
+      "target_identity": "sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5",
+      "candidate_diff_sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
+      "changed_path_manifest_sha256": "sha256:049219ea30e21c409608ea8527e65bcc6774d764363031a6cf0cb05e35c734ef",
+      "lens": "review-resilience",
+      "selected_order": 1
+    },
+    {
+      "schema": "gentle-ai.review-artifact-subject/v1",
+      "subject_hash": "sha256:beacbf1eed52620ef7686087f8944cbc2304d71abf13281267efe9e4de20fb1e",
+      "lineage_id": "review-start-fixture",
+      "authority_revision": "sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c",
+      "target_identity": "sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5",
+      "candidate_diff_sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
+      "changed_path_manifest_sha256": "sha256:049219ea30e21c409608ea8527e65bcc6774d764363031a6cf0cb05e35c734ef",
+      "lens": "review-readability",
+      "selected_order": 2
+    },
+    {
+      "schema": "gentle-ai.review-artifact-subject/v1",
+      "subject_hash": "sha256:61a10b133e3f7a8ccad1d0f1d58989df75d2330ad530690137de625bfd10eec8",
+      "lineage_id": "review-start-fixture",
+      "authority_revision": "sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c",
+      "target_identity": "sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5",
+      "candidate_diff_sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
+      "changed_path_manifest_sha256": "sha256:049219ea30e21c409608ea8527e65bcc6774d764363031a6cf0cb05e35c734ef",
+      "lens": "review-reliability",
+      "selected_order": 3
+    }
+  ],
+  "candidate_diff": {
+    "encoding": "base64",
+    "data": "ZGlmZiAtLWdpdCBhL3NjcmlwdHMvZGVwbG95LnNoIGIvc2NyaXB0cy9kZXBsb3kuc2gKbmV3IGZpbGUgbW9kZSAxMDA2NDQKaW5kZXggMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMC4uMjhiM2FjMTI4ZmJiZWFmZmY0OWEzMjYxMDVmOGVhYzg1YzZjNzdhMQotLS0gL2Rldi9udWxsCisrKyBiL3NjcmlwdHMvZGVwbG95LnNoCkBAIC0wLDAgKzEgQEAKK2VjaG8gZGVwbG95Cg==",
+    "sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
+    "byte_size": 226
+  },
+  "changed_path_manifest": [
+    {
+      "path": "scripts/deploy.sh",
+      "status": "A",
+      "old_mode": "000000",
+      "new_mode": "100644",
+      "deleted": false,
+      "type_changed": false,
+      "mode_only": false,
+      "intended_untracked": true
+    }
+  ],
+  "repository_context": {
+    "capability": "review.opaque_repository_context",
+    "handle": "rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "revision": "sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c",
+    "target_identity": "sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5"
+  }
+}

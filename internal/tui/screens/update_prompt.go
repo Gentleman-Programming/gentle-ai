@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
 // UpdatePromptOptions returns the display labels for the three update-prompt options.

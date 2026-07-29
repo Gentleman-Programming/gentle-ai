@@ -4,8 +4,15 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+)
+
+const (
+	claudeCodeGraphToolGrant = "mcp__codegraph__codegraph_explore"
+	kiroCodeGraphToolGrant   = "@codegraph"
 )
 
 // readSkillContent reads the embedded skill content for the given phase.
@@ -13,10 +20,29 @@ func readSkillContent(phase string) (string, error) {
 	return assets.Read("skills/" + phase + "/SKILL.md")
 }
 
-// SharedPromptDir returns the directory where shared SDD prompt files are stored.
-// The path is {homeDir}/.config/opencode/prompts/sdd.
+// SharedPromptDir returns the shared SDD prompt directory beside OpenCode's
+// settings file, including when XDG_CONFIG_HOME overrides the default root.
 func SharedPromptDir(homeDir string) string {
-	return filepath.Join(homeDir, ".config", "opencode", "prompts", "sdd")
+	return filepath.Join(opencode.ConfigPath(homeDir), "prompts", "sdd")
+}
+
+// SharedPromptFileRef returns a prompt file reference relative to the settings
+// file that will contain it.
+func SharedPromptFileRef(settingsPath, homeDir, phase string) (string, error) {
+	return sharedPromptFileRef(settingsPath, homeDir, phase, filepath.Rel)
+}
+
+func sharedPromptFileRef(settingsPath, homeDir, phase string, rel func(string, string) (string, error)) (string, error) {
+	promptPath := filepath.Join(SharedPromptDir(homeDir), phase+".md")
+	relativePath, err := rel(filepath.Dir(settingsPath), promptPath)
+	if err != nil {
+		return "{file:" + filepath.ToSlash(promptPath) + "}", nil
+	}
+	relativePath = filepath.ToSlash(relativePath)
+	if !strings.HasPrefix(relativePath, ".") {
+		relativePath = "./" + relativePath
+	}
+	return "{file:" + relativePath + "}", nil
 }
 
 // subAgentPhaseOrder is an alias for profilePhaseOrder (defined in profiles.go),
@@ -94,6 +120,45 @@ func injectCodeGraphGuidanceIntoPrompt(prompt, guidance string) string {
 	return filemerge.InjectMarkdownSection(prompt, "codegraph-guidance", guidance)
 }
 
+func injectCodeGraphToolGrantIntoPrompt(prompt string, agentID model.AgentID, guidance string) string {
+	if strings.TrimSpace(guidance) == "" {
+		return prompt
+	}
+
+	grant := ""
+	switch agentID {
+	case model.AgentClaudeCode:
+		grant = claudeCodeGraphToolGrant
+	case model.AgentKiroIDE:
+		grant = kiroCodeGraphToolGrant
+	default:
+		return prompt
+	}
+
+	frontmatterEnd := strings.Index(prompt, "\n---\n")
+	if frontmatterEnd < 0 {
+		return prompt
+	}
+	lines := strings.Split(prompt[:frontmatterEnd], "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "tools:") {
+			continue
+		}
+		if strings.Contains(line, grant) {
+			return prompt
+		}
+		if agentID == model.AgentClaudeCode {
+			lines[i] = line + ", " + grant
+		} else if strings.HasSuffix(line, "]") {
+			lines[i] = strings.TrimSuffix(line, "]") + `, "` + grant + `"]`
+		} else {
+			return prompt
+		}
+		return strings.Join(lines, "\n") + prompt[frontmatterEnd:]
+	}
+	return prompt
+}
+
 func isMarkdownSubAgentPromptFile(fileName string) bool {
 	if filepath.Ext(fileName) != ".md" {
 		return false
@@ -111,6 +176,10 @@ func injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap map[string]any,
 			continue
 		}
 		if mode, _ := agent["mode"].(string); mode == "primary" {
+			continue
+		}
+		tools, _ := agent["tools"].(map[string]any)
+		if bash, explicitlySet := tools["bash"].(bool); explicitlySet && !bash {
 			continue
 		}
 		prompt, ok := agent["prompt"].(string)

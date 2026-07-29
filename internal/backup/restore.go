@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 )
 
 // UserHomeDirFn is the function used to resolve the user's home directory.

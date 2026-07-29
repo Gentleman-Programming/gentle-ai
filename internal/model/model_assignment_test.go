@@ -20,3 +20,29 @@ func TestModelAssignment_FullIDUnaffectedByEffort(t *testing.T) {
 		t.Errorf("FullID() = %q, want %q", a.FullID(), want)
 	}
 }
+
+func TestSplitModelSpec(t *testing.T) {
+	tests := []struct {
+		name         string
+		spec         string
+		wantProvider string
+		wantModel    string
+		wantOK       bool
+	}{
+		{name: "slash separator", spec: "anthropic/claude-sonnet-4", wantProvider: "anthropic", wantModel: "claude-sonnet-4", wantOK: true},
+		{name: "colon separator", spec: "anthropic:claude-sonnet-4", wantProvider: "anthropic", wantModel: "claude-sonnet-4", wantOK: true},
+		{name: "first separator wins", spec: "openrouter/qwen/qwen3.6-plus:free", wantProvider: "openrouter", wantModel: "qwen/qwen3.6-plus:free", wantOK: true},
+		{name: "missing separator", spec: "claude-sonnet-4"},
+		{name: "empty provider", spec: "/claude-sonnet-4"},
+		{name: "empty model", spec: "anthropic/"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, modelID, ok := SplitModelSpec(tt.spec)
+			if provider != tt.wantProvider || modelID != tt.wantModel || ok != tt.wantOK {
+				t.Fatalf("SplitModelSpec(%q) = (%q, %q, %v), want (%q, %q, %v)", tt.spec, provider, modelID, ok, tt.wantProvider, tt.wantModel, tt.wantOK)
+			}
+		})
+	}
+}

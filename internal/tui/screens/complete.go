@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 )
 
 const maxErrorLines = 15
@@ -33,8 +33,10 @@ type CompletePayload struct {
 	GGAInstalled        bool
 	FailedSteps         []FailedStep
 	RollbackPerformed   bool
+	RollbackComplete    bool
 	MissingDeps         []MissingDep
 	AvailableUpdates    []UpdateInfo
+	ManualActions       []string
 }
 
 func RenderComplete(data CompletePayload) string {
@@ -56,6 +58,7 @@ func renderCompleteSuccess(data CompletePayload) string {
 
 	renderMissingDeps(&b, data.MissingDeps)
 	renderAvailableUpdates(&b, data.AvailableUpdates)
+	renderManualActions(&b, data.ManualActions)
 
 	b.WriteString(styles.HeadingStyle.Render("Next steps"))
 	b.WriteString("\n")
@@ -80,6 +83,18 @@ func renderCompleteSuccess(data CompletePayload) string {
 	b.WriteString(styles.HelpStyle.Render("Press Enter to exit."))
 
 	return b.String()
+}
+
+func renderManualActions(b *strings.Builder, actions []string) {
+	if len(actions) == 0 {
+		return
+	}
+	b.WriteString(styles.WarningStyle.Render("Manual actions required"))
+	b.WriteString("\n")
+	for _, action := range actions {
+		b.WriteString("  " + styles.WarningStyle.Render(action) + "\n")
+	}
+	b.WriteString("\n")
 }
 
 func renderMissingDeps(b *strings.Builder, deps []MissingDep) {
@@ -138,10 +153,15 @@ func renderCompleteFailed(data CompletePayload) string {
 	b.WriteString("\n")
 
 	if data.RollbackPerformed {
-		b.WriteString(styles.WarningStyle.Render("Rollback was performed — previous configuration restored."))
+		message := "Rollback completed — previous configuration restored."
+		if !data.RollbackComplete {
+			message = "Rollback partially completed — manual recovery may be required."
+		}
+		b.WriteString(styles.WarningStyle.Render(message))
 		b.WriteString("\n\n")
 	}
 
+	renderManualActions(&b, data.ManualActions)
 	renderMissingDeps(&b, data.MissingDeps)
 	renderAvailableUpdates(&b, data.AvailableUpdates)
 

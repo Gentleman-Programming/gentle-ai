@@ -291,6 +291,9 @@ func RemoveTOMLTableKeys(content, section string, keys []string) string {
 // RemoveTOMLTable removes a complete single TOML table and its key-value lines.
 // It preserves every other table and top-level key verbatim, normalizing CRLF to
 // LF like the other string-based TOML merge helpers in this package.
+//
+// It matches only the exactly-spelled [tableName] header and leaves subtables
+// alone.
 func RemoveTOMLTable(content, tableName string) string {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	lines := strings.Split(content, "\n")

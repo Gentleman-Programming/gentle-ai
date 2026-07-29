@@ -1,12 +1,15 @@
 package gga
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 )
 
 func TestEnsureRuntimeAssetsCreatesPRModeWhenMissing(t *testing.T) {
@@ -310,6 +313,138 @@ func TestEnsurePowerShellShimIsNoOpWhenContentMatches(t *testing.T) {
 	// replaced and the modification time must not change.
 	if stat2.ModTime() != stat1.ModTime() {
 		t.Fatalf("EnsurePowerShellShim re-wrote the file even though content was identical")
+	}
+}
+
+func TestPowerShellShimResolvesGitBash(t *testing.T) {
+	if os.Getenv("OS") != "Windows_NT" {
+		t.Skip("PowerShell shim is Windows-only")
+	}
+
+	powerShell, err := exec.LookPath("powershell.exe")
+	if err != nil {
+		t.Skip("Windows PowerShell is unavailable")
+	}
+	helper := buildWindowsShimHelper(t)
+
+	tests := []struct {
+		name          string
+		gitPath       string
+		bashPaths     []string
+		pathBash      bool
+		helperExit    int
+		wantBash      string
+		wantExit      int
+		wantErrorText string
+	}{
+		{name: "cmd Git uses root bin Bash", gitPath: `Git\cmd\git.exe`, bashPaths: []string{`Git\bin\bash.exe`}, wantBash: `Git\bin\bash.exe`},
+		{name: "bin Git uses root bin Bash", gitPath: `Git\bin\git.exe`, bashPaths: []string{`Git\bin\bash.exe`}, wantBash: `Git\bin\bash.exe`},
+		{name: "mingw64 bin Git uses root bin Bash case insensitively", gitPath: `Git\MINGW64\BIN\git.exe`, bashPaths: []string{`Git\bin\bash.exe`}, wantBash: `Git\bin\bash.exe`},
+		{name: "root bin is preferred", gitPath: `Git\cmd\git.exe`, bashPaths: []string{`Git\bin\bash.exe`, `Git\usr\bin\bash.exe`}, wantBash: `Git\bin\bash.exe`},
+		{name: "usr bin is fallback", gitPath: `Git\cmd\git.exe`, bashPaths: []string{`Git\usr\bin\bash.exe`}, wantBash: `Git\usr\bin\bash.exe`},
+		{name: "installation path may contain spaces", gitPath: `Git Install\cmd\git.exe`, bashPaths: []string{`Git Install\bin\bash.exe`}, wantBash: `Git Install\bin\bash.exe`},
+		{name: "Git absent", wantExit: 1, wantErrorText: "Git not found on PATH"},
+		{name: "Git Bash absent", gitPath: `Git\cmd\git.exe`, wantExit: 1, wantErrorText: "Git Bash not found"},
+		{name: "PATH Bash alias is not selected", gitPath: `Git\cmd\git.exe`, pathBash: true, wantExit: 1, wantErrorText: "Git Bash not found"},
+		{name: "helper exit code is propagated", gitPath: `Git\cmd\git.exe`, bashPaths: []string{`Git\bin\bash.exe`}, helperExit: 37, wantBash: `Git\bin\bash.exe`, wantExit: 37},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			shim := filepath.Join(root, "gga.ps1")
+			content, err := assets.Read("gga/gga.ps1")
+			if err != nil {
+				t.Fatalf("assets.Read() error = %v", err)
+			}
+			if err := os.WriteFile(shim, []byte(content), 0o644); err != nil {
+				t.Fatalf("WriteFile(shim) error = %v", err)
+			}
+
+			pathDirs := []string{filepath.Join(root, "empty-path")}
+			if tt.gitPath != "" {
+				git := filepath.Join(root, filepath.FromSlash(strings.ReplaceAll(tt.gitPath, `\`, "/")))
+				copyShimHelper(t, helper, git)
+				pathDirs = append([]string{filepath.Dir(git)}, pathDirs...)
+			}
+			for _, path := range tt.bashPaths {
+				copyShimHelper(t, helper, filepath.Join(root, filepath.FromSlash(strings.ReplaceAll(path, `\`, "/"))))
+			}
+			if tt.pathBash {
+				aliasDir := filepath.Join(root, "WindowsApps")
+				copyShimHelper(t, helper, filepath.Join(aliasDir, "bash.exe"))
+				pathDirs = append(pathDirs, aliasDir)
+			}
+
+			capture := filepath.Join(root, "selected-bash.txt")
+			cmd := exec.Command(powerShell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", shim)
+			cmd.Env = append(os.Environ(),
+				"PATH="+strings.Join(pathDirs, string(os.PathListSeparator)),
+				"GGA_TEST_CAPTURE="+capture,
+				"GGA_TEST_EXIT="+strconv.Itoa(tt.helperExit),
+			)
+			output, runErr := cmd.CombinedOutput()
+			gotExit := 0
+			if runErr != nil {
+				var exitErr *exec.ExitError
+				if !errors.As(runErr, &exitErr) {
+					t.Fatalf("PowerShell harness error = %v; output: %s", runErr, output)
+				}
+				gotExit = exitErr.ExitCode()
+			}
+			if gotExit != tt.wantExit {
+				t.Fatalf("exit code = %d, want %d; output: %s", gotExit, tt.wantExit, output)
+			}
+			if tt.wantErrorText != "" && !strings.Contains(strings.Join(strings.Fields(string(output)), " "), tt.wantErrorText) {
+				t.Fatalf("output = %q, want text %q", output, tt.wantErrorText)
+			}
+			if tt.wantBash != "" {
+				selected, err := os.ReadFile(capture)
+				if err != nil {
+					t.Fatalf("ReadFile(capture) error = %v; output: %s", err, output)
+				}
+				want := filepath.Join(root, filepath.FromSlash(strings.ReplaceAll(tt.wantBash, `\`, "/")))
+				if !strings.EqualFold(strings.TrimSpace(string(selected)), want) {
+					t.Fatalf("selected Bash = %q, want %q", selected, want)
+				}
+			}
+		})
+	}
+}
+
+func buildWindowsShimHelper(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "main.go")
+	program := `package main
+import ("os"; "strconv")
+func main() {
+	if path := os.Getenv("GGA_TEST_CAPTURE"); path != "" { _ = os.WriteFile(path, []byte(os.Args[0]), 0644) }
+	code, _ := strconv.Atoi(os.Getenv("GGA_TEST_EXIT"))
+	os.Exit(code)
+}`
+	if err := os.WriteFile(source, []byte(program), 0o644); err != nil {
+		t.Fatalf("WriteFile(helper source) error = %v", err)
+	}
+	helper := filepath.Join(dir, "shim-helper.exe")
+	cmd := exec.Command("go", "build", "-o", helper, source)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build shim helper: %v\n%s", err, output)
+	}
+	return helper
+}
+
+func copyShimHelper(t *testing.T, source, destination string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(destination), err)
+	}
+	content, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", source, err)
+	}
+	if err := os.WriteFile(destination, content, 0o755); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", destination, err)
 	}
 }
 

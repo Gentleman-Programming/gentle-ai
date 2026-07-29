@@ -30,6 +30,7 @@ func ResolveInstallChannel(flagValue string) (InstallChannel, error) {
 	case ChannelBeta, "nightly":
 		return ChannelBeta, nil
 	default:
+		// refusal:by-design operator-knowledge: only the operator knows which channel they meant; the message already states the complete next action (use stable, beta, or nightly), and no runnable command can pick it for them
 		return "", fmt.Errorf("unsupported Gentle AI channel %q (use stable, beta, or nightly)", raw)
 	}
 }

@@ -13,8 +13,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
+
+func TestMain(m *testing.M) {
+	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
+		panic(err)
+	}
+
+	os.Exit(m.Run())
+}
 
 // --- TestDetectInstalledVersion ---
 
@@ -766,6 +774,7 @@ func TestResolveGitHubToken_EmptyWhenNoEnvAndNoGh(t *testing.T) {
 // --- TestCheckAll ---
 
 func TestCheckAll(t *testing.T) {
+	mockNoHomebrew(t)
 	// Set up fake GitHub API that returns different versions per repo.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -843,6 +852,7 @@ func TestCheckAll(t *testing.T) {
 }
 
 func TestCheckSingleTool_EngramUsesBinaryReleaseChannel(t *testing.T) {
+	mockNoHomebrew(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -1010,7 +1020,7 @@ func TestUpdateHint(t *testing.T) {
 			name:    "gentle-ai windows",
 			tool:    ToolInfo{Name: "gentle-ai"},
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
-			want:    "irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex",
+			want:    "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced. Install/update from source with Go 1.25.10+: go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest",
 		},
 		{
 			name:          "engram macOS brew-owned",
@@ -1290,6 +1300,7 @@ func TestRegistryContents(t *testing.T) {
 // TestCheckAll_DevVersion verifies that "dev" build version results in DevBuild
 // (not VersionUnknown — dev is a well-known sentinel for source-built binaries).
 func TestCheckAll_DevVersion(t *testing.T) {
+	mockNoHomebrew(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -1452,6 +1463,7 @@ func TestCheckFiltered_UnknownToolIgnored(t *testing.T) {
 //   - Dev build MUST be reported as development-build semantic
 //   - gentle-ai self-upgrade is skipped while engram/gga remain eligible
 func TestCheckFiltered_DevBuildSemanticsForGentleAI(t *testing.T) {
+	mockNoHomebrew(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -1497,6 +1509,7 @@ func TestCheckFiltered_DevBuildSemanticsForGentleAI(t *testing.T) {
 // TestCheckFiltered_DevBuildSkipNotEligible verifies that in a mixed run,
 // gentle-ai with "dev" version gets DevBuild while engram with a real version stays eligible.
 func TestCheckFiltered_DevBuildSkipNotEligible(t *testing.T) {
+	mockNoHomebrew(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -1565,6 +1578,7 @@ func TestCheckFiltered_DevBuildSkipNotEligible(t *testing.T) {
 
 // TestNoUpdatesPath verifies CheckFiltered returns correct statuses when nothing needs updating.
 func TestNoUpdatesPath(t *testing.T) {
+	mockNoHomebrew(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

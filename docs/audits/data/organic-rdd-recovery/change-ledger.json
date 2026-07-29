@@ -1,0 +1,574 @@
+{
+  "changes": [
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "contracts/work-routing/v1/"
+    },
+    {
+      "context": "ACI",
+      "disposition": "REGENERATE",
+      "path": "docs/trigger-rules.md"
+    },
+    {
+      "context": "RAR",
+      "disposition": "REWRITE",
+      "path": "e2e/organicruntime/organic_runtime_test.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "KEEP",
+      "path": "internal/agents/capabilitymanifest/manifest.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "KEEP",
+      "path": "internal/agents/capabilitymanifest/manifest_test.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/app/app.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/app/app_test.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/app/help.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/app/help_test.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/app/work_provider_test.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "REGENERATE",
+      "path": "internal/assets/antigravity/sdd-orchestrator.md"
+    },
+    {
+      "context": "ACI",
+      "disposition": "KEEP",
+      "path": "internal/assets/assets_test.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "REGENERATE",
+      "path": "internal/assets/claude/sdd-orchestrator.md"
+    },
+    {
+      "context": "ACI",
+      "disposition": "REGENERATE",
+      "path": "internal/assets/codex/sdd-orchestrator.md"
+    },
+    {
+      "context": "ACI",
+      "disposition": "REGENERATE",
+      "path": "internal/assets/cursor/sdd-orchestrator.md"
+    },
+    {
+      "context": "ACI",
+      "disposition": "REGENERATE",
+      "path": "internal/assets/gemini/sdd-orchestrator.md"
+    },
+    {
+      "context": "ACI",
+      "disposition": "REGENERATE",
+      "path": "internal/assets/generic/sdd-orchestrator.md"
+    },
+    {
+      "context": "ACI",
+      "disposition": "REGENERATE",
+      "path": "internal/assets/hermes/sdd-orchestrator.md"
+    },
+    {
+      "context": "ACI",
+      "disposition": "REGENERATE",
+      "path": "internal/assets/kimi/sdd-orchestrator.md"
+    },
+    {
+      "context": "ACI",
+      "disposition": "REGENERATE",
+      "path": "internal/assets/kiro/sdd-orchestrator.md"
+    },
+    {
+      "context": "ACI",
+      "disposition": "REGENERATE",
+      "path": "internal/assets/opencode/sdd-orchestrator.md"
+    },
+    {
+      "context": "ACI",
+      "disposition": "REGENERATE",
+      "path": "internal/assets/qwen/sdd-orchestrator.md"
+    },
+    {
+      "context": "ACI",
+      "disposition": "KEEP",
+      "path": "internal/assets/skills/_shared/review-ledger-contract.md"
+    },
+    {
+      "context": "ACI",
+      "disposition": "REGENERATE",
+      "path": "internal/assets/windsurf/sdd-orchestrator.md"
+    },
+    {
+      "context": "ACI",
+      "disposition": "DEFER",
+      "path": "internal/catalog/bounded_review_triggers_test.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "DEFER",
+      "path": "internal/catalog/release_event_test.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "DEFER",
+      "path": "internal/catalog/triggers.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "DEFER",
+      "path": "internal/catalog/triggers_test.go"
+    },
+    {
+      "context": "EPD",
+      "disposition": "KEEP",
+      "path": "internal/cli/doctor.go"
+    },
+    {
+      "context": "EPD",
+      "disposition": "KEEP",
+      "path": "internal/cli/doctor_test.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/cli/review.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/cli/review_facade.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/cli/review_mode.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/cli/review_mode_test.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/cli/review_next_transition.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/cli/review_status_contract.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "DEFER",
+      "path": "internal/cli/review_verification_decide.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "DEFER",
+      "path": "internal/cli/review_verification_decide_test.go"
+    },
+    {
+      "context": "HCR",
+      "disposition": "KEEP",
+      "path": "internal/cli/run.go"
+    },
+    {
+      "context": "HCR",
+      "disposition": "KEEP",
+      "path": "internal/cli/run_component_paths_test.go"
+    },
+    {
+      "context": "SDD",
+      "disposition": "KEEP",
+      "path": "internal/cli/sdd_attempt.go"
+    },
+    {
+      "context": "HCR",
+      "disposition": "KEEP",
+      "path": "internal/cli/sync.go"
+    },
+    {
+      "context": "HCR",
+      "disposition": "KEEP",
+      "path": "internal/cli/sync_test.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_advance.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_advance_test.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_capabilities.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_command_test.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_flags.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_reconcile.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_reconcile_test.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_route.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_route_test.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_runtime_test.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_start.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_status.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_status_test.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_transition.go"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_transition_test.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_verification_decide.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "DELETE",
+      "path": "internal/cli/work_verification_decide_test.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "KEEP",
+      "path": "internal/components/agentguidance/inject.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "KEEP",
+      "path": "internal/components/agentguidance/inject_test.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "KEEP",
+      "path": "internal/components/agentguidance/routing.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "KEEP",
+      "path": "internal/components/agentguidance/routing_test.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "DEFER",
+      "path": "internal/components/agentguidance/status.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "DEFER",
+      "path": "internal/components/agentguidance/status_test.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "KEEP",
+      "path": "internal/components/golden_test.go"
+    },
+    {
+      "context": "SDD",
+      "disposition": "KEEP",
+      "path": "internal/components/sdd/bounded_review_contract_test.go"
+    },
+    {
+      "context": "SDD",
+      "disposition": "KEEP",
+      "path": "internal/components/sdd/boundedreview.go"
+    },
+    {
+      "context": "SDD",
+      "disposition": "KEEP",
+      "path": "internal/components/sdd/inject.go"
+    },
+    {
+      "context": "SDD",
+      "disposition": "KEEP",
+      "path": "internal/components/sdd/inject_test.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "DELETE",
+      "path": "internal/components/sdd/triggerrules.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "DELETE",
+      "path": "internal/components/sdd/triggerrules_test.go"
+    },
+    {
+      "context": "MMI",
+      "disposition": "DELETE",
+      "path": "internal/deliveryadmission/"
+    },
+    {
+      "context": "EPD",
+      "disposition": "KEEP",
+      "path": "internal/doctor/doctor.go"
+    },
+    {
+      "context": "EPD",
+      "disposition": "KEEP",
+      "path": "internal/doctor/doctor_test.go"
+    },
+    {
+      "context": "EPD",
+      "disposition": "DELETE",
+      "path": "internal/evidence/"
+    },
+    {
+      "context": "HCR",
+      "disposition": "DELETE",
+      "path": "internal/hostruntime/"
+    },
+    {
+      "context": "ACI",
+      "disposition": "DEFER",
+      "path": "internal/model/types.go"
+    },
+    {
+      "context": "MMI",
+      "disposition": "DELETE",
+      "path": "internal/mutationintegrity/"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/reviewtransaction/compact_reviewer_capture.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/reviewtransaction/compact_reviewer_capture_test.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/reviewtransaction/rar_plan_authority.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/reviewtransaction/rar_plan_authority_test.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/reviewtransaction/rdd_mode.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/reviewtransaction/rdd_mode_test.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/reviewtransaction/risk.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/reviewtransaction/risk_test.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "DEFER",
+      "path": "internal/reviewtransaction/verification_consent.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "DEFER",
+      "path": "internal/reviewtransaction/verification_consent_test.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/reviewtransaction/verification_contract.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/reviewtransaction/verification_contract_test.go"
+    },
+    {
+      "context": "SDD",
+      "disposition": "KEEP",
+      "path": "internal/sddstatus/runtime_ledger.go"
+    },
+    {
+      "context": "SDD",
+      "disposition": "KEEP",
+      "path": "internal/sddstatus/runtime_ledger_test.go"
+    },
+    {
+      "context": "SDD",
+      "disposition": "DELETE",
+      "path": "internal/sddstatus/workrun_binding.go"
+    },
+    {
+      "context": "SDD",
+      "disposition": "DELETE",
+      "path": "internal/sddstatus/workrun_binding_test.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/state/state.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "KEEP",
+      "path": "internal/state/state_test.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "DEFER",
+      "path": "internal/testdata/golden/trigger-rules-default.golden"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/workprovider/"
+    },
+    {
+      "context": "PAD",
+      "disposition": "DELETE",
+      "path": "internal/workprovider/pad_candidate_catalog.go"
+    },
+    {
+      "context": "HCR",
+      "disposition": "DELETE",
+      "path": "internal/workprovider/pad_git_object_authority.go"
+    },
+    {
+      "context": "MMI",
+      "disposition": "DELETE",
+      "path": "internal/workprovider/productive_advance_path_unix.go"
+    },
+    {
+      "context": "MMI",
+      "disposition": "DELETE",
+      "path": "internal/workprovider/productive_advance_path_windows.go"
+    },
+    {
+      "context": "HCR",
+      "disposition": "DELETE",
+      "path": "internal/workprovider/productive_advance_recovery_test.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "DELETE",
+      "path": "internal/workprovider/productive_verification_consent.go"
+    },
+    {
+      "context": "MMI",
+      "disposition": "DELETE",
+      "path": "internal/workprovider/runtime_policy_provisioner.go"
+    },
+    {
+      "context": "MMI",
+      "disposition": "DELETE",
+      "path": "internal/workrun/"
+    },
+    {
+      "context": "MMI",
+      "disposition": "DELETE",
+      "path": "internal/workrun/path_safety.go"
+    },
+    {
+      "context": "MMI",
+      "disposition": "DELETE",
+      "path": "internal/workrun/path_safety_unix.go"
+    },
+    {
+      "context": "MMI",
+      "disposition": "DELETE",
+      "path": "internal/workrun/path_safety_windows.go"
+    },
+    {
+      "context": "MMI",
+      "disposition": "DELETE",
+      "path": "internal/workrun/store.go"
+    },
+    {
+      "context": "RAR",
+      "disposition": "DELETE",
+      "path": "internal/workrun/verification_consent.go"
+    },
+    {
+      "context": "ACI",
+      "disposition": "DEFER",
+      "path": "testdata/golden/organic-routing-manifest.json"
+    }
+  ]
+}

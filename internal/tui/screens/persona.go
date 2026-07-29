@@ -3,8 +3,8 @@ package screens
 import (
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 )
 
 func PersonaOptions() []model.PersonaID {
@@ -12,9 +12,9 @@ func PersonaOptions() []model.PersonaID {
 }
 
 var personaDescriptions = map[model.PersonaID]string{
-	model.PersonaGentleman:                 "Managed Gentleman persona with teaching-first guidance",
-	model.PersonaGentlemanNeutralArtifacts: "Gentleman conversation with English technical artifacts and comments in context language",
-	model.PersonaNeutral:                   "Managed neutral persona with the same guidance and less regional tone",
+	model.PersonaGentleman:                 "Voseo conversation; English technical artifacts",
+	model.PersonaGentlemanNeutralArtifacts: "Voseo conversation; English technical artifacts (legacy alias)",
+	model.PersonaNeutral:                   "No regional conversation tone; English technical artifacts",
 	model.PersonaCustom:                    "Do not install a managed persona; choose themes/logo on the next screens",
 }
 

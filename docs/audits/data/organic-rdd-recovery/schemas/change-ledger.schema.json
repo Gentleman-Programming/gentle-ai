@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/audits/data/organic-rdd-recovery/schemas/change-ledger.schema.json",
+  "title": "Organic RDD recovery change ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "changes"
+  ],
+  "properties": {
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "disposition",
+          "path"
+        ],
+        "properties": {
+          "context": {"$ref": "#/$defs/context"},
+          "disposition": {"$ref": "#/$defs/disposition"},
+          "path": {"$ref": "#/$defs/path"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "path": {"type": "string", "minLength": 1},
+    "context": {
+      "enum": ["HCR", "MMI", "ACI", "MCA", "RAR", "EPD", "DSR", "SDD", "PAD"]
+    },
+    "disposition": {
+      "enum": ["KEEP", "TRANSPLANT", "REWRITE", "DELETE", "REGENERATE", "DEFER"]
+    }
+  }
+}

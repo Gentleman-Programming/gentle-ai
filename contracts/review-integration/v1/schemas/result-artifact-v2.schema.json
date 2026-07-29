@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/result-artifact-v2.schema.json",
+  "title": "Gentle AI native reviewer result artifact v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "capability",
+    "sha256",
+    "lineage_id",
+    "target_identity",
+    "lens",
+    "selected_order",
+    "subject_hash",
+    "admission_decision"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-result-artifact/v2"},
+    "capability": {"const": "review.native_result_artifact"},
+    "path": {"type": "string", "minLength": 1},
+    "reference": {"type": "string", "pattern": "^rart1_[0-9a-f]{64}$"},
+    "sha256": {"$ref": "#/$defs/sha256"},
+    "lineage_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "target_identity": {"$ref": "#/$defs/sha256"},
+    "lens": {"enum": ["review-risk", "review-resilience", "review-readability", "review-reliability"]},
+    "selected_order": {"type": "integer", "minimum": 0, "maximum": 3},
+    "subject_hash": {"$ref": "#/$defs/sha256"},
+    "admission_decision": {"const": "completed"}
+  },
+  "oneOf": [
+    {"required": ["path"], "not": {"required": ["reference"]}},
+    {"required": ["reference"], "not": {"required": ["path"]}}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/targeted-validation-request.schema.json",
+  "title": "Gentle AI provider-owned targeted validation request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "request_hash",
+    "lineage_id",
+    "expected_revision",
+    "target_identity",
+    "fix_finding_ids",
+    "projection",
+    "correction_candidate_tree",
+    "correction_target_identity",
+    "correction_paths",
+    "correction_paths_digest"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-targeted-validation-request/v1"},
+    "request_hash": {"$ref": "#/$defs/sha256"},
+    "lineage_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "expected_revision": {"$ref": "#/$defs/sha256"},
+    "target_identity": {"$ref": "#/$defs/sha256"},
+    "fix_finding_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "projection": {"enum": ["workspace", "staged"]},
+    "correction_candidate_tree": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+    "correction_target_identity": {"$ref": "#/$defs/sha256"},
+    "correction_paths": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "correction_paths_digest": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

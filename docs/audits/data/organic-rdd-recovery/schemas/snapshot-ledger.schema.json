@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/audits/data/organic-rdd-recovery/schemas/snapshot-ledger.schema.json",
+  "title": "Organic RDD recovery snapshot ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "backlog",
+    "reconciliation"
+  ],
+  "properties": {
+    "backlog": {
+      "description": "Every snapshot issue and pull request, exactly once. The counts in reconciliation are derived from these items, so a document carrying only the counts is incomplete evidence.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "context",
+          "disposition",
+          "kind",
+          "number"
+        ],
+        "properties": {
+          "action": {"type": "string", "minLength": 1},
+          "context": {
+            "type": "string",
+            "enum": [
+              "ACI",
+              "DSR",
+              "EPD",
+              "HCR",
+              "MCA",
+              "MMI",
+              "PAD",
+              "RAR",
+              "SDD"
+            ]
+          },
+          "disposition": {"type": "string", "minLength": 1},
+          "kind": {
+            "type": "string",
+            "enum": [
+              "issue",
+              "pull_request"
+            ]
+          },
+          "number": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "reconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "collisionPrs",
+        "decompositions",
+        "issues",
+        "overlaps",
+        "pullRequests"
+      ],
+      "properties": {
+        "collisionPrs": {"type": "integer", "minimum": 0},
+        "decompositions": {"type": "integer", "minimum": 0},
+        "issues": {"type": "integer", "minimum": 0},
+        "overlaps": {"type": "integer", "minimum": 0},
+        "pullRequests": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

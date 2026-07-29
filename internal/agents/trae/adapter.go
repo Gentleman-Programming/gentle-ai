@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 type statResult struct {
@@ -60,7 +62,13 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 
 // --- Installation ---
 
-func (a *Adapter) SupportsAutoInstall() bool { return false }
+func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.MustForAgent(model.AgentTrae)
+}
+
+func (a *Adapter) SupportsAutoInstall() bool {
+	return a.CapabilityManifest().Features.AutoInstall
+}
 
 func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 	return nil, AgentNotInstallableError{Agent: model.AgentTrae}
@@ -118,37 +126,60 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 
 // traeUserDir returns the OS-specific Trae User config directory.
 // Trae follows VS Code conventions substituting "Trae" for "Code".
+//
+// Environment overrides (XDG_CONFIG_HOME, APPDATA) are honored only when
+// homeDir is the real user home: a caller that passes a custom installation
+// root (sandboxed installs, tests) must stay contained inside that root, so
+// ambient environment can never redirect a write outside it.
 func (a *Adapter) traeUserDir(homeDir string) string {
 	switch runtime.GOOS {
 	case "darwin":
 		return filepath.Join(homeDir, "Library", "Application Support", "Trae", "User")
 	case "windows":
-		appData := os.Getenv("APPDATA")
-		if appData == "" {
-			appData = filepath.Join(homeDir, "AppData", "Roaming")
+		if appData := strings.TrimSpace(os.Getenv("APPDATA")); filepath.IsAbs(appData) && isRealUserHome(homeDir) {
+			return filepath.Join(appData, "Trae", "User")
 		}
-		return filepath.Join(appData, "Trae", "User")
+		return filepath.Join(homeDir, "AppData", "Roaming", "Trae", "User")
 	default: // linux and others
-		xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
-		if xdgConfigHome == "" {
-			xdgConfigHome = filepath.Join(homeDir, ".config")
+		if xdgConfigHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); filepath.IsAbs(xdgConfigHome) && isRealUserHome(homeDir) {
+			return filepath.Join(xdgConfigHome, "Trae", "User")
 		}
-		return filepath.Join(xdgConfigHome, "Trae", "User")
+		return filepath.Join(homeDir, ".config", "Trae", "User")
 	}
+}
+
+// isRealUserHome reports whether homeDir is the current user's actual home
+// directory — the only case where process-wide environment overrides may
+// legitimately steer config resolution away from homeDir.
+func isRealUserHome(homeDir string) bool {
+	userHome, err := os.UserHomeDir()
+	return err == nil && filepath.Clean(homeDir) == filepath.Clean(userHome)
 }
 
 // --- Optional capabilities ---
 
-func (a *Adapter) SupportsOutputStyles() bool     { return false }
+func (a *Adapter) SupportsOutputStyles() bool {
+	return a.CapabilityManifest().Features.OutputStyles
+}
 func (a *Adapter) OutputStyleDir(_ string) string { return "" }
-func (a *Adapter) SupportsSlashCommands() bool    { return false }
-func (a *Adapter) CommandsDir(_ string) string    { return "" }
-func (a *Adapter) SupportsSubAgents() bool        { return false }
-func (a *Adapter) SubAgentsDir(_ string) string   { return "" }
-func (a *Adapter) EmbeddedSubAgentsDir() string   { return "" }
-func (a *Adapter) SupportsSkills() bool           { return true }
-func (a *Adapter) SupportsSystemPrompt() bool     { return true }
-func (a *Adapter) SupportsMCP() bool              { return true }
+func (a *Adapter) SupportsSlashCommands() bool {
+	return a.CapabilityManifest().Features.SlashCommands
+}
+func (a *Adapter) CommandsDir(_ string) string { return "" }
+func (a *Adapter) SupportsSubAgents() bool {
+	return a.CapabilityManifest().Features.FileSubAgents
+}
+func (a *Adapter) SubAgentsDir(_ string) string { return "" }
+func (a *Adapter) EmbeddedSubAgentsDir() string { return "" }
+func (a *Adapter) SupportsSkills() bool {
+	return a.CapabilityManifest().Features.Skills
+}
+func (a *Adapter) SupportsSystemPrompt() bool {
+	return a.CapabilityManifest().Features.SystemPrompt
+}
+func (a *Adapter) SupportsMCP() bool {
+	return a.CapabilityManifest().Features.MCP
+}
 
 // AgentNotInstallableError is returned when InstallCommand is called on a desktop-only agent.
 type AgentNotInstallableError struct {

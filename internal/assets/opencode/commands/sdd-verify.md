@@ -26,6 +26,6 @@ DEPENDENCY CHECK:
 - Tell the user what is missing and suggest `/sdd-continue <change>` or `/sdd-apply <change>` as appropriate.
 
 TASK:
-If all gates pass, launch the hidden `sdd-verify` sub-agent with the structured status, references to available artifacts, resolved review budget, and strict TDD instructions if `sdd-init` detected strict TDD.
+If all gates pass and the native bounded transaction is `ready_final_verification` or `final_verifying`, launch the hidden `sdd-verify` sub-agent with the structured status, exact transaction/ledger references, available artifacts, and strict TDD instructions if `sdd-init` detected strict TDD. This is the single independent requirements/runtime verification; a contradiction escalates and never starts another review/refuter/fix loop.
 
 Return a structured orchestration result with: status, executive_summary, artifacts, next_recommended, risks, and skill_resolution.

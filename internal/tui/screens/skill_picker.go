@@ -1,35 +1,13 @@
 package screens
 
 import (
+	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 )
-
-// sddSkillIDs are the SDD orchestrator skills shown in the first group.
-var sddSkillIDs = []model.SkillID{
-	model.SkillSDDInit,
-	model.SkillSDDExplore,
-	model.SkillSDDPropose,
-	model.SkillSDDSpec,
-	model.SkillSDDDesign,
-	model.SkillSDDTasks,
-	model.SkillSDDApply,
-	model.SkillSDDVerify,
-	model.SkillSDDArchive,
-	model.SkillSDDOnboard,
-	model.SkillJudgmentDay,
-}
-
-// foundationSkillIDs are the baseline/learning skills shown in the second group.
-var foundationSkillIDs = []model.SkillID{
-	model.SkillGoTesting,
-	model.SkillCreator,
-	model.SkillBranchPR,
-	model.SkillIssueCreation,
-}
 
 // skillLabels maps each SkillID to a human-readable display label.
 var skillLabels = map[model.SkillID]string{
@@ -50,6 +28,15 @@ var skillLabels = map[model.SkillID]string{
 	model.SkillIssueCreation: "Issue Creation",
 }
 
+var additionalSkillLabels = map[model.SkillID]string{
+	model.SkillImprover:        "Skill Improver",
+	model.SkillSkillRegistry:   "Skill Registry",
+	model.SkillChainedPR:       "Chained PR",
+	model.SkillCognitiveDoc:    "Cognitive Doc Design",
+	model.SkillCommentWriter:   "Comment Writer",
+	model.SkillWorkUnitCommits: "Work Unit Commits",
+}
+
 // SkillPickerOptions returns the action buttons shown after the skill checkboxes.
 func SkillPickerOptions() []string {
 	return []string{"Continue", "Back"}
@@ -66,7 +53,7 @@ func SkillPickerOptionCount() int {
 }
 
 // RenderSkillPicker renders the skill selection screen for custom preset mode.
-func RenderSkillPicker(selectedSkills []model.SkillID, cursor int) string {
+func RenderSkillPicker(selectedSkills []model.SkillID, cursor, height int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Select Skills"))
@@ -79,47 +66,56 @@ func RenderSkillPicker(selectedSkills []model.SkillID, cursor int) string {
 		selectedSet[s] = struct{}{}
 	}
 
-	allSkills := AllSkillsOrdered()
-
-	// ── SDD Skills group ──────────────────────────────────────────────────────
-	b.WriteString(styles.HeadingStyle.Render("SDD Skills"))
-	b.WriteString("\n")
-
-	for idx, skillID := range sddSkillIDs {
-		_, checked := selectedSet[skillID]
-		focused := idx == cursor
-		label := skillLabelFor(skillID)
-		b.WriteString(renderCheckbox(label, checked, focused))
+	allSkills, actions := AllSkillsOrdered(), SkillPickerOptions()
+	total, sddCount := len(allSkills)+len(actions), len(skills.SkillsForPreset(model.PresetMinimal))
+	start, end := skillPickerWindow(cursor, height, total)
+	for idx := start; idx < end; idx++ {
+		if idx < len(allSkills) {
+			if idx == start || idx == sddCount {
+				heading := "SDD Skills"
+				if idx >= sddCount {
+					b.WriteString("\n")
+					heading = "Foundation Skills"
+				}
+				b.WriteString(styles.HeadingStyle.Render(heading) + "\n")
+			}
+			_, checked := selectedSet[allSkills[idx]]
+			b.WriteString(renderCheckbox(skillLabelFor(allSkills[idx]), checked, idx == cursor))
+		} else {
+			focus := -1
+			if idx == len(allSkills) {
+				b.WriteString("\n")
+			}
+			if idx == cursor {
+				focus = 0
+			}
+			b.WriteString(renderOptions([]string{actions[idx-len(allSkills)]}, focus))
+		}
 	}
-
-	b.WriteString("\n")
-
-	// ── Foundation Skills group ───────────────────────────────────────────────
-	b.WriteString(styles.HeadingStyle.Render("Foundation Skills"))
-	b.WriteString("\n")
-
-	for i, skillID := range foundationSkillIDs {
-		idx := len(sddSkillIDs) + i
-		_, checked := selectedSet[skillID]
-		focused := idx == cursor
-		label := skillLabelFor(skillID)
-		b.WriteString(renderCheckbox(label, checked, focused))
+	if start > 0 || end < total {
+		b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("Rows %d-%d of %d", start+1, end, total)) + "\n")
 	}
-
-	b.WriteString("\n")
-
-	// ── Action buttons ────────────────────────────────────────────────────────
-	actionOffset := cursor - len(allSkills)
-	b.WriteString(renderOptions(SkillPickerOptions(), actionOffset))
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("j/k: navigate • space/enter: toggle • esc: back"))
 
 	return b.String()
 }
 
+func skillPickerWindow(cursor, height, total int) (int, int) {
+	if height <= 0 || total <= height-8 {
+		return 0, total
+	}
+	visible := max(1, height-8)
+	start := max(0, min(cursor-visible/2, total-visible))
+	return start, start + visible
+}
+
 // skillLabelFor returns the human-readable label for a skill ID.
 func skillLabelFor(id model.SkillID) string {
 	if label, ok := skillLabels[id]; ok {
+		return label
+	}
+	if label, ok := additionalSkillLabels[id]; ok {
 		return label
 	}
 	return string(id)

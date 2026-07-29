@@ -26,7 +26,6 @@ const (
 	InstallBrew      InstallMethod = "brew"
 	InstallGoInstall InstallMethod = "go-install"
 	InstallBinary    InstallMethod = "binary"
-	InstallInstaller InstallMethod = "installer"
 	// InstallScript downloads and executes the project's install.sh via pipe.
 	// Used for tools that distribute via shell scripts rather than pre-built binaries
 	// (e.g., GGA which has no release binary assets).

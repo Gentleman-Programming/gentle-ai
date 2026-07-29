@@ -1,7 +1,7 @@
 package screens
 
 import (
-	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 )
 
 func renderOptions(options []string, cursor int) string {
@@ -15,6 +15,12 @@ func renderOptions(options []string, cursor int) string {
 	}
 
 	return output
+}
+
+func RenderOperationRunning(title, detail string, spinnerFrame int) string {
+	return styles.TitleStyle.Render(title) + "\n\n" +
+		styles.WarningStyle.Render(SpinnerChar(spinnerFrame)+"  "+detail) + "\n\n" +
+		styles.HelpStyle.Render("Please wait...")
 }
 
 func renderCheckbox(label string, checked bool, focused bool) string {

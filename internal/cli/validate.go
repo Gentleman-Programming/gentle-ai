@@ -2,11 +2,12 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 type InstallInput struct {
@@ -21,7 +22,11 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 
 	agents := defaultAgentsFromDetection(detection)
 	if len(flags.Agents) > 0 {
-		agents = asAgentIDs(flags.Agents)
+		parsed, err := asAgentIDs(flags.Agents)
+		if err != nil {
+			return InstallInput{}, err
+		}
+		agents = parsed
 	}
 	selection.Agents = unique(agents)
 
@@ -215,13 +220,34 @@ func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentI
 	return agents
 }
 
-func asAgentIDs(values []string) []model.AgentID {
+// asAgentIDs converts raw --agent/--agents flag values into model.AgentID,
+// rejecting any value that is not a real, supported agent. The valid set is
+// derived from catalog.AllAgents() -- the same canonical agent registry used
+// by internal/app/app.go's default agent list -- so it can never drift from
+// a hand-written list (install/sync surface audit finding 3: an unknown
+// value like `cluade` previously converted silently and was later dropped
+// without any error, so `gentle-ai sync --agent cluade` reported success
+// having synced nothing).
+func asAgentIDs(values []string) ([]model.AgentID, error) {
+	supported := catalog.AllAgents()
+	allowed := make(map[model.AgentID]struct{}, len(supported))
+	names := make([]string, 0, len(supported))
+	for _, agent := range supported {
+		allowed[agent.ID] = struct{}{}
+		names = append(names, string(agent.ID))
+	}
+	sort.Strings(names)
+
 	agents := make([]model.AgentID, 0, len(values))
 	for _, value := range values {
-		agents = append(agents, model.AgentID(value))
+		id := model.AgentID(value)
+		if _, ok := allowed[id]; !ok {
+			return nil, fmt.Errorf("unsupported agent %q (valid: %s)", value, strings.Join(names, ", "))
+		}
+		agents = append(agents, id)
 	}
 
-	return agents
+	return agents, nil
 }
 
 func isPiOnlyAgents(agents []model.AgentID) bool {

@@ -3,11 +3,11 @@ package screens
 import (
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 )
 
 // RenderABGenerating renders the generation-in-progress (or error) screen.
-func RenderABGenerating(engineName string, spinnerFrame int, genErr error) string {
+func RenderABGenerating(engineName string, spinnerFrame int, genErr error, cursor int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Generating Your Agent..."))
@@ -20,7 +20,7 @@ func RenderABGenerating(engineName string, spinnerFrame int, genErr error) strin
 		b.WriteString("\n")
 		b.WriteString(styles.ErrorStyle.Render("  Error: " + genErr.Error()))
 		b.WriteString("\n\n")
-		b.WriteString(renderOptions([]string{"Retry", "Back"}, 0))
+		b.WriteString(renderOptions([]string{"Retry", "Back"}, cursor))
 		b.WriteString("\n")
 		b.WriteString(styles.HelpStyle.Render("enter: select • esc: back"))
 		return b.String()

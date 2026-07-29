@@ -426,13 +426,32 @@ func JDPhases() []string {
 	}
 }
 
+const ReviewRefuterAgent = "review-refuter"
+
+// ReviewLensPhases returns the ordered native bounded-review lens agents.
+func ReviewLensPhases() []string {
+	return []string{
+		"review-risk",
+		"review-readability",
+		"review-reliability",
+		"review-resilience",
+	}
+}
+
+// ReviewPhases returns every agent invoked by the native review lifecycle.
+func ReviewPhases() []string {
+	phases := ReviewLensPhases()
+	return append(phases, ReviewRefuterAgent)
+}
+
 // ConfigurableAgentPhases returns all agent names that support per-agent
-// model configuration. This includes SDD phases + JD agents.
+// model configuration. This includes SDD, Judgment Day, and review agents.
 // Used by the inject model assignment table builder and the configurable agent set
-// in ReadCurrentModelAssignments. The TUI model picker uses SDDPhases() and
-// JDPhases() separately for row layout control.
+// in ReadCurrentModelAssignments. The TUI uses each role family separately
+// for row layout control.
 func ConfigurableAgentPhases() []string {
 	phases := SDDPhases()
 	phases = append(phases, JDPhases()...)
+	phases = append(phases, ReviewPhases()...)
 	return phases
 }

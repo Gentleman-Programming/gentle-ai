@@ -1,12 +1,54 @@
 package vscode
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
+
+func TestDetectRequiresVSCodeAndCopilotExtension(t *testing.T) {
+	home := t.TempDir()
+	a := NewAdapter()
+	a.lookPath = func(string) (string, error) { return filepath.Join(home, "bin", "code"), nil }
+
+	if err := os.MkdirAll(filepath.Join(home, ".copilot", "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installed, _, _, _, err := a.Detect(context.Background(), home)
+	if err != nil || installed {
+		t.Fatalf("Detect() with skills only = %v, %v; want false, nil", installed, err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(home, ".vscode", "extensions", "github.copilot-1.2.3"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installed, _, _, evidence, err := a.Detect(context.Background(), home)
+	if err != nil || !installed || !evidence {
+		t.Fatalf("Detect() with Copilot extension = %v, %v, %v; want true, true, nil", installed, evidence, err)
+	}
+}
+
+func TestDetectIgnoresStaleManagedConfiguration(t *testing.T) {
+	home := t.TempDir()
+	a := NewAdapter()
+	a.lookPath = func(string) (string, error) { return filepath.Join(home, "bin", "code"), nil }
+	for _, path := range []string{a.SystemPromptFile(home), a.MCPConfigPath(home, "codegraph")} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installed, _, _, _, err := a.Detect(context.Background(), home)
+	if err != nil || installed {
+		t.Fatalf("Detect() with stale managed config = %v, %v; want false, nil", installed, err)
+	}
+}
 
 func TestStrategies(t *testing.T) {
 	a := NewAdapter()
@@ -54,11 +96,23 @@ func TestSettingsPathUsesVSCodeUserProfile(t *testing.T) {
 			t.Fatalf("SettingsPath() = %q, want %q", path, want)
 		}
 	default:
+		// A custom root never follows ambient XDG_CONFIG_HOME: containment wins.
 		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 		path := a.SettingsPath(home)
-		want := filepath.Join(home, "xdg", "Code", "User", "settings.json")
+		want := filepath.Join(home, ".config", "Code", "User", "settings.json")
 		if path != want {
 			t.Fatalf("SettingsPath() = %q, want %q", path, want)
+		}
+
+		// The real user home is the only root that honors XDG_CONFIG_HOME.
+		realHome, err := os.UserHomeDir()
+		if err != nil {
+			t.Fatalf("UserHomeDir() error = %v", err)
+		}
+		path = a.SettingsPath(realHome)
+		want = filepath.Join(home, "xdg", "Code", "User", "settings.json")
+		if path != want {
+			t.Fatalf("SettingsPath(realHome) = %q, want %q", path, want)
 		}
 	}
 }
@@ -83,11 +137,23 @@ func TestMCPConfigPathUsesVSCodeUserProfile(t *testing.T) {
 			t.Fatalf("MCPConfigPath() = %q, want %q", path, want)
 		}
 	default:
+		// A custom root never follows ambient XDG_CONFIG_HOME: containment wins.
 		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 		path := a.MCPConfigPath(home, "context7")
-		want := filepath.Join(home, "xdg", "Code", "User", "mcp.json")
+		want := filepath.Join(home, ".config", "Code", "User", "mcp.json")
 		if path != want {
 			t.Fatalf("MCPConfigPath() = %q, want %q", path, want)
+		}
+
+		// The real user home is the only root that honors XDG_CONFIG_HOME.
+		realHome, err := os.UserHomeDir()
+		if err != nil {
+			t.Fatalf("UserHomeDir() error = %v", err)
+		}
+		path = a.MCPConfigPath(realHome, "context7")
+		want = filepath.Join(home, "xdg", "Code", "User", "mcp.json")
+		if path != want {
+			t.Fatalf("MCPConfigPath(realHome) = %q, want %q", path, want)
 		}
 	}
 }

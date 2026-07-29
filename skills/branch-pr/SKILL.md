@@ -35,7 +35,7 @@ Load this skill whenever you need to:
 
 3. Implement changes following specs and design
 
-4. Run tests locally (unit + E2E)
+4. Run checks locally (format + unit + E2E)
 
 5. Commit using Conventional Commits format
 
@@ -112,12 +112,18 @@ Closes #<N>
 go test ./...
 \`\`\`
 
+**Go Format**
+\`\`\`bash
+go run ./internal/gofmtcheck
+\`\`\`
+
 **E2E Tests** (Docker required)
 \`\`\`bash
 cd e2e && ./docker-test.sh
 \`\`\`
 
 - [ ] Unit tests pass (`go test ./...`)
+- [ ] Go format passes (`go run ./internal/gofmtcheck`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
 - [ ] Manually tested locally
 
@@ -146,6 +152,7 @@ These checks run on every PR and **all must pass** before merge:
 | **Check Issue Has `status:approved`** | Linked issue has been approved by a maintainer | Wait for maintainer to add `status:approved` to the issue |
 | **Check PR Has `type:*` Label** | Exactly one `type:*` label is applied to the PR | Ask a maintainer to add the correct label; remove extras |
 | **Unit Tests** | `go test ./...` passes | Fix failing tests before pushing |
+| **Go Format** | `go run ./internal/gofmtcheck` passes | Format malformed Go files before pushing |
 | **E2E Tests** | `cd e2e && ./docker-test.sh` passes | Fix failing E2E scenarios before pushing |
 
 ---
@@ -233,6 +240,9 @@ git checkout -b fix/<short-description>
 ```bash
 # Unit tests
 go test ./...
+
+# Go format
+go run ./internal/gofmtcheck
 
 # Unit tests — specific package
 go test ./internal/tui/...

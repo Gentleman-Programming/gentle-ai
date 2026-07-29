@@ -33,4 +33,7 @@ type ExecutionResult struct {
 	Apply    StageResult
 	Rollback StageResult
 	Err      error
+	// ManualActions are non-fatal but actionable outcomes propagated by runtime
+	// steps to both CLI and TUI completion renderers.
+	ManualActions []string
 }

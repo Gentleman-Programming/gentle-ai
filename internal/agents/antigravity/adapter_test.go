@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 // makeStatFn returns a statPath function that reports the given paths as existing
@@ -114,7 +114,7 @@ func TestDetect(t *testing.T) {
 			name:            "neither exists, falls back to CLI path",
 			existingDirs:    []string{},
 			wantInstalled:   false,
-			wantConfigPath:  cliDir,
+			wantConfigPath:  filepath.Join(home, ".gemini", "antigravity"),
 			wantConfigFound: false,
 		},
 		{
@@ -175,7 +175,7 @@ func TestConfigPathsCLIOnly(t *testing.T) {
 		t.Fatalf("SettingsPath() = %q, want %q", got, filepath.Join(cliDir, "settings.json"))
 	}
 	if got := a.MCPConfigPath(home, "ctx7"); got != filepath.Join(cliDir, "mcp_config.json") {
-		t.Fatalf("MCPConfigPath() = %q, want %q", got, filepath.Join(cliDir, "mcp_config.json"))
+		t.Fatalf("MCPConfigPath() = %q, want Gentle AI CLI path", got)
 	}
 }
 
@@ -194,7 +194,7 @@ func TestConfigPathsDesktopOnly(t *testing.T) {
 		t.Fatalf("SettingsPath() = %q, want %q", got, filepath.Join(desktopDir, "settings.json"))
 	}
 	if got := a.MCPConfigPath(home, "ctx7"); got != filepath.Join(desktopDir, "mcp_config.json") {
-		t.Fatalf("MCPConfigPath() = %q, want %q", got, filepath.Join(desktopDir, "mcp_config.json"))
+		t.Fatalf("MCPConfigPath() = %q, want Gentle AI desktop path", got)
 	}
 }
 
@@ -214,11 +214,41 @@ func TestConfigPathsBothExistPrefersDesktop(t *testing.T) {
 
 func TestConfigPathsNeitherExistsFallsBackToCLI(t *testing.T) {
 	home := t.TempDir()
-	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
 	a := &Adapter{statPath: makeStatFn()}
 
-	if got := a.GlobalConfigDir(home); got != cliDir {
-		t.Fatalf("GlobalConfigDir() = %q, want %q (should fall back to CLI)", got, cliDir)
+	if got := a.GlobalConfigDir(home); got != filepath.Join(home, ".gemini", "antigravity") {
+		t.Fatalf("GlobalConfigDir() = %q, want upstream legacy root", got)
+	}
+}
+
+func TestUpstreamDetectionScenarios(t *testing.T) {
+	home := t.TempDir()
+	legacy := filepath.Join(home, ".gemini", "antigravity")
+	config := filepath.Join(home, ".gemini", "config")
+	marker := filepath.Join(config, ".migrated")
+	geminiOnly := filepath.Join(home, ".gemini")
+	tests := []struct {
+		name     string
+		existing []string
+		want     bool
+		root     string
+	}{
+		{"legacy", []string{legacy}, true, legacy},
+		{"unified", []string{config, marker}, true, config},
+		{"half migrated marker", []string{marker}, true, config},
+		{"Gemini only", []string{geminiOnly}, false, legacy},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &Adapter{statPath: makeStatFn(tt.existing...)}
+			installed, _, _, _, err := a.Detect(context.Background(), home)
+			if err != nil || installed != tt.want {
+				t.Fatalf("Detect() = %v, %v, want %v", installed, err, tt.want)
+			}
+			if got := a.GlobalConfigDir(home); got != tt.root {
+				t.Errorf("GlobalConfigDir() = %q, want %q", got, tt.root)
+			}
+		})
 	}
 }
 

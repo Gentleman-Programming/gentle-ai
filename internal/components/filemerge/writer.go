@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/gentleman-programming/gentle-ai/internal/symlinkguard"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/symlinkguard"
 )
 
 // runtimeGOOS and syncDirFn are package-level vars so tests can override them

@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 const testHome = "/tmp/home"
@@ -93,43 +93,67 @@ func TestConfigPathsCrossPlatform(t *testing.T) {
 
 func TestOSSpecificPaths(t *testing.T) {
 	a := NewAdapter()
-	home := testHome
+
+	realHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir() error = %v", err)
+	}
 
 	tests := []struct {
 		name    string
 		goos    string
+		home    string
 		envVars map[string]string
 		wantDir string
 	}{
 		{
 			name:    "macOS",
 			goos:    "darwin",
+			home:    testHome,
 			envVars: map[string]string{},
-			wantDir: filepath.Join(home, "Library", "Application Support", "Trae", "User"),
+			wantDir: filepath.Join(testHome, "Library", "Application Support", "Trae", "User"),
 		},
 		{
 			name:    "Linux default XDG",
 			goos:    "linux",
+			home:    testHome,
 			envVars: map[string]string{},
-			wantDir: filepath.Join(home, ".config", "Trae", "User"),
+			wantDir: filepath.Join(testHome, ".config", "Trae", "User"),
 		},
 		{
-			name:    "Linux custom XDG",
+			name:    "Linux custom XDG for the real home",
 			goos:    "linux",
+			home:    realHome,
 			envVars: map[string]string{"XDG_CONFIG_HOME": "/custom/config"},
 			wantDir: "/custom/config/Trae/User",
 		},
 		{
-			name:    "Windows default APPDATA",
-			goos:    "windows",
-			envVars: map[string]string{},
-			wantDir: filepath.Join(home, "AppData", "Roaming", "Trae", "User"),
+			name:    "Linux custom XDG never escapes a custom root",
+			goos:    "linux",
+			home:    testHome,
+			envVars: map[string]string{"XDG_CONFIG_HOME": "/custom/config"},
+			wantDir: filepath.Join(testHome, ".config", "Trae", "User"),
 		},
 		{
-			name:    "Windows custom APPDATA",
+			name:    "Windows default APPDATA",
 			goos:    "windows",
+			home:    testHome,
+			envVars: map[string]string{},
+			wantDir: filepath.Join(testHome, "AppData", "Roaming", "Trae", "User"),
+		},
+		{
+			name:    "Windows custom APPDATA for the real home",
+			goos:    "windows",
+			home:    realHome,
 			envVars: map[string]string{"APPDATA": "C:\\CustomAppData"},
 			wantDir: "C:\\CustomAppData\\Trae\\User",
+		},
+		{
+			name:    "Windows custom APPDATA never escapes a custom root",
+			goos:    "windows",
+			home:    testHome,
+			envVars: map[string]string{"APPDATA": "C:\\CustomAppData"},
+			wantDir: filepath.Join(testHome, "AppData", "Roaming", "Trae", "User"),
 		},
 	}
 
@@ -138,6 +162,7 @@ func TestOSSpecificPaths(t *testing.T) {
 			if runtime.GOOS != tt.goos {
 				t.Skipf("Skipping %s test on %s", tt.goos, runtime.GOOS)
 			}
+			home := tt.home
 			for k, v := range tt.envVars {
 				if v != "" {
 					t.Setenv(k, v)
