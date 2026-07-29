@@ -157,8 +157,10 @@ func TestInvalidateApprovedCompactAuthorityPreservesAuthorityOnGitInfrastructure
 	originalStarter := gitProcessTreeStarter
 	t.Cleanup(func() { gitProcessTreeStarter = originalStarter })
 	gitProcessTreeStarter = func(command *exec.Cmd) (func() error, error) {
-		for _, arg := range command.Args {
-			if arg == "--cached" {
+		// Match only the batched `ls-files -z --cached` invocation this test
+		// exercises; snapshot.go runs an unrelated `ls-files --cached -z`.
+		for i, arg := range command.Args {
+			if arg == "ls-files" && i+2 < len(command.Args) && command.Args[i+1] == "-z" && command.Args[i+2] == "--cached" {
 				return nil, errors.New("job object creation rejected")
 			}
 		}
