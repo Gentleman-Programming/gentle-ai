@@ -130,14 +130,14 @@ func TestResolveRDDModeHonorsWorktreeOffPrecedence(t *testing.T) {
 	if err != nil || cloneOff.Source != RDDModeSourceCloneLocal {
 		t.Fatalf("clone off status = %#v, %v", cloneOff, err)
 	}
-	worktreeOff, err := setLocalRDDMode(ctx, repo, RDDModeOff, "", globalOff, RDDModeSourceWorktreeLocal)
+	worktreeOff, err := SetWorktreeLocalRDDMode(ctx, repo, RDDModeOff, "", globalOff)
 	if err != nil || worktreeOff.Source != RDDModeSourceWorktreeLocal {
 		t.Fatalf("worktree off status = %#v, %v", worktreeOff, err)
 	}
 	if worktreeOff.Revision != worktreeOff.WorktreeRevision {
 		t.Fatalf("deciding worktree revision = %q, want %q", worktreeOff.Revision, worktreeOff.WorktreeRevision)
 	}
-	worktreeInherit, err := setLocalRDDMode(ctx, repo, RDDModeUnset, worktreeOff.WorktreeRevision, globalOff, RDDModeSourceWorktreeLocal)
+	worktreeInherit, err := SetWorktreeLocalRDDMode(ctx, repo, RDDModeUnset, worktreeOff.WorktreeRevision, globalOff)
 	if err != nil || worktreeInherit.Source != RDDModeSourceCloneLocal {
 		t.Fatalf("worktree inherit status = %#v, %v", worktreeInherit, err)
 	}
@@ -164,8 +164,8 @@ func TestWorktreeRDDModeUsesDistinctMainWorktreeNamespace(t *testing.T) {
 	if _, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", RDDGlobalMode{Value: "on"}); err != nil {
 		t.Fatalf("SetCloneLocalRDDMode error = %v", err)
 	}
-	if _, err := setLocalRDDMode(ctx, repo, RDDModeOff, "", RDDGlobalMode{Value: "on"}, RDDModeSourceWorktreeLocal); err != nil {
-		t.Fatalf("setLocalRDDMode(worktree) error = %v", err)
+	if _, err := SetWorktreeLocalRDDMode(ctx, repo, RDDModeOff, "", RDDGlobalMode{Value: "on"}); err != nil {
+		t.Fatalf("SetWorktreeLocalRDDMode error = %v", err)
 	}
 	clonePath, err := CloneLocalRDDModeRecordPath(ctx, repo)
 	if err != nil {
@@ -187,9 +187,9 @@ func TestWorktreeRDDModeUsesDistinctMainWorktreeNamespace(t *testing.T) {
 func TestWorktreeRDDModeIsolatedAcrossLinkedWorktrees(t *testing.T) {
 	primary, linked := initRepositoryIdentityLeaseWorktree(t)
 	ctx := context.Background()
-	linkedStatus, err := setLocalRDDMode(ctx, linked, RDDModeOff, "", RDDGlobalMode{Value: "on"}, RDDModeSourceWorktreeLocal)
+	linkedStatus, err := SetWorktreeLocalRDDMode(ctx, linked, RDDModeOff, "", RDDGlobalMode{Value: "on"})
 	if err != nil {
-		t.Fatalf("setLocalRDDMode(linked worktree) error = %v", err)
+		t.Fatalf("SetWorktreeLocalRDDMode(linked worktree) error = %v", err)
 	}
 	mainStatus, err := ResolveRDDMode(ctx, primary, RDDGlobalMode{Value: "on"})
 	if err != nil {
@@ -229,9 +229,9 @@ func TestLocalRDDModeCompareAndSwapIsPerScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetCloneLocalRDDMode error = %v", err)
 	}
-	worktree, err := setLocalRDDMode(ctx, repo, RDDModeOff, "", global, RDDModeSourceWorktreeLocal)
+	worktree, err := SetWorktreeLocalRDDMode(ctx, repo, RDDModeOff, "", global)
 	if err != nil {
-		t.Fatalf("setLocalRDDMode(worktree) error = %v", err)
+		t.Fatalf("SetWorktreeLocalRDDMode error = %v", err)
 	}
 	if clone.CloneLocalRevision == "" || worktree.WorktreeRevision == "" {
 		t.Fatalf("scope revisions are not independent: clone=%#v worktree=%#v", clone, worktree)
@@ -239,7 +239,7 @@ func TestLocalRDDModeCompareAndSwapIsPerScope(t *testing.T) {
 	if _, err := SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, "", global); !errors.Is(err, ErrRDDModeRevisionMismatch) {
 		t.Fatalf("stale clone CAS error = %v, want ErrRDDModeRevisionMismatch", err)
 	}
-	if _, err := setLocalRDDMode(ctx, repo, RDDModeUnset, "", global, RDDModeSourceWorktreeLocal); !errors.Is(err, ErrRDDModeRevisionMismatch) {
+	if _, err := SetWorktreeLocalRDDMode(ctx, repo, RDDModeUnset, "", global); !errors.Is(err, ErrRDDModeRevisionMismatch) {
 		t.Fatalf("stale worktree CAS error = %v, want ErrRDDModeRevisionMismatch", err)
 	}
 }

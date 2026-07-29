@@ -201,7 +201,7 @@ func TestGlobalReviewModeEnabledPermitsButDoesNotGrantV2Consent(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	var modeOutput bytes.Buffer
-	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--json"}, &modeOutput); err != nil {
+	if err := RunReviewMode([]string{"enable", "--scope=global", "--cwd", repo, "--json"}, &modeOutput); err != nil {
 		t.Fatal(err)
 	}
 	if mode := decodeReviewModeResult(t, modeOutput.Bytes()).Status; mode.Effective != reviewtransaction.RDDModeOn {
@@ -223,7 +223,7 @@ func TestGlobalReviewModeOffRefusesBeforeV2Consent(t *testing.T) {
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
 	status := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV2, "--lineage", "review-consent-global-off")
 	var modeOutput bytes.Buffer
-	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--json"}, &modeOutput); err != nil {
+	if err := RunReviewMode([]string{"disable", "--scope=global", "--cwd", repo, "--json"}, &modeOutput); err != nil {
 		t.Fatal(err)
 	}
 
@@ -391,7 +391,7 @@ func TestHeadlessSkipNoticeNamesDefaultProvenance(t *testing.T) {
 	_ = explicitHome
 	repoExplicit := initReviewCLIRepo(t)
 	var modeOutput bytes.Buffer
-	if err := RunReviewMode([]string{"enable", "--cwd", repoExplicit, "--json"}, &modeOutput); err != nil {
+	if err := RunReviewMode([]string{"enable", "--scope=global", "--cwd", repoExplicit, "--json"}, &modeOutput); err != nil {
 		t.Fatalf("review mode enable: %v", err)
 	}
 	consoleExplicit := stubReviewConsole(t, false, "")

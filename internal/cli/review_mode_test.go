@@ -75,13 +75,9 @@ func TestReviewModeMutationsRequireExplicitScope(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	for _, operation := range []string{"enable", "disable"} {
-		t.Run(operation, func(t *testing.T) {
-			var output bytes.Buffer
-			err := RunReviewMode([]string{operation, "--cwd", repo, "--json"}, &output)
-			if err == nil || !strings.Contains(err.Error(), "requires an explicit --scope") {
-				t.Fatalf("%s without scope error = %v", operation, err)
-			}
-		})
+		if err := RunReviewMode([]string{operation, "--cwd", repo, "--json"}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "requires an explicit --scope") {
+			t.Fatalf("%s without scope error = %v", operation, err)
+		}
 	}
 }
 
@@ -102,15 +98,15 @@ func TestReviewModeScopesRouteAndReportBlastRadius(t *testing.T) {
 	}
 
 	output.Reset()
-	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "global", "--json"}, &output); err != nil {
-		t.Fatalf("enable global: %v", err)
-	}
-	output.Reset()
 	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone", "--json"}, &output); err != nil {
 		t.Fatalf("disable clone: %v", err)
 	}
+	output.Reset()
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--json"}, &output); err != nil {
+		t.Fatalf("enable clone: %v", err)
+	}
 	clone := decodeReviewModeResult(t, output.Bytes())
-	if clone.Status.Source != reviewtransaction.RDDModeSourceCloneLocal || clone.BlastRadius == nil ||
+	if clone.Status.Global != reviewtransaction.RDDModeOff || clone.Status.CloneLocal != reviewtransaction.RDDModeUnset || clone.Status.Source != reviewtransaction.RDDModeSourceGlobal || clone.BlastRadius == nil ||
 		clone.BlastRadius.WorktreesAvailable == nil || !*clone.BlastRadius.WorktreesAvailable ||
 		clone.BlastRadius.WorktreeCount != 2 || clone.BlastRadius.LinkedWorktreeCount == nil ||
 		*clone.BlastRadius.LinkedWorktreeCount != 1 || len(clone.BlastRadius.Worktrees) != 2 {
@@ -118,8 +114,8 @@ func TestReviewModeScopesRouteAndReportBlastRadius(t *testing.T) {
 	}
 
 	output.Reset()
-	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--json"}, &output); err != nil {
-		t.Fatalf("enable clone: %v", err)
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "global", "--json"}, &output); err != nil {
+		t.Fatalf("enable global: %v", err)
 	}
 	output.Reset()
 	if err := RunReviewMode([]string{"disable", "--cwd", linked, "--scope", "worktree"}, &output); err != nil {
@@ -141,31 +137,6 @@ func TestReviewModeScopesRouteAndReportBlastRadius(t *testing.T) {
 	}
 	if primaryStatus := decodeReviewModeResult(t, output.Bytes()).Status; primaryStatus.Effective != reviewtransaction.RDDModeOn {
 		t.Fatalf("worktree override leaked into primary worktree: %#v", primaryStatus)
-	}
-}
-
-func TestReviewModeEnableClearsOnlySelectedScope(t *testing.T) {
-	home := reviewModeHome(t)
-	repo := initReviewCLIRepo(t)
-	var output bytes.Buffer
-	for _, arguments := range [][]string{
-		{"disable", "--cwd", repo, "--scope", "global", "--json"},
-		{"disable", "--cwd", repo, "--scope", "clone", "--json"},
-		{"enable", "--cwd", repo, "--scope", "clone", "--json"},
-	} {
-		output.Reset()
-		if err := RunReviewMode(arguments, &output); err != nil {
-			t.Fatalf("RunReviewMode(%v): %v", arguments, err)
-		}
-	}
-	result := decodeReviewModeResult(t, output.Bytes())
-	if result.Status.Global != reviewtransaction.RDDModeOff || result.Status.CloneLocal != reviewtransaction.RDDModeUnset ||
-		result.Status.Source != reviewtransaction.RDDModeSourceGlobal {
-		t.Fatalf("clone enable changed a broader scope: %#v", result.Status)
-	}
-	persisted, err := state.Read(home)
-	if err != nil || persisted.RDDMode != string(reviewtransaction.RDDModeOff) {
-		t.Fatalf("global mode after clone enable = %#v, %v", persisted, err)
 	}
 }
 
