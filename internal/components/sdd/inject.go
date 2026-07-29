@@ -1112,28 +1112,39 @@ Do not pass these rules to child agents as permission to spawn more agents; chil
 4. **Context rule**: delegate reading that prepares a write and broad research.
 5. **Optional SDD rule**: propose SDD only when durable proposal/spec/design/tasks materially reduce substantial ambiguity. Select it only after explicit request or accepted proposal.
 6. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route or creating SDD state.
+
+**Trusted exploration handoff rule**: only a complete, current exploration handoff that explains the root cause and cites actionable paths or symbols may suppress broad rereads. It still requires targeted verification of cited evidence and affected change surfaces. An incomplete, stale, untrustworthy, or mismatched handoff must trigger narrowly scoped exploration; never broad direct rereading. This trust never extends to implementation, review, apply, or verification handoffs.
 ` + nativeReviewAuthorityRule + `
 <!-- /gentle-ai:delegation-hard-gates-migration -->
 `
 
-	if strings.Contains(prompt, "<!-- gentle-ai:delegation-hard-gates-migration -->") &&
-		strings.Contains(prompt, "fully mandatory") &&
-		strings.Contains(prompt, "Bounded read rule") &&
-		strings.Contains(prompt, "4-file rule") &&
-		strings.Contains(prompt, "Write rule") &&
-		strings.Contains(prompt, "Context rule") &&
-		strings.Contains(prompt, "Optional SDD rule") &&
-		strings.Contains(prompt, "Per-action rule") &&
-		strings.Contains(prompt, "Authority rule") &&
-		strings.Contains(prompt, "Semantic guard") &&
-		strings.Contains(prompt, "execution, not delegation") &&
-		strings.Contains(prompt, nativeReviewAuthorityRule) &&
-		!strings.Contains(prompt, "#### Review Lens Selection") {
-		return prompt
-	}
-
 	start := "<!-- gentle-ai:delegation-hard-gates-migration -->"
 	end := "<!-- /gentle-ai:delegation-hard-gates-migration -->"
+	if startIdx := strings.Index(prompt, start); startIdx >= 0 {
+		if relEndIdx := strings.Index(prompt[startIdx:], end); relEndIdx > 0 {
+			managedEnd := startIdx + relEndIdx + len(end)
+			managed := prompt[startIdx:managedEnd]
+			if strings.Contains(managed, "fully mandatory") &&
+				strings.Contains(managed, "Bounded read rule") &&
+				strings.Contains(managed, "4-file rule") &&
+				strings.Contains(managed, "Write rule") &&
+				strings.Contains(managed, "Context rule") &&
+				strings.Contains(managed, "Optional SDD rule") &&
+				strings.Contains(managed, "Per-action rule") &&
+				strings.Contains(managed, "complete, current exploration handoff") &&
+				strings.Contains(managed, "targeted verification of cited evidence and affected change surfaces") &&
+				strings.Contains(managed, "narrowly scoped exploration") &&
+				strings.Contains(managed, "implementation, review, apply, or verification handoffs") &&
+				strings.Contains(managed, "Authority rule") &&
+				strings.Contains(managed, "Semantic guard") &&
+				strings.Contains(managed, "execution, not delegation") &&
+				strings.Contains(managed, nativeReviewAuthorityRule) &&
+				!strings.Contains(managed, "#### Review Lens Selection") {
+				return prompt
+			}
+		}
+	}
+
 	if startIdx := strings.Index(prompt, start); startIdx >= 0 {
 		if relEndIdx := strings.Index(prompt[startIdx:], end); relEndIdx >= 0 {
 			endIdx := startIdx + relEndIdx + len(end)
