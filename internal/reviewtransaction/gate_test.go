@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -728,6 +729,77 @@ func TestDefaultPrePushBaseKeepsInfrastructureErrorsUntyped(t *testing.T) {
 	_, _, _, upstreamErr := configuredUpstreamRef(ctx, repo, branch)
 	if !errors.Is(upstreamErr, context.Canceled) || errors.As(upstreamErr, &targetErr) {
 		t.Fatalf("cancelled upstream lookup error = %T %v", upstreamErr, upstreamErr)
+	}
+}
+
+func TestResolveAdvertisedSelectorPreservesRemoteIdentityFailure(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	configurePublicationRemote(t, repo, branch)
+
+	original := gitCommandContext
+	t.Setenv("GENTLE_AI_TEST_GIT_PATH_FAIL", "1")
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if slicesContain(args, "config") && slicesContain(args, "remote.origin.url") {
+			return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGitAuthorityPathHelperProcess$")
+		}
+		return original(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = original })
+
+	_, err := resolveAdvertisedSelector(context.Background(), repo, "origin/"+branch, PrePRBoundaryExplicit)
+	var gitErr *GitCommandError
+	var targetErr *GateTargetResolutionError
+	if !errors.As(err, &gitErr) || errors.As(err, &targetErr) {
+		t.Fatalf("remote identity error = %T %v, want operational GitCommandError", err, err)
+	}
+}
+
+func TestResolveAdvertisedSelectorPreservesRemoteQueryFailure(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	branch := currentBranch(context.Background(), repo)
+	configurePublicationRemote(t, repo, branch)
+	gitSnapshot(t, repo, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
+
+	_, err := resolveAdvertisedSelector(context.Background(), repo, "origin/"+branch, PrePRBoundaryExplicit)
+	var gitErr *GitCommandError
+	var targetErr *GateTargetResolutionError
+	if !errors.As(err, &gitErr) || errors.As(err, &targetErr) {
+		t.Fatalf("remote query error = %T %v, want operational GitCommandError", err, err)
+	}
+}
+
+func TestResolveAdvertisedSelectorClassifiesZeroAndMultipleMatches(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		selector  string
+		configure func(*testing.T, string, string)
+	}{
+		{name: "zero", selector: "missing"},
+		{name: "multiple", configure: func(t *testing.T, repo, branch string) {
+			upstream := filepath.Join(t.TempDir(), "upstream.git")
+			gitSnapshot(t, repo, "clone", "--bare", repo, upstream)
+			gitSnapshot(t, repo, "remote", "add", "upstream", upstream)
+		}, selector: "main"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			branch := currentBranch(context.Background(), repo)
+			configurePublicationRemote(t, repo, branch)
+			if tt.configure != nil {
+				tt.configure(t, repo, branch)
+			}
+			selector := tt.selector
+			if selector == "main" {
+				selector = branch
+			}
+
+			_, err := resolveAdvertisedSelector(context.Background(), repo, selector, PrePRBoundaryExplicit)
+			var targetErr *GateTargetResolutionError
+			if !errors.As(err, &targetErr) || targetErr.RequiredInput != "base_ref" {
+				t.Fatalf("%s selector error = %T %v, want semantic target resolution", tt.name, err, err)
+			}
+		})
 	}
 }
 
