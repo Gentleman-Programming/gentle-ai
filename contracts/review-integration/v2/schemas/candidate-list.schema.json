@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/candidate-list.schema.json",
+  "title": "Gentle AI historical exact-binding repair candidate list",
+  "description": "Strict v2 enumerable candidate list for compact_v2_historical_binding_drift. Canonical identity binds repository, closed anomaly, both lineage IDs and expected revisions, and the recorded authorization digest. Raw authorization and evidence bytes stay quarantine-only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "candidates"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gentle-ai.review-integration.candidate-list/v2"
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/candidate"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "lineage_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository_binding",
+        "anomaly_class",
+        "predecessor_lineage_id",
+        "expected_predecessor_revision",
+        "successor_lineage_id",
+        "expected_successor_revision",
+        "recorded_authorization_digest"
+      ],
+      "properties": {
+        "repository_binding": {
+          "$ref": "#/$defs/sha256"
+        },
+        "anomaly_class": {
+          "const": "compact_v2_historical_binding_drift"
+        },
+        "predecessor_lineage_id": {
+          "$ref": "#/$defs/lineage_id"
+        },
+        "expected_predecessor_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "successor_lineage_id": {
+          "$ref": "#/$defs/lineage_id"
+        },
+        "expected_successor_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "recorded_authorization_digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

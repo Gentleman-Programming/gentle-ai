@@ -1,0 +1,23 @@
+{
+  "schema": "gentle-ai.review-integration.candidate-list/v2",
+  "candidates": [
+    {
+      "repository_binding": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "anomaly_class": "compact_v2_historical_binding_drift",
+      "predecessor_lineage_id": "edge-a-predecessor",
+      "expected_predecessor_revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "successor_lineage_id": "edge-a-successor",
+      "expected_successor_revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "recorded_authorization_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "repository_binding": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "anomaly_class": "compact_v2_historical_binding_drift",
+      "predecessor_lineage_id": "edge-b-predecessor",
+      "expected_predecessor_revision": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "successor_lineage_id": "edge-b-successor",
+      "expected_successor_revision": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "recorded_authorization_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  ]
+}
