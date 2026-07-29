@@ -4,7 +4,7 @@ description: "Create and triage GitHub issues from repository evidence. Trigger:
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "1.1"
+  version: "1.2"
 ---
 
 # Issue Creation
@@ -69,7 +69,24 @@ An empty array applies no label; do not invent labels.
 4. Choose a repository-provided template only when its purpose matches the report.
 5. Fill every required template field from known evidence. Ask for missing facts rather than inventing them.
 6. Apply labels only when they exist and repository guidance establishes who should apply them.
-7. Publish only after the title, body, target repository, and selected template or fallback have been reviewed.
+7. Publish only after the title, body, target repository, and selected template or fallback have been reviewed, and the pre-submission privacy review below has passed.
+
+## Pre-submission Privacy Review
+
+Pre-submission privacy review is mandatory. Scan every issue body immediately before `gh issue create`. The scan replaces — never deletes — environment-specific data with explicit placeholders so the reproduction still teaches:
+
+| Category | Replace with | Example (before → after) |
+|----------|---------------|---------------------------|
+| Private project names | `<project-name>` | `my-private-project-b` → `<project-name>` |
+| Usernames | `<user>` | `C:\Users\my-real-username\go\bin` → `C:\Users\<user>\go\bin` |
+| Hostnames | `<hostname>` | `devbox-macbook.local` → `<hostname>` |
+| Home paths | `/home/<user>` or `C:\Users\<user>` | (covered above) |
+| API keys, tokens, passwords | `<token>` / `<password>` | `ghp_abc123...` → `<token>` |
+| Internal ports / hostnames | `<host>:<port>` | `10.0.0.42:5432` → `<host>:<port>` |
+
+Do NOT redact intentionally public identifiers: tool names (`gentle-ai`, `engram`, `go`, `node`, `python`), package names, public documentation URLs, generic example domains (`example.com`, `localhost`). Keep reproduction structure with placeholders — never redact an example into nothingness.
+
+**Rule of thumb:** if the reader can run the reproduction step after you replace every identifier with its placeholder, the sanitization is correct. If a step becomes impossible (because the placeholder consumed a needed value), that step needs the value — and you should mark it `<value-required>` and explain in the body what the user should fill in.
 
 ## Template Paths
 
