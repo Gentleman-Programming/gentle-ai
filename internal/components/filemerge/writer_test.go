@@ -30,6 +30,12 @@ func mustSymlink(t *testing.T, target, link string) {
 	}
 }
 
+func setTestHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
 func TestWriteFileAtomicReadOnlyDirRelaxesOwnerWritePermission(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod 555 semantics differ on Windows")
@@ -176,8 +182,7 @@ func TestWriteFileAtomicCreatesDanglingSymlinkTarget(t *testing.T) {
 
 func TestWriteFileAtomicAllowsSymlinkWithinHome(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	setTestHome(t, home)
 	target := filepath.Join(home, ".dotfiles", "claude", "CLAUDE.md")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatalf("MkdirAll(target dir) error = %v", err)
@@ -227,6 +232,7 @@ func TestWriteFileAtomicCreatesNestedDanglingSymlinkTarget(t *testing.T) {
 
 func TestWriteFileAtomicRejectsSymlinkEscapes(t *testing.T) {
 	base := t.TempDir()
+	setTestHome(t, base)
 	outside := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outside, "target.txt"), []byte("outside\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(outside target) error = %v", err)
@@ -310,6 +316,7 @@ func TestWriteFileAtomicRejectsSymlinkLoop(t *testing.T) {
 
 func TestWriteFileAtomicRejectsEscapingSymlinkParentDirectory(t *testing.T) {
 	base := t.TempDir()
+	setTestHome(t, base)
 	outside := t.TempDir()
 	linkDir := filepath.Join(base, "linked")
 	mustSymlink(t, outside, linkDir)

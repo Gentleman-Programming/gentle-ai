@@ -25,6 +25,12 @@ func mustSymlink(t *testing.T, target, link string) {
 	}
 }
 
+func setTestHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
 func FuzzNormalizeJSON_NoPanic(f *testing.F) {
 	seeds := [][]byte{
 		[]byte(`{"mcpServers":{"engram":{"command":"engram"}}}`),
@@ -308,8 +314,7 @@ func TestReadManagedFile_FollowsSymlink(t *testing.T) {
 
 func TestReadManagedFile_AllowsSymlinkWithinHome(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	setTestHome(t, home)
 	target := filepath.Join(home, ".gemini", "config", "mcp_config.json")
 	want := []byte(`{"ok":true}`)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -350,6 +355,7 @@ func TestReadManagedFile_BrokenSymlinkReturnsNotExist(t *testing.T) {
 
 func TestReadManagedFile_RejectsSymlinkEscape(t *testing.T) {
 	dir := t.TempDir()
+	setTestHome(t, dir)
 	outside := t.TempDir()
 	target := filepath.Join(outside, "target.json")
 	if err := os.WriteFile(target, []byte(`{"ok":true}`), 0o644); err != nil {
@@ -366,6 +372,7 @@ func TestReadManagedFile_RejectsSymlinkEscape(t *testing.T) {
 
 func TestReadManagedFile_RejectsBrokenSymlinkEscape(t *testing.T) {
 	dir := t.TempDir()
+	setTestHome(t, dir)
 	outside := t.TempDir()
 	link := filepath.Join(dir, "link.json")
 	mustSymlink(t, filepath.Join(outside, "missing.json"), link)
@@ -378,6 +385,7 @@ func TestReadManagedFile_RejectsBrokenSymlinkEscape(t *testing.T) {
 
 func TestReadManagedFile_RejectsEscapingSymlinkParentDirectory(t *testing.T) {
 	dir := t.TempDir()
+	setTestHome(t, dir)
 	outside := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outside, "config.json"), []byte(`{"ok":true}`), 0o644); err != nil {
 		t.Fatalf("WriteFile(outside config) error = %v", err)
