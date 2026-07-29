@@ -180,7 +180,7 @@ func uvInstallHint(profile system.PlatformProfile) string {
 	case "dnf":
 		return "sudo dnf install -y uv"
 	case "zypper":
-		return "sudo zypper install -y uv"
+		return "sudo zypper --non-interactive install uv"
 	case "winget":
 		return "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements"
 	default:
@@ -214,7 +214,7 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 	case "dnf":
 		return CommandSequence{{"sudo", "dnf", "install", "-y", dependency}}, nil
 	case "zypper":
-		return CommandSequence{{"sudo", "zypper", "install", "-y", dependency}}, nil
+		return CommandSequence{{"sudo", "zypper", "--non-interactive", "install", dependency}}, nil
 	case "winget":
 		return CommandSequence{{"winget", "install", "--id", dependency, "-e", "--accept-source-agreements", "--accept-package-agreements"}}, nil
 	default:

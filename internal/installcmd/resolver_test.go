@@ -189,7 +189,7 @@ func TestResolveDependencyInstall(t *testing.T) {
 			name:    "opensuse resolves zypper command",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper"},
 			dep:     "somepkg",
-			want:    CommandSequence{{"sudo", "zypper", "install", "-y", "somepkg"}},
+			want:    CommandSequence{{"sudo", "zypper", "--non-interactive", "install", "somepkg"}},
 		},
 		{
 			name:    "empty dependency returns error",

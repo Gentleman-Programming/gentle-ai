@@ -181,12 +181,7 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 		{
 			name:       "sles",
 			osRelease:  "ID=sles\nID_LIKE=\"suse\"\n",
-			wantDistro: LinuxDistroOpenSUSE,
-		},
-		{
-			name:       "opensuse via id_like token",
-			osRelease:  "ID=custom-distro\nID_LIKE=\"suse\"\n",
-			wantDistro: LinuxDistroOpenSUSE,
+			wantDistro: LinuxDistroSLES,
 		},
 		{
 			name:       "empty os-release",
@@ -207,6 +202,11 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			name:       "malformed lines are ignored",
 			osRelease:  "no-equals-sign\nID=ubuntu\n",
 			wantDistro: LinuxDistroUbuntu,
+		},
+		{
+			name:       "microos is NOT classified as opensuse (transactional variant)",
+			osRelease:  "ID=opensuse-microos\nID_LIKE=\"opensuse suse\"\n",
+			wantDistro: LinuxDistroUnknown,
 		},
 		{
 			name:       "quoted values are handled",
