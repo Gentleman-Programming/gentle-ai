@@ -792,6 +792,9 @@ func TestResolveAdvertisedSelectorPreservesRemoteQueryFailure(t *testing.T) {
 	if !errors.As(err, &gitErr) || errors.As(err, &targetErr) {
 		t.Fatalf("remote query error = %T %v, want operational GitCommandError", err, err)
 	}
+	if len(gitErr.Args) != 4 || gitErr.Args[0] != "ls-remote" || gitErr.Args[1] != "--heads" || gitErr.Args[2] != "origin" || gitErr.Args[3] != branch {
+		t.Fatalf("remote query git args = %q, want ls-remote --heads origin %q", gitErr.Args, branch)
+	}
 }
 
 func TestResolveAdvertisedSelectorClassifiesZeroAndMultipleMatches(t *testing.T) {
