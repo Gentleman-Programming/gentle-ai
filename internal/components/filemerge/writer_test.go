@@ -177,6 +177,7 @@ func TestWriteFileAtomicCreatesDanglingSymlinkTarget(t *testing.T) {
 func TestWriteFileAtomicAllowsSymlinkWithinHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	target := filepath.Join(home, ".dotfiles", "claude", "CLAUDE.md")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatalf("MkdirAll(target dir) error = %v", err)
@@ -195,6 +196,32 @@ func TestWriteFileAtomicAllowsSymlinkWithinHome(t *testing.T) {
 	}
 	if got, err := os.ReadFile(target); err != nil || string(got) != "new\n" {
 		t.Fatalf("target content = %q err=%v, want updated target", got, err)
+	}
+}
+
+func TestWriteFileAtomicCreatesNestedDanglingSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "linked.txt")
+	mid := filepath.Join(dir, "mid-link.txt")
+	target := filepath.Join(dir, "missing", "target.txt")
+	mustSymlink(t, mid, path)
+	mustSymlink(t, target, mid)
+
+	content := []byte("created\n")
+	if _, err := WriteFileAtomic(path, content, 0o644); err != nil {
+		t.Fatalf("WriteFileAtomic(nested dangling symlink) error = %v, want success", err)
+	}
+	for _, link := range []string{path, mid} {
+		info, err := os.Lstat(link)
+		if err != nil {
+			t.Fatalf("Lstat(%q) error = %v", link, err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("%q was replaced, want symlink preserved", link)
+		}
+	}
+	if got, err := os.ReadFile(target); err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("target content = %q err=%v, want %q", got, err, content)
 	}
 }
 
@@ -244,6 +271,16 @@ func TestWriteFileAtomicRejectsSymlinkEscapes(t *testing.T) {
 			setup: func(t *testing.T) string {
 				path := filepath.Join(base, "dangling-link.txt")
 				mustSymlink(t, filepath.Join(outside, "missing.txt"), path)
+				return path
+			},
+		},
+		{
+			name: "nested dangling target escapes root",
+			setup: func(t *testing.T) string {
+				mid := filepath.Join(base, "dangling-mid-link.txt")
+				mustSymlink(t, filepath.Join(outside, "missing.txt"), mid)
+				path := filepath.Join(base, "dangling-chain-link.txt")
+				mustSymlink(t, mid, path)
 				return path
 			},
 		},

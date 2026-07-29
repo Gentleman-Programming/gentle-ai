@@ -309,6 +309,7 @@ func TestReadManagedFile_FollowsSymlink(t *testing.T) {
 func TestReadManagedFile_AllowsSymlinkWithinHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	target := filepath.Join(home, ".gemini", "config", "mcp_config.json")
 	want := []byte(`{"ok":true}`)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -372,6 +373,21 @@ func TestReadManagedFile_RejectsBrokenSymlinkEscape(t *testing.T) {
 	_, err := readManagedFile(link)
 	if err == nil || os.IsNotExist(err) || !strings.Contains(err.Error(), "outside allowed root") {
 		t.Fatalf("readManagedFile(broken escape) error = %v, want non-NotExist allowed-root rejection", err)
+	}
+}
+
+func TestReadManagedFile_RejectsEscapingSymlinkParentDirectory(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "config.json"), []byte(`{"ok":true}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(outside config) error = %v", err)
+	}
+	linkDir := filepath.Join(dir, "linked")
+	mustSymlink(t, outside, linkDir)
+
+	_, err := readManagedFile(filepath.Join(linkDir, "config.json"))
+	if err == nil || !strings.Contains(err.Error(), "outside allowed root") {
+		t.Fatalf("readManagedFile(parent escape) error = %v, want allowed-root rejection", err)
 	}
 }
 
