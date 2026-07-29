@@ -277,6 +277,9 @@ func (store Store) installBundle(chain ValidatedChain, events []ChainBundleEvent
 			return ValidatedChain{}, err
 		}
 	}
+	if err := SyncReviewDirectory(filepath.Join(store.Dir, "events")); err != nil {
+		return ValidatedChain{}, &directorySyncError{path: filepath.Join(store.Dir, "events"), cause: err}
+	}
 	if err := writeAtomic(filepath.Join(store.Dir, "HEAD"), []byte(chain.HeadRevision+"\n"), 0o644); err != nil {
 		return ValidatedChain{}, err
 	}

@@ -71,6 +71,50 @@ func SyncReviewDirectory(path string) error {
 	return nil
 }
 
+// mkdirAllSync ensures every directory in path's ancestry exists, then
+// synchronizes every newly-created directory entry bottom-up before
+// returning. It returns nil if no directory creation was required.
+//
+// This is the durability seam for first-time publication: when a writer
+// creates `<authority-root>/v2/<lineage>/` from scratch, MkdirAll creates
+// both `v2/` and `v2/<lineage>/` in one call. Without bottom-up
+// synchronization, a power loss after the file publish but before the
+// directory entry is durable leaves the lineage entry unreachable from
+// the authority root.
+//
+// Newly-created directories are detected by walking up from
+// filepath.Dir(path) and stat-ing before MkdirAll; the same stat result
+// is used to build the sync order, so sync failures on a newly-created
+// ancestor short-circuit the call before any file publish happens.
+//
+// Windows: SyncReviewDirectory already short-circuits on Windows via
+// reviewRuntimeGOOS() == "windows" + ErrPermission, so this helper
+// inherits that behavior.
+func mkdirAllSync(path string, mode os.FileMode) error {
+	var missing []string
+	for dir := filepath.Dir(path); dir != "" && dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+		if _, err := os.Stat(dir); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		missing = append(missing, dir)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), mode); err != nil {
+		return err
+	}
+	// Sync bottom-up: closest to the file first, then each ancestor.
+	for _, dir := range missing {
+		if err := SyncReviewDirectory(dir); err != nil {
+			return &directorySyncError{path: dir, cause: err}
+		}
+	}
+	return nil
+}
+
 type Record struct {
 	Schema           string      `json:"schema"`
 	Operation        string      `json:"operation"`
@@ -310,6 +354,9 @@ func (store Store) append(expectedRevision string, record Record) (string, error
 		} else {
 			return "", err
 		}
+	}
+	if err := SyncReviewDirectory(filepath.Join(store.Dir, "events")); err != nil {
+		return "", &directorySyncError{path: filepath.Join(store.Dir, "events"), cause: err}
 	}
 	if err := writeAtomic(filepath.Join(store.Dir, "HEAD"), []byte(revision+"\n"), 0o644); err != nil {
 		return "", err
@@ -945,7 +992,7 @@ func readRevision(path string) (string, error) {
 }
 
 func writeAtomic(path string, payload []byte, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := mkdirAllSync(path, 0o755); err != nil {
 		return err
 	}
 	temp, err := os.CreateTemp(filepath.Dir(path), ".atomic-*")
