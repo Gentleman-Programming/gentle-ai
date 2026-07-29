@@ -25,27 +25,32 @@ var (
 )
 
 func ensureRARRepositoryRoot(commonDir, root string, create bool) error {
-	commonDir = filepath.Clean(commonDir)
-	root = filepath.Clean(root)
-	relative, err := filepath.Rel(commonDir, root)
-	if err != nil || relative == "." || relative == ".." ||
-		strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
-		filepath.IsAbs(relative) {
-		return errors.New("RAR authority root escapes the Git common directory")
-	}
-	want := filepath.Join(
+	return ensureRARRepositoryRootAt(commonDir, root, filepath.Join(
 		"gentle-ai",
 		"review-transactions",
 		rarAuthorityDirectory,
 		rarAuthorityVersion,
-	)
+	), "Git common directory", create)
+}
+
+// ensureRARRepositoryRootAt applies the established private-root checks to a
+// second Git metadata root without relaxing the canonical authority path.
+func ensureRARRepositoryRootAt(base, root, want, baseLabel string, create bool) error {
+	base = filepath.Clean(base)
+	root = filepath.Clean(root)
+	relative, err := filepath.Rel(base, root)
+	if err != nil || relative == "." || relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
+		filepath.IsAbs(relative) {
+		return fmt.Errorf("RAR authority root escapes the %s", baseLabel)
+	}
 	if relative != want {
-		return errors.New("RAR authority root is not the canonical Git-common-dir path")
+		return fmt.Errorf("RAR authority root is not the canonical %s path", baseLabel)
 	}
-	if err := validateRARRepositoryParent(commonDir); err != nil {
-		return fmt.Errorf("validate RAR Git common directory %q: %w", commonDir, err)
+	if err := validateRARRepositoryParent(base); err != nil {
+		return fmt.Errorf("validate RAR %s %q: %w", baseLabel, base, err)
 	}
-	current := commonDir
+	current := base
 	parts := strings.Split(relative, string(filepath.Separator))
 	for index, part := range parts {
 		if part == "" || part == "." || part == ".." {
