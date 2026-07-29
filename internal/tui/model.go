@@ -161,6 +161,29 @@ func sanitizeKnownModelEffort(assignment model.ModelAssignment, sddModels map[st
 	return assignment
 }
 
+func (m Model) hasProfileAssignmentContext() bool {
+	return m.ProfileEditMode ||
+		m.ProfileDraft.Name != "" ||
+		m.ProfileDraft.OrchestratorModel.ProviderID != "" ||
+		m.ProfileDraft.OrchestratorModel.ModelID != "" ||
+		len(m.ProfileDraft.PhaseAssignments) > 0
+}
+
+func (m Model) withBaseOpenCodeModelAssignments() Model {
+	m.Selection.ModelAssignments = nil
+	settingsPath := opencode.DefaultSettingsPath()
+	if current, err := readCurrentAssignmentsFn(settingsPath); err == nil && len(current) > 0 {
+		m.Selection.ModelAssignments = sanitizeKnownModelEfforts(current, m.ModelPicker.SDDModels)
+	}
+	return m
+}
+
+func (m Model) withoutProfileAssignmentContext() Model {
+	m.ProfileEditMode = false
+	m.ProfileDraft = model.Profile{}
+	return m
+}
+
 // codexPhaseModelsFromCustomAssignments converts the TUI's CustomAssignments map
 // (phase → CodexCustomAssignment) to the state-layer map (phase → model id string)
 // used by Selection.CodexPhaseModelAssignments and state.InstallState.
@@ -1997,18 +2020,16 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			} else {
 				m.ModelPicker = screens.ModelPickerState{}
 			}
-			// Pre-populate with existing assignments from opencode.json.
-			// Only when there are no in-session assignments yet — the nil guard
-			// ensures we don't overwrite changes the user already made this session.
-			if m.Selection.ModelAssignments == nil {
-				settingsPath := opencode.DefaultSettingsPath()
-				if current, err := readCurrentAssignmentsFn(settingsPath); err == nil && len(current) > 0 {
-					// Sanitize loaded assignments: clear any stale effort values for
-					// models that no longer report variants (e.g. provider refreshed
-					// their catalog since the user last synced). Without this, a stale
-					// effort would be preserved in the picker and re-injected on the
-					// next sync even if the model no longer supports that effort level.
-					m.Selection.ModelAssignments = sanitizeKnownModelEfforts(current, m.ModelPicker.SDDModels)
+			// Pre-populate with base OpenCode assignments from opencode.json when
+			// entering the standalone flow fresh, or after profile editing. Profile
+			// editing also uses Selection.ModelAssignments, so preserving that map here
+			// can leak a custom profile into the base/default OpenCode config screen.
+			// Non-profile in-session model config edits are still preserved.
+			profileAssignmentContext := m.hasProfileAssignmentContext()
+			if m.Selection.ModelAssignments == nil || profileAssignmentContext {
+				m = m.withBaseOpenCodeModelAssignments()
+				if profileAssignmentContext {
+					m = m.withoutProfileAssignmentContext()
 				}
 			}
 			m.setScreen(ScreenModelPicker)

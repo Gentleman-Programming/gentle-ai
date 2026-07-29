@@ -2370,6 +2370,55 @@ func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
 	}
 }
 
+func TestModelConfigOpenCodeReloadsBaseAssignmentsAfterProfileEdit(t *testing.T) {
+	originalReadCurrentAssignmentsFn := readCurrentAssignmentsFn
+	t.Cleanup(func() { readCurrentAssignmentsFn = originalReadCurrentAssignmentsFn })
+
+	readCurrentAssignmentsFn = func(settingsPath string) (map[string]model.ModelAssignment, error) {
+		return map[string]model.ModelAssignment{
+			screens.SDDOrchestratorPhase: {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+			"sdd-apply":                  {ProviderID: "openai", ModelID: "gpt-5"},
+		}, nil
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Cursor = 1
+	m.ProfileEditMode = true
+	m.ProfileDraft = model.Profile{
+		Name:              "work",
+		OrchestratorModel: model.ModelAssignment{ProviderID: "profile-provider", ModelID: "profile-orchestrator"},
+		PhaseAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "profile-provider", ModelID: "profile-apply"},
+		},
+	}
+	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
+		screens.SDDOrchestratorPhase: {ProviderID: "profile-provider", ModelID: "profile-orchestrator"},
+		"sdd-apply":                  {ProviderID: "profile-provider", ModelID: "profile-apply"},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.ProfileEditMode {
+		t.Fatal("profile edit mode was not cleared")
+	}
+	if !reflect.DeepEqual(state.ProfileDraft, model.Profile{}) {
+		t.Fatalf("profile draft was not cleared: %+v", state.ProfileDraft)
+	}
+	if got := state.Selection.ModelAssignments[screens.SDDOrchestratorPhase].ProviderID; got != "anthropic" {
+		t.Fatalf("orchestrator provider = %q, want base OpenCode assignment", got)
+	}
+	if got := state.Selection.ModelAssignments["sdd-apply"].ModelID; got != "gpt-5" {
+		t.Fatalf("sdd-apply model = %q, want base OpenCode assignment", got)
+	}
+	for phase, assignment := range state.Selection.ModelAssignments {
+		if strings.HasPrefix(assignment.ProviderID, "profile-") || strings.HasPrefix(assignment.ModelID, "profile-") {
+			t.Fatalf("phase %q kept profile assignment: %+v", phase, assignment)
+		}
+	}
+}
+
 // TestModelConfig_BackNavigation verifies that selecting cursor 4 (Back) from
 // ScreenModelConfig returns to ScreenWelcome.
 // Index 3 is now "Configure Codex models"; Back moved to index 4.
