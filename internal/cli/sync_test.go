@@ -5087,15 +5087,29 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 	}
 	// #2685: sync deliberately stamps the binary version that performed it, so
 	// doctor can surface managed assets older than the running binary. It is
-	// the one field sync is ALLOWED to write here; everything else must
+	// one of the fields sync is ALLOWED to write here; everything else must
 	// survive byte-identical, which is this guard's whole point.
 	if after.InstalledBinaryVersion != AppVersion {
 		t.Fatalf("sync did not stamp the binary version: %q, want %q", after.InstalledBinaryVersion, AppVersion)
 	}
-	expected := before
-	expected.InstalledBinaryVersion = AppVersion
-	if !reflect.DeepEqual(after, expected) {
-		t.Fatalf("CLI sync changed persisted state beyond the version stamp:\nafter:  %#v\nbefore: %#v", after, expected)
+
+	// #1978: sync also records the last-synced version + timestamp so the
+	// TUI can stale-detect and correlate with the running binary.
+	if after.LastSyncedVersion == "" {
+		t.Error("LastSyncedVersion not written after sync")
+	}
+	if after.LastSyncedAt == nil {
+		t.Error("LastSyncedAt not written after sync")
+	}
+
+	// Clone before and set the new fields so DeepEqual can verify everything
+	// else survived byte-identical.
+	want := before
+	want.InstalledBinaryVersion = AppVersion
+	want.LastSyncedVersion = after.LastSyncedVersion
+	want.LastSyncedAt = after.LastSyncedAt
+	if !reflect.DeepEqual(after, want) {
+		t.Fatalf("CLI sync changed persisted state beyond the version stamp:\nafter:  %#v\nwant:   %#v", after, want)
 	}
 }
 

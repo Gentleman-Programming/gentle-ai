@@ -974,6 +974,145 @@ func TestMergeAgents_PreservesLastUpdateCheck(t *testing.T) {
 	}
 }
 
+// ─── LastSyncedVersion round-trip, omitempty, backward-compat ─────────────
+
+func TestLastSyncedVersion_RoundTrip(t *testing.T) {
+	home := t.TempDir()
+	s := InstallState{
+		InstalledAgents:   []string{"claude-code"},
+		LastSyncedVersion: "2.1.0",
+	}
+	if err := Write(home, s); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	got, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got.LastSyncedVersion != "2.1.0" {
+		t.Errorf("LastSyncedVersion = %q, want %q", got.LastSyncedVersion, "2.1.0")
+	}
+	data, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !contains(string(data), "last_synced_version") {
+		t.Errorf("JSON must contain key last_synced_version; got:\n%s", data)
+	}
+}
+
+func TestLastSyncedVersion_OmitWhenEmpty(t *testing.T) {
+	home := t.TempDir()
+	s := InstallState{InstalledAgents: []string{"claude-code"}}
+	if err := Write(home, s); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	data, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if contains(string(data), "last_synced_version") {
+		t.Error("JSON must not contain last_synced_version when empty")
+	}
+}
+
+func TestLastSyncedVersion_BackwardCompat(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, stateDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacy := `{"installed_agents":["claude-code"]}` + "\n"
+	if err := os.WriteFile(Path(home), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	s, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if s.LastSyncedVersion != "" {
+		t.Errorf("LastSyncedVersion = %q for legacy state, want empty", s.LastSyncedVersion)
+	}
+}
+
+// ─── LastSyncedAt round-trip, omitempty, backward-compat ───────────────
+
+func TestLastSyncedAt_RoundTrip(t *testing.T) {
+	home := t.TempDir()
+	ts := time.Date(2026, 7, 15, 9, 30, 0, 0, time.UTC)
+	s := InstallState{
+		InstalledAgents: []string{"claude-code"},
+		LastSyncedAt:    &ts,
+	}
+	if err := Write(home, s); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	got, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got.LastSyncedAt == nil || !got.LastSyncedAt.Equal(ts) {
+		t.Errorf("LastSyncedAt = %v, want %v", got.LastSyncedAt, ts)
+	}
+	data, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !contains(string(data), "last_synced_at") {
+		t.Errorf("JSON must contain key last_synced_at; got:\n%s", data)
+	}
+}
+
+func TestLastSyncedAt_OmitWhenZero(t *testing.T) {
+	home := t.TempDir()
+	s := InstallState{InstalledAgents: []string{"claude-code"}}
+	if err := Write(home, s); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	data, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if contains(string(data), "last_synced_at") {
+		t.Error("JSON must not contain last_synced_at when nil")
+	}
+}
+
+func TestLastSyncedAt_BackwardCompat(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, stateDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacy := `{"installed_agents":["claude-code"]}` + "\n"
+	if err := os.WriteFile(Path(home), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	s, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if s.LastSyncedAt != nil {
+		t.Errorf("LastSyncedAt = %v for legacy state, want nil", s.LastSyncedAt)
+	}
+}
+
+func TestMergeAgents_PreservesLastSyncedFields(t *testing.T) {
+	ts := time.Date(2026, 7, 15, 9, 30, 0, 0, time.UTC)
+	existing := InstallState{
+		InstalledAgents:   []string{"claude-code"},
+		LastSyncedVersion: "2.1.0",
+		LastSyncedAt:      &ts,
+	}
+	merged := MergeAgents(existing, []string{"opencode"})
+	if merged.LastSyncedVersion != "2.1.0" {
+		t.Errorf("MergeAgents did not preserve LastSyncedVersion: got %q, want %q",
+			merged.LastSyncedVersion, "2.1.0")
+	}
+	if merged.LastSyncedAt == nil || !merged.LastSyncedAt.Equal(ts) {
+		t.Errorf("MergeAgents did not preserve LastSyncedAt: got %v, want %v",
+			merged.LastSyncedAt, ts)
+	}
+}
+
 // ─── Slice 4 RED: PendingSync round-trip and backward-compat ────────────────
 
 // TestPendingSync_RoundTrip verifies that PendingSync bool survives a

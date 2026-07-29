@@ -1661,6 +1661,23 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 		return result, persistErr
 	}
 
+	// Record which version of the binary last completed a successful sync.
+	// This allows a future invocation to detect "sync has not run since upgrade".
+	// Re-read state after persistSyncManagedAssetState so we capture the
+	// InstallState it just stamped (InstalledBinaryVersion, ManagedAssetDigest,
+	// etc.) instead of clobbering the on-disk file with the stale snapshot.
+	if persistedStateErr == nil {
+		latest, err := state.Read(homeDir)
+		if err != nil {
+			return result, fmt.Errorf("re-read state for sync version metadata: %w", err)
+		}
+		latest.LastSyncedVersion = AppVersion
+		latest.LastSyncedAt = func() *time.Time { t := time.Now().UTC(); return &t }()
+		if err := state.Write(homeDir, latest); err != nil {
+			return result, fmt.Errorf("persist sync version metadata: %w", err)
+		}
+	}
+
 	return result, nil
 }
 

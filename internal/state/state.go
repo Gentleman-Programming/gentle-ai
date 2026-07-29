@@ -143,6 +143,19 @@ type InstallState struct {
 	// persisted separately from the OpenCode field because each key is part of
 	// an independent state contract.
 	PiBackgroundIntent model.PiBackgroundIntent `json:"pi_background_subagents,omitempty"`
+
+	// LastSyncedVersion is the version string of the binary that last completed
+	// a `gentle-ai sync` for this home directory. Empty for state files written
+	// before this field was added — callers compare against app.Version to detect
+	// "sync has not run since the binary was upgraded". Stored as a plain string
+	// rather than a semver struct because the binary version format is owned
+	// by the release pipeline, not by the state package.
+	LastSyncedVersion string `json:"last_synced_version,omitempty"`
+
+	// LastSyncedAt records when the most recent successful sync wrote
+	// LastSyncedVersion. Nil for state files written before this field was added.
+	// Useful for diagnosing staleness ("sync ran 47 days ago on version X").
+	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
 }
 
 // UnmarshalJSON preserves whether the persisted persona field was present.
@@ -251,9 +264,10 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		PendingSync:                 existing.PendingSync,
 		RDDMode:                     existing.RDDMode,
 		RDDModeRecordedAt:           existing.RDDModeRecordedAt,
-
-		BackgroundIntent:   existing.BackgroundIntent,
-		PiBackgroundIntent: existing.PiBackgroundIntent,
+		BackgroundIntent:            existing.BackgroundIntent,
+		PiBackgroundIntent:          existing.PiBackgroundIntent,
+		LastSyncedVersion:           existing.LastSyncedVersion,
+		LastSyncedAt:                existing.LastSyncedAt,
 	}
 }
 
