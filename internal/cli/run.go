@@ -1790,8 +1790,7 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			if adapter.SupportsSkills() {
 				skillDir := adapter.SkillsDir(targetDir)
 				if skillDir != "" {
-					sharedNames, _ := assets.SharedSkillFileNames()
-					for _, name := range sharedNames {
+					for _, name := range assets.MustSharedSkillFileNames() {
 						paths = append(paths, filepath.Join(skillDir, "_shared", name))
 					}
 					paths = append(paths,

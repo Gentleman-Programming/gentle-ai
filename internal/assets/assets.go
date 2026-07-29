@@ -37,3 +37,12 @@ func SharedSkillFileNames() ([]string, error) {
 	}
 	return names, nil
 }
+
+// MustSharedSkillFileNames returns the list of all file basenames in skills/_shared/ sorted alphabetically, or panics.
+func MustSharedSkillFileNames() []string {
+	names, err := SharedSkillFileNames()
+	if err != nil {
+		panic("assets: " + err.Error())
+	}
+	return names
+}

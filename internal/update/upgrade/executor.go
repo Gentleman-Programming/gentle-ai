@@ -276,8 +276,7 @@ func managedSkillBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		})
 	}
 
-	sharedNames, _ := assets.SharedSkillFileNames()
-	for _, name := range sharedNames {
+	for _, name := range assets.MustSharedSkillFileNames() {
 		paths = append(paths, filepath.Join(skillDir, "_shared", name))
 	}
 
