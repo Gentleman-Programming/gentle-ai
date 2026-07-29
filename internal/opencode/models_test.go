@@ -372,6 +372,24 @@ func TestModel_EffortLevels(t *testing.T) {
 	}
 }
 
+func TestReviewPhasesCompleteRuntimeSet(t *testing.T) {
+	want := []string{
+		"review-risk",
+		"review-readability",
+		"review-reliability",
+		"review-resilience",
+		"review-refuter",
+	}
+	if got := ReviewPhases(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ReviewPhases() = %v, want %v", got, want)
+	}
+
+	configurable := ConfigurableAgentPhases()
+	if got := configurable[len(configurable)-len(want):]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ConfigurableAgentPhases() review suffix = %v, want %v", got, want)
+	}
+}
+
 func TestDefaultVariantsCachePath(t *testing.T) {
 	got := DefaultVariantsCachePath()
 	if got == "" {

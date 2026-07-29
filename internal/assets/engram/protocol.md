@@ -22,6 +22,17 @@ Call `mem_save` IMMEDIATELY and WITHOUT BEING ASKED after any of these:
 
 Self-check after EVERY task: "Did I make a decision, fix a bug, learn something non-obvious, or establish a convention? If yes, call mem_save NOW."
 
+### DELIVERY GUARANTEE — saving is not replying
+
+Saving to memory is internal bookkeeping. It NEVER counts as answering the user, and the user never sees your tool calls or the content you store.
+
+- If the answer exists only inside a `mem_save`, the user never received it. Saving is not replying.
+- End every turn with your complete user-facing answer as the final message, with NO tool calls after it.
+- Save memory BEFORE composing that final answer, not after. Never let a `mem_save`/`mem_judge` be the last action in a turn that still owed the user a substantive reply.
+- If a memory chain (`mem_save` → `mem_judge`) ran late, still write the full answer in that final message — do not collapse it into a one-line "saved / done" acknowledgement.
+- If a memory call (`mem_save`, `mem_judge`, `mem_session_summary`) fails or times out, deliver the complete answer anyway and note the failure briefly — a failed or slow memory operation never blocks, truncates, or replaces the reply.
+- Never treat the text you stored in memory as the text you delivered: memory is for your future self, the reply is for the user.
+
 Format for `mem_save`:
 - **title**: Verb + what — short, searchable (e.g. "Fixed N+1 query in UserList")
 - **type**: bugfix | decision | architecture | discovery | pattern | config | preference
@@ -114,6 +125,12 @@ MCP server instructions and the SessionStart hook. Always-on rules:
   automated/SDD artifacts.
 - On any reference to past work: `mem_context` → `mem_search` → `mem_get_observation`.
 - Before saying "done", call `mem_session_summary`.
+- Saving to memory is bookkeeping, never the reply: it NEVER counts as answering.
+  End every turn with the complete user-facing answer as the final message (no
+  tool calls after it), and save memory before composing it — never collapse the
+  answer into a "saved / done" acknowledgement.
+- If a memory call fails or times out, deliver the answer anyway — memory
+  failures never block or replace the reply.
 <!-- /section:slim -->
 
 <!-- section:passive-capture -->

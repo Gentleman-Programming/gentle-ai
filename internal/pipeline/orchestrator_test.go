@@ -259,6 +259,20 @@ func TestOrchestratorContinueOnErrorWithRollback(t *testing.T) {
 	}
 }
 
+func TestExecuteRollbackAttemptsEveryStepAfterFailures(t *testing.T) {
+	order := []string{}
+	first := &testStep{id: "first", order: &order}
+	failed := &testStep{id: "failed", order: &order, rollErr: errors.New("restore failed")}
+	last := &testStep{id: "last", order: &order}
+	result := ExecuteRollback([]StepResult{{StepID: "first", Status: StepStatusSucceeded}, {StepID: "failed", Status: StepStatusSucceeded}, {StepID: "last", Status: StepStatusSucceeded}}, map[string]Step{"first": first, "failed": failed, "last": last})
+	if result.Success || len(result.Steps) != 3 || result.Steps[1].Status != StepStatusFailed {
+		t.Fatalf("rollback = %#v, want all three results with failed middle step", result)
+	}
+	if !reflect.DeepEqual(order, []string{"rollback:last", "rollback:failed", "rollback:first"}) {
+		t.Fatalf("order = %v", order)
+	}
+}
+
 func TestOrchestratorWithProgressFunc(t *testing.T) {
 	order := []string{}
 	events := []ProgressEvent{}

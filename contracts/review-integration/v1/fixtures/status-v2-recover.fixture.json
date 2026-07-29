@@ -1,0 +1,130 @@
+{
+  "schema": "gentle-ai.review-integration.status/v2",
+  "contract": "gentle-ai.review-integration/v1",
+  "operation": "review.status",
+  "applicability": "current_target",
+  "authority": {
+    "version": "compact-v2",
+    "lineage_id": "review-status-recover-fixture",
+    "state": "correction_required",
+    "generation": 3,
+    "revision": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390"
+  },
+  "receipt": {
+    "status": "expected_missing"
+  },
+  "action": "recover",
+  "action_disposition": "scope_changed",
+  "replayability": "manual_action_required",
+  "frozen": {
+    "tier": "medium",
+    "original_changed_lines": 2,
+    "correction_budget": 1
+  },
+  "target_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+  "projection": {
+    "schema": "gentle-ai.review-integration.projection/v1",
+    "kind": "current-changes",
+    "projection": "workspace",
+    "base_tree": "3e21a205dd9b55021aeae87965092623807e455f",
+    "initial_review_tree": "1c3325617279b38743f073302ba190fc421b5a09",
+    "current_candidate_tree": "1c3325617279b38743f073302ba190fc421b5a09",
+    "paths_digest": "sha256:b93fca961a97d240c2b7023e98772f49ebd2995eda7db07043270b57bed75d71",
+    "paths": [
+      "tracked.txt"
+    ],
+    "intended_untracked": [],
+    "intended_untracked_proof": "sha256:b97229718d4c7fe50a8892eb474ae5aa6491697bccb400e3e31dbaca4894d2f3",
+    "initial_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+    "current_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
+  },
+  "repair": {
+    "schema": "gentle-ai.review-authority-repair-assessment/v1",
+    "status": "unsupported",
+    "counts": {
+      "lineages": 0,
+      "compact_lineages": 0,
+      "legacy_lineages": 0,
+      "events": 0,
+      "bytes": 0,
+      "eligible_candidates": 0,
+      "unsupported_lineages": 0,
+      "conflicts": 0
+    },
+    "supported_operations": [
+      "review/complete-fix",
+      "review/validate-fix"
+    ],
+    "authorization_schema": "gentle-ai.review-repair-authorization/v1"
+  },
+  "candidates": [],
+  "eligibility": {
+    "allowed_actions": [
+      {
+        "action": "review.recover",
+        "reason_code": "eligible_recovery",
+        "required_inputs": [
+          "predecessor_lineage",
+          "expected_predecessor_revision",
+          "successor_lineage",
+          "disposition",
+          "reason",
+          "actor",
+          "maintainer_authorization"
+        ],
+        "disposition": "scope_changed",
+        "binding": {
+          "lineage_id": "review-status-recover-fixture",
+          "revision": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390",
+          "target_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
+        }
+      }
+    ],
+    "forbidden_actions": [
+      {
+        "action": "review.abandon",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.finalize",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.invalidate",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.quarantine-legacy",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.reclaim",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.reconcile-authority",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.reconcile-authority-batch",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.repair",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.retry_final_verification",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.start",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
+        "action": "review.validate",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      }
+    ]
+  }
+}

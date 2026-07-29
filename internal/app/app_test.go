@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -14,47 +15,16 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/tui"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
-	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
 )
-
-func tomlSection(text, header string) string {
-	start := strings.Index(text, header)
-	if start == -1 {
-		return ""
-	}
-	section := text[start+len(header):]
-	if next := strings.Index(section, "\n["); next != -1 {
-		section = section[:next]
-	}
-	return section
-}
-
-func assertCodexWorkspaceWriteRulesScoped(t *testing.T, text string) {
-	t.Helper()
-
-	rootFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem]`)
-	for _, rule := range []string{`"." = "write"`, `".git/**" = "write"`} {
-		if strings.Contains(rootFilesystem, rule) {
-			t.Fatalf("root filesystem table contains workspace write rule %q; got:\n%s", rule, rootFilesystem)
-		}
-	}
-
-	scopedFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem.":workspace_roots"]`)
-	if scopedFilesystem == "" {
-		t.Fatalf("config.toml missing workspace-scoped filesystem table; got:\n%s", text)
-	}
-	for _, rule := range []string{`"." = "write"`, `".git/**" = "write"`} {
-		if !strings.Contains(scopedFilesystem, rule) {
-			t.Fatalf("workspace-scoped filesystem table missing workspace write rule %q; got:\n%s", rule, scopedFilesystem)
-		}
-	}
-}
 
 // TestListBackupsNewestFirst verifies that ListBackups returns manifests sorted
 // newest-first by CreatedAt timestamp, matching the spec "newest first" ordering.
@@ -254,6 +224,31 @@ func TestRunArgsUninstallBypassesPlatformValidation(t *testing.T) {
 	// If we got here, uninstall bypassed the platform validation.
 }
 
+func TestRunArgsUninstallReportsBackupOnFailure(t *testing.T) {
+	home := t.TempDir()
+	setupMockHome(t, home)
+	t.Chdir(t.TempDir())
+
+	statePath := state.Path(home)
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err := RunArgs([]string{"uninstall", "--agent", "codex", "--yes"}, &output)
+	if err == nil || !strings.Contains(err.Error(), "read install state") {
+		t.Fatalf("RunArgs(uninstall) error = %v, want install state read failure", err)
+	}
+	for _, want := range []string{"Backup:", "Backup path:"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("RunArgs(uninstall) output missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
 func TestRunArgsInstallHelpPrintsInstallSpecificHelp(t *testing.T) {
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
@@ -298,6 +293,32 @@ func TestRunArgsSDDStatusIsDispatchedBeforePlatformValidation(t *testing.T) {
 	}
 }
 
+func TestRunArgsSDDVerifyValidateIsDispatchedBeforePlatformValidation(t *testing.T) {
+	err := RunArgs([]string{"sdd-verify-validate", "--input", filepath.Join(t.TempDir(), "missing"), "--requirements", "1", "--scenarios", "1"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "read verify report") {
+		t.Fatalf("RunArgs(sdd-verify-validate) error = %v", err)
+	}
+}
+
+func TestRunArgsSDDAttemptIsDispatchedBeforePlatformValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error { return fmt.Errorf("unsupported platform") }
+
+	root := t.TempDir()
+	command := exec.Command("git", "init", "-q", root)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	var buf bytes.Buffer
+	if err := RunArgs([]string{"sdd-attempt", "status", "--cwd", root, "--change", "app-attempt"}, &buf); err != nil {
+		t.Fatalf("RunArgs(sdd-attempt) error = %v", err)
+	}
+	if !strings.Contains(buf.String(), `"schema": "gentle-ai.sdd-runtime-status/v1"`) || !strings.Contains(buf.String(), `"change": "app-attempt"`) {
+		t.Fatalf("sdd-attempt output missing native status:\n%s", buf.String())
+	}
+}
+
 func TestRunArgsSDDContinueIsDispatchedBeforePlatformValidation(t *testing.T) {
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
@@ -318,6 +339,83 @@ func TestRunArgsSDDContinueIsDispatchedBeforePlatformValidation(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "## Native SDD Dispatcher: add-auth") {
 		t.Fatalf("sdd-continue output missing dispatcher markdown:\n%s", buf.String())
+	}
+}
+
+func TestRunArgsDispatchesNativeReviewOperationsBeforePlatformValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error { return fmt.Errorf("unsupported platform") }
+
+	for _, test := range []struct {
+		command string
+		want    string
+	}{
+		{command: "review-start", want: "review-start requires --cwd, --lineage, and --policy-file"},
+		{command: "review-resume", want: "review-resume requires --cwd and --lineage"},
+		{command: "review-bundle-export", want: "review-bundle-export requires --cwd, --lineage, and --out"},
+		{command: "review-bundle-import", want: "review-bundle-import requires --cwd and --bundle"},
+		{command: "review-validate", want: "review-validate requires --cwd and --receipt"},
+	} {
+		t.Run(test.command, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunArgs([]string{test.command}, &output)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("RunArgs(%s) error = %v, want %q", test.command, err, test.want)
+			}
+		})
+	}
+}
+
+func TestRunArgsReviewSubcommandHelpExitsSuccessfully(t *testing.T) {
+	for _, command := range []string{"review-start", "review-step", "review-resume", "review-validate", "review-bundle-export", "review-bundle-import"} {
+		t.Run(command, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunArgs([]string{command, "--help"}, &output); err != nil {
+				t.Fatalf("RunArgs(%s --help) error = %v", command, err)
+			}
+			if !strings.Contains(output.String(), "Usage: gentle-ai "+command+" [flags]") {
+				t.Fatalf("RunArgs(%s --help) output:\n%s", command, output.String())
+			}
+		})
+	}
+}
+
+func TestRunArgsDispatchesCompactReviewFacadeBeforePlatformValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error { return fmt.Errorf("unsupported platform") }
+
+	var output bytes.Buffer
+	if err := RunArgs([]string{"review", "--help"}, &output); err != nil {
+		t.Fatalf("RunArgs(review --help) error = %v", err)
+	}
+	if !strings.Contains(output.String(), "review <capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|reconcile-authority|reconcile-authority-batch|dispose-result|reopen-results|quarantine-legacy|quarantine-legacy-fix-scope|repair-legacy-alias|schema|bind-sdd>") {
+		t.Fatalf("compact review help missing:\n%s", output.String())
+	}
+	output.Reset()
+	if err := RunArgs([]string{"review", "repair", "--help"}, &output); err != nil || !strings.Contains(output.String(), "provider-owned") {
+		t.Fatalf("RunArgs(review repair --help) = %v\n%s", err, output.String())
+	}
+}
+
+func TestRunArgsDispatchesReviewModeBeforePlatformValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error { return fmt.Errorf("unsupported platform") }
+
+	var output bytes.Buffer
+	if err := RunArgs([]string{"review", "mode", "--help"}, &output); err != nil {
+		t.Fatalf("RunArgs(review mode --help) error = %v", err)
+	}
+	if !strings.Contains(output.String(), "gentle-ai review mode <enable|disable|status>") {
+		t.Fatalf("review mode help missing:\n%s", output.String())
+	}
+
+	output.Reset()
+	err := RunArgs([]string{"review", "mode", "toggle"}, &output)
+	if err == nil || !strings.Contains(err.Error(), "unknown review mode command") {
+		t.Fatalf("RunArgs(review mode toggle) error = %v", err)
 	}
 }
 
@@ -457,112 +555,26 @@ func TestTuiSyncTargetAgentsFallsBackToDiscoveredAgents(t *testing.T) {
 	}
 }
 
-func TestTuiSyncIncludesCodexPermissions(t *testing.T) {
+func TestTuiSyncSelectionPreservesCustomPermissionExclusion(t *testing.T) {
 	home := t.TempDir()
-	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentCodex)}}); err != nil {
-		t.Fatalf("state.Write: %v", err)
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}, SelectionConfigured: true, Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillCommentWriter}, Preset: model.PresetCustom}); err != nil {
+		t.Fatal(err)
 	}
-	configPath := filepath.Join(home, ".codex", "config.toml")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	initial := `[permissions.gentle-dev.filesystem]
-":slash_tmp" = "write"
-":tmpdir" = "write"
-
-[permissions.gentle-dev.filesystem.":workspace_roots"]
-"**/*.key" = "deny"
-"**/*.pem" = "deny"
-`
-	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	changed, err := tuiSync(home)(nil)
-	if err != nil {
-		t.Fatalf("tuiSync Codex permissions error: %v", err)
-	}
-	if len(changed) == 0 {
-		t.Fatal("tuiSync Codex permissions changed 0 files, want config.toml updated")
-	}
-
-	body, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", configPath, err)
-	}
-	text := string(body)
-	if !strings.Contains(text, `[permissions.gentle-dev.filesystem]`) || !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `":tmpdir" = "write"`) || !strings.Contains(text, `":slash_tmp" = "write"`) || !strings.Contains(text, `[permissions.gentle-dev.filesystem.":workspace_roots"]`) || !strings.Contains(text, `"**/*.key" = "deny"`) {
-		t.Fatalf("Codex permissions sync should add valid filesystem reads; got:\n%s", text)
-	}
-	assertCodexWorkspaceWriteRulesScoped(t, text)
-	rootFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem]`)
-	if strings.Contains(rootFilesystem, `"**/*.key" = "deny"`) || strings.Contains(rootFilesystem, `"**/*.pem" = "deny"`) {
-		t.Fatalf("Codex root filesystem table should not contain secret glob denies; got:\n%s", rootFilesystem)
-	}
-	for _, invalid := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`} {
-		if strings.Contains(text, invalid) {
-			t.Fatalf("Codex permissions sync should remove invalid entry %q; got:\n%s", invalid, text)
-		}
-	}
-
-	changed, err = tuiSync(home)(nil)
-	if err != nil {
-		t.Fatalf("second tuiSync Codex permissions error: %v", err)
-	}
-	body, err = os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s) after second sync: %v", configPath, err)
-	}
-	text = string(body)
-	for _, invalid := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`} {
-		if strings.Contains(text, invalid) {
-			t.Fatalf("second sync should keep invalid entry %q removed; got:\n%s", invalid, text)
-		}
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentPermission}, Preset: model.PresetFullGentleman}
+	loadPersistedAssignments(home, &selection)
+	if selection.HasComponent(model.ComponentPermission) || !reflect.DeepEqual(selection.Skills, []model.SkillID{model.SkillCommentWriter}) || selection.Preset != model.PresetCustom {
+		t.Fatalf("TUI sync replaced custom selection: %#v", selection)
 	}
 }
 
-func TestTuiSyncIncludesCodexPermissionsForTargetedOverrides(t *testing.T) {
+func TestTUIExecutePersistsConfiguredSelection(t *testing.T) {
 	home := t.TempDir()
-	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentPi)}}); err != nil {
-		t.Fatalf("state.Write: %v", err)
-	}
-	configPath := filepath.Join(home, ".codex", "config.toml")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	initial := `[permissions.gentle-dev.filesystem]
-":slash_tmp" = "write"
-":tmpdir" = "write"
-
-[permissions.gentle-dev.filesystem.":workspace_roots"]
-"**/*.key" = "deny"
-`
-	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	_, err := tuiSync(home)(&model.SyncOverrides{TargetAgents: []model.AgentID{model.AgentCodex}})
-	if err != nil {
-		t.Fatalf("targeted tuiSync Codex permissions error: %v", err)
-	}
-
-	body, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", configPath, err)
-	}
-	text := string(body)
-	if !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `":tmpdir" = "write"`) || !strings.Contains(text, `":slash_tmp" = "write"`) || !strings.Contains(text, `[permissions.gentle-dev.workspace_roots]`) || !strings.Contains(text, `[permissions.gentle-dev.filesystem.":workspace_roots"]`) || !strings.Contains(text, `"**/*.key" = "deny"`) {
-		t.Fatalf("targeted sync should add valid Codex permissions profile; got:\n%s", text)
-	}
-	assertCodexWorkspaceWriteRulesScoped(t, text)
-	rootFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem]`)
-	if strings.Contains(rootFilesystem, `"**/*.key" = "deny"`) {
-		t.Fatalf("targeted sync root filesystem table should not contain secret glob denies; got:\n%s", rootFilesystem)
-	}
-	for _, invalid := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`} {
-		if strings.Contains(text, invalid) {
-			t.Fatalf("targeted sync should remove invalid entry %q; got:\n%s", invalid, text)
-		}
+	setupMockHome(t, home)
+	selection := model.Selection{Preset: model.PresetCustom, Components: []model.ComponentID{}, Skills: []model.SkillID{}, SDDMode: model.SDDModeMulti, StrictTDD: true}
+	result := tuiExecute(selection, planner.ResolvedPlan{}, system.DetectionResult{}, nil)
+	got, err := state.Read(home)
+	if result.Err != nil || err != nil || !got.SelectionConfigured || got.Preset != model.PresetCustom || got.SDDMode != model.SDDModeMulti || !got.StrictTDD || len(got.Components) != 0 || len(got.Skills) != 0 {
+		t.Fatalf("persisted selection = %#v, execute err = %v, read err = %v", got, result.Err, err)
 	}
 }
 
@@ -571,10 +583,15 @@ func TestDeferredSyncIncludesCodexPermissionsArgs(t *testing.T) {
 	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentCodex)}}); err != nil {
 		t.Fatalf("state.Write: %v", err)
 	}
-
-	args := syncArgsForDiscoveredAgents(home)
-	if len(args) != 1 || args[0] != "--include-permissions" {
-		t.Fatalf("syncArgsForDiscoveredAgents() = %v, want [--include-permissions]", args)
+	if args := syncArgsForDiscoveredAgents(home); len(args) != 1 || args[0] != "--include-permissions" {
+		t.Fatalf("legacy sync args = %v, want permissions", args)
+	}
+	configured := t.TempDir()
+	if err := state.Write(configured, state.InstallState{InstalledAgents: []string{"codex"}, SelectionConfigured: true, Components: []model.ComponentID{model.ComponentEngram}}); err != nil {
+		t.Fatal(err)
+	}
+	if args := syncArgsForDiscoveredAgents(configured); len(args) != 0 {
+		t.Fatalf("configured Custom sync args = %v, want none", args)
 	}
 }
 
@@ -632,6 +649,45 @@ func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("lazy SDD workflow missing %q; got:\n%s", want, body)
 		}
+	}
+}
+
+func TestTuiSyncModelConfigPropagatesAssignmentWriteFailure(t *testing.T) {
+	home := t.TempDir()
+	original := state.InstallState{
+		InstalledAgents:          []string{string(model.AgentClaudeCode)},
+		CommunityToolsConfigured: true,
+		ClaudeModelAssignments:   map[string]string{"sdd-apply": "haiku"},
+	}
+	if err := state.Write(home, original); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	statePath := state.Path(home)
+	stateTarget := filepath.Join(home, ".gentle-ai", "persisted-state.json")
+	if err := os.Rename(statePath, stateTarget); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if err := os.Symlink(stateTarget, statePath); err != nil {
+		t.Skipf("state symlink unavailable: %v", err)
+	}
+
+	_, err := tuiSync(home)(&model.SyncOverrides{
+		TargetAgents: []model.AgentID{model.AgentClaudeCode},
+		ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
+			"sdd-apply": model.ClaudeModelSonnet,
+		},
+	})
+	if err == nil {
+		t.Fatal("tuiSync() error = nil, want assignment persistence failure")
+	}
+
+	got, readErr := state.Read(home)
+	if readErr != nil {
+		t.Fatalf("state.Read: %v", readErr)
+	}
+	if !reflect.DeepEqual(got, original) {
+		t.Fatalf("state after failed tuiSync() = %#v, want %#v", got, original)
 	}
 }
 
@@ -1189,6 +1245,42 @@ func TestUnknownCommandSuggestsHelp(t *testing.T) {
 	}
 }
 
+// TestRunArgsRetiredWorkCommandsNoLongerDispatch proves the remote control
+// plane's command surface is gone: every retired work-* command falls through
+// to the unknown-command error instead of dispatching provider machinery.
+func TestRunArgsRetiredWorkCommandsNoLongerDispatch(t *testing.T) {
+	origSelfUpdate := selfUpdateFn
+	origDetect := detectSystem
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() {
+		selfUpdateFn = origSelfUpdate
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+	})
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
+	selfUpdateFn = func(context.Context, string, system.PlatformProfile, io.Writer) error { return nil }
+
+	retired := []string{
+		"work-capabilities", "work-start", "work-route", "work-advance",
+		"work-verification-decide", "work-reconcile", "work-status", "work-transition",
+	}
+	for _, command := range retired {
+		t.Run(command, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := RunArgs([]string{command}, &buf)
+			if err == nil {
+				t.Fatalf("RunArgs(%q) error = nil, want unknown command", command)
+			}
+			if !strings.Contains(err.Error(), fmt.Sprintf("unknown command %q", command)) {
+				t.Fatalf("RunArgs(%q) error = %v, want unknown command", command, err)
+			}
+		})
+	}
+}
+
 func TestRunArgs_UpdateSkipsSelfUpdate(t *testing.T) {
 	origSelfUpdate := selfUpdateFn
 	origCheckAll := updateCheckAll
@@ -1364,6 +1456,27 @@ func setupMockHome(t *testing.T, home string) {
 	os.Setenv("USERPROFILE", home)
 }
 
+func TestTUIExecuteReturnsStatePersistenceFailure(t *testing.T) {
+	home := t.TempDir()
+	setupMockHome(t, home)
+	if err := state.Write(home, state.InstallState{}); err != nil {
+		t.Fatal(err)
+	}
+	statePath := state.Path(home)
+	target := filepath.Join(home, ".gentle-ai", "persisted-state.json")
+	if err := os.Rename(statePath, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, statePath); err != nil {
+		t.Skipf("state symlink unavailable: %v", err)
+	}
+
+	result := tuiExecute(model.Selection{CommunityTools: []model.CommunityToolID{}}, planner.ResolvedPlan{}, system.DetectionResult{}, nil)
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "persist install state") {
+		t.Fatalf("tuiExecute() error = %v, want state persistence failure", result.Err)
+	}
+}
+
 // TestApplyOverrides_CodexModelAssignments verifies that a non-nil
 // CodexModelAssignments override sets the selection.
 func TestApplyOverrides_CodexModelAssignments(t *testing.T) {
@@ -1459,37 +1572,90 @@ func TestApplyOverrides_CodexCarrilModelAssignments(t *testing.T) {
 	if len(sel.CodexCarrilModelAssignments) != len(carrilModels) {
 		t.Fatalf("CodexCarrilModelAssignments len = %d, want %d", len(sel.CodexCarrilModelAssignments), len(carrilModels))
 	}
-	if sel.CodexCarrilModelAssignments["sdd-cheap"] != "gpt-5.4-mini" {
-		t.Errorf("CodexCarrilModelAssignments[sdd-cheap] = %q, want gpt-5.4-mini", sel.CodexCarrilModelAssignments["sdd-cheap"])
+	if sel.CodexCarrilModelAssignments["sdd-cheap"] != "gpt-5.6-luna" {
+		t.Errorf("CodexCarrilModelAssignments[sdd-cheap] = %q, want gpt-5.6-luna", sel.CodexCarrilModelAssignments["sdd-cheap"])
 	}
-	if sel.CodexCarrilModelAssignments["sdd-strong"] != "gpt-5.5" {
-		t.Errorf("CodexCarrilModelAssignments[sdd-strong] = %q, want gpt-5.5", sel.CodexCarrilModelAssignments["sdd-strong"])
+	if sel.CodexCarrilModelAssignments["sdd-strong"] != "gpt-5.6-sol" {
+		t.Errorf("CodexCarrilModelAssignments[sdd-strong] = %q, want gpt-5.6-sol", sel.CodexCarrilModelAssignments["sdd-strong"])
 	}
 }
 
-// TestLoadPersistedAssignments_CodexCarrilModels verifies that state with
-// codexCarrilModelAssignments populates selection.CodexCarrilModelAssignments.
 func TestLoadPersistedAssignments_CodexCarrilModels(t *testing.T) {
+	tests := []struct {
+		name      string
+		persisted map[string]string
+		want      map[string]string
+	}{
+		{name: "migrates exact legacy defaults", persisted: map[string]string{"sdd-strong": "gpt-5.5", "sdd-mid": "gpt-5.5", "sdd-cheap": "gpt-5.4-mini"}, want: model.DefaultCarrilModels()},
+		{name: "preserves custom tuple", persisted: map[string]string{"sdd-strong": "gpt-5.5", "sdd-mid": "gpt-5.4", "sdd-cheap": "gpt-5.4-mini"}, want: map[string]string{"sdd-strong": "gpt-5.5", "sdd-mid": "gpt-5.4", "sdd-cheap": "gpt-5.4-mini"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := state.Write(home, state.InstallState{InstalledAgents: []string{"codex"}, CodexCarrilModelAssignments: tt.persisted}); err != nil {
+				t.Fatalf("state.Write: %v", err)
+			}
+
+			sel := model.Selection{}
+			loadPersistedAssignments(home, &sel)
+			if !reflect.DeepEqual(sel.CodexCarrilModelAssignments, tt.want) {
+				t.Fatalf("CodexCarrilModelAssignments = %#v, want %#v", sel.CodexCarrilModelAssignments, tt.want)
+			}
+		})
+	}
+}
+
+func TestTuiSyncMigratesLegacyCodexCarrilDefaults(t *testing.T) {
+	t.Cleanup(codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil))
 	home := t.TempDir()
 	if err := state.Write(home, state.InstallState{
-		InstalledAgents: []string{"codex"},
-		CodexCarrilModelAssignments: map[string]string{
-			"sdd-strong": "gpt-5.5",
-			"sdd-mid":    "gpt-5.5",
-			"sdd-cheap":  "gpt-5.4-mini",
-		},
+		InstalledAgents:             []string{"codex"},
+		CodexCarrilModelAssignments: map[string]string{"sdd-strong": "gpt-5.5", "sdd-mid": "gpt-5.5", "sdd-cheap": "gpt-5.4-mini"},
+		CodexModelAssignments:       map[string]string{"sdd-apply": "medium"},
 	}); err != nil {
 		t.Fatalf("state.Write: %v", err)
 	}
 
-	sel := model.Selection{}
-	loadPersistedAssignments(home, &sel)
-
-	if sel.CodexCarrilModelAssignments["sdd-cheap"] != "gpt-5.4-mini" {
-		t.Errorf("CodexCarrilModelAssignments[sdd-cheap] = %q, want gpt-5.4-mini", sel.CodexCarrilModelAssignments["sdd-cheap"])
+	changed, err := tuiSync(home)(nil)
+	if err != nil {
+		t.Fatalf("tuiSync() error = %v", err)
 	}
-	if sel.CodexCarrilModelAssignments["sdd-strong"] != "gpt-5.5" {
-		t.Errorf("CodexCarrilModelAssignments[sdd-strong] = %q, want gpt-5.5", sel.CodexCarrilModelAssignments["sdd-strong"])
+	changedSet := make(map[string]bool, len(changed))
+	for _, path := range changed {
+		changedSet[path] = true
+	}
+
+	wantProfiles := map[string][]string{
+		"sdd-strong.config.toml": {`model = "gpt-5.6-sol"`, `model_reasoning_effort = "medium"`},
+		"sdd-mid.config.toml":    {`model = "gpt-5.6-terra"`, `model_reasoning_effort = "medium"`},
+		"sdd-cheap.config.toml":  {`model = "gpt-5.6-luna"`, `model_reasoning_effort = "high"`},
+	}
+	for name, wantContent := range wantProfiles {
+		path := filepath.Join(home, ".codex", name)
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", path, err)
+		}
+		for _, want := range wantContent {
+			if !strings.Contains(string(body), want) {
+				t.Fatalf("%s missing %q; got:\n%s", name, want, body)
+			}
+		}
+		if !changedSet[path] {
+			t.Errorf("tuiSync changed files missing %s: %#v", path, changed)
+		}
+	}
+
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read after tuiSync: %v", err)
+	}
+	if !reflect.DeepEqual(persisted.CodexCarrilModelAssignments, model.DefaultCarrilModels()) {
+		t.Fatalf("persisted carril assignments = %#v, want %#v", persisted.CodexCarrilModelAssignments, model.DefaultCarrilModels())
+	}
+	if persisted.CodexModelAssignments["sdd-apply"] != "medium" {
+		t.Fatalf("persisted effort assignment = %#v, want sdd-apply medium", persisted.CodexModelAssignments)
 	}
 }
 
@@ -1737,87 +1903,6 @@ func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
 	}
 }
 
-func TestRunArgsPendingSyncRepairsCodexPermissions(t *testing.T) {
-	home := t.TempDir()
-	setupMockHome(t, home)
-
-	if err := state.Write(home, state.InstallState{
-		InstalledAgents: []string{string(model.AgentCodex)},
-		PendingSync:     true,
-	}); err != nil {
-		t.Fatalf("state.Write() error = %v", err)
-	}
-	configPath := filepath.Join(home, ".codex", "config.toml")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	initial := `[permissions.gentle-dev.filesystem]
-":slash_tmp" = "write"
-":tmpdir" = "write"
-
-[permissions.gentle-dev.filesystem.":workspace_roots"]
-"**/*.key" = "deny"
-"**/*.pem" = "deny"
-`
-	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	origSelf := selfUpdateFn
-	origEnsure := ensureCurrentOSSupported
-	origDetect := detectSystem
-	origRunTUI := runTUI
-	t.Cleanup(func() {
-		selfUpdateFn = origSelf
-		ensureCurrentOSSupported = origEnsure
-		detectSystem = origDetect
-		runTUI = origRunTUI
-	})
-
-	selfUpdateFn = func(_ context.Context, _ string, _ system.PlatformProfile, _ io.Writer) error {
-		return nil
-	}
-	ensureCurrentOSSupported = func() error { return nil }
-	detectSystem = func(context.Context) (system.DetectionResult, error) {
-		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true}}}, nil
-	}
-	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
-		return m, nil
-	}
-
-	var buf bytes.Buffer
-	if err := RunArgs(nil, &buf); err != nil {
-		t.Fatalf("RunArgs(nil) error = %v", err)
-	}
-
-	body, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", configPath, err)
-	}
-	text := string(body)
-	if !strings.Contains(text, `":minimal" = "read"`) || !strings.Contains(text, `":tmpdir" = "write"`) || !strings.Contains(text, `":slash_tmp" = "write"`) || !strings.Contains(text, `[permissions.gentle-dev.workspace_roots]`) || !strings.Contains(text, `[permissions.gentle-dev.filesystem.":workspace_roots"]`) || !strings.Contains(text, `"**/*.key" = "deny"`) {
-		t.Fatalf("deferred sync should add valid Codex permissions profile; got:\n%s", text)
-	}
-	assertCodexWorkspaceWriteRulesScoped(t, text)
-	rootFilesystem := tomlSection(text, `[permissions.gentle-dev.filesystem]`)
-	if strings.Contains(rootFilesystem, `"**/*.key" = "deny"`) || strings.Contains(rootFilesystem, `"**/*.pem" = "deny"`) {
-		t.Fatalf("deferred sync root filesystem table should not contain secret glob denies; got:\n%s", rootFilesystem)
-	}
-	for _, invalid := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`} {
-		if strings.Contains(text, invalid) {
-			t.Fatalf("deferred sync should remove invalid entry %q; got:\n%s", invalid, text)
-		}
-	}
-
-	s, err := state.Read(home)
-	if err != nil {
-		t.Fatalf("state.Read() error = %v", err)
-	}
-	if s.PendingSync {
-		t.Fatal("PendingSync = true after successful Codex deferred sync, want false")
-	}
-}
-
 // TestRunArgs_PendingSync_LeavesSetOnFailure verifies that when the deferred
 // sync fails, PendingSync remains true so the next launch retries idempotently.
 func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
@@ -1886,9 +1971,6 @@ func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
 // error is printed to stdout and RunArgs does not return an error.
 // This guards against silently swallowed write failures (Issue 2).
 func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("cannot test permission errors as root")
-	}
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -1900,12 +1982,15 @@ func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
 		t.Fatalf("state.Write() error = %v", err)
 	}
 
-	// Make the state file read-only so state.Write (the clear-PendingSync write) fails.
+	// Keep state readable through a symlink while making atomic replacement refuse it.
 	stateFilePath := state.Path(home)
-	if err := os.Chmod(stateFilePath, 0o444); err != nil {
-		t.Fatalf("Chmod: %v", err)
+	stateTargetPath := filepath.Join(home, ".gentle-ai", "persisted-state.json")
+	if err := os.Rename(stateFilePath, stateTargetPath); err != nil {
+		t.Fatalf("Rename: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(stateFilePath, 0o644) })
+	if err := os.Symlink(stateTargetPath, stateFilePath); err != nil {
+		t.Skipf("state symlink unavailable: %v", err)
+	}
 
 	origSelf := selfUpdateFn
 	origEnsure := ensureCurrentOSSupported
@@ -1997,5 +2082,56 @@ func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
 
 	if syncCalled != 0 {
 		t.Errorf("deferredSyncFn called %d times, want 0 (no pending sync)", syncCalled)
+	}
+}
+
+func TestCustomSyncClearsPersistedCodexOrchestratorAssignment(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"codex"},
+		CodexOrchestratorAssignment: &state.CodexOrchestratorAssignmentState{
+			Model: "gpt-5.6-sol", Effort: "low",
+		},
+	}); err != nil {
+		t.Fatalf("state.Write (seed): %v", err)
+	}
+
+	selection := model.Selection{}
+	loadPersistedAssignments(home, &selection)
+	applyOverrides(&selection, &model.SyncOverrides{ClearCodexOrchestratorAssignment: true})
+	if selection.CodexOrchestratorAssignment != nil {
+		t.Fatalf("same-sync selection retained curated orchestrator: %#v", selection.CodexOrchestratorAssignment)
+	}
+	persistAssignments(home, selection)
+
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if persisted.CodexOrchestratorAssignment != nil {
+		t.Fatalf("persisted curated orchestrator was not cleared: %#v", persisted.CodexOrchestratorAssignment)
+	}
+}
+
+func TestCustomClearRoundTripLeavesFutureSyncInPreserveMode(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"codex"},
+		CodexOrchestratorAssignment: &state.CodexOrchestratorAssignmentState{
+			Model: "gpt-5.6-sol", Effort: "low",
+		},
+	}); err != nil {
+		t.Fatalf("state.Write (seed): %v", err)
+	}
+
+	first := model.Selection{}
+	loadPersistedAssignments(home, &first)
+	applyOverrides(&first, &model.SyncOverrides{ClearCodexOrchestratorAssignment: true})
+	persistAssignments(home, first)
+
+	future := model.Selection{}
+	loadPersistedAssignments(home, &future)
+	if future.CodexOrchestratorAssignment != nil || future.ClearCodexOrchestratorAssignment {
+		t.Fatalf("future sync did not return to preserve mode: assignment=%#v clear=%v", future.CodexOrchestratorAssignment, future.ClearCodexOrchestratorAssignment)
 	}
 }

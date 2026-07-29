@@ -2,13 +2,16 @@ package vscode
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 type Adapter struct {
@@ -33,20 +36,38 @@ func (a *Adapter) Tier() model.SupportTier {
 
 // --- Detection ---
 
-func (a *Adapter) Detect(_ context.Context, _ string) (bool, string, string, bool, error) {
-	// VS Code is detected by its binary on PATH.
+func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, string, bool, error) {
 	binaryPath, err := a.lookPath("code")
 	if err != nil {
+		if !errors.Is(err, exec.ErrNotFound) {
+			return false, "", "", false, err
+		}
 		return false, "", "", false, nil
 	}
-
-	return true, binaryPath, "", true, nil
+	extensionsDir := filepath.Join(homeDir, ".vscode", "extensions")
+	entries, err := os.ReadDir(extensionsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, binaryPath, extensionsDir, false, nil
+		}
+		return false, "", extensionsDir, false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && (entry.Name() == "github.copilot" || strings.HasPrefix(entry.Name(), "github.copilot-")) {
+			return true, binaryPath, extensionsDir, true, nil
+		}
+	}
+	return false, binaryPath, extensionsDir, false, nil
 }
 
 // --- Installation ---
 
+func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.MustForAgent(model.AgentVSCodeCopilot)
+}
+
 func (a *Adapter) SupportsAutoInstall() bool {
-	return false // VS Code is a desktop app installed via package managers.
+	return a.CapabilityManifest().Features.AutoInstall
 }
 
 func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
@@ -95,29 +116,41 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 	return filepath.Join(a.vscodeUserDir(homeDir), "mcp.json")
 }
 
+// vscodeUserDir returns the OS-specific VS Code User config directory.
+//
+// Environment overrides (XDG_CONFIG_HOME, APPDATA) are honored only when
+// homeDir is the real user home: a caller that passes a custom installation
+// root (sandboxed installs, tests) must stay contained inside that root, so
+// ambient environment can never redirect a write outside it.
 func (a *Adapter) vscodeUserDir(homeDir string) string {
 	switch runtime.GOOS {
 	case "darwin":
 		return filepath.Join(homeDir, "Library", "Application Support", "Code", "User")
 	case "windows":
-		appData := os.Getenv("APPDATA")
-		if appData == "" {
-			appData = filepath.Join(homeDir, "AppData", "Roaming")
+		if appData := strings.TrimSpace(os.Getenv("APPDATA")); filepath.IsAbs(appData) && isRealUserHome(homeDir) {
+			return filepath.Join(appData, "Code", "User")
 		}
-		return filepath.Join(appData, "Code", "User")
+		return filepath.Join(homeDir, "AppData", "Roaming", "Code", "User")
 	default:
-		xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
-		if xdgConfigHome == "" {
-			xdgConfigHome = filepath.Join(homeDir, ".config")
+		if xdgConfigHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); filepath.IsAbs(xdgConfigHome) && isRealUserHome(homeDir) {
+			return filepath.Join(xdgConfigHome, "Code", "User")
 		}
-		return filepath.Join(xdgConfigHome, "Code", "User")
+		return filepath.Join(homeDir, ".config", "Code", "User")
 	}
+}
+
+// isRealUserHome reports whether homeDir is the current user's actual home
+// directory — the only case where process-wide environment overrides may
+// legitimately steer config resolution away from homeDir.
+func isRealUserHome(homeDir string) bool {
+	userHome, err := os.UserHomeDir()
+	return err == nil && filepath.Clean(homeDir) == filepath.Clean(userHome)
 }
 
 // --- Optional capabilities ---
 
 func (a *Adapter) SupportsOutputStyles() bool {
-	return false
+	return a.CapabilityManifest().Features.OutputStyles
 }
 
 func (a *Adapter) OutputStyleDir(_ string) string {
@@ -125,7 +158,7 @@ func (a *Adapter) OutputStyleDir(_ string) string {
 }
 
 func (a *Adapter) SupportsSlashCommands() bool {
-	return false
+	return a.CapabilityManifest().Features.SlashCommands
 }
 
 func (a *Adapter) CommandsDir(_ string) string {
@@ -133,7 +166,7 @@ func (a *Adapter) CommandsDir(_ string) string {
 }
 
 func (a *Adapter) SupportsSubAgents() bool {
-	return false
+	return a.CapabilityManifest().Features.FileSubAgents
 }
 
 func (a *Adapter) SubAgentsDir(_ string) string {
@@ -145,15 +178,15 @@ func (a *Adapter) EmbeddedSubAgentsDir() string {
 }
 
 func (a *Adapter) SupportsSkills() bool {
-	return true
+	return a.CapabilityManifest().Features.Skills
 }
 
 func (a *Adapter) SupportsSystemPrompt() bool {
-	return true
+	return a.CapabilityManifest().Features.SystemPrompt
 }
 
 func (a *Adapter) SupportsMCP() bool {
-	return true
+	return a.CapabilityManifest().Features.MCP
 }
 
 // AgentNotInstallableError is returned when InstallCommand is called on a desktop-only agent.

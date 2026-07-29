@@ -142,14 +142,21 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - System prompt at `~/.codex/AGENTS.md`
 - Engram instruction files at `~/.codex/engram-instructions.md`
 - MCP servers (Engram and Context7) are upserted as `[mcp_servers.<name>]` blocks in `~/.codex/config.toml`
-- SDD model-selection profiles written as separate files at `~/.codex/<name>.config.toml` (Codex >= 0.134.0 separate-file mechanism). Selected at runtime via `codex --profile <name>`:
+- SDD model-selection profiles written as separate files at `~/.codex/<name>.config.toml`. GPT-5.6 defaults require Codex >= 0.144.0 (the separate-file mechanism itself is available since 0.134.0). Select a profile at runtime via `codex --profile <name>`:
 
-  | Profile | `model_reasoning_effort` | SDD phases |
-  |---------|--------------------------|------------|
-  | `sdd-strong` | `xhigh` | propose, design, verify, judge |
-  | `sdd-mid` | `high` | spec, tasks, apply |
-  | `sdd-cheap` | `low` | explore, archive, onboard |
+  Model and effort defaults vary together by preset. These effort levels are Gentle AI workload policy, not Codex defaults. The carriles split by what the phase actually does: `sdd-strong` phases reason over context delivered to them, `sdd-mid` phases write code in an agentic loop where effort matters more than raw model strength, and `sdd-cheap` phases do structured transcription with short context and verifiable output, so they buy effort instead of a bigger model.
 
+  Every curated preset runs the main orchestrator/session at `medium` effort — it plans, routes and adjudicates rather than doing the delegated work. The orchestrator *model* varies: Low-cost runs it on `gpt-5.6-terra` so a Plus plan can still afford `gpt-5.6-sol` in the strong carril, where the reasoning pays. Custom and legacy state preserve existing top-level settings:
+
+  | Profile | Low-cost | Recommended | Powerful | SDD phases |
+  |---------|----------|-------------|----------|------------|
+  | Orchestrator | `gpt-5.6-terra` / `medium` | `gpt-5.6-sol` / `medium` | `gpt-5.6-sol` / `medium` | main session |
+  | `sdd-strong` | `gpt-5.6-sol` / `medium` | `gpt-5.6-sol` / `medium` | `gpt-5.6-sol` / `xhigh` | explore, propose, design, verify, judge |
+  | `sdd-mid` | `gpt-5.6-terra` / `medium` | `gpt-5.6-terra` / `high` | `gpt-5.6-sol` / `high` | apply, fix-agent |
+  | `sdd-cheap` | `gpt-5.6-luna` / `high` | `gpt-5.6-luna` / `high` | `gpt-5.6-luna` / `high` | spec, tasks, archive, onboard |
+
+- Explicit saved Codex model assignments are preserved on sync, including older pinned IDs such as `gpt-5.5` or `gpt-5.4-mini`. The narrow exception is the exact former implicit-default tuple (`sdd-strong=gpt-5.5`, `sdd-mid=gpt-5.5`, `sdd-cheap=gpt-5.4-mini`), which sync treats as Recommended and upgrades to the current GPT-5.6 tuple; partial, extended, or otherwise different maps remain custom and unchanged.
+- GPT-5.6 `max` reasoning effort and `ultra` mode are intentionally not enabled by this default update. `max` requires confirmed Codex support; `ultra` changes orchestration semantics and needs separate design.
 - Multi-agent SDD delegation is available as an **experimental opt-in** (default off). gentle-ai writes `features.multi_agent = false` and `agents.max_threads = 4` / `agents.max_depth = 2` into `~/.codex/config.toml`. To enable, set `multi_agent = true` in the `[features]` section. When enabled, the `sdd-orchestrator` asset uses Codex's native `spawn_agent` / `wait_agent` / `close_agent` tools to delegate SDD phases; otherwise it falls back to solo-agent inline execution.
 - **Delegation**: Solo-agent (multi-agent opt-in, experimental)
 
@@ -232,7 +239,6 @@ For the full Pi command and package reference, see [Pi Agent](pi.md).
   - `pi install npm:pi-mcp-adapter`
   - `npm exec --yes --package gentle-engram@latest -- pi-engram init`
   - `pi install npm:pi-subagents-j0k3r`
-  - `pi install npm:pi-intercom`
   - `pi install npm:@juicesharp/rpiv-ask-user-question`
   - `pi install npm:pi-web-access`
   - `pi install npm:@juicesharp/rpiv-todo`
@@ -244,7 +250,6 @@ For the full Pi command and package reference, see [Pi Agent](pi.md).
 - **`gentle-engram` package**: adds persistent Engram memory for Pi. It captures sessions, exposes Engram MCP tools through `pi-mcp-adapter`, and degrades safely when the local `engram` binary is missing.
 - **MCP adapter wiring**: ComponentEngram declares `npm:pi-mcp-adapter` in `.pi/agent/settings.json` packages and adds `pi-mcp-adapter` `^2.6.0` to `.pi/npm/package.json` without removing unrelated user entries. `pi-engram init` owns the Pi Engram MCP config schema and is run during installation.
 - **`pi-subagents-j0k3r` package**: discovers and runs SDD agents from `.pi/agents/`; Gentle AI installs it directly with `pi install npm:pi-subagents-j0k3r`.
-- **`pi-intercom` package**: lets Pi child agents ask the parent session for decisions while a chain is running.
 - **`@juicesharp/rpiv-ask-user-question` package**: lets Pi child agents ask the active user session for clarification when they need human input.
 - **Pi companion packages**: `pi-web-access`, `@juicesharp/rpiv-todo`, and `pi-btw` add web access, todo tracking, and companion workflow support.
 - **Pi-only flow**: when Pi is the only selected agent, gentle-ai skips persona, ecosystem component selection, and Strict TDD prompts because those behaviors are provided by `gentle-pi`.

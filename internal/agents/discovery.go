@@ -1,9 +1,10 @@
 package agents
 
 import (
+	"context"
 	"os"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 // InstalledAgent pairs an agent ID with its resolved config root directory.
@@ -28,6 +29,10 @@ func DiscoverInstalled(reg *Registry, homeDir string) []InstalledAgent {
 	for _, id := range reg.SupportedAgents() {
 		adapter, ok := reg.Get(id)
 		if !ok {
+			continue
+		}
+		installed, _, _, configFound, err := adapter.Detect(context.Background(), homeDir)
+		if err != nil || (!installed && !configFound) {
 			continue
 		}
 

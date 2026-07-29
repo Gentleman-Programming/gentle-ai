@@ -3,14 +3,16 @@ package installcmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 func TestValidateGoForModuleInstall(t *testing.T) {
@@ -623,7 +625,7 @@ func TestResolveComponentInstall(t *testing.T) {
 			component: model.ComponentGGA,
 			want: CommandSequence{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
-				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
 				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
 		},
@@ -633,7 +635,7 @@ func TestResolveComponentInstall(t *testing.T) {
 			component: model.ComponentGGA,
 			want: CommandSequence{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
-				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
 				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
 		},
@@ -643,7 +645,7 @@ func TestResolveComponentInstall(t *testing.T) {
 			component: model.ComponentGGA,
 			want: CommandSequence{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
-				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
 				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
 		},
@@ -658,8 +660,8 @@ func TestResolveComponentInstall(t *testing.T) {
 			profile:   system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			component: model.ComponentGGA,
 			want: CommandSequence{
-				{"powershell", "-NoProfile", "-Command", fmt.Sprintf("Remove-Item -Recurse -Force -ErrorAction SilentlyContinue '%s'; exit 0", filepath.Join(os.TempDir(), "gentleman-guardian-angel"))},
-				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", filepath.Join(os.TempDir(), "gentleman-guardian-angel")},
+				{"powershell", "-NoProfile", "-Command", fmt.Sprintf("$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath '%s') { Remove-Item -Recurse -Force -LiteralPath '%s' }", powerShellSingleQuotedValue(filepath.Join(os.TempDir(), "gentleman-guardian-angel")), powerShellSingleQuotedValue(filepath.Join(os.TempDir(), "gentleman-guardian-angel")))},
+				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", filepath.Join(os.TempDir(), "gentleman-guardian-angel")},
 				{gitBashPath(), bashScriptPath(system.PlatformProfile{OS: "windows"}, filepath.Join(os.TempDir(), "gentleman-guardian-angel", "install.sh"))},
 			},
 		},
@@ -686,5 +688,110 @@ func TestResolveComponentInstall(t *testing.T) {
 				t.Fatalf("ResolveComponentInstall() = %v, want %v", command, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveGGAInstall_UsesPinnedReleaseTag(t *testing.T) {
+	r := NewResolver()
+	cmds, err := r.ResolveComponentInstall(
+		system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
+		model.ComponentGGA,
+	)
+	if err != nil {
+		t.Fatalf("ResolveComponentInstall() error = %v", err)
+	}
+	if len(cmds) < 2 {
+		t.Fatalf("ResolveComponentInstall() returned %d commands, want clone command", len(cmds))
+	}
+
+	wantClone := []string{
+		"git",
+		"clone",
+		"--depth=1",
+		"--branch",
+		"v" + versions.GGAVersion,
+		"https://github.com/Gentleman-Programming/gentleman-guardian-angel.git",
+		"/tmp/gentleman-guardian-angel",
+	}
+	if !reflect.DeepEqual(cmds[1], wantClone) {
+		t.Fatalf("GGA clone command = %v, want %v", cmds[1], wantClone)
+	}
+}
+
+func TestGGAInstall_CleanupCommandBehavior(t *testing.T) {
+	// Create a temp directory to simulate the clone destination.
+	tmpDir := t.TempDir()
+	staleDir := filepath.Join(tmpDir, "gentleman-guardian-angel")
+	if err := os.MkdirAll(staleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Write a file to make it non-empty.
+	staleFile := filepath.Join(staleDir, "stale_file.txt")
+	if err := os.WriteFile(staleFile, []byte("stale content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Resolve the installation command sequence to get the cleanup command.
+	r := NewResolver()
+	var profile system.PlatformProfile
+	if runtime.GOOS == "windows" {
+		profile = system.PlatformProfile{OS: "windows", PackageManager: "winget"}
+	} else {
+		profile = system.PlatformProfile{OS: "linux", LinuxDistro: "ubuntu", PackageManager: "apt"}
+	}
+
+	cmds, err := r.ResolveComponentInstall(profile, model.ComponentGGA)
+	if err != nil {
+		t.Fatalf("failed to resolve GGA install: %v", err)
+	}
+	if len(cmds) < 2 {
+		t.Fatalf("expected at least 2 commands, got %d", len(cmds))
+	}
+
+	// Replace the resolved target path with our test staleDir in the cleanup command.
+	cleanupCmd := cmds[0]
+	var testCmd []string
+	if profile.OS == "windows" {
+		// Cleanup command: powershell -NoProfile -Command "..."
+		// Substitute the system Temp path with our local staleDir.
+		systemTemp := powerShellSingleQuotedValue(filepath.Join(os.TempDir(), "gentleman-guardian-angel"))
+		cmdStr := strings.ReplaceAll(cleanupCmd[3], systemTemp, powerShellSingleQuotedValue(staleDir))
+		testCmd = []string{cleanupCmd[0], cleanupCmd[1], cleanupCmd[2], cmdStr}
+	} else {
+		// Cleanup command: rm -rf /tmp/gentleman-guardian-angel
+		// Substitute /tmp/... with our local staleDir.
+		testCmd = []string{cleanupCmd[0], cleanupCmd[1], staleDir}
+	}
+
+	// Run the cleanup command.
+	var execCmd *exec.Cmd
+	if len(testCmd) > 1 {
+		execCmd = exec.Command(testCmd[0], testCmd[1:]...)
+	} else {
+		execCmd = exec.Command(testCmd[0])
+	}
+	if out, err := execCmd.CombinedOutput(); err != nil {
+		t.Fatalf("cleanup command failed: %v, output: %s", err, string(out))
+	}
+
+	// Assert the stale directory has been deleted.
+	if _, err := os.Stat(staleDir); !os.IsNotExist(err) {
+		t.Fatalf("expected stale directory %q to be deleted, but it still exists", staleDir)
+	}
+
+	// Run the cleanup command again (when directory doesn't exist) to verify no-op/success.
+	if len(testCmd) > 1 {
+		execCmd = exec.Command(testCmd[0], testCmd[1:]...)
+	} else {
+		execCmd = exec.Command(testCmd[0])
+	}
+	if out, err := execCmd.CombinedOutput(); err != nil {
+		t.Fatalf("cleanup command failed on non-existent directory: %v, output: %s", err, string(out))
+	}
+}
+
+func TestPowerShellSingleQuotedValue(t *testing.T) {
+	if got, want := powerShellSingleQuotedValue(`C:\Users\O'Brien\Temp`), `C:\Users\O''Brien\Temp`; got != want {
+		t.Fatalf("powerShellSingleQuotedValue() = %q, want %q", got, want)
 	}
 }

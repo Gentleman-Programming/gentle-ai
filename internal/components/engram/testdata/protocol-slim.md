@@ -9,3 +9,9 @@ MCP server instructions and the SessionStart hook. Always-on rules:
   automated/SDD artifacts.
 - On any reference to past work: `mem_context` → `mem_search` → `mem_get_observation`.
 - Before saying "done", call `mem_session_summary`.
+- Saving to memory is bookkeeping, never the reply: it NEVER counts as answering.
+  End every turn with the complete user-facing answer as the final message (no
+  tool calls after it), and save memory before composing it — never collapse the
+  answer into a "saved / done" acknowledgement.
+- If a memory call fails or times out, deliver the answer anyway — memory
+  failures never block or replace the reply.

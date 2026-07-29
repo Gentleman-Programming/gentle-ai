@@ -1,0 +1,54 @@
+{
+  "schema": "gentle-ai.review-record/v1",
+  "operation": "review/freeze-findings",
+  "previous_revision": "sha256:d4c310032d9bb4d299277dece13c029b3bae8b9728fa481558c5c2f59d8eed86",
+  "transaction": {
+    "schema": "gentle-ai.review-transaction/v1",
+    "lineage_id": "legacy-valid",
+    "mode": "ordinary_4r",
+    "generation": 1,
+    "state": "findings_frozen",
+    "snapshot": {
+      "kind": "current-changes",
+      "base_tree": "8c3de935e475844d1dbdaf8a4e68c5ef3d2e7b97",
+      "candidate_tree": "551f003a86ddd6ab07e08888e482f3136baa49c6",
+      "paths_digest": "sha256:b93fca961a97d240c2b7023e98772f49ebd2995eda7db07043270b57bed75d71",
+      "intended_untracked": [],
+      "intended_untracked_proof": "sha256:b97229718d4c7fe50a8892eb474ae5aa6491697bccb400e3e31dbaca4894d2f3",
+      "paths": [
+        "tracked.txt"
+      ],
+      "identity": "sha256:1bc6f372694d543130b4f12af7febbf29ccb26bc7fb840658ef47945aa91575e"
+    },
+    "genesis_paths": [
+      "tracked.txt"
+    ],
+    "base_tree": "8c3de935e475844d1dbdaf8a4e68c5ef3d2e7b97",
+    "paths_digest": "sha256:b93fca961a97d240c2b7023e98772f49ebd2995eda7db07043270b57bed75d71",
+    "initial_review_tree": "551f003a86ddd6ab07e08888e482f3136baa49c6",
+    "final_candidate_tree": "551f003a86ddd6ab07e08888e482f3136baa49c6",
+    "fix_delta_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "policy_hash": "sha256:bf34776184f2fe18651dda5cdb688e6fc8965cd0395a955f37a8e2052c010ab5",
+    "ledger_hash": "sha256:37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "ledger_findings_hash": "sha256:dc7066caf7f1a69347dc5e5e9addd77eb7f279bd9943079ed125bebe4afc4eb8",
+    "evidence_hash": "",
+    "judge_proofs": [],
+    "counters": {
+      "full_reviews": 1,
+      "refuter_batches": 0,
+      "fix_batches": 0,
+      "scoped_fix_validations": 0,
+      "final_verifications": 0,
+      "fix_rounds": 0,
+      "scoped_rejudgments": 0,
+      "judge_executions": 0
+    },
+    "findings": [],
+    "classifications": {},
+    "outcomes": {},
+    "fix_finding_ids": [],
+    "pending_refuter_ids": [],
+    "fix_caused_findings": [],
+    "follow_ups": []
+  }
+}

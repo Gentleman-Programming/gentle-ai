@@ -7,9 +7,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 const (
@@ -35,14 +35,28 @@ func CodeGraphGuidanceMarkdown() string {
 		"",
 		"When answering structural or codebase questions, use CodeGraph before broad filesystem searches. This is a hard ordering rule for repo maps, architecture, call flow, dependencies, symbol references, impact analysis, and “how does X work” questions.",
 		"",
+		"CodeGraph-aware worktree placement:",
+		"",
+		"- Create Git worktrees that may need CodeGraph under the user's home directory, preferably as a sibling such as `<repo-parent>/<repo-name>-worktrees/<worktree-name>`. Never place a CodeGraph-dependent worktree under `/tmp`, `/var/tmp`, or `/tmp/opencode`; generic temporary-work guidance does not override this rule.",
+		"- Every worktree needs its own `.codegraph/` index. Never copy, symlink, or reuse another checkout's index because its root and checked-out bytes may differ.",
+		"",
+		"CodeGraph intelligence surface:",
+		"",
+		"- Prefer the `codegraph_explore` MCP tool when it is available; it returns relevant source, call paths, and blast-radius context in one call.",
+		"- If the MCP tool is unavailable, invoke the upstream CLI directly. Agents may use its read-only intelligence commands: `codegraph status`, `codegraph query`, `codegraph explore`, `codegraph node`, `codegraph files`, `codegraph callers`, `codegraph callees`, `codegraph impact`, and `codegraph affected`.",
+		"- Do not use `gentle-ai codegraph` as a general proxy. Its `init` command exists only to validate the project root before initialization; intelligence queries belong to the upstream CLI.",
+		"- Never run or recommend destructive or administrative lifecycle commands: `codegraph uninit`, `codegraph install`, `codegraph uninstall`, or `codegraph upgrade`. Reserve `codegraph index` for explicit index-corruption recovery, never routine use.",
+		"",
 		"Required order for structural/codebase questions:",
 		"",
 		"1. Resolve the project root with `git rev-parse --show-toplevel || pwd`.",
 		"2. Confirm the root is a real project/workspace. Do not ask the user before initializing CodeGraph in a real project. Do not initialize CodeGraph in `$HOME`, temporary directories, or non-project folders.",
 		"3. Check for `<project-root>/.codegraph/` before any broad Read/Glob/Grep filesystem exploration.",
-		"4. If `.codegraph/` is missing and CodeGraph is enabled/available, immediately run `codegraph init <project-root>` once, then use the `codegraph_explore` MCP tool or `codegraph explore \"...\"`.",
+		"4. If `.codegraph/` is missing and CodeGraph is enabled/available, immediately run `gentle-ai codegraph init --cwd <project-root>` once.",
 		"5. Missing .codegraph/ is the trigger to initialize, not a reason to skip CodeGraph. Do not fall back just because `.codegraph/` is missing; a missing index is the trigger to lazy-initialize, not a reason to skip CodeGraph.",
-		"6. Only fall back after CodeGraph init or CodeGraph use fails. Only fall back to normal filesystem tools after CodeGraph init or CodeGraph use fails, and briefly explain the fallback.",
+		"6. Use `codegraph_explore` after initialization, or the read-only upstream CLI commands when MCP tools are absent.",
+		"7. After edits, rely on watcher auto-sync by default. Run `codegraph sync` only when the watcher is disabled or CodeGraph reports stale files that do not refresh normally.",
+		"8. Only fall back to normal filesystem tools after CodeGraph initialization or use fails, and briefly explain the fallback.",
 		"",
 		"Broad Read/Glob/Grep exploration before this CodeGraph check is explicitly discouraged for structural/codebase questions.",
 	}, "\n")
@@ -65,7 +79,7 @@ func InjectCodeGraphGuidanceIfSelected(homeDir string, selected []model.Communit
 // has CodeGraph wiring or a managed guidance marker. This prevents normal sync
 // from introducing CodeGraph prompts for users who never installed/enabled it.
 func RefreshCodeGraphGuidanceIfConfigured(homeDir string, detector Detector) (GuidanceInjectionResult, bool, error) {
-	if !HasConfiguredCodeGraph(homeDir, detector) && !hasAvailableLegacyCodeGraphGuidance(homeDir, detector) {
+	if !HasConfiguredCodeGraph(homeDir, detector) && !hasAvailableCodeGraphGuidance(homeDir, detector) {
 		return GuidanceInjectionResult{}, false, nil
 	}
 
@@ -73,9 +87,9 @@ func RefreshCodeGraphGuidanceIfConfigured(homeDir string, detector Detector) (Gu
 	return result, true, err
 }
 
-func hasAvailableLegacyCodeGraphGuidance(homeDir string, detector Detector) bool {
+func hasAvailableCodeGraphGuidance(homeDir string, detector Detector) bool {
 	status := DetectStatus(model.CommunityToolCodeGraph, homeDir, detector)
-	return status.CLI == AvailabilityAvailable && HasLegacyCodeGraphGuidance(homeDir)
+	return status.CLI == AvailabilityAvailable && HasAnyCodeGraphGuidance(homeDir)
 }
 
 func HasConfiguredCodeGraph(homeDir string, detector Detector) bool {
@@ -98,6 +112,23 @@ func HasLegacyCodeGraphGuidance(homeDir string) bool {
 			continue
 		}
 		if containsLegacyCodeGraphGuidance(string(data)) {
+			return true
+		}
+	}
+	return false
+}
+
+func HasAnyCodeGraphGuidance(homeDir string) bool {
+	return HasManagedCodeGraphGuidance(homeDir) || HasLegacyCodeGraphGuidance(homeDir)
+}
+
+func HasManagedCodeGraphGuidance(homeDir string) bool {
+	for _, path := range CodeGraphGuidancePaths(homeDir) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(data), "<!-- gentle-ai:"+codeGraphGuidanceSectionID+" -->") {
 			return true
 		}
 	}
@@ -142,7 +173,7 @@ func InjectCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, error) {
 	result := GuidanceInjectionResult{}
 	for _, installedAgent := range installed {
 		adapter, ok := reg.Get(installedAgent.ID)
-		if !ok || !isCodeGraphSupportedAgent(installedAgent.ID) || !adapter.SupportsSystemPrompt() {
+		if !ok || !isCodeGraphCompatibleAgent(installedAgent.ID) || !adapter.SupportsSystemPrompt() || installedAgent.ID == model.AgentPi {
 			continue
 		}
 
@@ -172,7 +203,7 @@ func CodeGraphGuidancePaths(homeDir string) []string {
 	paths := make([]string, 0, len(installed))
 	for _, installedAgent := range installed {
 		adapter, ok := reg.Get(installedAgent.ID)
-		if !ok || !isCodeGraphSupportedAgent(installedAgent.ID) || !adapter.SupportsSystemPrompt() {
+		if !ok || !isCodeGraphCompatibleAgent(installedAgent.ID) || !adapter.SupportsSystemPrompt() {
 			continue
 		}
 		path := adapter.SystemPromptFile(homeDir)
@@ -181,6 +212,104 @@ func CodeGraphGuidancePaths(homeDir string) []string {
 		}
 	}
 	return paths
+}
+
+// CodeGraphManagedPaths returns every detected agent file that CodeGraph setup
+// or managed guidance may update. Sync uses this complete set for backup and
+// changed-file accounting before invoking the upstream installer.
+func CodeGraphManagedPaths(homeDir string) []string {
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		return nil
+	}
+
+	paths := append([]string(nil), CodeGraphGuidancePaths(homeDir)...)
+	for _, installedAgent := range agents.DiscoverInstalled(reg, homeDir) {
+		adapter, ok := reg.Get(installedAgent.ID)
+		if !ok || !isCodeGraphCompatibleAgent(installedAgent.ID) {
+			continue
+		}
+		paths = append(paths, codeGraphToolWiringPaths(homeDir, adapter)...)
+	}
+
+	seen := make(map[string]struct{}, len(paths))
+	managed := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		seen[path] = struct{}{}
+		managed = append(managed, path)
+	}
+	slices.Sort(managed)
+	return managed
+}
+
+func NeedsOpenCodeCodeGraphReconcile(homeDir string) bool {
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		return false
+	}
+	adapter, ok := reg.Get(model.AgentOpenCode)
+	if !ok {
+		return false
+	}
+	detected := slices.ContainsFunc(agents.DiscoverInstalled(reg, homeDir), func(agent agents.InstalledAgent) bool {
+		return agent.ID == model.AgentOpenCode
+	})
+	if !detected {
+		return false
+	}
+	_, configured := hasCodeGraphToolWiring(homeDir, adapter)
+	return !configured
+}
+
+// ReconcileOpenCodeCodeGraph delegates JSON/JSONC editing to CodeGraph's own
+// installer so comments and unrelated user configuration remain untouched.
+func ReconcileOpenCodeCodeGraph(homeDir string, runner Runner) (GuidanceInjectionResult, error) {
+	if !NeedsOpenCodeCodeGraphReconcile(homeDir) {
+		return GuidanceInjectionResult{}, nil
+	}
+	if runner == nil {
+		return GuidanceInjectionResult{}, fmt.Errorf("OpenCode CodeGraph reconciliation runner is not configured")
+	}
+
+	paths := CodeGraphManagedPaths(homeDir)
+	before := readCodeGraphManagedFiles(paths)
+	if err := runner.Run("codegraph", "install", "--target", "opencode", "--location", "global", "--yes"); err != nil {
+		return GuidanceInjectionResult{}, fmt.Errorf("reconcile OpenCode CodeGraph MCP wiring: %w", err)
+	}
+	if NeedsOpenCodeCodeGraphReconcile(homeDir) {
+		return GuidanceInjectionResult{}, fmt.Errorf("CodeGraph installer did not create effective OpenCode MCP wiring")
+	}
+
+	result := GuidanceInjectionResult{}
+	for _, path := range paths {
+		after, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			return result, fmt.Errorf("read reconciled CodeGraph file %q: %w", path, err)
+		}
+		if string(after) == before[path] {
+			continue
+		}
+		result.Changed = true
+		result.Files = append(result.Files, path)
+	}
+	return result, nil
+}
+
+func readCodeGraphManagedFiles(paths []string) map[string]string {
+	files := make(map[string]string, len(paths))
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			files[path] = string(data)
+		}
+	}
+	return files
 }
 
 func injectCodeGraphGuidanceForAgent(homeDir string, adapter agents.Adapter) (string, bool, error) {
@@ -427,7 +556,7 @@ func hasCodeGraphGuidance(path string) bool {
 	}
 	content := strings.ToLower(string(data))
 	return strings.Contains(content, "gentle-ai:"+codeGraphGuidanceSectionID) ||
-		(strings.Contains(content, "codegraph") && strings.Contains(content, "codegraph init <project-root>"))
+		(strings.Contains(content, "codegraph") && strings.Contains(content, "gentle-ai codegraph init --cwd <project-root>"))
 }
 
 func codeGraphGuidancePath(homeDir string, adapter agents.Adapter) string {

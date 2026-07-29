@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/symlinkguard"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/symlinkguard"
 )
 
 type jsonPath []string

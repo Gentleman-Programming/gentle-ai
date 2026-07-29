@@ -11,6 +11,7 @@ func TestPinnedVersionsAreDefined(t *testing.T) {
 		"Codex":       Codex,
 		"GeminiCLI":   GeminiCLI,
 		"Context7MCP": Context7MCP,
+		"GGAVersion":  GGAVersion,
 	} {
 		if val == "" {
 			t.Errorf("%s must not be empty", name)

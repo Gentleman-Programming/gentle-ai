@@ -4,15 +4,19 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
 var homebrewPackageInstalled = defaultHomebrewPackageInstalled
+var homebrewOwnershipDetector = update.DetectHomebrewOwnership
 
 type commandRunner func(string, ...string) *exec.Cmd
 type pathResolver func(string) (string, error)
 
 func defaultHomebrewPackageInstalled(toolName string) bool {
-	return homebrewPackageInstalledWith(execCommand, lookPathCommand, toolName)
+	kind, err := homebrewOwnershipDetector(toolName)
+	return err == nil && kind != update.HomebrewNone
 }
 
 func homebrewPackageInstalledWith(run commandRunner, resolvePath pathResolver, toolName string) bool {

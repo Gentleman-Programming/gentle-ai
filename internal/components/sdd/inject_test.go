@@ -11,16 +11,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
-	windsurfagent "github.com/gentleman-programming/gentle-ai/internal/agents/windsurf"
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	windsurfagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/windsurf"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodemodel "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
 )
 
@@ -249,7 +250,7 @@ func TestInjectClaudeKeepsHeavySDDWorkflowLazy(t *testing.T) {
 	for _, eager := range []string{
 		"### Delegation Rules",
 		"#### Mandatory Delegation Triggers",
-		"#### Review Lens Selection",
+		"#### Native Checking Contract",
 		"#### Cost and Context Balance",
 		"~/.claude/skills/_shared/sdd-orchestrator-workflow.md",
 	} {
@@ -537,6 +538,11 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	if !first.Changed {
 		t.Fatalf("Inject() first changed = false")
 	}
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	firstSettings, err := os.ReadFile(settingsPath)
+	if err != nil || !bytes.Contains(firstSettings, []byte(`"default_agent": "gentle-orchestrator"`)) {
+		t.Fatalf("first settings missing managed default: %s, err = %v", firstSettings, err)
+	}
 
 	second, err := Inject(home, opencodeAdapter(), "")
 	if err != nil {
@@ -578,11 +584,11 @@ func TestInjectOpenCodeUsesOpenCodeSpecificOrchestratorPrompt(t *testing.T) {
 			for _, wanted := range []string{
 				"Gentle AI",
 				"Read the configured models from `opencode.json`",
-				"present the proceed/adjust/stop options via the `question` tool",
-				"Use the `question` tool for this between-phase decision",
-				"present the proceed/adjust/stop options through a single `question` tool call",
-				"present that decision via the `question` tool",
-				"Use the `question` tool for this choice: present the two strategy options",
+				"Use the `question` tool for SDD Session Preflight only when it is available in the current interactive runtime and all four groups are exactly representable",
+				"present the proceed/adjust/stop options through the lossless blocking-prompt route",
+				"present the correct/second-round/continue choice through the lossless blocking-prompt route",
+				"Present the two strategy options through one `question` tool call when the lossless native route is usable",
+				"otherwise emit the complete choice through the plain chat or terminal fallback and STOP",
 			} {
 				if !strings.Contains(text, wanted) {
 					t.Fatalf("opencode.json missing OpenCode orchestrator prompt content %q", wanted)
@@ -632,19 +638,21 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 	for _, wanted := range []string{
 		"### SDD Session Preflight (HARD GATE)",
 		"### Mandatory Delegation Triggers (Non-Skippable)",
-		"TOTALMENTE obligatorio",
+		"fully mandatory",
 		"Semantic guard",
 		"execution, not delegation",
-		"not a substitute for delegation",
-		"run the concrete review lens(es) selected by Review Lens Selection",
-		"run the concrete audit/review lens(es) selected by Review Lens Selection",
-		"use fresh context with the selected concrete review lens(es)",
-		"#### Review Lens Selection",
-		"`reviewer` is an intent, not a concrete installed agent",
-		"`review-readability`",
-		"`review-reliability`",
-		"`review-resilience`",
-		"`review-risk`",
+		"Bounded read rule",
+		"read 1–3 files inline",
+		"4-file rule",
+		"Write rule",
+		"2+ non-trivial files",
+		"Context rule",
+		"Optional SDD rule",
+		"explicit request or accepted proposal",
+		"Per-action rule",
+		"Authority rule",
+		"gentle-ai review status",
+		"gentle-ai review validate --gate",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated preserved prompt hard gate %q", wanted)
@@ -654,6 +662,13 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 		"run a fresh-context review unless the diff is trivial docs/text",
 		"run a fresh audit before continuing",
 		"use fresh context for adversarial review of diffs",
+		"select concrete lenses by risk profile",
+		"Large PR, hot path, or >400 changed lines",
+		"small mechanical changes",
+		"trivial docs/text",
+		"#### Review Lens Selection",
+		"run exactly ONE lens",
+		"Full 4R",
 	} {
 		if strings.Contains(text, stale) {
 			t.Fatalf("opencode.json retained stale generic review routing %q", stale)
@@ -701,6 +716,12 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"run a fresh-context review unless the diff is trivial docs/text",
 		"run a fresh audit before continuing",
 		"use fresh context for adversarial review of diffs",
+		"trivial docs/text",
+		"small mechanical changes",
+		"run the concrete review lens(es) selected by Review Lens Selection",
+		"#### Review Lens Selection",
+		"run exactly ONE lens",
+		"Full 4R",
 	} {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("opencode.json still contains stale preserved prompt reference %q", unwanted)
@@ -732,28 +753,393 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"business rules, implications, impact, edge cases",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 		"### Mandatory Delegation Triggers (Non-Skippable)",
-		"TOTALMENTE obligatorio",
+		"fully mandatory",
+		"Bounded read rule",
+		"read 1–3 files inline",
 		"4-file rule",
-		"Multi-file write rule",
-		"PR rule",
-		"Incident rule",
-		"Long-session rule",
-		"Fresh review rule",
+		"Write rule",
+		"2+ non-trivial files",
+		"Context rule",
+		"Optional SDD rule",
+		"explicit request or accepted proposal",
+		"Per-action rule",
+		"Authority rule",
 		"Semantic guard",
 		"execution, not delegation",
-		"not a substitute for delegation",
-		"run the concrete review lens(es) selected by Review Lens Selection",
-		"run the concrete audit/review lens(es) selected by Review Lens Selection",
-		"use fresh context with the selected concrete review lens(es)",
-		"#### Review Lens Selection",
-		"`review-readability`",
-		"`review-reliability`",
-		"`review-resilience`",
-		"`review-risk`",
+		"gentle-ai review status",
+		"gentle-ai review validate --gate",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated preserved prompt reference %q", wanted)
 		}
+	}
+}
+
+// A preserved prompt that carries the retired prompt-owned lens router is
+// upgraded in place to native route/status/transition authority.
+func TestInjectOpenCodeUpgradesPromptOwnedLensRouter(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+
+	const userContent = "CUSTOM_PROMPT_HEAD\nUser-authored wording must remain " + legacyMandatoryWording + "."
+	const v1Block = userContent + "\n\n" +
+		"<!-- gentle-ai:delegation-hard-gates-migration -->\n" +
+		"### Mandatory Delegation Triggers (Non-Skippable)\n\n" +
+		"These gates are non-skippable hard gates, not recommendations. They are " + legacyMandatoryWording + ": do not skip them.\n\n" +
+		"Semantic guard: delegate means using OpenCode's native Task tool. Running local scripts is execution, not delegation.\n\n" +
+		"1. **4-file rule**: delegate.\n" +
+		"2. **Multi-file write rule**: a fresh review is required after delegated implementation, not a substitute for delegation.\n" +
+		"3. **PR rule**: run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial docs/text.\n" +
+		"4. **Incident rule**: stop and run the concrete audit/review lens(es) selected by Review Lens Selection before continuing.\n" +
+		"5. **Long-session rule**: pause and delegate.\n" +
+		"6. **Fresh review rule**: use fresh context with the selected concrete review lens(es) for adversarial review.\n\n" +
+		"#### Review Lens Selection\n\n" +
+		"`reviewer` is an intent, not a concrete installed agent. When a fresh review/audit is required, select concrete lenses by risk profile:\n\n" +
+		"| Risk signal | Review lens |\n" +
+		"| --- | --- |\n" +
+		"| Clear naming, structure, maintainability, or small refactors | `review-readability` |\n" +
+		"| Behavior, state, tests, determinism, or regressions | `review-reliability` |\n" +
+		"| Shell/process integration, partial failures, recovery, or degraded dependencies | `review-resilience` |\n" +
+		"| Security, permissions, data exposure/loss, architecture, or dependencies | `review-risk` |\n" +
+		"| Large PR, hot path, or >400 changed lines | full 4R: `review-risk`, `review-resilience`, `review-readability`, `review-reliability` |\n\n" +
+		"If multiple rows match, run the narrow set that covers the risk.\n" +
+		"<!-- /gentle-ai:delegation-hard-gates-migration -->\n"
+	seed := `{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "prompt": ` + strconv.Quote(v1Block) + `
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		PreserveOpenCodeOrchestratorPrompt: true,
+	})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	text := string(settingsBytes)
+
+	var settings struct {
+		Agent map[string]struct {
+			Prompt string `json:"prompt"`
+		} `json:"agent"`
+	}
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	prompt := settings.Agent["gentle-orchestrator"].Prompt
+	if !strings.HasPrefix(prompt, userContent+"\n\n") {
+		t.Fatalf("user-authored content outside the migration block changed:\n%s", prompt)
+	}
+	for _, wanted := range []string{
+		"fully mandatory",
+		"Bounded read rule",
+		"read 1–3 files inline",
+		"4-file rule",
+		"Write rule",
+		"2+ non-trivial files",
+		"Optional SDD rule",
+		"explicit request or accepted proposal",
+		"Authority rule",
+		"gentle-ai review status",
+		"gentle-ai review validate --gate",
+	} {
+		if !strings.Contains(text, wanted) {
+			t.Fatalf("opencode.json missing native routing fragment %q after migration", wanted)
+		}
+	}
+	for _, stale := range []string{
+		"select concrete lenses by risk profile",
+		"Large PR, hot path, or >400 changed lines",
+		"run the narrow set that covers the risk",
+		"small mechanical changes",
+		"trivial docs/text",
+		"#### Review Lens Selection",
+		"run exactly ONE lens",
+		"Full 4R",
+	} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("opencode.json retained stale v1 lens-selection text %q", stale)
+		}
+	}
+	managedStart := strings.Index(prompt, "<!-- gentle-ai:delegation-hard-gates-migration -->")
+	managedEnd := strings.Index(prompt, "<!-- /gentle-ai:delegation-hard-gates-migration -->")
+	if managedStart < 0 || managedEnd < managedStart {
+		t.Fatal("opencode.json missing delegation hard-gates migration block")
+	}
+	managedBlock := prompt[managedStart:managedEnd]
+	if strings.Contains(managedBlock, legacyMandatoryWording) {
+		t.Fatalf("managed delegation block retained legacy wording %q", legacyMandatoryWording)
+	}
+	if !strings.Contains(managedBlock, "fully mandatory") {
+		t.Fatal("managed delegation block missing migrated wording \"fully mandatory\"")
+	}
+	if strings.Contains(managedBlock, "Review Lens Selection") {
+		t.Fatal("managed delegation block retained prompt-owned review selection")
+	}
+}
+
+func TestEnsurePreservedOpenCodeDelegationHardGatesMigratesToNativeTransition(t *testing.T) {
+	legacy := "### Mandatory Delegation Triggers (Non-Skippable)\n\n" +
+		"before commit, push, or PR after code changes, run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)"
+	got := ensurePreservedOpenCodeDelegationHardGates(legacy)
+	for _, want := range []string{"`gentle-ai review status`", "`gentle-ai review validate --gate <gate>`", "exact owner-issued receipt"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("migrated delegation gates missing native review authority clause %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Review Lens Selection") {
+		t.Fatalf("migrated delegation gates retained prompt-owned lens router:\n%s", got)
+	}
+}
+
+func TestEnsurePreservedOpenCodeDelegationHardGatesPreservesUnmarkedUserTail(t *testing.T) {
+	const userTail = `#### User-Owned Policy
+
+PRESERVE_THIS_H4_AND_PLAIN_TEXT exactly as authored.
+The words TOTALMENTE obligatorio here belong to the user.`
+	legacy := "### Mandatory Delegation Triggers (Non-Skippable)\n\n" +
+		"3. **PR rule**: before commit, push, or PR after code changes, run a fresh-context review unless the diff is trivial docs/text.\n\n" +
+		userTail
+
+	got := ensurePreservedOpenCodeDelegationHardGates(legacy)
+	if !strings.Contains(got, userTail) {
+		t.Fatalf("unmarked legacy migration changed or deleted user-owned tail:\n%s", got)
+	}
+	if strings.Count(got, "<!-- gentle-ai:delegation-hard-gates-migration -->") != 1 {
+		t.Fatalf("unmarked legacy migration must append exactly one managed block:\n%s", got)
+	}
+	if second := ensurePreservedOpenCodeDelegationHardGates(got); second != got {
+		t.Fatalf("unmarked legacy migration is not idempotent:\nfirst:\n%s\nsecond:\n%s", got, second)
+	}
+}
+
+// Vocabulary from the retired work-routing contracts. A preserved prompt is a
+// user-visible artifact, so none of it may survive a migration: the commands it
+// names no longer exist and would send the orchestrator after dead authority.
+var retiredWorkRoutingTokens = []string{
+	"work-capabilities",
+	"work-start",
+	"work-advance",
+	"work-route",
+	"work-status",
+	"work-transition",
+	"work-reconcile",
+	"work-verification-decide",
+	"WorkRun",
+	"authorizedTransition",
+}
+
+// The exact rule 7 a previous install wrote into every preserved OpenCode and
+// Kilocode orchestrator prompt.
+const retiredWorkRoutingAuthorityRule = "7. **Authority rule**: when a WorkRun exists, request `gentle-ai.work-status/v1`" +
+	" and apply only its exact provider-issued `gentle-ai.work-transition/v1` authorization." +
+	" Never select lenses, synthesize transitions, or infer PASS from prose."
+
+// The replacement rule 7, keyed on authority surfaces that still exist.
+const nativeReviewAuthorityRuleText = "7. **Authority rule**: read native review state with `gentle-ai review status`" +
+	" and let `gentle-ai review validate --gate <gate>` check the exact owner-issued receipt at every lifecycle gate." +
+	" Never select lenses, synthesize transitions, or infer PASS from prose."
+
+// previouslyInstalledDelegationHardGates reproduces, byte for byte, the managed
+// block that shipped before this migration, including the retired rule 7.
+func previouslyInstalledDelegationHardGates(userHead string) string {
+	return userHead + "\n\n" +
+		"<!-- gentle-ai:delegation-hard-gates-migration -->\n" +
+		"### Mandatory Delegation Triggers (Non-Skippable)\n\n" +
+		"These routing boundaries are fully mandatory. They protect context quality without making SDD the universal implementation workflow.\n\n" +
+		"Semantic guard: **delegate** means using OpenCode's native Task tool to invoke a configured sub-agent. Running local scripts, Python, or Bash inline is execution, not delegation.\n\n" +
+		"Do not pass these rules to child agents as permission to spawn more agents; children receive concrete role work and must not orchestrate.\n\n" +
+		"1. **Bounded read rule**: read 1–3 files inline to decide or verify.\n" +
+		"2. **4-file rule**: if understanding requires 4+ files, delegate one narrow exploration/mapping task.\n" +
+		"3. **Write rule**: keep one mechanical, already-understood file inline; delegate one writer for 2+ non-trivial files.\n" +
+		"4. **Context rule**: delegate reading that prepares a write and broad research.\n" +
+		"5. **Optional SDD rule**: propose SDD only when durable proposal/spec/design/tasks materially reduce substantial ambiguity. Select it only after explicit request or accepted proposal.\n" +
+		"6. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route or creating SDD state.\n" +
+		retiredWorkRoutingAuthorityRule + "\n" +
+		"<!-- /gentle-ai:delegation-hard-gates-migration -->\n"
+}
+
+func TestEnsurePreservedOpenCodeDelegationHardGatesRewritesRetiredWorkRoutingAuthorityRule(t *testing.T) {
+	t.Parallel()
+
+	const userHead = "CUSTOM_PROMPT_HEAD user-authored policy."
+	installed := previouslyInstalledDelegationHardGates(userHead)
+
+	got := ensurePreservedOpenCodeDelegationHardGates(installed)
+
+	if strings.Contains(got, retiredWorkRoutingAuthorityRule) {
+		t.Fatalf("preserved prompt kept the retired authority rule:\n%s", got)
+	}
+	if count := strings.Count(got, nativeReviewAuthorityRuleText); count != 1 {
+		t.Fatalf("native authority rule occurrences = %d, want 1:\n%s", count, got)
+	}
+	if !strings.HasPrefix(got, userHead+"\n\n") {
+		t.Fatalf("migration disturbed user-authored content outside the managed block:\n%s", got)
+	}
+	if count := strings.Count(got, "<!-- gentle-ai:delegation-hard-gates-migration -->"); count != 1 {
+		t.Fatalf("managed block occurrences = %d, want 1:\n%s", count, got)
+	}
+	if second := ensurePreservedOpenCodeDelegationHardGates(got); second != got {
+		t.Fatalf("retired authority rule migration is not idempotent:\nfirst:\n%s\nsecond:\n%s", got, second)
+	}
+}
+
+func TestEnsurePreservedOpenCodeDelegationHardGatesAddsNativeAuthorityRuleToFreshPrompt(t *testing.T) {
+	t.Parallel()
+
+	const fresh = "EXTERNAL_PROFILE_MANAGER_CUSTOM_PROMPT_DO_NOT_OVERWRITE"
+
+	got := ensurePreservedOpenCodeDelegationHardGates(fresh)
+
+	if count := strings.Count(got, nativeReviewAuthorityRuleText); count != 1 {
+		t.Fatalf("native authority rule occurrences = %d, want 1:\n%s", count, got)
+	}
+	if !strings.Contains(got, fresh) {
+		t.Fatalf("fresh preserved prompt lost its user-authored content:\n%s", got)
+	}
+	if second := ensurePreservedOpenCodeDelegationHardGates(got); second != got {
+		t.Fatalf("fresh preserved prompt migration is not idempotent:\nfirst:\n%s\nsecond:\n%s", got, second)
+	}
+}
+
+func TestEnsurePreservedOpenCodeDelegationHardGatesNeverEmitsRetiredWorkRoutingVocabulary(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		prompt string
+	}{
+		{
+			name:   "previously installed prompt carrying the retired rule",
+			prompt: previouslyInstalledDelegationHardGates("CUSTOM_PROMPT_HEAD user-authored policy."),
+		},
+		{
+			name:   "fresh preserved prompt",
+			prompt: "EXTERNAL_PROFILE_MANAGER_CUSTOM_PROMPT_DO_NOT_OVERWRITE",
+		},
+		{
+			name: "unmarked stray copy of the retired rule",
+			prompt: "CUSTOM_PROMPT_HEAD user-authored policy.\n\n" +
+				"### Mandatory Delegation Triggers (Non-Skippable)\n\n" +
+				retiredWorkRoutingAuthorityRule + "\n",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := ensurePreservedOpenCodeDelegationHardGates(testCase.prompt)
+
+			for _, retired := range retiredWorkRoutingTokens {
+				if strings.Contains(got, retired) {
+					t.Errorf("migrated prompt still carries retired token %q:\n%s", retired, got)
+				}
+			}
+			if count := strings.Count(got, nativeReviewAuthorityRuleText); count != 1 {
+				t.Errorf("native authority rule occurrences = %d, want 1:\n%s", count, got)
+			}
+		})
+	}
+}
+
+func TestInjectOpenCodeUpgradesPreservedV1ReviewExecutionContract(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+
+	const staleV1Prompt = `# External profile prompt
+
+Keep this user-authored orchestration policy unchanged.
+
+#### Review Execution Contract
+
+Run an exhaustive review pass, then repeat until a dry pass.
+All severities enter the fix and re-review loop.
+WARNING findings use status open when assessed as real.
+Launch three refuters per candidate before fixing.
+
+#### User-Owned Policy
+
+PRESERVE_THIS_UNRELATED_SECTION exactly as authored.
+`
+	seed := `{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "prompt": ` + strconv.Quote(staleV1Prompt) + `
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	opts := InjectOptions{PreserveOpenCodeOrchestratorPrompt: true}
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, opts); err != nil {
+		t.Fatalf("first Inject() error = %v", err)
+	}
+
+	prompt := readGentleOrchestratorPrompt(t, settingsPath)
+	assertTextContainsClauses(t, "migrated preserved OpenCode prompt", prompt, requiredLedgerClauses)
+	assertTextContainsClauses(t, "migrated preserved OpenCode prompt", prompt, []string{requiredOrchestratorMergeModeClause})
+	for _, preserved := range []string{
+		"Keep this user-authored orchestration policy unchanged.",
+		"#### User-Owned Policy",
+		"PRESERVE_THIS_UNRELATED_SECTION exactly as authored.",
+	} {
+		if !strings.Contains(prompt, preserved) {
+			t.Errorf("migrated prompt lost unrelated user content %q", preserved)
+		}
+	}
+	for _, stale := range []string{
+		"repeat until a dry pass",
+		"All severities enter the fix and re-review loop",
+		"WARNING findings use status open",
+		"three refuters per candidate",
+	} {
+		if strings.Contains(prompt, stale) {
+			t.Errorf("migrated prompt retained stale v1 review semantics %q", stale)
+		}
+	}
+	if got := strings.Count(prompt, "#### Review Execution Contract"); got != 1 {
+		t.Fatalf("migrated prompt has %d Review Execution Contract headings, want 1", got)
+	}
+	if got := strings.Count(prompt, "<!-- gentle-ai:review-execution-contract-migration -->"); got != 1 {
+		t.Fatalf("migrated prompt has %d review-contract migration markers, want 1", got)
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, opts); err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+	secondPrompt := readGentleOrchestratorPrompt(t, settingsPath)
+	if secondPrompt != prompt {
+		diffAt := 0
+		for diffAt < len(prompt) && diffAt < len(secondPrompt) && prompt[diffAt] == secondPrompt[diffAt] {
+			diffAt++
+		}
+		start := max(0, diffAt-80)
+		firstEnd := min(len(prompt), diffAt+160)
+		secondEnd := min(len(secondPrompt), diffAt+160)
+		t.Fatalf("preserved v1 Review Execution Contract migration is not idempotent at byte %d\nfirst:  %q\nsecond: %q", diffAt, prompt[start:firstEnd], secondPrompt[start:secondEnd])
 	}
 }
 
@@ -1804,9 +2190,10 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Multi overlay must contain gentle-orchestrator + 10 SDD sub-agents + 3 JD agents + 4 review agents = 18 agents.
-	if len(agentMap) != 18 {
-		t.Fatalf("agent count = %d, want 18", len(agentMap))
+	// Multi overlay must contain gentle-orchestrator + 10 SDD sub-agents +
+	// 3 JD agents + 4 review agents + 1 batched refuter = 19 agents.
+	if len(agentMap) != 19 {
+		t.Fatalf("agent count = %d, want 19", len(agentMap))
 	}
 
 	// Verify gentle-orchestrator is present.
@@ -1830,7 +2217,7 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	}
 
 	// Verify representative sub-agents are present.
-	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience"} {
+	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter"} {
 		if _, ok := agentMap[subAgent]; !ok {
 			t.Fatalf("missing sub-agent %q", subAgent)
 		}
@@ -2104,12 +2491,16 @@ func TestInjectOpenCodeSubagentPromptsStayExecutorScoped(t *testing.T) {
 			t.Fatalf("%s has unexpected type: %T", phase, raw)
 		}
 
-		// After the shared-prompt-files refactor, the prompt field is a {file:...}
-		// reference. The executor-scoped content lives in the prompt file on disk.
 		prompt, _ := agentDef["prompt"].(string)
-		expectedRef := "{file:" + filepath.ToSlash(filepath.Join(promptDir, phase+".md")) + "}"
+		expectedRef, err := SharedPromptFileRef(settingsPath, home, phase)
+		if err != nil {
+			t.Fatalf("SharedPromptFileRef() error = %v", err)
+		}
 		if prompt != expectedRef {
 			t.Fatalf("%s prompt = %q, want {file:...} reference %q", phase, prompt, expectedRef)
+		}
+		if strings.Contains(prompt, filepath.ToSlash(home)) {
+			t.Fatalf("%s prompt = %q, contains home path", phase, prompt)
 		}
 
 		// Also verify the prompt file contains the executor-scoped content
@@ -2130,6 +2521,27 @@ func TestInjectOpenCodeSubagentPromptsStayExecutorScoped(t *testing.T) {
 		if !hasGate && !hasDoNotDelegate {
 			t.Fatalf("%s prompt file missing expected skill content", phase)
 		}
+	}
+}
+
+func TestInjectKilocodeSubagentPromptUsesSharedRelativePath(t *testing.T) {
+	home := t.TempDir()
+	adapter := kilocodeAdapter()
+
+	if _, err := Inject(home, adapter, "multi"); err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+
+	prompt := agentPrompt(t, readOpenCodeAgents(t, adapter.SettingsPath(home)), "sdd-apply")
+	want, err := SharedPromptFileRef(adapter.SettingsPath(home), home, "sdd-apply")
+	if err != nil {
+		t.Fatalf("SharedPromptFileRef() error = %v", err)
+	}
+	if prompt != want {
+		t.Fatalf("sdd-apply prompt = %q, want %q", prompt, want)
+	}
+	if strings.Contains(prompt, filepath.ToSlash(home)) {
+		t.Fatalf("sdd-apply prompt = %q, contains home path", prompt)
 	}
 }
 
@@ -2166,12 +2578,13 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Empty mode defaults to single — gentle-orchestrator + 10 SDD sub-agents + 3 JD agents + 4 review agents = 18 agents.
+	// Empty mode defaults to single — gentle-orchestrator + 10 SDD sub-agents +
+	// 3 JD agents + 4 review agents + 1 batched refuter = 19 agents.
 	if _, ok := agentMap["gentle-orchestrator"]; !ok {
 		t.Fatal("missing gentle-orchestrator agent")
 	}
-	if len(agentMap) != 18 {
-		t.Fatalf("agent count = %d, want 18", len(agentMap))
+	if len(agentMap) != 19 {
+		t.Fatalf("agent count = %d, want 19", len(agentMap))
 	}
 
 	// Verify orchestrator mode is "primary".
@@ -2200,7 +2613,7 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 	}
 
 	// Verify sub-agents are present with mode "subagent".
-	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience"} {
+	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter"} {
 		raw, ok := agentMap[subAgent]
 		if !ok {
 			t.Fatalf("missing sub-agent %q", subAgent)
@@ -2216,6 +2629,13 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 			t.Fatalf("gentle-orchestrator permission.task[%s] = %v, want allow", subAgent, taskAllowlist[subAgent])
 		}
 	}
+	for _, builtIn := range []string{"general", "explore"} {
+		if got := taskAllowlist[builtIn]; got != "allow" {
+			t.Fatalf("gentle-orchestrator permission.task[%s] = %v, want allow", builtIn, got)
+		}
+	}
+	refuterTools := agentMap["review-refuter"].(map[string]any)["tools"].(map[string]any)
+	assertOpenCodeRefuterToolsReadOnly(t, "rendered single-mode OpenCode config", refuterTools)
 }
 
 func TestInjectClaudeIgnoresSDDMode(t *testing.T) {
@@ -2550,10 +2970,23 @@ func TestInjectOpenClawRejectsAmbiguousWorkspacePath(t *testing.T) {
 func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	seed := `{"$schema":"https://opencode.ai/config.json","username":"review-user","agent":{"custom":{"model":"custom/provider-model","description":"preserve me"}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
 
 	assignments := map[string]model.ModelAssignment{
-		"sdd-init":  {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
-		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-4o"},
+		"sdd-init":           {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
+		"sdd-apply":          {ProviderID: "openai", ModelID: "gpt-4o"},
+		"review-risk":        {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		"review-readability": {ProviderID: "openai", ModelID: "gpt-5-mini"},
+		"review-reliability": {ProviderID: "openai", ModelID: "gpt-5"},
+		"review-resilience":  {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		"review-refuter":     {ProviderID: "openai", ModelID: "gpt-5", Effort: "high"},
 	}
 
 	result, err := Inject(home, opencodeAdapter(), "multi", InjectOptions{OpenCodeModelAssignments: assignments})
@@ -2564,7 +2997,6 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 		t.Fatal("Inject(multi, assignments) changed = false")
 	}
 
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	content, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("ReadFile(opencode.json) error = %v", err)
@@ -2578,6 +3010,13 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 	agentMap, ok := root["agent"].(map[string]any)
 	if !ok {
 		t.Fatal("opencode.json missing agent map")
+	}
+	if root["$schema"] != "https://opencode.ai/config.json" || root["username"] != "review-user" {
+		t.Fatalf("unrelated config was not preserved: %v", root)
+	}
+	custom := agentMap["custom"].(map[string]any)
+	if custom["model"] != "custom/provider-model" || custom["description"] != "preserve me" {
+		t.Fatalf("unrelated custom agent changed: %v", custom)
 	}
 
 	// Verify sdd-init has the assigned model.
@@ -2596,6 +3035,21 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 	}
 	if m, _ := applyAgent["model"].(string); m != "openai/gpt-4o" {
 		t.Fatalf("sdd-apply model = %q, want %q", m, "openai/gpt-4o")
+	}
+	for agent, want := range map[string]string{
+		"review-risk":        "anthropic/claude-sonnet-4",
+		"review-readability": "openai/gpt-5-mini",
+		"review-reliability": "openai/gpt-5",
+		"review-resilience":  "anthropic/claude-sonnet-4",
+		"review-refuter":     "openai/gpt-5",
+	} {
+		definition := agentMap[agent].(map[string]any)
+		if got := definition["model"]; got != want {
+			t.Fatalf("%s model = %q, want %q", agent, got, want)
+		}
+	}
+	if got := agentMap["review-refuter"].(map[string]any)["variant"]; got != "high" {
+		t.Fatalf("review-refuter variant = %q, want high", got)
 	}
 
 	// Unassigned phases should NOT have a model field — the overlay no longer
@@ -4682,8 +5136,8 @@ func TestInjectWritesNativeReviewAgentFiles(t *testing.T) {
 				t.Fatalf("Inject(%s) changed = false", tt.name)
 			}
 
-			for _, agent := range reviewAgentNames {
-				assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), agent+".md"), "No findings.")
+			for _, agent := range opencodemodel.ReviewLensPhases() {
+				assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), agent+".md"), `"findings":[]`)
 				for _, ext := range tt.extraExts {
 					want := tt.extraContains[ext]
 					if ext == ".yaml" {
@@ -4691,6 +5145,14 @@ func TestInjectWritesNativeReviewAgentFiles(t *testing.T) {
 					}
 					assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), agent+ext), want)
 				}
+			}
+			assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), opencodemodel.ReviewRefuterAgent+".md"), "complete merged list of BLOCKER/CRITICAL candidates")
+			for _, ext := range tt.extraExts {
+				want := tt.extraContains[ext]
+				if ext == ".yaml" {
+					want += opencodemodel.ReviewRefuterAgent + ".md"
+				}
+				assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), opencodemodel.ReviewRefuterAgent+ext), want)
 			}
 		})
 	}
@@ -5381,7 +5843,7 @@ func TestInjectOpenCodeWithProfile_StaleJDCleanupAcceptsJSONCSettings(t *testing
 	}
 }
 
-func TestInjectOpenCodeWithProfile_StaleJDCleanupDoesNotRejectMalformedSettings(t *testing.T) {
+func TestInjectOpenCodeRejectsMalformedSettingsBeforeWrites(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -5397,20 +5859,16 @@ func TestInjectOpenCodeWithProfile_StaleJDCleanupDoesNotRejectMalformedSettings(
 		Name:              "cheap",
 		OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"},
 	}
-	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{Profiles: []model.Profile{profileWithoutJD}}); err != nil {
-		t.Fatalf("Inject() should preserve merge behavior for malformed opencode settings: %v", err)
+	before, _ := os.ReadFile(settingsPath)
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{Profiles: []model.Profile{profileWithoutJD}}); err == nil {
+		t.Fatal("Inject() accepted malformed opencode settings")
 	}
-
-	content, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(opencode.json): %v", err)
+	after, _ := os.ReadFile(settingsPath)
+	if !bytes.Equal(before, after) {
+		t.Fatalf("malformed settings changed: %q", after)
 	}
-	var root map[string]any
-	if err := json.Unmarshal(content, &root); err != nil {
-		t.Fatalf("opencode.json should be recovered as valid JSON: %v", err)
-	}
-	if _, ok := root["agent"].(map[string]any)["sdd-orchestrator-cheap"]; !ok {
-		t.Fatal("profile orchestrator missing after malformed settings recovery")
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "commands")); !os.IsNotExist(err) {
+		t.Fatalf("commands were written before settings validation: %v", err)
 	}
 }
 
@@ -6069,11 +6527,18 @@ func TestInject_CodexPerPhaseModelAssignments_InjectsPerPhaseTable(t *testing.T)
 	home := t.TempDir()
 	adapter := codexInjectAdapter()
 
-	// Custom per-phase: sdd-propose gets gpt-5.4.
+	// Custom per-phase: sdd-propose gets gpt-5.4, while unassigned phases
+	// preserve the selected/saved carril models instead of reverting to the
+	// Recommended preset.
 	opts := InjectOptions{
 		CodexModelAssignments: model.CodexModelPresetRecommended(),
 		CodexPhaseModelAssignments: map[string]string{
 			"sdd-propose": "gpt-5.4",
+		},
+		CodexCarrilModelAssignments: map[string]string{
+			"sdd-strong": "gpt-5.4-mini",
+			"sdd-mid":    "gpt-5.5",
+			"sdd-cheap":  "gpt-5.3-codex",
 		},
 	}
 
@@ -6104,7 +6569,20 @@ func TestInject_CodexPerPhaseModelAssignments_InjectsPerPhaseTable(t *testing.T)
 	if !strings.Contains(text, wantRow) {
 		t.Errorf("AGENTS.md missing expected sdd-propose row %q:\n%s", wantRow, text)
 	}
-	// No unresolved placeholders.
+	// An unassigned strong phase must preserve the supplied carril model.
+	wantFallbackRow := "| `sdd-design` | `gpt-5.4-mini` | `medium` |"
+	if !strings.Contains(text, wantFallbackRow) {
+		t.Errorf("AGENTS.md missing preserved carril fallback row %q:\n%s", wantFallbackRow, text)
+	}
+	// The delegation example must refer readers back to the generated table,
+	// not hardcode values that are wrong for some presets.
+	if strings.Contains(text, `model="gpt-5.6-sol", reasoning_effort="xhigh"`) {
+		t.Errorf("AGENTS.md contains a hardcoded delegation example that can contradict the generated table:\n%s", text)
+	}
+	if !strings.Contains(text, `model="<assigned-model>"`) || !strings.Contains(text, `reasoning_effort="<assigned-effort>"`) {
+		t.Errorf("AGENTS.md delegation example must use assigned-value placeholders:\n%s", text)
+	}
+	// No unresolved template placeholders.
 	if strings.Contains(text, "{{") {
 		t.Errorf("AGENTS.md contains unresolved placeholder '{{' after Inject:\n%s", text)
 	}
@@ -6248,7 +6726,7 @@ func TestInjectCodexWithCarrilModels(t *testing.T) {
 }
 
 // TestInjectCodexNilCarrilModels verifies that nil CodexCarrilModelAssignments
-// causes the render to use canonical defaults (gpt-5.5 / gpt-5.4-mini).
+// causes the render to use canonical GPT-5.6 defaults.
 func TestInjectCodexNilCarrilModels(t *testing.T) {
 	home := t.TempDir()
 	adapter := codexInjectAdapter()
@@ -6270,8 +6748,10 @@ func TestInjectCodexNilCarrilModels(t *testing.T) {
 	if !strings.Contains(text, "Model") {
 		t.Error("AGENTS.md missing Model column — nil carrilModels should fall back to defaults")
 	}
-	if !strings.Contains(text, "gpt-5.4-mini") {
-		t.Error("AGENTS.md missing gpt-5.4-mini — nil carrilModels should show sdd-cheap default")
+	for _, want := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("AGENTS.md missing %s — nil carrilModels should show GPT-5.6 defaults", want)
+		}
 	}
 }
 
@@ -6287,356 +6767,6 @@ func TestInjectNonCodexAdapterCarrilUnaffected(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Inject(claude, carrilModels) should not error; got: %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Unit 4 — Trigger-rules injection tests
-// ---------------------------------------------------------------------------
-
-// 4.1 — Inject for a system-prompt agent (claude) places trigger-rules markers.
-func TestInjectTriggerRules_SystemPromptAgent(t *testing.T) {
-	home := t.TempDir()
-
-	_, err := Inject(home, claudeAdapter(), "")
-	if err != nil {
-		t.Fatalf("Inject(claude) error = %v", err)
-	}
-
-	path := filepath.Join(home, ".claude", "CLAUDE.md")
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(CLAUDE.md) error = %v", err)
-	}
-	text := string(content)
-
-	if !strings.Contains(text, "<!-- gentle-ai:trigger-rules -->") {
-		t.Error("CLAUDE.md missing <!-- gentle-ai:trigger-rules --> open marker")
-	}
-	if !strings.Contains(text, "<!-- /gentle-ai:trigger-rules -->") {
-		t.Error("CLAUDE.md missing <!-- /gentle-ai:trigger-rules --> close marker")
-	}
-
-	// At least one rendered binding line must appear between the markers.
-	openIdx := strings.Index(text, "<!-- gentle-ai:trigger-rules -->")
-	closeIdx := strings.Index(text, "<!-- /gentle-ai:trigger-rules -->")
-	if openIdx < 0 || closeIdx < 0 || closeIdx <= openIdx {
-		t.Fatal("trigger-rules markers found but in wrong order")
-	}
-	between := text[openIdx : closeIdx+len("<!-- /gentle-ai:trigger-rules -->")]
-	if !strings.Contains(between, "pre-commit") {
-		t.Error("CLAUDE.md trigger-rules section does not contain binding content (expected 'pre-commit')")
-	}
-}
-
-// 4.2 — Inject is idempotent for trigger-rules (section appears exactly once after two calls).
-func TestInjectTriggerRules_Idempotent(t *testing.T) {
-	home := t.TempDir()
-
-	_, err := Inject(home, claudeAdapter(), "")
-	if err != nil {
-		t.Fatalf("Inject(claude) first error = %v", err)
-	}
-	_, err = Inject(home, claudeAdapter(), "")
-	if err != nil {
-		t.Fatalf("Inject(claude) second error = %v", err)
-	}
-
-	path := filepath.Join(home, ".claude", "CLAUDE.md")
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(CLAUDE.md) error = %v", err)
-	}
-	text := string(content)
-
-	openCount := strings.Count(text, "<!-- gentle-ai:trigger-rules -->")
-	if openCount != 1 {
-		t.Errorf("CLAUDE.md trigger-rules open marker count = %d, want 1 (idempotency)", openCount)
-	}
-	closeCount := strings.Count(text, "<!-- /gentle-ai:trigger-rules -->")
-	if closeCount != 1 {
-		t.Errorf("CLAUDE.md trigger-rules close marker count = %d, want 1 (idempotency)", closeCount)
-	}
-}
-
-// 4.3 — Inject for a JinjaModules agent (kimi) writes trigger-rules.md module.
-func TestInjectTriggerRules_JinjaModule(t *testing.T) {
-	home := t.TempDir()
-
-	_, err := Inject(home, kimiAdapter(), "")
-	if err != nil {
-		t.Fatalf("Inject(kimi) error = %v", err)
-	}
-
-	modulePath := filepath.Join(home, ".kimi", "trigger-rules.md")
-	content, err := os.ReadFile(modulePath)
-	if err != nil {
-		t.Fatalf("ReadFile(trigger-rules.md) error = %v", err)
-	}
-	text := string(content)
-
-	// The module itself is the content (no markers — KIMI.md includes it via {% include %}).
-	if !strings.Contains(text, "pre-commit") {
-		t.Error("trigger-rules.md missing binding content (expected 'pre-commit')")
-	}
-	if !strings.Contains(text, "Agent Trigger Rules") {
-		t.Error("trigger-rules.md missing header 'Agent Trigger Rules'")
-	}
-	// The module must NOT contain markers (those are only for marker-based injection).
-	if strings.Contains(text, "<!-- gentle-ai:") {
-		t.Error("trigger-rules.md must not contain <!-- gentle-ai: markers (file is a Jinja module, not a marker-injected file)")
-	}
-}
-
-// 4.4 — Inject for OpenCode places trigger-rules content in the gentle-orchestrator prompt.
-func TestInjectTriggerRules_OpenCodePlacement(t *testing.T) {
-	home := t.TempDir()
-
-	_, err := Inject(home, opencodeAdapter(), "")
-	if err != nil {
-		t.Fatalf("Inject(opencode) error = %v", err)
-	}
-
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
-	content, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(opencode.json) error = %v", err)
-	}
-	text := string(content)
-
-	// The trigger-rules section should appear in the gentle-orchestrator prompt scope.
-	if !strings.Contains(text, "trigger-rules") {
-		t.Error("opencode.json does not contain trigger-rules content in the gentle-orchestrator prompt")
-	}
-}
-
-// 4.5 — Inject for Kilocode places trigger-rules content in the gentle-orchestrator prompt.
-func TestInjectTriggerRules_KilocodePlacement(t *testing.T) {
-	home := t.TempDir()
-
-	_, err := Inject(home, kilocodeAdapter(), "")
-	if err != nil {
-		t.Fatalf("Inject(kilocode) error = %v", err)
-	}
-
-	settingsPath := kilocodeAdapter().SettingsPath(home)
-	content, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(kilocode settings) error = %v", err)
-	}
-	text := string(content)
-
-	if !strings.Contains(text, "trigger-rules") {
-		t.Error("kilocode settings does not contain trigger-rules content")
-	}
-}
-
-// 4.6 — All adapters receive trigger-rules content after Inject.
-//
-// This test enumerates ALL adapters registered in agents.NewDefaultRegistry()
-// and asserts that Inject writes trigger-rules content for each one. A count
-// guard ensures that adding a new adapter to the factory without handling its
-// trigger-rules injection causes this test to fail immediately.
-func TestInjectTriggerRules_AllAdapters(t *testing.T) {
-	// Build the canonical registry to get the exact registered adapter count.
-	// SupportedAgents() returns one entry per registered adapter.
-	registry, err := agents.NewDefaultRegistry()
-	if err != nil {
-		t.Fatalf("NewDefaultRegistry() error = %v", err)
-	}
-	registryLen := len(registry.SupportedAgents())
-
-	type adapterCase struct {
-		name    string
-		agentID model.AgentID
-		// getContent returns the primary system-prompt, Jinja module, or orchestrator
-		// content where trigger-rules is expected to appear after Inject.
-		// nil means the adapter does not support system prompts (Pi) — only no-error
-		// is asserted.
-		getContent func(home string, adapter agents.Adapter) (string, error)
-		// injectOpts customizes Inject() for adapters that require special setup
-		// (e.g. OpenClaw uses workspaceDir = home).
-		injectOpts func(home string) InjectOptions
-	}
-
-	allAdapters := []adapterCase{
-		{
-			name:    "claude",
-			agentID: model.AgentClaudeCode,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "opencode",
-			agentID: model.AgentOpenCode,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SettingsPath(home))
-			},
-		},
-		{
-			name:    "kilocode",
-			agentID: model.AgentKilocode,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SettingsPath(home))
-			},
-		},
-		{
-			name:    "gemini",
-			agentID: model.AgentGeminiCLI,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "cursor",
-			agentID: model.AgentCursor,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "vscode",
-			agentID: model.AgentVSCodeCopilot,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "codex",
-			agentID: model.AgentCodex,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "antigravity",
-			agentID: model.AgentAntigravity,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "windsurf",
-			agentID: model.AgentWindsurf,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "kimi",
-			agentID: model.AgentKimi,
-			getContent: func(home string, _ agents.Adapter) (string, error) {
-				// Kimi uses StrategyJinjaModules: trigger-rules is written as a
-				// standalone module file, not injected into the base template via markers.
-				return readFileOrEmpty(filepath.Join(home, ".kimi", "trigger-rules.md"))
-			},
-		},
-		{
-			name:    "qwencode",
-			agentID: model.AgentQwenCode,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "kiroide",
-			agentID: model.AgentKiroIDE,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			// OpenClaw is workspace-first: homeDir is the workspace path.
-			name:    "openclaw",
-			agentID: model.AgentOpenClaw,
-			getContent: func(home string, _ agents.Adapter) (string, error) {
-				// OpenClaw writes to AGENTS.md in the workspace root (= home in tests).
-				return readFileOrEmpty(filepath.Join(home, "AGENTS.md"))
-			},
-			injectOpts: func(home string) InjectOptions {
-				return InjectOptions{WorkspaceDir: home}
-			},
-		},
-		{
-			// Pi does not support system prompts (SupportsSystemPrompt = false).
-			// Inject() returns immediately with no error and no files written.
-			// We assert only that Inject does not error.
-			name:       "pi",
-			agentID:    model.AgentPi,
-			getContent: nil, // skip content check
-		},
-		{
-			name:    "trae",
-			agentID: model.AgentTrae,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "hermes",
-			agentID: model.AgentHermes,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-	}
-
-	// Count guard: the test table must enumerate exactly as many adapters as the
-	// default registry. If a new adapter is added to factory.go without a
-	// corresponding entry here, this assertion catches it immediately.
-	if len(allAdapters) != registryLen {
-		t.Fatalf(
-			"TestInjectTriggerRules_AllAdapters: test table has %d adapters but agents.NewDefaultRegistry() returned %d. "+
-				"Add the missing adapter(s) to the allAdapters table and handle trigger-rules injection for them.",
-			len(allAdapters), registryLen,
-		)
-	}
-
-	for _, tc := range allAdapters {
-		tc := tc // capture
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			home := t.TempDir()
-
-			adapter, newErr := agents.NewAdapter(tc.agentID)
-			if newErr != nil {
-				t.Fatalf("NewAdapter(%s) error = %v", tc.agentID, newErr)
-			}
-
-			var opts InjectOptions
-			if tc.injectOpts != nil {
-				opts = tc.injectOpts(home)
-			}
-
-			_, injectErr := Inject(home, adapter, "", opts)
-			if injectErr != nil {
-				t.Fatalf("Inject(%s) error = %v", tc.name, injectErr)
-			}
-
-			// Pi skips the content check — it returns early from Inject.
-			if tc.getContent == nil {
-				return
-			}
-
-			content, readErr := tc.getContent(home, adapter)
-			if readErr != nil {
-				t.Fatalf("getContent(%s) error = %v", tc.name, readErr)
-			}
-
-			// System-prompt agents: the marker string "trigger-rules" appears in the
-			// injected section or in the settings JSON key.
-			// Jinja module agents (kimi): the file contains "Agent Trigger Rules" header.
-			hasTriggerRulesMarker := strings.Contains(content, "trigger-rules")
-			hasAgentTriggerRulesHeader := strings.Contains(content, "Agent Trigger Rules")
-			if !hasTriggerRulesMarker && !hasAgentTriggerRulesHeader {
-				t.Errorf(
-					"adapter %s: primary prompt/module does not contain trigger-rules content after Inject "+
-						"(checked for 'trigger-rules' and 'Agent Trigger Rules'); content len=%d",
-					tc.name, len(content),
-				)
-			}
-		})
 	}
 }
 
@@ -6707,5 +6837,127 @@ func TestMigrateLegacyOpenCodeCommandPromptNoOp(t *testing.T) {
 		if string(out) != in {
 			t.Fatalf("input %q mutated to %q, want unchanged", in, string(out))
 		}
+	}
+}
+
+// TestRefreshInstalledOpenCodePluginsSkipsSymlinksAndDirectories pins the
+// Lstat safety property of RefreshInstalledOpenCodePlugins: only regular
+// files at managed plugin paths are refreshed. A symlink must be skipped
+// without following it (the user-owned target must stay untouched) and a
+// directory at a plugin path must be left alone.
+func TestRefreshInstalledOpenCodePluginsSkipsSymlinksAndDirectories(t *testing.T) {
+	home := t.TempDir()
+	pluginsDir := filepath.Join(home, ".config", "opencode", "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugins) error = %v", err)
+	}
+
+	// Symlink at a managed plugin path, pointing at a user file.
+	userFile := filepath.Join(home, "user-owned.ts")
+	userContent := []byte("// user-owned content, must never be overwritten")
+	if err := os.WriteFile(userFile, userContent, 0o644); err != nil {
+		t.Fatalf("WriteFile(user file) error = %v", err)
+	}
+	symlinkPath := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+	if err := os.Symlink(userFile, symlinkPath); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	// Directory at a managed plugin path.
+	dirPath := filepath.Join(pluginsDir, "model-variants.ts")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(dir plugin path) error = %v", err)
+	}
+
+	// Stale regular file — the only one that must be refreshed.
+	regularPath := filepath.Join(pluginsDir, "skill-registry.ts")
+	if err := os.WriteFile(regularPath, []byte("// stale"), 0o644); err != nil {
+		t.Fatalf("WriteFile(regular plugin) error = %v", err)
+	}
+
+	result, err := RefreshInstalledOpenCodePlugins(home, opencodeAdapter())
+	if err != nil {
+		t.Fatalf("RefreshInstalledOpenCodePlugins() error = %v", err)
+	}
+
+	// Symlink stays a symlink and its target is untouched.
+	if info, lerr := os.Lstat(symlinkPath); lerr != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("symlink plugin path must remain a symlink; info = %v, err = %v", info, lerr)
+	}
+	if got, rerr := os.ReadFile(userFile); rerr != nil || !bytes.Equal(got, userContent) {
+		t.Errorf("symlink target was modified: content = %q, err = %v", got, rerr)
+	}
+
+	// Directory stays a directory.
+	if info, serr := os.Lstat(dirPath); serr != nil || !info.IsDir() {
+		t.Errorf("directory plugin path must remain a directory; info = %v, err = %v", info, serr)
+	}
+
+	// Regular stale file is refreshed byte-equal to the embedded asset.
+	got, rerr := os.ReadFile(regularPath)
+	if rerr != nil {
+		t.Fatalf("ReadFile(regular plugin) error = %v", rerr)
+	}
+	if string(got) != assets.MustRead("opencode/plugins/skill-registry.ts") {
+		t.Errorf("regular stale plugin was not refreshed to the embedded asset")
+	}
+	if !result.Changed {
+		t.Errorf("result.Changed = false, want true (regular plugin refreshed)")
+	}
+	for _, file := range result.Files {
+		if file == symlinkPath || file == dirPath {
+			t.Errorf("result.Files must not report skipped path %q; files = %v", file, result.Files)
+		}
+	}
+}
+
+// TestInjectRefreshesStaleArchiveSkillWithFinalStateAuthority proves the
+// freshness path for the sdd-archive instruction fix end to end: an installed
+// config carrying pre-Final-State-Authority skill text must actually receive
+// the new contract on the next inject (community issue #1882 was reported from
+// a mixed install whose managed skills lagged the binary).
+func TestInjectRefreshesStaleArchiveSkillWithFinalStateAuthority(t *testing.T) {
+	home := t.TempDir()
+
+	skillPath := filepath.Join(home, ".claude", "skills", "sdd-archive", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	stale := "---\nname: sdd-archive\n---\n\n## Purpose\n\nOld archive skill text without the snapshot contract.\n"
+	if err := os.WriteFile(skillPath, []byte(stale), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	result, err := Inject(home, claudeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() over a stale archive skill reported no change")
+	}
+
+	content, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", skillPath, err)
+	}
+	text := string(content)
+	for _, want := range []string{
+		"## Final-State Authority",
+		"`apply-progress` and `verify-report` are intermediate snapshots",
+		"outranks intermediate snapshots",
+		"Do NOT echo the stale claim",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("installed sdd-archive skill still stale — missing %q", want)
+		}
+	}
+
+	workflowPath := filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md")
+	workflowContent, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", workflowPath, err)
+	}
+	if !strings.Contains(string(workflowContent), "### Archive Final-State Handoff (MANDATORY)") {
+		t.Fatal("installed lazy SDD workflow missing archive final-state handoff section")
 	}
 }

@@ -8,23 +8,23 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
-	codexagent "github.com/gentleman-programming/gentle-ai/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/cursor"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/kiro"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/windsurf"
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/internal/components/mcp"
-	"github.com/gentleman-programming/gentle-ai/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	codexagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/cursor"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kiro"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/windsurf"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 var update = flag.Bool("update", false, "update golden files")
@@ -136,6 +136,8 @@ func TestGoldenSDD_OpenCode(t *testing.T) {
 	// Golden-check a representative command file.
 	sddInit := readTestFile(t, filepath.Join(home, ".config", "opencode", "commands", "sdd-init.md"))
 	assertGolden(t, "sdd-opencode-cmd-sdd-init.golden", sddInit)
+	sddApply := readTestFile(t, filepath.Join(home, ".config", "opencode", "commands", "sdd-apply.md"))
+	assertGolden(t, "sdd-opencode-cmd-sdd-apply.golden", sddApply)
 
 	// Golden-check a representative SDD skill file.
 	skillInit := readTestFile(t, filepath.Join(home, ".config", "opencode", "skills", "sdd-init", "SKILL.md"))
@@ -173,14 +175,7 @@ func TestGoldenSDD_OpenCode_Multi(t *testing.T) {
 			t.Fatalf("multi-mode settings missing orchestrator tool %s", toolName)
 		}
 	}
-	// Normalize the absolute home path in the settings JSON so the golden
-	// file remains stable across test runs (temp dirs change each run).
-	// Sub-agent prompts now use {file:/abs/path/...} references.
-	jsonStr := string(settingsJSON)
-	jsonStr = strings.ReplaceAll(jsonStr, home, "{{HOME}}")
-	jsonStr = strings.ReplaceAll(jsonStr, filepath.ToSlash(home), "{{HOME}}")
-	normalizedSettings := []byte(jsonStr)
-	assertGolden(t, "sdd-opencode-multi-settings.golden", normalizedSettings)
+	assertGolden(t, "sdd-opencode-multi-settings.golden", settingsJSON)
 
 	legacyPluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
 	if _, err := os.Stat(legacyPluginPath); !os.IsNotExist(err) {
@@ -304,7 +299,8 @@ func TestGoldenSDD_Codex(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := sdd.Inject(home, codexAdapter(), "", sdd.InjectOptions{
-		CodexModelAssignments: model.CodexModelPresetRecommended(),
+		CodexModelAssignments:       model.CodexModelPresetRecommended(),
+		CodexCarrilModelAssignments: model.CodexCarrilModelsForPreset("recommended"),
 	})
 	if err != nil {
 		t.Fatalf("sdd.Inject(codex) error = %v", err)
@@ -340,7 +336,8 @@ func TestGoldenSDD_Codex_LowCost(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := sdd.Inject(home, codexAdapter(), "", sdd.InjectOptions{
-		CodexModelAssignments: model.CodexModelPresetLowCost(),
+		CodexModelAssignments:       model.CodexModelPresetLowCost(),
+		CodexCarrilModelAssignments: model.CodexCarrilModelsForPreset("low-cost"),
 	})
 	if err != nil {
 		t.Fatalf("sdd.Inject(codex, LowCost) error = %v", err)
@@ -357,7 +354,8 @@ func TestGoldenSDD_Codex_Powerful(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := sdd.Inject(home, codexAdapter(), "", sdd.InjectOptions{
-		CodexModelAssignments: model.CodexModelPresetPowerful(),
+		CodexModelAssignments:       model.CodexModelPresetPowerful(),
+		CodexCarrilModelAssignments: model.CodexCarrilModelsForPreset("powerful"),
 	})
 	if err != nil {
 		t.Fatalf("sdd.Inject(codex, Powerful) error = %v", err)
@@ -711,6 +709,8 @@ func TestGoldenEngram_Kiro(t *testing.T) {
 // CAPTURE section.
 func TestGoldenEngram_Codex(t *testing.T) {
 	home := t.TempDir()
+	restore := codexagent.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil)
+	t.Cleanup(restore)
 
 	engram.SetLookPathForTest(t, "/opt/homebrew/bin/engram", "")
 

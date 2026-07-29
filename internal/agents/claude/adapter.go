@@ -6,9 +6,10 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/internal/installcmd"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 var LookPathOverride = exec.LookPath
@@ -63,8 +64,12 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 
 // --- Installation ---
 
+func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.MustForAgent(model.AgentClaudeCode)
+}
+
 func (a *Adapter) SupportsAutoInstall() bool {
-	return true
+	return a.CapabilityManifest().Features.AutoInstall
 }
 
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
@@ -117,7 +122,7 @@ func (a *Adapter) MCPConfigPath(homeDir string, serverName string) string {
 // --- Optional capabilities ---
 
 func (a *Adapter) SupportsOutputStyles() bool {
-	return true
+	return a.CapabilityManifest().Features.OutputStyles
 }
 
 func (a *Adapter) OutputStyleDir(homeDir string) string {
@@ -125,7 +130,7 @@ func (a *Adapter) OutputStyleDir(homeDir string) string {
 }
 
 func (a *Adapter) SupportsSlashCommands() bool {
-	return true
+	return a.CapabilityManifest().Features.SlashCommands
 }
 
 func (a *Adapter) CommandsDir(homeDir string) string {
@@ -133,15 +138,15 @@ func (a *Adapter) CommandsDir(homeDir string) string {
 }
 
 func (a *Adapter) SupportsSkills() bool {
-	return true
+	return a.CapabilityManifest().Features.Skills
 }
 
 func (a *Adapter) SupportsSystemPrompt() bool {
-	return true
+	return a.CapabilityManifest().Features.SystemPrompt
 }
 
 func (a *Adapter) SupportsMCP() bool {
-	return true
+	return a.CapabilityManifest().Features.MCP
 }
 
 // --- Sub-agent support ---
@@ -154,7 +159,7 @@ func (a *Adapter) SupportsMCP() bool {
 // rather than relying on orchestrator prose.
 
 func (a *Adapter) SupportsSubAgents() bool {
-	return true
+	return a.CapabilityManifest().Features.FileSubAgents
 }
 
 func (a *Adapter) SubAgentsDir(homeDir string) string {

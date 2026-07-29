@@ -8,9 +8,9 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 )
 
 // ModelPickerMode represents the current sub-mode of the model picker screen.
@@ -25,6 +25,7 @@ const (
 
 // maxVisibleItems is the maximum number of items shown in scrollable sub-lists.
 const maxVisibleItems = 10
+const maxVisiblePhaseRows = 16
 
 // ProviderEntry holds a provider ID, display name, and model count for the provider list.
 type ProviderEntry struct {
@@ -123,9 +124,13 @@ const SDDOrchestratorPhase = "gentle-orchestrator"
 
 // ModelPickerRows returns the row labels for the model picker screen.
 // Row 0 is "gentle-orchestrator" (coordinator), row 1 is "Set all phases",
-// rows 2-11 are the 10 SDD sub-agent phases, then a separator and JD agents.
+// rows 2-11 are the 10 SDD sub-agent phases, followed by workflow agent sections.
 func ModelPickerRows() []string {
-	rows := make([]string, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases()))
+	return modelPickerRows(true)
+}
+
+func modelPickerRows(includeReview bool) []string {
+	rows := make([]string, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases())+1+len(opencode.ReviewPhases()))
 	rows = append(rows, SDDOrchestratorPhase)
 	rows = append(rows, "Set all SDD phases")
 	rows = append(rows, opencode.SDDPhases()...)
@@ -133,14 +138,22 @@ func ModelPickerRows() []string {
 		rows = append(rows, "--- Judgment Day ---")
 		rows = append(rows, opencode.JDPhases()...)
 	}
+	if includeReview && len(opencode.ReviewPhases()) > 0 {
+		rows = append(rows, "--- Review agents ---")
+		rows = append(rows, opencode.ReviewPhases()...)
+	}
 	return rows
 }
 
 // ModelPickerRowsForProfile returns model picker rows for profile creation.
 // Profiles support both SDD phase assignments and optional Judgment Day agent
-// assignments, so this mirrors the main OpenCode row list.
+// assignments. Native review agents remain unsuffixed global runtime agents.
 func ModelPickerRowsForProfile() []string {
-	return ModelPickerRows()
+	return modelPickerRows(false)
+}
+
+func IsModelPickerSeparatorRow(row string) bool {
+	return strings.HasPrefix(row, "--- ")
 }
 
 // SeparatorRowIdx returns the index of the "--- Judgment Day ---" separator
@@ -420,28 +433,14 @@ func compareVersionKeys(left, right []int) int {
 
 func applyAssignmentPreservingMatchingEffort(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment, preserveEffort bool) map[string]model.ModelAssignment {
 	phases := opencode.SDDPhases()
-	jdPhases := opencode.JDPhases()
-	separatorIdx := SeparatorRowIdx()
 	switch {
-	case state.SelectedPhaseIdx == 0:
-		assignments[SDDOrchestratorPhase] = preserveMatchingEffort(assignments[SDDOrchestratorPhase], assignment, preserveEffort)
 	case state.SelectedPhaseIdx == 1:
 		for _, phase := range phases {
 			assignments[phase] = preserveMatchingEffort(assignments[phase], assignment, preserveEffort)
 		}
-	case state.SelectedPhaseIdx == separatorIdx:
-		// Separator row ("--- Judgment Day ---") — no action, skip.
-	case state.SelectedPhaseIdx > separatorIdx:
-		// JD agent rows: map to JDPhases() after separator.
-		jdIdx := state.SelectedPhaseIdx - separatorIdx - 1
-		if jdIdx < len(jdPhases) {
-			assignments[jdPhases[jdIdx]] = preserveMatchingEffort(assignments[jdPhases[jdIdx]], assignment, preserveEffort)
-		}
 	default:
-		phaseIdx := state.SelectedPhaseIdx - 2
-		if phaseIdx < len(phases) {
-			phase := phases[phaseIdx]
-			assignments[phase] = preserveMatchingEffort(assignments[phase], assignment, preserveEffort)
+		if key := selectedModelPickerAgent(state); key != "" {
+			assignments[key] = preserveMatchingEffort(assignments[key], assignment, preserveEffort)
 		}
 	}
 	return assignments
@@ -456,28 +455,15 @@ func ClearModelPickerAssignment(state *ModelPickerState, assignments map[string]
 	}
 
 	phases := opencode.SDDPhases()
-	jdPhases := opencode.JDPhases()
-	separatorIdx := SeparatorRowIdx()
-
 	switch {
-	case state.SelectedPhaseIdx == 0:
-		delete(assignments, SDDOrchestratorPhase)
 	case state.SelectedPhaseIdx == 1:
 		for _, phase := range phases {
 			delete(assignments, phase)
 		}
 		state.AllPhasesModel = model.ModelAssignment{}
-	case state.SelectedPhaseIdx == separatorIdx:
-		// Separator row — no assignment to clear.
-	case state.SelectedPhaseIdx > separatorIdx:
-		jdIdx := state.SelectedPhaseIdx - separatorIdx - 1
-		if jdIdx < len(jdPhases) {
-			delete(assignments, jdPhases[jdIdx])
-		}
 	default:
-		phaseIdx := state.SelectedPhaseIdx - 2
-		if phaseIdx < len(phases) {
-			delete(assignments, phases[phaseIdx])
+		if key := selectedModelPickerAgent(*state); key != "" {
+			delete(assignments, key)
 		}
 	}
 	return assignments
@@ -505,30 +491,32 @@ func formatAssignmentLabel(row, provName, modelName, effort string) string {
 // the single sub-agent phase matching the index is set.
 func applyAssignment(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment) map[string]model.ModelAssignment {
 	phases := opencode.SDDPhases()
-	jdPhases := opencode.JDPhases()
-	separatorIdx := SeparatorRowIdx()
 	switch {
-	case state.SelectedPhaseIdx == 0:
-		assignments[SDDOrchestratorPhase] = assignment
 	case state.SelectedPhaseIdx == 1:
 		for _, phase := range phases {
 			assignments[phase] = assignment
 		}
-	case state.SelectedPhaseIdx == separatorIdx:
-		// Separator row ("--- Judgment Day ---") — no action, skip.
-	case state.SelectedPhaseIdx > separatorIdx:
-		// JD agent rows: map to JDPhases() after separator.
-		jdIdx := state.SelectedPhaseIdx - separatorIdx - 1
-		if jdIdx < len(jdPhases) {
-			assignments[jdPhases[jdIdx]] = assignment
-		}
 	default:
-		phaseIdx := state.SelectedPhaseIdx - 2
-		if phaseIdx < len(phases) {
-			assignments[phases[phaseIdx]] = assignment
+		if key := selectedModelPickerAgent(state); key != "" {
+			assignments[key] = assignment
 		}
 	}
 	return assignments
+}
+
+func selectedModelPickerAgent(state ModelPickerState) string {
+	rows := ModelPickerRows()
+	if state.ForProfile {
+		rows = ModelPickerRowsForProfile()
+	}
+	if state.SelectedPhaseIdx < 0 || state.SelectedPhaseIdx >= len(rows) {
+		return ""
+	}
+	row := rows[state.SelectedPhaseIdx]
+	if state.SelectedPhaseIdx == 1 || IsModelPickerSeparatorRow(row) {
+		return ""
+	}
+	return row
 }
 
 // effortOptionsFromLevels returns the effort picker options in display order.
@@ -666,7 +654,7 @@ func renderPhaseList(
 ) string {
 	var b strings.Builder
 
-	title := "Assign Models to SDD Phases & JD Agents"
+	title := "Assign Models to SDD, JD & Review Agents"
 	if state.ForProfile {
 		title = "Assign Models to SDD Phases & JD Agents"
 	}
@@ -703,11 +691,16 @@ func renderPhaseList(
 	} else {
 		rows = ModelPickerRows()
 	}
-	phases := opencode.SDDPhases()
-	jdPhases := opencode.JDPhases()
-	separatorIdx := SeparatorRowIdx()
-
-	for idx, row := range rows {
+	start, end := 0, len(rows)
+	if len(rows) > maxVisiblePhaseRows {
+		start = max(0, min(cursor-maxVisiblePhaseRows+1, len(rows)-maxVisiblePhaseRows))
+		end = start + maxVisiblePhaseRows
+	}
+	if start > 0 {
+		b.WriteString(styles.SubtextStyle.Render("  ↑ more assignments") + "\n")
+	}
+	for offset, row := range rows[start:end] {
+		idx := start + offset
 		focused := idx == cursor
 
 		var label string
@@ -731,7 +724,7 @@ func renderPhaseList(
 			} else {
 				label = fmt.Sprintf("%-20s (not set)", row)
 			}
-		case idx == separatorIdx:
+		case IsModelPickerSeparatorRow(row):
 			// Separator row — render as a visual divider with subtle indicator when focused.
 			if focused {
 				b.WriteString(styles.SubtextStyle.Render("▸ "+row) + "\n")
@@ -739,23 +732,8 @@ func renderPhaseList(
 				b.WriteString(styles.SubtextStyle.Render("  "+row) + "\n")
 			}
 			continue
-		case idx > separatorIdx:
-			// JD agent rows
-			jdIdx := idx - separatorIdx - 1
-			if jdIdx < len(jdPhases) {
-				phase := jdPhases[jdIdx]
-				assignment, ok := assignments[phase]
-				if ok && assignment.ProviderID != "" {
-					provName, modelName := resolveNames(assignment, state)
-					label = formatAssignmentLabel(row, provName, modelName, assignment.Effort)
-				} else {
-					label = fmt.Sprintf("%-20s (default)", row)
-				}
-			}
 		default:
-			// SDD sub-agent rows start at idx 2; phases[idx-2] maps to the correct phase
-			phase := phases[idx-2]
-			assignment, ok := assignments[phase]
+			assignment, ok := assignments[row]
 			if ok && assignment.ProviderID != "" {
 				provName, modelName := resolveNames(assignment, state)
 				label = formatAssignmentLabel(row, provName, modelName, assignment.Effort)
@@ -769,6 +747,9 @@ func renderPhaseList(
 		} else {
 			b.WriteString(styles.UnselectedStyle.Render("  "+label) + "\n")
 		}
+	}
+	if end < len(rows) {
+		b.WriteString(styles.SubtextStyle.Render("  ↓ more assignments") + "\n")
 	}
 
 	b.WriteString("\n")

@@ -37,6 +37,9 @@ func RenderCLI(results []UpdateResult) string {
 			updatesAvailable++
 		} else if r.Status == CheckFailed {
 			b.WriteString("  check failed")
+			if r.Err != nil {
+				fmt.Fprintf(&b, ": %v", r.Err)
+			}
 			checksFailed++
 		} else if r.Status == RegisteredNotMaterialized {
 			registeredPending++

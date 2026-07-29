@@ -9,7 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 // resolveGitBashForTest derives the Git Bash path the same way the installcmd
@@ -68,7 +69,7 @@ func TestInstallCommandByProfile(t *testing.T) {
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
 			want: [][]string{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
-				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
 				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
 		},
@@ -77,7 +78,7 @@ func TestInstallCommandByProfile(t *testing.T) {
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
 			want: [][]string{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
-				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
 				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
 		},
@@ -85,8 +86,8 @@ func TestInstallCommandByProfile(t *testing.T) {
 			name:    "windows cleans temp dir and uses git bash",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			want: [][]string{
-				{"powershell", "-NoProfile", "-Command", fmt.Sprintf("Remove-Item -Recurse -Force -ErrorAction SilentlyContinue '%s'; exit 0", cloneDst)},
-				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", cloneDst},
+				{"powershell", "-NoProfile", "-Command", fmt.Sprintf("$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath '%s') { Remove-Item -Recurse -Force -LiteralPath '%s' }", strings.ReplaceAll(cloneDst, "'", "''"), strings.ReplaceAll(cloneDst, "'", "''"))},
+				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", cloneDst},
 				{bash, scriptPath},
 			},
 		},
@@ -95,7 +96,7 @@ func TestInstallCommandByProfile(t *testing.T) {
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
 			want: [][]string{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
-				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
 				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
 		},

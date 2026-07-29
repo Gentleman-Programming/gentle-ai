@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 type Adapter struct {
@@ -48,28 +49,29 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 	// artifacts live), NOT GlobalConfigDir() which points to the OS app-config
 	// dir (%APPDATA%\kiro\User on Windows) used only for settings.json.
 	configPath := filepath.Join(homeDir, ".kiro")
+	info, statErr := a.statPath(configPath)
+	configFound := statErr == nil && info.IsDir()
 
 	binaryPath, err := a.lookPath("kiro")
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
-			// Binary not found — Kiro is not installed.
-			return false, "", configPath, false, nil
+			return false, "", configPath, configFound, nil
 		}
 		// Unexpected error (permission / IO) — surface it so callers can distinguish.
 		return false, "", configPath, false, err
 	}
-
-	// Binary found — check whether the config dir already exists.
-	info, statErr := a.statPath(configPath)
-	configFound := statErr == nil && info.IsDir()
 
 	return true, binaryPath, configPath, configFound, nil
 }
 
 // --- Installation ---
 
+func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.MustForAgent(model.AgentKiroIDE)
+}
+
 func (a *Adapter) SupportsAutoInstall() bool {
-	return false // Kiro IDE is a desktop app, installed via official downloads or package managers
+	return a.CapabilityManifest().Features.AutoInstall
 }
 
 func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
@@ -85,7 +87,7 @@ func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 // Steering content is written to ~/.kiro/steering/gentle-ai.md via StrategySteeringFile.
 
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
-	return a.kiroConfigDir(homeDir)
+	return filepath.Join(homeDir, ".kiro")
 }
 
 func (a *Adapter) SystemPromptDir(homeDir string) string {
@@ -107,13 +109,15 @@ func (a *Adapter) SkillsDir(homeDir string) string {
 }
 
 func (a *Adapter) SettingsPath(homeDir string) string {
+	// Kiro's OS app settings remain a secondary Gentle AI path; CodeGraph MCP
+	// ownership is rooted independently under ~/.kiro/settings.
 	return filepath.Join(a.kiroConfigDir(homeDir), "settings.json")
 }
 
 // --- Sub-agent support (Kiro native agents in ~/.kiro/agents/) ---
 
 func (a *Adapter) SupportsSubAgents() bool {
-	return true
+	return a.CapabilityManifest().Features.FileSubAgents
 }
 
 func (a *Adapter) SubAgentsDir(homeDir string) string {
@@ -175,7 +179,7 @@ func (a *Adapter) kiroConfigDir(homeDir string) string {
 // --- Optional capabilities ---
 
 func (a *Adapter) SupportsOutputStyles() bool {
-	return false // Kiro IDE output style support not documented
+	return a.CapabilityManifest().Features.OutputStyles
 }
 
 func (a *Adapter) OutputStyleDir(_ string) string {
@@ -183,7 +187,7 @@ func (a *Adapter) OutputStyleDir(_ string) string {
 }
 
 func (a *Adapter) SupportsSlashCommands() bool {
-	return false // Would need to verify if Kiro IDE has slash command support
+	return a.CapabilityManifest().Features.SlashCommands
 }
 
 func (a *Adapter) CommandsDir(_ string) string {
@@ -191,13 +195,13 @@ func (a *Adapter) CommandsDir(_ string) string {
 }
 
 func (a *Adapter) SupportsSkills() bool {
-	return true
+	return a.CapabilityManifest().Features.Skills
 }
 
 func (a *Adapter) SupportsSystemPrompt() bool {
-	return true
+	return a.CapabilityManifest().Features.SystemPrompt
 }
 
 func (a *Adapter) SupportsMCP() bool {
-	return true
+	return a.CapabilityManifest().Features.MCP
 }

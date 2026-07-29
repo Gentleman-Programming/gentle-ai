@@ -1,0 +1,25 @@
+{
+  "schema": "gentle-ai.review-integration.failure/v1",
+  "contract": "gentle-ai.review-integration/v1",
+  "operation": "review.bind_sdd",
+  "phase": "pre_native",
+  "code": "binding_revision_conflict",
+  "message": "The expected SDD review binding revision does not match the current native binding.",
+  "mutation_outcome": "not_started",
+  "authority_applicability": "current_target",
+  "retry_safe": true,
+  "replayability": "not_replayable",
+  "lineage_id": "review-binding-conflict-fixture",
+  "required_inputs": [
+    "change",
+    "lineage_id",
+    "expected_binding_revision"
+  ],
+  "next_action": "review.bind_sdd",
+  "context": {
+    "binding_revision": {
+      "expected": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "current": ""
+    }
+  }
+}

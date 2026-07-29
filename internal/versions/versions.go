@@ -11,16 +11,19 @@ const ClaudeCode = "2.1.140"
 const Kilocode = "7.2.52"
 
 // renovate: datasource=npm depName=opencode-ai
-const OpenCode = "1.14.48"
+const OpenCode = "1.18.4"
 
 // renovate: datasource=npm depName=@qwen-code/qwen-code
 const QwenCode = "0.15.10"
 
 // renovate: datasource=npm depName=@openai/codex
-const Codex = "0.137.0"
+const Codex = "0.144.0"
 
 // renovate: datasource=npm depName=@google/gemini-cli
 const GeminiCLI = "0.41.2"
 
 // renovate: datasource=npm depName=@upstash/context7-mcp
 const Context7MCP = "2.2.5"
+
+// renovate: datasource=github-releases depName=Gentleman-Programming/gentleman-guardian-angel
+const GGAVersion = "2.10.1"

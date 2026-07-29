@@ -116,7 +116,7 @@ For non-Claude solo-inline and platform-native orchestrator assets, the system M
 
 ### Requirement: chained-pr Skill Binding in Chain Strategy Guidance
 
-All 11 SDD orchestrator assets MUST bind the `chained-pr` skill into their chain-strategy guidance. When delivery planning produces chained or stacked PRs, the orchestrator MUST resolve the `chained-pr` skill by its registry name (not a hardcoded filesystem path) through its existing Sub-Agent Launch Pattern, and MUST inject the resolved skill path into `sdd-tasks` and `sdd-apply` phase prompts under `## Skills to load before work`. Those phases MUST read and follow the skill BEFORE planning or creating any PR.
+All 12 SDD orchestrator assets MUST bind the `chained-pr` skill into their chain-strategy guidance. When delivery planning produces chained or stacked PRs, the orchestrator MUST resolve the `chained-pr` skill by its registry name (not a hardcoded filesystem path) through its existing Sub-Agent Launch Pattern, and MUST inject the resolved skill path into `sdd-tasks` and `sdd-apply` phase prompts under `## Skills to load before work`. Those phases MUST read and follow the skill BEFORE planning or creating any PR.
 
 The binding MUST reference the skill by registry name `chained-pr` (frontmatter `gentle-ai-chained-pr`). No hardcoded path to a `SKILL.md` file is permitted as the binding reference.
 
@@ -129,9 +129,9 @@ The binding MUST reference the skill by registry name `chained-pr` (frontmatter 
 - AND the resolved skill path is injected into the `sdd-apply` prompt under `## Skills to load before work`
 - AND no hardcoded filesystem path is used as the binding reference
 
-#### Scenario: Binding is present in all 11 orchestrator templates
+#### Scenario: Binding is present in all 12 orchestrator templates
 
-- GIVEN the 11 SDD orchestrator templates are reviewed (antigravity, claude, codex, cursor, gemini, generic, kimi, kiro, opencode, qwen, windsurf)
+- GIVEN the 12 SDD orchestrator templates are reviewed (antigravity, claude, codex, cursor, gemini, generic, hermes, kimi, kiro, opencode, qwen, windsurf)
 - WHEN the chain strategy section of each template is inspected
 - THEN each template contains a binding instruction referencing the `chained-pr` skill by registry name
 - AND the binding instruction is located inside or immediately adjacent to the chain strategy section
@@ -154,7 +154,7 @@ The binding MUST reference the skill by registry name `chained-pr` (frontmatter 
 
 ### Requirement: Inline Chain Strategy Summary Retained
 
-All 11 SDD orchestrator assets MUST retain a short inline summary of both `stacked-to-main` and `feature-branch-chain` strategies in their chain strategy section. The binding supplements, and does NOT replace, the existing inline summary. Canonical strategy names MUST continue to appear verbatim so that existing "Strategy naming remains canonical" scenarios continue to hold.
+All 12 SDD orchestrator assets MUST retain a short inline summary of both `stacked-to-main` and `feature-branch-chain` strategies in their chain strategy section. The binding supplements, and does NOT replace, the existing inline summary. Canonical strategy names MUST continue to appear verbatim so that existing "Strategy naming remains canonical" scenarios continue to hold.
 
 #### Scenario: Chain strategy inline summary coexists with skill binding
 
@@ -235,11 +235,11 @@ For solo-inline and platform-native orchestrator hosts (windsurf, antigravity, k
 
 Static-validation tests and golden fixtures that cover chain strategy content MUST be updated to assert the presence of the `chained-pr` skill binding. Golden churn MUST be limited to the intended binding wording and the new Cursor chain strategy section; no unrelated content changes are permitted.
 
-#### Scenario: New static assertions verify binding presence in all 11 templates
+#### Scenario: New static assertions verify binding presence in all 12 templates
 
 - GIVEN static-validation tests run after the change is applied
 - WHEN binding assertions execute
-- THEN each of the 11 orchestrator templates has a binding assertion that passes
+- THEN each of the 12 orchestrator templates has a binding assertion that passes
 - AND the assertions verify the registry-name reference, not a hardcoded path
 
 #### Scenario: Cursor is added to chain-strategy parity static assertions
@@ -314,3 +314,38 @@ The system MUST also keep direct static assertions and impacted golden fixtures 
 - WHEN compared with expected outputs
 - THEN fixtures include required strategy guidance and propagation where relevant
 - AND fixtures preserve accurate platform-native wording without unrelated churn
+
+---
+
+### Requirement: Bounded Review Contract Parity Across Catalog Agents
+
+Every AgentID returned by `catalog.AllAgents()` MUST render the canonical bounded review execution contract. The 12 source orchestrator templates MAY share mappings, but every one of the 16 supported IDs MUST be covered, including OpenCode/Kilocode sharing and Pi/VS Code Copilot/OpenClaw/Trae using the generic runtime family.
+
+#### Scenario: Catalog-derived parity test renders all agents
+
+- GIVEN the current catalog contains 16 supported AgentIDs
+- WHEN each ID is passed through the real orchestrator asset renderer
+- THEN every rendered variant contains explicit `review/start(target)`, one transaction-wide refuter batch, non-iterative ordinary scoped validation, Judgment Day-only re-judgment, exact persistence references, and user-owned runtime selection
+- AND no variant contains the old standard=1/full-4R=3 refuter fan-out
+
+### Requirement: Shared Contract Expansion
+
+Reusable bounded-review algorithms MUST live in `skills/_shared/review-ledger-contract.md`. Orchestrator and native review-agent generation MUST expand that canonical source instead of maintaining divergent hand-copied algorithms.
+
+#### Scenario: Dedicated reviewer is installed
+
+- GIVEN an adapter supports native review sub-agents
+- WHEN SDD injection writes the reviewer file
+- THEN the installed prompt contains the canonical bounded contract
+- AND the role-specific source contributes only lens and tool-boundary instructions
+
+### Requirement: Read-Only Reviewer and Refuter Roles
+
+Every dedicated reviewer, Judgment Day judge, and refuter MUST be structurally read-only for its adapter. OpenCode overlays MUST explicitly disable write, edit, bash, and task for these roles; Claude/Kiro/Kimi/Cursor assets MUST use their equivalent read-only capability boundary.
+
+#### Scenario: Reviewer finishes
+
+- GIVEN a native review lens receives an immutable target
+- WHEN its one sweep completes
+- THEN it returns neutral structured claims and terminates
+- AND it cannot modify files or launch another role

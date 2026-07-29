@@ -10,14 +10,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 type Manager interface {
@@ -363,6 +365,11 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 	}
 
 	backupTargets[state.Path(s.homeDir)] = struct{}{}
+	if slices.Contains(agentIDs, model.AgentPi) {
+		for _, target := range communitytool.PiCodeGraphPaths(s.homeDir, s.workspaceDir) {
+			backupTargets[target] = struct{}{}
+		}
+	}
 
 	orderedTargets := make([]string, 0, len(backupTargets))
 	for target := range backupTargets {
@@ -396,6 +403,17 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 	result := Result{
 		Manifest:   manifest,
 		BackupPath: snapshotDir,
+	}
+	// Pi ownership hashes include the shared MCP file. Remove its managed entry
+	// before other component cleanup (notably Engram) mutates that file, otherwise
+	// an unrelated mutation is indistinguishable from user drift.
+	if slices.Contains(agentsToRemove, model.AgentPi) {
+		piResult, piErr := communitytool.UninstallPiCodeGraph(s.homeDir)
+		if piErr != nil {
+			return result, fmt.Errorf("remove Pi CodeGraph integration: %w", piErr)
+		}
+		result.ChangedFiles = append(result.ChangedFiles, piResult.Files...)
+		result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
 	}
 
 	for _, op := range p.operations {
@@ -593,7 +611,11 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			ops = append(ops, rewriteSkillRegistryHook(path))
 		}
 		if path := adapter.SettingsPath(homeDir); path != "" && adapter.Agent() == model.AgentOpenCode {
-			targets = append(targets, path)
+			defaultPlan, err := opencodedefault.PrepareUninstall(path)
+			if err != nil {
+				return nil, nil, err
+			}
+			targets = append(targets, path, opencodedefault.OwnershipPath(path))
 			paths := make([]jsonPath, 0, len(configuredAgents))
 			for _, agentKey := range configuredAgents {
 				paths = append(paths, jsonPath{"agent", agentKey})
@@ -616,7 +638,7 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 				}
 			}
 
-			ops = append(ops, rewriteJSONFile(path, paths...))
+			ops = append(ops, rewriteOpenCodeSDDSettings(path, defaultPlan, paths...))
 
 			pluginDir := filepath.Join(homeDir, ".config", "opencode", "plugins")
 			for _, pluginPath := range []string{
@@ -853,6 +875,24 @@ func rewriteJSONFile(path string, jsonPaths ...jsonPath) operation {
 			return true, false, nil
 		},
 	}
+}
+
+func rewriteOpenCodeSDDSettings(path string, plan *opencodedefault.UninstallPlan, jsonPaths ...jsonPath) operation {
+	return operation{typeID: opRewriteFile, path: path, apply: func(path string) (bool, bool, error) {
+		raw, err := readManagedFile(path)
+		exists := err == nil
+		if err != nil && !os.IsNotExist(err) {
+			return false, false, err
+		}
+		updated := raw
+		if exists {
+			updated, _, err = removeJSONPaths(raw, jsonPaths...)
+			if err != nil {
+				return false, false, err
+			}
+		}
+		return plan.Apply(updated, exists)
+	}}
 }
 
 func rewriteSkillRegistryHook(path string) operation {

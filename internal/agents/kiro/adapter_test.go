@@ -5,12 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 func TestAdapter_Agent(t *testing.T) {
@@ -113,25 +112,25 @@ func TestAdapter_Detect_BinaryFoundConfigDirExists(t *testing.T) {
 	}
 }
 
+func TestAdapter_Detect_RealArtifactsWithoutBinary(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".kiro", "settings"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &Adapter{lookPath: func(string) (string, error) { return "", exec.ErrNotFound }, statPath: os.Stat}
+	installed, _, configPath, found, err := adapter.Detect(nil, home)
+	if err != nil || installed || !found || configPath != filepath.Join(home, ".kiro") {
+		t.Fatalf("Detect() = installed %v found %v path %q err %v", installed, found, configPath, err)
+	}
+}
+
 func TestAdapter_GlobalConfigDir(t *testing.T) {
 	adapter := NewAdapter()
 	homeDir := "/home/user"
 	got := adapter.GlobalConfigDir(homeDir)
 
-	// Verify path ends with expected structure based on OS
-	switch runtime.GOOS {
-	case "darwin":
-		if !contains(got, "Library", "Application Support", "Kiro", "User") {
-			t.Errorf("macOS: GlobalConfigDir() = %q, missing expected path components", got)
-		}
-	case "windows":
-		if !contains(got, "kiro", "User") {
-			t.Errorf("Windows: GlobalConfigDir() = %q, missing expected path components", got)
-		}
-	default: // linux
-		if !contains(got, "kiro", "user") {
-			t.Errorf("Linux: GlobalConfigDir() = %q, missing expected path components", got)
-		}
+	if want := filepath.Join(homeDir, ".kiro"); got != want {
+		t.Errorf("GlobalConfigDir() = %q, want %q", got, want)
 	}
 }
 
@@ -167,18 +166,13 @@ func TestAdapter_SkillsDir(t *testing.T) {
 		t.Errorf("SkillsDir() = %q, want %q", got, expected)
 	}
 
-	// Verify path is independent from GlobalConfigDir (must not contain AppData or platform config dir).
-	globalConfigDir := adapter.GlobalConfigDir(homeDir)
-	if got == filepath.Join(globalConfigDir, "skills") {
-		t.Errorf("SkillsDir() must be independent from GlobalConfigDir(); got %q which matches GlobalConfigDir/skills", got)
-	}
+	// Skills and CodeGraph evidence intentionally share Kiro's real ~/.kiro root.
 }
 
 func TestAdapter_SettingsPath(t *testing.T) {
 	adapter := NewAdapter()
 	homeDir := "/home/user"
-	configDir := adapter.GlobalConfigDir(homeDir)
-	expected := filepath.Join(configDir, "settings.json")
+	expected := filepath.Join(adapter.kiroConfigDir(homeDir), "settings.json")
 
 	got := adapter.SettingsPath(homeDir)
 	if got != expected {
@@ -195,6 +189,23 @@ func TestAdapter_MCPConfigPath(t *testing.T) {
 	got := adapter.MCPConfigPath(homeDir, "")
 	if got != expected {
 		t.Errorf("MCPConfigPath() = %q, want %q", got, expected)
+	}
+}
+
+func TestAdapter_RealRootIgnoresStaleOSSettingsAndKilo(t *testing.T) {
+	home := t.TempDir()
+	adapter := &Adapter{lookPath: func(string) (string, error) { return "", exec.ErrNotFound }, statPath: os.Stat}
+	for _, path := range []string{adapter.kiroConfigDir(home), filepath.Join(home, ".config", "kilo")} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installed, _, configPath, found, err := adapter.Detect(nil, home)
+	if err != nil || installed || found || configPath != filepath.Join(home, ".kiro") {
+		t.Fatalf("stale settings detection = installed %v found %v path %q err %v", installed, found, configPath, err)
+	}
+	if got := adapter.MCPConfigPath(home, "codegraph"); got != filepath.Join(home, ".kiro", "settings", "mcp.json") {
+		t.Fatalf("MCPConfigPath() = %q", got)
 	}
 }
 

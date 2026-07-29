@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/consent.schema.json",
+  "title": "Gentle AI negotiated review consent question",
+  "description": "The typed per-candidate blocking consent question a negotiated START answers with instead of proceeding, emitted only when the caller declared --consent relay. It carries why input is required, the complete choice set, and the exact runnable follow-up invocations scoped to the one frozen candidate. A decline is scoped to that candidate and is deliberately not the kill switch; the permanent disable stays a documented off path outside the choice set.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "operation",
+    "action",
+    "blocking",
+    "target_identity",
+    "projection",
+    "risk_level",
+    "changed_files",
+    "changed_lines",
+    "headline",
+    "reason",
+    "value",
+    "risk_evidence",
+    "choices",
+    "off_path"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.consent/v1"},
+    "contract": {"const": "gentle-ai.review-integration/v1"},
+    "operation": {"const": "review.start"},
+    "action": {"const": "consent_required"},
+    "blocking": {"const": true},
+    "target_identity": {"$ref": "#/$defs/sha256"},
+    "projection": {"enum": ["workspace", "staged"]},
+    "risk_level": {"enum": ["medium", "high"]},
+    "changed_files": {"type": "integer", "minimum": 0},
+    "changed_lines": {"type": "integer", "minimum": 0},
+    "headline": {"type": "string", "minLength": 1},
+    "reason": {"type": "string", "minLength": 1},
+    "value": {"type": "string", "minLength": 1},
+    "risk_evidence": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "choices": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {"$ref": "#/$defs/choice_granted"},
+        {"$ref": "#/$defs/choice_declined"}
+      ],
+      "items": false
+    },
+    "off_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["note", "command"],
+      "properties": {
+        "note": {"type": "string", "minLength": 1},
+        "command": {"const": "gentle-ai review mode disable"}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "choice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["answer", "label", "effect", "invocation"],
+      "properties": {
+        "answer": {"enum": ["granted", "declined"]},
+        "label": {"type": "string", "minLength": 1},
+        "effect": {"type": "string", "minLength": 1},
+        "invocation": {"type": "string", "pattern": "^gentle-ai review start .* --consent (granted|declined)$"}
+      }
+    },
+    "choice_granted": {
+      "allOf": [{"$ref": "#/$defs/choice"}],
+      "properties": {"answer": {"const": "granted"}}
+    },
+    "choice_declined": {
+      "allOf": [{"$ref": "#/$defs/choice"}],
+      "properties": {"answer": {"const": "declined"}}
+    }
+  }
+}

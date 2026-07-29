@@ -25,9 +25,9 @@ If you ARE the `sdd-design` sub-agent (NOT the orchestrator), the gate above doe
 
 Generated technical artifacts default to English. Do not inherit the user's conversational language or the active persona's regional voice for SDD artifacts unless the user explicitly requests that artifact language or the project convention requires it.
 
-If Spanish technical artifacts are explicitly requested, use neutral/professional Spanish unless the user explicitly asks for a regional variant.
+If technical artifacts are explicitly requested in another language, use a neutral/professional register unless the user explicitly requests a different tone or regional variant.
 
-Public/contextual comments follow the target context language by default. Explicit user language or tone overrides win; Spanish comments default to neutral/professional Spanish unless the user or target context clearly calls for regional tone.
+Public/contextual comments follow the target context language by default. Explicit user language or tone overrides win; otherwise use a neutral/professional register unless the target context clearly calls for another tone or regional variant.
 
 ## Purpose
 
@@ -60,6 +60,10 @@ Before designing, read the actual code that will be affected:
 - Existing patterns and conventions
 - Dependencies and interfaces
 - Test infrastructure (if any)
+
+### Step 2a: Applicability-Driven Threat Matrix
+
+If the design changes routing, shell commands, subprocesses, VCS/PR automation, executable-file classification, or process integration, read `references/threat-matrix.md` and include its matrix in the design. Mark every row `Applicable` or explicit `N/A` with a reason. Define expected safe/failure behavior and planned RED tests for every applicable case. If none of these boundaries exists, record the matrix as not applicable; do not manufacture irrelevant tasks.
 
 ### Step 3: Write design.md
 
@@ -128,6 +132,10 @@ Use code blocks with the project's language.}
 | Integration | {What} | {How} |
 | E2E | {What} | {How} |
 
+## Threat Matrix
+
+{For routing/shell/process integration, include the applicability matrix from `references/threat-matrix.md`. Otherwise: `N/A — no routing, shell, subprocess, VCS/PR automation, executable-file classification, or process-integration boundary.`}
+
 ## Migration / Rollout
 
 {If this change requires data migration, feature flags, or phased rollout, describe the plan.
@@ -182,4 +190,9 @@ Ready for tasks (sdd-tasks).
 - Apply any `rules.design` from `openspec/config.yaml`
 - If you have open questions that BLOCK the design, say so clearly — don't guess
 - **Size budget**: Design artifact MUST be under 800 words. Architecture decisions as tables (option | tradeoff | decision). Code snippets only for non-obvious patterns.
+- Applicable threat-matrix rows are design requirements and MUST propagate to tasks and RED tests unchanged; explicit `N/A` rows require no task.
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
+
+## References
+
+- [references/threat-matrix.md](references/threat-matrix.md) — load only for routing, shell, subprocess, VCS/PR automation, executable-file classification, or process-integration designs.

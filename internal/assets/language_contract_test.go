@@ -9,11 +9,20 @@ import (
 	"testing"
 )
 
-var sddLanguageContractRequired = []string{
-	"The active persona controls direct user/orchestrator conversation only.",
+var sddArtifactLanguageContractRequired = []string{
 	"Generated technical artifacts default to English",
+	"If technical artifacts are explicitly requested in another language, use a neutral/professional register",
 	"Public/contextual comments follow the target context language",
-	"If Spanish technical artifacts are explicitly requested, use neutral/professional Spanish",
+	"Explicit user language or tone overrides win; otherwise use a neutral/professional register",
+}
+
+var sddOrchestratorLanguageContractRequired = append([]string{
+	"The active persona controls direct user/orchestrator conversation only.",
+}, sddArtifactLanguageContractRequired...)
+
+var sddLanguageSpecificFallbacks = []string{
+	"If Spanish technical artifacts are explicitly requested",
+	"Spanish comments default to neutral/professional Spanish",
 }
 
 var sddKnownLanguageLeaks = []string{
@@ -75,15 +84,38 @@ func TestSDDOrchestratorAssetsEnforceLanguageContract(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			content := MustRead(path)
 
-			for _, required := range sddLanguageContractRequired {
+			for _, required := range sddOrchestratorLanguageContractRequired {
 				if !strings.Contains(content, required) {
 					t.Fatalf("%s missing language contract wording %q", path, required)
+				}
+			}
+			for _, fallback := range sddLanguageSpecificFallbacks {
+				if strings.Contains(content, fallback) {
+					t.Fatalf("%s contains language-specific fallback wording %q", path, fallback)
 				}
 			}
 
 			for _, leak := range sddKnownLanguageLeaks {
 				if strings.Contains(content, leak) {
 					t.Fatalf("%s contains persona-agnostic language leak %q", path, leak)
+				}
+			}
+		})
+	}
+}
+
+func TestSDDPhaseSkillsEnforceLanguageContract(t *testing.T) {
+	for _, path := range allSDDPhaseSkillAssetPaths(t) {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			for _, required := range sddArtifactLanguageContractRequired {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing language contract wording %q", path, required)
+				}
+			}
+			for _, fallback := range sddLanguageSpecificFallbacks {
+				if strings.Contains(content, fallback) {
+					t.Fatalf("%s contains language-specific fallback wording %q", path, fallback)
 				}
 			}
 		})
@@ -116,12 +148,34 @@ func TestSupportedAgentSDDLanguageMatrix(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.agent, func(t *testing.T) {
 			content := MustRead(tc.path)
-			for _, required := range sddLanguageContractRequired {
+			for _, required := range sddOrchestratorLanguageContractRequired {
 				if !strings.Contains(content, required) {
 					t.Fatalf("agent %s asset %s missing language contract wording %q", tc.agent, tc.path, required)
 				}
 			}
 		})
+	}
+}
+
+func allSDDPhaseSkillAssetPaths(t *testing.T) []string {
+	t.Helper()
+	paths, err := fs.Glob(FS, "skills/sdd-*/SKILL.md")
+	if err != nil {
+		t.Fatalf("Glob embedded SDD phase skills: %v", err)
+	}
+	if len(paths) != 10 {
+		t.Fatalf("SDD phase skill asset count = %d, want 10", len(paths))
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func TestShippedReviewAssetsDoNotInstructFixTouchedLineDiscovery(t *testing.T) {
+	for _, path := range allReviewLifecycleAssetPaths(t) {
+		content := MustRead(path)
+		if strings.Contains(content, "MUST review only fix-touched lines") {
+			t.Fatalf("%s retains stale broad post-fix discovery instructions", path)
+		}
 	}
 }
 
@@ -351,6 +405,27 @@ func allSDDOrchestratorAssetPaths(t *testing.T) []string {
 		return nil
 	}); err != nil {
 		t.Fatalf("WalkDir embedded assets: %v", err)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func allReviewLifecycleAssetPaths(t *testing.T) []string {
+	t.Helper()
+	var paths []string
+	if err := fs.WalkDir(FS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".md") {
+			return nil
+		}
+		if strings.Contains(MustRead(path), "MUST review only fix-touched lines") {
+			paths = append(paths, path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WalkDir embedded review assets: %v", err)
 	}
 	sort.Strings(paths)
 	return paths

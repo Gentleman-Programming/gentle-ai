@@ -13,6 +13,8 @@ CONTEXT:
 TASK:
 Verify the active SDD change. Read the proposal, specs, design, and tasks artifacts. Then:
 
+This is the single independent requirements/runtime final verification. Continue only when the native bounded transaction is `ready_final_verification` or `final_verifying`. A contradiction or failing check escalates; it never launches another review/refuter/fix loop.
+
 STATUS GATE:
 Read `~/.claude/skills/_shared/sdd-status-contract.md` and produce structured status before acting. If `$ARGUMENTS` is missing or ambiguous, ask the user to choose and STOP. Do not guess. Continue only when tasks and implementation evidence exist. If status reports `workspace-planning`, STOP and explain that full workspace implementation verification is not supported in this slice. Carry `contextFiles`, task progress, dependency states, and `actionContext` into the native sub-agent prompt when delegating.
 

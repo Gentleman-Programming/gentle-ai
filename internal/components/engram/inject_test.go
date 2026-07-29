@@ -8,23 +8,28 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/qwen"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/qwen"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func codexAdapter() agents.Adapter    { return codex.NewAdapter() }
+
+func validCodexRuntime(t *testing.T) {
+	t.Helper()
+	t.Cleanup(codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil))
+}
 func geminiAdapter() agents.Adapter   { return gemini.NewAdapter() }
 func hermesAdapter() agents.Adapter   { return hermes.NewAdapter() }
 func qwenAdapter() agents.Adapter     { return qwen.NewAdapter() }
@@ -658,6 +663,7 @@ func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T
 // ─── Codex tests ──────────────────────────────────────────────────────────────
 
 func TestInjectCodexWritesTOMLMCP(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	result, err := Inject(home, codexAdapter())
@@ -705,6 +711,7 @@ func TestInjectCodexWritesTOMLMCP(t *testing.T) {
 }
 
 func TestInjectCodexWritesInstructionFiles(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	_, err := Inject(home, codexAdapter())
@@ -735,6 +742,7 @@ func TestInjectCodexWritesInstructionFiles(t *testing.T) {
 }
 
 func TestInjectCodexInjectsTOMLKeys(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	_, err := Inject(home, codexAdapter())
@@ -938,6 +946,7 @@ func TestInjectClaudeMigratesCellarCommandToStablePath(t *testing.T) {
 }
 
 func TestInjectCodexIsIdempotent(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	first, err := Inject(home, codexAdapter())
@@ -973,6 +982,7 @@ func TestInjectCodexIsIdempotent(t *testing.T) {
 // TestInjectCodexWritesProfiles asserts that Inject for the Codex adapter
 // writes the three gentle-ai SDD profile files into ~/.codex/.
 func TestInjectCodexWritesProfiles(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	_, err := Inject(home, codexAdapter())
@@ -984,9 +994,9 @@ func TestInjectCodexWritesProfiles(t *testing.T) {
 		name            string
 		reasoningEffort string
 	}{
-		{"sdd-strong.config.toml", "high"},
-		{"sdd-mid.config.toml", "medium"},
-		{"sdd-cheap.config.toml", "low"},
+		{"sdd-strong.config.toml", "medium"},
+		{"sdd-mid.config.toml", "high"},
+		{"sdd-cheap.config.toml", "high"},
 	}
 
 	for _, p := range profiles {
@@ -1005,6 +1015,7 @@ func TestInjectCodexWritesProfiles(t *testing.T) {
 // TestInjectCodexProfilesIdempotent asserts that running Inject twice leaves
 // the profile files unchanged on the second run and does not duplicate keys.
 func TestInjectCodexProfilesIdempotent(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	if _, err := Inject(home, codexAdapter()); err != nil {
@@ -1053,9 +1064,9 @@ func TestProfileFallbackAgreesWithRenderFallback(t *testing.T) {
 		carril     string
 		wantEffort string
 	}{
-		{"sdd-strong", "high"},
-		{"sdd-mid", "medium"},
-		{"sdd-cheap", "low"},
+		{"sdd-strong", "medium"},
+		{"sdd-mid", "high"},
+		{"sdd-cheap", "high"},
 	}
 	for _, tc := range cases {
 		got := profileEffort[tc.carril]
@@ -1090,6 +1101,7 @@ func TestProfileFallbackAgreesWithRenderFallback(t *testing.T) {
 // config.toml contains [features] with multi_agent = true. Codex SDD enables
 // multi-agent delegation by default so the per-phase reasoning_effort table applies.
 func TestInjectCodexMultiAgentDefaultOn(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	if _, err := Inject(home, codexAdapter()); err != nil {
@@ -1116,6 +1128,7 @@ func TestInjectCodexMultiAgentDefaultOn(t *testing.T) {
 // TestInjectCodexMultiAgentOptIn asserts that InjectWithOptions with
 // CodexMultiAgent=true writes multi_agent = true in [features].
 func TestInjectCodexMultiAgentOptIn(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	opts := InjectOptions{CodexMultiAgent: true}
@@ -1137,6 +1150,7 @@ func TestInjectCodexMultiAgentOptIn(t *testing.T) {
 // TestInjectCodexMultiAgentDefaults asserts that the [agents] section is always
 // written with max_threads = 4 and max_depth = 2 regardless of the opt-in flag.
 func TestInjectCodexMultiAgentDefaults(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	if _, err := Inject(home, codexAdapter()); err != nil {
@@ -1164,6 +1178,7 @@ func TestInjectCodexMultiAgentDefaults(t *testing.T) {
 // produces exactly one [features] section and one [agents] section with no
 // duplicate keys, and that the engram and context7 blocks are not disturbed.
 func TestInjectCodexMultiAgentIdempotent(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	if _, err := Inject(home, codexAdapter()); err != nil {
@@ -2231,5 +2246,44 @@ func TestInjectWithOptionsReInjectConvergesFullToSlimAndBack(t *testing.T) {
 	}
 	if n := strings.Count(string(afterBackToFull), "<!-- gentle-ai:engram-protocol -->"); n != 1 {
 		t.Fatalf("expected exactly 1 open marker after re-inject back to full (no duplication), got %d", n)
+	}
+}
+
+func TestInjectCodexOrchestratorAssignmentWritesTopLevelModel(t *testing.T) {
+	validCodexRuntime(t)
+	home := t.TempDir()
+	opts := InjectOptions{CodexOrchestratorAssignment: model.CodexPresetOrchestratorAssignment(string(model.CodexPresetRecommended))}
+	if _, err := InjectWithOptions(home, codexAdapter(), opts); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `model = "gpt-5.6-sol"`) || !strings.Contains(text, `model_reasoning_effort = "medium"`) {
+		t.Fatalf("top-level orchestrator assignment missing:\n%s", text)
+	}
+}
+
+func TestInjectCodexNilOrchestratorAssignmentPreservesTopLevelModel(t *testing.T) {
+	validCodexRuntime(t)
+	home := t.TempDir()
+	path := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("model = \"user-model\"\nmodel_reasoning_effort = \"high\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InjectWithOptions(home, codexAdapter(), InjectOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `model = "user-model"`) || !strings.Contains(string(content), `model_reasoning_effort = "high"`) {
+		t.Fatalf("nil assignment clobbered top-level model:\n%s", content)
 	}
 }

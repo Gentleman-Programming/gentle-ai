@@ -10,12 +10,39 @@ on:
     - cron: "0 3 * * *"
 
 jobs:
-  unit-tests:
-    name: Unit Tests
+  go-format:
+    name: Go Format
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout exact event candidate
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Check Go formatting
+        run: go run ./internal/gofmtcheck
+
+  unit-tests:
+    name: Unit Tests
+    needs: go-format
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful Go format
+        if: needs.go-format.result != 'success'
+        run: exit 1
+
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
@@ -25,8 +52,159 @@ jobs:
       - name: Run unit tests
         run: go test ./...
 
+      # Lives in this job, not the format job, because only Unit Tests is a
+      # required status check on main. A guard that cannot block a merge is
+      # decoration.
+      # Ratchet, not a clean gate: the repository already carries 230 functions
+      # nothing reaches from main, most of them legitimate. This fails only when
+      # a NEW one appears. It exists because InstallCommandsForDep survived with
+      # no callers while the install docs described the dependency remediation
+      # it would have performed.
+      - name: Check for new unreachable functions
+        run: ./scripts/deadcode-ratchet.sh
+
+  windows-runtime:
+    name: Windows Runtime
+    needs: go-format
+    if: always()
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require successful Go format
+        if: needs.go-format.result != 'success'
+        run: exit 1
+
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Build native test binary
+        shell: pwsh
+        run: go build -trimpath -ldflags="-s -w -X main.version=ci" -o "$env:RUNNER_TEMP\gentle-ai.exe" ./cmd/gentle-ai
+
+      - name: Run Windows release-blocker tests
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          GENTLE_AI_TEST_BINARY: ${{ runner.temp }}\gentle-ai.exe
+          GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER: "1"
+        run: go test -v ./internal/cli ./internal/reviewtransaction ./internal/sddstatus -run '^(TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals|TestRARPrivateOwnerRemainsTokenUserOnly|TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags|TestWindowsSecureOpenDriveFallbackFailsClosed|TestWindowsSecureOpenDoesNotRetryOtherErrors|TestWindowsStoreLockUsesExistingInodeAdvisoryTruth|TestRunGitBoundsLocalAndRemoteCommands|TestRunGitDistinguishesAggregateDeadlineAndTypedExit|TestStoreLockReportsLiveOwnerAndCannotBeStolen|TestStoreLockRecoversCrashAndCorruptOwnerRecords|TestStoreLockIsReleasedWhenOwnerProcessExits|TestConcurrentStoreLockRecoverersCannotBothWin|TestCompactStoresShareRepositoryWriteLock|TestCompactStoreRejectsConcurrentLockedWriter|TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline|TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance|TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays|TestRepairClassifiedAuthorityResumesEachDurablePhase|TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState|TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath|TestRejectFacadeCorrectionUntrackedRespectsStagedProjection|TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree|TestWindowsPowerShell51ArtifactManifestFileFinalize)$' -count=1 -timeout=8m
+
+      # PR runs the release-blocker subset only; push to main and the nightly
+      # schedule run the full Windows suite, mirroring the E2E tier policy.
+      - name: Run full Windows suite
+        shell: pwsh
+        timeout-minutes: 35
+        run: if ($env:GITHUB_EVENT_NAME -eq 'push' -or $env:GITHUB_EVENT_NAME -eq 'schedule') { go test ./... -count=1 -timeout=30m; exit $LASTEXITCODE } else { Write-Host 'Skipping full suite on pull_request; release-blocker tests already ran.' }
+
+  # Native Darwin release blockers (#1853). Four macOS defects (#1773, #1781,
+  # #1804, #1850) and the #1872 RAR lock convoy shipped because no CI lane
+  # executes Darwin semantics; GOOS=darwin cross-builds prove compilation, not
+  # APFS aliasing, advisory-lock timing, or rename fallbacks. macOS runners
+  # bill ~10x Linux minutes, so this job runs only the curated manifest in
+  # scripts/darwin-release-blockers.manifest — tests whose failure mode is
+  # platform-dependent — never the full suite. The full suite stays on Linux.
+  #
+  # REQUIRED FOR MERGE: the maintainer must add the status check
+  # "Darwin Runtime" to the branch protection required status checks
+  # (repository settings — this cannot be done from the workflow file).
+  darwin-runtime:
+    name: Darwin Runtime
+    needs: go-format
+    if: always()
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - name: Require successful Go format
+        if: needs.go-format.result != 'success'
+        run: exit 1
+
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      # Fails loudly if any manifest entry names a test that no longer exists:
+      # `go test -run` with a pattern matching nothing exits 0, which would rot
+      # the manifest invisibly. Native `go test -list` here is authoritative,
+      # including for //go:build darwin tests no other lane can even list.
+      - name: Verify manifest against existing tests
+        run: ./scripts/darwin-release-blockers.sh verify
+
+      - name: Run Darwin release-blocker tests
+        timeout-minutes: 20
+        run: ./scripts/darwin-release-blockers.sh run
+
+  organic-runtime-e2e:
+    name: Organic Runtime E2E (${{ matrix.os }})
+    needs: go-format
+    if: always()
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    steps:
+      - name: Require successful Go format
+        if: needs.go-format.result != 'success'
+        run: exit 1
+
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6
+        with:
+          node-version: "24"
+
+      - name: Install pinned OpenCode runtime
+        run: npm install --global opencode-ai@1.18.4
+
+      - name: Run organic journeys
+        # No -run filter: a renamed test must fail this job loudly, never let
+        # go test exit 0 having matched nothing. The gated real-agent journey
+        # (TestRealAgentOrganicJourneys) is included via its env switch.
+        env:
+          GENTLE_AI_REAL_AGENT_E2E: "1"
+          # The large-workspace journey spawns one Git subprocess per intended
+          # untracked path, so its cost is dominated by process creation. Linux
+          # absorbs it; Windows does not, and gating it here keeps the real
+          # coverage where it is affordable instead of deleting it outright.
+          GENTLE_AI_LARGE_WORKSPACE_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+        run: go test -v ./e2e/organicruntime -count=1 -timeout=15m
+
   e2e-tests:
     name: E2E Tests (${{ matrix.platform.name }})
+    needs: go-format
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -40,8 +218,15 @@ jobs:
           - name: fedora
             dockerfile: Dockerfile.fedora
     steps:
-      - name: Checkout
+      - name: Require successful Go format
+        if: needs.go-format.result != 'success'
+        run: exit 1
+
+      - name: Checkout exact event candidate
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0

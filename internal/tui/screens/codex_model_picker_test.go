@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
 )
 
 func TestNewCodexModelPickerState(t *testing.T) {
@@ -198,45 +198,44 @@ func TestCodexPickerLabels_SelfDescribing(t *testing.T) {
 			preset:           screens.CodexPresetLowCost,
 			wantStrongEffort: "medium",
 			wantMidEffort:    "medium",
-			wantCheapEffort:  "low",
+			wantCheapEffort:  "high",
 		},
 		{
 			preset:           screens.CodexPresetRecommended,
-			wantStrongEffort: "high",
-			wantMidEffort:    "medium",
-			wantCheapEffort:  "low",
+			wantStrongEffort: "medium",
+			wantMidEffort:    "high",
+			wantCheapEffort:  "high",
 		},
 		{
 			preset:           screens.CodexPresetPowerful,
 			wantStrongEffort: "xhigh",
 			wantMidEffort:    "high",
-			wantCheapEffort:  "low",
+			wantCheapEffort:  "high",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(string(tc.preset), func(t *testing.T) {
 			label := screens.CodexPresetLabel(tc.preset)
 
-			// Model must appear at least once.
-			if !strings.Contains(label, "gpt-5.5") {
-				t.Errorf("CodexPresetLabel(%q) = %q: missing gpt-5.5", tc.preset, label)
-			}
+			defaults := model.CodexPresetCarrilDefaults(string(tc.preset))
 
 			// Verify each carril by anchoring the model/effort token to its OWN
 			// carril segment. This catches a regression in one carril even when
-			// another carril shares the same model+effort (e.g. LowCost strong
-			// and mid are both gpt-5.5/medium).
-			strongToken := "Razonamiento gpt-5.5/" + tc.wantStrongEffort
+			// another carril shares the same model+effort.
+			strong := defaults["sdd-strong"]
+			strongToken := "Razonamiento " + strong.Model + "/" + tc.wantStrongEffort
 			if !strings.Contains(label, strongToken) {
 				t.Errorf("CodexPresetLabel(%q) = %q: Razonamiento carril missing %q", tc.preset, label, strongToken)
 			}
 
-			midToken := "Código gpt-5.5/" + tc.wantMidEffort
+			mid := defaults["sdd-mid"]
+			midToken := "Código " + mid.Model + "/" + tc.wantMidEffort
 			if !strings.Contains(label, midToken) {
 				t.Errorf("CodexPresetLabel(%q) = %q: Código carril missing %q", tc.preset, label, midToken)
 			}
 
-			cheapToken := "Liviano gpt-5.4-mini/" + tc.wantCheapEffort
+			cheap := defaults["sdd-cheap"]
+			cheapToken := "Liviano " + cheap.Model + "/" + tc.wantCheapEffort
 			if !strings.Contains(label, cheapToken) {
 				t.Errorf("CodexPresetLabel(%q) = %q: Liviano carril missing %q", tc.preset, label, cheapToken)
 			}
@@ -309,7 +308,7 @@ func TestCodexCustomModelSearch_EmptyQueryShowsAll(t *testing.T) {
 	state.CustomMode = screens.CodexCustomModeModelSelect
 	state.CustomModelSearch = ""
 	out := screens.RenderCodexModelPicker(state, 0)
-	for _, m := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2-codex", "gpt-5.3-codex"} {
+	for _, m := range model.CodexAvailableModels() {
 		if !strings.Contains(out, m) {
 			t.Errorf("model search empty query must show all models; missing %q; output:\n%s", m, out)
 		}
@@ -411,8 +410,8 @@ func TestCodexCustom_SelectModelAndEffortUpdatesAssignment(t *testing.T) {
 	if !ok {
 		t.Fatalf("CustomAssignments missing sdd-explore; got: %v", state.CustomAssignments)
 	}
-	if a.ModelID != "gpt-5.5" {
-		t.Errorf("CustomAssignments[sdd-explore].ModelID = %q, want gpt-5.5", a.ModelID)
+	if a.ModelID != "gpt-5.6-sol" {
+		t.Errorf("CustomAssignments[sdd-explore].ModelID = %q, want gpt-5.6-sol", a.ModelID)
 	}
 	if a.Effort != model.CodexEffortHigh {
 		t.Errorf("CustomAssignments[sdd-explore].Effort = %q, want high", a.Effort)
