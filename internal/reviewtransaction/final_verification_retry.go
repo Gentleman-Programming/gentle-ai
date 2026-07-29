@@ -463,6 +463,10 @@ func validateCompactFinalVerificationRetryProofShape(successor CompactState, rec
 	return nil
 }
 
+// validateAndNormalizeFinalVerificationRetrySuccessorLifecycle accepts validating
+// successors with empty evidence and approved or escalated successors with a valid
+// evidence hash. It returns a copy normalized to StateValidating with evidence
+// cleared for frozen-authority comparison.
 func validateAndNormalizeFinalVerificationRetrySuccessorLifecycle(successor CompactState) (CompactState, error) {
 	switch successor.State {
 	case StateValidating:
