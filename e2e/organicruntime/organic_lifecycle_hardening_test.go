@@ -84,15 +84,21 @@ func TestOrganicReviewStartDeadlineHeadroom(t *testing.T) {
 		if err := json.Unmarshal([]byte(stdout), &started); err != nil {
 			t.Fatalf("decode large-workspace START: %v\n%s", err, stdout)
 		}
-		started.TargetIdentity = targetIdentity
+		if returnedTargetIdentity := started.targetIdentity(); returnedTargetIdentity != targetIdentity {
+			t.Fatalf("START target identity = %q, want %q", returnedTargetIdentity, targetIdentity)
+		}
 		if len(started.SelectedLenses) != 1 {
 			t.Fatalf("large active-MDX workspace selected lenses = %v, want one consolidated lens", started.SelectedLenses)
 		}
 		finalized := harness.approveReview(lineage, started)
+		lifecycleElapsed := time.Since(lifecycleStarted)
 		if finalized.State != organicStateApproved {
 			t.Fatalf("large-workspace lifecycle finalized as %q, want %q", finalized.State, organicStateApproved)
 		}
-		t.Logf("large-workspace lifecycle completed %d files: START=%s total=%s", headroomFiles, startElapsed, time.Since(lifecycleStarted))
+		if lifecycleElapsed >= organicLocalTimeout {
+			t.Fatalf("large-workspace lifecycle took %s, want less than the harness local timeout %s", lifecycleElapsed, organicLocalTimeout)
+		}
+		t.Logf("large-workspace lifecycle completed %d files: START=%s total=%s", headroomFiles, startElapsed, lifecycleElapsed)
 
 		harness.assertSingleReviewLineage(lineage)
 		harness.assertNoSDDArtifacts()

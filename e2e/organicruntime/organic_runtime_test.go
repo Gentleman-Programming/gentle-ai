@@ -1196,7 +1196,7 @@ func (harness *organicHarness) captureReviewerResult(lineage string, started org
 	lens := started.SelectedLenses[order]
 	binding := []string{
 		"review", "capture-result", "--cwd", harness.repo.worktree, "--lineage", lineage,
-		"--target", started.TargetIdentity, "--lens", lens, "--order", strconv.Itoa(order),
+		"--target", started.targetIdentity(), "--lens", lens, "--order", strconv.Itoa(order),
 	}
 	var preflight organicCapturePreflight
 	if err := json.Unmarshal(harness.gentle(append(binding, "--preflight")...), &preflight); err != nil {
@@ -1686,9 +1686,25 @@ type organicStartResult struct {
 	ChangedLines     int      `json:"changed_lines"`
 	CorrectionBudget int      `json:"correction_budget"`
 	TargetIdentity   string   `json:"target_identity"`
+
+	Repository *organicStartRepositoryContext `json:"repository_context,omitempty"`
 	// Hint is the informational recovery pointer an empty-candidate start
 	// carries; the re-enable journey follows it verbatim.
 	Hint string `json:"hint"`
+}
+
+type organicStartRepositoryContext struct {
+	TargetIdentity string `json:"target_identity"`
+}
+
+func (result organicStartResult) targetIdentity() string {
+	if result.TargetIdentity != "" {
+		return result.TargetIdentity
+	}
+	if result.Repository != nil {
+		return result.Repository.TargetIdentity
+	}
+	return ""
 }
 
 type organicFinalizeResult struct {

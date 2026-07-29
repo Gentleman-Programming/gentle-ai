@@ -1535,6 +1535,49 @@ func TestNulSeparatedGitParsersPreserveUnusualPaths(t *testing.T) {
 	if _, err := parseTreeEntries([]byte("malformed\x00")); err == nil {
 		t.Fatal("malformed ls-tree record was accepted")
 	}
+	unterminated := []byte("100644 blob " + oid + "\tunterminated.txt")
+	if _, err := parseTreeEntries(unterminated); err == nil {
+		t.Fatal("unterminated ls-tree record was accepted")
+	}
+}
+
+func TestBatchGitProtocolReadersRejectDiagnostics(t *testing.T) {
+	t.Setenv("GENTLE_AI_TEST_GIT_PROTOCOL_DIAGNOSTIC", "1")
+	originalCommand := gitCommandContext
+	gitCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestBatchGitProtocolDiagnosticHelperProcess$")
+	}
+	t.Cleanup(func() { gitCommandContext = originalCommand })
+
+	repo := t.TempDir()
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "ls-tree", run: func() error {
+			_, err := listTreeEntries(context.Background(), repo, "HEAD")
+			return err
+		}},
+		{name: "cat-file-batch", run: func() error {
+			_, err := batchBlobContents(context.Background(), repo, []string{strings.Repeat("a", 40)})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil || !strings.Contains(err.Error(), "git inventory produced diagnostics: protocol diagnostic") {
+				t.Fatalf("protocol reader error = %v, want explicit stderr diagnostic", err)
+			}
+		})
+	}
+}
+
+func TestBatchGitProtocolDiagnosticHelperProcess(t *testing.T) {
+	if os.Getenv("GENTLE_AI_TEST_GIT_PROTOCOL_DIAGNOSTIC") != "1" {
+		return
+	}
+	_, _ = fmt.Fprint(os.Stderr, "protocol diagnostic")
 }
 
 func TestSnapshotBuilderRejectsFirstIgnoredIntendedPathInCanonicalOrder(t *testing.T) {

@@ -381,7 +381,7 @@ func batchBlobContents(ctx context.Context, repo string, oids []string) (map[str
 		stdin = append(stdin, oid...)
 		stdin = append(stdin, '\n')
 	}
-	output, err := runGit(ctx, repo, nil, stdin, "cat-file", "--batch")
+	output, err := runGitCaptured(ctx, repo, nil, stdin, 0, false, true, "cat-file", "--batch")
 	if err != nil {
 		return nil, fmt.Errorf("read immutable passive candidate blobs: %w", err)
 	}

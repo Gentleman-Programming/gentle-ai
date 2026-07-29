@@ -1132,7 +1132,7 @@ func (builder SnapshotBuilder) untrackedProof(ctx context.Context, candidateTree
 }
 
 func listTreeEntries(ctx context.Context, repo, tree string) (map[string][]byte, error) {
-	output, err := runGit(ctx, repo, nil, nil, "ls-tree", "-r", "-t", "-z", tree)
+	output, err := runGitInventory(ctx, repo, "ls-tree", "-r", "-t", "-z", tree)
 	if err != nil {
 		return nil, err
 	}
@@ -1142,6 +1142,9 @@ func listTreeEntries(ctx context.Context, repo, tree string) (map[string][]byte,
 // parseTreeEntries preserves each complete ls-tree record, including its NUL,
 // so untracked proof bytes remain identical to the former per-path command.
 func parseTreeEntries(output []byte) (map[string][]byte, error) {
+	if len(output) > 0 && output[len(output)-1] != 0 {
+		return nil, errors.New("unexpected unterminated tree entry") // refusal:by-design world-action: truncated Git protocol output cannot be made trustworthy by a review command
+	}
 	entries := make(map[string][]byte)
 	for _, record := range bytes.Split(output, []byte{0}) {
 		if len(record) == 0 {
