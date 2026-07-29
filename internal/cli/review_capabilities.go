@@ -17,6 +17,7 @@ import (
 )
 
 const ReviewIntegrationContractV1 = "gentle-ai.review-integration/v1"
+const ReviewIntegrationContractV2 = "gentle-ai.review-integration/v2"
 const ReviewIntegrationCapabilitiesSchemaV1 = "gentle-ai.review-integration.capabilities/v1"
 const ReviewIntegrationCapabilitiesSchemaIDV1 = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities.schema.json"
 const ReviewIntegrationCapabilitiesSchemaV11 = "gentle-ai.review-integration.capabilities/v1.1"
@@ -29,6 +30,8 @@ const ReviewIntegrationCapabilitiesSchemaV14 = "gentle-ai.review-integration.cap
 const ReviewIntegrationCapabilitiesSchemaIDV14 = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities-v1.4.schema.json"
 const ReviewIntegrationCapabilitiesSchema = "gentle-ai.review-integration.capabilities/v1.5"
 const ReviewIntegrationCapabilitiesSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities-v1.5.schema.json"
+const ReviewIntegrationCapabilitiesSchemaV2 = "gentle-ai.review-integration.capabilities/v2"
+const ReviewIntegrationCapabilitiesSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities.schema.json"
 
 const (
 	reviewRefuterSchemaID   = "https://gentle-ai.dev/schema/review/refuter/v1"
@@ -43,6 +46,7 @@ const (
 // both name this same runnable command instead of only describing the
 // concept, so they cannot drift from each other.
 const reviewNextTransitionRefreshCommand = "gentle-ai review status --cwd <repo> --contract " + ReviewIntegrationContractV1 + " --next-transition"
+const reviewNextTransitionRefreshCommandV2 = "gentle-ai review status --cwd <repo> --contract " + ReviewIntegrationContractV2 + " --next-transition"
 
 var reviewCapabilitiesBuildInfoReader = debug.ReadBuildInfo
 var reviewCapabilitiesExecutablePath = os.Executable
@@ -150,7 +154,7 @@ func RunReviewCapabilities(args []string, stdout io.Writer) error {
 	if err := validateReviewIntegrationContract(*contract); err != nil {
 		return err
 	}
-	result, err := buildReviewCapabilities()
+	result, err := buildReviewCapabilities(*contract)
 	if err != nil {
 		return err
 	}
@@ -158,13 +162,17 @@ func RunReviewCapabilities(args []string, stdout io.Writer) error {
 }
 
 func validateReviewIntegrationContract(contract string) error {
-	if contract != ReviewIntegrationContractV1 {
-		return fmt.Errorf("unsupported review integration contract %q; supported contract is %s", contract, ReviewIntegrationContractV1)
+	if contract != ReviewIntegrationContractV1 && contract != ReviewIntegrationContractV2 {
+		return fmt.Errorf("unsupported review integration contract %q; retry with gentle-ai review capabilities --contract %s or gentle-ai review capabilities --contract %s", contract, ReviewIntegrationContractV1, ReviewIntegrationContractV2)
 	}
 	return nil
 }
 
-func buildReviewCapabilities() (ReviewCapabilitiesResult, error) {
+func buildReviewCapabilities(contracts ...string) (ReviewCapabilitiesResult, error) {
+	contract := ReviewIntegrationContractV1
+	if len(contracts) > 0 {
+		contract = contracts[0]
+	}
 	version := strings.TrimSpace(AppVersion)
 	if version == "" {
 		return ReviewCapabilitiesResult{}, errors.New("gentle-ai package version is unavailable")
@@ -177,7 +185,7 @@ func buildReviewCapabilities() (ReviewCapabilitiesResult, error) {
 	if err != nil {
 		return ReviewCapabilitiesResult{}, err
 	}
-	result := reviewCapabilitiesStaticSurface()
+	result := reviewCapabilitiesStaticSurface(contract)
 	result.Package = ReviewCapabilitiesPackage{Name: "gentle-ai", Version: version, ReleaseChannel: reviewReleaseChannel(version)}
 	result.Build = build
 	result.Executable = ReviewCapabilitiesExecutable{
@@ -189,8 +197,12 @@ func buildReviewCapabilities() (ReviewCapabilitiesResult, error) {
 	return result, nil
 }
 
-func reviewCapabilitiesStaticSurface() ReviewCapabilitiesResult {
-	return ReviewCapabilitiesResult{
+func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResult {
+	contract := ReviewIntegrationContractV1
+	if len(contracts) > 0 {
+		contract = contracts[0]
+	}
+	result := ReviewCapabilitiesResult{
 		Schema:     ReviewIntegrationCapabilitiesSchema,
 		Contract:   ReviewIntegrationContractV1,
 		Protocol:   ReviewCapabilitiesProtocol{Major: 1, Minor: 5},
@@ -201,8 +213,8 @@ func reviewCapabilitiesStaticSurface() ReviewCapabilitiesResult {
 		},
 		Projections: []string{string(reviewtransaction.ProjectionStaged), string(reviewtransaction.ProjectionWorkspace)},
 		Schemas: []string{
-			reviewtransaction.AdmittedReviewerResultSchema,
-			reviewtransaction.ArtifactSubjectSchema,
+			reviewtransaction.AdmittedReviewerResultSchemaV1,
+			reviewtransaction.ArtifactSubjectSchemaV1,
 			reviewtransaction.AuthorityRepairAssessmentSchema,
 			reviewtransaction.ReviewAuthorityStatusSchema,
 			reviewtransaction.GateRequestSchema,
@@ -212,8 +224,8 @@ func reviewCapabilitiesStaticSurface() ReviewCapabilitiesResult {
 			ReviewIntegrationOperationSchema,
 			ReviewIntegrationProjectionSchema,
 			ReviewIntegrationRepairSchema,
-			ReviewIntegrationStartSchema,
-			ReviewIntegrationStatusSchema,
+			ReviewIntegrationStartSchemaV2,
+			ReviewIntegrationStatusSchemaV2,
 			reviewtransaction.ReceiptSchema,
 			reviewtransaction.CompactReceiptSchema,
 			reviewResultArtifactSchema,
@@ -275,6 +287,41 @@ func reviewCapabilitiesStaticSurface() ReviewCapabilitiesResult {
 			},
 		},
 	}
+	if contract == ReviewIntegrationContractV2 {
+		result.Schema, result.Contract = ReviewIntegrationCapabilitiesSchemaV2, ReviewIntegrationContractV2
+		result.Protocol = ReviewCapabilitiesProtocol{Major: 2, Minor: 0}
+		for index, schema := range result.Schemas {
+			switch schema {
+			case reviewtransaction.AdmittedReviewerResultSchemaV1:
+				result.Schemas[index] = reviewtransaction.AdmittedReviewerResultSchema
+			case reviewtransaction.ArtifactSubjectSchemaV1:
+				result.Schemas[index] = reviewtransaction.ArtifactSubjectSchema
+			case ReviewIntegrationCapabilitiesSchema:
+				result.Schemas[index] = ReviewIntegrationCapabilitiesSchemaV2
+			case ReviewIntegrationFailureSchema:
+				result.Schemas[index] = ReviewIntegrationFailureSchemaV2
+			case ReviewIntegrationConsentSchema:
+				result.Schemas[index] = ReviewIntegrationConsentSchemaV2
+			case ReviewIntegrationOperationSchema:
+				result.Schemas[index] = ReviewIntegrationOperationSchemaV2
+			case ReviewIntegrationRepairSchema:
+				result.Schemas[index] = ReviewIntegrationRepairSchemaV2
+			case ReviewIntegrationStartSchemaV2:
+				result.Schemas[index] = ReviewIntegrationStartSchema
+			case ReviewIntegrationStatusSchemaV2:
+				result.Schemas[index] = ReviewIntegrationStatusSchema
+			}
+		}
+		result.Schemas = append(result.Schemas, ReviewIntegrationConsentSchemaV2)
+		result.Features.Optional = append(result.Features.Optional, ReviewCapabilityFeature{
+			Name: "provider_bound_native_git_context", Supported: true,
+			Requires: []string{"native_frozen_candidate_context", "opaque_repository_context", "provider_artifact_admission"},
+		})
+		result.Bootstrap.Command = reviewNextTransitionRefreshCommandV2
+		result.Compatibility.MinimumProtocolMajor, result.Compatibility.MaximumProtocolMajor = 2, 2
+		result.Compatibility.AdditiveMinorPolicy = "optional-fields-only"
+	}
+	return result
 }
 
 func reviewCapabilitiesBuildIdentity(packageVersion string) (ReviewCapabilitiesBuild, error) {
@@ -353,15 +400,15 @@ func reviewReleaseChannel(version string) string {
 }
 
 func (result ReviewCapabilitiesResult) Validate() error {
-	static := reviewCapabilitiesStaticSurface()
+	static := reviewCapabilitiesStaticSurface(result.Contract)
 	if result.Schema != static.Schema || result.Contract != static.Contract || result.Protocol != static.Protocol ||
 		!reflect.DeepEqual(result.Operations, static.Operations) || !reflect.DeepEqual(result.Gates, static.Gates) ||
 		!reflect.DeepEqual(result.Projections, static.Projections) || !reflect.DeepEqual(result.Schemas, static.Schemas) ||
 		!reflect.DeepEqual(result.Features.Mandatory, static.Features.Mandatory) || !reflect.DeepEqual(result.Features.Optional, static.Features.Optional) || !reflect.DeepEqual(result.Compatibility, static.Compatibility) {
-		return errors.New("capability surface does not match the negotiated v1 contract")
+		return errors.New("capability surface does not match the negotiated contract") // refusal:by-design world-action: provider-generated capabilities require a code fix, not an operator command
 	}
 	if result.Bootstrap != nil && !reflect.DeepEqual(result.Bootstrap, static.Bootstrap) {
-		return errors.New("capability bootstrap does not match the negotiated v1 contract")
+		return errors.New("capability bootstrap does not match the negotiated contract") // refusal:by-design world-action: provider-generated bootstrap requires a code fix, not an operator command
 	}
 	if result.Package.Name != "gentle-ai" || strings.TrimSpace(result.Package.Version) == "" || result.Package.ReleaseChannel != reviewReleaseChannel(result.Package.Version) {
 		return errors.New("capability package identity is invalid")

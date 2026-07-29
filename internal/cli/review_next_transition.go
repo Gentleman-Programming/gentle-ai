@@ -51,6 +51,8 @@ type ReviewTransitionInput struct {
 	Arguments           []ReviewTransitionArgument                    `json:"arguments"`
 	ArtifactSubject     *reviewtransaction.ArtifactSubject            `json:"artifact_subject,omitempty"`
 	CandidateDiff       *reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff,omitempty"`
+	BaseTree            string                                        `json:"base_tree,omitempty"`
+	CandidateTree       string                                        `json:"candidate_tree,omitempty"`
 	ChangedPathManifest *[]reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest,omitempty"`
 	ValidationRequest   *reviewtransaction.TargetedValidationRequest  `json:"validation_request,omitempty"`
 }
@@ -387,12 +389,19 @@ func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int,
 	}
 	if context != nil && order >= 0 && order < len(context.ArtifactSubjects) {
 		subject := context.ArtifactSubjects[order]
-		diff := context.FrozenContext.CandidateDiff
 		manifest := append([]reviewtransaction.ChangedPathManifestEntry(nil), context.FrozenContext.ChangedPathManifest...)
 		if manifest == nil {
 			manifest = []reviewtransaction.ChangedPathManifestEntry{}
 		}
-		input.ArtifactSubject, input.CandidateDiff, input.ChangedPathManifest = &subject, &diff, &manifest
+		input.ArtifactSubject = &subject
+		input.ChangedPathManifest = &manifest
+		if context.FrozenContext.LegacyCandidateDiff != nil {
+			diff := *context.FrozenContext.LegacyCandidateDiff
+			input.CandidateDiff = &diff
+		} else {
+			input.Arguments = append(input.Arguments, ReviewTransitionArgument{Name: "subject-hash", Value: subject.SubjectHash})
+			input.BaseTree, input.CandidateTree = context.FrozenContext.BaseTree, context.FrozenContext.CandidateTree
+		}
 	}
 	return input
 }
@@ -421,8 +430,12 @@ type reviewTransitionSelector struct {
 }
 
 func reviewStartArguments(status ReviewTargetStatusResult, lineage string) []ReviewTransitionArgument {
+	contract := status.Contract
+	if contract == "" {
+		contract = ReviewIntegrationContractV1
+	}
 	arguments := []ReviewTransitionArgument{
-		{Name: "contract", Value: ReviewIntegrationContractV1},
+		{Name: "contract", Value: contract},
 		{Name: "target", Value: status.TargetIdentity},
 		{Name: "projection", Value: string(status.Projection.Projection)},
 	}
@@ -474,7 +487,13 @@ func reviewRepairTransition(status ReviewTargetStatusResult, input reviewNextTra
 func newReviewCaptureContext(state reviewtransaction.CompactState, revision string, frozen reviewtransaction.FrozenCandidateContext) (*reviewCaptureContext, error) {
 	subjects := make([]reviewtransaction.ArtifactSubject, len(state.SelectedLenses))
 	for order, lens := range state.SelectedLenses {
-		subject, err := reviewtransaction.NewArtifactSubject(state, revision, frozen, lens, order, "")
+		var subject reviewtransaction.ArtifactSubject
+		var err error
+		if frozen.LegacyCandidateDiff != nil {
+			subject, err = reviewtransaction.NewLegacyArtifactSubject(state, revision, frozen, lens, order, "")
+		} else {
+			subject, err = reviewtransaction.NewArtifactSubject(state, revision, frozen, lens, order, "")
+		}
 		if err != nil {
 			return nil, fmt.Errorf("derive restart artifact subject %d: %w", order, err)
 		}

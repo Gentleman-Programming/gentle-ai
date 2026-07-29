@@ -3,7 +3,6 @@ import { spawn } from "node:child_process"
 
 const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-readability", "review-reliability"])
 const BINDING = /^GENTLE_AI_REVIEW_BINDING (\{[^\n]+\})(?:\n|$)/
-const FROZEN_CONTEXT = "GENTLE_AI_FROZEN_CANDIDATE_CONTEXT "
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
 
@@ -18,13 +17,40 @@ type ReviewBinding = {
 }
 
 interface ReviewArtifactSubject {
+  schema: string
   subject_hash: string
+  lineage_id: string
+  authority_revision: string
+  target_identity: string
+  base_tree: string
+  candidate_tree: string
+  changed_path_manifest_sha256: string
+  lens: string
+  selected_order: number
+}
+
+interface ChangedPathManifestEntry {
+  path: string
+  status: string
+  old_mode: string
+  new_mode: string
+  deleted: boolean
+  type_changed: boolean
+  mode_only: boolean
+  intended_untracked: boolean
 }
 
 interface ReviewCapturePreflight {
+  schema: string
+  capability: string
+  lineage_id: string
+  target_identity: string
+  lens: string
+  selected_order: number
   artifact_subject: ReviewArtifactSubject
-  candidate_diff: Record<string, unknown>
-  changed_path_manifest: Array<Record<string, unknown>>
+  base_tree: string
+  candidate_tree: string
+  changed_path_manifest: ChangedPathManifestEntry[]
 }
 
 function parseBinding(prompt: unknown, lens: string): ReviewBinding {
@@ -114,19 +140,21 @@ function repositoryBindingArgs(cwd: string, binding: ReviewBinding): string[] {
 }
 
 function captureResult(cwd: string, binding: ReviewBinding, result: string): Promise<string> {
+  const subjectArgs = binding.subject_hash ? ["--subject-hash", binding.subject_hash] : []
   return runNative(cwd, [
     "review", "capture-result", ...repositoryBindingArgs(cwd, binding),
     "--lineage", binding.lineage, "--target", binding.target,
-    "--lens", binding.lens, "--order", String(binding.order), "--input", "-",
+    "--lens", binding.lens, "--order", String(binding.order), ...subjectArgs, "--input", "-",
   ], result)
 }
 
 async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<ReviewCapturePreflight> {
   try {
+    const subjectArgs = binding.subject_hash ? ["--subject-hash", binding.subject_hash] : []
     const response = await runNative(cwd, [
       "review", "capture-result", ...repositoryBindingArgs(cwd, binding),
       "--lineage", binding.lineage, "--target", binding.target,
-      "--lens", binding.lens, "--order", String(binding.order), "--preflight",
+      "--lens", binding.lens, "--order", String(binding.order), ...subjectArgs, "--preflight",
     ], "")
     let parsed: unknown
     try {
@@ -139,10 +167,21 @@ async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<Re
     }
     const value = parsed as Record<string, unknown>
     const subject = value.artifact_subject as Record<string, unknown> | undefined
-    if (!subject || typeof subject.subject_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.subject_hash) ||
-        !value.candidate_diff || typeof value.candidate_diff !== "object" || Array.isArray(value.candidate_diff) ||
-        !Array.isArray(value.changed_path_manifest) || value.changed_path_manifest.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))) {
-      throw new Error("review capture preflight returned incomplete frozen candidate context")
+    const manifest = value.changed_path_manifest
+    if (!subject || subject.schema !== "gentle-ai.review-artifact-subject/v2" ||
+        typeof subject.subject_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.subject_hash) ||
+        typeof subject.authority_revision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.authority_revision) ||
+        typeof subject.base_tree !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(subject.base_tree) ||
+        typeof subject.candidate_tree !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(subject.candidate_tree) ||
+        typeof subject.changed_path_manifest_sha256 !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.changed_path_manifest_sha256) ||
+        subject.lineage_id !== binding.lineage || subject.target_identity !== binding.target ||
+        (binding.revision !== undefined && subject.authority_revision !== binding.revision) ||
+        subject.lens !== binding.lens || subject.selected_order !== binding.order ||
+        value.schema !== "gentle-ai.review-capture-preflight/v1" || value.capability !== "review.native_capture_preflight" ||
+        value.lineage_id !== binding.lineage || value.target_identity !== binding.target || value.lens !== binding.lens ||
+        value.selected_order !== binding.order || value.base_tree !== subject.base_tree || value.candidate_tree !== subject.candidate_tree ||
+        !validManifest(manifest)) {
+      throw new Error("review capture preflight returned an incomplete artifact subject")
     }
     if (binding.subject_hash && subject.subject_hash !== binding.subject_hash) {
       throw new Error("review capture preflight returned a different artifact subject")
@@ -165,20 +204,36 @@ async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<Re
   }
 }
 
-async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<string> {
-  if (prompt.includes(FROZEN_CONTEXT)) {
-    throw new Error("review task must not supply GENTLE_AI_FROZEN_CANDIDATE_CONTEXT")
+function validManifest(value: unknown): value is ChangedPathManifestEntry[] {
+  if (!Array.isArray(value)) return false
+  let previous = ""
+  for (const entry of value) {
+    if (!validManifestEntry(entry) ||
+        (previous !== "" && Buffer.compare(Buffer.from(previous, "utf8"), Buffer.from(entry.path, "utf8")) >= 0)) return false
+    previous = entry.path
   }
+  return true
+}
+
+function validManifestEntry(entry: unknown): entry is ChangedPathManifestEntry {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false
+  const value = entry as Record<string, unknown>
+  return Object.keys(value).sort().join(",") ===
+    "deleted,intended_untracked,mode_only,new_mode,old_mode,path,status,type_changed" &&
+    typeof value.path === "string" && value.path !== "" &&
+    typeof value.status === "string" && /^[ADMT]$/.test(value.status) &&
+    typeof value.old_mode === "string" && /^[0-7]{6}$/.test(value.old_mode) &&
+    typeof value.new_mode === "string" && /^[0-7]{6}$/.test(value.new_mode) &&
+    typeof value.deleted === "boolean" && typeof value.type_changed === "boolean" &&
+    typeof value.mode_only === "boolean" && typeof value.intended_untracked === "boolean"
+}
+
+async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<string> {
   const binding = parseBinding(prompt, lens)
   const preflight = await preflightCapture(cwd, binding)
   const injectedBinding = { ...binding, subject_hash: preflight.artifact_subject.subject_hash }
-  const boundPrompt = prompt.replace(BINDING, `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(injectedBinding)}\n`)
-  const frozen = JSON.stringify({
-    artifact_subject: preflight.artifact_subject,
-    candidate_diff: preflight.candidate_diff,
-    changed_path_manifest: preflight.changed_path_manifest,
-  })
-  return `${boundPrompt.trimEnd()}\n${FROZEN_CONTEXT}${frozen}`
+  return `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(injectedBinding)}\n` +
+    `GENTLE_AI_REVIEW_CONTEXT ${JSON.stringify(preflight)}\n`
 }
 
 function preserveResult(cwd: string, binding: ReviewBinding, raw: string, cls?: string): Promise<string> {
@@ -222,9 +277,30 @@ function gitTrustRefusal(binding: ReviewBinding, cause: unknown): boolean {
   return Boolean(binding.repository_context) && new RegExp(`\\b${GIT_TRUST_REFUSAL_CODE}\\b`).test(errorMessage(cause))
 }
 
+// ADMISSION_REJECTION matches the typed decision the native CLI emits when it
+// refused the reviewer RESULT itself (`reviewer artifact admission <decision>:`
+// from internal/cli/review_artifact.go). Only the [a-z_]+ decision token is
+// forwarded — never the native diagnostic, which can embed payload text — so
+// the opaque path keeps its rule that no native prose reaches the transcript.
+// Without this, an invalid result collapsed into "retry the same opaque
+// binding", advice that deterministically fails: recapturing identical bytes
+// can never satisfy admission, only a relaunched reviewer can.
+const ADMISSION_REJECTION = /\breviewer artifact admission ([a-z_]+):/
+
+function admissionRejection(cause: unknown): string | undefined {
+  const match = ADMISSION_REJECTION.exec(errorMessage(cause))
+  return match ? match[1] : undefined
+}
+
 function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string): string {
   if (!binding.repository_context) return errorMessage(cause)
   if (gitTrustRefusal(binding, cause)) return GIT_TRUST_REFUSAL_MESSAGE
+  const admission = admissionRejection(cause)
+  if (admission) {
+    return `${code}: native admission rejected the reviewer result as ${admission}; ` +
+      "retrying capture with the same result cannot succeed — relaunch this lens reviewer to produce a corrected result " +
+      "(severe findings must anchor to lines the frozen candidate actually changed)"
+  }
   return `${code}: provider-owned review operation failed; refresh the exact native next_transition or retry the same opaque binding`
 }
 

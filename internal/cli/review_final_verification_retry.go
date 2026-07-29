@@ -128,5 +128,5 @@ func runReviewRetryFinalVerification(ctx context.Context, args []string, stdout 
 	if err := result.Validate(); err != nil {
 		return err
 	}
-	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationRetryFinalVerification, result, result)
+	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationRetryFinalVerification, result, result, *contract)
 }

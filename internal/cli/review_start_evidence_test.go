@@ -286,7 +286,7 @@ func TestReviewFacadeStartNonEmptyCandidateWithoutLensesHasNoHint(t *testing.T) 
 
 // TestReviewFacadeStartLensesRequiredHintsNegotiatedContract proves the
 // unnegotiated summary is self-describing: when lenses are required, this
-// response cannot itself carry the frozen candidate_diff/changed_path_manifest
+// response cannot itself carry the frozen tree/changed_path_manifest
 // (that payload only exists on the negotiated form), so the hint must name
 // the exact --contract invocation — reusing this response's own
 // target_identity and projection — that returns it. This closes the reported
@@ -308,7 +308,7 @@ func TestReviewFacadeStartLensesRequiredHintsNegotiatedContract(t *testing.T) {
 	if !started.LensesRequired || len(started.SelectedLenses) == 0 {
 		t.Fatalf("service-token start lenses_required = %v, selected_lenses = %v, want lenses selected", started.LensesRequired, started.SelectedLenses)
 	}
-	wantCommand := fmt.Sprintf("gentle-ai review start --contract %s --target %s --projection %s", ReviewIntegrationContractV1, started.TargetIdentity, started.Projection)
+	wantCommand := fmt.Sprintf("gentle-ai review start --contract %s --target %s --projection %s", ReviewIntegrationContractV2, started.TargetIdentity, started.Projection)
 	if !strings.Contains(started.Hint, wantCommand) {
 		t.Fatalf("lenses-required start hint = %q, want it to contain %q", started.Hint, wantCommand)
 	}

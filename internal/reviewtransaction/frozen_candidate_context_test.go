@@ -3,9 +3,6 @@ package reviewtransaction
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,7 +50,13 @@ func TestFrozenCandidateContextUsesImmutableTreesAndCanonicalManifest(t *testing
 	if err != nil {
 		t.Fatalf("FrozenCandidateContext() error = %v", err)
 	}
-	baselineDiff := frozenCandidateDiffBytes(t, baseline.CandidateDiff)
+	if baseline.BaseTree != snapshot.BaseTree || baseline.CandidateTree != snapshot.CandidateTree {
+		t.Fatalf("frozen trees = %s..%s, want %s..%s", baseline.BaseTree, baseline.CandidateTree, snapshot.BaseTree, snapshot.CandidateTree)
+	}
+	baselineDiff := frozenCandidatePathDiff(t, repo, baseline)
+	if wholeDiff := frozenCandidateGitDiff(t, repo, baseline, ""); !bytes.Equal(baselineDiff, wholeDiff) {
+		t.Fatalf("ordered path-scoped diffs do not reconstruct the canonical tree diff\npaths=%s\nwhole=%s", baselineDiff, wholeDiff)
+	}
 
 	want := []ChangedPathManifestEntry{
 		{Path: "added.txt", Status: CandidatePathAdded, OldMode: "000000", NewMode: "100644"},
@@ -111,6 +114,9 @@ func TestFrozenCandidateContextUsesImmutableTreesAndCanonicalManifest(t *testing
 	if !reflect.DeepEqual(replayed, baseline) {
 		t.Fatalf("replayed context changed after hostile config/workspace mutation\nfirst=%#v\nreplayed=%#v", baseline, replayed)
 	}
+	if replayedDiff := frozenCandidatePathDiff(t, repo, replayed); !bytes.Equal(replayedDiff, baselineDiff) {
+		t.Fatalf("path-scoped tree diff changed after live mutation\nfirst=%s\nreplayed=%s", baselineDiff, replayedDiff)
+	}
 }
 
 func TestFrozenCandidateContextMarksIntendedUntrackedAndSupportsEmptyCandidate(t *testing.T) {
@@ -134,7 +140,7 @@ func TestFrozenCandidateContextMarksIntendedUntrackedAndSupportsEmptyCandidate(t
 		if !reflect.DeepEqual(contextResult.ChangedPathManifest, want) {
 			t.Fatalf("manifest = %#v, want %#v", contextResult.ChangedPathManifest, want)
 		}
-		if diff := frozenCandidateDiffBytes(t, contextResult.CandidateDiff); !bytes.Contains(diff, []byte("+reviewed untracked")) {
+		if diff := frozenCandidatePathDiff(t, repo, contextResult); !bytes.Contains(diff, []byte("+reviewed untracked")) {
 			t.Fatalf("candidate diff does not contain intended-untracked bytes:\n%s", diff)
 		}
 	})
@@ -151,13 +157,114 @@ func TestFrozenCandidateContextMarksIntendedUntrackedAndSupportsEmptyCandidate(t
 		if err != nil {
 			t.Fatalf("FrozenCandidateContext() error = %v", err)
 		}
-		if diff := frozenCandidateDiffBytes(t, contextResult.CandidateDiff); len(diff) != 0 {
+		if diff := frozenCandidatePathDiff(t, repo, contextResult); len(diff) != 0 {
 			t.Fatalf("empty candidate diff = %q", diff)
 		}
 		if contextResult.ChangedPathManifest == nil || len(contextResult.ChangedPathManifest) != 0 {
 			t.Fatalf("empty manifest = %#v, want non-nil []", contextResult.ChangedPathManifest)
 		}
 	})
+}
+
+func TestFrozenCandidateReviewerDiffUsesLiteralManifestPaths(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	paths := []string{
+		"literal*.txt", "literal-one.txt",
+		"literal?.txt", "literal1.txt",
+		"literal[1].txt", ":(top)magic.txt", "magic.txt",
+	}
+	for _, version := range []string{"base", "candidate"} {
+		for _, logicalPath := range paths {
+			blob := strings.TrimSpace(gitSnapshotInput(t, repo, []byte(version+" "+logicalPath+"\n"), "hash-object", "-w", "--stdin"))
+			gitSnapshot(t, repo, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+logicalPath)
+		}
+		gitSnapshot(t, repo, "commit", "-m", version)
+	}
+	candidateCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetExactRevision, Revision: candidateCommit,
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	frozen, err := (SnapshotBuilder{Repo: repo}).FrozenCandidateContext(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("FrozenCandidateContext() error = %v", err)
+	}
+	if len(frozen.ChangedPathManifest) != len(paths) {
+		t.Fatalf("manifest has %d paths, want %d: %#v", len(frozen.ChangedPathManifest), len(paths), frozen.ChangedPathManifest)
+	}
+	for _, entry := range frozen.ChangedPathManifest {
+		scoped := frozenCandidateGitDiff(t, repo, frozen, entry.Path)
+		if count := bytes.Count(scoped, []byte("diff --git ")); count != 1 {
+			t.Fatalf("literal path %q rendered %d diffs:\n%s", entry.Path, count, scoped)
+		}
+		if !bytes.Contains(scoped, []byte("+candidate "+entry.Path)) {
+			t.Fatalf("literal path %q selected different candidate bytes:\n%s", entry.Path, scoped)
+		}
+	}
+	if scoped, whole := frozenCandidatePathDiff(t, repo, frozen), frozenCandidateGitDiff(t, repo, frozen, ""); !bytes.Equal(scoped, whole) {
+		t.Fatalf("literal path-scoped diffs do not reconstruct the whole tree diff\npaths=%s\nwhole=%s", scoped, whole)
+	}
+}
+
+func TestFrozenCandidateReviewerDiffIgnoresMutableAttributeSources(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "attribute-target.txt", "base\n")
+	gitSnapshot(t, repo, "add", "--", "attribute-target.txt")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+	writeSnapshotFile(t, repo, "attribute-target.txt", "candidate\n")
+	gitSnapshot(t, repo, "add", "--", "attribute-target.txt")
+	gitSnapshot(t, repo, "commit", "-m", "candidate")
+	candidateCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetExactRevision, Revision: candidateCommit,
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	frozen, err := (SnapshotBuilder{Repo: repo}).FrozenCandidateContext(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("FrozenCandidateContext() error = %v", err)
+	}
+	baseline := frozenCandidateGitDiff(t, repo, frozen, "attribute-target.txt")
+	if !bytes.Contains(baseline, []byte("+candidate")) || bytes.Contains(baseline, []byte("GIT binary patch")) {
+		t.Fatalf("baseline reviewer diff is not canonical text:\n%s", baseline)
+	}
+
+	attributes := filepath.Join(t.TempDir(), "attributes")
+	if err := os.WriteFile(attributes, []byte("attribute-target.txt binary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitSnapshot(t, repo, "config", "core.attributesFile", attributes)
+	for _, config := range []string{"global.gitconfig", "system.gitconfig"} {
+		path := filepath.Join(t.TempDir(), config)
+		writeFrozenCandidateHostileGitConfig(t, path, attributes)
+		if strings.HasPrefix(config, "global") {
+			t.Setenv("GIT_CONFIG_GLOBAL", path)
+		} else {
+			t.Setenv("GIT_CONFIG_SYSTEM", path)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".git", "info", "attributes"), []byte("attribute-target.txt binary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSnapshotFile(t, repo, ".gitattributes", "attribute-target.txt binary\n")
+	t.Setenv("GIT_ATTR_SOURCE", "HEAD")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.attributesFile")
+	t.Setenv("GIT_CONFIG_VALUE_0", attributes)
+
+	replayed := frozenCandidateGitDiff(t, repo, frozen, "attribute-target.txt")
+	if !bytes.Equal(replayed, baseline) {
+		t.Fatalf("reviewer tree diff changed under mutable Git attributes\nfirst=%s\nreplayed=%s", baseline, replayed)
+	}
+	porcelain := frozenCandidatePorcelainGitDiff(t, repo, frozen, "attribute-target.txt")
+	if bytes.Equal(porcelain, baseline) || !bytes.Contains(porcelain, []byte("GIT binary patch")) {
+		t.Fatalf("hostile attributes did not exercise the porcelain regression:\n%s", porcelain)
+	}
 }
 
 func TestFrozenCandidateContextIsolatesAllGitAttributesConfigAndLocale(t *testing.T) {
@@ -187,11 +294,6 @@ func TestFrozenCandidateContextIsolatesAllGitAttributesConfigAndLocale(t *testin
 	if err != nil {
 		t.Fatalf("DiffStats() error = %v", err)
 	}
-	baselineBytes := frozenCandidateDiffBytes(t, baseline.CandidateDiff)
-	if !bytes.Contains(baselineBytes, []byte("-base\n+candidate\n")) || bytes.Contains(baselineBytes, []byte("GIT binary patch")) {
-		t.Fatalf("committed attributes influenced isolated diff:\n%s", baselineBytes)
-	}
-
 	globalAttributes := filepath.Join(t.TempDir(), "global-attributes")
 	if err := os.WriteFile(globalAttributes, []byte("attribute-target.txt binary\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -263,66 +365,6 @@ func writeFrozenCandidateHostileGitConfig(t *testing.T, path, attributesFile str
 	}
 }
 
-func TestFrozenCandidateContextPreservesInvalidUTF8PatchBytesAcrossJSON(t *testing.T) {
-	requireSnapshotGit(t)
-	repo := initSnapshotRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "invalid.txt"), []byte("base\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	gitSnapshot(t, repo, "add", "--", "invalid.txt")
-	gitSnapshot(t, repo, "commit", "-m", "base")
-	if err := os.WriteFile(filepath.Join(repo, "invalid.txt"), []byte{'c', 'a', 'n', 'd', 0xff, '\n'}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	gitSnapshot(t, repo, "add", "--", "invalid.txt")
-	gitSnapshot(t, repo, "commit", "-m", "candidate")
-	candidateCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
-	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
-		Kind: TargetExactRevision, Revision: candidateCommit,
-	})
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-
-	contextResult, err := (SnapshotBuilder{Repo: repo}).FrozenCandidateContext(context.Background(), snapshot)
-	if err != nil {
-		t.Fatalf("FrozenCandidateContext() error = %v", err)
-	}
-	wantBytes := frozenCandidateDiffBytes(t, contextResult.CandidateDiff)
-	if !bytes.Contains(wantBytes, []byte{0xff}) {
-		t.Fatalf("candidate diff lost invalid UTF-8 byte: %x", wantBytes)
-	}
-	payload, err := json.Marshal(contextResult.CandidateDiff)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var roundTrip FrozenCandidateDiff
-	if err := json.Unmarshal(payload, &roundTrip); err != nil {
-		t.Fatal(err)
-	}
-	if got := frozenCandidateDiffBytes(t, roundTrip); !bytes.Equal(got, wantBytes) {
-		t.Fatalf("JSON round trip changed patch bytes\nwant=%x\ngot=%x", wantBytes, got)
-	}
-}
-
-func TestFrozenCandidateDiffCaptureAndMetadataEnforceRawByteLimit(t *testing.T) {
-	requireSnapshotGit(t)
-	if got := base64.StdEncoding.EncodedLen(MaxFrozenCandidateDiffBytes); got != MaxFrozenCandidateDiffBase64Bytes {
-		t.Fatalf("encoded max = %d, want %d", got, MaxFrozenCandidateDiffBase64Bytes)
-	}
-	repo := initSnapshotRepo(t)
-	blob := bytes.Repeat([]byte("bounded-output\n"), 64)
-	oid := strings.TrimSpace(gitSnapshotInput(t, repo, blob, "hash-object", "-w", "--stdin"))
-	_, err := runGitLimited(context.Background(), repo, nil, nil, 64, "cat-file", "blob", oid)
-	var limitErr *GitOutputLimitError
-	if !errors.As(err, &limitErr) || limitErr.Limit != 64 {
-		t.Fatalf("runGitLimited() error = %v, want 64-byte GitOutputLimitError", err)
-	}
-	if _, err := NewFrozenCandidateDiff(make([]byte, MaxFrozenCandidateDiffBytes+1)); !errors.As(err, &limitErr) || limitErr.Limit != MaxFrozenCandidateDiffBytes {
-		t.Fatalf("NewFrozenCandidateDiff() error = %v, want max-size rejection", err)
-	}
-}
-
 func TestFrozenCandidateContextRejectsSnapshotMetadataMismatch(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
@@ -358,11 +400,48 @@ func manifestPaths(entries []ChangedPathManifestEntry) []string {
 	return paths
 }
 
-func frozenCandidateDiffBytes(t *testing.T, diff FrozenCandidateDiff) []byte {
+func frozenCandidatePathDiff(t *testing.T, repo string, frozen FrozenCandidateContext) []byte {
 	t.Helper()
-	payload, err := diff.Bytes()
-	if err != nil {
-		t.Fatalf("candidate diff metadata = %#v: %v", diff, err)
+	var payload []byte
+	for _, entry := range frozen.ChangedPathManifest {
+		payload = append(payload, frozenCandidateGitDiff(t, repo, frozen, entry.Path)...)
 	}
 	return payload
+}
+
+func frozenCandidateGitDiff(t *testing.T, repo string, frozen FrozenCandidateContext, logicalPath string) []byte {
+	t.Helper()
+	isolation, cleanup, err := isolatedImmutableTreeGit(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("create isolated reviewer Git environment: %v", err)
+	}
+	t.Cleanup(cleanup)
+	args := []string{
+		"--no-pager", "diff-tree", "-p", "--binary", "--full-index", "--no-color", "--no-renames",
+		"--no-ext-diff", "--no-textconv", "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=3",
+		"--ignore-submodules=none", "--src-prefix=a/", "--dst-prefix=b/", frozen.BaseTree, frozen.CandidateTree, "--",
+	}
+	if logicalPath != "" {
+		args = append(args, ":(literal)"+logicalPath)
+	}
+	output, err := runGitIsolated(context.Background(), repo, isolation, nil, args...)
+	if err != nil {
+		t.Fatalf("isolated git path-scoped diff %q: %v\n%s", logicalPath, err, output)
+	}
+	return output
+}
+
+func frozenCandidatePorcelainGitDiff(t *testing.T, repo string, frozen FrozenCandidateContext, logicalPath string) []byte {
+	t.Helper()
+	args := []string{
+		"-C", repo, "--no-pager", "diff", "--binary", "--full-index", "--no-color", "--no-renames",
+		"--no-ext-diff", "--no-textconv", "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=3",
+		"--ignore-submodules=none", "--src-prefix=a/", "--dst-prefix=b/", frozen.BaseTree, frozen.CandidateTree, "--",
+		":(literal)" + logicalPath,
+	}
+	output, err := exec.Command("git", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git porcelain path-scoped diff %q: %v\n%s", logicalPath, err, output)
+	}
+	return output
 }

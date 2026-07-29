@@ -122,18 +122,19 @@ const ReviewStartConsentDeclinedThisCandidate = "declined_this_candidate"
 const reviewStartEmptyCandidateHint = "the candidate has no pending changes; already-committed work can be reviewed by rerunning review start with --base-ref <commit> naming the base to compare against"
 
 // reviewStartNegotiateContractHint makes the negotiated contract path
-// discoverable from the plain START response. It transports the frozen target
-// selector as well as its identity so the rerun rebuilds the same authority.
+// discoverable from the plain START response. It transports the immutable Git
+// trees and preserves the frozen target selector so the rerun rebuilds the same
+// authority.
 func reviewStartNegotiateContractHint(snapshot reviewtransaction.Snapshot) string {
 	command := fmt.Sprintf("gentle-ai review start --contract %s --target %s --projection %s",
-		ReviewIntegrationContractV1, snapshot.Identity, facadeProjection(snapshot.Projection))
+		ReviewIntegrationContractV2, snapshot.Identity, facadeProjection(snapshot.Projection))
 	switch snapshot.Kind {
 	case reviewtransaction.TargetBaseDiff:
 		command += " --base-ref " + snapshot.BaseTree + " --committed-only"
 	case reviewtransaction.TargetBaseWorkspaceOverlay:
 		command += " --base-ref " + snapshot.BaseTree + " --workspace-overlay"
 	}
-	return "this response's selected lenses require the frozen candidate diff, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `" + command + "` to receive them"
+	return "this response's selected lenses require the frozen Git trees, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `" + command + "` to receive them"
 }
 
 // ReviewFacadeLensBinding pairs one selected lens with its frozen zero-based
@@ -794,7 +795,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if selectedBaseTree != "" && native.Projection.BaseTree != selectedBaseTree {
 			return errors.New("--base-tree does not identify an exact Git tree object")
 		}
-		result := newReviewTargetStatusResult(native)
+		result := newReviewTargetStatusResultForContract(native, *contract)
 		if native.Applicability == reviewtransaction.TargetApplicabilityCorrupted &&
 			native.Action == reviewtransaction.TargetStatusActionRepairAuthority {
 			repair, repairErr := reviewtransaction.AssessAuthorityRepairAtRepositoryRoot(ctx, root)
@@ -860,7 +861,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
 							})
 							if artifactErr == nil {
-								frozen, frozenErr := (reviewtransaction.SnapshotBuilder{Repo: root}).FrozenCandidateContext(ctx, record.State.InitialSnapshot)
+								contextBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
+								frozen, frozenErr := contextBuilder.FrozenCandidateContext(ctx, record.State.InitialSnapshot)
+								if frozenErr == nil && *contract == ReviewIntegrationContractV1 {
+									frozen, frozenErr = contextBuilder.WithLegacyCandidateDiff(ctx, record.State.InitialSnapshot, frozen)
+								}
 								if frozenErr != nil {
 									artifactErr = frozenErr
 								} else {
@@ -1239,7 +1244,7 @@ func runReviewBindSDD(ctx context.Context, args []string, stdout io.Writer) erro
 	if err != nil {
 		return err
 	}
-	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationBindSDD, binding, binding)
+	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationBindSDD, binding, binding, *contract)
 }
 
 func RunReviewInvalidate(args []string, stdout io.Writer) error {
@@ -1501,7 +1506,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			question, questionErr := newReviewIntegrationConsentResult(snapshot, assessment,
 				reviewConsentFollowUpBase(*cwd, snapshot.Identity, selectedProjection, strings.TrimSpace(*lineage),
 					strings.TrimSpace(*baseRef), strings.TrimSpace(*policySource), strings.TrimSpace(*focus),
-					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay))
+					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract), *contract)
 			if questionErr != nil {
 				return questionErr
 			}
@@ -1556,7 +1561,11 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// produce. The render is the same bounded Git capture STATUS would run
 	// anyway, so a candidate that starts here is a candidate STATUS can answer.
 	if len(state.SelectedLenses) > 0 {
-		contextResult, contextErr := renderReviewStartFrozenCandidateContext(ctx, reviewtransaction.SnapshotBuilder{Repo: root}, state.InitialSnapshot)
+		contextBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
+		contextResult, contextErr := renderReviewStartFrozenCandidateContext(ctx, contextBuilder, state.InitialSnapshot)
+		if contextErr == nil && *contract == ReviewIntegrationContractV1 {
+			contextResult, contextErr = contextBuilder.WithLegacyCandidateDiff(ctx, state.InitialSnapshot, contextResult)
+		}
 		if contextErr != nil {
 			requestedContextErr = &reviewStartContextError{LineageID: state.LineageID, Cause: contextErr}
 		} else {
@@ -1584,7 +1593,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	if negotiated && requestedContextErr == nil {
 		preview := reviewFacadeStartResultFor(reviewtransaction.CompactStartCreated, len(state.SelectedLenses) > 0, state)
-		if _, previewErr := newReviewIntegrationStartResult(preview, assessment, state.InitialSnapshot.Kind, requestedFrozenContext, requestedRepositoryContext); previewErr != nil {
+		if _, previewErr := newReviewIntegrationStartResult(preview, assessment, state.InitialSnapshot.Kind, requestedFrozenContext, requestedRepositoryContext, *contract); previewErr != nil {
 			requestedContextErr = &reviewStartContextError{LineageID: state.LineageID, Cause: previewErr}
 		}
 	}
@@ -1643,7 +1652,11 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		if authority.InitialSnapshot.Identity == state.InitialSnapshot.Identity && requestedFrozenContext != nil {
 			frozenContext = requestedFrozenContext
 		} else {
-			contextResult, contextErr := renderReviewStartFrozenCandidateContext(ctx, reviewtransaction.SnapshotBuilder{Repo: root}, authority.InitialSnapshot)
+			contextBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
+			contextResult, contextErr := renderReviewStartFrozenCandidateContext(ctx, contextBuilder, authority.InitialSnapshot)
+			if contextErr == nil && *contract == ReviewIntegrationContractV1 {
+				contextResult, contextErr = contextBuilder.WithLegacyCandidateDiff(ctx, authority.InitialSnapshot, contextResult)
+			}
 			if contextErr != nil {
 				return &reviewStartContextError{
 					AuthoritySelected: true, LineageID: authority.LineageID, StoreRevision: started.Record.Revision, Cause: contextErr,
@@ -1669,7 +1682,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			TargetIdentity: authority.InitialSnapshot.Identity,
 		}
 	}
-	negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment, authority.InitialSnapshot.Kind, frozenContext, repositoryContext)
+	negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment, authority.InitialSnapshot.Kind, frozenContext, repositoryContext, *contract)
 	if err != nil {
 		return &reviewStartContextError{
 			AuthoritySelected: true, LineageID: authority.LineageID, StoreRevision: started.Record.Revision, Cause: err,
@@ -1828,10 +1841,11 @@ func reviewConsentFollowUpBase(
 	projection reviewtransaction.Projection,
 	lineage, baseRef, policy, focus, trace string,
 	committedOnly, workspaceOverlay bool,
+	contract string,
 ) string {
 	parts := []string{
 		"gentle-ai review start",
-		"--contract " + ReviewIntegrationContractV1,
+		"--contract " + contract,
 		"--cwd " + cwd,
 		"--target " + target,
 		"--projection " + string(projection),
@@ -2184,7 +2198,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		if err := reviewFacadeSyncDirectory(filepath.Dir(store.FinalizeAttemptJournalPath())); err != nil {
 			return fmt.Errorf("sync completed finalize journal directory: %w", err)
 		}
-		return encodeCompactFacadeFinalize(stdout, negotiated, *actionEligibility, *nextTransition, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>", reviewFinalizeOutputContext{Context: ctx, Repo: root})
+		return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>", reviewFinalizeOutputContext{Context: ctx, Repo: root})
 	}
 	var attempt reviewtransaction.FinalizeAttempt
 	attemptLoaded := false
@@ -2211,7 +2225,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 				if err := store.CompleteFinalizeAttempt(attempt.Request.RequestDigest); err != nil {
 					return err
 				}
-				return encodeCompactFacadeFinalize(stdout, negotiated, *actionEligibility, *nextTransition, state, record.Revision, store, "continue the current review state", reviewFinalizeOutputContext{Context: ctx, Repo: root})
+				return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "continue the current review state", reviewFinalizeOutputContext{Context: ctx, Repo: root})
 			}
 		}
 	}
@@ -2249,7 +2263,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		if plan.CapturedEvidence != nil {
 			outputContext.CapturedEvidence = &plan.CapturedEvidence.Record
 		}
-		return encodeCompactFacadeFinalize(stdout, negotiated, *actionEligibility, *nextTransition, state, record.Revision, store, "continue the current review state", outputContext)
+		return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "continue the current review state", outputContext)
 	}
 	request := facadeFinalizeAttemptRequestForCandidate(record, plan.Candidate, reviewerResults, validation, refuter, plan.Evidence, *correctionLines, effectiveFailed, plan.CapturedEvidence)
 	if !terminalAtEntry && pendingAtEntry != nil && !attemptLoaded {
@@ -2311,10 +2325,10 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	}
 
 	if state.State != reviewtransaction.StateApproved && state.State != reviewtransaction.StateEscalated {
-		return encodeCompactFacadeFinalize(stdout, negotiated, *actionEligibility, *nextTransition, state, record.Revision, store, "continue the current review state", reviewFinalizeOutputContext{Context: ctx, Repo: root})
+		return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "continue the current review state", reviewFinalizeOutputContext{Context: ctx, Repo: root})
 	}
 	if terminalAtEntry && terminalReceiptExists {
-		return encodeCompactFacadeFinalize(stdout, negotiated, *actionEligibility, *nextTransition, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>", reviewFinalizeOutputContext{Context: ctx, Repo: root})
+		return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>", reviewFinalizeOutputContext{Context: ctx, Repo: root})
 	}
 	receipt := terminalReceipt
 	if !terminalAtEntry {
@@ -2336,7 +2350,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	if err := store.MarkFinalizeAttemptReceiptPublished(requestDigest); err != nil {
 		return err
 	}
-	return encodeCompactFacadeFinalize(stdout, negotiated, *actionEligibility, *nextTransition, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>", reviewFinalizeOutputContext{Context: ctx, Repo: root})
+	return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>", reviewFinalizeOutputContext{Context: ctx, Repo: root})
 }
 
 func facadeFinalizeTransitionIndex(attempt *reviewtransaction.FinalizeAttempt, revision string) int {
@@ -2674,7 +2688,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 				Result:  reviewtransaction.GateAllow,
 				Reason:  reviewEmptyPublicationRangeReason,
 				Context: reviewtransaction.GateContext{Gate: gateInput.Gate},
-			}, negotiated)
+			}, negotiated, *contract)
 		}
 	}
 	compactStore, compactRecord, compactErr := discoverCompactFacadeGateReview(ctx, root, *lineage, gateInput)
@@ -2697,7 +2711,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 			// operator turns reviews back on and resolves it.
 			mixed := &ReviewReceiptDiscoveryError{Kind: ReviewReceiptAmbiguous, Detail: errReviewMixedCompactLegacyAuthority.Error()}
 			if reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
-				return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, mixed, negotiated)
+				return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, mixed, negotiated, *contract)
 			}
 			return errReviewMixedCompactLegacyAuthority
 		}
@@ -2716,16 +2730,16 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		if gateInput.Gate == reviewtransaction.GatePrePR && strings.TrimSpace(*lineage) == "" &&
 			evaluation.Context.Denial != nil && evaluation.Context.Denial.Stage == "receipt-binding" && evaluation.Context.Denial.Code == "base-mismatch" {
 			if composed, attempted := reviewtransaction.EvaluateCompactPrePRChain(ctx, root, gateInput); attempted {
-				return emitFacadeGateEvaluationNegotiated(stdout, composed, negotiated)
+				return emitFacadeGateEvaluationNegotiated(stdout, composed, negotiated, *contract)
 			}
 		}
-		return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated)
+		return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 	}
 	var compactDiscovery *ReviewReceiptDiscoveryError
 	if gateInput.Gate == reviewtransaction.GatePrePR && strings.TrimSpace(*lineage) == "" &&
 		errors.As(compactErr, &compactDiscovery) && compactDiscovery.Kind != ReviewAuthorityCorrupted && compactDiscovery.Kind != ReviewReceiptMissing {
 		if evaluation, attempted := reviewtransaction.EvaluateCompactPrePRChain(ctx, root, gateInput); attempted {
-			return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated)
+			return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 		}
 	}
 	// The kill switch is consulted BEFORE the negotiation branch and for every
@@ -2750,7 +2764,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	}
 	if disabledDiscovery != nil &&
 		reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
-		return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, disabledDiscovery, negotiated)
+		return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, disabledDiscovery, negotiated, *contract)
 	}
 	if !negotiated {
 		if targetResolution != nil {
@@ -2759,7 +2773,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 				Context: reviewtransaction.GateContext{
 					Gate: gateInput.Gate, Denial: &reviewtransaction.GateDenial{Stage: "target-resolution", Code: "target_resolution_failed"},
 				},
-			}, false)
+			}, false, "")
 		}
 		var discovery *ReviewReceiptDiscoveryError
 		if errors.As(compactErr, &discovery) {
@@ -2778,7 +2792,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 			}
 			return emitFacadeGateEvaluationNegotiated(stdout, reviewtransaction.NativeGateEvaluation{
 				Result: result, Reason: reason, Context: context,
-			}, false)
+			}, false, "")
 		}
 	}
 
@@ -2805,7 +2819,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	for _, path := range tx.Snapshot.IntendedUntracked {
 		validateArgs = append(validateArgs, "--intended-untracked", path)
 	}
-	return runFacadeLegacyValidateNegotiated(ctx, validateArgs, stdout, negotiated)
+	return runFacadeLegacyValidateNegotiated(ctx, validateArgs, stdout, negotiated, *contract)
 }
 
 func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, input reviewtransaction.NativeGateRequestInput) (reviewtransaction.CompactStore, reviewtransaction.CompactRecord, error) {
@@ -3560,7 +3574,7 @@ type reviewFinalizeOutputContext struct {
 	CapturedEvidence *reviewtransaction.VerificationEvidenceRecord
 }
 
-func encodeCompactFacadeFinalize(stdout io.Writer, negotiated, actionEligibility, nextTransition bool, state reviewtransaction.CompactState, revision string, store reviewtransaction.CompactStore, action string, contexts ...reviewFinalizeOutputContext) error {
+func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract string, actionEligibility, nextTransition bool, state reviewtransaction.CompactState, revision string, store reviewtransaction.CompactStore, action string, contexts ...reviewFinalizeOutputContext) error {
 	var validationRequest *reviewtransaction.TargetedValidationRequest
 	var captureContext *reviewCaptureContext
 	var capturedEvidence *reviewtransaction.VerificationEvidenceRecord
@@ -3653,7 +3667,7 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated, actionEligibility
 		Action: result.Action, Escalation: result.Escalation, StoreRevision: result.StoreRevision,
 		Eligibility: eligibility, NextTransition: transition, ValidationRequest: validationRequest,
 	}
-	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationFinalize, result, public)
+	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationFinalize, result, public, contract)
 }
 
 func rejectFacadeCorrectionUntracked(ctx context.Context, repo string, state reviewtransaction.CompactState) error {
@@ -3750,7 +3764,7 @@ func reviewDisabledUnmanagedDeliveryReason(discovery *ReviewReceiptDiscoveryErro
 // still fails closed is an unreadable KILL SWITCH — reviewDeliveryDisposition
 // treats an unresolvable mode as managed — so a tampered or broken mode record
 // can never manufacture this disposition.
-func emitDisabledUnmanagedDelivery(stdout io.Writer, gate reviewtransaction.GateKind, discovery *ReviewReceiptDiscoveryError, negotiated bool) error {
+func emitDisabledUnmanagedDelivery(stdout io.Writer, gate reviewtransaction.GateKind, discovery *ReviewReceiptDiscoveryError, negotiated bool, contract string) error {
 	context := reviewtransaction.GateContext{
 		Gate:   gate,
 		Denial: &reviewtransaction.GateDenial{Stage: "receipt-discovery", Code: string(discovery.Kind)},
@@ -3765,14 +3779,14 @@ func emitDisabledUnmanagedDelivery(stdout io.Writer, gate reviewtransaction.Gate
 		Delivery: reviewtransaction.RDDDeliveryDisabledUnmanaged,
 		Context:  context,
 	}
-	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationValidate, result, result)
+	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationValidate, result, result, contract)
 }
 
 func emitFacadeGateEvaluation(stdout io.Writer, evaluation reviewtransaction.NativeGateEvaluation) error {
-	return emitFacadeGateEvaluationNegotiated(stdout, evaluation, false)
+	return emitFacadeGateEvaluationNegotiated(stdout, evaluation, false, "")
 }
 
-func emitFacadeGateEvaluationNegotiated(stdout io.Writer, evaluation reviewtransaction.NativeGateEvaluation, negotiated bool) error {
+func emitFacadeGateEvaluationNegotiated(stdout io.Writer, evaluation reviewtransaction.NativeGateEvaluation, negotiated bool, contract string) error {
 	if err := reviewGateContentionError(evaluation); err != nil {
 		return err
 	}
@@ -3780,7 +3794,7 @@ func emitFacadeGateEvaluationNegotiated(stdout io.Writer, evaluation reviewtrans
 		Schema: ReviewValidateSchema, Result: evaluation.Result, Allowed: evaluation.Result == reviewtransaction.GateAllow,
 		Action: reviewGateAction(evaluation.Result), Reason: evaluation.Reason, Context: evaluation.Context,
 	}
-	if err := encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationValidate, result, result); err != nil {
+	if err := encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationValidate, result, result, contract); err != nil {
 		return err
 	}
 	if !result.Allowed {
@@ -3789,7 +3803,7 @@ func emitFacadeGateEvaluationNegotiated(stdout io.Writer, evaluation reviewtrans
 	return nil
 }
 
-func runFacadeLegacyValidateNegotiated(ctx context.Context, args []string, stdout io.Writer, negotiated bool) error {
+func runFacadeLegacyValidateNegotiated(ctx context.Context, args []string, stdout io.Writer, negotiated bool, contract string) error {
 	if !negotiated {
 		return runReviewValidate(ctx, args, stdout)
 	}
@@ -3802,7 +3816,7 @@ func runFacadeLegacyValidateNegotiated(ctx context.Context, args []string, stdou
 	if err := decodeStrictReviewIntegrationResult(output.Bytes(), &result); err != nil {
 		return err
 	}
-	if err := encodeReviewIntegrationOperation(stdout, true, ReviewIntegrationOperationValidate, result, result); err != nil {
+	if err := encodeReviewIntegrationOperation(stdout, true, ReviewIntegrationOperationValidate, result, result, contract); err != nil {
 		return err
 	}
 	return runErr

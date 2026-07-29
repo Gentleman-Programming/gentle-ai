@@ -12,18 +12,26 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-func TestReviewProviderArtifactV1ContractsRemainByteIdentical(t *testing.T) {
+func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
 	want := map[string]string{
-		"fixtures/start.fixture.json":            "f369160ac26eb3427b57de2dd01c9d8c81e51c8a2bd546446780129d31b1945b",
-		"fixtures/status.fixture.json":           "555054d8046a896162995dcb117752f9cd1ef903fb9ebaad29af1b7e7f319bb3",
-		"fixtures/status-ambiguous.fixture.json": "ee695fd58ba72adfb3b51dfd16432a177498173a45bfcb594d6bdc53bfa32e6e",
-		"fixtures/status-corrupted.fixture.json": "4cfc0048c28a39cec8a32fecfaad66e56e5c1248263ceb4ce66b6717981880b2",
-		"fixtures/status-recover.fixture.json":   "714f762f72380ce93d567626cafbaa536ab3aae02af73d3d40ca123f1f30d8b0",
-		"fixtures/status-unrelated.fixture.json": "deab36c877ced3c9b480ca33724c10d88f75c761d6426fa14be850345122891d",
-		"schemas/result-artifact.schema.json":    "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
-		"schemas/start.schema.json":              "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
-		"schemas/status.schema.json":             "67f3bddf5f5feeb3213bce489de8548546163b2e1d49a0e3965c0091dabc8c39",
+		"fixtures/capabilities-v1.4.fixture.json": "84e0db457b76b97b35c2be772dfc647f9eab66810ea98f64fed85645c3c266ba",
+		"fixtures/start.fixture.json":             "f369160ac26eb3427b57de2dd01c9d8c81e51c8a2bd546446780129d31b1945b",
+		"fixtures/start-v2.fixture.json":          "388c7c21374b89afe2d42d64bd1987d17ec0e2c7151cab1c56a08969ffb2ea0e",
+		"fixtures/status.fixture.json":            "555054d8046a896162995dcb117752f9cd1ef903fb9ebaad29af1b7e7f319bb3",
+		"fixtures/status-v2.fixture.json":         "5410d8bbae1b7152a43b3a5c4c880e9e98a5e47b76d910456f5ef13f19836f3a",
+		"fixtures/status-ambiguous.fixture.json":  "ee695fd58ba72adfb3b51dfd16432a177498173a45bfcb594d6bdc53bfa32e6e",
+		"fixtures/status-corrupted.fixture.json":  "4cfc0048c28a39cec8a32fecfaad66e56e5c1248263ceb4ce66b6717981880b2",
+		"fixtures/status-recover.fixture.json":    "714f762f72380ce93d567626cafbaa536ab3aae02af73d3d40ca123f1f30d8b0",
+		"fixtures/status-unrelated.fixture.json":  "deab36c877ced3c9b480ca33724c10d88f75c761d6426fa14be850345122891d",
+		"schemas/admitted-result.schema.json":     "7796e8dbba331434594108c902dfab7ec46f691fa447a9259a78f2448111b0de",
+		"schemas/artifact-subject.schema.json":    "f7dcd934e27e8f3735a37f3d0ec8048dd8ccc1811b9df61124a1dcbf8a03f40e",
+		"schemas/capabilities-v1.4.schema.json":   "926b61c8ac0f870f09214f6bd8af1b035c5b72f14f0b83c0d4a7bdbb277f5447",
+		"schemas/result-artifact.schema.json":     "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
+		"schemas/start.schema.json":               "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
+		"schemas/start-v2.schema.json":            "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
+		"schemas/status.schema.json":              "67f3bddf5f5feeb3213bce489de8548546163b2e1d49a0e3965c0091dabc8c39",
+		"schemas/status-v2.schema.json":           "63e8988ce276d948ea8305008a3d27c4e26dff664cf54fffed9e188f465d92d1",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -37,7 +45,7 @@ func TestReviewProviderArtifactV1ContractsRemainByteIdentical(t *testing.T) {
 	}
 }
 
-func TestReviewProviderArtifactV2SchemasAreStrictAndBound(t *testing.T) {
+func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas")
 	tests := []struct {
 		name string
@@ -46,8 +54,8 @@ func TestReviewProviderArtifactV2SchemasAreStrictAndBound(t *testing.T) {
 		{name: "artifact-subject.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v1/schemas/artifact-subject.schema.json"},
 		{name: "admitted-result.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v1/schemas/admitted-result.schema.json"},
 		{name: "result-artifact-v2.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v1/schemas/result-artifact-v2.schema.json"},
-		{name: "start-v2.schema.json", id: ReviewIntegrationStartSchemaID},
-		{name: "status-v2.schema.json", id: ReviewIntegrationStatusSchemaID},
+		{name: "start-v2.schema.json", id: ReviewIntegrationStartSchemaIDV2},
+		{name: "status-v2.schema.json", id: ReviewIntegrationStatusSchemaIDV2},
 		{name: "authority-repair-assessment.schema.json", id: reviewtransaction.AuthorityRepairAssessmentSchemaID},
 		{name: "repair.schema.json", id: ReviewIntegrationRepairSchemaID},
 	}
@@ -115,14 +123,93 @@ func TestReviewProviderArtifactV2SchemasAreStrictAndBound(t *testing.T) {
 	captureThen := captureRule["then"].(map[string]any)
 	for _, field := range []string{"artifact_subject", "candidate_diff", "changed_path_manifest"} {
 		if !slices.Contains(schemaStringArray(t, captureThen["required"]), field) {
-			t.Fatalf("status v2 capture input omits required frozen context %q: %#v", field, captureThen)
+			t.Fatalf("legacy status v2 capture input omits required frozen context %q: %#v", field, captureThen)
 		}
 	}
 	inputProperties := transitionInput["properties"].(map[string]any)
 	if inputProperties["artifact_subject"].(map[string]any)["$ref"] != "artifact-subject.schema.json" ||
-		inputProperties["candidate_diff"].(map[string]any)["$ref"] != "start-v2.schema.json#/$defs/frozen_candidate_diff" ||
+		inputProperties["candidate_diff"] == nil || inputProperties["base_tree"] != nil || inputProperties["candidate_tree"] != nil ||
 		inputProperties["changed_path_manifest"].(map[string]any)["type"] != "array" {
-		t.Fatalf("status v2 capture input frozen context = %#v", inputProperties)
+		t.Fatalf("legacy status v2 capture input frozen context = %#v", inputProperties)
+	}
+
+	v2Root := filepath.Join("..", "..", "contracts", "review-integration", "v2", "schemas")
+	v2Schemas := []struct {
+		name string
+		id   string
+	}{
+		{name: "artifact-subject.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/artifact-subject.schema.json"},
+		{name: "admitted-result.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/admitted-result.schema.json"},
+		{name: "start.schema.json", id: ReviewIntegrationStartSchemaID},
+		{name: "status.schema.json", id: ReviewIntegrationStatusSchemaID},
+		{name: "capabilities.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV2},
+		{name: "consent.schema.json", id: ReviewIntegrationConsentSchemaIDV2},
+		{name: "failure.schema.json", id: ReviewIntegrationFailureSchemaIDV2},
+		{name: "operation.schema.json", id: ReviewIntegrationOperationSchemaIDV2},
+		{name: "repair.schema.json", id: ReviewIntegrationRepairSchemaIDV2},
+	}
+	v2Documents := make(map[string]map[string]any, len(v2Schemas))
+	for _, tt := range v2Schemas {
+		payload, err := os.ReadFile(filepath.Join(v2Root, tt.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(payload, &schema); err != nil {
+			t.Fatal(err)
+		}
+		if schema["$schema"] != "https://json-schema.org/draft/2020-12/schema" || schema["$id"] != tt.id || schema["additionalProperties"] != false {
+			t.Fatalf("v2 %s header = %#v", tt.name, schema)
+		}
+		v2Documents[tt.name] = schema
+	}
+	v2Input := v2Documents["status.schema.json"]["$defs"].(map[string]any)["transition_input"].(map[string]any)
+	v2CaptureThen := v2Input["allOf"].([]any)[1].(map[string]any)["then"].(map[string]any)
+	for _, field := range []string{"artifact_subject", "base_tree", "candidate_tree", "changed_path_manifest"} {
+		if !slices.Contains(schemaStringArray(t, v2CaptureThen["required"]), field) {
+			t.Fatalf("native Git status capture input omits %q: %#v", field, v2CaptureThen)
+		}
+	}
+	v2Properties := v2Input["properties"].(map[string]any)
+	if v2Properties["candidate_diff"] != nil || v2Properties["base_tree"] == nil || v2Properties["candidate_tree"] == nil {
+		t.Fatalf("native Git status capture input = %#v", v2Properties)
+	}
+}
+
+func TestReviewProviderArtifactV2FixturesValidate(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures")
+	startPayload, err := os.ReadFile(filepath.Join(root, "start.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var start ReviewIntegrationStartResult
+	if err := json.Unmarshal(startPayload, &start); err != nil {
+		t.Fatal(err)
+	}
+	if err := start.Validate(); err != nil {
+		t.Fatalf("v2 START fixture: %v", err)
+	}
+	statusPayload, err := os.ReadFile(filepath.Join(root, "status.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	if err := json.Unmarshal(statusPayload, &status); err != nil {
+		t.Fatal(err)
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("v2 STATUS fixture: %v", err)
+	}
+	consentPayload, err := os.ReadFile(filepath.Join(root, "consent.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var consent ReviewIntegrationConsentResult
+	if err := json.Unmarshal(consentPayload, &consent); err != nil {
+		t.Fatal(err)
+	}
+	if err := consent.Validate(); err != nil {
+		t.Fatalf("v2 consent fixture: %v", err)
 	}
 }
 

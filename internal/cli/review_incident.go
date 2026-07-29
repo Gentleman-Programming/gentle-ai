@@ -35,7 +35,8 @@ type reviewCapturePreflightResult struct {
 	Lens                string                                       `json:"lens"`
 	SelectedOrder       int                                          `json:"selected_order"`
 	ArtifactSubject     reviewtransaction.ArtifactSubject            `json:"artifact_subject"`
-	CandidateDiff       reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff"`
+	BaseTree            string                                       `json:"base_tree"`
+	CandidateTree       string                                       `json:"candidate_tree"`
 	ChangedPathManifest []reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest"`
 }
 

@@ -2,7 +2,7 @@
 
 ← [Back to README](../README.md)
 
-`gentle-ai.review-integration/v1` is the versioned provider contract for consumers that coordinate Gentle AI's native bounded review lifecycle. It lets a consumer negotiate capabilities, reconstruct one target after restart, drive explicit review operations, and validate the resulting receipt without reading provider-private authority files.
+Gentle AI exposes two negotiated review contracts. `gentle-ai.review-integration/v1` preserves the published Base64 candidate-diff transport byte for byte. `gentle-ai.review-integration/v2` is the native-Git contract: it carries immutable base/candidate tree IDs and an ordered changed-path manifest, never an inline patch. Both let a consumer reconstruct one target after restart, drive explicit review operations, and validate the resulting receipt without reading provider-private authority files.
 
 ## Negotiate the provider first
 
@@ -15,11 +15,15 @@ gentle-ai review capabilities \
 
 The response identifies the protocol major, package and build identity, executable SHA-256, operations, five gates, projections, schemas, mandatory and optional features, and compatibility window. The executable digest is self-reported evidence; compare it with the published release manifest before trusting the binary.
 
+New integrations SHOULD negotiate `gentle-ai.review-integration/v2`. Existing v1 consumers remain valid and MUST continue validating the published v1 schemas and fixture bytes; they do not gain tree-only fields additively.
+
 Protocol v1.5 advertises `gentle-ai.review-integration.capabilities/v1.5` and adds `outcome_bound_verification_evidence` without changing the preserved v1.4 identity or its `one_shot_final_verification_retry` feature. `review capture-evidence` requires one closed `--outcome` (`passed`, `verification_failed`, or `procedural_tooling_failed`) and persists `gentle-ai.review-verification-evidence/v2` beside immutable candidate-addressed raw bytes. The record binds lineage, authority revision, target tree, canonical paths and ledger IDs, raw SHA-256 and size, outcome, and its own canonical digest. FINALIZE derives captured approval or escalation from that record; a caller-supplied `--failed` may agree with it but cannot override it.
+
+Protocol v1.4 advertises `gentle-ai.review-integration.capabilities/v1.4` and adds `one_shot_final_verification_retry`, operation `review.retry_final_verification`, and incident schema `gentle-ai.review-final-verification-incident/v1`. This is a dedicated provider-owned retry for one exact completed failed final-verification tooling incident; it does not relax generic recovery.
 
 Protocol v1.3 introduced `provider_artifact_admission`, `validating_result_reopen`, `recovered_correction_evidence`, and `classified_authority_repair`. START v2 supplies one provider-owned `ArtifactSubject` per selected lens. Result artifact v2 and status v2 expose the admitted subject hash and completed admission decision. Status v2 also requires a bounded `gentle-ai.review-authority-repair-assessment/v1`; `review.repair` publishes the matching strict preflight and execution contract. The durable admitted-result envelope preserves raw and canonical payload identities, the result identity, and repository-verified candidate-causal finding IDs. Exact accounting-only recovery may reuse that evidence only when the corrected predecessor bytes are the successor's exact initial target. Protocol v1.0 through v1.4 capability schemas and fixtures remain packaged unchanged. Consumers must reject an unknown schema/minor identity they do not support; v1.5 consumers validate the v1.5 schema before relying on the current features.
 
-The v1.2 artifact remains the compatibility record for `native_frozen_candidate_context`, `opaque_repository_context`, and `provider_targeted_validation_request`. Frozen context supplies the exact candidate diff and changed-path manifest. Opaque repository context lets an external actor return results without receiving or rediscovering a repository path. Provider-targeted validation supplies the exact corrected candidate and frozen finding IDs to validate. START v1, status v1, and result-artifact v1 schemas and fixtures remain packaged byte-identically; v1.3 advertises their v2 successors rather than changing those identities in place.
+The v1.2 feature set includes `native_frozen_candidate_context`, `opaque_repository_context`, and `provider_targeted_validation_request`. Its published reviewer transport contains the canonical candidate diff and ordered changed-path manifest. Opaque repository context lets an external actor return results without receiving or rediscovering a repository path. Provider-targeted validation supplies the exact corrected candidate and frozen finding IDs to validate. Contract v2 replaces only that reviewer transport with immutable tree IDs; it does not rewrite v1.
 
 The v1.1 artifact remains the compatibility record for `base_ref_workspace_overlay`, `bounded_process_waits`, `exact_gate_receipt_discovery`, `native_low_risk_verification`, `native_next_transition`, `risk_reasons`, and `scope_change_diagnostics`. The overlay feature requires immutable snapshots and restart-safe projection.
 
@@ -28,11 +32,11 @@ Consumers MUST reject an incompatible protocol major, an unsupported mandatory f
 Pass the same contract explicitly to negotiated repository operations:
 
 ```bash
-gentle-ai review start --contract gentle-ai.review-integration/v1 --cwd .
-gentle-ai review status --contract gentle-ai.review-integration/v1 --cwd .
-gentle-ai review finalize --contract gentle-ai.review-integration/v1 --cwd . --lineage <lineage> ...
-gentle-ai review validate --contract gentle-ai.review-integration/v1 --cwd . --gate pre-commit
-gentle-ai review bind-sdd --contract gentle-ai.review-integration/v1 --cwd . --change <change> --lineage <lineage> --expected-binding-revision=<revision>
+gentle-ai review start --contract gentle-ai.review-integration/v2 --cwd .
+gentle-ai review status --contract gentle-ai.review-integration/v2 --cwd .
+gentle-ai review finalize --contract gentle-ai.review-integration/v2 --cwd . --lineage <lineage> ...
+gentle-ai review validate --contract gentle-ai.review-integration/v2 --cwd . --gate pre-commit
+gentle-ai review bind-sdd --contract gentle-ai.review-integration/v2 --cwd . --change <change> --lineage <lineage> --expected-binding-revision=<revision>
 ```
 
 ### Zero-help lifecycle bootstrap
@@ -40,14 +44,14 @@ gentle-ai review bind-sdd --contract gentle-ai.review-integration/v1 --cwd . --c
 When capabilities advertise `native_next_transition`, the parent orchestrator starts lifecycle routing exactly once with:
 
 ```bash
-gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition
+gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition
 ```
 
-Append a target selector only when its type is already known: `--projection staged`, `--base-ref <ref>`, `--workspace-overlay --base-ref <ref>`, or `--workspace-overlay --base-tree <tree>`. If the feature is unavailable, query exactly once `gentle-ai review capabilities --contract gentle-ai.review-integration/v1` and stop with `unsupported-capability`; do not explore commands or consult help. After bootstrap, only the parent executes the exact native `next_transition`. Reviewers, validators, executors, and refuters receive role inputs and return artifacts; they never invoke review lifecycle commands.
+Append a target selector only when its type is already known: `--projection staged`, `--base-ref <ref>`, `--workspace-overlay --base-ref <ref>`, or `--workspace-overlay --base-tree <tree>`. If the feature is unavailable, query exactly once `gentle-ai review capabilities --contract gentle-ai.review-integration/v2` and stop with `unsupported-capability`; do not explore commands or consult help. After bootstrap, only the parent executes the exact native `next_transition`. Reviewers, validators, executors, and refuters receive role inputs and return artifacts; they never invoke review lifecycle commands.
 
 ### Per-candidate consent relay
 
-A session that can relay a blocking question to a human declares it on negotiated START with `--consent relay`. When the frozen candidate's tier would ask the per-candidate consent question (any non-low tier whose one-time question is still unanswered), START then responds with the typed `gentle-ai.review-integration.consent/v1` envelope instead of proceeding: why input is required (the same headline, reason, and risk-evidence phrases the interactive terminal question speaks), the complete choice set, and one runnable follow-up invocation per choice, scoped to the exact `--target` identity. Nothing is persisted while the question is outstanding, and no console notice is printed.
+A session that can relay a blocking question to a human declares it on negotiated START with `--consent relay`. When the frozen candidate's tier would ask the per-candidate consent question (any non-low tier whose one-time question is still unanswered), START responds with the consent envelope matching the negotiated contract: `consent/v1` for integration v1 or `consent/v2` for integration v2. It carries why input is required, the complete choice set, and one runnable follow-up invocation per choice scoped to the exact `--target` identity. Nothing is persisted while the question is outstanding, and no console notice is printed.
 
 The orchestrator relays the complete envelope losslessly and answers with exactly one named invocation. `--consent granted` runs the review and records the one-time question as answered; it is replay-safe and a rerun resumes the same authority. `--consent declined` reports the existing typed declined START outcome (`consent: declined_this_candidate`): scoped to that one candidate, nothing persisted, the next candidate asks again. A decline is deliberately not the kill switch; the permanent disable remains `gentle-ai review mode disable`, documented in the envelope's `off_path` and never offered as a choice. Without the declaration, START behavior is unchanged: low risk asks nothing, a resolved question asks nothing, and a headless undeclared session keeps the skip-and-notice fallback.
 
@@ -81,7 +85,7 @@ Consumers MUST NOT reconstruct receipts, derive canonical hashes, inspect the Gi
 
 `review.start` is the only ordinary entry point that creates a review budget. Finalize continues that frozen lifecycle. The dedicated final-verification retry creates a successor lineage but copies every frozen budget and accounting field without adding a reviewer, correction, SDD, or other budget. Status, validation, and gates are read-only.
 
-`gentle-ai review capture-result` is an additive headless command, not a negotiated `review-integration/v1` repository operation. It accepts no `--contract` and emits a manifest with capability `review.native_result_artifact` and schema `gentle-ai.review-result-artifact/v2`. The manifest binds the provider-issued `subject_hash` and `admission_decision: completed`; exactly one provider-owned `path` or opaque `reference` locates the durable `gentle-ai.review-admitted-result/v1` envelope. A negotiated capture transition carries `--repository-context <opaque-handle>` plus `--expected-revision <revision>`, so the consumer can invoke capture from an unrelated working directory without learning the repository path. Explicit `--cwd` remains the compatibility path-manifest mode and cannot be combined with a repository-context handle.
+`gentle-ai review capture-result` is an additive headless command, not a negotiated repository operation. It accepts no `--contract`; the provider-issued subject hash selects the transport version. Capture emits a manifest with capability `review.native_result_artifact` and schema `gentle-ai.review-result-artifact/v2`; the manifest binds `subject_hash` and `admission_decision: completed`, and exactly one provider-owned `path` or opaque `reference` locates the durable admitted-result envelope (`review-admitted-result/v1` for a v1 subject, `review-admitted-result/v2` for a v2 subject). A negotiated capture transition carries `--repository-context <opaque-handle>` plus `--expected-revision <revision>`, so consumers can invoke capture from an unrelated working directory without learning the repository path. Explicit `--cwd` remains the capture compatibility path-manifest mode and cannot be combined with a repository-context handle.
 
 ### Choose the target explicitly
 
@@ -91,26 +95,32 @@ Consumers MUST NOT reconstruct receipts, derive canonical hashes, inspect the Gi
 | `review start --base-ref <ref> --committed-only` | `<ref>` to `HEAD`; workspace changes are excluded. |
 | `review start --base-ref <ref> --workspace-overlay` | `<ref>` to the synthetic workspace tree, including branch commits and staged, unstaged, and intended-untracked bytes. |
 
-Overlay mode requires workspace projection and cannot be combined with `--committed-only`. START returns `target_mode`, `target_identity`, `base_tree`, and `candidate_tree` only for this mode. Restarted consumers select the frozen target with `review status --base-tree <START base_tree> --workspace-overlay`; `--base-ref` remains available for a fresh symbolic selection, but cannot be combined with `--base-tree`. Existing workspace-only and committed-only payloads remain unchanged. Snapshot construction uses a temporary index and does not mutate the real index or worktree.
+Overlay mode requires workspace projection and cannot be combined with `--committed-only`. START returns `target_mode` and `target_identity` only for this mode. Under contract v2, selected-lens START responses also return `base_tree` and `candidate_tree` as reviewer context for every target kind. Restarted consumers select an overlay target with `review status --base-tree <START base_tree> --workspace-overlay`; `--base-ref` remains available for a fresh symbolic selection, but cannot be combined with `--base-tree`. Snapshot construction uses a temporary index and does not mutate the real index or worktree.
 
 ### Use frozen reviewer context
 
-When negotiated START returns one or more selected lenses, it also returns both `candidate_diff` and `changed_path_manifest` plus one `artifact_subjects` entry per selected lens. The provider derives them from the selected authority's persisted initial base/candidate trees and canonical paths—not from the current index, worktree, or a correction snapshot. Each subject self-hashes the exact lineage, authority revision, target, candidate-diff digest, changed-path-manifest digest, lens, selected order, and optional correction target. Created, resumed, receipt-replay, blocked, and recovery-selected responses therefore retain the same bytes across process restarts and unrelated workspace mutation.
+Under integration v2, negotiated START with selected lenses returns `base_tree`, `candidate_tree`, `changed_path_manifest`, and one `artifact_subjects` entry per lens. The provider derives them from the selected authority's persisted initial snapshot, not the current index, worktree, or a correction snapshot. Each subject self-hashes the exact lineage, authority revision, target, both tree IDs, manifest digest, lens, selected order, and optional correction target.
 
-After a restart, negotiated `review status --next-transition` returns that same immutable context inside every missing `review.capture-result` collection input: the lens-specific `artifact_subject`, exact `candidate_diff`, and complete `changed_path_manifest` including modes. This is sufficient to launch each missing reviewer without another START, lineage, or review budget. Consumers pass these fields through unchanged and never rebuild them from the live workspace.
+After a restart, v2 `review status --next-transition` returns that same context inside every missing `review.capture-result` input. No v2 START, status, task, environment, or plugin payload contains the full patch or a Base64 copy. Contract v1 deliberately retains its published Base64 candidate-diff field.
 
-The patch uses fixed binary/full-index, prefix, context, algorithm, rename, external-diff, text-conversion, submodule, color, and locale behavior. Rendering and START diff statistics run through a temporary bare Git view backed only by the repository object database, with repository, info, global, system, worktree, and committed `.gitattributes` sources excluded. Attribute state therefore cannot reinterpret frozen bytes or risk counts between retries. The raw patch is capped at 4 MiB while Git output is captured, matching the native reviewer-artifact ceiling and bounding the base64 plus indented-JSON copies in the START response. Oversized patches stop before a new authority is created.
+Reviewers inspect the frozen candidate through read-only native Git commands against the exact `base_tree` and `candidate_tree` from their collection input. They treat the ordered `changed_path_manifest` as the complete frozen scope, begin with compact discovery, and then open only the paths their lens needs:
 
-`candidate_diff` is an exact-byte object rather than a JSON string:
+```bash
+env -i PATH="$PATH" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 \
+  git --no-replace-objects --no-pager -c color.ui=false -c core.attributesFile=/dev/null -c diff.external= \
+  diff --name-status --text --no-ext-diff --no-textconv --no-renames --ignore-submodules=none \
+  <base_tree> <candidate_tree> --
 
-| Field | Meaning |
-| --- | --- |
-| `encoding` | Always `base64`; `data` is canonical padded base64. |
-| `data` | The exact raw Git patch bytes, including bytes that are not valid UTF-8. |
-| `sha256` | `sha256:<lowercase hex>` over the decoded bytes. |
-| `byte_size` | Decoded byte count, from zero through 4,194,304. |
+env -i PATH="$PATH" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 \
+  git --no-replace-objects --no-pager -c color.ui=false -c core.attributesFile=/dev/null -c diff.external= \
+  diff --patch --text --full-index --no-color --no-renames --no-ext-diff --no-textconv \
+  --diff-algorithm=myers --no-indent-heuristic --unified=3 --ignore-submodules=none \
+  <base_tree> <candidate_tree> -- ':(literal)<path>'
+```
 
-The provider validates all four fields together before serialization. Consumers decode `data`, verify `byte_size` and `sha256`, and never reinterpret the patch as UTF-8 before that verification. Manifest entries stay in persisted path order and expose:
+Reviewers may also use the corresponding allowlisted `--numstat`, selective `--stat`, and exact `cat-file -p '<tree>:<path>'` forms. Several related literal pathspecs may share one selective command. Reviewers never pass `--binary` and never render the entire candidate patch automatically. They run only these clean-environment commands in the session working directory. The frozen trees resolve through the repository object store shared by every worktree of the same repository. The guarantee is immutable candidate content addressed by the frozen trees, not byte-identical rendered patch transport across Git versions. Reviewers never inspect the live worktree, index, `HEAD`, or an unbound revision; a runtime without the enforced Git command boundary reports incomplete inspection instead of substituting live files.
+
+Manifest entries stay in persisted path order and expose:
 
 | Field | Meaning |
 | --- | --- |
@@ -120,11 +130,11 @@ The provider validates all four fields together before serialization. Consumers 
 | `deleted` / `type_changed` / `mode_only` | Explicit state that consumers do not need to infer from patch prose. |
 | `intended_untracked` | Whether the frozen snapshot bound the path as intended-untracked provenance. |
 
-Missing context is different from a valid empty candidate: the latter is encoded as `candidate_diff: {"encoding":"base64","data":"","sha256":"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","byte_size":0}` with `changed_path_manifest: []`. The schema and runtime require both context fields or neither; selected lenses require both. START rejects incomplete, non-canonical, digest-mismatched, oversized, or structurally mismatched context before serialization. Unnegotiated START retains its legacy behavior and emits neither field nor candidate contents.
+Under v2, selected lenses require both valid tree IDs and the manifest. An empty candidate has equal valid tree IDs with `changed_path_manifest: []`; missing context remains invalid. V1 continues to require its candidate diff and manifest. Unnegotiated START retains its legacy response shape and emits no candidate contents.
 
 Reviewer results must echo the exact `subject_hash` and report structured `inspection: {status: "completed", paths: [...]}` for the complete frozen manifest, including root-level paths. Finding IDs use the ASCII form `R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*`. Proof and evidence recognize `path:positive-line` only for canonical paths present in the immutable base/candidate tree union: bare root references contain a dot, while quoted references support extensionless, Unicode, and space-containing paths. Digests, timestamps, status labels, URLs, and arbitrary colon-delimited prose are not path references. The provider accepts transport prose around exactly one complete JSON object, but rejects zero, multiple, or unterminated objects. Missing inspection, access-denied or unavailable-inspection evidence, paths or locations outside the frozen candidate, repeated finding IDs, wrong lens prefixes, binding mismatch, and unsupported causal metadata are classified and rejected before publication. Severe findings must retain a supported `evidence_class` and `causal_disposition`; `introduced`, `behavior-activated`, and `worsened` claims are admitted only when repository-derived changed-line evidence supports the claimed location. Reviewer results may omit the top-level `lens`; when present, it must match the selected-lens position returned by START.
 
-The managed OpenCode result-artifact plugin preflights each bound reviewer invocation and injects the provider-returned subject, exact candidate diff, and manifest before the lens runs. It then captures the reviewer's single schema-conformant result. A legacy provider that does not support preflight remains compatible, but receives no invented frozen context.
+The managed OpenCode result-artifact plugin replaces caller-authored task prose with the provider-issued binding and preflight context. It validates the subject, trees, lens slot, and canonical ordered manifest before launching the reviewer; it never transports a patch or candidate bytes. OpenCode reviewers receive only the narrow read-only Git allowlist above. Managed runtimes that cannot enforce that per-command boundary receive no shell and must report incomplete inspection rather than substitute live files or receive an inline patch fallback.
 
 Durable controllers capture each result with exact lineage, target, lens, selected order, authority revision, and provider-issued repository context. Current captures emit pathless manifests with opaque references; the provider can discover every canonical result with `--captured-results`, or controllers can write each emitted manifest to its own file and pass those files to FINALIZE in selected-lens order with repeatable `--result-artifact-file <path>` flags. A `--result-artifact-file -` occurrence reads exactly one manifest from stdin; because FINALIZE has one shared stdin, `-` may appear only once across reviewer results, artifact manifests, validation, refuter outcomes, and evidence.
 
@@ -247,7 +257,7 @@ Persistent compact `LOCK` JSON is advisory diagnostics, not current-holder proof
 
 ### Preserve the uniform failure envelope
 
-Every failed operation explicitly negotiated through `gentle-ai.review-integration/v1` emits `gentle-ai.review-integration.failure/v1` and still exits nonzero. Capabilities uses this envelope by default; repository operations use it when `--contract` is present. Unnegotiated command errors retain their compatibility behavior.
+Every failed negotiated operation emits the failure envelope matching its contract: `failure/v1` for integration v1 and `failure/v2` for integration v2, and still exits nonzero. Capabilities defaults to v1; repository operations use the selected envelope when `--contract` is present. Unnegotiated command errors retain their compatibility behavior.
 
 | Field | Runtime meaning |
 | --- | --- |

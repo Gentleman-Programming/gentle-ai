@@ -16,12 +16,20 @@ import (
 )
 
 const (
-	AdmittedReviewerResultSchema           = "gentle-ai.review-admitted-result/v1"
+	AdmittedReviewerResultSchemaV1         = "gentle-ai.review-admitted-result/v1"
+	AdmittedReviewerResultSchema           = "gentle-ai.review-admitted-result/v2"
 	CompactResultReopenOperation           = "review/reopen-results"
 	CompactQuarantinedReviewerResultsDir   = "quarantined-reviewer-results"
 	compactResultReopenAuthorizationSchema = "gentle-ai.review-result-reopen-authorization/v1"
 	compactReviewerResultSizeLimit         = 4 << 20
 )
+
+func admittedReviewerResultSchemaForSubject(subject ArtifactSubject) string {
+	if subject.Schema == ArtifactSubjectSchemaV1 {
+		return AdmittedReviewerResultSchemaV1
+	}
+	return AdmittedReviewerResultSchema
+}
 
 type CompactResultReopenRequest struct {
 	LineageID        string
@@ -211,7 +219,7 @@ func ReopenCompactReviewerResults(ctx context.Context, repo string, request Comp
 		} else if !os.IsNotExist(statErr) {
 			return statErr
 		}
-		quarantined, retained, inspectErr := classifyCompactResultReopenSlots(store.Dir, record.State, frozen, plan.AuthorizedLenses)
+		quarantined, retained, inspectErr := classifyCompactResultReopenSlots(repository, store.Dir, record.State, frozen, plan.AuthorizedLenses)
 		if inspectErr != nil {
 			return inspectErr
 		}
@@ -293,7 +301,7 @@ func buildCompactResultReopenPlan(ctx context.Context, repository string, store 
 	if err != nil {
 		return CompactResultReopenPlan{}, err
 	}
-	quarantined, retained, err := classifyCompactResultReopenSlots(store.Dir, state, frozen, authorizedLenses)
+	quarantined, retained, err := classifyCompactResultReopenSlots(repository, store.Dir, state, frozen, authorizedLenses)
 	if err != nil {
 		return CompactResultReopenPlan{}, err
 	}
@@ -314,7 +322,7 @@ func buildCompactResultReopenPlan(ctx context.Context, repository string, store 
 // reporting that candidate inspection was unavailable. authorizedLenses adds
 // the maintainer's explicitly named admitted slots — the one and only path by
 // which a structurally valid, provider-admitted result leaves its slot.
-func classifyCompactResultReopenSlots(storeDir string, state CompactState, frozen FrozenCandidateContext, authorizedLenses []string) ([]CompactResultReopenSlot, []CompactResultReopenSlot, error) {
+func classifyCompactResultReopenSlots(repository, storeDir string, state CompactState, frozen FrozenCandidateContext, authorizedLenses []string) ([]CompactResultReopenSlot, []CompactResultReopenSlot, error) {
 	authorized := make(map[string]struct{}, len(authorizedLenses))
 	for _, lens := range authorizedLenses {
 		authorized[lens] = struct{}{}
@@ -322,7 +330,7 @@ func classifyCompactResultReopenSlots(storeDir string, state CompactState, froze
 	quarantined := make([]CompactResultReopenSlot, 0)
 	retained := make([]CompactResultReopenSlot, 0)
 	for order, lens := range state.SelectedLenses {
-		slot, trusted, err := inspectCompactResultReopenSlot(storeDir, state, frozen, order, lens)
+		slot, trusted, err := inspectCompactResultReopenSlot(repository, storeDir, state, frozen, order, lens)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -340,7 +348,7 @@ func classifyCompactResultReopenSlots(storeDir string, state CompactState, froze
 	return quarantined, retained, nil
 }
 
-func inspectCompactResultReopenSlot(storeDir string, state CompactState, frozen FrozenCandidateContext, order int, lens string) (CompactResultReopenSlot, bool, error) {
+func inspectCompactResultReopenSlot(repository, storeDir string, state CompactState, frozen FrozenCandidateContext, order int, lens string) (CompactResultReopenSlot, bool, error) {
 	if order >= len(state.LensResults) {
 		return CompactResultReopenSlot{}, false, errors.New("validating authority does not contain every selected lens result")
 	}
@@ -359,10 +367,10 @@ func inspectCompactResultReopenSlot(storeDir string, state CompactState, frozen 
 		return slot, false, nil
 	}
 	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF || envelope.Schema != AdmittedReviewerResultSchema || len(envelope.Result) == 0 {
+	if err := decoder.Decode(&extra); err != io.EOF || envelope.Schema != admittedReviewerResultSchemaForSubject(envelope.Subject) || len(envelope.Result) == 0 {
 		return slot, false, nil
 	}
-	expected, err := NewArtifactSubject(state, envelope.Subject.AuthorityRevision, frozen, lens, order, envelope.Subject.CorrectionTargetIdentity)
+	frozen, expected, err := artifactSubjectForSchema(context.Background(), SnapshotBuilder{Repo: repository}, state, envelope.Subject.AuthorityRevision, frozen, lens, order, envelope.Subject.CorrectionTargetIdentity, envelope.Subject.Schema)
 	if err != nil || envelope.Subject != expected || envelope.Admission.Validate(expected) != nil {
 		return slot, false, nil
 	}

@@ -18,8 +18,12 @@ import (
 
 const ReviewIntegrationOperationSchema = "gentle-ai.review-integration.operation/v1"
 const ReviewIntegrationOperationSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/operation.schema.json"
+const ReviewIntegrationOperationSchemaV2 = "gentle-ai.review-integration.operation/v2"
+const ReviewIntegrationOperationSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/operation.schema.json"
 const ReviewIntegrationFailureSchema = "gentle-ai.review-integration.failure/v1"
 const ReviewIntegrationFailureSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/failure.schema.json"
+const ReviewIntegrationFailureSchemaV2 = "gentle-ai.review-integration.failure/v2"
+const ReviewIntegrationFailureSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/failure.schema.json"
 
 const (
 	ReviewIntegrationOperationFinalize               = "review.finalize"
@@ -299,7 +303,7 @@ func reviewIntegrationFailureRoute(args []string) (string, bool, *ReviewIntegrat
 		failure.LineageID = safeReviewIntegrationLineage(operation, args[1:])
 		return operation, true, &failure
 	}
-	if contract != ReviewIntegrationContractV1 {
+	if contract != ReviewIntegrationContractV1 && contract != ReviewIntegrationContractV2 {
 		failure := newReviewIntegrationPreflightFailure(operation, "unsupported_contract", "The requested review integration contract is not supported.")
 		failure.LineageID = safeReviewIntegrationLineage(operation, args[1:])
 		return operation, true, &failure
@@ -343,6 +347,9 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		Message:         "The negotiated review operation failed without authoritative mutation evidence.",
 		MutationOutcome: ReviewMutationUnknown, AuthorityApplicability: "not_evaluated", RetrySafe: false,
 		Replayability: reviewtransaction.ReplayabilityStatusRequired, RequiredInputs: []string{}, NextAction: "review.status",
+	}
+	if provided, contract, _ := reviewIntegrationContractArgument(args); provided && contract == ReviewIntegrationContractV2 {
+		failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
 	}
 	failure.LineageID = safeReviewIntegrationLineage(operation, args)
 	// Both branches below refuse inside authorizeReviewStart, strictly before
@@ -702,6 +709,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		// cannot forget to name itself.
 		reason := preflight.classification()
 		preflightFailure := newReviewIntegrationPreflightFailure(operation, reason.Code, reason.Message)
+		preflightFailure.Schema, preflightFailure.Contract = failure.Schema, failure.Contract
 		preflightFailure.LineageID = failure.LineageID
 		preflightFailure.RequiredInputs = append([]string{}, reason.RequiredInputs...)
 		preflightFailure.NextAction = reason.NextAction
@@ -1088,7 +1096,9 @@ func validReviewIntegrationLineage(value string) bool {
 }
 
 func (failure ReviewIntegrationFailure) Validate() error {
-	if failure.Schema != ReviewIntegrationFailureSchema || failure.Contract != ReviewIntegrationContractV1 ||
+	legacyContract := failure.Schema == ReviewIntegrationFailureSchema && failure.Contract == ReviewIntegrationContractV1
+	nativeGitContract := failure.Schema == ReviewIntegrationFailureSchemaV2 && failure.Contract == ReviewIntegrationContractV2
+	if (!legacyContract && !nativeGitContract) ||
 		!validReviewIntegrationFailureOperation(failure.Operation) {
 		return errors.New("invalid negotiated review failure identity")
 	}
@@ -1276,7 +1286,7 @@ func reviewFlagWasProvided(flags *flag.FlagSet, name string) bool {
 	return provided
 }
 
-func encodeReviewIntegrationOperation(stdout io.Writer, negotiated bool, operation string, legacyResult, publicResult any) error {
+func encodeReviewIntegrationOperation(stdout io.Writer, negotiated bool, operation string, legacyResult, publicResult any, contracts ...string) error {
 	if !negotiated {
 		return encodeReviewJSON(stdout, legacyResult)
 	}
@@ -1284,8 +1294,12 @@ func encodeReviewIntegrationOperation(stdout io.Writer, negotiated bool, operati
 	if err != nil {
 		return fmt.Errorf("encode negotiated %s result: %w", operation, err)
 	}
+	schema, contract := ReviewIntegrationOperationSchema, ReviewIntegrationContractV1
+	if len(contracts) > 0 && contracts[0] == ReviewIntegrationContractV2 {
+		schema, contract = ReviewIntegrationOperationSchemaV2, ReviewIntegrationContractV2
+	}
 	envelope := ReviewIntegrationOperationResult{
-		Schema: ReviewIntegrationOperationSchema, Contract: ReviewIntegrationContractV1,
+		Schema: schema, Contract: contract,
 		Operation: operation, Result: payload,
 	}
 	if err := envelope.Validate(); err != nil {
@@ -1295,7 +1309,9 @@ func encodeReviewIntegrationOperation(stdout io.Writer, negotiated bool, operati
 }
 
 func (result ReviewIntegrationOperationResult) Validate() error {
-	if result.Schema != ReviewIntegrationOperationSchema || result.Contract != ReviewIntegrationContractV1 || len(result.Result) == 0 {
+	legacyContract := result.Schema == ReviewIntegrationOperationSchema && result.Contract == ReviewIntegrationContractV1
+	nativeGitContract := result.Schema == ReviewIntegrationOperationSchemaV2 && result.Contract == ReviewIntegrationContractV2
+	if (!legacyContract && !nativeGitContract) || len(result.Result) == 0 {
 		return errors.New("invalid negotiated review operation identity")
 	}
 	var document any

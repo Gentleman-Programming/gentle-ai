@@ -943,7 +943,8 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 		}
 		prompt, _ := reviewerPrompt(name)
 		agent["prompt"] = prompt
-		agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+		agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": true, "task": false}
+		agent["permission"] = openCodeReviewerPermission()
 	}
 
 	for _, name := range []string{"jd-judge-a", "jd-judge-b"} {

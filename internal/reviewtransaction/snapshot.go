@@ -1454,7 +1454,19 @@ func runGitLimited(ctx context.Context, repo string, extraEnv []string, stdin []
 	return runGitCaptured(ctx, repo, extraEnv, stdin, outputLimit, true, false, args...)
 }
 
+func runGitRange(ctx context.Context, repo string, extraEnv []string, offset, length int, args ...string) ([]byte, int, error) {
+	if offset < 0 || length <= 0 {
+		return nil, 0, errors.New("git output range is invalid") // refusal:by-design world-action: only internal callers construct this range; the exit is a code fix, not a command
+	}
+	return runGitCapturedRange(ctx, repo, extraEnv, nil, offset, length, true, false, false, args...)
+}
+
 func runGitCaptured(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputLimit int, isolateConfig, rejectStderr bool, args ...string) ([]byte, error) {
+	output, _, err := runGitCapturedRange(ctx, repo, extraEnv, stdin, 0, outputLimit, isolateConfig, rejectStderr, true, args...)
+	return output, err
+}
+
+func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputOffset, outputLimit int, isolateConfig, rejectStderr, rejectOverflow bool, args ...string) ([]byte, int, error) {
 	remote := len(args) > 0 && args[0] == "ls-remote"
 	timeout := localGitCommandTimeout
 	if remote {
@@ -1472,7 +1484,7 @@ func runGitCaptured(ctx context.Context, repo string, extraEnv []string, stdin [
 	var combined, machineStdout, machineStderr bytes.Buffer
 	var stdout, stderr *boundedGitOutput
 	if outputLimit > 0 {
-		stdout = &boundedGitOutput{limit: outputLimit}
+		stdout = &boundedGitOutput{offset: outputOffset, limit: outputLimit}
 		stderr = &boundedGitOutput{limit: 64 << 10}
 		command.Stdout, command.Stderr = stdout, stderr
 	} else if rejectStderr {
@@ -1515,34 +1527,39 @@ func runGitCaptured(ctx context.Context, repo string, extraEnv []string, stdin [
 			if aggregate {
 				cause = ctx.Err()
 			}
-			return nil, &GitCommandTimeoutError{
+			return nil, 0, &GitCommandTimeoutError{
 				Args: append([]string{}, args...), Timeout: timeout, Remote: remote, Aggregate: aggregate, Cause: cause,
 			}
 		}
 		if startErr != nil {
-			return nil, &GitProcessControlError{Args: append([]string{}, args...), Cause: startErr}
+			return nil, 0, &GitProcessControlError{Args: append([]string{}, args...), Cause: startErr}
 		}
 		exitCode := -1
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		}
-		return nil, &GitCommandError{
+		return nil, 0, &GitCommandError{
 			Args: append([]string{}, args...), ExitCode: exitCode, Remote: remote, Cause: err,
 			Output: strings.TrimSpace(string(diagnostic)),
 		}
 	}
-	if stdout != nil && stdout.exceeded {
-		return nil, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit, Actual: stdout.total}
+	if stdout != nil && stdout.exceeded && rejectOverflow {
+		return nil, 0, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit, Actual: stdout.total}
 	}
 	if rejectStderr && len(diagnostic) != 0 {
-		return nil, fmt.Errorf("git inventory produced diagnostics: %s", strings.TrimSpace(string(diagnostic)))
+		return nil, 0, fmt.Errorf("git inventory produced diagnostics: %s", strings.TrimSpace(string(diagnostic)))
 	}
-	return output, nil
+	total := len(output)
+	if stdout != nil {
+		total = stdout.total
+	}
+	return output, total, nil
 }
 
 type boundedGitOutput struct {
 	buffer   bytes.Buffer
+	offset   int
 	limit    int
 	exceeded bool
 	// total counts every byte the child produced, including the bytes past
@@ -1554,7 +1571,16 @@ type boundedGitOutput struct {
 
 func (output *boundedGitOutput) Write(payload []byte) (int, error) {
 	written := len(payload)
+	start := output.total
 	output.total += written
+	if output.total <= output.offset {
+		return written, nil
+	}
+	payloadOffset := 0
+	if start < output.offset {
+		payloadOffset = output.offset - start
+	}
+	payload = payload[payloadOffset:]
 	remaining := output.limit - output.buffer.Len()
 	if remaining > 0 {
 		if remaining > len(payload) {
@@ -1585,7 +1611,11 @@ func sanitizedGitEnvironmentForRun(environment, extra []string, isolateConfig bo
 		"GIT_IMPLICIT_WORK_TREE":           {},
 		"GIT_INDEX_FILE":                   {},
 		"GIT_INTERNAL_SUPER_PREFIX":        {},
+		"GIT_ICASE_PATHSPECS":              {},
 		"GIT_NAMESPACE":                    {},
+		"GIT_LITERAL_PATHSPECS":            {},
+		"GIT_GLOB_PATHSPECS":               {},
+		"GIT_NOGLOB_PATHSPECS":             {},
 		"GIT_NO_REPLACE_OBJECTS":           {},
 		"GIT_OBJECT_DIRECTORY":             {},
 		"GIT_PREFIX":                       {},
@@ -1594,12 +1624,24 @@ func sanitizedGitEnvironmentForRun(environment, extra []string, isolateConfig bo
 		"GIT_SHALLOW_FILE":                 {},
 		"GIT_WORK_TREE":                    {},
 	}
+	processEssential := map[string]struct{}{
+		"COMSPEC": {}, "PATH": {}, "PATHEXT": {}, "SYSTEMDRIVE": {},
+		"SYSTEMROOT": {}, "TEMP": {}, "TMP": {}, "TMPDIR": {}, "WINDIR": {},
+	}
 	result := make([]string, 0, len(environment)+len(extra)+1)
 	for _, entry := range environment {
 		name, _, _ := strings.Cut(entry, "=")
-		_, remove := unsafe[name]
-		isolatedOverride := isolateConfig && (strings.HasPrefix(name, "GIT_CONFIG_") || strings.HasPrefix(name, "GIT_ATTR_") || name == "GIT_DIFF_OPTS")
-		if !remove && name != "LC_ALL" && !isolatedOverride {
+		canonicalName := strings.ToUpper(name)
+		_, remove := unsafe[canonicalName]
+		trace := strings.HasPrefix(canonicalName, "GIT_TRACE")
+		_, essential := processEssential[canonicalName]
+		if isolateConfig {
+			if essential && !strings.HasPrefix(canonicalName, "GIT_") {
+				result = append(result, entry)
+			}
+			continue
+		}
+		if !remove && !trace && canonicalName != "LC_ALL" {
 			result = append(result, entry)
 		}
 	}

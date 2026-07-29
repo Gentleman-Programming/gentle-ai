@@ -60,7 +60,7 @@ func TestNegotiatedReviewContractFailuresArePreMutationAndLegacyErrorsStayCompat
 		args []string
 		code string
 	}{
-		{name: "capabilities unsupported", args: []string{"capabilities", "--contract", "gentle-ai.review-integration/v2"}, code: "unsupported_contract"},
+		{name: "capabilities unsupported", args: []string{"capabilities", "--contract", "gentle-ai.review-integration/v3"}, code: "unsupported_contract"},
 		{name: "start empty", args: []string{"start", "--contract="}, code: "empty_contract"},
 		{name: "finalize malformed", args: []string{"finalize", "--contract"}, code: "invalid_request"},
 	}
@@ -85,6 +85,18 @@ func TestNegotiatedReviewContractFailuresArePreMutationAndLegacyErrorsStayCompat
 	var publicErr *ReviewIntegrationFailureError
 	if errors.As(err, &publicErr) {
 		t.Fatalf("unnegotiated error became negotiated: %v", err)
+	}
+}
+
+func TestNegotiatedReviewV2FailureUsesSuccessorEnvelope(t *testing.T) {
+	var output bytes.Buffer
+	err := RunReview([]string{"start", "--contract", ReviewIntegrationContractV2, "unexpected"}, &output)
+	if err == nil {
+		t.Fatal("invalid v2 request succeeded")
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Schema != ReviewIntegrationFailureSchemaV2 || failure.Contract != ReviewIntegrationContractV2 || failure.Code != "invalid_request" {
+		t.Fatalf("v2 failure = %#v", failure)
 	}
 }
 

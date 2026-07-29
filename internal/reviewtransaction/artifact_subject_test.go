@@ -7,18 +7,15 @@ import (
 
 func artifactSubjectFixture(t *testing.T) (CompactState, string, FrozenCandidateContext) {
 	t.Helper()
-	diff, err := NewFrozenCandidateDiff([]byte("diff --git a/internal/a.go b/internal/a.go\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	paths := []string{"internal/a.go", "internal/b.go"}
+	baseTree, candidateTree := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	state := CompactState{
 		LineageID:       "review-artifact-subject",
 		SelectedLenses:  []string{LensReliability, LensReadability},
-		InitialSnapshot: Snapshot{Identity: "sha256:" + strings.Repeat("1", 64), Paths: paths},
+		InitialSnapshot: Snapshot{Identity: "sha256:" + strings.Repeat("1", 64), BaseTree: baseTree, CandidateTree: candidateTree, Paths: paths},
 	}
 	context := FrozenCandidateContext{
-		CandidateDiff: diff,
+		BaseTree: baseTree, CandidateTree: candidateTree,
 		ChangedPathManifest: []ChangedPathManifestEntry{
 			{Path: paths[0], Status: CandidatePathModified, OldMode: "100644", NewMode: "100644"},
 			{Path: paths[1], Status: CandidatePathAdded, OldMode: "000000", NewMode: "100644", IntendedUntracked: true},
@@ -39,7 +36,7 @@ func TestArtifactSubjectBindsFrozenCandidateAndSlot(t *testing.T) {
 	}
 	if subject.Schema != ArtifactSubjectSchema || subject.SubjectHash == "" ||
 		subject.LineageID != state.LineageID || subject.AuthorityRevision != revision ||
-		subject.TargetIdentity != state.InitialSnapshot.Identity || subject.CandidateDiffSHA256 != context.CandidateDiff.SHA256 ||
+		subject.TargetIdentity != state.InitialSnapshot.Identity || subject.BaseTree != context.BaseTree || subject.CandidateTree != context.CandidateTree ||
 		subject.Lens != LensReadability || subject.SelectedOrder != 1 {
 		t.Fatalf("subject = %#v", subject)
 	}
@@ -80,5 +77,31 @@ func TestArtifactSubjectOptionalCorrectionIdentityIsBound(t *testing.T) {
 	without.CorrectionTargetIdentity = ""
 	if err := ValidateArtifactSubject(without); err == nil {
 		t.Fatal("subject hash ignored correction identity")
+	}
+}
+
+func TestLegacyArtifactSubjectRetainsCandidateDiffBinding(t *testing.T) {
+	state, revision, frozen := artifactSubjectFixture(t)
+	diff, err := NewFrozenCandidateDiff([]byte("diff --git a/internal/a.go b/internal/a.go\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen.LegacyCandidateDiff = &diff
+	legacy, err := NewLegacyArtifactSubject(state, revision, frozen, LensReliability, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Schema != ArtifactSubjectSchemaV1 || legacy.CandidateDiffSHA256 != diff.SHA256 || legacy.BaseTree != "" || legacy.CandidateTree != "" {
+		t.Fatalf("legacy subject = %#v", legacy)
+	}
+	if err := ValidateArtifactSubject(legacy); err != nil {
+		t.Fatal(err)
+	}
+	nativeGit, err := NewArtifactSubject(state, revision, frozen, LensReliability, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nativeGit.SubjectHash == legacy.SubjectHash {
+		t.Fatal("v1 candidate-diff and v2 native-Git subjects share an identity")
 	}
 }

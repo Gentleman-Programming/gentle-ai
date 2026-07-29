@@ -2706,7 +2706,7 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 		"orchestrator": settings.Agent["gentle-orchestrator"].Prompt,
 		"post-apply":   string(applyPayload),
 	} {
-		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition") {
+		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition") {
 			t.Errorf("synced OpenCode %s controller does not use negotiated STATUS routing", name)
 		}
 		for _, stale := range []string{

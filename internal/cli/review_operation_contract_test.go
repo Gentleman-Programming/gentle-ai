@@ -249,7 +249,7 @@ func TestNegotiatedReviewBindSDDRejectsHistoricalLegacyThroughTypedFailureEnvelo
 }
 
 func TestNegotiatedReviewOperationsRejectInvalidContractsBeforeMutation(t *testing.T) {
-	for _, contract := range []string{"", "gentle-ai.review-integration/v2"} {
+	for _, contract := range []string{"", "gentle-ai.review-integration/v3"} {
 		t.Run("finalize_"+contract, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			writeNegotiatedOperationChange(t, repo, "thin")

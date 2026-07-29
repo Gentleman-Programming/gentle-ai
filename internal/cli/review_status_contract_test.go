@@ -78,7 +78,7 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 	if err := status.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if status.Schema != ReviewIntegrationStatusSchema || status.Contract != ReviewIntegrationContractV1 || status.Operation != "review.status" ||
+	if status.Schema != ReviewIntegrationStatusSchemaV2 || status.Contract != ReviewIntegrationContractV1 || status.Operation != "review.status" ||
 		status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
 		status.Authority.State != reviewtransaction.StateReviewing || status.Authority.LineageID != started.LineageID ||
 		status.Receipt.Status != ReviewReceiptExpectedMissing || status.Receipt.Identity != "" ||
@@ -156,7 +156,7 @@ func transitionArgumentValue(t *testing.T, transition *ReviewNextTransition, nam
 func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	var output bytes.Buffer
-	err := RunReview([]string{"status", "--contract", "gentle-ai.review-integration/v2", "--cwd", repo}, &output)
+	err := RunReview([]string{"status", "--contract", "gentle-ai.review-integration/v3", "--cwd", repo}, &output)
 	if err == nil {
 		t.Fatalf("unsupported status contract = %q, %v", output.String(), err)
 	}
@@ -168,7 +168,7 @@ func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 		name string
 		id   string
 	}{
-		{name: "status-v2.schema.json", id: ReviewIntegrationStatusSchemaID},
+		{name: "status-v2.schema.json", id: ReviewIntegrationStatusSchemaIDV2},
 		{name: "authority-repair-assessment.schema.json", id: reviewtransaction.AuthorityRepairAssessmentSchemaID},
 		{name: "projection.schema.json", id: ReviewIntegrationProjectionSchemaID},
 		{name: "targeted-validation-request.schema.json", id: reviewtransaction.TargetedValidationRequestSchemaID},
@@ -383,21 +383,36 @@ func TestReviewActionEligibilityStopsWithoutCompleteExecutionInputs(t *testing.T
 }
 
 func TestNegotiatedReviewFinalizeEligibilityRequiresTargetScopedStatus(t *testing.T) {
-	for _, state := range []reviewtransaction.State{
-		reviewtransaction.StateReviewing,
-		reviewtransaction.StateCorrectionRequired,
-		reviewtransaction.StateValidating,
-		reviewtransaction.StateApproved,
+	for _, contract := range []struct {
+		name   string
+		value  string
+		schema string
+	}{
+		{name: "v1", value: ReviewIntegrationContractV1, schema: ReviewIntegrationOperationSchema},
+		{name: "v2", value: ReviewIntegrationContractV2, schema: ReviewIntegrationOperationSchemaV2},
 	} {
-		t.Run(string(state), func(t *testing.T) {
-			var output bytes.Buffer
-			if err := encodeCompactFacadeFinalize(&output, true, true, false, reviewtransaction.CompactState{LineageID: "review-finalize-eligibility", State: state}, "sha256:"+strings.Repeat("a", 64), reviewtransaction.CompactStore{}, "finalize"); err != nil {
-				t.Fatal(err)
-			}
-			var result ReviewIntegrationFinalizeResult
-			decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &result)
-			if result.Eligibility == nil || result.Eligibility.ValidateFinalize() != nil {
-				t.Fatalf("finalize eligibility = %#v", result.Eligibility)
+		t.Run(contract.name, func(t *testing.T) {
+			for _, state := range []reviewtransaction.State{
+				reviewtransaction.StateReviewing,
+				reviewtransaction.StateCorrectionRequired,
+				reviewtransaction.StateValidating,
+				reviewtransaction.StateApproved,
+			} {
+				t.Run(string(state), func(t *testing.T) {
+					var output bytes.Buffer
+					if err := encodeCompactFacadeFinalize(&output, true, contract.value, true, false, reviewtransaction.CompactState{LineageID: "review-finalize-eligibility", State: state}, "sha256:"+strings.Repeat("a", 64), reviewtransaction.CompactStore{}, "finalize"); err != nil {
+						t.Fatal(err)
+					}
+					envelope := decodeReviewOperationEnvelope(t, output.Bytes())
+					if envelope.Contract != contract.value || envelope.Schema != contract.schema {
+						t.Fatalf("finalize operation identity = %q, %q; want %q, %q", envelope.Contract, envelope.Schema, contract.value, contract.schema)
+					}
+					var result ReviewIntegrationFinalizeResult
+					decodeStrictReviewJSON(t, envelope.Result, &result)
+					if result.Eligibility == nil || result.Eligibility.ValidateFinalize() != nil {
+						t.Fatalf("finalize eligibility = %#v", result.Eligibility)
+					}
+				})
 			}
 		})
 	}

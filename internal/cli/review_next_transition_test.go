@@ -316,7 +316,7 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 	repo, started, _, record := newArtifactReview(t, true)
 	var output bytes.Buffer
 	if err := RunReview([]string{
-		"status", "--contract", ReviewIntegrationContractV1, "--next-transition",
+		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
 		"--cwd", repo, "--lineage", started.LineageID,
 	}, &output); err != nil {
 		t.Fatal(err)
@@ -340,18 +340,14 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 		if err := json.Unmarshal(payload, &document); err != nil {
 			t.Fatal(err)
 		}
-		for _, field := range []string{"artifact_subject", "candidate_diff", "changed_path_manifest"} {
+		for _, field := range []string{"artifact_subject", "base_tree", "candidate_tree", "changed_path_manifest"} {
 			if len(document[field]) == 0 {
 				t.Fatalf("restart reviewer input %d omits %q: %s", order, field, payload)
 			}
 		}
 		var subject reviewtransaction.ArtifactSubject
-		var diff reviewtransaction.FrozenCandidateDiff
 		var manifest []reviewtransaction.ChangedPathManifestEntry
 		if err := json.Unmarshal(document["artifact_subject"], &subject); err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(document["candidate_diff"], &diff); err != nil {
 			t.Fatal(err)
 		}
 		if err := json.Unmarshal(document["changed_path_manifest"], &manifest); err != nil {
@@ -359,11 +355,11 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 		}
 		if subject.LineageID != record.State.LineageID || subject.AuthorityRevision != record.Revision ||
 			subject.TargetIdentity != record.State.InitialSnapshot.Identity || subject.Lens != record.State.SelectedLenses[order] ||
-			subject.SelectedOrder != order || subject.CandidateDiffSHA256 != wantContext.CandidateDiff.SHA256 {
+			subject.SelectedOrder != order || subject.BaseTree != wantContext.BaseTree || subject.CandidateTree != wantContext.CandidateTree {
 			t.Fatalf("restart subject %d = %#v", order, subject)
 		}
-		if !reflect.DeepEqual(diff, wantContext.CandidateDiff) || !reflect.DeepEqual(manifest, wantContext.ChangedPathManifest) {
-			t.Fatalf("restart context %d differs from frozen candidate\ngot diff=%#v manifest=%#v\nwant diff=%#v manifest=%#v", order, diff, manifest, wantContext.CandidateDiff, wantContext.ChangedPathManifest)
+		if input.BaseTree != wantContext.BaseTree || input.CandidateTree != wantContext.CandidateTree || !reflect.DeepEqual(manifest, wantContext.ChangedPathManifest) {
+			t.Fatalf("restart context %d differs from frozen candidate\ngot trees=%s..%s manifest=%#v\nwant trees=%s..%s manifest=%#v", order, input.BaseTree, input.CandidateTree, manifest, wantContext.BaseTree, wantContext.CandidateTree, wantContext.ChangedPathManifest)
 		}
 	}
 }
@@ -844,12 +840,9 @@ func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, schemaFile
 
 func nextTransitionTestCaptureContext(t *testing.T, status ReviewTargetStatusResult, lenses []string) *reviewCaptureContext {
 	t.Helper()
-	diff, err := reviewtransaction.NewFrozenCandidateDiff([]byte("immutable candidate\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	baseTree, candidateTree := strings.Repeat("c", 40), strings.Repeat("d", 40)
 	frozen := reviewtransaction.FrozenCandidateContext{
-		CandidateDiff: diff,
+		BaseTree: baseTree, CandidateTree: candidateTree,
 		ChangedPathManifest: []reviewtransaction.ChangedPathManifestEntry{{
 			Path: "tracked.txt", Status: reviewtransaction.CandidatePathModified, OldMode: "100644", NewMode: "100644",
 		}},
@@ -857,7 +850,7 @@ func nextTransitionTestCaptureContext(t *testing.T, status ReviewTargetStatusRes
 	state := reviewtransaction.CompactState{
 		LineageID: status.Authority.LineageID,
 		InitialSnapshot: reviewtransaction.Snapshot{
-			Identity: status.TargetIdentity, Paths: []string{"tracked.txt"},
+			Identity: status.TargetIdentity, BaseTree: baseTree, CandidateTree: candidateTree, Paths: []string{"tracked.txt"},
 		},
 		SelectedLenses: append([]string{}, lenses...),
 	}

@@ -228,6 +228,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	lens := flags.String("lens", "", "exact selected lens")
 	order := flags.Int("order", -1, "zero-based selected lens order")
 	revision := flags.String("expected-revision", "", "exact reviewing authority revision")
+	subjectHash := flags.String("subject-hash", "", "provider-issued artifact subject hash for native-Git context")
 	input := flags.String("input", "", "raw reviewer result JSON file or - for stdin; `gentle-ai review schema reviewer` emits the schema and a working example")
 	preflight := flags.Bool("preflight", false, "verify the capture binding against the current reviewing authority without reading or persisting any result")
 	if err := parseReviewFlags(flags, args); err != nil {
@@ -289,7 +290,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if state.State != reviewtransaction.StateReviewing || state.LineageID != *lineage || state.InitialSnapshot.Identity != *target ||
 		(strings.TrimSpace(*revision) != "" && record.Revision != *revision) || *order >= len(state.SelectedLenses) || state.SelectedLenses[*order] != *lens {
 		if contextHandle != "" {
-			return reviewPreflightError(fmt.Errorf("capture binding does not match the current reviewing authority under the provider-issued repository context; ask the parent orchestrator to refresh the exact native next transition by running %s", reviewNextTransitionRefreshCommand))
+			return reviewPreflightError(fmt.Errorf("capture binding does not match the current reviewing authority under the provider-issued repository context; ask the parent orchestrator to refresh the exact native next transition by running %s", reviewNextTransitionRefreshCommandV2))
 		}
 		return reviewPreflightError(fmt.Errorf("capture binding does not match the current reviewing authority under repository %q; verify the frozen lineage, target, lens, and order for that repository, or re-run with --cwd set to the repository where the review was started", root))
 	}
@@ -302,6 +303,17 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		return reviewPreflightError(fmt.Errorf("derive reviewer artifact subject: %w", err))
 	}
 	if *preflight {
+		if *subjectHash != "" && *subjectHash != subject.SubjectHash {
+			legacyFrozen, legacyErr := (reviewtransaction.SnapshotBuilder{Repo: root}).WithLegacyCandidateDiff(ctx, state.InitialSnapshot, frozen)
+			if legacyErr != nil {
+				return reviewPreflightError(errors.New("review capture preflight subject hash does not match the provider-owned authority; refresh the binding with gentle-ai review status --cwd <repo> --contract <same-contract> --next-transition"))
+			}
+			legacySubject, legacyErr := reviewtransaction.NewLegacyArtifactSubject(state, record.Revision, legacyFrozen, *lens, *order, "")
+			if legacyErr != nil || *subjectHash != legacySubject.SubjectHash {
+				return reviewPreflightError(errors.New("review capture preflight subject hash does not match the provider-owned authority; refresh the binding with gentle-ai review status --cwd <repo> --contract <same-contract> --next-transition"))
+			}
+			frozen, subject = legacyFrozen, legacySubject
+		}
 		publicRoot := root
 		if contextHandle != "" {
 			publicRoot = ""
@@ -309,7 +321,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		return encodeReviewJSON(stdout, reviewCapturePreflightResult{
 			Schema: reviewCapturePreflightSchema, Capability: reviewCapturePreflightCapability, RepositoryRoot: publicRoot,
 			LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Lens: *lens, SelectedOrder: *order,
-			ArtifactSubject: subject, CandidateDiff: frozen.CandidateDiff,
+			ArtifactSubject: subject, BaseTree: frozen.BaseTree, CandidateTree: frozen.CandidateTree,
 			ChangedPathManifest: append([]reviewtransaction.ChangedPathManifestEntry{}, frozen.ChangedPathManifest...),
 		})
 	}
@@ -330,6 +342,15 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	}
 	if result.Findings == nil || result.Evidence == nil {
 		return reviewPreflightError(errors.New("reviewer result requires explicit findings and evidence arrays"))
+	}
+	if result.SubjectHash != subject.SubjectHash {
+		legacyFrozen, legacyErr := (reviewtransaction.SnapshotBuilder{Repo: root}).WithLegacyCandidateDiff(ctx, state.InitialSnapshot, frozen)
+		if legacyErr == nil {
+			legacySubject, subjectErr := reviewtransaction.NewLegacyArtifactSubject(state, record.Revision, legacyFrozen, *lens, *order, "")
+			if subjectErr == nil && result.SubjectHash == legacySubject.SubjectHash {
+				frozen, subject = legacyFrozen, legacySubject
+			}
+		}
 	}
 	if _, err := prepareCompactReviewerResults(reviewtransaction.CompactState{SelectedLenses: []string{*lens}}, []facadeReviewerResult{result}, facadeRefuterResult{}); err != nil {
 		return reviewPreflightError(err)
@@ -365,8 +386,12 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if err != nil {
 		return reviewPreflightError(err)
 	}
+	envelopeSchema := reviewAdmittedResultSchema
+	if subject.Schema == reviewtransaction.ArtifactSubjectSchemaV1 {
+		envelopeSchema = reviewtransaction.AdmittedReviewerResultSchemaV1
+	}
 	envelope, err := json.Marshal(admittedReviewerResult{
-		Schema: reviewAdmittedResultSchema, Subject: subject, Admission: admission, Result: result,
+		Schema: envelopeSchema, Subject: subject, Admission: admission, Result: result,
 	})
 	if err != nil {
 		return err
@@ -671,7 +696,7 @@ func readFacadeReviewerArtifacts(ctx context.Context, repo string, raw []string,
 		if err != nil {
 			return nil, fmt.Errorf("verify reviewer artifact %d: %w", index+1, err)
 		}
-		result, subject, err := decodeBoundAdmittedReviewerResult(payload, artifact.SHA256, state, revision, index, frozen)
+		result, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, payload, artifact.SHA256, state, revision, index, frozen)
 		if err != nil {
 			return nil, fmt.Errorf("parse reviewer artifact %d: %w", index+1, err)
 		}
@@ -713,7 +738,7 @@ func discoverCapturedReviewerArtifacts(ctx context.Context, repo, storeDir strin
 		if err != nil {
 			return nil, fmt.Errorf("verify captured reviewer result %d: %w", order, err)
 		}
-		_, subject, err := decodeBoundAdmittedReviewerResult(payload, artifact.SHA256, state, revision, order, frozen)
+		_, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, payload, artifact.SHA256, state, revision, order, frozen)
 		if err != nil {
 			return nil, fmt.Errorf("verify captured reviewer admission %d: %w", order, err)
 		}
@@ -753,7 +778,7 @@ func readCapturedReviewerResults(ctx context.Context, repo, storeDir string, sta
 		if err != nil {
 			return nil, err
 		}
-		result, subject, err := decodeBoundAdmittedReviewerResult(payload, artifact.SHA256, state, revision, index, frozen)
+		result, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, payload, artifact.SHA256, state, revision, index, frozen)
 		if err != nil {
 			return nil, err
 		}
@@ -773,7 +798,7 @@ func reviewerArtifactFrozenContext(ctx context.Context, repo string, state revie
 	return frozen, nil
 }
 
-func decodeBoundAdmittedReviewerResult(payload []byte, artifactDigest string, state reviewtransaction.CompactState, currentRevision string, order int, frozen reviewtransaction.FrozenCandidateContext) (facadeReviewerResult, reviewtransaction.ArtifactSubject, error) {
+func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload []byte, artifactDigest string, state reviewtransaction.CompactState, currentRevision string, order int, frozen reviewtransaction.FrozenCandidateContext) (facadeReviewerResult, reviewtransaction.ArtifactSubject, error) {
 	var envelope admittedReviewerResult
 	if err := decodeFacadeJSONBytes(payload, &envelope); err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
@@ -787,13 +812,25 @@ func decodeBoundAdmittedReviewerResult(payload []byte, artifactDigest string, st
 		) {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, errors.New("captured reviewer result does not bind the active authority revision")
 	}
-	expected, err := reviewtransaction.NewArtifactSubject(
-		state, envelope.Subject.AuthorityRevision, frozen, state.SelectedLenses[order], order, envelope.Subject.CorrectionTargetIdentity,
-	)
+	subjectFrozen := frozen
+	var expected reviewtransaction.ArtifactSubject
+	var err error
+	if envelope.Subject.Schema == reviewtransaction.ArtifactSubjectSchemaV1 {
+		subjectFrozen, err = (reviewtransaction.SnapshotBuilder{Repo: repo}).WithLegacyCandidateDiff(ctx, state.InitialSnapshot, frozen)
+		if err == nil {
+			expected, err = reviewtransaction.NewLegacyArtifactSubject(
+				state, envelope.Subject.AuthorityRevision, subjectFrozen, state.SelectedLenses[order], order, envelope.Subject.CorrectionTargetIdentity,
+			)
+		}
+	} else {
+		expected, err = reviewtransaction.NewArtifactSubject(
+			state, envelope.Subject.AuthorityRevision, frozen, state.SelectedLenses[order], order, envelope.Subject.CorrectionTargetIdentity,
+		)
+	}
 	if err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
 	}
-	result, err := decodeAdmittedReviewerResult(payload, expected, frozen)
+	result, err := decodeAdmittedReviewerResult(payload, expected, subjectFrozen)
 	if err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
 	}
@@ -813,7 +850,11 @@ func decodeAdmittedReviewerResult(payload []byte, expected reviewtransaction.Art
 	if err := decodeFacadeJSONBytes(payload, &envelope); err != nil {
 		return facadeReviewerResult{}, err
 	}
-	if envelope.Schema != reviewAdmittedResultSchema || !reflect.DeepEqual(envelope.Subject, expected) {
+	wantSchema := reviewAdmittedResultSchema
+	if expected.Schema == reviewtransaction.ArtifactSubjectSchemaV1 {
+		wantSchema = reviewtransaction.AdmittedReviewerResultSchemaV1
+	}
+	if envelope.Schema != wantSchema || !reflect.DeepEqual(envelope.Subject, expected) {
 		return facadeReviewerResult{}, errors.New("captured reviewer result does not contain the exact provider-owned subject")
 	}
 	if err := envelope.Admission.Validate(expected); err != nil {

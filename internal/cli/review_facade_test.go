@@ -623,7 +623,7 @@ func TestReviewFacadeStartProvableShellAndModeRiskSelectsCanonical4R(t *testing.
 }
 
 // TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible proves the
-// unnegotiated response never gains a negotiated field (candidate_diff,
+// unnegotiated response never gains a negotiated field (changed_path_manifest,
 // changed_path_manifest, artifact_subjects, ...); it stays a strict compatible
 // subset. It does NOT promise the field set is frozen forever: "hint" is an
 // existing additive field (see reviewStartEmptyCandidateHint) and now also
@@ -653,7 +653,7 @@ func TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible(t *testing.T
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unnegotiated start fields = %v, want %v", got, want)
 	}
-	for _, negotiatedOnly := range []string{"candidate_diff", "changed_path_manifest", "artifact_subjects", "schema", "contract"} {
+	for _, negotiatedOnly := range []string{"changed_path_manifest", "artifact_subjects", "schema", "contract"} {
 		if _, ok := fields[negotiatedOnly]; ok {
 			t.Fatalf("unnegotiated start leaked negotiated-only field %q: %s", negotiatedOnly, output.String())
 		}

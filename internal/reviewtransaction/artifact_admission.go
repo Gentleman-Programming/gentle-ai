@@ -145,8 +145,9 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 			"reviewer result echoed a different artifact subject: "+artifactRecaptureContinuation+
 				", which is "+request.ExpectedSubject.SubjectHash)
 	}
-	if _, err := request.FrozenContext.CandidateDiff.Bytes(); err != nil || request.FrozenContext.CandidateDiff.SHA256 != request.ExpectedSubject.CandidateDiffSHA256 {
-		return fail(ArtifactAdmissionBindingMismatch, "frozen candidate diff does not match the artifact subject")
+	if request.FrozenContext.BaseTree != request.ExpectedSubject.BaseTree ||
+		request.FrozenContext.CandidateTree != request.ExpectedSubject.CandidateTree {
+		return fail(ArtifactAdmissionBindingMismatch, "frozen candidate trees do not match the artifact subject")
 	}
 	manifestDigest, err := ChangedPathManifestDigest(request.FrozenContext.ChangedPathManifest)
 	if err != nil || manifestDigest != request.ExpectedSubject.ChangedPathManifestSHA256 {

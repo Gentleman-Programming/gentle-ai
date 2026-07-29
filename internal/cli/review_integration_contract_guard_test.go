@@ -354,7 +354,7 @@ func TestReviewIntegrationDualModeCommandsAreClassified(t *testing.T) {
 // reviewIntegrationEncodeOperationCallRegexp extracts the two result
 // arguments passed to encodeReviewIntegrationOperation(stdout, negotiated|
 // true, <operation constant>, <legacy>, <public>).
-var reviewIntegrationEncodeOperationCallRegexp = regexp.MustCompile(`encodeReviewIntegrationOperation\(stdout, (?:negotiated|true), (ReviewIntegrationOperation\w+), (\w+), (\w+)\)`)
+var reviewIntegrationEncodeOperationCallRegexp = regexp.MustCompile(`encodeReviewIntegrationOperation\(stdout, (?:negotiated|true), (ReviewIntegrationOperation\w+), (\w+), (\w+)(?:, (?:\*?\w+|""))?\)`)
 
 // TestReviewIntegrationVacuousModeClassificationIsProvenBySource is Guard C's
 // evidence half for the "vacuous" classification: it re-derives, from every

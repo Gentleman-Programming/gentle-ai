@@ -37,7 +37,7 @@ func TestNegotiatedReviewStartMatchesVersionedFixture(t *testing.T) {
 		reviewtransaction.LensRisk, reviewtransaction.LensResilience,
 		reviewtransaction.LensReadability, reviewtransaction.LensReliability,
 	}
-	if result.Schema != ReviewIntegrationStartSchema || result.Contract != ReviewIntegrationContractV1 ||
+	if result.Schema != ReviewIntegrationStartSchemaV2 || result.Contract != ReviewIntegrationContractV1 ||
 		result.Operation != "review.start" || result.Action != "created" || !result.LensesRequired ||
 		result.LineageID != "review-start-fixture" || result.State != reviewtransaction.StateReviewing ||
 		result.RiskLevel != reviewtransaction.RiskHigh || !reflect.DeepEqual(result.SelectedLenses, wantLenses) ||
@@ -687,7 +687,7 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 	// "hint" is present here (see TestReviewFacadeStartLensesRequiredHintsNegotiatedContract
 	// in review_start_evidence_test.go) because this fixture's tracked.txt
 	// change requires lenses: the unnegotiated response cannot itself carry
-	// the frozen candidate_diff/changed_path_manifest/artifact_subjects those
+	// the frozen tree/changed_path_manifest/artifact_subjects those
 	// lenses need, so it names the exact negotiated rerun that returns them.
 	wantFields := []string{
 		"action", "changed_files", "changed_lines", "correction_budget", "hint", "lens_bindings", "lenses_required",
@@ -744,7 +744,7 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 }
 
 func TestNegotiatedReviewStartRejectsInvalidContractsBeforeAuthorityMutation(t *testing.T) {
-	for _, contract := range []string{"", "gentle-ai.review-integration/v2", " " + ReviewIntegrationContractV1} {
+	for _, contract := range []string{"", "gentle-ai.review-integration/v3", " " + ReviewIntegrationContractV1} {
 		t.Run(strings.ReplaceAll(contract, "/", "_"), func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
@@ -838,21 +838,17 @@ func TestNegotiatedReviewStartSchemaAndFixtureAreStrict(t *testing.T) {
 		t.Fatal(err)
 	}
 	if schema["$schema"] != "https://json-schema.org/draft/2020-12/schema" ||
-		schema["$id"] != ReviewIntegrationStartSchemaID || schema["additionalProperties"] != false {
+		schema["$id"] != ReviewIntegrationStartSchemaIDV2 || schema["additionalProperties"] != false {
 		t.Fatalf("START schema header = %#v", schema)
 	}
 	properties := schema["properties"].(map[string]any)
-	if properties["candidate_diff"] == nil || properties["changed_path_manifest"] == nil || schema["allOf"] == nil {
+	if properties["candidate_diff"] == nil || properties["base_tree"] == nil || properties["candidate_tree"] == nil || properties["changed_path_manifest"] == nil || schema["allOf"] == nil {
 		t.Fatalf("START schema does not declare conditional frozen context: %#v", schema)
 	}
 	dependencies := schema["dependentRequired"].(map[string]any)
 	if !reflect.DeepEqual(dependencies["candidate_diff"], []any{"changed_path_manifest"}) ||
 		!reflect.DeepEqual(dependencies["changed_path_manifest"], []any{"candidate_diff"}) {
-		t.Fatalf("START schema does not require frozen context fields as a pair: %#v", dependencies)
-	}
-	candidateDiffSchema := properties["candidate_diff"].(map[string]any)
-	if candidateDiffSchema["$ref"] != "#/$defs/frozen_candidate_diff" {
-		t.Fatalf("START candidate_diff schema = %#v", candidateDiffSchema)
+		t.Fatalf("START schema does not require frozen tree context fields together: %#v", dependencies)
 	}
 	fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "start-v2.fixture.json"))
 	if err != nil {
@@ -896,7 +892,7 @@ func runNegotiatedReviewStart(t *testing.T, repo, lineage string) ReviewIntegrat
 	t.Helper()
 	var output bytes.Buffer
 	if err := RunReview(boundNegotiatedStartArgs(t, []string{
-		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage,
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage,
 	}), &output); err != nil {
 		t.Fatal(err)
 	}

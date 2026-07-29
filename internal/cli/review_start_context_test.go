@@ -49,11 +49,14 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 		t.Fatalf("negotiated replay action = %q, want resumed", resumed.Action)
 	}
 	assertNegotiatedStartFrozenContext(t, repo, resumed)
-	frozenDiff := *resumed.CandidateDiff
+	frozenBase, frozenCandidate := resumed.BaseTree, resumed.CandidateTree
 	frozenManifest := append([]reviewtransaction.ChangedPathManifestEntry(nil), (*resumed.ChangedPathManifest)...)
-	frozenDiffBytes := decodeReviewStartCandidateDiff(t, frozenDiff)
-	if !bytes.Contains(frozenDiffBytes, []byte("+private tracked candidate")) || !bytes.Contains(frozenDiffBytes, []byte("+private intended candidate")) {
-		t.Fatalf("negotiated START omitted frozen candidate bytes:\n%s", frozenDiffBytes)
+	encoded, err := json.Marshal(resumed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("private tracked candidate")) || bytes.Contains(encoded, []byte("private intended candidate")) {
+		t.Fatalf("negotiated START leaked candidate bytes: %s", encoded)
 	}
 	if len(frozenManifest) != 2 || frozenManifest[0].Path != "private.txt" || !frozenManifest[0].IntendedUntracked ||
 		frozenManifest[1].Path != "tracked.txt" || frozenManifest[1].IntendedUntracked {
@@ -71,7 +74,7 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 		t.Fatal(err)
 	}
 	blocked := runNegotiatedReviewStart(t, repo, lineage)
-	if blocked.Action != string(reviewtransaction.CompactStartBlocked) || *blocked.CandidateDiff != frozenDiff ||
+	if blocked.Action != string(reviewtransaction.CompactStartBlocked) || blocked.BaseTree != frozenBase || blocked.CandidateTree != frozenCandidate ||
 		!reflect.DeepEqual(*blocked.ChangedPathManifest, frozenManifest) {
 		t.Fatalf("blocked START did not retain frozen context: %#v", blocked)
 	}
@@ -90,7 +93,7 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 		completeNegotiatedStartReview(t, repo, created, true)
 
 		reused := runNegotiatedReviewStart(t, repo, lineage)
-		if reused.Action != string(reviewtransaction.CompactStartReuseReceipt) || *reused.CandidateDiff != *created.CandidateDiff ||
+		if reused.Action != string(reviewtransaction.CompactStartReuseReceipt) || reused.BaseTree != created.BaseTree || reused.CandidateTree != created.CandidateTree ||
 			!reflect.DeepEqual(*reused.ChangedPathManifest, *created.ChangedPathManifest) {
 			t.Fatalf("receipt replay START = %#v", reused)
 		}
@@ -106,7 +109,7 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 		writeReviewStartCandidate(t, repo, "tracked.txt", "replacement target after escalation\n", 0o644)
 		recovery := runNegotiatedReviewStart(t, repo, lineage)
 		if recovery.Action != string(reviewtransaction.CompactStartBlocked) || recovery.LineageID != lineage ||
-			*recovery.CandidateDiff != *created.CandidateDiff || !reflect.DeepEqual(*recovery.ChangedPathManifest, *created.ChangedPathManifest) {
+			recovery.BaseTree != created.BaseTree || recovery.CandidateTree != created.CandidateTree || !reflect.DeepEqual(*recovery.ChangedPathManifest, *created.ChangedPathManifest) {
 			t.Fatalf("recovery START = %#v", recovery)
 		}
 	})
@@ -128,30 +131,9 @@ func TestNegotiatedReviewStartContextValidationDistinguishesMissingAndEmpty(t *t
 			subjects[0].SubjectHash = "sha256:" + strings.Repeat("0", 64)
 			result.ArtifactSubjects = subjects
 		}},
-		{name: "missing diff", mutate: func(result *ReviewIntegrationStartResult) { result.CandidateDiff = nil }},
+		{name: "missing base tree", mutate: func(result *ReviewIntegrationStartResult) { result.BaseTree = "" }},
+		{name: "missing candidate tree", mutate: func(result *ReviewIntegrationStartResult) { result.CandidateTree = "" }},
 		{name: "missing manifest", mutate: func(result *ReviewIntegrationStartResult) { result.ChangedPathManifest = nil }},
-		{name: "empty diff for changed path", mutate: func(result *ReviewIntegrationStartResult) {
-			empty, err := reviewtransaction.NewFrozenCandidateDiff(nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			result.CandidateDiff = &empty
-		}},
-		{name: "noncanonical diff encoding", mutate: func(result *ReviewIntegrationStartResult) {
-			diff := *result.CandidateDiff
-			diff.Encoding = "utf-8"
-			result.CandidateDiff = &diff
-		}},
-		{name: "diff digest mismatch", mutate: func(result *ReviewIntegrationStartResult) {
-			diff := *result.CandidateDiff
-			diff.SHA256 = "sha256:" + strings.Repeat("0", 64)
-			result.CandidateDiff = &diff
-		}},
-		{name: "diff byte size mismatch", mutate: func(result *ReviewIntegrationStartResult) {
-			diff := *result.CandidateDiff
-			diff.ByteSize++
-			result.CandidateDiff = &diff
-		}},
 		{name: "manifest count mismatch", mutate: func(result *ReviewIntegrationStartResult) {
 			empty := []reviewtransaction.ChangedPathManifestEntry{}
 			result.ChangedPathManifest = &empty
@@ -186,12 +168,7 @@ func TestNegotiatedReviewStartContextValidationDistinguishesMissingAndEmpty(t *t
 		})
 	}
 
-	emptyDiff, err := reviewtransaction.NewFrozenCandidateDiff(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	emptyManifest := []reviewtransaction.ChangedPathManifestEntry{}
-	valid.CandidateDiff = &emptyDiff
 	valid.ChangedPathManifest = &emptyManifest
 	valid.LensesRequired = false
 	valid.RiskLevel = reviewtransaction.RiskLow
@@ -269,7 +246,7 @@ func TestNegotiatedReviewStartContextFailureReportsTruthfulAuthorityProvenance(t
 
 func assertNegotiatedStartFrozenContext(t *testing.T, repo string, result ReviewIntegrationStartResult) {
 	t.Helper()
-	if result.CandidateDiff == nil || result.ChangedPathManifest == nil {
+	if result.BaseTree == "" || result.CandidateTree == "" || result.ChangedPathManifest == nil {
 		t.Fatalf("negotiated START context is missing: %#v", result)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, result.LineageID)
@@ -284,7 +261,7 @@ func assertNegotiatedStartFrozenContext(t *testing.T, repo string, result Review
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *result.CandidateDiff != want.CandidateDiff || !reflect.DeepEqual(*result.ChangedPathManifest, want.ChangedPathManifest) {
+	if result.BaseTree != want.BaseTree || result.CandidateTree != want.CandidateTree || !reflect.DeepEqual(*result.ChangedPathManifest, want.ChangedPathManifest) {
 		t.Fatalf("START context does not match frozen authority:\ngot=%#v\nwant=%#v", result, want)
 	}
 }
@@ -323,15 +300,6 @@ func completeNegotiatedStartReview(t *testing.T, repo string, started ReviewInte
 	if _, err := store.Replace(record.Revision, "review/complete-verification", next); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func decodeReviewStartCandidateDiff(t *testing.T, diff reviewtransaction.FrozenCandidateDiff) []byte {
-	t.Helper()
-	payload, err := diff.Bytes()
-	if err != nil {
-		t.Fatalf("candidate diff metadata = %#v: %v", diff, err)
-	}
-	return payload
 }
 
 func forceReviewStartContextFailure(forced error) func() {

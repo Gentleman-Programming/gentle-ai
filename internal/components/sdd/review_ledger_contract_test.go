@@ -20,10 +20,11 @@ const requiredOrchestratorMergeModeClause = "Parent orchestrator and native CLI 
 func TestBoundedReviewContractLeavesCanonicalizationToNativeGo(t *testing.T) {
 	content := boundedReviewContract()
 	for _, want := range []string{
-		"Native Go validates, canonicalizes, persists, hashes, reopens, and binds results",
-		"models never construct canonical bytes or hashes",
-		"Freeze merged findings",
-		"plugin appends the artifact subject, exact candidate diff, and changed-path manifest only after native preflight succeeds",
+		"Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding",
+		"Only candidate-caused severe findings block",
+		"OpenCode preflights the opaque binding",
+		"injects only the provider's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered manifest",
+		"read-only native Git commands",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("orchestrator contract missing %q", want)
@@ -61,7 +62,10 @@ func TestDedicatedReviewAndJudgmentAssetsRenderRoleContracts(t *testing.T) {
 		for _, path := range paths {
 			t.Run(family+"/"+path, func(t *testing.T) {
 				content := renderBoundedReviewAsset(path)
-				assertTextContainsClauses(t, path, content, []string{"read-only", "candidate", "BLOCKER", "CRITICAL", "causal", "proof"})
+				assertTextContainsClauses(t, path, content, []string{"candidate", "BLOCKER", "CRITICAL", "causal", "proof"})
+				if !strings.Contains(content, "read-only") && !strings.Contains(content, "Never edit") {
+					t.Errorf("%s does not state its non-mutating role", path)
+				}
 				assertNoReviewerLifecycleInstructions(t, path, content)
 			})
 		}
@@ -72,20 +76,29 @@ func TestDedicatedReviewersAndRefutersAreStructurallyReadOnly(t *testing.T) {
 	for _, path := range []string{
 		"claude/agents/review-risk.md", "claude/agents/review-readability.md",
 		"claude/agents/review-reliability.md", "claude/agents/review-resilience.md",
-		"claude/agents/review-refuter.md",
 	} {
 		frontmatter := markdownFrontmatter(t, path)
-		for _, forbidden := range []string{"Bash", "Write", "Edit"} {
+		if strings.Contains(frontmatter, "Bash") {
+			t.Errorf("%s grants unrestricted Bash without a per-command policy", path)
+		}
+		for _, forbidden := range []string{"Write", "Edit"} {
 			if strings.Contains(frontmatter, forbidden) {
 				t.Errorf("%s frontmatter grants %s", path, forbidden)
 			}
 		}
 	}
+	if frontmatter := markdownFrontmatter(t, "claude/agents/review-refuter.md"); strings.Contains(frontmatter, "Bash") || strings.Contains(frontmatter, "Write") || strings.Contains(frontmatter, "Edit") {
+		t.Errorf("Claude refuter grants an execution or mutation tool: %s", frontmatter)
+	}
 	for _, path := range []string{
 		"kiro/agents/review-risk.md", "kiro/agents/review-readability.md",
 		"kiro/agents/review-reliability.md", "kiro/agents/review-resilience.md",
-		"kiro/agents/review-refuter.md", "kiro/agents/jd-judge-a.md", "kiro/agents/jd-judge-b.md",
 	} {
+		if frontmatter := markdownFrontmatter(t, path); !strings.Contains(frontmatter, `tools: ["read"]`) || strings.Contains(frontmatter, "shell") {
+			t.Errorf("%s does not fail closed without a narrow shell policy:\n%s", path, frontmatter)
+		}
+	}
+	for _, path := range []string{"kiro/agents/review-refuter.md", "kiro/agents/jd-judge-a.md", "kiro/agents/jd-judge-b.md"} {
 		if frontmatter := markdownFrontmatter(t, path); !strings.Contains(frontmatter, `tools: ["read"]`) {
 			t.Errorf("%s is not read-only:\n%s", path, frontmatter)
 		}
@@ -108,13 +121,18 @@ func TestDedicatedReviewersAndRefutersAreStructurallyReadOnly(t *testing.T) {
 	for _, path := range []string{
 		"kimi/agents/review-risk.yaml", "kimi/agents/review-readability.yaml",
 		"kimi/agents/review-reliability.yaml", "kimi/agents/review-resilience.yaml",
-		"kimi/agents/review-refuter.yaml",
 	} {
 		content := assets.MustRead(path)
 		for _, excluded := range []string{"multiagent:Task", "shell:Shell", "file:WriteFile", "file:StrReplaceFile"} {
 			if !strings.Contains(content, excluded) {
 				t.Errorf("%s does not exclude %s", path, excluded)
 			}
+		}
+	}
+	refuter := assets.MustRead("kimi/agents/review-refuter.yaml")
+	for _, excluded := range []string{"multiagent:Task", "shell:Shell", "file:WriteFile", "file:StrReplaceFile"} {
+		if !strings.Contains(refuter, excluded) {
+			t.Errorf("Kimi refuter does not exclude %s", excluded)
 		}
 	}
 }
@@ -133,7 +151,8 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 				prompt := agent["prompt"].(string)
 				assertTextContainsClauses(t, path+" "+name, prompt, []string{"## Scope", "## Candidate-Causal Admission", "## Severity", "## Evidence", "## Output"})
 				assertNoReviewerLifecycleInstructions(t, path+" "+name, prompt)
-				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any))
+				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any), true)
+				assertOpenCodeReviewerPermission(t, path+" "+name, agent["permission"])
 			}
 			for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
 				agent := agentsMap[name].(map[string]any)
@@ -142,7 +161,7 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 					t.Errorf("%s %s does not use the native role-only judgment contract", path, name)
 				}
 				assertNoReviewerLifecycleInstructions(t, path+" "+name, prompt)
-				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any))
+				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any), false)
 			}
 			refuter := agentsMap[opencode.ReviewRefuterAgent].(map[string]any)
 			refuterPrompt := refuter["prompt"].(string)
@@ -150,8 +169,38 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 				t.Errorf("%s refuter prompt is not bounded: %s", path, refuterPrompt)
 			}
 			assertNoReviewerLifecycleInstructions(t, path+" refuter", refuterPrompt)
-			assertOpenCodeReadOnlyTools(t, path+" refuter", refuter["tools"].(map[string]any))
+			assertOpenCodeReadOnlyTools(t, path+" refuter", refuter["tools"].(map[string]any), false)
 		})
+	}
+}
+
+func assertOpenCodeReviewerPermission(t *testing.T, label string, raw any) {
+	t.Helper()
+	permission, ok := raw.(map[string]any)
+	if !ok || permission["edit"] != "deny" {
+		t.Fatalf("%s permission = %#v, want edit deny", label, raw)
+	}
+	bash, ok := permission["bash"].(map[string]any)
+	if !ok || bash["*"] != "deny" || len(bash) != len(reviewerGitCommandSuffixes)+1 {
+		t.Fatalf("%s bash permission = %#v", label, permission["bash"])
+	}
+	for _, suffix := range reviewerGitCommandSuffixes {
+		pattern := reviewerGitCommandPrefix + " " + suffix
+		for _, replacement := range []string{"<base_tree>", "<candidate_tree>", "<tree>", "<path>"} {
+			pattern = strings.ReplaceAll(pattern, replacement, "*")
+		}
+		if bash[pattern] != "allow" {
+			t.Errorf("%s does not allow exact reviewer Git shape %q", label, pattern)
+		}
+	}
+	encoded, err := json.Marshal(permission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deny := strings.Index(string(encoded), `"*":"deny"`)
+	allow := strings.Index(string(encoded), `":"allow"`)
+	if deny < 0 || allow < 0 || deny > allow {
+		t.Fatalf("%s permission order does not put broad deny before narrow allows: %s", label, encoded)
 	}
 }
 
@@ -193,7 +242,7 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// contract. Two field reports cost a review each because the prompt
 		// left both unsaid: one lens returned findings/evidence with no
 		// subject_hash and no inspection, and one reported inspection.status
-		// "access_failure" after trying to generate the candidate diff and
+		// "access_failure" after trying to inspect the candidate and
 		// verify its SHA-256 itself, which its declared read-only tools never
 		// permitted. The prompt now names GENTLE_AI_REVIEW_BINDING as the only
 		// source of subject_hash, forbids inventing it, says the diff and
@@ -224,6 +273,49 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// collect, and stop, and derives reviewer bindings from the exact
 		// collection input so resumed reviews never depend on a prior START reply.
 		//
+		// One authority-bound native reader replaces per-lens bare-repository setup
+		// and plumbing instructions (12,307 -> 11,597 / 25,954 -> 23,270). The
+		// command is runtime-independent and candidate bytes remain absent.
+		//
+		// Retiring `review read-diff` for direct read-only native Git against the
+		// frozen trees grew the recipe (11,597 -> 12,316 / 23,270 -> 25,873): the
+		// prompt now carries compact discovery plus selective literal-pathspec
+		// commands, environment hygiene, the no---binary rule, oversized-path
+		// triage, and the Git-unavailable incomplete result. Candidate bytes
+		// remain absent and prompt size still scales with path count, not patch
+		// size.
+		//
+		// Checkout independence grew both surfaces (12,316 -> 13,074 / 25,873 ->
+		// 27,981): reviewers now run the recipe in their session working
+		// directory because frozen trees resolve through the shared object
+		// store, orchestrators never send reviewers into another checkout, and
+		// a denied optional preparatory read no longer aborts inspection. This
+		// closes the cross-checkout regression where a main-repo session
+		// reviewing a worktree candidate denied every subagent tool call.
+		//
+		// The numstat-vs-manifest suspicion rule (13,074 -> 13,294 / 27,981 ->
+		// 28,861) came out of the first admitted resilience finding: a mutable
+		// Git attribute can reclassify changed text as binary and silently
+		// suppress its hunk, so a path numstat calls binary while its manifest
+		// entry is an ordinary text-mode modification must be named in
+		// evidence, never metadata-triaged in silence.
+		//
+		// Naming the fix validator's capability added 379 shared-contract
+		// characters to both rows (13,294 -> 13,673 / 28,861 -> 29,240). It cost
+		// a real correction attempt to learn: the contract said "run one
+		// read-only scoped fix validator" without naming who, an orchestrator
+		// routed targeted validation to the refuter (no shell, by design), and
+		// that inconclusive answer was submitted as a failed check, escalating
+		// the lineage irreversibly.
+		//
+		// The ceilings move with it (14,000 -> 15,700 / 29,500 -> 33,600) to
+		// restore the ~15% margin below. This is not slackening the guard: a
+		// ceiling left fixed while the pin legitimately grows converges on the
+		// pin and becomes the second copy the paragraph below forbids. Both new
+		// ceilings still fail loudly on the regression they exist for — one
+		// agent falling through to the un-rendered contract adds roughly 28,600
+		// (standard) or 19,400 (per agent, full-4R), far above either ceiling.
+		//
 		// maxCharacters is NOT a second copy of wantChars. wantChars catches
 		// every byte of change and must be updated by hand with a reason; the
 		// ceiling exists only to catch the rendering silently giving up on
@@ -233,8 +325,11 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// un-rendered protocol). The ceilings below sit ~15% above the pins so
 		// an ordinary wording fix never touches them, and 4-5x below the
 		// un-rendered sizes so a renderer regression still fails loudly.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 10_428, maxCharacters: 12_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 19_632, maxCharacters: 22_600},
+		// Provider-bound preflight and the immutable Git recipe initially pushed
+		// the pins too close to those ceilings. Removing repeated prose restores
+		// more than 15% headroom without weakening either contract.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 13_536, maxCharacters: 15_700},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_956, maxCharacters: 33_600},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -250,6 +345,9 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 			}
 			if chars > tt.maxCharacters {
 				t.Fatalf("rendered protocol cost = %d characters / %d estimated tokens, target <= %d / %d", chars, tokens, tt.maxCharacters, tt.maxCharacters/4)
+			}
+			if chars*115 > tt.maxCharacters*100 {
+				t.Fatalf("rendered protocol cost = %d characters leaves less than 15%% headroom below ceiling %d", chars, tt.maxCharacters)
 			}
 		})
 	}
@@ -269,9 +367,9 @@ func markdownFrontmatter(t *testing.T, path string) string {
 	return parts[1]
 }
 
-func assertOpenCodeReadOnlyTools(t *testing.T, label string, tools map[string]any) {
+func assertOpenCodeReadOnlyTools(t *testing.T, label string, tools map[string]any, bash bool) {
 	t.Helper()
-	want := map[string]bool{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+	want := map[string]bool{"*": false, "read": true, "write": false, "edit": false, "bash": bash, "task": false}
 	if len(tools) != len(want) {
 		t.Fatalf("%s tools = %#v", label, tools)
 	}
@@ -322,5 +420,5 @@ func readGentleOrchestratorPrompt(t *testing.T, settingsPath string) string {
 
 func assertOpenCodeRefuterToolsReadOnly(t *testing.T, label string, tools map[string]any) {
 	t.Helper()
-	assertOpenCodeReadOnlyTools(t, label, tools)
+	assertOpenCodeReadOnlyTools(t, label, tools, false)
 }

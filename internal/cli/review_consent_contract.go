@@ -10,6 +10,8 @@ import (
 
 const ReviewIntegrationConsentSchema = "gentle-ai.review-integration.consent/v1"
 const ReviewIntegrationConsentSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/consent.schema.json"
+const ReviewIntegrationConsentSchemaV2 = "gentle-ai.review-integration.consent/v2"
+const ReviewIntegrationConsentSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/consent.schema.json"
 
 // ReviewIntegrationConsentResult is the typed per-candidate consent question a
 // relay-declared negotiated START answers with instead of proceeding. It is a
@@ -79,6 +81,7 @@ func newReviewIntegrationConsentResult(
 	snapshot reviewtransaction.Snapshot,
 	assessment reviewtransaction.RiskAssessment,
 	followUpBase string,
+	contract string,
 ) (ReviewIntegrationConsentResult, error) {
 	// The evidence phrases may legitimately be empty (a large change with no
 	// sensitive path still escalates); the reason sentence always explains the
@@ -121,6 +124,9 @@ func newReviewIntegrationConsentResult(
 			Command: reviewConsentOffPathCommand,
 		},
 	}
+	if contract == ReviewIntegrationContractV2 {
+		result.Schema, result.Contract = ReviewIntegrationConsentSchemaV2, ReviewIntegrationContractV2
+	}
 	if err := result.Validate(); err != nil {
 		return ReviewIntegrationConsentResult{}, fmt.Errorf("validate consent question: %w", err)
 	}
@@ -128,7 +134,9 @@ func newReviewIntegrationConsentResult(
 }
 
 func (result ReviewIntegrationConsentResult) Validate() error {
-	if result.Schema != ReviewIntegrationConsentSchema || result.Contract != ReviewIntegrationContractV1 ||
+	legacyContract := result.Schema == ReviewIntegrationConsentSchema && result.Contract == ReviewIntegrationContractV1
+	nativeGitContract := result.Schema == ReviewIntegrationConsentSchemaV2 && result.Contract == ReviewIntegrationContractV2
+	if (!legacyContract && !nativeGitContract) ||
 		result.Operation != "review.start" || result.Action != reviewConsentActionRequired || !result.Blocking {
 		return errors.New("invalid consent question identity") // refusal:by-design world-action: this envelope is built and validated by the same file; the exit is a code fix, not a command
 	}

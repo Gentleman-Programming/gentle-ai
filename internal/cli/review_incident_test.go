@@ -61,9 +61,9 @@ func TestReviewCaptureResultPreflightVerifiesBindingWithoutMutation(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(preflight.CandidateDiff, wantContext.CandidateDiff) ||
+	if preflight.BaseTree != wantContext.BaseTree || preflight.CandidateTree != wantContext.CandidateTree ||
 		!reflect.DeepEqual(preflight.ChangedPathManifest, wantContext.ChangedPathManifest) {
-		t.Fatalf("preflight frozen context differs from authority\ngot=%#v %#v\nwant=%#v %#v", preflight.CandidateDiff, preflight.ChangedPathManifest, wantContext.CandidateDiff, wantContext.ChangedPathManifest)
+		t.Fatalf("preflight frozen context differs from authority\ngot=%s..%s %#v\nwant=%s..%s %#v", preflight.BaseTree, preflight.CandidateTree, preflight.ChangedPathManifest, wantContext.BaseTree, wantContext.CandidateTree, wantContext.ChangedPathManifest)
 	}
 	if _, err := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir)); !os.IsNotExist(err) {
 		t.Fatal("preflight persisted a reviewer result artifact")
