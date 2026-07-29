@@ -215,6 +215,8 @@ func reviewModeScopeForSource(source RDDModeSource) string {
 		return "global"
 	case RDDModeSourceCloneLocal:
 		return "clone"
+	case RDDModeSourceWorktreeLocal:
+		return "worktree"
 	default:
 		return ""
 	}
