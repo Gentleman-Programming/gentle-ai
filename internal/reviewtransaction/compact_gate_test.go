@@ -742,8 +742,10 @@ func TestCompactCommittedNextSliceIntendedFilterPropagatesGitInfraFailure(t *tes
 	gitProcessTreeStarter = func(command *exec.Cmd) (func() error, error) {
 		// Match only the batched `ls-files -z --cached` invocation this test
 		// exercises; snapshot.go runs an unrelated `ls-files --cached -z`.
+		// Require `--cached` to be the final argument so invocations with
+		// trailing flags or pathspecs never trip the injected failure.
 		for i, arg := range command.Args {
-			if arg == "ls-files" && i+2 < len(command.Args) && command.Args[i+1] == "-z" && command.Args[i+2] == "--cached" {
+			if arg == "ls-files" && i+2 == len(command.Args)-1 && command.Args[i+1] == "-z" && command.Args[i+2] == "--cached" {
 				return nil, errors.New("job object creation rejected")
 			}
 		}
