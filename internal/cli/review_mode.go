@@ -40,7 +40,6 @@ type ReviewModeResult struct {
 	BlastRadius *ReviewModeBlastRadius          `json:"blast_radius,omitempty"`
 }
 
-// ReviewModeBlastRadius reports who sees a successful mode mutation.
 type ReviewModeBlastRadius struct {
 	Affects             string               `json:"affects"`
 	WorktreesAvailable  *bool                `json:"worktrees_available,omitempty"`
@@ -49,8 +48,6 @@ type ReviewModeBlastRadius struct {
 	Worktrees           []ReviewModeWorktree `json:"worktrees,omitempty"`
 }
 
-// ReviewModeWorktree identifies one shared-clone worktree without relying on a name
-// alone, which may be duplicated by users.
 type ReviewModeWorktree struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
@@ -100,6 +97,7 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 		}
 	})
 	if operation != "status" && !scopeProvided {
+		// refusal:by-design operator-knowledge: only the user can choose the affected scope; the command cannot safely infer global, clone, or worktree
 		return fmt.Errorf("review mode %s requires an explicit --scope=<global|clone|worktree>", operation)
 	}
 	selectedScope := strings.TrimSpace(*scope)
@@ -245,14 +243,10 @@ func reviewModeUnreadable(
 		case reviewtransaction.RDDModeSourceCloneLocal:
 			path, pathErr = reviewtransaction.CloneLocalRDDModeRecordPath(ctx, repo)
 		case reviewtransaction.RDDModeSourceWorktreeLocal:
-			path, pathErr = reviewtransaction.WorktreeLocalRDDModeRecordPath(ctx, repo)
+			scopes = append(scopes, ReviewModeUnreadableScope{Scope: reviewModeScopeWorktree, Path: "the current worktree", Repo: repo})
 		}
 		if pathErr == nil && path != "" {
-			scope := reviewModeScopeClone
-			if local.Source == reviewtransaction.RDDModeSourceWorktreeLocal {
-				scope = reviewModeScopeWorktree
-			}
-			scopes = append(scopes, ReviewModeUnreadableScope{Scope: scope, Path: path, Repo: repo})
+			scopes = append(scopes, ReviewModeUnreadableScope{Scope: reviewModeScopeClone, Path: path, Repo: repo})
 		}
 	}
 	if len(scopes) == 0 {
@@ -469,6 +463,7 @@ type reviewModeLimitedBuffer struct {
 
 func (buffer *reviewModeLimitedBuffer) Write(value []byte) (int, error) {
 	if buffer.Len()+len(value) > buffer.limit {
+		// refusal:by-design world-action: the bounded disclosure is omitted when the repository emits more worktree data than it can safely report
 		return 0, errors.New("review mode worktree list exceeds output limit")
 	}
 	return buffer.Buffer.Write(value)

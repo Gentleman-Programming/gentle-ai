@@ -261,6 +261,17 @@ func SetCloneLocalRDDMode(
 	return setLocalRDDMode(ctx, repo, mode, expectedRevision, global, RDDModeSourceCloneLocal)
 }
 
+// SetWorktreeLocalRDDMode records this worktree's off-only override.
+func SetWorktreeLocalRDDMode(
+	ctx context.Context,
+	repo string,
+	mode RDDMode,
+	expectedRevision string,
+	global RDDGlobalMode,
+) (RDDModeStatus, error) {
+	return setLocalRDDMode(ctx, repo, mode, expectedRevision, global, RDDModeSourceWorktreeLocal)
+}
+
 func setLocalRDDMode(
 	ctx context.Context,
 	repo string,
