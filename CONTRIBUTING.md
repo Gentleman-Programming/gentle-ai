@@ -140,6 +140,18 @@ chmod +x docker-test.sh
 
 > ⚠️ E2E tests spin up containers to simulate real installation environments. They may take a few minutes to complete.
 
+### Benchmark Validation
+
+[`bench/`](bench/README.md) is a separate Go module, so root-module tests do not validate it. For benchmark-module changes, run these commands from `bench/`:
+
+```bash
+go build ./...
+go vet ./...
+go test ./...
+```
+
+For measured product-behavior changes, use driven mode and report the command, tested binary or commit, selected subset or axes, and result summary. Compare before and after only when claiming a measured friction change. For unrelated changes, mark benchmark validation `N/A` with a brief reason.
+
 ### Windows — Known Test Limitations
 
 Some unit tests require OS-level capabilities that are restricted on Windows by default.
@@ -289,6 +301,7 @@ Review feedback should be warm, direct, and useful quickly. Start with the actio
 - [ ] Commits are organized by deliverable work unit
 - [ ] All unit tests pass (`go test ./...`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
+- [ ] Benchmark run completed, or this change is not applicable to the benchmark (explain why in the Test Plan).
 - [ ] Commits follow Conventional Commits format
 - [ ] Code is self-reviewed
 
