@@ -311,14 +311,18 @@ func (builder SnapshotBuilder) activePassiveContentPaths(ctx context.Context, sn
 		return nil, err
 	}
 	scanned := int64(0)
+	treeBlobs := make(map[string]map[string]treeBlob, 2)
 	for _, tree := range []string{snapshot.BaseTree, snapshot.CandidateTree} {
 		blobs, err := treeBlobSizes(ctx, repo, tree, paths)
 		if err != nil {
 			return nil, err
 		}
+		byPath := make(map[string]treeBlob, len(blobs))
 		for _, blob := range blobs {
 			scanned += blob.size
+			byPath[blob.path] = blob
 		}
+		treeBlobs[tree] = byPath
 	}
 	active := make(map[string]struct{}, len(candidates))
 	if scanned > processBoundaryScanByteLimit {
@@ -326,6 +330,26 @@ func (builder SnapshotBuilder) activePassiveContentPaths(ctx context.Context, sn
 			active[logicalPath] = struct{}{}
 		}
 		return active, nil
+	}
+	oids := make([]string, 0, len(candidates)*2)
+	for _, stat := range candidates {
+		for _, version := range []struct {
+			tree string
+			mode string
+		}{{tree: snapshot.BaseTree, mode: stat.OldMode}, {tree: snapshot.CandidateTree, mode: stat.NewMode}} {
+			if version.mode == "" || version.mode == "000000" {
+				continue
+			}
+			blob, present := treeBlobs[version.tree][stat.Path]
+			if !present {
+				return nil, fmt.Errorf("read immutable passive candidate %q: blob is absent from tree inventory", stat.Path) // refusal:by-design world-action: contradictory immutable Git evidence cannot be repaired by a review command
+			}
+			oids = append(oids, blob.oid)
+		}
+	}
+	contents, err := batchBlobContents(ctx, repo, oids)
+	if err != nil {
+		return nil, err
 	}
 	for _, stat := range candidates {
 		for _, version := range []struct {
@@ -335,17 +359,54 @@ func (builder SnapshotBuilder) activePassiveContentPaths(ctx context.Context, sn
 			if version.mode == "" || version.mode == "000000" {
 				continue
 			}
-			content, err := runGit(ctx, repo, nil, nil, "cat-file", "blob", version.tree+":"+stat.Path)
-			if err != nil {
-				return nil, fmt.Errorf("read immutable passive candidate %q: %w", stat.Path, err)
-			}
-			if !isPassiveDocumentContent(stat.Path, content) {
+			blob := treeBlobs[version.tree][stat.Path]
+			if !isPassiveDocumentContent(stat.Path, contents[blob.oid]) {
 				active[stat.Path] = struct{}{}
 				break
 			}
 		}
 	}
 	return active, nil
+}
+
+// batchBlobContents reads exact OIDs rather than rev:path expressions, keeping
+// path bytes out of cat-file's line-delimited batch protocol.
+func batchBlobContents(ctx context.Context, repo string, oids []string) (map[string][]byte, error) {
+	contents := make(map[string][]byte, len(oids))
+	if len(oids) == 0 {
+		return contents, nil
+	}
+	stdin := make([]byte, 0, len(oids)*65)
+	for _, oid := range oids {
+		stdin = append(stdin, oid...)
+		stdin = append(stdin, '\n')
+	}
+	output, err := runGit(ctx, repo, nil, stdin, "cat-file", "--batch")
+	if err != nil {
+		return nil, fmt.Errorf("read immutable passive candidate blobs: %w", err)
+	}
+	rest := output
+	for _, oid := range oids {
+		newline := bytes.IndexByte(rest, '\n')
+		if newline < 0 {
+			return nil, fmt.Errorf("read immutable passive candidate blob %s: truncated cat-file batch header", oid) // refusal:by-design world-action: malformed Git protocol output cannot be made trustworthy by a review command
+		}
+		fields := bytes.Fields(rest[:newline])
+		rest = rest[newline+1:]
+		if len(fields) != 3 || string(fields[0]) != oid || string(fields[1]) != "blob" {
+			return nil, fmt.Errorf("read immutable passive candidate blob %s: unexpected cat-file batch header %q", oid, fields) // refusal:by-design world-action: malformed Git protocol output cannot be made trustworthy by a review command
+		}
+		size, parseErr := strconv.ParseInt(string(fields[2]), 10, 64)
+		if parseErr != nil || size < 0 || size >= int64(len(rest)) || rest[int(size)] != '\n' {
+			return nil, fmt.Errorf("read immutable passive candidate blob %s: invalid cat-file batch content", oid) // refusal:by-design world-action: malformed Git protocol output cannot be made trustworthy by a review command
+		}
+		contents[oid] = rest[:int(size)]
+		rest = rest[int(size)+1:]
+	}
+	if len(rest) != 0 {
+		return nil, errors.New("read immutable passive candidate blobs: unexpected trailing cat-file batch output") // refusal:by-design world-action: malformed Git protocol output cannot be made trustworthy by a review command
+	}
+	return contents, nil
 }
 
 // isPassiveDocumentContent proves a document is inert from its own bytes.
@@ -372,6 +433,7 @@ func hasInterpreterDirective(content []byte) bool {
 
 type treeBlob struct {
 	path string
+	oid  string
 	size int64
 }
 
@@ -471,7 +533,7 @@ func treeBlobSizes(ctx context.Context, repo, tree string, paths []string) ([]tr
 			if parseErr != nil {
 				return nil, fmt.Errorf("parse source blob size: %w", parseErr)
 			}
-			blobs = append(blobs, treeBlob{path: string(entry[tab+1:]), size: size})
+			blobs = append(blobs, treeBlob{path: string(entry[tab+1:]), oid: fields[2], size: size})
 		}
 	}
 	return blobs, nil

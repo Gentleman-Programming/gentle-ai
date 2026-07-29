@@ -821,21 +821,22 @@ func buildCompactGateRequestWithPushBase(ctx context.Context, repo string, state
 // remain untracked. After an approved candidate is committed exactly as
 // reviewed, its frozen intended paths are tracked in HEAD and can no longer
 // participate in the live current-changes target of the next work unit. Only
-// the expected not-in-index lookup exit reclassifies a path as untracked;
-// git infrastructure failures (timeouts, process control, unexpected exits)
-// propagate so the gate fails instead of misclassifying scope.
+// a cached-path inventory classifies the complete set in one subprocess; Git
+// infrastructure failures propagate instead of misclassifying scope.
 func compactStillUntrackedIntended(ctx context.Context, repo string, intended []string) ([]string, error) {
 	remaining := []string{}
+	if len(intended) == 0 {
+		return remaining, nil
+	}
+	output, err := runGitInventory(ctx, repo, "ls-files", "--cached", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("classify intended-untracked paths: %w", err)
+	}
+	tracked := nulSeparatedPathSet(output)
 	for _, logicalPath := range intended {
-		_, err := runGit(ctx, repo, nil, nil, "ls-files", "--error-unmatch", "--", literalPathspec(logicalPath))
-		if err == nil {
-			continue
+		if _, isTracked := tracked[logicalPath]; !isTracked {
+			remaining = append(remaining, logicalPath)
 		}
-		var lookup *GitCommandError
-		if !errors.As(err, &lookup) || lookup.ExitCode != 1 {
-			return nil, fmt.Errorf("classify intended-untracked path %q: %w", logicalPath, err)
-		}
-		remaining = append(remaining, logicalPath)
 	}
 	return remaining, nil
 }

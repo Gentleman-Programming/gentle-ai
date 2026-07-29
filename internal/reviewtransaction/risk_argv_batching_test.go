@@ -234,7 +234,7 @@ func TestTreeBlobSizesSingleBatchMatchesUnbatchedGitLsTree(t *testing.T) {
 		if parseErr != nil {
 			t.Fatalf("parse blob size: %v", parseErr)
 		}
-		want = append(want, treeBlob{path: string(entry[tab+1:]), size: size})
+		want = append(want, treeBlob{path: string(entry[tab+1:]), oid: fields[2], size: size})
 	}
 
 	sortTreeBlobsForTest(batched)
@@ -288,5 +288,84 @@ func TestProcessBoundaryRiskReasonsGrepBatchesMixedMatchAndNoMatch(t *testing.T)
 	want := RiskReason{Code: RiskReasonProcessBoundary, Signal: SignalShellProcess, Path: "tools/spawn.py"}
 	if assessment.Level != RiskHigh || !reflect.DeepEqual(assessment.Reasons, []RiskReason{want}) {
 		t.Fatalf("AssessSnapshotRisk() = %#v, want high with %#v", assessment, want)
+	}
+}
+
+func TestActivePassiveContentPathsUsesOneCatFileBatch(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	paths := make([]string, 65)
+	for index := range 64 {
+		paths[index] = fmt.Sprintf("docs/file-%03d.md", index)
+		writeSnapshotFile(t, repo, paths[index], "static documentation\n")
+	}
+	paths[64] = "docs/active.mdx"
+	writeSnapshotFile(t, repo, paths[64], "export const value = 1\n")
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: paths})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := (SnapshotBuilder{Repo: repo}).DiffStats(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	batchCalls, singleCalls := 0, 0
+	originalCommand := gitCommandContext
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if slicesContain(args, "cat-file") {
+			if slicesContain(args, "--batch") {
+				batchCalls++
+			}
+			if slicesContain(args, "blob") {
+				singleCalls++
+			}
+		}
+		return originalCommand(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = originalCommand })
+
+	active, err := (SnapshotBuilder{Repo: repo}).activePassiveContentPaths(context.Background(), snapshot, stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batchCalls != 1 || singleCalls != 0 {
+		t.Fatalf("65-path passive scan cat-file calls = batch:%d single:%d, want 1/0", batchCalls, singleCalls)
+	}
+	if _, present := active["docs/active.mdx"]; !present || len(active) != 1 {
+		t.Fatalf("active passive-content paths = %v, want only docs/active.mdx", active)
+	}
+}
+
+func TestBatchBlobContentsPreservesBinaryObjectBoundariesAndErrors(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	contents := map[string]string{"docs/a.md": "first\n\x00tail\n", "docs/b.md": "without trailing newline"}
+	paths := make([]string, 0, len(contents))
+	for name, content := range contents {
+		writeSnapshotFile(t, repo, name, content)
+		paths = append(paths, name)
+	}
+	sort.Strings(paths)
+	gitSnapshot(t, repo, "add", "--", ".")
+	gitSnapshot(t, repo, "commit", "-m", "batch object fixture")
+	tree := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}"))
+	blobs, err := treeBlobSizes(context.Background(), repo, tree, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oids := make([]string, len(blobs))
+	for index, blob := range blobs {
+		oids[index] = blob.oid
+	}
+	got, err := batchBlobContents(context.Background(), repo, oids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, blob := range blobs {
+		if string(got[blob.oid]) != contents[blob.path] {
+			t.Fatalf("blob content for %q = %q, want %q", blob.path, got[blob.oid], contents[blob.path])
+		}
+	}
+	if _, err := batchBlobContents(context.Background(), repo, []string{strings.Repeat("0", 40)}); err == nil {
+		t.Fatal("missing batch object was accepted")
 	}
 }
