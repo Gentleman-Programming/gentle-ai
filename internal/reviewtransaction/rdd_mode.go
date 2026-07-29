@@ -224,9 +224,10 @@ func reviewModeScopeForSource(source RDDModeSource) string {
 
 func (err *RDDDisabledError) Unwrap() error { return ErrRDDDisabled }
 
-// ResolveRDDMode combines the global user mode with this clone's off-only
-// override. Any off wins, a repository can never force on, and every failure
-// projects a disabled status so a caller that drops the error still fails safe.
+// ResolveRDDMode combines the global user mode with clone- and worktree-local
+// off-only overrides. Any off wins, a repository can never force on, and every
+// failure projects a disabled status so a caller that drops the error still
+// fails safe.
 func ResolveRDDMode(ctx context.Context, repo string, global RDDGlobalMode) (RDDModeStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceDefault), err
@@ -258,18 +259,6 @@ func SetCloneLocalRDDMode(
 	global RDDGlobalMode,
 ) (RDDModeStatus, error) {
 	return setLocalRDDMode(ctx, repo, mode, expectedRevision, global, RDDModeSourceCloneLocal)
-}
-
-// SetWorktreeLocalRDDMode records this worktree's off-only override under its
-// canonical Git directory. It accepts only RDDModeOff or RDDModeUnset.
-func SetWorktreeLocalRDDMode(
-	ctx context.Context,
-	repo string,
-	mode RDDMode,
-	expectedRevision string,
-	global RDDGlobalMode,
-) (RDDModeStatus, error) {
-	return setLocalRDDMode(ctx, repo, mode, expectedRevision, global, RDDModeSourceWorktreeLocal)
 }
 
 func setLocalRDDMode(
@@ -635,7 +624,14 @@ func readCloneLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrid
 }
 
 func readWorktreeLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrideRecord, bool, error) {
-	return readLocalRDDOverride(ctx, repo, RDDModeSourceWorktreeLocal)
+	dir, err := worktreeLocalRDDModeRoot(ctx, repo, false)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return rddModeOverrideRecord{}, false, nil
+		}
+		return rddModeOverrideRecord{}, false, err
+	}
+	return readCloneLocalRDDOverrideHead(dir)
 }
 
 func readLocalRDDOverride(ctx context.Context, repo string, source RDDModeSource) (rddModeOverrideRecord, bool, error) {
@@ -656,11 +652,6 @@ func readLocalRDDOverride(ctx context.Context, repo string, source RDDModeSource
 // override at all.
 func CloneLocalRDDModeRecordPath(ctx context.Context, repo string) (string, error) {
 	return localRDDModeRecordPath(ctx, repo, RDDModeSourceCloneLocal)
-}
-
-// WorktreeLocalRDDModeRecordPath reports this worktree's override record.
-func WorktreeLocalRDDModeRecordPath(ctx context.Context, repo string) (string, error) {
-	return localRDDModeRecordPath(ctx, repo, RDDModeSourceWorktreeLocal)
 }
 
 func localRDDModeRecordPath(ctx context.Context, repo string, source RDDModeSource) (string, error) {
