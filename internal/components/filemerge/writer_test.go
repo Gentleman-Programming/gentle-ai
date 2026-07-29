@@ -16,14 +16,18 @@ import (
 // process lacks SeCreateSymbolicLinkPrivilege. errors.Is does not map this
 // errno to os.ErrPermission, so we unwrap and check the raw value.
 func isSymlinkPrivilegeError(err error) bool {
-	var le *os.LinkError
-	if errors.As(err, &le) {
-		var errno syscall.Errno
-		if errors.As(le.Err, &errno) {
-			return errno == 1314 // ERROR_PRIVILEGE_NOT_HELD
+	var errno syscall.Errno
+	return errors.As(err, &errno) && errno == 1314 // ERROR_PRIVILEGE_NOT_HELD
+}
+
+func mustSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		if isSymlinkPrivilegeError(err) {
+			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
 		}
+		t.Fatalf("Symlink(%q, %q) error = %v", target, link, err)
 	}
-	return false
 }
 
 func TestWriteFileAtomicReadOnlyDirRelaxesOwnerWritePermission(t *testing.T) {
@@ -93,15 +97,7 @@ func TestWriteFileAtomicPreservesExistingSymlink(t *testing.T) {
 		t.Fatalf("WriteFile(target) error = %v", err)
 	}
 	path := filepath.Join(dir, "linked.txt")
-	if err := os.Symlink(target, path); err != nil {
-		// On Windows without Developer Mode or admin rights, symlink creation
-		// requires SeCreateSymbolicLinkPrivilege (ERROR_PRIVILEGE_NOT_HELD = 1314).
-		// Skip gracefully — the test infrastructure lacks the privilege, not the code.
-		if isSymlinkPrivilegeError(err) {
-			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
-		}
-		t.Fatalf("Symlink() error = %v", err)
-	}
+	mustSymlink(t, target, path)
 
 	result, err := WriteFileAtomic(path, []byte("new\n"), 0o644)
 	if err != nil {
@@ -130,12 +126,7 @@ func TestWriteFileAtomicSymlinkNoopPreservesLink(t *testing.T) {
 		t.Fatalf("WriteFile(target) error = %v", err)
 	}
 	path := filepath.Join(dir, "linked.txt")
-	if err := os.Symlink(target, path); err != nil {
-		if isSymlinkPrivilegeError(err) {
-			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
-		}
-		t.Fatalf("Symlink() error = %v", err)
-	}
+	mustSymlink(t, target, path)
 
 	result, err := WriteFileAtomic(path, content, 0o644)
 	if err != nil {
@@ -157,12 +148,7 @@ func TestWriteFileAtomicCreatesDanglingSymlinkTarget(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "missing", "target.txt")
 	path := filepath.Join(dir, "linked.txt")
-	if err := os.Symlink(target, path); err != nil {
-		if isSymlinkPrivilegeError(err) {
-			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
-		}
-		t.Fatalf("Symlink() error = %v", err)
-	}
+	mustSymlink(t, target, path)
 
 	content := []byte("created\n")
 	result, err := WriteFileAtomic(path, content, 0o644)
@@ -188,6 +174,115 @@ func TestWriteFileAtomicCreatesDanglingSymlinkTarget(t *testing.T) {
 	}
 }
 
+func TestWriteFileAtomicAllowsSymlinkWithinHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	target := filepath.Join(home, ".dotfiles", "claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("MkdirAll(target dir) error = %v", err)
+	}
+	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	path := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(path dir) error = %v", err)
+	}
+	mustSymlink(t, target, path)
+
+	if _, err := WriteFileAtomic(path, []byte("new\n"), 0o644); err != nil {
+		t.Fatalf("WriteFileAtomic(home symlink) error = %v, want success", err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "new\n" {
+		t.Fatalf("target content = %q err=%v, want updated target", got, err)
+	}
+}
+
+func TestWriteFileAtomicRejectsSymlinkEscapes(t *testing.T) {
+	base := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "target.txt"), []byte("outside\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outside target) error = %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T) string
+	}{
+		{
+			name: "absolute target outside root",
+			setup: func(t *testing.T) string {
+				path := filepath.Join(base, "absolute-link.txt")
+				mustSymlink(t, filepath.Join(outside, "target.txt"), path)
+				return path
+			},
+		},
+		{
+			name: "relative target escapes root",
+			setup: func(t *testing.T) string {
+				managed := filepath.Join(base, "managed")
+				if err := os.Mkdir(managed, 0o755); err != nil {
+					t.Fatalf("Mkdir(managed) error = %v", err)
+				}
+				path := filepath.Join(managed, "relative-link.txt")
+				mustSymlink(t, filepath.Join("..", "..", filepath.Base(outside), "target.txt"), path)
+				return path
+			},
+		},
+		{
+			name: "chained target escapes root",
+			setup: func(t *testing.T) string {
+				mid := filepath.Join(base, "mid-link.txt")
+				mustSymlink(t, filepath.Join(outside, "target.txt"), mid)
+				path := filepath.Join(base, "chained-link.txt")
+				mustSymlink(t, mid, path)
+				return path
+			},
+		},
+		{
+			name: "dangling target escapes root",
+			setup: func(t *testing.T) string {
+				path := filepath.Join(base, "dangling-link.txt")
+				mustSymlink(t, filepath.Join(outside, "missing.txt"), path)
+				return path
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := WriteFileAtomic(tt.setup(t), []byte("new\n"), 0o644)
+			if err == nil || !strings.Contains(err.Error(), "outside allowed root") {
+				t.Fatalf("WriteFileAtomic() error = %v, want allowed-root rejection", err)
+			}
+		})
+	}
+}
+
+func TestWriteFileAtomicRejectsSymlinkLoop(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first")
+	second := filepath.Join(dir, "second")
+	mustSymlink(t, second, first)
+	mustSymlink(t, first, second)
+
+	if _, err := WriteFileAtomic(first, []byte("new\n"), 0o644); err == nil {
+		t.Fatal("WriteFileAtomic(loop) error = nil, want failure")
+	}
+}
+
+func TestWriteFileAtomicRejectsEscapingSymlinkParentDirectory(t *testing.T) {
+	base := t.TempDir()
+	outside := t.TempDir()
+	linkDir := filepath.Join(base, "linked")
+	mustSymlink(t, outside, linkDir)
+
+	_, err := WriteFileAtomic(filepath.Join(linkDir, "config.txt"), []byte("value\n"), 0o644)
+	if err == nil || !strings.Contains(err.Error(), "outside allowed root") {
+		t.Fatalf("WriteFileAtomic(parent escape) error = %v, want allowed-root rejection", err)
+	}
+}
+
 func TestWriteFileAtomicRejectsOversizedExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "big.txt")
@@ -209,18 +304,8 @@ func TestWriteFileAtomicFollowsSymlinkParentDirectory(t *testing.T) {
 		t.Fatalf("Mkdir(realDir) error = %v", err)
 	}
 	linkDir := filepath.Join(base, "linked")
-	if err := os.Symlink(realDir, linkDir); err != nil {
-		// On Windows without Developer Mode or admin rights, symlink creation
-		// requires SeCreateSymbolicLinkPrivilege (ERROR_PRIVILEGE_NOT_HELD = 1314).
-		// Skip gracefully — the test infrastructure lacks the privilege, not the code.
-		if isSymlinkPrivilegeError(err) {
-			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
-		}
-		t.Fatalf("Symlink(linkDir) error = %v", err)
-	}
+	mustSymlink(t, realDir, linkDir)
 
-	// Writing through a symlinked parent (e.g. ~/.claude/agents → dotfiles repo)
-	// must succeed: the file lands in the real directory.
 	content := []byte("value\n")
 	path := filepath.Join(linkDir, "config.txt")
 	_, err := WriteFileAtomic(path, content, 0o644)
@@ -228,7 +313,6 @@ func TestWriteFileAtomicFollowsSymlinkParentDirectory(t *testing.T) {
 		t.Fatalf("WriteFileAtomic() via symlink parent error = %v, want success", err)
 	}
 
-	// Verify the file was written to the real directory.
 	realPath := filepath.Join(realDir, "config.txt")
 	got, readErr := os.ReadFile(realPath)
 	if readErr != nil {

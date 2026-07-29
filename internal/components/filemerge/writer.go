@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/gentleman-programming/gentle-ai/internal/symlinkguard"
 )
 
 // runtimeGOOS and syncDirFn are package-level vars so tests can override them
@@ -44,7 +46,7 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 		perm = 0o644
 	}
 
-	writePath, err := resolveExistingSymlink(path)
+	writePath, _, err := symlinkguard.ResolveExisting(path)
 	if err != nil {
 		return WriteResult{}, err
 	}
@@ -115,34 +117,6 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 	return WriteResult{Changed: true, Created: created}, nil
 }
 
-func resolveExistingSymlink(path string) (string, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return path, nil
-		}
-		return "", fmt.Errorf("stat file %q: %w", path, err)
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		return path, nil
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return "", fmt.Errorf("resolve symlink %q: %w", path, err)
-		}
-		target, readErr := os.Readlink(path)
-		if readErr != nil {
-			return "", fmt.Errorf("read symlink %q: %w", path, readErr)
-		}
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(filepath.Dir(path), target)
-		}
-		return filepath.Clean(target), nil
-	}
-	return resolved, nil
-}
-
 func readComparableFile(path string) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -150,9 +124,13 @@ func readComparableFile(path string) ([]byte, error) {
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		original := path
-		path, err = filepath.EvalSymlinks(path)
+		var exists bool
+		path, exists, err = symlinkguard.ResolveExisting(path)
 		if err != nil {
-			return nil, fmt.Errorf("resolve symlink %q: %w", original, err)
+			return nil, err
+		}
+		if !exists {
+			return nil, &os.PathError{Op: "resolve symlink", Path: original, Err: os.ErrNotExist}
 		}
 		info, err = os.Stat(path)
 		if err != nil {
@@ -191,11 +169,17 @@ func ensureAtomicParentDir(dir, path string) error {
 		return fmt.Errorf("stat parent directory for %q: %w", path, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		// Parent is a symlink (e.g. ~/.claude/agents → dotfiles repo).
-		// Resolve the target and continue checks against the real directory.
+		// Symlinked parents are valid only when their target stays in-bounds.
+		root, rootErr := symlinkguard.AllowedRoot(dir)
+		if rootErr != nil {
+			return rootErr
+		}
 		resolved, err := filepath.EvalSymlinks(dir)
 		if err != nil {
 			return fmt.Errorf("resolving symlink parent %q for %q: %w", dir, path, err)
+		}
+		if err := symlinkguard.EnsureWithinRoot(resolved, root, dir); err != nil {
+			return err
 		}
 		info, err = os.Stat(resolved)
 		if err != nil {

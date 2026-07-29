@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/internal/symlinkguard"
 )
 
 type jsonPath []string
@@ -239,12 +239,13 @@ func readManagedFile(path string) ([]byte, error) {
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		original := path
-		path, err = filepath.EvalSymlinks(path)
+		var exists bool
+		path, exists, err = symlinkguard.ResolveExisting(path)
 		if err != nil {
-			if os.IsNotExist(err) {
-				return nil, &os.PathError{Op: "resolve symlink", Path: original, Err: os.ErrNotExist}
-			}
-			return nil, fmt.Errorf("resolve symlink %q: %w", original, err)
+			return nil, err
+		}
+		if !exists {
+			return nil, &os.PathError{Op: "resolve symlink", Path: original, Err: os.ErrNotExist}
 		}
 		info, err = os.Stat(path)
 		if err != nil {
