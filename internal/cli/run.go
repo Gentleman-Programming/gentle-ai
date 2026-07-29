@@ -1790,13 +1790,11 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			if adapter.SupportsSkills() {
 				skillDir := adapter.SkillsDir(targetDir)
 				if skillDir != "" {
+					sharedNames, _ := assets.SharedSkillFileNames()
+					for _, name := range sharedNames {
+						paths = append(paths, filepath.Join(skillDir, "_shared", name))
+					}
 					paths = append(paths,
-						filepath.Join(skillDir, "_shared", "persistence-contract.md"),
-						filepath.Join(skillDir, "_shared", "engram-convention.md"),
-						filepath.Join(skillDir, "_shared", "openspec-convention.md"),
-						filepath.Join(skillDir, "_shared", "sdd-phase-common.md"),
-						filepath.Join(skillDir, "_shared", "sdd-status-contract.md"),
-						filepath.Join(skillDir, "_shared", "skill-resolver.md"),
 						filepath.Join(skillDir, "sdd-init", "SKILL.md"),
 						filepath.Join(skillDir, "sdd-explore", "SKILL.md"),
 						filepath.Join(skillDir, "sdd-propose", "SKILL.md"),

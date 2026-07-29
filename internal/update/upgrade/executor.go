@@ -276,15 +276,9 @@ func managedSkillBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		})
 	}
 
-	for _, relPath := range []string{
-		"_shared/persistence-contract.md",
-		"_shared/engram-convention.md",
-		"_shared/openspec-convention.md",
-		"_shared/sdd-phase-common.md",
-		"_shared/sdd-status-contract.md",
-		"_shared/skill-resolver.md",
-	} {
-		paths = append(paths, filepath.Join(skillDir, relPath))
+	sharedNames, _ := assets.SharedSkillFileNames()
+	for _, name := range sharedNames {
+		paths = append(paths, filepath.Join(skillDir, "_shared", name))
 	}
 
 	return paths

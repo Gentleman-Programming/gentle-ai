@@ -2218,3 +2218,28 @@ func TestSDDArchiveFinalStateAuthorityContract(t *testing.T) {
 		}
 	}
 }
+
+func TestSharedSkillFileNamesReturnsAllEmbeddedFiles(t *testing.T) {
+	names, err := SharedSkillFileNames()
+	if err != nil {
+		t.Fatalf("SharedSkillFileNames() error = %v", err)
+	}
+	if len(names) != 8 {
+		t.Fatalf("SharedSkillFileNames() returned %d files, want 8: %v", len(names), names)
+	}
+	want := []string{
+		"SKILL.md",
+		"engram-convention.md",
+		"openspec-convention.md",
+		"persistence-contract.md",
+		"review-ledger-contract.md",
+		"sdd-phase-common.md",
+		"sdd-status-contract.md",
+		"skill-resolver.md",
+	}
+	for i, name := range names {
+		if name != want[i] {
+			t.Fatalf("names[%d] = %q, want %q", i, name, want[i])
+		}
+	}
+}

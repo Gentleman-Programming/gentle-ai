@@ -22,3 +22,18 @@ func Read(path string) (string, error) {
 	}
 	return string(data), nil
 }
+
+// SharedSkillFileNames returns the list of all file basenames in skills/_shared/ sorted alphabetically.
+func SharedSkillFileNames() ([]string, error) {
+	entries, err := FS.ReadDir("skills/_shared")
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	return names, nil
+}

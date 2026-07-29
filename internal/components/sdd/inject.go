@@ -494,14 +494,9 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.SupportsSkills() {
 		skillDir := adapter.SkillsDir(homeDir)
 		if skillDir != "" {
-			sharedFiles := []string{
-				"SKILL.md",
-				"persistence-contract.md",
-				"engram-convention.md",
-				"openspec-convention.md",
-				"sdd-phase-common.md",
-				"sdd-status-contract.md",
-				"skill-resolver.md",
+			sharedFiles, err := assets.SharedSkillFileNames()
+			if err != nil {
+				return InjectionResult{}, fmt.Errorf("read embedded _shared skill file names: %w", err)
 			}
 			sddSkillIDs := []model.SkillID{
 				"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
