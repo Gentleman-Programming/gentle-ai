@@ -335,25 +335,29 @@ func UpsertTopLevelTOMLString(content, key, value string) string {
 	// Assignments after a table or array-table header belong to that table.
 	var cleaned []string
 	inTopLevel := true
+	var multilineQuote byte
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if inTopLevel && (strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=")) {
 			continue
 		}
 		cleaned = append(cleaned, line)
-		if isTOMLTableHeader(trimmed) {
+		if multilineQuote == 0 && isTOMLTableHeader(trimmed) {
 			inTopLevel = false
 		}
+		multilineQuote = updateTOMLMultilineString(line, multilineQuote)
 	}
 
 	// Find insertion point: before the first [section] header.
 	insertAt := len(cleaned)
+	multilineQuote = 0
 	for i, line := range cleaned {
 		trimmed := strings.TrimSpace(line)
-		if isTOMLTableHeader(trimmed) {
+		if multilineQuote == 0 && isTOMLTableHeader(trimmed) {
 			insertAt = i
 			break
 		}
+		multilineQuote = updateTOMLMultilineString(line, multilineQuote)
 	}
 
 	var out []string
@@ -362,6 +366,58 @@ func UpsertTopLevelTOMLString(content, key, value string) string {
 	out = append(out, cleaned[insertAt:]...)
 
 	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
+}
+
+// updateTOMLMultilineString tracks multiline basic and literal string values.
+// Table-like lines inside those values are content, not TOML table headers.
+func updateTOMLMultilineString(line string, multilineQuote byte) byte {
+	var quote byte
+	escaped := false
+	for i := 0; i < len(line); i++ {
+		char := line[i]
+		if multilineQuote != 0 {
+			if char == multilineQuote && i+2 < len(line) && line[i+1] == multilineQuote && line[i+2] == multilineQuote && (multilineQuote == '\'' || !escapedTOMLCharacter(line, i)) {
+				multilineQuote = 0
+				i += 2
+			}
+			continue
+		}
+
+		if quote != 0 {
+			if quote == '"' && char == '\\' && !escaped {
+				escaped = true
+				continue
+			}
+			if char == quote && !escaped {
+				quote = 0
+			}
+			escaped = false
+			continue
+		}
+
+		switch char {
+		case '#':
+			return 0
+		case '"', '\'':
+			if i+2 < len(line) && line[i+1] == char && line[i+2] == char {
+				multilineQuote = char
+				i += 2
+				continue
+			}
+			quote = char
+		}
+	}
+
+	return multilineQuote
+}
+
+func escapedTOMLCharacter(line string, index int) bool {
+	backslashes := 0
+	for index > 0 && line[index-1] == '\\' {
+		backslashes++
+		index--
+	}
+	return backslashes%2 == 1
 }
 
 func isTOMLTableHeader(line string) bool {

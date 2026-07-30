@@ -282,6 +282,63 @@ model_reasoning_effort = "nested-effort"
 	}
 }
 
+func TestUpsertTopLevelTOMLString_IgnoresTableLikeMultilineValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name: "basic string with array table text",
+			input: `instructions = """
+[[profiles]]
+"""
+model = "old-top-level-model"
+
+[mcp_servers.engram]
+command = "engram"
+`,
+			want: `instructions = """
+[[profiles]]
+"""
+
+model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
+		{
+			name: "literal string with standard table text",
+			input: `instructions = '''
+[profiles.default]
+'''
+model = "old-top-level-model"
+
+[mcp_servers.engram]
+command = "engram"
+`,
+			want: `instructions = '''
+[profiles.default]
+'''
+
+model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UpsertTopLevelTOMLString(tt.input, "model", "new-top-level-model")
+
+			if got != tt.want {
+				t.Fatalf("UpsertTopLevelTOMLString() mismatch (-want +got):\nwant:\n%s\ngot:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
 // ─── UpsertCodexMCPServerBlock ────────────────────────────────────────────────
 
 func TestUpsertCodexMCPServerBlock_Empty(t *testing.T) {
