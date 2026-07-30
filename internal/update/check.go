@@ -81,7 +81,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 
 	go func() {
 		defer wg.Done()
-		if strings.TrimSpace(tool.NpmPackage) != "" {
+		if usesOpenCodePluginDetection(tool) {
 			localVersion, pluginRegistered = detectOpenCodePluginPackage(tool.NpmPackage)
 			return
 		}
@@ -118,7 +118,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 
 	// Determine status based on local version.
 	if localVersion == "" {
-		if strings.TrimSpace(tool.NpmPackage) != "" {
+		if usesOpenCodePluginDetection(tool) {
 			if pluginRegistered {
 				result.Status = RegisteredNotMaterialized
 				result.UpdateHint = openCodeRegisteredNotMaterializedHint(tool)
@@ -276,7 +276,18 @@ func shortCommit(sha string) string {
 	return sha[:12]
 }
 
+// usesOpenCodePluginDetection reports whether a tool's local version is read
+// from the OpenCode plugin package layout under ~/.config/opencode. npm-global
+// tools also declare NpmPackage (for registry lookups and upgrades) but detect
+// their installed version via DetectCmd like any other CLI binary.
+func usesOpenCodePluginDetection(tool ToolInfo) bool {
+	return strings.TrimSpace(tool.NpmPackage) != "" && tool.InstallMethod != InstallNpmGlobal
+}
+
 func fetchLatestReleaseForTool(ctx context.Context, tool ToolInfo) (githubRelease, error) {
+	if tool.InstallMethod == InstallNpmGlobal {
+		return fetchLatestNpmRelease(ctx, tool.NpmPackage)
+	}
 	if pattern := strings.TrimSpace(tool.ReleaseTagPattern); pattern != "" {
 		return fetchLatestReleaseMatchingPattern(ctx, tool.Owner, tool.Repo, pattern)
 	}
