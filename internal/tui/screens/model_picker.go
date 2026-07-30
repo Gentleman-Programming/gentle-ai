@@ -777,6 +777,8 @@ func renderPhaseList(
 		return b.String()
 	}
 
+	b.WriteString(styles.SubtextStyle.Render("Configure model assignments for OpenCode's SDD, JD, and review agents:"))
+	b.WriteString("\n")
 	b.WriteString(styles.SubtextStyle.Render("Current assignments:"))
 	b.WriteString("\n\n")
 
