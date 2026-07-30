@@ -168,7 +168,7 @@ For relevant paths, inspect stat, deterministic textual hunks, and exact stored 
 %s
 %s
 
-Repeat the selective shape per literal path; never pass --binary or render the whole patch automatically. --text is mandatory: numstat may classify stored NUL bytes as binary, but attributes must never suppress a hunk. Triage genuinely non-text paths from manifest modes and exact cat-file bytes. Record large-path or binary dispositions in evidence.
+Repeat the selective shape per literal path; never pass --binary or render the whole patch automatically. Text handling is enforced by the native capability. Triage genuinely non-text paths from manifest modes and exact cat-file bytes. Record large-path or binary dispositions in evidence.
 
 ## Scope
 

@@ -227,7 +227,7 @@ func TestOpenCodeReviewInspectionIsNativeAndWindowsPortable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"env -i", " git ", "PowerShell", "cmd /", "Git Bash"} {
+	for _, forbidden := range []string{"env -i", " git ", "--text", "PowerShell", "cmd /", "Git Bash"} {
 		if strings.Contains(prompt, forbidden) || strings.Contains(string(encoded), forbidden) {
 			t.Errorf("review inspection still depends on %q", forbidden)
 		}
@@ -382,8 +382,9 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// is loaded per phase rather than always-on.
 		// +457 defines STATUS-mediated recollection without adding retry state.
 		// Native inspect-candidate removes repeated shell hardening prose and operands.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_935, maxCharacters: 18_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 29_503, maxCharacters: 36_000},
+		// Reviewer prompts no longer expose native Git flags owned by that capability.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_874, maxCharacters: 18_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 29_259, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
