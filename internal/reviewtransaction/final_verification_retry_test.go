@@ -80,6 +80,26 @@ func TestRetryCompactFinalVerificationCreatesOnlyOneFrozenValidatingSuccessor(t 
 	}
 }
 
+func TestFinalVerificationRetryEdgeAcceptsCompletedSuccessor(t *testing.T) {
+	fixture := newFinalVerificationRetryFixture(t, "retry-lifecycle-source", "retry-lifecycle-successor")
+	record, err := RetryCompactFinalVerification(context.Background(), fixture.repo, fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	successor := record.State
+	if err := successor.CompleteVerification([]byte("successful retry evidence\n"), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCompactFinalVerificationRetryEdge(fixture.predecessor, successor); err != nil {
+		t.Fatal(err)
+	}
+
+	successor.PolicyHash = hash("frozen-policy-changed")
+	if err := validateCompactFinalVerificationRetryEdge(fixture.predecessor, successor); err == nil || err.Error() != "final-verification retry successor changed frozen authority or budget state" {
+		t.Fatalf("changed frozen policy error = %v", err)
+	}
+}
+
 func TestRetryCompactFinalVerificationUsesCorrectedCurrentSnapshot(t *testing.T) {
 	fixture := newCorrectedFinalVerificationRetryFixture(t, "retry-corrected-source", "retry-corrected-successor")
 	if snapshotsEqual(fixture.predecessor.State.InitialSnapshot, fixture.predecessor.State.CurrentSnapshot) {
