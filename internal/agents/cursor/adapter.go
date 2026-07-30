@@ -5,8 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 type statResult struct {
@@ -54,8 +55,12 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 
 // --- Installation ---
 
+func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.MustForAgent(model.AgentCursor)
+}
+
 func (a *Adapter) SupportsAutoInstall() bool {
-	return false // Desktop app — cannot install via CLI.
+	return a.CapabilityManifest().Features.AutoInstall
 }
 
 func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
@@ -103,7 +108,7 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 // --- Optional capabilities ---
 
 func (a *Adapter) SupportsOutputStyles() bool {
-	return false
+	return a.CapabilityManifest().Features.OutputStyles
 }
 
 func (a *Adapter) OutputStyleDir(_ string) string {
@@ -111,7 +116,7 @@ func (a *Adapter) OutputStyleDir(_ string) string {
 }
 
 func (a *Adapter) SupportsSlashCommands() bool {
-	return false
+	return a.CapabilityManifest().Features.SlashCommands
 }
 
 func (a *Adapter) CommandsDir(_ string) string {
@@ -119,15 +124,15 @@ func (a *Adapter) CommandsDir(_ string) string {
 }
 
 func (a *Adapter) SupportsSkills() bool {
-	return true
+	return a.CapabilityManifest().Features.Skills
 }
 
 func (a *Adapter) SupportsSystemPrompt() bool {
-	return true
+	return a.CapabilityManifest().Features.SystemPrompt
 }
 
 func (a *Adapter) SupportsMCP() bool {
-	return true
+	return a.CapabilityManifest().Features.MCP
 }
 
 // AgentNotInstallableError is returned when InstallCommand is called on a desktop-only agent.
@@ -142,7 +147,7 @@ func (e AgentNotInstallableError) Error() string {
 // --- Sub-agent support (Cursor native agents in ~/.cursor/agents/) ---
 
 func (a *Adapter) SupportsSubAgents() bool {
-	return true
+	return a.CapabilityManifest().Features.FileSubAgents
 }
 
 func (a *Adapter) SubAgentsDir(homeDir string) string {

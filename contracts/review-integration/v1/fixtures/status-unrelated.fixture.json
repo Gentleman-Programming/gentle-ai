@@ -60,6 +60,10 @@
         "reason_code": "forbidden_unrelated_target"
       },
       {
+        "action": "review.reconcile-authority-batch",
+        "reason_code": "forbidden_unrelated_target"
+      },
+      {
         "action": "review.recover",
         "reason_code": "forbidden_unrelated_target"
       },

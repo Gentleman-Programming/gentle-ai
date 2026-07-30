@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status.schema.json",
+  "title": "Gentle AI Review Integration native Git target status v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "contract", "operation", "applicability", "receipt", "action", "replayability",
+    "target_identity", "projection", "repair", "candidates"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.status/v3"},
+    "contract": {"const": "gentle-ai.review-integration/v2"},
+    "operation": {"const": "review.status"},
+    "applicability": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/applicability"},
+    "authority": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/authority"},
+    "receipt": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/receipt"},
+    "action": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/action"},
+    "action_disposition": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/action_disposition"},
+    "replayability": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/replayability"},
+    "frozen": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/frozen"},
+    "target_identity": {"$ref": "#/$defs/sha256"},
+    "authority_target_identity": {"$ref": "#/$defs/sha256"},
+    "projection": {"$ref": "../../v1/schemas/projection.schema.json"},
+    "repair": {"$ref": "../../v1/schemas/authority-repair-assessment.schema.json"},
+    "candidates": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/candidates"},
+    "reconciliation": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/reconciliation"},
+    "eligibility": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/action_eligibility"},
+    "next_transition": {"$ref": "#/$defs/next_transition"},
+    "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"},
+    "final_verification_retry": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/final_verification_retry"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "next_transition": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "reason_code"],
+      "properties": {
+        "kind": {"enum": ["execute", "collect", "stop"]},
+        "reason_code": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "execute": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_execution"},
+        "collect": {"$ref": "#/$defs/transition_collection"}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "execute"}}, "required": ["kind"]}, "then": {"required": ["execute"], "not": {"required": ["collect"]}}},
+        {"if": {"properties": {"kind": {"const": "collect"}}, "required": ["kind"]}, "then": {"required": ["collect"], "not": {"required": ["execute"]}}},
+        {"if": {"properties": {"kind": {"const": "stop"}}, "required": ["kind"]}, "then": {"not": {"anyOf": [{"required": ["execute"]}, {"required": ["collect"]}]}}}
+      ]
+    },
+    "transition_collection": {
+      "type": "object", "additionalProperties": false, "required": ["inputs"],
+      "properties": {"inputs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/transition_input"}}}
+    },
+    "transition_input": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "schema", "capture_operation", "arguments"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "schema": {"type": "string", "minLength": 1},
+        "capture_operation": {"type": "string", "minLength": 1},
+        "arguments": {
+          "type": "array", "minItems": 1,
+          "items": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_argument"}
+        },
+        "artifact_subject": {"$ref": "artifact-subject.schema.json"},
+        "base_tree": {"$ref": "#/$defs/git_tree"},
+        "candidate_tree": {"$ref": "#/$defs/git_tree"},
+        "changed_path_manifest": {"type": "array", "uniqueItems": true, "items": {"$ref": "start.schema.json#/$defs/changed_path"}},
+        "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"capture_operation": {"const": "external.run_targeted_validation"}}, "required": ["capture_operation"]},
+          "then": {"required": ["validation_request"], "properties": {"schema": {"const": "gentle-ai.review-targeted-validation-request/v1"}}},
+          "else": {"not": {"required": ["validation_request"]}}
+        },
+        {
+          "if": {"properties": {"capture_operation": {"const": "review.capture-result"}}, "required": ["capture_operation"]},
+          "then": {
+            "required": ["artifact_subject", "base_tree", "candidate_tree", "changed_path_manifest"],
+            "properties": {"schema": {"const": "https://gentle-ai.dev/schema/review/reviewer/v1"}}
+          },
+          "else": {
+            "allOf": [
+              {"not": {"required": ["artifact_subject"]}},
+              {"not": {"required": ["base_tree"]}},
+              {"not": {"required": ["candidate_tree"]}},
+              {"not": {"required": ["changed_path_manifest"]}}
+            ]
+          }
+        }
+      ]
+    },
+    "git_tree": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}
+  },
+  "allOf": [
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/0"},
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/1"},
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/2"},
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/3"},
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/4"},
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/5"},
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/6"}
+  ]
+}

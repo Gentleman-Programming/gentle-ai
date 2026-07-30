@@ -48,7 +48,7 @@ For each task:
 Return a structured result with: status, executive_summary, detailed_report (files changed), artifacts, and next_recommended.
 
 POST-APPLY REVIEW ROUTING:
-Return control to the parent orchestrator. If native status reports `nextRecommended: review`, the parent—not the apply executor—runs `gentle-ai review start --cwd <repo>`. The facade derives repository scope, lineage, tier, lenses, and correction budget from live Git.
+Return control to the parent orchestrator. If native status reports `nextRecommended: review`, the parent—not the apply executor—begins negotiated review routing with `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition`. It routes only from the returned `next_transition`: for `execute`, it invokes the exact operation and ordered argument tokens unchanged; for `collect`, it satisfies only the exact named inputs and capture operations before querying STATUS again; for `stop`, it stops without running a lifecycle operation. The parent never substitutes direct START.
 
 ### Authority-First Terminal Procedure
 
@@ -56,11 +56,11 @@ Use only the compact facade; it appends and reads back native authority before m
 
 | Order | Operation | Required result | Terminal mirrors |
 |---|---|---|---|
-| 01 | `gentle-ai review start` | target, tier, lenses, and budget bound | blocked |
-| 02 | `gentle-ai review finalize` | results, evidence, native transitions, and receipt bound | blocked |
-| 03 | `gentle-ai review validate --gate <gate> --cwd <repo>` | authority, receipt, and live Git checked | blocked |
+| 01 | `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` | one provider-owned `next_transition` returned | blocked |
+| 02 | `provider-returned transition` | exact `execute` operation/arguments or `collect` inputs completed; `stop` halts | blocked |
+| 03 | repeat 01–02 | exact returned `review.validate` allows the terminal gate | blocked |
 | 04 | `reconcile-terminal-mirrors` | existing mirrors reconciled | allowed |
 
-After ambiguous output, rerun the same facade operation; native discovery resumes committed authority without another budget. Malformed or ambiguous lineage remains invalid.
+After ambiguous output, query STATUS again; native discovery reports the committed authority and its next transition without another budget. Malformed or ambiguous lineage remains invalid.
 
 Reuse a valid receipt; never auto-launch Judgment Day or create another budget at commit/push/PR/release.

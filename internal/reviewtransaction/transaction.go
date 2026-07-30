@@ -111,21 +111,25 @@ type LensResult struct {
 }
 
 type Finding struct {
-	ID        string   `json:"id"`
-	Lens      string   `json:"lens,omitempty"`
-	Location  string   `json:"location,omitempty"`
-	Severity  string   `json:"severity,omitempty"`
-	Claim     string   `json:"claim,omitempty"`
-	ProofRefs []string `json:"proof_refs,omitempty"`
+	ID                string            `json:"id"`
+	Lens              string            `json:"lens,omitempty"`
+	Location          string            `json:"location,omitempty"`
+	Severity          string            `json:"severity,omitempty"`
+	Claim             string            `json:"claim,omitempty"`
+	ProofRefs         []string          `json:"proof_refs,omitempty"`
+	EvidenceClass     EvidenceClass     `json:"evidence_class,omitempty"`
+	CausalDisposition CausalDisposition `json:"causal_disposition,omitempty"`
 }
 
 type ScopedValidationResult struct {
-	LedgerIDs            []string        `json:"ledger_ids"`
-	Approved             bool            `json:"approved"`
-	FixCausedFindings    []Finding       `json:"fix_caused_findings"`
-	OriginalCriteria     ValidationCheck `json:"original_criteria"`
-	CorrectionRegression ValidationCheck `json:"correction_regression"`
-	FollowUps            []FollowUp      `json:"follow_ups"`
+	LedgerIDs                     []string        `json:"ledger_ids"`
+	Approved                      bool            `json:"approved"`
+	FixCausedFindings             []Finding       `json:"fix_caused_findings"`
+	OriginalCriteria              ValidationCheck `json:"original_criteria"`
+	CorrectionRegression          ValidationCheck `json:"correction_regression"`
+	FollowUps                     []FollowUp      `json:"follow_ups"`
+	TargetedValidationRequestHash string          `json:"targeted_validation_request_hash,omitempty"`
+	CorrectionTargetIdentity      string          `json:"correction_target_identity,omitempty"`
 }
 
 type ValidationCheck struct {
@@ -377,6 +381,12 @@ func canonicalLensResult(result LensResult, allowMissingSevereLocation bool) (Le
 		finding.Location = strings.TrimSpace(finding.Location)
 		finding.Severity = strings.ToUpper(strings.TrimSpace(finding.Severity))
 		finding.Claim = strings.TrimSpace(finding.Claim)
+		if finding.EvidenceClass != "" && !isSupportedEvidenceClass(finding.EvidenceClass) {
+			return LensResult{}, fmt.Errorf("lens result finding[%d] has unsupported evidence class %q", index, finding.EvidenceClass)
+		}
+		if finding.CausalDisposition != "" && !isSupportedCausalDisposition(finding.CausalDisposition) {
+			return LensResult{}, fmt.Errorf("lens result finding[%d] has unsupported causal disposition %q", index, finding.CausalDisposition)
+		}
 		finding.ProofRefs = append([]string(nil), finding.ProofRefs...)
 		for proofIndex := range finding.ProofRefs {
 			finding.ProofRefs[proofIndex] = strings.TrimSpace(finding.ProofRefs[proofIndex])
@@ -884,6 +894,13 @@ func validateTargetedValidation(result ScopedValidationResult, fixDeltaHash stri
 			return fmt.Errorf("%s check is stale for the immutable fix delta", name)
 		}
 	}
+	if (result.TargetedValidationRequestHash == "") != (result.CorrectionTargetIdentity == "") {
+		return errors.New("targeted validation request binding is partial")
+	}
+	if result.TargetedValidationRequestHash != "" &&
+		(!validSHA256(result.TargetedValidationRequestHash) || !validSHA256(result.CorrectionTargetIdentity)) {
+		return errors.New("targeted validation request binding is invalid")
+	}
 	return nil
 }
 
@@ -1211,12 +1228,21 @@ func (transaction *Transaction) escalateBudget(name string) error {
 }
 
 func validateSnapshot(snapshot Snapshot) error {
+	return validateSnapshotKinds(snapshot, false)
+}
+
+func validateCompactSnapshot(snapshot Snapshot) error {
+	return validateSnapshotKinds(snapshot, true)
+}
+
+func validateSnapshotKinds(snapshot Snapshot, allowStagedOverlay bool) error {
 	projection, err := canonicalProjection(snapshot.Projection)
 	if err != nil || projection != snapshot.Projection {
 		return errors.New("snapshot projection is unsupported or non-canonical")
 	}
-	if projection == ProjectionStaged && snapshot.Kind != TargetCurrentChanges && snapshot.Kind != TargetBaseDiff && snapshot.Kind != TargetFixDiff {
-		return errors.New("staged snapshot projection requires current-changes, base-diff, or fix-diff")
+	if projection == ProjectionStaged && snapshot.Kind != TargetCurrentChanges && snapshot.Kind != TargetBaseDiff &&
+		snapshot.Kind != TargetFixDiff && (!allowStagedOverlay || snapshot.Kind != TargetBaseWorkspaceOverlay) {
+		return errors.New("staged snapshot projection kind is unsupported")
 	}
 	if projection == ProjectionStaged && len(snapshot.IntendedUntracked) != 0 {
 		return errors.New("staged snapshot projection cannot contain intended-untracked paths")
@@ -1544,7 +1570,7 @@ func (transaction *Transaction) validateFindingRouting() error {
 }
 
 func findingsHash(findings []Finding) string {
-	payload, _ := json.Marshal(findings)
+	payload, _ := json.Marshal(ledgerProjection(findings))
 	sum := sha256.Sum256(append([]byte("gentle-ai.review-ledger-findings/v1\x00"), payload...))
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
@@ -1803,6 +1829,15 @@ func isConcreteEvidence(value string) bool {
 func isSupportedCausalDisposition(disposition CausalDisposition) bool {
 	switch disposition {
 	case CausalIntroduced, CausalBehaviorActivated, CausalWorsened, CausalPreExisting, CausalBaseOnly, CausalUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+func isSupportedEvidenceClass(class EvidenceClass) bool {
+	switch class {
+	case EvidenceDeterministic, EvidenceInferential, EvidenceInsufficient:
 		return true
 	default:
 		return false

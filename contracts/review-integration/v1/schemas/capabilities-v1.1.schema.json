@@ -135,12 +135,13 @@
         },
         "optional": {
           "type": "array",
-          "minItems": 6,
-          "maxItems": 6,
+          "minItems": 7,
+          "maxItems": 7,
           "items": {"$ref": "#/$defs/feature"}
         }
       }
     },
+    "bootstrap": {"$ref": "#/$defs/bootstrap"},
     "compatibility": {
       "type": "object",
       "additionalProperties": false,
@@ -206,6 +207,7 @@
             "risk_reasons",
             "sdd_receipt_binding",
             "scope_change_diagnostics",
+            "native_next_transition",
             "target_scoped_status",
             "uniform_failure_envelope"
           ]
@@ -216,6 +218,27 @@
           "uniqueItems": true,
           "items": {"type": "string", "minLength": 1}
         }
+      }
+    },
+    "bootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "target_selector_variants", "required_feature", "unsupported_outcome", "parent_only"],
+      "properties": {
+        "command": {"const": "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition"},
+        "target_selector_variants": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"$ref": "#/$defs/target_selector"}},
+        "required_feature": {"const": "native_next_transition"},
+        "unsupported_outcome": {"const": "unsupported-capability"},
+        "parent_only": {"const": true}
+      }
+    },
+    "target_selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_type", "arguments"],
+      "properties": {
+        "target_type": {"enum": ["staged", "base_ref", "workspace_overlay_base_ref", "workspace_overlay_base_tree"]},
+        "arguments": {"type": "array", "minItems": 2, "items": {"type": "string", "minLength": 1}}
       }
     }
   }

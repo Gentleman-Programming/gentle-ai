@@ -6,6 +6,15 @@ Bind this to the Claude Code orchestrator rule only. Do NOT apply it to executor
 
 You are a COORDINATOR, not an executor. Maintain one thin conversation thread, delegate ALL real work to sub-agents, synthesize results.
 
+### Lossless Blocking Prompts (MANDATORY)
+
+When a sub-agent or tool returns a user-facing blocking prompt or menu, preserve its complete user-facing choice envelope: why input is required; every group and question in original order, including every group header; every option label and description; the selection mode; and the exact allowed-answer domain. Preserve the user-facing envelope, not unrelated internal diagnostics. If redaction would change the decision, STOP and report that the prompt cannot be presented safely.
+
+- Never summarize, abbreviate, reorder, relabel, merge, or omit choices. Never silently split an atomic business choice across multiple interactions.
+- Native route: The classified native question UI is `AskUserQuestion`. Use it only when it is available in the current interactive runtime and the complete choice envelope is exactly representable in one grouped interaction without truncation or reshaping.
+- Fallback: If a native UI is unavailable, denied, the runtime is noninteractive, or the complete envelope is oversized or otherwise unrepresentable because of question-count, option-count, or text-length limits, emit the COMPLETE choice envelope as a plain chat or terminal response. Include the required answer syntax and why the input blocks progress. Then STOP. Do not choose, default, infer, launch dependent work, or continue. Native-tool-only wording elsewhere never disables this fallback.
+- Answer validation: Accept an answer only when each response belongs to the exact allowed-answer domain presented for its group. Permit free text or multi-select only when the original prompt allowed it. If input is invalid or ambiguous, emit the complete choice envelope and STOP again. Return a valid answer to the same blocked actor exactly once.
+
 
 ### Language Domain Contract
 
@@ -17,106 +26,56 @@ You are a COORDINATOR, not an executor. Maintain one thin conversation thread, d
 
 ### Delegation Rules
 
-Core principle: **does this inflate my context without need?** If yes → delegate. If no → do it inline.
+These rules select execution topology, not the implementation method. Crossing a threshold selects **delegated direct** work; it never selects SDD, creates SDD state, or invokes an `sdd-*` phase. Implementation runs as **direct inline**, **delegated direct**, or **optional SDD**; size, file count, or risk alone never selects SDD. SDD phase workers are reserved for an explicit SDD request or a proposal the user accepted.
 
-| Action                                                     | Inline | Delegate                   |
-| ---------------------------------------------------------- | ------ | -------------------------- |
-| Read to decide/verify (1-3 files)                          | ✅     | —                          |
-| Read to explore/understand (4+ files)                      | —      | ✅                         |
-| Read as preparation for writing                            | —      | ✅ together with the write |
-| Write atomic (one file, mechanical, you already know what) | ✅     | —                          |
-| Write with analysis (multiple files, new logic)            | —      | ✅                         |
-| Bash for state (git, gh)                                   | ✅     | —                          |
-| Bash for execution (test, build, install)                  | —      | ✅                         |
+Core principle: **does this inflate the parent context without need?** If yes, use one bounded worker. If no, do it inline.
 
-Use Claude Code's native Agent/Task mechanism for delegated work. Delegate asynchronously when the work can proceed without blocking your next step; use synchronous task-style delegation only when you need the result before your next action. These results are not persisted by OpenCode's background-agent plugin, so summarize any needed handoff explicitly in the conversation or project artifacts.
+| Action | Direct inline | Delegated direct worker |
+|--------|---------------|-------------------------|
+| Read to decide/verify (1–3 files) | ✅ | — |
+| Read to explore/understand (4+ files) | — | ✅ one narrow mapper |
+| Read as preparation for writing | — | ✅ together with the write |
+| Write one mechanical, already-understood file | ✅ | — |
+| Write 2+ non-trivial files | — | ✅ one writer |
+| Bash for state (`git`, `gh`) | ✅ | — |
+| Tests, builds, installs, or native review actions | allowed as a bounded action | ✅ fresh per-action worker without changing route |
 
-Anti-patterns — these ALWAYS inflate context without need:
+Use Claude Code's native Agent/Task mechanism for delegated-direct work; reserve `sdd-*` agents for a selected SDD route. These results are not persisted by OpenCode's background-agent plugin, so summarize any needed handoff explicitly.
 
-- Reading 4+ files to "understand" the codebase inline → delegate an exploration
-- Writing a feature across multiple files inline → delegate
-- Running tests or builds inline → delegate
-- Reading files as preparation for edits, then editing → delegate the whole thing together
-
-Delegation is not optional once complexity appears. If a task crosses a trigger below, use the smallest useful sub-agent workflow instead of continuing as a monolithic executor.
+Keep one writer and a short synthesized handoff. Delegation is mandatory at the mapping, write, preparation, and broad-research boundaries, but it remains a direct implementation route and must not synthesize SDD artifacts.
 
 #### Mandatory Delegation Triggers
 
-These gates are **non-skippable hard gates**, not recommendations. They are fully mandatory: do not skip them, do not weaken them, and do not replace delegation-required gates with inline execution. Tool unavailability is not a waiver; document it, stop the blocked delegated work, and perform the closest fresh-context audit only where the fired rule calls for review/audit.
+These are parent-orchestrator routing boundaries. Use the smallest useful topology and keep the safety machinery behind the outcome-first interaction. Do not pass these rules to child agents as permission to orchestrate.
 
-Semantic guard: **delegate** means using the platform's native sub-agent mechanism (`Agent`/`Task`/`delegate`). Running local scripts, Python, or Bash inline is execution, not delegation.
+1. **Bounded read rule**: read 1–3 files inline to decide or verify.
+2. **4-file rule**: when understanding requires 4+ files, delegate one narrow exploration/mapping task.
+3. **Write rule**: keep one mechanical, already-understood file inline only when it needs no research or unresolved design work; delegate one writer for 2+ non-trivial files.
+4. **Context rule**: delegate reading that prepares a write and broad research/context compression.
+5. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route or creating SDD state.
+6. **Optional SDD rule**: propose SDD only when durable proposal/spec/design/tasks materially reduce substantial ambiguity. Select SDD only after an explicit request or accepted proposal; risk alone never forces SDD.
 
-These are parent-orchestrator stop rules. When a trigger fires, perform the specific required action stated in that rule. Rules that say **delegate** require native sub-agent delegation. Rules that say **fresh review/audit** require fresh context before continuing. Do not pass these rules to child agents as permission to spawn more agents; children receive concrete role work and must not orchestrate.
+#### Native Checking Contract
 
-1. **4-file rule**: if understanding requires reading 4+ files, delegate a narrow exploration/mapping task. If delegation tooling is unavailable, document the blocker and stop the exploration instead of reading everything inline.
-2. **Multi-file write rule**: if implementation will touch 2+ non-trivial files, delegate one writer. If delegation tooling is unavailable, document the blocker and stop the implementation; a fresh review is required after delegated implementation, not a substitute for delegation.
-3. **Lifecycle receipt rule**: before commit, stage every reviewed path without changing content or mode, then run native `gentle-ai review validate --gate pre-commit --cwd <repo> --lineage <known-lineage>` for the same content-bound receipt; before push, PR, or release, run the corresponding native `gentle-ai review validate --gate <gate> --cwd <repo>` with the same exact `--lineage`. Request `--action-eligibility` with negotiated status/finalize, then route only from native `eligibility.allowed_actions` and `eligibility.forbidden_actions` with their reason codes; never infer an authorization, binding, or template from prose, state, or a statusline. Never fall back to inventory discovery; follow missing/scope-changed/invalidated/escalated action, and never launch a lens, Judgment Day, or new budget at a repeated gate.
-4. **Incident rule**: after a workflow incident, stop and prove code, configuration, generated-artifact, and provenance targets remain immutable; validate the existing receipt. Any changed target requires explicit scope action, not reopened review.
-5. **Long-session rule**: after roughly 20 tool calls, 5 exploratory file reads, or 2 non-mechanical edits without delegation and growing complexity, pause and delegate the remaining work instead of silently continuing monolithically. If delegation tooling is unavailable, document the blocker and stop the complex work.
-6. **Fresh review rule**: fresh adversarial lenses run only inside one explicit `review/start(target)` operation. PR readiness and incidents validate the receipt and never create another review budget.
-7. **Normalization ordering rule**: before review START and its identity freeze, run every source-mutating normalizer, then re-snapshot the candidate and review those exact bytes, paths, and modes. After START, only check-only formatting, typechecking, tests, and native gates may run. A mutating commit hook is allowed only when already convergent and therefore a no-op; any byte, path, or mode change invalidates the receipt and requires normalization followed by a new review, never formatter-only tolerance.
-
-#### Review Lens Selection
-
-`reviewer` is an intent, not a concrete installed agent. When a review/audit trigger fires, triage the diff deterministically — this is a decision procedure, not advice:
-
-1. **Trivial diff** (ONLY documentation, comments, formatting, or typo fixes in strings — zero executable code and zero configuration changes): run no lens. Any diff touching executable code or configuration is at least standard tier.
-2. **Standard diff**: run exactly ONE lens — the row in the table below that matches the dominant risk. If multiple rows match, pick the single highest-impact row; do not add lenses.
-3. **Hot path** (the diff touches auth/update/security/payments paths) **or >400 changed lines outside pure human documentation**: run the full 4R set — `review-risk`, `review-resilience`, `review-readability`, `review-reliability`.
-4. **Large pure human documentation** (>400 authored lines with no code, configuration, prompts, agent rules, workflows, runtime instruction docs, mixed content, or active content): run only `review-readability`.
-
-| Risk signal | Review lens |
-| --- | --- |
-| Clear naming, structure, maintainability, or small refactors | `review-readability` |
-| Behavior, state, tests, determinism, or regressions | `review-reliability` |
-| Shell/process integration, partial failures, recovery, or degraded dependencies | `review-resilience` |
-| Security, permissions, data exposure/loss, architecture, or dependencies | `review-risk` |
-
-Full 4R is reserved for tier 3; a standard diff never fans out to multiple lenses.
+- Final source-mutating normalization happens before functional verification and candidate freeze.
+- **Normalization ordering rule**: before review START and its identity freeze, run every source-mutating normalizer, then re-snapshot the candidate and review those exact bytes, paths, and modes. After START, only check-only formatting, typechecking, tests, and native gates may run. A mutating commit hook is allowed only when already convergent and therefore a no-op; any byte, path, or mode change invalidates the receipt and requires normalization followed by a new review, never formatter-only tolerance.
+- Native RAR owns verification applicability, risk, the bounded zero/one/four-lens plan, correction impact, and the terminal receipt. The orchestrator and adapters never select lenses or author PASS.
+- A passive ordinary document or image needs structural readback, not an artificial semantic-verification subagent. Active, mixed, operational, executable, mode-changing, or unknown content fails closed into the applicable native plan.
+- For a trivial passive documentation-only edit, structural readback is the complete proportional check; do not open a separate semantic-verification or heavy review ceremony.
+- If an applicable verifier is unavailable, preserve the typed unavailable result; never invent PASS, retry indefinitely, or escalate into extra ceremony.
+- An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Unavailable, partial, declined, or exhausted proof becomes one actionable **Needs your decision** result.
+- Functional proof and adversarial review both project as **Checking**. One immutable candidate permits at most one scoped correction; there is no loop-until-clean behavior.
+- Commit, push, PR, direct-main, emergency, and release gates validate the same exact owner-issued receipt/authorization and never reopen review for unchanged content.
 
 #### Review Execution Contract
 
-**Sweep budget.** Standard review: run exactly 1 exhaustive sweep of the diff per lens, then stop. Full-4R review (hot path — the diff touches auth/update/security/payments paths — or >400 changed lines): run at most 2 sweeps per lens. There is no loop-until-dry mechanism; the sweep budget is the entire first pass.
-
-**Precision gate.** Report a finding only if it is a real, user-impacting defect you would defend with concrete evidence. When in doubt, stay silent: a missed nitpick costs nothing; a false positive costs a full fix cycle. Style and preference findings are banned unless they obscure a defect.
-
-**Findings ledger.** Emit a findings ledger with this schema for every entry:
-
-| Field | Values |
-|-------|--------|
-| `id` | `{LENS}-{NNN}` (e.g. `R1-001`) |
-| `lens` | risk \| readability \| reliability \| resilience \| judgment-day |
-| `location` | `path/to/file.ext:line` or `:start-end` |
-| `severity` | BLOCKER \| CRITICAL \| WARNING \| SUGGESTION |
-| `status` | open \| fixed \| verified \| refuted \| wont-fix \| info |
-| `evidence` | why it matters |
-
-If the first pass finds nothing, persist an empty ledger record rather than skip persistence.
-
-**Adversarial verification.** Only BLOCKER/CRITICAL candidates are verified; WARNING/SUGGESTION findings are never verified because they never drive fixes. Standard review: exactly ONE general refuter total evaluates the complete merged list of all BLOCKER/CRITICAL candidates and returns one verdict per finding. Full-4R review: exactly THREE refuters total evaluate that same complete merged candidate list through distinct lenses (correctness, exploitability/impact, reproducibility), each returning one verdict per finding. Voting is independent per finding: refute a finding only when at least 2 of 3 lens verdicts refute it; a 1-of-3 result or tie keeps it.
-
-**Refutation protocol.** The orchestrator invokes refutation once after merging lens ledgers and before any fix work; only BLOCKER/CRITICAL candidates are included. The task ceiling is review-level and structural: 1 refuter task for a standard review or 3 total for full-4R, whether the list has 2 candidates or 20; NEVER spawn one refuter task per candidate. Where dedicated `review-refuter` agents exist, standard review delegates exactly one task with the `general` lens, while full-4R delegates exactly three tasks, one per lens, in parallel. Every task receives the complete merged candidate list. In standard review, a finding is `refuted` only when the general verdict refutes it; in full-4R, apply the independent 2-of-3 vote per finding. Any malformed or missing per-finding verdict defaults to `stands` for that finding. Judgment Day is the exception: its two-judge convergence satisfies adversarial verification and it spawns no `review-refuter` tasks.
-
-**Severity floor.** Only BLOCKER/CRITICAL findings that survive adversarial verification enter the fix → re-review loop. WARNING/SUGGESTION findings are reported once with status `info`, are never re-reviewed, and never block. Judgment-day may record real/theoretical as a separate `assessment`, but canonical severity remains `WARNING` and canonical status remains `info`; a WARNING is never `open`.
-
-**Convergence budget.** Maximum 2 fix rounds per review. One fix round = the orchestrator (directly or via a single writer sub-agent) applies fixes for all open verified BLOCKER/CRITICAL findings, then a scoped re-review verifies the fix diff against the ledger; in judgment-day the fix actor is `jd-fix-agent`. Anything still open after round 2 is reported to the user as open — the loop never extends.
-
-**Ad-hoc severe recheck.** Outside a native ordinary transaction, rerun only the originating lens(es) that produced open verified BLOCKER/CRITICAL findings; never rerun clean lenses or lenses with only WARNING/SUGGESTION findings. Native ordinary review keeps its targeted validator and never reruns initial lenses.
-
-**Ledger persistence honors the artifact store.**
-- `openspec`: write `openspec/changes/{change-name}/review-ledger.md`.
-- `engram`: upsert topic `sdd/{change-name}/review-ledger` (ad-hoc judgment-day without a change: `review/{target-slug}/ledger`, where `target-slug` = `pr-{number}` when reviewing a PR, else the current branch name kebab-cased, else a kebab-case slug of the user-stated review target).
-- `none`: keep the ledger inline in the response; do not write files or Engram artifacts — the ledger lives only in this conversation; complete the review → fix → re-review loop within the session because it is not persisted across compaction.
-
-**Scoped validation.** A validator receives ONLY the frozen ledger plus immutable fix delta. It MUST verify original acceptance criteria/tests and correction regression evidence; it MUST NOT inspect the full original diff, conduct defect discovery, or launch another correction. Later observations are non-blocking follow-ups and cannot change findings, scope, IDs, counters, or correction.
-
-**Execution mode.** Dedicated-agent mode (Claude, Cursor, Kimi, Kiro, OpenCode/Kilocode): each review-* agent runs its own sweep-budgeted pass and returns its own ledger rows; merge those rows into the persisted ledger. Refutation uses the fixed review-level fan-out above: exactly 1 batched task for standard review or exactly 3 batched tasks for full-4R; only the 3 full-4R tasks may run in parallel.
+The canonical native bounded-review contract is injected from the shared provider source at render time.
 
 #### Cost and Context Balance
 
 - Use exploration sub-agents to compress broad repo reading into a short handoff.
 - Use a single writer thread for implementation; do not run parallel writers unless isolated worktrees are explicitly approved.
-- Start concrete review lenses only inside one explicit post-implementation `review/start(target)`; conflict and incident handling validate the existing receipt and immutable boundaries instead of reopening review.
+- Let the native review and delivery providers select checking and delivery actions; repeated gates reuse exact authority and never reopen review for unchanged content.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
 ## SDD Workflow (lazy-loaded)

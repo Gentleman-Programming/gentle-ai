@@ -21,6 +21,11 @@ type compactPrePRChainMember struct {
 	receipt CompactReceipt
 }
 
+type compactPrePRNormalizedMembers struct {
+	delivery       []compactPrePRChainMember
+	authorityAfter map[string][]compactPrePRChainMember
+}
+
 type compactPrePRChainAuthorityProof struct {
 	LineageID   string `json:"lineage_id"`
 	Revision    string `json:"revision"`
@@ -91,8 +96,18 @@ func EvaluateCompactPrePRChain(ctx context.Context, repo string, input NativeGat
 	if err != nil {
 		return invalid("compact pre-PR receipt composition denied: "+err.Error(), err), true
 	}
-	lock, err := acquireStoreLock(derived.lockPath)
+	// Same read-only final-authorization window as evaluateCompactGate, and
+	// the same 1861 rule: losing a race for the advisory lock decided nothing
+	// about the composed chain, so wait it out and report a retryable
+	// non-verdict rather than composition damage.
+	lock, err := acquireStoreLockForReadOnlyEvaluation(ctx, derived.lockPath)
 	if err != nil {
+		var contended *AuthorityLockTimeoutError
+		if errors.As(err, &contended) {
+			evaluation := invalid("compact authority lock is held by a concurrent review operation", err)
+			evaluation.Contended = true
+			return evaluation, true
+		}
 		return invalid("compact pre-PR receipt composition changed during final authorization", err), true
 	}
 	defer lock.release()
@@ -149,7 +164,8 @@ func deriveCompactPrePRChain(ctx context.Context, repo string, input NativeGateR
 		leafSet[store.lineageID] = struct{}{}
 	}
 	authority := make([]compactPrePRChainAuthorityProof, 0, len(stores))
-	members := make([]compactPrePRChainMember, 0, len(stores))
+	approvedMembers := make(map[string]compactPrePRChainMember, len(stores))
+	leafMembers := make([]compactPrePRChainMember, 0, len(leaves))
 	for _, store := range stores {
 		statePayload, readErr := os.ReadFile(store.StatePath())
 		if readErr != nil {
@@ -175,8 +191,12 @@ func deriveCompactPrePRChain(ctx context.Context, repo string, input NativeGateR
 				return compactPrePRChainDerivation{}, true, fmt.Errorf("compact receipt %q does not match current authority", store.lineageID)
 			}
 			proof.ReceiptHash = compactPrePRChainPayloadHash("receipt", receiptPayload)
-			if _, leaf := leafSet[store.lineageID]; leaf && record.State.State == StateApproved {
-				members = append(members, compactPrePRChainMember{store: store, record: record, receipt: receipt})
+			if record.State.State == StateApproved {
+				member := compactPrePRChainMember{store: store, record: record, receipt: receipt}
+				approvedMembers[store.lineageID] = member
+				if _, leaf := leafSet[store.lineageID]; leaf {
+					leafMembers = append(leafMembers, member)
+				}
 			}
 		} else if receiptErr == nil {
 			return compactPrePRChainDerivation{}, true, fmt.Errorf("nonterminal compact authority %q has a receipt", store.lineageID)
@@ -185,11 +205,19 @@ func deriveCompactPrePRChain(ctx context.Context, repo string, input NativeGateR
 		}
 		authority = append(authority, proof)
 	}
-	if len(members) < 2 {
+	normalized, err := normalizeCompactPrePRRecoveryMembers(ctx, repo, leafMembers, approvedMembers)
+	if err != nil {
+		return compactPrePRChainDerivation{}, true, err
+	}
+	if len(normalized.delivery) < 2 {
 		return compactPrePRChainDerivation{}, true, errors.New("no receipt chain contains at least two authoritative approved members")
 	}
 
-	path, compatibility, err := selectCompactPrePRChain(ctx, repo, request, preimages, snapshot, refs, members)
+	deliveryPath, compatibility, err := selectCompactPrePRChain(ctx, repo, request, preimages, snapshot, refs, normalized.delivery)
+	if err != nil {
+		return compactPrePRChainDerivation{}, true, err
+	}
+	authorityPath, err := expandCompactPrePRAuthorityPath(deliveryPath, normalized.authorityAfter)
 	if err != nil {
 		return compactPrePRChainDerivation{}, true, err
 	}
@@ -202,14 +230,14 @@ func deriveCompactPrePRChain(ctx context.Context, repo string, input NativeGateR
 	}
 	if len(preimages.policy) > 0 {
 		policyHash := hashArtifactPayload(preimages.policy)
-		for _, member := range path {
+		for _, member := range authorityPath {
 			if member.record.State.PolicyHash != policyHash {
 				return compactPrePRChainDerivation{}, true, errors.New("explicit pre-PR policy is not bound to every composed receipt")
 			}
 		}
 	}
 
-	proof, err := buildCompactPrePRChainProof(ctx, repo, request, refs, snapshot, authority, path, compatibility)
+	proof, err := buildCompactPrePRChainProof(ctx, repo, request, refs, snapshot, authority, deliveryPath, compatibility)
 	if err != nil {
 		return compactPrePRChainDerivation{}, true, err
 	}
@@ -217,11 +245,11 @@ func deriveCompactPrePRChain(ctx context.Context, repo string, input NativeGateR
 	if err != nil {
 		return compactPrePRChainDerivation{}, true, err
 	}
-	last := path[len(path)-1]
-	fixHashes := make([]string, len(path))
-	policyHashes := make([]string, len(path))
-	evidenceHashes := make([]string, len(path))
-	for index, member := range path {
+	last := authorityPath[len(authorityPath)-1]
+	fixHashes := make([]string, len(authorityPath))
+	policyHashes := make([]string, len(authorityPath))
+	evidenceHashes := make([]string, len(authorityPath))
+	for index, member := range authorityPath {
 		fixHashes[index] = member.receipt.FixDeltaHash
 		policyHashes[index] = member.receipt.PolicyHash
 		evidenceHashes[index] = member.receipt.EvidenceHash
@@ -239,7 +267,7 @@ func deriveCompactPrePRChain(ctx context.Context, repo string, input NativeGateR
 	// the sddstatus legacy empty-ledger compatibility shim.
 	gateContext := GateContext{
 		Gate: GatePrePR, LineageID: last.receipt.LineageID, Generation: last.receipt.Generation,
-		StoreRevision: last.record.Revision, GenesisRevision: path[0].record.Revision,
+		StoreRevision: last.record.Revision, GenesisRevision: authorityPath[0].record.Revision,
 		ChainIdentity: identity, BundleDigest: identity,
 		BaseTree: proof.BaseTree, CandidateTree: proof.HeadTree, PathsDigest: digestPaths(proof.PublicationPaths),
 		FixDeltaHash: compactPrePRChainValuesHash("fix-delta", fixHashes),
@@ -247,7 +275,119 @@ func deriveCompactPrePRChain(ctx context.Context, repo string, input NativeGateR
 		LedgerHash:   EmptyFixDeltaHash, EvidenceHash: compactPrePRChainValuesHash("evidence", evidenceHashes),
 		BaseRelationshipValid: compatibility == nil, BaseAdvance: compatibility, PrePRBoundary: &boundary,
 	}
-	return compactPrePRChainDerivation{proof: proof, identity: identity, context: gateContext, lockPath: path[0].store.lockPath}, true, nil
+	return compactPrePRChainDerivation{proof: proof, identity: identity, context: gateContext, lockPath: authorityPath[0].store.lockPath}, true, nil
+}
+
+// normalizeCompactPrePRRecoveryMembers restores approved predecessors that
+// were removed from the authority leaf set by a valid scope-changed recovery.
+// Degenerate T->T recovery receipts are omitted only from the delivery graph
+// after their exact predecessor revision and target relation are revalidated.
+// They remain in authority expansions so policy, provenance, and composed
+// hashes always bind the current recovery wrapper.
+func normalizeCompactPrePRRecoveryMembers(ctx context.Context, repo string, leaves []compactPrePRChainMember, approved map[string]compactPrePRChainMember) (compactPrePRNormalizedMembers, error) {
+	normalized := compactPrePRNormalizedMembers{
+		delivery:       make([]compactPrePRChainMember, 0, len(leaves)),
+		authorityAfter: make(map[string][]compactPrePRChainMember, len(leaves)),
+	}
+	selected := make(map[string]compactPrePRChainMember, len(leaves))
+	for _, leaf := range leaves {
+		chain := []compactPrePRChainMember{leaf}
+		binding, ok, err := deriveCompactRecoveryBinding(ctx, repo, leaf.record.State)
+		if err != nil {
+			return compactPrePRNormalizedMembers{}, err
+		}
+		if ok {
+			chain = chain[:0]
+			for _, record := range binding.Members {
+				member, exists := approved[record.State.LineageID]
+				if !exists || member.record.Revision != record.Revision {
+					return compactPrePRNormalizedMembers{}, errors.New("composed recovery member is not authoritative and approved")
+				}
+				chain = append(chain, member)
+			}
+		}
+		authorityAfter := make(map[string][]compactPrePRChainMember, len(chain))
+		anchor := ""
+		for index, member := range chain {
+			if index == 0 || !compactDegenerateRecoveryMember(chain[index-1].record, member) {
+				anchor = member.record.State.LineageID
+				selected[anchor] = member
+				authorityAfter[anchor] = []compactPrePRChainMember{member}
+				continue
+			}
+			if anchor == "" {
+				return compactPrePRNormalizedMembers{}, errors.New("composed recovery authority has no delivery anchor")
+			}
+			authorityAfter[anchor] = append(authorityAfter[anchor], member)
+		}
+		for lineage, expansion := range authorityAfter {
+			if current, exists := normalized.authorityAfter[lineage]; exists && !compactPrePRChainMembersEqual(current, expansion) {
+				return compactPrePRNormalizedMembers{}, errors.New("composed recovery authority has conflicting provenance")
+			}
+			normalized.authorityAfter[lineage] = append([]compactPrePRChainMember(nil), expansion...)
+		}
+	}
+	for _, member := range selected {
+		normalized.delivery = append(normalized.delivery, member)
+	}
+	sort.Slice(normalized.delivery, func(i, j int) bool {
+		return normalized.delivery[i].record.State.LineageID < normalized.delivery[j].record.State.LineageID
+	})
+	return normalized, nil
+}
+
+func expandCompactPrePRAuthorityPath(delivery []compactPrePRChainMember, authorityAfter map[string][]compactPrePRChainMember) ([]compactPrePRChainMember, error) {
+	authority := make([]compactPrePRChainMember, 0, len(delivery))
+	seen := make(map[string]struct{}, len(delivery))
+	for _, deliveryMember := range delivery {
+		expansion, ok := authorityAfter[deliveryMember.record.State.LineageID]
+		if !ok || len(expansion) == 0 || !compactPrePRChainMemberEqual(expansion[0], deliveryMember) {
+			return nil, errors.New("selected delivery member has no exact authority provenance")
+		}
+		for _, member := range expansion {
+			lineage := member.record.State.LineageID
+			if _, duplicate := seen[lineage]; duplicate {
+				return nil, errors.New("selected authority path contains duplicate provenance")
+			}
+			seen[lineage] = struct{}{}
+			authority = append(authority, member)
+		}
+	}
+	return authority, nil
+}
+
+func compactPrePRChainMembersEqual(left, right []compactPrePRChainMember) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if !compactPrePRChainMemberEqual(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func compactPrePRChainMemberEqual(left, right compactPrePRChainMember) bool {
+	return left.record.State.LineageID == right.record.State.LineageID && left.record.Revision == right.record.Revision
+}
+
+func compactDegenerateRecoveryMember(predecessor CompactRecord, successor compactPrePRChainMember) bool {
+	recovery := successor.record.State.Recovery
+	if recovery == nil || recovery.Disposition != RecoveryScopeChanged ||
+		successor.receipt.BaseTree != successor.receipt.FinalCandidateTree ||
+		successor.receipt.FixDeltaHash != EmptyFixDeltaHash ||
+		predecessor.State.CurrentSnapshot.CandidateTree != successor.receipt.BaseTree ||
+		validateCompactRecoveryEdge(predecessor, successor.record.State) != nil {
+		return false
+	}
+	relation := classifyCompactTargetRelation(
+		predecessor.State.CurrentSnapshot,
+		successor.record.State.InitialSnapshot,
+		predecessor.State.GenesisPaths,
+		compactTargetRelationEvidence{ExplicitScopeChange: true},
+	)
+	return relation.Kind == compactTargetChangedScope
 }
 
 func selectCompactPrePRChain(ctx context.Context, repo string, request GateRequest, preimages gateArtifactPreimages, snapshot Snapshot, refs *resolvedPrePRRefs, members []compactPrePRChainMember) ([]compactPrePRChainMember, *BaseAdvanceCompatibility, error) {
@@ -319,11 +459,14 @@ func selectCompactPrePRChain(ctx context.Context, repo string, request GateReque
 		if len(adjacency[node]) != wantOutgoing {
 			return nil, nil, errors.New("compact receipt chain contains a fork")
 		}
-		wantIncoming := 1
 		if node == path[0].receipt.BaseTree {
-			wantIncoming = 0
+			// A historical approved receipt whose chain merely ends exactly at
+			// the selected chain's own root is a linear predecessor, not a
+			// convergence (issue-1782): it is not part of the selected path, so
+			// its incoming edge into this node must not be counted against it.
+			continue
 		}
-		if incoming[node] != wantIncoming {
+		if incoming[node] != 1 {
 			return nil, nil, errors.New("compact receipt chain contains a convergence")
 		}
 	}

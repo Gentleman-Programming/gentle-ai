@@ -127,7 +127,11 @@ func TestCompactStoreReloadsLegacyV2ReceiptWithoutRewritingItsIdentity(t *testin
 	}
 }
 
-func TestCompactStartResumesPrePolicyLargeDocumentationAuthority(t *testing.T) {
+// TestCompactStartNeverNarrowsAPrePolicyLargeDocumentationAuthority pins the
+// evidence-driven tier for a large documentation candidate: it is structural
+// readback with zero reviewers, and an authority frozen under the old size rule
+// with the full 4R set is blocked rather than silently narrowed to it.
+func TestCompactStartNeverNarrowsAPrePolicyLargeDocumentationAuthority(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "docs/guide.md", strings.Repeat("line\n", 401))
 	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
@@ -140,10 +144,14 @@ func TestCompactStartResumesPrePolicyLargeDocumentationAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	lenses, err := SelectReviewLenses(assessment, "risk")
+	if err != nil || assessment.Level != RiskLow || len(lenses) != 0 {
+		t.Fatalf("large documentation assessment = %q with lenses %v, %v; want low with zero reviewers", assessment.Level, lenses, err)
+	}
 	requested, err := NewCompactState(Start{
 		LineageID: "pre-policy-large-doc", Mode: ModeOrdinaryBounded, Generation: 1,
 		Snapshot: snapshot, PolicyHash: hash("d"), RiskLevel: assessment.Level,
-		SelectedLenses: []string{assessment.DominantLens}, OriginalChangedLines: &assessment.ChangedLines,
+		SelectedLenses: lenses, OriginalChangedLines: &assessment.ChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +178,7 @@ func TestCompactStartResumesPrePolicyLargeDocumentationAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Action != CompactStartResumed || result.Record.State.RiskLevel != RiskHigh ||
+	if result.Action != CompactStartBlocked || result.Record.State.RiskLevel != RiskHigh ||
 		!equalStrings(result.Record.State.SelectedLenses, existing.SelectedLenses) {
 		t.Fatalf("pre-policy resume = action %q, risk %q, lenses %v", result.Action, result.Record.State.RiskLevel, result.Record.State.SelectedLenses)
 	}
@@ -463,6 +471,46 @@ func TestStartCompactAuthorityBlocksSupersededApprovedPredecessor(t *testing.T) 
 	}
 }
 
+func TestStartCompactAuthorityRunsBeforeCreateGuardOnlyAtNewAuthorityBoundary(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "compact-start-before-create")
+	guardErr := errors.New("candidate context unavailable")
+	guardCalls := 0
+	_, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{
+		State: state,
+		BeforeCreate: func() error {
+			guardCalls++
+			return guardErr
+		},
+	})
+	if !errors.Is(err, guardErr) || guardCalls != 1 {
+		t.Fatalf("guarded START = calls %d error %v", guardCalls, err)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.StatePath()); !os.IsNotExist(err) {
+		t.Fatalf("failed before-create guard persisted authority: %v", err)
+	}
+
+	created, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state})
+	if err != nil || created.Action != CompactStartCreated {
+		t.Fatalf("unguarded START = %#v, %v", created, err)
+	}
+	replayed, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{
+		State: state,
+		BeforeCreate: func() error {
+			t.Fatal("before-create guard ran for existing authority")
+			return guardErr
+		},
+	})
+	if err != nil || replayed.Action != CompactStartResumed {
+		t.Fatalf("existing START = %#v, %v", replayed, err)
+	}
+}
+
 func TestStartCompactAuthorityKeepsStagedAndWorkspaceAuthoritiesDistinct(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -548,7 +596,7 @@ func TestCompactStagedCorrectionAcceptsIndexFixDespiteWorkspaceDivergence(t *tes
 	}
 	fixHash := FixDeltaHashForSnapshot(fix)
 	validation := ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, OriginalCriteria: ValidationCheck{Passed: true, EvidenceHash: hash("2"), FixDeltaHash: fixHash}, CorrectionRegression: ValidationCheck{Passed: true, EvidenceHash: hash("3"), FixDeltaHash: fixHash}}
-	if err := state.CompleteCorrection(fix, 2, validation); err != nil {
+	if err := state.CompleteCorrection(fix, 2, bindTargetedValidationForTest(validation, fix)); err != nil {
 		t.Fatalf("CompleteCorrection(staged fix) error = %v", err)
 	}
 	if state.State != StateValidating {
@@ -581,7 +629,7 @@ func TestCompactStagedCorrectionRejectsWorkspaceSnapshotWithoutMutatingState(t *
 	}
 	fixHash := FixDeltaHashForSnapshot(workspaceFix)
 	validation := ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, OriginalCriteria: ValidationCheck{Passed: true, EvidenceHash: hash("2"), FixDeltaHash: fixHash}, CorrectionRegression: ValidationCheck{Passed: true, EvidenceHash: hash("3"), FixDeltaHash: fixHash}}
-	if err := state.CompleteCorrection(workspaceFix, 1, validation); err == nil || !strings.Contains(err.Error(), "projection") {
+	if err := state.CompleteCorrection(workspaceFix, 1, bindTargetedValidationForTest(validation, workspaceFix)); err == nil || !strings.Contains(err.Error(), "projection") {
 		t.Fatalf("workspace correction error = %v", err)
 	}
 	if !reflect.DeepEqual(state, before) {
@@ -594,7 +642,7 @@ func TestCompactStagedCorrectionRejectsWorkspaceSnapshotWithoutMutatingState(t *
 	}
 	fixHash = FixDeltaHashForSnapshot(stagedFix)
 	validation.OriginalCriteria.FixDeltaHash, validation.CorrectionRegression.FixDeltaHash = fixHash, fixHash
-	if err := state.CompleteCorrection(stagedFix, 0, validation); err == nil || !strings.Contains(err.Error(), "unchanged candidate") {
+	if err := state.CompleteCorrection(stagedFix, 0, bindTargetedValidationForTest(validation, stagedFix)); err == nil || !strings.Contains(err.Error(), "unchanged candidate") {
 		t.Fatalf("unchanged staged correction error = %v", err)
 	}
 	if !reflect.DeepEqual(state, before) {
@@ -706,6 +754,182 @@ func TestStartCompactAuthorityCreatesWithUnrelatedHistoricalLeaves(t *testing.T)
 	}
 }
 
+func TestStartCompactAuthorityRequiresRecoveryForApprovedSameScopeChangedCandidate(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	paths := []string{"first.txt", "second.txt", "third.txt", "fourth.txt"}
+	for _, path := range paths {
+		writeSnapshotFile(t, repo, path, "base "+path+"\n")
+	}
+	gitSnapshot(t, repo, "add", "--", "first.txt", "second.txt", "third.txt", "fourth.txt")
+	gitSnapshot(t, repo, "commit", "-m", "add review scope")
+	for _, path := range paths {
+		writeSnapshotFile(t, repo, path, "reviewed "+path+"\n")
+	}
+	approved, store, receipt := approvedCompactCurrentChangesFixture(t, repo, "compact-start-approved-scope", []string{})
+	predecessor, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessorStateBytes, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessorReceiptBytes, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPredecessorUnchanged := func(stage string) {
+		t.Helper()
+		stateBytes, stateErr := os.ReadFile(store.StatePath())
+		receiptBytes, receiptErr := os.ReadFile(store.ReceiptPath())
+		if stateErr != nil || receiptErr != nil || !bytes.Equal(stateBytes, predecessorStateBytes) || !bytes.Equal(receiptBytes, predecessorReceiptBytes) {
+			t.Fatalf("%s changed predecessor state or receipt bytes: state=%v receipt=%v", stage, stateErr, receiptErr)
+		}
+	}
+	assertNoAuthorityArtifacts := func(lineages ...string) {
+		t.Helper()
+		for _, lineage := range lineages {
+			successorStore, storeErr := CompactAuthoritativeStore(context.Background(), repo, lineage)
+			if storeErr != nil {
+				t.Fatal(storeErr)
+			}
+			for _, path := range []string{successorStore.StatePath(), successorStore.ReceiptPath()} {
+				if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("START created authority artifact for successor %q at %q: %v", lineage, path, statErr)
+				}
+			}
+		}
+	}
+	writeSnapshotFile(t, repo, "first.txt", "changed first.txt\n")
+	writeSnapshotFile(t, repo, "second.txt", "changed second.txt\n")
+
+	requested := newCompactTestState(t, repo, "compact-start-approved-scope-g2")
+	if approved.InitialSnapshot.Projection != requested.InitialSnapshot.Projection ||
+		approved.InitialSnapshot.BaseTree != requested.InitialSnapshot.BaseTree ||
+		approved.InitialSnapshot.PathsDigest != requested.InitialSnapshot.PathsDigest ||
+		!equalStrings(approved.GenesisPaths, requested.InitialSnapshot.Paths) ||
+		approved.CurrentSnapshot.CandidateTree == requested.InitialSnapshot.CandidateTree {
+		t.Fatalf("regression fixture does not retain delivery scope with a changed candidate: approved=%#v requested=%#v", approved.InitialSnapshot, requested.InitialSnapshot)
+	}
+	gate := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: approved.LineageID})
+	if gate.Result != GateScopeChanged || gate.Context.Denial == nil || gate.Context.Denial.Code != "candidate-or-paths-mismatch" ||
+		gate.Context.ScopeChange == nil || gate.Context.ScopeChange.RecoveryOperation != "review.recover" ||
+		gate.Context.ScopeChange.PredecessorRevision != predecessor.Revision || gate.Context.ScopeChange.DifferingPathCount != 2 {
+		t.Fatalf("same-scope changed-candidate gate = %#v", gate)
+	}
+
+	type outcome struct {
+		result CompactStartResult
+		err    error
+	}
+	results := make(chan outcome, 2)
+	raceLineages := []string{"compact-start-approved-scope-race-a", "compact-start-approved-scope-race-b"}
+	for _, lineage := range raceLineages {
+		state := requested
+		state.LineageID = lineage
+		go func() {
+			result, startErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state})
+			results <- outcome{result: result, err: startErr}
+		}()
+	}
+	for range 2 {
+		got := <-results
+		if got.err != nil || got.result.Action != CompactStartRecover || got.result.Record.Revision != predecessor.Revision {
+			t.Fatalf("concurrent same-scope START = %#v, %v", got.result, got.err)
+		}
+	}
+	assertPredecessorUnchanged("concurrent START")
+	assertNoAuthorityArtifacts(raceLineages...)
+
+	explicit := requested
+	explicit.LineageID = "compact-start-approved-scope-explicit"
+	got, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: explicit, ExplicitLineage: true})
+	if err != nil || got.Action != CompactStartRecover || got.Record.Revision != predecessor.Revision {
+		t.Fatalf("explicit successor START = %#v, %v", got, err)
+	}
+	explicit.LineageID = approved.LineageID
+	got, err = StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: explicit, ExplicitLineage: true})
+	if err != nil || got.Action != CompactStartBlocked || got.Record.Revision != predecessor.Revision {
+		t.Fatalf("explicit predecessor START = %#v, %v", got, err)
+	}
+	assertPredecessorUnchanged("explicit START")
+	assertNoAuthorityArtifacts("compact-start-approved-scope-explicit")
+
+	requested.Generation = approved.Generation + 1
+	reason, actor := "candidate changed after approval", "maintainer@example.com"
+	recovered, err := RecoverCompactAuthority(context.Background(), repo, CompactRecoveryRequest{
+		PredecessorLineageID: approved.LineageID, ExpectedPredecessorRevision: predecessor.Revision,
+		Successor: requested, Disposition: RecoveryScopeChanged, Reason: reason, Actor: actor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPredecessorUnchanged("successful recovery")
+	successorStore, err := CompactAuthoritativeStore(context.Background(), repo, requested.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(successorStore.ReceiptPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recovered successor receipt exists at %q: %v", successorStore.ReceiptPath(), err)
+	}
+	provenance := recovered.State.Recovery
+	if provenance == nil || provenance.PredecessorLineageID != approved.LineageID ||
+		provenance.PredecessorRevision != predecessor.Revision || provenance.Reason != reason || provenance.Actor != actor {
+		t.Fatalf("recovery provenance = %#v", provenance)
+	}
+	if len(recovered.State.LensResults) != 0 || len(recovered.State.Findings) != 0 || recovered.State.EvidenceHash != "" ||
+		len(recovered.State.CorrectionAttempts) != 0 {
+		t.Fatalf("recovery reused predecessor evidence: %#v", recovered.State)
+	}
+}
+
+func TestStartCompactAuthorityCreatesForApprovedDisjointTarget(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "path_1.txt", "one\n")
+	writeSnapshotFile(t, repo, "path_2.txt", "two\n")
+	gitSnapshot(t, repo, "add", "--", "path_1.txt", "path_2.txt")
+	gitSnapshot(t, repo, "commit", "-m", "add disjoint review targets")
+
+	writeSnapshotFile(t, repo, "path_1.txt", "reviewed one\n")
+	approved, approvedStore, _ := approvedCompactCurrentChangesFixture(t, repo, "compact-start-approved-path-1", []string{})
+	approvedStateBytes, err := os.ReadFile(approvedStore.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedReceiptBytes, err := os.ReadFile(approvedStore.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeSnapshotFile(t, repo, "path_1.txt", "one\n")
+	writeSnapshotFile(t, repo, "path_2.txt", "reviewed two\n")
+	requested := newCompactTestState(t, repo, "compact-start-requested-path-2")
+	if !equalStrings(approved.GenesisPaths, []string{"path_1.txt"}) ||
+		!equalStrings(requested.InitialSnapshot.Paths, []string{"path_2.txt"}) ||
+		classifyCompactPathSetRelation(approved.GenesisPaths, requested.InitialSnapshot.Paths) != compactPathsDisjoint {
+		t.Fatalf("fixture path sets are not disjoint: approved=%v requested=%v", approved.GenesisPaths, requested.InitialSnapshot.Paths)
+	}
+
+	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
+	if err != nil || result.Action != CompactStartCreated || result.Record.State.LineageID != requested.LineageID ||
+		result.Record.State.State != StateReviewing {
+		t.Fatalf("start approved disjoint target = %#v, %v", result, err)
+	}
+	if stateBytes, readErr := os.ReadFile(approvedStore.StatePath()); readErr != nil || !bytes.Equal(stateBytes, approvedStateBytes) {
+		t.Fatalf("disjoint START changed approved state bytes: %v", readErr)
+	}
+	if receiptBytes, readErr := os.ReadFile(approvedStore.ReceiptPath()); readErr != nil || !bytes.Equal(receiptBytes, approvedReceiptBytes) {
+		t.Fatalf("disjoint START changed approved receipt bytes: %v", readErr)
+	}
+	requestedStore, err := CompactAuthoritativeStore(context.Background(), repo, requested.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(requestedStore.ReceiptPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("new reviewing lineage receipt exists at %q: %v", requestedStore.ReceiptPath(), err)
+	}
+}
+
 func TestStartCompactAuthorityResumesMatchingAuthorityAmongUnrelatedLeaves(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "unrelated one\n")
@@ -775,7 +999,7 @@ func TestStartCompactAuthorityPreservesTerminalFailedValidator(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixHash := FixDeltaHashForSnapshot(fix)
-	if err := state.CompleteCorrection(fix, 1, ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, OriginalCriteria: ValidationCheck{Passed: false, EvidenceHash: hash("2"), FixDeltaHash: fixHash}, CorrectionRegression: ValidationCheck{Passed: false, EvidenceHash: hash("3"), FixDeltaHash: fixHash}}); err != nil {
+	if err := state.CompleteCorrection(fix, 1, bindTargetedValidationForTest(ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, OriginalCriteria: ValidationCheck{Passed: false, EvidenceHash: hash("2"), FixDeltaHash: fixHash}, CorrectionRegression: ValidationCheck{Passed: false, EvidenceHash: hash("3"), FixDeltaHash: fixHash}}, fix)); err != nil {
 		t.Fatal(err)
 	}
 	revision, err = store.Replace(revision, "review/complete-fix", state)
@@ -1067,6 +1291,158 @@ func TestCompactStoreReplacesCurrentStateWithCASAndExactRetry(t *testing.T) {
 	}
 }
 
+func TestCompactCorrectionForecastCASIsIdempotentAndRejectsCompetingForecast(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state, store, revision := persistedCompactCorrectionRequired(t, repo, "compact-correction-forecast-cas")
+
+	first := state
+	if err := first.BeginCorrection(1); err != nil {
+		t.Fatal(err)
+	}
+	committed, err := store.Replace(revision, "review/begin-fix", first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed, err := store.Replace(revision, "review/begin-fix", first); err != nil || replayed != committed {
+		t.Fatalf("identical forecast replay = %q, %v; want %q", replayed, err, committed)
+	}
+	competing := state
+	if err := competing.BeginCorrection(2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(revision, "review/begin-fix", competing); !errors.Is(err, ErrConcurrentUpdate) {
+		t.Fatalf("competing forecast error = %v, want ErrConcurrentUpdate", err)
+	}
+	loaded, err := store.Load()
+	if err != nil || loaded.Revision != committed || loaded.State.ProposedCorrectionLines == nil || *loaded.State.ProposedCorrectionLines != 1 || len(loaded.State.CorrectionAttempts) != 0 {
+		t.Fatalf("forecast authority = %#v, %v", loaded, err)
+	}
+}
+
+func TestCompactStoreRejectsSecondOrdinaryCorrectionWithoutMutation(t *testing.T) {
+	const consumed = "ordinary compact correction already consumed"
+
+	t.Run("begin fix", func(t *testing.T) {
+		repo, state, record, _ := historicalFailedValidatorFixture(t, "compact-second-begin")
+		store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+		before, err := os.ReadFile(store.StatePath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		next := state
+		forecast := 1
+		next.ProposedCorrectionLines = &forecast
+		if err := next.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Replace(record.Revision, "review/begin-fix", next); !errors.Is(err, ErrInvalidSuccessor) || !strings.Contains(err.Error(), consumed) {
+			t.Fatalf("second begin error = %v", err)
+		}
+		assertCompactAuthorityBytes(t, store, record.Revision, before)
+		methodState := state
+		if err := methodState.BeginCorrection(1); err == nil || !strings.Contains(err.Error(), consumed) || !reflect.DeepEqual(methodState, state) {
+			t.Fatalf("BeginCorrection() = %v, state changed=%t", err, !reflect.DeepEqual(methodState, state))
+		}
+	})
+
+	t.Run("complete fix", func(t *testing.T) {
+		repo, state, _, _ := historicalFailedValidatorFixture(t, "compact-second-complete")
+		forecast := 1
+		state.ProposedCorrectionLines = &forecast
+		record, payload, err := makeCompactRecord(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+		if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		methodState := state
+		if err := methodState.CompleteCorrection(Snapshot{}, 0, ScopedValidationResult{}); err == nil || !strings.Contains(err.Error(), consumed) || !reflect.DeepEqual(methodState, state) {
+			t.Fatalf("CompleteCorrection() = %v, state changed=%t", err, !reflect.DeepEqual(methodState, state))
+		}
+
+		writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\nextra\n")
+		fix, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+			Kind: TargetFixDiff, BaseRef: state.CurrentSnapshot.CandidateTree,
+			IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual, err := (SnapshotBuilder{Repo: repo}).ChangedLines(context.Background(), fix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixHash := FixDeltaHashForSnapshot(fix)
+		validation := ScopedValidationResult{
+			LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
+			OriginalCriteria:              ValidationCheck{Passed: true, EvidenceHash: hash("8"), FixDeltaHash: fixHash},
+			CorrectionRegression:          ValidationCheck{Passed: true, EvidenceHash: hash("9"), FixDeltaHash: fixHash},
+			TargetedValidationRequestHash: hash("a"), CorrectionTargetIdentity: fix.Identity,
+		}
+		next := state
+		next.CorrectionAttempts = append(append([]CompactCorrectionAttempt{}, state.CorrectionAttempts...), CompactCorrectionAttempt{
+			Snapshot: fix, ProposedLines: forecast, ActualLines: actual, FixDeltaHash: fixHash,
+			OriginalCriteria: validation.OriginalCriteria, CorrectionRegression: validation.CorrectionRegression,
+			TargetedValidationRequestHash: validation.TargetedValidationRequestHash, CorrectionTargetIdentity: validation.CorrectionTargetIdentity,
+		})
+		next.CumulativeCorrectionLines += actual
+		next.CurrentSnapshot, next.FixDeltaHash = fix, fixHash
+		next.FollowUps = append(next.FollowUps, validation.FollowUps...)
+		next.ActualCorrectionLines = &actual
+		original, regression := validation.OriginalCriteria, validation.CorrectionRegression
+		next.OriginalCriteria, next.CorrectionRegression = &original, &regression
+		next.State = StateValidating
+		if err := next.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(store.StatePath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Replace(record.Revision, "review/complete-fix", next); !errors.Is(err, ErrInvalidSuccessor) || !strings.Contains(err.Error(), consumed) {
+			t.Fatalf("second complete error = %v", err)
+		}
+		assertCompactAuthorityBytes(t, store, record.Revision, before)
+	})
+}
+
+func persistedCompactCorrectionRequired(t *testing.T, repo, lineage string) (CompactState, CompactStore, string) {
+	t.Helper()
+	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nwrong\n")
+	state := newCompactTestState(t, repo, lineage)
+	store, _ := CompactAuthoritativeStore(context.Background(), repo, lineage)
+	revision, err := store.Replace("", "review/start", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := Finding{ID: "R3-001", Lens: strings.TrimPrefix(state.SelectedLenses[0], "review-"), Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "wrong value", ProofRefs: []string{"candidate-only failure"}}
+	if err := state.CompleteReview(CompactReviewInput{
+		LensResults:     []LensResult{{Lens: state.SelectedLenses[0], Findings: []Finding{finding}, Evidence: []string{"reviewed once"}}},
+		Classifications: []FindingEvidence{{FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk"}}, RefuterOutcomes: []EvidenceResult{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	revision, err = store.Replace(revision, "review/complete-review", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state, store, revision
+}
+
+func assertCompactAuthorityBytes(t *testing.T, store CompactStore, revision string, before []byte) {
+	t.Helper()
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("rejected successor changed authority bytes: %v", err)
+	}
+	loaded, err := store.Load()
+	if err != nil || loaded.Revision != revision {
+		t.Fatalf("rejected successor changed authority revision: got %#v, %v; want %s", loaded, err, revision)
+	}
+}
+
 func TestCompactStoreReplaceContextRejectsCancelledMutation(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -1206,7 +1582,7 @@ func TestCompactFirstCompletedValidatorIsTerminal(t *testing.T) {
 			validation := ScopedValidationResult{LedgerIDs: append([]string(nil), state.FixFindingIDs...), FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
 				OriginalCriteria:     ValidationCheck{EvidenceHash: hash("1"), FixDeltaHash: fixHash, Passed: tt.originalPassed},
 				CorrectionRegression: ValidationCheck{EvidenceHash: hash(tt.regressionEvidence), FixDeltaHash: fixHash, Passed: tt.regressionPassed}}
-			if err := state.CompleteCorrection(fix, 1, validation); err != nil {
+			if err := state.CompleteCorrection(fix, 1, bindTargetedValidationForTest(validation, fix)); err != nil {
 				t.Fatal(err)
 			}
 			if state.State != tt.wantState || state.ProposedCorrectionLines == nil || *state.ProposedCorrectionLines != 1 || state.ActualCorrectionLines == nil || *state.ActualCorrectionLines != 1 ||
@@ -1244,8 +1620,56 @@ func TestCompactMalformedValidatorDoesNotConsumeAuthority(t *testing.T) {
 	validation := ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
 		OriginalCriteria:     ValidationCheck{EvidenceHash: "not-a-hash", FixDeltaHash: FixDeltaHashForSnapshot(fix)},
 		CorrectionRegression: ValidationCheck{EvidenceHash: hash("regression"), FixDeltaHash: FixDeltaHashForSnapshot(fix)}}
-	if err := state.CompleteCorrection(fix, 1, validation); err == nil || !reflect.DeepEqual(state, before) {
+	if err := state.CompleteCorrection(fix, 1, bindTargetedValidationForTest(validation, fix)); err == nil || !reflect.DeepEqual(state, before) {
 		t.Fatalf("malformed validator consumed authority: %#v, %v", state, err)
+	}
+}
+
+func TestCompactClearedEscalationRequiresHistoricalExhaustion(t *testing.T) {
+	forgedRepo := initSnapshotRepo(t)
+	forged, fix := pendingCompactCorrection(t, forgedRepo, "forged-cleared-escalation")
+	fixHash := FixDeltaHashForSnapshot(fix)
+	validation := ScopedValidationResult{LedgerIDs: forged.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
+		OriginalCriteria: ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true}, CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true}}
+	if err := forged.CompleteCorrection(fix, 1, bindTargetedValidationForTest(validation, fix)); err != nil {
+		t.Fatal(err)
+	}
+	forged.State, forged.ActualCorrectionLines, forged.OriginalCriteria, forged.CorrectionRegression = StateEscalated, nil, nil, nil
+	forged.FixDeltaHash = EmptyFixDeltaHash
+	const want = "completed compact correction requires in-budget forecast and actual size"
+	if err := forged.Validate(); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("one-attempt cleared escalation validation = %v, want %q", err, want)
+	}
+	forgedRecord, _, _ := makeCompactRecord(forged)
+	forgedTransport := CompactTransport{Schema: CompactTransportSchema, Record: forgedRecord}
+	forgedTransport.BundleDigest = compactTransportDigest(forgedTransport)
+	gitSnapshot(t, forgedRepo, "commit", "-am", "forged correction delivery")
+	if _, err := ImportCompactTransport(context.Background(), forgedRepo, forgedTransport); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("one-attempt cleared escalation import = %v, want %q", err, want)
+	}
+
+	historicalRepo := initSnapshotRepo(t)
+	historical, next := pendingCompactCorrection(t, historicalRepo, "historical-cleared-escalation")
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			writeSnapshotFile(t, historicalRepo, "tracked.txt", strings.Repeat("historical correction\n", attempt+1))
+			next, _ = (SnapshotBuilder{Repo: historicalRepo}).Build(context.Background(), Target{Kind: TargetFixDiff, BaseRef: historical.CurrentSnapshot.CandidateTree, IntendedUntracked: historical.InitialSnapshot.IntendedUntracked, LedgerIDs: historical.FixFindingIDs})
+		}
+		fixDelta := FixDeltaHashForSnapshot(next)
+		historical.CorrectionAttempts = append(historical.CorrectionAttempts, CompactCorrectionAttempt{Snapshot: next, ProposedLines: 1, FixDeltaHash: fixDelta,
+			OriginalCriteria: ValidationCheck{EvidenceHash: hash(string(rune('a' + attempt))), FixDeltaHash: fixDelta, Passed: true}, CorrectionRegression: ValidationCheck{EvidenceHash: hash(string(rune('d' + attempt))), FixDeltaHash: fixDelta}})
+		historical.CurrentSnapshot = next
+	}
+	historical.State, historical.ProposedCorrectionLines = StateEscalated, nil
+	if err := historical.Validate(); err != nil {
+		t.Fatalf("historical three-attempt cleared state: %v", err)
+	}
+	historicalRecord, _, _ := makeCompactRecord(historical)
+	historicalTransport := CompactTransport{Schema: CompactTransportSchema, Record: historicalRecord}
+	historicalTransport.BundleDigest = compactTransportDigest(historicalTransport)
+	gitSnapshot(t, historicalRepo, "commit", "-am", "historical correction delivery")
+	if _, err := ImportCompactTransport(context.Background(), historicalRepo, historicalTransport); err != nil {
+		t.Fatalf("import historical three-attempt cleared state: %v", err)
 	}
 }
 
@@ -1259,7 +1683,7 @@ func TestCompactHistoricalFailedValidatorRecoveryPreservesPredecessor(t *testing
 	failed := ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
 		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true},
 		CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash}}
-	if err := state.CompleteCorrection(fix, 1, failed); err != nil {
+	if err := state.CompleteCorrection(fix, 1, bindTargetedValidationForTest(failed, fix)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(filepath.Join(repo, "tracked.txt"), 0o755); err != nil {
@@ -1517,12 +1941,24 @@ func TestCompactDiscoveryIgnoresOnlyUnpublishedCrashResidue(t *testing.T) {
 	if err := os.MkdirAll(residue.Dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(residue.Dir, ".atomic-interrupted"), []byte("partial"), 0o600); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{".atomic-interrupted", ".publish-interrupted"} {
+		if err := os.WriteFile(filepath.Join(residue.Dir, name), []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	leaves, err := CompactAuthorityLeaves(context.Background(), repo)
 	if err != nil || len(leaves) != 1 || leaves[0].lineageID != state.LineageID {
 		t.Fatalf("leaves with crash residue = %#v, %v", leaves, err)
+	}
+	unexpected := filepath.Join(residue.Dir, "unexpected-residue")
+	if err := os.WriteFile(unexpected, []byte("not a temporary publication"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CompactAuthorityLeaves(context.Background(), repo); err == nil {
+		t.Fatal("unexpected state-less lineage entry was hidden as crash residue")
+	}
+	if err := os.Remove(unexpected); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(residue.StatePath(), []byte("corrupt published authority"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1538,7 +1974,7 @@ func TestCompactActualCumulativeOverflowPersistsTerminalAttempt(t *testing.T) {
 	actual := state.CorrectionBudget + 1
 	fixHash := FixDeltaHashForSnapshot(fix)
 	validation := ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, OriginalCriteria: ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true}, CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true}}
-	if err := state.CompleteCorrection(fix, actual, validation); err != nil {
+	if err := state.CompleteCorrection(fix, actual, bindTargetedValidationForTest(validation, fix)); err != nil {
 		t.Fatal(err)
 	}
 	if state.State != StateEscalated || state.CumulativeCorrectionLines <= state.CorrectionBudget || len(state.CorrectionAttempts) != 1 {
@@ -1945,6 +2381,93 @@ func TestCompactDiagnosticTraceContainsMetadataOnly(t *testing.T) {
 	}
 }
 
+// TestReplaceContextGuardedReportsTraceWriteFailureInsteadOfSwallowingIt
+// covers issue #1854: a caller supplying TracePath asked for observability,
+// so a failed trace write must be reported even though the mutation itself
+// has already committed and must not be rolled back or fail.
+func TestReplaceContextGuardedReportsTraceWriteFailureInsteadOfSwallowingIt(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "compact-trace-replace-fail")
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// TracePath's parent directory is a regular file, so appendCompactTrace's
+	// os.MkdirAll must fail deterministically.
+	store.TracePath = filepath.Join(blocker, "trace.jsonl")
+
+	var gotOperation, gotPath string
+	var gotErr error
+	original := compactTraceWarn
+	t.Cleanup(func() { compactTraceWarn = original })
+	compactTraceWarn = func(operation, path string, err error) {
+		gotOperation, gotPath, gotErr = operation, path, err
+	}
+
+	revision, err := store.Replace("", "review/start", state)
+	if err != nil {
+		t.Fatalf("a lost review trace must not fail the mutation: %v", err)
+	}
+	if revision == "" {
+		t.Fatal("expected a committed revision despite the trace write failure")
+	}
+	if gotErr == nil {
+		t.Fatal("expected the trace write failure to be reported instead of swallowed")
+	}
+	if gotOperation != "review/start" {
+		t.Fatalf("wrong operation reported for the lost trace: %q", gotOperation)
+	}
+	if gotPath != store.TracePath {
+		t.Fatalf("wrong path reported for the lost trace: %q", gotPath)
+	}
+}
+
+// TestStartCompactAuthorityReportsTraceWriteFailureInsteadOfSwallowingIt
+// covers the same defect (issue #1854) at the StartCompactAuthority call
+// site, which appends its diagnostic trace directly rather than through
+// replaceContextGuarded.
+func TestStartCompactAuthorityReportsTraceWriteFailureInsteadOfSwallowingIt(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "compact-trace-start-fail")
+
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tracePath := filepath.Join(blocker, "trace.jsonl")
+
+	var gotOperation, gotPath string
+	var gotErr error
+	original := compactTraceWarn
+	t.Cleanup(func() { compactTraceWarn = original })
+	compactTraceWarn = func(operation, path string, err error) {
+		gotOperation, gotPath, gotErr = operation, path, err
+	}
+
+	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state, TracePath: tracePath})
+	if err != nil {
+		t.Fatalf("a lost review trace must not fail compact start: %v", err)
+	}
+	if result.Action != CompactStartCreated {
+		t.Fatalf("expected the start to still commit despite the trace failure, got action %q", result.Action)
+	}
+	if gotErr == nil {
+		t.Fatal("expected the trace write failure to be reported instead of swallowed")
+	}
+	if gotOperation != "review/start" {
+		t.Fatalf("wrong operation reported for the lost trace: %q", gotOperation)
+	}
+	if gotPath != tracePath {
+		t.Fatalf("wrong path reported for the lost trace: %q", gotPath)
+	}
+}
+
 func TestCompactLifecycleComplexityMeasurements(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -2230,7 +2753,7 @@ func correctedCompactTestStateWithIntended(t *testing.T, repo, lineage string, i
 		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true},
 		CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true},
 	}
-	if err := state.CompleteCorrection(fix, 2, validation); err != nil {
+	if err := state.CompleteCorrection(fix, 2, bindTargetedValidationForTest(validation, fix)); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.CompleteVerification([]byte("tests pass\n"), true); err != nil {
@@ -2239,6 +2762,12 @@ func correctedCompactTestStateWithIntended(t *testing.T, repo, lineage string, i
 	// Preserve the legacy compact fixture shape for backward-compatibility tests.
 	state.CorrectionAttempts, state.CumulativeCorrectionLines = nil, 0
 	return state
+}
+
+func bindTargetedValidationForTest(validation ScopedValidationResult, fix Snapshot) ScopedValidationResult {
+	validation.TargetedValidationRequestHash = hash("9")
+	validation.CorrectionTargetIdentity = fix.Identity
+	return validation
 }
 
 func newCompactRevisionState(t *testing.T, repo, lineage string) CompactState {

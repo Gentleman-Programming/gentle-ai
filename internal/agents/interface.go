@@ -3,8 +3,8 @@ package agents
 import (
 	"context"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 // Capability tags for adapter feature checks.
@@ -43,7 +43,8 @@ type Adapter interface {
 	// MCP path resolution
 	MCPConfigPath(homeDir string, serverName string) string
 
-	// Optional capabilities — agents declare what they support.
+	// Optional capabilities — compatibility projections of the adapter's
+	// canonical AgentCapabilityManifest.
 	SupportsOutputStyles() bool
 	OutputStyleDir(homeDir string) string
 

@@ -23,5 +23,29 @@
       "signal": "shell_process",
       "path": "scripts/deploy.sh"
     }
-  ]
+  ],
+  "candidate_diff": {
+    "encoding": "base64",
+    "data": "ZGlmZiAtLWdpdCBhL3NjcmlwdHMvZGVwbG95LnNoIGIvc2NyaXB0cy9kZXBsb3kuc2gKbmV3IGZpbGUgbW9kZSAxMDA2NDQKaW5kZXggMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMC4uMjhiM2FjMTI4ZmJiZWFmZmY0OWEzMjYxMDVmOGVhYzg1YzZjNzdhMQotLS0gL2Rldi9udWxsCisrKyBiL3NjcmlwdHMvZGVwbG95LnNoCkBAIC0wLDAgKzEgQEAKK2VjaG8gZGVwbG95Cg==",
+    "sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
+    "byte_size": 226
+  },
+  "changed_path_manifest": [
+    {
+      "path": "scripts/deploy.sh",
+      "status": "A",
+      "old_mode": "000000",
+      "new_mode": "100644",
+      "deleted": false,
+      "type_changed": false,
+      "mode_only": false,
+      "intended_untracked": true
+    }
+  ],
+  "repository_context": {
+    "capability": "review.opaque_repository_context",
+    "handle": "rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "revision": "sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c",
+    "target_identity": "sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5"
+  }
 }

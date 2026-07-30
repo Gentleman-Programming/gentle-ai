@@ -9,9 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 // profileNameRegex matches valid profile name slugs: lowercase alphanumeric + hyphens,
@@ -243,20 +243,7 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 //     sub-agent references and model assignments table), permissions scoped to *-{name}
 //   - sdd-{phase}-{name} (10 agents): subagent mode, hidden, file reference to
 //     the shared prompt at SharedPromptDir(homeDir)/sdd-{phase}.md
-//
-// fallbackPhaseAssignments (optional) is consulted when a phase is not
-// explicitly set on the profile. Typically this is the caller's
-// Selection.ModelAssignments from the gentle-ai TUI's global "Configure
-// Models" flow. Without the fallback, a phase the user assigned globally but
-// did not re-touch inside the profile picker would be silently emitted
-// without a model field, surfacing as "Unassigned" in OpenCode while
-// gentle-ai's UI showed the phase as assigned (issue #557). Profile-level
-// assignments always win over the fallback when both are present.
-//
-// codeGraphGuidance (optional) is markdown appended to sub-agent prompts that
-// instructs the agent how to use the CodeGraph community tool. Pass an empty
-// string when CodeGraph is not enabled.
-func GenerateProfileOverlay(profile model.Profile, homeDir string, fallbackPhaseAssignments map[string]model.ModelAssignment, codeGraphGuidance string) ([]byte, error) {
+func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string, fallbackPhaseAssignments map[string]model.ModelAssignment, codeGraphGuidance string) ([]byte, error) {
 	if profile.Name == "" || profile.Name == "default" {
 		return nil, fmt.Errorf("GenerateProfileOverlay: profile name must be non-empty and not 'default'")
 	}
@@ -344,7 +331,6 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, fallbackPhase
 	agentMap[orchestratorKey] = orchEntry
 
 	// Sub-agent entries
-	promptDir := SharedPromptDir(homeDir)
 	phaseDescriptions := map[string]string{
 		"sdd-init":    "Bootstrap SDD context and project configuration",
 		"sdd-explore": "Investigate codebase and think through ideas",
@@ -360,7 +346,10 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, fallbackPhase
 
 	for _, phase := range profilePhaseOrder {
 		key := phase + suffix
-		prompt := "{file:" + filepath.ToSlash(filepath.Join(promptDir, phase+".md")) + "}"
+		prompt, err := SharedPromptFileRef(settingsPath, homeDir, phase)
+		if err != nil {
+			return nil, fmt.Errorf("build shared prompt file reference for %q: %w", phase, err)
+		}
 		entry := map[string]any{
 			"mode":        "subagent",
 			"hidden":      true,

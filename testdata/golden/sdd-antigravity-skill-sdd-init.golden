@@ -57,7 +57,7 @@ Run this phase when the orchestrator/user asks to initialize SDD in a project. Y
 
 ## Execution Steps
 
-1. Inspect project files, including scanning subdirectories (up to 2 levels deep) for monorepos or multi-project structures (`package.json`, `go.mod`, `pyproject.toml`, `Cargo.toml`, `Project.toml`, CI/lint/test configs), and summarize the stack and conventions of each detected sub-project.
+1. Inspect project files, recursively scanning relevant subdirectories for monorepos or multi-project structures (`package.json`, `go.mod`, `pyproject.toml`, `Cargo.toml`, `Project.toml`, CI/lint/test configs), and summarize the stack and conventions of each detected sub-project.
 2. Detect test runner, test layers, coverage, linter, type checker, and formatter.
 3. Resolve Strict TDD from agent marker, `openspec/config.yaml`, detected runner fallback, or no-runner fallback.
 4. Initialize persistence for the resolved mode.

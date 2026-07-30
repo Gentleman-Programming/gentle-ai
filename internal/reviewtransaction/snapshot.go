@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
 )
 
 type TargetKind string
@@ -64,6 +67,24 @@ var exactObjectPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})
 
 func (builder SnapshotBuilder) Build(ctx context.Context, target Target) (Snapshot, error) {
 	return builder.build(ctx, target, false)
+}
+
+// BuildStagedWorkspaceOverlayRecovery freezes the exact real index for the
+// single recovery-only staged overlay transition. Ordinary START keeps using
+// Build, so this representation cannot create fresh authority directly.
+func (builder SnapshotBuilder) BuildStagedWorkspaceOverlayRecovery(ctx context.Context, target Target) (Snapshot, error) {
+	if target.Kind != TargetBaseWorkspaceOverlay || target.Projection != ProjectionStaged ||
+		target.IntendedUntracked == nil || len(target.IntendedUntracked) != 0 || len(target.LedgerIDs) != 0 {
+		return Snapshot{}, errors.New("staged workspace-overlay recovery requires an explicit empty intended_untracked list and no ledger IDs")
+	}
+	return builder.build(ctx, target, true)
+}
+
+func (builder SnapshotBuilder) BuildStoredSnapshot(ctx context.Context, target Target) (Snapshot, error) {
+	if target.Kind == TargetBaseWorkspaceOverlay && target.Projection == ProjectionStaged {
+		return builder.BuildStagedWorkspaceOverlayRecovery(ctx, target)
+	}
+	return builder.Build(ctx, target)
 }
 
 func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowStagedIntended bool) (Snapshot, error) {
@@ -184,13 +205,15 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 
 func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intended []string) (string, string, error) {
 	tracked := 0
-	for _, logicalPath := range intended {
-		output, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", "HEAD", "--", literalPathspec(logicalPath))
+	if len(intended) > 0 {
+		entries, err := listTreeEntries(ctx, builder.Repo, "HEAD")
 		if err != nil {
 			return "", "", err
 		}
-		if len(output) > 0 {
-			tracked++
+		for _, logicalPath := range intended {
+			if _, present := entries[logicalPath]; present {
+				tracked++
+			}
 		}
 	}
 	if tracked != 0 && tracked != len(intended) {
@@ -216,8 +239,7 @@ func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intend
 		return "", "", err
 	}
 	if len(intended) > 0 && tracked == 0 {
-		args := append([]string{"add", "--"}, literalPathspecs(intended)...)
-		if _, err := runGit(ctx, builder.Repo, env, nil, args...); err != nil {
+		if err := addIntendedPathspecs(ctx, builder.Repo, env, intended); err != nil {
 			return "", "", err
 		}
 	}
@@ -253,6 +275,33 @@ func (builder SnapshotBuilder) ValidateEvidence(ctx context.Context, snapshot Sn
 	identity := snapshotIdentityForProjection(snapshot.Kind, projection, snapshot.BaseTree, snapshot.CandidateTree, digest, proof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
 	if !equalStrings(paths, snapshot.Paths) || digest != snapshot.PathsDigest || proof != snapshot.IntendedUntrackedProof || identity != snapshot.Identity {
 		return errors.New("snapshot paths, digests, or identity do not match Git tree evidence")
+	}
+	return nil
+}
+
+// ValidateLiveSnapshot proves that a frozen snapshot still describes its exact live target.
+func (builder SnapshotBuilder) ValidateLiveSnapshot(ctx context.Context, expected Snapshot) error {
+	if err := builder.ValidateEvidence(ctx, expected); err != nil {
+		return fmt.Errorf("validate frozen snapshot Git evidence: %w", err)
+	}
+	target := Target{
+		Kind: expected.Kind, Projection: expected.Projection,
+		IntendedUntracked: append([]string{}, expected.IntendedUntracked...),
+		LedgerIDs:         append([]string(nil), expected.LedgerIDs...),
+	}
+	switch expected.Kind {
+	case TargetCurrentChanges:
+	case TargetBaseDiff, TargetBaseWorkspaceOverlay, TargetFixDiff:
+		target.BaseRef = expected.BaseTree
+	default:
+		return fmt.Errorf("unsupported live snapshot target kind %q", expected.Kind)
+	}
+	live, err := builder.BuildStoredSnapshot(ctx, target)
+	if err != nil {
+		return fmt.Errorf("rebuild live snapshot target: %w", err)
+	}
+	if live.UnbornHead != expected.UnbornHead || !snapshotsEqual(live, expected) {
+		return fmt.Errorf("live repository snapshot no longer matches frozen target: expected %s, got %s", expected.Identity, live.Identity)
 	}
 	return nil
 }
@@ -323,7 +372,7 @@ func rebuildCurrentSnapshotEvidence(ctx context.Context, repo string, snapshot S
 	default:
 		return errors.New("invalidation supports only live current-changes or base-diff snapshots")
 	}
-	live, err := (SnapshotBuilder{Repo: repo}).Build(ctx, target)
+	live, err := (SnapshotBuilder{Repo: repo}).BuildStoredSnapshot(ctx, target)
 	if err != nil {
 		return err
 	}
@@ -340,7 +389,12 @@ func (builder SnapshotBuilder) DiffStats(ctx context.Context, snapshot Snapshot)
 	if err != nil {
 		return nil, err
 	}
-	output, err := runGit(ctx, repo, nil, nil, "diff", "--numstat", "-z", "--no-renames", snapshot.BaseTree, snapshot.CandidateTree, "--")
+	isolation, cleanup, err := isolatedImmutableTreeGit(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	output, err := runGitIsolated(ctx, repo, isolation, nil, "diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", snapshot.BaseTree, snapshot.CandidateTree, "--")
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +429,7 @@ func (builder SnapshotBuilder) DiffStats(ctx context.Context, snapshot Snapshot)
 		}
 		statsByPath[stat.Path] = stat
 	}
-	rawOutput, err := runGit(ctx, repo, nil, nil, "diff", "--raw", "-z", "--no-ext-diff", "--no-textconv", "--no-renames", snapshot.BaseTree, snapshot.CandidateTree, "--")
+	rawOutput, err := runGitIsolated(ctx, repo, isolation, nil, "diff", "--raw", "-z", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", snapshot.BaseTree, snapshot.CandidateTree, "--")
 	if err != nil {
 		return nil, err
 	}
@@ -404,6 +458,7 @@ func (builder SnapshotBuilder) DiffStats(ctx context.Context, snapshot Snapshot)
 }
 
 type rawDiffModes struct {
+	status               CandidatePathStatus
 	oldMode, newMode     string
 	oldObject, newObject string
 }
@@ -436,7 +491,8 @@ func parseRawDiffModes(payload []byte) (map[string]rawDiffModes, error) {
 			return nil, fmt.Errorf("duplicate immutable raw diff path %q", logicalPath)
 		}
 		modes[logicalPath] = rawDiffModes{
-			oldMode: oldMode, newMode: newMode, oldObject: string(fields[2]), newObject: string(fields[3]),
+			status: CandidatePathStatus(fields[4]), oldMode: oldMode, newMode: newMode,
+			oldObject: string(fields[2]), newObject: string(fields[3]),
 		}
 	}
 	return modes, nil
@@ -468,7 +524,10 @@ func (builder SnapshotBuilder) repositoryRoot(ctx context.Context) (string, erro
 	if err != nil {
 		return "", err
 	}
-	if filepath.Clean(root) != filepath.Clean(abs) {
+	// Identity, not string equality. Git reports the toplevel in the spelling
+	// the kernel gave it, which on a case-insensitive volume differs from the
+	// spelling the caller typed even after filepath.EvalSymlinks resolved both.
+	if !pathidentity.SameDirectory(root, abs) {
 		return "", fmt.Errorf("snapshot repo %s is not the repository root %s", abs, root)
 	}
 	return root, nil
@@ -484,13 +543,17 @@ func (builder SnapshotBuilder) ResolveRepositoryRoot(ctx context.Context) (strin
 	if err != nil {
 		return "", err
 	}
-	output, err := runGit(ctx, abs, nil, nil, "rev-parse", "--show-toplevel")
+	root, err := resolveGitDirectory(ctx, abs, "--show-toplevel")
 	if err != nil {
 		return "", err
 	}
-	root, err := canonicalRepositoryPath(strings.TrimSpace(string(output)))
-	if err != nil {
-		return "", err
+	// 1773 boundary 2: filepath.Rel decided containment by comparing strings,
+	// so on a default case-insensitive APFS volume the requested path and the
+	// toplevel Git reported for it -- same device, same inode, different
+	// spelling -- were reported as different repositories. Containment is a
+	// filesystem question and internal/pathidentity asks the filesystem.
+	if !pathidentity.Contains(root, abs) {
+		return "", errors.New("resolved repository root does not contain the requested path")
 	}
 	return root, nil
 }
@@ -508,9 +571,135 @@ func (builder SnapshotBuilder) DiscoverIntendedUntracked(ctx context.Context) ([
 	}
 	parts := bytes.Split(output, []byte{0})
 	paths := make([]string, 0, len(parts))
+	var nestedRepositories []string
+	for _, item := range parts {
+		if len(item) == 0 {
+			continue
+		}
+		value := string(item)
+		if strings.HasSuffix(value, "/") {
+			// Without --directory, `git ls-files --others` recurses into every
+			// ordinary untracked directory and lists its files one by one. The
+			// only entries it reports as a bare directory with a trailing slash
+			// are directories it refuses to look inside because they hold
+			// another Git repository: a nested linked worktree's checkout or an
+			// embedded foreign clone (issue #1881, reported as ".wt/test/").
+			nestedRepositories = append(nestedRepositories, value)
+			continue
+		}
+		paths = append(paths, value)
+	}
+	if len(nestedRepositories) != 0 {
+		if err := excludeRegisteredNestedWorktrees(ctx, root, nestedRepositories); err != nil {
+			return nil, err
+		}
+	}
+	canonical, err := canonicalPaths(paths)
+	if err != nil {
+		return nil, &UntrackedScopeRefusalError{Cause: err}
+	}
+	return canonical, nil
+}
+
+// UntrackedScopeRefusalError marks a working-tree shape that untracked-scope
+// discovery refuses as a NAMED, anticipated condition: an embedded foreign
+// repository, or an untracked path Git reported that cannot be addressed as
+// canonical review scope. Callers use the type to tell a policy refusal (the
+// operator changes the repository layout) apart from an unanticipated internal
+// fault (a product defect worth a defect report); the message is unchanged.
+type UntrackedScopeRefusalError struct{ Cause error }
+
+func (err *UntrackedScopeRefusalError) Error() string { return err.Cause.Error() }
+func (err *UntrackedScopeRefusalError) Unwrap() error { return err.Cause }
+
+// excludeRegisteredNestedWorktrees decides what happens to the opaque
+// nested-repository directories `git ls-files --others` reported inside root.
+//
+// A directory that `git worktree list --porcelain` names as a linked worktree
+// of this repository is excluded from the candidate the same way `.git` itself
+// is: it is another checkout's working tree, not reviewable content of this
+// one. The alternative — admitting it as ordinary untracked content — was
+// considered and rejected: Git reports only the bare directory and refuses to
+// enumerate the files inside it, so the snapshot could never hash or diff
+// those bytes, and freezing a directory entry as if it were a reviewable file
+// would produce a manifest the delivery gates can never re-verify. Exclusion
+// is principled rather than pattern-based because the worktree list is Git's
+// own authoritative registry of which directories are its linked checkouts.
+//
+// An opaque nested repository that is NOT a registered worktree (an embedded
+// foreign clone) stays refused: silently dropping it would hide from the user
+// that a directory they may believe is under review can never be, and Git
+// itself warns rather than recurses when asked to add one. The refusal names
+// the path and every honest way out.
+func excludeRegisteredNestedWorktrees(ctx context.Context, root string, nestedRepositories []string) error {
+	registered, err := linkedWorktreeDirectories(ctx, root)
+	if err != nil {
+		return err
+	}
+	for _, value := range nestedRepositories {
+		logicalPath, err := normalizeLogicalPath(strings.TrimSuffix(value, "/"))
+		if err != nil {
+			return &UntrackedScopeRefusalError{Cause: fmt.Errorf("untracked nested repository directory %q is not addressable as review scope: %w; add it to .gitignore or move it outside this repository", value, err)}
+		}
+		absolute := filepath.Join(root, filepath.FromSlash(logicalPath))
+		excluded := false
+		for _, worktree := range registered {
+			if pathidentity.SameDirectory(absolute, worktree) {
+				excluded = true
+				break
+			}
+		}
+		// guard:population nested-worktree-scope too-tight: legitimate opaque nested repositories are Git-registered linked worktrees; unregistered embedded repositories remain excluded
+		if !excluded {
+			return &UntrackedScopeRefusalError{Cause: fmt.Errorf("untracked directory %q holds another Git repository that is not a linked worktree of this one, so it cannot enter the review candidate: add it to .gitignore, move it outside this repository, or register it as a linked worktree", logicalPath)} // refusal:by-design world-action: the exit is a repository-layout change (gitignore, move, or register the nested checkout), which no command of this product can decide or perform
+		}
+	}
+	return nil
+}
+
+// linkedWorktreeDirectories returns the absolute working-tree directories Git
+// registers for this repository, including the main one. Plain --porcelain
+// (not -z) keeps the git floor low; a hypothetical registered path containing
+// a newline would mis-parse into lines that match no opaque directory, which
+// fails closed into the embedded-repository refusal instead of silently
+// excluding content.
+func linkedWorktreeDirectories(ctx context.Context, root string) ([]string, error) {
+	output, err := runGit(ctx, root, nil, nil, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	var directories []string
+	for _, line := range strings.Split(string(output), "\n") {
+		if directory, ok := strings.CutPrefix(line, "worktree "); ok && directory != "" {
+			directories = append(directories, directory)
+		}
+	}
+	return directories, nil
+}
+
+// DiscoverTrackedAndUnignoredPaths returns the canonical Git-owned workspace
+// inventory: every cached path plus every unignored untracked path.
+func (builder SnapshotBuilder) DiscoverTrackedAndUnignoredPaths(ctx context.Context) ([]string, error) {
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	output, err := runGitInventory(ctx, root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
+	}
+	parts := bytes.Split(output, []byte{0})
+	paths := make([]string, 0, len(parts))
 	for _, item := range parts {
 		if len(item) > 0 {
-			paths = append(paths, string(item))
+			value := string(item)
+			if strings.HasSuffix(value, "/") {
+				value = strings.TrimSuffix(value, "/")
+				if value == "" || strings.HasSuffix(value, "/") {
+					return nil, fmt.Errorf("invalid opaque Git inventory path %q", item)
+				}
+			}
+			paths = append(paths, value)
 		}
 	}
 	return canonicalPaths(paths)
@@ -542,6 +731,130 @@ func canonicalRepositoryPath(path string) (string, error) {
 	return filepath.Clean(resolved), nil
 }
 
+func resolveGitDirectory(ctx context.Context, repo, selector string) (string, error) {
+	switch selector {
+	case "--show-toplevel", "--git-common-dir", "--git-dir":
+	default:
+		return "", fmt.Errorf("unsupported Git directory selector %q", selector)
+	}
+	output, err := runGit(ctx, repo, nil, nil, "rev-parse", selector)
+	if err != nil {
+		// Only --show-toplevel can fail for want of a working tree;
+		// --git-dir and --git-common-dir answer normally in a bare repository.
+		if selector == "--show-toplevel" {
+			return "", bareRepositoryFailure(ctx, repo, err)
+		}
+		return "", err
+	}
+	return canonicalGitDirectory(repo, output)
+}
+
+// ErrBareRepositoryHasNoWorkingTree reports that the requested repository is
+// bare. Refusing is correct: a review candidate is a working-tree diff, and a
+// bare repository has no working tree for one to exist in.
+var ErrBareRepositoryHasNoWorkingTree = errors.New("review needs a working tree")
+
+// BareRepositoryError states that refusal in the product's own voice and names
+// what the operator can run, which is normally what they wanted: they are in a
+// bare clone or a server-side hook and the work they mean to review lives in a
+// checkout somewhere else.
+//
+// It deliberately names no subcommand. This boundary serves every review verb,
+// so naming one verb would hand a caller of a different verb a command that
+// does not clear their block -- worse than naming nothing. The flag it names is
+// the one every review verb accepts.
+type BareRepositoryError struct {
+	Path string
+}
+
+func (err *BareRepositoryError) Error() string {
+	return fmt.Sprintf(
+		"%v: %s is a bare repository, and a review candidate is a working-tree diff; "+
+			"run the same command again from a checkout, or point it at one with `--cwd <path-to-a-checkout>`",
+		ErrBareRepositoryHasNoWorkingTree, err.Path,
+	)
+}
+
+func (err *BareRepositoryError) Unwrap() error { return ErrBareRepositoryHasNoWorkingTree }
+
+// bareRepositoryFailure classifies a rev-parse failure by asking Git the single
+// question that separates "this repository has no working tree" from every
+// other cause. A probe that cannot answer, or that answers no, returns the
+// original error untouched: an unexpected failure must keep the cause it came
+// with, because destroying diagnostic information is its own defect.
+func bareRepositoryFailure(ctx context.Context, repo string, err error) error {
+	if err == nil {
+		return nil
+	}
+	output, probeErr := runGit(ctx, repo, nil, nil, "rev-parse", "--is-bare-repository")
+	if probeErr != nil || string(bytes.TrimSpace(output)) != "true" {
+		return err
+	}
+	return &BareRepositoryError{Path: repo}
+}
+
+func canonicalGitDirectory(repo string, output []byte) (string, error) {
+	if len(output) == 0 || bytes.IndexByte(output, 0) >= 0 {
+		return "", errors.New("Git directory output is empty or contains NUL")
+	}
+	record := output
+	if record[len(record)-1] == '\n' {
+		record = record[:len(record)-1]
+		if len(record) > 0 && record[len(record)-1] == '\r' {
+			record = record[:len(record)-1]
+		}
+	}
+	if len(record) == 0 || bytes.ContainsAny(record, "\r\n") || strings.TrimSpace(string(record)) == "" || bytes.HasPrefix(record, []byte("--")) {
+		return "", errors.New("Git directory output is not exactly one valid path record")
+	}
+	root, err := canonicalRepositoryPath(repo)
+	if err != nil {
+		return "", err
+	}
+	directory := string(record)
+	relative := !filepath.IsAbs(directory)
+	if relative {
+		directory = filepath.Join(root, directory)
+		rel, relErr := filepath.Rel(root, directory)
+		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			return "", errors.New("relative Git directory escapes the repository root")
+		}
+	}
+	directory, err = canonicalRepositoryPath(directory)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(directory)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("Git directory output is not a directory")
+	}
+	return filepath.Clean(directory), nil
+}
+
+func readSnapshotIndex(path string) ([]byte, time.Time, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	defer file.Close()
+	before, err := file.Stat()
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	payload, err := io.ReadAll(file)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	after, err := file.Stat()
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	if before.Size() != after.Size() || before.ModTime() != after.ModTime() || int64(len(payload)) != after.Size() {
+		return nil, time.Time{}, errors.New("real index changed while being copied")
+	}
+	return payload, after.ModTime(), nil
+}
+
 func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended []string, allowStagedIntended bool, projection Projection) (string, string, string, error) {
 	baseTree, unborn, err := builder.resolveCurrentChangesBase(ctx, projection)
 	if err != nil {
@@ -556,19 +869,26 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 	if !filepath.IsAbs(indexPath) {
 		indexPath = filepath.Join(builder.Repo, indexPath)
 	}
-	indexContent, err := os.ReadFile(indexPath)
+	indexContent, indexModTime, err := readSnapshotIndex(indexPath)
 	missingIndex := errors.Is(err, os.ErrNotExist)
 	if err != nil && !missingIndex {
 		return "", "", "", fmt.Errorf("read real index: %w", err)
 	}
 
 	stagedIntended := 0
-	for _, logicalPath := range intended {
-		if _, err := runGit(ctx, builder.Repo, nil, nil, "ls-files", "--error-unmatch", "--", literalPathspec(logicalPath)); err == nil {
-			if !allowStagedIntended {
-				return "", "", "", fmt.Errorf("intended-untracked path %q is already tracked", logicalPath)
+	if len(intended) > 0 {
+		trackedOutput, err := runGitInventory(ctx, builder.Repo, "ls-files", "--cached", "-z", "--")
+		if err != nil {
+			return "", "", "", err
+		}
+		tracked := nulSeparatedPathSet(trackedOutput)
+		for _, logicalPath := range intended {
+			if _, isTracked := tracked[logicalPath]; isTracked {
+				if !allowStagedIntended {
+					return "", "", "", fmt.Errorf("intended-untracked path %q is already tracked", logicalPath)
+				}
+				stagedIntended++
 			}
-			stagedIntended++
 		}
 	}
 	if stagedIntended > 0 && stagedIntended != len(intended) {
@@ -605,16 +925,30 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 		if _, err := runGit(ctx, builder.Repo, env, nil, "read-tree", "--empty"); err != nil {
 			return "", "", "", err
 		}
-	} else if err := os.WriteFile(tempIndex, indexContent, 0o600); err != nil {
+	} else {
+		if err := os.WriteFile(tempIndex, indexContent, 0o600); err != nil {
+			return "", "", "", err
+		}
+		// Git's racily-clean check compares cached entry timestamps with the
+		// index timestamp. Preserve the real index timestamp: leaving the copied
+		// index freshly dated can make a rapid same-stat rewrite look safely old
+		// and let `git add -u` reuse stale cached content.
+		if err := os.Chtimes(tempIndex, indexModTime, indexModTime); err != nil {
+			return "", "", "", err
+		}
+	}
+	cachedEntries, err := runGitInventoryWithEnv(ctx, builder.Repo, env, "ls-files", "--cached", "-z")
+	if err != nil {
 		return "", "", "", err
 	}
 	if projection != ProjectionStaged {
-		if _, err := runGit(ctx, builder.Repo, env, nil, "add", "-u", "--", "."); err != nil {
-			return "", "", "", err
+		if len(cachedEntries) > 0 {
+			if _, err := runGit(ctx, builder.Repo, env, nil, "add", "-u", "--", "."); err != nil {
+				return "", "", "", err
+			}
 		}
 		if len(intended) > 0 {
-			args := append([]string{"add", "--"}, literalPathspecs(intended)...)
-			if _, err := runGit(ctx, builder.Repo, env, nil, args...); err != nil {
+			if err := addIntendedPathspecs(ctx, builder.Repo, env, intended); err != nil {
 				return "", "", "", err
 			}
 		}
@@ -641,7 +975,7 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 
 func (builder SnapshotBuilder) resolveCurrentChangesBase(ctx context.Context, projection Projection) (string, bool, error) {
 	baseTree, headErr := builder.resolveTree(ctx, "HEAD")
-	if headErr == nil || projection != ProjectionStaged {
+	if headErr == nil {
 		return baseTree, false, headErr
 	}
 
@@ -730,7 +1064,7 @@ func (builder SnapshotBuilder) resolveTree(ctx context.Context, revision string)
 }
 
 func (builder SnapshotBuilder) changedPaths(ctx context.Context, baseTree, candidateTree string) ([]string, error) {
-	output, err := runGit(ctx, builder.Repo, nil, nil, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", baseTree, candidateTree)
+	output, err := runGit(ctx, builder.Repo, nil, nil, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--no-renames", "--ignore-submodules=none", baseTree, candidateTree)
 	if err != nil {
 		return nil, err
 	}
@@ -751,14 +1085,26 @@ func (builder SnapshotBuilder) changedPaths(ctx context.Context, baseTree, candi
 }
 
 func (builder SnapshotBuilder) rejectIgnoredIntended(ctx context.Context, intended []string) error {
+	if len(intended) == 0 {
+		return nil
+	}
+	stdin := make([]byte, 0, len(intended)*32)
 	for _, logicalPath := range intended {
-		_, err := runGit(ctx, builder.Repo, nil, nil, "check-ignore", "--quiet", "--no-index", "--", logicalPath)
-		if err == nil {
-			return fmt.Errorf("intended-untracked path %q is ignored", logicalPath)
+		stdin = append(stdin, logicalPath...)
+		stdin = append(stdin, 0)
+	}
+	output, err := runGit(ctx, builder.Repo, nil, stdin, "check-ignore", "-z", "--stdin", "--no-index")
+	if err != nil {
+		var commandErr *GitCommandError
+		if errors.As(err, &commandErr) && commandErr.ExitCode == 1 {
+			return nil
 		}
-		var exitErr *exec.ExitError
-		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
-			return err
+		return err
+	}
+	ignored := nulSeparatedPathSet(output)
+	for _, logicalPath := range intended {
+		if _, isIgnored := ignored[logicalPath]; isIgnored {
+			return fmt.Errorf("intended-untracked path %q is ignored", logicalPath)
 		}
 	}
 	return nil
@@ -767,18 +1113,61 @@ func (builder SnapshotBuilder) rejectIgnoredIntended(ctx context.Context, intend
 func (builder SnapshotBuilder) untrackedProof(ctx context.Context, candidateTree string, intended []string) (string, error) {
 	hash := sha256.New()
 	hash.Write([]byte("gentle-ai.intended-untracked/v1\x00"))
+	if len(intended) == 0 {
+		return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+	}
+	entries, err := listTreeEntries(ctx, builder.Repo, candidateTree)
+	if err != nil {
+		return "", err
+	}
 	for _, logicalPath := range intended {
-		output, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", candidateTree, "--", literalPathspec(logicalPath))
-		if err != nil {
-			return "", err
-		}
-		if len(output) == 0 {
+		entry, present := entries[logicalPath]
+		if !present {
 			return "", fmt.Errorf("intended-untracked path %q is absent from candidate tree", logicalPath)
 		}
 		writeLengthPrefixed(hash, []byte(logicalPath))
-		writeLengthPrefixed(hash, output)
+		writeLengthPrefixed(hash, entry)
 	}
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func listTreeEntries(ctx context.Context, repo, tree string) (map[string][]byte, error) {
+	output, err := runGitInventory(ctx, repo, "ls-tree", "-r", "-t", "-z", tree)
+	if err != nil {
+		return nil, err
+	}
+	return parseTreeEntries(output)
+}
+
+// parseTreeEntries preserves each complete ls-tree record, including its NUL,
+// so untracked proof bytes remain identical to the former per-path command.
+func parseTreeEntries(output []byte) (map[string][]byte, error) {
+	if len(output) > 0 && output[len(output)-1] != 0 {
+		return nil, errors.New("unexpected unterminated tree entry") // refusal:by-design world-action: truncated Git protocol output cannot be made trustworthy by a review command
+	}
+	entries := make(map[string][]byte)
+	for _, record := range bytes.Split(output, []byte{0}) {
+		if len(record) == 0 {
+			continue
+		}
+		tab := bytes.IndexByte(record, '\t')
+		if tab < 0 {
+			return nil, fmt.Errorf("unexpected tree entry %q", record) // refusal:by-design world-action: malformed Git protocol output cannot be made trustworthy by a review command
+		}
+		entry := append(append([]byte(nil), record...), 0)
+		entries[string(record[tab+1:])] = entry
+	}
+	return entries, nil
+}
+
+func nulSeparatedPathSet(output []byte) map[string]struct{} {
+	paths := make(map[string]struct{})
+	for _, record := range bytes.Split(output, []byte{0}) {
+		if len(record) > 0 {
+			paths[string(record)] = struct{}{}
+		}
+	}
+	return paths
 }
 
 func literalPathspec(logicalPath string) string {
@@ -791,6 +1180,38 @@ func literalPathspecs(logicalPaths []string) []string {
 		result[index] = literalPathspec(logicalPath)
 	}
 	return result
+}
+
+// addIntendedPathspecs stages the intended-untracked paths by literal
+// pathspec, feeding them to Git over stdin instead of argv. Expanding one
+// ":(literal)<path>" pathspec per file into argv scales with the size of the
+// intended-untracked set; Windows caps a process command line at 32767
+// characters, so a large set (~1000+ paths) can exceed that limit and fail
+// to launch the process at all (issue 1778). --pathspec-from-file=- with
+// --pathspec-file-nul avoids argv entirely and needs no quoting, since
+// entries are NUL-delimited; pathspec magic such as ":(literal)" is still
+// honored per-entry.
+func addIntendedPathspecs(ctx context.Context, repo string, env []string, intended []string) error {
+	if len(intended) == 0 {
+		return nil
+	}
+	stdin := nulJoinedPathspecs(intended)
+	_, err := runGit(ctx, repo, env, stdin, "add", "--pathspec-from-file=-", "--pathspec-file-nul")
+	return err
+}
+
+// nulJoinedPathspecs renders each intended-untracked path as a NUL-delimited
+// literal pathspec suitable for `git add --pathspec-from-file=- --pathspec-file-nul`.
+func nulJoinedPathspecs(logicalPaths []string) []byte {
+	pathspecs := literalPathspecs(logicalPaths)
+	var buffer bytes.Buffer
+	for index, pathspec := range pathspecs {
+		if index > 0 {
+			buffer.WriteByte(0)
+		}
+		buffer.WriteString(pathspec)
+	}
+	return buffer.Bytes()
 }
 
 func canonicalPaths(values []string) ([]string, error) {
@@ -964,6 +1385,31 @@ func (err *GitCommandError) Error() string {
 
 func (err *GitCommandError) Unwrap() error { return err.Cause }
 
+var ErrGitOutputLimit = errors.New("git output exceeded deterministic byte limit")
+
+// GitOutputLimitError reports that a bounded Git capture produced more bytes
+// than the caller permits. The capture retains at most Limit bytes while the
+// child is drained, so oversized output cannot grow process memory without
+// bound.
+//
+// Actual is the total number of bytes the capture observed while draining,
+// which is what makes an overflow explainable rather than merely detectable: a
+// caller told only "you exceeded four mebibytes" cannot tell whether it is over
+// by a kilobyte or by a factor of three, and so cannot judge how much smaller a
+// candidate has to become. It is zero only where the total is genuinely
+// unknown, so a renderer must treat zero as "unmeasured", never as "empty".
+type GitOutputLimitError struct {
+	Args   []string
+	Limit  int
+	Actual int
+}
+
+func (err *GitOutputLimitError) Error() string {
+	return fmt.Sprintf("git %s output exceeds deterministic %d-byte limit", strings.Join(err.Args, " "), err.Limit)
+}
+
+func (err *GitOutputLimitError) Unwrap() error { return ErrGitOutputLimit }
+
 // GitProcessControlError reports that a git subprocess could not be started or
 // its process tree could not be brought under control before it produced any
 // result, e.g. Windows job-object or NtResumeProcess failures. It carries the
@@ -986,6 +1432,34 @@ var gitCommandContext = exec.CommandContext
 var gitProcessTreeStarter = startGitProcessTree
 
 func runGit(ctx context.Context, repo string, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
+	return runGitCaptured(ctx, repo, extraEnv, stdin, 0, false, false, args...)
+}
+
+func runGitInventory(ctx context.Context, repo string, args ...string) ([]byte, error) {
+	return runGitInventoryWithEnv(ctx, repo, nil, args...)
+}
+
+func runGitInventoryWithEnv(ctx context.Context, repo string, extraEnv []string, args ...string) ([]byte, error) {
+	return runGitCaptured(ctx, repo, extraEnv, nil, 0, false, true, args...)
+}
+
+func runGitIsolated(ctx context.Context, repo string, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
+	return runGitCaptured(ctx, repo, extraEnv, stdin, 0, true, false, args...)
+}
+
+func runGitLimited(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputLimit int, args ...string) ([]byte, error) {
+	if outputLimit <= 0 {
+		return nil, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit}
+	}
+	return runGitCaptured(ctx, repo, extraEnv, stdin, outputLimit, true, false, args...)
+}
+
+func runGitCaptured(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputLimit int, isolateConfig, rejectStderr bool, args ...string) ([]byte, error) {
+	output, _, err := runGitCapturedRange(ctx, repo, extraEnv, stdin, 0, outputLimit, isolateConfig, rejectStderr, true, args...)
+	return output, err
+}
+
+func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputOffset, outputLimit int, isolateConfig, rejectStderr, rejectOverflow bool, args ...string) ([]byte, int, error) {
 	remote := len(args) > 0 && args[0] == "ls-remote"
 	timeout := localGitCommandTimeout
 	if remote {
@@ -996,12 +1470,21 @@ func runGit(ctx context.Context, repo string, extraEnv []string, stdin []byte, a
 	command := gitCommandContext(commandContext, "git", append([]string{"--no-replace-objects", "-C", repo}, args...)...)
 	command.Cancel = nil
 	command.WaitDelay = gitCommandWaitDelay
-	command.Env = sanitizedGitEnvironment(os.Environ(), extraEnv)
+	command.Env = sanitizedGitEnvironmentForRun(os.Environ(), extraEnv, isolateConfig)
 	if stdin != nil {
 		command.Stdin = bytes.NewReader(stdin)
 	}
-	var buffer bytes.Buffer
-	command.Stdout, command.Stderr = &buffer, &buffer
+	var combined, machineStdout, machineStderr bytes.Buffer
+	var stdout, stderr *boundedGitOutput
+	if outputLimit > 0 {
+		stdout = &boundedGitOutput{offset: outputOffset, limit: outputLimit}
+		stderr = &boundedGitOutput{limit: 64 << 10}
+		command.Stdout, command.Stderr = stdout, stderr
+	} else if rejectStderr {
+		command.Stdout, command.Stderr = &machineStdout, &machineStderr
+	} else {
+		command.Stdout, command.Stderr = &combined, &combined
+	}
 	release, startErr := gitProcessTreeStarter(command)
 	err := startErr
 	if err == nil {
@@ -1021,7 +1504,12 @@ func runGit(ctx context.Context, repo string, extraEnv []string, stdin []byte, a
 		_ = command.Process.Kill()
 		_ = command.Wait()
 	}
-	output := buffer.Bytes()
+	output, diagnostic := combined.Bytes(), combined.Bytes()
+	if stdout != nil {
+		output, diagnostic = stdout.Bytes(), stderr.Bytes()
+	} else if rejectStderr {
+		output, diagnostic = machineStdout.Bytes(), machineStderr.Bytes()
+	}
 	if errors.Is(err, exec.ErrWaitDelay) && commandContext.Err() == nil {
 		err = nil
 	}
@@ -1032,27 +1520,80 @@ func runGit(ctx context.Context, repo string, extraEnv []string, stdin []byte, a
 			if aggregate {
 				cause = ctx.Err()
 			}
-			return nil, &GitCommandTimeoutError{
+			return nil, 0, &GitCommandTimeoutError{
 				Args: append([]string{}, args...), Timeout: timeout, Remote: remote, Aggregate: aggregate, Cause: cause,
 			}
 		}
 		if startErr != nil {
-			return nil, &GitProcessControlError{Args: append([]string{}, args...), Cause: startErr}
+			return nil, 0, &GitProcessControlError{Args: append([]string{}, args...), Cause: startErr}
 		}
 		exitCode := -1
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		}
-		return nil, &GitCommandError{
+		return nil, 0, &GitCommandError{
 			Args: append([]string{}, args...), ExitCode: exitCode, Remote: remote, Cause: err,
-			Output: strings.TrimSpace(string(output)),
+			Output: strings.TrimSpace(string(diagnostic)),
 		}
 	}
-	return output, nil
+	if stdout != nil && stdout.exceeded && rejectOverflow {
+		return nil, 0, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit, Actual: stdout.total}
+	}
+	if rejectStderr && len(diagnostic) != 0 {
+		return nil, 0, fmt.Errorf("git inventory produced diagnostics: %s", strings.TrimSpace(string(diagnostic)))
+	}
+	total := len(output)
+	if stdout != nil {
+		total = stdout.total
+	}
+	return output, total, nil
 }
 
+type boundedGitOutput struct {
+	buffer   bytes.Buffer
+	offset   int
+	limit    int
+	exceeded bool
+	// total counts every byte the child produced, including the bytes past
+	// the limit that are deliberately discarded. Counting is free -- the
+	// child is drained regardless -- and it is the only place the true size
+	// is ever visible, because nothing downstream retains the discarded tail.
+	total int
+}
+
+func (output *boundedGitOutput) Write(payload []byte) (int, error) {
+	written := len(payload)
+	start := output.total
+	output.total += written
+	if output.total <= output.offset {
+		return written, nil
+	}
+	payloadOffset := 0
+	if start < output.offset {
+		payloadOffset = output.offset - start
+	}
+	payload = payload[payloadOffset:]
+	remaining := output.limit - output.buffer.Len()
+	if remaining > 0 {
+		if remaining > len(payload) {
+			remaining = len(payload)
+		}
+		_, _ = output.buffer.Write(payload[:remaining])
+	}
+	if len(payload) > remaining {
+		output.exceeded = true
+	}
+	return written, nil
+}
+
+func (output *boundedGitOutput) Bytes() []byte { return output.buffer.Bytes() }
+
 func sanitizedGitEnvironment(environment, extra []string) []string {
+	return sanitizedGitEnvironmentForRun(environment, extra, false)
+}
+
+func sanitizedGitEnvironmentForRun(environment, extra []string, isolateConfig bool) []string {
 	unsafe := map[string]struct{}{
 		"GIT_ALTERNATE_OBJECT_DIRECTORIES": {},
 		"GIT_CEILING_DIRECTORIES":          {},
@@ -1063,7 +1604,11 @@ func sanitizedGitEnvironment(environment, extra []string) []string {
 		"GIT_IMPLICIT_WORK_TREE":           {},
 		"GIT_INDEX_FILE":                   {},
 		"GIT_INTERNAL_SUPER_PREFIX":        {},
+		"GIT_ICASE_PATHSPECS":              {},
 		"GIT_NAMESPACE":                    {},
+		"GIT_LITERAL_PATHSPECS":            {},
+		"GIT_GLOB_PATHSPECS":               {},
+		"GIT_NOGLOB_PATHSPECS":             {},
 		"GIT_NO_REPLACE_OBJECTS":           {},
 		"GIT_OBJECT_DIRECTORY":             {},
 		"GIT_PREFIX":                       {},
@@ -1072,10 +1617,24 @@ func sanitizedGitEnvironment(environment, extra []string) []string {
 		"GIT_SHALLOW_FILE":                 {},
 		"GIT_WORK_TREE":                    {},
 	}
+	processEssential := map[string]struct{}{
+		"COMSPEC": {}, "PATH": {}, "PATHEXT": {}, "SYSTEMDRIVE": {},
+		"SYSTEMROOT": {}, "TEMP": {}, "TMP": {}, "TMPDIR": {}, "WINDIR": {},
+	}
 	result := make([]string, 0, len(environment)+len(extra)+1)
 	for _, entry := range environment {
 		name, _, _ := strings.Cut(entry, "=")
-		if _, remove := unsafe[name]; !remove && name != "LC_ALL" {
+		canonicalName := strings.ToUpper(name)
+		_, remove := unsafe[canonicalName]
+		trace := strings.HasPrefix(canonicalName, "GIT_TRACE")
+		_, essential := processEssential[canonicalName]
+		if isolateConfig {
+			if essential && !strings.HasPrefix(canonicalName, "GIT_") {
+				result = append(result, entry)
+			}
+			continue
+		}
+		if !remove && !trace && canonicalName != "LC_ALL" {
 			result = append(result, entry)
 		}
 	}

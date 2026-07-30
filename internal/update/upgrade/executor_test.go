@@ -12,12 +12,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
 // --- helpers ---
@@ -1434,7 +1434,15 @@ func TestConfigPathsForBackup_EmptyStateAgentsFallsBackToFilesystem(t *testing.T
 func mockCmd(name string, args ...string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
 		if name == "echo" {
-			return exec.Command("cmd", "/c", "echo "+strings.Join(args, " "))
+			// `cmd /c echo` with nothing after it prints "ECHO is on", cmd's
+			// status line, not an empty line. A stub standing in for an unset
+			// `go env` value would then hand the caller that sentence as if it
+			// were the value, and callers that branch on "" take the wrong
+			// path. `echo.` is the form that emits a genuinely empty line.
+			if joined := strings.Join(args, " "); strings.TrimSpace(joined) != "" {
+				return exec.Command("cmd", "/c", "echo "+joined)
+			}
+			return exec.Command("cmd", "/c", "echo.")
 		}
 		if name == "true" {
 			return exec.Command("cmd", "/c", "exit 0")

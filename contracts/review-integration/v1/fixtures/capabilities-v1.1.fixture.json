@@ -157,6 +157,13 @@
         ]
       },
       {
+        "name": "native_next_transition",
+        "supported": true,
+        "requires": [
+          "target_scoped_status"
+        ]
+      },
+      {
         "name": "risk_reasons",
         "supported": true,
         "requires": [
@@ -171,6 +178,44 @@
         ]
       }
     ]
+  },
+  "bootstrap": {
+    "command": "gentle-ai review status --cwd \u003crepo\u003e --contract gentle-ai.review-integration/v1 --next-transition",
+    "target_selector_variants": [
+      {
+        "target_type": "staged",
+        "arguments": [
+          "--projection",
+          "staged"
+        ]
+      },
+      {
+        "target_type": "base_ref",
+        "arguments": [
+          "--base-ref",
+          "\u003cref\u003e"
+        ]
+      },
+      {
+        "target_type": "workspace_overlay_base_ref",
+        "arguments": [
+          "--workspace-overlay",
+          "--base-ref",
+          "\u003cref\u003e"
+        ]
+      },
+      {
+        "target_type": "workspace_overlay_base_tree",
+        "arguments": [
+          "--workspace-overlay",
+          "--base-tree",
+          "\u003ctree\u003e"
+        ]
+      }
+    ],
+    "required_feature": "native_next_transition",
+    "unsupported_outcome": "unsupported-capability",
+    "parent_only": true
   },
   "compatibility": {
     "minimum_protocol_major": 1,

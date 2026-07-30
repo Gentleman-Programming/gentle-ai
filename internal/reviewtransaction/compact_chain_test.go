@@ -28,6 +28,89 @@ func TestCompactPrePRChainAllowsExactThreeReceiptComposition(t *testing.T) {
 	}
 }
 
+func TestCompactPrePRChainAllowsAcceptedDegenerateScopeRecovery(t *testing.T) {
+	fixture := newCompactPrePRChainFixture(t, 2)
+	successor, receipt := recoverApprovedCompactSuccessor(t, fixture.repo, fixture.states[1].LineageID, "compact-chain-recovery", 2)
+	if receipt.BaseTree != receipt.FinalCandidateTree {
+		t.Fatalf("recovery receipt is not degenerate: %#v", receipt)
+	}
+
+	got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
+
+	if !attempted || got.Result != GateAllow {
+		t.Fatalf("accepted degenerate scope recovery = %#v, attempted %t, successor %s", got, attempted, successor.LineageID)
+	}
+	if got.Context.BaseTree != fixture.receipts[0].BaseTree || got.Context.CandidateTree != fixture.receipts[1].FinalCandidateTree {
+		t.Fatalf("recovered composed proof context = %#v", got.Context)
+	}
+	successorStore, err := CompactAuthoritativeStore(context.Background(), fixture.repo, successor.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	successorRecord, err := successorStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Context.LineageID != successor.LineageID || got.Context.Generation != successor.Generation || got.Context.StoreRevision != successorRecord.Revision {
+		t.Fatalf("recovered authority leaf context = %#v, want lineage %s generation %d revision %s", got.Context, successor.LineageID, successor.Generation, successorRecord.Revision)
+	}
+	if got.Context.FixDeltaHash != compactPrePRChainValuesHash("fix-delta", []string{fixture.receipts[0].FixDeltaHash, fixture.receipts[1].FixDeltaHash, receipt.FixDeltaHash}) ||
+		got.Context.PolicyHash != compactPrePRChainValuesHash("policy", []string{fixture.receipts[0].PolicyHash, fixture.receipts[1].PolicyHash, receipt.PolicyHash}) ||
+		got.Context.EvidenceHash != compactPrePRChainValuesHash("evidence", []string{fixture.receipts[0].EvidenceHash, fixture.receipts[1].EvidenceHash, receipt.EvidenceHash}) {
+		t.Fatalf("recovered authority hashes = %#v", got.Context)
+	}
+}
+
+func TestCompactPrePRChainRejectsStalePolicyAfterDegenerateRecoveryRotation(t *testing.T) {
+	dir := t.TempDir()
+	predecessorPolicy := []byte("review_policy: predecessor\n")
+	predecessorPolicyPath := filepath.Join(dir, "predecessor-policy.yml")
+	if err := os.WriteFile(predecessorPolicyPath, predecessorPolicy, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	currentPolicy := []byte("review_policy: current\n")
+	fixture := newCompactPrePRChainFixtureWithPolicy(t, 2, hashArtifactPayload(predecessorPolicy))
+	recoverApprovedCompactSuccessorWithPolicy(
+		t,
+		fixture.repo,
+		fixture.states[1].LineageID,
+		"compact-chain-policy-rotation",
+		2,
+		hashArtifactPayload(currentPolicy),
+	)
+	input := fixture.input()
+	input.PolicyArtifact = predecessorPolicyPath
+
+	got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, input)
+
+	if !attempted || got.Result == GateAllow || !strings.Contains(got.Reason, "explicit pre-PR policy") {
+		t.Fatalf("stale predecessor policy after recovery rotation = %#v, attempted %t", got, attempted)
+	}
+}
+
+func TestCompactPrePRChainNormalizesDegenerateRecoveryInsideChain(t *testing.T) {
+	fixture := newCompactPrePRChainFixture(t, 2)
+	degenerate, degenerateReceipt := recoverApprovedCompactSuccessor(t, fixture.repo, fixture.states[1].LineageID, "compact-chain-degenerate", 2)
+	writeSnapshotFile(t, fixture.repo, "segment-b.txt", "reviewed after recovery\n")
+	successor, receipt := recoverApprovedCompactSuccessor(t, fixture.repo, degenerate.LineageID, "compact-chain-after-degenerate", 3)
+	gitSnapshot(t, fixture.repo, "add", "segment-b.txt")
+	gitSnapshot(t, fixture.repo, "commit", "-m", "deliver reviewed recovery successor")
+
+	got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
+
+	if !attempted || got.Result != GateAllow {
+		t.Fatalf("normalized interior degenerate recovery = %#v, attempted %t, successor %s", got, attempted, successor.LineageID)
+	}
+	if got.Context.BaseTree != fixture.receipts[0].BaseTree || got.Context.CandidateTree != receipt.FinalCandidateTree {
+		t.Fatalf("normalized interior recovery proof context = %#v", got.Context)
+	}
+	if got.Context.FixDeltaHash != compactPrePRChainValuesHash("fix-delta", []string{fixture.receipts[0].FixDeltaHash, fixture.receipts[1].FixDeltaHash, degenerateReceipt.FixDeltaHash, receipt.FixDeltaHash}) ||
+		got.Context.PolicyHash != compactPrePRChainValuesHash("policy", []string{fixture.receipts[0].PolicyHash, fixture.receipts[1].PolicyHash, degenerateReceipt.PolicyHash, receipt.PolicyHash}) ||
+		got.Context.EvidenceHash != compactPrePRChainValuesHash("evidence", []string{fixture.receipts[0].EvidenceHash, fixture.receipts[1].EvidenceHash, degenerateReceipt.EvidenceHash, receipt.EvidenceHash}) {
+		t.Fatalf("normalized interior recovery authority hashes = %#v", got.Context)
+	}
+}
+
 func TestCompactPrePRChainLeavesExactSingleReceiptToDirectEvaluation(t *testing.T) {
 	fixture := newCompactPrePRChainFixture(t, 1)
 	input := fixture.input()
@@ -363,6 +446,37 @@ func TestCompactPrePRChainRejectsMultipleViableChains(t *testing.T) {
 	}
 }
 
+// TestSelectCompactPrePRChainRootIncomingExemption proves issue-1782:
+// selectCompactPrePRChain must not report a chain convergence when a
+// historical approved receipt merely ends exactly at the currently selected
+// publication base. Fixture inspection (addCompactChainConvergence,
+// compact_chain_test.go:919) confirmed it injects its extra receipt
+// MID-CHAIN (base = fixture.commits[0], the tree after the first segment,
+// not fixture.base) rather than at the chain root, so it already exercises
+// the correct negative regression (TestCompactPrePRChainRejectsForkConvergenceAndCycle/convergence,
+// unmodified) and is not the 1782 repro itself.
+//
+// This test reproduces 1782 directly: receipts X->A, A->B, B->C are a
+// genuinely linear chain (no fork, no real convergence anywhere), but moving
+// the publication tracker to land exactly on A selects A->B->C as the
+// winning chain while the historical X->A receipt (not on the selected
+// path) still has an edge landing on A. Before the fix, the incoming-degree
+// check demanded zero incoming edges at the selected chain's own root and
+// misreported that historical predecessor edge as a convergence.
+func TestSelectCompactPrePRChainRootIncomingExemption(t *testing.T) {
+	fixture := newCompactPrePRChainFixture(t, 3)
+	gitSnapshot(t, fixture.repo, "push", "--force", fixture.remote, fixture.commits[0]+":refs/heads/"+fixture.branch)
+	gitSnapshot(t, fixture.repo, "fetch", "origin", fixture.branch+":refs/remotes/origin/"+fixture.branch)
+
+	got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
+	if !attempted || got.Result != GateAllow {
+		t.Fatalf("linear chain with the publication tracker at its own mid-chain root = %#v, attempted %t", got, attempted)
+	}
+	if got.Context.BaseTree != fixture.receipts[0].FinalCandidateTree || got.Context.CandidateTree != fixture.receipts[2].FinalCandidateTree {
+		t.Fatalf("composed proof context = %#v, want base %s candidate %s", got.Context, fixture.receipts[0].FinalCandidateTree, fixture.receipts[2].FinalCandidateTree)
+	}
+}
+
 func TestCompactPrePRChainRejectsIncompatibleSelectedBase(t *testing.T) {
 	fixture := newCompactPrePRChainFixture(t, 3)
 	advanceCompactChainRemote(t, fixture, "segment-a.txt")
@@ -415,6 +529,59 @@ func TestCompactPrePRChainRequiresSignedCompatibleBaseAdvance(t *testing.T) {
 	signed, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, input)
 	if !attempted || signed.Result != GateAllow || signed.Context.BaseAdvance == nil || !signed.Context.BaseAdvance.Compatible {
 		t.Fatalf("signed compatible base advance = %#v, attempted %t", signed, attempted)
+	}
+}
+
+func TestCompactPrePRChainRejectsPredecessorTrustAfterCompatibleAdvanceRecoveryRotation(t *testing.T) {
+	predecessorPublicKey, predecessorPrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentPublicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	predecessorPolicy := []byte("pre_pr_ci_issuer: trusted-ci\npre_pr_ci_ed25519_public_key: " + base64.StdEncoding.EncodeToString(predecessorPublicKey) + "\n")
+	predecessorPolicyPath := filepath.Join(dir, "predecessor-policy.yml")
+	if err := os.WriteFile(predecessorPolicyPath, predecessorPolicy, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	currentPolicy := []byte("pre_pr_ci_issuer: trusted-ci\npre_pr_ci_ed25519_public_key: " + base64.StdEncoding.EncodeToString(currentPublicKey) + "\n")
+	fixture := newCompactPrePRChainFixtureWithPolicy(t, 2, hashArtifactPayload(predecessorPolicy))
+	recoverApprovedCompactSuccessorWithPolicy(
+		t,
+		fixture.repo,
+		fixture.states[1].LineageID,
+		"compact-chain-trust-rotation",
+		2,
+		hashArtifactPayload(currentPolicy),
+	)
+	newBase := advanceCompactChainRemote(t, fixture, "base-only.txt")
+	mergedOutput, err := runGit(context.Background(), fixture.repo, nil, nil, "merge-tree", "--write-tree", newBase, fixture.commits[len(fixture.commits)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestation := prePRCIAttestation{
+		Schema: prePRCIAttestationSchema, Issuer: "trusted-ci", MergedTree: strings.Fields(string(mergedOutput))[0], Status: "success",
+	}
+	attestation.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(predecessorPrivateKey, prePRCIAttestationPreimage(attestation)))
+	attestationPayload, err := json.Marshal(attestation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestationPath := filepath.Join(dir, "attestation.json")
+	if err := os.WriteFile(attestationPath, attestationPayload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	input := fixture.input()
+	input.PolicyArtifact = predecessorPolicyPath
+	input.PrePRCIAttestation = attestationPath
+
+	got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, input)
+
+	if !attempted || got.Result == GateAllow || !strings.Contains(got.Reason, "explicit pre-PR policy") {
+		t.Fatalf("predecessor trust after compatible advance recovery rotation = %#v, attempted %t", got, attempted)
 	}
 }
 

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 func TestMain(m *testing.M) {
@@ -1020,7 +1020,7 @@ func TestUpdateHint(t *testing.T) {
 			name:    "gentle-ai windows",
 			tool:    ToolInfo{Name: "gentle-ai"},
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
-			want:    "irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex",
+			want:    "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced. Install/update from source with Go 1.25.10+: go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest",
 		},
 		{
 			name:          "engram macOS brew-owned",

@@ -63,6 +63,10 @@
         "reason_code": "forbidden_ambiguous_authority"
       },
       {
+        "action": "review.reconcile-authority-batch",
+        "reason_code": "forbidden_ambiguous_authority"
+      },
+      {
         "action": "review.recover",
         "reason_code": "forbidden_ambiguous_authority"
       },

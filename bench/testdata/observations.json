@@ -1,0 +1,295 @@
+[
+  {
+    "name": "gate_without_receipt",
+    "args": [
+      "review",
+      "validate",
+      "--cwd",
+      "/SANDBOX/demo",
+      "--gate",
+      "pre-commit"
+    ],
+    "stdout": "{\n  \"schema\": \"gentle-ai.review-gate-result/v1\",\n  \"result\": \"invalidated\",\n  \"allowed\": false,\n  \"action\": \"explicit-maintainer-action\",\n  \"reason\": \"no terminal review receipt exists for gate validation\",\n  \"context\": {\n    \"gate\": \"pre-commit\",\n    \"lineage_id\": \"\",\n    \"generation\": 0,\n    \"base_tree\": \"\",\n    \"candidate_tree\": \"\",\n    \"paths_digest\": \"\",\n    \"fix_delta_hash\": \"\",\n    \"policy_hash\": \"\",\n    \"ledger_hash\": \"\",\n    \"evidence_hash\": \"\",\n    \"base_relationship_valid\": false,\n    \"denial\": {\n      \"stage\": \"receipt-discovery\",\n      \"code\": \"receipt_missing\"\n    }\n  }\n}",
+    "stderr": "Error: review lifecycle gate denied: invalidated",
+    "exit_code": 1,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "invalid_flag_combination",
+    "args": [
+      "review",
+      "start",
+      "--cwd",
+      "/SANDBOX/demo",
+      "--projection",
+      "staged",
+      "--base-ref",
+      "HEAD"
+    ],
+    "stdout": "",
+    "stderr": "Error: review start with --projection staged and --base-ref is refused because intent is ambiguous: for a staged-index review rerun with \"gentle-ai review start --projection staged\"; for a base-diff review rerun with \"gentle-ai review start --base-ref HEAD --committed-only\"",
+    "exit_code": 1,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "low_risk_start",
+    "args": [
+      "review",
+      "start",
+      "--cwd",
+      "/SANDBOX/demo"
+    ],
+    "stdout": "{\n  \"operation\": \"review/start\",\n  \"action\": \"created\",\n  \"lenses_required\": false,\n  \"lineage_id\": \"review-9dc2bb05f350e857\",\n  \"state\": \"reviewing\",\n  \"risk_level\": \"low\",\n  \"selected_lenses\": [],\n  \"lens_bindings\": [],\n  \"projection\": \"workspace\",\n  \"target_identity\": \"sha256:9dc2bb05f350e8574dab80819912e105be342af1a12cd0b589923a4874ab04c3\",\n  \"changed_files\": 1,\n  \"changed_lines\": 1,\n  \"correction_budget\": 1\n}",
+    "stderr": "",
+    "exit_code": 0,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "low_risk_finalize",
+    "args": [
+      "review",
+      "finalize",
+      "--cwd",
+      "/SANDBOX/demo"
+    ],
+    "stdout": "{\n  \"operation\": \"review/finalize\",\n  \"lineage_id\": \"review-9dc2bb05f350e857\",\n  \"state\": \"approved\",\n  \"action\": \"validate delivery with gentle-ai review validate --gate \\u003cgate\\u003e\",\n  \"store_revision\": \"sha256:8b966441d332a265a1aaa1e813d723645cf16c83c54f8b2a8fabe752031032d6\",\n  \"receipt_path\": \"/SANDBOX/demo/.git/gentle-ai/review-transactions/v2/review-9dc2bb05f350e857/review-receipt.json\"\n}",
+    "stderr": "",
+    "exit_code": 0,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "gate_allow",
+    "args": [
+      "review",
+      "validate",
+      "--cwd",
+      "/SANDBOX/demo",
+      "--gate",
+      "post-apply"
+    ],
+    "stdout": "{\n  \"schema\": \"gentle-ai.review-gate-result/v1\",\n  \"result\": \"allow\",\n  \"allowed\": true,\n  \"action\": \"continue\",\n  \"reason\": \"authoritative transaction, current repository target, and content-bound artifacts match\",\n  \"context\": {\n    \"gate\": \"post-apply\",\n    \"lineage_id\": \"review-9dc2bb05f350e857\",\n    \"generation\": 1,\n    \"store_revision\": \"sha256:8b966441d332a265a1aaa1e813d723645cf16c83c54f8b2a8fabe752031032d6\",\n    \"genesis_revision\": \"sha256:8b966441d332a265a1aaa1e813d723645cf16c83c54f8b2a8fabe752031032d6\",\n    \"chain_identity\": \"sha256:8b966441d332a265a1aaa1e813d723645cf16c83c54f8b2a8fabe752031032d6\",\n    \"bundle_digest\": \"sha256:8b966441d332a265a1aaa1e813d723645cf16c83c54f8b2a8fabe752031032d6\",\n    \"base_tree\": \"dbc44182f44dc7be67e1630ee3256210cdf567c1\",\n    \"candidate_tree\": \"2cdc2e601ee48f1d12f177bb77c5dc1abd1019bf\",\n    \"paths_digest\": \"sha256:0e0ec847c1f3982e8a319fd4646260c9b4b44b78cc66994503edbe142283b5d6\",\n    \"fix_delta_hash\": \"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n    \"policy_hash\": \"sha256:34fb63d7f29f8613cd4431382b1057398a4816f8a4c20fc34677fffc80a184f6\",\n    \"ledger_hash\": \"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n    \"evidence_hash\": \"sha256:1346a203572af384953f050271657b1fda1ffe313217baf3e8558cad83938e57\",\n    \"base_relationship_valid\": true\n  }\n}",
+    "stderr": "",
+    "exit_code": 0,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "high_risk_start",
+    "args": [
+      "review",
+      "start",
+      "--cwd",
+      "/SANDBOX/demo"
+    ],
+    "stdout": "{\n  \"operation\": \"review/start\",\n  \"action\": \"created\",\n  \"lenses_required\": true,\n  \"lineage_id\": \"review-f5e9da0ba13d855e\",\n  \"state\": \"reviewing\",\n  \"risk_level\": \"high\",\n  \"selected_lenses\": [\n    \"review-risk\",\n    \"review-resilience\",\n    \"review-readability\",\n    \"review-reliability\"\n  ],\n  \"lens_bindings\": [\n    {\n      \"lens\": \"review-risk\",\n      \"order\": 0\n    },\n    {\n      \"lens\": \"review-resilience\",\n      \"order\": 1\n    },\n    {\n      \"lens\": \"review-readability\",\n      \"order\": 2\n    },\n    {\n      \"lens\": \"review-reliability\",\n      \"order\": 3\n    }\n  ],\n  \"projection\": \"workspace\",\n  \"target_identity\": \"sha256:f5e9da0ba13d855e33245b91b90eec7bec88a203478e00958a25c0dfe56e0cfb\",\n  \"changed_files\": 1,\n  \"changed_lines\": 2,\n  \"correction_budget\": 1,\n  \"risk_evidence\": [\n    \"authentication in internal/auth/s.go\"\n  ]\n}",
+    "stderr": "Gentle AI reviewed this change without asking, because this session has no terminal to answer on. Run 'gentle-ai review mode disable' to turn reviews off, or 'gentle-ai review mode status' to see the current setting.",
+    "exit_code": 0,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "finalize_without_results",
+    "args": [
+      "review",
+      "finalize",
+      "--cwd",
+      "/SANDBOX/demo"
+    ],
+    "stdout": "",
+    "stderr": "Error: review finalize requires all 4 original reviewer result(s)",
+    "exit_code": 1,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "rejected_capture",
+    "args": [
+      "review",
+      "capture-result",
+      "--cwd",
+      "/SANDBOX/demo",
+      "--lineage",
+      "review-f5e9da0ba13d855e",
+      "--target",
+      "sha256:f5e9da0ba13d855e33245b91b90eec7bec88a203478e00958a25c0dfe56e0cfb",
+      "--expected-revision",
+      "sha256:11a55a64b58def16ebf7dbd4f2e2e7156e63293398967d29caec7744c7ff6ac2",
+      "--lens",
+      "review-risk",
+      "--order",
+      "0",
+      "--input",
+      "/tmp/claude-1000/-home-gentleman-work-gentle-ai/d938102f-af94-4eba-9b94-980ae31d79b1/scratchpad/bad.json"
+    ],
+    "stdout": "",
+    "stderr": "Error: reviewer artifact admission binding_mismatch: reviewer result echoed a different artifact subject",
+    "exit_code": 1,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "status_collect",
+    "args": [
+      "review",
+      "status",
+      "--cwd",
+      "/SANDBOX/demo",
+      "--contract",
+      "gentle-ai.review-integration/v1",
+      "--next-transition"
+    ],
+    "stdout": "{\n  \"schema\": \"gentle-ai.review-integration.status/v2\",\n  \"contract\": \"gentle-ai.review-integration/v1\",\n  \"operation\": \"review.status\",\n  \"applicability\": \"current_target\",\n  \"authority\": {\n    \"version\": \"compact-v2\",\n    \"lineage_id\": \"review-f5e9da0ba13d855e\",\n    \"state\": \"reviewing\",\n    \"generation\": 1,\n    \"revision\": \"sha256:11a55a64b58def16ebf7dbd4f2e2e7156e63293398967d29caec7744c7ff6ac2\"\n  },\n  \"receipt\": {\n    \"status\": \"expected_missing\"\n  },\n  \"action\": \"finalize\",\n  \"replayability\": \"not_replayable\",\n  \"frozen\": {\n    \"tier\": \"high\",\n    \"original_changed_lines\": 2,\n    \"correction_budget\": 1\n  },\n  \"target_identity\": \"sha256:f5e9da0ba13d855e33245b91b90eec7bec88a203478e00958a25c0dfe56e0cfb\",\n  \"projection\": {\n    \"schema\": \"gentle-ai.review-integration.projection/v1\",\n    \"kind\": \"current-changes\",\n    \"projection\": \"workspace\",\n    \"base_tree\": \"2cdc2e601ee48f1d12f177bb77c5dc1abd1019bf\",\n    \"initial_review_tree\": \"b0b7df19484a7b1ee93cf773da58a2850f0ccb2e\",\n    \"current_candidate_tree\": \"b0b7df19484a7b1ee93cf773da58a2850f0ccb2e\",\n    \"paths_digest\": \"sha256:6060c8b2349e6c7c28564c9c5ce89fd82dead511e33de0bd84a218db615207f8\",\n    \"paths\": [\n      \"internal/auth/s.go\"\n    ],\n    \"intended_untracked\": [],\n    \"intended_untracked_proof\": \"sha256:b97229718d4c7fe50a8892eb474ae5aa6491697bccb400e3e31dbaca4894d2f3\",\n    \"initial_snapshot_identity\": \"sha256:f5e9da0ba13d855e33245b91b90eec7bec88a203478e00958a25c0dfe56e0cfb\",\n    \"current_snapshot_identity\": \"sha256:f5e9da0ba13d855e33245b91b90eec7bec88a203478e00958a25c0dfe56e0cfb\"\n  },\n  \"repair\": {\n    \"schema\": \"gentle-ai.review-authority-repair-assessment/v1\",\n    \"status\": \"unsupported\",\n    \"counts\": {\n      \"lineages\": 0,\n      \"compact_lineages\": 0,\n      \"legacy_lineages\": 0,\n      \"events\": 0,\n      \"bytes\": 0,\n      \"eligible_candidates\": 0,\n      \"unsupported_lineages\": 0,\n      \"conflicts\": 0\n    },\n    \"supported_operations\": [\n      \"review/complete-fix\",\n      \"review/validate-fix\"\n    ],\n    \"authorization_schema\": \"gentle-ai.review-repair-authorization/v1\"\n  },\n  \"candidates\": [],\n  \"next_transition\": {\n    \"kind\": \"collect\",\n    \"reason_code\": \"reviewer_results_required\",\n    \"collect\": {\n      \"inputs\": [\n        {\n          \"name\": \"reviewer_result\",\n          \"schema\": \"https://gentle-ai.dev/schema/review/reviewer/v1\",\n          \"capture_operation\": \"review.capture-result\",\n          \"arguments\": [\n            {\n              \"name\": \"lineage\",\n              \"value\": \"review-f5e9da0ba13d855e\"\n            },\n            {\n              \"name\": \"expected-revision\",\n              \"value\": \"sha256:11a55a64b58def16ebf7dbd4f2e2e7156e63293398967d29caec7744c7ff6ac2\"\n            },\n            {\n              \"name\": \"target\",\n              \"value\": \"sha256:f5e9da0ba13d855e33245b91b90eec7bec88a203478e00958a25c0dfe56e0cfb\"\n            },\n            {\n              \"name\": \"repository-context\",\n              \"value\": \"rctx1_eb3f2315d1398e67e820374284883a12100d19e5a796428ac1784175292e1bfb\"\n            },\n            {\n              \"name\": \"lens\",\n              \"value\": \"review-risk\"\n            },\n            {\n              \"name\": \"order\",\n              \"value\": \"0\"\n            }\n          ],\n          \"artifact_subject\": {\n            \"schema\": \"gentle-ai.review-artifact-subject/v1\",\n            \"subject_hash\": \"sha256:5fa2abcf7f2818385e374e3677265aace78c660432e95b68eef8166470f7d1a6\",\n            \"lineage_id\": \"review-f5e9da0ba13d855e\",\n            \"authority_revision\": \"sha256:11a55a64b58def16ebf7dbd4f2e2e7156e63293398967d29caec7744c7ff6ac2\",\n            \"target_identity\": \"sha256:f5e9da0ba13d855e33245b91b90eec7bec88a203478e00958a25c0dfe56e0cfb\",\n            \"candidate_diff_sha256\": \"sha256:3637f5dfff2d35b1aab217032da91742eac39b922c8f29b43d11bd3b8460f1f8\",\n            \"changed_path_manifest_sha256\": \"sha256:b33ca08ceb356b11585594c4abdc24595f859f1d4f8def76cd7f6fcd4101cafe\",\n            \"lens\": \"review-risk\",\n            \"selected_order\": 0\n          },\n          \"candidate_diff\": {\n            \"encoding\": \"base64\",\n            \"data\": \"ZGlmZiAtLWdpdCBhL2ludGVybmFsL2F1dGgvcy5nbyBiL2ludGVybmFsL2F1dGgvcy5nbwpuZXcgZmlsZSBtb2RlIDEwMDY0NAppbmRleCAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwLi5hNTY5ODE3ZTIzYjMwYWFjMDJmYTk3ODc1MDhlNmRlOTNjYzBjM2UyCi0tLSAvZGV2L251bGwKKysrIGIvaW50ZXJuYWwvYXV0aC9zLmdvCkBAIC0wLDAgKzEsMiBAQAorcGFja2FnZSBhdXRoCitmdW5jIENoZWNrVG9rZW4odCBzdHJpbmcpIGJvb2wgeyByZXR1cm4gdCAhPSAiIiB9Cg==\",\n            \"sha256\": \"sha256:3637f5dfff2d35b1aab217032da91742eac39b922c8f29b43d11bd3b8460f1f8\",\n            \"byte_size\": 283\n          },\n          \"changed_path_manifest\": [\n            {\n              \"path\": \"internal/auth/s.go\",\n              \"status\": \"A\",\n              \"old_mode\": \"000000\",\n              \"new_mode\": \"100644\",\n              \"deleted\": false,\n              \"type_changed\": false,\n              \"mode_only\": false,\n              \"intended_untracked\": false\n            }\n          ]\n        },\n        {\n          \"name\": \"reviewer_result\",\n          \"schema\": \"https://gentle-ai.dev/schema/review/reviewer/v1\",\n          \"capture_operation\": \"review.capture-result\",\n          \"arguments\": [\n            {\n              \"name\": \"lineage\",\n              \"value\": \"review-f5e9da0ba13d855e\"\n            },\n            {\n              \"name\": \"expected-revision\",\n              \"value\": \"sha256:11a55a64b58def16ebf7dbd4f2e2e7156e63293398967d29caec7744c7ff6ac2\"\n            },\n            {\n              \"name\": \"target\",\n              \"value\": \"sha256:f5e9da0ba13d855e33245b91b90eec7bec88a203478e00958a25c0dfe56e0cfb\"\n            },\n            {\n              \"name\": \"repository-context\",\n              \"value\": \"rctx1_eb3f2315d1398e67e820374284883a12100d19e5a796428ac1784175292e1bfb\"\n            },\n            {\n              \"name\": \"lens\",\n              \"value\": \"review-resilience\"\n            },\n            {\n              \"name\": \"order\",\n              \"value\": \"1\"\n            }\n          ],\n          \"artifact_subject\": {\n            \"schema\": \"gentle-ai.review-artifact-subject/v1\",\n            \"subject_hash\": \"sha256:0580866bf7976023cddc2ab8b6aa6ee137863f5d825502d8fb38b1f02ec0c3d9\",\n            \"lineage_id\": \"review-f5e9da0ba13d855e\",\n            \"authority_revision\": \"sha256:11a55a64b58def16ebf7dbd4f2e2e7156e63293398967d29caec7744c7ff6ac2\",\n            \"target_identity\": \"sha256:f5e9da0ba13d855e33245b91b90eec7bec88a203478e00958a25c0dfe56e0cfb\",\n            \"candidate_diff_sha256\": \"sha256:3637f5dfff2d35b1aab217032da91742eac39b922c8f29b43d11bd3b8460f1f8\",\n            \"changed_path_manifest_sha256\": \"sha256:b33ca08ceb356b11585594c4abdc24595f859f1d4f8def76cd7f6fcd4101cafe\",\n            \"lens\": \"review-resilience\",\n            \"selected_order\": 1\n          },\n          \"candidate_diff\": {\n            \"encoding\": \"base64\",\n            \"data\": \"ZGlmZiAtLWdpdCBhL2ludGVybmFsL2F1dGgvcy5nbyBiL2ludGVybmFsL2F1dGgvcy5nbwpuZXcgZmlsZSBtb2RlIDEwMDY0NAppbmRleCAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwLi5hNTY5ODE3ZTIzYjMwYWFjMDJmYTk3ODc1MDhlNmRlOTNjYzBjM2UyCi0tLSAvZGV2L251bGwKKysrIGIvaW50ZXJuYWwvYXV0aC9zLmdvCkBAIC0wLDAgKzEsMiBAQAorcGFja2FnZSBhdXRoCitmdW5jIENoZWNrVG9rZW4odCBzdHJpbmcpIGJvb2wgeyByZXR1cm4gdCAhPSAiIiB9Cg==\",\n            \"sha256\": \"sha256:3637f5dfff2d35b1aab217032da91742eac39b922c8f29b43d11bd3b8460f1f8\",\n            \"byte_size\": 283\n          },\n          \"changed_path_manifest\": [\n            {\n              \"path\": \"internal/auth/s.go\",\n              \"status\": \"A\",\n              \"old_mode\": \"000000\",\n              \"new_mode\": \"100644\",\n              \"deleted\": false,\n              \"type_changed\": false,\n              \"mode_only\": false,\n              \"intended_untracked\": false\n            }\n          ]\n        },\n        {\n          \"name\": \"reviewer_result\",\n          \"schema\": \"https://gentle-ai.dev/schema/review/reviewer/v1\",\n          \"capture_operation\": \"review.capture-result\",\n          \"arguments\": [\n            {\n              \"name\": \"lineage\",\n              \"value\": \"review-f5e9da0ba13d855e\"\n            },\n            {\n              \"name\": \"expected-revision\",\n              \"value\": \"sha256:11a55a64b58def16ebf7dbd4f2e2e7156e63293398967d29caec7744c7ff6ac2\"\n            },\n            {\n              \"name\": \"target\",\n              \"value\": \"sha256:f5e9da0ba13d855e33245b91b90eec7bec88a203478e00958a25c0dfe56e0cfb\"\n            },\n            {\n              \"name\": \"repository-context\",\n              \"value\": \"rctx1_eb3f2315d1398e67e820374284883a12100d19e5a796428ac1784175292e1bfb\"\n            },\n            {\n              \"name\": \"lens\",\n              \"value\": \"review-readability\"\n            },\n            {\n              \"name\": \"order\",\n              \"value\": \"2\"\n            }\n          ],\n          \"artifact_subject\": {\n            \"schema\": \"gentle-ai.review-artifact-subject/v1\",\n            \"subject_hash\": \"sha256:7ea5dd12ec4d1285cbf33333ff446fc91aece79793b556dbaafdb8623d2cf991\",\n            \"lineage_id\": \"review-f5e9da0ba13d855e\",\n            \"authority_revision\": \"sha256:11a55a64b58def16ebf7dbd4f2e2e7156e63293398967d29caec7744c7ff6ac2\",\n            \"target_identity\": \"sha256:f5e9da0ba13d855e33245b91b90eec7bec88a203478e00958a25c0dfe56e0cfb\",\n            \"candidate_diff_sha256\": \"sha256:3637f5dfff2d35b1aab217032da91742eac39b922c8f29b43d11bd3b8460f1f8\",\n            \"changed_path_manifest_sha256\": \"sha256:b33ca08ceb356b11585594c4abdc24595f859f1d4f8def76cd7f6fcd4101cafe\",\n            \"lens\": \"review-readability\",\n            \"selected_order\": 2\n          },\n          \"candidate_diff\": {\n            \"encoding\": \"base64\",\n            \"data\": \"ZGlmZiAtLWdpdCBhL2ludGVybmFsL2F1dGgvcy5nbyBiL2ludGVybmFsL2F1dGgvcy5nbwpuZXcgZmlsZSBtb2RlIDEwMDY0NAppbmRleCAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwLi5hNTY5ODE3ZTIzYjMwYWFjMDJmYTk3ODc1MDhlNmRlOTNjYzBjM2UyCi0tLSAvZGV2L251bGwKKysrIGIvaW50ZXJuYWwvYXV0aC9zLmdvCkBAIC0wLDAgKzEsMiBAQAorcGFja2FnZSBhdXRoCitmdW5jIENoZWNrVG9rZW4odCBzdHJpbmcpIGJvb2wgeyByZXR1cm4gdCAhPSAiIiB9Cg==\",\n            \"sha256\": \"sha256:3637f5dfff2d35b1aab217032da91742eac39b922c8f29b43d11bd3b8460f1f8\",\n            \"byte_size\": 283\n          },\n          \"changed_path_manifest\": [\n            {\n              \"path\": \"internal/auth/s.go\",\n              \"status\": \"A\",\n              \"old_mode\": \"000000\",\n              \"new_mode\": \"100644\",\n              \"deleted\": false,\n              \"type_changed\": false,\n              \"mode_only\": false,\n              \"intended_untracked\": false\n            }\n          ]\n        },\n        {\n          \"name\": \"reviewer_result\",\n          \"schema\": \"https://gentle-ai.dev/schema/review/reviewer/v1\",\n          \"capture_operation\": \"review.capture-result\",\n          \"arguments\": [\n            {\n              \"name\": \"lineage\",\n              \"value\": \"review-f5e9da0ba13d855e\"\n            },\n            {\n              \"name\": \"expected-revision\",\n              \"value\": \"sha256:11a55a64b58def16ebf7dbd4f2e2e7156e63293398967d29caec7744c7ff6ac2\"\n            },\n            {\n              \"name\": \"target\",\n              \"value\": \"sha256:f5e9da0ba13d855e33245b91b90eec7bec88a203478e00958a25c0dfe56e0cfb\"\n            },\n            {\n              \"name\": \"repository-context\",\n              \"value\": \"rctx1_eb3f2315d1398e67e820374284883a12100d19e5a796428ac1784175292e1bfb\"\n            },\n            {\n              \"name\": \"lens\",\n              \"value\": \"review-reliability\"\n            },\n            {\n              \"name\": \"order\",\n              \"value\": \"3\"\n            }\n          ],\n          \"artifact_subject\": {\n            \"schema\": \"gentle-ai.review-artifact-subject/v1\",\n            \"subject_hash\": \"sha256:75e90363243418ff37b74faee54d10c053bdd64fd568f50e5f472ae10f6199de\",\n            \"lineage_id\": \"review-f5e9da0ba13d855e\",\n            \"authority_revision\": \"sha256:11a55a64b58def16ebf7dbd4f2e2e7156e63293398967d29caec7744c7ff6ac2\",\n            \"target_identity\": \"sha256:f5e9da0ba13d855e33245b91b90eec7bec88a203478e00958a25c0dfe56e0cfb\",\n            \"candidate_diff_sha256\": \"sha256:3637f5dfff2d35b1aab217032da91742eac39b922c8f29b43d11bd3b8460f1f8\",\n            \"changed_path_manifest_sha256\": \"sha256:b33ca08ceb356b11585594c4abdc24595f859f1d4f8def76cd7f6fcd4101cafe\",\n            \"lens\": \"review-reliability\",\n            \"selected_order\": 3\n          },\n          \"candidate_diff\": {\n            \"encoding\": \"base64\",\n            \"data\": \"ZGlmZiAtLWdpdCBhL2ludGVybmFsL2F1dGgvcy5nbyBiL2ludGVybmFsL2F1dGgvcy5nbwpuZXcgZmlsZSBtb2RlIDEwMDY0NAppbmRleCAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwLi5hNTY5ODE3ZTIzYjMwYWFjMDJmYTk3ODc1MDhlNmRlOTNjYzBjM2UyCi0tLSAvZGV2L251bGwKKysrIGIvaW50ZXJuYWwvYXV0aC9zLmdvCkBAIC0wLDAgKzEsMiBAQAorcGFja2FnZSBhdXRoCitmdW5jIENoZWNrVG9rZW4odCBzdHJpbmcpIGJvb2wgeyByZXR1cm4gdCAhPSAiIiB9Cg==\",\n            \"sha256\": \"sha256:3637f5dfff2d35b1aab217032da91742eac39b922c8f29b43d11bd3b8460f1f8\",\n            \"byte_size\": 283\n          },\n          \"changed_path_manifest\": [\n            {\n              \"path\": \"internal/auth/s.go\",\n              \"status\": \"A\",\n              \"old_mode\": \"000000\",\n              \"new_mode\": \"100644\",\n              \"deleted\": false,\n              \"type_changed\": false,\n              \"mode_only\": false,\n              \"intended_untracked\": false\n            }\n          ]\n        }\n      ]\n    }\n  }\n}",
+    "stderr": "",
+    "exit_code": 0,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "finalize_without_evidence",
+    "args": [
+      "review",
+      "finalize",
+      "--cwd",
+      "/SANDBOX/demo",
+      "--lineage",
+      "review-f5e9da0ba13d855e"
+    ],
+    "stdout": "",
+    "stderr": "Error: finalize for lineage \"review-f5e9da0ba13d855e\" had no verification evidence to consume and made no transition; capture it first with `gentle-ai review capture-evidence`, then run `gentle-ai review finalize --lineage review-f5e9da0ba13d855e --captured-evidence`",
+    "exit_code": 1,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "mode_disable",
+    "args": [
+      "review",
+      "mode",
+      "disable",
+      "--cwd",
+      "/SANDBOX/demo",
+      "--json"
+    ],
+    "stdout": "{\n  \"schema\": \"gentle-ai.review-mode/v1\",\n  \"operation\": \"disable\",\n  \"scope\": \"global\",\n  \"status\": {\n    \"schema\": \"gentle-ai.rdd-mode-status/v1\",\n    \"global\": \"off\",\n    \"clone_local\": \"\",\n    \"effective\": \"off\",\n    \"source\": \"global\"\n  }\n}",
+    "stderr": "",
+    "exit_code": 0,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "start_while_disabled",
+    "args": [
+      "review",
+      "start",
+      "--cwd",
+      "/SANDBOX/demo"
+    ],
+    "stdout": "",
+    "stderr": "Error: review-driven development is disabled: start is rejected because the global mode source keeps it off",
+    "exit_code": 1,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "undefined_flag",
+    "args": [
+      "review",
+      "start",
+      "--cwd",
+      "/SANDBOX/demo",
+      "--this-flag-does-not-exist",
+      "x"
+    ],
+    "stdout": "flag provided but not defined: -this-flag-does-not-exist\nUsage: gentle-ai review start [flags]\n\nFreeze live Git scope and derive the bounded review tier, lenses, and correction budget.\n\nFlags:\n  --base-ref <value>\n      optional base revision for immutable base-to-HEAD review\n  --committed-only <value>\n      acknowledge that --base-ref excludes dirty tracked changes (default \"false\")\n  --contract <value>\n      optional negotiated review integration contract\n  --cwd <value>\n      repository path (default \".\")\n  --focus <value>\n      dominant standard-risk focus: risk, resilience, readability, or reliability; large pure documentation always uses readability (default \"reliability\")\n  --lineage <value>\n      optional explicit review lineage identifier\n  --policy <value>\n      optional review policy file; the native bounded policy is used by default\n  --projection <value>\n      candidate projection: workspace or staged; staged base-diff records post-commit delivery provenance (default \"workspace\")\n  --target <value>\n      exact frozen target identity for negotiated START\n  --trace <value>\n      optional diagnostic operation metadata trace path\n  --workspace-overlay <value>\n      include branch commits and the live workspace over --base-ref (default \"false\")\n  -h, --help\n      show this help",
+    "stderr": "Error: flag provided but not defined: -this-flag-does-not-exist",
+    "exit_code": 1,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "unknown_verb",
+    "args": [
+      "review",
+      "nonesuch",
+      "--cwd",
+      "/SANDBOX/demo"
+    ],
+    "stdout": "",
+    "stderr": "Error: unknown review command \"nonesuch\"",
+    "exit_code": 1,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "abandon_without_token",
+    "args": [
+      "review",
+      "abandon",
+      "--cwd",
+      "/SANDBOX/demo",
+      "--lineage",
+      "review-f5e9da0ba13d855e",
+      "--expected-revision",
+      "sha256:11a55a64b58def16ebf7dbd4f2e2e7156e63293398967d29caec7744c7ff6ac2",
+      "--reason",
+      "r",
+      "--actor",
+      "a"
+    ],
+    "stdout": "",
+    "stderr": "Error: review abandon requires --lineage, --expected-revision, --reason, --actor, and --maintainer-authorization",
+    "exit_code": 1,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "gate_disabled_unmanaged",
+    "args": [
+      "review",
+      "validate",
+      "--cwd",
+      "/SANDBOX/demo",
+      "--gate",
+      "pre-commit"
+    ],
+    "stdout": "{\n  \"schema\": \"gentle-ai.review-gate-result/v1\",\n  \"result\": \"invalidated\",\n  \"allowed\": false,\n  \"action\": \"repository-policy\",\n  \"reason\": \"review-driven development is disabled and no receipt governs this candidate, so delivery follows ordinary repository policy\",\n  \"context\": {\n    \"gate\": \"pre-commit\",\n    \"lineage_id\": \"\",\n    \"generation\": 0,\n    \"base_tree\": \"\",\n    \"candidate_tree\": \"\",\n    \"paths_digest\": \"\",\n    \"fix_delta_hash\": \"\",\n    \"policy_hash\": \"\",\n    \"ledger_hash\": \"\",\n    \"evidence_hash\": \"\",\n    \"base_relationship_valid\": false,\n    \"denial\": {\n      \"stage\": \"receipt-discovery\",\n      \"code\": \"receipt_missing\"\n    }\n  },\n  \"delivery\": \"disabled/unmanaged\"\n}",
+    "stderr": "",
+    "exit_code": 0,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "gate_unmanaged_switch_on",
+    "args": [
+      "review",
+      "validate",
+      "--cwd",
+      "/SANDBOX/demo",
+      "--gate",
+      "pre-commit"
+    ],
+    "stdout": "{\n  \"schema\": \"gentle-ai.review-gate-result/v1\",\n  \"result\": \"invalidated\",\n  \"allowed\": false,\n  \"action\": \"explicit-maintainer-action\",\n  \"reason\": \"no terminal review receipt exists for gate validation\",\n  \"context\": {\n    \"gate\": \"pre-commit\",\n    \"lineage_id\": \"\",\n    \"generation\": 0,\n    \"base_tree\": \"\",\n    \"candidate_tree\": \"\",\n    \"paths_digest\": \"\",\n    \"fix_delta_hash\": \"\",\n    \"policy_hash\": \"\",\n    \"ledger_hash\": \"\",\n    \"evidence_hash\": \"\",\n    \"base_relationship_valid\": false,\n    \"denial\": {\n      \"stage\": \"receipt-discovery\",\n      \"code\": \"receipt_missing\"\n    }\n  }\n}",
+    "stderr": "Error: review lifecycle gate denied: invalidated: no terminal review receipt governs this candidate; review it with gentle-ai review start",
+    "exit_code": 1,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "bare_repository_start",
+    "args": [
+      "review",
+      "start",
+      "--cwd",
+      "/SANDBOX/bare.git"
+    ],
+    "stdout": "",
+    "stderr": "Error: resolve review repository root: review needs a working tree: /SANDBOX/bare.git is a bare repository, and a review candidate is a working-tree diff; run the same command again from a checkout, or point it at one with `--cwd <path-to-a-checkout>`\n",
+    "exit_code": 1,
+    "stdout_captured": true,
+    "stderr_captured": true
+  }
+]

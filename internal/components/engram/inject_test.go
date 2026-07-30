@@ -8,18 +8,18 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/qwen"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/qwen"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
@@ -995,8 +995,8 @@ func TestInjectCodexWritesProfiles(t *testing.T) {
 		reasoningEffort string
 	}{
 		{"sdd-strong.config.toml", "medium"},
-		{"sdd-mid.config.toml", "medium"},
-		{"sdd-cheap.config.toml", "low"},
+		{"sdd-mid.config.toml", "high"},
+		{"sdd-cheap.config.toml", "high"},
 	}
 
 	for _, p := range profiles {
@@ -1065,8 +1065,8 @@ func TestProfileFallbackAgreesWithRenderFallback(t *testing.T) {
 		wantEffort string
 	}{
 		{"sdd-strong", "medium"},
-		{"sdd-mid", "medium"},
-		{"sdd-cheap", "low"},
+		{"sdd-mid", "high"},
+		{"sdd-cheap", "high"},
 	}
 	for _, tc := range cases {
 		got := profileEffort[tc.carril]

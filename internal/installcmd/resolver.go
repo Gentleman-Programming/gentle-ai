@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 // cmdLookPath, osStat, osGetenv, and cmdGoVersion are package-level vars for testability.
@@ -262,9 +262,13 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 		}, nil
 	case "apt", "pacman", "dnf":
 		const tmpDir = "/tmp/gentleman-guardian-angel"
+		tagRef := "refs/tags/v" + versions.GGAVersion
 		return CommandSequence{
 			{"rm", "-rf", tmpDir},
-			{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tmpDir},
+			{"mkdir", "-p", tmpDir},
+			{"git", "init", tmpDir},
+			{"git", "-C", tmpDir, "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tagRef + ":" + tagRef},
+			{"git", "-C", tmpDir, "checkout", "-f", tagRef},
 			{"bash", tmpDir + "/install.sh"},
 		}, nil
 	case "winget":

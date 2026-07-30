@@ -60,6 +60,18 @@ func TestValidateGPT56Runtime(t *testing.T) {
 		{name: "leading zero numeric prerelease", output: "codex-cli 0.145.0-rc.01", wantErr: true},
 		{name: "prerelease at minimum is older", output: "codex-cli 0.144.0-beta.1", wantErr: true},
 		{name: "prerelease above minimum is newer", output: "codex-cli 0.145.0-beta.1"},
+		// codex --version prints startup warnings on the same combined stream,
+		// so the version line is not necessarily the only line. Reporting "not
+		// installed" for an installed 0.145.0 told users to downgrade (#1794).
+		{name: "warning line before version", output: "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\"\ncodex-cli 0.145.0"},
+		{name: "version shaped path in warning", output: "WARNING: refusing to use codex/0.1.2/bin as a helper directory\ncodex-cli 0.145.0"},
+		// Anchoring evidence: the version is on the FIRST line here. The old
+		// regex still missed it, which shows ^...$ was anchored to the whole
+		// output rather than to a line.
+		{name: "warning line after version", output: "codex-cli 0.145.0\nWARNING: trailing diagnostic"},
+		{name: "trailing blank lines around version", output: "\n\ncodex-cli 0.145.0\n\n"},
+		{name: "warning only, no version line", output: "WARNING: refusing to use codex/0.1.2/bin as a helper directory", wantErr: true},
+		{name: "multiple warnings, no version line", output: "WARNING: first\nWARNING: second\n", wantErr: true},
 	}
 
 	for _, tt := range tests {

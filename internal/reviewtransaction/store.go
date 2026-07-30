@@ -152,28 +152,12 @@ func reviewAuthorityRoot(ctx context.Context, repo string) (string, string, erro
 	if err != nil {
 		return "", "", fmt.Errorf("resolve authoritative review repository: %w", err)
 	}
-	output, err := runGit(ctx, root, nil, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	identity, err := reviewRepositoryIdentityAtRoot(ctx, root)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve repository Git common directory: %w", err)
+		return "", "", fmt.Errorf("resolve repository Git identity: %w", err)
 	}
-	commonDir := strings.TrimSpace(string(output))
-	if !filepath.IsAbs(commonDir) {
-		commonDir = filepath.Join(root, commonDir)
-	}
-	commonDir, err = filepath.Abs(commonDir)
-	if err != nil {
-		return "", "", err
-	}
-	commonDir, err = filepath.EvalSymlinks(commonDir)
-	if err != nil {
-		return "", "", fmt.Errorf("resolve repository Git common directory symlinks: %w", err)
-	}
-	info, err := os.Stat(commonDir)
-	if err != nil || !info.IsDir() {
-		return "", "", errors.New("repository Git common directory is not a directory")
-	}
-	authorityRoot := filepath.Join(filepath.Clean(commonDir), "gentle-ai", "review-transactions")
-	return authorityRoot, root, nil
+	authorityRoot := filepath.Join(identity.GitCommonDir, "gentle-ai", "review-transactions")
+	return authorityRoot, identity.RepositoryRoot, nil
 }
 
 func validateLineageID(lineageID string) error {
@@ -802,6 +786,13 @@ func snapshotsEqual(previous, next Snapshot) bool {
 		equalStrings(previous.IntendedUntracked, next.IntendedUntracked) &&
 		equalStrings(previous.LedgerIDs, next.LedgerIDs) &&
 		equalStrings(previous.Paths, next.Paths)
+}
+
+// SnapshotsEqualExact is the public post-check seam. Unlike the historical
+// store comparison above it includes every Snapshot field, including
+// UnbornHead, so a source-mutating verifier cannot silently change its subject.
+func SnapshotsEqualExact(previous, next Snapshot) bool {
+	return previous.UnbornHead == next.UnbornHead && snapshotsEqual(previous, next)
 }
 
 func validInitialStoreRecord(record Record) bool {

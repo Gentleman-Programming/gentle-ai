@@ -87,6 +87,10 @@
         "reason_code": "forbidden_not_selected_by_native_status"
       },
       {
+        "action": "review.reconcile-authority-batch",
+        "reason_code": "forbidden_not_selected_by_native_status"
+      },
+      {
         "action": "review.start",
         "reason_code": "forbidden_not_selected_by_native_status"
       },

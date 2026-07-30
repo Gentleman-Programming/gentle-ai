@@ -82,20 +82,31 @@ const (
 
 var codexPresetMatrix = map[CodexPresetKey]map[string]CodexCarrilDefault{
 	CodexPresetLowCost: {
-		"sdd-strong": {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
+		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
 		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
-		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortLow},
+		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
 	},
 	CodexPresetRecommended: {
 		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
-		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
-		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortLow},
+		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortHigh},
+		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
 	},
 	CodexPresetPowerful: {
-		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortHigh},
-		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortHigh},
-		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortLow},
+		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortXHigh},
+		"sdd-mid":    {Model: "gpt-5.6-sol", Effort: CodexEffortHigh},
+		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
 	},
+}
+
+// codexPresetOrchestrator is the main-session model per preset. It is no
+// longer one shared policy: the low-cost preset runs the orchestrator on
+// Terra, because a Plus plan cannot afford Sol in both the main session and
+// every strong lane, and the strong lanes are where reasoning actually pays.
+// Unknown keys fall back to Recommended, as the carril matrix does.
+var codexPresetOrchestrator = map[CodexPresetKey]CodexOrchestratorAssignment{
+	CodexPresetLowCost:     {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
+	CodexPresetRecommended: {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
+	CodexPresetPowerful:    {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
 }
 
 // CodexOrchestratorAssignment is the explicit top-level Codex session model
@@ -106,17 +117,17 @@ type CodexOrchestratorAssignment struct {
 }
 
 // CodexPresetOrchestratorAssignment returns the main-session policy for a
-// named preset. All curated presets share one orchestration policy: the
-// main session runs at medium effort. The orchestrator plans, routes and
-// adjudicates rather than doing the delegated work, so low effort made it
-// the weakest link in the chain; medium keeps it responsive while giving it
-// enough reasoning to route correctly. Unknown keys intentionally fall back
-// to Recommended.
+// named preset. Every preset runs the orchestrator at medium effort: it plans,
+// routes and adjudicates rather than doing the delegated work, so low effort
+// made it the weakest link in the chain while medium keeps it responsive and
+// still routes correctly. The model does vary — see codexPresetOrchestrator.
+// Unknown keys intentionally fall back to Recommended.
 func CodexPresetOrchestratorAssignment(preset string) *CodexOrchestratorAssignment {
-	if _, ok := codexPresetMatrix[CodexPresetKey(preset)]; !ok {
-		preset = string(CodexPresetRecommended)
+	assignment, ok := codexPresetOrchestrator[CodexPresetKey(preset)]
+	if !ok {
+		assignment = codexPresetOrchestrator[CodexPresetRecommended]
 	}
-	return &CodexOrchestratorAssignment{Model: "gpt-5.6-sol", Effort: CodexEffortMedium}
+	return &assignment
 }
 
 // CodexPresetCarrilDefaults returns a defensive copy of the selected preset's
@@ -194,10 +205,14 @@ func CodexModelPresetLowCost() map[string]CodexEffort {
 // extension), the canonical default model id for that carril, the default
 // reasoning_effort tier, and the SDD phases covered.
 //
-// Phase groupings (Approach C — orthogonal carril axis):
-//   - sdd-strong (Razonamiento): propose, design, verify, judge-a, judge-b, default
+// Phase groupings (Approach C — orthogonal carril axis). Sol reasons, Terra
+// writes, Luna transcribes:
+//   - sdd-strong (Razonamiento): explore, propose, design, verify, judge-a, judge-b, default
 //   - sdd-mid    (Código):       apply, fix-agent
-//   - sdd-cheap  (Liviano):      explore, spec, tasks, archive, onboard
+//   - sdd-cheap  (Liviano):      spec, tasks, archive, onboard
+//
+// codexTierGroups below is the single source of this grouping; the rendered
+// table derives its phase column from it via codexTierPhaseLabel.
 type CodexTierGroup struct {
 	Profile       string
 	Model         string
@@ -220,15 +235,15 @@ type CodexTierGroup struct {
 // These efforts are Gentle AI workload policy, not Codex defaults.
 //
 //	Carril      LowCost  Recommended  Powerful
-//	sdd-strong  medium   medium       high
-//	sdd-mid     medium         medium             high
-//	sdd-cheap   low            low                low
+//	sdd-strong  medium   medium       xhigh
+//	sdd-mid     medium   high         high
+//	sdd-cheap   high     high         high
 var codexTierGroups = []CodexTierGroup{
 	{
 		Profile:       "sdd-strong",
 		Model:         codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Model,
 		DefaultEffort: codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Effort,
-		Phases:        []string{"sdd-propose", "sdd-design", "sdd-verify", "jd-judge-a", "jd-judge-b", "default"},
+		Phases:        []string{"sdd-explore", "sdd-propose", "sdd-design", "sdd-verify", "jd-judge-a", "jd-judge-b", "default"},
 	},
 	{
 		Profile:       "sdd-mid",
@@ -240,7 +255,7 @@ var codexTierGroups = []CodexTierGroup{
 		Profile:       "sdd-cheap",
 		Model:         codexPresetMatrix[CodexPresetRecommended]["sdd-cheap"].Model,
 		DefaultEffort: codexPresetMatrix[CodexPresetRecommended]["sdd-cheap"].Effort,
-		Phases:        []string{"sdd-explore", "sdd-spec", "sdd-tasks", "sdd-archive", "sdd-onboard"},
+		Phases:        []string{"sdd-spec", "sdd-tasks", "sdd-archive", "sdd-onboard"},
 	},
 }
 
@@ -283,6 +298,36 @@ func maxEffort(assignments map[string]CodexEffort, phases []string) CodexEffort 
 	return best
 }
 
+// codexTierPhaseLabel renders the human-readable "SDD phases" cell for one
+// carril row directly from that carril's Phases. It exists so the rendered
+// table cannot drift from codexTierGroups: the grouping has exactly one
+// source, and moving a phase between carriles updates the table for free.
+//
+// Three presentation rules shape the label. Runtime prefixes (sdd-, jd-) are
+// dropped because the column is already scoped to phases. The two Judgment Day
+// judges collapse into a single "judge" entry, since a reader picking a profile
+// does not care that there are two blind judges. "default" is omitted because
+// it is the fallback binding for anything unlisted, not an SDD phase.
+func codexTierPhaseLabel(tier CodexTierGroup) string {
+	labels := make([]string, 0, len(tier.Phases))
+	seen := make(map[string]bool, len(tier.Phases))
+	for _, phase := range tier.Phases {
+		if phase == "default" {
+			continue
+		}
+		name := strings.TrimPrefix(strings.TrimPrefix(phase, "sdd-"), "jd-")
+		if name == "judge-a" || name == "judge-b" {
+			name = "judge"
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		labels = append(labels, name)
+	}
+	return strings.Join(labels, ", ")
+}
+
 // RenderCodexPhaseEfforts renders the Model Profiles table for the Codex
 // sdd-orchestrator.md asset. The table maps CLI profile names to their model,
 // reasoning_effort tier, and covered SDD phases. The output is deterministic:
@@ -298,19 +343,13 @@ func RenderCodexPhaseEfforts(assignments map[string]CodexEffort, carrilModels ma
 		carrilModels = DefaultCarrilModels()
 	}
 
-	tierPhaseLabels := map[string]string{
-		"sdd-strong": "propose, design, verify, judge",
-		"sdd-mid":    "apply, fix-agent",
-		"sdd-cheap":  "explore, spec, tasks, archive, onboard",
-	}
-
 	var sb strings.Builder
 	sb.WriteString("| Profile (CLI) | Model | `reasoning_effort` (spawn_agent) | SDD phases |\n")
 	sb.WriteString("|---------------|-------|----------------------------------|------------|\n")
 
 	for _, tier := range codexTierGroups {
 		effort := maxEffort(assignments, tier.Phases)
-		phases := tierPhaseLabels[tier.Profile]
+		phases := codexTierPhaseLabel(tier)
 		modelID := carrilModels[tier.Profile]
 		if modelID == "" {
 			modelID = tier.Model

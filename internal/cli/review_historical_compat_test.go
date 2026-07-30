@@ -13,10 +13,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-func injectCLIRetiredZeroEditEscalation(t *testing.T, statePath string) {
+func injectCLIRetiredCompactStateField(t *testing.T, statePath, field string, value any) {
 	t.Helper()
 	payload, err := os.ReadFile(statePath)
 	if err != nil {
@@ -30,7 +30,7 @@ func injectCLIRetiredZeroEditEscalation(t *testing.T, statePath string) {
 	if !ok {
 		t.Fatal("compact record has no state object")
 	}
-	state["zero_edit_escalation"] = true
+	state[field] = value
 	statePayload, err := json.Marshal(record["state"])
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +43,47 @@ func injectCLIRetiredZeroEditEscalation(t *testing.T, statePath string) {
 	}
 	if err := os.WriteFile(statePath, append(updated, '\n'), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReviewFacadeStartResumesHistoricalCandidateArtifactRequiredWithoutRewrite(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	args := []string{"--cwd", repo, "--projection", "staged", "--lineage", "candidate-artifact-required"}
+	var createdOutput bytes.Buffer
+	if err := RunReviewFacadeStart(args, &createdOutput); err != nil {
+		t.Fatal(err)
+	}
+	var created ReviewFacadeStartResult
+	if err := json.Unmarshal(createdOutput.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, created.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injectCLIRetiredCompactStateField(t, store.StatePath(), "candidate_artifact_required", true)
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var resumedOutput bytes.Buffer
+	if err := RunReviewFacadeStart(args, &resumedOutput); err != nil {
+		t.Fatalf("review start with historical candidate_artifact_required authority: %v", err)
+	}
+	var resumed ReviewFacadeStartResult
+	if err := json.Unmarshal(resumedOutput.Bytes(), &resumed); err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Action != string(reviewtransaction.CompactStartResumed) || resumed.LineageID != created.LineageID || resumed.TargetIdentity != created.TargetIdentity {
+		t.Fatalf("resumed review = %#v, want exact historical authority", resumed)
+	}
+	if after, err := os.ReadFile(store.StatePath()); err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("review start rewrote historical authority bytes: %v", err)
 	}
 }
 
@@ -159,7 +200,7 @@ func TestReviewBundleExportRefusesHistoricalZeroEditEscalationClearly(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	injectCLIRetiredZeroEditEscalation(t, store.StatePath())
+	injectCLIRetiredCompactStateField(t, store.StatePath(), "zero_edit_escalation", true)
 	before, err := os.ReadFile(store.StatePath())
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +232,7 @@ func TestReviewFacadeExplicitFinalizeCompletesWithHistoricalZeroEditEscalationRe
 	if err := os.WriteFile(evidencePath, []byte("go test ./...: pass\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	args := append([]string{"--cwd", repo, "--lineage", historical.LineageID}, facadeReviewerResultArgs(t, historical)...)
+	args := append([]string{"--cwd", repo, "--lineage", historical.LineageID}, facadeReviewerResultArgs(t, repo, historical)...)
 	if err := RunReviewFacadeFinalize(append(args, "--evidence", evidencePath), io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +250,7 @@ func TestReviewFacadeExplicitFinalizeCompletesWithHistoricalZeroEditEscalationRe
 	if err != nil {
 		t.Fatal(err)
 	}
-	injectCLIRetiredZeroEditEscalation(t, historicalStore.StatePath())
+	injectCLIRetiredCompactStateField(t, historicalStore.StatePath(), "zero_edit_escalation", true)
 	before, err := os.ReadFile(historicalStore.StatePath())
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +260,7 @@ func TestReviewFacadeExplicitFinalizeCompletesWithHistoricalZeroEditEscalationRe
 	if err := os.WriteFile(currentEvidence, []byte("go test ./...: pass\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	finalizeArgs := append([]string{"--cwd", repo, "--lineage", current.LineageID}, facadeReviewerResultArgs(t, current)...)
+	finalizeArgs := append([]string{"--cwd", repo, "--lineage", current.LineageID}, facadeReviewerResultArgs(t, repo, current)...)
 	var output bytes.Buffer
 	if err := RunReviewFacadeFinalize(append(finalizeArgs, "--evidence", currentEvidence), &output); err != nil {
 		t.Fatalf("explicit-lineage finalize with unrelated historical record: %v", err)

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 // TestGenerateProfileOverlay_FallsBackToGlobalAssignments reproduces issue #557:
@@ -57,7 +57,7 @@ func TestGenerateProfileOverlay_FallsBackToGlobalAssignments(t *testing.T) {
 		"sdd-archive":         {ProviderID: "openai", ModelID: "gpt-5.1"},
 	}
 
-	overlay, err := GenerateProfileOverlay(profile, home, globalAssignments, "")
+	overlay, err := GenerateProfileOverlay(profile, home, openCodeSettingsPathForTest(home), globalAssignments, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay() error = %v", err)
 	}
