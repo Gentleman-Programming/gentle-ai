@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	codexagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
@@ -1349,7 +1350,7 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentContext7:
 		for _, adapter := range adapters {
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
-			if _, err := mcp.Inject(targetDir, adapter); err != nil {
+			if _, err := mcp.Inject(s.homeDir, targetDir, adapter); err != nil {
 				return fmt.Errorf("inject context7 for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -1828,7 +1829,11 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			switch adapter.MCPStrategy() {
 			case model.StrategySeparateMCPFiles:
 				if adapter.Agent() == model.AgentClaudeCode {
-					if p := adapter.SettingsPath(targetDir); p != "" {
+					if targetDir == homeDir {
+						// Context7 injection writes ~/.claude.json (issue #1868).
+						paths = append(paths, claude.UserConfigPath(homeDir))
+					} else if p := adapter.SettingsPath(targetDir); p != "" {
+						// Workspace scope keeps the scoped settings merge.
 						paths = append(paths, p)
 					}
 					break
