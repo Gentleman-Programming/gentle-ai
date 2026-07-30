@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -108,6 +109,152 @@ func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T)
 	}
 	if got := joinSDDAttemptOperations(); got != "status, begin, finish, reset, acquire, or settle" {
 		t.Fatalf("joinSDDAttemptOperations() = %q, want %q", got, "status, begin, finish, reset, acquire, or settle")
+	}
+}
+
+func TestSDDAttemptRuntimeContractAuthority(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		valid   string
+		invalid string
+	}{
+		{name: "revision", pattern: sddstatus.RuntimeRevisionPattern, valid: cliAttemptHash('a'), invalid: "sha256:" + strings.Repeat("A", 64)},
+		{name: "request id", pattern: sddstatus.RuntimeRequestIDPattern, valid: "request-1.v2", invalid: "Request ID"},
+		{name: "change", pattern: sddstatus.RuntimeChangePattern, valid: "sdd-cli-help-contracts", invalid: "sdd_cli_help_contracts"},
+		{name: "lineage", pattern: sddstatus.RuntimeLineagePattern, valid: "review-successor", invalid: "ReviewSuccessor"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pattern := regexp.MustCompile(tt.pattern)
+			if !pattern.MatchString(tt.valid) {
+				t.Fatalf("%s pattern %q rejected valid value %q", tt.name, tt.pattern, tt.valid)
+			}
+			if pattern.MatchString(tt.invalid) {
+				t.Fatalf("%s pattern %q accepted invalid value %q", tt.name, tt.pattern, tt.invalid)
+			}
+		})
+	}
+
+	if got, want := sddstatus.RuntimeDefaultAttemptLimit, 2; got != want {
+		t.Fatalf("default attempt limit = %d, want %d", got, want)
+	}
+	if got, want := sddstatus.RuntimeMaxAttemptLimit, 100; got != want {
+		t.Fatalf("max attempt limit = %d, want %d", got, want)
+	}
+	if got, want := sddstatus.RuntimeDefaultChangedLines, 200; got != want {
+		t.Fatalf("default changed lines = %d, want %d", got, want)
+	}
+	if got, want := sddstatus.RuntimeMaxChangedLines, 1_000_000; got != want {
+		t.Fatalf("max changed lines = %d, want %d", got, want)
+	}
+	for name, limits := range map[string][2]int{
+		"work unit":          {sddstatus.RuntimeWorkUnitLimit, 160},
+		"evidence goal":      {sddstatus.RuntimeEvidenceGoalLimit, 240},
+		"diagnosis":          {sddstatus.RuntimeDiagnosisLimit, 500},
+		"cleanup evidence":   {sddstatus.RuntimeCleanupEvidenceLimit, 500},
+		"process evidence":   {sddstatus.RuntimeProcessEvidenceLimit, 500},
+		"reset reason":       {sddstatus.RuntimeResetReasonLimit, 500},
+		"actor":              {sddstatus.RuntimeActorLimit, 128},
+		"change identifier":  {sddstatus.RuntimeChangeLimit, 96},
+		"lineage identifier": {sddstatus.RuntimeLineageLimit, 128},
+	} {
+		if limits[0] != limits[1] {
+			t.Fatalf("%s limit = %d, want %d", name, limits[0], limits[1])
+		}
+	}
+
+	if got, want := sddstatus.RuntimeTerminalOutcomes(), []string{"failed", "interrupted", "passed"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("terminal outcomes = %v, want %v", got, want)
+	}
+	if got, want := sddstatus.RuntimeHarnessDispositions(), []string{"reused", "invalidated"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("harness dispositions = %v, want %v", got, want)
+	}
+}
+
+func TestRunSDDAttemptHelpContracts(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		want     []string
+		unwanted []string
+	}{
+		{
+			name:     "top level short help",
+			args:     []string{"-h"},
+			want:     []string{"Usage: gentle-ai sdd-attempt <operation> [flags]", "status", "begin", "finish", "reset", "acquire", "settle", "--cwd", "--change", "acquire a bounded attempt", "settle a bounded attempt"},
+			unwanted: []string{"--token", "--successor-lineage", "--expected-binding-revision"},
+		},
+		{
+			name: "top level long help",
+			args: []string{"--help"},
+			want: []string{"Usage: gentle-ai sdd-attempt <operation> [flags]", "acquire", "settle"},
+		},
+		{
+			name:     "status",
+			args:     []string{"status", "--help"},
+			want:     []string{"Usage: gentle-ai sdd-attempt status [flags]", "--cwd", "--change", "revision", "active_attempt"},
+			unwanted: []string{"--outcome", "--reason", "--request-id"},
+		},
+		{
+			name:     "begin",
+			args:     []string{"begin", "--help"},
+			want:     []string{"Usage: gentle-ai sdd-attempt begin [flags]", "--expected-revision", "--request-id", "--work-unit", "--evidence-goal", "--max-attempts", "--max-changed-lines", "default 2", "default 200", "A non-nil RuntimeStatus.active_attempt blocks begin."},
+			unwanted: []string{"--outcome", "--reason", "--token"},
+		},
+		{
+			name:     "finish",
+			args:     []string{"finish", "--help"},
+			want:     []string{"Usage: gentle-ai sdd-attempt finish [flags]", "--expected-revision", "--request-id", "--outcome", "--evidence-revision", "--diagnosis", "--harness-disposition", "--cleanup-evidence", "--process-evidence", "--expected-binding-revision", "--successor-lineage", "--remediates-evidence-revision", "failed|interrupted|passed", "reused|invalidated", "sha256:", "active_attempt", "binding_revision", "evidence_revision", "finish requires a non-nil, running RuntimeStatus.active_attempt."},
+			unwanted: []string{"--max-attempts", "--reason", "planning relationship"},
+		},
+		{
+			name:     "reset",
+			args:     []string{"reset", "--help"},
+			want:     []string{"Usage: gentle-ai sdd-attempt reset [flags]", "--expected-revision", "--request-id", "--reason", "--actor", "A non-nil RuntimeStatus.active_attempt blocks reset."},
+			unwanted: []string{"--outcome", "--work-unit", "--token"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunSDDAttempt(tt.args, &output); err != nil {
+				t.Fatalf("RunSDDAttempt(%v) error = %v", tt.args, err)
+			}
+			text := output.String()
+			for _, want := range tt.want {
+				if !strings.Contains(text, want) {
+					t.Errorf("help missing %q:\n%s", want, text)
+				}
+			}
+			for _, unwanted := range tt.unwanted {
+				if strings.Contains(text, unwanted) {
+					t.Errorf("help unexpectedly contains %q:\n%s", unwanted, text)
+				}
+			}
+		})
+	}
+}
+
+func TestRunSDDAttemptHelpIsPositionIndependentAndDependencyFree(t *testing.T) {
+	missingRepo := filepath.Join(t.TempDir(), "does-not-exist")
+	for _, args := range [][]string{
+		{"--help", "status", "--cwd", missingRepo, "--change", "help-contract"},
+		{"status", "--cwd", missingRepo, "--help", "--change", "help-contract"},
+		{"--cwd", missingRepo, "--change", "help-contract", "status", "--help"},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunSDDAttempt(args, &output); err != nil {
+				t.Fatalf("RunSDDAttempt(%v) error = %v", args, err)
+			}
+			if !strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt status [flags]") {
+				t.Fatalf("status help not selected for %v:\n%s", args, output.String())
+			}
+			if _, err := os.Stat(missingRepo); !os.IsNotExist(err) {
+				t.Fatalf("help accessed or created nonexistent repository %q: %v", missingRepo, err)
+			}
+		})
 	}
 }
 

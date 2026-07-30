@@ -12,7 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
-const maxVerifyReportBytes = 1 << 20
+const maxVerifyReportBytes = sddstatus.MaxVerifyReportBytes
 
 // RunSDDVerifyValidate validates a complete report without touching an artifact store.
 func RunSDDVerifyValidate(args []string, stdout io.Writer) error {
@@ -22,10 +22,18 @@ func RunSDDVerifyValidate(args []string, stdout io.Writer) error {
 func runSDDVerifyValidate(args []string, stdin io.Reader, stdout io.Writer) error {
 	flags := flag.NewFlagSet("sdd-verify-validate", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	flags.Usage = func() { renderSDDVerifyValidateHelp(stdout) }
+	if hasSDDVerifyValidateHelp(args) {
+		flags.Usage()
+		return nil
+	}
 	input := flags.String("input", "", "report path or - for stdin")
 	requirements := flags.Int("requirements", -2, "authoritative requirement count")
 	scenarios := flags.Int("scenarios", -2, "authoritative scenario count")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -66,4 +74,26 @@ func runSDDVerifyValidate(args []string, stdin io.Reader, stdout io.Writer) erro
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(admission)
+}
+
+func hasSDDVerifyValidateHelp(args []string) bool {
+	for _, argument := range args {
+		if argument == "-h" || argument == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func renderSDDVerifyValidateHelp(stdout io.Writer) {
+	_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai sdd-verify-validate [flags]")
+	_, _ = fmt.Fprintln(stdout, "\nFlags:")
+	_, _ = fmt.Fprintln(stdout, "  --input <path>         report path, or - for stdin")
+	_, _ = fmt.Fprintln(stdout, "  --requirements <n>     authoritative requirement count; must be nonnegative")
+	_, _ = fmt.Fprintln(stdout, "  --scenarios <n>        authoritative scenario count; must be nonnegative")
+	_, _ = fmt.Fprintln(stdout, "\nReport contract:")
+	_, _ = fmt.Fprintf(stdout, "  schema: %s\n", sddstatus.VerifyResultSchema)
+	_, _ = fmt.Fprintf(stdout, "  base envelope fields: %s\n", strings.Join(sddstatus.VerifyReportEnvelopeFields(), ", "))
+	_, _ = fmt.Fprintf(stdout, "  verdict: %s\n", strings.Join(sddstatus.VerifyVerdicts(), "|"))
+	_, _ = fmt.Fprintf(stdout, "  report limit: 1 MiB (%d bytes)\n", maxVerifyReportBytes)
 }

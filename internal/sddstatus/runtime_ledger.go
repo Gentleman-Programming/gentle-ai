@@ -22,10 +22,6 @@ const (
 	runtimeRecordSchema               = "gentle-ai.sdd-runtime-record/v1"
 	runtimeObjectiveSchema            = "gentle-ai.sdd-runtime-objective/v1"
 	runtimeObjectiveSchemaV2          = "gentle-ai.sdd-runtime-objective/v2"
-	DefaultRuntimeAttemptLimit        = 2
-	DefaultRuntimeChangedLines        = 200
-	maximumRuntimeAttemptLimit        = 100
-	maximumRuntimeChangedLines        = 1_000_000
 	maximumRuntimeRecordBytes         = 1 << 20
 	maximumRuntimeChainRecords        = 10_000
 	RuntimeActionBegin                = "begin"
@@ -90,9 +86,7 @@ var (
 	ErrRuntimeRemediationSuccessorRequired = errors.New("a bound passing SDD runtime attempt must also bind the approved review of its corrected candidate")
 	ErrBindingRevisionConflict             = errors.New("SDD review binding revision conflict")
 
-	runtimeRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
-	runtimeRevisionPattern  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
-	runtimeGitTreePattern   = regexp.MustCompile(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`)
+	runtimeGitTreePattern = regexp.MustCompile(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`)
 
 	runtimePublishRecord                     = reviewtransaction.PublishFileNoReplace
 	runtimeReplaceHead                       = reviewtransaction.ReplaceFileAtomic
@@ -146,17 +140,17 @@ func (err *RuntimePublicationError) Unwrap() error { return err.Cause }
 type AttemptOutcome string
 
 const (
-	AttemptRunning     AttemptOutcome = "running"
-	AttemptFailed      AttemptOutcome = "failed"
-	AttemptInterrupted AttemptOutcome = "interrupted"
-	AttemptPassed      AttemptOutcome = "passed"
+	AttemptRunning     AttemptOutcome = RuntimeOutcomeRunning
+	AttemptFailed      AttemptOutcome = RuntimeOutcomeFailed
+	AttemptInterrupted AttemptOutcome = RuntimeOutcomeInterrupted
+	AttemptPassed      AttemptOutcome = RuntimeOutcomePassed
 )
 
 type HarnessDisposition string
 
 const (
-	HarnessReused      HarnessDisposition = "reused"
-	HarnessInvalidated HarnessDisposition = "invalidated"
+	HarnessReused      HarnessDisposition = RuntimeDispositionReused
+	HarnessInvalidated HarnessDisposition = RuntimeDispositionInvalidated
 )
 
 type RuntimeObjective struct {
@@ -1253,9 +1247,9 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("invalid SDD runtime begin record shape")
 		}
 		event := record.Begin
-		if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, 160) != nil ||
-			validateRuntimeText(event.EvidenceGoal, 240) != nil || event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
-			event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines || event.Ordinal < 1 ||
+		if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, RuntimeWorkUnitLimit) != nil ||
+			validateRuntimeText(event.EvidenceGoal, RuntimeEvidenceGoalLimit) != nil || event.MaxAttempts < 1 || event.MaxAttempts > RuntimeMaxAttemptLimit ||
+			event.MaxChangedLines < 1 || event.MaxChangedLines > RuntimeMaxChangedLines || event.Ordinal < 1 ||
 			!runtimeRevisionPattern.MatchString(event.BeginCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.BeginCandidateTree) {
 			return errors.New("invalid SDD runtime begin event")
 		}
@@ -1272,10 +1266,10 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		event := record.Finish
 		if event.Ordinal < 1 || !validTerminalAttemptOutcome(event.Outcome) || event.ChangedLines < 0 ||
-			event.ChangedLines > maximumRuntimeChangedLines || !runtimeRevisionPattern.MatchString(event.EvidenceRevision) ||
+			event.ChangedLines > RuntimeMaxChangedLines || !runtimeRevisionPattern.MatchString(event.EvidenceRevision) ||
 			!runtimeRevisionPattern.MatchString(event.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.FinishCandidateTree) ||
-			validateRuntimeText(event.Diagnosis, 500) != nil || !validHarnessDisposition(event.HarnessDisposition) ||
-			validateRuntimeText(event.CleanupEvidence, 500) != nil || validateRuntimeText(event.ProcessEvidence, 500) != nil ||
+			validateRuntimeText(event.Diagnosis, RuntimeDiagnosisLimit) != nil || !validHarnessDisposition(event.HarnessDisposition) ||
+			validateRuntimeText(event.CleanupEvidence, RuntimeCleanupEvidenceLimit) != nil || validateRuntimeText(event.ProcessEvidence, RuntimeProcessEvidenceLimit) != nil ||
 			event.RemediatesEvidenceRevision != "" {
 			return errors.New("invalid SDD runtime finish event")
 		}
@@ -1293,11 +1287,11 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		finish, binding := record.Finish, record.Binding
 		if finish.Ordinal < 1 || finish.Outcome != AttemptPassed || finish.ChangedLines < 0 ||
-			finish.ChangedLines > maximumRuntimeChangedLines || !runtimeRevisionPattern.MatchString(finish.EvidenceRevision) ||
+			finish.ChangedLines > RuntimeMaxChangedLines || !runtimeRevisionPattern.MatchString(finish.EvidenceRevision) ||
 			!runtimeRevisionPattern.MatchString(finish.RemediatesEvidenceRevision) ||
 			!runtimeRevisionPattern.MatchString(finish.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(finish.FinishCandidateTree) ||
-			validateRuntimeText(finish.Diagnosis, 500) != nil || !validHarnessDisposition(finish.HarnessDisposition) ||
-			validateRuntimeText(finish.CleanupEvidence, 500) != nil || validateRuntimeText(finish.ProcessEvidence, 500) != nil {
+			validateRuntimeText(finish.Diagnosis, RuntimeDiagnosisLimit) != nil || !validHarnessDisposition(finish.HarnessDisposition) ||
+			validateRuntimeText(finish.CleanupEvidence, RuntimeCleanupEvidenceLimit) != nil || validateRuntimeText(finish.ProcessEvidence, RuntimeProcessEvidenceLimit) != nil {
 			return errors.New("invalid atomic SDD runtime remediation finish event")
 		}
 		if !runtimeRevisionPattern.MatchString(binding.ExpectedRevision) {
@@ -1333,7 +1327,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		event := record.Reset
 		if !runtimeRevisionPattern.MatchString(event.PreviousObjectiveID) || event.PreviousGeneration < 1 ||
 			!runtimeRevisionPattern.MatchString(event.ResetCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.ResetCandidateTree) ||
-			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
+			validateRuntimeText(event.Reason, RuntimeResetReasonLimit) != nil || validateRuntimeText(event.Actor, RuntimeActorLimit) != nil {
 			return errors.New("invalid SDD runtime reset event")
 		}
 		request := ResetObjectiveRequest{
@@ -1382,23 +1376,23 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
 		return BeginAttemptRequest{}, errors.New("request_id must be a canonical lowercase identifier")
 	}
-	if err := validateRuntimeText(request.WorkUnit, 160); err != nil {
+	if err := validateRuntimeText(request.WorkUnit, RuntimeWorkUnitLimit); err != nil {
 		return BeginAttemptRequest{}, fmt.Errorf("invalid work_unit: %w", err)
 	}
-	if err := validateRuntimeText(request.EvidenceGoal, 240); err != nil {
+	if err := validateRuntimeText(request.EvidenceGoal, RuntimeEvidenceGoalLimit); err != nil {
 		return BeginAttemptRequest{}, fmt.Errorf("invalid evidence_goal: %w", err)
 	}
 	if request.MaxAttempts == 0 {
-		request.MaxAttempts = DefaultRuntimeAttemptLimit
+		request.MaxAttempts = RuntimeDefaultAttemptLimit
 	}
 	if request.MaxChangedLines == 0 {
-		request.MaxChangedLines = DefaultRuntimeChangedLines
+		request.MaxChangedLines = RuntimeDefaultChangedLines
 	}
-	if request.MaxAttempts < 1 || request.MaxAttempts > maximumRuntimeAttemptLimit {
-		return BeginAttemptRequest{}, fmt.Errorf("max_attempts must be within 1..%d", maximumRuntimeAttemptLimit)
+	if request.MaxAttempts < 1 || request.MaxAttempts > RuntimeMaxAttemptLimit {
+		return BeginAttemptRequest{}, fmt.Errorf("max_attempts must be within 1..%d", RuntimeMaxAttemptLimit)
 	}
-	if request.MaxChangedLines < 1 || request.MaxChangedLines > maximumRuntimeChangedLines {
-		return BeginAttemptRequest{}, fmt.Errorf("max_changed_lines must be within 1..%d", maximumRuntimeChangedLines)
+	if request.MaxChangedLines < 1 || request.MaxChangedLines > RuntimeMaxChangedLines {
+		return BeginAttemptRequest{}, fmt.Errorf("max_changed_lines must be within 1..%d", RuntimeMaxChangedLines)
 	}
 	return request, nil
 }
@@ -1416,16 +1410,16 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 	if !runtimeRevisionPattern.MatchString(request.EvidenceRevision) {
 		return FinishAttemptRequest{}, errors.New("evidence_revision must be sha256")
 	}
-	if err := validateRuntimeText(request.Diagnosis, 500); err != nil {
+	if err := validateRuntimeText(request.Diagnosis, RuntimeDiagnosisLimit); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid diagnosis: %w", err)
 	}
 	if !validHarnessDisposition(request.HarnessDisposition) {
 		return FinishAttemptRequest{}, errors.New("harness_disposition must be reused or invalidated")
 	}
-	if err := validateRuntimeText(request.CleanupEvidence, 500); err != nil {
+	if err := validateRuntimeText(request.CleanupEvidence, RuntimeCleanupEvidenceLimit); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid cleanup_evidence: %w", err)
 	}
-	if err := validateRuntimeText(request.ProcessEvidence, 500); err != nil {
+	if err := validateRuntimeText(request.ProcessEvidence, RuntimeProcessEvidenceLimit); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid process_evidence: %w", err)
 	}
 	remediationFields := 0
@@ -1465,10 +1459,10 @@ func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjecti
 	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
 		return ResetObjectiveRequest{}, errors.New("request_id must be a canonical lowercase identifier")
 	}
-	if err := validateRuntimeText(request.Reason, 500); err != nil {
+	if err := validateRuntimeText(request.Reason, RuntimeResetReasonLimit); err != nil {
 		return ResetObjectiveRequest{}, fmt.Errorf("invalid reset reason: %w", err)
 	}
-	if err := validateRuntimeText(request.Actor, 128); err != nil {
+	if err := validateRuntimeText(request.Actor, RuntimeActorLimit); err != nil {
 		return ResetObjectiveRequest{}, fmt.Errorf("invalid reset actor: %w", err)
 	}
 	return request, nil

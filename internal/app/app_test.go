@@ -319,6 +319,20 @@ func TestRunArgsSDDAttemptIsDispatchedBeforePlatformValidation(t *testing.T) {
 	}
 }
 
+func TestRunArgsSDDAttemptHelpIsDispatchedBeforePlatformValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error { return fmt.Errorf("unsupported platform") }
+
+	var output bytes.Buffer
+	if err := RunArgs([]string{"sdd-attempt", "--help", "--cwd", filepath.Join(t.TempDir(), "missing"), "--change", "help-contract"}, &output); err != nil {
+		t.Fatalf("RunArgs(sdd-attempt --help) error = %v", err)
+	}
+	if !strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt <operation> [flags]") {
+		t.Fatalf("sdd-attempt help output:\n%s", output.String())
+	}
+}
+
 func TestRunArgsSDDContinueIsDispatchedBeforePlatformValidation(t *testing.T) {
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })

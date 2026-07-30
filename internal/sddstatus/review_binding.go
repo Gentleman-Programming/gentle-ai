@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
@@ -21,9 +20,6 @@ import (
 
 const reviewBindingSchema = "gentle-ai.sdd-review-binding/v1"
 
-var reviewBindingChange = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-var reviewBindingLineage = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-var reviewBindingHash = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 var bindingFinalAuthorizationHook = func() {}
 
 type ReviewBindingPublicationError struct{ Cause error }
@@ -766,11 +762,11 @@ func bindingDigest(b ReviewBinding) string {
 }
 
 func validReviewBindingChange(change string) bool {
-	return len(change) <= 96 && reviewBindingChange.MatchString(change)
+	return len(change) <= RuntimeChangeLimit && runtimeChangePattern.MatchString(change)
 }
 
 func validReviewBindingLineage(lineage string) bool {
-	return len(lineage) <= 128 && reviewBindingLineage.MatchString(lineage)
+	return len(lineage) <= RuntimeLineageLimit && runtimeLineagePattern.MatchString(lineage)
 }
 
 func bindingBytes(binding ReviewBinding) ([]byte, error) {
@@ -793,7 +789,7 @@ func parseBinding(payload []byte) (ReviewBinding, error) {
 		return ReviewBinding{}, errors.New("multiple binding values")
 	}
 	canonical, err := bindingBytes(binding)
-	if err != nil || !bytes.Equal(payload, canonical) || binding.Schema != reviewBindingSchema || !validReviewBindingChange(binding.Change) || !validReviewBindingLineage(binding.Lineage) || !reviewBindingHash.MatchString(binding.Revision) || !reviewBindingHash.MatchString(binding.AuthorityRevision) || !reviewBindingHash.MatchString(binding.ReceiptHash) || binding.Revision != bindingDigest(binding) || binding.GateContext.Gate != reviewtransaction.GatePostApply || binding.GateContext.LineageID != binding.Lineage || binding.GateContext.StoreRevision != binding.AuthorityRevision {
+	if err != nil || !bytes.Equal(payload, canonical) || binding.Schema != reviewBindingSchema || !validReviewBindingChange(binding.Change) || !validReviewBindingLineage(binding.Lineage) || !runtimeHashPattern.MatchString(binding.Revision) || !runtimeHashPattern.MatchString(binding.AuthorityRevision) || !runtimeHashPattern.MatchString(binding.ReceiptHash) || binding.Revision != bindingDigest(binding) || binding.GateContext.Gate != reviewtransaction.GatePostApply || binding.GateContext.LineageID != binding.Lineage || binding.GateContext.StoreRevision != binding.AuthorityRevision {
 		return ReviewBinding{}, errors.New("invalid binding")
 	}
 	return binding, nil

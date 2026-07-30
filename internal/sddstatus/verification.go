@@ -157,7 +157,7 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	if reason != "" {
 		return verifyReport{}, reason
 	}
-	base := []string{"schema", "evidence_revision", "verdict", "blockers", "critical_findings", "requirements", "scenarios", "test_command", "test_exit_code", "test_output_hash", "build_command", "build_exit_code", "build_output_hash"}
+	base := VerifyReportEnvelopeFields()
 	extension := []string{"authority_only_failure", "missing_review_authority", "substantive_failure", "command_failed", "observed_authority_revision"}
 	allowed := make(map[string]bool, len(base)+len(extension))
 	for _, field := range append(base, extension...) {
@@ -214,7 +214,7 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	if report.Scenarios, ok = parseVerifyCompletion(fields["scenarios"]); !ok {
 		return report, "invalid scenarios in verify result envelope"
 	}
-	if report.Verdict != "pass" && report.Verdict != "pass_with_warnings" && report.Verdict != "fail" {
+	if report.Verdict != VerifyVerdictPass && report.Verdict != VerifyVerdictPassWithWarnings && report.Verdict != VerifyVerdictFail {
 		return report, fmt.Sprintf("invalid verdict %s", report.Verdict)
 	}
 	if report.AuthorityOnly {
