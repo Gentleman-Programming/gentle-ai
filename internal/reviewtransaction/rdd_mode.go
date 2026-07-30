@@ -22,14 +22,15 @@ const (
 	// authorization and never carries a review outcome.
 	RDDModeStatusSchema = "gentle-ai.rdd-mode-status/v1"
 
-	rddModeOverrideSchema   = "gentle-ai.rdd-mode-override/v1"
-	rddModeDigestDomain     = "gentle-ai.rdd-mode-override-digest/v1"
-	rddModeDirectory        = "rdd-mode"
-	rddModeLockName         = "LOCK"
-	rddModeGenerationPrefix = "gen-"
-	rddModeGenerationSuffix = ".json"
-	rddModeGenerationDigits = 10
-	rddModeMaxGeneration    = 999_999_999
+	rddModeOverrideSchema    = "gentle-ai.rdd-mode-override/v1"
+	rddModeDigestDomain      = "gentle-ai.rdd-mode-override-digest/v1"
+	rddModeDirectory         = "rdd-mode"
+	rddModeWorktreeDirectory = "rdd-mode-worktree"
+	rddModeLockName          = "LOCK"
+	rddModeGenerationPrefix  = "gen-"
+	rddModeGenerationSuffix  = ".json"
+	rddModeGenerationDigits  = 10
+	rddModeMaxGeneration     = 999_999_999
 
 	// rddModeOverrideInherit is the persisted "no clone-local opinion" value.
 	// The override is off-only, so clearing it records an explicit inherit
@@ -87,7 +88,7 @@ const (
 	RDDModeOff RDDMode = "off"
 )
 
-// RDDModeSource names which of the two independent sources decided the
+// RDDModeSource names which of the independent sources decided the
 // effective mode.
 type RDDModeSource string
 
@@ -98,6 +99,8 @@ const (
 	RDDModeSourceGlobal RDDModeSource = "global"
 	// RDDModeSourceCloneLocal means this clone's Git-common-dir override decided.
 	RDDModeSourceCloneLocal RDDModeSource = "clone_local"
+	// RDDModeSourceWorktreeLocal means this worktree's Git-dir override decided.
+	RDDModeSourceWorktreeLocal RDDModeSource = "worktree_local"
 )
 
 // RDDOperation classifies what an actor wants to do, so that disabling freezes
@@ -139,16 +142,21 @@ type RDDGlobalMode struct {
 	RecordedAt time.Time
 }
 
-// RDDModeStatus is the read-only projection of both sources. Revision is the
-// clone-local compare-and-set token. The projection carries no time cutoff: it
-// answers "may review start now", never "which bytes are approved".
+// RDDModeStatus is the read-only projection of all mode sources. Revision
+// follows the deciding local source; the additive per-scope revisions let
+// callers select an exact CAS token without inferring it from precedence. The
+// projection carries no time cutoff: it answers "may review start now", never
+// "which bytes are approved".
 type RDDModeStatus struct {
-	Schema     string        `json:"schema"`
-	Global     RDDMode       `json:"global"`
-	CloneLocal RDDMode       `json:"clone_local"`
-	Effective  RDDMode       `json:"effective"`
-	Source     RDDModeSource `json:"source"`
-	Revision   string        `json:"revision,omitempty"`
+	Schema             string        `json:"schema"`
+	Global             RDDMode       `json:"global"`
+	CloneLocal         RDDMode       `json:"clone_local"`
+	Worktree           RDDMode       `json:"worktree,omitempty"`
+	Effective          RDDMode       `json:"effective"`
+	Source             RDDModeSource `json:"source"`
+	Revision           string        `json:"revision,omitempty"`
+	CloneLocalRevision string        `json:"clone_local_revision,omitempty"`
+	WorktreeRevision   string        `json:"worktree_revision,omitempty"`
 }
 
 // Enabled reports whether new receipt-driven development may start.
@@ -207,6 +215,8 @@ func reviewModeScopeForSource(source RDDModeSource) string {
 		return "global"
 	case RDDModeSourceCloneLocal:
 		return "clone"
+	case RDDModeSourceWorktreeLocal:
+		return "worktree"
 	default:
 		return ""
 	}
@@ -214,9 +224,10 @@ func reviewModeScopeForSource(source RDDModeSource) string {
 
 func (err *RDDDisabledError) Unwrap() error { return ErrRDDDisabled }
 
-// ResolveRDDMode combines the global user mode with this clone's off-only
-// override. Any off wins, a repository can never force on, and every failure
-// projects a disabled status so a caller that drops the error still fails safe.
+// ResolveRDDMode combines the global user mode with clone- and worktree-local
+// off-only overrides. Any off wins, a repository can never force on, and every
+// failure projects a disabled status so a caller that drops the error still
+// fails safe.
 func ResolveRDDMode(ctx context.Context, repo string, global RDDGlobalMode) (RDDModeStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceDefault), err
@@ -225,11 +236,15 @@ func ResolveRDDMode(ctx context.Context, repo string, global RDDGlobalMode) (RDD
 	if globalErr != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceGlobal), globalErr
 	}
-	override, present, overrideErr := readCloneLocalRDDOverride(ctx, repo)
+	cloneOverride, clonePresent, overrideErr := readCloneLocalRDDOverride(ctx, repo)
 	if overrideErr != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), overrideErr
 	}
-	return rddModeStatus(globalMode, override, present), nil
+	worktreeOverride, worktreePresent, overrideErr := readWorktreeLocalRDDOverride(ctx, repo)
+	if overrideErr != nil {
+		return failedClosedRDDModeStatus(RDDModeSourceWorktreeLocal), overrideErr
+	}
+	return rddModeStatus(globalMode, cloneOverride, clonePresent, worktreeOverride, worktreePresent), nil
 }
 
 // SetCloneLocalRDDMode records this clone's off-only override under the Git
@@ -243,20 +258,42 @@ func SetCloneLocalRDDMode(
 	expectedRevision string,
 	global RDDGlobalMode,
 ) (RDDModeStatus, error) {
+	return setLocalRDDMode(ctx, repo, mode, expectedRevision, global, RDDModeSourceCloneLocal)
+}
+
+// SetWorktreeLocalRDDMode records this worktree's off-only override.
+func SetWorktreeLocalRDDMode(
+	ctx context.Context,
+	repo string,
+	mode RDDMode,
+	expectedRevision string,
+	global RDDGlobalMode,
+) (RDDModeStatus, error) {
+	return setLocalRDDMode(ctx, repo, mode, expectedRevision, global, RDDModeSourceWorktreeLocal)
+}
+
+func setLocalRDDMode(
+	ctx context.Context,
+	repo string,
+	mode RDDMode,
+	expectedRevision string,
+	global RDDGlobalMode,
+	source RDDModeSource,
+) (RDDModeStatus, error) {
 	if err := ctx.Err(); err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
+		return failedClosedRDDModeStatus(source), err
 	}
 	persisted, err := cloneLocalRDDOverrideValue(mode)
 	if err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
+		return failedClosedRDDModeStatus(source), err
 	}
-	dir, err := cloneLocalRDDModeRoot(ctx, repo, true)
+	dir, err := localRDDModeRoot(ctx, repo, source, true)
 	if err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
+		return failedClosedRDDModeStatus(source), err
 	}
 	lock, err := acquireRARAuthorityLock(ctx, filepath.Join(dir, rddModeLockName))
 	if err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
+		return failedClosedRDDModeStatus(source), err
 	}
 	defer func() { _ = lock.release() }()
 
@@ -273,11 +310,11 @@ func SetCloneLocalRDDMode(
 		// unreadable generation: the repair writes the generation that
 		// supersedes it, so a lost race still cannot corrupt the head.
 		if !errors.Is(err, ErrRDDModeCorrupt) {
-			return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
+			return failedClosedRDDModeStatus(source), err
 		}
 		generation, generationErr := cloneLocalRDDOverrideHeadGeneration(dir)
 		if generationErr != nil {
-			return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), generationErr
+			return failedClosedRDDModeStatus(source), generationErr
 		}
 		head, present = rddModeOverrideRecord{Generation: generation}, false
 	}
@@ -286,11 +323,12 @@ func SetCloneLocalRDDMode(
 		current = head.Revision
 	}
 	if strings.TrimSpace(expectedRevision) != current {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), fmt.Errorf(
-			"%w: expected %q but the clone-local head is %q", ErrRDDModeRevisionMismatch, expectedRevision, current)
+		return failedClosedRDDModeStatus(source), fmt.Errorf(
+			"%w: expected %q but the %s head is %q", ErrRDDModeRevisionMismatch, expectedRevision, localRDDModeLabel(source), current)
 	}
 	if head.Generation >= rddModeMaxGeneration {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), errors.New("clone-local review mode generation space is exhausted")
+		// refusal:by-design world-action: exhausted immutable generation space has no unused slot, and no runnable continuation can safely repair it without overwriting authority history
+		return failedClosedRDDModeStatus(source), fmt.Errorf("%s review mode generation space is exhausted", localRDDModeLabel(source))
 	}
 
 	record := rddModeOverrideRecord{
@@ -301,23 +339,31 @@ func SetCloneLocalRDDMode(
 		RecordedAt:       time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if record.Revision, err = rddModeOverrideDigest(record); err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
+		return failedClosedRDDModeStatus(source), err
 	}
 	payload, err := canonicalRDDModeOverridePayload(record)
 	if err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
+		return failedClosedRDDModeStatus(source), err
 	}
 	// The immutable no-replace publish is the fail-closed backstop: a writer
 	// that somehow bypassed the lock still cannot overwrite a published
 	// generation, so a lost race can never corrupt the head record.
 	if err := publishPrivateRARImmutable(filepath.Join(dir, rddModeGenerationName(record.Generation)), payload); err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
+		return failedClosedRDDModeStatus(source), err
 	}
 	globalMode, globalErr := normalizeRDDMode(global.Value)
 	if globalErr != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceGlobal), globalErr
 	}
-	return rddModeStatus(globalMode, record, true), nil
+	cloneOverride, clonePresent, err := readCloneLocalRDDOverride(ctx, repo)
+	if err != nil {
+		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
+	}
+	worktreeOverride, worktreePresent, err := readWorktreeLocalRDDOverride(ctx, repo)
+	if err != nil {
+		return failedClosedRDDModeStatus(RDDModeSourceWorktreeLocal), err
+	}
+	return rddModeStatus(globalMode, cloneOverride, clonePresent, worktreeOverride, worktreePresent), nil
 }
 
 // AuthorizeRDDOperation is the single kill-switch gate. Reads always pass so
@@ -437,23 +483,35 @@ func RDDDeliveryDisposition(status RDDModeStatus, receiptPresent bool) RDDDelive
 
 func rddModeStatus(
 	globalMode RDDMode,
-	override rddModeOverrideRecord,
-	present bool,
+	cloneOverride rddModeOverrideRecord,
+	clonePresent bool,
+	worktreeOverride rddModeOverrideRecord,
+	worktreePresent bool,
 ) RDDModeStatus {
 	status := RDDModeStatus{
 		Schema:     RDDModeStatusSchema,
 		Global:     globalMode,
 		CloneLocal: RDDModeUnset,
+		Worktree:   RDDModeUnset,
 		Effective:  RDDModeOff,
 		Source:     RDDModeSourceDefault,
 	}
-	if present {
-		status.Revision = override.Revision
-		if override.Mode == string(RDDModeOff) {
+	if clonePresent {
+		status.Revision, status.CloneLocalRevision = cloneOverride.Revision, cloneOverride.Revision
+		if cloneOverride.Mode == string(RDDModeOff) {
 			status.CloneLocal = RDDModeOff
 		}
 	}
+	if worktreePresent {
+		status.WorktreeRevision = worktreeOverride.Revision
+		if worktreeOverride.Mode == string(RDDModeOff) {
+			status.Worktree = RDDModeOff
+		}
+	}
 	switch {
+	case status.Worktree == RDDModeOff:
+		status.Effective, status.Source = RDDModeOff, RDDModeSourceWorktreeLocal
+		status.Revision = status.WorktreeRevision
 	case status.CloneLocal == RDDModeOff:
 		status.Effective, status.Source = RDDModeOff, RDDModeSourceCloneLocal
 	case globalMode == RDDModeOff:
@@ -471,6 +529,7 @@ func failedClosedRDDModeStatus(source RDDModeSource) RDDModeStatus {
 		Schema:     RDDModeStatusSchema,
 		Global:     RDDModeUnset,
 		CloneLocal: RDDModeUnset,
+		Worktree:   RDDModeUnset,
 		Effective:  RDDModeOff,
 		Source:     source,
 	}
@@ -511,11 +570,26 @@ func cloneLocalRDDOverrideValue(mode RDDMode) (string, error) {
 	}
 }
 
+func localRDDModeLabel(source RDDModeSource) string {
+	if source == RDDModeSourceWorktreeLocal {
+		return "worktree-local"
+	}
+	return "clone-local"
+}
+
 // cloneLocalRDDModeRoot derives the override directory from the exact Git
 // common directory. It nests inside the already-validated owner-only review
 // authority root so that path safety, permissions, and private IO reuse the
 // existing helpers instead of inventing a second path policy.
 func cloneLocalRDDModeRoot(ctx context.Context, repo string, create bool) (string, error) {
+	return localRDDModeRoot(ctx, repo, RDDModeSourceCloneLocal, create)
+}
+
+func worktreeLocalRDDModeRoot(ctx context.Context, repo string, create bool) (string, error) {
+	return localRDDModeRoot(ctx, repo, RDDModeSourceWorktreeLocal, create)
+}
+
+func localRDDModeRoot(ctx context.Context, repo string, source RDDModeSource, create bool) (string, error) {
 	lease, err := OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
 		// A bare repository already states its own refusal and names its own
@@ -528,17 +602,28 @@ func cloneLocalRDDModeRoot(ctx context.Context, repo string, create bool) (strin
 		return "", fmt.Errorf("resolve review mode repository identity: %w", err)
 	}
 	identity := reviewRepositoryIdentityRecordFromLease(lease)
+	metadataDir, modeDirectory := identity.GitCommonDir, rddModeDirectory
+	if source == RDDModeSourceWorktreeLocal {
+		metadataDir, modeDirectory = identity.GitDir, rddModeWorktreeDirectory
+	}
 	base := filepath.Join(
-		identity.GitCommonDir,
+		metadataDir,
 		"gentle-ai",
 		"review-transactions",
 		rarAuthorityDirectory,
 		rarAuthorityVersion,
 	)
-	if err := ensureRARRepositoryRoot(identity.GitCommonDir, base, create); err != nil {
+	if source == RDDModeSourceCloneLocal {
+		err = ensureRARRepositoryRoot(identity.GitCommonDir, base, create)
+	} else {
+		err = ensureRARRepositoryRootAt(metadataDir, base, filepath.Join(
+			"gentle-ai", "review-transactions", rarAuthorityDirectory, rarAuthorityVersion,
+		), "Git directory", create)
+	}
+	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(base, rddModeDirectory)
+	dir := filepath.Join(base, modeDirectory)
 	if err := ensurePrivateRARDirectoryTree(base, dir, create); err != nil {
 		return "", err
 	}
@@ -546,7 +631,22 @@ func cloneLocalRDDModeRoot(ctx context.Context, repo string, create bool) (strin
 }
 
 func readCloneLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrideRecord, bool, error) {
-	dir, err := cloneLocalRDDModeRoot(ctx, repo, false)
+	return readLocalRDDOverride(ctx, repo, RDDModeSourceCloneLocal)
+}
+
+func readWorktreeLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrideRecord, bool, error) {
+	dir, err := worktreeLocalRDDModeRoot(ctx, repo, false)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return rddModeOverrideRecord{}, false, nil
+		}
+		return rddModeOverrideRecord{}, false, err
+	}
+	return readCloneLocalRDDOverrideHead(dir)
+}
+
+func readLocalRDDOverride(ctx context.Context, repo string, source RDDModeSource) (rddModeOverrideRecord, bool, error) {
+	dir, err := localRDDModeRoot(ctx, repo, source, false)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return rddModeOverrideRecord{}, false, nil
@@ -562,7 +662,11 @@ func readCloneLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrid
 // read-only, never creates state, and reports "" when this clone holds no
 // override at all.
 func CloneLocalRDDModeRecordPath(ctx context.Context, repo string) (string, error) {
-	dir, err := cloneLocalRDDModeRoot(ctx, repo, false)
+	return localRDDModeRecordPath(ctx, repo, RDDModeSourceCloneLocal)
+}
+
+func localRDDModeRecordPath(ctx context.Context, repo string, source RDDModeSource) (string, error) {
+	dir, err := localRDDModeRoot(ctx, repo, source, false)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", nil
