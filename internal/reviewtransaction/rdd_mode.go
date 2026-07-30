@@ -215,6 +215,8 @@ func reviewModeScopeForSource(source RDDModeSource) string {
 		return "global"
 	case RDDModeSourceCloneLocal:
 		return "clone"
+	case RDDModeSourceWorktreeLocal:
+		return "worktree"
 	default:
 		return ""
 	}
@@ -257,6 +259,17 @@ func SetCloneLocalRDDMode(
 	global RDDGlobalMode,
 ) (RDDModeStatus, error) {
 	return setLocalRDDMode(ctx, repo, mode, expectedRevision, global, RDDModeSourceCloneLocal)
+}
+
+// SetWorktreeLocalRDDMode records this worktree's off-only override.
+func SetWorktreeLocalRDDMode(
+	ctx context.Context,
+	repo string,
+	mode RDDMode,
+	expectedRevision string,
+	global RDDGlobalMode,
+) (RDDModeStatus, error) {
+	return setLocalRDDMode(ctx, repo, mode, expectedRevision, global, RDDModeSourceWorktreeLocal)
 }
 
 func setLocalRDDMode(
