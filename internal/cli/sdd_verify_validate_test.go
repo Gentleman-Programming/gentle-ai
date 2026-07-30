@@ -2,10 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
 func TestRunSDDVerifyValidate(t *testing.T) {
@@ -43,4 +47,57 @@ func TestRunSDDVerifyValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVerifyValidateContractAuthority(t *testing.T) {
+	if got, want := sddstatus.MaxVerifyReportBytes, 1<<20; got != want {
+		t.Fatalf("maximum report bytes = %d, want %d", got, want)
+	}
+	if got, want := sddstatus.VerifyVerdicts(), []string{"pass", "pass_with_warnings", "fail"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("verdicts = %v, want %v", got, want)
+	}
+
+	counts := sddstatus.SpecCounts{Requirements: 2, Scenarios: 3}
+	if counts.Requirements != 2 || counts.Scenarios != 3 {
+		t.Fatalf("authoritative counts = %#v, want 2 requirements and 3 scenarios", counts)
+	}
+}
+
+func TestRunSDDVerifyValidateHelpIsSuccessfulAndInputFree(t *testing.T) {
+	for _, args := range [][]string{
+		{"-h"},
+		{"--help"},
+		{"--input", filepath.Join(t.TempDir(), "missing-report.md"), "--help"},
+		{"--help", "--input", "-", "--requirements", "1", "--scenarios", "1"},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			var output bytes.Buffer
+			if err := runSDDVerifyValidate(args, rejectingReader{}, &output); err != nil {
+				t.Fatalf("runSDDVerifyValidate(%v) error = %v", args, err)
+			}
+			text := output.String()
+			for _, want := range []string{
+				"Usage: gentle-ai sdd-verify-validate [flags]",
+				"--input",
+				"--requirements",
+				"--scenarios",
+				"- for stdin",
+				"gentle-ai.verify-result/v1",
+				"base envelope fields: schema, evidence_revision",
+				"pass|pass_with_warnings|fail",
+				"nonnegative",
+				"1 MiB",
+			} {
+				if !strings.Contains(text, want) {
+					t.Errorf("validator help missing %q:\n%s", want, text)
+				}
+			}
+		})
+	}
+}
+
+type rejectingReader struct{}
+
+func (rejectingReader) Read([]byte) (int, error) {
+	return 0, fmt.Errorf("validator help must not read input")
 }
