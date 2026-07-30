@@ -777,7 +777,11 @@ func renderPhaseList(
 		return b.String()
 	}
 
-	b.WriteString(styles.SubtextStyle.Render("Configure model assignments for OpenCode's SDD, JD, and review agents:"))
+	scopeLabel := "Configure model assignments for OpenCode's SDD, JD, and review agents:"
+	if state.ForProfile {
+		scopeLabel = "Configure model assignments for OpenCode's SDD and JD agents:"
+	}
+	b.WriteString(styles.SubtextStyle.Render(scopeLabel))
 	b.WriteString("\n")
 	b.WriteString(styles.SubtextStyle.Render("Current assignments:"))
 	b.WriteString("\n\n")
