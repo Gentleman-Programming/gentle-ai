@@ -584,8 +584,8 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 	if !strings.Contains(text, `"args": [`) || !strings.Contains(text, `"mcp"`) {
 		t.Fatalf("Antigravity MCP config must launch Engram MCP; got:\n%s", text)
 	}
-	if !strings.Contains(text, `--tools=agent`) {
-		t.Fatalf("Antigravity should expose agent tools; got:\n%s", text)
+	if strings.Contains(text, `--tools=`) {
+		t.Fatalf("Antigravity should use Engram's default MCP invocation without tool-profile flags; got:\n%s", text)
 	}
 
 	pluginPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "plugin.json")
@@ -599,8 +599,8 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 		t.Fatalf("ReadFile(%q) error = %v", pluginMCPPath, err)
 	}
 	pluginMCPText := string(pluginMCPContent)
-	if !strings.Contains(pluginMCPText, `"mcp"`) || !strings.Contains(pluginMCPText, `--tools=agent`) {
-		t.Fatalf("Antigravity Engram plugin MCP config should expose agent tools; got:\n%s", pluginMCPText)
+	if !strings.Contains(pluginMCPText, `"mcp"`) || strings.Contains(pluginMCPText, `--tools=`) {
+		t.Fatalf("Antigravity Engram plugin MCP config should expose default Engram MCP tools; got:\n%s", pluginMCPText)
 	}
 
 	hooksPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "hooks.json")
@@ -633,7 +633,7 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 	}
 }
 
-func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T) {
+func TestInjectAntigravityPreservesGeneratedSettings(t *testing.T) {
 	home := t.TempDir()
 	writeFile(t, filepath.Join(home, ".gemini", "settings.json"), `{"keep":true}`)
 
@@ -650,8 +650,8 @@ func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
 	}
-	if string(got) != "{}\n" {
-		t.Fatalf("antigravity settings = %q, want empty JSON object", got)
+	if string(got) != `{"keep":true}` {
+		t.Fatalf("antigravity settings = %q, want generated settings", got)
 	}
 
 	second, err := Inject(home, antigravityAdapter())
@@ -683,7 +683,7 @@ func TestInjectAntigravityConvergesToSelectedPlugin(t *testing.T) {
 			if _, err := Inject(home, antigravityAdapter()); err != nil {
 				t.Fatal(err)
 			}
-			g, p := readJSONFile(t, global), readJSONFile(t, plugin)
+			g := readJSONFile(t, global)
 			if g["theme"] != "dark" {
 				t.Fatalf("global root fields lost: %v", g)
 			}
@@ -691,13 +691,13 @@ func TestInjectAntigravityConvergesToSelectedPlugin(t *testing.T) {
 			if _, ok := servers["engram"]; ok || servers["other"] == nil {
 				t.Fatalf("global servers not preserved/migrated: %v", servers)
 			}
-			if p["custom"] != true || p["mcpServers"].(map[string]any)["sibling"] == nil {
-				t.Fatalf("plugin fields lost: %v", p)
+			expected := engramOverlayJSON(model.AgentAntigravity, "/home/linuxbrew/.linuxbrew/bin/engram")
+			got, err := os.ReadFile(plugin)
+			if err != nil {
+				t.Fatalf("ReadFile(%q) error = %v", plugin, err)
 			}
-			assertNestedString(t, p, "/home/linuxbrew/.linuxbrew/bin/engram", "mcpServers", "engram", "command")
-			assertNestedStrings(t, p, []string{"mcp", "--tools=agent"}, "mcpServers", "engram", "args")
-			if _, ok := p["mcpServers"].(map[string]any)["engram"].(map[string]any)["env"]; ok {
-				t.Fatal("stale Engram fields preserved")
+			if !bytes.Equal(got, expected) {
+				t.Fatalf("plugin config = %s, want canonical generated config %s", got, expected)
 			}
 			if got, _ := os.ReadFile(settings); string(got) != `{"keep":true}` {
 				t.Fatalf("settings changed: %s", got)
@@ -709,7 +709,7 @@ func TestInjectAntigravityConvergesToSelectedPlugin(t *testing.T) {
 	}
 }
 
-func TestInjectAntigravityPreservesAbsoluteEngramLookPath(t *testing.T) {
+func TestInjectAntigravityUsesMainGeneratedCommand(t *testing.T) {
 	home := t.TempDir()
 	command := "/home/user/.local/bin/engram"
 	mockEngramLookPath(t, command, "")
@@ -717,7 +717,7 @@ func TestInjectAntigravityPreservesAbsoluteEngramLookPath(t *testing.T) {
 		t.Fatalf("first Inject = %+v, %v", first, err)
 	}
 	plugin := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
-	assertNestedString(t, readJSONFile(t, plugin), command, "mcpServers", "engram", "command")
+	assertNestedString(t, readJSONFile(t, plugin), "engram", "mcpServers", "engram", "command")
 	if second, err := Inject(home, antigravityAdapter()); err != nil || second.Changed {
 		t.Fatalf("second Inject = %+v, %v", second, err)
 	}
