@@ -379,6 +379,19 @@ func TestSDDInitDiscoversMonorepoSubProjects(t *testing.T) {
 		"never \"unclassified\"",
 		"per sub-project",
 		"two or more project roots",
+		// A single nested marker used to match both the monorepo rule and the
+		// single-root gate; each layout needs its own unambiguous row.
+		"exactly one project root, at the workspace root",
+		"exactly one project root, in a sub-directory",
+		// The scan is depth-bounded, so the unclassified verdict may only speak
+		// for the depth it reached.
+		"no marker within the scanned depth",
+		// Assert the whole chain, not its parts: a fragment check passes even if
+		// the tiers get reordered, and the order is the contract.
+		"override → the workspace-level `strict_tdd` default → the root's detected test runner → `false`",
+		// The gates table must carry the same workspace-default tier as the
+		// precedence chain, or an executor reading only the table skips it.
+		"no per-project marker/config but workspace default set",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Fatalf("skills/sdd-init/SKILL.md missing monorepo contract %q", want)
@@ -393,6 +406,14 @@ func TestSDDInitDiscoversMonorepoSubProjects(t *testing.T) {
 		"node_modules",
 		"go.work",
 		"projects:",
+		// Relative-path naming is what keeps two `api` directories apart, and
+		// each entry carries its own capabilities so overrides cannot collapse.
+		"sub-project name is its path relative to the workspace root",
+		"testing:",
+		"strict_tdd:",
+		// Declared members bypass the depth and skip bounds; say so, or the two
+		// rules read as contradictory.
+		"Declared members outrank both bounds",
 	} {
 		if !strings.Contains(details, want) {
 			t.Fatalf("skills/sdd-init/references/init-details.md missing discovery rule %q", want)
