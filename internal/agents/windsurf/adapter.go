@@ -19,22 +19,29 @@ type statResult struct {
 // Adapter implements agents.Adapter for Windsurf IDE (by Codeium).
 //
 // Config path summary:
-//   - Global AI config (MCP, memories): ~/.codeium/windsurf/
+//   - Global AI config (MCP, memories): ~/.codeium/devin/ when present,
+//     otherwise ~/.codeium/windsurf/
 //     → mcp_config.json
 //     → memories/global_rules.md
 //   - Editor settings (platform-specific):
-//     macOS:   ~/Library/Application Support/Windsurf/User/settings.json
-//     Linux:   ~/.config/Windsurf/User/settings.json   (respects XDG_CONFIG_HOME)
-//     Windows: %APPDATA%\Windsurf\User\settings.json
+//     macOS:   ~/Library/Application Support/{Devin,Windsurf}/User/settings.json
+//     Linux:   ~/.config/{Devin,Windsurf}/User/settings.json   (respects XDG_CONFIG_HOME)
+//     Windows: %APPDATA%\{Devin,Windsurf}\User\settings.json
 //
-// Detection: Windsurf is a desktop app. We detect it by the presence of
-// ~/.codeium/windsurf (the AI config dir), which is created on first launch.
+// Detection: Windsurf is a desktop app. We detect it by the selected AI
+// configuration directory, which is created on first launch.
 type Adapter struct {
 	statPath func(string) statResult
+	goos     string
+	getenv   func(string) string
 }
 
 func NewAdapter() *Adapter {
-	return &Adapter{statPath: defaultStat}
+	return &Adapter{
+		statPath: defaultStat,
+		goos:     runtime.GOOS,
+		getenv:   os.Getenv,
+	}
 }
 
 // --- Identity ---
@@ -44,8 +51,8 @@ func (a *Adapter) Tier() model.SupportTier { return model.TierFull }
 
 // --- Detection ---
 
-// Detect checks for the ~/.codeium/windsurf directory, which Windsurf creates
-// on its first launch. No binary appears on PATH (desktop app).
+// Detect checks the selected AI configuration directory. No binary appears on
+// PATH because Windsurf is a desktop app.
 func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, string, bool, error) {
 	configPath := a.GlobalConfigDir(homeDir)
 	stat := a.statPath(configPath)
@@ -74,11 +81,11 @@ func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 
 // --- Config paths ---
 
-// GlobalConfigDir returns the root of Windsurf's AI configuration directory.
+// GlobalConfigDir returns the root of the selected AI configuration directory.
 // This is cross-platform and always lives under the user's home directory.
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
 	devin := filepath.Join(homeDir, ".codeium", "devin")
-	if stat, err := os.Stat(devin); err == nil && stat.IsDir() {
+	if stat := a.statPath(devin); stat.err == nil && stat.isDir {
 		return devin
 	}
 	return filepath.Join(homeDir, ".codeium", "windsurf")
@@ -104,34 +111,33 @@ func (a *Adapter) SettingsPath(homeDir string) string {
 	return filepath.Join(a.windsurfUserDir(homeDir), "settings.json")
 }
 
-// windsurfUserDir returns the platform-specific Windsurf User config directory.
-// Windsurf follows the same platform conventions as VS Code, substituting
-// the application name "Windsurf" for "Code".
+// windsurfUserDir returns the selected platform-specific User config directory.
+// Devin and Windsurf follow the same platform conventions as VS Code.
 func (a *Adapter) windsurfUserDir(homeDir string) string {
-	switch runtime.GOOS {
+	switch a.goos {
 	case "darwin":
 		devin := filepath.Join(homeDir, "Library", "Application Support", "Devin", "User")
-		if stat, err := os.Stat(devin); err == nil && stat.IsDir() {
+		if stat := a.statPath(devin); stat.err == nil && stat.isDir {
 			return devin
 		}
 		return filepath.Join(homeDir, "Library", "Application Support", "Windsurf", "User")
 	case "windows":
-		appData := os.Getenv("APPDATA")
+		appData := a.getenv("APPDATA")
 		if appData == "" {
 			appData = filepath.Join(homeDir, "AppData", "Roaming")
 		}
 		devin := filepath.Join(appData, "Devin", "User")
-		if stat, err := os.Stat(devin); err == nil && stat.IsDir() {
+		if stat := a.statPath(devin); stat.err == nil && stat.isDir {
 			return devin
 		}
 		return filepath.Join(appData, "Windsurf", "User")
 	default: // linux and others
-		xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
+		xdgConfigHome := a.getenv("XDG_CONFIG_HOME")
 		if xdgConfigHome == "" {
 			xdgConfigHome = filepath.Join(homeDir, ".config")
 		}
 		devin := filepath.Join(xdgConfigHome, "Devin", "User")
-		if stat, err := os.Stat(devin); err == nil && stat.IsDir() {
+		if stat := a.statPath(devin); stat.err == nil && stat.isDir {
 			return devin
 		}
 		return filepath.Join(xdgConfigHome, "Windsurf", "User")
@@ -152,8 +158,8 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 
 // --- MCP ---
 
-// MCPConfigPath returns the dedicated MCP servers config file.
-// Windsurf uses ~/.codeium/windsurf/mcp_config.json across all platforms.
+// MCPConfigPath returns the dedicated MCP servers config file in the selected
+// global configuration directory.
 func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 	return filepath.Join(a.GlobalConfigDir(homeDir), "mcp_config.json")
 }
