@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -46,7 +47,7 @@ func TestReviewModeDisableGlobalWinsOverEveryRepository(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 
 	var output bytes.Buffer
-	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--json"}, &output); err != nil {
+	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "global", "--json"}, &output); err != nil {
 		t.Fatalf("RunReviewMode(disable) error = %v", err)
 	}
 	if result := decodeReviewModeResult(t, output.Bytes()); result.Status.Effective != reviewtransaction.RDDModeOff ||
@@ -62,11 +63,104 @@ func TestReviewModeDisableGlobalWinsOverEveryRepository(t *testing.T) {
 	}
 
 	output.Reset()
-	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--json"}, &output); err != nil {
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "global", "--json"}, &output); err != nil {
 		t.Fatalf("RunReviewMode(enable) error = %v", err)
 	}
 	if result := decodeReviewModeResult(t, output.Bytes()); result.Status.Effective != reviewtransaction.RDDModeOn {
 		t.Fatalf("global enable result = %#v", result.Status)
+	}
+}
+
+func TestReviewModeMutationsRequireExplicitScope(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	for _, operation := range []string{"enable", "disable"} {
+		if err := RunReviewMode([]string{operation, "--cwd", repo, "--json"}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "requires an explicit --scope") {
+			t.Fatalf("%s without scope error = %v", operation, err)
+		}
+	}
+}
+
+func TestReviewModeScopesRouteAndReportBlastRadius(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	runReviewCLIGit(t, repo, "worktree", "add", "-q", linked)
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "global", "--json"}, &output); err != nil {
+		t.Fatalf("disable global: %v", err)
+	}
+	global := decodeReviewModeResult(t, output.Bytes())
+	if global.Status.Source != reviewtransaction.RDDModeSourceGlobal || global.BlastRadius == nil ||
+		global.BlastRadius.Affects != "affects all repositories, clones, and worktrees for this user" {
+		t.Fatalf("global result = %#v", global)
+	}
+
+	output.Reset()
+	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone", "--json"}, &output); err != nil {
+		t.Fatalf("disable clone: %v", err)
+	}
+	output.Reset()
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--json"}, &output); err != nil {
+		t.Fatalf("enable clone: %v", err)
+	}
+	clone := decodeReviewModeResult(t, output.Bytes())
+	if clone.Status.Global != reviewtransaction.RDDModeOff || clone.Status.CloneLocal != reviewtransaction.RDDModeUnset || clone.Status.Source != reviewtransaction.RDDModeSourceGlobal || clone.BlastRadius == nil ||
+		clone.BlastRadius.WorktreesAvailable == nil || !*clone.BlastRadius.WorktreesAvailable ||
+		clone.BlastRadius.WorktreeCount != 2 || clone.BlastRadius.LinkedWorktreeCount == nil ||
+		*clone.BlastRadius.LinkedWorktreeCount != 1 || len(clone.BlastRadius.Worktrees) != 2 {
+		t.Fatalf("clone result = %#v", clone)
+	}
+
+	output.Reset()
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "global", "--json"}, &output); err != nil {
+		t.Fatalf("enable global: %v", err)
+	}
+	output.Reset()
+	if err := RunReviewMode([]string{"disable", "--cwd", linked, "--scope", "worktree"}, &output); err != nil {
+		t.Fatalf("disable worktree: %v", err)
+	}
+	if !strings.Contains(output.String(), "blast radius: affects only the current worktree") {
+		t.Fatalf("worktree text output misses blast radius:\n%s", output.String())
+	}
+	output.Reset()
+	if err := RunReviewMode([]string{"status", "--cwd", linked, "--json"}, &output); err != nil {
+		t.Fatalf("status linked worktree: %v", err)
+	}
+	if linkedStatus := decodeReviewModeResult(t, output.Bytes()).Status; linkedStatus.Source != reviewtransaction.RDDModeSourceWorktreeLocal {
+		t.Fatalf("linked worktree status = %#v", linkedStatus)
+	}
+	output.Reset()
+	if err := RunReviewMode([]string{"status", "--cwd", repo, "--json"}, &output); err != nil {
+		t.Fatalf("status primary worktree: %v", err)
+	}
+	if primaryStatus := decodeReviewModeResult(t, output.Bytes()).Status; primaryStatus.Effective != reviewtransaction.RDDModeOn {
+		t.Fatalf("worktree override leaked into primary worktree: %#v", primaryStatus)
+	}
+}
+
+func TestReviewModeCloneBlastRadiusEnumerationFailureDoesNotBlockMutation(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	previous := reviewModeGitCommandContext
+	reviewModeGitCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "git", "not-a-command")
+	}
+	t.Cleanup(func() { reviewModeGitCommandContext = previous })
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone", "--json"}, &output); err != nil {
+		t.Fatalf("clone mutation must survive enumeration failure: %v", err)
+	}
+	result := decodeReviewModeResult(t, output.Bytes())
+	if result.Status.Source != reviewtransaction.RDDModeSourceCloneLocal || result.BlastRadius == nil ||
+		result.BlastRadius.WorktreesAvailable == nil || *result.BlastRadius.WorktreesAvailable ||
+		!strings.Contains(result.BlastRadius.Affects, "unavailable") {
+		t.Fatalf("enumeration fallback = %#v", result)
+	}
+	if _, available := parseReviewModeWorktrees("worktree safe\nworktree unsafe\tpath\n"); available {
+		t.Fatal("control characters must make worktree enumeration unavailable")
 	}
 }
 

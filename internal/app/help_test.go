@@ -99,12 +99,12 @@ func TestHelpDocumentsUserControlledReviewModeKillSwitch(t *testing.T) {
 	output := buf.String()
 	for _, want := range []string{
 		"review mode <enable|disable|status>",
-		"--scope <global|clone>",
+		"--scope <global|clone|worktree>",
 		"off wins",
 		"status never mutates",
 		"asks once per clone",
 		"'not now' applies to that candidate only",
-		"gentle-ai review mode disable",
+		"gentle-ai review mode disable --scope=global",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help output missing review mode documentation %q:\n%s", want, output)

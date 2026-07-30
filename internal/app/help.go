@@ -36,13 +36,13 @@ COMMANDS
                Read-only inventory of compact-v2 and shipped legacy-v1 authority
   review repair --preflight [--cwd <repo>]
                Classify the complete authority inventory before provider-owned repair
-  review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone>]
+  review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone|worktree>]
                User-owned kill switch; off wins, no clone inherits an override,
-               status never mutates, and re-enabling applies to future candidates only
+               enable/disable require an explicit scope, status never mutates, and re-enabling applies to future candidates only
                'review start' asks once per clone before a review that would do work;
                accepting the review records that answer, 'not now' applies to that candidate only
                and persists nothing, turning reviews off for good needs a deliberate
-               'gentle-ai review mode disable', and a session without a terminal reviews
+               'gentle-ai review mode disable --scope=global', and a session without a terminal reviews
                the change and says so instead of asking
 
 COMPATIBILITY COMMANDS

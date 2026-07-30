@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,28 +24,45 @@ import (
 const ReviewModeSchema = "gentle-ai.review-mode/v1"
 
 const (
-	reviewModeScopeGlobal = "global"
-	reviewModeScopeClone  = "clone"
-	reviewModeScopeBoth   = "both"
+	reviewModeScopeGlobal   = "global"
+	reviewModeScopeClone    = "clone"
+	reviewModeScopeWorktree = "worktree"
+	reviewModeScopeBoth     = "both"
 )
 
 // ReviewModeResult reports what the command did and the resulting effective
 // mode with both of its sources. It carries no review outcome.
 type ReviewModeResult struct {
-	Schema    string                          `json:"schema"`
-	Operation string                          `json:"operation"`
-	Scope     string                          `json:"scope"`
-	Status    reviewtransaction.RDDModeStatus `json:"status"`
+	Schema      string                          `json:"schema"`
+	Operation   string                          `json:"operation"`
+	Scope       string                          `json:"scope"`
+	Status      reviewtransaction.RDDModeStatus `json:"status"`
+	BlastRadius *ReviewModeBlastRadius          `json:"blast_radius,omitempty"`
 }
 
+type ReviewModeBlastRadius struct {
+	Affects             string               `json:"affects"`
+	WorktreesAvailable  *bool                `json:"worktrees_available,omitempty"`
+	WorktreeCount       int                  `json:"worktree_count,omitempty"`
+	LinkedWorktreeCount *int                 `json:"linked_worktree_count,omitempty"`
+	Worktrees           []ReviewModeWorktree `json:"worktrees,omitempty"`
+}
+
+type ReviewModeWorktree struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+var reviewModeGitCommandContext = exec.CommandContext
+
 // RunReviewMode is the user-controlled receipt-driven-development kill switch.
-// The global mode lives in uncommitted user state; the clone-local override
-// lives under this clone's Git common directory and can only disable. Any off
-// wins, status never mutates, and re-enabling applies to future candidates only.
+// The global mode lives in uncommitted user state; clone and worktree overrides
+// can only disable. Any off wins, status never mutates, and re-enabling applies
+// to future candidates only.
 func RunReviewMode(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone>] [--expected-revision <revision>] [--json]")
-		_, _ = fmt.Fprintln(stdout, "User-owned kill switch. Any off wins: a repository may disable receipt-driven development for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Re-enabling applies to future candidates only.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone|worktree>] [--expected-revision <revision>] [--json]")
+		_, _ = fmt.Fprintln(stdout, "User-owned kill switch. enable and disable require an explicit --scope. Any off wins: local scopes can disable but never require receipt-driven development. status is read-only and reports every source plus the effective mode. Re-enabling applies to future candidates only.")
 		return nil
 	}
 	operation := args[0]
@@ -54,8 +74,8 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 
 	flags := newReviewFlagSet("review mode "+operation, stdout, "Read or set the user-controlled receipt-driven-development kill switch.")
 	cwd := flags.String("cwd", ".", "repository path")
-	scope := flags.String("scope", reviewModeScopeGlobal, "mode source to write: global or clone")
-	expectedRevision := flags.String("expected-revision", "", "exact clone-local revision this write replaces")
+	scope := flags.String("scope", reviewModeScopeGlobal, "mode source to write: global, clone, or worktree")
+	expectedRevision := flags.String("expected-revision", "", "exact selected local revision this write replaces")
 	emitJSON := flags.Bool("json", false, "emit the machine-readable review mode result")
 	if err := parseReviewFlags(flags, args[1:]); err != nil {
 		return err
@@ -66,18 +86,26 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected review mode argument %q", flags.Arg(0))
 	}
-	selectedScope := strings.TrimSpace(*scope)
-	switch selectedScope {
-	case reviewModeScopeGlobal, reviewModeScopeClone:
-	default:
-		return fmt.Errorf("unknown review mode scope %q", *scope)
-	}
+	scopeProvided := false
 	revisionProvided := false
 	flags.Visit(func(current *flag.Flag) {
-		if current.Name == "expected-revision" {
+		switch current.Name {
+		case "scope":
+			scopeProvided = true
+		case "expected-revision":
 			revisionProvided = true
 		}
 	})
+	if operation != "status" && !scopeProvided {
+		// refusal:by-design operator-knowledge: only the user can choose the affected scope; the command cannot safely infer global, clone, or worktree
+		return fmt.Errorf("review mode %s requires an explicit --scope=<global|clone|worktree>", operation)
+	}
+	selectedScope := strings.TrimSpace(*scope)
+	switch selectedScope {
+	case reviewModeScopeGlobal, reviewModeScopeClone, reviewModeScopeWorktree:
+	default:
+		return fmt.Errorf("unknown review mode scope %q", *scope)
+	}
 
 	ctx := context.Background()
 	result := ReviewModeResult{Schema: ReviewModeSchema, Operation: operation, Scope: selectedScope}
@@ -87,6 +115,7 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 		result.Status, err = reviewModeStatus(ctx, *cwd)
 	} else {
 		result.Status, err = applyReviewMode(ctx, *cwd, operation, selectedScope, *expectedRevision, revisionProvided)
+		result.BlastRadius = reviewModeBlastRadius(ctx, *cwd, selectedScope)
 	}
 	if emitErr := emitReviewMode(stdout, result, *emitJSON); emitErr != nil && err == nil {
 		return emitErr
@@ -115,10 +144,14 @@ type ReviewModeUnreadableScope struct {
 }
 
 func (scope ReviewModeUnreadableScope) label() string {
-	if scope.Scope == reviewModeScopeClone {
+	switch scope.Scope {
+	case reviewModeScopeClone:
 		return "clone-local"
+	case reviewModeScopeWorktree:
+		return "worktree-local"
+	default:
+		return "global"
 	}
-	return "global"
 }
 
 // commands names the two invocations that overwrite this scope. Both are
@@ -126,7 +159,7 @@ func (scope ReviewModeUnreadableScope) label() string {
 // to, because a clone-local record is only reachable through its own clone.
 func (scope ReviewModeUnreadableScope) commands() []string {
 	suffix := " --scope=" + scope.Scope
-	if scope.Scope == reviewModeScopeClone {
+	if scope.Scope == reviewModeScopeClone || scope.Scope == reviewModeScopeWorktree {
 		suffix += " --cwd " + scope.Repo
 	}
 	return []string{
@@ -182,7 +215,7 @@ func reviewModeCommandsByVerb(commands []string, verb string) []string {
 // reviewModeUnreadable turns a kill-switch resolution failure into a refusal
 // that names the file holding the value and the command that overwrites it.
 //
-// Both sources are probed rather than only the one that failed, because
+// Local sources are probed rather than only the one that failed, because
 // ResolveRDDMode stops at the first source it cannot read. Naming that one
 // alone would send the operator round the loop: they overwrite what the message
 // named, rerun, and hit the same wall from the other source.
@@ -201,10 +234,18 @@ func reviewModeUnreadable(
 			scopes = append(scopes, ReviewModeUnreadableScope{Scope: reviewModeScopeGlobal, Path: state.Path(home), Repo: repo})
 		}
 	}
-	// An unset global can never fail, so this isolates the clone-local source
-	// even when the global one already failed ahead of it.
-	if _, cloneErr := reviewtransaction.ResolveRDDMode(ctx, repo, reviewtransaction.RDDGlobalMode{}); cloneErr != nil {
-		if path, pathErr := reviewtransaction.CloneLocalRDDModeRecordPath(ctx, repo); pathErr == nil && path != "" {
+	// An unset global can never fail, so this identifies the first unreadable
+	// local source even when the global one already failed ahead of it.
+	if local, localErr := reviewtransaction.ResolveRDDMode(ctx, repo, reviewtransaction.RDDGlobalMode{}); localErr != nil {
+		var path string
+		var pathErr error
+		switch local.Source {
+		case reviewtransaction.RDDModeSourceCloneLocal:
+			path, pathErr = reviewtransaction.CloneLocalRDDModeRecordPath(ctx, repo)
+		case reviewtransaction.RDDModeSourceWorktreeLocal:
+			scopes = append(scopes, ReviewModeUnreadableScope{Scope: reviewModeScopeWorktree, Path: "the current worktree", Repo: repo})
+		}
+		if pathErr == nil && path != "" {
 			scopes = append(scopes, ReviewModeUnreadableScope{Scope: reviewModeScopeClone, Path: path, Repo: repo})
 		}
 	}
@@ -272,19 +313,21 @@ func applyReviewMode(
 	}
 	mode := reviewtransaction.RDDModeOff
 	if operation == "enable" {
-		// The override is off-only, so enabling clears this clone's opinion
+		// Local overrides are off-only, so enabling clears this scope's opinion
 		// instead of asserting on: a repository may never force review on.
 		mode = reviewtransaction.RDDModeUnset
 	}
 	if !revisionProvided {
-		// The compare-and-set token belongs to the clone-local source alone, so
-		// it is read with an unset global. Repairing this clone must not depend
-		// on the other source being readable, or a switch whose two records are
-		// both unreadable would have no repair command at all.
+		// The compare-and-set token belongs to the selected local source alone,
+		// so it is read with an unset global rather than inferred from precedence.
 		current, resolveErr := reviewtransaction.ResolveRDDMode(ctx, repo, reviewtransaction.RDDGlobalMode{})
 		switch {
 		case resolveErr == nil:
-			expectedRevision = current.Revision
+			if scope == reviewModeScopeClone {
+				expectedRevision = current.CloneLocalRevision
+			} else {
+				expectedRevision = current.WorktreeRevision
+			}
 		case errors.Is(resolveErr, reviewtransaction.ErrRDDModeCorrupt):
 			// An unreadable head carries no revision to compare against, and
 			// replacing it is the whole point of this command.
@@ -293,7 +336,12 @@ func applyReviewMode(
 			return disabled, reviewModeUnreadable(ctx, repo, global, resolveErr)
 		}
 	}
-	status, err := reviewtransaction.SetCloneLocalRDDMode(ctx, repo, mode, expectedRevision, global)
+	var status reviewtransaction.RDDModeStatus
+	if scope == reviewModeScopeClone {
+		status, err = reviewtransaction.SetCloneLocalRDDMode(ctx, repo, mode, expectedRevision, global)
+	} else {
+		status, err = reviewtransaction.SetWorktreeLocalRDDMode(ctx, repo, mode, expectedRevision, global)
+	}
 	return status, reviewModeUnreadable(ctx, repo, global, err)
 }
 
@@ -349,13 +397,102 @@ func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) er
 	}
 	_, err := fmt.Fprintf(
 		stdout,
-		"receipt-driven development: %s (decided by %s)\n  global:      %s\n  clone-local: %s\n",
+		"receipt-driven development: %s (decided by %s)\n  global:      %s\n  clone-local: %s\n  worktree:    %s\n",
 		reviewModeLabel(result.Status.Effective),
 		result.Status.Source,
 		reviewModeLabel(result.Status.Global),
 		reviewModeLabel(result.Status.CloneLocal),
+		reviewModeLabel(result.Status.Worktree),
 	)
+	if err != nil || result.BlastRadius == nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "blast radius: %s\n", result.BlastRadius.Affects)
+	for _, worktree := range result.BlastRadius.Worktrees {
+		if _, err = fmt.Fprintf(stdout, "  worktree: %s (%s)\n", worktree.Name, worktree.Path); err != nil {
+			return err
+		}
+	}
 	return err
+}
+
+func reviewModeBlastRadius(ctx context.Context, repo, scope string) *ReviewModeBlastRadius {
+	switch scope {
+	case reviewModeScopeGlobal:
+		return &ReviewModeBlastRadius{Affects: "affects all repositories, clones, and worktrees for this user"}
+	case reviewModeScopeWorktree:
+		return &ReviewModeBlastRadius{Affects: "affects only the current worktree"}
+	default:
+		worktrees, available := reviewModeCloneWorktrees(ctx, repo)
+		if !available {
+			available := false
+			return &ReviewModeBlastRadius{
+				Affects:            "affects all worktrees sharing this common Git directory; linked sibling count, worktree names, and list are unavailable",
+				WorktreesAvailable: &available,
+			}
+		}
+		available = true
+		linkedWorktreeCount := len(worktrees) - 1
+		return &ReviewModeBlastRadius{
+			Affects:             fmt.Sprintf("affects all %d worktrees sharing this common Git directory (%d linked siblings)", len(worktrees), linkedWorktreeCount),
+			WorktreesAvailable:  &available,
+			WorktreeCount:       len(worktrees),
+			LinkedWorktreeCount: &linkedWorktreeCount,
+			Worktrees:           worktrees,
+		}
+	}
+}
+
+func reviewModeCloneWorktrees(ctx context.Context, repo string) ([]ReviewModeWorktree, bool) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	command := reviewModeGitCommandContext(ctx, "git", "-C", repo, "worktree", "list", "--porcelain")
+	output := &reviewModeLimitedBuffer{limit: 64 << 10}
+	command.Stdout = output
+	command.Stderr = io.Discard
+	if err := command.Run(); err != nil {
+		return nil, false
+	}
+	return parseReviewModeWorktrees(output.String())
+}
+
+type reviewModeLimitedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (buffer *reviewModeLimitedBuffer) Write(value []byte) (int, error) {
+	if buffer.Len()+len(value) > buffer.limit {
+		// refusal:by-design world-action: the bounded disclosure is omitted when the repository emits more worktree data than it can safely report
+		return 0, errors.New("review mode worktree list exceeds output limit")
+	}
+	return buffer.Buffer.Write(value)
+}
+
+func parseReviewModeWorktrees(output string) ([]ReviewModeWorktree, bool) {
+	const maxWorktrees = 128
+	worktrees := make([]ReviewModeWorktree, 0)
+	for _, line := range strings.Split(output, "\n") {
+		path, found := strings.CutPrefix(strings.TrimSuffix(line, "\r"), "worktree ")
+		if !found {
+			continue
+		}
+		if path == "" || reviewModeContainsControl(path) || len(worktrees) == maxWorktrees {
+			return nil, false
+		}
+		worktrees = append(worktrees, ReviewModeWorktree{Name: filepath.Base(path), Path: path})
+	}
+	if len(worktrees) == 0 {
+		return nil, false
+	}
+	sort.Slice(worktrees, func(left, right int) bool { return worktrees[left].Path < worktrees[right].Path })
+	return worktrees, true
+}
+
+func reviewModeContainsControl(value string) bool {
+	return strings.IndexFunc(value, func(character rune) bool {
+		return character < 0x20 || character == 0x7f
+	}) >= 0
 }
 
 func reviewModeLabel(mode reviewtransaction.RDDMode) string {
@@ -423,7 +560,7 @@ const (
 	// safety net off for good must cost more than pressing a number in a hurry.
 	// The relayed consent envelope carries the same note as a documented off
 	// path outside the choice set, for exactly the same reason.
-	reviewConsentOffPathCommand = "gentle-ai review mode disable"
+	reviewConsentOffPathCommand = "gentle-ai review mode disable --scope=global"
 	reviewConsentOffPathNote    = "To turn reviews off for good, run '" + reviewConsentOffPathCommand + "'."
 	reviewConsentOffPath        = reviewConsentOffPathNote + "\n"
 	reviewConsentQuestion       = "Choose 1 or 2 [1]: "
@@ -431,14 +568,14 @@ const (
 	// reviewConsentSkippedNotice keeps the fail-safe default discoverable: an
 	// unanswerable question must never look like a silent yes.
 	reviewConsentSkippedNotice = "Gentle AI reviewed this change without asking, because this session has no terminal to answer on. " +
-		"Run 'gentle-ai review mode disable' to turn reviews off, or 'gentle-ai review mode status' to see the current setting."
+		"Run 'gentle-ai review mode disable --scope=global' to turn reviews off, or 'gentle-ai review mode status' to see the current setting."
 
 	// reviewConsentSkippedDefaultProvenance rides with the skip notice only
 	// when the resolved mode source is `default`: reviews are on because
 	// nobody chose anything, and the operator deserves to know the switch was
 	// never explicitly set, with both commands that make it a real choice.
 	reviewConsentSkippedDefaultProvenance = "Reviews are on by default; this was never explicitly chosen. " +
-		"Run 'gentle-ai review mode enable' to make reviews an explicit choice, or 'gentle-ai review mode disable' to turn them off."
+		"Run 'gentle-ai review mode enable --scope=global' to make reviews an explicit choice, or 'gentle-ai review mode disable --scope=global' to turn them off."
 	reviewConsentUnreadableNotice = "Gentle AI could not read an answer, so it reviewed this change and will ask again next time."
 	reviewConsentUnknownNotice    = "Gentle AI did not recognize that answer, so it reviewed this change and will ask again next time."
 
