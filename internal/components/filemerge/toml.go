@@ -331,21 +331,26 @@ func UpsertTopLevelTOMLString(content, key, value string) string {
 	lines := strings.Split(content, "\n")
 	lineValue := fmt.Sprintf("%s = %q", key, value)
 
-	// Remove all existing occurrences of the key.
+	// Remove existing occurrences of the key from the root TOML scope only.
+	// Assignments after a table or array-table header belong to that table.
 	var cleaned []string
+	inTopLevel := true
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=") {
+		if inTopLevel && (strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=")) {
 			continue
 		}
 		cleaned = append(cleaned, line)
+		if isTOMLTableHeader(trimmed) {
+			inTopLevel = false
+		}
 	}
 
 	// Find insertion point: before the first [section] header.
 	insertAt := len(cleaned)
 	for i, line := range cleaned {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		if isTOMLTableHeader(trimmed) {
 			insertAt = i
 			break
 		}
@@ -357,4 +362,37 @@ func UpsertTopLevelTOMLString(content, key, value string) string {
 	out = append(out, cleaned[insertAt:]...)
 
 	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
+}
+
+func isTOMLTableHeader(line string) bool {
+	if !strings.HasPrefix(line, "[") {
+		return false
+	}
+
+	var quote byte
+	escaped := false
+	for i := 0; i < len(line); i++ {
+		char := line[i]
+		if quote != 0 {
+			if quote == '"' && char == '\\' && !escaped {
+				escaped = true
+				continue
+			}
+			if char == quote && !escaped {
+				quote = 0
+			}
+			escaped = false
+			continue
+		}
+
+		switch char {
+		case '"', '\'':
+			quote = char
+		case '#':
+			line = strings.TrimSpace(line[:i])
+			return strings.HasSuffix(line, "]")
+		}
+	}
+
+	return strings.HasSuffix(line, "]")
 }

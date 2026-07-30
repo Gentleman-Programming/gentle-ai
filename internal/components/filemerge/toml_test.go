@@ -230,6 +230,58 @@ command = "engram"
 	}
 }
 
+func TestUpsertTopLevelTOMLString_PreservesHomonymousTableAssignments(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name: "standard table",
+			input: `model = "old-top-level-model"
+model_reasoning_effort = "low"
+
+[profiles.default] # user profile
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+`,
+			want: `model = "new-top-level-model"
+model_reasoning_effort = "high"
+[profiles.default] # user profile
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+`,
+		},
+		{
+			name: "array table",
+			input: `model = "old-top-level-model"
+model_reasoning_effort = "low"
+
+[[profiles]] # user profile
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+`,
+			want: `model = "new-top-level-model"
+model_reasoning_effort = "high"
+[[profiles]] # user profile
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UpsertTopLevelTOMLString(tt.input, "model", "new-top-level-model")
+			got = UpsertTopLevelTOMLString(got, "model_reasoning_effort", "high")
+
+			if got != tt.want {
+				t.Fatalf("UpsertTopLevelTOMLString() mismatch (-want +got):\nwant:\n%s\ngot:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
 // ─── UpsertCodexMCPServerBlock ────────────────────────────────────────────────
 
 func TestUpsertCodexMCPServerBlock_Empty(t *testing.T) {

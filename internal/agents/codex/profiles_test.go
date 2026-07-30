@@ -63,6 +63,43 @@ func TestWriteCodexProfiles_WritesModelAndEffort(t *testing.T) {
 	}
 }
 
+func TestWriteCodexProfiles_PreservesNestedModelAssignments(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sdd-strong.config.toml")
+	if err := os.WriteFile(path, []byte(`model = "old-top-level-model"
+model_reasoning_effort = "low"
+
+[profile.defaults] # user settings
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := WriteCodexProfiles(dir, []ProfileAssignment{{
+		Profile:         "sdd-strong",
+		Model:           "new-top-level-model",
+		ReasoningEffort: "high",
+	}})
+	if err != nil {
+		t.Fatalf("WriteCodexProfiles() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `model = "new-top-level-model"
+model_reasoning_effort = "high"
+[profile.defaults] # user settings
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+`
+	if string(content) != want {
+		t.Fatalf("WriteCodexProfiles() mismatch (-want +got):\nwant:\n%s\ngot:\n%s", want, content)
+	}
+}
+
 // TestWriteCodexProfiles_DefaultFallback asserts that nil assignments use
 // canonical Recommended defaults: sdd-strong=medium, sdd-mid=high, sdd-cheap=high.
 func TestWriteCodexProfiles_DefaultFallback(t *testing.T) {

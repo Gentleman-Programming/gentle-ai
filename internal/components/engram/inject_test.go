@@ -2266,6 +2266,47 @@ func TestInjectCodexOrchestratorAssignmentWritesTopLevelModel(t *testing.T) {
 	}
 }
 
+func TestInjectCodexOrchestratorAssignmentPreservesNestedModelAssignments(t *testing.T) {
+	validCodexRuntime(t)
+	home := t.TempDir()
+	path := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`model = "old-top-level-model"
+model_reasoning_effort = "low"
+
+[[profiles]] # user settings
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+model_instructions_file = "nested-instructions.md"
+experimental_compact_prompt_file = "nested-compact.md"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := InjectOptions{CodexOrchestratorAssignment: model.CodexPresetOrchestratorAssignment(string(model.CodexPresetRecommended))}
+	if _, err := InjectWithOptions(home, codexAdapter(), opts); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `model = "gpt-5.6-sol"`) || !strings.Contains(text, `model_reasoning_effort = "medium"`) {
+		t.Fatalf("top-level orchestrator assignment missing:\n%s", text)
+	}
+	if !strings.Contains(text, `[[profiles]] # user settings
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+model_instructions_file = "nested-instructions.md"
+experimental_compact_prompt_file = "nested-compact.md"`) {
+		t.Fatalf("nested model assignments were not preserved:\n%s", text)
+	}
+}
+
 func TestInjectCodexNilOrchestratorAssignmentPreservesTopLevelModel(t *testing.T) {
 	validCodexRuntime(t)
 	home := t.TempDir()
