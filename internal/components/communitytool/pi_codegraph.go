@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -528,16 +529,22 @@ func probePiCodeGraphMCPWithAgentDirContext(ctx context.Context, mcpPath, agentD
 	if err := command.Start(); err != nil {
 		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("start CodeGraph MCP server: %w", err)
 	}
+	return probePiCodeGraphMCPWithTransport(ctx, stdin, stdout, func() (error, error) {
+		return command.Process.Kill(), command.Wait()
+	})
+}
+
+func probePiCodeGraphMCPWithTransport(ctx context.Context, stdin io.WriteCloser, stdout io.Reader, cleanup func() (error, error)) (probeResult PiCodeGraphMCPProbeResult, returnErr error) {
+	phase := "MCP initialize"
 	defer func() {
 		_ = stdin.Close()
-		killErr := command.Process.Kill()
-		waitErr := command.Wait()
+		killErr, waitErr := cleanup()
 		if errors.Is(returnErr, context.DeadlineExceeded) {
 			return
 		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			probeResult = PiCodeGraphMCPProbeResult{}
-			returnErr = fmt.Errorf("wait for CodeGraph MCP server: %w", context.DeadlineExceeded)
+			returnErr = fmt.Errorf("%s: %w", phase, context.DeadlineExceeded)
 			return
 		}
 		if returnErr == nil && errors.Is(killErr, os.ErrProcessDone) && waitErr != nil {
@@ -565,6 +572,7 @@ func probePiCodeGraphMCPWithAgentDirContext(ctx context.Context, mcpPath, agentD
 	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized", "params": map[string]any{}}); err != nil {
 		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("send MCP initialized notification: %w", err)
 	}
+	phase = "MCP tools/list"
 	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": map[string]any{}}); err != nil {
 		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("send MCP tools/list: %w", err)
 	}
