@@ -29,7 +29,7 @@ COMMANDS
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>]
   review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>
                Admit one reviewer result; every selected lens needs one
-  review inspect-candidate --repository-context <handle> --operation <operation>
+  review inspect-candidate --repository-context <handle> --expected-revision <rev> --lineage <id> --target <id> --lens <lens> --order <n> --operation <operation>
                Read one bounded immutable candidate view through provider authority
   review finalize [--cwd <repo>] [--captured-results] [--evidence <path>]
   review validate --gate <gate> [--cwd <repo>]
