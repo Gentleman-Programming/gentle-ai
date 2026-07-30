@@ -447,9 +447,9 @@ func TestUVInstallHint(t *testing.T) {
 		want    string
 	}{
 		{
-			name:    "alpine fallback installs curl before standalone installer",
+			name:    "alpine fallback installs curl and updates current shell PATH",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
-			want:    "apk add --no-cache uv (requires community); otherwise: apk add --no-cache curl && curl -LsSf https://astral.sh/uv/install.sh | sh",
+			want:    "apk add --no-cache uv (requires community); otherwise: apk add --no-cache curl && curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\"",
 		},
 	}
 
