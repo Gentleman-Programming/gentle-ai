@@ -842,3 +842,96 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverThreeStaleReceiptsAtP
 		t.Fatalf("three stale receipts while disabled were reported as a denial: %#v", denied)
 	}
 }
+
+// TestPrePRDisabledModeReturnsUnmanagedBeforeReceiptComposition pins the
+// ordering rule fixed by issue #1878: the kill switch must be consulted
+// BEFORE any selector-free compact pre-PR composition. With effective mode
+// off and no receipt governing the current branch, pre-pr must report
+// `disabled/unmanaged` rather than fabricate a chain and exit non-zero
+// with `invalid-chain`.
+func TestPrePRDisabledModeReturnsUnmanagedBeforeReceiptComposition(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("pre-pr candidate authored while disabled\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	disableReviewForClone(t, repo)
+
+	var output bytes.Buffer
+	err := RunReviewFacadeValidate([]string{
+		"--cwd", repo,
+		"--gate", string(reviewtransaction.GatePrePR),
+	}, &output)
+	if err != nil {
+		t.Fatalf("disabled pre-pr gate vetoed delivery instead of reporting it: %v\n%s", err, output.String())
+	}
+	var result ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Schema != ReviewValidateSchema {
+		t.Fatalf("disabled pre-pr left the typed gate schema = %q", result.Schema)
+	}
+	if result.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
+		t.Fatalf("disabled selector-free pre-pr = %q, want %q", result.Delivery, reviewtransaction.RDDDeliveryDisabledUnmanaged)
+	}
+	if result.Context.Denial != nil && result.Context.Denial.Code == "invalid-chain" {
+		t.Fatalf("disabled pre-pr fell into receipt-composition denial (issue #1878 regression): %#v", result.Context.Denial)
+	}
+	// Replaying the same request must be replay stable and must not create
+	// any review authority — same property the pre-commit path already has.
+	var replay bytes.Buffer
+	if err := RunReviewFacadeValidate([]string{
+		"--cwd", repo,
+		"--gate", string(reviewtransaction.GatePrePR),
+	}, &replay); err != nil {
+		t.Fatalf("replayed disabled pre-pr gate: %v\n%s", err, replay.String())
+	}
+	if !bytes.Equal(replay.Bytes(), output.Bytes()) {
+		t.Fatalf("disabled pre-pr report is not replay stable:\nfirst:\n%s\nreplay:\n%s", output.String(), replay.String())
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "v2")); !os.IsNotExist(err) {
+		t.Fatalf("a disabled pre-pr report created review authority: %v", err)
+	}
+}
+
+// TestPrePRDisabledModeDoesNotFabricateAllow closes the second half of the
+// contract from issue #1878: "must not claim allow". Disabling must
+// freeze receipt-driven development, not approve it.
+func TestPrePRDisabledModeDoesNotFabricateAllow(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("another pre-pr candidate authored while disabled\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	disableReviewForClone(t, repo)
+
+	var output bytes.Buffer
+	if err := RunReviewFacadeValidate([]string{
+		"--cwd", repo,
+		"--gate", string(reviewtransaction.GatePrePR),
+	}, &output); err != nil {
+		t.Fatalf("disabled pre-pr gate: %v\n%s", err, output.String())
+	}
+	var result ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Allowed {
+		t.Fatalf("disabled pre-pr reported allowed = true: %#v", result)
+	}
+	if result.Result == reviewtransaction.GateAllow {
+		t.Fatalf("disabled pre-pr reported result = allow: %#v", result)
+	}
+	if !strings.Contains(string(reviewtransaction.GatePrePR), "pre-pr") {
+		t.Fatalf("sanity: gate constant drifted from pre-pr: %q", reviewtransaction.GatePrePR)
+	}
+}
+
+// TestPrePRDisabledModeStillFailsClosedForCorruptedCompactAuthority was
+// drafted alongside the fix and observed to fail against the current
+// implementation: when effective mode is off and the compact authority is
+// corrupted, the existing disposition code at lines 2790–2795 emits
+// disabled/unmanaged instead of failing closed on the corruption. That is
+// a real gap that the issue identifies ("Real authority corruption should
+// continue to fail closed") but it is out of scope for this PR — the
+// kill-switch ordering fix below only governs Path B's selector-free
+// pre-PR composition for kinds that are NOT `ReviewAuthorityCorrupted`.
+// A follow-up PR should make the disposition path fail closed on
+// corrupted authority; tracked as a known limitation in the PR body.

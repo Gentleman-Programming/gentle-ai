@@ -2778,6 +2778,13 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		evaluation := reviewtransaction.EvaluateCompactGate(ctx, root, receipt, input)
 		if gateInput.Gate == reviewtransaction.GatePrePR && strings.TrimSpace(*lineage) == "" &&
 			evaluation.Context.Denial != nil && evaluation.Context.Denial.Stage == "receipt-binding" && evaluation.Context.Denial.Code == "base-mismatch" {
+			// Issue #1878: the kill switch must be consulted BEFORE any
+			// selector-free compact pre-PR composition. When effective mode
+			// is off, the gate must defer to ordinary repository policy via
+			// disabled/unmanaged instead of fabricating a receipt chain.
+			if reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
+				return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, &ReviewReceiptDiscoveryError{Kind: ReviewReceiptAmbiguous, Detail: "compact receipt base-mismatch under disabled mode"}, negotiated, *contract)
+			}
 			if composed, attempted := reviewtransaction.EvaluateCompactPrePRChain(ctx, root, gateInput); attempted {
 				return emitFacadeGateEvaluationNegotiated(stdout, composed, negotiated, *contract)
 			}
@@ -2787,6 +2794,14 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	var compactDiscovery *ReviewReceiptDiscoveryError
 	if gateInput.Gate == reviewtransaction.GatePrePR && strings.TrimSpace(*lineage) == "" &&
 		errors.As(compactErr, &compactDiscovery) && compactDiscovery.Kind != ReviewAuthorityCorrupted && compactDiscovery.Kind != ReviewReceiptMissing {
+		// Issue #1878: same kill-switch ordering rule applies before
+		// selector-free compact pre-PR composition when no receipt governs
+		// the current branch. Without this guard, a disabled clone fails
+		// pre-pr with `invalid-chain` instead of deferring to ordinary
+		// repository policy.
+		if reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
+			return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, compactDiscovery, negotiated, *contract)
+		}
 		if evaluation, attempted := reviewtransaction.EvaluateCompactPrePRChain(ctx, root, gateInput); attempted {
 			return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 		}
