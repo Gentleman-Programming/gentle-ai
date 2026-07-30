@@ -13,32 +13,52 @@ import (
 // Package-level var for testability — swapped in tests to use a temp directory.
 var UserHomeDirFn = os.UserHomeDir
 
+// WorkspaceDirFn returns the workspace directory, if any, so isPathUnderHome
+// also accepts paths under the workspace during workspace-scoped operations.
+// Empty return value means no workspace dir is configured.
+var WorkspaceDirFn = func() string { return "" }
+
 // isPathUnderHome reports whether path is an absolute path that resides under
-// the current user's home directory. This is used to prevent arbitrary file
-// writes via tampered manifest OriginalPath fields.
-//
-// Symlink note: if the path already exists on disk, EvalSymlinks is used to
-// resolve the real path and re-check against home, preventing symlink escapes.
-// If the path does not exist yet (typical during restore), only filepath.Clean
-// is used — symlinks cannot be resolved for non-existent paths, so this
-// limitation is accepted and documented here.
+// the current user's home directory (or workspace directory when set).
+// This is used to prevent arbitrary file writes via tampered manifest
+// OriginalPath fields.
 func isPathUnderHome(path string) bool {
 	home, err := UserHomeDirFn()
 	if err != nil {
 		return false
 	}
+
 	clean := filepath.Clean(path)
-	homeClean := filepath.Clean(home)
-	if !strings.HasPrefix(clean, homeClean+string(filepath.Separator)) {
+
+	// Check against home directory.
+	if pathUnderRoot(clean, home) {
+		return true
+	}
+
+	// Also check against workspace directory when set (used for workspace-scoped
+	// installs where backup entries may live under the workspace, not HOME).
+	if ws := WorkspaceDirFn(); ws != "" {
+		if pathUnderRoot(clean, ws) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// pathUnderRoot checks whether clean is under root, with symlink resolution.
+func pathUnderRoot(clean, root string) bool {
+	rootClean := filepath.Clean(root)
+	if !strings.HasPrefix(clean, rootClean+string(filepath.Separator)) {
 		return false
 	}
 	// If the path exists, resolve symlinks and re-check to prevent symlink escapes.
 	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
-		resolvedHome, err := filepath.EvalSymlinks(homeClean)
+		resolvedRoot, err := filepath.EvalSymlinks(rootClean)
 		if err != nil {
-			resolvedHome = homeClean
+			resolvedRoot = rootClean
 		}
-		return strings.HasPrefix(resolved, resolvedHome+string(filepath.Separator))
+		return strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator))
 	}
 	// Path does not exist yet (file will be created by restore) — accept Clean-only check.
 	return true

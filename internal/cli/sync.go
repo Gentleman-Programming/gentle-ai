@@ -491,7 +491,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	apply := []pipeline.Step{
-		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state},
+		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, workspaceDir: r.workspaceDir},
 	}
 
 	for _, component := range r.selection.Components {

@@ -602,7 +602,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	apply := make([]pipeline.Step, 0, len(r.resolved.Agents)+len(r.selection.CommunityTools)+len(r.resolved.OrderedComponents)+1)
-	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state})
+	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, workspaceDir: r.workspaceDir})
 
 	// Before installing components, ensure modular agents have their system prompt hub.
 	// This ensures that SDD or Engram can inject their modules even if Persona is skipped.
@@ -954,8 +954,9 @@ func (s prepareBackupStep) Run() error {
 }
 
 type rollbackRestoreStep struct {
-	id    string
-	state *runtimeState
+	id          string
+	state       *runtimeState
+	workspaceDir string
 }
 
 func (s rollbackRestoreStep) ID() string {
@@ -969,6 +970,12 @@ func (s rollbackRestoreStep) Run() error {
 func (s rollbackRestoreStep) Rollback() error {
 	if len(s.state.manifest.Entries) == 0 {
 		return nil
+	}
+
+	if s.workspaceDir != "" {
+		origWorkspaceDirFn := backup.WorkspaceDirFn
+		backup.WorkspaceDirFn = func() string { return s.workspaceDir }
+		defer func() { backup.WorkspaceDirFn = origWorkspaceDirFn }()
 	}
 
 	return backup.RestoreService{}.Restore(s.state.manifest)
