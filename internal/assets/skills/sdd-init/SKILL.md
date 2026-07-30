@@ -54,6 +54,7 @@ Run this phase when the orchestrator/user asks to initialize SDD in a project. Y
 | strict TDD marker/config found | Use that value. |
 | no marker/config but test runner exists | Default `strict_tdd: true`. |
 | no test runner | Set `strict_tdd: false` and explain unavailable. |
+| **graphify-out/graph.json exists** | Wire graph-first retrieval into the project. |
 
 ## Execution Steps
 
@@ -62,8 +63,17 @@ Run this phase when the orchestrator/user asks to initialize SDD in a project. Y
 3. Resolve Strict TDD from agent marker, `openspec/config.yaml`, detected runner fallback, or no-runner fallback.
 4. Initialize persistence for the resolved mode.
 5. Build `.atl/skill-registry.md` using the skill-registry scan rules.
-6. Persist testing capabilities and project context.
-7. Return the structured initialization envelope.
+6. **Detect graphify knowledge graph and wire graph-first retrieval.**
+   - Check if `graphify-out/graph.json` exists in the project root.
+   - If found: add a `## Graph-First Retrieval` section to the project's `AGENTS.md`.
+     The section instructs the orchestrator to inject `graph-first-retrieval` as a
+     skill when launching `sdd-explore`, `sdd-apply`, `sdd-design`, or `sdd-verify`.
+   - The registry scan (step 5) already includes `~/.config/opencode/skills/` so the
+     graph-first-retrieval skill is discovered automatically.
+   - If `AGENTS.md` already has graph-first instructions, skip (idempotent).
+   - If `graphify-out/graph.json` does NOT exist, skip this step silently.
+7. Persist testing capabilities and project context.
+8. Return the structured initialization envelope.
 
 ## Output Contract
 
