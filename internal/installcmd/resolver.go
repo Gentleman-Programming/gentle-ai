@@ -180,7 +180,7 @@ func uvInstallHint(profile system.PlatformProfile) string {
 	case "dnf":
 		return "sudo dnf install -y uv"
 	case "apk":
-		return "apk add --no-cache uv"
+		return "enable the Alpine community repository, then run: apk add --no-cache uv"
 	case "winget":
 		return "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements"
 	default:
