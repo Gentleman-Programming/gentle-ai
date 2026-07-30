@@ -453,6 +453,7 @@ func (result facadeValidationResult) conclusive() error {
 		{name: "correction_regression", evidence: result.CorrectionRegression.Evidence},
 	} {
 		if reviewtransaction.InconclusiveValidationEvidence(check.evidence) {
+			// refusal:by-design world-action: validator access to the immutable frozen trees must be restored outside the local CLI before validation can be captured again
 			return fmt.Errorf("targeted validation is inconclusive: %s evidence reports the immutable candidate could not be inspected, so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees and capture the same validation again", check.name)
 		}
 	}
