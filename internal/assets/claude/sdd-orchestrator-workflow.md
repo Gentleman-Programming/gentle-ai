@@ -27,6 +27,14 @@ Meta-commands are handled by the orchestrator directly and do not appear in auto
 - `/sdd-continue [change]` → run the next dependency-ready phase.
 - `/sdd-ff <name>` → fast-forward proposal → specs → design → tasks.
 
+### Engram Project Resolution (MANDATORY)
+
+Before any project-scoped `mem_context` or `mem_search`, call `engram_mem_current_project` and wait for it to complete, even when the user named no repository; this strict dependency MUST NOT run in parallel with scoped calls. Use its returned canonical project key, never a cwd/worktree-basename guess.
+
+- Unique project: use the returned canonical project for context/search.
+- Ambiguous project: STOP and ask the user to choose only from the returned alternatives before any scoped search.
+- No project: continue without inventing a key and do not run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.
+
 ### Native SDD Dispatcher Guard
 
 Before routing, continuing, applying, verifying, or archiving an SDD change, first determine this session's artifact store. The native dispatcher (`gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`) reads only OpenSpec file artifacts and always emits `artifactStore: openspec`; it cannot observe Engram-backed changes.

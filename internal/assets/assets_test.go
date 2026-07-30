@@ -50,6 +50,43 @@ func TestSDDOrchestratorsCarryNoRetiredWorkRunCeremony(t *testing.T) {
 	}
 }
 
+func TestCoordinatorEngramProjectResolutionPrecedesScopedCalls(t *testing.T) {
+	const contract = "### Engram Project Resolution (MANDATORY)\n\n" +
+		"Before any project-scoped `mem_context` or `mem_search`, call `engram_mem_current_project` and wait for it to complete, even when the user named no repository; this strict dependency MUST NOT run in parallel with scoped calls. Use its returned canonical project key, never a cwd/worktree-basename guess.\n\n" +
+		"- Unique project: use the returned canonical project for context/search.\n" +
+		"- Ambiguous project: STOP and ask the user to choose only from the returned alternatives before any scoped search.\n" +
+		"- No project: continue without inventing a key and do not run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.\n"
+
+	paths := append(allSDDOrchestratorAssetPaths(t), "claude/sdd-orchestrator-workflow.md")
+	if len(paths) != 13 {
+		t.Fatalf("project-resolution coverage sees %d coordinator surfaces, want 13", len(paths))
+	}
+
+	for _, path := range paths {
+		content := MustRead(path)
+		want := 1
+		if path == "generic/sdd-orchestrator.md" {
+			// Generic renders capable and small-model sections that can both
+			// initiate Engram access.
+			want = 2
+		}
+		if count := strings.Count(content, contract); count != want {
+			t.Fatalf("%s has %d project-resolution contracts, want %d", path, count, want)
+		}
+	}
+
+	for _, path := range []string{
+		"claude/agents/sdd-apply.md",
+		"cursor/agents/sdd-apply.md",
+		"kimi/agents/sdd-apply.md",
+		"skills/sdd-apply/SKILL.md",
+	} {
+		if strings.Contains(MustRead(path), "### Engram Project Resolution (MANDATORY)") {
+			t.Fatalf("%s must not carry coordinator project-resolution instructions", path)
+		}
+	}
+}
+
 func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 	paths := allSDDOrchestratorAssetPaths(t)
 	if len(paths) != 12 {
