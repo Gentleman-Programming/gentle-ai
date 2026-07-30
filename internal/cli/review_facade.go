@@ -926,7 +926,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" {
 		return errors.New(reviewStatusTargetSelectorsRequireContractReason)
 	}
-	report, err := reviewtransaction.InventoryAuthority(ctx, *cwd)
+	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve review repository root: %w", err)
+	}
+	report, err := reviewtransaction.InventoryAuthority(ctx, root)
 	if err != nil {
 		return fmt.Errorf("inventory review authority: %w", err)
 	}
