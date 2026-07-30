@@ -83,7 +83,7 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	strictBinding := request.Gate == GatePostApply || request.Gate == GatePreCommit ||
 		request.Gate == GatePrePush && state.InitialSnapshot.Kind != TargetCurrentChanges
 	pathsMatch := pathsAreSubset(snapshot.Paths, state.GenesisPaths) == nil
-	baseMatches := snapshot.BaseTree == state.CurrentSnapshot.BaseTree || request.Target.Kind == TargetFixDiff
+	baseMatches := snapshot.BaseTree == state.CurrentSnapshot.BaseTree || request.Target.Kind == TargetFixDiff || squashedFixDelivery
 	if strictBinding {
 		pathsMatch = snapshot.PathsDigest == state.CurrentSnapshot.PathsDigest || squashedFixDelivery
 		baseMatches = snapshot.BaseTree == state.CurrentSnapshot.BaseTree || squashedFixDelivery
@@ -318,7 +318,7 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	binding := record.State.CurrentSnapshot
 	squashedFixDelivery := compactSquashedFixDelivery(request.Gate, record.State, snapshot, resolvedPrePR, receipt.FinalCandidateTree)
 	strictBinding := request.Gate == GatePostApply || request.Gate == GatePreCommit || request.Gate == GatePrePush && record.State.InitialSnapshot.Kind != TargetCurrentChanges
-	baseRelationshipValid := snapshot.BaseTree == receipt.BaseTree || request.Target.Kind == TargetFixDiff
+	baseRelationshipValid := snapshot.BaseTree == receipt.BaseTree || request.Target.Kind == TargetFixDiff || squashedFixDelivery
 	if strictBinding {
 		baseRelationshipValid = snapshot.BaseTree == binding.BaseTree || squashedFixDelivery
 	}

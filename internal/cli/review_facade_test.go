@@ -966,6 +966,12 @@ func TestReadFacadeReviewerResultsRejectsNonNativeFields(t *testing.T) {
 func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runReviewCLIGit(t, repo, "clone", "--bare", repo, remote)
+	runReviewCLIGit(t, repo, "remote", "add", "origin", remote)
+	runReviewCLIGit(t, repo, "config", "branch."+branch+".remote", "origin")
+	runReviewCLIGit(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1093,6 +1099,15 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 	}
 	if committedReuse.Action != "reuse-receipt" || committedReuse.LensesRequired || committedReuse.LineageID != started.LineageID || committedReuse.State != reviewtransaction.StateApproved {
 		t.Fatalf("equivalent committed corrected target did not reuse receipt: %#v", committedReuse)
+	}
+	output.Reset()
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output); err != nil {
+		t.Fatalf("selector-free corrected pre-push discovery: %v\n%s", err, output.String())
+	}
+	var delivery ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &delivery)
+	if !delivery.Allowed || delivery.Context.LineageID != started.LineageID || !delivery.Context.BaseRelationshipValid {
+		t.Fatalf("selector-free corrected pre-push discovery = %#v", delivery)
 	}
 }
 
