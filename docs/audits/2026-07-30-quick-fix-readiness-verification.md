@@ -1,10 +1,12 @@
-# Independent Verification Report: Quick-Fix Readiness Handoff
+# v1 Independent Verification Report: Quick-Fix Readiness Handoff
 
 ## Outcome
 
-This report records independent findings without assigning a global verdict. It identifies two rows with a current, explicit maintainer-required design prerequisite that conflicts with the handoff's own admission rule. Many other classifications, scopes, and test oracles are plausible but insufficiently evidenced by the handoff itself.
+This **v1 independent verification** records findings without assigning a global verdict. It identifies two rows with a current, explicit maintainer-required design prerequisite that conflicts with the handoff's own admission rule. Many other classifications, scopes, and test oracles are plausible but insufficiently evidenced by the handoff itself.
 
-This report is read-only evidence. It does not authorize implementation, issue closure, pull-request action, or any GitHub mutation.
+All `target:` line references and the G/Q/B/R ledgers in this report preserve the v1 `25 + 18 + 13 = 56` partition. For the current `10 + 13 + 20 + 13 = 56` operational partition, see the corrected [v2 handoff](2026-07-30-quick-fix-readiness.md).
+
+This verification was read-only with respect to repository files (apart from writing this report artifact itself), Git, GitHub, and CodeGraph. Engram received external audit/session persistence, which did not mutate any of those systems. This report does not authorize implementation, issue closure, pull-request action, or any GitHub mutation.
 
 ## Snapshot Identity
 
@@ -56,6 +58,10 @@ An absent proof is not treated as a contradiction. A live label alone is not tre
 | #973 | Closes #77; implements TUI installed-agent editing and targeted sync. | Unrelated to #1903 by closing issue, mechanism, and files. |
 
 Textual search matches were not used as relation proof.
+
+## v1 Ledger Scope Notice
+
+All `target:` references and the Global (G), Quick-Fix (Q), Blocked (B), and Rejected (R) ledgers below preserve the historical v1 `25 + 18 + 13 = 56` partition. They are not current operational counts; see the corrected [v2 handoff](2026-07-30-quick-fix-readiness.md) for the current `10 + 13 + 20 + 13 = 56` partition.
 
 # Complete Ledger
 
@@ -200,27 +206,29 @@ No test was executed in this verification. A listed oracle is not treated as ver
 4. Attach or link the immutable source ledger for the 321-issue taxonomy and the snapshot receipts for historical state claims.
 5. Re-run current live checks immediately before any implementation claim.
 
-# Exact Read-Only Command Log
+# Exact Repository/Git/GitHub/CodeGraph Read-Only Command Log
 
-All shell commands used the repository worktree. Parallel batches have a deterministic submission order but no total completion order.
+All shell commands used the repository worktree and were read-only with respect to repository files, Git, GitHub, and CodeGraph. Parallel batches have a deterministic submission order but no total completion order.
 
 ## Repository and Snapshot Commands
 
 ```powershell
 git rev-parse --show-toplevel
+$repoRoot = git rev-parse --show-toplevel
+$targetPath = Join-Path $repoRoot 'docs/audits/2026-07-30-quick-fix-readiness.md'
 git remote get-url origin
 git branch --show-current
 git rev-parse HEAD
 git status --short
 Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ss.fffZ'
-(Get-Item -LiteralPath 'C:\Users\Blackie\Desktop\Proyectos\gentle ai\issues-analysis\docs\audits\2026-07-30-quick-fix-readiness.md').Length
-(Get-FileHash -Algorithm SHA256 -LiteralPath 'C:\Users\Blackie\Desktop\Proyectos\gentle ai\issues-analysis\docs\audits\2026-07-30-quick-fix-readiness.md').Hash.ToLowerInvariant()
-Test-Path -LiteralPath 'C:\Users\Blackie\Desktop\Proyectos\gentle ai\issues-analysis\.codegraph'
+(Get-Item -LiteralPath $targetPath).Length
+(Get-FileHash -Algorithm SHA256 -LiteralPath $targetPath).Hash.ToLowerInvariant()
+Test-Path -LiteralPath (Join-Path $repoRoot '.codegraph')
 git cat-file -e HEAD:docs/audits/2026-07-27-post-ratchet-audit.md
 git cat-file -e HEAD:docs/audits/2026-07-23-systemic-remediation-architecture.md
 git cat-file -e HEAD:docs/releases/v2.2.0-closure-ledger.md
 git describe --tags --always HEAD
-(Get-Item -LiteralPath 'C:\Users\Blackie\Desktop\Proyectos\gentle ai\issues-analysis\docs\audits\2026-07-30-quick-fix-readiness.md').LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+(Get-Item -LiteralPath $targetPath).LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
 ```
 
 ## Lossless Repeated Issue Commands
@@ -281,8 +289,10 @@ gh pr view 973 --repo Gentleman-Programming/gentle-ai --json number,title,state,
 git status --short
 git branch --show-current
 git rev-parse HEAD
-(Get-Item -LiteralPath 'C:\Users\Blackie\Desktop\Proyectos\gentle ai\issues-analysis\docs\audits\2026-07-30-quick-fix-readiness.md').Length
-(Get-FileHash -Algorithm SHA256 -LiteralPath 'C:\Users\Blackie\Desktop\Proyectos\gentle ai\issues-analysis\docs\audits\2026-07-30-quick-fix-readiness.md').Hash.ToLowerInvariant()
+$repoRoot = git rev-parse --show-toplevel
+$targetPath = Join-Path $repoRoot 'docs/audits/2026-07-30-quick-fix-readiness.md'
+(Get-Item -LiteralPath $targetPath).Length
+(Get-FileHash -Algorithm SHA256 -LiteralPath $targetPath).Hash.ToLowerInvariant()
 Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ss.fffZ'
 ```
 
@@ -291,11 +301,12 @@ Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ss.fffZ'
 - Read: the required cognitive document-design skill, the target, the three related Markdown files, the PR workflow, and focused Go sources.
 - CodeGraph: read-only source, call-path, test, and blast-radius exploration; no init, sync, or index command was run.
 - Grep: focused shared-file inventory lookup in `internal/cli/run.go` and `internal/update/upgrade/executor.go`.
-- Engram: read-only context/search plus audit discovery and session-summary persistence. No repository or GitHub state was changed.
+- Engram: read-only context/search plus external audit discovery and session-summary persistence. This external persistence did not mutate repository files, Git, GitHub, or CodeGraph.
 
-## Final Read-Only State
+## Final Scoped Read-Only State
 
 - No test was executed.
-- No Git, GitHub, CodeGraph, or repository mutation was performed by the verification.
+- No Git, GitHub, or CodeGraph mutation was performed. No repository file was mutated apart from writing this report artifact.
+- Engram received external audit/session persistence; it did not mutate repository files, Git, GitHub, or CodeGraph.
 - The original target remained untracked and byte-identical to the stated identity.
 - This verification report is the only intended additional untracked file.
