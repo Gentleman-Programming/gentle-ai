@@ -169,6 +169,16 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			wantDistro: LinuxDistroFedora,
 		},
 		{
+			name:       "alpine",
+			osRelease:  "ID=alpine\n",
+			wantDistro: LinuxDistroAlpine,
+		},
+		{
+			name:       "alpine family via id_like token",
+			osRelease:  "ID=custom-linux\nID_LIKE=\"alpine linux\"\n",
+			wantDistro: LinuxDistroAlpine,
+		},
+		{
 			name:       "empty os-release",
 			osRelease:  "",
 			wantDistro: LinuxDistroUnknown,
@@ -267,6 +277,15 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			wantOS:        "linux",
 			wantPM:        "dnf",
 			wantDistro:    LinuxDistroFedora,
+			wantSupported: true,
+		},
+		{
+			name:          "alpine profile",
+			goos:          "linux",
+			osRelease:     "ID=alpine\n",
+			wantOS:        "linux",
+			wantPM:        "apk",
+			wantDistro:    LinuxDistroAlpine,
 			wantSupported: true,
 		},
 		{
