@@ -180,7 +180,7 @@ func uvInstallHint(profile system.PlatformProfile) string {
 	case "dnf":
 		return "sudo dnf install -y uv"
 	case "apk":
-		return "apk add --no-cache uv (requires community); otherwise: curl -LsSf https://astral.sh/uv/install.sh | sh"
+		return "apk add --no-cache uv (requires community); otherwise: apk add --no-cache curl && curl -LsSf https://astral.sh/uv/install.sh | sh"
 	case "winget":
 		return "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements"
 	default:
@@ -244,6 +244,9 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 		}
 		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 	case "apk":
+		if !profile.NpmWritable {
+			return nil, fmt.Errorf("OpenCode auto-install on Alpine requires a user-writable npm prefix on PATH; run npm config set prefix \"$HOME/.local\", add \"$HOME/.local/bin\" to PATH, then rerun gentle-ai install")
+		}
 		return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}}, nil
 	case "winget":
 		// On Windows, npm global installs do not require sudo.

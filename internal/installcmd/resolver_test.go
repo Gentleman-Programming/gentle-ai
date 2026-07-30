@@ -294,11 +294,12 @@ func TestResolveAgentInstall(t *testing.T) {
 	r := NewResolver()
 
 	tests := []struct {
-		name    string
-		profile system.PlatformProfile
-		agent   model.AgentID
-		want    CommandSequence
-		wantErr bool
+		name        string
+		profile     system.PlatformProfile
+		agent       model.AgentID
+		want        CommandSequence
+		wantErr     bool
+		errContains string
 	}{
 		{
 			name:    "claude-code on darwin uses npm without sudo",
@@ -367,10 +368,17 @@ func TestResolveAgentInstall(t *testing.T) {
 			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
 		},
 		{
-			name:    "opencode on alpine runs npm without sudo",
-			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
+			name:    "opencode on alpine writable npm prefix runs npm without sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk", NpmWritable: true},
 			agent:   model.AgentOpenCode,
 			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+		},
+		{
+			name:        "opencode on alpine non-writable npm prefix returns actionable error",
+			profile:     system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
+			agent:       model.AgentOpenCode,
+			wantErr:     true,
+			errContains: "gentle-ai install",
 		},
 		{
 			name:    "claude-code on windows uses npm without sudo",
@@ -419,6 +427,9 @@ func TestResolveAgentInstall(t *testing.T) {
 			}
 
 			if tt.wantErr {
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("ResolveAgentInstall() error = %q, want to contain %q", err.Error(), tt.errContains)
+				}
 				return
 			}
 
@@ -436,9 +447,9 @@ func TestUVInstallHint(t *testing.T) {
 		want    string
 	}{
 		{
-			name:    "alpine retains apk with standalone installer fallback",
+			name:    "alpine fallback installs curl before standalone installer",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
-			want:    "apk add --no-cache uv (requires community); otherwise: curl -LsSf https://astral.sh/uv/install.sh | sh",
+			want:    "apk add --no-cache uv (requires community); otherwise: apk add --no-cache curl && curl -LsSf https://astral.sh/uv/install.sh | sh",
 		},
 	}
 
