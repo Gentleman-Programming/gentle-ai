@@ -781,6 +781,12 @@ func TestCheckAll(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 
 		path := r.URL.Path
+		// codegraph is an npm-global tool: its "latest version" document comes
+		// from the npm registry shape ({"version": ...}), not a GitHub release.
+		if contains(path, "@colbymchenry/codegraph") {
+			json.NewEncoder(w).Encode(map[string]string{"version": "1.5.0"})
+			return
+		}
 		var release githubRelease
 		switch {
 		case contains(path, "gentle-ai"):
@@ -835,8 +841,8 @@ func TestCheckAll(t *testing.T) {
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
 	results := CheckAll(context.Background(), "1.5.0", profile)
 
-	if len(results) != 5 {
-		t.Fatalf("len(results) = %d, want 5", len(results))
+	if len(results) != 6 {
+		t.Fatalf("len(results) = %d, want 6", len(results))
 	}
 
 	// gentle-ai: 1.5.0 local == 1.5.0 remote → UpToDate
@@ -849,6 +855,10 @@ func TestCheckAll(t *testing.T) {
 	assertResult(t, results[2], "gga", NotInstalled, "", "2.0.0")
 	assertResult(t, results[3], "opencode-subagent-statusline", NotInstalled, "", "0.4.0")
 	assertResult(t, results[4], "opencode-sdd-engram-manage", NotInstalled, "", "1.1.7")
+
+	// codegraph: npm-global tool, binary not on PATH → NotInstalled,
+	// latest version resolved from the npm registry document.
+	assertResult(t, results[5], "codegraph", NotInstalled, "", "1.5.0")
 }
 
 func TestCheckSingleTool_EngramUsesBinaryReleaseChannel(t *testing.T) {
@@ -1249,8 +1259,8 @@ func TestParseVersionFromOutput(t *testing.T) {
 
 // TestRegistryContents verifies the registry has all expected tools.
 func TestRegistryContents(t *testing.T) {
-	if len(Tools) != 5 {
-		t.Fatalf("len(Tools) = %d, want 5", len(Tools))
+	if len(Tools) != 6 {
+		t.Fatalf("len(Tools) = %d, want 6", len(Tools))
 	}
 
 	expected := map[string]struct {
@@ -1262,6 +1272,7 @@ func TestRegistryContents(t *testing.T) {
 		"gga":                          {owner: "Gentleman-Programming", repo: "gentleman-guardian-angel"},
 		"opencode-subagent-statusline": {owner: "Joaquinvesapa", repo: "sub-agent-statusline"},
 		"opencode-sdd-engram-manage":   {owner: "j0k3r-dev-rgl", repo: "sdd-engram-plugin"},
+		"codegraph":                    {owner: "colbymchenry", repo: "codegraph"},
 	}
 
 	for _, tool := range Tools {

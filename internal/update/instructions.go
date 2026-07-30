@@ -33,6 +33,8 @@ func updateHint(tool ToolInfo, profile system.PlatformProfile) string {
 		return ggaHint(profile)
 	case "opencode-subagent-statusline", "opencode-sdd-engram-manage":
 		return "gentle-ai upgrade updates ~/.config/opencode npm deps, clears this plugin's @latest cache, then requires OpenCode restart/reload"
+	case "codegraph":
+		return "npm install -g @colbymchenry/codegraph@latest"
 	default:
 		return ""
 	}
