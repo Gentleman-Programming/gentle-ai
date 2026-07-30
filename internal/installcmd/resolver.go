@@ -179,6 +179,8 @@ func uvInstallHint(profile system.PlatformProfile) string {
 		return "sudo pacman -S --noconfirm uv"
 	case "dnf":
 		return "sudo dnf install -y uv"
+	case "emerge":
+		return "sudo emerge --ask=n --quiet uv"
 	case "winget":
 		return "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements"
 	default:
@@ -211,6 +213,8 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 		return CommandSequence{{"sudo", "pacman", "-S", "--noconfirm", dependency}}, nil
 	case "dnf":
 		return CommandSequence{{"sudo", "dnf", "install", "-y", dependency}}, nil
+	case "emerge":
+		return CommandSequence{{"sudo", "emerge", "--ask=n", "--quiet", dependency}}, nil
 	case "winget":
 		return CommandSequence{{"winget", "install", "--id", dependency, "-e", "--accept-source-agreements", "--accept-package-agreements"}}, nil
 	default:
@@ -233,7 +237,7 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 		return CommandSequence{
 			{"brew", "install", "anomalyco/tap/opencode"},
 		}, nil
-	case "apt", "pacman", "dnf":
+	case "apt", "pacman", "dnf", "emerge":
 		pkg := "opencode-ai@" + versions.OpenCode
 		if profile.NpmWritable {
 			return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
@@ -260,7 +264,7 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 			{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
 			{"brew", "reinstall", "gga"},
 		}, nil
-	case "apt", "pacman", "dnf":
+	case "apt", "pacman", "dnf", "emerge":
 		const tmpDir = "/tmp/gentleman-guardian-angel"
 		tagRef := "refs/tags/v" + versions.GGAVersion
 		return CommandSequence{

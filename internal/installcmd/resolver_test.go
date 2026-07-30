@@ -180,6 +180,12 @@ func TestResolveDependencyInstall(t *testing.T) {
 			want:    CommandSequence{{"sudo", "dnf", "install", "-y", "somepkg"}},
 		},
 		{
+			name:    "gentoo resolves emerge command",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroGentoo, PackageManager: "emerge"},
+			dep:     "somepkg",
+			want:    CommandSequence{{"sudo", "emerge", "--ask=n", "--quiet", "somepkg"}},
+		},
+		{
 			name:    "windows resolves winget command",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			dep:     "somepkg",
@@ -359,6 +365,12 @@ func TestResolveAgentInstall(t *testing.T) {
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", NpmWritable: true},
 			agent:   model.AgentOpenCode,
 			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+		},
+		{
+			name:    "opencode on gentoo system npm uses sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroGentoo, PackageManager: "emerge"},
+			agent:   model.AgentOpenCode,
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
 		},
 		{
 			name:    "claude-code on windows uses npm without sudo",
@@ -648,6 +660,19 @@ func TestResolveComponentInstall(t *testing.T) {
 		{
 			name:      "gga on fedora uses git clone and install.sh",
 			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
+			component: model.ComponentGGA,
+			want: CommandSequence{
+				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
+				{"mkdir", "-p", "/tmp/gentleman-guardian-angel"},
+				{"git", "init", "/tmp/gentleman-guardian-angel"},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "refs/tags/v" + versions.GGAVersion + ":refs/tags/v" + versions.GGAVersion},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "checkout", "-f", "refs/tags/v" + versions.GGAVersion},
+				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
+			},
+		},
+		{
+			name:      "gga on gentoo uses git clone and install.sh",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroGentoo, PackageManager: "emerge"},
 			component: model.ComponentGGA,
 			want: CommandSequence{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},

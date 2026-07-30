@@ -110,6 +110,18 @@ func TestInstallCommandByProfile(t *testing.T) {
 			},
 		},
 		{
+			name:    "gentoo uses git clone and install.sh",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroGentoo, PackageManager: "emerge"},
+			want: [][]string{
+				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
+				{"mkdir", "-p", "/tmp/gentleman-guardian-angel"},
+				{"git", "init", "/tmp/gentleman-guardian-angel"},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "refs/tags/v" + versions.GGAVersion + ":refs/tags/v" + versions.GGAVersion},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "checkout", "-f", "refs/tags/v" + versions.GGAVersion},
+				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
+			},
+		},
+		{
 			name: "unsupported package manager returns error",
 			profile: system.PlatformProfile{
 				OS:             "linux",
