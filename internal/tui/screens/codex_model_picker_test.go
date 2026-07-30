@@ -148,6 +148,37 @@ func TestRenderCodexModelPicker_ContainsTitle(t *testing.T) {
 	}
 }
 
+func TestRenderCodexModelPicker_StatesCodexScope(t *testing.T) {
+	tests := []struct {
+		name  string
+		state screens.CodexModelPickerState
+		want  string
+	}{
+		{
+			name:  "preset picker",
+			state: screens.NewCodexModelPickerState(),
+			want:  "Choose the reasoning_effort tier for Codex SDD phases. This configures Codex and is tied to your ChatGPT plan:",
+		},
+		{
+			name: "custom picker",
+			state: screens.CodexModelPickerState{
+				CustomMode:        screens.CodexCustomModePhaseList,
+				CustomAssignments: map[string]screens.CodexCustomAssignment{},
+			},
+			want: "Select a phase to assign its model and effort. This configures Codex; unassigned phases use Recommended defaults.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := screens.RenderCodexModelPicker(tt.state, 0)
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("expected scope text %q in render output, got:\n%s", tt.want, out)
+			}
+		})
+	}
+}
+
 func TestRenderCodexModelPicker_HasCustomRow(t *testing.T) {
 	// Custom row must appear alongside the 3 presets.
 	state := screens.NewCodexModelPickerState()

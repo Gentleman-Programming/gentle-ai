@@ -364,7 +364,7 @@ func renderPresetList(state ClaudeModelPickerState, cursor int) string {
 	b.WriteString("\n")
 	b.WriteString(styles.SubtextStyle.Render("Current: " + string(state.Preset)))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose how Claude models are assigned to each SDD phase:"))
+	b.WriteString(styles.SubtextStyle.Render("Choose how Claude Code models are assigned to each SDD phase:"))
 	b.WriteString("\n\n")
 
 	for idx, preset := range claudePresetOrder {
@@ -387,7 +387,7 @@ func renderCustomPhaseList(state ClaudeModelPickerState, cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("Custom Claude Assignments"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Select a phase to choose its model, then choose a supported effort level."))
+	b.WriteString(styles.SubtextStyle.Render("Select a phase to choose its Claude Code model, then choose a supported effort level."))
 	b.WriteString("\n\n")
 
 	for idx, phase := range claudePhases {

@@ -400,7 +400,7 @@ func renderCodexMainPicker(state CodexModelPickerState, cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("Codex Model Assignments"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose the reasoning_effort tier for Codex SDD phases (tied to your ChatGPT plan):"))
+	b.WriteString(styles.SubtextStyle.Render("Choose the reasoning_effort tier for Codex SDD phases. This configures Codex and is tied to your ChatGPT plan:"))
 	b.WriteString("\n\n")
 
 	for idx, preset := range codexPresetOrder {
@@ -434,7 +434,7 @@ func renderCodexCustomPhaseList(state CodexModelPickerState, cursor int) string 
 
 	b.WriteString(styles.TitleStyle.Render("Custom — Per-Phase Model & Effort"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Select a phase to assign its model and effort. Unassigned phases use Recommended defaults."))
+	b.WriteString(styles.SubtextStyle.Render("Select a phase to assign its model and effort. This configures Codex; unassigned phases use Recommended defaults."))
 	b.WriteString("\n\n")
 
 	for idx, phase := range codexCustomPhases {

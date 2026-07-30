@@ -173,8 +173,39 @@ func TestRenderClaudeModelPicker_CustomModeRendersFable(t *testing.T) {
 	if !strings.Contains(out, "[fable]") {
 		t.Errorf("expected [fable] tag in custom mode render, got:\n%s", out)
 	}
-	if !strings.Contains(out, "choose its model, then choose a supported effort") {
+	if !strings.Contains(out, "Select a phase to choose its Claude Code model, then choose a supported effort level.") {
 		t.Errorf("expected explicit model/effort help text, got:\n%s", out)
+	}
+}
+
+func TestRenderClaudeModelPicker_StatesClaudeCodeScope(t *testing.T) {
+	tests := []struct {
+		name  string
+		state ClaudeModelPickerState
+		want  string
+	}{
+		{
+			name:  "preset picker",
+			state: NewClaudeModelPickerState(),
+			want:  "Choose how Claude Code models are assigned to each SDD phase:",
+		},
+		{
+			name: "custom picker",
+			state: ClaudeModelPickerState{
+				InCustomMode:      true,
+				CustomAssignments: map[string]model.ClaudePhaseAssignment{},
+			},
+			want: "Select a phase to choose its Claude Code model, then choose a supported effort level.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := RenderClaudeModelPicker(tt.state, 0)
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("expected scope text %q in render output, got:\n%s", tt.want, out)
+			}
+		})
 	}
 }
 
