@@ -1,6 +1,7 @@
 package system
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -281,6 +282,7 @@ func TestInstallCommandsFullMatrix(t *testing.T) {
 		{OS: "linux", PackageManager: "apt", LinuxDistro: "ubuntu"},
 		{OS: "linux", PackageManager: "pacman", LinuxDistro: "arch"},
 		{OS: "linux", PackageManager: "dnf", LinuxDistro: LinuxDistroFedora},
+		{OS: "linux", PackageManager: "apk", LinuxDistro: LinuxDistroAlpine},
 	}
 
 	deps := []string{"git", "curl", "node", "go"}
@@ -302,5 +304,32 @@ func TestInstallCommandsFullMatrix(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAlpineDependencyInstallHintsAndCommands(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "apk", LinuxDistro: LinuxDistroAlpine}
+	tests := []struct {
+		name     string
+		dep      string
+		wantHint string
+		wantCmds [][]string
+	}{
+		{name: "git", dep: "git", wantHint: "apk add --no-cache git", wantCmds: [][]string{{"apk", "add", "--no-cache", "git"}}},
+		{name: "curl", dep: "curl", wantHint: "apk add --no-cache curl", wantCmds: [][]string{{"apk", "add", "--no-cache", "curl"}}},
+		{name: "node includes npm", dep: "node", wantHint: "apk add --no-cache nodejs npm", wantCmds: [][]string{{"apk", "add", "--no-cache", "nodejs", "npm"}}},
+		{name: "go", dep: "go", wantHint: "apk add --no-cache go", wantCmds: [][]string{{"apk", "add", "--no-cache", "go"}}},
+		{name: "npm comes with node", dep: "npm", wantHint: "npm is included with node — install node first"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if hint := InstallHintForDep(tt.dep, profile); hint != tt.wantHint {
+				t.Fatalf("InstallHintForDep(%q) = %q, want %q", tt.dep, hint, tt.wantHint)
+			}
+			if cmds := InstallCommandsForDep(tt.dep, profile); !reflect.DeepEqual(cmds, tt.wantCmds) {
+				t.Fatalf("InstallCommandsForDep(%q) = %v, want %v", tt.dep, cmds, tt.wantCmds)
+			}
+		})
 	}
 }

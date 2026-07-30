@@ -180,6 +180,12 @@ func TestResolveDependencyInstall(t *testing.T) {
 			want:    CommandSequence{{"sudo", "dnf", "install", "-y", "somepkg"}},
 		},
 		{
+			name:    "alpine resolves apk command",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
+			dep:     "somepkg",
+			want:    CommandSequence{{"apk", "add", "--no-cache", "somepkg"}},
+		},
+		{
 			name:    "windows resolves winget command",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			dep:     "somepkg",
@@ -361,6 +367,12 @@ func TestResolveAgentInstall(t *testing.T) {
 			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
 		},
 		{
+			name:    "opencode on alpine runs npm without sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
+			agent:   model.AgentOpenCode,
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+		},
+		{
 			name:    "claude-code on windows uses npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", NpmWritable: true},
 			agent:   model.AgentClaudeCode,
@@ -412,6 +424,28 @@ func TestResolveAgentInstall(t *testing.T) {
 
 			if !reflect.DeepEqual(command, tt.want) {
 				t.Fatalf("ResolveAgentInstall() = %v, want %v", command, tt.want)
+			}
+		})
+	}
+}
+
+func TestUVInstallHint(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile system.PlatformProfile
+		want    string
+	}{
+		{
+			name:    "alpine uses apk",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
+			want:    "apk add --no-cache uv",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := uvInstallHint(tt.profile); got != tt.want {
+				t.Fatalf("uvInstallHint() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -650,6 +684,20 @@ func TestResolveComponentInstall(t *testing.T) {
 			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
 			component: model.ComponentGGA,
 			want: CommandSequence{
+				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
+				{"mkdir", "-p", "/tmp/gentleman-guardian-angel"},
+				{"git", "init", "/tmp/gentleman-guardian-angel"},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "refs/tags/v" + versions.GGAVersion + ":refs/tags/v" + versions.GGAVersion},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "checkout", "-f", "refs/tags/v" + versions.GGAVersion},
+				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
+			},
+		},
+		{
+			name:      "gga on alpine installs git and bash before cleanup and installation",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
+			component: model.ComponentGGA,
+			want: CommandSequence{
+				{"apk", "add", "--no-cache", "git", "bash"},
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
 				{"mkdir", "-p", "/tmp/gentleman-guardian-angel"},
 				{"git", "init", "/tmp/gentleman-guardian-angel"},
