@@ -586,7 +586,7 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	targets := backupTargets(r.homeDir, r.workspaceDir, r.scope, r.selection, r.resolved)
 	prepare := []pipeline.Step{
-		checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile, homeDir: r.homeDir, selection: r.selection},
+		checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile, homeDir: r.homeDir, selection: r.selection, resolved: r.resolved, channel: r.channel},
 		prepareBackupStep{
 			id:          "prepare:backup-snapshot",
 			snapshotter: backup.NewSnapshotter(),
@@ -2248,6 +2248,8 @@ type checkDependenciesStep struct {
 	profile   system.PlatformProfile
 	homeDir   string
 	selection model.Selection
+	resolved  planner.ResolvedPlan
+	channel   InstallChannel
 }
 
 func (s checkDependenciesStep) ID() string {
@@ -2255,6 +2257,18 @@ func (s checkDependenciesStep) ID() string {
 }
 
 func (s checkDependenciesStep) Run() error {
+	if s.channel.IsBeta() {
+		for _, component := range s.resolved.OrderedComponents {
+			if component != model.ComponentEngram {
+				continue
+			}
+			if _, err := cmdLookPath("go"); err != nil {
+				return fmt.Errorf("beta Engram requires Go in PATH before installation. Install Go from https://go.dev/dl/ and restart your terminal")
+			}
+			break
+		}
+	}
+
 	// Run detection but do NOT write to stdout/stderr — this step runs
 	// inside the Bubble Tea alternate screen in TUI mode, so any raw
 	// output corrupts the display (see issue #2). Missing deps are
