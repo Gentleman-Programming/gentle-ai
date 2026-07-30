@@ -202,8 +202,6 @@ internal/sddstatus/status.go	reportTextIsClearlyPassing
 internal/sddstatus/status.go	reportValueIsBenign
 internal/sddstatus/status.go	stripMarkdownSignal
 internal/storage/bytes.go	FormatBytes
-internal/sysproc/sysproc_other.go	HideBackgroundConsole
-internal/sysproc/sysproc_other.go	PreserveConsole
 internal/system/install_deps.go	InstallCommandsForDep
 internal/system/install_deps.go	installCommandsBrew
 internal/system/install_deps.go	installCommandsCurl

@@ -3,8 +3,14 @@
 package sysproc
 
 import (
+	"errors"
+	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestHideConsole(t *testing.T) {
@@ -19,21 +25,39 @@ func TestHideConsole(t *testing.T) {
 	}
 }
 
-func TestHideBackgroundConsoleAndPreserveConsoleScoping(t *testing.T) {
-	t.Run("background subprocess receives CREATE_NO_WINDOW", func(t *testing.T) {
-		cmd := exec.Command("cmd.exe", "/c", "echo", "bg")
-		HideBackgroundConsole(cmd)
-		if cmd.SysProcAttr == nil || (cmd.SysProcAttr.CreationFlags&CREATE_NO_WINDOW) == 0 {
-			t.Fatal("expected HideBackgroundConsole to set CREATE_NO_WINDOW flag on Windows")
-		}
-	})
+func TestHideConsoleFromNoConsoleParentPreservesOutputAndExitStatus(t *testing.T) {
+	const roleEnv = "GENTLE_AI_NO_CONSOLE_TEST_ROLE"
+	getConsoleWindow := windows.NewLazySystemDLL("kernel32.dll").NewProc("GetConsoleWindow")
+	consoleWindow, _, _ := getConsoleWindow.Call()
 
-	t.Run("explicit preserve console clears CREATE_NO_WINDOW flag", func(t *testing.T) {
-		cmd := exec.Command("cmd.exe", "/c", "echo", "interactive")
-		HideBackgroundConsole(cmd)
-		PreserveConsole(cmd)
-		if cmd.SysProcAttr != nil && (cmd.SysProcAttr.CreationFlags&CREATE_NO_WINDOW) != 0 {
-			t.Fatal("expected PreserveConsole to clear CREATE_NO_WINDOW flag on Windows")
+	switch os.Getenv(roleEnv) {
+	case "child":
+		if consoleWindow != 0 {
+			t.Fatalf("child acquired console window %#x", consoleWindow)
 		}
-	})
+		fmt.Print("hidden-child-output")
+		os.Exit(7)
+	case "parent":
+		if consoleWindow != 0 {
+			t.Fatalf("parent acquired console window %#x", consoleWindow)
+		}
+		cmd := exec.Command(os.Args[0], "-test.run=^TestHideConsoleFromNoConsoleParentPreservesOutputAndExitStatus$")
+		cmd.Env = append(os.Environ(), roleEnv+"=child")
+		HideConsole(cmd)
+		output, err := cmd.CombinedOutput()
+		var exitErr *exec.ExitError
+		if !strings.Contains(string(output), "hidden-child-output") || !errors.As(err, &exitErr) || exitErr.ExitCode() != 7 {
+			t.Fatalf("hidden child output = %q, error = %v", output, err)
+		}
+		fmt.Print("no-console-parent-ok")
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHideConsoleFromNoConsoleParentPreservesOutputAndExitStatus$")
+	cmd.Env = append(os.Environ(), roleEnv+"=parent")
+	HideConsole(cmd)
+	output, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "no-console-parent-ok") {
+		t.Fatalf("no-console parent output = %q, error = %v", output, err)
+	}
 }

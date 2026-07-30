@@ -61,6 +61,7 @@ var (
 	runCommand                   = executeCommand
 	cmdLookPath                  = exec.LookPath
 	streamCommandOutput          = true
+	executeCommandFactory        = exec.Command
 	goEnv                        = defaultGoEnv
 	installCommunityTool         = communitytool.Install
 	installCommunityToolWithHome = communitytool.InstallWithHome
@@ -1632,8 +1633,7 @@ func runCommandSequence(commands [][]string) error {
 }
 
 func executeCommand(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	sysproc.HideConsole(cmd)
+	cmd := executeCommandFactory(name, args...)
 
 	if streamCommandOutput {
 		cmd.Stdout = os.Stdout
@@ -1641,6 +1641,7 @@ func executeCommand(name string, args ...string) error {
 		return cmd.Run()
 	}
 
+	sysproc.HideConsole(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if len(output) > 0 {
