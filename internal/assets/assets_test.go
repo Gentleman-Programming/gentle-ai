@@ -367,6 +367,47 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 	}
 }
 
+// TestSDDInitDiscoversMonorepoSubProjects pins the multi-root detection
+// contract. A workspace whose stack markers live only in sub-directories used
+// to be classified as "unclassified" with no runner, because detection was
+// anchored at the workspace root (issue #810). The skill must discover every
+// project root and keep unlike sub-projects separable.
+func TestSDDInitDiscoversMonorepoSubProjects(t *testing.T) {
+	skill := MustRead("skills/sdd-init/SKILL.md")
+	for _, want := range []string{
+		"Discover every project root before classifying",
+		"never \"unclassified\"",
+		"per sub-project",
+		"two or more project roots",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Fatalf("skills/sdd-init/SKILL.md missing monorepo contract %q", want)
+		}
+	}
+
+	details := MustRead("skills/sdd-init/references/init-details.md")
+	for _, want := range []string{
+		"Project Root Discovery",
+		"Cargo.toml",
+		"pyproject.toml",
+		"node_modules",
+		"go.work",
+		"projects:",
+	} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("skills/sdd-init/references/init-details.md missing discovery rule %q", want)
+		}
+	}
+
+	// The depth bound and the skip list are what keep the walk affordable on a
+	// large tree; losing either turns discovery into a full-repository scan.
+	for _, want := range []string{"two** directory levels", "ignored by `.gitignore`"} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("skills/sdd-init/references/init-details.md lost its scan bound %q", want)
+		}
+	}
+}
+
 func TestSDDVerifyAuthorityPreflightDenialEnvelopeContract(t *testing.T) {
 	const denialFields = `authority_only_failure: true
 missing_review_authority: true
