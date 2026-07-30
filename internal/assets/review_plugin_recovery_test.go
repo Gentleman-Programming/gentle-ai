@@ -276,25 +276,48 @@ func TestReviewPluginSurfacesNativeGitTrustRefusal(t *testing.T) {
 // relaunch the reviewer, while the native diagnostic prose (which can embed
 // payload text) stays out of the transcript.
 func TestReviewPluginSurfacesAdmissionRejectionClass(t *testing.T) {
-	native := "Error: reviewer artifact admission out_of_scope: candidate-causal findings are not proven by repository-derived changed-line evidence"
-	message := runReviewPluginScenario(t, "after-opaque", native)
-	if message == "NO_ERROR" {
-		t.Fatal("plugin did not fail despite an always-failing native binary")
+	tests := []struct {
+		name       string
+		decision   string
+		diagnostic string
+	}{
+		{
+			name:       "out-of-scope",
+			decision:   "out_of_scope",
+			diagnostic: "candidate-causal findings are not proven by repository-derived changed-line evidence",
+		},
+		{
+			name:       "incomplete-with-zero-findings",
+			decision:   "incomplete",
+			diagnostic: "zero-findings-native-diagnostic-must-stay-opaque",
+		},
 	}
-	if !strings.Contains(message, "rejected the reviewer result as out_of_scope") {
-		t.Fatalf("admission rejection lost its typed decision class: %s", message)
-	}
-	if !strings.Contains(message, "relaunch this lens reviewer") {
-		t.Fatalf("admission rejection carries no instruction that can actually succeed: %s", message)
-	}
-	if strings.Contains(message, "retry the same opaque binding") {
-		t.Fatalf("plugin still advises retrying a deterministically refused result: %s", message)
-	}
-	if strings.Contains(message, "changed-line evidence") {
-		t.Fatalf("plugin forwarded native admission diagnostic prose through an opaque binding: %s", message)
-	}
-	if !strings.Contains(message, reviewPluginPayloadMarker) {
-		t.Fatalf("admission rejection did not preserve the reviewer payload: %s", message)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			native := "Error: reviewer artifact admission " + tt.decision + ": " + tt.diagnostic
+			message := runReviewPluginScenario(t, "after-opaque", native)
+			if message == "NO_ERROR" {
+				t.Fatal("plugin did not fail despite an always-failing native binary")
+			}
+			if !strings.Contains(message, "rejected the reviewer result as "+tt.decision) {
+				t.Fatalf("admission rejection lost its typed decision class: %s", message)
+			}
+			if !strings.Contains(message, "relaunch this lens reviewer") {
+				t.Fatalf("admission rejection carries no instruction that can actually succeed: %s", message)
+			}
+			if strings.Contains(message, "retry the same opaque binding") {
+				t.Fatalf("plugin still advises retrying a deterministically refused result: %s", message)
+			}
+			if strings.Contains(message, tt.diagnostic) {
+				t.Fatalf("plugin forwarded native admission diagnostic prose through an opaque binding: %s", message)
+			}
+			if tt.decision == "incomplete" && strings.Contains(message, "severe findings must anchor") {
+				t.Fatalf("generic admission rejection included severe-finding-specific guidance: %s", message)
+			}
+			if !strings.Contains(message, reviewPluginPayloadMarker) {
+				t.Fatalf("admission rejection did not preserve the reviewer payload: %s", message)
+			}
+		})
 	}
 }
 
