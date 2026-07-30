@@ -436,9 +436,9 @@ func TestUVInstallHint(t *testing.T) {
 		want    string
 	}{
 		{
-			name:    "alpine requires community before using apk",
+			name:    "alpine retains apk with standalone installer fallback",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
-			want:    "enable the Alpine community repository, then run: apk add --no-cache uv",
+			want:    "apk add --no-cache uv (requires community); otherwise: curl -LsSf https://astral.sh/uv/install.sh | sh",
 		},
 	}
 
