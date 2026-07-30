@@ -2,7 +2,7 @@
 
 ## Testing Capability Checklist
 
-- Test runner: `package.json` scripts/deps, `pyproject.toml`, `pytest.ini`, `go.mod`, `Cargo.toml`, `Makefile`. For monorepos or multi-project layouts, recursively scan relevant subdirectories for project files (e.g. `subproject/pyproject.toml`, `subproject/Cargo.toml`, `subproject/package.json`).
+- Test runner: `package.json` scripts/deps, `pyproject.toml`, `pytest.ini`, `go.mod`, `Cargo.toml`, `Makefile`.
 - Test layers: unit runner; integration libraries (`testing-library`, `httpx`, `httptest`, `WebApplicationFactory`); E2E tools (`playwright`, `cypress`, `selenium`, `chromedp`).
 - Coverage: `vitest --coverage`, `jest --coverage`, `c8`, `pytest-cov`, `go test -cover`, `coverlet`.
 - Quality: linter, type checker, formatter commands.

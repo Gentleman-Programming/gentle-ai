@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
@@ -5512,9 +5513,9 @@ func TestFindProjectRootEmptyDirReturnsNotFound(t *testing.T) {
 		t.Fatalf("MkdirAll(subDir): %v", err)
 	}
 
-	got, ok := findProjectRoot(subDir)
+	got, ok := findProjectRootWithin(subDir, emptyDir)
 	if ok || got != "" {
-		t.Fatalf("findProjectRoot(%q) = (%q, %v), want (\"\", false)", subDir, got, ok)
+		t.Fatalf("findProjectRootWithin(%q, %q) = (%q, %v), want (\"\", false)", subDir, emptyDir, got, ok)
 	}
 }
 
@@ -5546,9 +5547,23 @@ func TestFindProjectRootDeepNestedMonorepo(t *testing.T) {
 		t.Fatalf("write pnpm-workspace.yaml: %v", err)
 	}
 
-	got, ok := findProjectRoot(deepDir)
-	if !ok || got != root {
-		t.Fatalf("findProjectRoot(%q) = (%q, %v), want (%q, true)", deepDir, got, ok, root)
+	type result struct {
+		root string
+		ok   bool
+	}
+	results := make(chan result, 1)
+	go func() {
+		got, ok := findProjectRoot(deepDir)
+		results <- result{root: got, ok: ok}
+	}()
+
+	select {
+	case result := <-results:
+		if !result.ok || result.root != root {
+			t.Fatalf("findProjectRoot(%q) = (%q, %v), want (%q, true)", deepDir, result.root, result.ok, root)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("findProjectRoot did not reach the monorepo root within one second")
 	}
 }
 

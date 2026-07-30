@@ -161,10 +161,20 @@ type bootstrapper interface {
 // the first one — we keep walking to find the highest ancestor with package.json
 // (or a monorepo root marker above it).
 func findProjectRoot(dir string) (string, bool) {
+	return findProjectRootWithin(dir, "")
+}
+
+// findProjectRootWithin walks upward from dir until it finds a project root or
+// reaches boundary. An empty boundary preserves findProjectRoot's production
+// behavior of walking to the filesystem root.
+func findProjectRootWithin(dir, boundary string) (string, bool) {
 	if dir == "" {
 		return "", false
 	}
 	current := filepath.Clean(dir)
+	if boundary != "" {
+		boundary = filepath.Clean(boundary)
+	}
 	var bestCandidate string // best weak (package.json-only) match found so far
 
 	for {
@@ -185,6 +195,9 @@ func findProjectRoot(dir string) (string, bool) {
 		// the root package.json is the authoritative project boundary.
 		if _, err := os.Stat(filepath.Join(current, "package.json")); err == nil {
 			bestCandidate = current
+		}
+		if current == boundary {
+			break
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
