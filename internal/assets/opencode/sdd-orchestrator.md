@@ -422,3 +422,39 @@ When launching `sdd-apply` for a continuation batch:
 | Apply progress  | `sdd/{change-name}/apply-progress` |
 | Verify report   | `sdd/{change-name}/verify-report`  |
 | Archive report  | `sdd/{change-name}/archive-report` |
+
+#### Graph-First Retrieval Injection (MANDATORY when graph exists)
+
+When launching `sdd-explore`, `sdd-apply`, `sdd-design`, or `sdd-verify`, the orchestrator
+MUST check if the project has a knowledge graph at `graphify-out/graph.json`. If it does,
+inject graph-first retrieval so sub-agents query the graph before reading implementation files.
+
+**Detection**: Before a matching sub-agent launch, check whether `graphify-out/graph.json`
+exists relative to `cwd` (e.g. `ls graphify-out/graph.json 2>/dev/null`). Cache the result
+for the session. If the file does not exist, skip injection silently.
+
+| Phase | Reason |
+|---|---|
+| `sdd-explore` | Find relevant files before reading blindly |
+| `sdd-apply` | Locate exact files to change + related tests |
+| `sdd-design` | Understand coupling without reading everything |
+| `sdd-verify` | Find affected areas + test files |
+
+**Pre-4-file-rule optimization**: Before the 4-file rule fires (reading 4+ files triggers
+delegation), first run a quick `graphify query "<question>" --budget 400`. If the graph
+can answer the question directly or narrow it to 1-2 files, skip delegation entirely.
+
+**Injection**: Resolve the `graph-first-retrieval` skill path from the skill registry and
+include it in the sub-agent prompt under `## Skills to load before work`. Add the following
+instruction to the sub-agent prompt:
+
+```
+GRAPH-FIRST ACTIVE — graphify-out/graph.json exists in this project.
+Query the knowledge graph via `graphify query "<question>"` BEFORE reading files.
+After editing code, run `graphify update .` (AST-only, zero API cost).
+```
+
+**Fallback**: If the `graphify` CLI is unavailable or `graphify-out/graph.json` does not
+exist, skip injection silently. Do not fail the launch. The skill registry will not contain
+this entry if graphify is not installed, so the orchestrator's standard registry-based
+resolution handles the fallback transparently.
