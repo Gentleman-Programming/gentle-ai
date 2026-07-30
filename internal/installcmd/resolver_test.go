@@ -436,9 +436,9 @@ func TestUVInstallHint(t *testing.T) {
 		want    string
 	}{
 		{
-			name:    "alpine uses apk",
+			name:    "alpine requires community before using apk",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
-			want:    "apk add --no-cache uv",
+			want:    "enable the Alpine community repository, then run: apk add --no-cache uv",
 		},
 	}
 
