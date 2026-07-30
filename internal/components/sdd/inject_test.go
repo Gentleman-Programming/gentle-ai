@@ -4669,6 +4669,8 @@ func TestInjectCodexWritesSDDOrchestratorAndSkills(t *testing.T) {
 		"`followup_task`",
 		"`interrupt_agent`",
 		"Completed or idle agents remain reusable",
+		"Repeat `wait_agent(timeout_ms=<bounded timeout>)` and `list_agents()` until the target agent reaches a terminal state.",
+		"If the target reaches a non-success terminal state, stop and surface its final output or status",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("agents.md missing Codex multi-agent v2 lifecycle fragment %q", want)

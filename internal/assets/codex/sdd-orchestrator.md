@@ -122,17 +122,25 @@ For each phase:
 1. Look up the phase's `reasoning_effort` **AND** `model` values in the **Model Profiles** table below (the values are preset-driven and written by gentle-ai — do not assume fixed tiers). This applies both for preset (per-carril) tables and Custom (per-phase) tables — always pass the model and effort shown in the table for that phase.
 2. `spawn_agent` with `task_name`, the phase prompt as `message`, `reasoning_effort` set to the tier value, and `model` set to the table's Model value for that phase. The `spawn_agent` tool has NO `profile` parameter — tier selection is the `reasoning_effort` argument, not a profile name.
 3. Set `fork_turns: "none"` whenever you override `reasoning_effort` or `model`. A full-history fork (the default) REJECTS these overrides, so the override is silently ignored unless `fork_turns` is `"none"`.
-4. Call `wait_agent(timeout_ms=<bounded timeout>)`. It waits for mailbox updates from
-   any live agent and does not accept a task name.
-5. Correlate the notification with `list_agents()` and the canonical task name returned
-   by `spawn_agent`.
-6. Verify the artifact was persisted before launching the next phase.
+4. Repeat `wait_agent(timeout_ms=<bounded timeout>)` and `list_agents()` until the target agent reaches a terminal state.
+   `wait_agent` returns on any mailbox update, so an update from another agent or a timeout
+   does not prove that the target completed.
+5. After each wait, correlate the notification with the canonical task name returned by
+   `spawn_agent` and inspect that target's current state in `list_agents()`.
+6. If the target reaches a non-success terminal state, stop and surface its final output or status;
+   do not verify artifacts or launch dependent work.
+7. Only after successful terminal completion, verify the artifact was persisted before
+   launching the next phase.
 
 Example — launching `sdd-design` with the values from its generated table row:
 ```
 spawn_agent(task_name="sdd-design", message=<design prompt>, model="<assigned-model>", reasoning_effort="<assigned-effort>", fork_turns="none")
-wait_agent(timeout_ms=300000)
-list_agents()
+repeat:
+  wait_agent(timeout_ms=300000)
+  list_agents()
+until target reaches a terminal state
+if target terminal state is not successful:
+  stop and surface target final output or status
 ```
 
 Note: the `~/.codex/<tier>.config.toml` profile files apply to whole CLI sessions launched with `codex --profile <name>`. They do NOT apply to spawned sub-agents — for those, pass `reasoning_effort` and `model` directly as shown above.
