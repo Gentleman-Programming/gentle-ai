@@ -22,6 +22,9 @@ var (
 	snapshotRepoTemplateOnce sync.Once
 	snapshotRepoTemplateDir  string
 	snapshotRepoTemplateErr  error
+
+	mergeTreeWriteTreeOnce      sync.Once
+	mergeTreeWriteTreeSupported bool
 )
 
 func TestMain(m *testing.M) {
@@ -1694,6 +1697,29 @@ func requireSnapshotGit(t *testing.T) {
 	}
 }
 
+// gitSupportsMergeTreeWriteTree reports whether the git binary on PATH
+// supports `git merge-tree --write-tree`, which was introduced in Git 2.38.
+// The repo must have a commit at HEAD; pre-2.38 git only understands the
+// legacy `merge-tree <base-tree> <branch1> <branch2>` mode and exits
+// non-zero on the --write-tree flag.
+func gitSupportsMergeTreeWriteTree(repo string) bool {
+	return gitSnapshotSucceeds(repo, "merge-tree", "--write-tree", "HEAD", "HEAD")
+}
+
+func requireMergeTreeWriteTree(t *testing.T) {
+	t.Helper()
+	mergeTreeWriteTreeOnce.Do(func() {
+		template, err := snapshotRepoTemplate()
+		if err != nil {
+			return
+		}
+		mergeTreeWriteTreeSupported = gitSupportsMergeTreeWriteTree(template)
+	})
+	if !mergeTreeWriteTreeSupported {
+		t.Skip("git on PATH does not support merge-tree --write-tree (requires Git 2.38+)")
+	}
+}
+
 func writeSnapshotFile(t *testing.T, repo, name, content string) {
 	t.Helper()
 	path := filepath.Join(repo, name)
@@ -1718,4 +1744,37 @@ func gitSnapshot(t *testing.T, repo string, args ...string) string {
 func gitSnapshotSucceeds(repo string, args ...string) bool {
 	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
 	return cmd.Run() == nil
+}
+
+func TestGitSupportsMergeTreeWriteTreeProbe(t *testing.T) {
+	requireSnapshotGit(t)
+	t.Run("legacy git without --write-tree reports unsupported", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("PATH stub script requires a POSIX shell")
+		}
+		stubDir := t.TempDir()
+		stub := "#!/bin/sh\n" +
+			"for arg in \"$@\"; do\n" +
+			"  case \"$arg\" in\n" +
+			"  --version) echo \"git version 2.34.1\"; exit 0 ;;\n" +
+			"  --write-tree) echo \"error: unknown option \\`write-tree'\" >&2; exit 129 ;;\n" +
+			"  esac\n" +
+			"done\n" +
+			"exit 0\n"
+		if err := os.WriteFile(filepath.Join(stubDir, "git"), []byte(stub), 0o755); err != nil {
+			t.Fatalf("WriteFile(stub git): %v", err)
+		}
+		t.Setenv("PATH", stubDir)
+		if gitSupportsMergeTreeWriteTree(t.TempDir()) {
+			t.Fatal("stubbed git 2.34 must report merge-tree --write-tree as unsupported")
+		}
+	})
+	t.Run("probe agrees with a direct merge-tree --write-tree invocation", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		head := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+		want := gitSnapshotSucceeds(repo, "merge-tree", "--write-tree", head, head)
+		if got := gitSupportsMergeTreeWriteTree(repo); got != want {
+			t.Fatalf("gitSupportsMergeTreeWriteTree = %t, direct git merge-tree --write-tree = %t", got, want)
+		}
+	})
 }

@@ -88,7 +88,7 @@ An issue **without** that label is usually waiting on information (`status:needs
 
 - Go 1.24+
 - Docker (for E2E tests)
-- Git
+- Git 2.38+ (the pre-PR compatible-base-advance gate and its tests use `git merge-tree --write-tree`)
 
 ### Clone and Build
 

@@ -488,6 +488,7 @@ func TestCompactPrePRChainRejectsIncompatibleSelectedBase(t *testing.T) {
 }
 
 func TestCompactPrePRChainRequiresSignedCompatibleBaseAdvance(t *testing.T) {
+	requireMergeTreeWriteTree(t)
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -533,6 +534,7 @@ func TestCompactPrePRChainRequiresSignedCompatibleBaseAdvance(t *testing.T) {
 }
 
 func TestCompactPrePRChainRejectsPredecessorTrustAfterCompatibleAdvanceRecoveryRotation(t *testing.T) {
+	requireMergeTreeWriteTree(t)
 	predecessorPublicKey, predecessorPrivateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)

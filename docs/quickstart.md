@@ -32,6 +32,7 @@
 
 ### All platforms
 
+- Git 2.38+ (the pre-PR compatible-base-advance gate uses `git merge-tree --write-tree`).
 - Go 1.24+ (for building from source).
 - Node.js 18+ and npm: `gentle-ai install` checks these as required prerequisites on every platform and prints a warning with a distro-specific install hint (see above) if either is missing — regardless of which agents/components you select. It does not install them for you. They are strictly required if you select any agent or component installed via `npm install -g` (most agent integrations, plus the CodeGraph community tool).
 - Pi installed and available as `pi` on `PATH` if you select the Pi agent.
