@@ -129,6 +129,101 @@ func TestAssessTargetStatusDerivesReceiptTruthWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestAssessTargetStatusRetainsApprovedReceiptForExactStagedIntendedTransition(t *testing.T) {
+	requireSnapshotGit(t)
+	tests := []struct {
+		name        string
+		stage       func(t *testing.T, repo string)
+		wantCurrent bool
+	}{
+		{
+			name: "all reviewed intended paths staged exactly",
+			stage: func(t *testing.T, repo string) {
+				gitSnapshot(t, repo, "add", "--", "tracked.txt", "first.txt", "second.txt")
+			},
+			wantCurrent: true,
+		},
+		{
+			name: "only a subset of intended paths staged",
+			stage: func(t *testing.T, repo string) {
+				gitSnapshot(t, repo, "add", "--", "tracked.txt", "first.txt")
+			},
+		},
+		{
+			name: "additional unreviewed staged path",
+			stage: func(t *testing.T, repo string) {
+				writeSnapshotFile(t, repo, "extra.txt", "not reviewed\n")
+				gitSnapshot(t, repo, "add", "--", "tracked.txt", "first.txt", "second.txt", "extra.txt")
+			},
+		},
+		{
+			name: "reviewed staged content changed",
+			stage: func(t *testing.T, repo string) {
+				writeSnapshotFile(t, repo, "first.txt", "changed after review\n")
+				gitSnapshot(t, repo, "add", "--", "tracked.txt", "first.txt", "second.txt")
+			},
+		},
+		{
+			name: "reviewed staged mode changed",
+			stage: func(t *testing.T, repo string) {
+				gitSnapshot(t, repo, "add", "--", "tracked.txt", "first.txt", "second.txt")
+				gitSnapshot(t, repo, "update-index", "--chmod=+x", "--", "first.txt")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			writeSnapshotFile(t, repo, "tracked.txt", "reviewed tracked change\n")
+			for _, path := range []string{"first.txt", "second.txt"} {
+				writeSnapshotFile(t, repo, path, "reviewed "+path+"\n")
+			}
+			lineage := "status-staged-intended-" + strings.ReplaceAll(tt.name, " ", "-")
+			state, _, _ := approvedCompactCurrentChangesFixture(t, repo, lineage, []string{"first.txt", "second.txt"})
+			tt.stage(t, repo)
+			assessment, err := AssessCompactGateTarget(context.Background(), repo, state, NativeGateRequestInput{
+				Gate: GatePreCommit, LineageID: lineage,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			request := TargetStatusRequest{Target: Target{
+				Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{},
+			}, LineageID: lineage}
+			explicit, err := AssessTargetStatus(context.Background(), repo, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.LineageID = ""
+			unqualified, err := AssessTargetStatus(context.Background(), repo, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if tt.wantCurrent {
+				if assessment.Applicability != CompactGateTargetExact {
+					t.Fatalf("exact staged pre-commit assessment = %#v, expected %#v", assessment, state.CurrentSnapshot)
+				}
+				if explicit.Applicability != TargetApplicabilityCurrent || explicit.Action != TargetStatusActionValidate ||
+					explicit.State != StateApproved || explicit.ReceiptIdentity == "" || explicit.LineageID != lineage {
+					t.Fatalf("explicit staged status = %#v", explicit)
+				}
+				if unqualified.Applicability != TargetApplicabilityCurrent || unqualified.Action != TargetStatusActionValidate ||
+					unqualified.LineageID != explicit.LineageID || unqualified.ReceiptIdentity != explicit.ReceiptIdentity ||
+					unqualified.AuthorityTargetIdentity != state.CurrentSnapshot.Identity {
+					t.Fatalf("unqualified staged status = %#v, explicit %#v", unqualified, explicit)
+				}
+				return
+			}
+			if explicit.Applicability == TargetApplicabilityCurrent || explicit.Action == TargetStatusActionValidate ||
+				unqualified.Applicability == TargetApplicabilityCurrent || unqualified.Action == TargetStatusActionValidate {
+				t.Fatalf("inexact staged status became current: explicit %#v, unqualified %#v", explicit, unqualified)
+			}
+		})
+	}
+}
+
 func TestAssessTargetStatusClassifiesAllApplicabilityStates(t *testing.T) {
 	requireSnapshotGit(t)
 	request := TargetStatusRequest{Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}}

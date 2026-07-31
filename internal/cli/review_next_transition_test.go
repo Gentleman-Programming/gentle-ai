@@ -74,6 +74,94 @@ func TestValidatingEvidenceCollectionUnblocksFinalizeAndPreCommit(t *testing.T) 
 	}
 }
 
+func TestNegotiatedPreCommitStatusRetainsApprovedStagedIntendedReceipt(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	for _, path := range []string{"first.txt", "second.txt"} {
+		if err := os.WriteFile(filepath.Join(repo, path), []byte("reviewed "+path+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lineage := "next-transition-staged-intended"
+	var startedOutput bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, &startedOutput); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedOutput.Bytes(), &started)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for order, lens := range record.State.SelectedLenses {
+		input := filepath.Join(t.TempDir(), fmt.Sprintf("result-%d.json", order))
+		if err := os.WriteFile(input, admittedReviewerPayloadForTest(t, repo, record, lens, order), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := RunReviewCaptureResult([]string{
+			"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+			"--lens", lens, "--order", fmt.Sprint(order), "--input", input,
+		}, &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--captured-results"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	record, err = store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := filepath.Join(t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(evidence, []byte("verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReview([]string{
+		"capture-evidence", "--cwd", repo, "--lineage", lineage, "--target", record.State.CurrentSnapshot.Identity,
+		"--expected-revision", record.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidence,
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--captured-evidence"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "--", "first.txt", "second.txt")
+
+	status := func(selector ...string) ReviewTargetStatusResult {
+		t.Helper()
+		args := []string{
+			"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo,
+			"--projection", string(reviewtransaction.ProjectionStaged), "--gate", string(reviewtransaction.GatePreCommit),
+		}
+		args = append(args, selector...)
+		var output bytes.Buffer
+		if err := RunReview(args, &output); err != nil {
+			t.Fatalf("negotiated staged status: %v\n%s", err, output.String())
+		}
+		var result ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &result)
+		return result
+	}
+
+	explicit := status("--lineage", lineage)
+	unqualified := status()
+	for _, result := range []ReviewTargetStatusResult{explicit, unqualified} {
+		if result.Applicability != reviewtransaction.TargetApplicabilityCurrent ||
+			result.Action != reviewtransaction.TargetStatusActionValidate || result.Receipt.Status != ReviewReceiptPresent ||
+			result.Authority == nil || result.Authority.LineageID != lineage || result.NextTransition == nil ||
+			result.NextTransition.Execute == nil || result.NextTransition.Execute.Operation != "review.validate" {
+			t.Fatalf("approved staged receipt status = %#v", result)
+		}
+	}
+	if !reflect.DeepEqual(explicit.Authority, unqualified.Authority) || explicit.Receipt != unqualified.Receipt ||
+		explicit.NextTransition.Execute.Operation != unqualified.NextTransition.Execute.Operation {
+		t.Fatalf("explicit and unqualified staged status diverged: explicit %#v, unqualified %#v", explicit, unqualified)
+	}
+}
+
 func TestFinalizeNextTransitionBindsCorrectedCurrentSnapshot(t *testing.T) {
 	initialTarget := strings.Repeat("a", 64)
 	currentTarget := strings.Repeat("b", 64)

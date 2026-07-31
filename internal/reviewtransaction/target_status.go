@@ -239,6 +239,21 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		} else if compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
 			candidates = append(candidates, candidate)
 			continue
+		} else if state.State == StateApproved && candidate.receiptPublished && candidate.receiptCanonical &&
+			(state.CurrentSnapshot.Projection == "" || state.CurrentSnapshot.Projection == ProjectionWorkspace) && live.Projection == ProjectionStaged {
+			// PRE-COMMIT represents reviewed intended-untracked files in the index.
+			// Reuse its exact target assessment instead of weakening STATUS matching:
+			// it accepts only the identical candidate, base, and complete path digest.
+			assessment, assessmentErr := AssessCompactGateTarget(ctx, repo, state, NativeGateRequestInput{
+				Gate: GatePreCommit, LineageID: state.LineageID,
+			})
+			if assessmentErr != nil {
+				return targetStatusFailure(base, assessmentErr)
+			}
+			if assessment.Applicability == CompactGateTargetExact {
+				candidates = append(candidates, candidate)
+				continue
+			}
 		}
 		if request.LineageID == "" && candidate.receiptPublished && (state.State == StateApproved || state.State == StateEscalated) {
 			if projectCompactTerminalHistory(state, live) == compactTerminalHistoryScopeChanged {
