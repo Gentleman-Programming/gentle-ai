@@ -97,6 +97,9 @@ type CompactReclaimRecord struct {
 	// LegacyFixScopeQuarantine carries the proof for the narrowly authorized
 	// complete-fix scope-expansion quarantine.
 	LegacyFixScopeQuarantine *LegacyFixScopeQuarantineProof `json:"legacy_fix_scope_quarantine,omitempty"`
+	// RecoveryBindingRepair carries the natively re-derived recovery-authorization
+	// target-drift proof; it is set only by review repair-recovery-binding.
+	RecoveryBindingRepair *CompactRecoveryBindingRepairProof `json:"recovery_binding_repair,omitempty"`
 }
 
 // compactAuthoritativeArtifact reports whether a store-entry name carries

@@ -110,7 +110,7 @@ func RunReviewRepair(args []string, stdout io.Writer) error {
 }
 
 func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only one provider-owned classified repair. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. A maintainer supplies actor, reason, and an exact gentle-ai.review-repair-authorization/v1 binding. The compatibility-only repair-legacy-alias command remains available for established automation.")
+	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only one provider-owned classified repair. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. A maintainer supplies actor, reason, and an exact gentle-ai.review-repair-authorization/v1 binding. The compatibility-only repair-legacy-alias command remains available for established automation. A compact-v2 recovery successor whose gentle-ai.review-recovery-authorization/v1 binding names a target identity it never persisted is the compact_v2_recovery_authorization_target_drift class; it is repaired per edge by review repair-recovery-binding --preflight.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", ReviewIntegrationContractV1, "review integration contract")
 	preflight := flags.Bool("preflight", false, "perform deterministic read-only classification without authority mutation")

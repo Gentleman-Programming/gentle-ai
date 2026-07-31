@@ -257,10 +257,18 @@ func acquireStoreLockForReadOnlyEvaluation(ctx context.Context, path string) (*s
 // competitor's milliseconds-long critical section into a reported publication
 // failure for an operation whose outcome had already committed.
 //
+// It admits one further caller with the same shape: an authority repair whose
+// request is exactly authorized and whose replay is idempotent. Two maintainers
+// issuing that one request converge on a single committed quarantine record —
+// the loser discovers the committed replay under this lock — and every gate
+// re-derives after acquisition, so waiting there cannot double-apply anything
+// either. What both callers share is that the outcome is already determined
+// before the lock is taken.
+//
 // The pre-commit mutation paths keep the instant refusal: there, waiting
 // cannot make a second writer legitimate, it can only delay its refusal.
 func acquireStoreLockForConvergentCompletion(ctx context.Context, path string) (*storeLock, error) {
-	// guard:population convergent-lock-contention too-tight: legitimate lock contenders include idempotent post-terminal completers that can safely wait for identical publication
+	// guard:population convergent-lock-contention too-tight: legitimate lock contenders include idempotent post-terminal completers that can safely wait for identical publication, and exactly-authorized idempotent authority repairs that converge on one committed record
 	return acquireStoreLockWithBoundedWait(ctx, path)
 }
 

@@ -596,6 +596,8 @@ func TestWindowsRuntimeIncludesRepairAndMaintenanceLockRegressions(t *testing.T)
 		"TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance",
 		"TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays",
 		"TestRepairClassifiedAuthorityResumesEachDurablePhase",
+		"TestRepairCompactRecoveryBindingConcurrentExecutionCommitsAndReplays",
+		"TestRepairCompactRecoveryBindingResumesEachDurablePhase",
 	} {
 		if !bytes.Contains(payload, []byte(name)) {
 			t.Fatalf("Windows PR runtime allowlist is missing %s", name)

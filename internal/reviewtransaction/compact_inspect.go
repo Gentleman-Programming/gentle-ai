@@ -145,6 +145,11 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	if err != nil {
 		return nil, err
 	}
+	// The drift prediction reads the whole authority once, and only when an edge
+	// can actually reach it: an edge reconciliation already classified keeps
+	// reaching `review reconcile-authority` with zero filesystem work, exactly as
+	// it did before this class existed.
+	var drifts *compactRecoveryBindingRepairExitProbe
 	for _, edge := range report.Edges {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -157,16 +162,28 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 		case len(edge.AnomalyClasses) > 0:
 			exit.Operation = CompactRecoveryEdgeExitReconcile
 		default:
-			eligibility, err := InspectCompactPristineAbandonment(ctx, root, edge.SuccessorLineageID)
-			if err != nil {
-				return nil, err
+			if drifts == nil {
+				probe := newCompactRecoveryBindingRepairExitProbe(ctx, root)
+				drifts = &probe
 			}
-			if eligibility.Eligible {
-				exit.Operation = CompactRecoveryEdgeExitAbandon
-			} else {
-				exit.Blocked = "no advertised operation admits this edge: reconciliation does not classify it into a supported anomaly class, and `review abandon` does not accept the successor. " +
-					"Nothing quarantines this shape today, so no command clears it and the entry stays exactly as persisted. " +
-					"This report, with non_reconcilable_reason, is the artifact to escalate"
+			drift, admitted := drifts.candidate(edge.SuccessorLineageID)
+			switch {
+			case admitted && drift.Blocked == "":
+				exit.Operation = CompactRecoveryEdgeExitRepairRecoveryBinding
+			case admitted:
+				exit.Blocked = fmt.Sprintf("`%s` admits this edge, but not yet: %s", CompactRecoveryEdgeExitRepairRecoveryBinding, drift.Blocked)
+			default:
+				eligibility, err := InspectCompactPristineAbandonment(ctx, root, edge.SuccessorLineageID)
+				if err != nil {
+					return nil, err
+				}
+				if eligibility.Eligible {
+					exit.Operation = CompactRecoveryEdgeExitAbandon
+				} else {
+					exit.Blocked = "no advertised operation admits this edge: reconciliation does not classify it into a supported anomaly class, and `review abandon` does not accept the successor. " +
+						"Nothing quarantines this shape today, so no command clears it and the entry stays exactly as persisted. " +
+						"This report, with non_reconcilable_reason, is the artifact to escalate"
+				}
 			}
 		}
 		exits = append(exits, exit)
@@ -241,6 +258,7 @@ func compactStartInvalidGraphRefusal(ctx context.Context, repo string, records m
 		return cause
 	}
 	var continuation strings.Builder
+	var drifts *compactRecoveryBindingRepairExitProbe
 	for _, exit := range exits {
 		switch exit.Operation {
 		case CompactRecoveryEdgeExitAbandon:
@@ -250,6 +268,18 @@ func compactStartInvalidGraphRefusal(ctx context.Context, repo string, records m
 			}
 			fmt.Fprintf(&continuation, " Successor %q is pristine, so quarantining it whole clears its graph defect: %s",
 				exit.SuccessorLineageID, compactAbandonCommandText(repo, exit.SuccessorLineageID, eligibility))
+		case CompactRecoveryEdgeExitRepairRecoveryBinding:
+			if drifts == nil {
+				probe := newCompactRecoveryBindingRepairExitProbe(ctx, repo)
+				drifts = &probe
+			}
+			candidate, admitted := drifts.candidate(exit.SuccessorLineageID)
+			if !admitted || candidate.Blocked != "" {
+				continue
+			}
+			fmt.Fprintf(&continuation, " The recovery edge onto successor %q records a %s binding whose target identity was never persisted, which `%s` admits: %s",
+				exit.SuccessorLineageID, compactRecoveryAuthorizationSchema, CompactRecoveryEdgeExitRepairRecoveryBinding,
+				compactRecoveryBindingRepairCommandText(repo, candidate))
 		case CompactRecoveryEdgeExitReconcile:
 			for _, edge := range report.Edges {
 				if edge.SuccessorLineageID != exit.SuccessorLineageID || len(edge.AnomalyClasses) == 0 {

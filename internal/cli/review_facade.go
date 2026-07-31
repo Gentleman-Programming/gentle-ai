@@ -576,7 +576,7 @@ func (err *reviewStartContextError) Unwrap() error { return err.Cause }
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|reconcile-authority|reconcile-authority-batch|dispose-result|reopen-results|quarantine-legacy|quarantine-legacy-fix-scope|repair-legacy-alias|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Use review retry-final-verification only for a provider-proven completed failed final-verification tooling incident. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair; repair-legacy-alias is compatibility-only.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|reconcile-authority|reconcile-authority-batch|dispose-result|reopen-results|quarantine-legacy|quarantine-legacy-fix-scope|repair-legacy-alias|repair-recovery-binding|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Use review retry-final-verification only for a provider-proven completed failed final-verification tooling incident. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair; repair-legacy-alias is compatibility-only. Use review repair-recovery-binding --preflight for a compact-v2 recovery authorization whose target identity was never persisted.")
 		_, _ = fmt.Fprintln(stdout, "Additive headless capabilities: gentle-ai review capture-result (with --preflight), gentle-ai review inspect-candidate, and gentle-ai review preserve-result.")
 		return nil
 	}
@@ -650,6 +650,8 @@ func runReviewCommandContext(ctx context.Context, args []string, stdout io.Write
 		return runReviewStatus(ctx, args[1:], stdout)
 	case "repair":
 		return runReviewRepair(ctx, args[1:], stdout)
+	case "repair-recovery-binding":
+		return runReviewRepairRecoveryBinding(ctx, args[1:], stdout)
 	case "retry-final-verification":
 		return runReviewRetryFinalVerification(ctx, args[1:], stdout)
 	case "finalize":
@@ -713,6 +715,8 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewLegacyFixScopeQuarantine(args[1:], stdout)
 	case "repair-legacy-alias":
 		return RunReviewLegacyAliasRepair(args[1:], stdout)
+	case "repair-recovery-binding":
+		return RunReviewRepairRecoveryBinding(args[1:], stdout)
 	case "schema":
 		return RunReviewSchema(args[1:], stdout)
 	case "bind-sdd":
