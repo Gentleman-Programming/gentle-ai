@@ -90,7 +90,7 @@ function reviewerResult(output: unknown): string {
   const envelope = TASK_RESULT.exec(trimmed)
   if (!envelope) {
     if (TASK_TAG.test(trimmed)) throw new Error("reviewer output contains a malformed task result envelope")
-    return trimmed
+    return extractReviewerJson(trimmed)
   }
   if (envelope[1].trim() === "") {
     throw Object.assign(new Error("reviewer task result is empty"), { reviewClass: "empty_result" })
@@ -98,7 +98,59 @@ function reviewerResult(output: unknown): string {
   if (TASK_TAG.test(envelope[1])) {
     throw Object.assign(new Error("reviewer task result contains a nested task envelope"), { reviewClass: "nested_envelope" })
   }
-  return envelope[1]
+  return extractReviewerJson(envelope[1])
+}
+
+// extractReviewerJson locates the single well-formed JSON object in reviewer
+// output that may start with explanatory prose or be wrapped in markdown
+// fences. Reviewers are instructed to return one JSON object and no prose, but
+// LLMs routinely prefix a preamble (or wrap the object in ```json fences)
+// anyway; forwarding the raw output makes the native strict decoder fail with
+// "invalid character ... looking for beginning of value" and strands the lens
+// result as a preserved incident (regression #1789). The object is located by
+// brace-depth scanning that respects string contents, and the candidate slice
+// is verified with JSON.parse, so the returned bytes are exactly the object
+// the reviewer produced — never surrounding prose, fences, or trailing text.
+function extractReviewerJson(body: string): string {
+  let candidate = body.trim()
+  const openingFence = /^```(?:json)?[ \t]*(?:\r?\n|$)/
+  if (openingFence.test(candidate)) candidate = candidate.replace(openingFence, "")
+  if (/```[ \t]*$/.test(candidate)) candidate = candidate.slice(0, candidate.lastIndexOf("```")).trim()
+  let start = -1
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < candidate.length; i++) {
+    const ch = candidate[i]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === "\\") escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+      continue
+    }
+    if (ch === "{") {
+      if (depth === 0) start = i
+      depth++
+      continue
+    }
+    if (ch === "}" && depth > 0) {
+      depth--
+      if (depth === 0 && start !== -1) {
+        const slice = candidate.slice(start, i + 1)
+        try {
+          const parsed = JSON.parse(slice)
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return slice
+        } catch {
+          // the balanced slice is not a JSON object; keep scanning for the next '{'
+        }
+      }
+    }
+  }
+  throw new Error("reviewer output contains no well-formed JSON object")
 }
 
 function extractionClass(cause: unknown): string | undefined {
