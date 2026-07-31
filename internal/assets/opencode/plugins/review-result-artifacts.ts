@@ -107,46 +107,51 @@ function reviewerResult(output: unknown): string {
 // LLMs routinely prefix a preamble (or wrap the object in ```json fences)
 // anyway; forwarding the raw output makes the native strict decoder fail with
 // "invalid character ... looking for beginning of value" and strands the lens
-// result as a preserved incident (regression #1789). The object is located by
-// brace-depth scanning that respects string contents, and the candidate slice
-// is verified with JSON.parse, so the returned bytes are exactly the object
-// the reviewer produced — never surrounding prose, fences, or trailing text.
+// result as a preserved incident (regression #1789). Every '{' is scanned as
+// an independent candidate with fresh string state, so quotes or braces in the
+// leading prose can never corrupt the scan of the real object, and the
+// candidate slice is verified with JSON.parse, so the returned bytes are
+// exactly the object the reviewer produced — never surrounding prose, fences,
+// or trailing text.
 function extractReviewerJson(body: string): string {
   let candidate = body.trim()
   const openingFence = /^```(?:json)?[ \t]*(?:\r?\n|$)/
   if (openingFence.test(candidate)) candidate = candidate.replace(openingFence, "")
   if (/```[ \t]*$/.test(candidate)) candidate = candidate.slice(0, candidate.lastIndexOf("```")).trim()
-  let start = -1
-  let depth = 0
-  let inString = false
-  let escaped = false
-  for (let i = 0; i < candidate.length; i++) {
-    const ch = candidate[i]
-    if (inString) {
-      if (escaped) escaped = false
-      else if (ch === "\\") escaped = true
-      else if (ch === '"') inString = false
-      continue
+  for (let start = 0; start < candidate.length; start++) {
+    if (candidate[start] !== "{") continue
+    let depth = 1
+    let inString = false
+    let escaped = false
+    let i = start + 1
+    for (; i < candidate.length; i++) {
+      const ch = candidate[i]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === "\\") escaped = true
+        else if (ch === '"') inString = false
+        continue
+      }
+      if (ch === '"') {
+        inString = true
+        continue
+      }
+      if (ch === "{") {
+        depth++
+        continue
+      }
+      if (ch === "}") {
+        depth--
+        if (depth === 0) break
+      }
     }
-    if (ch === '"') {
-      inString = true
-      continue
-    }
-    if (ch === "{") {
-      if (depth === 0) start = i
-      depth++
-      continue
-    }
-    if (ch === "}" && depth > 0) {
-      depth--
-      if (depth === 0 && start !== -1) {
-        const slice = candidate.slice(start, i + 1)
-        try {
-          const parsed = JSON.parse(slice)
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return slice
-        } catch {
-          // the balanced slice is not a JSON object; keep scanning for the next '{'
-        }
+    if (depth === 0) {
+      const slice = candidate.slice(start, i + 1)
+      try {
+        const parsed = JSON.parse(slice)
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return slice
+      } catch {
+        // the balanced slice is not a JSON object; keep scanning for the next '{'
       }
     }
   }

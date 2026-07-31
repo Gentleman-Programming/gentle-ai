@@ -43,7 +43,7 @@ try {
     const input = { tool: "task", args: { subagent_type: "review-risk", prompt } }
     const incomplete = '{"subject_hash":"sha256:' + "c".repeat(64) + '","inspection":{"status":"incomplete","paths":[]},"findings":[],"evidence":["` + reviewPluginPayloadMarker + `"]}'
     const plain = '{"subject_hash":"sha256:x","findings":[],"evidence":["` + reviewPluginPayloadMarker + `"]}'
-    const prose = "Based on my inspection of the immutable candidate diff, I have verified the timeout math.\n\n" + plain + "\nThat completes the review."
+    const prose = "Based on my inspection of the immutable candidate diff, I have verified the \"timeout math holds and {prose-braces} are harmless.\n\n" + plain + "\nThat completes the review."
     const fenced = "` + "```" + `json\n" + plain + "\n` + "```" + `"
     const enveloped = '<task id="review-reliability" state="completed">\n<task_result>\n' + prose + "\n</task_result>\n</task>"
     let after: string
@@ -93,8 +93,9 @@ func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, na
 // runReviewPluginStub executes one plugin hook scenario against the stub
 // native binary. When expectStdin is non-empty, the stub verifies that
 // `review capture-result` received exactly those bytes and succeeds only on an
-// exact match, printing CAPTURED — so a test can prove the plugin forwarded
-// the precise extracted JSON, not the prose-wrapped reviewer output.
+// exact byte-for-byte match (cmp against a file, so trailing newlines are not
+// stripped), printing CAPTURED — so a test can prove the plugin forwarded the
+// precise extracted JSON, not the prose-wrapped reviewer output.
 func runReviewPluginStub(t *testing.T, scenario, nativeStdout, nativeStderr, preserveStdout, expectStdin string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -117,11 +118,11 @@ func runReviewPluginStub(t *testing.T, scenario, nativeStdout, nativeStderr, pre
 		}
 	}
 	stub := "#!/bin/sh\n" +
-		"stdin=$(cat)\n" +
-		"if [ \"$2\" = \"capture-result\" ] && [ -n \"$GENTLE_AI_STUB_EXPECT_STDIN\" ]; then\n" +
-		"  if [ \"$stdin\" = \"$GENTLE_AI_STUB_EXPECT_STDIN\" ]; then printf 'CAPTURED\\n'; exit 0; fi\n" +
+		"if [ \"$2\" = \"capture-result\" ] && [ -n \"$GENTLE_AI_STUB_EXPECT_STDIN_FILE\" ]; then\n" +
+		"  if cmp -s \"$GENTLE_AI_STUB_EXPECT_STDIN_FILE\" -; then printf 'CAPTURED\\n'; exit 0; fi\n" +
 		"  printf 'capture stdin mismatch\\n' >&2\n  exit 1\n" +
 		"fi\n" +
+		"cat >/dev/null\n" +
 		"if [ \"$2\" = \"preserve-result\" ] && [ -n \"$GENTLE_AI_STUB_PRESERVE_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_PRESERVE_STDOUT\"; exit 0; fi\n" +
 		"if [ -n \"$GENTLE_AI_STUB_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_STDOUT\"; exit 0; fi\n" +
 		"printf '%s\\n' \"$GENTLE_AI_STUB_STDERR\" >&2\nexit 1\n"
@@ -134,6 +135,13 @@ func runReviewPluginStub(t *testing.T, scenario, nativeStdout, nativeStderr, pre
 	if err := os.WriteFile(filepath.Join(root, "harness.mts"), []byte(reviewPluginHarness), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	expectFile := ""
+	if expectStdin != "" {
+		expectFile = filepath.Join(root, "expect_stdin")
+		if err := os.WriteFile(expectFile, []byte(expectStdin), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	command := exec.Command(node, "harness.mts", scenario, workDir)
 	command.Dir = root
 	command.Env = append(os.Environ(),
@@ -141,7 +149,7 @@ func runReviewPluginStub(t *testing.T, scenario, nativeStdout, nativeStderr, pre
 		"GENTLE_AI_STUB_STDOUT="+nativeStdout,
 		"GENTLE_AI_STUB_STDERR="+nativeStderr,
 		"GENTLE_AI_STUB_PRESERVE_STDOUT="+preserveStdout,
-		"GENTLE_AI_STUB_EXPECT_STDIN="+expectStdin,
+		"GENTLE_AI_STUB_EXPECT_STDIN_FILE="+expectFile,
 		"GENTLE_AI_REVIEW_CWD=",
 	)
 	output, err := command.CombinedOutput()
@@ -393,7 +401,9 @@ func reviewPluginPlainResult() string {
 // reviewer that prefixes explanatory prose before the JSON object must still
 // capture — the plugin forwards exactly the extracted object, never the
 // prose-wrapped output that made the native strict decoder fail with
-// "invalid character 'B' looking for beginning of value".
+// "invalid character 'B' looking for beginning of value". The prose is
+// adversarial on purpose: it contains an unmatched double quote and stray
+// balanced braces before the object, which must not corrupt the scan.
 func TestReviewPluginStripsLeadingProseBeforeJSON(t *testing.T) {
 	message := runReviewPluginStub(t, "after-prose", "", "", "", reviewPluginPlainResult())
 	if message != "CAPTURED" {
