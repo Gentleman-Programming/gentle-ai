@@ -3,6 +3,8 @@ package upgrade
 import (
 	"fmt"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
 // RenderUpgradeReport produces a plain-text report of upgrade results.
@@ -48,6 +50,8 @@ func RenderUpgradeReport(report UpgradeReport) string {
 		case UpgradeSkipped:
 			if r.ManualHint != "" {
 				fmt.Fprintf(&b, "  manual update required: %s\n", r.ManualHint)
+			} else if report.DryRun && r.Method == update.InstallScoop {
+				fmt.Fprintf(&b, "  %s → %s  (dry-run; via scoop; would run: scoop update gentle-ai)\n", r.OldVersion, r.NewVersion)
 			} else if report.DryRun {
 				fmt.Fprintf(&b, "  %s → %s  (dry-run)\n", r.OldVersion, r.NewVersion)
 			} else {

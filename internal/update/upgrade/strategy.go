@@ -86,6 +86,8 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 	switch method {
 	case update.InstallBrew:
 		return false, brewUpgrade(ctx, r, ownership)
+	case update.InstallScoop:
+		return false, scoopUpgrade(ctx)
 	case update.InstallGoInstall:
 		return false, goInstallUpgrade(ctx, r.Tool, r.LatestVersion)
 	case update.InstallBinary:
