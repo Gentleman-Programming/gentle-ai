@@ -85,10 +85,14 @@ func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 // This is cross-platform and always lives under the user's home directory.
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
 	devin := filepath.Join(homeDir, ".codeium", "devin")
+	return a.selectDevinDir(devin, filepath.Join(homeDir, ".codeium", "windsurf"))
+}
+
+func (a *Adapter) selectDevinDir(devin, windsurf string) string {
 	if stat := a.statPath(devin); stat.err == nil && stat.isDir {
 		return devin
 	}
-	return filepath.Join(homeDir, ".codeium", "windsurf")
+	return windsurf
 }
 
 // SystemPromptDir returns the directory for global rules/memories.
@@ -117,30 +121,21 @@ func (a *Adapter) windsurfUserDir(homeDir string) string {
 	switch a.goos {
 	case "darwin":
 		devin := filepath.Join(homeDir, "Library", "Application Support", "Devin", "User")
-		if stat := a.statPath(devin); stat.err == nil && stat.isDir {
-			return devin
-		}
-		return filepath.Join(homeDir, "Library", "Application Support", "Windsurf", "User")
+		return a.selectDevinDir(devin, filepath.Join(homeDir, "Library", "Application Support", "Windsurf", "User"))
 	case "windows":
 		appData := a.getenv("APPDATA")
 		if appData == "" {
 			appData = filepath.Join(homeDir, "AppData", "Roaming")
 		}
 		devin := filepath.Join(appData, "Devin", "User")
-		if stat := a.statPath(devin); stat.err == nil && stat.isDir {
-			return devin
-		}
-		return filepath.Join(appData, "Windsurf", "User")
+		return a.selectDevinDir(devin, filepath.Join(appData, "Windsurf", "User"))
 	default: // linux and others
 		xdgConfigHome := a.getenv("XDG_CONFIG_HOME")
 		if xdgConfigHome == "" {
 			xdgConfigHome = filepath.Join(homeDir, ".config")
 		}
 		devin := filepath.Join(xdgConfigHome, "Devin", "User")
-		if stat := a.statPath(devin); stat.err == nil && stat.isDir {
-			return devin
-		}
-		return filepath.Join(xdgConfigHome, "Windsurf", "User")
+		return a.selectDevinDir(devin, filepath.Join(xdgConfigHome, "Windsurf", "User"))
 	}
 }
 

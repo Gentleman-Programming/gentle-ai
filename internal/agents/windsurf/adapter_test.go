@@ -16,6 +16,7 @@ const testHome = "/tmp/home"
 func TestDetect(t *testing.T) {
 	tests := []struct {
 		name            string
+		devinStat       statResult
 		stat            statResult
 		wantInstalled   bool
 		wantConfigPath  string
@@ -27,6 +28,13 @@ func TestDetect(t *testing.T) {
 			stat:            statResult{isDir: true},
 			wantInstalled:   true,
 			wantConfigPath:  filepath.Join(testHome, ".codeium", "windsurf"),
+			wantConfigFound: true,
+		},
+		{
+			name:            "Devin config directory found",
+			devinStat:       statResult{isDir: true},
+			wantInstalled:   true,
+			wantConfigPath:  filepath.Join(testHome, ".codeium", "devin"),
 			wantConfigFound: true,
 		},
 		{
@@ -49,7 +57,7 @@ func TestDetect(t *testing.T) {
 			legacyPath := filepath.Join(testHome, ".codeium", "windsurf")
 			a := &Adapter{statPath: func(path string) statResult {
 				if path == devinPath {
-					return statResult{err: os.ErrNotExist}
+					return tt.devinStat
 				}
 				if path != legacyPath {
 					t.Errorf("statPath() path = %q, want %q", path, legacyPath)
