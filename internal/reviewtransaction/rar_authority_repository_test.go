@@ -345,6 +345,49 @@ func TestRARAuthorityExactReplayConflictAndConcurrentPublication(t *testing.T) {
 	})
 }
 
+func TestRARAuthorityConvergesOnExhaustedLockOverIdenticalPublishedAuthority(t *testing.T) {
+	fixture := newRARCompactFixture(t, "rar-lock-converge")
+	published, err := fixture.repository.Publish(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := acquireRARAuthorityLock(context.Background(), filepath.Join(fixture.repository.root, "LOCK"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.release() }()
+
+	converged, err := fixture.repository.Publish(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("Publish() behind a held lock with identical authority = %v, want convergence", err)
+	}
+	if !reflect.DeepEqual(published, converged) {
+		t.Fatalf("converged authority diverged:\npublished=%#v\nconverged=%#v", published, converged)
+	}
+}
+
+func TestRARAuthorityLockExhaustionWithoutConvergentAuthorityStaysTyped(t *testing.T) {
+	fixture := newRARCompactFixture(t, "rar-lock-exhausted")
+	if err := ensureRARRepositoryRoot(fixture.repository.identity.GitCommonDir, fixture.repository.root, true); err != nil {
+		t.Fatal(err)
+	}
+	held, err := acquireRARAuthorityLock(context.Background(), filepath.Join(fixture.repository.root, "LOCK"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.release() }()
+
+	_, err = fixture.repository.Publish(context.Background(), fixture.request)
+	var timeout *AuthorityLockTimeoutError
+	if !errors.As(err, &timeout) || !errors.Is(err, ErrAuthorityLockTimeout) {
+		t.Fatalf("Publish() with no authority behind a held lock error = %v, want *AuthorityLockTimeoutError", err)
+	}
+	pairPath := fixture.repository.pairIndexPath(fixture.request.ReceiptRef, fixture.request.Result.ResultRef)
+	if _, err := os.Lstat(pairPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("exhausted publisher mutated the result pair index: %v", err)
+	}
+}
+
 func TestRARAuthorityReadsExactHistoricalV1Receipt(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\nhistorical RAR\n")

@@ -29,10 +29,12 @@ func (repository *RARAuthorityRepository) lockNativeReceipt(
 	if err := repository.validateIdentity(ctx); err != nil {
 		return RARNativeReceiptAuthority{}, VerificationSubject{}, func() {}, err
 	}
+	// Readers pin native authority against exclusive maintenance while allowing
+	// equivalent RAR publishers to validate the same immutable receipt.
 	maintenance, err := acquireMaintenanceLock(
 		ctx,
 		compactMaintenanceLockPath(base),
-		maintenanceExclusive,
+		maintenanceShared,
 	)
 	if err != nil {
 		return RARNativeReceiptAuthority{}, VerificationSubject{}, func() {}, err
