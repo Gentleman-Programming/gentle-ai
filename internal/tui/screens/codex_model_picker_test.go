@@ -76,6 +76,17 @@ func TestCodexModelPickerOptionCount_PhaseListMode(t *testing.T) {
 	}
 }
 
+func TestCodexCustomModelSelect_UsesStateCatalog(t *testing.T) {
+	state := screens.NewCodexModelPickerState()
+	state.CustomMode = screens.CodexCustomModeModelSelect
+	state.AvailableModels = []string{"gpt-5.6", "gpt-5.6-mini"}
+
+	out := screens.RenderCodexModelPicker(state, 0)
+	if !strings.Contains(out, "gpt-5.6") || strings.Contains(out, "gpt-5.5") {
+		t.Fatalf("custom model picker should use state catalog; output:\n%s", out)
+	}
+}
+
 func TestCodexModelPickerOptionCount_EffortMode(t *testing.T) {
 	// Effort-select mode: 4 effort levels
 	state := screens.NewCodexModelPickerState()
