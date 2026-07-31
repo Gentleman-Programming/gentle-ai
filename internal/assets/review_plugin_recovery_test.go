@@ -42,9 +42,20 @@ try {
   } else {
     const input = { tool: "task", args: { subagent_type: "review-risk", prompt } }
     const incomplete = '{"subject_hash":"sha256:' + "c".repeat(64) + '","inspection":{"status":"incomplete","paths":[]},"findings":[],"evidence":["` + reviewPluginPayloadMarker + `"]}'
-    const output = { output: scenario === "after-incomplete" ? incomplete : '{"subject_hash":"sha256:x","findings":[],"evidence":["` + reviewPluginPayloadMarker + `"]}' }
+    const plain = '{"subject_hash":"sha256:x","findings":[],"evidence":["` + reviewPluginPayloadMarker + `"]}'
+    const prose = "Based on my inspection of the immutable candidate diff, I have verified the timeout math.\n\n" + plain + "\nThat completes the review."
+    const fenced = "` + "```" + `json\n" + plain + "\n` + "```" + `"
+    const enveloped = '<task id="review-reliability" state="completed">\n<task_result>\n' + prose + "\n</task_result>\n</task>"
+    let after: string
+    if (scenario === "after-incomplete") after = incomplete
+    else if (scenario === "after-prose") after = prose
+    else if (scenario === "after-fenced") after = fenced
+    else if (scenario === "after-envelope-prose") after = enveloped
+    else if (scenario.startsWith("after-prose-only")) after = "Based on my inspection of ` + reviewPluginPayloadMarker + `, every change is correct."
+    else after = plain
+    const output = { output: after }
     await hooks["tool.execute.after"](input, output)
-    console.log("NO_ERROR")
+    console.log(output.output === undefined || output.output === null ? "NO_ERROR" : String(output.output))
   }
 } catch (cause: unknown) {
   console.log(cause instanceof Error ? cause.message : String(cause))
@@ -76,6 +87,15 @@ func runReviewPluginScenarioWithNative(t *testing.T, scenario, nativeStdout, nat
 }
 
 func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, nativeStdout, nativeStderr, preserveStdout string) string {
+	return runReviewPluginStub(t, scenario, nativeStdout, nativeStderr, preserveStdout, "")
+}
+
+// runReviewPluginStub executes one plugin hook scenario against the stub
+// native binary. When expectStdin is non-empty, the stub verifies that
+// `review capture-result` received exactly those bytes and succeeds only on an
+// exact match, printing CAPTURED — so a test can prove the plugin forwarded
+// the precise extracted JSON, not the prose-wrapped reviewer output.
+func runReviewPluginStub(t *testing.T, scenario, nativeStdout, nativeStderr, preserveStdout, expectStdin string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the stub native binary requires a POSIX shell")
@@ -96,7 +116,12 @@ func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, na
 			t.Fatal(err)
 		}
 	}
-	stub := "#!/bin/sh\ncat >/dev/null\n" +
+	stub := "#!/bin/sh\n" +
+		"stdin=$(cat)\n" +
+		"if [ \"$2\" = \"capture-result\" ] && [ -n \"$GENTLE_AI_STUB_EXPECT_STDIN\" ]; then\n" +
+		"  if [ \"$stdin\" = \"$GENTLE_AI_STUB_EXPECT_STDIN\" ]; then printf 'CAPTURED\\n'; exit 0; fi\n" +
+		"  printf 'capture stdin mismatch\\n' >&2\n  exit 1\n" +
+		"fi\n" +
 		"if [ \"$2\" = \"preserve-result\" ] && [ -n \"$GENTLE_AI_STUB_PRESERVE_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_PRESERVE_STDOUT\"; exit 0; fi\n" +
 		"if [ -n \"$GENTLE_AI_STUB_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_STDOUT\"; exit 0; fi\n" +
 		"printf '%s\\n' \"$GENTLE_AI_STUB_STDERR\" >&2\nexit 1\n"
@@ -116,6 +141,7 @@ func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, na
 		"GENTLE_AI_STUB_STDOUT="+nativeStdout,
 		"GENTLE_AI_STUB_STDERR="+nativeStderr,
 		"GENTLE_AI_STUB_PRESERVE_STDOUT="+preserveStdout,
+		"GENTLE_AI_STUB_EXPECT_STDIN="+expectStdin,
 		"GENTLE_AI_REVIEW_CWD=",
 	)
 	output, err := command.CombinedOutput()
@@ -354,5 +380,74 @@ func TestReviewPluginKeepsGenericOpaqueFailureOpaque(t *testing.T) {
 	}
 	if !strings.Contains(message, "repository_context_preflight_failed") {
 		t.Fatalf("generic opaque failure lost its provider-owned code: %s", message)
+	}
+}
+
+// reviewPluginPlainResult is the exact well-formed reviewer envelope the
+// extraction must forward to `review capture-result` byte for byte.
+func reviewPluginPlainResult() string {
+	return `{"subject_hash":"sha256:x","findings":[],"evidence":["` + reviewPluginPayloadMarker + `"]}`
+}
+
+// TestReviewPluginStripsLeadingProseBeforeJSON pins the #1789 regression: a
+// reviewer that prefixes explanatory prose before the JSON object must still
+// capture — the plugin forwards exactly the extracted object, never the
+// prose-wrapped output that made the native strict decoder fail with
+// "invalid character 'B' looking for beginning of value".
+func TestReviewPluginStripsLeadingProseBeforeJSON(t *testing.T) {
+	message := runReviewPluginStub(t, "after-prose", "", "", "", reviewPluginPlainResult())
+	if message != "CAPTURED" {
+		t.Fatalf("capture after prose-prefixed output = %q, want CAPTURED (exact JSON forwarded)", message)
+	}
+}
+
+// TestReviewPluginStripsMarkdownFencesBeforeJSON pins the #1600 shape: the
+// JSON object wrapped in ```json code fences must also capture cleanly.
+func TestReviewPluginStripsMarkdownFencesBeforeJSON(t *testing.T) {
+	message := runReviewPluginStub(t, "after-fenced", "", "", "", reviewPluginPlainResult())
+	if message != "CAPTURED" {
+		t.Fatalf("capture after fenced output = %q, want CAPTURED (exact JSON forwarded)", message)
+	}
+}
+
+// TestReviewPluginExtractsJSONFromEnvelopedProse pins that the same extraction
+// applies inside a completed task envelope, whose inner body is subject to the
+// same LLM prose-prefix behavior.
+func TestReviewPluginExtractsJSONFromEnvelopedProse(t *testing.T) {
+	message := runReviewPluginStub(t, "after-envelope-prose", "", "", "", reviewPluginPlainResult())
+	if message != "CAPTURED" {
+		t.Fatalf("capture after enveloped prose output = %q, want CAPTURED (exact JSON forwarded)", message)
+	}
+}
+
+// TestReviewPluginPreservesProseOnlyOutput pins the fail-closed tail of the
+// extraction: output with no JSON object at all must not be forwarded; it is
+// preserved as an incident so the lens stays recoverable. The legacy --cwd
+// binding is used so the extraction cause message survives to the transcript
+// (the opaque provider-owned path deliberately collapses native detail).
+func TestReviewPluginPreservesProseOnlyOutput(t *testing.T) {
+	message := runReviewPluginScenario(t, "after-prose-only-legacy", "resolve failed")
+	if message == "NO_ERROR" {
+		t.Fatal("plugin did not fail despite prose-only reviewer output")
+	}
+	if !strings.Contains(message, "reviewer output contains no well-formed JSON object") {
+		t.Fatalf("prose-only output lost its extraction failure cause: %s", message)
+	}
+	if !strings.Contains(message, reviewPluginPayloadMarker) {
+		t.Fatalf("prose-only output was not preserved for recovery: %s", message)
+	}
+}
+
+// TestReviewPluginPreservesExtractedJSONNotProseOnCaptureFailure pins the
+// extraction boundary: when capture fails after successful extraction, the
+// preserved payload must be the extracted strict JSON (the only bytes replay
+// admission accepts), never the original prose-wrapped output.
+func TestReviewPluginPreservesExtractedJSONNotProseOnCaptureFailure(t *testing.T) {
+	message := runReviewPluginScenario(t, "after-prose", "resolve failed")
+	if !strings.Contains(message, reviewPluginPayloadMarker) {
+		t.Fatalf("capture failure lost the extracted reviewer payload: %s", message)
+	}
+	if strings.Contains(message, "Based on my inspection") {
+		t.Fatalf("capture failure preserved the prose-wrapped output instead of the extracted JSON: %s", message)
 	}
 }
