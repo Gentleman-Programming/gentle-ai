@@ -70,9 +70,18 @@ func TestCoordinatorEngramProjectResolutionPrecedesScopedCalls(t *testing.T) {
 		"codex/sdd-orchestrator.md":           true,
 		"cursor/sdd-orchestrator.md":          true,
 		"generic/sdd-orchestrator.md":         true,
+		"hermes/sdd-orchestrator.md":          true,
 		"kiro/sdd-orchestrator.md":            true,
 		"qwen/sdd-orchestrator.md":            true,
 		"windsurf/sdd-orchestrator.md":        true,
+	}
+	allOrchestratorPaths := allSDDOrchestratorAssetPaths(t)
+	if len(allOrchestratorPaths) != 12 {
+		t.Fatalf("project-resolution discovery sees %d SDD orchestrator assets, want 12", len(allOrchestratorPaths))
+	}
+	allOrchestratorPathSet := make(map[string]bool, len(allOrchestratorPaths))
+	for _, path := range allOrchestratorPaths {
+		allOrchestratorPathSet[path] = true
 	}
 
 	paths := []string{
@@ -81,12 +90,21 @@ func TestCoordinatorEngramProjectResolutionPrecedesScopedCalls(t *testing.T) {
 		"codex/sdd-orchestrator.md",
 		"cursor/sdd-orchestrator.md",
 		"generic/sdd-orchestrator.md",
+		"hermes/sdd-orchestrator.md",
 		"kiro/sdd-orchestrator.md",
 		"qwen/sdd-orchestrator.md",
 		"windsurf/sdd-orchestrator.md",
 	}
-	if len(paths) != 8 {
-		t.Fatalf("project-resolution coverage sees %d coordinator surfaces, want 8", len(paths))
+	if len(paths) != 9 {
+		t.Fatalf("project-resolution coverage sees %d coordinator surfaces, want 9", len(paths))
+	}
+	for _, path := range paths {
+		if path == "claude/sdd-orchestrator-workflow.md" {
+			continue
+		}
+		if !allOrchestratorPathSet[path] {
+			t.Fatalf("project-resolution coordinator %s is not in dynamic SDD orchestrator discovery", path)
+		}
 	}
 
 	for _, path := range paths {
