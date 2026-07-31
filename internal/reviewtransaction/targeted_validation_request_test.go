@@ -2,6 +2,7 @@ package reviewtransaction
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -114,7 +115,7 @@ func TestTargetedValidationRequestRejectsOverBudgetCorrection(t *testing.T) {
 	repo, state, revision, _ := targetedValidationRequestFixture(t, "targeted-validation-over-budget", true)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\nextra\n")
 
-	if _, err := BuildTargetedValidationRequest(context.Background(), repo, state, revision); err == nil ||
+	if _, err := BuildTargetedValidationRequest(context.Background(), repo, state, revision); !errors.Is(err, ErrTargetedValidationCorrectionBudgetExceeded) ||
 		!strings.Contains(err.Error(), "exceeds the remaining correction budget") {
 		t.Fatalf("over-budget correction request error = %v", err)
 	}

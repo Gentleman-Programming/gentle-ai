@@ -134,23 +134,18 @@ func AssessTargetStatusWithSnapshot(ctx context.Context, repo string, request Ta
 		if recoveryErr != nil {
 			return TargetStatusResult{}, Snapshot{}, recoveryErr
 		}
-		switch len(candidates) {
-		case 1:
+		if len(candidates) == 1 {
 			live, request.LineageID = candidates[0].snapshot, candidates[0].lineage
-		case 2:
-			fallthrough
-		default:
-			if len(candidates) > 1 {
-				result := TargetStatusResult{
-					TargetIdentity: live.Identity, Projection: targetProjectionFromSnapshot(live),
-					Applicability: TargetApplicabilityAmbiguous, Action: TargetStatusActionSelectLineage,
-					Replayability: ReplayabilityStatusRequired, CandidateLineageIDs: make([]string, 0, len(candidates)),
-				}
-				for _, candidate := range candidates {
-					result.CandidateLineageIDs = append(result.CandidateLineageIDs, candidate.lineage)
-				}
-				return result, live, nil
+		} else if len(candidates) > 1 {
+			result := TargetStatusResult{
+				TargetIdentity: live.Identity, Projection: targetProjectionFromSnapshot(live),
+				Applicability: TargetApplicabilityAmbiguous, Action: TargetStatusActionSelectLineage,
+				Replayability: ReplayabilityStatusRequired, CandidateLineageIDs: make([]string, 0, len(candidates)),
 			}
+			for _, candidate := range candidates {
+				result.CandidateLineageIDs = append(result.CandidateLineageIDs, candidate.lineage)
+			}
+			return result, live, nil
 		}
 	}
 	result, err := assessTargetStatusSnapshot(ctx, repo, request, live)
@@ -185,9 +180,9 @@ func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) 
 			state.InitialSnapshot.Kind != TargetBaseDiff {
 			continue
 		}
-		live, err := RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, state)
+		live, err := rebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, state, clean)
 		if err != nil {
-			return nil, fmt.Errorf("rebuild committed correction candidate for %q: %w", state.LineageID, err)
+			continue
 		}
 		candidates = append(candidates, selectorlessCommittedBaseDiffCorrection{lineage: state.LineageID, snapshot: live})
 	}

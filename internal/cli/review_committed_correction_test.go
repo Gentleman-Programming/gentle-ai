@@ -73,8 +73,13 @@ func TestSelectorlessCommittedBaseDiffCorrectionFailsClosed(t *testing.T) {
 			if expansion {
 				writeCommittedCorrection(t, repo, false, true)
 				var output bytes.Buffer
-				if err := RunReview([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition"}, &output); err == nil {
-					t.Fatal("scope-expanded committed correction produced a status transition")
+				if err := RunReview([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition"}, &output); err != nil {
+					t.Fatal(err)
+				}
+				var status ReviewTargetStatusResult
+				decodeStrictReviewJSON(t, output.Bytes(), &status)
+				if status.Authority != nil && status.Authority.LineageID == started.LineageID {
+					t.Fatalf("scope-expanded correction remained a selector-less recovery candidate: %#v", status)
 				}
 				after, err := os.ReadFile(store.StatePath())
 				if err != nil || !bytes.Equal(before, after) {
@@ -86,7 +91,7 @@ func TestSelectorlessCommittedBaseDiffCorrectionFailsClosed(t *testing.T) {
 			if status.ValidationRequest != nil || status.Authority == nil || status.Authority.LineageID != started.LineageID {
 				t.Fatalf("invalid committed correction produced validation authority: %#v", status)
 			}
-			if !expansion && (status.NextTransition == nil || status.NextTransition.ReasonCode != "corrected_candidate_unavailable") {
+			if status.NextTransition == nil || status.NextTransition.ReasonCode != "corrected_candidate_unavailable" {
 				t.Fatalf("unchanged committed correction status = %#v", status.NextTransition)
 			}
 		})

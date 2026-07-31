@@ -48,6 +48,11 @@ const reviewStopReasonDocsTerminalPrefix = "Terminal"
 // removed from this table entirely, not marked with either disposition — see
 // the organic-dx Phase 3 investigation note on escalated_recovery_requires_changed_target.
 var reviewStopInvariantClassification = map[string]reviewStopDisposition{
+	"budget_exceeded": {
+		Terminal:      true,
+		Justification: "the candidate exceeds the frozen correction budget before a correction attempt can be recorded; ordinary correction cannot proceed without maintainer escalation",
+		ToolFault:     reviewStopToolFault(false),
+	},
 	"captured_verification_evidence_invalid": {
 		Terminal:      true,
 		Justification: "immutable captured verification metadata or bytes failed integrity validation; a maintainer must inspect the authority artifacts before they can be trusted",

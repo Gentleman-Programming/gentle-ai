@@ -158,6 +158,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		if status.Action == reviewtransaction.TargetStatusActionRecover {
 			return reviewRecoveryCollection(status, binding, input)
 		}
+		if errors.Is(input.ValidationRequestErr, reviewtransaction.ErrTargetedValidationCorrectionBudgetExceeded) {
+			return reviewStopTransition("budget_exceeded")
+		}
 		if input.ValidationRequest != nil {
 			validationBinding := binding
 			validationBinding.TargetIdentity = input.ValidationRequest.CorrectionTargetIdentity
@@ -287,11 +290,12 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 }
 
 type reviewFinalizeTransitionContext struct {
-	RepositoryContext string
-	ValidationRequest *reviewtransaction.TargetedValidationRequest
-	CaptureContext    *reviewCaptureContext
-	CapturedEvidence  *reviewtransaction.VerificationEvidenceRecord
-	EvidenceErr       error
+	RepositoryContext    string
+	ValidationRequest    *reviewtransaction.TargetedValidationRequest
+	ValidationRequestErr error
+	CaptureContext       *reviewCaptureContext
+	CapturedEvidence     *reviewtransaction.VerificationEvidenceRecord
+	EvidenceErr          error
 }
 
 func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision string, artifacts []ReviewTransitionArtifact, artifactErr error, contexts ...reviewFinalizeTransitionContext) ReviewNextTransition {
@@ -318,7 +322,8 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 	}
 	return newReviewNextTransition(status, state.SelectedLenses, artifacts, transitionContext.CapturedEvidence, artifactErr, reviewNextTransitionInput{
 		RepositoryContext: transitionContext.RepositoryContext, ValidationRequest: transitionContext.ValidationRequest,
-		EvidenceErr: transitionContext.EvidenceErr, CorrectionForecasted: state.ProposedCorrectionLines != nil,
+		ValidationRequestErr: transitionContext.ValidationRequestErr,
+		EvidenceErr:          transitionContext.EvidenceErr, CorrectionForecasted: state.ProposedCorrectionLines != nil,
 		CaptureContext: transitionContext.CaptureContext,
 	})
 }
@@ -413,6 +418,7 @@ type reviewNextTransitionInput struct {
 	StartLineage                                   string
 	RepositoryContext                              string
 	ValidationRequest                              *reviewtransaction.TargetedValidationRequest
+	ValidationRequestErr                           error
 	EvidenceErr                                    error
 	CorrectionForecasted                           bool
 	CaptureContext                                 *reviewCaptureContext

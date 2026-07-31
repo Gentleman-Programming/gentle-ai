@@ -585,7 +585,7 @@ func failedCorrectedFinalVerificationCLIFixture(t *testing.T) failedFinalVerific
 	if err != nil {
 		t.Fatal(err)
 	}
-	fix, err := facadeVerificationEvidenceTarget(context.Background(), repo, correction.State, correction.Revision)
+	fix, err := facadeVerificationEvidenceTarget(context.Background(), repo, correction.State, correction.Revision, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

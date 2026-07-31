@@ -324,25 +324,31 @@ func (builder SnapshotBuilder) WorktreeClean(ctx context.Context) (bool, error) 
 // RebuildCommittedBaseDiffCorrectionCandidate reconstructs the committed
 // correction target from frozen compact authority rather than a mutable ref.
 func RebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo string, state CompactState) (Snapshot, error) {
+	clean, err := (SnapshotBuilder{Repo: repo}).WorktreeClean(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return rebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, state, clean)
+}
+
+// rebuildCommittedBaseDiffCorrectionCandidate lets selector-less discovery
+// reuse its one worktree-cleanliness observation for every candidate.
+func rebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo string, state CompactState, clean bool) (Snapshot, error) {
 	if err := state.Validate(); err != nil {
 		return Snapshot{}, fmt.Errorf("validate committed base-diff correction authority: %w", err)
 	}
 	initial := state.InitialSnapshot
 	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil || state.CorrectionAttemptConsumed() ||
 		initial.Kind != TargetBaseDiff {
-		return Snapshot{}, errors.New("committed base-diff correction reconstruction is not eligible")
+		return Snapshot{}, errors.New("committed base-diff correction reconstruction is not eligible") // refusal:by-design world-action: only an eligible frozen correction authority can be reconstructed
 	}
 	projection, err := canonicalProjection(initial.Projection)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	builder := SnapshotBuilder{Repo: repo}
-	clean, err := builder.WorktreeClean(ctx)
-	if err != nil {
-		return Snapshot{}, err
-	}
 	if !clean {
-		return Snapshot{}, errors.New("committed base-diff correction reconstruction requires a clean worktree")
+		return Snapshot{}, errors.New("committed base-diff correction reconstruction requires a clean worktree") // refusal:by-design world-action: uncommitted workspace changes must be resolved before committed recovery can be trusted
 	}
 	live, err := builder.BuildStoredSnapshot(ctx, Target{
 		Kind: TargetBaseDiff, Projection: projection, BaseRef: initial.BaseTree,
@@ -357,7 +363,7 @@ func RebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo strin
 	if live.UnbornHead != initial.UnbornHead || live.BaseTree != initial.BaseTree || live.Projection != projection ||
 		!equalStrings(live.IntendedUntracked, initial.IntendedUntracked) ||
 		live.IntendedUntrackedProof != initial.IntendedUntrackedProof {
-		return Snapshot{}, errors.New("committed base-diff correction reconstruction does not match frozen authority")
+		return Snapshot{}, errors.New("committed base-diff correction reconstruction does not match frozen authority") // refusal:by-design world-action: repository history must match the immutable authority before recovery can proceed
 	}
 	if err := pathsAreSubset(live.Paths, state.GenesisPaths); err != nil {
 		return Snapshot{}, fmt.Errorf("committed base-diff correction exceeds frozen genesis paths: %w", err)

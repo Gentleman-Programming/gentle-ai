@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 )
 
@@ -29,6 +30,10 @@ type TargetedValidationRequest struct {
 	CorrectionPaths          []string   `json:"correction_paths"`
 	CorrectionPathsDigest    string     `json:"correction_paths_digest"`
 }
+
+// ErrTargetedValidationCorrectionBudgetExceeded identifies a correction that
+// cannot be admitted without exceeding the frozen compact budget.
+var ErrTargetedValidationCorrectionBudgetExceeded = errors.New("targeted validation request correction exceeds the remaining correction budget") // refusal:by-design world-action: the correction must fit the immutable budget before validation can proceed
 
 // BuildTargetedValidationRequest derives a corrected target from live Git and
 // binds the exact validator request to current compact authority.
@@ -96,7 +101,7 @@ func buildTargetedValidationRequest(ctx context.Context, repo string, state Comp
 		return TargetedValidationRequest{}, err
 	}
 	if changed > state.CorrectionBudget-state.CumulativeCorrectionLines {
-		return TargetedValidationRequest{}, errors.New("targeted validation request correction exceeds the remaining correction budget")
+		return TargetedValidationRequest{}, fmt.Errorf("%w: requested %d lines with %d remaining", ErrTargetedValidationCorrectionBudgetExceeded, changed, state.CorrectionBudget-state.CumulativeCorrectionLines)
 	}
 	return targetedValidationRequestForCorrection(state, revision, fix)
 }

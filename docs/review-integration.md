@@ -222,6 +222,7 @@ One recovery-only target expands an approved base-diff receipt into the exact st
 
 | Reason code | Continuation |
 | --- | --- |
+| `budget_exceeded` | Terminal — the changed correction exceeds the frozen correction budget before an ordinary correction attempt can be recorded. Requires maintainer review of the escalation before further work. |
 | `captured_artifacts_unverifiable` | Terminal — a previously captured reviewer artifact failed local verification (tampering or hash mismatch). Requires a maintainer to inspect the review authority store before any further `review.capture-result` is trusted. |
 | `captured_result_selection_unavailable` | Terminal — internal invariant violation: every selected lens already reports a captured artifact, yet the caller was routed here because the count was still short. File a defect; there is no caller-side retry. |
 | `captured_verification_evidence_invalid` | Terminal — the captured verification record, immutable raw payload, or their content binding failed integrity validation. Requires a maintainer to inspect the authority artifacts before that evidence is trusted. |

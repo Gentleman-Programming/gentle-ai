@@ -1034,7 +1034,7 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 		t.Fatalf("corrected in-scope start did not resume correction authority: %#v", resumed)
 	}
 	correction, _ := store.Load()
-	fix, err := facadeVerificationEvidenceTarget(context.Background(), repo, correction.State, correction.Revision)
+	fix, err := facadeVerificationEvidenceTarget(context.Background(), repo, correction.State, correction.Revision, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1366,18 +1366,32 @@ func TestReviewFacadePersistsOverBudgetForecastAndActual(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\nfixed-one\nfixed-two\nthree\nfour\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		request := capturePassedCorrectionEvidenceForTest(t, repo, started.LineageID)
 		validationPath := filepath.Join(t.TempDir(), "validation.json")
-		writeReviewCLIJSON(t, validationPath, facadeValidationResult{
-			TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
-			OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"acceptance passes"}},
-			CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"regression passes"}},
-			FollowUps:            []reviewtransaction.FollowUp{},
-		})
+		writeReviewCLIJSON(t, validationPath, facadeValidationResult{})
 		store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 		before, err := store.Load()
 		if err != nil {
 			t.Fatal(err)
+		}
+		var statusOutput bytes.Buffer
+		if err := RunReview([]string{"status", "--cwd", repo, "--lineage", started.LineageID, "--contract", ReviewIntegrationContractV1, "--next-transition"}, &statusOutput); err != nil {
+			t.Fatal(err)
+		}
+		var status ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+		if status.ValidationRequest != nil || status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop ||
+			status.NextTransition.ReasonCode != "budget_exceeded" {
+			t.Fatalf("over-budget status = %#v", status)
+		}
+		var finalizeOutput bytes.Buffer
+		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--contract", ReviewIntegrationContractV1, "--next-transition"}, &finalizeOutput); err != nil {
+			t.Fatal(err)
+		}
+		var finalized ReviewIntegrationFinalizeResult
+		decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, finalizeOutput.Bytes()).Result, &finalized)
+		if finalized.ValidationRequest != nil || finalized.NextTransition == nil || finalized.NextTransition.Kind != reviewNextTransitionStop ||
+			finalized.NextTransition.ReasonCode != "budget_exceeded" {
+			t.Fatalf("over-budget finalize = %#v", finalized)
 		}
 		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validationPath, "--captured-evidence"}, io.Discard); err == nil || !strings.Contains(err.Error(), "budget") {
 			t.Fatalf("over-budget actual error = %v", err)
@@ -1390,7 +1404,7 @@ func TestReviewFacadePersistsOverBudgetForecastAndActual(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		request = capturePassedCorrectionEvidenceForTest(t, repo, started.LineageID)
+		request := capturePassedCorrectionEvidenceForTest(t, repo, started.LineageID)
 		writeReviewCLIJSON(t, validationPath, facadeValidationResult{
 			TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
 			OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"adjusted acceptance passes"}},
@@ -1406,6 +1420,19 @@ func TestReviewFacadePersistsOverBudgetForecastAndActual(t *testing.T) {
 			t.Fatalf("adjusted correction authority = %#v", after)
 		}
 	})
+}
+
+func TestFacadeCorrectionEvidenceTargetUsesValidationRequestProjection(t *testing.T) {
+	state := reviewtransaction.CompactState{InitialSnapshot: reviewtransaction.Snapshot{Projection: ""}, CurrentSnapshot: reviewtransaction.Snapshot{CandidateTree: "base"}}
+	live := reviewtransaction.Snapshot{UnbornHead: true, IntendedUntrackedProof: "proof"}
+	request := reviewtransaction.TargetedValidationRequest{
+		Projection: reviewtransaction.ProjectionWorkspace, CorrectionCandidateTree: "candidate", CorrectionPathsDigest: "paths",
+		CorrectionPaths: []string{"tracked.txt"}, FixFindingIDs: []string{"R1-001"}, CorrectionTargetIdentity: "identity",
+	}
+	target := facadeCorrectionEvidenceTargetFromRequest(state, live, request)
+	if target.Projection != request.Projection {
+		t.Fatalf("correction evidence projection = %q, want request projection %q", target.Projection, request.Projection)
+	}
 }
 
 func TestReviewFacadeCompactRefuterAndHostileGitSelection(t *testing.T) {

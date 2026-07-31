@@ -161,7 +161,7 @@ func facadeProjection(projection reviewtransaction.Projection) reviewtransaction
 
 func facadeCorrectionEvidenceTargetFromRequest(state reviewtransaction.CompactState, live reviewtransaction.Snapshot, request reviewtransaction.TargetedValidationRequest) reviewtransaction.Snapshot {
 	return reviewtransaction.Snapshot{
-		Kind: reviewtransaction.TargetFixDiff, Projection: state.InitialSnapshot.Projection, UnbornHead: live.UnbornHead,
+		Kind: reviewtransaction.TargetFixDiff, Projection: request.Projection, UnbornHead: live.UnbornHead,
 		BaseTree: state.CurrentSnapshot.CandidateTree, CandidateTree: request.CorrectionCandidateTree,
 		PathsDigest: request.CorrectionPathsDigest, Paths: append([]string{}, request.CorrectionPaths...),
 		IntendedUntracked:      append([]string{}, state.InitialSnapshot.IntendedUntracked...),
@@ -453,7 +453,7 @@ func (result facadeValidationResult) conclusive() error {
 		{name: "correction_regression", evidence: result.CorrectionRegression.Evidence},
 	} {
 		if reviewtransaction.InconclusiveValidationEvidence(check.evidence) {
-			return fmt.Errorf("targeted validation is inconclusive: %s evidence reports the immutable candidate could not be inspected, so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees and capture the same validation again", check.name)
+			return fmt.Errorf("targeted validation is inconclusive: %s evidence reports the immutable candidate could not be inspected, so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees and capture the same validation again", check.name) // refusal:by-design world-action: the external validator must regain access before it can produce a verdict
 		}
 	}
 	return nil
@@ -837,6 +837,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			repositoryContext := ""
 			var captureContext *reviewCaptureContext
 			var validationRequest *reviewtransaction.TargetedValidationRequest
+			var validationRequestErr error
 			correctionForecasted := false
 			var artifactErr error
 			if native.Applicability == reviewtransaction.TargetApplicabilityCurrent && native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact {
@@ -877,6 +878,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							if requestErr == nil {
 								validationRequest = &request
 								result.ValidationRequest = validationRequest
+							} else if errors.Is(requestErr, reviewtransaction.ErrTargetedValidationCorrectionBudgetExceeded) {
+								validationRequestErr = requestErr
 							}
 						}
 						if record.State.State == reviewtransaction.StateReviewing {
@@ -924,7 +927,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if startLineage == "" && native.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
 				startLineage = reviewAvailableStartLineage(ctx, root, native.TargetIdentity)
 			}
-			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector})
+			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, ValidationRequestErr: validationRequestErr, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector})
 			result.NextTransition = &transition
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&
 				transition.ReasonCode != "correction_repository_tooling_failed" {
@@ -2062,20 +2065,9 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	}
 	store.TracePath = strings.TrimSpace(*tracePath)
 	state := record.State
-	var committedLive *reviewtransaction.Snapshot
-	if strings.TrimSpace(*lineage) == "" && state.State == reviewtransaction.StateCorrectionRequired &&
-		state.ProposedCorrectionLines != nil && state.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff {
-		clean, cleanErr := (reviewtransaction.SnapshotBuilder{Repo: root}).WorktreeClean(ctx)
-		if cleanErr != nil {
-			return reviewPreflightError(cleanErr)
-		}
-		if clean {
-			live, liveErr := reviewtransaction.RebuildCommittedBaseDiffCorrectionCandidate(ctx, root, state)
-			if liveErr != nil {
-				return reviewPreflightError(liveErr)
-			}
-			committedLive = &live
-		}
+	committedLive, err := facadeCommittedBaseDiffCorrectionLive(ctx, root, state, strings.TrimSpace(*lineage) == "")
+	if err != nil {
+		return reviewPreflightError(err)
 	}
 	if strings.TrimSpace(*lineage) != "" {
 		leaves, err := reviewtransaction.CompactAuthorityLeaves(ctx, root)
@@ -2204,11 +2196,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		}
 	}
 	if *capturedEvidence {
-		var capturedLive []reviewtransaction.Snapshot
-		if committedLive != nil {
-			capturedLive = append(capturedLive, *committedLive)
-		}
-		evidenceTarget, targetErr := facadeVerificationEvidenceTarget(ctx, root, state, record.Revision, capturedLive...)
+		evidenceTarget, targetErr := facadeVerificationEvidenceTarget(ctx, root, state, record.Revision, committedLive)
 		if targetErr != nil {
 			return reviewPreflightError(targetErr)
 		}
@@ -2371,7 +2359,13 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	}
 
 	if state.State != reviewtransaction.StateApproved && state.State != reviewtransaction.StateEscalated {
-		return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "continue the current review state", reviewFinalizeOutputContext{Context: ctx, Repo: root})
+		if len(plan.Transitions) > 0 && plan.Transitions[len(plan.Transitions)-1].Operation == "review/begin-fix" {
+			committedLive, err = facadeCommittedBaseDiffCorrectionLive(ctx, root, state, strings.TrimSpace(*lineage) == "")
+			if err != nil {
+				return reviewPreflightError(err)
+			}
+		}
+		return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "continue the current review state", reviewFinalizeOutputContext{Context: ctx, Repo: root, CommittedLive: committedLive})
 	}
 	if terminalAtEntry && terminalReceiptExists {
 		return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>", reviewFinalizeOutputContext{Context: ctx, Repo: root})
@@ -2397,6 +2391,22 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		return err
 	}
 	return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>", reviewFinalizeOutputContext{Context: ctx, Repo: root})
+}
+
+func facadeCommittedBaseDiffCorrectionLive(ctx context.Context, repo string, state reviewtransaction.CompactState, selectorless bool) (*reviewtransaction.Snapshot, error) {
+	if !selectorless || state.State != reviewtransaction.StateCorrectionRequired || state.ProposedCorrectionLines == nil ||
+		state.InitialSnapshot.Kind != reviewtransaction.TargetBaseDiff {
+		return nil, nil
+	}
+	clean, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).WorktreeClean(ctx)
+	if err != nil || !clean {
+		return nil, err
+	}
+	live, err := reviewtransaction.RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, state)
+	if err != nil {
+		return nil, err
+	}
+	return &live, nil
 }
 
 func facadeFinalizeTransitionIndex(attempt *reviewtransaction.FinalizeAttempt, revision string) int {
@@ -2484,7 +2494,7 @@ func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state
 	}
 	if state.State == reviewtransaction.StateCorrectionRequired && entryState == reviewtransaction.StateCorrectionRequired && entryProposed &&
 		captured != nil && captured.Record.Outcome == reviewtransaction.VerificationOutcomeProceduralFailure {
-		fix, err := facadeVerificationEvidenceTarget(ctx, repo, state, revision)
+		fix, err := facadeVerificationEvidenceTarget(ctx, repo, state, revision, committedLive)
 		if err != nil {
 			return plan, err
 		}
@@ -3638,6 +3648,7 @@ type reviewFinalizeOutputContext struct {
 
 func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract string, actionEligibility, nextTransition bool, state reviewtransaction.CompactState, revision string, store reviewtransaction.CompactStore, action string, contexts ...reviewFinalizeOutputContext) error {
 	var validationRequest *reviewtransaction.TargetedValidationRequest
+	var validationRequestErr error
 	var captureContext *reviewCaptureContext
 	var capturedEvidence *reviewtransaction.VerificationEvidenceRecord
 	var evidenceErr error
@@ -3663,18 +3674,27 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 								capturedEvidence = &record
 							}
 						}
+					} else if errors.Is(requestErr, reviewtransaction.ErrTargetedValidationCorrectionBudgetExceeded) {
+						validationRequestErr = requestErr
 					}
-				} else if target, targetErr := facadeVerificationEvidenceTarget(outputContext.Context, outputContext.Repo, state, revision); targetErr == nil {
-					request, requestErr := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(outputContext.Context, outputContext.Repo, state, revision, target)
-					if requestErr == nil {
-						validationRequest = &request
-						if capturedEvidence == nil {
-							captured, readErr := reviewtransaction.ReadCapturedVerificationEvidence(store.Dir, state.LineageID, revision, target)
-							evidenceErr = readErr
-							if readErr == nil {
-								record := captured.Record
-								capturedEvidence = &record
+				} else {
+					target, targetErr := facadeVerificationEvidenceTarget(outputContext.Context, outputContext.Repo, state, revision, nil)
+					if errors.Is(targetErr, reviewtransaction.ErrTargetedValidationCorrectionBudgetExceeded) {
+						validationRequestErr = targetErr
+					} else if targetErr == nil {
+						request, requestErr := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(outputContext.Context, outputContext.Repo, state, revision, target)
+						if requestErr == nil {
+							validationRequest = &request
+							if capturedEvidence == nil {
+								captured, readErr := reviewtransaction.ReadCapturedVerificationEvidence(store.Dir, state.LineageID, revision, target)
+								evidenceErr = readErr
+								if readErr == nil {
+									record := captured.Record
+									capturedEvidence = &record
+								}
 							}
+						} else if errors.Is(requestErr, reviewtransaction.ErrTargetedValidationCorrectionBudgetExceeded) {
+							validationRequestErr = requestErr
 						}
 					}
 				}
@@ -3718,7 +3738,7 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 			artifactErr = transitionErr
 		}
 		value := reviewFinalizeNextTransition(state, revision, artifacts, artifactErr, reviewFinalizeTransitionContext{
-			RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CaptureContext: captureContext,
+			RepositoryContext: repositoryContext, ValidationRequest: validationRequest, ValidationRequestErr: validationRequestErr, CaptureContext: captureContext,
 			CapturedEvidence: capturedEvidence, EvidenceErr: evidenceErr,
 		})
 		transition = &value

@@ -71,7 +71,7 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 	if record.Revision != *revision {
 		return reviewPreflightError(errors.New("verification evidence binding does not match the current authority revision")) // refusal:by-design operator-knowledge: only a fresh STATUS transition can identify the current immutable revision
 	}
-	evidenceTarget, err := facadeVerificationEvidenceTarget(ctx, root, state, record.Revision)
+	evidenceTarget, err := facadeVerificationEvidenceTarget(ctx, root, state, record.Revision, nil)
 	if err != nil || evidenceTarget.Identity != *target {
 		return reviewPreflightError(errors.New("verification evidence binding does not match the current validating or correction authority")) // refusal:by-design operator-knowledge: the evidence producer must use the exact target emitted by the current STATUS transition
 	}
@@ -100,7 +100,7 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 	return encodeReviewJSON(stdout, captured.Record)
 }
 
-func facadeVerificationEvidenceTarget(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string, capturedLive ...reviewtransaction.Snapshot) (reviewtransaction.Snapshot, error) {
+func facadeVerificationEvidenceTarget(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string, capturedLive *reviewtransaction.Snapshot) (reviewtransaction.Snapshot, error) {
 	switch state.State {
 	case reviewtransaction.StateValidating:
 		return state.CurrentSnapshot, nil
@@ -111,15 +111,12 @@ func facadeVerificationEvidenceTarget(ctx context.Context, repo string, state re
 		if err := rejectFacadeCorrectionUntracked(ctx, repo, state); err != nil {
 			return reviewtransaction.Snapshot{}, err
 		}
-		if len(capturedLive) > 1 {
-			return reviewtransaction.Snapshot{}, errors.New("verification evidence accepts one captured correction snapshot")
-		}
-		if len(capturedLive) == 1 {
-			request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, state, revision, capturedLive[0])
+		if capturedLive != nil {
+			request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, state, revision, *capturedLive)
 			if err != nil {
 				return reviewtransaction.Snapshot{}, err
 			}
-			return facadeCorrectionEvidenceTargetFromRequest(state, capturedLive[0], request), nil
+			return facadeCorrectionEvidenceTargetFromRequest(state, *capturedLive, request), nil
 		}
 		projection := state.InitialSnapshot.Projection
 		if projection == "" {
@@ -133,7 +130,10 @@ func facadeVerificationEvidenceTarget(ctx context.Context, repo string, state re
 			return reviewtransaction.Snapshot{}, err
 		}
 		request, err := reviewtransaction.BuildTargetedValidationRequest(ctx, repo, state, revision)
-		if err != nil || request.CorrectionTargetIdentity != fix.Identity || request.CorrectionCandidateTree != fix.CandidateTree ||
+		if err != nil {
+			return reviewtransaction.Snapshot{}, err
+		}
+		if request.CorrectionTargetIdentity != fix.Identity || request.CorrectionCandidateTree != fix.CandidateTree ||
 			request.CorrectionPathsDigest != fix.PathsDigest {
 			return reviewtransaction.Snapshot{}, errors.New("correction candidate changed while binding verification evidence") // refusal:by-design world-action: concurrent candidate mutation invalidated the snapshot and a stable candidate is required before capture
 		}

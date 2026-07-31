@@ -97,6 +97,8 @@ const reviewtransactionEscalationCauseSample = "budget_exceeded"
 // staged_workspace_overlay_recovery_unavailable carry the exact content
 // organic-dx tasks.md 3b.10 already recorded as Phase 4 registry input.
 var reviewStopReasonNarration = map[string]string{
+	"budget_exceeded": "This correction exceeds the frozen review budget and cannot be accepted as an ordinary correction. " +
+		"Ask a maintainer to inspect the escalation before making another change.",
 	"captured_verification_evidence_invalid": "The captured verification record or its immutable bytes failed integrity checks. " +
 		"Ask a maintainer to inspect the review record before trusting that evidence.",
 	"captured_artifacts_unverifiable": "A previously captured review result failed verification, so this review cannot continue on its own. " +

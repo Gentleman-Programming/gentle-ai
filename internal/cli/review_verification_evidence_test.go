@@ -411,7 +411,7 @@ func capturePassedCorrectionEvidenceForTest(t *testing.T, repo, lineage string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := facadeVerificationEvidenceTarget(context.Background(), repo, record.State, record.Revision)
+	target, err := facadeVerificationEvidenceTarget(context.Background(), repo, record.State, record.Revision, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
