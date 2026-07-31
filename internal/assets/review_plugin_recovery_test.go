@@ -41,7 +41,8 @@ try {
     console.log(scenario === "before-valid" || scenario === "before-substitute" ? output.args.prompt : "NO_ERROR")
   } else {
     const input = { tool: "task", args: { subagent_type: "review-risk", prompt } }
-    const output = { output: '{"subject_hash":"sha256:x","findings":[],"evidence":["` + reviewPluginPayloadMarker + `"]}' }
+    const incomplete = '{"subject_hash":"sha256:' + "c".repeat(64) + '","inspection":{"status":"incomplete","paths":[]},"findings":[],"evidence":["` + reviewPluginPayloadMarker + `"]}'
+    const output = { output: scenario === "after-incomplete" ? incomplete : '{"subject_hash":"sha256:x","findings":[],"evidence":["` + reviewPluginPayloadMarker + `"]}' }
     await hooks["tool.execute.after"](input, output)
     console.log("NO_ERROR")
   }
@@ -71,6 +72,10 @@ func runReviewPluginScenario(t *testing.T, scenario, nativeStderr string) string
 }
 
 func runReviewPluginScenarioWithNative(t *testing.T, scenario, nativeStdout, nativeStderr string) string {
+	return runReviewPluginScenarioWithNativeAndPreservation(t, scenario, nativeStdout, nativeStderr, "")
+}
+
+func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, nativeStdout, nativeStderr, preserveStdout string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the stub native binary requires a POSIX shell")
@@ -92,6 +97,7 @@ func runReviewPluginScenarioWithNative(t *testing.T, scenario, nativeStdout, nat
 		}
 	}
 	stub := "#!/bin/sh\ncat >/dev/null\n" +
+		"if [ \"$2\" = \"preserve-result\" ] && [ -n \"$GENTLE_AI_STUB_PRESERVE_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_PRESERVE_STDOUT\"; exit 0; fi\n" +
 		"if [ -n \"$GENTLE_AI_STUB_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_STDOUT\"; exit 0; fi\n" +
 		"printf '%s\\n' \"$GENTLE_AI_STUB_STDERR\" >&2\nexit 1\n"
 	if err := os.WriteFile(filepath.Join(binDir, "gentle-ai"), []byte(stub), 0o700); err != nil {
@@ -109,6 +115,7 @@ func runReviewPluginScenarioWithNative(t *testing.T, scenario, nativeStdout, nat
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"GENTLE_AI_STUB_STDOUT="+nativeStdout,
 		"GENTLE_AI_STUB_STDERR="+nativeStderr,
+		"GENTLE_AI_STUB_PRESERVE_STDOUT="+preserveStdout,
 		"GENTLE_AI_REVIEW_CWD=",
 	)
 	output, err := command.CombinedOutput()
@@ -290,11 +297,48 @@ func TestReviewPluginSurfacesAdmissionRejectionClass(t *testing.T) {
 	if strings.Contains(message, "retry the same opaque binding") {
 		t.Fatalf("plugin still advises retrying a deterministically refused result: %s", message)
 	}
+	if strings.Contains(message, "severe findings must anchor") {
+		t.Fatalf("admission rejection inferred a severe-finding cause without structured evidence: %s", message)
+	}
 	if strings.Contains(message, "changed-line evidence") {
 		t.Fatalf("plugin forwarded native admission diagnostic prose through an opaque binding: %s", message)
 	}
 	if !strings.Contains(message, reviewPluginPayloadMarker) {
 		t.Fatalf("admission rejection did not preserve the reviewer payload: %s", message)
+	}
+}
+
+func TestReviewPluginKeepsIncompleteAdmissionRecoveryNeutral(t *testing.T) {
+	nativeDiagnosticMarker := "NATIVE-DIAGNOSTIC-4e7c"
+	native := "Error: reviewer artifact admission incomplete: " + nativeDiagnosticMarker +
+		` rejected payload {"evidence":["` + reviewPluginPayloadMarker + `"]}`
+	message := runReviewPluginScenarioWithNativeAndPreservation(
+		t,
+		"after-incomplete",
+		"",
+		native,
+		`{"reference":"incident/reviewer-result.json"}`,
+	)
+	if message == "NO_ERROR" {
+		t.Fatal("plugin did not fail despite native incomplete admission")
+	}
+	if !strings.Contains(message, "rejected the reviewer result as incomplete") {
+		t.Fatalf("incomplete admission lost its typed decision: %s", message)
+	}
+	if !strings.Contains(message, "retrying capture with the same result cannot succeed") {
+		t.Fatalf("incomplete admission did not explain why recapture cannot succeed: %s", message)
+	}
+	if !strings.Contains(message, "relaunch this lens reviewer") {
+		t.Fatalf("incomplete admission carries no successful recovery instruction: %s", message)
+	}
+	if strings.Contains(message, "severe findings must anchor") {
+		t.Fatalf("incomplete admission inferred a severe-finding cause: %s", message)
+	}
+	if strings.Contains(message, nativeDiagnosticMarker) {
+		t.Fatalf("incomplete admission leaked native diagnostic prose: %s", message)
+	}
+	if strings.Contains(message, reviewPluginPayloadMarker) {
+		t.Fatalf("incomplete admission leaked the rejected reviewer payload: %s", message)
 	}
 }
 

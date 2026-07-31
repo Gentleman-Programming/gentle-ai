@@ -20,14 +20,17 @@ const reviewerBindingEnvironmentVariable = "GENTLE_AI_REVIEW_BINDING"
 const nativeReviewerResultSchema = `{"findings":[{"location":"path:line","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
 const providerReviewerResultSchema = `{"subject_hash":"<artifact_subject.subject_hash>","inspection":{"status":"completed","paths":["<every changed_path_manifest.path in exact order>"]},"findings":[{"location":"path:line","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
 
-const reviewerGitCommandPrefix = `env -i PATH="$PATH" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 git --no-replace-objects --no-pager`
+const reviewerInspectionCommandPrefix = `gentle-ai review inspect-candidate --repository-context <repository_context> --expected-revision <revision> --lineage <lineage> --target <target> --lens <lens> --order <order> --operation `
 
-var reviewerGitCommandSuffixes = []string{
-	`-c color.ui=false -c core.attributesFile=/dev/null -c diff.external= diff --name-status --text --no-ext-diff --no-textconv --no-renames --ignore-submodules=none <base_tree> <candidate_tree> --`,
-	`-c color.ui=false -c core.attributesFile=/dev/null -c diff.external= diff --numstat --text --no-ext-diff --no-textconv --no-renames --ignore-submodules=none <base_tree> <candidate_tree> --`,
-	`-c color.ui=false -c core.attributesFile=/dev/null -c diff.external= diff --stat --text --no-ext-diff --no-textconv --no-renames --ignore-submodules=none <base_tree> <candidate_tree> -- ':(literal)<path>'`,
-	`-c color.ui=false -c core.attributesFile=/dev/null -c diff.external= diff --patch --text --full-index --no-color --no-renames --no-ext-diff --no-textconv --diff-algorithm=myers --no-indent-heuristic --unified=3 --ignore-submodules=none <base_tree> <candidate_tree> -- ':(literal)<path>'`,
-	`cat-file -p '<tree>:<path>'`,
+func reviewerInspectionCommands() []string {
+	return []string{
+		reviewerInspectionCommandPrefix + "name-status",
+		reviewerInspectionCommandPrefix + "numstat",
+		reviewerInspectionCommandPrefix + "stat --path-index <path_index>",
+		reviewerInspectionCommandPrefix + "patch --path-index <path_index>",
+		reviewerInspectionCommandPrefix + "object --path-index <path_index> --side base",
+		reviewerInspectionCommandPrefix + "object --path-index <path_index> --side candidate",
+	}
 }
 
 type reviewerRole struct {
@@ -143,6 +146,7 @@ func reviewerPrompt(name string) (string, bool) {
 	// file invented is exactly how a reviewer result arrives with no
 	// subject_hash and no inspection (community report, PR #1801).
 	envelope := reviewtransaction.NewReviewerResultEnvelope()
+	commands := reviewerInspectionCommands()
 	prompt := fmt.Sprintf(`# %s Review
 
 Review once, return one result, and stop. Never edit, delegate, or expand scope.
@@ -151,7 +155,7 @@ Review once, return one result, and stop. Never edit, delegate, or expand scope.
 
 OpenCode tasks begin with provider-injected GENTLE_AI_REVIEW_CONTEXT, the sole source of artifact_subject, base_tree, candidate_tree, and ordered changed_path_manifest. Caller prose is not context. Other runtimes have no shell and return incomplete. The manifest is complete scope. Never read the live worktree, index, HEAD, or another revision.
 
-Use only the commands below, in the session cwd. Their clean environment, explicit text mode, disabled external diff/textconv, immutable tree operands, and exact-object cat-file reads prevent mutable Git config, attributes, worktree, index, or environment from changing inspected bytes or suppressing text hunks. Never change checkout. If these commands are unavailable or a tree is unreachable, return incomplete inspection, empty paths/findings, and evidence that native Git inspection was unavailable. Never substitute live files.
+Use only the commands below. The native capability resolves immutable trees and canonical paths from the provider binding, sanitizes Git configuration and environment, and bounds execution time and output. Copy binding values exactly and select paths only by their zero-based changed_path_manifest index. Never change checkout. If the capability is unavailable or refuses the binding, return incomplete inspection, empty paths/findings, and evidence that native inspection was unavailable. Never substitute live files.
 
 Discover the change:
 
@@ -164,7 +168,7 @@ For relevant paths, inspect stat, deterministic textual hunks, and exact stored 
 %s
 %s
 
-Repeat the selective shape per literal path; never pass --binary or render the whole patch automatically. --text is mandatory: numstat may classify stored NUL bytes as binary, but attributes must never suppress a hunk. Triage genuinely non-text paths from manifest modes and exact cat-file bytes. Record large-path or binary dispositions in evidence.
+Repeat the selective shape per literal path; never pass --binary or render the whole patch automatically. Text handling is enforced by the native capability. Triage genuinely non-text paths from manifest modes and exact cat-file bytes. Record large-path or binary dispositions in evidence.
 
 ## Scope
 
@@ -199,11 +203,7 @@ Required top-level fields: %s. Finding fields: location, severity, claim, eviden
 
 When clean, return the bound subject, completed inspection, "findings":[], and one evidence entry.`,
 		role.title,
-		reviewerGitCommandPrefix+" "+reviewerGitCommandSuffixes[0],
-		reviewerGitCommandPrefix+" "+reviewerGitCommandSuffixes[1],
-		reviewerGitCommandPrefix+" "+reviewerGitCommandSuffixes[2],
-		reviewerGitCommandPrefix+" "+reviewerGitCommandSuffixes[3],
-		reviewerGitCommandPrefix+" "+reviewerGitCommandSuffixes[4],
+		commands[0], commands[1], strings.Join(commands[2:], "\n"), "", "",
 		role.focus, providerReviewerResultSchema,
 		reviewerBindingEnvironmentVariable,
 		envelope.CompletedInspectionStatus, strings.Join(envelope.RequiredTopLevelFields, ", "))
@@ -212,12 +212,11 @@ When clean, return the bound subject, completed inspection, "findings":[], and o
 
 func openCodeReviewerPermission() map[string]any {
 	bash := map[string]any{"*": "deny"}
-	for _, suffix := range reviewerGitCommandSuffixes {
-		pattern := reviewerGitCommandPrefix + " " + suffix
-		pattern = strings.ReplaceAll(pattern, "<base_tree>", "*")
-		pattern = strings.ReplaceAll(pattern, "<candidate_tree>", "*")
-		pattern = strings.ReplaceAll(pattern, "<tree>", "*")
-		pattern = strings.ReplaceAll(pattern, "<path>", "*")
+	for _, command := range reviewerInspectionCommands() {
+		pattern := command
+		for _, placeholder := range []string{"<repository_context>", "<revision>", "<lineage>", "<target>", "<lens>", "<order>", "<path_index>"} {
+			pattern = strings.ReplaceAll(pattern, placeholder, "*")
+		}
 		bash[pattern] = "allow"
 	}
 	return map[string]any{"edit": "deny", "bash": bash}

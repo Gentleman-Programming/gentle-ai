@@ -896,7 +896,8 @@ func (s componentSyncStep) Run() error {
 
 	case model.ComponentContext7:
 		for _, adapter := range adapters {
-			res, err := mcp.Inject(s.homeDir, adapter)
+			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+			res, err := mcp.Inject(s.homeDir, targetDir, adapter)
 			if err != nil {
 				return fmt.Errorf("sync context7 for %q: %w", adapter.Agent(), err)
 			}

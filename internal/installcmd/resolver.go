@@ -262,9 +262,13 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 		}, nil
 	case "apt", "pacman", "dnf":
 		const tmpDir = "/tmp/gentleman-guardian-angel"
+		tagRef := "refs/tags/v" + versions.GGAVersion
 		return CommandSequence{
 			{"rm", "-rf", tmpDir},
-			{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tmpDir},
+			{"mkdir", "-p", tmpDir},
+			{"git", "init", tmpDir},
+			{"git", "-C", tmpDir, "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tagRef + ":" + tagRef},
+			{"git", "-C", tmpDir, "checkout", "-f", tagRef},
 			{"bash", tmpDir + "/install.sh"},
 		}, nil
 	case "winget":

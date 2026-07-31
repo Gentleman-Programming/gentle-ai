@@ -1,7 +1,6 @@
 package reviewtransaction
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -10,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 )
 
@@ -87,12 +85,13 @@ type ChangedPathManifestEntry struct {
 
 // FrozenCandidateContext is the deterministic reviewer input derived only
 // from the immutable Git trees and metadata persisted in a Snapshot.
+// Its repositoryRoot is provider-only local state, not reviewer-visible input.
 type FrozenCandidateContext struct {
 	BaseTree            string
 	CandidateTree       string
 	LegacyCandidateDiff *FrozenCandidateDiff
 	ChangedPathManifest []ChangedPathManifestEntry
-	repositoryPaths     []string
+	repositoryRoot      string
 }
 
 // WithLegacyCandidateDiff adds the exact published v1 candidate transport.
@@ -188,52 +187,60 @@ func (builder SnapshotBuilder) FrozenCandidateContext(ctx context.Context, snaps
 		}
 		manifest = append(manifest, entry)
 	}
-	repositoryPaths, err := frozenRepositoryPathManifest(ctx, repo, isolation, snapshot.BaseTree, snapshot.CandidateTree)
-	if err != nil {
-		return FrozenCandidateContext{}, err
-	}
 	return FrozenCandidateContext{
 		BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree,
-		ChangedPathManifest: manifest, repositoryPaths: repositoryPaths,
+		ChangedPathManifest: manifest, repositoryRoot: repo,
 	}, nil
 }
 
-// frozenRepositoryPathManifest returns the canonical logical paths present in
-// either immutable side of the review. Admission uses this private universe to
-// distinguish real repository path:line references from hashes, timestamps,
-// status labels, URLs, and other arbitrary colon-delimited prose.
-func frozenRepositoryPathManifest(ctx context.Context, repo string, isolation []string, trees ...string) ([]string, error) {
-	seen := make(map[string]struct{})
-	seenTrees := make(map[string]struct{}, len(trees))
-	for _, tree := range trees {
-		if _, duplicate := seenTrees[tree]; duplicate {
-			continue
-		}
-		seenTrees[tree] = struct{}{}
-		output, err := runGitLimited(ctx, repo, isolation, nil, maxFrozenCandidateManifestBytes,
-			"ls-tree", "-r", "-z", "--name-only", "--full-tree", tree)
-		if err != nil {
-			return nil, fmt.Errorf("render frozen repository path manifest: %w", err)
-		}
-		for _, rawPath := range bytes.Split(output, []byte{0}) {
-			if len(rawPath) == 0 {
-				continue
-			}
-			logicalPath, err := normalizeLogicalPath(string(rawPath))
-			if err != nil {
-				// Unsupported unchanged Git names cannot be emitted by the native
-				// changed-path manifest, so they are not valid reviewer references.
-				continue
-			}
-			seen[logicalPath] = struct{}{}
-		}
+// InspectCandidate renders one bounded, read-only frozen-candidate view; path operations select only by canonical manifest index.
+func (builder SnapshotBuilder) InspectCandidate(ctx context.Context, snapshot Snapshot, operation string, pathIndex int, side string) ([]byte, error) {
+	repo, err := builder.repositoryRoot(ctx)
+	if err != nil {
+		return nil, err
 	}
-	paths := make([]string, 0, len(seen))
-	for logicalPath := range seen {
-		paths = append(paths, logicalPath)
+	frozen, err := builder.FrozenCandidateContext(ctx, snapshot)
+	if err != nil {
+		return nil, err
 	}
-	sort.Strings(paths)
-	return paths, nil
+	pathOperation := operation == "stat" || operation == "patch" || operation == "object"
+	if pathOperation != (pathIndex >= 0) || pathIndex >= len(frozen.ChangedPathManifest) {
+		return nil, errors.New("candidate inspection operation requires its exact canonical path index") // refusal:by-design operator-knowledge: the native CLI validates this closed combination before calling the provider boundary
+	}
+	if operation == "object" {
+		if side != "base" && side != "candidate" {
+			return nil, errors.New("candidate object inspection requires side base or candidate") // refusal:by-design operator-knowledge: the native CLI validates this closed enum before calling the provider boundary
+		}
+	} else if side != "" {
+		return nil, errors.New("candidate inspection side is valid only for object content") // refusal:by-design operator-knowledge: reaching this means provider code bypassed the validated native CLI contract
+	}
+
+	isolation, cleanup, err := isolatedImmutableTreeGit(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	common := []string{"--no-pager", "-c", "color.ui=false", "-c", "core.attributesFile=" + os.DevNull, "-c", "diff.external="}
+	var args []string
+	switch operation {
+	case "name-status", "numstat":
+		args = append(common, "diff", "--"+operation, "--text", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", frozen.BaseTree, frozen.CandidateTree, "--")
+	case "stat":
+		path := ":(literal)" + frozen.ChangedPathManifest[pathIndex].Path
+		args = append(common, "diff", "--stat", "--text", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", frozen.BaseTree, frozen.CandidateTree, "--", path)
+	case "patch":
+		path := ":(literal)" + frozen.ChangedPathManifest[pathIndex].Path
+		args = append(common, "diff", "--patch", "--text", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=3", "--ignore-submodules=none", frozen.BaseTree, frozen.CandidateTree, "--", path)
+	case "object":
+		tree := frozen.CandidateTree
+		if side == "base" {
+			tree = frozen.BaseTree
+		}
+		args = append(common, "cat-file", "-p", tree+":"+frozen.ChangedPathManifest[pathIndex].Path)
+	default:
+		return nil, fmt.Errorf("unknown candidate inspection operation %q", operation) // refusal:by-design operator-knowledge: the native CLI validates the closed operation enum before calling this boundary
+	}
+	return runGitLimited(ctx, repo, isolation, nil, MaxFrozenCandidateDiffBytes, args...)
 }
 
 func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func(), error) {

@@ -71,7 +71,7 @@ func (store CompactStore) ResolveAdmittedReviewerResult(ctx context.Context, exp
 		if err := decoder.Decode(&extra); err != io.EOF || envelope.Schema != admittedReviewerResultSchemaForSubject(expected) || envelope.Subject != expected || envelope.Admission.Validate(expected) != nil || len(envelope.Result) == 0 {
 			return errors.New("admitted reviewer result does not match locked authority")
 		}
-		result, found = reAdmitCompactReviewerResult(envelope, expected, nativeFrozen)
+		result, found = reAdmitCompactReviewerResult(ctx, envelope, expected, nativeFrozen)
 		if !found {
 			return errors.New("admitted reviewer result failed native re-admission")
 		}
@@ -168,6 +168,7 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 				)
 			}
 			admissionResult, admission, err := AdmitArtifact(
+				ctx,
 				ArtifactAdmissionRequest{
 					ExpectedSubject:           expected,
 					FrozenContext:             nativeContext,

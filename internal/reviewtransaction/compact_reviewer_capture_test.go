@@ -169,6 +169,7 @@ func TestCompactStoreCaptureAdmittedReviewerResultPublishesDurableExactReplay(
 		t.Fatalf("canonical provider result = %#v", provider)
 	}
 	reAdmitted, ok := reAdmitCompactReviewerResult(
+		t.Context(),
 		envelope,
 		fixture.request.ArtifactSubject,
 		fixture.request.FrozenContext,
