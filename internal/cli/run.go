@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	codexagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
@@ -1348,7 +1349,8 @@ func (s componentApplyStep) Run() error {
 		return nil
 	case model.ComponentContext7:
 		for _, adapter := range adapters {
-			if _, err := mcp.Inject(s.homeDir, adapter); err != nil {
+			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
+			if _, err := mcp.Inject(s.homeDir, targetDir, adapter); err != nil {
 				return fmt.Errorf("inject context7 for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -1827,22 +1829,26 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			switch adapter.MCPStrategy() {
 			case model.StrategySeparateMCPFiles:
 				if adapter.Agent() == model.AgentClaudeCode {
-					if p := adapter.SettingsPath(homeDir); p != "" {
+					if targetDir == homeDir {
+						// Context7 injection writes ~/.claude.json (issue #1868).
+						paths = append(paths, claude.UserConfigPath(homeDir))
+					} else if p := adapter.SettingsPath(targetDir); p != "" {
+						// Workspace scope keeps the scoped settings merge.
 						paths = append(paths, p)
 					}
 					break
 				}
-				paths = append(paths, adapter.MCPConfigPath(homeDir, "context7"))
+				paths = append(paths, adapter.MCPConfigPath(targetDir, "context7"))
 			case model.StrategyMergeIntoSettings:
-				if p := adapter.SettingsPath(homeDir); p != "" {
+				if p := adapter.SettingsPath(targetDir); p != "" {
 					paths = append(paths, p)
 				}
 			case model.StrategyMCPConfigFile:
-				if p := adapter.MCPConfigPath(homeDir, "context7"); p != "" {
+				if p := adapter.MCPConfigPath(targetDir, "context7"); p != "" {
 					paths = append(paths, p)
 				}
 			case model.StrategyTOMLFile:
-				if p := adapter.MCPConfigPath(homeDir, "context7"); p != "" {
+				if p := adapter.MCPConfigPath(targetDir, "context7"); p != "" {
 					paths = append(paths, p)
 				}
 			}
@@ -2002,7 +2008,7 @@ func componentPathDir(homeDir, workspaceDir string, adapter agents.Adapter, comp
 
 func componentPathDirScoped(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter, component model.ComponentID) string {
 	switch component {
-	case model.ComponentEngram, model.ComponentSDD, model.ComponentPersona, model.ComponentSkills:
+	case model.ComponentEngram, model.ComponentSDD, model.ComponentPersona, model.ComponentSkills, model.ComponentContext7:
 		return componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
 	default:
 		return homeDir

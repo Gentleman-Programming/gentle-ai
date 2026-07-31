@@ -346,10 +346,24 @@ func TestBuildStagedWorkspaceOverlayRecoveryUsesOnlyTheRealIndex(t *testing.T) {
 		len(snapshot.IntendedUntracked) != 0 || len(snapshot.LedgerIDs) != 0 {
 		t.Fatalf("staged recovery snapshot = %#v", snapshot)
 	}
-	for _, path := range []string{"tracked.txt", "untracked.txt"} {
-		if gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":"+path) && path == "untracked.txt" {
-			t.Fatalf("staged recovery snapshot included %s", path)
-		}
+	if got := gitSnapshot(t, repo, "show", snapshot.CandidateTree+":reviewed.txt"); got != "reviewed\n" {
+		t.Fatalf("staged recovery snapshot reviewed.txt = %q, want authorized staged bytes", got)
+	}
+	if got := gitSnapshot(t, repo, "show", snapshot.CandidateTree+":tracked.txt"); got != "base\n" {
+		t.Fatalf("staged recovery snapshot tracked.txt = %q, want base index bytes", got)
+	}
+	if gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":untracked.txt") {
+		t.Fatal("staged recovery snapshot included unrelated untracked.txt")
+	}
+
+	writeSnapshotFile(t, repo, "tracked.txt", "more unstaged\n")
+	writeSnapshotFile(t, repo, "untracked.txt", "more untracked\n")
+	rebuilt, err := builder.BuildStagedWorkspaceOverlayRecovery(context.Background(), target)
+	if err != nil {
+		t.Fatalf("rebuild staged recovery snapshot: %v", err)
+	}
+	if rebuilt.CandidateTree != snapshot.CandidateTree || rebuilt.Identity != snapshot.Identity {
+		t.Fatalf("staged recovery identity changed with only worktree bytes: before=%#v after=%#v", snapshot, rebuilt)
 	}
 	if afterIndex := gitSnapshot(t, repo, "diff", "--cached", "--binary"); afterIndex != beforeIndex {
 		t.Fatal("staged recovery snapshot mutated the real index")

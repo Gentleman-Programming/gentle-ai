@@ -94,6 +94,17 @@ When a sub-agent or tool returns a user-facing blocking prompt or menu, preserve
 - Fallback: If a native UI is unavailable, denied, the runtime is noninteractive, or the complete envelope is oversized or otherwise unrepresentable because of question-count, option-count, or text-length limits, emit the COMPLETE choice envelope as a plain chat or terminal response. Include the required answer syntax and why the input blocks progress. Then STOP. Do not choose, default, infer, launch dependent work, or continue.
 - Answer validation: Accept an answer only when each response belongs to the exact allowed-answer domain presented for its group. Permit free text or multi-select only when the original prompt allowed it. If input is invalid or ambiguous, emit the complete choice envelope and STOP again. Return a valid answer to the same blocked actor exactly once.
 
+#### Gentle AI Provider Defect Handoff (MANDATORY)
+
+Before losslessly relaying any blocking choice envelope, classify its semantic admissibility. When the consumer workflow appears blocked by a Gentle AI provider or tool defect, never offer to switch to, inspect, modify, or directly repair the Gentle AI repository from that workflow. If an upstream envelope offers direct repair, do not silently mutate it: reject it as semantically inadmissible and issue this separate orchestrator-owned handoff envelope.
+
+- Ask the user first, in the active orchestrator conversation language, whether to report the apparent defect. Present one single-select blocking envelope with exactly two semantic choices. Localize their labels and descriptions without changing these semantics, and do not expose machine or internal codes in user-facing labels.
+  1. **Report the Gentle AI defect**: Only after explicit consent, prepare or reuse privacy-scrubbed diagnostics; search open and closed issues in `Gentleman-Programming/gentle-ai`; comment on an equivalent issue with the new occurrence and evidence, or create a new bug report only if no duplicate exists. Then STOP with all consumer state preserved.
+  2. **Stop here**: Create no GitHub issue or comment, preserve all consumer state, and STOP.
+- Report observed evidence, not an unconfirmed root cause. Include or reuse sanitized version/build, OS/architecture/client, the operation shape without secrets, bounded attempts and outcomes, failure envelopes, mutation outcome, expected and actual behavior, a minimal reproduction, safe opaque reason/revision identifiers, and preserved-state evidence.
+- Immediately before any GitHub side effect, perform a final privacy scan. Exclude raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values.
+- Resume only after an installed released fix, then re-enter through native status. Never resume against a source checkout or unmerged pull request.
+
 ### Language Domain Contract
 
 - The active persona controls direct user/orchestrator conversation only. Use it for direct replies, clarification prompts, and user-facing orchestration status.

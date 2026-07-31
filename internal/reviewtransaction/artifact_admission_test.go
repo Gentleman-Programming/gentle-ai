@@ -7,8 +7,27 @@ import (
 
 func admittedArtifactFixture(t *testing.T) (ArtifactSubject, FrozenCandidateContext, ArtifactAdmissionRequest) {
 	t.Helper()
-	state, revision, context := artifactSubjectFixture(t)
-	subject, err := NewArtifactSubject(state, revision, context, LensReliability, 0, "")
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "internal/a.go", "package internal\n\nconst value = 1\n")
+	writeSnapshotFile(t, repo, "internal/secret.go", "package internal\n")
+	writeSnapshotFile(t, repo, "secret.go", "package secret\n")
+	gitSnapshot(t, repo, "add", "-A", "--")
+	gitSnapshot(t, repo, "commit", "-m", "add admission fixtures")
+	writeSnapshotFile(t, repo, "internal/a.go", "package internal\n\nconst value = 2\n")
+	writeSnapshotFile(t, repo, "internal/b.go", "package internal\n")
+	gitSnapshot(t, repo, "add", "-A", "--")
+	gitSnapshot(t, repo, "commit", "-m", "candidate")
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(t.Context(), Target{Kind: TargetExactRevision, Revision: strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	context, err := (SnapshotBuilder{Repo: repo}).FrozenCandidateContext(t.Context(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := CompactState{LineageID: "review-artifact-subject", SelectedLenses: []string{LensReliability, LensReadability}, InitialSnapshot: snapshot}
+	subject, err := NewArtifactSubject(state, "sha256:"+strings.Repeat("2", 64), context, LensReliability, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +73,7 @@ func TestExtractBoundedSingleJSONObject(t *testing.T) {
 
 func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 	_, _, request := admittedArtifactFixture(t)
-	canonical, admission, err := AdmitArtifact(request)
+	canonical, admission, err := AdmitArtifact(t.Context(), request)
 	if err != nil {
 		t.Fatalf("AdmitArtifact() error = %v", err)
 	}
@@ -78,14 +97,8 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 			r.Result.Evidence = []string{"Inspection blocked: read access denied; no candidate contents were available."}
 		}, decision: ArtifactAdmissionIncomplete},
 		{name: "partial inspection", mutate: func(r *ArtifactAdmissionRequest) { r.Inspection.Paths = []string{"internal/a.go"} }, decision: ArtifactAdmissionIncomplete},
-		{name: "repository path manifest missing", mutate: func(r *ArtifactAdmissionRequest) {
-			r.FrozenContext.repositoryPaths = nil
-		}, decision: ArtifactAdmissionBindingMismatch},
-		{name: "repository path manifest non-canonical", mutate: func(r *ArtifactAdmissionRequest) {
-			r.FrozenContext.repositoryPaths = append([]string{"./not-canonical.go"}, r.FrozenContext.repositoryPaths...)
-		}, decision: ArtifactAdmissionBindingMismatch},
-		{name: "changed path absent from repository manifest", mutate: func(r *ArtifactAdmissionRequest) {
-			r.FrozenContext.repositoryPaths = []string{"internal/a.go"}
+		{name: "repository authority missing", mutate: func(r *ArtifactAdmissionRequest) {
+			r.FrozenContext.repositoryRoot = ""
 		}, decision: ArtifactAdmissionBindingMismatch},
 		{name: "out of scope finding", mutate: func(r *ArtifactAdmissionRequest) { r.Result.Findings[0].Location = "unrelated/old.go:3" }, decision: ArtifactAdmissionOutOfScope},
 		{name: "unknown repository proof", mutate: func(r *ArtifactAdmissionRequest) {
@@ -93,6 +106,9 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 		}, decision: ArtifactAdmissionOutOfScope},
 		{name: "unknown repository evidence", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Evidence = append(r.Result.Evidence, "diff: missing.go:42")
+		}, decision: ArtifactAdmissionOutOfScope},
+		{name: "directory repository evidence does not recurse", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Evidence = append(r.Result.Evidence, "directory: `internal:1`")
 		}, decision: ArtifactAdmissionOutOfScope},
 		{name: "non-canonical repository proof", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings[0].ProofRefs = []string{"diff: ./secret.go:42"}
@@ -105,7 +121,7 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, candidate := admittedArtifactFixture(t)
 			tc.mutate(&candidate)
-			_, admission, err := AdmitArtifact(candidate)
+			_, admission, err := AdmitArtifact(t.Context(), candidate)
 			if err == nil || admission.Decision != tc.decision {
 				t.Fatalf("AdmitArtifact() decision = %q, error = %v; want %q", admission.Decision, err, tc.decision)
 			}
@@ -118,17 +134,23 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 // candidate diff rather than the frozen Git trees.
 func legacyAdmittedArtifactFixture(t *testing.T) ArtifactAdmissionRequest {
 	t.Helper()
-	state, revision, frozen := artifactSubjectFixture(t)
+	native, frozen, request := admittedArtifactFixture(t)
+	state := CompactState{
+		LineageID: native.LineageID, SelectedLenses: []string{LensReliability, LensReadability},
+		InitialSnapshot: Snapshot{
+			Identity: native.TargetIdentity, BaseTree: frozen.BaseTree, CandidateTree: frozen.CandidateTree,
+			Paths: manifestPaths(frozen.ChangedPathManifest),
+		},
+	}
 	diff, err := NewFrozenCandidateDiff([]byte("diff --git a/internal/a.go b/internal/a.go\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	frozen.LegacyCandidateDiff = &diff
-	subject, err := NewLegacyArtifactSubject(state, revision, frozen, LensReliability, 0, "")
+	subject, err := NewLegacyArtifactSubject(state, native.AuthorityRevision, frozen, LensReliability, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, request := admittedArtifactFixture(t)
 	request.ExpectedSubject, request.FrozenContext = subject, frozen
 	request.EchoedSubjectHash = subject.SubjectHash
 	return request
@@ -140,7 +162,7 @@ func legacyAdmittedArtifactFixture(t *testing.T) ArtifactAdmissionRequest {
 // slot, leaving the collect loop to re-offer the same slot forever.
 func TestAdmitArtifactBindsLegacySubjectByCandidateDiff(t *testing.T) {
 	request := legacyAdmittedArtifactFixture(t)
-	canonical, admission, err := AdmitArtifact(request)
+	canonical, admission, err := AdmitArtifact(t.Context(), request)
 	if err != nil {
 		t.Fatalf("AdmitArtifact() error = %v (decision %q, diagnostic %q)", err, admission.Decision, admission.Diagnostic)
 	}
@@ -170,7 +192,7 @@ func TestAdmitArtifactBindsLegacySubjectByCandidateDiff(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			candidate := legacyAdmittedArtifactFixture(t)
 			tc.mutate(&candidate)
-			_, admission, err := AdmitArtifact(candidate)
+			_, admission, err := AdmitArtifact(t.Context(), candidate)
 			if err == nil || admission.Decision != ArtifactAdmissionBindingMismatch {
 				t.Fatalf("AdmitArtifact() decision = %q, error = %v; want %q",
 					admission.Decision, err, ArtifactAdmissionBindingMismatch)
@@ -181,10 +203,12 @@ func TestAdmitArtifactBindsLegacySubjectByCandidateDiff(t *testing.T) {
 
 func TestAdmitArtifactAllowsSupportingProofOutsideChangedManifest(t *testing.T) {
 	_, _, request := admittedArtifactFixture(t)
+	gitSnapshot(t, request.FrozenContext.repositoryRoot, "rm", "--", "secret.go")
+	writeSnapshotFile(t, request.FrozenContext.repositoryRoot, "live-only.go", "package liveonly\n")
 	request.Result.Evidence = append(request.Result.Evidence, "supporting implementation: internal/secret.go:7")
 	request.Result.Findings[0].ProofRefs = []string{"repository proof: secret.go:42"}
 
-	canonical, admission, err := AdmitArtifact(request)
+	canonical, admission, err := AdmitArtifact(t.Context(), request)
 	if err != nil || admission.Decision != ArtifactAdmissionCompleted {
 		t.Fatalf("AdmitArtifact() = %q, %v; want completed", admission.Decision, err)
 	}
@@ -194,8 +218,13 @@ func TestAdmitArtifactAllowsSupportingProofOutsideChangedManifest(t *testing.T) 
 	}
 
 	request.Inspection.Paths = append(request.Inspection.Paths, "internal/secret.go")
-	if _, rejected, err := AdmitArtifact(request); err == nil || rejected.Decision != ArtifactAdmissionOutOfScope {
+	if _, rejected, err := AdmitArtifact(t.Context(), request); err == nil || rejected.Decision != ArtifactAdmissionOutOfScope {
 		t.Fatalf("external proof path became an inspectable candidate path: decision=%q error=%v", rejected.Decision, err)
+	}
+	request.Inspection.Paths = []string{"internal/a.go", "internal/b.go"}
+	request.Result.Evidence = []string{"live-only proof: live-only.go:1"}
+	if _, rejected, err := AdmitArtifact(t.Context(), request); err == nil || rejected.Decision != ArtifactAdmissionOutOfScope {
+		t.Fatalf("live-worktree-only proof was admitted: decision=%q error=%v", rejected.Decision, err)
 	}
 }
 
@@ -221,7 +250,7 @@ func TestArtifactAdmissionCandidateCausalCanonicalization(t *testing.T) {
 	t.Run("non-canonical submitted order still admits", func(t *testing.T) {
 		request := admittedCandidateCausalArtifactFixture(t)
 		request.CandidateCausalFindingIDs = []string{" R3-001 "}
-		_, admission, err := AdmitArtifact(request)
+		_, admission, err := AdmitArtifact(t.Context(), request)
 		if err != nil || admission.Decision != ArtifactAdmissionCompleted {
 			t.Fatalf("AdmitArtifact() = %q, %v; want completed", admission.Decision, err)
 		}
@@ -232,7 +261,7 @@ func TestArtifactAdmissionCandidateCausalCanonicalization(t *testing.T) {
 	t.Run("canonicalization error becomes incomplete and names the offending id", func(t *testing.T) {
 		request := admittedCandidateCausalArtifactFixture(t)
 		request.CandidateCausalFindingIDs = []string{"R3-001", "R3-001"}
-		_, admission, err := AdmitArtifact(request)
+		_, admission, err := AdmitArtifact(t.Context(), request)
 		if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
 			t.Fatalf("AdmitArtifact() = %q, %v; want incomplete", admission.Decision, err)
 		}
@@ -243,7 +272,7 @@ func TestArtifactAdmissionCandidateCausalCanonicalization(t *testing.T) {
 	t.Run("real set mismatch stays out of scope byte-identical", func(t *testing.T) {
 		request := admittedCandidateCausalArtifactFixture(t)
 		request.CandidateCausalFindingIDs = []string{"R3-999"}
-		_, admission, err := AdmitArtifact(request)
+		_, admission, err := AdmitArtifact(t.Context(), request)
 		wantMessage := "candidate-causal findings are not proven by repository-derived changed-line evidence"
 		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope || admission.Diagnostic != wantMessage {
 			t.Fatalf("AdmitArtifact() = %q, %q, %v; want out-of-scope %q", admission.Decision, admission.Diagnostic, err, wantMessage)
@@ -260,7 +289,7 @@ func TestArtifactAdmissionCandidateCausalCanonicalization(t *testing.T) {
 func TestAdmitArtifactOmittedSubjectDiagnosticNamesContinuation(t *testing.T) {
 	_, _, request := admittedArtifactFixture(t)
 	request.EchoedSubjectHash = ""
-	_, admission, err := AdmitArtifact(request)
+	_, admission, err := AdmitArtifact(t.Context(), request)
 	if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
 		t.Fatalf("AdmitArtifact() decision = %q, error = %v; want incomplete", admission.Decision, err)
 	}
@@ -283,6 +312,10 @@ func TestReferenceOutsideRepositoryRecognizesOnlyCanonicalRepositoryPaths(t *tes
 		"internal/secret.go", "main.go", "secret.go", "sha256", "status",
 	} {
 		repository[logicalPath] = struct{}{}
+	}
+	lookup := func(logicalPath string) (bool, error) {
+		_, known := repository[logicalPath]
+		return known, nil
 	}
 	tests := []struct {
 		name    string
@@ -310,7 +343,11 @@ func TestReferenceOutsideRepositoryRecognizesOnlyCanonicalRepositoryPaths(t *tes
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := referenceOutsideRepository(tt.value, repository); got != tt.outside {
+			got, err := referenceOutsideRepository(tt.value, lookup)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.outside {
 				t.Fatalf("referenceOutsideRepository(%q) = %v, want %v", tt.value, got, tt.outside)
 			}
 		})
