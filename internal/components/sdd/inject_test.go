@@ -7277,3 +7277,61 @@ func TestInjectOpenCodeNativeFallbackAgentsDeriveFromExploreModel(t *testing.T) 
 		}
 	}
 }
+
+func TestInjectOpenCodeNativeFallbackAgentsPreserveExistingUserModel(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	existingJSON := `{
+  "model": "openai/gpt-5",
+  "agent": {
+    "general": {
+      "model": "user-provider/custom-user-model",
+      "variant": "high"
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(existingJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	opts := InjectOptions{
+		OpenCodeModelAssignments: map[string]model.ModelAssignment{
+			"sdd-explore": {ProviderID: "anthropic", ModelID: "claude-3-5-haiku", Effort: "medium"},
+		},
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), "multi", opts); err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+
+	genDef, ok := agentMap["general"].(map[string]any)
+	if !ok {
+		t.Fatal("general agent missing")
+	}
+	if genDef["model"] != "user-provider/custom-user-model" {
+		t.Fatalf("general model = %v, want preserved user-provider/custom-user-model", genDef["model"])
+	}
+	if genDef["variant"] != "high" {
+		t.Fatalf("general variant = %v, want preserved high", genDef["variant"])
+	}
+}

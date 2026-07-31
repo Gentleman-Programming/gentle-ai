@@ -2708,8 +2708,12 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 			} else {
 				agentMap["variant"] = ""
 			}
+		case existingAgentKeys[phase]:
+			// 2. Agent already exists in user's config — let merge preserve whatever they have
+			// (don't touch the overlay for this agent's model)
 		case isNativeFallbackAgent(phase):
-			// 2. Native fallback agents (general, explore): derive model from sdd-explore if available, else rootModelID
+			// 3. Native fallback agents (general, explore) not yet in user config:
+			// derive model from sdd-explore if available, else rootModelID
 			if exploreAssignment, ok := assignments["sdd-explore"]; ok && exploreAssignment.ProviderID != "" && exploreAssignment.ModelID != "" {
 				agentMap["model"] = exploreAssignment.FullID()
 				if exploreAssignment.Effort != "" {
@@ -2721,9 +2725,6 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 				agentMap["model"] = rootModelID
 				agentMap["variant"] = ""
 			}
-		case existingAgentKeys[phase]:
-			// 3. Agent already exists in user's config — let merge preserve whatever they have
-			// (don't touch the overlay for this agent's model)
 		case rootModelID != "":
 			// 4. Fresh install or new agent: use root model as default to break inheritance.
 			// Also clear variant explicitly so the overlay output stays symmetric
