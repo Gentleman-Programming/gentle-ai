@@ -373,6 +373,10 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 
 func parseCandidateFindingLocation(location string) (string, int, error) {
 	separator := strings.LastIndex(location, ":")
+	if separator == 1 && len(location) >= 3 && (location[2] == '\\' || location[2] == '/') &&
+		((location[0] >= 'A' && location[0] <= 'Z') || (location[0] >= 'a' && location[0] <= 'z')) {
+		separator = -1
+	}
 	logicalPath := location
 	if separator >= 0 {
 		logicalPath = location[:separator]

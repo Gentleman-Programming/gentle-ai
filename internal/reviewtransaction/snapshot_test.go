@@ -62,6 +62,8 @@ func TestParseCandidateFindingLocation(t *testing.T) {
 		{name: "zero", location: "internal/review.go:0", wantPath: "internal/review.go", wantErr: true},
 		{name: "missing line", location: "internal/review.go:", wantPath: "internal/review.go", wantErr: true},
 		{name: "missing colon", location: "internal/review.go", wantPath: "internal/review.go", wantErr: true},
+		{name: "windows drive without line", location: `C:\repo\review.go`, wantPath: `C:\repo\review.go`, wantErr: true},
+		{name: "windows slash drive without line", location: `C:/repo/review.go`, wantPath: `C:/repo/review.go`, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
