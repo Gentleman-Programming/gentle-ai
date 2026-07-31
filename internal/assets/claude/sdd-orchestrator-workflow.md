@@ -265,6 +265,7 @@ Sub-agents start with fresh context. The orchestrator controls what context they
 
 For non-SDD delegation:
 
+- Only after a canonical project resolves may non-SDD work search or persist Engram. Without one, skip Engram and continue only with valid OpenSpec/file behavior; do not invent a key or run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.
 - Orchestrator searches Engram for relevant prior context and passes it in the prompt.
 - Sub-agent saves significant discoveries, decisions, and bug fixes to Engram before returning.
 - Orchestrator forwards exact skill paths.
