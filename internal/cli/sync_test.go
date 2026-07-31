@@ -21,6 +21,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -4341,12 +4342,21 @@ func runSyncInjectionSteps(t *testing.T, home string, selection model.Selection)
 	if err != nil {
 		t.Fatalf("newSyncRuntime() error = %v", err)
 	}
-	for _, step := range rt.stagePlan().Apply {
+	plan := rt.stagePlan()
+	before, err := snapshotSyncFiles(rt.managedPaths)
+	if err != nil {
+		t.Fatalf("snapshotSyncFiles() error = %v", err)
+	}
+	for _, step := range plan.Apply {
 		if err := step.Run(); err != nil {
 			t.Fatalf("Run(%s) error = %v", step.ID(), err)
 		}
 	}
-	return rt.changedFiles
+	changed, err := changedSyncFiles(rt.changedFiles, before)
+	if err != nil {
+		t.Fatalf("changedSyncFiles() error = %v", err)
+	}
+	return changed
 }
 
 // runSyncComponentSteps executes only the component steps of a sync plan.
@@ -4501,6 +4511,38 @@ func TestSyncBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *test
 		if !containsPath(targets, path) {
 			t.Fatalf("syncBackupTargets missing routing guidance path %q\ntargets = %v", path, targets)
 		}
+	}
+}
+
+func TestSyncRollbackRestoresOpenCodeDefaultOwnershipSidecar(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeSingle,
+	}
+
+	targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	ownershipPath := opencodedefault.OwnershipPath(settingsPath)
+	snapshots, err := snapshotSyncFiles(targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snapshots[ownershipPath]; !ok {
+		t.Fatalf("sync snapshot missing ownership sidecar %q", ownershipPath)
+	}
+	if err := os.MkdirAll(filepath.Dir(ownershipPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ownershipPath, []byte("mutated ownership"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreSyncFiles(snapshots); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ownershipPath); !os.IsNotExist(err) {
+		t.Fatalf("ownership sidecar survives rollback: %v", err)
 	}
 }
 

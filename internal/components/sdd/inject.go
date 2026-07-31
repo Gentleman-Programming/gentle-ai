@@ -1740,6 +1740,11 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 	if err != nil {
 		return mergeJSONResult{}, err
 	}
+	patterns := reviewerInspectionPermissionPatterns()
+	expectedReviewerPermissions, err := expectedOpenCodeReviewerPermissions(overlay, patterns)
+	if err != nil {
+		return mergeJSONResult{}, err
+	}
 	base, baseErr := filemerge.UnmarshalJSONObject(baseJSON)
 	mergedObject, err := filemerge.UnmarshalJSONObject(merged)
 	if err != nil {
@@ -1748,7 +1753,7 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 	if baseErr == nil && reflect.DeepEqual(base, mergedObject) {
 		merged = baseJSON
 	}
-	merged, err = orderOpenCodeReviewerPermissions(merged)
+	merged, err = orderOpenCodeReviewerPermissions(merged, patterns, expectedReviewerPermissions)
 	if err != nil {
 		return mergeJSONResult{}, err
 	}
@@ -1764,7 +1769,8 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 // orderOpenCodeReviewerPermissions changes only the managed reviewer bash
 // objects. OpenCode resolves the last matching rule, so the fallback must
 // precede the PowerShell call-operator rules that Go's map encoder sorts first.
-func orderOpenCodeReviewerPermissions(document []byte) ([]byte, error) {
+func orderOpenCodeReviewerPermissions(document []byte, patterns []string, expected int) ([]byte, error) {
+	found := 0
 	for offset := 0; offset < len(document); {
 		bash := bytes.Index(document[offset:], []byte(`"bash": {`))
 		if bash < 0 {
@@ -1776,17 +1782,42 @@ func orderOpenCodeReviewerPermissions(document []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !isOpenCodeReviewerPermission(document[start:end]) {
+		if !isOpenCodeReviewerPermission(document[start:end], patterns) {
 			offset = end
 			continue
 		}
 		lineStart := bytes.LastIndexByte(document[:bash], '\n') + 1
-		indent := string(document[lineStart:bash])
+		indentBytes := document[lineStart:bash]
+		if len(bytes.Trim(indentBytes, " \t\r")) != 0 {
+			return nil, fmt.Errorf("invalid indentation before managed OpenCode reviewer permission")
+		}
+		indent := string(indentBytes)
 		replacement := []byte(orderedOpenCodeReviewerBash(indent))
 		document = append(append(append([]byte(nil), document[:start]...), replacement...), document[end:]...)
 		offset = start + len(replacement)
+		found++
+	}
+	if found < expected {
+		return nil, fmt.Errorf("found %d managed OpenCode reviewer permissions, expected %d", found, expected)
 	}
 	return document, nil
+}
+
+func expectedOpenCodeReviewerPermissions(overlay []byte, patterns []string) (int, error) {
+	var root map[string]any
+	if err := json.Unmarshal(overlay, &root); err != nil {
+		return 0, fmt.Errorf("unmarshal OpenCode reviewer permission overlay: %w", err)
+	}
+	agents, _ := root["agent"].(map[string]any)
+	count := 0
+	for _, rawAgent := range agents {
+		agent, _ := rawAgent.(map[string]any)
+		permission, _ := agent["permission"].(map[string]any)
+		if isOpenCodeReviewerPermissionMap(permission, patterns) {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func jsonObjectEnd(document []byte, start int) (int, error) {
@@ -1820,12 +1851,25 @@ func jsonObjectEnd(document []byte, start int) (int, error) {
 	return 0, fmt.Errorf("unterminated OpenCode bash permission object")
 }
 
-func isOpenCodeReviewerPermission(raw []byte) bool {
+func isOpenCodeReviewerPermission(raw []byte, patterns []string) bool {
 	var bash map[string]string
-	if err := json.Unmarshal(raw, &bash); err != nil || bash["*"] != "deny" || len(bash) != len(reviewerInspectionPermissionPatterns())+1 {
+	if err := json.Unmarshal(raw, &bash); err != nil || bash["*"] != "deny" || len(bash) != len(patterns)+1 {
 		return false
 	}
-	for _, pattern := range reviewerInspectionPermissionPatterns() {
+	for _, pattern := range patterns {
+		if bash[pattern] != "allow" {
+			return false
+		}
+	}
+	return true
+}
+
+func isOpenCodeReviewerPermissionMap(permission map[string]any, patterns []string) bool {
+	bash, ok := permission["bash"].(map[string]any)
+	if !ok || len(bash) != len(patterns)+1 || bash["*"] != "deny" {
+		return false
+	}
+	for _, pattern := range patterns {
 		if bash[pattern] != "allow" {
 			return false
 		}

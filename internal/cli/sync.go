@@ -1247,17 +1247,23 @@ func restoreSyncFiles(snapshots map[string]syncFileSnapshot) error {
 func changedSyncFiles(candidates []string, before map[string]syncFileSnapshot) ([]string, error) {
 	var changed []string
 	for _, path := range dedupPaths(candidates) {
+		previous, managed := before[path]
+		if !managed {
+			// Aggregate injectors can return installed support assets outside the
+			// sync snapshot contract. They must not turn an unchanged sync into a
+			// reported mutation.
+			continue
+		}
 		after, err := os.ReadFile(path)
 		if err != nil {
 			if os.IsNotExist(err) {
-				if before[path].exists {
+				if previous.exists {
 					changed = append(changed, path)
 				}
 				continue
 			}
 			return nil, fmt.Errorf("compare managed sync file %q: %w", path, err)
 		}
-		previous := before[path]
 		if !previous.exists || !bytes.Equal(after, previous.data) {
 			changed = append(changed, path)
 		}

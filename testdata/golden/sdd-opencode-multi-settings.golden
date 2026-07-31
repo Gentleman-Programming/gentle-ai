@@ -87,11 +87,17 @@
         "bash": {
           "*": "deny",
           "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation name-status": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation name-status": "allow",
           "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation numstat": "allow",
-          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side base": "allow",
-          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side candidate": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation numstat": "allow",
+          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation stat --path-index *": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation stat --path-index *": "allow",
           "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation patch --path-index *": "allow",
-          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation stat --path-index *": "allow"
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation patch --path-index *": "allow",
+          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side base": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side base": "allow",
+          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side candidate": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side candidate": "allow"
         },
         "edit": "deny"
       },
@@ -127,11 +133,17 @@
         "bash": {
           "*": "deny",
           "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation name-status": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation name-status": "allow",
           "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation numstat": "allow",
-          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side base": "allow",
-          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side candidate": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation numstat": "allow",
+          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation stat --path-index *": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation stat --path-index *": "allow",
           "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation patch --path-index *": "allow",
-          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation stat --path-index *": "allow"
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation patch --path-index *": "allow",
+          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side base": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side base": "allow",
+          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side candidate": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side candidate": "allow"
         },
         "edit": "deny"
       },
@@ -153,11 +165,17 @@
         "bash": {
           "*": "deny",
           "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation name-status": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation name-status": "allow",
           "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation numstat": "allow",
-          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side base": "allow",
-          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side candidate": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation numstat": "allow",
+          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation stat --path-index *": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation stat --path-index *": "allow",
           "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation patch --path-index *": "allow",
-          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation stat --path-index *": "allow"
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation patch --path-index *": "allow",
+          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side base": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side base": "allow",
+          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side candidate": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side candidate": "allow"
         },
         "edit": "deny"
       },
@@ -179,11 +197,17 @@
         "bash": {
           "*": "deny",
           "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation name-status": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation name-status": "allow",
           "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation numstat": "allow",
-          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side base": "allow",
-          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side candidate": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation numstat": "allow",
+          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation stat --path-index *": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation stat --path-index *": "allow",
           "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation patch --path-index *": "allow",
-          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation stat --path-index *": "allow"
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation patch --path-index *": "allow",
+          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side base": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side base": "allow",
+          "gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side candidate": "allow",
+          "\u0026 gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation object --path-index * --side candidate": "allow"
         },
         "edit": "deny"
       },
