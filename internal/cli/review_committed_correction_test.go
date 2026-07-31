@@ -135,7 +135,7 @@ func TestSelectorlessConsumedCommittedBaseDiffCorrectionFinalizesAsStop(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	record.State.State, record.State.ActualCorrectionLines = reviewtransaction.StateCorrectionRequired, nil
+	record.State.State, record.State.ProposedCorrectionLines, record.State.ActualCorrectionLines = reviewtransaction.StateCorrectionRequired, nil, nil
 	record.State.FixDeltaHash, record.State.OriginalCriteria, record.State.CorrectionRegression = reviewtransaction.EmptyFixDeltaHash, nil, nil
 	record.State.EvidenceHash, record.State.EvidenceRecordDigest = "", ""
 	record.State.EvidenceOutcome, record.State.EvidenceTargetIdentity, record.State.EvidenceAuthorityRevision = "", "", ""
