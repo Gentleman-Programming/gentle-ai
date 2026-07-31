@@ -97,6 +97,93 @@ func TestRunSDDVerifyValidateHelpIsSuccessfulAndInputFree(t *testing.T) {
 	}
 }
 
+// TestRunSDDVerifyValidateHelpMarksRequiredFlags proves --input,
+// --requirements, and --scenarios are explicitly marked required for normal
+// execution while help itself stays input-free and successful.
+func TestRunSDDVerifyValidateHelpMarksRequiredFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"-h"},
+		{"--help"},
+		{"--input", filepath.Join(t.TempDir(), "missing-report.md"), "--help"},
+		{"--help", "--input", "-", "--requirements", "1", "--scenarios", "1"},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			var output bytes.Buffer
+			if err := runSDDVerifyValidate(args, rejectingReader{}, &output); err != nil {
+				t.Fatalf("runSDDVerifyValidate(%v) error = %v", args, err)
+			}
+			text := output.String()
+			for _, want := range []string{
+				"--input <path>         required",
+				"--requirements <n>     required",
+				"--scenarios <n>        required",
+			} {
+				if !strings.Contains(text, want) {
+					t.Errorf("required marker missing for %q:\n%s", want, text)
+				}
+			}
+		})
+	}
+}
+
+// TestRunSDDVerifyValidateHelpAuthorityOnlyContract asserts distinct, stable
+// contract fragments for the authority-only extension: all five required
+// extension fields with their required values, both exit-code conditions, and
+// the empty output hash constraint. It prefers semantic fragments over one
+// brittle full-output snapshot so a single cosmetic reformat cannot mask a
+// real contract regression.
+func TestRunSDDVerifyValidateHelpAuthorityOnlyContract(t *testing.T) {
+	var output bytes.Buffer
+	if err := runSDDVerifyValidate([]string{"--help"}, rejectingReader{}, &output); err != nil {
+		t.Fatalf("runSDDVerifyValidate(--help) error = %v", err)
+	}
+	text := output.String()
+
+	// All five extension fields are named by the help.
+	for _, field := range []string{
+		"authority_only_failure",
+		"missing_review_authority",
+		"substantive_failure",
+		"command_failed",
+		"observed_authority_revision",
+	} {
+		if !strings.Contains(text, field) {
+			t.Errorf("authority-only help missing extension field %q:\n%s", field, text)
+		}
+	}
+
+	// Each extension field is paired with its required value.
+	valueFragments := []string{
+		"authority_only_failure=true",
+		"missing_review_authority=true",
+		"substantive_failure=false",
+		"command_failed=false",
+	}
+	for _, fragment := range valueFragments {
+		if !strings.Contains(text, fragment) {
+			t.Errorf("authority-only help missing required value %q:\n%s", fragment, text)
+		}
+	}
+	if !strings.Contains(text, "observed_authority_revision is a lowercase sha256 evidence revision") {
+		t.Errorf("authority-only help missing observed_authority_revision value constraint:\n%s", text)
+	}
+
+	// Both exit-code conditions: non-fail requires zero exit codes; fail with
+	// exit code 125 requires the authority-only extension.
+	if !strings.Contains(text, "test_exit_code 0, build_exit_code 0") {
+		t.Errorf("authority-only help missing non-fail zero exit-code condition:\n%s", text)
+	}
+	if !strings.Contains(text, "exit code 125 requires the authority-only extension") {
+		t.Errorf("authority-only help missing exit-code-125 condition:\n%s", text)
+	}
+
+	// Hash constraint: the empty output hash for test_output_hash and
+	// build_output_hash is the single source-backed value.
+	if !strings.Contains(text, sddstatus.VerifyEmptyOutputHash) {
+		t.Errorf("authority-only help missing empty output hash constraint:\n%s", text)
+	}
+}
+
 type rejectingReader struct{}
 
 func (rejectingReader) Read([]byte) (int, error) {

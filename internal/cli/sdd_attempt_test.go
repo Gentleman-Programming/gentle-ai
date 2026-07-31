@@ -243,10 +243,10 @@ func TestRunSDDAttemptHelpContracts(t *testing.T) {
 				"Usage: gentle-ai sdd-attempt <operation> [flags]", "acquire", "settle",
 				"change grammar", "lineage grammar",
 			},
-			// The internal acquire/settle contract is intentionally not surfaced
-			// at the top level; their detailed flag contract lives only behind
-			// the compact operations themselves (decision: issue #1937 scope).
-			unwanted: []string{"Acquire and settle are compact orchestration operations"},
+			// The detailed acquire/settle flag contract is intentionally not
+			// surfaced at the top level; it lives only behind the compact
+			// operations themselves (decision: issue #1937 scope).
+			unwanted: []string{"--token", "--request-id", "--successor-lineage", "Acquire and settle are compact orchestration operations"},
 		},
 		{
 			name: "status",
@@ -333,6 +333,125 @@ func TestRunSDDAttemptHelpIsPositionIndependentAndDependencyFree(t *testing.T) {
 			}
 			if !strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt status [flags]") {
 				t.Fatalf("status help not selected for %v:\n%s", args, output.String())
+			}
+			if _, err := os.Stat(missingRepo); !os.IsNotExist(err) {
+				t.Fatalf("help accessed or created nonexistent repository %q: %v", missingRepo, err)
+			}
+		})
+	}
+}
+
+// TestRunSDDAttemptCompactOperationHelpIsOperationSpecific proves acquire and
+// settle render their own operation-specific help — not the generic top-level
+// fallback — for both help aliases, at arbitrary positions, without touching the
+// repository, with their correct flags and without unrelated operation flags.
+func TestRunSDDAttemptCompactOperationHelpIsOperationSpecific(t *testing.T) {
+	missingRepo := filepath.Join(t.TempDir(), "does-not-exist")
+	tests := []struct {
+		name      string
+		operation string
+		helpAlias string
+		// helpPosition embeds the help alias at an arbitrary position among
+		// real-looking flags that must never be read during help.
+		helpPosition func(operation, alias string) []string
+		want         []string
+		unwanted     []string
+	}{
+		{
+			name: "acquire short help anywhere", operation: "acquire", helpAlias: "-h",
+			helpPosition: func(operation, alias string) []string {
+				return []string{operation, "--cwd", missingRepo, "--change", "help-contract", alias, "--request-id", "should-not-be-read"}
+			},
+			want: []string{
+				"Usage: gentle-ai sdd-attempt acquire [flags]",
+				"--cwd", "--change", "--request-id", "--work-unit", "--evidence-goal",
+				"--max-attempts", "--max-changed-lines",
+				"acquire a bounded attempt",
+				"Acquire claims one bounded attempt without exposing the growing runtime history",
+				"token identifies that exact begin record for settle",
+				"Replaying the same --request-id returns its committed CompactAttemptResult",
+				"blocks acquire and returns CompactAttemptResult.state=blocked",
+				"change grammar", "lineage grammar",
+				`gentle-ai sdd-attempt acquire --cwd "$REPO_DIR"`,
+			},
+			unwanted: []string{
+				"--token", "--outcome", "--evidence-revision", "--diagnosis",
+				"--harness-disposition", "--cleanup-evidence", "--process-evidence",
+				"--successor-lineage", "--remediates-evidence-revision", "--expected-binding-revision",
+				"--reason", "--actor", "--expected-revision",
+				"Usage: gentle-ai sdd-attempt <operation> [flags]",
+				"settle a bounded attempt",
+			},
+		},
+		{
+			name: "acquire long help anywhere", operation: "acquire", helpAlias: "--help",
+			helpPosition: func(operation, alias string) []string {
+				return []string{"--cwd", missingRepo, alias, "--change", "help-contract", operation, "--request-id", "should-not-be-read"}
+			},
+			want: []string{
+				"Usage: gentle-ai sdd-attempt acquire [flags]",
+				"acquire a bounded attempt",
+				"Acquire claims one bounded attempt without exposing the growing runtime history",
+			},
+			unwanted: []string{"--token", "Usage: gentle-ai sdd-attempt <operation> [flags]"},
+		},
+		{
+			name: "settle short help anywhere", operation: "settle", helpAlias: "-h",
+			helpPosition: func(operation, alias string) []string {
+				return []string{operation, "--token", "sha256:" + strings.Repeat("a", 64), alias, "--cwd", missingRepo, "--change", "help-contract", "--request-id", "should-not-be-read"}
+			},
+			want: []string{
+				"Usage: gentle-ai sdd-attempt settle [flags]",
+				"--cwd", "--change", "--token", "--request-id", "--outcome",
+				"--evidence-revision", "--diagnosis", "--harness-disposition",
+				"--cleanup-evidence", "--process-evidence", "--successor-lineage",
+				"--remediates-evidence-revision",
+				"settle a bounded attempt",
+				"Settle closes the attempt selected by --token through the ordinary Finish transition",
+				"current binding and failed-evidence revisions are derived inside the authority",
+				"Replaying the same --request-id returns its committed CompactAttemptResult",
+				"name a distinct recovery lineage only",
+				"failed|interrupted|passed", "reused|invalidated",
+				"change grammar", "lineage grammar",
+				`gentle-ai sdd-attempt settle --cwd "$REPO_DIR"`,
+			},
+			unwanted: []string{
+				"--work-unit", "--evidence-goal", "--max-attempts", "--max-changed-lines",
+				"--reason", "--actor", "--expected-revision", "--expected-binding-revision",
+				"Usage: gentle-ai sdd-attempt <operation> [flags]",
+				"acquire a bounded attempt",
+			},
+		},
+		{
+			name: "settle long help anywhere", operation: "settle", helpAlias: "--help",
+			helpPosition: func(operation, alias string) []string {
+				return []string{alias, operation, "--cwd", missingRepo, "--change", "help-contract", "--token", "should-not-be-read"}
+			},
+			want: []string{
+				"Usage: gentle-ai sdd-attempt settle [flags]",
+				"settle a bounded attempt",
+				"Settle closes the attempt selected by --token through the ordinary Finish transition",
+			},
+			unwanted: []string{"--work-unit", "Usage: gentle-ai sdd-attempt <operation> [flags]"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := tt.helpPosition(tt.operation, tt.helpAlias)
+			var output bytes.Buffer
+			if err := RunSDDAttempt(args, &output); err != nil {
+				t.Fatalf("RunSDDAttempt(%v) error = %v", args, err)
+			}
+			text := output.String()
+			for _, want := range tt.want {
+				if !strings.Contains(text, want) {
+					t.Errorf("help missing %q:\n%s", want, text)
+				}
+			}
+			for _, unwanted := range tt.unwanted {
+				if strings.Contains(text, unwanted) {
+					t.Errorf("help unexpectedly contains %q:\n%s", unwanted, text)
+				}
 			}
 			if _, err := os.Stat(missingRepo); !os.IsNotExist(err) {
 				t.Fatalf("help accessed or created nonexistent repository %q: %v", missingRepo, err)

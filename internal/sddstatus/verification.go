@@ -11,7 +11,8 @@ import (
 
 const VerifyResultSchema = "gentle-ai.verify-result/v1"
 const RemediationResultSchema = "gentle-ai.remediation-result/v1"
-const verifyEmptyOutputHash = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+const VerifyEmptyOutputHash = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+const verifyEmptyOutputHash = VerifyEmptyOutputHash
 
 type SpecCounts struct {
 	Requirements int

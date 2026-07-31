@@ -88,9 +88,9 @@ func hasSDDVerifyValidateHelp(args []string) bool {
 func renderSDDVerifyValidateHelp(stdout io.Writer) {
 	_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai sdd-verify-validate [flags]")
 	_, _ = fmt.Fprintln(stdout, "\nFlags:")
-	_, _ = fmt.Fprintln(stdout, "  --input <path>         report path, or - for stdin")
-	_, _ = fmt.Fprintln(stdout, "  --requirements <n>     authoritative requirement count; must be nonnegative")
-	_, _ = fmt.Fprintln(stdout, "  --scenarios <n>        authoritative scenario count; must be nonnegative")
+	_, _ = fmt.Fprintln(stdout, "  --input <path>         required; report path, or - for stdin")
+	_, _ = fmt.Fprintln(stdout, "  --requirements <n>     required; authoritative requirement count; must be nonnegative")
+	_, _ = fmt.Fprintln(stdout, "  --scenarios <n>        required; authoritative scenario count; must be nonnegative")
 	_, _ = fmt.Fprintln(stdout, "\nReport contract:")
 	_, _ = fmt.Fprintf(stdout, "  schema: %s\n", sddstatus.VerifyResultSchema)
 	_, _ = fmt.Fprintf(stdout, "  base envelope fields: %s\n", strings.Join(sddstatus.VerifyReportEnvelopeFields(), ", "))
@@ -103,6 +103,8 @@ func renderSDDVerifyValidateHelp(stdout io.Writer) {
 	_, _ = fmt.Fprintln(stdout, "  A non-fail verdict requires test_exit_code 0, build_exit_code 0, blockers 0, critical_findings 0, and completed == total for requirements and scenarios.")
 	_, _ = fmt.Fprintln(stdout, "  A fail verdict without the authority-only extension is rejected when all evidence is green; exit code 125 requires the authority-only extension.")
 	_, _ = fmt.Fprintln(stdout, "  The authority-only extension adds authority_only_failure, missing_review_authority, substantive_failure, command_failed, and observed_authority_revision; it requires verdict fail, exit code 125, nonzero blockers and critical_findings, and the empty output hashes.")
+	_, _ = fmt.Fprintln(stdout, "  Extension field values: authority_only_failure=true, missing_review_authority=true, substantive_failure=false, command_failed=false, and observed_authority_revision is a lowercase sha256 evidence revision.")
+	_, _ = fmt.Fprintf(stdout, "  The empty output hash for test_output_hash and build_output_hash is %s.\n", sddstatus.VerifyEmptyOutputHash)
 }
 
 func verifyReportLimitText() string {

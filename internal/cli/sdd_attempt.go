@@ -351,7 +351,7 @@ func renderSDDAttemptHelp(operation string, stdout io.Writer) error {
 	}
 
 	definition, ok := sddAttemptOperationDefinition(operation)
-	if !ok || operation == "acquire" || operation == "settle" {
+	if !ok {
 		return renderSDDAttemptHelp("", stdout)
 	}
 	_, _ = fmt.Fprintf(stdout, "Usage: gentle-ai sdd-attempt %s [flags]\n", operation)
@@ -402,9 +402,23 @@ func renderSDDAttemptOperationContract(stdout io.Writer, operation string) {
 		_, _ = fmt.Fprintln(stdout, "  Request IDs are idempotency keys: replaying the same request with the same ID returns its committed result; reusing an ID with different fields is rejected.")
 	case "rescope":
 		_, _ = fmt.Fprintln(stdout, "  Rescope requires no active attempt, an existing objective that is not decision-required or complete, and a terminal failed or interrupted attempt whose candidate has not drifted.")
-		_, _ = fmt.Fprintf(stdout, "  Revision matches %s; request IDs match %s; change and lineage identifiers match %s.\n", sddstatus.RuntimeRevisionPattern, sddstatus.RuntimeRequestIDPattern, sddstatus.RuntimeChangePattern)
+		_, _ = fmt.Fprintf(stdout, "  Revision matches %s; request IDs match %s; change grammar %s; lineage grammar %s.\n", sddstatus.RuntimeRevisionPattern, sddstatus.RuntimeRequestIDPattern, sddstatus.RuntimeChangePattern, sddstatus.RuntimeLineagePattern)
 		_, _ = fmt.Fprintln(stdout, "  --max-attempts and --max-changed-lines may only narrow or hold the current objective ceilings; cumulative attempts and changed lines carry forward unchanged.")
 		_, _ = fmt.Fprintln(stdout, "  Rescope is a maintainer-authorized successor scope; reason and actor are persisted in the runtime audit record.")
+	case "acquire":
+		_, _ = fmt.Fprintln(stdout, "  Acquire claims one bounded attempt without exposing the growing runtime history; the returned token identifies that exact begin record for settle.")
+		_, _ = fmt.Fprintln(stdout, "  Replaying the same --request-id returns its committed CompactAttemptResult; a different request reusing that ID is rejected as an invalid continuation.")
+		_, _ = fmt.Fprintln(stdout, "  A complete, decision-required, or already-active objective blocks acquire and returns CompactAttemptResult.state=blocked with the active token when applicable.")
+		_, _ = fmt.Fprintf(stdout, "  Revision matches %s; request IDs match %s; change grammar %s; lineage grammar %s.\n", sddstatus.RuntimeRevisionPattern, sddstatus.RuntimeRequestIDPattern, sddstatus.RuntimeChangePattern, sddstatus.RuntimeLineagePattern)
+		_, _ = fmt.Fprintf(stdout, "  --max-attempts is bounded by %d; --max-changed-lines is bounded by %d.\n", sddstatus.RuntimeMaxAttemptLimit, sddstatus.RuntimeMaxChangedLines)
+		_, _ = fmt.Fprintln(stdout, `  Example: REPO_DIR="$(git rev-parse --show-toplevel)"; gentle-ai sdd-attempt acquire --cwd "$REPO_DIR" --change runtime-demo --request-id acquire-runtime-demo-1 --work-unit runtime-help --evidence-goal "prove runtime help" --max-attempts 2 --max-changed-lines 200`)
+	case "settle":
+		_, _ = fmt.Fprintln(stdout, "  Settle closes the attempt selected by --token through the ordinary Finish transition; current binding and failed-evidence revisions are derived inside the authority.")
+		_, _ = fmt.Fprintln(stdout, "  Replaying the same --request-id returns its committed CompactAttemptResult; a different request reusing that ID is rejected as an invalid continuation.")
+		_, _ = fmt.Fprintln(stdout, "  --successor-lineage and --remediates-evidence-revision name a distinct recovery lineage only; the authority derives the binding revision and self-successor when omitted.")
+		_, _ = fmt.Fprintf(stdout, "  Revision, evidence, and binding values use %s; change grammar %s; lineage grammar %s.\n", sddstatus.RuntimeRevisionPattern, sddstatus.RuntimeChangePattern, sddstatus.RuntimeLineagePattern)
+		_, _ = fmt.Fprintf(stdout, "  Outcomes are %s; dispositions are %s.\n", strings.Join(sddstatus.RuntimeTerminalOutcomes(), "|"), strings.Join(sddstatus.RuntimeHarnessDispositions(), "|"))
+		_, _ = fmt.Fprintln(stdout, `  Example: REPO_DIR="$(git rev-parse --show-toplevel)"; gentle-ai sdd-attempt settle --cwd "$REPO_DIR" --change runtime-demo --token "${ACQUIRE_TOKEN:?set from acquire.token}" --request-id settle-runtime-demo-1 --outcome failed --evidence-revision "${EVIDENCE_REVISION:?set to a lowercase sha256 evidence revision}" --diagnosis "runtime evidence shows the bounded attempt failed" --harness-disposition reused --cleanup-evidence "cleanup completed" --process-evidence "process scan completed"`)
 	}
 }
 
