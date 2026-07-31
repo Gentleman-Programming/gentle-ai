@@ -10,6 +10,7 @@ import (
 	"io"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -1005,29 +1006,43 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 	return state.Validate()
 }
 
-func findingLocationInGenesis(location string, genesisPaths []string) bool {
+// ErrInvalidFindingLocation indicates that a reviewer finding location string is malformed.
+var ErrInvalidFindingLocation = errors.New("invalid finding location format")
+
+// ParseFindingLocation parses a finding location string into a canonical logical path
+// and a 1-indexed integer line number. It returns an error if the location does not
+// conform to the required "path:line" format.
+func ParseFindingLocation(location string) (string, int, error) {
 	separator := strings.LastIndexByte(location, ':')
 	if separator <= 0 || separator == len(location)-1 {
-		return false
+		return "", 0, fmt.Errorf("%w %q: missing or misplaced line separator ':'", ErrInvalidFindingLocation, location)
 	}
-	line := location[separator+1:]
-	nonzero := false
-	for index := range line {
-		if line[index] < '0' || line[index] > '9' {
-			return false
-		}
-		nonzero = nonzero || line[index] != '0'
+	lineStr := location[separator+1:]
+	line, err := strconv.Atoi(lineStr)
+	if err != nil {
+		return "", 0, fmt.Errorf("%w %q: line %q is not a valid integer: %w", ErrInvalidFindingLocation, location, lineStr, err)
+	}
+	if line <= 0 {
+		return "", 0, fmt.Errorf("%w %q: line number %d must be positive", ErrInvalidFindingLocation, location, line)
 	}
 	logicalPath := location[:separator]
 	if len(logicalPath) >= 3 && logicalPath[1] == ':' && logicalPath[2] == '/' &&
 		((logicalPath[0] >= 'A' && logicalPath[0] <= 'Z') || (logicalPath[0] >= 'a' && logicalPath[0] <= 'z')) {
-		return false
+		return "", 0, fmt.Errorf("%w %q: absolute drive-letter paths are not allowed", ErrInvalidFindingLocation, location)
 	}
 	canonical, err := normalizeLogicalPath(logicalPath)
-	if err != nil || canonical != logicalPath || !nonzero {
+	if err != nil || canonical != logicalPath {
+		return "", 0, fmt.Errorf("%w %q: path %q is non-canonical", ErrInvalidFindingLocation, location, logicalPath)
+	}
+	return canonical, line, nil
+}
+
+func findingLocationInGenesis(location string, genesisPaths []string) bool {
+	logicalPath, _, err := ParseFindingLocation(location)
+	if err != nil {
 		return false
 	}
-	return stringIndex(genesisPaths, canonical) >= 0
+	return stringIndex(genesisPaths, logicalPath) >= 0
 }
 
 func (state *CompactState) Invalidate(reason string) error {

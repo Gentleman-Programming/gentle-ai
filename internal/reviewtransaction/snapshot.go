@@ -310,12 +310,13 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 	if err := builder.ValidateEvidence(ctx, snapshot); err != nil {
 		return false, err
 	}
-	separator := strings.LastIndex(location, ":")
-	if !findingLocationInGenesis(location, snapshot.Paths) {
+	logicalPath, line, err := ParseFindingLocation(location)
+	if err != nil {
+		return false, err
+	}
+	if stringIndex(snapshot.Paths, logicalPath) < 0 {
 		return false, nil
 	}
-	logicalPath := location[:separator]
-	line, _ := strconv.Atoi(location[separator+1:])
 	if causality == CausalBehaviorActivated {
 		entry, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(logicalPath))
 		if err != nil || len(entry) == 0 {

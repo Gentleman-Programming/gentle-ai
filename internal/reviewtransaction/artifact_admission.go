@@ -230,8 +230,11 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 			return fail(ArtifactAdmissionAmbiguous, "reviewer result repeats a finding ID")
 		}
 		seenFindingIDs[finding.ID] = struct{}{}
+		if _, _, err := ParseFindingLocation(finding.Location); err != nil {
+			return fail(ArtifactAdmissionBindingMismatch, fmt.Sprintf("reviewer finding %q location syntax is invalid: %v", finding.ID, err))
+		}
 		if !findingLocationInGenesis(finding.Location, wantPaths) {
-			return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
+			return fail(ArtifactAdmissionOutOfScope, fmt.Sprintf("reviewer finding %q location %q path is outside the frozen candidate", finding.ID, finding.Location))
 		}
 		for _, proof := range finding.ProofRefs {
 			if referenceOutsideRepository(proof, repository) {

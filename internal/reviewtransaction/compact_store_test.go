@@ -2628,11 +2628,70 @@ func TestSnapshotCandidateLocationSupportsStructuredCausality(t *testing.T) {
 		location  string
 		causality CausalDisposition
 		want      bool
-	}{{"introduced replacement", "tracked.txt:2", CausalIntroduced, true}, {"introduced addition", "tracked.txt:5", CausalIntroduced, true}, {"introduced deletion", "deleted.txt:1", CausalIntroduced, false}, {"old-side deletion collision", "tracked.txt:4", CausalIntroduced, false}, {"introduced unchanged", "tracked.txt:1", CausalIntroduced, false}, {"worsened changed", "tracked.txt:2", CausalWorsened, true}, {"worsened unchanged", "tracked.txt:1", CausalWorsened, false}, {"activated unchanged", "tracked.txt:1", CausalBehaviorActivated, true}, {"activated deletion", "deleted.txt:1", CausalBehaviorActivated, false}, {"activated out of range", "tracked.txt:99", CausalBehaviorActivated, false}, {"outside genesis", "other.txt:1", CausalBehaviorActivated, false}, {"zero", "tracked.txt:0", CausalIntroduced, false}, {"malformed", "tracked.txt", CausalWorsened, false}} {
+		wantErr   bool
+	}{
+		{"introduced replacement", "tracked.txt:2", CausalIntroduced, true, false},
+		{"introduced addition", "tracked.txt:5", CausalIntroduced, true, false},
+		{"introduced deletion", "deleted.txt:1", CausalIntroduced, false, false},
+		{"old-side deletion collision", "tracked.txt:4", CausalIntroduced, false, false},
+		{"introduced unchanged", "tracked.txt:1", CausalIntroduced, false, false},
+		{"worsened changed", "tracked.txt:2", CausalWorsened, true, false},
+		{"worsened unchanged", "tracked.txt:1", CausalWorsened, false, false},
+		{"activated unchanged", "tracked.txt:1", CausalBehaviorActivated, true, false},
+		{"activated deletion", "deleted.txt:1", CausalBehaviorActivated, false, false},
+		{"activated out of range", "tracked.txt:99", CausalBehaviorActivated, false, false},
+		{"outside genesis", "other.txt:1", CausalBehaviorActivated, false, false},
+		{"zero line error", "tracked.txt:0", CausalIntroduced, false, true},
+		{"malformed no colon error", "tracked.txt", CausalWorsened, false, true},
+		{"range syntax error", "tracked.txt:2-5", CausalIntroduced, false, true},
+	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := (SnapshotBuilder{Repo: repo}).CandidateLocationSupportsCausality(context.Background(), snapshot, tt.location, tt.causality)
-			if err != nil || got != tt.want {
-				t.Fatalf("CandidateLocationSupportsCausality(%q, %q) = %t, %v", tt.location, tt.causality, got, err)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("CandidateLocationSupportsCausality(%q, %q) unexpected error state: err=%v, wantErr=%t", tt.location, tt.causality, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Fatalf("CandidateLocationSupportsCausality(%q, %q) = %t, want %t", tt.location, tt.causality, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseFindingLocation(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		location     string
+		wantPath     string
+		wantLine     int
+		wantErr      bool
+		errSubstring string
+	}{
+		{"valid single line", "src/main.go:42", "src/main.go", 42, false, ""},
+		{"valid root path", "main.go:1", "main.go", 1, false, ""},
+		{"missing line separator", "src/main.go", "", 0, true, "missing or misplaced line separator"},
+		{"line range not integer", "src/main.go:10-20", "", 0, true, "is not a valid integer"},
+		{"zero line number", "src/main.go:0", "", 0, true, "must be positive"},
+		{"negative line number", "src/main.go:-5", "", 0, true, "must be positive"},
+		{"non-integer line text", "src/main.go:abc", "", 0, true, "is not a valid integer"},
+		{"drive letter absolute path", "C:/src/main.go:10", "", 0, true, "absolute drive-letter paths"},
+		{"non-canonical path", "src/../main.go:10", "", 0, true, "is non-canonical"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path, line, err := ParseFindingLocation(tt.location)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseFindingLocation(%q) err = %v, wantErr = %t", tt.location, err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if !errors.Is(err, ErrInvalidFindingLocation) {
+					t.Errorf("ParseFindingLocation(%q) err = %v, want errors.Is ErrInvalidFindingLocation", tt.location, err)
+				}
+				if !strings.Contains(err.Error(), tt.errSubstring) {
+					t.Errorf("ParseFindingLocation(%q) err = %q, want substring %q", tt.location, err.Error(), tt.errSubstring)
+				}
+			} else {
+				if path != tt.wantPath || line != tt.wantLine {
+					t.Errorf("ParseFindingLocation(%q) = (%q, %d), want (%q, %d)", tt.location, path, line, tt.wantPath, tt.wantLine)
+				}
 			}
 		})
 	}
