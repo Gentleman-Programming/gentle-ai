@@ -161,12 +161,12 @@ func facadeProjection(projection reviewtransaction.Projection) reviewtransaction
 
 func facadeCorrectionEvidenceTargetFromRequest(state reviewtransaction.CompactState, live reviewtransaction.Snapshot, request reviewtransaction.TargetedValidationRequest) reviewtransaction.Snapshot {
 	return reviewtransaction.Snapshot{
-		Kind: reviewtransaction.TargetFixDiff, Projection: request.Projection, UnbornHead: live.UnbornHead,
+		Kind: reviewtransaction.TargetFixDiff, Projection: state.InitialSnapshot.Projection, UnbornHead: live.UnbornHead,
 		BaseTree: state.CurrentSnapshot.CandidateTree, CandidateTree: request.CorrectionCandidateTree,
-		PathsDigest: request.CorrectionPathsDigest, Paths: append([]string(nil), request.CorrectionPaths...),
-		IntendedUntracked:      append([]string(nil), state.InitialSnapshot.IntendedUntracked...),
+		PathsDigest: request.CorrectionPathsDigest, Paths: append([]string{}, request.CorrectionPaths...),
+		IntendedUntracked:      append([]string{}, state.InitialSnapshot.IntendedUntracked...),
 		IntendedUntrackedProof: live.IntendedUntrackedProof,
-		LedgerIDs:              append([]string(nil), request.FixFindingIDs...), Identity: request.CorrectionTargetIdentity,
+		LedgerIDs:              append([]string{}, request.FixFindingIDs...), Identity: request.CorrectionTargetIdentity,
 	}
 }
 
@@ -2062,6 +2062,21 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	}
 	store.TracePath = strings.TrimSpace(*tracePath)
 	state := record.State
+	var committedLive *reviewtransaction.Snapshot
+	if strings.TrimSpace(*lineage) == "" && state.State == reviewtransaction.StateCorrectionRequired &&
+		state.ProposedCorrectionLines != nil && state.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff {
+		clean, cleanErr := (reviewtransaction.SnapshotBuilder{Repo: root}).WorktreeClean(ctx)
+		if cleanErr != nil {
+			return reviewPreflightError(cleanErr)
+		}
+		if clean {
+			live, liveErr := reviewtransaction.RebuildCommittedBaseDiffCorrectionCandidate(ctx, root, state)
+			if liveErr != nil {
+				return reviewPreflightError(liveErr)
+			}
+			committedLive = &live
+		}
+	}
 	if strings.TrimSpace(*lineage) != "" {
 		leaves, err := reviewtransaction.CompactAuthorityLeaves(ctx, root)
 		if err != nil {
@@ -2189,7 +2204,11 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		}
 	}
 	if *capturedEvidence {
-		evidenceTarget, targetErr := facadeVerificationEvidenceTarget(ctx, root, state, record.Revision)
+		var capturedLive []reviewtransaction.Snapshot
+		if committedLive != nil {
+			capturedLive = append(capturedLive, *committedLive)
+		}
+		evidenceTarget, targetErr := facadeVerificationEvidenceTarget(ctx, root, state, record.Revision, capturedLive...)
 		if targetErr != nil {
 			return reviewPreflightError(targetErr)
 		}
@@ -2225,7 +2244,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		if err := reviewFacadeSyncDirectory(filepath.Dir(store.FinalizeAttemptJournalPath())); err != nil {
 			return fmt.Errorf("sync completed finalize journal directory: %w", err)
 		}
-		return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>", reviewFinalizeOutputContext{Context: ctx, Repo: root})
+		return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>", reviewFinalizeOutputContext{Context: ctx, Repo: root, CommittedLive: committedLive})
 	}
 	var attempt reviewtransaction.FinalizeAttempt
 	attemptLoaded := false
@@ -2252,7 +2271,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 				if err := store.CompleteFinalizeAttempt(attempt.Request.RequestDigest); err != nil {
 					return err
 				}
-				return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "continue the current review state", reviewFinalizeOutputContext{Context: ctx, Repo: root})
+				return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "continue the current review state", reviewFinalizeOutputContext{Context: ctx, Repo: root, CommittedLive: committedLive})
 			}
 		}
 	}
@@ -2263,7 +2282,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 				fmt.Errorf("validate FINALIZE current snapshot: %v", err))
 		}
 	}
-	plan, err := prepareFacadeFinalizePlan(ctx, root, record.Revision, state, reviewerResults, refuter, validation, evidence, *correctionLines, effectiveFailed, capturedVerification)
+	plan, err := prepareFacadeFinalizePlan(ctx, root, record.Revision, state, reviewerResults, refuter, validation, evidence, *correctionLines, effectiveFailed, capturedVerification, committedLive)
 	if err != nil {
 		return reviewPreflightError(err)
 	}
@@ -2286,7 +2305,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		if !*nextTransition && state.State == reviewtransaction.StateValidating && len(plan.Evidence) == 0 {
 			return reviewPreflightError(&ErrReviewFinalizeNoTransition{LineageID: state.LineageID})
 		}
-		outputContext := reviewFinalizeOutputContext{Context: ctx, Repo: root}
+		outputContext := reviewFinalizeOutputContext{Context: ctx, Repo: root, CommittedLive: committedLive}
 		if plan.CapturedEvidence != nil {
 			outputContext.CapturedEvidence = &plan.CapturedEvidence.Record
 		}
@@ -2441,7 +2460,7 @@ type facadeFinalizePlan struct {
 // prepareFacadeFinalizePlan performs every deterministic validation before the
 // attempt journal exists. Its states are the only states later admitted and
 // written through the write-ahead journal.
-func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state reviewtransaction.CompactState, results []facadeReviewerResult, refuter facadeRefuterResult, validation *facadeValidationResult, evidence []byte, correctionLines int, failed bool, captured *reviewtransaction.CapturedVerificationEvidence) (facadeFinalizePlan, error) {
+func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state reviewtransaction.CompactState, results []facadeReviewerResult, refuter facadeRefuterResult, validation *facadeValidationResult, evidence []byte, correctionLines int, failed bool, captured *reviewtransaction.CapturedVerificationEvidence, committedLive *reviewtransaction.Snapshot) (facadeFinalizePlan, error) {
 	entryState, entryProposed := state.State, state.ProposedCorrectionLines != nil
 	plan := facadeFinalizePlan{Transitions: []facadeFinalizeTransition{}, Candidate: state.CurrentSnapshot, Evidence: evidence, CapturedEvidence: captured}
 	appendState := func(operation string) {
@@ -2485,15 +2504,24 @@ func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state
 		if captured.Record.Outcome != reviewtransaction.VerificationOutcomePassed || failed {
 			return plan, errors.New("compact correction repository verification must pass before acceptance") // refusal:by-design world-action: the candidate must change and pass repository verification before the open correction can be accepted
 		}
-		fix, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(ctx, reviewtransaction.Target{Kind: reviewtransaction.TargetFixDiff, Projection: state.InitialSnapshot.Projection, BaseRef: state.CurrentSnapshot.CandidateTree, IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs})
+		var fix reviewtransaction.Snapshot
+		var request reviewtransaction.TargetedValidationRequest
+		var err error
+		if committedLive != nil {
+			request, err = reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, state, revision, *committedLive)
+			if err == nil {
+				fix = facadeCorrectionEvidenceTargetFromRequest(state, *committedLive, request)
+			}
+		} else {
+			fix, err = (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(ctx, reviewtransaction.Target{Kind: reviewtransaction.TargetFixDiff, Projection: state.InitialSnapshot.Projection, BaseRef: state.CurrentSnapshot.CandidateTree, IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs})
+			if err == nil {
+				request, err = reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, state, revision, fix)
+			}
+		}
 		if err != nil {
 			return plan, err
 		}
 		actual, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(ctx, fix)
-		if err != nil {
-			return plan, err
-		}
-		request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, state, revision, fix)
 		if err != nil {
 			return plan, err
 		}
@@ -3605,6 +3633,7 @@ type reviewFinalizeOutputContext struct {
 	Context          context.Context
 	Repo             string
 	CapturedEvidence *reviewtransaction.VerificationEvidenceRecord
+	CommittedLive    *reviewtransaction.Snapshot
 }
 
 func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract string, actionEligibility, nextTransition bool, state reviewtransaction.CompactState, revision string, store reviewtransaction.CompactStore, action string, contexts ...reviewFinalizeOutputContext) error {
@@ -3621,8 +3650,21 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 		outputContext := contexts[0]
 		if state.State == reviewtransaction.StateCorrectionRequired && state.ProposedCorrectionLines != nil {
 			if nextTransition {
-				target, targetErr := facadeVerificationEvidenceTarget(outputContext.Context, outputContext.Repo, state, revision)
-				if targetErr == nil {
+				if outputContext.CommittedLive != nil {
+					request, requestErr := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(outputContext.Context, outputContext.Repo, state, revision, *outputContext.CommittedLive)
+					if requestErr == nil {
+						validationRequest = &request
+						if capturedEvidence == nil {
+							target := facadeCorrectionEvidenceTargetFromRequest(state, *outputContext.CommittedLive, request)
+							captured, readErr := reviewtransaction.ReadCapturedVerificationEvidence(store.Dir, state.LineageID, revision, target)
+							evidenceErr = readErr
+							if readErr == nil {
+								record := captured.Record
+								capturedEvidence = &record
+							}
+						}
+					}
+				} else if target, targetErr := facadeVerificationEvidenceTarget(outputContext.Context, outputContext.Repo, state, revision); targetErr == nil {
 					request, requestErr := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(outputContext.Context, outputContext.Repo, state, revision, target)
 					if requestErr == nil {
 						validationRequest = &request

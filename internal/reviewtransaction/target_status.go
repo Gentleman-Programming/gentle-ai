@@ -129,8 +129,70 @@ func AssessTargetStatusWithSnapshot(ctx context.Context, repo string, request Ta
 	if err != nil {
 		return TargetStatusResult{}, Snapshot{}, err
 	}
+	if request.LineageID == "" && request.Target.Kind == TargetCurrentChanges && request.Target.Projection == ProjectionWorkspace {
+		candidates, recoveryErr := selectorlessCommittedBaseDiffCorrections(ctx, repo)
+		if recoveryErr != nil {
+			return TargetStatusResult{}, Snapshot{}, recoveryErr
+		}
+		switch len(candidates) {
+		case 1:
+			live, request.LineageID = candidates[0].snapshot, candidates[0].lineage
+		case 2:
+			fallthrough
+		default:
+			if len(candidates) > 1 {
+				result := TargetStatusResult{
+					TargetIdentity: live.Identity, Projection: targetProjectionFromSnapshot(live),
+					Applicability: TargetApplicabilityAmbiguous, Action: TargetStatusActionSelectLineage,
+					Replayability: ReplayabilityStatusRequired, CandidateLineageIDs: make([]string, 0, len(candidates)),
+				}
+				for _, candidate := range candidates {
+					result.CandidateLineageIDs = append(result.CandidateLineageIDs, candidate.lineage)
+				}
+				return result, live, nil
+			}
+		}
+	}
 	result, err := assessTargetStatusSnapshot(ctx, repo, request, live)
 	return result, live, err
+}
+
+type selectorlessCommittedBaseDiffCorrection struct {
+	lineage  string
+	snapshot Snapshot
+}
+
+func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) ([]selectorlessCommittedBaseDiffCorrection, error) {
+	clean, err := (SnapshotBuilder{Repo: repo}).WorktreeClean(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !clean {
+		return nil, nil
+	}
+	stores, err := DiscoverCompactStores(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	candidates := []selectorlessCommittedBaseDiffCorrection{}
+	for _, store := range stores {
+		record, err := store.LoadContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		state := record.State
+		if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil || state.CorrectionAttemptConsumed() ||
+			state.InitialSnapshot.Kind != TargetBaseDiff {
+			continue
+		}
+		live, err := RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, state)
+		if err != nil {
+			return nil, fmt.Errorf("rebuild committed correction candidate for %q: %w", state.LineageID, err)
+		}
+		candidates = append(candidates, selectorlessCommittedBaseDiffCorrection{lineage: state.LineageID, snapshot: live})
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].lineage < candidates[j].lineage })
+	return candidates, nil
 }
 
 func assessTargetStatusSnapshot(ctx context.Context, repo string, request TargetStatusRequest, live Snapshot) (TargetStatusResult, error) {

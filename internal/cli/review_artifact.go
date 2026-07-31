@@ -100,7 +100,7 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 	return encodeReviewJSON(stdout, captured.Record)
 }
 
-func facadeVerificationEvidenceTarget(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string) (reviewtransaction.Snapshot, error) {
+func facadeVerificationEvidenceTarget(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string, capturedLive ...reviewtransaction.Snapshot) (reviewtransaction.Snapshot, error) {
 	switch state.State {
 	case reviewtransaction.StateValidating:
 		return state.CurrentSnapshot, nil
@@ -110,6 +110,16 @@ func facadeVerificationEvidenceTarget(ctx context.Context, repo string, state re
 		}
 		if err := rejectFacadeCorrectionUntracked(ctx, repo, state); err != nil {
 			return reviewtransaction.Snapshot{}, err
+		}
+		if len(capturedLive) > 1 {
+			return reviewtransaction.Snapshot{}, errors.New("verification evidence accepts one captured correction snapshot")
+		}
+		if len(capturedLive) == 1 {
+			request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, state, revision, capturedLive[0])
+			if err != nil {
+				return reviewtransaction.Snapshot{}, err
+			}
+			return facadeCorrectionEvidenceTargetFromRequest(state, capturedLive[0], request), nil
 		}
 		projection := state.InitialSnapshot.Projection
 		if projection == "" {

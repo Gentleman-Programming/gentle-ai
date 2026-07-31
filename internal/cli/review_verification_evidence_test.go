@@ -232,6 +232,105 @@ func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing
 	}
 }
 
+func TestSelectorlessStatusAndFinalizeRecoverCommittedBaseDiffCorrection(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	runReviewCLIGit(t, repo, "branch", "frozen-base", base)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nwrong\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "transient review candidate")
+
+	var startOutput bytes.Buffer
+	if err := RunReviewFacadeStart([]string{
+		"--cwd", repo, "--lineage", "committed-clean-correction", "--base-ref", "frozen-base", "--committed-only",
+	}, &startOutput); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startOutput.Bytes(), &started)
+
+	reviewer := filepath.Join(t.TempDir(), "reviewer.json")
+	writeReviewCLIJSON(t, reviewer, facadeReviewerResult{
+		Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
+			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "terminal value is incorrect",
+			ProofRefs: []string{"candidate-only differential failure"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+			CausalDisposition: reviewtransaction.CausalIntroduced,
+		}}, Evidence: []string{"reviewed transient base-diff candidate"},
+	})
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", reviewer}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "--amend", "-qm", "committed correction")
+	// The textual ref is deliberately moved after start; recovery must retain its frozen tree.
+	runReviewCLIGit(t, repo, "branch", "-f", "frozen-base", "HEAD")
+
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status := strings.TrimSpace(runReviewCLIGit(t, repo, "status", "--porcelain")); status != "" {
+		t.Fatalf("committed correction worktree is not clean: %q", status)
+	}
+
+	statusArgs := []string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo}
+	waiting := readCorrectionEvidenceStatus(t, statusArgs)
+	if waiting.Authority == nil || waiting.Authority.LineageID != started.LineageID ||
+		waiting.Projection.BaseTree != before.State.InitialSnapshot.BaseTree ||
+		waiting.NextTransition == nil || waiting.NextTransition.Kind != reviewNextTransitionCollect ||
+		waiting.NextTransition.ReasonCode != "correction_repository_verification_required" {
+		t.Fatalf("selector-less committed correction status = %#v", waiting)
+	}
+	target := transitionArgumentValue(t, waiting.NextTransition, "target")
+	evidence := filepath.Join(t.TempDir(), "repository-evidence.txt")
+	if err := os.WriteFile(evidence, []byte("repository verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewCaptureEvidence([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", target, "--expected-revision", before.Revision,
+		"--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidence,
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	ready := readCorrectionEvidenceStatus(t, statusArgs)
+	if ready.NextTransition == nil || ready.NextTransition.Kind != reviewNextTransitionCollect ||
+		ready.NextTransition.ReasonCode != "targeted_validation_required" || ready.ValidationRequest == nil ||
+		ready.ValidationRequest.CorrectionTargetIdentity != target {
+		t.Fatalf("passed committed correction evidence status = %#v", ready)
+	}
+
+	validation := filepath.Join(t.TempDir(), "validation.json")
+	writeReviewCLIJSON(t, validation, facadeValidationResult{
+		TargetedValidationRequestHash: ready.ValidationRequest.RequestHash,
+		CorrectionTargetIdentity:      ready.ValidationRequest.CorrectionTargetIdentity,
+		OriginalCriteria:              facadeValidationCheck{Passed: true, Evidence: []string{"original criteria passed"}},
+		CorrectionRegression:          facadeValidationCheck{Passed: true, Evidence: []string{"correction regression passed"}},
+		FollowUps:                     []reviewtransaction.FollowUp{},
+	})
+	var finalized bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validation, "--captured-evidence"}, &finalized); err != nil {
+		t.Fatalf("selector-less committed correction finalize: %v\n%s", err, finalized.String())
+	}
+	after, err := store.Load()
+	if err != nil || after.State.State != reviewtransaction.StateApproved || len(after.State.CorrectionAttempts) != 1 ||
+		after.State.CurrentSnapshot.Identity != target {
+		t.Fatalf("selector-less committed correction authority = %#v, %v", after, err)
+	}
+}
+
 func TestProceduralCorrectionEvidenceEscalatesBeforeRetryEligibility(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {

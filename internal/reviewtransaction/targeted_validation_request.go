@@ -91,6 +91,13 @@ func buildTargetedValidationRequest(ctx context.Context, repo string, state Comp
 	if err := pathsAreSubset(fix.Paths, state.GenesisPaths); err != nil {
 		return TargetedValidationRequest{}, err
 	}
+	changed, err := (SnapshotBuilder{Repo: repo}).ChangedLines(ctx, fix)
+	if err != nil {
+		return TargetedValidationRequest{}, err
+	}
+	if changed > state.CorrectionBudget-state.CumulativeCorrectionLines {
+		return TargetedValidationRequest{}, errors.New("targeted validation request correction exceeds the remaining correction budget")
+	}
 	return targetedValidationRequestForCorrection(state, revision, fix)
 }
 

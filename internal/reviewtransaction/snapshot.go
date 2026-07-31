@@ -306,6 +306,65 @@ func (builder SnapshotBuilder) ValidateLiveSnapshot(ctx context.Context, expecte
 	return nil
 }
 
+// WorktreeClean reports whether the repository has no staged, unstaged, or
+// untracked content. Committed-only correction recovery must not reinterpret a
+// workspace candidate as a committed one.
+func (builder SnapshotBuilder) WorktreeClean(ctx context.Context) (bool, error) {
+	repo, err := builder.repositoryRoot(ctx)
+	if err != nil {
+		return false, err
+	}
+	output, err := runGit(ctx, repo, nil, nil, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return false, err
+	}
+	return len(output) == 0, nil
+}
+
+// RebuildCommittedBaseDiffCorrectionCandidate reconstructs the committed
+// correction target from frozen compact authority rather than a mutable ref.
+func RebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo string, state CompactState) (Snapshot, error) {
+	if err := state.Validate(); err != nil {
+		return Snapshot{}, fmt.Errorf("validate committed base-diff correction authority: %w", err)
+	}
+	initial := state.InitialSnapshot
+	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil || state.CorrectionAttemptConsumed() ||
+		initial.Kind != TargetBaseDiff {
+		return Snapshot{}, errors.New("committed base-diff correction reconstruction is not eligible")
+	}
+	projection, err := canonicalProjection(initial.Projection)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	clean, err := builder.WorktreeClean(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if !clean {
+		return Snapshot{}, errors.New("committed base-diff correction reconstruction requires a clean worktree")
+	}
+	live, err := builder.BuildStoredSnapshot(ctx, Target{
+		Kind: TargetBaseDiff, Projection: projection, BaseRef: initial.BaseTree,
+		IntendedUntracked: append([]string(nil), initial.IntendedUntracked...),
+	})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err := builder.ValidateEvidence(ctx, live); err != nil {
+		return Snapshot{}, fmt.Errorf("validate rebuilt committed base-diff correction: %w", err)
+	}
+	if live.UnbornHead != initial.UnbornHead || live.BaseTree != initial.BaseTree || live.Projection != projection ||
+		!equalStrings(live.IntendedUntracked, initial.IntendedUntracked) ||
+		live.IntendedUntrackedProof != initial.IntendedUntrackedProof {
+		return Snapshot{}, errors.New("committed base-diff correction reconstruction does not match frozen authority")
+	}
+	if err := pathsAreSubset(live.Paths, state.GenesisPaths); err != nil {
+		return Snapshot{}, fmt.Errorf("committed base-diff correction exceeds frozen genesis paths: %w", err)
+	}
+	return live, nil
+}
+
 func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Context, snapshot Snapshot, location string, causality CausalDisposition) (bool, error) {
 	if err := builder.ValidateEvidence(ctx, snapshot); err != nil {
 		return false, err

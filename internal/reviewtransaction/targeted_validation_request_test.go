@@ -96,7 +96,7 @@ func TestTargetedValidationRequestFromSnapshotIgnoresLaterWorkspaceChanges(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeSnapshotFile(t, repo, "tracked.txt", "base\nlater\n")
+	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nlater\n")
 
 	request, err := BuildTargetedValidationRequestFromSnapshot(context.Background(), repo, state, revision, live)
 	if err != nil {
@@ -105,8 +105,18 @@ func TestTargetedValidationRequestFromSnapshotIgnoresLaterWorkspaceChanges(t *te
 	if request.CorrectionCandidateTree != live.CandidateTree {
 		t.Fatalf("request candidate = %s, want captured live tree %s", request.CorrectionCandidateTree, live.CandidateTree)
 	}
-	if got := gitSnapshot(t, repo, "show", request.CorrectionCandidateTree+":tracked.txt"); got != "base\nfixed\n" {
+	if got := gitSnapshot(t, repo, "show", request.CorrectionCandidateTree+":tracked.txt"); got != "base\none\ntwo\nthree\nfixed\n" {
 		t.Fatalf("request candidate content = %q, want captured content", got)
+	}
+}
+
+func TestTargetedValidationRequestRejectsOverBudgetCorrection(t *testing.T) {
+	repo, state, revision, _ := targetedValidationRequestFixture(t, "targeted-validation-over-budget", true)
+	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\nextra\n")
+
+	if _, err := BuildTargetedValidationRequest(context.Background(), repo, state, revision); err == nil ||
+		!strings.Contains(err.Error(), "exceeds the remaining correction budget") {
+		t.Fatalf("over-budget correction request error = %v", err)
 	}
 }
 
@@ -190,7 +200,7 @@ func TestTargetedValidationRequestCountsOnlyPartialCorrectionAcrossIntendedUntra
 func targetedValidationRequestFixture(t *testing.T, lineage string, correct bool) (string, CompactState, string, CompactStore) {
 	t.Helper()
 	repo := initSnapshotRepo(t)
-	writeSnapshotFile(t, repo, "tracked.txt", "base\nwrong\n")
+	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nwrong\n")
 	state := newCompactTestState(t, repo, lineage)
 	store := storeCompactStartAuthority(t, repo, state)
 	record, err := store.Load()
@@ -222,7 +232,7 @@ func targetedValidationRequestFixture(t *testing.T, lineage string, correct bool
 		t.Fatal(err)
 	}
 	if correct {
-		writeSnapshotFile(t, repo, "tracked.txt", "base\nfixed\n")
+		writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\n")
 	}
 	return repo, state, revision, store
 }
