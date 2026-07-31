@@ -1,6 +1,7 @@
 package reviewtransaction
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -277,7 +278,36 @@ func TestArtifactAdmissionCandidateCausalCanonicalization(t *testing.T) {
 		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope || admission.Diagnostic != wantMessage {
 			t.Fatalf("AdmitArtifact() = %q, %q, %v; want out-of-scope %q", admission.Decision, admission.Diagnostic, err, wantMessage)
 		}
+		var admissionErr *ArtifactAdmissionError
+		if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil {
+			t.Fatalf("candidate-causal error = %v; want structured diagnostic", err)
+		}
+		if admissionErr.Diagnostic.FindingID != "R3-001" ||
+			admissionErr.Diagnostic.Location != "internal/a.go:7" ||
+			admissionErr.Diagnostic.Reason != "line_not_changed_by_candidate" {
+			t.Fatalf("candidate-causal diagnostic = %#v", admissionErr.Diagnostic)
+		}
 	})
+}
+
+func TestAdmitArtifactReturnsStructuredInvalidLocationDiagnostic(t *testing.T) {
+	request := admittedCandidateCausalArtifactFixture(t)
+	request.Result.Findings[0].Location = "internal/a.go:7-9"
+
+	_, admission, err := AdmitArtifact(t.Context(), request)
+	var admissionErr *ArtifactAdmissionError
+	var locationErr *FindingLocationError
+	if admission.Decision != ArtifactAdmissionOutOfScope ||
+		!errors.As(err, &admissionErr) || !errors.As(err, &locationErr) {
+		t.Fatalf("AdmitArtifact() = %#v, %v; want typed location refusal", admission, err)
+	}
+	if admissionErr.Diagnostic == nil ||
+		admissionErr.Diagnostic.Code != "invalid_finding_location" ||
+		admissionErr.Diagnostic.FindingID != "R3-001" ||
+		admissionErr.Diagnostic.Location != "internal/a.go:7-9" ||
+		admissionErr.Diagnostic.Reason != "line_suffix_not_integer" {
+		t.Fatalf("structured diagnostic = %#v", admissionErr.Diagnostic)
+	}
 }
 
 // TestAdmitArtifactOmittedSubjectDiagnosticNamesContinuation pins the

@@ -286,10 +286,39 @@ function gitTrustRefusal(binding: ReviewBinding, cause: unknown): boolean {
 // binding", advice that deterministically fails: recapturing identical bytes
 // can never satisfy admission, only a relaunched reviewer can.
 const ADMISSION_REJECTION = /\breviewer artifact admission ([a-z_]+):/
+const ADMISSION_DIAGNOSTIC = /; admission_diagnostic=(\{[^\r\n]{1,1024}\})$/
+const ADMISSION_DIAGNOSTIC_REASONS = new Set([
+  "expected_path_and_line", "line_suffix_not_integer", "line_must_be_positive",
+  "path_must_be_repository_relative", "path_must_be_canonical", "line_not_changed_by_candidate",
+])
 
-function admissionRejection(cause: unknown): string | undefined {
-  const match = ADMISSION_REJECTION.exec(errorMessage(cause))
-  return match ? match[1] : undefined
+type AdmissionDiagnostic = {
+  code: "invalid_finding_location" | "candidate_causality_unproven"
+  finding_id: string
+  location: string
+  reason: string
+}
+
+function admissionRejection(cause: unknown): { decision: string, diagnostic?: AdmissionDiagnostic } | undefined {
+  const message = errorMessage(cause)
+  const match = ADMISSION_REJECTION.exec(message)
+  if (!match) return undefined
+  const detail = ADMISSION_DIAGNOSTIC.exec(message)
+  if (!detail) return { decision: match[1] }
+  try {
+    const parsed = JSON.parse(detail[1]) as Partial<AdmissionDiagnostic>
+    const safeLocation = typeof parsed.location === "string" && parsed.location.length <= 256 &&
+      !/[\u0000-\u001f\u007f\\]/.test(parsed.location) && !/^(?:[A-Za-z]:[\\/]|[\\/])/.test(parsed.location) &&
+      !parsed.location.split(":", 1)[0].split("/").includes("..")
+    const safeID = typeof parsed.finding_id === "string" && /^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(parsed.finding_id)
+    const safeCode = parsed.code === "invalid_finding_location" || parsed.code === "candidate_causality_unproven"
+    const safeReason = typeof parsed.reason === "string" && ADMISSION_DIAGNOSTIC_REASONS.has(parsed.reason)
+    return safeLocation && safeID && safeCode && safeReason
+      ? { decision: match[1], diagnostic: parsed as AdmissionDiagnostic }
+      : { decision: match[1] }
+  } catch {
+    return { decision: match[1] }
+  }
 }
 
 function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string): string {
@@ -297,7 +326,10 @@ function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: strin
   if (gitTrustRefusal(binding, cause)) return GIT_TRUST_REFUSAL_MESSAGE
   const admission = admissionRejection(cause)
   if (admission) {
-    return `${code}: native admission rejected the reviewer result as ${admission}; ` +
+    const detail = admission.diagnostic
+      ? `; finding ${admission.diagnostic.finding_id} at ${JSON.stringify(admission.diagnostic.location)}: ${admission.diagnostic.reason}`
+      : ""
+    return `${code}: native admission rejected the reviewer result as ${admission.decision}${detail}; ` +
       "retrying capture with the same result cannot succeed; relaunch this lens reviewer to produce a corrected result"
   }
   return `${code}: provider-owned review operation failed; refresh the exact native next_transition or retry the same opaque binding`

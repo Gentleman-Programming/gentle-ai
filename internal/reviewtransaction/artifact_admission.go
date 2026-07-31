@@ -67,11 +67,59 @@ type ArtifactAdmissionRequest struct {
 // ArtifactAdmissionError exposes the stable native decision without requiring
 // callers to parse diagnostic prose.
 type ArtifactAdmissionError struct {
-	Admission ArtifactAdmission
+	Admission  ArtifactAdmission
+	Diagnostic *ArtifactAdmissionDiagnostic
+	cause      error
 }
 
 func (err *ArtifactAdmissionError) Error() string {
-	return fmt.Sprintf("reviewer artifact admission %s: %s", err.Admission.Decision, err.Admission.Diagnostic)
+	message := fmt.Sprintf("reviewer artifact admission %s: %s", err.Admission.Decision, err.Admission.Diagnostic)
+	if err.Diagnostic != nil {
+		encoded, _ := json.Marshal(err.Diagnostic)
+		message += "; admission_diagnostic=" + string(encoded)
+	}
+	return message
+}
+
+func (err *ArtifactAdmissionError) Unwrap() error { return err.cause }
+
+// ArtifactAdmissionDiagnostic contains bounded, non-sensitive recovery fields.
+type ArtifactAdmissionDiagnostic struct {
+	Code      string `json:"code"`
+	FindingID string `json:"finding_id,omitempty"`
+	Location  string `json:"location,omitempty"`
+	Reason    string `json:"reason"`
+}
+
+func boundedAdmissionField(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if len(value) > limit {
+		return value[:limit]
+	}
+	return value
+}
+
+func findingAdmissionDiagnostic(code, findingID, location, reason string) *ArtifactAdmissionDiagnostic {
+	return &ArtifactAdmissionDiagnostic{
+		Code: code, FindingID: boundedAdmissionField(findingID, 128),
+		Location: boundedAdmissionField(location, 256), Reason: reason,
+	}
+}
+
+// NewArtifactLocationAdmissionError preserves a typed location cause while
+// exposing the stable admission decision and bounded recovery details.
+func NewArtifactLocationAdmissionError(findingID, location string, cause error) error {
+	var locationErr *FindingLocationError
+	reason := "invalid_location"
+	if errors.As(cause, &locationErr) {
+		reason = string(locationErr.Reason)
+	}
+	admission := ArtifactAdmission{Decision: ArtifactAdmissionOutOfScope, Diagnostic: "reviewer finding location is invalid"}
+	return &ArtifactAdmissionError{
+		Admission:  admission,
+		Diagnostic: findingAdmissionDiagnostic("invalid_finding_location", findingID, location, reason),
+		cause:      cause,
+	}
 }
 
 func (admission ArtifactAdmission) Validate(subject ArtifactSubject) error {
@@ -115,6 +163,10 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 	fail := func(decision ArtifactAdmissionDecision, diagnostic string) (LensResult, ArtifactAdmission, error) {
 		admission.Decision, admission.Diagnostic = decision, diagnostic
 		return LensResult{}, admission, &ArtifactAdmissionError{Admission: admission}
+	}
+	failFinding := func(decision ArtifactAdmissionDecision, diagnostic string, detail *ArtifactAdmissionDiagnostic, cause error) (LensResult, ArtifactAdmission, error) {
+		admission.Decision, admission.Diagnostic = decision, diagnostic
+		return LensResult{}, admission, &ArtifactAdmissionError{Admission: admission, Diagnostic: detail, cause: cause}
 	}
 	if err := ValidateArtifactSubject(request.ExpectedSubject); err != nil {
 		return fail(ArtifactAdmissionBindingMismatch, err.Error())
@@ -227,7 +279,14 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 			return fail(ArtifactAdmissionAmbiguous, "reviewer result repeats a finding ID")
 		}
 		seenFindingIDs[finding.ID] = struct{}{}
-		if !findingLocationInGenesis(finding.Location, wantPaths) {
+		logicalPath, _, locationErr := parseFindingLocation(finding.Location)
+		if locationErr != nil {
+			var typedLocationErr *FindingLocationError
+			errors.As(locationErr, &typedLocationErr)
+			return failFinding(ArtifactAdmissionOutOfScope, "reviewer finding location is invalid",
+				findingAdmissionDiagnostic("invalid_finding_location", finding.ID, finding.Location, string(typedLocationErr.Reason)), locationErr)
+		}
+		if stringIndex(wantPaths, logicalPath) < 0 {
 			return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
 		}
 		for _, proof := range finding.ProofRefs {
@@ -263,7 +322,16 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 	// non-canonical formatting must still admit, since admission persists the
 	// canonical form below rather than the caller's raw bytes.
 	if !equalStrings(verifiedIDs, wantCandidateCausalIDs) {
-		return fail(ArtifactAdmissionOutOfScope, "candidate-causal findings are not proven by repository-derived changed-line evidence")
+		var findingID, location string
+		for _, finding := range canonical.Findings {
+			if stringIndex(wantCandidateCausalIDs, finding.ID) >= 0 && stringIndex(verifiedIDs, finding.ID) < 0 {
+				findingID, location = finding.ID, finding.Location
+				break
+			}
+		}
+		return failFinding(ArtifactAdmissionOutOfScope,
+			"candidate-causal findings are not proven by repository-derived changed-line evidence",
+			findingAdmissionDiagnostic("candidate_causality_unproven", findingID, location, "line_not_changed_by_candidate"), nil)
 	}
 	admission.Decision, admission.ResultHash = ArtifactAdmissionCompleted, canonical.ResultHash
 	admission.CandidateCausalFindingIDs = verifiedIDs

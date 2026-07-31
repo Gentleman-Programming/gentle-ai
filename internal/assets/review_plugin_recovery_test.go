@@ -342,6 +342,34 @@ func TestReviewPluginKeepsIncompleteAdmissionRecoveryNeutral(t *testing.T) {
 	}
 }
 
+func TestReviewPluginSurfacesStructuredLocationRecoveryDiagnostic(t *testing.T) {
+	native := `Error: reviewer artifact admission out_of_scope: reviewer finding location is invalid; ` +
+		`admission_diagnostic={"code":"invalid_finding_location","finding_id":"R3-001",` +
+		`"location":"internal/a.go:207-221","reason":"line_suffix_not_integer"}`
+	message := runReviewPluginScenarioWithNativeAndPreservation(
+		t, "after-opaque", "", native, `{"reference":"rinc1_safe"}`,
+	)
+	for _, want := range []string{
+		"rejected the reviewer result as out_of_scope",
+		`finding R3-001 at "internal/a.go:207-221": line_suffix_not_integer`,
+		"relaunch this lens reviewer",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("structured recovery message %q does not contain %q", message, want)
+		}
+	}
+	if strings.Contains(message, "reviewer finding location is invalid") {
+		t.Fatalf("structured recovery leaked native diagnostic prose: %s", message)
+	}
+	unsafe := strings.Replace(native, "internal/a.go:207-221", `C:\Users\private\repo\a.go:207-221`, 1)
+	message = runReviewPluginScenarioWithNativeAndPreservation(
+		t, "after-opaque", "", unsafe, `{"reference":"rinc1_safe"}`,
+	)
+	if strings.Contains(message, `C:\Users\private`) || strings.Contains(message, "finding R3-001") {
+		t.Fatalf("unsafe structured diagnostic escaped opaque filtering: %s", message)
+	}
+}
+
 // TestReviewPluginKeepsGenericOpaqueFailureOpaque proves the trust pass-through
 // is not a hole in the opaque path's path-safety rule: any other native failure
 // still collapses into the generic provider-owned message.
