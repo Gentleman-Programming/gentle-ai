@@ -82,6 +82,12 @@ func TestRunSDDVerifyValidateHelpIsSuccessfulAndInputFree(t *testing.T) {
 				"pass|pass_with_warnings|fail",
 				"nonnegative",
 				"1 MiB",
+				"Count semantics:",
+				"completed/total",
+				"must equal the report totals exactly",
+				"Scenario and evidence dispositions:",
+				"authority-only extension",
+				"exit code 125",
 			} {
 				if !strings.Contains(text, want) {
 					t.Errorf("validator help missing %q:\n%s", want, text)

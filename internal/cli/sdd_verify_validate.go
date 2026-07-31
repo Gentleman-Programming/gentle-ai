@@ -96,6 +96,13 @@ func renderSDDVerifyValidateHelp(stdout io.Writer) {
 	_, _ = fmt.Fprintf(stdout, "  base envelope fields: %s\n", strings.Join(sddstatus.VerifyReportEnvelopeFields(), ", "))
 	_, _ = fmt.Fprintf(stdout, "  verdict: %s\n", strings.Join(sddstatus.VerifyVerdicts(), "|"))
 	_, _ = fmt.Fprintf(stdout, "  report limit: %s\n", verifyReportLimitText())
+	_, _ = fmt.Fprintln(stdout, "\nCount semantics:")
+	_, _ = fmt.Fprintln(stdout, "  requirements and scenarios use completed/total; completed must not exceed total.")
+	_, _ = fmt.Fprintln(stdout, "  --requirements and --scenarios must equal the report totals exactly; a mismatch is rejected.")
+	_, _ = fmt.Fprintln(stdout, "\nScenario and evidence dispositions:")
+	_, _ = fmt.Fprintln(stdout, "  A non-fail verdict requires test_exit_code 0, build_exit_code 0, blockers 0, critical_findings 0, and completed == total for requirements and scenarios.")
+	_, _ = fmt.Fprintln(stdout, "  A fail verdict without the authority-only extension is rejected when all evidence is green; exit code 125 requires the authority-only extension.")
+	_, _ = fmt.Fprintln(stdout, "  The authority-only extension adds authority_only_failure, missing_review_authority, substantive_failure, command_failed, and observed_authority_revision; it requires verdict fail, exit code 125, nonzero blockers and critical_findings, and the empty output hashes.")
 }
 
 func verifyReportLimitText() string {
