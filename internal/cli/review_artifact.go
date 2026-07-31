@@ -165,6 +165,22 @@ type admittedReviewerResult struct {
 	Result    facadeReviewerResult                `json:"result"`
 }
 
+type reviewerAdmissionDiagnostic struct {
+	Reason    string `json:"reason"`
+	FindingID string `json:"finding_id"`
+	Location  string `json:"location"`
+}
+
+type reviewerAdmissionDiagnosticError struct {
+	Decision   reviewtransaction.ArtifactAdmissionDecision
+	Diagnostic reviewerAdmissionDiagnostic
+}
+
+func (err *reviewerAdmissionDiagnosticError) Error() string {
+	payload, _ := json.Marshal(err.Diagnostic)
+	return fmt.Sprintf("reviewer artifact admission %s: %s", err.Decision, payload)
+}
+
 type capturedArtifactBinding struct {
 	Subject   reviewtransaction.ArtifactSubject
 	Admission reviewtransaction.ArtifactAdmission
@@ -830,7 +846,7 @@ func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload
 	if err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
 	}
-	result, err := decodeAdmittedReviewerResult(payload, expected, subjectFrozen)
+	result, err := decodeAdmittedReviewerResult(ctx, payload, expected, subjectFrozen)
 	if err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
 	}
@@ -845,7 +861,7 @@ func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload
 	return result, expected, nil
 }
 
-func decodeAdmittedReviewerResult(payload []byte, expected reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext) (facadeReviewerResult, error) {
+func decodeAdmittedReviewerResult(ctx context.Context, payload []byte, expected reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext) (facadeReviewerResult, error) {
 	var envelope admittedReviewerResult
 	if err := decodeFacadeJSONBytes(payload, &envelope); err != nil {
 		return facadeReviewerResult{}, err
@@ -891,6 +907,15 @@ func verifiedCandidateCausalFindingIDs(ctx context.Context, repo string, snapsho
 		case reviewtransaction.CausalIntroduced, reviewtransaction.CausalBehaviorActivated, reviewtransaction.CausalWorsened:
 			changed, err := builder.CandidateLocationSupportsCausality(ctx, snapshot, finding.Location, finding.CausalDisposition)
 			if err != nil {
+				var locationErr *reviewtransaction.FindingLocationError
+				if errors.As(err, &locationErr) {
+					return nil, &reviewerAdmissionDiagnosticError{
+						Decision: reviewtransaction.ArtifactAdmissionIncomplete,
+						Diagnostic: reviewerAdmissionDiagnostic{
+							Reason: reviewtransaction.FindingLocationInvalidReason, FindingID: finding.ID, Location: locationErr.Location,
+						},
+					}
+				}
 				return nil, fmt.Errorf("verify candidate causality for finding %q: %w", finding.ID, err)
 			}
 			if changed {

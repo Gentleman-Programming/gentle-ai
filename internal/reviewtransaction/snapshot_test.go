@@ -49,6 +49,37 @@ func TestCanonicalPathsRejectsDuplicateInput(t *testing.T) {
 	}
 }
 
+func TestParseCandidateFindingLocation(t *testing.T) {
+	tests := []struct {
+		name, location, wantPath string
+		wantLine                 int
+		wantErr                  bool
+	}{
+		{name: "single line", location: "internal/review.go:207", wantPath: "internal/review.go", wantLine: 207},
+		{name: "final colon after drive", location: `C:\repo\review.go:12`, wantPath: `C:\repo\review.go`, wantLine: 12},
+		{name: "range", location: "internal/review.go:207-221", wantPath: "internal/review.go", wantErr: true},
+		{name: "leading plus", location: "internal/review.go:+1", wantPath: "internal/review.go", wantErr: true},
+		{name: "zero", location: "internal/review.go:0", wantPath: "internal/review.go", wantErr: true},
+		{name: "missing line", location: "internal/review.go:", wantPath: "internal/review.go", wantErr: true},
+		{name: "missing colon", location: "internal/review.go", wantPath: "internal/review.go", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path, line, err := parseCandidateFindingLocation(tt.location)
+			if tt.wantErr {
+				var locationErr *FindingLocationError
+				if !errors.As(err, &locationErr) || locationErr.Location != tt.location || path != tt.wantPath {
+					t.Fatalf("parseCandidateFindingLocation(%q) = %q, %d, %#v", tt.location, path, line, err)
+				}
+				return
+			}
+			if err != nil || path != tt.wantPath || line != tt.wantLine {
+				t.Fatalf("parseCandidateFindingLocation(%q) = %q, %d, %v", tt.location, path, line, err)
+			}
+		})
+	}
+}
+
 func TestSnapshotBuilderCurrentChangesIsCompleteAndPreservesRealIndex(t *testing.T) {
 	if testing.Short() {
 		t.Skip("uses real git commands")
@@ -346,10 +377,24 @@ func TestBuildStagedWorkspaceOverlayRecoveryUsesOnlyTheRealIndex(t *testing.T) {
 		len(snapshot.IntendedUntracked) != 0 || len(snapshot.LedgerIDs) != 0 {
 		t.Fatalf("staged recovery snapshot = %#v", snapshot)
 	}
-	for _, path := range []string{"tracked.txt", "untracked.txt"} {
-		if gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":"+path) && path == "untracked.txt" {
-			t.Fatalf("staged recovery snapshot included %s", path)
-		}
+	if got := gitSnapshot(t, repo, "show", snapshot.CandidateTree+":reviewed.txt"); got != "reviewed\n" {
+		t.Fatalf("staged recovery snapshot reviewed.txt = %q, want authorized staged bytes", got)
+	}
+	if got := gitSnapshot(t, repo, "show", snapshot.CandidateTree+":tracked.txt"); got != "base\n" {
+		t.Fatalf("staged recovery snapshot tracked.txt = %q, want base index bytes", got)
+	}
+	if gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":untracked.txt") {
+		t.Fatal("staged recovery snapshot included unrelated untracked.txt")
+	}
+
+	writeSnapshotFile(t, repo, "tracked.txt", "more unstaged\n")
+	writeSnapshotFile(t, repo, "untracked.txt", "more untracked\n")
+	rebuilt, err := builder.BuildStagedWorkspaceOverlayRecovery(context.Background(), target)
+	if err != nil {
+		t.Fatalf("rebuild staged recovery snapshot: %v", err)
+	}
+	if rebuilt.CandidateTree != snapshot.CandidateTree || rebuilt.Identity != snapshot.Identity {
+		t.Fatalf("staged recovery identity changed with only worktree bytes: before=%#v after=%#v", snapshot, rebuilt)
 	}
 	if afterIndex := gitSnapshot(t, repo, "diff", "--cached", "--binary"); afterIndex != beforeIndex {
 		t.Fatal("staged recovery snapshot mutated the real index")

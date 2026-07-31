@@ -16,6 +16,11 @@ type ReviewBinding = {
   subject_hash?: string
 }
 
+type AdmissionRejection = {
+  decision: string
+  diagnostic?: { reason: "finding_location_invalid"; finding_id: string; location: string }
+}
+
 interface ReviewArtifactSubject {
   schema: string
   subject_hash: string
@@ -279,27 +284,59 @@ function gitTrustRefusal(binding: ReviewBinding, cause: unknown): boolean {
 
 // ADMISSION_REJECTION matches the typed decision the native CLI emits when it
 // refused the reviewer RESULT itself (`reviewer artifact admission <decision>:`
-// from internal/cli/review_artifact.go). Only the [a-z_]+ decision token is
-// forwarded — never the native diagnostic, which can embed payload text — so
-// the opaque path keeps its rule that no native prose reaches the transcript.
+// from internal/cli/review_artifact.go). Only the [a-z_]+ decision token and a
+// strictly validated malformed-location diagnostic are forwarded. All other
+// native diagnostic prose stays opaque because it can embed payload text.
 // Without this, an invalid result collapsed into "retry the same opaque
 // binding", advice that deterministically fails: recapturing identical bytes
 // can never satisfy admission, only a relaunched reviewer can.
-const ADMISSION_REJECTION = /\breviewer artifact admission ([a-z_]+):/
+const ADMISSION_REJECTION = /\breviewer artifact admission ([a-z_]+):(?: (\{[^\r\n]*\}))?/
 
-function admissionRejection(cause: unknown): string | undefined {
+function admissionRejection(cause: unknown): AdmissionRejection | undefined {
   const match = ADMISSION_REJECTION.exec(errorMessage(cause))
-  return match ? match[1] : undefined
+  if (!match) return undefined
+  const rejection: AdmissionRejection = { decision: match[1] }
+  if (!match[2]) return rejection
+  try {
+    const value = JSON.parse(match[2]) as Record<string, unknown>
+    if (Object.keys(value).sort().join(",") === "finding_id,location,reason" &&
+        value.reason === "finding_location_invalid" &&
+        typeof value.finding_id === "string" && /^[A-Za-z0-9._-]+$/.test(value.finding_id) &&
+        typeof value.location === "string" && value.location.length <= 1024 && !/[\r\n]/.test(value.location)) {
+      rejection.diagnostic = value as AdmissionRejection["diagnostic"]
+    }
+  } catch {
+    // Unrecognized native diagnostics remain opaque.
+  }
+  return rejection
 }
 
-function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string): string {
+function recoveryKey(binding: ReviewBinding): string {
+  return `${binding.lineage}\0${binding.target}\0${binding.lens}\0${binding.order}`
+}
+
+function sessionErrorMessage(
+  binding: ReviewBinding, cause: unknown, code: string, admissionRecoveries?: Set<string>,
+): string {
   if (!binding.repository_context) return errorMessage(cause)
   if (gitTrustRefusal(binding, cause)) return GIT_TRUST_REFUSAL_MESSAGE
   const admission = admissionRejection(cause)
   if (admission) {
-    return `${code}: native admission rejected the reviewer result as ${admission}; ` +
-      "retrying capture with the same result cannot succeed — relaunch this lens reviewer to produce a corrected result " +
-      "(severe findings must anchor to lines the frozen candidate actually changed)"
+    if (admissionRecoveries) {
+      const key = recoveryKey(binding)
+      if (admissionRecoveries.has(key)) {
+        return `reviewer_admission_recovery_unavailable: corrected reviewer result was rejected as ${admission.decision}; ` +
+          "the single admission recovery relaunch is exhausted; stop relaunching this lens and surface the terminal failure"
+      }
+      if (admission.diagnostic) {
+        admissionRecoveries.add(key)
+        return `${code}: native admission rejected finding ${admission.diagnostic.finding_id} because location ` +
+          `${JSON.stringify(admission.diagnostic.location)} is malformed; use one repo-relative path followed by a final colon ` +
+          "and one positive integer line (for example path/to/file.go:207), then relaunch this lens reviewer exactly once"
+      }
+    }
+    return `${code}: native admission rejected the reviewer result as ${admission.decision}; ` +
+      "retrying capture with the same result cannot succeed; relaunch this lens reviewer to produce a corrected result"
   }
   return `${code}: provider-owned review operation failed; refresh the exact native next_transition or retry the same opaque binding`
 }
@@ -326,8 +363,10 @@ function embeddedRawPayload(raw: string): string {
   return `${raw.slice(0, PRESERVE_EMBED_LIMIT)}\n[truncated: first ${PRESERVE_EMBED_LIMIT} of ${raw.length} characters embedded]`
 }
 
-async function preservedCaptureFailure(cwd: string, binding: ReviewBinding, raw: unknown, cause: unknown): Promise<Error> {
-  const captureFailure = sessionErrorMessage(binding, cause, "repository_context_capture_failed")
+async function preservedCaptureFailure(
+  cwd: string, binding: ReviewBinding, raw: unknown, cause: unknown, admissionRecoveries?: Set<string>,
+): Promise<Error> {
+  const captureFailure = sessionErrorMessage(binding, cause, "repository_context_capture_failed", admissionRecoveries)
   if (typeof raw !== "string" || raw.trim() === "") {
     return new Error(`${captureFailure}; no raw reviewer result was available to preserve`)
   }
@@ -350,47 +389,50 @@ async function preservedCaptureFailure(cwd: string, binding: ReviewBinding, raw:
   }
 }
 
-const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => ({
-  "tool.execute.before": async (input, output) => {
-    if (input.tool !== "task" || typeof output.args?.subagent_type !== "string" ||
-        !REVIEW_AGENTS.has(output.args.subagent_type)) return
-    if (typeof output.args.prompt !== "string") {
-      throw new Error("review task is missing GENTLE_AI_REVIEW_BINDING")
-    }
-    if (output.args.background === true) {
-      throw new Error("bound review tasks must run in the foreground for native result capture")
-    }
-    output.args.prompt = await injectReviewerContext(
-      output.args.prompt,
-      output.args.subagent_type,
-      captureCwd(worktree, directory),
-    )
-  },
-  "tool.execute.after": async (input, output) => {
-    if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
-    if (typeof input.args.prompt !== "string" || !BINDING.test(input.args.prompt)) return
-    const lens = input.args.subagent_type
-    const binding = parseBinding(input.args.prompt, lens)
-    const cwd = captureCwd(worktree, directory)
-    // Extract the replayable payload exactly once, BEFORE capture: recovery
-    // re-runs `review capture-result --input <preserved file>`, whose strict
-    // decoder rejects the task envelope, so a capture failure must preserve
-    // the extracted strict JSON — never the enveloped output.output.
-    let result: string
-    try {
-      result = reviewerResult(output.output)
-    } catch (cause) {
-      // Extraction itself failed (malformed envelope): there is no extracted
-      // payload, so preserve the raw envelope under the distinct extraction
-      // cause for manual inspection.
-      throw await preservedCaptureFailure(cwd, binding, output.output, cause)
-    }
-    try {
-      output.output = await captureResult(cwd, binding, result)
-    } catch (cause) {
-      throw await preservedCaptureFailure(cwd, binding, result, cause)
-    }
-  },
-})
+const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
+  const admissionRecoveries = new Set<string>()
+  return {
+    "tool.execute.before": async (input, output) => {
+      if (input.tool !== "task" || typeof output.args?.subagent_type !== "string" ||
+          !REVIEW_AGENTS.has(output.args.subagent_type)) return
+      if (typeof output.args.prompt !== "string") {
+        throw new Error("review task is missing GENTLE_AI_REVIEW_BINDING")
+      }
+      if (output.args.background === true) {
+        throw new Error("bound review tasks must run in the foreground for native result capture")
+      }
+      output.args.prompt = await injectReviewerContext(
+        output.args.prompt,
+        output.args.subagent_type,
+        captureCwd(worktree, directory),
+      )
+    },
+    "tool.execute.after": async (input, output) => {
+      if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
+      if (typeof input.args.prompt !== "string" || !BINDING.test(input.args.prompt)) return
+      const lens = input.args.subagent_type
+      const binding = parseBinding(input.args.prompt, lens)
+      const cwd = captureCwd(worktree, directory)
+      // Extract the replayable payload exactly once, BEFORE capture: recovery
+      // re-runs `review capture-result --input <preserved file>`, whose strict
+      // decoder rejects the task envelope, so a capture failure must preserve
+      // the extracted strict JSON — never the enveloped output.output.
+      let result: string
+      try {
+        result = reviewerResult(output.output)
+      } catch (cause) {
+        // Extraction itself failed (malformed envelope): there is no extracted
+        // payload, so preserve the raw envelope under the distinct extraction
+        // cause for manual inspection.
+        throw await preservedCaptureFailure(cwd, binding, output.output, cause)
+      }
+      try {
+        output.output = await captureResult(cwd, binding, result)
+      } catch (cause) {
+        throw await preservedCaptureFailure(cwd, binding, result, cause, admissionRecoveries)
+      }
+    },
+  }
+}
 
 export default ReviewResultArtifactsPlugin

@@ -502,11 +502,12 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		// envelope that `review capture-result --input` would reject on replay.
 		`result = reviewerResult(output.output)`,
 		`output.output = await captureResult(cwd, binding, result)`,
-		`throw await preservedCaptureFailure(cwd, binding, result, cause)`,
+		`throw await preservedCaptureFailure(cwd, binding, result, cause, admissionRecoveries)`,
 		// Envelope extraction itself can fail; only then is the raw envelope
 		// preserved, under a distinct extraction-failure cause.
 		`throw await preservedCaptureFailure(cwd, binding, output.output, cause)`,
-		`function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string): string`,
+		`function sessionErrorMessage(`,
+		`admissionRecoveries?: Set<string>`,
 		`sessionErrorMessage(binding, cause, "repository_context_preflight_failed")`,
 		`parsed.reference`,
 		`raw reviewer result preserved for recovery`,

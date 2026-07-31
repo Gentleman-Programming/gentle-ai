@@ -63,6 +63,16 @@ type SnapshotBuilder struct {
 	unbornHead bool
 }
 
+const FindingLocationInvalidReason = "finding_location_invalid"
+
+type FindingLocationError struct {
+	Location string
+}
+
+func (err *FindingLocationError) Error() string {
+	return "finding location must end with a positive integer line after its final colon"
+}
+
 var exactObjectPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
 
 func (builder SnapshotBuilder) Build(ctx context.Context, target Target) (Snapshot, error) {
@@ -310,11 +320,14 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 	if err := builder.ValidateEvidence(ctx, snapshot); err != nil {
 		return false, err
 	}
-	logicalPath, line, err := ParseFindingLocation(location)
+	logicalPath, line, err := parseCandidateFindingLocation(location)
 	if err != nil {
-		return false, err
+		if stringIndex(snapshot.Paths, logicalPath) >= 0 {
+			return false, err
+		}
+		return false, nil
 	}
-	if stringIndex(snapshot.Paths, logicalPath) < 0 {
+	if !findingLocationInGenesis(location, snapshot.Paths) {
 		return false, nil
 	}
 	if causality == CausalBehaviorActivated {
@@ -356,6 +369,28 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 		}
 	}
 	return false, nil
+}
+
+func parseCandidateFindingLocation(location string) (string, int, error) {
+	separator := strings.LastIndex(location, ":")
+	logicalPath := location
+	if separator >= 0 {
+		logicalPath = location[:separator]
+	}
+	if separator <= 0 || separator == len(location)-1 {
+		return logicalPath, 0, &FindingLocationError{Location: location}
+	}
+	lineText := location[separator+1:]
+	for index := range lineText {
+		if lineText[index] < '0' || lineText[index] > '9' {
+			return logicalPath, 0, &FindingLocationError{Location: location}
+		}
+	}
+	line, err := strconv.Atoi(lineText)
+	if err != nil || line <= 0 {
+		return logicalPath, 0, &FindingLocationError{Location: location}
+	}
+	return logicalPath, line, nil
 }
 
 func rebuildCurrentSnapshotEvidence(ctx context.Context, repo string, snapshot Snapshot) error {
