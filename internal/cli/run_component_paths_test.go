@@ -98,6 +98,7 @@ func TestComponentPathsWorkspaceScopedOpenCodeSDDUsesWorkspaceManagedPaths(t *te
 	workspace := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode})
 	selection := model.Selection{SDDMode: model.SDDModeMulti}
+	reviewLedgerContract := filepath.Join(workspace, ".config", "opencode", "skills", "_shared", "review-ledger-contract.md")
 
 	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, selection, adapters, model.ComponentSDD)
 
@@ -109,6 +110,7 @@ func TestComponentPathsWorkspaceScopedOpenCodeSDDUsesWorkspaceManagedPaths(t *te
 		filepath.Join(workspace, ".config", "opencode", "plugins", "skill-registry.ts"),
 		filepath.Join(workspace, ".config", "opencode", "prompts", "sdd", "sdd-apply.md"),
 		filepath.Join(workspace, ".config", "opencode", "skills", "sdd-apply", "SKILL.md"),
+		reviewLedgerContract,
 	} {
 		if !containsPath(paths, want) {
 			t.Fatalf("componentPathsWithWorkspaceScoped(sdd,opencode,workspace) missing workspace-scoped path %q\npaths=%v", want, paths)
@@ -123,10 +125,19 @@ func TestComponentPathsWorkspaceScopedOpenCodeSDDUsesWorkspaceManagedPaths(t *te
 		filepath.Join(home, ".config", "opencode", "plugins", "skill-registry.ts"),
 		filepath.Join(home, ".config", "opencode", "prompts", "sdd", "sdd-apply.md"),
 		filepath.Join(home, ".config", "opencode", "skills", "sdd-apply", "SKILL.md"),
+		filepath.Join(home, ".config", "opencode", "skills", "_shared", "review-ledger-contract.md"),
 	} {
 		if containsPath(paths, unwanted) {
 			t.Fatalf("componentPathsWithWorkspaceScoped(sdd,opencode,workspace) must not include home-scoped path %q\npaths=%v", unwanted, paths)
 		}
+	}
+
+	resolved := planner.ResolvedPlan{
+		Agents:            []model.AgentID{model.AgentOpenCode},
+		OrderedComponents: []model.ComponentID{model.ComponentSDD},
+	}
+	if targets := backupTargets(home, workspace, ScopeWorkspace, selection, resolved); !containsPath(targets, reviewLedgerContract) {
+		t.Fatalf("backupTargets missing workspace-scoped review ledger contract %q\ntargets=%v", reviewLedgerContract, targets)
 	}
 }
 
