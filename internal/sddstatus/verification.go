@@ -78,7 +78,7 @@ func parseVerifyResult(text string, expected SpecCounts) verifyResultEvaluation 
 	internallyComplete := report.Requirements.Completed == report.Requirements.Total && report.Scenarios.Completed == report.Scenarios.Total
 	totalsMatch := report.Requirements.Total == expected.Requirements && report.Scenarios.Total == expected.Scenarios
 	if !totalsMatch {
-		evaluation.Stale = report.Verdict != "fail" && report.Blockers == 0 && report.Critical == 0 && internallyComplete
+		evaluation.Stale = report.Verdict != VerifyVerdictFail && report.Blockers == 0 && report.Critical == 0 && internallyComplete
 	}
 	if report.Requirements.Total != expected.Requirements {
 		evaluation.Reason = fmt.Sprintf("verify result total %d does not match actual requirement count %d", report.Requirements.Total, expected.Requirements)
@@ -104,7 +104,7 @@ func parseVerifyResult(text string, expected SpecCounts) verifyResultEvaluation 
 		evaluation.Reason = "scenarios are incomplete"
 		return evaluation
 	}
-	if report.Verdict == "fail" {
+	if report.Verdict == VerifyVerdictFail {
 		evaluation.Reason = "verdict requires remediation"
 		return evaluation
 	}
@@ -133,7 +133,7 @@ func ValidateVerifyReportAdmission(text string, expected SpecCounts) VerifyRepor
 		return result
 	}
 	complete := report.Requirements.Completed == report.Requirements.Total && report.Scenarios.Completed == report.Scenarios.Total
-	if report.Verdict != "fail" {
+	if report.Verdict != VerifyVerdictFail {
 		if report.TestExit != 0 || report.BuildExit != 0 || report.Blockers != 0 || report.Critical != 0 || !complete {
 			result.Reason = "passing verdict contradicts failing or incomplete evidence"
 			return result
@@ -223,7 +223,7 @@ func parseVerifyReport(text string) (verifyReport, string) {
 				return report, "invalid authority-only extension"
 			}
 		}
-		if report.Verdict != "fail" || report.TestExit != 125 || report.BuildExit != 125 || report.Blockers == 0 || report.Critical == 0 || fields["test_output_hash"] != verifyEmptyOutputHash || fields["build_output_hash"] != verifyEmptyOutputHash || !sha256IdentityPattern.MatchString(fields["observed_authority_revision"]) {
+		if report.Verdict != VerifyVerdictFail || report.TestExit != 125 || report.BuildExit != 125 || report.Blockers == 0 || report.Critical == 0 || fields["test_output_hash"] != verifyEmptyOutputHash || fields["build_output_hash"] != verifyEmptyOutputHash || !sha256IdentityPattern.MatchString(fields["observed_authority_revision"]) {
 			return report, "invalid authority-only extension"
 		}
 	}

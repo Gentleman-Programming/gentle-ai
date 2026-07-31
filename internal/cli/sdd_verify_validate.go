@@ -95,5 +95,13 @@ func renderSDDVerifyValidateHelp(stdout io.Writer) {
 	_, _ = fmt.Fprintf(stdout, "  schema: %s\n", sddstatus.VerifyResultSchema)
 	_, _ = fmt.Fprintf(stdout, "  base envelope fields: %s\n", strings.Join(sddstatus.VerifyReportEnvelopeFields(), ", "))
 	_, _ = fmt.Fprintf(stdout, "  verdict: %s\n", strings.Join(sddstatus.VerifyVerdicts(), "|"))
-	_, _ = fmt.Fprintf(stdout, "  report limit: 1 MiB (%d bytes)\n", maxVerifyReportBytes)
+	_, _ = fmt.Fprintf(stdout, "  report limit: %s\n", verifyReportLimitText())
+}
+
+func verifyReportLimitText() string {
+	const bytesPerMiB = 1 << 20
+	if maxVerifyReportBytes%bytesPerMiB != 0 {
+		return fmt.Sprintf("%d bytes", maxVerifyReportBytes)
+	}
+	return fmt.Sprintf("%d MiB (%d bytes)", maxVerifyReportBytes/bytesPerMiB, maxVerifyReportBytes)
 }

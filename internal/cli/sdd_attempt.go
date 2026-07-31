@@ -183,8 +183,8 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 			{name: "request-id", usage: "idempotency request identifier (lowercase canonical ID, up to 128 characters)"},
 			{name: "work-unit", usage: "caller-facing work-unit label (up to 160 characters)"},
 			{name: "evidence-goal", usage: "stable runtime evidence objective (up to 240 characters)"},
-			{name: "max-attempts", kind: sddAttemptIntFlag, usage: "attempt limit in the range 1..100", defaultText: "default 2"},
-			{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "changed-line limit in the range 1..1000000", defaultText: "default 200"},
+			{name: "max-attempts", kind: sddAttemptIntFlag, usage: fmt.Sprintf("attempt limit in the range 1..%d", sddstatus.RuntimeMaxAttemptLimit), defaultText: fmt.Sprintf("default %d", sddstatus.RuntimeDefaultAttemptLimit)},
+			{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: fmt.Sprintf("changed-line limit in the range 1..%d", sddstatus.RuntimeMaxChangedLines), defaultText: fmt.Sprintf("default %d", sddstatus.RuntimeDefaultChangedLines)},
 		},
 	},
 	{

@@ -56,11 +56,6 @@ func TestVerifyValidateContractAuthority(t *testing.T) {
 	if got, want := sddstatus.VerifyVerdicts(), []string{"pass", "pass_with_warnings", "fail"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("verdicts = %v, want %v", got, want)
 	}
-
-	counts := sddstatus.SpecCounts{Requirements: 2, Scenarios: 3}
-	if counts.Requirements != 2 || counts.Scenarios != 3 {
-		t.Fatalf("authoritative counts = %#v, want 2 requirements and 3 scenarios", counts)
-	}
 }
 
 func TestRunSDDVerifyValidateHelpIsSuccessfulAndInputFree(t *testing.T) {

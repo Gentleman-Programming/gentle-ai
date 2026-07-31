@@ -70,6 +70,7 @@ func TestValidateVerifyReportAdmission(t *testing.T) {
 		{"passing blocker", strings.Replace(valid, "blockers: 0", "blockers: 1", 1), "contradicts", false},
 		{"passing incomplete", strings.Replace(valid, "requirements: 2/2", "requirements: 1/2", 1), "contradicts", false},
 		{"count mismatch", valid, "actual requirement count", false},
+		{"scenario count mismatch", strings.Replace(valid, "scenarios: 3/3", "scenarios: 4/4", 1), "actual scenario count", false},
 		{"front matter", "---\nverdict: pass\n---\n" + valid, "front matter", false},
 		{"prose first", "Result follows\n" + valid, "first non-empty", false},
 		{"unterminated", strings.TrimSuffix(valid, "```"), "unterminated", false},
