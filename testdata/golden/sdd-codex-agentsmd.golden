@@ -232,7 +232,7 @@ Before any project-scoped `mem_context` or `mem_search`, call `engram_mem_curren
 
 - Unique project: use the returned canonical project for context/search.
 - Ambiguous project: STOP and ask the user to choose only from the returned alternatives before any scoped search.
-- No project: continue without inventing a key and do not run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.
+- No project: do not run ANY project-scoped Engram operation, including status/continuation lookups, `sdd-init` checks, TDD/apply-progress searches, artifact reads/writes, or persistence. Continue only with valid OpenSpec/file behavior until a project is selected; do not invent a key or run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.
 
 ### Skill Loading for Delegation
 
@@ -393,6 +393,8 @@ When launching `sdd-apply`, include the resolved `delivery_strategy`, `chain_str
 ### Apply/Verify Context Forwarding (MANDATORY)
 
 Before spawning each delegated `sdd-apply` or `sdd-verify` phase:
+
+Only after a canonical project resolves may these project-scoped Engram searches run. If no project resolves, skip them and all other project-scoped Engram persistence; continue only with valid OpenSpec/file artifacts until a project is selected.
 
 1. Search `mem_search(query: "sdd-init/{project}", project: "{project}")`, then call `mem_get_observation(id)` for the matching ID and read the full project init. Search previews are not sufficient. Resolve the exact `strict_tdd` value and `test_command`; if the full project init cannot be retrieved, STOP instead of inferring Standard Mode.
 2. Search `mem_search(query: "sdd/{change-name}/apply-progress", project: "{project}")`. When it exists, call `mem_get_observation(id)` and read the full prior apply-progress before launch. Record an explicit `none` when it does not exist.
