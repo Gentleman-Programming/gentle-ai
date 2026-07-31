@@ -388,7 +388,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if err != nil {
 		return reviewPreflightError(err)
 	}
-	_, admission, err := reviewtransaction.AdmitArtifact(reviewtransaction.ArtifactAdmissionRequest{
+	_, admission, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
 		ExpectedSubject: subject, FrozenContext: frozen, EchoedSubjectHash: result.SubjectHash,
 		Inspection: result.Inspection, Result: nativeResult, CandidateCausalFindingIDs: candidateCausalIDs,
 		RawPayload: rawPayload, CanonicalPayload: canonicalResult,
@@ -840,7 +840,7 @@ func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload
 	if err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
 	}
-	result, err := decodeAdmittedReviewerResult(payload, expected, subjectFrozen)
+	result, err := decodeAdmittedReviewerResult(ctx, payload, expected, subjectFrozen)
 	if err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
 	}
@@ -855,7 +855,7 @@ func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload
 	return result, expected, nil
 }
 
-func decodeAdmittedReviewerResult(payload []byte, expected reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext) (facadeReviewerResult, error) {
+func decodeAdmittedReviewerResult(ctx context.Context, payload []byte, expected reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext) (facadeReviewerResult, error) {
 	var envelope admittedReviewerResult
 	if err := decodeFacadeJSONBytes(payload, &envelope); err != nil {
 		return facadeReviewerResult{}, err
@@ -877,7 +877,7 @@ func decodeAdmittedReviewerResult(payload []byte, expected reviewtransaction.Art
 	canonical = append(canonical, '\n')
 	native := envelope.Result.nativeLensResult()
 	native.Lens = expected.Lens
-	result, revalidated, err := reviewtransaction.AdmitArtifact(reviewtransaction.ArtifactAdmissionRequest{
+	result, revalidated, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
 		ExpectedSubject: expected, FrozenContext: frozen, EchoedSubjectHash: envelope.Result.SubjectHash,
 		Inspection: envelope.Result.Inspection, Result: native,
 		CandidateCausalFindingIDs: envelope.Admission.CandidateCausalFindingIDs,

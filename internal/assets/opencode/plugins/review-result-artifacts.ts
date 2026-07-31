@@ -298,8 +298,7 @@ function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: strin
   const admission = admissionRejection(cause)
   if (admission) {
     return `${code}: native admission rejected the reviewer result as ${admission}; ` +
-      "retrying capture with the same result cannot succeed — relaunch this lens reviewer to produce a corrected result " +
-      "(severe findings must anchor to lines the frozen candidate actually changed)"
+      "retrying capture with the same result cannot succeed; relaunch this lens reviewer to produce a corrected result"
   }
   return `${code}: provider-owned review operation failed; refresh the exact native next_transition or retry the same opaque binding`
 }

@@ -2,6 +2,7 @@ package assets
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -130,6 +131,77 @@ func TestNativeBlockingPromptRulesRetainInteractiveUIWithFailClosedFallback(t *t
 			}
 		})
 	}
+}
+
+func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T) {
+	requirements := []struct {
+		name string
+		text string
+	}{
+		{name: "admissibility before lossless relay", text: "Before losslessly relaying any blocking choice envelope, classify its semantic admissibility"},
+		{name: "direct repair prohibition", text: "never offer to switch to, inspect, modify, or directly repair the Gentle AI repository"},
+		{name: "invalid upstream envelope", text: "reject it as semantically inadmissible and issue this separate orchestrator-owned handoff envelope"},
+		{name: "localized consent", text: "Ask the user first, in the active orchestrator conversation language"},
+		{name: "exact choice shape", text: "one single-select blocking envelope with exactly two semantic choices"},
+		{name: "localized labels", text: "Localize their labels and descriptions without changing these semantics"},
+		{name: "no internal labels", text: "do not expose machine or internal codes in user-facing labels"},
+		{name: "report choice", text: "**Report the Gentle AI defect**: Only after explicit consent"},
+		{name: "fixed repository", text: "`Gentleman-Programming/gentle-ai`"},
+		{name: "open and closed duplicate search", text: "search open and closed issues"},
+		{name: "comment duplicate", text: "comment on an equivalent issue with the new occurrence and evidence"},
+		{name: "create only without duplicate", text: "create a new bug report only if no duplicate exists"},
+		{name: "reported path preserves state", text: "Then STOP with all consumer state preserved"},
+		{name: "stop choice", text: "**Stop here**: Create no GitHub issue or comment, preserve all consumer state, and STOP"},
+		{name: "observed evidence", text: "Report observed evidence, not an unconfirmed root cause"},
+		{name: "sanitized diagnostics", text: "sanitized version/build, OS/architecture/client"},
+		{name: "bounded evidence", text: "bounded attempts and outcomes, failure envelopes, mutation outcome"},
+		{name: "reproduction evidence", text: "expected and actual behavior, a minimal reproduction"},
+		{name: "opaque identifiers", text: "safe opaque reason/revision identifiers, and preserved-state evidence"},
+		{name: "final privacy scan", text: "perform a final privacy scan"},
+		{name: "privacy exclusions", text: "raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values"},
+		{name: "released fix only", text: "Resume only after an installed released fix"},
+		{name: "native status re-entry", text: "re-enter through native status"},
+		{name: "no source checkout resume", text: "Never resume against a source checkout or unmerged pull request"},
+	}
+
+	allPaths := allSDDOrchestratorAssetPaths(t)
+	canonical := providerDefectHandoffSection(t, allPaths[0])
+	semanticChoicePattern := regexp.MustCompile(`(?m)^[ \t]+[0-9]+\. \*\*[^*]+\*\*:`)
+	for _, path := range allPaths {
+		t.Run(path, func(t *testing.T) {
+			contract := providerDefectHandoffSection(t, path)
+			if contract != canonical {
+				t.Error("provider-defect handoff differs from the canonical cross-variant block")
+			}
+			if got := len(semanticChoicePattern.FindAllString(contract, -1)); got != 2 {
+				t.Errorf("provider-defect handoff has %d numbered semantic choices; want exactly 2", got)
+			}
+			for _, requirement := range requirements {
+				t.Run(requirement.name, func(t *testing.T) {
+					if !strings.Contains(contract, requirement.text) {
+						t.Errorf("provider-defect handoff missing %q", requirement.text)
+					}
+				})
+			}
+		})
+	}
+}
+
+func providerDefectHandoffSection(t *testing.T, path string) string {
+	t.Helper()
+	const heading = "#### Gentle AI Provider Defect Handoff (MANDATORY)"
+	content := MustRead(path)
+	start := strings.Index(content, heading)
+	if start == -1 {
+		t.Fatalf("%s missing %q", path, heading)
+	}
+	contract := content[start:]
+	const endMarker = "Never resume against a source checkout or unmerged pull request."
+	end := strings.Index(contract, endMarker)
+	if end == -1 {
+		t.Fatalf("%s provider-defect handoff missing terminal release boundary", path)
+	}
+	return strings.TrimSpace(contract[:end+len(endMarker)])
 }
 
 func blockingPromptContractSection(t *testing.T, path string) string {

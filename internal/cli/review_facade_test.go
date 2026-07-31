@@ -1430,8 +1430,8 @@ func TestFacadeCorrectionEvidenceTargetUsesValidationRequestProjection(t *testin
 		CorrectionPaths: []string{"tracked.txt"}, FixFindingIDs: []string{"R1-001"}, CorrectionTargetIdentity: "identity",
 	}
 	target := facadeCorrectionEvidenceTargetFromRequest(state, live, request)
-	if target.Projection != request.Projection {
-		t.Fatalf("correction evidence projection = %q, want request projection %q", target.Projection, request.Projection)
+	if target.Projection != live.Projection {
+		t.Fatalf("correction evidence projection = %q, want canonical live projection %q", target.Projection, live.Projection)
 	}
 }
 

@@ -1217,7 +1217,15 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil {
 		return fmt.Errorf("cannot complete correction from compact state %q", state.State)
 	}
-	if snapshot.Kind != TargetFixDiff || snapshot.Projection != state.InitialSnapshot.Projection || snapshot.BaseTree != state.CurrentSnapshot.CandidateTree || !equalStrings(snapshot.LedgerIDs, state.FixFindingIDs) {
+	initialProjection, err := canonicalProjection(state.InitialSnapshot.Projection)
+	if err != nil {
+		return err
+	}
+	snapshotProjection, err := canonicalProjection(snapshot.Projection)
+	if err != nil {
+		return err
+	}
+	if snapshot.Kind != TargetFixDiff || snapshotProjection != initialProjection || snapshot.BaseTree != state.CurrentSnapshot.CandidateTree || !equalStrings(snapshot.LedgerIDs, state.FixFindingIDs) {
 		return errors.New("compact correction snapshot is not bound to the reviewed candidate, projection, and causal findings")
 	}
 	if snapshot.CandidateTree == snapshot.BaseTree {
