@@ -11,7 +11,6 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -54,8 +53,12 @@ func TestPreserveIncidentArtifactPublishesExactPrivateBytes(t *testing.T) {
 	if err != nil || !bytes.Equal(got, payload) {
 		t.Fatalf("preserved incident bytes = %q, read error = %v", got, err)
 	}
-	if _, err := preserveIncidentArtifact(dir, artifact.LineageID, artifact.TargetIdentity, artifact.Lens, artifact.SelectedOrder, payload, artifact.Class); err != nil {
+	replay, err := preserveIncidentArtifact(dir, artifact.LineageID, artifact.TargetIdentity, artifact.Lens, artifact.SelectedOrder, payload, artifact.Class)
+	if err != nil {
 		t.Fatalf("exact incident replay: %v", err)
+	}
+	if replay.Path != artifact.Path || replay.SHA256 != artifact.SHA256 {
+		t.Fatalf("exact incident replay artifact = %#v, want path %q and SHA256 %q", replay, artifact.Path, artifact.SHA256)
 	}
 	other, err := preserveIncidentArtifact(dir, artifact.LineageID, artifact.TargetIdentity, artifact.Lens, artifact.SelectedOrder, []byte("different\n"), artifact.Class)
 	if err != nil || other.Path == artifact.Path {
@@ -72,7 +75,7 @@ func TestPreserveIncidentArtifactKeepsWindowsDirectorySyncPermissionFailClosed(t
 	t.Cleanup(func() { reviewArtifactRuntimeGOOS, syncReviewerArtifactDirectory = originalGOOS, originalSync })
 	reviewArtifactRuntimeGOOS = func() string { return "windows" }
 	syncReviewerArtifactDirectory = func(path string) error {
-		return &os.PathError{Op: "sync", Path: path, Err: syscall.Errno(5)}
+		return &os.PathError{Op: "sync", Path: path, Err: os.ErrPermission}
 	}
 
 	payload := []byte("raw reviewer output\n")
