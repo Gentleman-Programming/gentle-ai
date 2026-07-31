@@ -85,9 +85,10 @@ func RecoveryPredecessorNotInvalidated(err error) bool {
 // historical pre-contract free-form authorizations to exactly this class.
 var errCompactRecoveryAuthorizationInexact = errors.New("escalated recovery requires an exact maintainer authorization binding")
 
-// compactRecoveryAuthorizationSchema is the first line of the exact six-line
+// CompactRecoveryAuthorizationSchema is the first line of the exact six-line
 // escalated-recovery maintainer authorization binding.
-const compactRecoveryAuthorizationSchema = "gentle-ai.review-recovery-authorization/v1"
+const CompactRecoveryAuthorizationSchema = "gentle-ai.review-recovery-authorization/v1"
+const compactRecoveryAuthorizationSchema = CompactRecoveryAuthorizationSchema
 
 // ErrHistoricalCompatReadOnly denies ordinary mutation of authority loaded
 // through the retired-field compatibility path.

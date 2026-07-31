@@ -1116,6 +1116,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	actor := flags.String("actor", "", "recovery actor")
 	projectionFlag := flags.String("projection", "", "successor projection: workspace or staged (default: predecessor projection)")
 	authorization := flags.String("maintainer-authorization", "", "exact LF-only gentle-ai.review-recovery-authorization/v1 binding: predecessor_lineage, predecessor_revision, target_identity, optional native successor_lineage, actor, reason")
+	authorizationFile := flags.String("maintainer-authorization-file", "", "path to file containing exact LF-only maintainer authorization binding (or - for stdin)")
 	policySource := flags.String("policy", "", "optional review policy file")
 	focus := flags.String("focus", "reliability", "dominant standard-risk focus; large pure documentation always uses readability")
 	baseRef := flags.String("base-ref", "", "optional base revision for immutable base-to-HEAD review")
@@ -1134,15 +1135,24 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	if strings.TrimSpace(*predecessor) == "" || strings.TrimSpace(*expected) == "" || strings.TrimSpace(*successor) == "" || strings.TrimSpace(*disposition) == "" {
 		return errors.New("review recover requires --predecessor-lineage, --expected-predecessor-revision, --successor-lineage, and --disposition")
 	}
-	// Self-derived recovery (organic-dx Duty 2): absence of
-	// --maintainer-authorization, not its value, is what triggers
-	// derivation, so an explicitly-supplied wrong binding never reaches
-	// this branch and still refuses downstream exactly as before
-	// self-derivation existed (reviewFlagWasProvided is a flags.Visit
-	// presence check, not an empty-value check).
-	authorizationProvided := reviewFlagWasProvided(flags, "maintainer-authorization")
+	authProvided := reviewFlagWasProvided(flags, "maintainer-authorization")
+	authFileProvided := reviewFlagWasProvided(flags, "maintainer-authorization-file")
+	if authProvided && authFileProvided {
+		return errors.New("cannot specify both --maintainer-authorization and --maintainer-authorization-file")
+	}
+	if authFileProvided {
+		if strings.TrimSpace(*authorizationFile) == "" {
+			return errors.New("review recover requires a non-empty path for --maintainer-authorization-file")
+		}
+		rawAuth, err := readFacadeBytes(*authorizationFile)
+		if err != nil {
+			return fmt.Errorf("read --maintainer-authorization-file: %w", err)
+		}
+		*authorization = strings.TrimRight(string(rawAuth), "\r\n")
+	}
+	authorizationProvided := authProvided || authFileProvided
 	if authorizationProvided && (strings.TrimSpace(*reason) == "" || strings.TrimSpace(*actor) == "") {
-		return errors.New("review recover requires --reason and --actor when --maintainer-authorization is supplied")
+		return errors.New("review recover requires --reason and --actor when --maintainer-authorization or --maintainer-authorization-file is supplied")
 	}
 	builder := reviewtransaction.SnapshotBuilder{Repo: *cwd}
 	root, err := resolveReviewMutationRoot(context.Background(), *cwd)
@@ -1250,7 +1260,20 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	if !authorizationProvided {
 		shape, derivable := reviewSelfRecoveryShapeForRecover(predecessorRecord.State.State, snapshot.Identity != predecessorRecord.State.InitialSnapshot.Identity)
 		if !derivable {
-			return errors.New("review recover requires --reason, --actor, and --maintainer-authorization for this predecessor state")
+			return fmt.Errorf(`review recover requires --reason, --actor, and --maintainer-authorization for this predecessor state.
+
+--maintainer-authorization is exactly these final six lines, joined by LF, with no trailing newline:
+%s
+predecessor_lineage=%s
+predecessor_revision=%s
+target_identity=%s
+actor=<actor>
+reason=<reason>`,
+				reviewtransaction.CompactRecoveryAuthorizationSchema,
+				*predecessor,
+				predecessorRecord.Revision,
+				snapshot.Identity,
+			)
 		}
 		*actor = reviewAuditActor(context.Background(), root)
 		*reason = reviewSelfRecoveryReason(shape)
