@@ -2417,7 +2417,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 
 func facadeCommittedBaseDiffCorrectionLive(ctx context.Context, repo string, state reviewtransaction.CompactState, selectorless bool) (*reviewtransaction.Snapshot, error) {
 	if !selectorless || state.State != reviewtransaction.StateCorrectionRequired || state.ProposedCorrectionLines == nil ||
-		state.InitialSnapshot.Kind != reviewtransaction.TargetBaseDiff {
+		state.CorrectionAttemptConsumed() || state.InitialSnapshot.Kind != reviewtransaction.TargetBaseDiff {
 		return nil, nil
 	}
 	clean, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).WorktreeClean(ctx)

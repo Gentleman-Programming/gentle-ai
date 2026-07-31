@@ -254,6 +254,67 @@ func TestAssessTargetStatusRecognizesAuthorizedCorrection(t *testing.T) {
 	}
 }
 
+func TestSelectorlessCommittedBaseDiffCorrectionSkipsUnreadableUnrelatedStore(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nwrong\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "committed candidate")
+
+	state := newCompactStartStateForTarget(t, repo, "eligible-committed-correction", Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: []string{}})
+	if len(state.SelectedLenses) == 0 {
+		t.Fatalf("committed correction fixture has no selected lens: %#v", state)
+	}
+	store := storeCompactStartAuthority(t, repo, state)
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make([]LensResult, len(state.SelectedLenses))
+	for index, lens := range state.SelectedLenses {
+		results[index] = LensResult{Lens: strings.TrimPrefix(lens, "review-"), Evidence: []string{"reviewed committed candidate"}}
+	}
+	finding := Finding{ID: "R3-001", Lens: strings.TrimPrefix(state.SelectedLenses[0], "review-"), Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate is wrong", ProofRefs: []string{"tracked.txt:5 changed hunk"}}
+	results[0].Findings = []Finding{finding}
+	if err := state.CompleteReview(CompactReviewInput{
+		LensResults: results,
+		Classifications: []FindingEvidence{{
+			FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk",
+		}},
+		RefuterOutcomes: []EvidenceResult{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	revision, err := store.Replace(record.Revision, "review/complete-review", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.BeginCorrection(1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(revision, "review/begin-fix", state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RebuildCommittedBaseDiffCorrectionCandidate(context.Background(), repo, state); err != nil {
+		t.Fatalf("eligible committed correction reconstruction = %v", err)
+	}
+
+	unrelated := storeCompactStartAuthority(t, repo, newCompactTestState(t, repo, "unreadable-unrelated"))
+	if err := os.WriteFile(unrelated.StatePath(), []byte("{\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := selectorlessCommittedBaseDiffCorrections(context.Background(), repo)
+	if err != nil || len(candidates) != 1 || candidates[0].lineage != state.LineageID {
+		t.Fatalf("selectorless committed correction discovery with unreadable unrelated store = %#v, err = %v", candidates, err)
+	}
+
+	request := TargetStatusRequest{Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: unrelated.lineageID}
+	selected, err := AssessTargetStatus(context.Background(), repo, request)
+	if err != nil || selected.Applicability != TargetApplicabilityCorrupted || selected.Action != TargetStatusActionRepairAuthority {
+		t.Fatalf("selected unreadable lineage did not fail closed: %#v, err = %v", selected, err)
+	}
+}
+
 func TestHistoricalFailedValidatorRequiresChangedTargetRecovery(t *testing.T) {
 	repo, state, record, before := historicalFailedValidatorFixture(t, "historical-status")
 	target := Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}

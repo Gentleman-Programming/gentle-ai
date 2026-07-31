@@ -173,7 +173,7 @@ func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) 
 	for _, store := range stores {
 		record, err := store.LoadContext(ctx)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		state := record.State
 		if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil || state.CorrectionAttemptConsumed() ||

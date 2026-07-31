@@ -94,7 +94,93 @@ func TestSelectorlessCommittedBaseDiffCorrectionFailsClosed(t *testing.T) {
 			if status.NextTransition == nil || status.NextTransition.ReasonCode != "corrected_candidate_unavailable" {
 				t.Fatalf("unchanged committed correction status = %#v", status.NextTransition)
 			}
+			after, err := os.ReadFile(store.StatePath())
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("unchanged committed correction mutated authority: %v", err)
+			}
 		})
+	}
+}
+
+func TestSelectorlessConsumedCommittedBaseDiffCorrectionFinalizesAsStop(t *testing.T) {
+	repo, _, started := forecastCommittedBaseDiffCorrection(t)
+	writeCommittedCorrection(t, repo, false, false)
+	status := selectorlessCommittedCorrectionStatus(t, repo)
+	if status.Authority == nil || status.NextTransition == nil {
+		t.Fatalf("committed correction status = %#v", status)
+	}
+	target := transitionArgumentValue(t, status.NextTransition, "target")
+	captureCommittedCorrectionEvidence(t, repo, started.LineageID, status.Authority.Revision, target)
+	ready := selectorlessCommittedCorrectionStatus(t, repo)
+	if ready.ValidationRequest == nil {
+		t.Fatalf("committed correction validation status = %#v", ready)
+	}
+	validation := filepath.Join(t.TempDir(), "validation.json")
+	writeReviewCLIJSON(t, validation, facadeValidationResult{
+		TargetedValidationRequestHash: ready.ValidationRequest.RequestHash,
+		CorrectionTargetIdentity:      target,
+		OriginalCriteria:              facadeValidationCheck{Passed: true, Evidence: []string{"acceptance passed"}},
+		CorrectionRegression:          facadeValidationCheck{Passed: true, Evidence: []string{"regression passed"}},
+		FollowUps:                     []reviewtransaction.FollowUp{},
+	})
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--validation", validation, "--captured-evidence"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.State.State, record.State.ActualCorrectionLines = reviewtransaction.StateCorrectionRequired, nil
+	record.State.FixDeltaHash, record.State.OriginalCriteria, record.State.CorrectionRegression = reviewtransaction.EmptyFixDeltaHash, nil, nil
+	record.State.EvidenceHash, record.State.EvidenceRecordDigest = "", ""
+	record.State.EvidenceOutcome, record.State.EvidenceTargetIdentity, record.State.EvidenceAuthorityRevision = "", "", ""
+	record.State.CorrectionVerificationTarget = nil
+	lastAttempt := len(record.State.CorrectionAttempts) - 1
+	record.State.CorrectionAttempts[lastAttempt].OriginalCriteria.Passed = false
+	record.State.CorrectionAttempts[lastAttempt].CorrectionRegression.Passed = false
+	if err := record.State.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	record.Revision, err = reviewtransaction.CompactRevisionForState(record.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = append(payload, '\n')
+	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.ReceiptPath()); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(store.Dir, "finalize-attempt-journal.json")); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var finalized ReviewIntegrationFinalizeResult
+	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &finalized)
+	if finalized.NextTransition == nil || finalized.NextTransition.Kind != reviewNextTransitionStop || finalized.NextTransition.ReasonCode != "unchanged_or_unverified_authority" {
+		t.Fatalf("consumed committed correction finalize = %#v", finalized.NextTransition)
+	}
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("consumed committed correction finalize mutated authority: %v", err)
 	}
 }
 
