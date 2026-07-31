@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -29,6 +31,79 @@ func TestValidResultIncidentClass(t *testing.T) {
 		if got := reviewtransaction.ValidResultIncidentClass(class); got != want {
 			t.Fatalf("ValidResultIncidentClass(%q) = %v, want %v", class, got, want)
 		}
+	}
+}
+
+func TestPreserveIncidentArtifactPublishesExactPrivateBytes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "incidents")
+	payload := []byte("{\"findings\":[],\"evidence\":[\"raw reviewer output\"]}\n")
+
+	artifact, err := preserveIncidentArtifact(
+		dir,
+		"review-lineage",
+		"sha256:"+strings.Repeat("a", 64),
+		"review-risk",
+		0,
+		payload,
+		reviewtransaction.ResultIncidentEmptyResult,
+	)
+	if err != nil {
+		t.Fatalf("preserve incident artifact: %v", err)
+	}
+	got, err := os.ReadFile(artifact.Path)
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("preserved incident bytes = %q, read error = %v", got, err)
+	}
+	if _, err := preserveIncidentArtifact(dir, artifact.LineageID, artifact.TargetIdentity, artifact.Lens, artifact.SelectedOrder, payload, artifact.Class); err != nil {
+		t.Fatalf("exact incident replay: %v", err)
+	}
+	other, err := preserveIncidentArtifact(dir, artifact.LineageID, artifact.TargetIdentity, artifact.Lens, artifact.SelectedOrder, []byte("different\n"), artifact.Class)
+	if err != nil || other.Path == artifact.Path {
+		t.Fatalf("different incident payload = %#v, error = %v", other, err)
+	}
+	otherBytes, err := os.ReadFile(other.Path)
+	if err != nil || !bytes.Equal(otherBytes, []byte("different\n")) {
+		t.Fatalf("different incident bytes = %q, read error = %v", otherBytes, err)
+	}
+}
+
+func TestPreserveIncidentArtifactKeepsWindowsDirectorySyncPermissionFailClosed(t *testing.T) {
+	originalGOOS, originalSync := reviewArtifactRuntimeGOOS, syncReviewerArtifactDirectory
+	t.Cleanup(func() { reviewArtifactRuntimeGOOS, syncReviewerArtifactDirectory = originalGOOS, originalSync })
+	reviewArtifactRuntimeGOOS = func() string { return "windows" }
+	syncReviewerArtifactDirectory = func(path string) error {
+		return &os.PathError{Op: "sync", Path: path, Err: syscall.Errno(5)}
+	}
+
+	payload := []byte("raw reviewer output\n")
+	artifact, err := preserveIncidentArtifact(
+		filepath.Join(t.TempDir(), "incidents"),
+		"review-lineage",
+		"sha256:"+strings.Repeat("a", 64),
+		"review-risk",
+		0,
+		payload,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("Windows directory sync compatibility: %v", err)
+	}
+	got, readErr := os.ReadFile(artifact.Path)
+	if readErr != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("Windows directory sync changed preserved bytes: %q, read error = %v", got, readErr)
+	}
+
+	reviewArtifactRuntimeGOOS = func() string { return "linux" }
+	if _, err := preserveIncidentArtifact(
+		filepath.Join(t.TempDir(), "fatal-incidents"),
+		"review-lineage",
+		"sha256:"+strings.Repeat("a", 64),
+		"review-risk",
+		0,
+		payload,
+		"",
+	); err == nil || !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("non-Windows directory sync permission error = %v, want failure", err)
 	}
 }
 
