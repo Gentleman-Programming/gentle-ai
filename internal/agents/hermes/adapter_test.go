@@ -165,17 +165,31 @@ func TestConfigPaths(t *testing.T) {
 
 func TestConfigPathResolution(t *testing.T) {
 	homeDir := filepath.Join(string(filepath.Separator), "home", "test")
+	localAppData := filepath.Join(string(filepath.Separator), "LocalAppData", "hermes_appdata")
 
-	t.Run("HERMES_HOME override", func(t *testing.T) {
+	t.Run("HERMES_HOME override takes precedence over LOCALAPPDATA", func(t *testing.T) {
 		custom := filepath.Join(string(filepath.Separator), "custom", "hermes")
 		t.Setenv("HERMES_HOME", custom)
+		t.Setenv("LOCALAPPDATA", localAppData)
 		if got := ConfigPath(homeDir); got != filepath.Clean(custom) {
 			t.Fatalf("ConfigPath() with HERMES_HOME = %q, want %q", got, filepath.Clean(custom))
 		}
 	})
 
+	t.Run("Windows LOCALAPPDATA fallback when HERMES_HOME unset", func(t *testing.T) {
+		t.Setenv("HERMES_HOME", "")
+		t.Setenv("LOCALAPPDATA", localAppData)
+		if runtime.GOOS == "windows" {
+			want := filepath.Join(localAppData, "hermes")
+			if got := ConfigPath(homeDir); got != want {
+				t.Fatalf("ConfigPath() Windows LOCALAPPDATA = %q, want %q", got, want)
+			}
+		}
+	})
+
 	t.Run("default fallback without HERMES_HOME", func(t *testing.T) {
 		t.Setenv("HERMES_HOME", "")
+		t.Setenv("LOCALAPPDATA", "")
 		if runtime.GOOS != "windows" {
 			want := filepath.Join(homeDir, ".hermes")
 			if got := ConfigPath(homeDir); got != want {
