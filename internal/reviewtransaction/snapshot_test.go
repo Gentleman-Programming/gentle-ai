@@ -49,6 +49,37 @@ func TestCanonicalPathsRejectsDuplicateInput(t *testing.T) {
 	}
 }
 
+func TestParseCandidateFindingLocation(t *testing.T) {
+	tests := []struct {
+		name, location, wantPath string
+		wantLine                 int
+		wantErr                  bool
+	}{
+		{name: "single line", location: "internal/review.go:207", wantPath: "internal/review.go", wantLine: 207},
+		{name: "final colon after drive", location: `C:\repo\review.go:12`, wantPath: `C:\repo\review.go`, wantLine: 12},
+		{name: "range", location: "internal/review.go:207-221", wantPath: "internal/review.go", wantErr: true},
+		{name: "leading plus", location: "internal/review.go:+1", wantPath: "internal/review.go", wantErr: true},
+		{name: "zero", location: "internal/review.go:0", wantPath: "internal/review.go", wantErr: true},
+		{name: "missing line", location: "internal/review.go:", wantPath: "internal/review.go", wantErr: true},
+		{name: "missing colon", location: "internal/review.go", wantPath: "internal/review.go", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path, line, err := parseCandidateFindingLocation(tt.location)
+			if tt.wantErr {
+				var locationErr *FindingLocationError
+				if !errors.As(err, &locationErr) || locationErr.Location != tt.location || path != tt.wantPath {
+					t.Fatalf("parseCandidateFindingLocation(%q) = %q, %d, %#v", tt.location, path, line, err)
+				}
+				return
+			}
+			if err != nil || path != tt.wantPath || line != tt.wantLine {
+				t.Fatalf("parseCandidateFindingLocation(%q) = %q, %d, %v", tt.location, path, line, err)
+			}
+		})
+	}
+}
+
 func TestSnapshotBuilderCurrentChangesIsCompleteAndPreservesRealIndex(t *testing.T) {
 	if testing.Short() {
 		t.Skip("uses real git commands")

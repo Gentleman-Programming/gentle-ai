@@ -150,6 +150,42 @@ func TestReviewCaptureResultRejectsSemanticAdmissionBeforePublication(t *testing
 	}
 }
 
+func TestReviewCaptureResultReportsMalformedCausalFindingLocation(t *testing.T) {
+	for _, location := range []string{"tracked.txt:1-2", "tracked.txt:+1", "tracked.txt"} {
+		t.Run(location, func(t *testing.T) {
+			repo, started, store, record := newArtifactReview(t, false)
+			lens := record.State.SelectedLenses[0]
+			prefix := map[string]string{
+				reviewtransaction.LensRisk: "R1-", reviewtransaction.LensReadability: "R2-",
+				reviewtransaction.LensReliability: "R3-", reviewtransaction.LensResilience: "R4-",
+			}[lens]
+			result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+			result.Findings = []facadeFinding{{
+				ID: prefix + "001", Location: location, Severity: "CRITICAL", Claim: "candidate defect",
+				ProofRefs: []string{"tracked.txt:1 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+				CausalDisposition: reviewtransaction.CausalIntroduced,
+			}}
+			input := filepath.Join(t.TempDir(), "result.json")
+			writeReviewCLIJSON(t, input, result)
+			err := RunReviewCaptureResult([]string{
+				"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+				"--lens", lens, "--order", "0", "--input", input,
+			}, io.Discard)
+			var diagnostic *reviewerAdmissionDiagnosticError
+			if !errors.As(err, &diagnostic) || diagnostic.Decision != reviewtransaction.ArtifactAdmissionIncomplete ||
+				diagnostic.Diagnostic != (reviewerAdmissionDiagnostic{
+					Reason: reviewtransaction.FindingLocationInvalidReason, FindingID: prefix + "001", Location: location,
+				}) {
+				t.Fatalf("capture error = %#v", err)
+			}
+			if _, statErr := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir)); !os.IsNotExist(statErr) {
+				t.Fatalf("malformed location consumed the immutable result slot: %v", statErr)
+			}
+			assertArtifactRevision(t, store, record.Revision)
+		})
+	}
+}
+
 func TestReviewCaptureResultPublishesExternalRepositoryProofExactlyOnce(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "support.go"), []byte("package support\n"), 0o644); err != nil {

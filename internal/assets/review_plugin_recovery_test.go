@@ -125,6 +125,47 @@ func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, na
 	return strings.TrimSpace(string(output))
 }
 
+func runReviewPluginDiagnosticScenario(t *testing.T, firstError, secondError string) string {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is unavailable")
+	}
+	source, err := Read("opencode/plugins/review-result-artifacts.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "plugin.mts"), []byte(source+"\nexport { sessionErrorMessage }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	harness := `import { sessionErrorMessage } from "./plugin.mts"
+const binding = {
+  lens: "review-risk", lineage: "trust-check", order: 0,
+  repository_context: "rctx1_" + "a".repeat(64),
+  revision: "sha256:" + "b".repeat(64), target: "sha256:" + "d".repeat(64),
+}
+const recoveries = new Set<string>()
+console.log(sessionErrorMessage(binding, new Error(process.env.GENTLE_AI_STUB_STDERR_FIRST), "repository_context_capture_failed", recoveries))
+console.log("---")
+console.log(sessionErrorMessage(binding, new Error(process.env.GENTLE_AI_STUB_STDERR_SECOND), "repository_context_capture_failed", recoveries))
+`
+	if err := os.WriteFile(filepath.Join(root, "harness.mts"), []byte(harness), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(node, "harness.mts")
+	command.Dir = root
+	command.Env = append(os.Environ(),
+		"GENTLE_AI_STUB_STDERR_FIRST="+firstError,
+		"GENTLE_AI_STUB_STDERR_SECOND="+secondError,
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("node could not execute plugin diagnostics (%v): %s", err, output)
+	}
+	return strings.TrimSpace(string(output))
+}
+
 func TestReviewPluginRejectsInvalidBindingBeforeReviewerLaunch(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -339,6 +380,29 @@ func TestReviewPluginKeepsIncompleteAdmissionRecoveryNeutral(t *testing.T) {
 	}
 	if strings.Contains(message, reviewPluginPayloadMarker) {
 		t.Fatalf("incomplete admission leaked the rejected reviewer payload: %s", message)
+	}
+}
+
+func TestReviewPluginBoundsMalformedLocationRecovery(t *testing.T) {
+	first := `Error: reviewer artifact admission incomplete: {"reason":"finding_location_invalid","finding_id":"R1-007","location":"internal/review.go:207-221"}`
+	secondMarker := "SECOND-NATIVE-DIAGNOSTIC-MUST-STAY-OPAQUE"
+	second := "Error: reviewer artifact admission out_of_scope: " + secondMarker
+	message := runReviewPluginDiagnosticScenario(t, first, second)
+	parts := strings.Split(message, "\n---\n")
+	if len(parts) != 2 {
+		t.Fatalf("recovery attempts = %q", message)
+	}
+	for _, want := range []string{"R1-007", `internal/review.go:207-221`, "path/to/file.go:207", "exactly once"} {
+		if !strings.Contains(parts[0], want) {
+			t.Fatalf("first recovery omitted %q: %s", want, parts[0])
+		}
+	}
+	if !strings.Contains(parts[1], "reviewer_admission_recovery_unavailable") ||
+		!strings.Contains(parts[1], "single admission recovery relaunch is exhausted") {
+		t.Fatalf("second recovery was not terminal: %s", parts[1])
+	}
+	if strings.Contains(parts[1], secondMarker) {
+		t.Fatalf("terminal recovery leaked native diagnostic prose: %s", parts[1])
 	}
 }
 

@@ -2628,9 +2628,16 @@ func TestSnapshotCandidateLocationSupportsStructuredCausality(t *testing.T) {
 		location  string
 		causality CausalDisposition
 		want      bool
-	}{{"introduced replacement", "tracked.txt:2", CausalIntroduced, true}, {"introduced addition", "tracked.txt:5", CausalIntroduced, true}, {"introduced deletion", "deleted.txt:1", CausalIntroduced, false}, {"old-side deletion collision", "tracked.txt:4", CausalIntroduced, false}, {"introduced unchanged", "tracked.txt:1", CausalIntroduced, false}, {"worsened changed", "tracked.txt:2", CausalWorsened, true}, {"worsened unchanged", "tracked.txt:1", CausalWorsened, false}, {"activated unchanged", "tracked.txt:1", CausalBehaviorActivated, true}, {"activated deletion", "deleted.txt:1", CausalBehaviorActivated, false}, {"activated out of range", "tracked.txt:99", CausalBehaviorActivated, false}, {"outside genesis", "other.txt:1", CausalBehaviorActivated, false}, {"zero", "tracked.txt:0", CausalIntroduced, false}, {"malformed", "tracked.txt", CausalWorsened, false}} {
+	}{{"introduced replacement", "tracked.txt:2", CausalIntroduced, true}, {"introduced addition", "tracked.txt:5", CausalIntroduced, true}, {"introduced deletion", "deleted.txt:1", CausalIntroduced, false}, {"old-side deletion collision", "tracked.txt:4", CausalIntroduced, false}, {"introduced unchanged", "tracked.txt:1", CausalIntroduced, false}, {"worsened changed", "tracked.txt:2", CausalWorsened, true}, {"worsened unchanged", "tracked.txt:1", CausalWorsened, false}, {"activated unchanged", "tracked.txt:1", CausalBehaviorActivated, true}, {"activated deletion", "deleted.txt:1", CausalBehaviorActivated, false}, {"activated out of range", "tracked.txt:99", CausalBehaviorActivated, false}, {"outside genesis", "other.txt:1", CausalBehaviorActivated, false}, {"zero", "tracked.txt:0", CausalIntroduced, false}, {"range", "tracked.txt:2-4", CausalIntroduced, false}, {"leading plus", "tracked.txt:+1", CausalIntroduced, false}, {"missing colon", "tracked.txt", CausalWorsened, false}} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := (SnapshotBuilder{Repo: repo}).CandidateLocationSupportsCausality(context.Background(), snapshot, tt.location, tt.causality)
+			if tt.name == "zero" || tt.name == "range" || tt.name == "leading plus" || tt.name == "missing colon" {
+				var locationErr *FindingLocationError
+				if got || !errors.As(err, &locationErr) || locationErr.Location != tt.location {
+					t.Fatalf("CandidateLocationSupportsCausality(%q, %q) = %t, %#v", tt.location, tt.causality, got, err)
+				}
+				return
+			}
 			if err != nil || got != tt.want {
 				t.Fatalf("CandidateLocationSupportsCausality(%q, %q) = %t, %v", tt.location, tt.causality, got, err)
 			}
