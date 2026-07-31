@@ -7224,3 +7224,56 @@ func TestInjectRefreshesStaleArchiveSkillWithFinalStateAuthority(t *testing.T) {
 		t.Fatal("installed lazy SDD workflow missing archive final-state handoff section")
 	}
 }
+
+func TestInjectOpenCodeNativeFallbackAgentsDeriveFromExploreModel(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"model":"openai/gpt-5"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	opts := InjectOptions{
+		OpenCodeModelAssignments: map[string]model.ModelAssignment{
+			"sdd-explore": {ProviderID: "anthropic", ModelID: "claude-3-5-haiku", Effort: "medium"},
+		},
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), "multi", opts); err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+
+	for _, fallbackAgent := range []string{"general", "explore"} {
+		agentDef, ok := agentMap[fallbackAgent].(map[string]any)
+		if !ok {
+			t.Fatalf("fallback agent %q not found in opencode.json", fallbackAgent)
+		}
+		m, hasModel := agentDef["model"]
+		if !hasModel || m != "anthropic/claude-3-5-haiku" {
+			t.Fatalf("%s model = %v, want anthropic/claude-3-5-haiku", fallbackAgent, m)
+		}
+		v, hasVariant := agentDef["variant"]
+		if !hasVariant || v != "medium" {
+			t.Fatalf("%s variant = %v, want medium", fallbackAgent, v)
+		}
+	}
+}
