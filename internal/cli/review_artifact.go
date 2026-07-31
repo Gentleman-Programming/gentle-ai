@@ -49,6 +49,7 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 	revision := flags.String("expected-revision", "", "exact validating or correction authority revision")
 	outcome := flags.String("outcome", "", "closed verification outcome: passed, verification_failed, or procedural_tooling_failed")
 	input := flags.String("input", "", "final verification evidence file or - for stdin")
+	metadataPath := flags.String("metadata", "", "structured candidate-bound verification metadata JSON file")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -79,9 +80,23 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 	if err != nil || len(payload) == 0 || len(payload) > reviewResultArtifactLimit {
 		return reviewPreflightError(errors.New("final verification evidence is required"))
 	}
+	var metadata *reviewtransaction.VerificationEvidenceMetadata
+	if strings.TrimSpace(*metadataPath) != "" {
+		metadataPayload, readErr := readFacadeBytes(*metadataPath)
+		if readErr != nil {
+			return reviewPreflightError(fmt.Errorf("verification evidence metadata: %w", readErr))
+		}
+		var parsed reviewtransaction.VerificationEvidenceMetadata
+		decoder := json.NewDecoder(bytes.NewReader(metadataPayload))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&parsed); err != nil {
+			return reviewPreflightError(fmt.Errorf("verification evidence metadata: %w", err))
+		}
+		metadata = &parsed
+	}
 	captured, err := reviewtransaction.PublishCapturedVerificationEvidence(reviewtransaction.CaptureVerificationEvidenceRequest{
 		StoreDir: store.Dir, LineageID: state.LineageID, AuthorityRevision: record.Revision,
-		Target: evidenceTarget, Payload: payload, Outcome: reviewtransaction.VerificationOutcome(*outcome),
+		Target: evidenceTarget, Payload: payload, Outcome: reviewtransaction.VerificationOutcome(*outcome), Metadata: metadata,
 	})
 	if err != nil {
 		if errors.Is(err, reviewtransaction.ErrCapturedVerificationEvidenceConflict) {

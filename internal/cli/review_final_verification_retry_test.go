@@ -91,8 +91,7 @@ func TestReviewRetryFinalVerificationOperationAndStatusCompleteNormally(t *testi
 	if err := os.WriteFile(passed, []byte("retry verification passed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReview([]string{"capture-evidence", "--cwd", fixture.repo, "--lineage", successor.State.LineageID,
-		"--target", successor.State.CurrentSnapshot.Identity, "--expected-revision", successor.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", passed}, &bytes.Buffer{}); err != nil {
+	if err := RunReview(append([]string{"capture-evidence"}, structuredPassedEvidenceArgs(t, fixture.repo, successor.State.LineageID, successor.State.CurrentSnapshot.Identity, successor.Revision, passed)...), &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	var finalized bytes.Buffer
@@ -150,8 +149,7 @@ func TestReviewRetryFinalVerificationCorrectedRestartUsesFrozenAuthorityTarget(t
 	if err := os.WriteFile(passed, []byte("corrected retry verification passed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReview([]string{"capture-evidence", "--cwd", fixture.repo, "--lineage", successorStatus.Authority.LineageID,
-		"--target", successorStatus.AuthorityTargetIdentity, "--expected-revision", successorStatus.Authority.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", passed}, &bytes.Buffer{}); err != nil {
+	if err := RunReview(append([]string{"capture-evidence"}, structuredPassedEvidenceArgs(t, fixture.repo, successorStatus.Authority.LineageID, successorStatus.AuthorityTargetIdentity, successorStatus.Authority.Revision, passed)...), &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	var terminal bytes.Buffer

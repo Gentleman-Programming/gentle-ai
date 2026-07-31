@@ -340,9 +340,8 @@ func capturePassedBinaryCorrectionEvidence(t *testing.T, binary, repo, lineage s
 	if err := os.WriteFile(evidence, []byte("targeted and full repository verification passed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runReviewBinary(t, binary, true, "capture-evidence", "--cwd", repo, "--lineage", lineage,
-		"--target", target, "--expected-revision", waiting.Authority.Revision,
-		"--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidence)
+	args := structuredPassedEvidenceArgs(t, repo, lineage, target, waiting.Authority.Revision, evidence)
+	runReviewBinary(t, binary, true, append([]string{"capture-evidence"}, args...)...)
 	var ready ReviewTargetStatusResult
 	decodeBinaryJSON(t, runReviewBinary(t, binary, true, "status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", lineage), &ready)
 	if ready.ValidationRequest == nil || ready.ValidationRequest.CorrectionTargetIdentity != target {

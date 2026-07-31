@@ -48,7 +48,7 @@ func TestValidatingEvidenceCollectionUnblocksFinalizeAndPreCommit(t *testing.T) 
 	if err := os.WriteFile(evidence, []byte("verification passed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReview([]string{"capture-evidence", "--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--expected-revision", status.Authority.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidence}, &bytes.Buffer{}); err != nil {
+	if err := RunReview(append([]string{"capture-evidence"}, structuredPassedEvidenceArgs(t, repo, started.LineageID, record.State.InitialSnapshot.Identity, status.Authority.Revision, evidence)...), &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	var ready bytes.Buffer

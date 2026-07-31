@@ -40,19 +40,35 @@ var (
 // VerificationEvidenceRecord binds opaque verification bytes to one immutable
 // candidate and the authority revision that requested their collection.
 type VerificationEvidenceRecord struct {
-	Schema            string              `json:"schema"`
-	Version           int                 `json:"version"`
-	LineageID         string              `json:"lineage_id"`
-	AuthorityRevision string              `json:"authority_revision"`
-	TargetIdentity    string              `json:"target_identity"`
-	CandidateTree     string              `json:"candidate_tree"`
-	PathsDigest       string              `json:"paths_digest"`
-	Paths             []string            `json:"paths"`
-	LedgerIDs         []string            `json:"ledger_ids"`
-	RawPayloadSHA256  string              `json:"raw_payload_sha256"`
-	RawPayloadBytes   int64               `json:"raw_payload_bytes"`
-	Outcome           VerificationOutcome `json:"outcome"`
-	RecordDigest      string              `json:"record_digest"`
+	Schema            string                        `json:"schema"`
+	Version           int                           `json:"version"`
+	LineageID         string                        `json:"lineage_id"`
+	AuthorityRevision string                        `json:"authority_revision"`
+	TargetIdentity    string                        `json:"target_identity"`
+	CandidateTree     string                        `json:"candidate_tree"`
+	PathsDigest       string                        `json:"paths_digest"`
+	Paths             []string                      `json:"paths"`
+	LedgerIDs         []string                      `json:"ledger_ids"`
+	RawPayloadSHA256  string                        `json:"raw_payload_sha256"`
+	RawPayloadBytes   int64                         `json:"raw_payload_bytes"`
+	Outcome           VerificationOutcome           `json:"outcome"`
+	Metadata          *VerificationEvidenceMetadata `json:"metadata,omitempty"`
+	RecordDigest      string                        `json:"record_digest"`
+}
+
+type VerificationEvidenceMetadata struct {
+	CandidateIdentity string   `json:"candidate_identity"`
+	CandidateTree     string   `json:"candidate_tree"`
+	Producer          string   `json:"producer"`
+	Command           []string `json:"command,omitempty"`
+	NativePlan        string   `json:"native_plan,omitempty"`
+	StartedAt         string   `json:"started_at"`
+	FinishedAt        string   `json:"finished_at"`
+	ExitStatus        int      `json:"exit_status"`
+	Verdict           string   `json:"verdict"`
+	Assertions        []string `json:"assertions"`
+	StdoutSHA256      string   `json:"stdout_sha256"`
+	StderrSHA256      string   `json:"stderr_sha256"`
 }
 
 type CapturedVerificationEvidence struct {
@@ -67,6 +83,7 @@ type CaptureVerificationEvidenceRequest struct {
 	Target            Snapshot
 	Payload           []byte
 	Outcome           VerificationOutcome
+	Metadata          *VerificationEvidenceMetadata
 }
 
 func validVerificationOutcome(outcome VerificationOutcome) bool {
@@ -79,6 +96,10 @@ func validVerificationOutcome(outcome VerificationOutcome) bool {
 }
 
 func NewVerificationEvidenceRecord(lineageID, authorityRevision string, target Snapshot, payload []byte, outcome VerificationOutcome) (VerificationEvidenceRecord, error) {
+	return NewStructuredVerificationEvidenceRecord(lineageID, authorityRevision, target, payload, outcome, nil)
+}
+
+func NewStructuredVerificationEvidenceRecord(lineageID, authorityRevision string, target Snapshot, payload []byte, outcome VerificationOutcome, metadata *VerificationEvidenceMetadata) (VerificationEvidenceRecord, error) {
 	if err := validateCompactSnapshot(target); err != nil {
 		return VerificationEvidenceRecord{}, fmt.Errorf("verification evidence target: %w", err)
 	}
@@ -87,7 +108,7 @@ func NewVerificationEvidenceRecord(lineageID, authorityRevision string, target S
 		LineageID: lineageID, AuthorityRevision: authorityRevision, TargetIdentity: target.Identity,
 		CandidateTree: target.CandidateTree, PathsDigest: target.PathsDigest,
 		Paths: append([]string(nil), target.Paths...), LedgerIDs: append([]string(nil), target.LedgerIDs...),
-		RawPayloadSHA256: finalVerificationPayloadDigest(payload), RawPayloadBytes: int64(len(payload)), Outcome: outcome,
+		RawPayloadSHA256: finalVerificationPayloadDigest(payload), RawPayloadBytes: int64(len(payload)), Outcome: outcome, Metadata: metadata,
 	}
 	record.RecordDigest = verificationEvidenceRecordDigest(record)
 	if err := record.ValidatePayload(payload); err != nil {
@@ -135,6 +156,21 @@ func (record VerificationEvidenceRecord) ValidatePayload(payload []byte) error {
 	if int64(len(payload)) != record.RawPayloadBytes || len(payload) == 0 || len(payload) > verificationEvidencePayloadLimit ||
 		finalVerificationPayloadDigest(payload) != record.RawPayloadSHA256 {
 		return errors.New("verification evidence raw payload does not match its record") // refusal:by-design world-action: immutable raw bytes and metadata conflict, so neither can safely authorize continuation
+	}
+	return nil
+}
+
+func validateVerificationEvidenceMetadata(metadata *VerificationEvidenceMetadata, targetIdentity, candidateTree string) error {
+	if metadata == nil || metadata.CandidateIdentity != targetIdentity || metadata.CandidateTree != candidateTree ||
+		strings.TrimSpace(metadata.Producer) == "" || strings.TrimSpace(metadata.StartedAt) == "" || strings.TrimSpace(metadata.FinishedAt) == "" ||
+		metadata.ExitStatus != 0 || metadata.Verdict != string(VerificationOutcomePassed) || len(metadata.Assertions) == 0 ||
+		(metadata.NativePlan == "" && len(metadata.Command) == 0) || !validSHA256(metadata.StdoutSHA256) || !validSHA256(metadata.StderrSHA256) {
+		return errors.New("passed verification evidence requires valid candidate-bound structured metadata") // refusal:by-design world-action: opaque or contradictory evidence cannot authorize a review gate
+	}
+	for _, assertion := range metadata.Assertions {
+		if strings.TrimSpace(assertion) == "" {
+			return errors.New("verification evidence assertions must be non-empty") // refusal:by-design operator-knowledge: assertions are required to establish the producer's claimed verdict
+		}
 	}
 	return nil
 }
@@ -280,7 +316,7 @@ func ReadCapturedVerificationEvidence(storeDir, lineageID, authorityRevision str
 }
 
 func PublishCapturedVerificationEvidence(request CaptureVerificationEvidenceRequest) (CapturedVerificationEvidence, error) {
-	record, err := NewVerificationEvidenceRecord(request.LineageID, request.AuthorityRevision, request.Target, request.Payload, request.Outcome)
+	record, err := NewStructuredVerificationEvidenceRecord(request.LineageID, request.AuthorityRevision, request.Target, request.Payload, request.Outcome, request.Metadata)
 	if err != nil {
 		return CapturedVerificationEvidence{}, err
 	}

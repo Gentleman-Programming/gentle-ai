@@ -332,10 +332,7 @@ func TestNegotiatedFinalizeReturnsProviderOwnedTargetedValidationRequest(t *test
 	if err := os.WriteFile(evidencePath, []byte("targeted and full repository verification passed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewCaptureEvidence([]string{
-		"--cwd", repo, "--lineage", started.LineageID, "--target", status.ValidationRequest.CorrectionTargetIdentity,
-		"--expected-revision", status.Authority.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidencePath,
-	}, io.Discard); err != nil {
+	if err := RunReviewCaptureEvidence(structuredPassedEvidenceArgs(t, repo, started.LineageID, status.ValidationRequest.CorrectionTargetIdentity, status.Authority.Revision, evidencePath), io.Discard); err != nil {
 		t.Fatal(err)
 	}
 

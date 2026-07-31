@@ -198,9 +198,7 @@ func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing
 	if err := os.WriteFile(passedPath, []byte("targeted and full repository verification passed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewCaptureEvidence([]string{"--cwd", repo, "--lineage", started.LineageID,
-		"--target", secondTarget, "--expected-revision", before.Revision,
-		"--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", passedPath}, &bytes.Buffer{}); err != nil {
+	if err := RunReviewCaptureEvidence(structuredPassedEvidenceArgs(t, repo, started.LineageID, secondTarget, before.Revision, passedPath), &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	ready := readCorrectionEvidenceStatus(t, statusArgs)
@@ -320,10 +318,7 @@ func capturePassedCorrectionEvidenceForTest(t *testing.T, repo, lineage string) 
 	if err := os.WriteFile(evidencePath, []byte("targeted and full repository verification passed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewCaptureEvidence([]string{
-		"--cwd", repo, "--lineage", lineage, "--target", target.Identity,
-		"--expected-revision", record.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidencePath,
-	}, &bytes.Buffer{}); err != nil {
+	if err := RunReviewCaptureEvidence(structuredPassedEvidenceArgs(t, repo, lineage, target.Identity, record.Revision, evidencePath), &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(context.Background(), repo, record.State, record.Revision, target)
@@ -334,4 +329,37 @@ func capturePassedCorrectionEvidenceForTest(t *testing.T, repo, lineage string) 
 		t.Fatalf("targeted validation identity %q != captured target %q", request.CorrectionTargetIdentity, target.Identity)
 	}
 	return request
+}
+
+func structuredPassedEvidenceArgs(t *testing.T, repo, lineage, targetIdentity, revision, evidencePath string) []string {
+	t.Helper()
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := facadeVerificationEvidenceTarget(context.Background(), repo, record.State, revision)
+	if err != nil || target.Identity != targetIdentity {
+		t.Fatalf("structured evidence target = %s, %v; want %s", target.Identity, err, targetIdentity)
+	}
+	metadataPath := filepath.Join(t.TempDir(), "verification-metadata.json")
+	writeReviewCLIJSON(t, metadataPath, reviewtransaction.VerificationEvidenceMetadata{
+		CandidateIdentity: target.Identity,
+		CandidateTree:     target.CandidateTree,
+		Producer:          "test-verifier",
+		Command:           []string{"test-verifier", "run"},
+		StartedAt:         "2026-07-31T00:00:00Z",
+		FinishedAt:        "2026-07-31T00:00:01Z",
+		ExitStatus:        0,
+		Verdict:           string(reviewtransaction.VerificationOutcomePassed),
+		Assertions:        []string{"candidate verification passed"},
+		StdoutSHA256:      facadePayloadHash([]byte("structured stdout")),
+		StderrSHA256:      facadePayloadHash([]byte("structured stderr")),
+	})
+	return []string{"--cwd", repo, "--lineage", lineage, "--target", targetIdentity,
+		"--expected-revision", revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed),
+		"--input", evidencePath, "--metadata", metadataPath}
 }

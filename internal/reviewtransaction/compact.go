@@ -1264,6 +1264,9 @@ func (state *CompactState) CompleteCorrectionVerification(snapshot Snapshot, act
 	if record.Outcome != VerificationOutcomePassed {
 		return errors.New("compact correction repository verification must pass before acceptance") // refusal:by-design operator-knowledge: the caller must retain the open correction and submit only a passed candidate-bound verification bundle
 	}
+	if err := validateVerificationEvidenceMetadata(record.Metadata, record.TargetIdentity, record.CandidateTree); err != nil {
+		return err
+	}
 	if err := record.ValidatePayload(payload); err != nil {
 		return err
 	}
@@ -1410,6 +1413,11 @@ func (state *CompactState) CompleteVerificationRecord(record VerificationEvidenc
 	}
 	if err := record.ValidateBinding(state.LineageID, record.AuthorityRevision, state.CurrentSnapshot); err != nil {
 		return err
+	}
+	if record.Outcome == VerificationOutcomePassed {
+		if err := validateVerificationEvidenceMetadata(record.Metadata, record.TargetIdentity, record.CandidateTree); err != nil {
+			return err
+		}
 	}
 	state.EvidenceHash = record.RawPayloadSHA256
 	state.EvidenceRecordDigest = record.RecordDigest

@@ -1046,9 +1046,7 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 	if err := os.WriteFile(evidencePath, []byte("focused and full tests: pass\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewCaptureEvidence([]string{"--cwd", repo, "--lineage", started.LineageID,
-		"--target", fix.Identity, "--expected-revision", correction.Revision,
-		"--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidencePath}, io.Discard); err != nil {
+	if err := RunReviewCaptureEvidence(structuredPassedEvidenceArgs(t, repo, started.LineageID, fix.Identity, correction.Revision, evidencePath), io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	validationPath := filepath.Join(t.TempDir(), "validation.json")
@@ -2285,7 +2283,7 @@ func prepareFacadeReceiptPending(t *testing.T) facadeReceiptPendingFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReview([]string{"capture-evidence", "--cwd", repo, "--lineage", started.LineageID, "--target", validating.State.InitialSnapshot.Identity, "--expected-revision", validating.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidencePath}, io.Discard); err != nil {
+	if err := RunReview(append([]string{"capture-evidence"}, structuredPassedEvidenceArgs(t, repo, started.LineageID, validating.State.InitialSnapshot.Identity, validating.Revision, evidencePath)...), io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	sentinel := errors.New("injected receipt publication interruption")
@@ -2381,10 +2379,7 @@ func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
 		if err := os.WriteFile(evidencePath, evidence, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := RunReviewCaptureEvidence([]string{
-			"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.CurrentSnapshot.Identity,
-			"--expected-revision", record.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidencePath,
-		}, io.Discard); err != nil {
+		if err := RunReviewCaptureEvidence(structuredPassedEvidenceArgs(t, repo, started.LineageID, record.State.CurrentSnapshot.Identity, record.Revision, evidencePath), io.Discard); err != nil {
 			t.Fatalf("capture evidence out of band: %v", err)
 		}
 
@@ -2458,10 +2453,7 @@ func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
 		if err := os.WriteFile(evidencePath, []byte("focused tests pass\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := RunReviewCaptureEvidence([]string{
-			"--cwd", repo, "--lineage", started.LineageID, "--target", before.State.CurrentSnapshot.Identity,
-			"--expected-revision", before.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidencePath,
-		}, io.Discard); err != nil {
+		if err := RunReviewCaptureEvidence(structuredPassedEvidenceArgs(t, repo, started.LineageID, before.State.CurrentSnapshot.Identity, before.Revision, evidencePath), io.Discard); err != nil {
 			t.Fatal(err)
 		}
 		canonical := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir,

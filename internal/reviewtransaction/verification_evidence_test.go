@@ -103,7 +103,12 @@ func TestCompleteCorrectionVerificationIsAtomicAndCandidateBound(t *testing.T) {
 	}
 
 	passedPayload := []byte("repository verification passed\n")
-	passed, err := NewVerificationEvidenceRecord(state.LineageID, revision, fix, passedPayload, VerificationOutcomePassed)
+	passed, err := NewStructuredVerificationEvidenceRecord(state.LineageID, revision, fix, passedPayload, VerificationOutcomePassed, &VerificationEvidenceMetadata{
+		CandidateIdentity: fix.Identity, CandidateTree: fix.CandidateTree, Producer: "test-runner", Command: []string{"verify"},
+		StartedAt: "2026-07-31T00:00:00Z", FinishedAt: "2026-07-31T00:00:01Z", ExitStatus: 0,
+		Verdict: string(VerificationOutcomePassed), Assertions: []string{"repository verification passed"},
+		StdoutSHA256: payloadDigest([]byte("stdout")), StderrSHA256: payloadDigest([]byte("stderr")),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +123,71 @@ func TestCompleteCorrectionVerificationIsAtomicAndCandidateBound(t *testing.T) {
 	}
 	if _, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetFixDiff, BaseRef: before.CurrentSnapshot.CandidateTree, IntendedUntracked: before.InitialSnapshot.IntendedUntracked, LedgerIDs: before.FixFindingIDs}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOpaquePassedEvidenceCannotAuthorizeVerification(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "opaque-passed-rejected")
+	payload := []byte("PASS\n")
+	record, err := NewVerificationEvidenceRecord(state.LineageID, hash("a"), state.CurrentSnapshot, payload, VerificationOutcomePassed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := state
+	if err := state.CompleteVerificationRecord(record, payload); err == nil {
+		t.Fatal("opaque passed evidence authorized verification")
+	}
+	if !reflect.DeepEqual(state, before) {
+		t.Fatal("opaque evidence rejection mutated compact state")
+	}
+}
+
+func TestStructuredPassedEvidenceReplayAndContradictionRejection(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "structured-evidence-replay")
+	store := storeCompactStartAuthority(t, repo, state)
+	revision := mustLoadCompactRecord(t, store).Revision
+	payload := []byte("structured verification output\n")
+	metadata := &VerificationEvidenceMetadata{
+		CandidateIdentity: state.CurrentSnapshot.Identity, CandidateTree: state.CurrentSnapshot.CandidateTree,
+		Producer: "test-verifier", Command: []string{"verify", "--candidate"},
+		StartedAt: "2026-07-31T00:00:00Z", FinishedAt: "2026-07-31T00:00:01Z", Verdict: string(VerificationOutcomePassed),
+		Assertions: []string{"candidate passed"}, StdoutSHA256: payloadDigest([]byte("stdout")), StderrSHA256: payloadDigest([]byte("stderr")),
+	}
+	request := CaptureVerificationEvidenceRequest{StoreDir: store.Dir, LineageID: state.LineageID, AuthorityRevision: revision, Target: state.CurrentSnapshot, Payload: payload, Outcome: VerificationOutcomePassed, Metadata: metadata}
+	first, err := PublishCapturedVerificationEvidence(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := PublishCapturedVerificationEvidence(request)
+	if err != nil || !reflect.DeepEqual(replay, first) {
+		t.Fatalf("structured replay = %#v, %v; want %#v", replay, err, first)
+	}
+	contradictory := *metadata
+	contradictory.ExitStatus = 1
+	record, err := NewStructuredVerificationEvidenceRecord(state.LineageID, revision, state.CurrentSnapshot, payload, VerificationOutcomePassed, &contradictory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := state
+	if err := state.CompleteVerificationRecord(record, payload); err == nil {
+		t.Fatal("contradictory structured evidence authorized verification")
+	}
+	if !reflect.DeepEqual(state, before) {
+		t.Fatal("contradictory structured evidence mutated compact state")
+	}
+	mismatched := *metadata
+	mismatched.CandidateIdentity = hash("another-candidate")
+	record, err = NewStructuredVerificationEvidenceRecord(state.LineageID, revision, state.CurrentSnapshot, payload, VerificationOutcomePassed, &mismatched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.CompleteVerificationRecord(record, payload); err == nil {
+		t.Fatal("mismatched structured evidence authorized verification")
+	}
+	if !reflect.DeepEqual(state, before) {
+		t.Fatal("mismatched structured evidence mutated compact state")
 	}
 }
 
