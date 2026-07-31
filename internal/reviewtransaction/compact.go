@@ -1006,7 +1006,7 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 	return state.Validate()
 }
 
-// ErrInvalidFindingLocation indicates that a reviewer finding location string is malformed.
+// refusal:by-design operator-knowledge: reviewer finding location strings must conform to path:line format
 var ErrInvalidFindingLocation = errors.New("invalid finding location format")
 
 // ParseFindingLocation parses a finding location string into a canonical logical path
