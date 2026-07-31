@@ -643,16 +643,13 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 //     Regression guards: TestGentleAIOnLinuxNeverRoutesToGoInstall and
 //     TestGentleAIOnMacOSNeverRoutesToGoInstall.
 //
-//   - Windows publishes no official binary and no Scoop manifest while publicly
-//     trusted Authenticode signing is pending, so there is no signed asset to
-//     download and minisign is not an option there. With Go on PATH, a pinned
-//     `go install <importPath>@vX.Y.Z` is the automatic upgrade. That is not an
-//     unverified install: goInstallUpgrade deliberately does not touch cmd.Env,
-//     so the Go checksum database (sum.golang.org) still verifies the module
-//     against its transparency log. The trust anchor moves from our minisign key
-//     to Go's checksum log — a different anchor, not a missing one. (The `@main`
-//     beta path in goInstallMainUpgrade DOES bypass sumdb via goProxyBypassEnv;
-//     that is a separate, opt-in channel and is not this path.)
+//   - On Windows, an active executable owned by Scoop is upgraded by Scoop. The
+//     ownership check resolves both the executable and Scoop's current package
+//     directory, so a separate AppData or Go installation is never redirected.
+//     Otherwise, with Go on PATH, a pinned `go install <importPath>@vX.Y.Z` is
+//     the automatic upgrade. That is not an unverified install: goInstallUpgrade
+//     deliberately does not touch cmd.Env, so the Go checksum database
+//     (sum.golang.org) still verifies the module against its transparency log.
 //     `go install` can write somewhere the shell does not resolve, which is why
 //     goInstallUpgrade verifies the destination afterwards and warns on mismatch.
 //
@@ -664,6 +661,9 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 // legacy InstallScript declaration on Windows, where scriptUpgrade has no bash
 // and would point the user at a releases page that publishes no Windows assets.
 func gentleAISelfUpgradeMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
+	if profile.OS == "windows" && scoopGentleAIOwned() {
+		return update.InstallScoop
+	}
 	if profile.OS == "windows" && profile.GoAvailable && tool.GoImportPath != "" {
 		return update.InstallGoInstall
 	}
