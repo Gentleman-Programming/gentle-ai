@@ -168,6 +168,9 @@ async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<Re
     const value = parsed as Record<string, unknown>
     const subject = value.artifact_subject as Record<string, unknown> | undefined
     const manifest = value.changed_path_manifest
+    if (subject?.schema === "gentle-ai.review-artifact-subject/v1") {
+      throw Object.assign(new Error("stale artifact-subject v1 binding"), { reviewClass: "stale_artifact_subject_v1" })
+    }
     if (!subject || subject.schema !== "gentle-ai.review-artifact-subject/v2" ||
         typeof subject.subject_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.subject_hash) ||
         typeof subject.authority_revision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.authority_revision) ||
@@ -189,7 +192,9 @@ async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<Re
     return value as unknown as ReviewCapturePreflight
   } catch (cause) {
     const scope = binding.repository_context ? "the provider-issued repository context" : cwd
-    const recovery = gitTrustRefusal(binding, cause)
+    const recovery = staleArtifactSubjectV1(cause)
+      ? "Refresh the exact negotiated STATUS/next_transition before relaunching the lens."
+      : gitTrustRefusal(binding, cause)
       ? GIT_TRUST_REFUSAL_RECOVERY
       : binding.repository_context
       ? `Refresh the exact native next_transition for lineage ${binding.lineage} before relaunching the lens.`
@@ -287,6 +292,12 @@ function gitTrustRefusal(binding: ReviewBinding, cause: unknown): boolean {
 // can never satisfy admission, only a relaunched reviewer can.
 const ADMISSION_REJECTION = /\breviewer artifact admission ([a-z_]+):/
 
+const STALE_ARTIFACT_SUBJECT_V1 = "stale_artifact_subject_v1"
+
+function staleArtifactSubjectV1(cause: unknown): boolean {
+  return extractionClass(cause) === STALE_ARTIFACT_SUBJECT_V1
+}
+
 function admissionRejection(cause: unknown): string | undefined {
   const match = ADMISSION_REJECTION.exec(errorMessage(cause))
   return match ? match[1] : undefined
@@ -295,6 +306,10 @@ function admissionRejection(cause: unknown): string | undefined {
 function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string): string {
   if (!binding.repository_context) return errorMessage(cause)
   if (gitTrustRefusal(binding, cause)) return GIT_TRUST_REFUSAL_MESSAGE
+  if (staleArtifactSubjectV1(cause)) {
+    return `${code}: stale artifact-subject v1 binding is incompatible with the current v2 review contract; ` +
+      "the opaque binding is deterministically incompatible"
+  }
   const admission = admissionRejection(cause)
   if (admission) {
     return `${code}: native admission rejected the reviewer result as ${admission}; ` +

@@ -165,6 +165,38 @@ func TestReviewPluginBindsProviderOwnedCandidateContext(t *testing.T) {
 	}
 }
 
+func TestReviewPluginRejectsStaleV1BindingAndAcceptsFreshV2Binding(t *testing.T) {
+	stale := runReviewPluginScenarioWithNative(
+		t,
+		"before-opaque",
+		strings.Replace(reviewPluginPreflight(strings.Repeat("1", 40), strings.Repeat("2", 40)), "gentle-ai.review-artifact-subject/v2", "gentle-ai.review-artifact-subject/v1", 1),
+		"",
+	)
+	for _, want := range []string{
+		"repository_context_preflight_failed: stale artifact-subject v1 binding",
+		"current v2 review contract",
+		"The reviewer was not launched",
+		"Refresh the exact negotiated STATUS/next_transition",
+	} {
+		if !strings.Contains(stale, want) {
+			t.Fatalf("stale v1 binding result is missing %q: %s", want, stale)
+		}
+	}
+	if strings.Contains(stale, "retry the same opaque binding") {
+		t.Fatalf("stale v1 binding still advises a deterministically incompatible retry: %s", stale)
+	}
+
+	fresh := runReviewPluginScenarioWithNative(
+		t,
+		"before-valid",
+		reviewPluginPreflight(strings.Repeat("1", 40), strings.Repeat("2", 40)),
+		"",
+	)
+	if !strings.HasPrefix(fresh, "GENTLE_AI_REVIEW_BINDING {") {
+		t.Fatalf("fresh v2 binding did not complete preflight: %q", fresh)
+	}
+}
+
 func TestReviewPluginRejectsNonCanonicalProviderManifest(t *testing.T) {
 	entry := `{"path":"internal/example.go","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false}`
 	unsorted := `{"path":"z.go","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false},` + entry
