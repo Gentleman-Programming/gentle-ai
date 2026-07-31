@@ -2708,11 +2708,24 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 			} else {
 				agentMap["variant"] = ""
 			}
+		case isNativeFallbackAgent(phase):
+			// 2. Native fallback agents (general, explore): derive model from sdd-explore if available, else rootModelID
+			if exploreAssignment, ok := assignments["sdd-explore"]; ok && exploreAssignment.ProviderID != "" && exploreAssignment.ModelID != "" {
+				agentMap["model"] = exploreAssignment.FullID()
+				if exploreAssignment.Effort != "" {
+					agentMap["variant"] = exploreAssignment.Effort
+				} else {
+					agentMap["variant"] = ""
+				}
+			} else if rootModelID != "" {
+				agentMap["model"] = rootModelID
+				agentMap["variant"] = ""
+			}
 		case existingAgentKeys[phase]:
-			// 2. Agent already exists in user's config — let merge preserve whatever they have
+			// 3. Agent already exists in user's config — let merge preserve whatever they have
 			// (don't touch the overlay for this agent's model)
 		case rootModelID != "":
-			// 3. Fresh install or new agent: use root model as default to break inheritance.
+			// 4. Fresh install or new agent: use root model as default to break inheritance.
 			// Also clear variant explicitly so the overlay output stays symmetric
 			// with case 1 — this prevents a stale variant from leaking through if
 			// the embedded overlay or upstream pipeline ever carries a variant.
@@ -2746,6 +2759,10 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 		return nil, fmt.Errorf("marshal overlay after model injection: %w", err)
 	}
 	return append(result, '\n'), nil
+}
+
+func isNativeFallbackAgent(name string) bool {
+	return name == "general" || name == "explore"
 }
 
 // normalizeOpenCodeSDDModelAssignments accepts the historical
