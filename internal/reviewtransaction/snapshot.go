@@ -1039,6 +1039,9 @@ func (builder SnapshotBuilder) resolveExactRevision(ctx context.Context, revisio
 	if err != nil {
 		return "", "", err
 	}
+	if err := builder.rejectRepositoryLocalGrafts(ctx); err != nil {
+		return "", "", err
+	}
 	parentsOutput, err := runGit(ctx, builder.Repo, nil, nil, "rev-list", "--parents", "-n", "1", commit)
 	if err != nil {
 		return "", "", err
@@ -1053,6 +1056,20 @@ func (builder SnapshotBuilder) resolveExactRevision(ctx context.Context, revisio
 		return "", "", err
 	}
 	return strings.TrimSpace(string(emptyTreeOutput)), candidate, nil
+}
+
+func (builder SnapshotBuilder) rejectRepositoryLocalGrafts(ctx context.Context) error {
+	commonDir, err := resolveGitDirectory(ctx, builder.Repo, "--git-common-dir")
+	if err != nil {
+		return fmt.Errorf("locate Git common directory for exact revision: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(commonDir, "info", "grafts")); err == nil {
+		// guard:population exact-revision-history fail-closed: legitimate exact-revision inputs derive ancestry from the repository's native commit graph; locally rewritten graft ancestry is excluded
+		return errors.New("exact revision snapshot refuses repository-local Git grafts")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect repository-local Git grafts: %w", err)
+	}
+	return nil
 }
 
 func (builder SnapshotBuilder) resolveTree(ctx context.Context, revision string) (string, error) {
