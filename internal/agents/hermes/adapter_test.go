@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -131,9 +132,10 @@ func TestSupportsAutoInstall(t *testing.T) {
 }
 
 func TestConfigPaths(t *testing.T) {
+	t.Setenv("HERMES_HOME", "")
 	a := NewAdapter()
 	homeDir := filepath.Join(string(filepath.Separator), "home", "test")
-	configDir := filepath.Join(homeDir, ".hermes")
+	configDir := ConfigPath(homeDir)
 	configYAML := filepath.Join(configDir, "config.yaml")
 	soulMD := filepath.Join(configDir, "SOUL.md")
 	skillsDir := filepath.Join(configDir, "skills")
@@ -159,6 +161,28 @@ func TestConfigPaths(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConfigPathResolution(t *testing.T) {
+	homeDir := filepath.Join(string(filepath.Separator), "home", "test")
+
+	t.Run("HERMES_HOME override", func(t *testing.T) {
+		custom := filepath.Join(string(filepath.Separator), "custom", "hermes")
+		t.Setenv("HERMES_HOME", custom)
+		if got := ConfigPath(homeDir); got != filepath.Clean(custom) {
+			t.Fatalf("ConfigPath() with HERMES_HOME = %q, want %q", got, filepath.Clean(custom))
+		}
+	})
+
+	t.Run("default fallback without HERMES_HOME", func(t *testing.T) {
+		t.Setenv("HERMES_HOME", "")
+		if runtime.GOOS != "windows" {
+			want := filepath.Join(homeDir, ".hermes")
+			if got := ConfigPath(homeDir); got != want {
+				t.Fatalf("ConfigPath() default = %q, want %q", got, want)
+			}
+		}
+	})
 }
 
 func TestCapabilities(t *testing.T) {
