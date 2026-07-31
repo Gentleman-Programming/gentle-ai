@@ -131,3 +131,31 @@ func TestReviewRecoverAuthorizationFileStdin(t *testing.T) {
 		t.Fatalf("RunReviewRecover with stdin failed: %v", err)
 	}
 }
+
+func TestReviewRecoverAuthorizationFilePreservesExtraTrailingBlankLines(t *testing.T) {
+	repo, predecessor := invalidatedRecoverySelfDerivationPredecessor(t, "recover-extra-lines")
+	runReviewCLIGit(t, repo, "config", "user.name", "Maintainer")
+	runReviewCLIGit(t, repo, "config", "user.email", "maintainer@example.com")
+
+	// Extra trailing blank line (\n\n) should be preserved so exact binding check fails
+	authPath := filepath.Join(t.TempDir(), "auth_extra.txt")
+	authContent := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + predecessor.State.LineageID + "\npredecessor_revision=" + predecessor.Revision + "\ntarget_identity=" + predecessor.State.InitialSnapshot.Identity + "\nactor=Maintainer <maintainer@example.com>\nreason=manual recovery\n\n"
+	if err := os.WriteFile(authPath, []byte(authContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err := RunReviewRecover([]string{
+		"--cwd", repo,
+		"--predecessor-lineage", predecessor.State.LineageID,
+		"--expected-predecessor-revision", predecessor.Revision,
+		"--successor-lineage", "successor-extra-auth",
+		"--disposition", "invalidated",
+		"--actor", "Maintainer <maintainer@example.com>",
+		"--reason", "manual recovery",
+		"--maintainer-authorization-file", authPath,
+	}, &output)
+	if err == nil {
+		t.Fatal("expected RunReviewRecover to fail when file authorization has extra trailing blank lines")
+	}
+}

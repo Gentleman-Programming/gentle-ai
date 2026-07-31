@@ -1148,7 +1148,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("read --maintainer-authorization-file: %w", err)
 		}
-		*authorization = strings.TrimRight(string(rawAuth), "\r\n")
+		*authorization = trimSingleTrailingNewline(string(rawAuth))
 	}
 	authorizationProvided := authProvided || authFileProvided
 	if authorizationProvided && (strings.TrimSpace(*reason) == "" || strings.TrimSpace(*actor) == "") {
@@ -4363,6 +4363,13 @@ func readFacadeBytes(path string) ([]byte, error) {
 		return io.ReadAll(os.Stdin)
 	}
 	return os.ReadFile(path)
+}
+
+func trimSingleTrailingNewline(s string) string {
+	if strings.HasSuffix(s, "\r\n") {
+		return strings.TrimSuffix(s, "\r\n")
+	}
+	return strings.TrimSuffix(s, "\n")
 }
 
 var errFacadeArtifactManifestInputNotRegular = errors.New("artifact manifest input must be a regular file")
