@@ -438,6 +438,89 @@ func TestReviewModeRejectsUnknownSubcommandAndScope(t *testing.T) {
 		!strings.Contains(err.Error(), "unknown review mode scope") {
 		t.Fatalf("unknown scope error = %v", err)
 	}
+	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "worktree", "--json"}, &output); err != nil {
+		t.Fatalf("--scope worktree must be accepted: %v", err)
+	}
+}
+
+// TestReviewModeWorktreeScopeDisablesOnlyThisWorktree locks issue #1973 from
+// the CLI surface: --scope worktree inside a linked worktree writes a private
+// override that disables that worktree only, reports the worktree_local source,
+// and never touches the main clone. Status from the worktree must not announce
+// a blast radius for its private override.
+func TestReviewModeWorktreeScopeDisablesOnlyThisWorktree(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	runReviewCLIGit(t, repo, "worktree", "add", "-b", "review-mode-linked", linked, "HEAD")
+	t.Cleanup(func() { runReviewCLIGit(t, repo, "worktree", "remove", "--force", linked) })
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"disable", "--cwd", linked, "--scope", "worktree", "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(disable worktree) error = %v", err)
+	}
+	result := decodeReviewModeResult(t, output.Bytes())
+	if result.Status.Effective != reviewtransaction.RDDModeOff ||
+		result.Status.Source != reviewtransaction.RDDModeSourceWorktreeLocal ||
+		result.Status.WorktreeRevision == "" ||
+		result.BlastRadius != 0 {
+		t.Fatalf("worktree disable result = %#v", result.Status)
+	}
+
+	// The main clone is unaffected.
+	output.Reset()
+	if err := RunReviewMode([]string{"status", "--cwd", repo, "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(status main) error = %v", err)
+	}
+	if main := decodeReviewModeResult(t, output.Bytes()); main.Status.Effective != reviewtransaction.RDDModeOn {
+		t.Fatalf("main clone inherited the worktree override: %#v", main.Status)
+	}
+
+	// Status inside the worktree reports the private source and no blast radius.
+	output.Reset()
+	if err := RunReviewMode([]string{"status", "--cwd", linked, "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(status linked) error = %v", err)
+	}
+	if linkedResult := decodeReviewModeResult(t, output.Bytes()); linkedResult.Status.Source != reviewtransaction.RDDModeSourceWorktreeLocal ||
+		linkedResult.BlastRadius != 0 {
+		t.Fatalf("linked status = %#v, blast radius = %d; want worktree_local and none", linkedResult.Status, linkedResult.BlastRadius)
+	}
+
+	// Re-enabling with the worktree scope clears only this worktree.
+	output.Reset()
+	if err := RunReviewMode([]string{"enable", "--cwd", linked, "--scope", "worktree", "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(enable worktree) error = %v", err)
+	}
+	if result := decodeReviewModeResult(t, output.Bytes()); result.Status.Effective != reviewtransaction.RDDModeOn {
+		t.Fatalf("worktree enable result = %#v", result.Status)
+	}
+}
+
+// TestReviewModeStatusAnnouncesCloneBlastRadius locks the blast-radius
+// announcement (issue #1973): a clone-local override is stored under the shared
+// Git common directory, so status names how many other worktree checkouts share
+// it, from any checkout of the clone.
+func TestReviewModeStatusAnnouncesCloneBlastRadius(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	runReviewCLIGit(t, repo, "worktree", "add", "-b", "review-mode-blast", linked, "HEAD")
+	t.Cleanup(func() { runReviewCLIGit(t, repo, "worktree", "remove", "--force", linked) })
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone", "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(disable clone) error = %v", err)
+	}
+	for name, checkout := range map[string]string{"main": repo, "linked": linked} {
+		output.Reset()
+		if err := RunReviewMode([]string{"status", "--cwd", checkout, "--json"}, &output); err != nil {
+			t.Fatalf("RunReviewMode(status %s) error = %v", name, err)
+		}
+		result := decodeReviewModeResult(t, output.Bytes())
+		if result.Status.Source != reviewtransaction.RDDModeSourceCloneLocal || result.BlastRadius != 1 {
+			t.Fatalf("%s status = %#v, blast radius = %d; want clone_local and 1", name, result.Status, result.BlastRadius)
+		}
+	}
 }
 
 // TestReviewStartIsRejectedWhileTheKillSwitchIsOff proves a disabled START

@@ -23,29 +23,34 @@ import (
 const ReviewModeSchema = "gentle-ai.review-mode/v1"
 
 const (
-	reviewModeScopeGlobal = "global"
-	reviewModeScopeClone  = "clone"
-	reviewModeScopeBoth   = "both"
+	reviewModeScopeGlobal   = "global"
+	reviewModeScopeClone    = "clone"
+	reviewModeScopeWorktree = "worktree"
+	reviewModeScopeBoth     = "both"
 )
 
 // ReviewModeResult reports what the command did and the resulting effective
-// mode with both of its sources. It carries no review outcome.
+// mode with both of its sources. It carries no review outcome. BlastRadius is
+// informational and only present when a clone-local override lives under a Git
+// common directory shared with other worktree checkouts.
 type ReviewModeResult struct {
-	Schema    string                          `json:"schema"`
-	Operation string                          `json:"operation"`
-	Scope     string                          `json:"scope"`
-	Status    reviewtransaction.RDDModeStatus `json:"status"`
+	Schema      string                          `json:"schema"`
+	Operation   string                          `json:"operation"`
+	Scope       string                          `json:"scope"`
+	Status      reviewtransaction.RDDModeStatus `json:"status"`
+	BlastRadius int                             `json:"blast_radius,omitempty"`
 }
 
 // RunReviewMode is the user-controlled receipt-driven-development switch.
 // Receipt-driven development is opt-in: with no source expressing an opinion it
 // resolves to off, and only an explicit global enable turns it on. The global
 // mode lives in uncommitted user state; the clone-local override lives under
-// this clone's Git common directory and can only disable. Any off wins, status
-// never mutates, and enabling applies to future candidates only.
+// this clone's Git common directory and the worktree-local override lives under
+// a linked worktree's own Git directory, and both can only disable. Any off
+// wins, status never mutates, and enabling applies to future candidates only.
 func RunReviewMode(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone>] [--expected-revision <revision>] [--json]")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone|worktree>] [--expected-revision <revision>] [--json]")
 		_, _ = fmt.Fprintln(stdout, "User-owned switch. Receipt-driven development is off until you enable it: run 'gentle-ai review mode enable --scope global' to opt in. Any off wins: a repository may disable it for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Enabling applies to future candidates only.")
 		return nil
 	}
@@ -58,8 +63,8 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 
 	flags := newReviewFlagSet("review mode "+operation, stdout, "Read or set the user-controlled receipt-driven-development kill switch.")
 	cwd := flags.String("cwd", ".", "repository path")
-	scope := flags.String("scope", reviewModeScopeGlobal, "mode source to write: global or clone")
-	expectedRevision := flags.String("expected-revision", "", "exact clone-local revision this write replaces")
+	scope := flags.String("scope", reviewModeScopeGlobal, "mode source to write: global, clone, or worktree")
+	expectedRevision := flags.String("expected-revision", "", "exact local-override revision this write replaces (clone or worktree scope)")
 	emitJSON := flags.Bool("json", false, "emit the machine-readable review mode result")
 	if err := parseReviewFlags(flags, args[1:]); err != nil {
 		return err
@@ -72,7 +77,7 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 	}
 	selectedScope := strings.TrimSpace(*scope)
 	switch selectedScope {
-	case reviewModeScopeGlobal, reviewModeScopeClone:
+	case reviewModeScopeGlobal, reviewModeScopeClone, reviewModeScopeWorktree:
 	default:
 		return fmt.Errorf("unknown review mode scope %q", *scope)
 	}
@@ -89,6 +94,14 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 	if operation == "status" {
 		result.Scope = reviewModeScopeBoth
 		result.Status, err = reviewModeStatus(ctx, *cwd)
+		if err == nil && result.Status.Source == reviewtransaction.RDDModeSourceCloneLocal {
+			// A clone-local override lives under the shared Git common
+			// directory, so it may also govern every linked worktree. The
+			// announcement is informational and never changes the mode.
+			if shared, radiusErr := reviewtransaction.LinkedWorktreeBlastRadius(ctx, *cwd); radiusErr == nil && shared > 0 {
+				result.BlastRadius = shared
+			}
+		}
 	} else {
 		result.Status, err = applyReviewMode(ctx, *cwd, operation, selectedScope, *expectedRevision, revisionProvided)
 	}
@@ -119,18 +132,22 @@ type ReviewModeUnreadableScope struct {
 }
 
 func (scope ReviewModeUnreadableScope) label() string {
-	if scope.Scope == reviewModeScopeClone {
+	switch scope.Scope {
+	case reviewModeScopeClone:
 		return "clone-local"
+	case reviewModeScopeWorktree:
+		return "worktree-local"
 	}
 	return "global"
 }
 
 // commands names the two invocations that overwrite this scope. Both are
-// complete as printed: the clone-local scope carries the repository it belongs
-// to, because a clone-local record is only reachable through its own clone.
+// complete as printed: the repository scopes carry the repository they belong
+// to, because a repository-scoped record is only reachable through its own
+// clone.
 func (scope ReviewModeUnreadableScope) commands() []string {
 	suffix := " --scope=" + scope.Scope
-	if scope.Scope == reviewModeScopeClone {
+	if scope.Scope == reviewModeScopeClone || scope.Scope == reviewModeScopeWorktree {
 		suffix += " --cwd " + scope.Repo
 	}
 	return []string{
@@ -273,11 +290,14 @@ func reviewModeUnreadable(
 			scopes = append(scopes, ReviewModeUnreadableScope{Scope: reviewModeScopeGlobal, Path: state.Path(home), Repo: repo})
 		}
 	}
-	// An unset global can never fail, so this isolates the clone-local source
-	// even when the global one already failed ahead of it.
+	// An unset global can never fail, so this isolates the repository-scoped
+	// sources even when the global one already failed ahead of it.
 	if _, cloneErr := reviewtransaction.ResolveRDDMode(ctx, repo, reviewtransaction.RDDGlobalMode{}); cloneErr != nil {
 		if path, pathErr := reviewtransaction.CloneLocalRDDModeRecordPath(ctx, repo); pathErr == nil && path != "" {
 			scopes = append(scopes, ReviewModeUnreadableScope{Scope: reviewModeScopeClone, Path: path, Repo: repo})
+		}
+		if path, pathErr := reviewtransaction.WorktreeLocalRDDModeRecordPath(ctx, repo); pathErr == nil && path != "" {
+			scopes = append(scopes, ReviewModeUnreadableScope{Scope: reviewModeScopeWorktree, Path: path, Repo: repo})
 		}
 	}
 	if len(scopes) == 0 {
@@ -323,19 +343,34 @@ func applyReviewMode(
 	}
 	mode := reviewtransaction.RDDModeOff
 	if operation == "enable" {
-		// The override is off-only, so enabling clears this clone's opinion
+		// The override is off-only, so enabling clears this scope's opinion
 		// instead of asserting on: a repository may never force review on.
 		mode = reviewtransaction.RDDModeUnset
 	}
 	if !revisionProvided {
-		// The compare-and-set token belongs to the clone-local source alone, so
-		// it is read with an unset global. Repairing this clone must not depend
-		// on the other source being readable, or a switch whose two records are
-		// both unreadable would have no repair command at all.
+		// The compare-and-set token belongs to the repository-scoped source
+		// alone, so it is read with an unset global. Repairing this scope must
+		// not depend on the other source being readable, or a switch whose two
+		// records are both unreadable would have no repair command at all.
 		current, resolveErr := reviewtransaction.ResolveRDDMode(ctx, repo, reviewtransaction.RDDGlobalMode{})
 		switch {
 		case resolveErr == nil:
 			expectedRevision = current.Revision
+			if scope == reviewModeScopeWorktree {
+				// On a linked worktree the write targets the private
+				// worktree-local head, whose token is WorktreeRevision. On the
+				// main checkout there is no distinct worktree-local storage, so
+				// the write targets the clone-local record and must carry its
+				// token.
+				lease, leaseErr := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
+				if leaseErr != nil {
+					return disabled, reviewModeUnreadable(ctx, repo, global, leaseErr)
+				}
+				identity := lease.Identity()
+				if identity.GitDir != identity.GitCommonDir {
+					expectedRevision = current.WorktreeRevision
+				}
+			}
 		case errors.Is(resolveErr, reviewtransaction.ErrRDDModeCorrupt):
 			// An unreadable head carries no revision to compare against, and
 			// replacing it is the whole point of this command.
@@ -343,6 +378,10 @@ func applyReviewMode(
 		default:
 			return disabled, reviewModeUnreadable(ctx, repo, global, resolveErr)
 		}
+	}
+	if scope == reviewModeScopeWorktree {
+		status, err := reviewtransaction.SetWorktreeLocalRDDMode(ctx, repo, mode, expectedRevision, global)
+		return status, reviewModeUnreadable(ctx, repo, global, err)
 	}
 	status, err := reviewtransaction.SetCloneLocalRDDMode(ctx, repo, mode, expectedRevision, global)
 	return status, reviewModeUnreadable(ctx, repo, global, err)
@@ -400,13 +439,27 @@ func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) er
 	}
 	_, err := fmt.Fprintf(
 		stdout,
-		"receipt-driven development: %s (decided by %s)\n  global:      %s\n  clone-local: %s\n",
+		"receipt-driven development: %s (decided by %s)\n  %-14s %s\n  %-14s %s\n  %-14s %s\n",
 		reviewModeLabel(result.Status.Effective),
 		result.Status.Source,
-		reviewModeLabel(result.Status.Global),
-		reviewModeLabel(result.Status.CloneLocal),
+		"global:", reviewModeLabel(result.Status.Global),
+		"clone-local:", reviewModeLabel(result.Status.CloneLocal),
+		"worktree-local:", reviewModeLabel(result.Status.WorktreeLocal),
 	)
-	if err != nil || result.Status.Reach != reviewtransaction.RDDModeReachThisBuild {
+	if err != nil {
+		return err
+	}
+	if result.BlastRadius > 0 {
+		_, err = fmt.Fprintf(
+			stdout,
+			"  note: %d other worktree checkout(s) share this clone-local override because it is stored under the shared Git common directory\n",
+			result.BlastRadius,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	if result.Status.Reach != reviewtransaction.RDDModeReachThisBuild {
 		return err
 	}
 	// The switch is machine state. A write that reached only this build has to

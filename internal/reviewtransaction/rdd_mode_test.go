@@ -614,3 +614,180 @@ func TestResolveRDDModeUnsafePrivatePathIsNotACorruptHead(t *testing.T) {
 		t.Fatalf("unsafe private RAR path did not fail closed: %#v", status)
 	}
 }
+
+func TestWorktreeLocalRDDOverrideStaysPrivateToItsWorktree(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	linkedA := filepath.Join(t.TempDir(), "linked-a")
+	gitSnapshot(t, repo, "worktree", "add", "-b", "rdd-worktree-a", linkedA, "HEAD")
+	t.Cleanup(func() { _ = runSnapshotGit(repo, "worktree", "remove", "--force", linkedA) })
+	linkedB := filepath.Join(t.TempDir(), "linked-b")
+	gitSnapshot(t, repo, "worktree", "add", "-b", "rdd-worktree-b", linkedB, "HEAD")
+	t.Cleanup(func() { _ = runSnapshotGit(repo, "worktree", "remove", "--force", linkedB) })
+
+	ctx := context.Background()
+	global := RDDGlobalMode{Value: "on"}
+	disabled, err := SetWorktreeLocalRDDMode(ctx, linkedA, RDDModeOff, "", global)
+	if err != nil {
+		t.Fatalf("SetWorktreeLocalRDDMode(off) error = %v", err)
+	}
+	if disabled.Enabled() || disabled.Source != RDDModeSourceWorktreeLocal {
+		t.Fatalf("worktree-local disable did not take effect: %#v", disabled)
+	}
+
+	// The override lives under linkedA's private Git directory, never under the
+	// shared Git common directory.
+	lease, err := OpenRepositoryIdentityLease(ctx, linkedA)
+	if err != nil {
+		t.Fatalf("OpenRepositoryIdentityLease(linkedA) error = %v", err)
+	}
+	identity := lease.Identity()
+	overridePath := filepath.Join(identity.GitDir, "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	if _, err := os.Stat(overridePath); err != nil {
+		t.Fatalf("worktree-local override is not stored under the worktree Git directory: %v", err)
+	}
+	sharedPath := filepath.Join(identity.GitCommonDir, "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	if _, err := os.Stat(sharedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("worktree-local override leaked into the shared Git common directory: %v", err)
+	}
+
+	status, err := ResolveRDDMode(ctx, linkedA, global)
+	if err != nil {
+		t.Fatalf("ResolveRDDMode(linkedA) error = %v", err)
+	}
+	if status.Effective != RDDModeOff || status.Source != RDDModeSourceWorktreeLocal ||
+		status.WorktreeLocal != RDDModeOff || status.WorktreeRevision == "" {
+		t.Fatalf("linkedA status = %#v", status)
+	}
+	if status.Revision != "" {
+		t.Fatalf("linkedA status carries a clone-local revision for an absent clone override: %#v", status)
+	}
+
+	for name, checkout := range map[string]string{"main": repo, "linkedB": linkedB} {
+		status, err := ResolveRDDMode(ctx, checkout, global)
+		if err != nil {
+			t.Fatalf("ResolveRDDMode(%s) error = %v", name, err)
+		}
+		if status.Effective != RDDModeOn || status.CloneLocal != RDDModeUnset || status.WorktreeLocal != RDDModeUnset {
+			t.Fatalf("%s inherited the worktree-local override: %#v", name, status)
+		}
+	}
+
+	// A start refusal inside the worktree names the exact scope that must be
+	// turned back on.
+	var stop *RDDDisabledError
+	err = AuthorizeRDDCandidate(status)
+	if !errors.As(err, &stop) || stop.Source != RDDModeSourceWorktreeLocal ||
+		!strings.Contains(stop.Error(), "gentle-ai review mode enable --scope=worktree") {
+		t.Fatalf("worktree-local refusal = %v, stop = %#v", err, stop)
+	}
+
+	// Re-enabling inside the worktree clears only its private record, leaving
+	// the main checkout and the sibling worktree untouched.
+	cleared, err := SetWorktreeLocalRDDMode(ctx, linkedA, RDDModeUnset, status.WorktreeRevision, global)
+	if err != nil {
+		t.Fatalf("SetWorktreeLocalRDDMode(clear) error = %v", err)
+	}
+	if !cleared.Enabled() || cleared.Source != RDDModeSourceGlobal {
+		t.Fatalf("cleared worktree override did not re-enable linkedA: %#v", cleared)
+	}
+	for name, checkout := range map[string]string{"main": repo, "linkedA": linkedA, "linkedB": linkedB} {
+		status, err := ResolveRDDMode(ctx, checkout, global)
+		if err != nil {
+			t.Fatalf("ResolveRDDMode(%s) after clear error = %v", name, err)
+		}
+		if status.Effective != RDDModeOn {
+			t.Fatalf("%s stayed disabled after the worktree-local clear: %#v", name, status)
+		}
+	}
+
+	// The blast radius of a shared clone-local override is the sibling
+	// checkouts; the worktree-local override never widens it.
+	for name, checkout := range map[string]string{"main": repo, "linkedA": linkedA, "linkedB": linkedB} {
+		count, err := LinkedWorktreeBlastRadius(ctx, checkout)
+		if err != nil || count != 2 {
+			t.Fatalf("LinkedWorktreeBlastRadius(%s) = %d, %v; want 2", name, count, err)
+		}
+	}
+}
+
+// TestWorktreeLocalRDDOverrideWinsOverSharedCloneLocal pins the blast-radius
+// semantics (issue #1973): the clone-local override stays under the shared Git
+// common directory and governs every worktree of the clone, while the
+// worktree-local override wins inside exactly one worktree and never changes
+// the shared record.
+func TestWorktreeLocalRDDOverrideWinsOverSharedCloneLocal(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	gitSnapshot(t, repo, "worktree", "add", "-b", "rdd-precedence", linked, "HEAD")
+	t.Cleanup(func() { _ = runSnapshotGit(repo, "worktree", "remove", "--force", linked) })
+
+	ctx := context.Background()
+	global := RDDGlobalMode{Value: "on"}
+	if _, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", global); err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+	}
+	for name, checkout := range map[string]string{"main": repo, "linked": linked} {
+		status, err := ResolveRDDMode(ctx, checkout, global)
+		if err != nil {
+			t.Fatalf("ResolveRDDMode(%s) error = %v", name, err)
+		}
+		if status.Effective != RDDModeOff || status.Source != RDDModeSourceCloneLocal || status.CloneLocal != RDDModeOff {
+			t.Fatalf("%s did not see the shared clone-local override: %#v", name, status)
+		}
+	}
+
+	// The worktree-local off wins over the shared clone-local off inside this
+	// worktree only.
+	worktreeOff, err := SetWorktreeLocalRDDMode(ctx, linked, RDDModeOff, "", global)
+	if err != nil {
+		t.Fatalf("SetWorktreeLocalRDDMode(off) error = %v", err)
+	}
+	if worktreeOff.Source != RDDModeSourceWorktreeLocal || worktreeOff.Effective != RDDModeOff {
+		t.Fatalf("worktree-scope disable reported %#v", worktreeOff)
+	}
+	status, err := ResolveRDDMode(ctx, linked, global)
+	if err != nil {
+		t.Fatalf("ResolveRDDMode(linked) error = %v", err)
+	}
+	if status.Effective != RDDModeOff || status.Source != RDDModeSourceWorktreeLocal {
+		t.Fatalf("worktree-local off did not win over clone-local off: %#v", status)
+	}
+	mainStatus, err := ResolveRDDMode(ctx, repo, global)
+	if err != nil {
+		t.Fatalf("ResolveRDDMode(main) error = %v", err)
+	}
+	if mainStatus.Effective != RDDModeOff || mainStatus.Source != RDDModeSourceCloneLocal {
+		t.Fatalf("main checkout changed under a worktree-local override: %#v", mainStatus)
+	}
+
+	// A clone-scope write issued inside the linked worktree targets the shared
+	// common-dir head, never the private worktree head: its CAS token must be
+	// the clone-local revision, and the published record is visible in the main
+	// checkout (the blast radius is the whole clone family).
+	if _, err := SetCloneLocalRDDMode(ctx, linked, RDDModeOff, status.WorktreeRevision, global); !errors.Is(err, ErrRDDModeRevisionMismatch) {
+		t.Fatalf("clone-scope write with the worktree token error = %v, want ErrRDDModeRevisionMismatch", err)
+	}
+	if _, err := SetCloneLocalRDDMode(ctx, linked, RDDModeOff, mainStatus.Revision, global); err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off) inside linked worktree error = %v", err)
+	}
+	reShared, err := ResolveRDDMode(ctx, repo, global)
+	if err != nil {
+		t.Fatalf("ResolveRDDMode(main) after linked clone write error = %v", err)
+	}
+	if reShared.Effective != RDDModeOff || reShared.Source != RDDModeSourceCloneLocal {
+		t.Fatalf("linked-worktree clone-scope write did not reach the shared record: %#v", reShared)
+	}
+
+	// Clearing the worktree scope re-exposes the shared clone-local off inside
+	// the linked worktree.
+	cleared, err := SetWorktreeLocalRDDMode(ctx, linked, RDDModeUnset, status.WorktreeRevision, global)
+	if err != nil {
+		t.Fatalf("SetWorktreeLocalRDDMode(clear) error = %v", err)
+	}
+	if cleared.Effective != RDDModeOff || cleared.Source != RDDModeSourceCloneLocal {
+		t.Fatalf("cleared worktree scope did not re-expose the shared clone-local off: %#v", cleared)
+	}
+}
+

@@ -104,6 +104,10 @@ const (
 	RDDModeSourceGlobal RDDModeSource = "global"
 	// RDDModeSourceCloneLocal means this clone's Git-common-dir override decided.
 	RDDModeSourceCloneLocal RDDModeSource = "clone_local"
+	// RDDModeSourceWorktreeLocal means this linked worktree's private override
+	// decided. It exists only when the checkout is a linked worktree; on the
+	// main checkout there is no distinct worktree-local storage.
+	RDDModeSourceWorktreeLocal RDDModeSource = "worktree_local"
 )
 
 // RDDOperation classifies what an actor wants to do, so that disabling freezes
@@ -184,13 +188,15 @@ const (
 // clone-local compare-and-set token. The projection carries no time cutoff: it
 // answers "may review start now", never "which bytes are approved".
 type RDDModeStatus struct {
-	Schema     string        `json:"schema"`
-	Global     RDDMode       `json:"global"`
-	CloneLocal RDDMode       `json:"clone_local"`
-	Effective  RDDMode       `json:"effective"`
-	Source     RDDModeSource `json:"source"`
-	Revision   string        `json:"revision,omitempty"`
-	Reach      RDDModeReach  `json:"reach,omitempty"`
+	Schema           string        `json:"schema"`
+	Global           RDDMode       `json:"global"`
+	CloneLocal       RDDMode       `json:"clone_local"`
+	WorktreeLocal    RDDMode       `json:"worktree_local"`
+	Effective        RDDMode       `json:"effective"`
+	Source           RDDModeSource `json:"source"`
+	Revision         string        `json:"revision,omitempty"`
+	WorktreeRevision string        `json:"worktree_revision,omitempty"`
+	Reach            RDDModeReach  `json:"reach,omitempty"`
 }
 
 // Enabled reports whether new receipt-driven development may start.
@@ -258,6 +264,23 @@ func reviewModeEnableForSource(source RDDModeSource) string {
 	return enable + "global"
 }
 
+// reviewModeScopeForSource maps the deciding source onto the --scope value of
+// `gentle-ai review mode enable`. The default source expresses no opinion, so
+// it can never be what keeps reviews off and gets no continuation rather than
+// a guessed one.
+func reviewModeScopeForSource(source RDDModeSource) string {
+	switch source {
+	case RDDModeSourceGlobal:
+		return "global"
+	case RDDModeSourceCloneLocal:
+		return "clone"
+	case RDDModeSourceWorktreeLocal:
+		return "worktree"
+	default:
+		return ""
+	}
+}
+
 func (err *RDDDisabledError) Unwrap() error { return ErrRDDDisabled }
 
 // RDDModePartialApplyError reports a clone-scope write that applied for this
@@ -306,11 +329,15 @@ func ResolveRDDMode(ctx context.Context, repo string, global RDDGlobalMode) (RDD
 	if globalErr != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceGlobal), globalErr
 	}
-	override, present, overrideErr := readCloneLocalRDDOverride(ctx, repo)
-	if overrideErr != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), overrideErr
+	cloneOverride, clonePresent, cloneErr := readCloneLocalRDDOverride(ctx, repo)
+	if cloneErr != nil {
+		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), cloneErr
 	}
-	return rddModeStatus(globalMode, override, present), nil
+	worktreeOverride, worktreePresent, worktreeErr := readWorktreeLocalRDDOverride(ctx, repo)
+	if worktreeErr != nil {
+		return failedClosedRDDModeStatus(RDDModeSourceWorktreeLocal), worktreeErr
+	}
+	return rddModeStatusWithWorktree(globalMode, cloneOverride, clonePresent, worktreeOverride, worktreePresent), nil
 }
 
 // SetCloneLocalRDDMode records this clone's off-only override under the Git
@@ -324,157 +351,41 @@ func SetCloneLocalRDDMode(
 	expectedRevision string,
 	global RDDGlobalMode,
 ) (RDDModeStatus, error) {
-	if err := ctx.Err(); err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
-	}
-	persisted, err := cloneLocalRDDOverrideValue(mode)
-	if err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
-	}
-	globalMode, globalErr := normalizeRDDMode(global.Value)
-	if globalErr != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceGlobal), globalErr
-	}
-	currentStatus, currentErr := ResolveRDDMode(ctx, repo, global)
-	if currentErr == nil && strings.TrimSpace(expectedRevision) != currentStatus.Revision {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), fmt.Errorf(
-			"%w: expected %q but the clone-local head is %q", ErrRDDModeRevisionMismatch, expectedRevision, currentStatus.Revision)
-	}
-	if currentErr == nil && mode == RDDModeUnset && globalMode == RDDModeOff {
-		// Clearing this clone's off-only override cannot enable review while the
-		// global source remains off, so refuse without publishing a generation.
-		return currentStatus, &RDDDisabledError{Operation: RDDOperationStart, Source: RDDModeSourceGlobal}
-	}
-	// A request that matches the mode this clone already carries publishes no
-	// new generation of its own -- but it is not finished until every gentle-ai
-	// on this machine carries it too, so it goes on to the mirror below rather
-	// than returning here.
-	alreadyDecided := currentErr == nil && ((mode == RDDModeOff && currentStatus.CloneLocal == RDDModeOff) ||
-		(mode == RDDModeUnset && currentStatus.CloneLocal == RDDModeUnset))
-	if alreadyDecided && currentStatus.Revision == "" {
-		// This clone holds no override in either location and is not being asked
-		// for one. There is no decision to record and none to mirror, so this
-		// stays the one path that creates nothing at all.
-		return currentStatus, nil
-	}
-	if currentErr != nil && !errors.Is(currentErr, ErrRDDModeCorrupt) {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), currentErr
-	}
-	dir, err := cloneLocalRDDModeRoot(ctx, repo, true)
-	if err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
-	}
-	lock, err := acquireRARAuthorityLock(ctx, filepath.Join(dir, rddModeLockName))
-	if err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
-	}
-	defer func() { _ = lock.release() }()
+	return setRDDModeOverride(ctx, repo, rddOverrideCloneLocal, mode, expectedRevision, global)
+}
 
-	// Every clone-scope write also publishes into the pre-relocation location,
-	// because that is where the other gentle-ai installations on this machine
-	// read the switch. Writers from before the relocation lock that path;
-	// taking this build's root first and that one second serialises either
-	// version of gentle-ai without a lock-order cycle.
-	mirror := openCloneLocalRDDModeMirror(ctx, repo)
-	defer mirror.release()
+func SetWorktreeLocalRDDMode(
+	ctx context.Context,
+	repo string,
+	mode RDDMode,
+	expectedRevision string,
+	global RDDGlobalMode,
+) (RDDModeStatus, error) {
+	return setRDDModeOverride(ctx, repo, rddOverrideWorktreeLocal, mode, expectedRevision, global)
+}
 
-	head, present, err := readCloneLocalRDDOverrideHead(dir)
-	repairingCurrentHead := false
-	if err != nil {
-		// An unreadable head is precisely what this command exists to replace,
-		// so it must not be able to block its own repair -- that left the
-		// operator with a refusal and no runnable way out of it. It expresses
-		// no readable opinion and therefore carries no compare-and-set token,
-		// which is the same position as holding no record at all.
-		//
-		// Nothing is weakened. The lock still serialises writers, and the
-		// immutable no-replace publish still refuses to overwrite the
-		// unreadable generation: the repair writes the generation that
-		// supersedes it, so a lost race still cannot corrupt the head.
-		if !errors.Is(err, ErrRDDModeCorrupt) {
-			return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
-		}
-		generation, generationErr := cloneLocalRDDOverrideHeadGeneration(dir)
-		if generationErr != nil {
-			return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), generationErr
-		}
-		head, present = rddModeOverrideRecord{Generation: generation}, false
-		repairingCurrentHead = true
-	}
-	if !present && !repairingCurrentHead && mirror.available {
-		// Legacy records are immutable forensic evidence. A valid one may advance
-		// only by publishing its successor in the switch-owned authority root;
-		// a damaged legacy record must never be shadowed by a fresh root.
-		if mirror.readErr != nil {
-			return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), mirror.readErr
-		}
-		if mirror.present {
-			head, present = mirror.record, true
-		}
-	}
-	current := ""
-	if present {
-		current = head.Revision
-	}
-	if strings.TrimSpace(expectedRevision) != current {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), fmt.Errorf(
-			"%w: expected %q but the clone-local head is %q", ErrRDDModeRevisionMismatch, expectedRevision, current)
-	}
-	if alreadyDecided && (!mirror.available || mirror.decides(persisted)) {
-		// Both readable locations already carry this decision, or the other one
-		// cannot be reached at all and no write would change what it reports.
-		// Publishing another generation would move the compare-and-set token
-		// for nothing.
-		return rddModeWriteStatus(globalMode, head, present, mirror.reach()), nil
-	}
-	// The generation is a slot number in both locations, so it clears whichever
-	// of them has published further. A pre-relocation gentle-ai that wrote its
-	// own generations must not have one of them overwritten, and this build's
-	// own head must still advance.
-	generation := head.Generation + 1
-	if mirror.available && mirror.head >= generation {
-		generation = mirror.head + 1
-	}
-	if generation > rddModeMaxGeneration {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), errors.New("clone-local review mode generation space is exhausted")
-	}
+// rddModeOverrideStorage names which storage scope a read or write targets.
+type rddModeOverrideStorage int
 
-	record := rddModeOverrideRecord{
-		Schema:           rddModeOverrideSchema,
-		Generation:       generation,
-		PreviousRevision: current,
-		Mode:             persisted,
-		RecordedAt:       time.Now().UTC().Format(time.RFC3339Nano),
+const (
+	rddOverrideCloneLocal rddModeOverrideStorage = iota
+	rddOverrideWorktreeLocal
+)
+
+func rddOverrideSource(storage rddModeOverrideStorage) RDDModeSource {
+	if storage == rddOverrideWorktreeLocal {
+		return RDDModeSourceWorktreeLocal
 	}
-	if record.Revision, err = rddModeOverrideDigest(record); err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
+	return RDDModeSourceCloneLocal
+}
+
+// rddOverrideHeadLabel names one storage scope the way an operator would say
+// it in an error message.
+func rddOverrideHeadLabel(storage rddModeOverrideStorage) string {
+	if storage == rddOverrideWorktreeLocal {
+		return "worktree-local"
 	}
-	payload, err := canonicalRDDModeOverridePayload(record)
-	if err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
-	}
-	// The immutable no-replace publish is the fail-closed backstop: a writer
-	// that somehow bypassed the lock still cannot overwrite a published
-	// generation, so a lost race can never corrupt the head record.
-	//
-	// This build's own root is published first and never waits on the other
-	// location's health. #2882 is exactly what happens when the switch can be
-	// held hostage by the review authority tree, and ordering the mirror ahead
-	// of it would reintroduce that through the back door.
-	if err := publishPrivateRARImmutable(filepath.Join(dir, rddModeGenerationName(record.Generation)), payload); err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
-	}
-	if !mirror.available {
-		return rddModeWriteStatus(globalMode, record, true, RDDModeReachThisBuild), nil
-	}
-	// The same exact bytes at the same slot: a pre-relocation gentle-ai parses,
-	// digests, and canonicalises this record identically, so the two locations
-	// hold one decision rather than two that have to be reconciled.
-	if err := publishPrivateRARImmutable(filepath.Join(mirror.dir, rddModeGenerationName(record.Generation)), payload); err != nil {
-		return rddModeWriteStatus(globalMode, record, true, RDDModeReachThisBuild),
-			&RDDModePartialApplyError{Mode: mode, Cause: err}
-	}
-	return rddModeWriteStatus(globalMode, record, true, RDDModeReachMachine), nil
+	return "clone-local"
 }
 
 // cloneLocalRDDModeMirror is the pre-relocation copy of this clone's override,
@@ -485,6 +396,198 @@ func SetCloneLocalRDDMode(
 // gentle-ai fails closed on, so refusing there would only re-close the exit
 // #2882 opened; a location that opens and then refuses the publish is a real
 // half-applied switch and is reported as one.
+
+func setRDDModeOverride(
+	ctx context.Context,
+	repo string,
+	storage rddModeOverrideStorage,
+	mode RDDMode,
+	expectedRevision string,
+	global RDDGlobalMode,
+) (RDDModeStatus, error) {
+	source := rddOverrideSource(storage)
+	if err := ctx.Err(); err != nil {
+		return failedClosedRDDModeStatus(source), err
+	}
+	persisted, err := cloneLocalRDDOverrideValue(mode)
+	if err != nil {
+		return failedClosedRDDModeStatus(source), err
+	}
+	globalMode, globalErr := normalizeRDDMode(global.Value)
+	if globalErr != nil {
+		return failedClosedRDDModeStatus(RDDModeSourceGlobal), globalErr
+	}
+	currentStatus, currentErr := ResolveRDDMode(ctx, repo, global)
+	if storage == rddOverrideCloneLocal {
+		if currentErr == nil && strings.TrimSpace(expectedRevision) != currentStatus.Revision {
+			return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), fmt.Errorf(
+				"%w: expected %q but the clone-local head is %q", ErrRDDModeRevisionMismatch, expectedRevision, currentStatus.Revision)
+		}
+		if currentErr == nil && mode == RDDModeUnset && globalMode == RDDModeOff {
+			return currentStatus, &RDDDisabledError{Operation: RDDOperationStart, Source: RDDModeSourceGlobal}
+		}
+		alreadyDecided := currentErr == nil && ((mode == RDDModeOff && currentStatus.CloneLocal == RDDModeOff) ||
+			(mode == RDDModeUnset && currentStatus.CloneLocal == RDDModeUnset))
+		if alreadyDecided && currentStatus.Revision == "" {
+			return currentStatus, nil
+		}
+		if currentErr != nil && !errors.Is(currentErr, ErrRDDModeCorrupt) {
+			return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), currentErr
+		}
+	} else {
+		if currentErr != nil && !errors.Is(currentErr, ErrRDDModeCorrupt) {
+			return failedClosedRDDModeStatus(RDDModeSourceWorktreeLocal), currentErr
+		}
+		if currentErr == nil && mode == RDDModeUnset && globalMode == RDDModeOff {
+			return currentStatus, &RDDDisabledError{Operation: RDDOperationStart, Source: RDDModeSourceGlobal}
+		}
+	}
+	dir, _, err := rddModeStorageRoot(ctx, repo, true, storage)
+	if err != nil {
+		return failedClosedRDDModeStatus(source), err
+	}
+	lock, err := acquireRARAuthorityLock(ctx, filepath.Join(dir, rddModeLockName))
+	if err != nil {
+		return failedClosedRDDModeStatus(source), err
+	}
+	defer func() { _ = lock.release() }()
+
+	if storage == rddOverrideCloneLocal {
+		mirror := openCloneLocalRDDModeMirror(ctx, repo)
+		defer mirror.release()
+
+		head, present, err := readCloneLocalRDDOverrideHead(dir)
+		repairingCurrentHead := false
+		if err != nil {
+			if !errors.Is(err, ErrRDDModeCorrupt) {
+				return failedClosedRDDModeStatus(source), err
+			}
+			generation, generationErr := cloneLocalRDDOverrideHeadGeneration(dir)
+			if generationErr != nil {
+				return failedClosedRDDModeStatus(source), generationErr
+			}
+			head, present = rddModeOverrideRecord{Generation: generation}, false
+			repairingCurrentHead = true
+		}
+		if !present && !repairingCurrentHead && mirror.available {
+			if mirror.readErr != nil {
+				return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), mirror.readErr
+			}
+			if mirror.present {
+				head, present = mirror.record, true
+			}
+		}
+		current := ""
+		if present {
+			current = head.Revision
+		}
+		if strings.TrimSpace(expectedRevision) != current {
+			return failedClosedRDDModeStatus(source), fmt.Errorf(
+				"%w: expected %q but the %s head is %q", ErrRDDModeRevisionMismatch, expectedRevision, rddOverrideHeadLabel(storage), current)
+		}
+		alreadyDecided := currentErr == nil && ((mode == RDDModeOff && currentStatus.CloneLocal == RDDModeOff) ||
+			(mode == RDDModeUnset && currentStatus.CloneLocal == RDDModeUnset))
+		if alreadyDecided && (!mirror.available || mirror.decides(persisted)) {
+			worktreeRecord, worktreePresent, err := readWorktreeLocalRDDOverride(ctx, repo)
+			if err != nil {
+				return failedClosedRDDModeStatus(RDDModeSourceWorktreeLocal), err
+			}
+			status := rddModeStatusWithWorktree(globalMode, head, present, worktreeRecord, worktreePresent)
+			status.Reach = mirror.reach()
+			return status, nil
+		}
+		generation := head.Generation + 1
+		if mirror.available && mirror.head >= generation {
+			generation = mirror.head + 1
+		}
+		if generation > rddModeMaxGeneration {
+			return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), errors.New("clone-local review mode generation space is exhausted")
+		}
+		record := rddModeOverrideRecord{
+			Schema:           rddModeOverrideSchema,
+			Generation:       generation,
+			PreviousRevision: current,
+			Mode:             persisted,
+			RecordedAt:       time.Now().UTC().Format(time.RFC3339Nano),
+		}
+		if record.Revision, err = rddModeOverrideDigest(record); err != nil {
+			return failedClosedRDDModeStatus(source), err
+		}
+		payload, err := canonicalRDDModeOverridePayload(record)
+		if err != nil {
+			return failedClosedRDDModeStatus(source), err
+		}
+		if err := publishPrivateRARImmutable(filepath.Join(dir, rddModeGenerationName(record.Generation)), payload); err != nil {
+			return failedClosedRDDModeStatus(source), err
+		}
+		if !mirror.available {
+			worktreeRecord, worktreePresent, err := readWorktreeLocalRDDOverride(ctx, repo)
+			if err != nil {
+				return failedClosedRDDModeStatus(RDDModeSourceWorktreeLocal), err
+			}
+			status := rddModeStatusWithWorktree(globalMode, record, true, worktreeRecord, worktreePresent)
+			status.Reach = RDDModeReachThisBuild
+			return status, nil
+		}
+		if err := publishPrivateRARImmutable(filepath.Join(mirror.dir, rddModeGenerationName(record.Generation)), payload); err != nil {
+			worktreeRecord, worktreePresent, _ := readWorktreeLocalRDDOverride(ctx, repo)
+			status := rddModeStatusWithWorktree(globalMode, record, true, worktreeRecord, worktreePresent)
+			status.Reach = RDDModeReachThisBuild
+			return status, &RDDModePartialApplyError{Mode: mode, Cause: err}
+		}
+		worktreeRecord, worktreePresent, _ := readWorktreeLocalRDDOverride(ctx, repo)
+		status := rddModeStatusWithWorktree(globalMode, record, true, worktreeRecord, worktreePresent)
+		status.Reach = RDDModeReachMachine
+		return status, nil
+	}
+	// worktreeLocal path (no mirror)
+	head, present, err := readCloneLocalRDDOverrideHead(dir)
+	if err != nil {
+		if !errors.Is(err, ErrRDDModeCorrupt) {
+			return failedClosedRDDModeStatus(source), err
+		}
+		generation, generationErr := cloneLocalRDDOverrideHeadGeneration(dir)
+		if generationErr != nil {
+			return failedClosedRDDModeStatus(source), generationErr
+		}
+		head, present = rddModeOverrideRecord{Generation: generation}, false
+	}
+	current := ""
+	if present {
+		current = head.Revision
+	}
+	if strings.TrimSpace(expectedRevision) != current {
+		return failedClosedRDDModeStatus(source), fmt.Errorf(
+			"%w: expected %q but the %s head is %q", ErrRDDModeRevisionMismatch, expectedRevision, rddOverrideHeadLabel(storage), current)
+	}
+	if head.Generation >= rddModeMaxGeneration {
+		return failedClosedRDDModeStatus(source), fmt.Errorf("%s review mode generation space is exhausted", rddOverrideHeadLabel(storage))
+	}
+	record := rddModeOverrideRecord{
+		Schema:           rddModeOverrideSchema,
+		Generation:       head.Generation + 1,
+		PreviousRevision: current,
+		Mode:             persisted,
+		RecordedAt:       time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if record.Revision, err = rddModeOverrideDigest(record); err != nil {
+		return failedClosedRDDModeStatus(source), err
+	}
+	payload, err := canonicalRDDModeOverridePayload(record)
+	if err != nil {
+		return failedClosedRDDModeStatus(source), err
+	}
+	if err := publishPrivateRARImmutable(filepath.Join(dir, rddModeGenerationName(record.Generation)), payload); err != nil {
+		return failedClosedRDDModeStatus(source), err
+	}
+	cloneRecord, clonePresent, err := readCloneLocalRDDOverride(ctx, repo)
+	if err != nil {
+		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
+	}
+	worktreeRecord, worktreePresent := record, true
+	return rddModeStatusWithWorktree(globalMode, cloneRecord, clonePresent, worktreeRecord, worktreePresent), nil
+}
+
 type cloneLocalRDDModeMirror struct {
 	dir       string
 	lock      *storeLock
@@ -683,20 +786,39 @@ func rddModeStatus(
 	override rddModeOverrideRecord,
 	present bool,
 ) RDDModeStatus {
+	return rddModeStatusWithWorktree(globalMode, override, present, rddModeOverrideRecord{}, false)
+}
+
+func rddModeStatusWithWorktree(
+	globalMode RDDMode,
+	cloneOverride rddModeOverrideRecord,
+	clonePresent bool,
+	worktreeOverride rddModeOverrideRecord,
+	worktreePresent bool,
+) RDDModeStatus {
 	status := RDDModeStatus{
-		Schema:     RDDModeStatusSchema,
-		Global:     globalMode,
-		CloneLocal: RDDModeUnset,
-		Effective:  RDDModeOff,
-		Source:     RDDModeSourceDefault,
+		Schema:        RDDModeStatusSchema,
+		Global:        globalMode,
+		CloneLocal:    RDDModeUnset,
+		WorktreeLocal: RDDModeUnset,
+		Effective:     RDDModeOff,
+		Source:        RDDModeSourceDefault,
 	}
-	if present {
-		status.Revision = override.Revision
-		if override.Mode == string(RDDModeOff) {
+	if clonePresent {
+		status.Revision = cloneOverride.Revision
+		if cloneOverride.Mode == string(RDDModeOff) {
 			status.CloneLocal = RDDModeOff
 		}
 	}
+	if worktreePresent {
+		status.WorktreeRevision = worktreeOverride.Revision
+		if worktreeOverride.Mode == string(RDDModeOff) {
+			status.WorktreeLocal = RDDModeOff
+		}
+	}
 	switch {
+	case status.WorktreeLocal == RDDModeOff:
+		status.Effective, status.Source = RDDModeOff, RDDModeSourceWorktreeLocal
 	case status.CloneLocal == RDDModeOff:
 		status.Effective, status.Source = RDDModeOff, RDDModeSourceCloneLocal
 	case globalMode == RDDModeOff:
@@ -721,18 +843,32 @@ func rddModeWriteStatus(
 	present bool,
 	reach RDDModeReach,
 ) RDDModeStatus {
-	status := rddModeStatus(globalMode, override, present)
+	status := rddModeStatusWithWorktree(globalMode, override, present, rddModeOverrideRecord{}, false)
+	status.Reach = reach
+	return status
+}
+
+func rddModeWriteStatusWithWorktree(
+	globalMode RDDMode,
+	cloneOverride rddModeOverrideRecord,
+	clonePresent bool,
+	worktreeOverride rddModeOverrideRecord,
+	worktreePresent bool,
+	reach RDDModeReach,
+) RDDModeStatus {
+	status := rddModeStatusWithWorktree(globalMode, cloneOverride, clonePresent, worktreeOverride, worktreePresent)
 	status.Reach = reach
 	return status
 }
 
 func failedClosedRDDModeStatus(source RDDModeSource) RDDModeStatus {
 	return RDDModeStatus{
-		Schema:     RDDModeStatusSchema,
-		Global:     RDDModeUnset,
-		CloneLocal: RDDModeUnset,
-		Effective:  RDDModeOff,
-		Source:     source,
+		Schema:        RDDModeStatusSchema,
+		Global:        RDDModeUnset,
+		CloneLocal:    RDDModeUnset,
+		WorktreeLocal: RDDModeUnset,
+		Effective:     RDDModeOff,
+		Source:        source,
 	}
 }
 
@@ -934,6 +1070,105 @@ func CloneLocalRDDModeRecordPath(ctx context.Context, repo string) (string, erro
 // without reading or parsing it. Naming and repairing an unreadable head need
 // the slot number and nothing else, and a record that cannot be parsed must not
 // be able to hide the slot that supersedes it.
+
+
+func readWorktreeLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrideRecord, bool, error) {
+	dir, distinct, err := worktreeLocalRDDModeRoot(ctx, repo, false)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return rddModeOverrideRecord{}, false, nil
+		}
+		return rddModeOverrideRecord{}, false, err
+	}
+	if !distinct {
+		return rddModeOverrideRecord{}, false, nil
+	}
+	return readCloneLocalRDDOverrideHead(dir)
+}
+
+func worktreeLocalRDDModeRoot(ctx context.Context, repo string, create bool) (string, bool, error) {
+	return rddModeStorageRoot(ctx, repo, create, rddOverrideWorktreeLocal)
+}
+
+func rddModeStorageRoot(ctx context.Context, repo string, create bool, storage rddModeOverrideStorage) (string, bool, error) {
+	lease, err := OpenRepositoryIdentityLease(ctx, repo)
+	if err != nil {
+		var bare *BareRepositoryError
+		if errors.As(err, &bare) {
+			return "", false, err
+		}
+		return "", false, fmt.Errorf("resolve review mode repository identity: %w", err)
+	}
+	identity := reviewRepositoryIdentityRecordFromLease(lease)
+	baseRoot := identity.GitCommonDir
+	distinct := true
+	switchDir := rddModeSwitchDirectory
+	if storage == rddOverrideWorktreeLocal {
+		distinct = identity.GitDir != identity.GitCommonDir
+		if distinct {
+			baseRoot = identity.GitDir
+		}
+		switchDir = rddModeLegacySwitchDirectory
+	}
+	base := filepath.Join(
+		baseRoot,
+		"gentle-ai",
+		switchDir,
+		rarAuthorityDirectory,
+		rarAuthorityVersion,
+	)
+	if storage == rddOverrideCloneLocal {
+		if err := ensureRARSwitchRoot(baseRoot, base, create); err != nil {
+			return "", false, err
+		}
+	} else {
+		if err := ensureRARRepositoryRoot(baseRoot, base, create); err != nil {
+			return "", false, err
+		}
+	}
+	dir := filepath.Join(base, rddModeDirectory)
+	if err := ensurePrivateRARDirectoryTree(base, dir, create); err != nil {
+		return "", false, err
+	}
+	return dir, distinct, nil
+}
+
+func WorktreeLocalRDDModeRecordPath(ctx context.Context, repo string) (string, error) {
+	return rddModeRecordPath(ctx, repo, rddOverrideWorktreeLocal)
+}
+
+func rddModeRecordPath(ctx context.Context, repo string, storage rddModeOverrideStorage) (string, error) {
+	dir, _, err := rddModeStorageRoot(ctx, repo, false, storage)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	if dir == "" {
+		return "", nil
+	}
+	// For worktreeLocal on main checkout, there is no distinct storage, so no record
+	if storage == rddOverrideWorktreeLocal {
+		lease, err := OpenRepositoryIdentityLease(ctx, repo)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return "", nil
+			}
+			return "", err
+		}
+		identity := reviewRepositoryIdentityRecordFromLease(lease)
+		if identity.GitDir == identity.GitCommonDir {
+			return "", nil
+		}
+	}
+	head, err := cloneLocalRDDOverrideHeadGeneration(dir)
+	if err != nil || head == 0 {
+		return "", err
+	}
+	return filepath.Join(dir, rddModeGenerationName(head)), nil
+}
+
 func cloneLocalRDDOverrideHeadGeneration(dir string) (int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
