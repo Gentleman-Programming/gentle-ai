@@ -51,11 +51,16 @@ func TestSDDOrchestratorsCarryNoRetiredWorkRunCeremony(t *testing.T) {
 }
 
 func TestCoordinatorEngramProjectResolutionPrecedesScopedCalls(t *testing.T) {
+	const projectResolutionInstruction = "Before any project-scoped `mem_context` or `mem_search`, call `engram_mem_current_project` and wait for it to complete, even when the user named no repository; this strict dependency MUST NOT run in parallel with scoped calls. Use its returned canonical project key, never a cwd/worktree-basename guess."
 	const contract = "Engram Project Resolution (MANDATORY)\n\n" +
-		"Before any project-scoped `mem_context` or `mem_search`, call `engram_mem_current_project` and wait for it to complete, even when the user named no repository; this strict dependency MUST NOT run in parallel with scoped calls. Use its returned canonical project key, never a cwd/worktree-basename guess.\n\n" +
+		projectResolutionInstruction + "\n\n" +
 		"- Unique project: use the returned canonical project for context/search.\n" +
 		"- Ambiguous project: STOP and ask the user to choose only from the returned alternatives before any scoped search.\n" +
 		"- No project: continue without inventing a key and do not run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.\n"
+	const dispatcherProjectGate = "If no project is resolved, continue without project-scoped Engram persistence and do not look up `sdd-init/{project}`. Only when a canonical project exists and the artifact-store decision permits Engram may you check `sdd-init/{project}` in Engram"
+	const dispatcherMarker = "Native SDD Dispatcher Guard"
+	dispatcherHeading := regexp.MustCompile(`(?m)^#{1,6}\s+` + regexp.QuoteMeta(dispatcherMarker) + `\s*$`)
+	markdownHeading := regexp.MustCompile(`(?m)^#{1,6}\s+`)
 
 	paths := append(allSDDOrchestratorAssetPaths(t), "claude/sdd-orchestrator-workflow.md")
 	if len(paths) != 13 {
@@ -74,9 +79,37 @@ func TestCoordinatorEngramProjectResolutionPrecedesScopedCalls(t *testing.T) {
 			t.Fatalf("%s has %d project-resolution contracts, want %d", path, count, want)
 		}
 
-		prefix := content[:strings.Index(content, contract)]
-		if invocation := regexp.MustCompile(`(?:engram_)?mem_(?:context|search)\s*\(`).FindString(prefix); invocation != "" {
-			t.Fatalf("%s invokes %q before the project-resolution contract", path, invocation)
+		remaining := content
+		for occurrence := 1; occurrence <= want; occurrence++ {
+			contractOffset := strings.Index(remaining, contract)
+			if contractOffset < 0 {
+				t.Fatalf("%s cannot locate project-resolution contract occurrence %d", path, occurrence)
+			}
+
+			sectionStart := strings.LastIndex(remaining[:contractOffset], "<!-- section:model-")
+			if sectionStart < 0 {
+				sectionStart = 0
+			}
+			prefix := remaining[sectionStart:contractOffset]
+			if invocation := regexp.MustCompile(`(?:engram_)?mem_(?:context|search)\s*\(`).FindString(prefix); invocation != "" {
+				t.Fatalf("%s coordinator section for project-resolution contract occurrence %d invokes %q before the contract", path, occurrence, invocation)
+			}
+
+			remaining = remaining[contractOffset+len(contract):]
+		}
+
+		if path == "antigravity/sdd-orchestrator.md" || path == "codex/sdd-orchestrator.md" || path == "cursor/sdd-orchestrator.md" || path == "generic/sdd-orchestrator.md" || path == "kiro/sdd-orchestrator.md" || path == "qwen/sdd-orchestrator.md" || path == "windsurf/sdd-orchestrator.md" {
+			dispatcherMatch := dispatcherHeading.FindStringIndex(content)
+			if dispatcherMatch == nil {
+				t.Fatalf("%s missing dispatcher guard marker %q", path, dispatcherMarker)
+			}
+			dispatcher := content[dispatcherMatch[0]:]
+			if nextHeading := markdownHeading.FindStringIndex(content[dispatcherMatch[1]:]); nextHeading != nil {
+				dispatcher = content[dispatcherMatch[0] : dispatcherMatch[1]+nextHeading[0]]
+			}
+			if !strings.Contains(dispatcher, dispatcherProjectGate) {
+				t.Fatalf("%s dispatcher guard must skip unresolved sdd-init lookup and require a canonical project plus an Engram-permitting artifact store", path)
+			}
 		}
 	}
 
@@ -86,7 +119,7 @@ func TestCoordinatorEngramProjectResolutionPrecedesScopedCalls(t *testing.T) {
 		"kimi/agents/sdd-apply.md",
 		"skills/sdd-apply/SKILL.md",
 	} {
-		if strings.Contains(MustRead(path), "### Engram Project Resolution (MANDATORY)") {
+		if strings.Contains(MustRead(path), projectResolutionInstruction) {
 			t.Fatalf("%s must not carry coordinator project-resolution instructions", path)
 		}
 	}
