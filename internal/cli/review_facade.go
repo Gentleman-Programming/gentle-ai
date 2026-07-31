@@ -1138,11 +1138,11 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	authProvided := reviewFlagWasProvided(flags, "maintainer-authorization")
 	authFileProvided := reviewFlagWasProvided(flags, "maintainer-authorization-file")
 	if authProvided && authFileProvided {
-		return errors.New("cannot specify both --maintainer-authorization and --maintainer-authorization-file")
+		return errors.New("cannot specify both --maintainer-authorization and --maintainer-authorization-file") // refusal:by-design operator-knowledge: operator must specify at most one authorization transport flag
 	}
 	if authFileProvided {
 		if strings.TrimSpace(*authorizationFile) == "" {
-			return errors.New("review recover requires a non-empty path for --maintainer-authorization-file")
+			return errors.New("review recover requires a non-empty path for --maintainer-authorization-file") // refusal:by-design operator-knowledge: operator must provide a valid non-empty file path or - for stdin
 		}
 		rawAuth, err := readFacadeBytes(*authorizationFile)
 		if err != nil {
@@ -1152,7 +1152,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	}
 	authorizationProvided := authProvided || authFileProvided
 	if authorizationProvided && (strings.TrimSpace(*reason) == "" || strings.TrimSpace(*actor) == "") {
-		return errors.New("review recover requires --reason and --actor when --maintainer-authorization or --maintainer-authorization-file is supplied")
+		return errors.New("review recover requires --reason and --actor when --maintainer-authorization or --maintainer-authorization-file is supplied") // refusal:by-design operator-knowledge: operator must provide reason and actor when supplying maintainer authorization
 	}
 	builder := reviewtransaction.SnapshotBuilder{Repo: *cwd}
 	root, err := resolveReviewMutationRoot(context.Background(), *cwd)
@@ -1260,7 +1260,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	if !authorizationProvided {
 		shape, derivable := reviewSelfRecoveryShapeForRecover(predecessorRecord.State.State, snapshot.Identity != predecessorRecord.State.InitialSnapshot.Identity)
 		if !derivable {
-			return fmt.Errorf(`review recover requires --reason, --actor, and --maintainer-authorization for this predecessor state.
+			return fmt.Errorf(`review recover requires --reason, --actor, and --maintainer-authorization for this predecessor state. // refusal:by-design human-authority: operator must supply maintainer authorization for non-derivable predecessor states
 
 --maintainer-authorization is exactly these final six lines, joined by LF, with no trailing newline:
 %s
