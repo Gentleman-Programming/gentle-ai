@@ -66,8 +66,11 @@ func (p *InstallPlan) Apply() (bool, error) {
 	if owned == nil || p.recapture || !current.present || current.value != ManagedAgent {
 		owned = newOwnership(current)
 	}
-	root["default_agent"] = ManagedAgent
-	settings := encode(root)
+	settings := raw
+	if !current.present || current.value != ManagedAgent {
+		root["default_agent"] = ManagedAgent
+		settings = encode(root)
+	}
 	metadata := encode(owned)
 	ownerPath := OwnershipPath(p.settingsPath)
 	ownerRaw, _ := os.ReadFile(ownerPath)

@@ -1,11 +1,13 @@
 package sdd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -371,6 +373,15 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
+			if defaultPlan != nil {
+				defaultChanged, defaultErr := defaultPlan.Apply()
+				if defaultErr != nil {
+					return InjectionResult{}, defaultErr
+				}
+				changed = changed || defaultChanged
+				files = append(files, opencodedefault.OwnershipPath(settingsPath))
+				defaultPlan = nil
+			}
 			overlayContent, err := assets.Read(overlayAssetPath(sddMode))
 			if err != nil {
 				return InjectionResult{}, fmt.Errorf("read SDD overlay asset: %w", err)
@@ -478,14 +489,6 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				}
 				changed = changed || profileResult.writeResult.Changed
 				mergedSettingsBytes = profileResult.merged
-			}
-			if defaultPlan != nil {
-				defaultChanged, defaultErr := defaultPlan.Apply()
-				if defaultErr != nil {
-					return InjectionResult{}, defaultErr
-				}
-				changed = changed || defaultChanged
-				files = append(files, opencodedefault.OwnershipPath(settingsPath))
 			}
 		}
 	}
@@ -1737,6 +1740,18 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 	if err != nil {
 		return mergeJSONResult{}, err
 	}
+	base, baseErr := filemerge.UnmarshalJSONObject(baseJSON)
+	mergedObject, err := filemerge.UnmarshalJSONObject(merged)
+	if err != nil {
+		return mergeJSONResult{}, fmt.Errorf("unmarshal merged OpenCode settings: %w", err)
+	}
+	if baseErr == nil && reflect.DeepEqual(base, mergedObject) {
+		merged = baseJSON
+	}
+	merged, err = orderOpenCodeReviewerPermissions(merged)
+	if err != nil {
+		return mergeJSONResult{}, err
+	}
 
 	writeResult, err := filemerge.WriteFileAtomic(path, merged, 0o644)
 	if err != nil {
@@ -1744,6 +1759,99 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 	}
 
 	return mergeJSONResult{writeResult: writeResult, merged: merged}, nil
+}
+
+// orderOpenCodeReviewerPermissions changes only the managed reviewer bash
+// objects. OpenCode resolves the last matching rule, so the fallback must
+// precede the PowerShell call-operator rules that Go's map encoder sorts first.
+func orderOpenCodeReviewerPermissions(document []byte) ([]byte, error) {
+	for offset := 0; offset < len(document); {
+		bash := bytes.Index(document[offset:], []byte(`"bash": {`))
+		if bash < 0 {
+			break
+		}
+		bash += offset
+		start := bash + len(`"bash": `)
+		end, err := jsonObjectEnd(document, start)
+		if err != nil {
+			return nil, err
+		}
+		if !isOpenCodeReviewerPermission(document[start:end]) {
+			offset = end
+			continue
+		}
+		lineStart := bytes.LastIndexByte(document[:bash], '\n') + 1
+		indent := string(document[lineStart:bash])
+		replacement := []byte(orderedOpenCodeReviewerBash(indent))
+		document = append(append(append([]byte(nil), document[:start]...), replacement...), document[end:]...)
+		offset = start + len(replacement)
+	}
+	return document, nil
+}
+
+func jsonObjectEnd(document []byte, start int) (int, error) {
+	depth := 0
+	quoted := false
+	escaped := false
+	for index := start; index < len(document); index++ {
+		character := document[index]
+		if quoted {
+			if escaped {
+				escaped = false
+			} else if character == '\\' {
+				escaped = true
+			} else if character == '"' {
+				quoted = false
+			}
+			continue
+		}
+		switch character {
+		case '"':
+			quoted = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return index + 1, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("unterminated OpenCode bash permission object")
+}
+
+func isOpenCodeReviewerPermission(raw []byte) bool {
+	var bash map[string]string
+	if err := json.Unmarshal(raw, &bash); err != nil || bash["*"] != "deny" || len(bash) != len(reviewerInspectionPermissionPatterns())+1 {
+		return false
+	}
+	for _, pattern := range reviewerInspectionPermissionPatterns() {
+		if bash[pattern] != "allow" {
+			return false
+		}
+	}
+	return true
+}
+
+func orderedOpenCodeReviewerBash(indent string) string {
+	entries := append([]string{"*"}, reviewerInspectionPermissionPatterns()...)
+	var output strings.Builder
+	output.WriteString("{\n")
+	for index, pattern := range entries {
+		key, _ := json.Marshal(pattern)
+		action := "allow"
+		if pattern == "*" {
+			action = "deny"
+		}
+		value, _ := json.Marshal(action)
+		output.WriteString(indent + "  " + string(key) + ": " + string(value))
+		if index < len(entries)-1 {
+			output.WriteByte(',')
+		}
+		output.WriteByte('\n')
+	}
+	output.WriteString(indent + "}")
+	return output.String()
 }
 
 // defaultOpenCodeShareDisabled adds a defensive OpenCode default for SDD

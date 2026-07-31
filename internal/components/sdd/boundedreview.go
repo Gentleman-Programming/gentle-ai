@@ -33,6 +33,21 @@ func reviewerInspectionCommands() []string {
 	}
 }
 
+func reviewerInspectionPermissionPatterns() []string {
+	commands := reviewerInspectionCommands()
+	patterns := make([]string, 0, len(commands)*2)
+	for _, command := range commands {
+		pattern := command
+		for _, placeholder := range []string{"<repository_context>", "<revision>", "<lineage>", "<target>", "<lens>", "<order>", "<path_index>"} {
+			pattern = strings.ReplaceAll(pattern, placeholder, "*")
+		}
+		// OpenCode evaluates the complete PowerShell command, including the
+		// call operator used for native executables on Windows.
+		patterns = append(patterns, pattern, "& "+pattern)
+	}
+	return patterns
+}
+
 type reviewerRole struct {
 	title string
 	focus string
@@ -212,11 +227,7 @@ When clean, return the bound subject, completed inspection, "findings":[], and o
 
 func openCodeReviewerPermission() map[string]any {
 	bash := map[string]any{"*": "deny"}
-	for _, command := range reviewerInspectionCommands() {
-		pattern := command
-		for _, placeholder := range []string{"<repository_context>", "<revision>", "<lineage>", "<target>", "<lens>", "<order>", "<path_index>"} {
-			pattern = strings.ReplaceAll(pattern, placeholder, "*")
-		}
+	for _, pattern := range reviewerInspectionPermissionPatterns() {
 		bash[pattern] = "allow"
 	}
 	return map[string]any{"edit": "deny", "bash": bash}

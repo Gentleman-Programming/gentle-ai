@@ -1,6 +1,7 @@
 package sdd
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -181,25 +182,19 @@ func assertOpenCodeReviewerPermission(t *testing.T, label string, raw any) {
 		t.Fatalf("%s permission = %#v, want edit deny", label, raw)
 	}
 	bash, ok := permission["bash"].(map[string]any)
-	commands := reviewerInspectionCommands()
-	if !ok || bash["*"] != "deny" || len(bash) != len(commands)+1 {
+	patterns := reviewerInspectionPermissionPatterns()
+	if !ok || bash["*"] != "deny" || len(bash) != len(patterns)+1 {
 		t.Fatalf("%s bash permission = %#v", label, permission["bash"])
 	}
-	for _, command := range commands {
-		pattern := command
-		for _, replacement := range []string{"<repository_context>", "<revision>", "<lineage>", "<target>", "<lens>", "<order>", "<path_index>"} {
-			pattern = strings.ReplaceAll(pattern, replacement, "*")
-		}
+	for _, pattern := range patterns {
 		if bash[pattern] != "allow" {
 			t.Errorf("%s does not allow exact reviewer inspection shape %q", label, pattern)
 		}
 	}
-	encoded, err := json.Marshal(permission)
-	if err != nil {
-		t.Fatal(err)
-	}
-	deny := strings.Index(string(encoded), `"*":"deny"`)
-	allow := strings.Index(string(encoded), `":"allow"`)
+	encoded := []byte(orderedOpenCodeReviewerBash(""))
+	compact := strings.ReplaceAll(strings.ReplaceAll(string(encoded), "\n", ""), ": ", ":")
+	deny := strings.Index(compact, `"*":"deny"`)
+	allow := strings.Index(compact, `":"allow"`)
 	if deny < 0 || allow < 0 || deny > allow {
 		t.Fatalf("%s permission order does not put broad deny before narrow allows: %s", label, encoded)
 	}
@@ -241,6 +236,220 @@ func TestOpenCodeReviewInspectionIsNativeAndWindowsPortable(t *testing.T) {
 	if bash["*"] != "deny" || bash["gentle-ai review inspect-candidate *"] == "allow" {
 		t.Fatalf("reviewer permission is not deny-by-default and exact: %#v", bash)
 	}
+}
+
+func TestOpenCodeReviewerPermissionAllowsOnlyBoundWindowsCommandForms(t *testing.T) {
+	for _, command := range reviewerInspectionCommands() {
+		concrete := strings.NewReplacer(
+			"<repository_context>", "rctx1_"+strings.Repeat("a", 64),
+			"<revision>", "sha256:"+strings.Repeat("b", 64),
+			"<lineage>", "review-lineage",
+			"<target>", "sha256:"+strings.Repeat("c", 64),
+			"<lens>", "review-risk",
+			"<order>", "0",
+			"<path_index>", "1",
+		).Replace(command)
+		for _, rendered := range []string{concrete, "& " + concrete} {
+			if got := openCodeBashPermissionAction(t, rendered); got != "allow" {
+				t.Errorf("OpenCode permission action for %q = %q, want allow", rendered, got)
+			}
+		}
+	}
+
+	for _, command := range []string{
+		"git status",
+		"& gentle-ai review status",
+		"gentle-ai review inspect-candidate --operation name-status",
+		"gentle-ai review inspect-candidate --repository-context rctx1_" + strings.Repeat("a", 64) +
+			" --expected-revision sha256:" + strings.Repeat("b", 64) +
+			" --lineage review-lineage --target sha256:" + strings.Repeat("c", 64) +
+			" --lens review-risk --order 0 --operation name-status --side candidate",
+	} {
+		if got := openCodeBashPermissionAction(t, command); got != "deny" {
+			t.Errorf("OpenCode permission action for unrelated command %q = %q, want deny", command, got)
+		}
+	}
+}
+
+func TestOpenCodeReviewerPermissionSerializationKeepsFallbackBeforeWindowsRules(t *testing.T) {
+	overlay, err := json.Marshal(map[string]any{
+		"agent": map[string]any{
+			"review-risk": map[string]any{"permission": openCodeReviewerPermission()},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := mergeJSONFile(filepath.Join(t.TempDir(), "opencode.json"), overlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := string(result.merged)
+	deny := strings.Index(rendered, `"*": "deny"`)
+	windowsRule := strings.Index(rendered, `"\u0026 gentle-ai review inspect-candidate`)
+	if deny < 0 || windowsRule < 0 || deny > windowsRule {
+		t.Fatalf("serialized reviewer permission does not keep fallback first: %s", rendered)
+	}
+}
+
+func TestOpenCodeReviewerPermissionRepeatMergePreservesUserRuleOrder(t *testing.T) {
+	overlay, err := json.Marshal(map[string]any{
+		"agent": map[string]any{
+			"review-risk": map[string]any{"permission": openCodeReviewerPermission()},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(path, []byte(`{
+  "permission": {
+    "bash": {
+      "git status": "deny",
+      "*": "allow"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mergeJSONFile(path, overlay); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := []byte("\"bash\": {\n      \"*\": \"allow\",\n      \"git status\": \"deny\"\n")
+	userOrdered := []byte("\"bash\": {\n      \"git status\": \"deny\",\n      \"*\": \"allow\"\n")
+	first = bytes.Replace(first, canonical, userOrdered, 1)
+	if !bytes.Contains(first, userOrdered) {
+		t.Fatalf("did not install ordered user permission fixture: %s", first)
+	}
+	if err := os.WriteFile(path, first, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := mergeJSONFile(path, overlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || result.writeResult.Changed || !bytes.Equal(before, after) {
+		t.Fatalf("repeat merge changed user permission order: changed=%t read=%v\nbefore=%s\nafter=%s", result.writeResult.Changed, err, before, after)
+	}
+}
+
+func TestOpenCodeReviewerPermissionRepeatMergePreservesReviewerLikeUserRules(t *testing.T) {
+	overlay, err := json.Marshal(map[string]any{
+		"agent": map[string]any{
+			"review-risk": map[string]any{"permission": openCodeReviewerPermission()},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	callOperatorRule := "& gentle-ai review inspect-candidate --repository-context * --expected-revision * --lineage * --target * --lens * --order * --operation name-status"
+	exactWithExtra := func() map[string]any {
+		bash := make(map[string]any)
+		for pattern, action := range openCodeReviewerPermission()["bash"].(map[string]any) {
+			bash[pattern] = action
+		}
+		bash["user-reviewer-command"] = "ask"
+		return bash
+	}
+	cases := []struct {
+		name string
+		bash map[string]any
+	}{
+		{
+			name: "partial provider-looking rule set",
+			bash: map[string]any{
+				callOperatorRule: "allow",
+				"*":              "deny",
+			},
+		},
+		{
+			name: "complete provider-looking rule set with user key",
+			bash: exactWithExtra(),
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "opencode.json")
+			settings, err := json.MarshalIndent(map[string]any{
+				"agent": map[string]any{
+					"user-reviewer": map[string]any{
+						"permission": map[string]any{"bash": tt.bash},
+					},
+				},
+			}, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, append(settings, '\n'), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := mergeJSONFile(path, overlay); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			userStart := bytes.Index(before, []byte(`"user-reviewer":`))
+			if userStart < 0 {
+				t.Fatalf("missing user reviewer fixture: %s", before)
+			}
+			user := before[userStart:]
+			callOperator := bytes.Index(user, []byte(`"\u0026 gentle-ai review inspect-candidate`))
+			fallback := bytes.Index(user, []byte(`"*": "deny"`))
+			if callOperator < 0 || fallback < 0 || callOperator > fallback {
+				t.Fatalf("user reviewer fixture lost its distinct rule ordering: %s", user)
+			}
+			result, err := mergeJSONFile(path, overlay)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || result.writeResult.Changed || !bytes.Equal(before, after) {
+				t.Fatalf("repeat merge changed non-managed user reviewer rules: changed=%t read=%v\nbefore=%s\nafter=%s", result.writeResult.Changed, err, before, after)
+			}
+		})
+	}
+}
+
+func openCodeBashPermissionAction(t *testing.T, command string) string {
+	t.Helper()
+	encoded := []byte(orderedOpenCodeReviewerBash(""))
+	compact := strings.ReplaceAll(strings.ReplaceAll(string(encoded), "\n", ""), ": ", ":")
+	// OpenCode v1.18.10 evaluates JSON object rules in insertion order and uses
+	// its Wildcard matcher after normalizing Windows path separators.
+	action := "ask"
+	for _, match := range regexp.MustCompile(`"([^"]+)":"(allow|deny|ask)"`).FindAllStringSubmatch(compact, -1) {
+		var pattern string
+		if err := json.Unmarshal([]byte(`"`+match[1]+`"`), &pattern); err != nil {
+			t.Fatal(err)
+		}
+		if openCodeWildcardMatch(command, pattern) {
+			action = match[2]
+		}
+	}
+	return action
+}
+
+func openCodeWildcardMatch(input, pattern string) bool {
+	normalized := strings.ReplaceAll(input, `\`, "/")
+	escaped := regexp.QuoteMeta(strings.ReplaceAll(pattern, `\`, "/"))
+	escaped = strings.ReplaceAll(escaped, `\*`, ".*")
+	escaped = strings.ReplaceAll(escaped, `\?`, ".")
+	if strings.HasSuffix(escaped, " .*") {
+		escaped = strings.TrimSuffix(escaped, " .*") + "( .*)?"
+	}
+	return regexp.MustCompile(`(?is)^` + escaped + `$`).MatchString(normalized)
 }
 
 func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
