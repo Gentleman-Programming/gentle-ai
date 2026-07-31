@@ -336,6 +336,7 @@ Sub-agents run in fresh, isolated context windows with NO shared memory. The orc
 
 #### Non-SDD Tasks (general delegation)
 
+- Only after a canonical project resolves may non-SDD work search or persist Engram. Without one, skip Engram and continue only with valid OpenSpec/file behavior; do not invent a key or run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.
 - Read context: orchestrator searches engram (`mem_search`) for relevant prior context and passes it in the subagent invocation message. Sub-agent does NOT search engram itself.
 - Write context: sub-agent MUST save significant discoveries, decisions, or bug fixes to engram via `mem_save` before returning. Sub-agent has full detail — save before returning, not after.
 - Always include in invocation message: `"If you make important discoveries, decisions, or fix bugs, save them to engram via mem_save with project: '{project}'."`

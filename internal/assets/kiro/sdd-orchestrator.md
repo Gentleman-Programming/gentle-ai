@@ -421,6 +421,8 @@ When launching `sdd-archive`, forward explicit final-state facts for any work co
 ### Non-SDD Tasks
 
 When executing general (non-SDD) work:
+Only after a canonical project resolves may non-SDD work search or persist Engram. Without one, skip Engram and continue only with valid OpenSpec/file behavior; do not invent a key or run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.
+
 1. Search engram (`mem_search`) for relevant prior context before starting
 2. If you make important discoveries, decisions, or fix bugs, save them to engram via `mem_save`
 3. Do NOT rely solely on conversation history — persist important findings to engram for cross-session durability
