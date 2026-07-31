@@ -935,7 +935,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector})
 			result.NextTransition = &transition
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&
-				transition.ReasonCode != "correction_repository_tooling_failed" {
+				transition.ReasonCode != "correction_repository_tooling_failed" && transition.ReasonCode != "captured_verification_failed" {
 				result.ValidationRequest = nil
 			}
 			// The stdout JSON envelope is the machine surface and stays
@@ -2493,7 +2493,7 @@ func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state
 		appendState("review/begin-fix")
 	}
 	if state.State == reviewtransaction.StateCorrectionRequired && entryState == reviewtransaction.StateCorrectionRequired && entryProposed &&
-		captured != nil && captured.Record.Outcome == reviewtransaction.VerificationOutcomeProceduralFailure {
+		captured != nil && (captured.Record.Outcome == reviewtransaction.VerificationOutcomeFailed || captured.Record.Outcome == reviewtransaction.VerificationOutcomeProceduralFailure) {
 		fix, err := facadeVerificationEvidenceTarget(ctx, repo, state, revision)
 		if err != nil {
 			return plan, err

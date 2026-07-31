@@ -740,14 +740,14 @@ func validateCompactCorrection(state CompactState) error {
 	}
 	if state.CorrectionVerificationTarget != nil {
 		target := state.CorrectionVerificationTarget
-		if state.State != StateEscalated || state.EvidenceOutcome != VerificationOutcomeProceduralFailure ||
+		if state.State != StateEscalated || (state.EvidenceOutcome != VerificationOutcomeFailed && state.EvidenceOutcome != VerificationOutcomeProceduralFailure) ||
 			len(state.CorrectionAttempts) != 0 || state.CumulativeCorrectionLines != 0 || state.ProposedCorrectionLines == nil ||
 			*state.ProposedCorrectionLines > state.CorrectionBudget || state.ActualCorrectionLines != nil ||
 			state.OriginalCriteria != nil || state.CorrectionRegression != nil || state.FixDeltaHash != EmptyFixDeltaHash ||
 			target.Kind != TargetFixDiff || target.Projection != state.InitialSnapshot.Projection ||
 			target.BaseTree != state.CurrentSnapshot.CandidateTree || !equalStrings(target.LedgerIDs, state.FixFindingIDs) ||
 			pathsAreSubset(target.Paths, state.GenesisPaths) != nil {
-			return errors.New("procedural correction verification target is invalid") // refusal:by-design world-action: persisted terminal evidence targets an invalid correction snapshot and cannot authorize continuation
+			return errors.New("failed correction verification target is invalid") // refusal:by-design world-action: persisted terminal evidence targets an invalid correction snapshot and cannot authorize continuation
 		}
 		if err := validateCompactSnapshot(*target); err != nil {
 			return err
@@ -1288,13 +1288,14 @@ func (state *CompactState) CompleteCorrectionVerification(snapshot Snapshot, act
 }
 
 func (state *CompactState) EscalateCorrectionVerification(snapshot Snapshot, record VerificationEvidenceRecord, payload []byte) error {
-	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil || record.Outcome != VerificationOutcomeProceduralFailure {
-		return errors.New("procedural correction verification escalation requires one open correction transaction") // refusal:by-design operator-knowledge: this edge accepts only tooling-failure evidence for the current forecasted correction
+	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil ||
+		(record.Outcome != VerificationOutcomeFailed && record.Outcome != VerificationOutcomeProceduralFailure) {
+		return errors.New("failed correction verification escalation requires one open correction transaction") // refusal:by-design operator-knowledge: this edge accepts only failed candidate-bound verification evidence for the current forecasted correction
 	}
 	if snapshot.Kind != TargetFixDiff || snapshot.Projection != state.InitialSnapshot.Projection ||
 		snapshot.BaseTree != state.CurrentSnapshot.CandidateTree || !equalStrings(snapshot.LedgerIDs, state.FixFindingIDs) ||
 		pathsAreSubset(snapshot.Paths, state.GenesisPaths) != nil {
-		return errors.New("procedural correction verification target is outside the open correction transaction") // refusal:by-design world-action: candidate mutation invalidated the captured correction target and requires a fresh stable evidence capture
+		return errors.New("failed correction verification target is outside the open correction transaction") // refusal:by-design world-action: candidate mutation invalidated the captured correction target and requires a fresh stable evidence capture
 	}
 	if err := record.ValidatePayload(payload); err != nil {
 		return err

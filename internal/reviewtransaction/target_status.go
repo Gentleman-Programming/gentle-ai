@@ -201,7 +201,7 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			requested := state
 			requested.InitialSnapshot = live
 			if compactStartDeliveryScopeMatches(state, requested) {
-				candidate.correctionRecovery = compactEscalatedRecoveryTargetChanged(state.CurrentSnapshot, live)
+				candidate.correctionRecovery = compactEscalatedRecoveryTargetChanged(compactEscalatedRecoverySnapshot(state), live)
 				if candidate.correctionRecovery {
 					candidate.recoveryDisposition = RecoveryEscalated
 				} else if compactAccountingOnlyEscalation(state) {

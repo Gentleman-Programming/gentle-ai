@@ -119,7 +119,7 @@ func TestLegacyRawEvidenceWithoutMetadataFailsClosed(t *testing.T) {
 	}
 }
 
-func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing.T) {
+func TestFailedCorrectionVerificationEscalatesAndRecoversOnlyToFreshCandidate(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -167,14 +167,60 @@ func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing
 		t.Fatal(err)
 	}
 	failedStatus := readCorrectionEvidenceStatus(t, statusArgs)
-	if failedStatus.NextTransition == nil || failedStatus.NextTransition.Kind != reviewNextTransitionStop ||
-		failedStatus.NextTransition.ReasonCode != "correction_repository_verification_failed" {
+	if failedStatus.NextTransition == nil || failedStatus.NextTransition.Kind != reviewNextTransitionExecute || failedStatus.NextTransition.Execute == nil ||
+		failedStatus.NextTransition.ReasonCode != "captured_verification_failed" || failedStatus.NextTransition.Execute.Operation != "review.finalize" {
 		t.Fatalf("failed correction repository status = %#v", failedStatus.NextTransition)
 	}
+	finalizeArgs := []string{"finalize", "--cwd", repo}
+	for _, argument := range failedStatus.NextTransition.Execute.Arguments {
+		finalizeArgs = append(finalizeArgs, argument.Token)
+	}
+	if err := RunReview(finalizeArgs, &bytes.Buffer{}); err != nil {
+		t.Fatalf("finalize failed correction verification: %v", err)
+	}
 	afterFailure, err := store.Load()
-	if err != nil || afterFailure.Revision != before.Revision || len(afterFailure.State.CorrectionAttempts) != 0 ||
-		afterFailure.State.CumulativeCorrectionLines != 0 || afterFailure.State.State != reviewtransaction.StateCorrectionRequired {
-		t.Fatalf("failed repository verification consumed correction: %#v, %v", afterFailure, err)
+	if err != nil || afterFailure.Revision == before.Revision || len(afterFailure.State.CorrectionAttempts) != 0 ||
+		afterFailure.State.CumulativeCorrectionLines != 0 || afterFailure.State.State != reviewtransaction.StateEscalated ||
+		afterFailure.State.EvidenceOutcome != reviewtransaction.VerificationOutcomeFailed || afterFailure.State.CorrectionVerificationTarget == nil ||
+		afterFailure.State.CorrectionVerificationTarget.Identity != firstTarget {
+		t.Fatalf("failed repository verification terminal state = %#v, %v", afterFailure, err)
+	}
+	predecessorBytes, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstReplay, secondReplay bytes.Buffer
+	for _, output := range []*bytes.Buffer{&firstReplay, &secondReplay} {
+		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID}, output); err != nil {
+			t.Fatalf("exact terminal replay: %v", err)
+		}
+	}
+	if firstReplay.String() != secondReplay.String() {
+		t.Fatalf("terminal replay output differs: first=%q second=%q", firstReplay.String(), secondReplay.String())
+	}
+	replayed, err := store.Load()
+	if err != nil || replayed.Revision != afterFailure.Revision || replayed.State.State != reviewtransaction.StateEscalated {
+		t.Fatalf("terminal replay mutated failed correction authority = %#v, %v", replayed, err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "1"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("terminal failed correction accepted another correction")
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--validation", filepath.Join(t.TempDir(), "validator.json")}, &bytes.Buffer{}); err == nil {
+		t.Fatal("terminal failed correction accepted another validator")
+	}
+	unchanged := readCorrectionEvidenceStatus(t, statusArgs)
+	if unchanged.NextTransition == nil || unchanged.NextTransition.Kind != reviewNextTransitionStop ||
+		unchanged.NextTransition.ReasonCode != "native_stop_required" {
+		t.Fatalf("unchanged failed correction predecessor transition = %#v", unchanged.NextTransition)
+	}
+	unchangedAuthorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + started.LineageID +
+		"\npredecessor_revision=" + afterFailure.Revision + "\ntarget_identity=" + firstTarget +
+		"\nsuccessor_lineage=failed-correction-unchanged\nactor=maintainer\nreason=retry unchanged failed candidate"
+	if err := RunReview([]string{"recover", "--cwd", repo, "--predecessor-lineage", started.LineageID,
+		"--expected-predecessor-revision", afterFailure.Revision, "--successor-lineage", "failed-correction-unchanged",
+		"--disposition", string(reviewtransaction.RecoveryEscalated), "--reason", "retry unchanged failed candidate", "--actor", "maintainer",
+		"--maintainer-authorization", unchangedAuthorization}, &bytes.Buffer{}); err == nil {
+		t.Fatal("terminal failed correction recovered without a changed candidate")
 	}
 	firstRaw := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir,
 		strings.TrimPrefix(firstTarget, "sha256:"), reviewtransaction.CompactFinalEvidenceFile)
@@ -185,50 +231,44 @@ func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	secondStatus := readCorrectionEvidenceStatus(t, statusArgs)
-	if secondStatus.NextTransition == nil || secondStatus.NextTransition.Kind != reviewNextTransitionCollect ||
-		secondStatus.NextTransition.ReasonCode != "correction_repository_verification_required" {
-		t.Fatalf("changed correction candidate status = %#v", secondStatus.NextTransition)
+	recoveryArgs := []string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID,
+		"--recovery-successor-lineage", "failed-correction-recovered", "--recovery-reason", "candidate changed after failed verification", "--recovery-actor", "maintainer"}
+	changed := readCorrectionEvidenceStatus(t, recoveryArgs)
+	if changed.TargetIdentity == firstTarget || changed.NextTransition == nil || changed.NextTransition.Kind != reviewNextTransitionCollect ||
+		changed.NextTransition.ReasonCode != "recovery_authorization_required" {
+		t.Fatalf("changed failed correction recovery transition = %#v", changed)
 	}
-	secondTarget := transitionArgumentValue(t, secondStatus.NextTransition, "target")
-	if secondTarget == firstTarget {
-		t.Fatal("changed correction candidate reused the failed candidate identity")
+	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + started.LineageID +
+		"\npredecessor_revision=" + afterFailure.Revision + "\ntarget_identity=" + changed.TargetIdentity +
+		"\nsuccessor_lineage=failed-correction-recovered\nactor=maintainer\nreason=candidate changed after failed verification"
+	recoveryArgs = append(recoveryArgs, "--recovery-authorization", authorization)
+	authorized := readCorrectionEvidenceStatus(t, recoveryArgs)
+	if authorized.NextTransition == nil || authorized.NextTransition.Kind != reviewNextTransitionExecute || authorized.NextTransition.Execute == nil ||
+		authorized.NextTransition.Execute.Operation != "review.recover" || authorized.NextTransition.ReasonCode != "recovery_authorized" {
+		t.Fatalf("authorized failed correction recovery transition = %#v", authorized.NextTransition)
 	}
-	passedPath := filepath.Join(t.TempDir(), "passed.txt")
-	if err := os.WriteFile(passedPath, []byte("targeted and full repository verification passed\n"), 0o600); err != nil {
+	recoverArgs := []string{"recover", "--cwd", repo}
+	for _, argument := range authorized.NextTransition.Execute.Arguments {
+		recoverArgs = append(recoverArgs, argument.Token)
+	}
+	if err := RunReview(recoverArgs, &bytes.Buffer{}); err != nil {
+		t.Fatalf("recover failed correction lineage: %v", err)
+	}
+	predecessor, err := store.Load()
+	predecessorAfterBytes, readErr := os.ReadFile(store.StatePath())
+	if err != nil || readErr != nil || predecessor.Revision != afterFailure.Revision || predecessor.State.State != reviewtransaction.StateEscalated || !bytes.Equal(predecessorBytes, predecessorAfterBytes) {
+		t.Fatalf("recovered predecessor = %#v, errors=%v/%v", predecessor, err, readErr)
+	}
+	successorStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "failed-correction-recovered")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewCaptureEvidence([]string{"--cwd", repo, "--lineage", started.LineageID,
-		"--target", secondTarget, "--expected-revision", before.Revision,
-		"--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", passedPath}, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	ready := readCorrectionEvidenceStatus(t, statusArgs)
-	if ready.NextTransition == nil || ready.NextTransition.Kind != reviewNextTransitionCollect ||
-		ready.NextTransition.ReasonCode != "targeted_validation_required" || ready.ValidationRequest == nil ||
-		ready.ValidationRequest.CorrectionTargetIdentity != secondTarget {
-		t.Fatalf("passed repository evidence did not unlock matching targeted validation: %#v", ready)
-	}
-	validationPath := filepath.Join(t.TempDir(), "validation.json")
-	writeReviewCLIJSON(t, validationPath, facadeValidationResult{
-		TargetedValidationRequestHash: ready.ValidationRequest.RequestHash,
-		CorrectionTargetIdentity:      ready.ValidationRequest.CorrectionTargetIdentity,
-		OriginalCriteria:              facadeValidationCheck{Passed: true, Evidence: []string{"original criteria passed"}},
-		CorrectionRegression:          facadeValidationCheck{Passed: true, Evidence: []string{"repository policy passed"}},
-		FollowUps:                     []reviewtransaction.FollowUp{},
-	})
-	var finalized bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID,
-		"--validation", validationPath, "--captured-evidence"}, &finalized); err != nil {
-		t.Fatalf("atomic correction finalize: %v\n%s", err, finalized.String())
-	}
-	terminal, err := store.Load()
-	if err != nil || terminal.State.State != reviewtransaction.StateApproved || len(terminal.State.CorrectionAttempts) != 1 ||
-		terminal.State.EvidenceOutcome != reviewtransaction.VerificationOutcomePassed || terminal.State.EvidenceTargetIdentity != secondTarget {
-		t.Fatalf("atomic correction terminal = %#v, %v", terminal, err)
+	successor, err := successorStore.Load()
+	if err != nil || successor.State.State != reviewtransaction.StateReviewing || successor.State.InitialSnapshot.Identity != changed.TargetIdentity || successor.State.Recovery == nil || successor.State.Recovery.PredecessorLineageID != started.LineageID {
+		t.Fatalf("fresh recovered authority = %#v, %v", successor, err)
 	}
 	if _, err := os.Stat(firstRaw); err != nil {
-		t.Fatalf("accepted candidate replaced prior failed evidence: %v", err)
+		t.Fatalf("recovery replaced prior failed evidence: %v", err)
 	}
 }
 

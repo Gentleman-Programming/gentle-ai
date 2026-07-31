@@ -121,11 +121,11 @@ func TestCompleteCorrectionVerificationIsAtomicAndCandidateBound(t *testing.T) {
 	}
 }
 
-func TestProceduralCorrectionVerificationEscalatesWithoutConsumingCorrection(t *testing.T) {
+func TestFailedCorrectionVerificationEscalatesWithoutConsumingCorrection(t *testing.T) {
 	repo := initSnapshotRepo(t)
-	state, fix := pendingCompactCorrection(t, repo, "procedural-correction-verification")
-	payload := []byte("repository verification tool crashed\n")
-	record, err := NewVerificationEvidenceRecord(state.LineageID, hash("a"), fix, payload, VerificationOutcomeProceduralFailure)
+	state, fix := pendingCompactCorrection(t, repo, "failed-correction-verification")
+	payload := []byte("repository verification failed\n")
+	record, err := NewVerificationEvidenceRecord(state.LineageID, hash("a"), fix, payload, VerificationOutcomeFailed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestProceduralCorrectionVerificationEscalatesWithoutConsumingCorrection(t *
 	}
 	if state.State != StateEscalated || len(state.CorrectionAttempts) != 0 || state.CumulativeCorrectionLines != 0 ||
 		state.CorrectionVerificationTarget == nil || state.CorrectionVerificationTarget.Identity != fix.Identity ||
-		state.EvidenceOutcome != VerificationOutcomeProceduralFailure {
-		t.Fatalf("procedural correction escalation = %#v", state)
+		state.EvidenceOutcome != VerificationOutcomeFailed {
+		t.Fatalf("failed correction escalation = %#v", state)
 	}
 }

@@ -363,7 +363,8 @@ func (result ReviewTargetStatusResult) Validate() error {
 		transitionRequest := reviewTransitionValidationRequest(result.NextTransition)
 		correctionEvidenceFirst := transitionRequest == nil && result.ValidationRequest != nil &&
 			(result.NextTransition.ReasonCode == "correction_repository_verification_required" ||
-				result.NextTransition.ReasonCode == "correction_repository_tooling_failed")
+				result.NextTransition.ReasonCode == "correction_repository_tooling_failed" ||
+				result.NextTransition.ReasonCode == "captured_verification_failed")
 		if !correctionEvidenceFirst && ((transitionRequest == nil) != (result.ValidationRequest == nil) ||
 			transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest)) {
 			return errors.New("negotiated status validation request copies differ")
@@ -517,7 +518,8 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if result.Authority != nil && result.Authority.State == reviewtransaction.StateValidating {
 		expectedExecutionTarget = reviewAuthorityTargetIdentity(result)
 	} else if result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired &&
-		result.ValidationRequest != nil && result.NextTransition.ReasonCode == "correction_repository_tooling_failed" {
+		result.ValidationRequest != nil && (result.NextTransition.ReasonCode == "correction_repository_tooling_failed" ||
+		result.NextTransition.ReasonCode == "captured_verification_failed") {
 		expectedExecutionTarget = result.ValidationRequest.CorrectionTargetIdentity
 	}
 	if result.NextTransition.Execute != nil && result.NextTransition.Execute.Binding.TargetIdentity != expectedExecutionTarget {

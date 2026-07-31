@@ -548,7 +548,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 		if predecessor.State.State != StateEscalated && !historicalFailedValidator {
 			return errors.New("recovery requires an escalated predecessor")
 		}
-		if !compactEscalatedRecoveryTargetChanged(predecessor.State.CurrentSnapshot, successor.InitialSnapshot) {
+		if !compactEscalatedRecoveryTargetChanged(compactEscalatedRecoverySnapshot(predecessor.State), successor.InitialSnapshot) {
 			return errCompactRecoveryTargetUnchanged
 		}
 		if recovery.MaintainerAuthorization != compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
@@ -564,6 +564,16 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 
 func compactEscalatedRecoveryTargetChanged(previous, next Snapshot) bool {
 	return previous.CandidateTree != next.CandidateTree && previous.Identity != next.Identity
+}
+
+// compactEscalatedRecoverySnapshot keeps a failed correction candidate frozen
+// as the terminal predecessor target. Recovery must not turn that same failed
+// candidate into a fresh lineage; it requires a further candidate change.
+func compactEscalatedRecoverySnapshot(state CompactState) Snapshot {
+	if state.CorrectionVerificationTarget != nil {
+		return *state.CorrectionVerificationTarget
+	}
+	return state.CurrentSnapshot
 }
 
 func compactHistoricalFailedValidator(state CompactState) bool {
@@ -969,7 +979,7 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 	for _, store := range leaves {
 		existing := records[store.lineageID].State
 		if existing.State == StateEscalated && compactStartDeliveryScopeMatches(existing, request.State) {
-			if compactEscalatedRecoveryTargetChanged(existing.CurrentSnapshot, request.State.InitialSnapshot) {
+			if compactEscalatedRecoveryTargetChanged(compactEscalatedRecoverySnapshot(existing), request.State.InitialSnapshot) {
 				recoveryCandidates = append(recoveryCandidates, store)
 			} else {
 				claimants = append(claimants, store)
@@ -1135,7 +1145,7 @@ func resumeExplicitCompactStart(ctx context.Context, store CompactStore, record 
 	}
 	if existing.State == StateEscalated || compactHistoricalFailedValidator(existing) {
 		if compactStartDeliveryScopeMatches(existing, requested) &&
-			compactEscalatedRecoveryTargetChanged(existing.CurrentSnapshot, requested.InitialSnapshot) {
+			compactEscalatedRecoveryTargetChanged(compactEscalatedRecoverySnapshot(existing), requested.InitialSnapshot) {
 			return CompactStartResult{Record: record, Action: CompactStartRecover}, nil
 		}
 		return blocked()
@@ -1821,10 +1831,10 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		}
 	case "review/escalate-correction-verification":
 		if previous.State != StateCorrectionRequired || previous.ProposedCorrectionLines == nil || next.State != StateEscalated ||
-			next.CorrectionVerificationTarget == nil || next.EvidenceOutcome != VerificationOutcomeProceduralFailure ||
+			next.CorrectionVerificationTarget == nil || (next.EvidenceOutcome != VerificationOutcomeFailed && next.EvidenceOutcome != VerificationOutcomeProceduralFailure) ||
 			next.EvidenceAuthorityRevision != previousRevision || len(next.CorrectionAttempts) != len(previous.CorrectionAttempts) ||
 			next.CumulativeCorrectionLines != previous.CumulativeCorrectionLines {
-			return fmt.Errorf("%w: invalid procedural correction verification escalation", ErrInvalidSuccessor)
+			return fmt.Errorf("%w: invalid failed correction verification escalation", ErrInvalidSuccessor)
 		}
 		expected := previous
 		expected.State = StateEscalated
@@ -1835,7 +1845,7 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		expected.EvidenceTargetIdentity = next.EvidenceTargetIdentity
 		expected.EvidenceAuthorityRevision = next.EvidenceAuthorityRevision
 		if !compactStateEqual(expected, next) {
-			return fmt.Errorf("%w: procedural correction verification escalation changed unrelated state", ErrInvalidSuccessor)
+			return fmt.Errorf("%w: failed correction verification escalation changed unrelated state", ErrInvalidSuccessor)
 		}
 	case CompactResultDispositionOperation:
 		// reviewing -> escalated. The disposition may only append its own audit
