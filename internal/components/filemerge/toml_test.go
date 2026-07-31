@@ -326,6 +326,25 @@ model = "new-top-level-model"
 command = "engram"
 `,
 		},
+		{
+			name: "basic string with root key text",
+			input: `instructions = """
+model = "example text"
+"""
+model = "old-top-level-model"
+
+[mcp_servers.engram]
+command = "engram"
+`,
+			want: `instructions = """
+model = "example text"
+"""
+
+model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
 	}
 
 	for _, tt := range tests {

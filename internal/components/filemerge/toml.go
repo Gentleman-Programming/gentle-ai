@@ -338,7 +338,7 @@ func UpsertTopLevelTOMLString(content, key, value string) string {
 	var multilineQuote byte
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if inTopLevel && (strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=")) {
+		if inTopLevel && multilineQuote == 0 && (strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=")) {
 			continue
 		}
 		cleaned = append(cleaned, line)
