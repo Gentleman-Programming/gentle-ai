@@ -51,7 +51,7 @@ func TestSDDOrchestratorsCarryNoRetiredWorkRunCeremony(t *testing.T) {
 }
 
 func TestCoordinatorEngramProjectResolutionPrecedesScopedCalls(t *testing.T) {
-	const contract = "### Engram Project Resolution (MANDATORY)\n\n" +
+	const contract = "Engram Project Resolution (MANDATORY)\n\n" +
 		"Before any project-scoped `mem_context` or `mem_search`, call `engram_mem_current_project` and wait for it to complete, even when the user named no repository; this strict dependency MUST NOT run in parallel with scoped calls. Use its returned canonical project key, never a cwd/worktree-basename guess.\n\n" +
 		"- Unique project: use the returned canonical project for context/search.\n" +
 		"- Ambiguous project: STOP and ask the user to choose only from the returned alternatives before any scoped search.\n" +
@@ -72,6 +72,11 @@ func TestCoordinatorEngramProjectResolutionPrecedesScopedCalls(t *testing.T) {
 		}
 		if count := strings.Count(content, contract); count != want {
 			t.Fatalf("%s has %d project-resolution contracts, want %d", path, count, want)
+		}
+
+		prefix := content[:strings.Index(content, contract)]
+		if invocation := regexp.MustCompile(`(?:engram_)?mem_(?:context|search)\s*\(`).FindString(prefix); invocation != "" {
+			t.Fatalf("%s invokes %q before the project-resolution contract", path, invocation)
 		}
 	}
 

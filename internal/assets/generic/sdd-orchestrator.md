@@ -124,7 +124,7 @@ Before routing, continuing, applying, verifying, or archiving an SDD change, **f
 
 ### SDD Init Guard (MANDATORY)
 
-Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-status`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`), check if `sdd-init` has been run for this project:
+Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-status`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`), check if `sdd-init` has been run for this project. If no project was resolved, skip project-scoped Engram initialization and continue without Engram persistence until a project is selected. Otherwise:
 
 1. Search Engram: `mem_search(query: "sdd-init/{project}", project: "{project}")`
 2. If found → init was done, proceed normally
@@ -269,7 +269,7 @@ Model hints:
 
 Artifact store: default `engram` when available.
 
-### Engram Project Resolution (MANDATORY)
+## Engram Project Resolution (MANDATORY)
 
 Before any project-scoped `mem_context` or `mem_search`, call `engram_mem_current_project` and wait for it to complete, even when the user named no repository; this strict dependency MUST NOT run in parallel with scoped calls. Use its returned canonical project key, never a cwd/worktree-basename guess.
 
