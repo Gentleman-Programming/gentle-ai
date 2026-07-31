@@ -107,6 +107,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - Multi-mode prerequisite: connect your AI providers first, then run `opencode models --refresh`
 - Gentle AI sets OpenCode SDD agent sharing to `disabled` by default for privacy; existing user-managed `share` values such as `manual` or `auto` are preserved.
 - OpenCode Desktop SDD commands resolve the project with `git rev-parse --show-toplevel || pwd` before acting, avoiding Electron current-working-directory drift.
+- If review launch fails with `Attempted to assign to readonly property`, follow the [OpenCode readonly task-argument recovery](review-integration.md#restart-opencode-after-a-readonly-task-argument-failure).
 
 ### Kilo Code
 

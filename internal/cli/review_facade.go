@@ -453,6 +453,7 @@ func (result facadeValidationResult) conclusive() error {
 		{name: "correction_regression", evidence: result.CorrectionRegression.Evidence},
 	} {
 		if reviewtransaction.InconclusiveValidationEvidence(check.evidence) {
+			// refusal:by-design world-action: validator access to the frozen trees must be restored before the same evidence can be captured again
 			return fmt.Errorf("targeted validation is inconclusive: %s evidence reports the immutable candidate could not be inspected, so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees and capture the same validation again", check.name)
 		}
 	}
@@ -1429,6 +1430,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	workspaceOverlay := flags.Bool("workspace-overlay", false, "include branch commits and the live workspace over --base-ref")
 	tracePath := flags.String("trace", "", "optional diagnostic operation metadata trace path")
 	consent := flags.String("consent", "", "negotiated consent declaration: relay to receive the typed blocking consent question, granted or declined to answer it for the exact frozen candidate")
+	locale := flags.String("locale", "", "optional consent-envelope locale: en or es")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -1442,10 +1444,14 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if err != nil {
 		return err
 	}
-	if err := validateReviewStartBinding(args, negotiated, *targetIdentity, *projection, *baseRef, *lineage, *committedOnly, *workspaceOverlay, *consent); err != nil {
+	if err := validateReviewStartBinding(args, negotiated, *targetIdentity, *projection, *baseRef, *lineage, *committedOnly, *workspaceOverlay, *consent, *locale); err != nil {
 		return reviewPreflightError(err)
 	}
 	consentMode := reviewStartConsentMode(strings.TrimSpace(*consent))
+	consentLocale, err := normalizeReviewConsentLocale(*locale)
+	if err != nil {
+		return reviewPreflightError(err)
+	}
 	builder := reviewtransaction.SnapshotBuilder{Repo: *cwd}
 	root, err := builder.ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -1533,20 +1539,25 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			question, questionErr := newReviewIntegrationConsentResult(snapshot, assessment,
 				reviewConsentFollowUpBase(*cwd, snapshot.Identity, selectedProjection, strings.TrimSpace(*lineage),
 					strings.TrimSpace(*baseRef), strings.TrimSpace(*policySource), strings.TrimSpace(*focus),
-					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract), *contract)
+					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract, strings.TrimSpace(*locale)), *contract, consentLocale)
 			if questionErr != nil {
 				return questionErr
 			}
 			return encodeReviewJSON(stdout, question)
 		}
-		if errors.Is(err, errReviewDeclinedForCandidate) && (!negotiated || consentMode == reviewConsentModeDeclined) {
-			// A decline is a reported user choice, not a failure. Nothing has
-			// been persisted and no latch was recorded, so the next candidate
-			// simply asks again; the typed consent token lets an agent tell
-			// "user declined this work unit" apart from every other outcome.
-			// The relayed --consent declined answer reuses exactly this typed
-			// outcome; an interactive decline inside an undeclared negotiated
-			// start keeps its existing failure-envelope projection.
+		if errors.Is(err, errReviewDeclinedForCandidate) {
+			// A candidate decline is durable enough to govern only this exact
+			// delivery, never a review lineage or receipt. Record it under the
+			// native RAR root only after its live snapshot is revalidated; an
+			// exact replay converges on the same canonical authorization.
+			if _, recordErr := reviewtransaction.RecordCandidateDecline(ctx, root, snapshot); recordErr != nil {
+				return fmt.Errorf("record candidate review decline: %w", recordErr)
+			}
+			if negotiated && consentMode != reviewConsentModeDeclined {
+				return err
+			}
+			// The relayed --consent declined answer reports a typed choice, but
+			// does not create review authority or consume the legacy consent latch.
 			return encodeReviewJSON(stdout, reviewFacadeStartDeclinedResult(snapshot, assessment))
 		}
 		return err
@@ -1718,7 +1729,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	return encodeReviewJSON(stdout, negotiatedResult)
 }
 
-func validateReviewStartBinding(args []string, negotiated bool, target, projection, baseRef, lineage string, committedOnly, workspaceOverlay bool, consent string) error {
+func validateReviewStartBinding(args []string, negotiated bool, target, projection, baseRef, lineage string, committedOnly, workspaceOverlay bool, consent, locale string) error {
 	counts := reviewStartBindingFlagCounts(args)
 	switch reviewStartConsentMode(strings.TrimSpace(consent)) {
 	case reviewConsentModeNone, reviewConsentModeRelay, reviewConsentModeGranted, reviewConsentModeDeclined:
@@ -1732,12 +1743,19 @@ func validateReviewStartBinding(args []string, negotiated bool, target, projecti
 		if counts["consent"] != 0 {
 			return errors.New(reviewStartConsentRequiresContractReason)
 		}
+		if counts["locale"] != 0 {
+			// refusal:by-design operator-knowledge: only the caller can supply the complete candidate-bound negotiated START invocation
+			return errors.New("review start --locale requires a negotiated --contract")
+		}
 		return nil
 	}
-	for _, name := range []string{"contract", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent"} {
+	for _, name := range []string{"contract", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale"} {
 		if counts[name] > 1 {
 			return fmt.Errorf("review start repeats --%s", name)
 		}
+	}
+	if _, err := normalizeReviewConsentLocale(locale); err != nil {
+		return err
 	}
 	if counts["contract"] != 1 || counts["target"] != 1 || counts["projection"] != 1 {
 		return errors.New("negotiated review start requires exactly one --contract, --target, and --projection")
@@ -1787,7 +1805,7 @@ func reviewStartBindingFlagCounts(args []string) map[string]int {
 			continue
 		}
 		switch name {
-		case "contract", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent":
+		case "contract", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale":
 			counts[name]++
 		}
 		if kind != reviewIntegrationBoolFlag && !hasValue {
@@ -1869,6 +1887,7 @@ func reviewConsentFollowUpBase(
 	lineage, baseRef, policy, focus, trace string,
 	committedOnly, workspaceOverlay bool,
 	contract string,
+	locale string,
 ) string {
 	parts := []string{
 		"gentle-ai review start",
@@ -1899,6 +1918,9 @@ func reviewConsentFollowUpBase(
 	}
 	if trace != "" {
 		parts = append(parts, "--trace "+trace)
+	}
+	if locale != "" {
+		parts = append(parts, "--locale "+locale)
 	}
 	return strings.Join(parts, " ")
 }
@@ -2768,6 +2790,15 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		if evaluation, attempted := reviewtransaction.EvaluateCompactPrePRChain(ctx, root, gateInput); attempted {
 			return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 		}
+	}
+	// A candidate decline can govern ordinary delivery only when no terminal
+	// receipt was discovered. It is deliberately checked after compact discovery:
+	// a real exact receipt remains stronger native authority, while a corrupted or
+	// ambiguous review store still fails closed rather than being bypassed.
+	if decline, found, declineErr := reviewtransaction.ResolveCandidateDeclineForGate(ctx, root, gateInput); declineErr != nil {
+		return fmt.Errorf("resolve candidate decline delivery authorization: %w", declineErr)
+	} else if found {
+		return emitCandidateDeclinedUnmanagedDelivery(stdout, gateInput.Gate, decline, negotiated, *contract)
 	}
 	// The kill switch is consulted BEFORE the negotiation branch and for every
 	// discovery outcome. While reviews are off, receipt-driven development does
@@ -3797,6 +3828,30 @@ func reviewDisabledUnmanagedDeliveryReason(discovery *ReviewReceiptDiscoveryErro
 // still fails closed is an unreadable KILL SWITCH — reviewDeliveryDisposition
 // treats an unresolvable mode as managed — so a tampered or broken mode record
 // can never manufacture this disposition.
+// emitCandidateDeclinedUnmanagedDelivery reports that RDD remains enabled but
+// the operator declined review for this exact candidate. It exits successfully
+// so ordinary repository policy can decide delivery, while explicitly refusing to
+// project an approval, receipt, lineage, or release authorization.
+func emitCandidateDeclinedUnmanagedDelivery(stdout io.Writer, gate reviewtransaction.GateKind, decline reviewtransaction.CandidateDeclineGateAuthorization, negotiated bool, contract string) error {
+	result := ReviewValidateResult{
+		Schema: ReviewValidateSchema, Result: reviewtransaction.GateInvalidated, Allowed: false,
+		Action:   reviewDeliveryPolicyAction,
+		Reason:   "review is unmanaged by candidate choice; ordinary repository policy governs this exact declined candidate",
+		Delivery: reviewtransaction.RDDDeliveryCandidateDeclinedUnmanaged,
+		Context: reviewtransaction.GateContext{
+			Gate:   gate,
+			Denial: &reviewtransaction.GateDenial{Stage: "candidate-decline", Code: "exact_candidate"},
+		},
+	}
+	// Keep the derived authorization live in this boundary: this guards against a
+	// future emitter accidentally accepting a zero-value resolver result.
+	if decline.AuthorizationRef == "" || decline.Snapshot.Identity == "" {
+		// refusal:by-design world-action: an internal incomplete authorization cannot safely govern delivery and requires a code correction
+		return errors.New("candidate decline delivery authorization is incomplete")
+	}
+	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationValidate, result, result, contract)
+}
+
 func emitDisabledUnmanagedDelivery(stdout io.Writer, gate reviewtransaction.GateKind, discovery *ReviewReceiptDiscoveryError, negotiated bool, contract string) error {
 	context := reviewtransaction.GateContext{
 		Gate:   gate,
