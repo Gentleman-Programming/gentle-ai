@@ -336,9 +336,15 @@ func UpsertTopLevelTOMLString(content, key, value string) string {
 	var cleaned []string
 	inTopLevel := true
 	var multilineQuote byte
+	var removingMultilineQuote byte
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if inTopLevel && multilineQuote == 0 && (strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=")) {
+		if removingMultilineQuote != 0 {
+			removingMultilineQuote = updateTOMLMultilineString(line, removingMultilineQuote)
+			continue
+		}
+		if inTopLevel && multilineQuote == 0 && isTOMLKeyAssignment(trimmed, key) {
+			removingMultilineQuote = updateTOMLMultilineString(line, 0)
 			continue
 		}
 		cleaned = append(cleaned, line)
@@ -366,6 +372,18 @@ func UpsertTopLevelTOMLString(content, key, value string) string {
 	out = append(out, cleaned[insertAt:]...)
 
 	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
+}
+
+func isTOMLKeyAssignment(line, key string) bool {
+	if !strings.HasPrefix(line, key) {
+		return false
+	}
+
+	remainder := line[len(key):]
+	for len(remainder) > 0 && (remainder[0] == ' ' || remainder[0] == '\t') {
+		remainder = remainder[1:]
+	}
+	return strings.HasPrefix(remainder, "=")
 }
 
 // updateTOMLMultilineString tracks multiline basic and literal string values.

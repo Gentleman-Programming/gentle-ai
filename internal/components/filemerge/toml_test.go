@@ -218,6 +218,61 @@ command = "engram"
 	}
 }
 
+func TestUpsertTopLevelTOMLString_ReplacesAssignmentVariants(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "tab before equals",
+			input: "model\t= \"old-top-level-model\"\n\n[mcp_servers.engram]\ncommand = \"engram\"\n",
+			want: `model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
+		{
+			name: "multiline basic value",
+			input: `model = """
+old-top-level-model
+"""
+
+[mcp_servers.engram]
+command = "engram"
+`,
+			want: `model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
+		{
+			name: "multiline literal value",
+			input: `model = '''
+old-top-level-model
+'''
+
+[mcp_servers.engram]
+command = "engram"
+`,
+			want: `model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UpsertTopLevelTOMLString(tt.input, "model", "new-top-level-model")
+
+			if got != tt.want {
+				t.Fatalf("UpsertTopLevelTOMLString() mismatch (-want +got):\nwant:\n%s\ngot:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestUpsertTopLevelTOMLString_Idempotent(t *testing.T) {
 	input := `[mcp_servers.engram]
 command = "engram"
