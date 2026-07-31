@@ -29,7 +29,7 @@
       "uniqueItems": true,
       "items": {"type": "string", "minLength": 1}
     },
-    "projection": {"enum": ["workspace", "staged"]},
+    "projection": {"enum": ["", "staged"]},
     "correction_candidate_tree": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
     "correction_target_identity": {"$ref": "#/$defs/sha256"},
     "correction_paths": {

@@ -21,6 +21,7 @@ func TestTargetedValidationRequestBindsCurrentAuthorityAndCorrectedCandidate(t *
 	}
 	if first.Schema != TargetedValidationRequestSchema || first.LineageID != state.LineageID ||
 		first.ExpectedRevision != revision || first.TargetIdentity != state.InitialSnapshot.Identity ||
+		first.Projection != state.InitialSnapshot.Projection ||
 		!reflect.DeepEqual(first.FixFindingIDs, state.FixFindingIDs) ||
 		!reflect.DeepEqual(first.CorrectionPaths, []string{"tracked.txt"}) ||
 		first.CorrectionPathsDigest != digestPaths(first.CorrectionPaths) ||

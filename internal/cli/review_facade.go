@@ -161,7 +161,7 @@ func facadeProjection(projection reviewtransaction.Projection) reviewtransaction
 
 func facadeCorrectionEvidenceTargetFromRequest(state reviewtransaction.CompactState, live reviewtransaction.Snapshot, request reviewtransaction.TargetedValidationRequest) reviewtransaction.Snapshot {
 	return reviewtransaction.Snapshot{
-		Kind: reviewtransaction.TargetFixDiff, Projection: live.Projection, UnbornHead: live.UnbornHead,
+		Kind: reviewtransaction.TargetFixDiff, Projection: request.Projection, UnbornHead: live.UnbornHead,
 		BaseTree: state.CurrentSnapshot.CandidateTree, CandidateTree: request.CorrectionCandidateTree,
 		PathsDigest: request.CorrectionPathsDigest, Paths: append([]string{}, request.CorrectionPaths...),
 		IntendedUntracked:      append([]string{}, state.InitialSnapshot.IntendedUntracked...),

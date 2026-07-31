@@ -449,7 +449,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 			result.ValidationRequest.LineageID != result.Authority.LineageID ||
 			result.ValidationRequest.ExpectedRevision != result.Authority.Revision ||
 			result.ValidationRequest.TargetIdentity != result.Projection.InitialSnapshotIdentity ||
-			result.ValidationRequest.Projection != result.Projection.Projection ||
+			facadeProjection(result.ValidationRequest.Projection) != result.Projection.Projection ||
 			result.ValidationRequest.CorrectionCandidateTree != result.Projection.CurrentCandidateTree ||
 			!reviewStatusPathsContain(result.Projection.Paths, result.ValidationRequest.CorrectionPaths) ||
 			reviewtransaction.ValidateTargetedValidationRequest(*result.ValidationRequest) != nil {

@@ -1424,14 +1424,14 @@ func TestReviewFacadePersistsOverBudgetForecastAndActual(t *testing.T) {
 
 func TestFacadeCorrectionEvidenceTargetUsesValidationRequestProjection(t *testing.T) {
 	state := reviewtransaction.CompactState{InitialSnapshot: reviewtransaction.Snapshot{Projection: ""}, CurrentSnapshot: reviewtransaction.Snapshot{CandidateTree: "base"}}
-	live := reviewtransaction.Snapshot{UnbornHead: true, IntendedUntrackedProof: "proof"}
+	live := reviewtransaction.Snapshot{Projection: reviewtransaction.ProjectionStaged, UnbornHead: true, IntendedUntrackedProof: "proof"}
 	request := reviewtransaction.TargetedValidationRequest{
-		Projection: reviewtransaction.ProjectionWorkspace, CorrectionCandidateTree: "candidate", CorrectionPathsDigest: "paths",
+		Projection: "", CorrectionCandidateTree: "candidate", CorrectionPathsDigest: "paths",
 		CorrectionPaths: []string{"tracked.txt"}, FixFindingIDs: []string{"R1-001"}, CorrectionTargetIdentity: "identity",
 	}
 	target := facadeCorrectionEvidenceTargetFromRequest(state, live, request)
-	if target.Projection != live.Projection {
-		t.Fatalf("correction evidence projection = %q, want canonical live projection %q", target.Projection, live.Projection)
+	if target.Projection != request.Projection {
+		t.Fatalf("correction evidence projection = %q, want canonical request projection %q", target.Projection, request.Projection)
 	}
 }
 

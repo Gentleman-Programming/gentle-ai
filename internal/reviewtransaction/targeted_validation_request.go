@@ -74,9 +74,6 @@ func buildTargetedValidationRequest(ctx context.Context, repo string, state Comp
 		return TargetedValidationRequest{}, errors.New("targeted validation request requires a forecasted compact correction")
 	}
 	projection := state.InitialSnapshot.Projection
-	if projection == "" {
-		projection = ProjectionWorkspace
-	}
 	var fix Snapshot
 	if captured == nil {
 		fix, err = (SnapshotBuilder{Repo: repo}).Build(ctx, Target{
@@ -116,14 +113,10 @@ func targetedValidationRequestForCorrection(state CompactState, revision string,
 		!equalStrings(fix.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(fix.Paths, state.GenesisPaths) != nil {
 		return TargetedValidationRequest{}, errors.New("targeted validation request correction binding is invalid")
 	}
-	projection := snapshotProjection
-	if projection == "" {
-		projection = ProjectionWorkspace
-	}
 	request := TargetedValidationRequest{
 		Schema: TargetedValidationRequestSchema, LineageID: state.LineageID, ExpectedRevision: revision,
 		TargetIdentity: state.InitialSnapshot.Identity, FixFindingIDs: append([]string(nil), state.FixFindingIDs...),
-		Projection: projection, CorrectionCandidateTree: fix.CandidateTree,
+		Projection: snapshotProjection, CorrectionCandidateTree: fix.CandidateTree,
 		CorrectionTargetIdentity: fix.Identity, CorrectionPaths: append([]string(nil), fix.Paths...),
 		CorrectionPathsDigest: fix.PathsDigest,
 	}
@@ -187,7 +180,8 @@ func ValidateTargetedValidationRequest(request TargetedValidationRequest) error 
 	if !validGitTree(request.CorrectionCandidateTree) {
 		return errors.New("targeted validation request candidate tree is invalid")
 	}
-	if request.Projection != ProjectionWorkspace && request.Projection != ProjectionStaged {
+	projection, err := canonicalProjection(request.Projection)
+	if err != nil || projection != request.Projection {
 		return errors.New("targeted validation request projection is invalid")
 	}
 	ids, err := canonicalStrings(request.FixFindingIDs, "fix finding id")
