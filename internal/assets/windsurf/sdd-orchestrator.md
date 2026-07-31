@@ -126,7 +126,7 @@ Before any project-scoped `mem_context` or `mem_search`, call `engram_mem_curren
 
 - Unique project: use the returned canonical project for context/search.
 - Ambiguous project: STOP and ask the user to choose only from the returned alternatives before any scoped search.
-- No project: continue without inventing a key and do not run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.
+- No project: do not run ANY project-scoped Engram operation, including status/continuation lookups, `sdd-init` checks, TDD/apply-progress searches, artifact reads/writes, or persistence. Continue only with valid OpenSpec/file behavior until a project is selected; do not invent a key or run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.
 
 ### Native SDD Dispatcher Guard
 
@@ -411,6 +411,8 @@ When launching `sdd-archive`, forward explicit final-state facts for any work co
 #### Strict TDD Forwarding (MANDATORY)
 
 When executing `sdd-apply` or `sdd-verify` phases, the orchestrator MUST:
+
+Only after a canonical project resolves may these project-scoped Engram searches run. If no project resolves, skip them and all other project-scoped Engram persistence; continue only with valid OpenSpec/file artifacts until a project is selected.
 
 1. Search for testing capabilities: `mem_search(query: "sdd-init/{project}", project: "{project}")`
 2. If the result contains `strict_tdd: true`:

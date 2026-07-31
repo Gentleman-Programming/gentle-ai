@@ -52,23 +52,46 @@ func TestSDDOrchestratorsCarryNoRetiredWorkRunCeremony(t *testing.T) {
 
 func TestCoordinatorEngramProjectResolutionPrecedesScopedCalls(t *testing.T) {
 	const projectResolutionInstruction = "Before any project-scoped `mem_context` or `mem_search`, call `engram_mem_current_project` and wait for it to complete, even when the user named no repository; this strict dependency MUST NOT run in parallel with scoped calls. Use its returned canonical project key, never a cwd/worktree-basename guess."
+	const noProjectTerminalPolicy = "- No project: do not run ANY project-scoped Engram operation, including status/continuation lookups, `sdd-init` checks, TDD/apply-progress searches, artifact reads/writes, or persistence. Continue only with valid OpenSpec/file behavior until a project is selected; do not invent a key or run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.\n"
 	const contract = "Engram Project Resolution (MANDATORY)\n\n" +
 		projectResolutionInstruction + "\n\n" +
 		"- Unique project: use the returned canonical project for context/search.\n" +
 		"- Ambiguous project: STOP and ask the user to choose only from the returned alternatives before any scoped search.\n" +
-		"- No project: continue without inventing a key and do not run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.\n"
+		noProjectTerminalPolicy
 	const dispatcherProjectGate = "If no project is resolved, continue without project-scoped Engram persistence and do not look up `sdd-init/{project}`. Only when a canonical project exists and the artifact-store decision permits Engram may you check `sdd-init/{project}` in Engram"
 	const dispatcherMarker = "Native SDD Dispatcher Guard"
 	dispatcherHeading := regexp.MustCompile(`(?m)^#{1,6}\s+` + regexp.QuoteMeta(dispatcherMarker) + `\s*$`)
 	markdownHeading := regexp.MustCompile(`(?m)^#{1,6}\s+`)
+	scopedEngramInvocation := regexp.MustCompile(`(?:engram_)?mem_[a-z_]+\s*\([^\n]*project:\s*"\{project\}"`)
+	anyEngramInvocation := regexp.MustCompile(`(?:engram_)?mem_[a-z_]+\s*\(`)
+	dispatcherPaths := map[string]bool{
+		"antigravity/sdd-orchestrator.md":     true,
+		"claude/sdd-orchestrator-workflow.md": true,
+		"codex/sdd-orchestrator.md":           true,
+		"cursor/sdd-orchestrator.md":          true,
+		"generic/sdd-orchestrator.md":         true,
+		"kiro/sdd-orchestrator.md":            true,
+		"qwen/sdd-orchestrator.md":            true,
+		"windsurf/sdd-orchestrator.md":        true,
+	}
 
-	paths := append(allSDDOrchestratorAssetPaths(t), "claude/sdd-orchestrator-workflow.md")
-	if len(paths) != 13 {
-		t.Fatalf("project-resolution coverage sees %d coordinator surfaces, want 13", len(paths))
+	paths := []string{
+		"antigravity/sdd-orchestrator.md",
+		"claude/sdd-orchestrator-workflow.md",
+		"codex/sdd-orchestrator.md",
+		"cursor/sdd-orchestrator.md",
+		"generic/sdd-orchestrator.md",
+		"kiro/sdd-orchestrator.md",
+		"qwen/sdd-orchestrator.md",
+		"windsurf/sdd-orchestrator.md",
+	}
+	if len(paths) != 8 {
+		t.Fatalf("project-resolution coverage sees %d coordinator surfaces, want 8", len(paths))
 	}
 
 	for _, path := range paths {
 		content := MustRead(path)
+		firstContractOffset := -1
 		want := 1
 		if path == "generic/sdd-orchestrator.md" {
 			// Generic renders capable and small-model sections that can both
@@ -85,20 +108,30 @@ func TestCoordinatorEngramProjectResolutionPrecedesScopedCalls(t *testing.T) {
 			if contractOffset < 0 {
 				t.Fatalf("%s cannot locate project-resolution contract occurrence %d", path, occurrence)
 			}
+			if firstContractOffset < 0 {
+				firstContractOffset = contractOffset
+			}
 
 			sectionStart := strings.LastIndex(remaining[:contractOffset], "<!-- section:model-")
 			if sectionStart < 0 {
 				sectionStart = 0
 			}
 			prefix := remaining[sectionStart:contractOffset]
-			if invocation := regexp.MustCompile(`(?:engram_)?mem_(?:context|search)\s*\(`).FindString(prefix); invocation != "" {
+			if invocation := anyEngramInvocation.FindString(prefix); invocation != "" {
 				t.Fatalf("%s coordinator section for project-resolution contract occurrence %d invokes %q before the contract", path, occurrence, invocation)
 			}
 
 			remaining = remaining[contractOffset+len(contract):]
 		}
 
-		if path == "antigravity/sdd-orchestrator.md" || path == "codex/sdd-orchestrator.md" || path == "cursor/sdd-orchestrator.md" || path == "generic/sdd-orchestrator.md" || path == "kiro/sdd-orchestrator.md" || path == "qwen/sdd-orchestrator.md" || path == "windsurf/sdd-orchestrator.md" {
+		for _, invocation := range scopedEngramInvocation.FindAllStringIndex(content[firstContractOffset+len(contract):], -1) {
+			invocationOffset := firstContractOffset + len(contract) + invocation[0]
+			if strings.LastIndex(content[:invocationOffset], noProjectTerminalPolicy) < 0 {
+				t.Fatalf("%s invokes project-scoped Engram after project resolution without the terminal no-project policy", path)
+			}
+		}
+
+		if dispatcherPaths[path] {
 			dispatcherMatch := dispatcherHeading.FindStringIndex(content)
 			if dispatcherMatch == nil {
 				t.Fatalf("%s missing dispatcher guard marker %q", path, dispatcherMarker)
