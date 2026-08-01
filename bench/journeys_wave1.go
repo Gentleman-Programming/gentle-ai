@@ -73,6 +73,25 @@ type waveCorrectionStatus struct {
 	NextTransition *struct {
 		Kind       string `json:"kind"`
 		ReasonCode string `json:"reason_code"`
+		Collect    *struct {
+			Inputs []struct {
+				Name             string `json:"name"`
+				Schema           string `json:"schema"`
+				CaptureOperation string `json:"capture_operation"`
+				Arguments        []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"arguments"`
+			} `json:"inputs"`
+		} `json:"collect"`
+		CorrectionRequest *struct {
+			RequestHash      string   `json:"request_hash"`
+			LineageID        string   `json:"lineage_id"`
+			ExpectedRevision string   `json:"expected_revision"`
+			TargetIdentity   string   `json:"target_identity"`
+			CorrectionBudget int      `json:"correction_budget"`
+			FixFindingIDs    []string `json:"fix_finding_ids"`
+		} `json:"correction_request"`
 	} `json:"next_transition"`
 }
 
@@ -444,6 +463,44 @@ func readCorrectionStatusFor(r *journeyRun, lineage string) (waveCorrectionStatu
 	observation := r.run(productArgsFor(r, "review", "status", "--contract", reviewContract, "--next-transition", "--lineage", lineage), false)
 	var status waveCorrectionStatus
 	return status, decodeWaveObservation(observation, &status, "corrected review status")
+}
+
+// requireIssue2093CorrectionCandidate proves the post-forecast boundary that
+// used to be a stop: the product must authorize the external bounded edit with
+// the exact provider-owned request, without changing authority while projecting.
+func requireIssue2093CorrectionCandidate(r *journeyRun) error {
+	first, err := readCorrectionStatus(r)
+	if err != nil {
+		return err
+	}
+	second, err := readCorrectionStatus(r)
+	if err != nil {
+		return err
+	}
+	if first.Authority == nil || second.Authority == nil || first.Authority.State != "correction_required" ||
+		first.Authority.Revision != second.Authority.Revision || first.NextTransition == nil ||
+		first.NextTransition.Kind != "collect" || first.NextTransition.ReasonCode != "correction_candidate_required" ||
+		first.NextTransition.Collect == nil || len(first.NextTransition.Collect.Inputs) != 1 ||
+		first.NextTransition.CorrectionRequest == nil {
+		return fmt.Errorf("issue 2093 correction route was not authoritative and read-only: %+v", first)
+	}
+	input := first.NextTransition.Collect.Inputs[0]
+	request := first.NextTransition.CorrectionRequest
+	if input.Name != "correction_candidate" || input.Schema != "gentle-ai.review-correction-plan-request/v1" ||
+		input.CaptureOperation != "external.apply_correction" || request.RequestHash == "" ||
+		request.LineageID != first.Authority.LineageID || request.ExpectedRevision != first.Authority.Revision ||
+		request.TargetIdentity != first.Projection.CurrentSnapshotIdentity || request.CorrectionBudget <= 0 || len(request.FixFindingIDs) == 0 {
+		return fmt.Errorf("issue 2093 correction binding is incomplete: %+v", first.NextTransition)
+	}
+	arguments := map[string]string{}
+	for _, argument := range input.Arguments {
+		arguments[argument.Name] = argument.Value
+	}
+	if len(arguments) != 3 || arguments["lineage"] != request.LineageID ||
+		arguments["expected-revision"] != request.ExpectedRevision || arguments["target"] != request.TargetIdentity {
+		return fmt.Errorf("issue 2093 correction collection arguments do not bind the request: %+v", input.Arguments)
+	}
+	return nil
 }
 
 func capturePassedCorrectionEvidence(r *journeyRun) error {
@@ -1034,6 +1091,27 @@ func requireCandidateDeclineRejected(name string) func(*Sandbox, Observation) er
 
 func waveOneJourneys() []Journey {
 	return []Journey{
+		{
+			ID:     "j46-issue-2093-correction-transition",
+			Title:  "Forecasted correction: negotiated routing authorizes the bounded external edit before the candidate changes",
+			Source: "issue #2093 + shape 4 (a transition must not stop while its prose tells the caller to act)",
+			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
+				{Name: "fixture: one exact code candidate proven staged", Fixture: stageWaveCandidate},
+				{Name: "review start", Requires: startNamedCapability,
+					Args: productArgs("review", "start", "--lineage", correctedDeliveryLineage), After: rememberLineage},
+				{Name: "capture one blocking finding and finish the lens set", Requires: captureResultCapability, Composite: captureCorrectableFinding},
+				{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability,
+					Args:  productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--captured-results=true"),
+					After: requireReviewState("correction_required", correctedDeliveryLineage)},
+				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability,
+					Args: productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--correction-lines", "2")},
+				{Name: "post-forecast route authorizes the external bounded candidate correction", Requires: statusCapability, Composite: requireIssue2093CorrectionCandidate},
+				{Name: "fixture: corrected candidate proven to change only the reviewed path", Fixture: writeCorrectedCandidate},
+				{Name: "capture passed repository evidence for the provider correction target", Requires: captureOutcomeEvidenceCapability, Composite: capturePassedCorrectionEvidence},
+				{Name: "complete targeted validation and approve the corrected receipt", Requires: finalizeValidationCapability, Composite: completeCorrectedReview},
+			},
+		},
 		{
 			ID:     "j44-corrected-current-changes-delivery",
 			Title:  "Corrected current-changes receipt: one exact linked-worktree delivery is discovered selector-free",

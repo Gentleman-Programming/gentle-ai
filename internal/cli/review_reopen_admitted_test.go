@@ -197,9 +197,9 @@ func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequ
 		contaminatedBytes[order] = payload
 	}
 
-	// Follow the product's messages. The collect transition asks for a
-	// correction forecast; after the forecast, the stop reason must present
-	// both truths, and the second one must name the reopen route runnably.
+	// Follow the product's messages. The first collect transition asks for a
+	// correction forecast; the persisted forecast then authorizes the bounded
+	// external correction without affecting the independent reopen route.
 	transition := nextTransitionForTest(t, repo)
 	if transition == nil || transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != "correction_plan_required" {
 		t.Fatalf("first transition = %#v, want correction_plan_required collect", transition)
@@ -210,18 +210,9 @@ func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequ
 		t.Fatal(err)
 	}
 	transition = nextTransitionForTest(t, repo)
-	if transition == nil || transition.Kind != reviewNextTransitionStop || transition.ReasonCode != "corrected_candidate_unavailable" {
-		t.Fatalf("post-forecast transition = %#v, want corrected_candidate_unavailable stop", transition)
-	}
-	statement, ok := reviewStopReasonStatement("corrected_candidate_unavailable")
-	if !ok {
-		t.Fatal("corrected_candidate_unavailable has no narration statement")
-	}
-	if !strings.Contains(statement, "Change the candidate content") {
-		t.Fatalf("narration lost the real-findings truth: %q", statement)
-	}
-	if !strings.Contains(statement, "review reopen-results") || !strings.Contains(statement, "--quarantine-lens") {
-		t.Fatalf("narration does not name the wrong-input exit runnably: %q", statement)
+	if transition == nil || transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != "correction_candidate_required" ||
+		transition.Collect == nil || len(transition.Collect.Inputs) != 1 || transition.Collect.Inputs[0].CaptureOperation != "external.apply_correction" {
+		t.Fatalf("post-forecast transition = %#v, want correction_candidate_required collect", transition)
 	}
 
 	forecasted, err := store.Load()
