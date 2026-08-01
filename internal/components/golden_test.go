@@ -634,8 +634,8 @@ func TestGoldenEngram_Claude(t *testing.T) {
 		t.Fatalf("engram.InjectWithOptions(claude) changed = false")
 	}
 
-	// MCP server JSON config.
-	mcpJSON := readTestFile(t, filepath.Join(home, ".claude", "mcp", "engram.json"))
+	// Claude user MCP registry, the supported user-scope location.
+	mcpJSON := readTestFile(t, claude.UserConfigPath(home))
 	assertGolden(t, "engram-claude-mcp.golden", mcpJSON)
 
 	// CLAUDE.md with engram-protocol section (slim, per Decision 1).
