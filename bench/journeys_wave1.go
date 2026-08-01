@@ -19,6 +19,9 @@ const (
 	stagedSuccessorLineage   = "wave-one-staged-recovery-successor"
 	fullScopeLineage         = "wave-one-full-scope-source"
 	fullScopeSuccessor       = "wave-one-full-scope-successor"
+	noOpFirstSegment         = "wave-one-noop-chain-first-segment"
+	noOpSecondSegment        = "wave-one-noop-chain-second-segment"
+	noOpSelfLoopLineage      = "wave-one-noop-self-loop"
 	declineCandidateLineage  = "wave-one-candidate-decline"
 	declineCandidatePath     = "scripts/deploy.sh"
 	declineCandidateContents = "#!/bin/sh\necho deploy\n"
@@ -667,6 +670,82 @@ func requireStagedSuccessorGate(_ *Sandbox, observation Observation) error {
 	return requireGateForLineage(observation, stagedSuccessorLineage, false)
 }
 
+// noOpChainGate is the composed pre-PR envelope reduced to the two facts this
+// journey compares across the no-op: whether delivery was authorized, and which
+// tree transition the composed proof spans. waveGateResult omits the trees.
+type noOpChainGate struct {
+	Result  string `json:"result"`
+	Allowed bool   `json:"allowed"`
+	Context struct {
+		LineageID     string `json:"lineage_id"`
+		BaseTree      string `json:"base_tree"`
+		CandidateTree string `json:"candidate_tree"`
+		Denial        *struct {
+			Stage string `json:"stage"`
+			Code  string `json:"code"`
+		} `json:"denial"`
+	} `json:"context"`
+}
+
+// recordNoOpChainComposition stores the composed two-segment proof span so the
+// same gate can be compared byte for byte after an unrelated no-op authority is
+// approved. Storing the span, not just "allow", is what makes the later
+// assertion meaningful: a fix that authorized delivery while silently narrowing
+// the composed range would still pass an allow-only check.
+func recordNoOpChainComposition(sandbox *Sandbox, observation Observation) error {
+	var gate noOpChainGate
+	if err := decodeWaveObservation(observation, &gate, "composed pre-PR chain"); err != nil {
+		return err
+	}
+	if !gate.Allowed || gate.Result != "allow" || gate.Context.LineageID != noOpSecondSegment {
+		return fmt.Errorf("two-segment delivery was not authorized before the no-op: %+v", gate)
+	}
+	if gate.Context.BaseTree == "" || gate.Context.CandidateTree == "" || gate.Context.BaseTree == gate.Context.CandidateTree {
+		return fmt.Errorf("composed proof does not span a real tree transition: %+v", gate)
+	}
+	sandbox.Scratch["noop-chain-base-tree"] = gate.Context.BaseTree
+	sandbox.Scratch["noop-chain-candidate-tree"] = gate.Context.CandidateTree
+	return nil
+}
+
+// requireNoOpChainCompositionUnchanged is the regression this journey exists
+// for. A clean approved no-op reviewed a candidate identical to its own base, so
+// its receipt edge is a self-loop that delivers nothing. Before the fix it
+// entered the delivery graph, tripped cycle detection, and denied composition
+// for every unrelated lineage in the repository. Delivery must stay authorized
+// over the exact same composed span it had before that authority existed.
+func requireNoOpChainCompositionUnchanged(sandbox *Sandbox, observation Observation) error {
+	var gate noOpChainGate
+	if err := decodeWaveObservation(observation, &gate, "composed pre-PR chain after no-op"); err != nil {
+		return err
+	}
+	if !gate.Allowed || gate.Result != "allow" {
+		return fmt.Errorf("an unrelated clean no-op authority denied two-segment delivery: %+v", gate)
+	}
+	if gate.Context.BaseTree != sandbox.Scratch["noop-chain-base-tree"] ||
+		gate.Context.CandidateTree != sandbox.Scratch["noop-chain-candidate-tree"] {
+		return fmt.Errorf("no-op authority changed the composed delivery span: got base %q candidate %q, want base %q candidate %q",
+			gate.Context.BaseTree, gate.Context.CandidateTree,
+			sandbox.Scratch["noop-chain-base-tree"], sandbox.Scratch["noop-chain-candidate-tree"])
+	}
+	return nil
+}
+
+// proveNoOpSelfLoopApproved fails closed if the fixture stopped producing the
+// shape under test. The journey only proves something if the extra authority is
+// genuinely approved and genuinely a no-op; a refused or non-degenerate start
+// would make the later comparison pass for the wrong reason.
+func proveNoOpSelfLoopApproved(_ *Sandbox, observation Observation) error {
+	var result waveOperationResult
+	if err := decodeWaveObservation(observation, &result, "no-op self-loop finalize"); err != nil {
+		return err
+	}
+	if result.LineageID != noOpSelfLoopLineage || result.State != "approved" {
+		return fmt.Errorf("no-op self-loop authority is not an approved no-op: %+v", result)
+	}
+	return nil
+}
+
 func proveCorrectedPrePush(sandbox *Sandbox, observation Observation) error {
 	if err := requireGateForLineage(observation, correctedDeliveryLineage, true); err != nil {
 		return err
@@ -1218,6 +1297,41 @@ func waveOneJourneys() []Journey {
 				{Name: "fixture: restore bytes and add path drift", Fixture: addDeclinedPathDrift},
 				{Name: "path drift cannot inherit candidate decline", Requires: validateCapability,
 					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireCandidateDeclineRejected("path drift")},
+			},
+		},
+		{
+			// The two segments are approved and committed BEFORE the no-op exists,
+			// and the composed span is recorded at that point. The no-op is then
+			// approved on a clean worktree, which is what makes it a self-loop:
+			// its candidate equals its own base, so it delivers no tree
+			// transition. Re-running the identical gate is the whole test.
+			ID:     "j51-unrelated-noop-authority-keeps-composed-delivery",
+			Title:  "Composed pre-PR delivery: an unrelated clean no-op authority never denies a two-segment chain",
+			Source: "issue #2125",
+			Steps: []Step{
+				{Name: "fixture: repo with remote", Fixture: baseRepoWithRemote},
+				{Name: "fixture: stage first segment", Fixture: stageDocs("segment-one")},
+				{Name: "review first segment", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", noOpFirstSegment)},
+				{Name: "approve first segment", Requires: finalizeCapability, Args: productArgs("review", "finalize", "--lineage", noOpFirstSegment)},
+				{Name: "first segment pre-commit allows", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", noOpFirstSegment, "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
+					return requireGateForLineage(observation, noOpFirstSegment, false)
+				}},
+				{Name: "fixture: commit first segment", Fixture: commitStaged("docs: segment one")},
+				{Name: "fixture: stage second segment", Fixture: stageDocs("segment-two")},
+				{Name: "review second segment", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", noOpSecondSegment)},
+				{Name: "approve second segment", Requires: finalizeCapability, Args: productArgs("review", "finalize", "--lineage", noOpSecondSegment)},
+				{Name: "second segment pre-commit allows", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", noOpSecondSegment, "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
+					return requireGateForLineage(observation, noOpSecondSegment, false)
+				}},
+				{Name: "fixture: commit second segment", Fixture: commitStaged("docs: segment two")},
+				// No --lineage: composition is only attempted for a selector-free
+				// pre-PR gate (compact_chain.go rejects the request outright when a
+				// lineage is named), because naming one asks for that single
+				// receipt instead of the composed chain.
+				{Name: "two delivered segments compose before the no-op", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-pr", "--base-ref", "origin/main"), After: recordNoOpChainComposition},
+				{Name: "review the clean worktree as a no-op", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", noOpSelfLoopLineage)},
+				{Name: "approve the no-op self-loop", Requires: finalizeCapability, Args: productArgs("review", "finalize", "--lineage", noOpSelfLoopLineage), After: proveNoOpSelfLoopApproved},
+				{Name: "same two segments still compose after the no-op", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-pr", "--base-ref", "origin/main"), After: requireNoOpChainCompositionUnchanged, AbortOnBlock: true},
 			},
 		},
 	}

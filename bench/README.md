@@ -306,7 +306,7 @@ invents a metric is worse than one that admits a gap.
    classifier reads a field other than exit code and denial shape, and widening
    it would let the product talk its way out of a denial.
 
-7. **The corpus is honest, not exhaustive.** Forty-nine core journeys that run
+7. **The corpus is honest, not exhaustive.** Fifty-one core journeys that run
    end to end, weighted toward failure paths because that is where friction
    lives. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts) are
    inspection steps rather than review-lifecycle friction and are not modelled.
@@ -388,7 +388,7 @@ invents a metric is worse than one that admits a gap.
     (cluttered repositories, interleaved lifecycles) governed by a different
     growth rule: community-reported shapes become journeys, so its size tracks
     community reports, not releases, and folding it into the core would make
-    "50 journeys" a moving claim. Two of its numbers need careful reading.
+    "51 journeys" a moving claim. Two of its numbers need careful reading.
     `rw01` pins issue #1881 while a product fix is in flight: a block there is
     the truth about today's build, not a permanent verdict, and the journey is
     kept precisely so the fix has a permanent pin. And the no-echo assertions
@@ -431,7 +431,7 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 
 Those numbers are the **14-journey** corpus against the binary named above,
 kept as-is because they belong to that named build. The corpus has since grown
-to 50 journeys; re-run `run` against your own binary rather than reading the
+to 51 journeys; re-run `run` against your own binary rather than reading the
 block above as current totals. The row labels moved too: `by_design` did not
 exist when this was recorded and is now printed as `4d`, next to the number it
 carves out of, with `dead_end` at `4e`.
@@ -565,7 +565,7 @@ cannot silently decay into the already-covered corrupt-record case.
 
 ### Wave 1 integration regressions (`journeys_wave1.go`)
 
-Journeys 44 to 50 pin fixes that internal tests already covered below the user
+Journeys 44 to 51 pin fixes that internal tests already covered below the user
 boundary. All remain core black-box journeys: fixtures create repository inputs,
 and every native authority state is reached through the measured binary.
 
@@ -578,6 +578,7 @@ and every native authority state is reached through the measured binary.
 | `j48-recovered-workspace-preserves-full-candidate-scope` | two-path workspace candidate, strict-subset correction, complete terminal and recovered scope, immediate pre-commit allow, byte/path drift controls | issue #2090 |
 | `j49-status-without-cwd-honors-kill-switch` | clone-local mode disabled, explicit-CWD control, omitted-CWD status using the same repository identity, disabled/unmanaged archive without approval | issue #2129 |
 | `j50-candidate-decline-preserves-frozen-delivery-identity` | status-derived v2 consent relay and decline, exact non-authorizing delivery identity, clean authority inventory, release and byte/path drift controls | issue #2045 |
+| `j51-unrelated-noop-authority-keeps-composed-delivery` | two approved delivered segments, recorded composed pre-PR span, unrelated clean approved no-op, identical composed span afterward | issue #2125 |
 
 `j44` proves the linked checkout/common-dir topology and remote baseline before
 review starts, then proves the staged delivery tree equals the corrected receipt
@@ -598,6 +599,12 @@ the same archive-ready change without fabricating review authority. `j50`
 executes only provider-emitted START and decline invocations, then proves the
 unchanged staged candidate retains its base/tree/path identity without review
 authority while release, byte drift, and path drift cannot inherit the decline.
+`j51` records the composed pre-PR span across two delivered segments before an
+unrelated clean no-op authority exists, then approves that no-op on a clean
+worktree and requires the identical selector-free gate to allow the identical
+span. Comparing the span, not just the verdict, is what makes it a regression:
+a graph that admitted the no-op self-loop denied composition for every
+unrelated lineage in the repository.
 
 ## Opt-in axes
 
@@ -619,7 +626,7 @@ its own declaration.
 
 - **Nothing runs unless you name it.** Default is the core alone. `--axis all`
   takes everything registered. An unknown name is a hard error, because
-  "50 journeys" and "50 journeys plus an axis" are different measurements and a
+  "51 journeys" and "51 journeys plus an axis" are different measurements and a
   typo must never silently produce the first.
 - **The core does not depend on any axis.** `rm bench/axis_damaged_store*.go`
   leaves the corpus compiling, testing and reporting exactly the numbers it
