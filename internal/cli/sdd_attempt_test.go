@@ -455,6 +455,79 @@ func TestRunSDDAttemptFinishAcceptsApprovedSelfRemediationSuccessor(t *testing.T
 	}
 }
 
+// TestRunSDDAttemptFinishAcceptsPureEngramBinding is the acceptance regression
+// for a pure Engram change: the repository never grows an OpenSpec change root,
+// so the binding published by BindApprovedReview carries compact authority and
+// the live post-apply gate as its complete provenance. Creating that binding is
+// not enough — this drives it through `sdd-attempt finish` as the remediation
+// successor to prove the runtime ledger actually accepts it and completes.
+func TestRunSDDAttemptFinishAcceptsPureEngramBinding(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	change := "cli-engram-change"
+	if _, err := os.Stat(filepath.Join(repo, "openspec")); !os.IsNotExist(err) {
+		t.Fatalf("pure Engram repository unexpectedly has an OpenSpec root: %v", err)
+	}
+
+	started := runSDDAttemptStatus(t, []string{
+		"begin", "--cwd", repo, "--change", change, "--expected-revision=", "--request-id", "engram-begin-1",
+		"--work-unit", "cli-engram-change", "--evidence-goal", "repair failed Engram verification evidence",
+		"--max-attempts", "3", "--max-changed-lines", "40",
+	})
+	failedEvidence := cliAttemptHash('c')
+	failed := runSDDAttemptStatus(t, []string{
+		"finish", "--cwd", repo, "--change", change, "--expected-revision", started.Revision, "--request-id", "engram-finish-1",
+		"--outcome", "failed", "--evidence-revision", failedEvidence,
+		"--diagnosis", "pure Engram verification failed before bounded remediation", "--harness-disposition", "reused",
+		"--cleanup-evidence", "Engram predecessor cleanup completed",
+		"--process-evidence", "Engram predecessor process scan found no descendants",
+	})
+	active := runSDDAttemptStatus(t, []string{
+		"begin", "--cwd", repo, "--change", change, "--expected-revision", failed.Revision, "--request-id", "engram-begin-2",
+		"--work-unit", "cli-engram-change", "--evidence-goal", "repair failed Engram verification evidence",
+		"--max-attempts", "3", "--max-changed-lines", "40",
+	})
+	if active.ActiveAttempt == nil || active.EvidenceRevision != failedEvidence {
+		t.Fatalf("pre-remediation pure Engram CLI status = %#v", active)
+	}
+
+	// The bounded correction lands in ordinary tracked source, not in planning files.
+	writeCLIAttemptFile(t, filepath.Join(repo, "tracked.txt"), "base\nbounded Engram remediation\n")
+	lineage := "cli-engram-lineage"
+	writeCLIApprovedCompactAuthority(t, repo, lineage)
+	binding, err := sddstatus.BindApprovedReview(context.Background(), repo, change, lineage, "")
+	if err != nil {
+		t.Fatalf("bind approved review for a pure Engram change: %v", err)
+	}
+	postBind := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+	if postBind.Binding == nil || postBind.Binding.Revision != binding.Revision {
+		t.Fatalf("post-bind pure Engram CLI status = %#v", postBind)
+	}
+
+	completed := runSDDAttemptStatus(t, []string{
+		"finish", "--cwd", repo, "--change", change, "--expected-revision", postBind.Revision, "--request-id", "engram-finish-2",
+		"--outcome", "passed", "--evidence-revision", cliAttemptHash('d'),
+		"--diagnosis", "bounded Engram remediation passed corrected verification", "--harness-disposition", "reused",
+		"--cleanup-evidence", "Engram remediation cleanup completed",
+		"--process-evidence", "Engram remediation process scan found no descendants",
+		"--expected-binding-revision", binding.Revision, "--successor-lineage", lineage,
+		"--remediates-evidence-revision", failedEvidence,
+	})
+	if !completed.Complete || completed.ActiveAttempt != nil || completed.NextAction != sddstatus.RuntimeActionComplete {
+		t.Fatalf("pure Engram CLI completion = %#v", completed)
+	}
+	if completed.Binding == nil || completed.Binding.Lineage != lineage || completed.Binding.Revision != binding.Revision {
+		t.Fatalf("pure Engram CLI binding = %#v", completed.Binding)
+	}
+	last := completed.Attempts[len(completed.Attempts)-1]
+	if last.Outcome != sddstatus.AttemptPassed || last.RemediatesEvidenceRevision != failedEvidence ||
+		last.EvidenceRevision != cliAttemptHash('d') || last.ChangedLines == 0 {
+		t.Fatalf("pure Engram CLI attempt = %#v", last)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "openspec")); !os.IsNotExist(err) {
+		t.Fatalf("pure Engram finish created or required an OpenSpec root: %v", err)
+	}
+}
+
 func writeCLIAttemptFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
