@@ -830,6 +830,19 @@ func requireExplicitInvalidArchiveStatus(_ *Sandbox, observation Observation) er
 	})(nil, observation)
 }
 
+func requireDisabledUnmanagedArchiveStatus(name string) func(*Sandbox, Observation) error {
+	return sddStatusAssertion(name, func(status sddStatusV1) error {
+		if status.ReviewGate == nil || status.ReviewGate.Delivery != deliveryDisabledUnmanaged || status.ReviewGate.Result == "allow" {
+			return fmt.Errorf("reviewGate = %+v, want non-authorizing disabled/unmanaged delivery", status.ReviewGate)
+		}
+		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
+			return fmt.Errorf("archive=%q next=%q blocked=%v, want ready/archive with no blockers",
+				status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
+		}
+		return nil
+	})
+}
+
 func proveArchiveAuthorityUnchanged(sandbox *Sandbox) error {
 	head, err := proveAuthorities(sandbox)
 	if err != nil {
@@ -995,6 +1008,22 @@ func waveOneJourneys() []Journey {
 				}},
 				{Name: "fixture: add path outside recovered scope", Fixture: addFullScopePathDrift},
 				{Name: "path drift still fails closed", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", fullScopeSuccessor, "--gate", "pre-commit"), After: requireFullScopeDrift},
+			},
+		},
+		{
+			ID:     "j49-status-without-cwd-honors-kill-switch",
+			Title:  "SDD status without CWD: repository resolution and the kill switch share one workspace",
+			Source: "issue #2129",
+			Steps: []Step{
+				{Name: "fixture: archive-ready SDD change", Fixture: sddPlanningArtifacts(sddVerifyReport)},
+				{Name: "disable review mode for the clone", Requires: modeCapability,
+					Args: productArgs("review", "mode", "disable", "--scope", "clone", "--json")},
+				{Name: "explicit CWD honors disabled mode", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDisabledUnmanagedArchiveStatus("explicit CWD control")},
+				{Name: "omitted CWD honors the same disabled mode", Requires: sddStatusCapability,
+					Args: func(*Sandbox) ([]string, error) {
+						return []string{"sdd-status", sddChange, "--json"}, nil
+					}, After: requireDisabledUnmanagedArchiveStatus("omitted CWD")},
 			},
 		},
 	}
