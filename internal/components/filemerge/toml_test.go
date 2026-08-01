@@ -337,6 +337,29 @@ model_reasoning_effort = "nested-effort"
 	}
 }
 
+func TestUpsertTopLevelTOMLString_PreservesRootMultilineArrays(t *testing.T) {
+	input := `items = [
+["value"]
+]
+model = "old"
+`
+
+	got := UpsertTopLevelTOMLString(input, "model", "new")
+
+	if !strings.Contains(got, `items = [
+["value"]
+]
+`) {
+		t.Fatalf("root array was modified:\n%s", got)
+	}
+	if strings.Count(got, `model = "new"`) != 1 {
+		t.Fatalf("expected exactly one replacement, got:\n%s", got)
+	}
+	if strings.Contains(got, `model = "old"`) {
+		t.Fatalf("old root assignment was retained:\n%s", got)
+	}
+}
+
 func TestUpsertTopLevelTOMLString_IgnoresTableLikeMultilineValues(t *testing.T) {
 	tests := []struct {
 		name  string

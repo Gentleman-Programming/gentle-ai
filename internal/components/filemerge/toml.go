@@ -335,35 +335,37 @@ func UpsertTopLevelTOMLString(content, key, value string) string {
 	// Assignments after a table or array-table header belong to that table.
 	var cleaned []string
 	inTopLevel := true
+	rootArrayDepth := 0
 	var multilineQuote byte
 	var removingMultilineQuote byte
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if removingMultilineQuote != 0 {
-			removingMultilineQuote = updateTOMLMultilineString(line, removingMultilineQuote)
+			removingMultilineQuote = updateTOMLMultilineString(line, removingMultilineQuote, nil)
 			continue
 		}
-		if inTopLevel && multilineQuote == 0 && isTOMLKeyAssignment(trimmed, key) {
-			removingMultilineQuote = updateTOMLMultilineString(line, 0)
+		if inTopLevel && rootArrayDepth == 0 && multilineQuote == 0 && isTOMLKeyAssignment(trimmed, key) {
+			removingMultilineQuote = updateTOMLMultilineString(line, 0, nil)
 			continue
 		}
 		cleaned = append(cleaned, line)
-		if multilineQuote == 0 && isTOMLTableHeader(trimmed) {
+		if rootArrayDepth == 0 && multilineQuote == 0 && isTOMLTableHeader(trimmed) {
 			inTopLevel = false
 		}
-		multilineQuote = updateTOMLMultilineString(line, multilineQuote)
+		multilineQuote = updateTOMLMultilineString(line, multilineQuote, &rootArrayDepth)
 	}
 
 	// Find insertion point: before the first [section] header.
 	insertAt := len(cleaned)
+	rootArrayDepth = 0
 	multilineQuote = 0
 	for i, line := range cleaned {
 		trimmed := strings.TrimSpace(line)
-		if multilineQuote == 0 && isTOMLTableHeader(trimmed) {
+		if rootArrayDepth == 0 && multilineQuote == 0 && isTOMLTableHeader(trimmed) {
 			insertAt = i
 			break
 		}
-		multilineQuote = updateTOMLMultilineString(line, multilineQuote)
+		multilineQuote = updateTOMLMultilineString(line, multilineQuote, &rootArrayDepth)
 	}
 
 	var out []string
@@ -387,8 +389,8 @@ func isTOMLKeyAssignment(line, key string) bool {
 }
 
 // updateTOMLMultilineString tracks multiline basic and literal string values.
-// Table-like lines inside those values are content, not TOML table headers.
-func updateTOMLMultilineString(line string, multilineQuote byte) byte {
+// When arrayDepth is provided, it also tracks brackets outside strings and comments.
+func updateTOMLMultilineString(line string, multilineQuote byte, arrayDepth *int) byte {
 	var quote byte
 	escaped := false
 	for i := 0; i < len(line); i++ {
@@ -423,6 +425,14 @@ func updateTOMLMultilineString(line string, multilineQuote byte) byte {
 				continue
 			}
 			quote = char
+		case '[':
+			if arrayDepth != nil {
+				(*arrayDepth)++
+			}
+		case ']':
+			if arrayDepth != nil && *arrayDepth > 0 {
+				(*arrayDepth)--
+			}
 		}
 	}
 
