@@ -76,7 +76,8 @@ func TestScoopCommandCancelsRunningProcess(t *testing.T) {
 	t.Setenv("GENTLE_AI_SCOOP_COMMAND_READY", readyPath)
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		if name != "scoop" || !sameStrings(args, []string{"update", "gentle-ai"}) {
-			t.Fatalf("command = %q %v, want scoop update gentle-ai", name, args)
+			t.Errorf("command = %q %v, want scoop update gentle-ai", name, args)
+			return exec.Command(os.Args[0], "-test.run=^$")
 		}
 		return exec.Command(os.Args[0], "-test.run=^TestScoopCommandCancellationHelper$", "--")
 	}
