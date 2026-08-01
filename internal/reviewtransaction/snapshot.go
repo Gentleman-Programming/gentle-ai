@@ -1079,13 +1079,12 @@ func (builder SnapshotBuilder) resolveExactRevision(ctx context.Context, revisio
 	if err := builder.rejectRepositoryLocalGrafts(ctx); err != nil {
 		return "", "", err
 	}
-	parentsOutput, err := runGit(ctx, builder.Repo, nil, nil, "rev-list", "--parents", "-n", "1", commit)
+	parents, err := builder.rawCommitParents(ctx, commit)
 	if err != nil {
 		return "", "", err
 	}
-	parents := strings.Fields(string(parentsOutput))
-	if len(parents) > 1 {
-		base, err := builder.resolveTree(ctx, parents[1])
+	if len(parents) > 0 {
+		base, err := builder.resolveTree(ctx, parents[0])
 		return base, candidate, err
 	}
 	emptyTreeOutput, err := runGit(ctx, builder.Repo, nil, []byte{}, "mktree")
@@ -1095,6 +1094,21 @@ func (builder SnapshotBuilder) resolveExactRevision(ctx context.Context, revisio
 	return strings.TrimSpace(string(emptyTreeOutput)), candidate, nil
 }
 
+func (builder SnapshotBuilder) rawCommitParents(ctx context.Context, commit string) ([]string, error) {
+	object, err := runGit(ctx, builder.Repo, []string{"GIT_NO_REPLACE_OBJECTS=1"}, nil, "cat-file", "commit", commit)
+	if err != nil {
+		return nil, err
+	}
+	headers, _, _ := bytes.Cut(object, []byte("\n\n"))
+	var parents []string
+	for _, header := range bytes.Split(headers, []byte{'\n'}) {
+		if parent, found := bytes.CutPrefix(header, []byte("parent ")); found {
+			parents = append(parents, string(parent))
+		}
+	}
+	return parents, nil
+}
+
 func (builder SnapshotBuilder) rejectRepositoryLocalGrafts(ctx context.Context) error {
 	commonDir, err := resolveGitDirectory(ctx, builder.Repo, "--git-common-dir")
 	if err != nil {
@@ -1102,7 +1116,7 @@ func (builder SnapshotBuilder) rejectRepositoryLocalGrafts(ctx context.Context) 
 	}
 	if _, err := os.Stat(filepath.Join(commonDir, "info", "grafts")); err == nil {
 		// guard:population exact-revision-history fail-closed: legitimate exact-revision inputs derive ancestry from the repository's native commit graph; locally rewritten graft ancestry is excluded
-		return errors.New("exact revision snapshot refuses repository-local Git grafts")
+		return errors.New("exact revision snapshot refuses repository-local Git grafts") // refusal:by-design world-action: removing repository-local graft state requires external repository cleanup, not a product command
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect repository-local Git grafts: %w", err)
 	}
