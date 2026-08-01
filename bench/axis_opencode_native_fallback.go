@@ -32,15 +32,26 @@ func init() {
 }
 
 func openCodeNativeFallbackJourneys() []Journey {
-	return []Journey{{
-		ID:     "oc01-native-fallback-model-persistence",
-		Title:  "Sync persists sdd-mid defaults and gentle-orchestrator delegates to native general and explore roles",
-		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2104",
-		Steps: []Step{
-			{Name: "fixture: repository", Fixture: baseRepo},
-			{Name: "sync persists and routes shared sdd-mid native fallback assignments", Skip: pinnedOpenCodeUnavailable, Composite: syncNativeFallbackAssignments},
+	return []Journey{
+		{
+			ID:     "oc01-native-fallback-model-persistence",
+			Title:  "Sync persists sdd-mid defaults and gentle-orchestrator delegates to native general and explore roles",
+			Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2104",
+			Steps: []Step{
+				{Name: "fixture: repository", Fixture: baseRepo},
+				{Name: "sync persists and routes shared sdd-mid native fallback assignments", Skip: pinnedOpenCodeUnavailable, Composite: syncNativeFallbackAssignments},
+			},
 		},
-	}}
+		{
+			ID:     "oc02-native-fallback-picker-selection",
+			Title:  "Sync preserves explicit picker assignments for native general and explore roles",
+			Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2197",
+			Steps: []Step{
+				{Name: "fixture: repository", Fixture: baseRepo},
+				{Name: "sync persists and routes explicit native picker assignments", Skip: pinnedOpenCodeUnavailable, Composite: syncExplicitNativeFallbackPickerAssignments},
+			},
+		},
+	}
 }
 
 func pinnedOpenCodeUnavailable(*Sandbox) string {
@@ -58,6 +69,30 @@ func pinnedOpenCodeUnavailable(*Sandbox) string {
 }
 
 func syncNativeFallbackAssignments(r *journeyRun) error {
+	return syncNativeFallbackAssignmentsForRoles(r, map[string]map[string]string{
+		"sdd-mid": {"provider_id": "fixture", "model_id": "mid", "effort": "medium"},
+	}, map[string]nativeFallbackAssignment{
+		"general": {model: "mid", variant: "medium"},
+		"explore": {model: "mid", variant: "medium"},
+	})
+}
+
+func syncExplicitNativeFallbackPickerAssignments(r *journeyRun) error {
+	return syncNativeFallbackAssignmentsForRoles(r, map[string]map[string]string{
+		"general": {"provider_id": "fixture", "model_id": "explicit-general", "effort": "high"},
+		"explore": {"provider_id": "fixture", "model_id": "explicit-explore", "effort": "low"},
+	}, map[string]nativeFallbackAssignment{
+		"general": {model: "explicit-general", variant: "high"},
+		"explore": {model: "explicit-explore", variant: "low"},
+	})
+}
+
+type nativeFallbackAssignment struct {
+	model   string
+	variant string
+}
+
+func syncNativeFallbackAssignmentsForRoles(r *journeyRun, assignments map[string]map[string]string, want map[string]nativeFallbackAssignment) error {
 	home := r.sandbox.Home
 	configDir := filepath.Join(home, ".config", "opencode")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
@@ -66,12 +101,21 @@ func syncNativeFallbackAssignments(r *journeyRun) error {
 	fixture := &nativeFallbackFixture{}
 	server := httptest.NewServer(http.HandlerFunc(fixture.serveHTTP))
 	defer server.Close()
+	models := map[string]any{
+		"root": map[string]any{"name": "Root", "tool_call": true},
+		"mid":  map[string]any{"name": "Mid", "tool_call": true},
+	}
+	for _, expected := range want {
+		if _, exists := models[expected.model]; !exists {
+			models[expected.model] = map[string]any{"name": expected.model, "tool_call": true}
+		}
+	}
 	config := map[string]any{
 		"model": "fixture/root",
 		"provider": map[string]any{"fixture": map[string]any{
 			"npm":     "@ai-sdk/openai-compatible",
 			"options": map[string]any{"baseURL": server.URL + "/v1", "apiKey": "fixture"},
-			"models":  map[string]any{"root": map[string]any{"name": "Root", "tool_call": true}, "mid": map[string]any{"name": "Mid", "tool_call": true}},
+			"models":  models,
 		}},
 		"plugin": []any{},
 	}
@@ -92,9 +136,7 @@ func syncNativeFallbackAssignments(r *journeyRun) error {
 		"preset":               "full-gentleman",
 		"sdd_mode":             "multi",
 		"persona":              "neutral",
-		"model_assignments": map[string]any{
-			"sdd-mid": map[string]string{"provider_id": "fixture", "model_id": "mid", "effort": "medium"},
-		},
+		"model_assignments":    assignments,
 	}
 	raw, err := json.Marshal(state)
 	if err != nil {
@@ -124,13 +166,18 @@ func syncNativeFallbackAssignments(r *journeyRun) error {
 	if err := json.Unmarshal(settings, &decoded); err != nil {
 		return err
 	}
-	for role, want := range map[string]struct{ model, variant string }{
-		"general": {"fixture/mid", "medium"},
-		"explore": {"fixture/mid", "medium"},
-	} {
+	modelRoles := make(map[string]int, len(want))
+	for _, expected := range want {
+		modelRoles[expected.model]++
+	}
+	fixture.roleModels = make(map[string]string, len(want))
+	for role, expected := range want {
+		if modelRoles[expected.model] == 1 {
+			fixture.roleModels[expected.model] = role
+		}
 		got := decoded.Agent[role]
-		if got.Model != want.model || got.Variant != want.variant {
-			return fmt.Errorf("%s persisted as %#v, want model %q variant %q", role, got, want.model, want.variant)
+		if got.Model != "fixture/"+expected.model || got.Variant != expected.variant {
+			return fmt.Errorf("%s persisted as %#v, want model %q variant %q", role, got, "fixture/"+expected.model, expected.variant)
 		}
 	}
 
@@ -170,12 +217,13 @@ func syncNativeFallbackAssignments(r *journeyRun) error {
 }
 
 type nativeFallbackFixture struct {
-	mu        sync.Mutex
-	next      int
-	models    []string
-	tasks     []string
-	roles     []string
-	responses []string
+	mu         sync.Mutex
+	next       int
+	models     []string
+	tasks      []string
+	roles      []string
+	responses  []string
+	roleModels map[string]string
 }
 
 type nativeFallbackRequest struct {
@@ -202,18 +250,26 @@ func (f *nativeFallbackFixture) serveHTTP(writer http.ResponseWriter, request *h
 		return
 	}
 	requestText := nativeFallbackRequestText(input)
-	for _, role := range []string{"general", "explore"} {
-		if input.Model == "mid" || input.Model == "fixture/mid" {
-			if !strings.Contains(requestText, "ROLE_RESPONSE "+role) {
-				continue
+	if role := f.roleModels[strings.TrimPrefix(input.Model, "fixture/")]; role != "" {
+		f.roles = append(f.roles, role)
+		f.responses = append(f.responses, "ROLE_RESPONSE "+role)
+		f.mu.Unlock()
+		if err := writeNativeFallbackText(writer, "ROLE_RESPONSE "+role); err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	if strings.TrimPrefix(input.Model, "fixture/") == "mid" {
+		for _, role := range []string{"general", "explore"} {
+			if strings.Contains(requestText, "ROLE_RESPONSE "+role) {
+				f.roles = append(f.roles, role)
+				f.responses = append(f.responses, "ROLE_RESPONSE "+role)
+				f.mu.Unlock()
+				if err := writeNativeFallbackText(writer, "ROLE_RESPONSE "+role); err != nil {
+					http.Error(writer, err.Error(), http.StatusInternalServerError)
+				}
+				return
 			}
-			f.roles = append(f.roles, role)
-			f.responses = append(f.responses, "ROLE_RESPONSE "+role)
-			f.mu.Unlock()
-			if err := writeNativeFallbackText(writer, "ROLE_RESPONSE "+role); err != nil {
-				http.Error(writer, err.Error(), http.StatusInternalServerError)
-			}
-			return
 		}
 	}
 	if f.next == 0 {

@@ -385,8 +385,9 @@ func TestReviewPhasesCompleteRuntimeSet(t *testing.T) {
 	}
 
 	configurable := ConfigurableAgentPhases()
-	if got := configurable[len(configurable)-len(want):]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("ConfigurableAgentPhases() review suffix = %v, want %v", got, want)
+	wantConfigurableSuffix := append(want, NativeFallbackPhases()...)
+	if got := configurable[len(configurable)-len(wantConfigurableSuffix):]; !reflect.DeepEqual(got, wantConfigurableSuffix) {
+		t.Fatalf("ConfigurableAgentPhases() suffix = %v, want %v", got, wantConfigurableSuffix)
 	}
 }
 

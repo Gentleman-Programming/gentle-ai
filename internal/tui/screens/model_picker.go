@@ -316,7 +316,7 @@ func modelPickerRowsWithCustom(includeReview bool, customAgents []string) []stri
 }
 
 func modelPickerRowsWithCustomIdentity(includeReview bool, customAgents []string) []ModelPickerRow {
-	rows := make([]ModelPickerRow, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases())+1+len(opencode.ReviewPhases())+len(customAgents)+2)
+	rows := make([]ModelPickerRow, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases())+1+len(opencode.ReviewPhases())+1+len(opencode.NativeFallbackPhases())+len(customAgents)+2)
 	rows = append(rows,
 		ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: SDDOrchestratorPhase, AgentID: SDDOrchestratorPhase},
 		ModelPickerRow{Kind: ModelPickerRowKindSetAllSDD, Label: "Set all SDD phases"},
@@ -333,6 +333,12 @@ func modelPickerRowsWithCustomIdentity(includeReview bool, customAgents []string
 	if includeReview && len(opencode.ReviewPhases()) > 0 {
 		rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindSeparator, Label: "--- Review agents ---"})
 		for _, phase := range opencode.ReviewPhases() {
+			rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: phase, AgentID: phase})
+		}
+	}
+	if includeReview && len(opencode.NativeFallbackPhases()) > 0 {
+		rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindSeparator, Label: "--- Native fallback agents ---"})
+		for _, phase := range opencode.NativeFallbackPhases() {
 			rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: phase, AgentID: phase})
 		}
 	}
