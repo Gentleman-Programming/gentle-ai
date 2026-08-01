@@ -804,12 +804,15 @@ func linkedWorktreeDirectories(ctx context.Context, root string) ([]string, erro
 	return directories, nil
 }
 
-// LinkedWorktreeBlastRadius reports how many other worktree checkouts share
-// this repository's Git common directory. A clone-local override is stored
-// under that common directory, so a status can announce exactly how wide the
-// blast radius of the deciding clone-local record is. It is strictly
-// informational: it never changes the resolved mode, and it reports 0 for a
-// checkout with no siblings.
+// LinkedWorktreeBlastRadius reports how many other checkouts of this
+// repository share its Git common directory. The count covers every other
+// checkout of the clone, including the main worktree when this is called from
+// a linked worktree, because git worktree list emits both the main and linked
+// checkouts and the caller is excluded. A clone-local override is stored under
+// that common directory, so a status can announce exactly how wide the blast
+// radius of the deciding clone-local record is. It is strictly informational:
+// it never changes the resolved mode, and it reports 0 for a checkout with no
+// siblings.
 func LinkedWorktreeBlastRadius(ctx context.Context, repo string) (int, error) {
 	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {

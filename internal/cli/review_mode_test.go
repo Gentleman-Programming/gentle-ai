@@ -463,7 +463,7 @@ func TestReviewModeRejectsUnknownSubcommandAndScope(t *testing.T) {
 // and never touches the main clone. Status from the worktree must not announce
 // a blast radius for its private override.
 func TestReviewModeWorktreeScopeDisablesOnlyThisWorktree(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	linked := filepath.Join(t.TempDir(), "linked")
 	runReviewCLIGit(t, repo, "worktree", "add", "-b", "review-mode-linked", linked, "HEAD")

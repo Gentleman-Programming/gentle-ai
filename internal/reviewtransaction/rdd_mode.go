@@ -261,6 +261,9 @@ func reviewModeEnableForSource(source RDDModeSource) string {
 	if source == RDDModeSourceCloneLocal {
 		return enable + "global then " + enable + "clone"
 	}
+	if source == RDDModeSourceWorktreeLocal {
+		return enable + "worktree"
+	}
 	return enable + "global"
 }
 
@@ -442,7 +445,12 @@ func setRDDModeOverride(
 			return currentStatus, &RDDDisabledError{Operation: RDDOperationStart, Source: RDDModeSourceGlobal}
 		}
 	}
-	dir, _, err := rddModeStorageRoot(ctx, repo, true, storage)
+	var dir string
+	if storage == rddOverrideWorktreeLocal {
+		dir, _, err = worktreeLocalRDDModeRoot(ctx, repo, true)
+	} else {
+		dir, err = cloneLocalRDDModeRoot(ctx, repo, true)
+	}
 	if err != nil {
 		return failedClosedRDDModeStatus(source), err
 	}
@@ -456,13 +464,13 @@ func setRDDModeOverride(
 		mirror := openCloneLocalRDDModeMirror(ctx, repo)
 		defer mirror.release()
 
-		head, present, err := readCloneLocalRDDOverrideHead(dir)
+		head, present, err := readRDDOverrideHead(dir)
 		repairingCurrentHead := false
 		if err != nil {
 			if !errors.Is(err, ErrRDDModeCorrupt) {
 				return failedClosedRDDModeStatus(source), err
 			}
-			generation, generationErr := cloneLocalRDDOverrideHeadGeneration(dir)
+			generation, generationErr := rddOverrideHeadGeneration(dir)
 			if generationErr != nil {
 				return failedClosedRDDModeStatus(source), generationErr
 			}
@@ -541,12 +549,12 @@ func setRDDModeOverride(
 		return status, nil
 	}
 	// worktreeLocal path (no mirror)
-	head, present, err := readCloneLocalRDDOverrideHead(dir)
+	head, present, err := readRDDOverrideHead(dir)
 	if err != nil {
 		if !errors.Is(err, ErrRDDModeCorrupt) {
 			return failedClosedRDDModeStatus(source), err
 		}
-		generation, generationErr := cloneLocalRDDOverrideHeadGeneration(dir)
+		generation, generationErr := rddOverrideHeadGeneration(dir)
 		if generationErr != nil {
 			return failedClosedRDDModeStatus(source), generationErr
 		}
@@ -611,7 +619,7 @@ type cloneLocalRDDModeMirror struct {
 // validates and then refuses readdir(2) -- a permission change racing the
 // walk, EIO, or ESTALE on a network mount. Production always uses the real
 // scan.
-var cloneLocalRDDModeMirrorSlotScan = cloneLocalRDDOverrideHeadGeneration
+var cloneLocalRDDModeMirrorSlotScan = rddOverrideHeadGeneration
 
 func openCloneLocalRDDModeMirror(ctx context.Context, repo string) *cloneLocalRDDModeMirror {
 	mirror := &cloneLocalRDDModeMirror{}
@@ -654,7 +662,7 @@ func openCloneLocalRDDModeMirror(ctx context.Context, repo string) *cloneLocalRD
 		return mirror
 	}
 	mirror.head = head
-	mirror.record, mirror.present, mirror.readErr = readCloneLocalRDDOverrideHead(dir)
+	mirror.record, mirror.present, mirror.readErr = readRDDOverrideHead(dir)
 	return mirror
 }
 
@@ -938,23 +946,7 @@ const rddModeSwitchDirectory = "review-mode"
 // is a decision they never see (#3284).
 const rddModeLegacySwitchDirectory = "review-transactions"
 
-// cloneLocalRDDModeRoot derives the override directory from the exact Git
-// common directory, under the switch's own root.
-func cloneLocalRDDModeRoot(ctx context.Context, repo string, create bool) (string, error) {
-	identity, err := cloneLocalRDDModeIdentity(ctx, repo)
-	if err != nil {
-		return "", err
-	}
-	base := filepath.Join(identity.GitCommonDir, "gentle-ai", rddModeSwitchDirectory, rarAuthorityDirectory, rarAuthorityVersion)
-	if err := ensureRARSwitchRoot(identity.GitCommonDir, base, create); err != nil {
-		return "", err
-	}
-	dir := filepath.Join(base, rddModeDirectory)
-	if err := ensurePrivateRARDirectoryTree(base, dir, create); err != nil {
-		return "", err
-	}
-	return dir, nil
-}
+
 
 // cloneLocalRDDModeLegacyRoot is the pre-#2882 location inside the review
 // authority tree. Reads pass create=false and are best-effort: overrides
@@ -1018,7 +1010,7 @@ func cloneLocalRDDModeReadRoot(ctx context.Context, repo string) (string, error)
 		return "", err
 	}
 	if err == nil {
-		head, headErr := cloneLocalRDDOverrideHeadGeneration(dir)
+		head, headErr := rddOverrideHeadGeneration(dir)
 		if headErr != nil {
 			return "", headErr
 		}
@@ -1030,7 +1022,7 @@ func cloneLocalRDDModeReadRoot(ctx context.Context, repo string) (string, error)
 	if legacyErr != nil {
 		return "", nil
 	}
-	if head, headErr := cloneLocalRDDOverrideHeadGeneration(legacy); headErr != nil || head == 0 {
+	if head, headErr := rddOverrideHeadGeneration(legacy); headErr != nil || head == 0 {
 		return "", nil
 	}
 	return legacy, nil
@@ -1047,7 +1039,7 @@ func readCloneLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrid
 	if dir == "" {
 		return rddModeOverrideRecord{}, false, nil
 	}
-	return readCloneLocalRDDOverrideHead(dir)
+	return readRDDOverrideHead(dir)
 }
 
 // CloneLocalRDDModeRecordPath reports the clone-local override file that
@@ -1066,14 +1058,14 @@ func CloneLocalRDDModeRecordPath(ctx context.Context, repo string) (string, erro
 	if dir == "" {
 		return "", nil
 	}
-	head, err := cloneLocalRDDOverrideHeadGeneration(dir)
+	head, err := rddOverrideHeadGeneration(dir)
 	if err != nil || head == 0 {
 		return "", err
 	}
 	return filepath.Join(dir, rddModeGenerationName(head)), nil
 }
 
-// cloneLocalRDDOverrideHeadGeneration reports the highest published generation
+// rddOverrideHeadGeneration reports the highest published generation
 // without reading or parsing it. Naming and repairing an unreadable head need
 // the slot number and nothing else, and a record that cannot be parsed must not
 // be able to hide the slot that supersedes it.
@@ -1090,54 +1082,72 @@ func readWorktreeLocalRDDOverride(ctx context.Context, repo string) (rddModeOver
 	if !distinct {
 		return rddModeOverrideRecord{}, false, nil
 	}
-	return readCloneLocalRDDOverrideHead(dir)
+	return readRDDOverrideHead(dir)
+}
+
+func cloneLocalRDDModeRoot(ctx context.Context, repo string, create bool) (string, error) {
+	identity, err := rddModeStorageIdentity(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	return rddModeRootUnder(identity.GitCommonDir, create)
 }
 
 func worktreeLocalRDDModeRoot(ctx context.Context, repo string, create bool) (string, bool, error) {
-	return rddModeStorageRoot(ctx, repo, create, rddOverrideWorktreeLocal)
-}
-
-func rddModeStorageRoot(ctx context.Context, repo string, create bool, storage rddModeOverrideStorage) (string, bool, error) {
-	lease, err := OpenRepositoryIdentityLease(ctx, repo)
+	identity, err := rddModeStorageIdentity(ctx, repo)
 	if err != nil {
-		var bare *BareRepositoryError
-		if errors.As(err, &bare) {
-			return "", false, err
-		}
-		return "", false, fmt.Errorf("resolve review mode repository identity: %w", err)
+		return "", false, err
 	}
-	identity := reviewRepositoryIdentityRecordFromLease(lease)
 	baseRoot := identity.GitCommonDir
-	distinct := true
-	switchDir := rddModeSwitchDirectory
-	if storage == rddOverrideWorktreeLocal {
-		distinct = identity.GitDir != identity.GitCommonDir
-		if distinct {
-			baseRoot = identity.GitDir
-		}
-		switchDir = rddModeLegacySwitchDirectory
+	distinct := identity.GitDir != identity.GitCommonDir
+	if distinct {
+		baseRoot = identity.GitDir
 	}
 	base := filepath.Join(
 		baseRoot,
 		"gentle-ai",
-		switchDir,
+		rddModeLegacySwitchDirectory,
 		rarAuthorityDirectory,
 		rarAuthorityVersion,
 	)
-	if storage == rddOverrideCloneLocal {
-		if err := ensureRARSwitchRoot(baseRoot, base, create); err != nil {
-			return "", false, err
-		}
-	} else {
-		if err := ensureRARRepositoryRoot(baseRoot, base, create); err != nil {
-			return "", false, err
-		}
+	if err := ensureRARRepositoryRoot(baseRoot, base, create); err != nil {
+		return "", false, err
 	}
 	dir := filepath.Join(base, rddModeDirectory)
 	if err := ensurePrivateRARDirectoryTree(base, dir, create); err != nil {
 		return "", false, err
 	}
 	return dir, distinct, nil
+}
+
+func rddModeStorageIdentity(ctx context.Context, repo string) (reviewRepositoryIdentityRecord, error) {
+	lease, err := OpenRepositoryIdentityLease(ctx, repo)
+	if err != nil {
+		var bare *BareRepositoryError
+		if errors.As(err, &bare) {
+			return reviewRepositoryIdentityRecord{}, err
+		}
+		return reviewRepositoryIdentityRecord{}, fmt.Errorf("resolve review mode repository identity: %w", err)
+	}
+	return reviewRepositoryIdentityRecordFromLease(lease), nil
+}
+
+func rddModeRootUnder(baseRoot string, create bool) (string, error) {
+	base := filepath.Join(
+		baseRoot,
+		"gentle-ai",
+		rddModeSwitchDirectory,
+		rarAuthorityDirectory,
+		rarAuthorityVersion,
+	)
+	if err := ensureRARSwitchRoot(baseRoot, base, create); err != nil {
+		return "", err
+	}
+	dir := filepath.Join(base, rddModeDirectory)
+	if err := ensurePrivateRARDirectoryTree(base, dir, create); err != nil {
+		return "", err
+	}
+	return dir, nil
 }
 
 // WorktreeLocalRevision returns the compare-and-set token the worktree scope
@@ -1148,14 +1158,14 @@ func rddModeStorageRoot(ctx context.Context, repo string, create bool, storage r
 // same position as an absent expected revision. It is strictly read-only and
 // never creates state.
 func WorktreeLocalRevision(ctx context.Context, repo string) (string, error) {
-	dir, _, err := rddModeStorageRoot(ctx, repo, false, rddOverrideWorktreeLocal)
+	dir, _, err := worktreeLocalRDDModeRoot(ctx, repo, false)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", nil
 		}
 		return "", err
 	}
-	head, present, err := readCloneLocalRDDOverrideHead(dir)
+	head, present, err := readRDDOverrideHead(dir)
 	if err != nil {
 		return "", err
 	}
@@ -1196,7 +1206,13 @@ func WorktreeLocalRDDModeRecordPath(ctx context.Context, repo string) (string, e
 }
 
 func rddModeRecordPath(ctx context.Context, repo string, storage rddModeOverrideStorage) (string, error) {
-	dir, _, err := rddModeStorageRoot(ctx, repo, false, storage)
+	var dir string
+	var err error
+	if storage == rddOverrideWorktreeLocal {
+		dir, _, err = worktreeLocalRDDModeRoot(ctx, repo, false)
+	} else {
+		dir, err = cloneLocalRDDModeRoot(ctx, repo, false)
+	}
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", nil
@@ -1220,14 +1236,14 @@ func rddModeRecordPath(ctx context.Context, repo string, storage rddModeOverride
 			return "", nil
 		}
 	}
-	head, err := cloneLocalRDDOverrideHeadGeneration(dir)
+	head, err := rddOverrideHeadGeneration(dir)
 	if err != nil || head == 0 {
 		return "", err
 	}
 	return filepath.Join(dir, rddModeGenerationName(head)), nil
 }
 
-func cloneLocalRDDOverrideHeadGeneration(dir string) (int, error) {
+func rddOverrideHeadGeneration(dir string) (int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -1248,8 +1264,8 @@ func cloneLocalRDDOverrideHeadGeneration(dir string) (int, error) {
 	return head, nil
 }
 
-func readCloneLocalRDDOverrideHead(dir string) (rddModeOverrideRecord, bool, error) {
-	head, err := cloneLocalRDDOverrideHeadGeneration(dir)
+func readRDDOverrideHead(dir string) (rddModeOverrideRecord, bool, error) {
+	head, err := rddOverrideHeadGeneration(dir)
 	if err != nil {
 		return rddModeOverrideRecord{}, false, err
 	}
@@ -1272,6 +1288,16 @@ func readCloneLocalRDDOverrideHead(dir string) (rddModeOverrideRecord, bool, err
 		return rddModeOverrideRecord{}, false, fmt.Errorf("%w: generation %d is stored as %d", ErrRDDModeCorrupt, record.Generation, head)
 	}
 	return record, true, nil
+}
+
+// cloneLocalRDDOverrideHeadGeneration is deprecated, use rddOverrideHeadGeneration.
+func cloneLocalRDDOverrideHeadGeneration(dir string) (int, error) {
+	return rddOverrideHeadGeneration(dir)
+}
+
+// readCloneLocalRDDOverrideHead is deprecated, use readRDDOverrideHead.
+func readCloneLocalRDDOverrideHead(dir string) (rddModeOverrideRecord, bool, error) {
+	return readRDDOverrideHead(dir)
 }
 
 // rddModeOverrideRecord is one immutable generation of the clone-local

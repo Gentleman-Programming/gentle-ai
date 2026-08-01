@@ -664,12 +664,12 @@ func TestWorktreeLocalRDDOverrideStaysPrivateToItsWorktree(t *testing.T) {
 	}
 
 	for name, checkout := range map[string]string{"main": repo, "linkedB": linkedB} {
-		status, err := ResolveRDDMode(ctx, checkout, global)
+		siblingStatus, err := ResolveRDDMode(ctx, checkout, global)
 		if err != nil {
 			t.Fatalf("ResolveRDDMode(%s) error = %v", name, err)
 		}
-		if status.Effective != RDDModeOn || status.CloneLocal != RDDModeUnset || status.WorktreeLocal != RDDModeUnset {
-			t.Fatalf("%s inherited the worktree-local override: %#v", name, status)
+		if siblingStatus.Effective != RDDModeOn || siblingStatus.CloneLocal != RDDModeUnset || siblingStatus.WorktreeLocal != RDDModeUnset {
+			t.Fatalf("%s inherited the worktree-local override: %#v", name, siblingStatus)
 		}
 	}
 

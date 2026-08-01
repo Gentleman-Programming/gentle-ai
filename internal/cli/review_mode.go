@@ -439,7 +439,7 @@ func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) er
 	}
 	_, err := fmt.Fprintf(
 		stdout,
-		"receipt-driven development: %s (decided by %s)\n  %-14s %s\n  %-14s %s\n  %-14s %s\n",
+		"receipt-driven development: %s (decided by %s)\n  %-15s %s\n  %-15s %s\n  %-15s %s\n",
 		reviewModeLabel(result.Status.Effective),
 		result.Status.Source,
 		"global:", reviewModeLabel(result.Status.Global),
