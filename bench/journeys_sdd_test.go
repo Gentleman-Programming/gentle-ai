@@ -5,16 +5,26 @@ import (
 	"testing"
 )
 
-func TestSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
-	want := map[string]bool{
-		"j51-sdd-stale-authority-does-not-shadow-approved-candidate": false,
-		"j52-sdd-ambiguous-authorities-fail-closed":                  false,
-		"j53-sdd-missing-authority-receipt-fails-closed":             false,
-		"j54-sdd-mismatched-authority-receipt-fails-closed":          false,
-		"j55-sdd-non-allow-post-apply-gate-fails-closed":             false,
-		"j56-sdd-authority-drift-during-discovery-fails-closed":      false,
-		"j57-sdd-foreign-openspec-path-fails-closed":                 false,
+var sddFailClosedAuthorityJourneyIDs = []string{
+	"j52-sdd-stale-authority-does-not-shadow-approved-candidate",
+	"j53-sdd-ambiguous-authorities-fail-closed",
+	"j54-sdd-missing-authority-receipt-fails-closed",
+	"j55-sdd-mismatched-authority-receipt-fails-closed",
+	"j56-sdd-non-allow-post-apply-gate-fails-closed",
+	"j57-sdd-authority-drift-during-discovery-fails-closed",
+	"j58-sdd-foreign-openspec-path-fails-closed",
+}
+
+func sddFailClosedAuthorityJourneySet(found bool) map[string]bool {
+	journeys := make(map[string]bool, len(sddFailClosedAuthorityJourneyIDs))
+	for _, id := range sddFailClosedAuthorityJourneyIDs {
+		journeys[id] = found
 	}
+	return journeys
+}
+
+func TestSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
+	want := sddFailClosedAuthorityJourneySet(false)
 	seen := map[string]bool{}
 	for _, journey := range Journeys() {
 		if seen[journey.ID] {
@@ -24,6 +34,9 @@ func TestSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 		if _, ok := want[journey.ID]; ok {
 			want[journey.ID] = true
 		}
+	}
+	if got := len(seen); got != 58 {
+		t.Errorf("core journey count = %d, want 58", got)
 	}
 	for id, found := range want {
 		if !found {
@@ -37,15 +50,7 @@ func TestSDDFailClosedAuthorityJourneys(t *testing.T) {
 	if binary == "" {
 		t.Skip("set GENTLE_AI_BENCH_BINARY to run the native SDD authority journeys")
 	}
-	want := map[string]bool{
-		"j51-sdd-stale-authority-does-not-shadow-approved-candidate": true,
-		"j52-sdd-ambiguous-authorities-fail-closed":                  true,
-		"j53-sdd-missing-authority-receipt-fails-closed":             true,
-		"j54-sdd-mismatched-authority-receipt-fails-closed":          true,
-		"j55-sdd-non-allow-post-apply-gate-fails-closed":             true,
-		"j56-sdd-authority-drift-during-discovery-fails-closed":      true,
-		"j57-sdd-foreign-openspec-path-fails-closed":                 true,
-	}
+	want := sddFailClosedAuthorityJourneySet(true)
 	for _, journey := range Journeys() {
 		if !want[journey.ID] {
 			continue

@@ -61,6 +61,19 @@ subset. `run --axis damaged-store` adds an opt-in axis; `--axis all` adds every
 registered one. An unknown axis name is a hard error, never a quiet fall back to
 the core.
 
+Run the complete SDD authority-control set against a selected public binary:
+
+```sh
+gentle-ai-bench run --binary /path/to/gentle-ai --only \
+  j52-sdd-stale-authority-does-not-shadow-approved-candidate,\
+  j53-sdd-ambiguous-authorities-fail-closed,\
+  j54-sdd-missing-authority-receipt-fails-closed,\
+  j55-sdd-mismatched-authority-receipt-fails-closed,\
+  j56-sdd-non-allow-post-apply-gate-fails-closed,\
+  j57-sdd-authority-drift-during-discovery-fails-closed,\
+  j58-sdd-foreign-openspec-path-fails-closed
+```
+
 **`run` fails closed on failed journeys.** A journey that reports `failed`
 produced no numbers — the harness could not build or prove its fixture, or an
 assertion fired — and community issue #1883 found that such a run still exited
@@ -306,7 +319,7 @@ invents a metric is worse than one that admits a gap.
    classifier reads a field other than exit code and denial shape, and widening
    it would let the product talk its way out of a denial.
 
-7. **The corpus is honest, not exhaustive.** Fifty-one core journeys that run
+7. **The corpus is honest, not exhaustive.** Fifty-eight core journeys that run
    end to end, weighted toward failure paths because that is where friction
    lives. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts) are
    inspection steps rather than review-lifecycle friction and are not modelled.
@@ -388,7 +401,7 @@ invents a metric is worse than one that admits a gap.
     (cluttered repositories, interleaved lifecycles) governed by a different
     growth rule: community-reported shapes become journeys, so its size tracks
     community reports, not releases, and folding it into the core would make
-    "51 journeys" a moving claim. Two of its numbers need careful reading.
+    "58 journeys" a moving claim. Two of its numbers need careful reading.
     `rw01` pins issue #1881 while a product fix is in flight: a block there is
     the truth about today's build, not a permanent verdict, and the journey is
     kept precisely so the fix has a permanent pin. And the no-echo assertions
@@ -431,7 +444,7 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 
 Those numbers are the **14-journey** corpus against the binary named above,
 kept as-is because they belong to that named build. The corpus has since grown
-to 51 journeys; re-run `run` against your own binary rather than reading the
+to 58 journeys; re-run `run` against your own binary rather than reading the
 block above as current totals. The row labels moved too: `by_design` did not
 exist when this was recorded and is now printed as `4d`, next to the number it
 carves out of, with `dead_end` at `4e`.
@@ -606,6 +619,22 @@ span. Comparing the span, not just the verdict, is what makes it a regression:
 a graph that admitted the no-op self-loop denied composition for every
 unrelated lineage in the repository.
 
+### SDD authority discovery controls (`journeys_sdd.go`)
+
+Journeys 52 to 58 prove SDD chooses the sole exact approved authority over
+stale history and fails closed for every invalid authority shape. Each uses the
+public binary through the normal benchmark sandbox, not a source-level proxy.
+
+| ID | Flow | Source |
+|---|---|---|
+| `j52-sdd-stale-authority-does-not-shadow-approved-candidate` | newer approved same-path authority wins over stale history | issue #1893 |
+| `j53-sdd-ambiguous-authorities-fail-closed` | multiple eligible authorities block selection | compact authority discovery contract |
+| `j54-sdd-missing-authority-receipt-fails-closed` | a missing published receipt is not approval | compact authority discovery contract |
+| `j55-sdd-mismatched-authority-receipt-fails-closed` | receipt bytes must match approved authority state | compact authority discovery contract |
+| `j56-sdd-non-allow-post-apply-gate-fails-closed` | changed bytes cannot inherit an otherwise valid authority | compact authority discovery contract |
+| `j57-sdd-authority-drift-during-discovery-fails-closed` | authority reads must remain immutable during discovery | compact authority discovery contract |
+| `j58-sdd-foreign-openspec-path-fails-closed` | mixed OpenSpec paths cannot govern the selected change | compact authority discovery contract |
+
 ## Opt-in axes
 
 Everything above this line is the core corpus, and the core corpus is
@@ -626,7 +655,7 @@ its own declaration.
 
 - **Nothing runs unless you name it.** Default is the core alone. `--axis all`
   takes everything registered. An unknown name is a hard error, because
-  "51 journeys" and "51 journeys plus an axis" are different measurements and a
+  "58 journeys" and "58 journeys plus an axis" are different measurements and a
   typo must never silently produce the first.
 - **The core does not depend on any axis.** `rm bench/axis_damaged_store*.go`
   leaves the corpus compiling, testing and reporting exactly the numbers it
