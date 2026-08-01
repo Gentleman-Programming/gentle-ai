@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -643,6 +644,90 @@ func proveCompletedRetryInventory(_ *Sandbox, observation Observation) error {
 	return nil
 }
 
+func rememberArchiveAuthority(sandbox *Sandbox, observation Observation) error {
+	if err := rememberLineage(sandbox, observation); err != nil {
+		return err
+	}
+	if sandbox.Lineage == "" || sandbox.Revision == "" {
+		return errors.New("approved archive authority published no lineage or revision")
+	}
+	sandbox.Scratch["archive-authority-revision"] = sandbox.Revision
+	return nil
+}
+
+func requireDiscoveredArchivePremise(_ *Sandbox, observation Observation) error {
+	return sddStatusAssertion("discovered receipt premise", func(status sddStatusV1) error {
+		if status.ReviewGate == nil || status.ReviewGate.Result != "allow" || status.ReviewGate.Delivery != "" {
+			return fmt.Errorf("reviewGate = %+v, want discovered allow without a delivery override", status.ReviewGate)
+		}
+		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
+			return fmt.Errorf("archive=%q next=%q blocked=%v, want ready/archive with no blockers",
+				status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
+		}
+		return nil
+	})(nil, observation)
+}
+
+func requireDiscoveredArchiveStatus(disabled bool) func(*Sandbox, Observation) error {
+	return sddStatusAssertion("discovered invalidated archive authority", func(status sddStatusV1) error {
+		if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" {
+			return fmt.Errorf("reviewGate = %+v, want invalidated", status.ReviewGate)
+		}
+		if !strings.Contains(status.ReviewGate.Reason, "review receipt was invalidated") {
+			return fmt.Errorf("reviewGate.reason = %q, want the discovered authority reason", status.ReviewGate.Reason)
+		}
+		if disabled {
+			if status.ReviewGate.Delivery != deliveryDisabledUnmanaged || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+				return fmt.Errorf("disabled gate=%+v archive=%q next=%q, want invalidated disabled/unmanaged ready/archive",
+					status.ReviewGate, status.Dependencies.Archive, status.NextRecommended)
+			}
+			return nil
+		}
+		if status.ReviewGate.Delivery != "" || status.Dependencies.Archive != "blocked" || status.NextRecommended != "resolve-review" {
+			return fmt.Errorf("enabled gate=%+v archive=%q next=%q, want invalidated blocked/resolve-review",
+				status.ReviewGate, status.Dependencies.Archive, status.NextRecommended)
+		}
+		return nil
+	})
+}
+
+func introduceArchiveGateInvalidation(sandbox *Sandbox) error {
+	return sandbox.write(filepath.Join(sandbox.Repo, "outside-reviewed-scope.txt"), "unreviewed\n")
+}
+
+func writeExplicitInvalidArchiveReceipt(sandbox *Sandbox) error {
+	return sandbox.write(filepath.Join(sddChangeRoot(sandbox), "reviews", "receipt.json"), "{\n")
+}
+
+func requireExplicitInvalidArchiveStatus(_ *Sandbox, observation Observation) error {
+	return sddStatusAssertion("explicit invalid archive authority", func(status sddStatusV1) error {
+		if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" || status.ReviewGate.Delivery != "" {
+			return fmt.Errorf("reviewGate = %+v, want explicit invalidated without disabled delivery", status.ReviewGate)
+		}
+		if !strings.Contains(status.ReviewGate.Reason, "invalid or non-terminal") || status.Dependencies.Archive != "blocked" || status.NextRecommended != "resolve-review" {
+			return fmt.Errorf("explicit gate=%+v archive=%q next=%q, want fail-closed blocked/resolve-review",
+				status.ReviewGate, status.Dependencies.Archive, status.NextRecommended)
+		}
+		return nil
+	})(nil, observation)
+}
+
+func proveArchiveAuthorityUnchanged(sandbox *Sandbox) error {
+	head, err := proveAuthorities(sandbox)
+	if err != nil {
+		return err
+	}
+	for _, entry := range head.Entries {
+		if entry.LineageID == sandbox.Lineage {
+			if entry.State != "approved" || entry.Revision != sandbox.Scratch["archive-authority-revision"] {
+				return fmt.Errorf("archive authority changed to state=%q revision=%q", entry.State, entry.Revision)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("archive authority %q disappeared", sandbox.Lineage)
+}
+
 func waveOneJourneys() []Journey {
 	return []Journey{
 		{
@@ -732,6 +817,33 @@ func waveOneJourneys() []Journey {
 				{Name: "fixture: commit reviewed overlay and remove unstaged noise", Fixture: commitRecoveredStagedOverlay},
 				{Name: "gate recovered delivery at pre-push", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", stagedSuccessorLineage, "--gate", "pre-push"), After: requireStagedSuccessorGate},
 				{Name: "gate recovered delivery at pre-pr", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", stagedSuccessorLineage, "--gate", "pre-pr", "--base-ref", "origin/feature"), After: requireStagedSuccessorGate},
+			},
+		},
+		{
+			ID:     "j47-disabled-mode-archives-discovered-invalidated-receipt",
+			Title:  "Discovered invalidated archive receipt: disabled mode steps aside without weakening explicit authority",
+			Source: "issue #2128",
+			Steps: []Step{
+				{Name: "fixture: archive-ready SDD change", Fixture: sddPlanningArtifacts(sddVerifyReport)},
+				{Name: "fixture: stage the reviewed candidate", Fixture: stageProse("", "archive-authority")},
+				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start")},
+				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberArchiveAuthority},
+				{Name: "discovered receipt allows before invalidation", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchivePremise},
+				{Name: "fixture: add untracked content outside the reviewed scope", Fixture: introduceArchiveGateInvalidation},
+				{Name: "enabled discovered receipt blocks", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchiveStatus(false)},
+				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
+				{Name: "disabled discovered receipt closes unmanaged", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchiveStatus(true)},
+				{Name: "mode enable", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
+				{Name: "re-enabled discovered receipt blocks again", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchiveStatus(false)},
+				{Name: "fixture: write an explicit invalid receipt", Fixture: writeExplicitInvalidArchiveReceipt},
+				{Name: "mode disable with explicit receipt", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
+				{Name: "disabled explicit invalid receipt still blocks", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: requireExplicitInvalidArchiveStatus},
+				{Name: "authority remained approved at its original revision", Fixture: proveArchiveAuthorityUnchanged},
 			},
 		},
 	}

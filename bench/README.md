@@ -306,7 +306,7 @@ invents a metric is worse than one that admits a gap.
    classifier reads a field other than exit code and denial shape, and widening
    it would let the product talk its way out of a denial.
 
-7. **The corpus is honest, not exhaustive.** Forty-five core journeys that run
+7. **The corpus is honest, not exhaustive.** Forty-seven core journeys that run
    end to end, weighted toward failure paths because that is where friction
    lives. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts) are
    inspection steps rather than review-lifecycle friction and are not modelled.
@@ -388,7 +388,7 @@ invents a metric is worse than one that admits a gap.
     (cluttered repositories, interleaved lifecycles) governed by a different
     growth rule: community-reported shapes become journeys, so its size tracks
     community reports, not releases, and folding it into the core would make
-    "45 journeys" a moving claim. Two of its numbers need careful reading.
+    "47 journeys" a moving claim. Two of its numbers need careful reading.
     `rw01` pins issue #1881 while a product fix is in flight: a block there is
     the truth about today's build, not a permanent verdict, and the journey is
     kept precisely so the fix has a permanent pin. And the no-echo assertions
@@ -431,7 +431,7 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 
 Those numbers are the **14-journey** corpus against the binary named above,
 kept as-is because they belong to that named build. The corpus has since grown
-to 45 journeys; re-run `run` against your own binary rather than reading the
+to 47 journeys; re-run `run` against your own binary rather than reading the
 block above as current totals. The row labels moved too: `by_design` did not
 exist when this was recorded and is now printed as `4d`, next to the number it
 carves out of, with `dead_end` at `4e`.
@@ -565,14 +565,16 @@ cannot silently decay into the already-covered corrupt-record case.
 
 ### Wave 1 integration regressions (`journeys_wave1.go`)
 
-Journeys 44 and 45 pin fixes that internal tests already covered below the user
-boundary. Both remain core black-box journeys: fixtures create only Git state,
-and every review state is reached through the measured binary.
+Journeys 44 to 47 pin fixes that internal tests already covered below the user
+boundary. All remain core black-box journeys: fixtures create repository inputs,
+and every native authority state is reached through the measured binary.
 
 | ID | Flow | Shape |
 |---|---|---|
 | `j44-corrected-current-changes-delivery` | corrected current-changes receipt in a proven linked worktree, exact one-commit delivery, selector-free pre-push discovery | issue #1819 + 3 |
 | `j45-completed-final-verification-retry` | procedural final-verification failure, status-derived retry successor, successful completion, authoritative inventory and selector-free post-apply | issue #1915 + 3 |
+| `j46-correction-required-staged-recovery` | correction-required base-diff authority, negotiated staged-overlay recovery, fresh successor review, exact pre-commit/pre-push/pre-PR delivery | issue #1921 |
+| `j47-disabled-mode-archives-discovered-invalidated-receipt` | enabled discovered invalidation, disabled/unmanaged archive without allow, explicit invalid receipt control, and re-enabled enforcement | issue #2128 |
 
 `j44` proves the linked checkout/common-dir topology and remote baseline before
 review starts, then proves the staged delivery tree equals the corrected receipt
@@ -581,6 +583,10 @@ and `HEAD` is exactly one clean commit above upstream before pre-push runs.
 from negotiated status fields, then requires the global inventory to report the
 predecessor as `superseded`, the approved successor as `recovered`, and the
 inventory as complete and authoritative before selector-free post-apply runs.
+`j46` proves the staged overlay is the exact authorized recovery target and
+delivers only through its fresh approved successor. `j47` preserves one native
+authority revision while review mode is toggled, proving that only discovered
+governance steps aside and an explicit invalid receipt remains fail-closed.
 
 ## Opt-in axes
 
@@ -602,7 +608,7 @@ its own declaration.
 
 - **Nothing runs unless you name it.** Default is the core alone. `--axis all`
   takes everything registered. An unknown name is a hard error, because
-  "45 journeys" and "45 journeys plus an axis" are different measurements and a
+  "47 journeys" and "47 journeys plus an axis" are different measurements and a
   typo must never silently produce the first.
 - **The core does not depend on any axis.** `rm bench/axis_damaged_store*.go`
   leaves the corpus compiling, testing and reporting exactly the numbers it
