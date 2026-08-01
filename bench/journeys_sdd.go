@@ -1735,16 +1735,6 @@ func sddJourneys() []Journey {
 			),
 		},
 		{
-			ID:     "j57-sdd-authority-drift-during-discovery-fails-closed",
-			Title:  "Authority receipt changes during discovery: SDD fails closed",
-			Source: "compact authority discovery contract: immutable authority reads must agree",
-			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
-				Step{Name: "fixture: select the sandbox-only receipt drift seam", Fixture: sddInstallDiscoveryDriftFixture},
-				Step{Name: "sdd-status refuses authority drift", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("compact authority changed during discovery")},
-			),
-		},
-		{
 			ID:     "j58-sdd-foreign-openspec-path-fails-closed",
 			Title:  "Mixed OpenSpec authority path set: SDD refuses the selected change",
 			Source: "compact authority discovery contract: mixed foreign OpenSpec paths are not change-bound authority",

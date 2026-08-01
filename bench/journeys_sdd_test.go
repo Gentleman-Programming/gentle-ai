@@ -5,26 +5,25 @@ import (
 	"testing"
 )
 
-var sddFailClosedAuthorityJourneyIDs = []string{
+var portableSDDFailClosedAuthorityJourneyIDs = []string{
 	"j52-sdd-stale-authority-does-not-shadow-approved-candidate",
 	"j53-sdd-ambiguous-authorities-fail-closed",
 	"j54-sdd-missing-authority-receipt-fails-closed",
 	"j55-sdd-mismatched-authority-receipt-fails-closed",
 	"j56-sdd-non-allow-post-apply-gate-fails-closed",
-	"j57-sdd-authority-drift-during-discovery-fails-closed",
 	"j58-sdd-foreign-openspec-path-fails-closed",
 }
 
-func sddFailClosedAuthorityJourneySet(found bool) map[string]bool {
-	journeys := make(map[string]bool, len(sddFailClosedAuthorityJourneyIDs))
-	for _, id := range sddFailClosedAuthorityJourneyIDs {
+func portableSDDFailClosedAuthorityJourneySet(found bool) map[string]bool {
+	journeys := make(map[string]bool, len(portableSDDFailClosedAuthorityJourneyIDs))
+	for _, id := range portableSDDFailClosedAuthorityJourneyIDs {
 		journeys[id] = found
 	}
 	return journeys
 }
 
-func TestSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
-	want := sddFailClosedAuthorityJourneySet(false)
+func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
+	want := portableSDDFailClosedAuthorityJourneySet(false)
 	seen := map[string]bool{}
 	for _, journey := range Journeys() {
 		if seen[journey.ID] {
@@ -35,8 +34,8 @@ func TestSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 			want[journey.ID] = true
 		}
 	}
-	if got := len(seen); got != 58 {
-		t.Errorf("core journey count = %d, want 58", got)
+	if got := len(seen); got != 57 {
+		t.Errorf("core journey count = %d, want 57", got)
 	}
 	for id, found := range want {
 		if !found {
@@ -45,12 +44,12 @@ func TestSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	}
 }
 
-func TestSDDFailClosedAuthorityJourneys(t *testing.T) {
+func TestPortableSDDFailClosedAuthorityJourneys(t *testing.T) {
 	binary := os.Getenv("GENTLE_AI_BENCH_BINARY")
 	if binary == "" {
 		t.Skip("set GENTLE_AI_BENCH_BINARY to run the native SDD authority journeys")
 	}
-	want := sddFailClosedAuthorityJourneySet(true)
+	want := portableSDDFailClosedAuthorityJourneySet(true)
 	for _, journey := range Journeys() {
 		if !want[journey.ID] {
 			continue

@@ -150,11 +150,12 @@ go vet ./...
 go test ./...
 ```
 
-When running the native authority-control journeys (`j52` through `j58`), build
-the measured product binary from the repository root with its bench-only seam:
+The portable core includes `j52` through `j56` and `j58` under a normal product
+binary. `j57` is source-coupled, so run it explicitly with its tagged seam:
 
 ```bash
 go build -tags bench_fixture -o /path/to/gentle-ai ./cmd/gentle-ai
+gentle-ai-bench run --binary /path/to/gentle-ai --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed
 ```
 
 Benchmark validation applies to review-lifecycle, gate, recovery, delivery, benchmark implementation/corpus/classifier, and benchmark-claim changes. For measured product-behavior changes, use driven mode and report the command, tested binary or commit, selected subset or axes, and result summary. Compare before and after only when claiming a measured friction change. For unrelated changes, mark benchmark validation `N/A` with a brief reason.

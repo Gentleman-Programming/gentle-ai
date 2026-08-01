@@ -33,13 +33,9 @@ go vet ./...
 go test ./...
 ```
 
-The `j57` receipt-drift control also needs the product binary to include its
-bench-only seam. Build that binary from the repository root, then pass it to
-the bench as usual:
-
-```sh
-go build -tags bench_fixture -o /path/to/gentle-ai ./cmd/gentle-ai
-```
+The portable core contains 57 journeys. `j57` is deliberately excluded because
+it requires the product's `bench_fixture` seam; it is an explicit
+`source-coupled` axis, not a portable black-box measurement.
 
 The measured binary is passed in with `--binary`, so the tool never depends on
 the sources next to it. That is what lets it measure an old release and the
@@ -69,7 +65,7 @@ subset. `run --axis damaged-store` adds an opt-in axis; `--axis all` adds every
 registered one. An unknown axis name is a hard error, never a quiet fall back to
 the core.
 
-Run the complete SDD authority-control set against a selected public binary:
+Run the portable SDD authority controls against a selected public binary:
 
 ```sh
 gentle-ai-bench run --binary /path/to/gentle-ai --only \
@@ -78,8 +74,15 @@ gentle-ai-bench run --binary /path/to/gentle-ai --only \
   j54-sdd-missing-authority-receipt-fails-closed,\
   j55-sdd-mismatched-authority-receipt-fails-closed,\
   j56-sdd-non-allow-post-apply-gate-fails-closed,\
-  j57-sdd-authority-drift-during-discovery-fails-closed,\
   j58-sdd-foreign-openspec-path-fails-closed
+```
+
+Run the source-coupled receipt-drift proof only with its tagged product binary:
+
+```sh
+go build -tags bench_fixture -o /path/to/gentle-ai ./cmd/gentle-ai
+gentle-ai-bench run --binary /path/to/gentle-ai --axis source-coupled --only \
+  j57-sdd-authority-drift-during-discovery-fails-closed
 ```
 
 **`run` fails closed on failed journeys.** A journey that reports `failed`
@@ -409,7 +412,7 @@ invents a metric is worse than one that admits a gap.
     (cluttered repositories, interleaved lifecycles) governed by a different
     growth rule: community-reported shapes become journeys, so its size tracks
     community reports, not releases, and folding it into the core would make
-    "58 journeys" a moving claim. Two of its numbers need careful reading.
+    "57 core journeys" a moving claim. Two of its numbers need careful reading.
     `rw01` pins issue #1881 while a product fix is in flight: a block there is
     the truth about today's build, not a permanent verdict, and the journey is
     kept precisely so the fix has a permanent pin. And the no-echo assertions
@@ -451,11 +454,12 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 ```
 
 Those numbers are the **14-journey** corpus against the binary named above,
-kept as-is because they belong to that named build. The corpus has since grown
-to 58 journeys; re-run `run` against your own binary rather than reading the
-block above as current totals. The row labels moved too: `by_design` did not
-exist when this was recorded and is now printed as `4d`, next to the number it
-carves out of, with `dead_end` at `4e`.
+kept as-is because they belong to that named build. The portable core has since
+grown to 57 journeys; the source-coupled `j57` receipt-drift proof is opt-in.
+Re-run `run` against your own binary rather than reading the block above as
+current totals. The row labels moved too: `by_design` did not exist when this
+was recorded and is now printed as `4d`, next to the number it carves out of,
+with `dead_end` at `4e`.
 
 `results-before.json` is the same corpus against `v2.1.2`, kept as a worked
 example of the cross-version path: 5 journeys completed and 9 recorded
@@ -629,9 +633,11 @@ unrelated lineage in the repository.
 
 ### SDD authority discovery controls (`journeys_sdd.go`)
 
-Journeys 52 to 58 prove SDD chooses the sole exact approved authority over
-stale history and fails closed for every invalid authority shape. Each uses the
-public binary through the normal benchmark sandbox, not a source-level proxy.
+Portable journeys 52 to 56 and 58 prove SDD chooses the sole exact approved
+authority over stale history and fails closed for every public authority shape.
+Each uses the public binary through the normal benchmark sandbox, not a
+source-level proxy. The `j57` receipt-drift proof is source-coupled and is
+listed with its axis below.
 
 | ID | Flow | Source |
 |---|---|---|
@@ -640,7 +646,6 @@ public binary through the normal benchmark sandbox, not a source-level proxy.
 | `j54-sdd-missing-authority-receipt-fails-closed` | a missing published receipt is not approval | compact authority discovery contract |
 | `j55-sdd-mismatched-authority-receipt-fails-closed` | receipt bytes must match approved authority state | compact authority discovery contract |
 | `j56-sdd-non-allow-post-apply-gate-fails-closed` | changed bytes cannot inherit an otherwise valid authority | compact authority discovery contract |
-| `j57-sdd-authority-drift-during-discovery-fails-closed` | authority reads must remain immutable during discovery | compact authority discovery contract |
 | `j58-sdd-foreign-openspec-path-fails-closed` | mixed OpenSpec paths cannot govern the selected change | compact authority discovery contract |
 
 ## Opt-in axes
@@ -663,8 +668,8 @@ its own declaration.
 
 - **Nothing runs unless you name it.** Default is the core alone. `--axis all`
   takes everything registered. An unknown name is a hard error, because
-  "58 journeys" and "58 journeys plus an axis" are different measurements and a
-  typo must never silently produce the first.
+  "57 core journeys" and "57 core journeys plus an axis" are different
+  measurements and a typo must never silently produce the first.
 - **The core does not depend on any axis.** `rm bench/axis_damaged_store*.go`
   leaves the corpus compiling, testing and reporting exactly the numbers it
   reported before. That is the test of whether the seam is real, and it is worth
@@ -679,6 +684,19 @@ its own declaration.
 Adding an axis is adding one file with an `init()` that calls `RegisterAxis`.
 The seam in `axis.go` is deliberately small — one registry, one flag, one report
 section — and it does not know what any axis measures.
+
+### `source-coupled` (`axis_source_coupled.go`)
+
+The preserved `j57-sdd-authority-drift-during-discovery-fails-closed` fixture
+uses the `bench_fixture` build tag to mutate its fresh sandbox receipt between
+the product's immutable authority reads. That hook is intentionally absent from
+ordinary binaries, so this is not portable black-box core coverage. Run it only
+with `--axis source-coupled` and a product binary built with
+`-tags bench_fixture`.
+
+| ID | Coupling | What it tests |
+|---|---|---|
+| `j57-sdd-authority-drift-during-discovery-fails-closed` | tagged sandbox receipt mutation seam | authority reads must remain immutable during discovery |
 
 ### `damaged-store` (`axis_damaged_store.go`)
 
