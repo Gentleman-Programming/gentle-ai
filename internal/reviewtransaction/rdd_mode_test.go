@@ -822,3 +822,63 @@ func TestWorktreeScopeOnMainCheckoutSharesCloneLocalStorage(t *testing.T) {
 		t.Fatalf("write-time and subsequent status disagree: write=%#v resolve=%#v", written, resolved)
 	}
 }
+
+// TestCloneLocalRevisionIgnoresCorruptWorktreeLocalRecord pins the repair
+// invariant: the clone-local CAS token must come from clone-local storage
+// alone, so an unreadable worktree-local record never blocks repairing the
+// clone scope. Before the reader was scoped, ResolveRDDMode failed closed on
+// the corrupt worktree record and the clone repair had no token to compare
+// against.
+func TestCloneLocalRevisionIgnoresCorruptWorktreeLocalRecord(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	gitSnapshot(t, repo, "worktree", "add", "-b", "rdd-repair-linked", linked, "HEAD")
+	t.Cleanup(func() { _ = runSnapshotGit(repo, "worktree", "remove", "--force", linked) })
+
+	ctx := context.Background()
+	global := RDDGlobalMode{Value: "on"}
+
+	// A healthy clone-local record on the main checkout.
+	written, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", global)
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+	}
+
+	// A corrupt worktree-local record inside the linked worktree.
+	if _, err := SetWorktreeLocalRDDMode(ctx, linked, RDDModeOff, "", global); err != nil {
+		t.Fatalf("SetWorktreeLocalRDDMode(off) error = %v", err)
+	}
+	lease, err := OpenRepositoryIdentityLease(ctx, linked)
+	if err != nil {
+		t.Fatalf("OpenRepositoryIdentityLease(linked) error = %v", err)
+	}
+	identity := lease.Identity()
+	corrupt := filepath.Join(identity.GitDir, "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode", "gen-0000000001.json")
+	if err := os.WriteFile(corrupt, []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatalf("corrupt worktree-local override: %v", err)
+	}
+
+	// The clone-local token is still readable even though resolving the full
+	// projection now fails closed.
+	if _, err := ResolveRDDMode(ctx, linked, global); !errors.Is(err, ErrRDDModeCorrupt) {
+		t.Fatalf("ResolveRDDMode on corrupt worktree record error = %v, want ErrRDDModeCorrupt", err)
+	}
+	token, err := CloneLocalRevision(ctx, repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRevision error = %v, want the healthy clone-local token", err)
+	}
+	if token != written.Revision {
+		t.Fatalf("CloneLocalRevision = %q, want %q", token, written.Revision)
+	}
+
+	// The clone scope can be repaired from the main checkout with that token,
+	// independent of the sibling worktree's unreadable record.
+	cleared, err := SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, token, global)
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(clear) with clone-local token error = %v", err)
+	}
+	if !cleared.Enabled() || cleared.CloneLocal != RDDModeUnset {
+		t.Fatalf("clone repair did not re-enable the clone: %#v", cleared)
+	}
+}

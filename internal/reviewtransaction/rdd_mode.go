@@ -1165,6 +1165,32 @@ func WorktreeLocalRevision(ctx context.Context, repo string) (string, error) {
 	return head.Revision, nil
 }
 
+// CloneLocalRevision returns the compare-and-set token for the clone-local
+// scope alone, independent of whether the worktree-local record is readable.
+// It reports "" when the clone-local storage holds no record, which is the
+// same position as an absent expected revision. It is strictly read-only and
+// never creates state.
+func CloneLocalRevision(ctx context.Context, repo string) (string, error) {
+	record, present, err := readCloneLocalRDDOverride(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	if !present {
+		return "", nil
+	}
+	return record.Revision, nil
+}
+
+// CloneLocalRDDModeRecordPath reports the clone-local override file that
+// currently decides this clone's mode, so a refusal can name the exact file
+// holding an unreadable value instead of merely describing it. It is strictly
+// read-only, never creates state, and reports "" when this clone holds no
+// override at all.
+
+// WorktreeLocalRDDModeRecordPath reports the worktree-local override file that
+// currently decides this worktree's mode, so a refusal can name the exact file
+// holding an unreadable value. On the main checkout it reports the clone-local
+// file, because that is where the worktree scope actually stores its record.
 func WorktreeLocalRDDModeRecordPath(ctx context.Context, repo string) (string, error) {
 	return rddModeRecordPath(ctx, repo, rddOverrideWorktreeLocal)
 }

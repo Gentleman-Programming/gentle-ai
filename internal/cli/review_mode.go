@@ -364,9 +364,9 @@ func applyReviewMode(
 			// keeps the storage-distinctness rule in one place.
 			token, tokenErr = reviewtransaction.WorktreeLocalRevision(ctx, repo)
 		} else {
-			var current reviewtransaction.RDDModeStatus
-			current, tokenErr = reviewtransaction.ResolveRDDMode(ctx, repo, reviewtransaction.RDDGlobalMode{})
-			token = current.Revision
+			// Scoped to clone-local storage alone, so an unreadable
+			// worktree-local record never blocks repairing this scope.
+			token, tokenErr = reviewtransaction.CloneLocalRevision(ctx, repo)
 		}
 		switch {
 		case tokenErr == nil:
