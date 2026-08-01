@@ -469,6 +469,74 @@ func sddPlanningArtifacts(verifyReport string) func(*Sandbox) error {
 	}
 }
 
+// sddStaleAuthorityFixture recreates the #1893 shape through the public CLI:
+// an older reviewing lineage and a newer approved lineage bind the same
+// OpenSpec paths but freeze different candidate trees.
+func sddStaleAuthorityFixture(sandbox *Sandbox) error {
+	if err := baseRepo(sandbox); err != nil {
+		return err
+	}
+	root := sddChangeRoot(sandbox)
+	for path, content := range map[string]string{
+		filepath.Join(root, "proposal.md"):               "# " + sddChange + "\n\n## Why\n\nexercise stale authority selection.\n",
+		filepath.Join(root, "design.md"):                 "# design\n\n## Approach\n\nplain prose.\n",
+		filepath.Join(root, "tasks.md"):                  "# tasks\n\n- [x] 1.1 write the prose\n",
+		filepath.Join(root, "specs", "prose", "spec.md"): "### Requirement: prose exists\n#### Scenario: prose is present\n\n- **WHEN** the reader opens the change\n- **THEN** the prose is there\n",
+	} {
+		if err := sandbox.write(path, content); err != nil {
+			return err
+		}
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "openspec"); err != nil {
+		return err
+	}
+	paths, err := gitOut(sandbox, sandbox.Repo, "diff", "--cached", "--name-only")
+	if err != nil {
+		return err
+	}
+	if err := sddFixtureCommand(sandbox, "review", "start", "--cwd", sandbox.Repo); err != nil {
+		return fmt.Errorf("start stale authority: %w", err)
+	}
+
+	if err := sandbox.write(filepath.Join(root, "tasks.md"), "# tasks\n\n- [x] 1.1 write the newer prose\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "openspec"); err != nil {
+		return err
+	}
+	newerPaths, err := gitOut(sandbox, sandbox.Repo, "diff", "--cached", "--name-only")
+	if err != nil {
+		return err
+	}
+	if paths != newerPaths {
+		return fmt.Errorf("fixture changed the bound path set from %q to %q", paths, newerPaths)
+	}
+	if err := sddFixtureCommand(sandbox, "review", "start", "--cwd", sandbox.Repo); err != nil {
+		return fmt.Errorf("start newer authority: %w", err)
+	}
+
+	head, err := proveAuthorities(sandbox)
+	if err != nil {
+		return err
+	}
+	states := map[string]int{}
+	for _, entry := range head.Entries {
+		states[entry.State]++
+	}
+	if states["reviewing"] != 2 {
+		return fmt.Errorf("fixture needs stale and newer reviewing lineages before approval, got %+v", head.Entries)
+	}
+	return nil
+}
+
+func sddFixtureCommand(sandbox *Sandbox, args ...string) error {
+	observation := sandbox.readBack(args...)
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("fixture command %q exited %d: %s", strings.Join(args, " "), observation.ExitCode, firstLine(observation.Stderr, observation.Stdout))
+	}
+	return nil
+}
+
 // sddVerifyReport is the fenced envelope a completed independent verification
 // writes. Its exact shape matters: a report the product cannot parse routes as
 // "verification is missing", which is a different journey.
@@ -1288,6 +1356,32 @@ func sddJourneys() []Journey {
 						}
 						if status.ReviewGate.Result == "allow" {
 							return errors.New("a disabled run fabricated the approval the archive contract asks for")
+						}
+						return nil
+					})},
+			},
+		},
+		{
+			ID:     "j44-sdd-stale-authority-does-not-shadow-approved-candidate",
+			Title:  "Stale same-path review authority: SDD selects the newer approved candidate",
+			Source: "issue #1893: stale compact authority must not shadow an exact approved candidate",
+			Steps: []Step{
+				{Name: "fixture: stale and newer same-path review lineages", Fixture: sddStaleAuthorityFixture},
+				{Name: "capture every lens for the newer candidate", Requires: captureResultCapability, Composite: captureAllLenses},
+				{Name: "finalize the newer candidate results", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--captured-results=true"), After: rememberLineage},
+				{Name: "capture final evidence for the newer candidate", Requires: captureEvidenceCapability, Composite: captureFinalEvidence},
+				{Name: "approve the newer candidate", Requires: finalizeEvidenceCapability, Args: productArgs("review", "finalize", "--captured-evidence=true"), After: rememberLineage},
+				{Name: "sdd-status selects the approved candidate", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"),
+					After: sddStatusAssertion("stale authority does not shadow the approved candidate", func(status sddStatusV1) error {
+						if status.NextRecommended != "verify" {
+							return fmt.Errorf("nextRecommended = %q, want verify; blocked reasons = %v", status.NextRecommended, status.BlockedReasons)
+						}
+						if status.Dependencies.Verify != "ready" {
+							return fmt.Errorf("dependencies.verify = %q, want ready; blocked reasons = %v", status.Dependencies.Verify, status.BlockedReasons)
+						}
+						if len(status.BlockedReasons) != 0 {
+							return fmt.Errorf("approved candidate was shadowed by stale authority: %v", status.BlockedReasons)
 						}
 						return nil
 					})},
