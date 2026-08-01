@@ -75,6 +75,17 @@ var (
 	}
 )
 
+// writeCloseSyncer abstracts *os.File for test seam injection.
+type writeCloseSyncer interface {
+	io.Writer
+	Sync() error
+	Close() error
+}
+
+var engramCreateFile = func(path string) (writeCloseSyncer, error) {
+	return os.Create(path)
+}
+
 func goPrivateModuleEnv(base []string, modulePath string) []string {
 	values := map[string]string{
 		"GONOSUMDB": modulePath,
@@ -514,17 +525,28 @@ func engramDownloadToFile(ctx context.Context, url string, outPath string) (hexD
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return "", fmt.Errorf("create dir: %w", err)
 	}
-	f, err := os.Create(outPath)
+	f, err := engramCreateFile(outPath)
 	if err != nil {
 		return "", fmt.Errorf("create %s: %w", outPath, err)
 	}
-	defer f.Close()
+	completed := false
+	defer func() {
+		if closeErr := f.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close %s: %w", outPath, closeErr)
+		}
+		if !completed || err != nil {
+			_ = os.Remove(outPath)
+		}
+	}()
 
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
 		return "", fmt.Errorf("write %s: %w", outPath, err)
 	}
-
+	if err := f.Sync(); err != nil {
+		return "", fmt.Errorf("sync %s: %w", outPath, err)
+	}
+	completed = true
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
