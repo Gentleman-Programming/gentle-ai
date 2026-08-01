@@ -319,9 +319,9 @@ type reviewAuthorityEvaluation struct {
 	Reason       string
 	CompactState *reviewtransaction.CompactState
 	// Absent reports that no review authority GOVERNS this change: the change
-	// supplied no review artifact, and discovery found either no terminal
-	// native receipt at all or only receipts that verifiably stopped covering
-	// the current repository state. That is the implicit demand the kill
+	// supplied no review artifact, and discovery found either no terminal native
+	// receipt or only receipts whose terminal evaluation cannot govern the
+	// current change. That is the implicit demand the kill
 	// switch removes — issue #1877's disabled window delivers under ordinary
 	// repository policy and is recorded as unmanaged, never blocked on a
 	// review the switch refuses to run. An explicit change-bound artifact that
@@ -356,10 +356,9 @@ func resolveCompactRemediationAuthority(ctx context.Context, repo, change string
 	return evaluation.CompactState
 }
 
-// errTerminalReceiptMissing is the one discovery outcome that means "no review
-// authority exists", as opposed to "a review authority exists and does not
-// govern these bytes". Only the first is the implicit demand the kill switch
-// removes, so it is a sentinel rather than a message to match on.
+// errTerminalReceiptMissing distinguishes an empty terminal inventory from
+// discovery failures that must remain fail-closed. It is a sentinel rather than
+// a message to match on so the empty-inventory reason can name a fresh review.
 var errTerminalReceiptMissing = errors.New("terminal review receipt is missing")
 
 // reviewGateDisabledUnmanagedReason names the situation before the mechanism:
@@ -465,11 +464,12 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 			Absent: !explicit,
 		}
 	}
-	// Escalations and validation failures block regardless of provenance: an
-	// artifact that asked receipt-driven development to act is validated in
-	// full even while the switch is off.
+	// Escalations and validation failures still block while review is enabled.
+	// While disabled, only an explicit artifact continues to govern the change.
 	if len(blockers) > 0 {
-		return blockers[0]
+		selected := blockers[0]
+		selected.Absent = !explicit
+		return selected
 	}
 	selected := stale[0]
 	// An empty-candidate receipt means the operator already ran the plain

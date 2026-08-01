@@ -2049,11 +2049,12 @@ func TestCompactTransportAllowsCorrectedPrePushWithoutTransientBaseObject(t *tes
 	clone := filepath.Join(t.TempDir(), "clone")
 	runReviewCLIGit(t, source, "clone", "--no-local", source, clone)
 	runReviewCLIGit(t, source, "branch", "reviewed-base", "HEAD^")
-	for _, tree := range []string{initial.State.InitialSnapshot.CandidateTree, sourceRecord.State.CurrentSnapshot.BaseTree} {
-		command := exec.Command("git", "-C", clone, "cat-file", "-e", tree+"^{tree}")
-		if err := command.Run(); err == nil {
-			t.Fatalf("clean clone unexpectedly retained dangling intermediate tree %s", tree)
-		}
+	if sourceRecord.State.CurrentSnapshot.BaseTree != initial.State.InitialSnapshot.BaseTree {
+		t.Fatalf("corrected authority base = %s, want reviewed base %s", sourceRecord.State.CurrentSnapshot.BaseTree, initial.State.InitialSnapshot.BaseTree)
+	}
+	intermediate := initial.State.InitialSnapshot.CandidateTree
+	if err := exec.Command("git", "-C", clone, "cat-file", "-e", intermediate+"^{tree}").Run(); err == nil {
+		t.Fatalf("clean clone unexpectedly retained dangling intermediate tree %s", intermediate)
 	}
 	if err := RunReviewBundleImport([]string{"--cwd", clone, "--bundle", bundlePath}, io.Discard); err != nil {
 		t.Fatalf("corrected compact import: %v", err)

@@ -1646,7 +1646,7 @@ func sddJourneys() []Journey {
 			},
 		},
 		{
-			ID:     "j44-sdd-stale-authority-does-not-shadow-approved-candidate",
+			ID:     "j51-sdd-stale-authority-does-not-shadow-approved-candidate",
 			Title:  "Stale same-path review authority: SDD selects the newer approved candidate",
 			Source: "issue #1893: stale compact authority must not shadow an exact approved candidate",
 			Steps: []Step{
@@ -1672,7 +1672,7 @@ func sddJourneys() []Journey {
 			},
 		},
 		{
-			ID:     "j45-sdd-ambiguous-authorities-fail-closed",
+			ID:     "j52-sdd-ambiguous-authorities-fail-closed",
 			Title:  "Two approved candidates for the same OpenSpec change: SDD refuses to choose one",
 			Source: "compact authority discovery contract: ambiguous governing candidates block",
 			Steps: append(sddApprovedAuthoritySteps(sddAmbiguousAuthorityFixture),
@@ -1682,7 +1682,7 @@ func sddJourneys() []Journey {
 			),
 		},
 		{
-			ID:     "j46-sdd-missing-authority-receipt-fails-closed",
+			ID:     "j53-sdd-missing-authority-receipt-fails-closed",
 			Title:  "Approved compact authority without its receipt: SDD fails closed",
 			Source: "compact authority discovery contract: a missing receipt is not approval",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
@@ -1692,7 +1692,7 @@ func sddJourneys() []Journey {
 			),
 		},
 		{
-			ID:     "j47-sdd-mismatched-authority-receipt-fails-closed",
+			ID:     "j54-sdd-mismatched-authority-receipt-fails-closed",
 			Title:  "Approved compact authority with a mismatched receipt: SDD fails closed",
 			Source: "compact authority discovery contract: receipt bytes must equal approved state",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
@@ -1702,7 +1702,7 @@ func sddJourneys() []Journey {
 			),
 		},
 		{
-			ID:     "j48-sdd-non-allow-post-apply-gate-fails-closed",
+			ID:     "j55-sdd-non-allow-post-apply-gate-fails-closed",
 			Title:  "Valid approved authority over changed bytes: SDD fails closed on a non-allow post-apply gate",
 			Source: "compact authority discovery contract: a valid receipt still needs an allow gate",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
@@ -1712,7 +1712,7 @@ func sddJourneys() []Journey {
 			),
 		},
 		{
-			ID:     "j49-sdd-authority-drift-during-discovery-fails-closed",
+			ID:     "j56-sdd-authority-drift-during-discovery-fails-closed",
 			Title:  "Authority receipt changes during discovery: SDD fails closed",
 			Source: "compact authority discovery contract: immutable authority reads must agree",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
@@ -1722,7 +1722,7 @@ func sddJourneys() []Journey {
 			),
 		},
 		{
-			ID:     "j50-sdd-foreign-openspec-path-fails-closed",
+			ID:     "j57-sdd-foreign-openspec-path-fails-closed",
 			Title:  "Mixed OpenSpec authority path set: SDD refuses the selected change",
 			Source: "compact authority discovery contract: mixed foreign OpenSpec paths are not change-bound authority",
 			Steps: append(sddApprovedAuthoritySteps(sddForeignAuthorityFixture),
