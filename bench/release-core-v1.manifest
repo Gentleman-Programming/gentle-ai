@@ -1,0 +1,18 @@
+# bench/release-core-v1.manifest
+# Platform-neutral core journeys for the v1 release-evidence contract.
+# Each entry MUST be a stable journey ID; the manifest is sorted + de-duplicated at load time.
+journeys:
+  - j01-docs-happy-path
+  - j02-install-verify
+  - j03-sync-preserve
+  - j04-uninstall-clean
+  - j05-gate-without-any-review
+  - j06-pre-push-after-publication
+  - j07-disabled-with-stale-receipts
+  - j08-finalize-without-reviewer-results
+  - j09-finalize-without-evidence
+  - j10-invalid-flag-combination
+  - j11-unborn-head
+  - j12-rejected-capture-then-recapture
+  - j13-next-transition-runs-verbatim
+  - j14-abandon-needs-a-hand-built-token
