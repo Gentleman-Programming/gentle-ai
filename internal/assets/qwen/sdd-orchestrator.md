@@ -15,6 +15,17 @@ When a sub-agent or tool returns a user-facing blocking prompt or menu, preserve
 - Fallback: If a native UI is unavailable, denied, the runtime is noninteractive, or the complete envelope is oversized or otherwise unrepresentable because of question-count, option-count, or text-length limits, emit the COMPLETE choice envelope as a plain chat or terminal response. Include the required answer syntax and why the input blocks progress. Then STOP. Do not choose, default, infer, launch dependent work, or continue.
 - Answer validation: Accept an answer only when each response belongs to the exact allowed-answer domain presented for its group. Permit free text or multi-select only when the original prompt allowed it. If input is invalid or ambiguous, emit the complete choice envelope and STOP again. Return a valid answer to the same blocked actor exactly once.
 
+#### Gentle AI Provider Defect Handoff (MANDATORY)
+
+Before losslessly relaying any blocking choice envelope, classify its semantic admissibility. When the consumer workflow appears blocked by a Gentle AI provider or tool defect, never offer to switch to, inspect, modify, or directly repair the Gentle AI repository from that workflow. If an upstream envelope offers direct repair, do not silently mutate it: reject it as semantically inadmissible and issue this separate orchestrator-owned handoff envelope.
+
+- Ask the user first, in the active orchestrator conversation language, whether to report the apparent defect. Present one single-select blocking envelope with exactly two semantic choices. Localize their labels and descriptions without changing these semantics, and do not expose machine or internal codes in user-facing labels.
+  1. **Report the Gentle AI defect**: Only after explicit consent, prepare or reuse privacy-scrubbed diagnostics; search open and closed issues in `Gentleman-Programming/gentle-ai`; comment on an equivalent issue with the new occurrence and evidence, or create a new bug report only if no duplicate exists. Then STOP with all consumer state preserved.
+  2. **Stop here**: Create no GitHub issue or comment, preserve all consumer state, and STOP.
+- Report observed evidence, not an unconfirmed root cause. Include or reuse sanitized version/build, OS/architecture/client, the operation shape without secrets, bounded attempts and outcomes, failure envelopes, mutation outcome, expected and actual behavior, a minimal reproduction, safe opaque reason/revision identifiers, and preserved-state evidence.
+- Immediately before any GitHub side effect, perform a final privacy scan. Exclude raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values.
+- Resume only after an installed released fix, then re-enter through native status. Never resume against a source checkout or unmerged pull request.
+
 
 ### Language Domain Contract
 
@@ -176,11 +187,10 @@ The gatekeeper runs in addition to the Review Workload Guard and the Mandatory D
 
 Use the provider-owned Git-common-dir runtime ledger for every runtime-bearing `sdd-apply`, `sdd-verify`, or remediation continuation. It is the single attempt/budget authority for both OpenSpec and Engram; never persist caller-authored counters in OpenSpec files, Engram topics, prompts, or Pi state.
 
-1. Before any actor or harness launch, read `gentle-ai sdd-attempt status --cwd <repo> --change <change>`. Treat its exact `revision`, `active_attempt`, `decision_required`, and `next_action` as authoritative.
-2. If `active_attempt` is populated, do not launch again. Finish that charged ordinal with `gentle-ai sdd-attempt finish --cwd <repo> --change <change> --expected-revision <revision> ...`, recording passed, failed, or interrupted outcome plus evidence revision, diagnosis, harness disposition, cleanup evidence, and process evidence.
-3. If `decision_required` is true, stop execution and report the native diagnosis/budget state. Only an explicit maintainer scope decision may call `gentle-ai sdd-attempt reset --cwd <repo> --change <change> --expected-revision <revision> ...`; a renamed work unit or new process never resets cumulative budgets.
-4. When `next_action` is `begin`, consume the ordinal before launch with `gentle-ai sdd-attempt begin --cwd <repo> --change <change> --expected-revision <revision> ...`. After `next_action: complete`, never rerun the same objective; a genuinely distinct objective requires an explicit reset.
-5. A passing bound remediation MUST add `--expected-binding-revision`, `--successor-lineage`, and `--remediates-evidence-revision` to `gentle-ai sdd-attempt finish`; read their values from `gentle-ai sdd-attempt status --cwd <repo> --change <change>` as `binding_revision`, `binding.lineage`, and `evidence_revision`. When the corrected candidate is already approved on the bound lineage, the lineage the binding already names is itself the successor — do not run `review recover` to mint a distinct one, which is correctly refused for an unchanged approved scope and for a same-lineage successor. The native command charges the attempt, persists evidence, and binds the approved successor in one HEAD CAS; do not publish those steps separately.
+1. Before an actor or harness launch, call `gentle-ai sdd-attempt acquire --cwd <repo> --change <change> --request-id <id> --work-unit <label> --evidence-goal <goal> --max-attempts <count> --max-changed-lines <count>`.
+2. Launch only when acquire returns `state: proceed`, and retain its opaque `token`. `blocked` or `complete` stops the launch.
+3. After the external run, call `gentle-ai sdd-attempt settle --cwd <repo> --change <change> --token <token> --request-id <settle-id> ...` with a request ID distinct from the acquire operation's request ID, outcome, and bounded evidence. Reuse each operation's own ID only for its idempotent replay. Settle derives native binding/remediation inputs; pass `--successor-lineage` only for a distinct approved successor, otherwise the bound lineage remains its own successor.
+4. Route only from settle's `proceed`, `blocked`, or `complete` state. Full `status|begin|finish|reset` operations are diagnostic/compatibility surfaces; reset requires an explicit maintainer scope decision and is never automatic.
 
 ### Artifact Store Mode
 

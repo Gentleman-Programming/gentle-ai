@@ -970,13 +970,26 @@ func sddMultiCursor(t *testing.T) int {
 	return -1
 }
 
+func withModelPickerPaths(t *testing.T, cachePath, settingsPath string) {
+	t.Helper()
+	originalCachePath := modelPickerCachePath
+	originalSettingsPath := modelPickerSettingsPath
+	modelPickerCachePath = func() string { return cachePath }
+	modelPickerSettingsPath = func() string { return settingsPath }
+	t.Cleanup(func() {
+		modelPickerCachePath = originalCachePath
+		modelPickerSettingsPath = originalSettingsPath
+	})
+}
+
 // TestSDDModeMultiShowsModelPickerWhenCacheMissing verifies that selecting
 // SDDModeMulti still opens the model picker when the OpenCode model cache has
 // not been populated yet. The picker can still load custom providers from
 // opencode.json and otherwise shows its explicit empty state instead of silently
 // skipping model assignment.
 func TestSDDModeMultiShowsModelPickerWhenCacheMissing(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	withModelPickerPaths(t, filepath.Join(dir, "missing-models.json"), filepath.Join(dir, "missing-settings.json"))
 
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenSDDMode
@@ -996,7 +1009,8 @@ func TestSDDModeMultiShowsModelPickerWhenCacheMissing(t *testing.T) {
 }
 
 func TestSDDModeMultiEmptyModelPickerCanContinueWithDefaults(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	withModelPickerPaths(t, filepath.Join(dir, "missing-models.json"), filepath.Join(dir, "missing-settings.json"))
 
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenSDDMode
@@ -1033,11 +1047,7 @@ func TestSDDModeMultiShowsModelPickerWhenCacheExists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	origStat := osStatModelCache
-	osStatModelCache = func(name string) (os.FileInfo, error) {
-		return os.Stat(cacheFile) // stat succeeds → cache present
-	}
-	t.Cleanup(func() { osStatModelCache = origStat })
+	withModelPickerPaths(t, cacheFile, filepath.Join(tmpDir, "missing-settings.json"))
 
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenSDDMode
@@ -6649,7 +6659,7 @@ func TestPickerFlowSlice(t *testing.T) {
 			},
 		},
 		{
-			name: "non-custom all agents SDDMode Multi cache absent excludes ModelPicker",
+			name: "non-custom all agents SDDMode Multi cache absent includes ModelPicker",
 			setup: func(t *testing.T) Model {
 				t.Setenv("HOME", t.TempDir()) // guarantees cache path resolves to missing file
 				m := NewModel(system.DetectionResult{}, "dev")
@@ -6665,6 +6675,7 @@ func TestPickerFlowSlice(t *testing.T) {
 				ScreenKiroModelPicker,
 				ScreenCodexModelPicker,
 				ScreenSDDMode,
+				ScreenModelPicker,
 				ScreenStrictTDD,
 				ScreenDependencyTree,
 			},
@@ -7069,7 +7080,8 @@ func TestApplyPickerEntry(t *testing.T) {
 		{
 			name: "ModelPicker initializes ModelPicker state",
 			setup: func(t *testing.T) Model {
-				withModelCacheOverride(t)
+				dir := t.TempDir()
+				withModelPickerPaths(t, filepath.Join(dir, "missing-models.json"), filepath.Join(dir, "missing-settings.json"))
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
 				m.Selection.Components = sddComponents
@@ -7174,7 +7186,10 @@ func TestApplyPickerEntry(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := tt.setup(t)
-			m.applyPickerEntry(tt.target)
+			cmd := m.applyPickerEntry(tt.target)
+			if tt.target == ScreenModelPicker && cmd == nil {
+				t.Fatal("applyPickerEntry(ScreenModelPicker) returned nil discovery command")
+			}
 			tt.assertFn(t, m)
 		})
 	}
@@ -7337,6 +7352,17 @@ func TestPickerBackRowRegression(t *testing.T) {
 				t.Fatalf("screen = %v, want %v", got.Screen, tt.wantScreen)
 			}
 		})
+	}
+}
+
+func TestGoBackCustomModelPickerStartsDiscovery(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen, m.Selection.Preset, m.Selection.SDDMode = ScreenStrictTDD, model.PresetCustom, model.SDDModeMulti
+	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := updated.(Model); got.Screen != ScreenModelPicker || cmd == nil {
+		t.Fatalf("screen/cmd = %v/%v", got.Screen, cmd)
 	}
 }
 

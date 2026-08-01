@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/correction-plan-request.schema.json",
+  "title": "Gentle AI provider-owned bounded correction plan request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "request_hash", "lineage_id", "expected_revision", "target_identity",
+    "correction_budget", "fix_finding_ids", "findings"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-correction-plan-request/v1"},
+    "request_hash": {"$ref": "#/$defs/sha256"},
+    "lineage_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "expected_revision": {"$ref": "#/$defs/sha256"},
+    "target_identity": {"$ref": "#/$defs/sha256"},
+    "correction_budget": {"type": "integer", "minimum": 1, "maximum": 200},
+    "fix_finding_ids": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "findings": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/finding"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "lens", "location", "severity", "claim", "proof_refs", "evidence",
+        "evidence_class", "causal_disposition"
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "lens": {"enum": ["risk", "resilience", "readability", "reliability"]},
+        "location": {"type": "string", "minLength": 1},
+        "severity": {"enum": ["BLOCKER", "CRITICAL"]},
+        "claim": {"type": "string", "minLength": 1},
+        "proof_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "evidence": {"type": "string", "minLength": 1},
+        "evidence_class": {"enum": ["deterministic", "inferential"]},
+        "causal_disposition": {"enum": ["introduced", "behavior-activated", "worsened"]}
+      }
+    }
+  }
+}

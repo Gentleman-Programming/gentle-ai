@@ -4661,6 +4661,31 @@ func TestInjectCodexWritesSDDOrchestratorAndSkills(t *testing.T) {
 		t.Fatal("agents.md contains Gemini-specific paths — wrong asset was injected")
 	}
 
+	for _, want := range []string{
+		"`spawn_agent`",
+		"`wait_agent(timeout_ms=<bounded timeout>)`",
+		"`list_agents()`",
+		"`send_message`",
+		"`followup_task`",
+		"`interrupt_agent`",
+		"Completed or idle agents remain reusable",
+		"Repeat `wait_agent(timeout_ms=<bounded timeout>)` and `list_agents()` until the target agent reaches a terminal state.",
+		"If the target reaches a non-success terminal state, stop and surface its final output or status",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("agents.md missing Codex multi-agent v2 lifecycle fragment %q", want)
+		}
+	}
+	for _, stale := range []string{
+		"`close_agent`",
+		"`send_input`",
+		"`wait_agent(task_name=",
+	} {
+		if strings.Contains(text, stale) {
+			t.Errorf("agents.md retained legacy Codex multi-agent lifecycle fragment %q", stale)
+		}
+	}
+
 	// Should also write SDD skill files.
 	skillPath := filepath.Join(home, ".codex", "skills", "sdd-init", "SKILL.md")
 	if _, err := os.Stat(skillPath); err != nil {

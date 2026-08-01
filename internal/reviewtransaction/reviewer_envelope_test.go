@@ -69,13 +69,13 @@ func TestSchemaExampleShapedResultIsAdmitted(t *testing.T) {
 	request.Result = LensResult{Lens: LensReliability, Findings: []Finding{}, Evidence: evidence}
 	request.CandidateCausalFindingIDs = nil
 
-	_, admission, err := AdmitArtifact(request)
+	_, admission, err := AdmitArtifact(t.Context(), request)
 	if err != nil || admission.Decision != ArtifactAdmissionCompleted {
 		t.Fatalf("AdmitArtifact(schema-shaped result) decision = %q, error = %v; want completed", admission.Decision, err)
 	}
 
 	request.EchoedSubjectHash = ""
-	_, admission, err = AdmitArtifact(request)
+	_, admission, err = AdmitArtifact(t.Context(), request)
 	if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
 		t.Fatalf("AdmitArtifact(no subject_hash) decision = %q, error = %v; want incomplete", admission.Decision, err)
 	}

@@ -24,6 +24,7 @@ func TestBoundedReviewContractLeavesCanonicalizationToNativeGo(t *testing.T) {
 		"Only candidate-caused severe findings block",
 		"OpenCode preflights the opaque binding",
 		"injects only the provider's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered manifest",
+		"Claude Code carries immutable candidate evidence directly in the reviewer task prompt",
 		"read-only native Git commands",
 	} {
 		if !strings.Contains(content, want) {
@@ -181,16 +182,17 @@ func assertOpenCodeReviewerPermission(t *testing.T, label string, raw any) {
 		t.Fatalf("%s permission = %#v, want edit deny", label, raw)
 	}
 	bash, ok := permission["bash"].(map[string]any)
-	if !ok || bash["*"] != "deny" || len(bash) != len(reviewerGitCommandSuffixes)+1 {
+	commands := reviewerInspectionCommands()
+	if !ok || bash["*"] != "deny" || len(bash) != len(commands)+1 {
 		t.Fatalf("%s bash permission = %#v", label, permission["bash"])
 	}
-	for _, suffix := range reviewerGitCommandSuffixes {
-		pattern := reviewerGitCommandPrefix + " " + suffix
-		for _, replacement := range []string{"<base_tree>", "<candidate_tree>", "<tree>", "<path>"} {
+	for _, command := range commands {
+		pattern := command
+		for _, replacement := range []string{"<repository_context>", "<revision>", "<lineage>", "<target>", "<lens>", "<order>", "<path_index>"} {
 			pattern = strings.ReplaceAll(pattern, replacement, "*")
 		}
 		if bash[pattern] != "allow" {
-			t.Errorf("%s does not allow exact reviewer Git shape %q", label, pattern)
+			t.Errorf("%s does not allow exact reviewer inspection shape %q", label, pattern)
 		}
 	}
 	encoded, err := json.Marshal(permission)
@@ -201,6 +203,44 @@ func assertOpenCodeReviewerPermission(t *testing.T, label string, raw any) {
 	allow := strings.Index(string(encoded), `":"allow"`)
 	if deny < 0 || allow < 0 || deny > allow {
 		t.Fatalf("%s permission order does not put broad deny before narrow allows: %s", label, encoded)
+	}
+}
+
+func TestReviewerInspectionCommandsReturnIndependentValues(t *testing.T) {
+	first := reviewerInspectionCommands()
+	second := reviewerInspectionCommands()
+	if len(first) == 0 || len(second) != len(first) {
+		t.Fatalf("inspection commands = %#v / %#v", first, second)
+	}
+	first[0] = "mutated"
+	if second[0] == "mutated" || reviewerInspectionCommands()[0] == "mutated" {
+		t.Fatal("reviewer inspection commands share mutable backing storage")
+	}
+}
+
+func TestOpenCodeReviewInspectionIsNativeAndWindowsPortable(t *testing.T) {
+	prompt, ok := reviewerPrompt("review-reliability")
+	if !ok {
+		t.Fatal("review-reliability prompt missing")
+	}
+	permission := openCodeReviewerPermission()
+	encoded, err := json.Marshal(permission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"env -i", " git ", "--text", "PowerShell", "cmd /", "Git Bash"} {
+		if strings.Contains(prompt, forbidden) || strings.Contains(string(encoded), forbidden) {
+			t.Errorf("review inspection still depends on %q", forbidden)
+		}
+	}
+	for _, operation := range []string{"name-status", "numstat", "stat", "patch", "object"} {
+		if !strings.Contains(prompt, "gentle-ai review inspect-candidate") || !strings.Contains(prompt, "--operation "+operation) {
+			t.Errorf("review prompt omits native %s inspection recipe", operation)
+		}
+	}
+	bash := permission["bash"].(map[string]any)
+	if bash["*"] != "deny" || bash["gentle-ai review inspect-candidate *"] == "allow" {
+		t.Fatalf("reviewer permission is not deny-by-default and exact: %#v", bash)
 	}
 }
 
@@ -341,8 +381,13 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// Deliberately one clause: the standard tier sits close to its 15%
 		// headroom rule, so the reasoning lives in sdd-archive/SKILL.md, which
 		// is loaded per phase rather than always-on.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_762, maxCharacters: 17_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_182, maxCharacters: 35_000},
+		// +457 defines STATUS-mediated recollection without adding retry state.
+		// Native inspect-candidate removes repeated shell hardening prose and operands.
+		// Reviewer prompts no longer expose native Git flags owned by that capability.
+		// +1,190 gives Claude's shell-less reviewer a complete prompt-carried
+		// immutable transport while OpenCode keeps provider-owned injection (#2003).
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 16_064, maxCharacters: 18_500},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_449, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -38,8 +38,13 @@ func TestReviewRepositoryContextPublishesOpaquePrivateBinding(t *testing.T) {
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("context record mode = %o, want 600", info.Mode().Perm())
 	}
-	if payload, err := os.ReadFile(path); err != nil || !strings.Contains(string(payload), repo) {
-		t.Fatalf("private record does not retain the repository root: %v", err)
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record reviewRepositoryContextFile
+	if err := json.Unmarshal(payload, &record); err != nil || record.RepositoryRoot != repo {
+		t.Fatalf("private record repository root = %q, %v; want %q", record.RepositoryRoot, err, repo)
 	}
 }
 

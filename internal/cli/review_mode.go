@@ -406,6 +406,27 @@ const (
 	reviewConsentAnswerNotNow = "2"
 )
 
+type reviewConsentLocale string
+
+const (
+	reviewConsentLocaleEnglish reviewConsentLocale = "en"
+	reviewConsentLocaleSpanish reviewConsentLocale = "es"
+)
+
+// normalizeReviewConsentLocale keeps the absent locale on the published English
+// projection while accepting the two native consent-envelope localizations.
+func normalizeReviewConsentLocale(value string) (reviewConsentLocale, error) {
+	switch strings.TrimSpace(value) {
+	case "", string(reviewConsentLocaleEnglish):
+		return reviewConsentLocaleEnglish, nil
+	case string(reviewConsentLocaleSpanish):
+		return reviewConsentLocaleSpanish, nil
+	default:
+		// refusal:by-design operator-knowledge: only the caller knows which supported locale matches the active conversation
+		return "", errors.New("review consent locale must be en or es")
+	}
+}
+
 const (
 	reviewConsentHeadline = "Gentle AI can review this change before you call it done."
 	reviewConsentValue    = "Reviewing takes a bit longer, and it makes the result substantially safer."

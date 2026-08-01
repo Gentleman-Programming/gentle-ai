@@ -13,7 +13,8 @@ import (
 )
 
 // RunSDDAttempt exposes the artifact-store-agnostic native runtime authority.
-// Every successful operation emits exactly one RuntimeStatus JSON value.
+// Legacy operations emit RuntimeStatus; acquire and settle emit its bounded
+// orchestration projection.
 func RunSDDAttempt(args []string, stdout io.Writer) error {
 	return runSDDAttempt(context.Background(), args, stdout)
 }
@@ -35,6 +36,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	cwd := flags.String("cwd", "", "repository path")
 	change := flags.String("change", "", "SDD change")
 	expected := flags.String("expected-revision", "", "exact native runtime revision")
+	token := flags.String("token", "", "opaque compact attempt continuation")
 	requestID := flags.String("request-id", "", "idempotency request identifier")
 	workUnit := flags.String("work-unit", "", "caller-facing work-unit label")
 	evidenceGoal := flags.String("evidence-goal", "", "stable runtime evidence objective")
@@ -73,15 +75,15 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	// attempt must not demand a review obligation the operator has no way to
 	// satisfy.
 	store.ReviewDisabled = reviewDrivenDevelopmentDisabled(ctx, *cwd)
-	var status sddstatus.RuntimeStatus
+	var result any
 	switch operation {
 	case "status":
-		status, err = store.Status()
+		result, err = store.Status()
 	case "begin":
 		if missing := missingSDDAttemptFlags(args[1:], "expected-revision", "request-id", "work-unit", "evidence-goal"); len(missing) != 0 {
 			return fmt.Errorf("sdd-attempt begin requires %s", strings.Join(missing, ", "))
 		}
-		status, err = store.Begin(ctx, sddstatus.BeginAttemptRequest{
+		result, err = store.Begin(ctx, sddstatus.BeginAttemptRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
 		})
@@ -93,7 +95,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		if remediationFlags != 0 && remediationFlags != 3 {
 			return errors.New("remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together")
 		}
-		status, err = store.Finish(ctx, sddstatus.FinishAttemptRequest{
+		result, err = store.Finish(ctx, sddstatus.FinishAttemptRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, Outcome: sddstatus.AttemptOutcome(*outcome),
 			EvidenceRevision: *evidenceRevision, Diagnosis: *diagnosis,
 			HarnessDisposition: sddstatus.HarnessDisposition(*harnessDisposition),
@@ -105,8 +107,27 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		if missing := missingSDDAttemptFlags(args[1:], "expected-revision", "request-id", "reason", "actor"); len(missing) != 0 {
 			return fmt.Errorf("sdd-attempt reset requires %s", strings.Join(missing, ", "))
 		}
-		status, err = store.Reset(ctx, sddstatus.ResetObjectiveRequest{
+		result, err = store.Reset(ctx, sddstatus.ResetObjectiveRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, Reason: *reason, Actor: *actor,
+		})
+	case "acquire":
+		if missing := missingSDDAttemptFlags(args[1:], "request-id", "work-unit", "evidence-goal"); len(missing) != 0 {
+			return fmt.Errorf("sdd-attempt acquire requires %s; rerun `gentle-ai sdd-attempt acquire` with those missing flags", strings.Join(missing, ", "))
+		}
+		result, err = store.Acquire(ctx, sddstatus.CompactAcquireRequest{
+			RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
+			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
+		})
+	case "settle":
+		if missing := missingSDDAttemptFlags(args[1:], "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence"); len(missing) != 0 {
+			return fmt.Errorf("sdd-attempt settle requires %s; rerun `gentle-ai sdd-attempt settle` with those missing flags", strings.Join(missing, ", "))
+		}
+		result, err = store.Settle(ctx, sddstatus.CompactSettleRequest{
+			Token: *token, RequestID: *requestID, Outcome: sddstatus.AttemptOutcome(*outcome),
+			EvidenceRevision: *evidenceRevision, Diagnosis: *diagnosis,
+			HarnessDisposition: sddstatus.HarnessDisposition(*harnessDisposition),
+			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
+			SuccessorLineageID: *successorLineage, RemediatesEvidenceRevision: *remediatesEvidenceRevision,
 		})
 	}
 	if err != nil {
@@ -114,7 +135,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(status)
+	return encoder.Encode(result)
 }
 
 // sddAttemptOperationsInOrder is the single ordered source of truth for
@@ -123,7 +144,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 // accepted values and the values a message names can never drift apart.
 // Mirrors reviewIntegrationGatesInOrder / reviewIntegrationGateNames in
 // review_operation_contract.go.
-var sddAttemptOperationsInOrder = []string{"status", "begin", "finish", "reset"}
+var sddAttemptOperationsInOrder = []string{"status", "begin", "finish", "reset", "acquire", "settle"}
 
 func validSDDAttemptOperation(operation string) bool {
 	for _, valid := range sddAttemptOperationsInOrder {
@@ -154,9 +175,11 @@ func joinSDDAttemptOperations() string {
 func validateSDDAttemptOperationFlags(operation string, args []string) error {
 	allowed := map[string]bool{"cwd": true, "change": true}
 	for _, name := range map[string][]string{
-		"begin":  {"expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"},
-		"finish": {"expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "expected-binding-revision", "successor-lineage", "remediates-evidence-revision"},
-		"reset":  {"expected-revision", "request-id", "reason", "actor"},
+		"begin":   {"expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"},
+		"finish":  {"expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "expected-binding-revision", "successor-lineage", "remediates-evidence-revision"},
+		"reset":   {"expected-revision", "request-id", "reason", "actor"},
+		"acquire": {"request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"},
+		"settle":  {"token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "successor-lineage", "remediates-evidence-revision"},
 	}[operation] {
 		allowed[name] = true
 	}
