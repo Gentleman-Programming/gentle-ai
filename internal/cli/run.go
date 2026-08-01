@@ -437,7 +437,9 @@ func goInstallBinDir() string {
 
 func defaultGoEnv(keys ...string) (map[string]string, error) {
 	args := append([]string{"env"}, keys...)
-	out, err := exec.Command("go", args...).Output()
+	cmd := exec.Command("go", args...)
+	cmd.Dir = system.SanitizeWorkingDir(cmd.Dir)
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}

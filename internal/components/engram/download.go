@@ -45,6 +45,7 @@ var (
 	// engramGoInstallCmdFn executes `go install <pkg>`. Package-level var for testability.
 	engramGoInstallCmdFn = func(pkg string) error {
 		cmd := exec.Command("go", "install", pkg)
+		cmd.Dir = system.SanitizeWorkingDir(cmd.Dir)
 		cmd.Env = goPrivateModuleEnv(os.Environ(), engramCanonicalModule)
 		cmd.Stdin = nil
 		out, err := cmd.CombinedOutput()
@@ -60,7 +61,9 @@ var (
 	// the real Go env file.
 	engramGoEnvFn = func(keys ...string) (map[string]string, error) {
 		args := append([]string{"env"}, keys...)
-		out, err := exec.Command("go", args...).Output()
+		cmd := exec.Command("go", args...)
+		cmd.Dir = system.SanitizeWorkingDir(cmd.Dir)
+		out, err := cmd.Output()
 		if err != nil {
 			return nil, err
 		}
