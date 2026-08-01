@@ -17,13 +17,19 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/bench/canonical"
 )
 
 func main() {
@@ -84,6 +90,11 @@ func commandRunWith(args []string, isExecutable func(string) bool, journeys func
 	axisFlag := flags.String("axis", "",
 		"comma-separated opt-in axes to add to the core corpus, or `all` (default: none). Registered: "+
 			strings.Join(append([]string{}, axisNames()...), ", "))
+	// Identity verification flags — when provided, the pre-measurement gate runs
+	// and aborts without starting any journey on mismatch.
+	verifySHA256 := flags.String("verify-sha256", "", "expected target binary SHA-256 (preflight gate)")
+	verifyRevision := flags.String("verify-revision", "", "expected embedded VCS revision (preflight gate)")
+	verifySourceRevision := flags.String("verify-source-revision", "", "expected source revision (preflight gate)")
 	_ = flags.Parse(args)
 
 	if strings.TrimSpace(*binary) == "" {
@@ -139,6 +150,32 @@ func commandRunWith(args []string, isExecutable func(string) bool, journeys func
 		Binary:        resolved,
 		BinaryVersion: binaryVersion(resolved),
 	}
+
+	// Pre-measurement identity verification gate: when --verify-* flags are
+	// provided, the gate runs before any journey starts. Mismatch aborts the
+	// measurement without writing evidence.
+	if *verifySHA256 != "" || *verifyRevision != "" || *verifySourceRevision != "" {
+		observedBinarySHA256, _ := binarySHA256(resolved)
+		observedRevision, _ := embeddedVCSRevision(resolved)
+		observed := Identity{
+			TargetBinarySHA256:  observedBinarySHA256,
+			EmbeddedVCSRevision: observedRevision,
+			SourceRevision:      "",
+			RuntimeGOOS:         runtime.GOOS,
+			RuntimeGOARCH:       runtime.GOARCH,
+			Mode:                ModeDriven,
+		}
+		expected := Identity{
+			TargetBinarySHA256:  *verifySHA256,
+			EmbeddedVCSRevision: *verifyRevision,
+			SourceRevision:      *verifySourceRevision,
+		}
+		if err := Verify(context.Background(), expected, observed); err != nil {
+			fmt.Fprintf(os.Stderr, "benchmark identity mismatch: %v\n", err)
+			return 1
+		}
+	}
+
 	if len(requested) > 0 && len(resolvedIDs) == 0 {
 		results.RequestedSelectors = requested
 		results.ResolvedIDs = &resolvedIDs
@@ -193,6 +230,19 @@ func commandRunWith(args []string, isExecutable func(string) bool, journeys func
 		fmt.Fprintf(os.Stderr, "write results: %v\n", err)
 		return 1
 	}
+
+	// Canonical projection: produce path-free digest from the raw results JSON.
+	if rawJSON, err := json.Marshal(results); err == nil {
+		if canonJSON, err := canonical.Canonicalize(rawJSON); err == nil {
+			digest := canonical.Digest(canonJSON)
+			results.Notes = append(results.Notes, "canonical_digest: "+digest)
+			// Re-write with digest note.
+			if err := writeJSON(*out, results); err != nil {
+				fmt.Fprintf(os.Stderr, "write results (canonical digest note): %v\n", err)
+			}
+		}
+	}
+
 	writeRunReport(os.Stdout, results)
 	fmt.Fprintf(os.Stderr, "\nwrote %s\n", *out)
 	if exit := runExitCode(results); exit != 0 {
@@ -397,4 +447,38 @@ func binaryVersion(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(output))
+}
+
+func binarySHA256(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(h[:]), nil
+}
+
+// embeddedVCSRevision reads the embedded VCS revision from a binary built
+// with -ldflags="-X main.embeddedVCSRevision=...". Returns "" if not available.
+func embeddedVCSRevision(path string) (string, error) {
+	output, err := exec.Command("go", "version", "-m", path).Output()
+	if err != nil {
+		return "", err
+	}
+	// go version -m output format:
+	// path/to/binary
+	//     go    go1.25.10
+	//     mod   github.com/gentleman-programming/gentle-ai/bench  (devel build or v1.2.3)
+	//     dep   ...
+	// The embedded VCS revision is set via -X main.embeddedVCSRevision=...
+	for _, line := range strings.Split(string(output), "\n") {
+		if strings.HasPrefix(line, "\tgen ") {
+			// gen github.com/gentleman-programming/gentle-ai/bench  <revision>
+			fields := strings.Fields(line)
+			if len(fields) >= 3 {
+				return fields[len(fields)-1], nil
+			}
+		}
+	}
+	return "", nil
 }
