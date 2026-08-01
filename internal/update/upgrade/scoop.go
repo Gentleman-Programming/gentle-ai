@@ -54,12 +54,6 @@ func scoopRootWith(getenv func(string) string, userHome func() (string, error), 
 	return filepath.Join(homeDir, "scoop")
 }
 
-// scoopOwnsExecutableWith verifies that the running executable resolves under
-// Scoop's current Gentle AI package, not merely that Scoop is installed.
-func scoopOwnsExecutableWith(executable, root string, resolve func(string) (string, error)) bool {
-	return scoopOwnsExecutableWithResolvers(executable, root, resolve, resolve)
-}
-
 func scoopOwnsExecutableWithResolvers(executable, root string, resolveExecutable, resolveCurrent func(string) (string, error)) bool {
 	resolvedExecutable, err := resolveExecutable(executable)
 	if err != nil {
