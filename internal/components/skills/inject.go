@@ -51,9 +51,32 @@ func injectWithCatalog(homeDir string, adapter agents.Adapter, skillIDs []model.
 		skillsByID[skill.ID] = skill
 	}
 
+	needsManifest := false
 	for _, id := range skillIDs {
 		// SDD skills are written by the SDD component — skip to avoid conflicts
 		// unless a capability was specified (model-section extraction requested).
+		if IsSDDSkill(id) && capability == "" {
+			continue
+		}
+
+		skill, ok := skillsByID[id]
+		if ok && skill.RequiredCapabilities != (agents.AgentFeatureClaims{}) {
+			needsManifest = true
+			break
+		}
+	}
+
+	var provided agents.AgentFeatureClaims
+	if needsManifest {
+		manifest, manifestErr := agents.ResolveCapabilityManifest(adapter)
+		if manifestErr != nil {
+			return InjectionResult{}, fmt.Errorf("resolve capabilities for agent %q: %w", adapter.Agent(), manifestErr)
+		}
+		provided = manifest.Features
+	}
+
+	candidates := make([]catalog.Skill, 0, len(skillIDs))
+	for _, id := range skillIDs {
 		if IsSDDSkill(id) && capability == "" {
 			continue
 		}
@@ -64,17 +87,15 @@ func injectWithCatalog(homeDir string, adapter agents.Adapter, skillIDs []model.
 			skipped = append(skipped, id)
 			continue
 		}
-		if skill.RequiredCapabilities != (agents.AgentFeatureClaims{}) {
-			manifest, manifestErr := agents.ResolveCapabilityManifest(adapter)
-			if manifestErr != nil {
-				return InjectionResult{}, fmt.Errorf("resolve capabilities for agent %q: %w", adapter.Agent(), manifestErr)
-			}
-			if !isCompatible(skill.RequiredCapabilities, manifest.Features) {
-				skipped = append(skipped, id)
-				continue
-			}
+		if skill.RequiredCapabilities != (agents.AgentFeatureClaims{}) && !isCompatible(skill.RequiredCapabilities, provided) {
+			skipped = append(skipped, id)
+			continue
 		}
+		candidates = append(candidates, skill)
+	}
 
+	for _, skill := range candidates {
+		id := skill.ID
 		embedDir := "skills/" + string(id)
 		entries, readErr := fs.ReadDir(assets.FS, embedDir)
 		if readErr != nil {

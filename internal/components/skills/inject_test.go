@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,6 +252,37 @@ func TestInjectFiltersSkillsByRequiredCapabilities(t *testing.T) {
 			}
 			assertNonEmptyFile(t, path)
 		})
+	}
+}
+
+type invalidManifestAdapter struct {
+	agents.Adapter
+}
+
+func (a invalidManifestAdapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.AgentCapabilityManifest{}
+}
+
+func TestInjectPreflightsCapabilitiesBeforeWritingSkills(t *testing.T) {
+	home := t.TempDir()
+	adapter := invalidManifestAdapter{Adapter: claude.NewAdapter()}
+	available := []catalog.Skill{
+		{ID: model.SkillCreator, Name: "skill-creator"},
+		{
+			ID:                   model.SkillGoTesting,
+			Name:                 "go-testing",
+			RequiredCapabilities: capabilitymanifest.AgentFeatureClaims{FileSubAgents: true},
+		},
+	}
+
+	_, err := injectWithCatalog(home, adapter, []model.SkillID{model.SkillCreator, model.SkillGoTesting}, "", available)
+	if !errors.Is(err, agents.ErrCapabilityManifestMismatch) {
+		t.Fatalf("injectWithCatalog() error = %v, want capability manifest mismatch", err)
+	}
+
+	earlierPath := SkillPathForAgent(home, adapter, model.SkillCreator)
+	if _, statErr := os.Stat(earlierPath); !os.IsNotExist(statErr) {
+		t.Fatalf("unannotated skill path stat error = %v, want not exist", statErr)
 	}
 }
 
