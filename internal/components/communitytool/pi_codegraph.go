@@ -509,7 +509,7 @@ func isPiCodeGraphMCPTransportEOF(err error) bool {
 	if err == nil {
 		return false
 	}
-	return errors.Is(err, io.EOF) || strings.Contains(err.Error(), "EOF")
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func probePiCodeGraphMCP(mcpPath string) (PiCodeGraphMCPProbeResult, error) {

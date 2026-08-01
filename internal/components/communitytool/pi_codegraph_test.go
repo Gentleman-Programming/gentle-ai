@@ -475,6 +475,7 @@ func TestVerifyPiMCPUsesInjectedEffectiveProbe(t *testing.T) {
 		{name: "pending health with malformed explore schema remains fatal", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{{Name: "codegraph_explore", InputSchema: map[string]any{"type": "object"}}}}, probeErr: ErrPiCodeGraphAdapterHealthUnavailable, wantErr: true},
 		{name: "validated capability with unavailable adapter health becomes pending", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{validTool}}, probeErr: ErrPiCodeGraphAdapterHealthUnavailable, wantPending: true},
 		{name: "transport EOF during probe becomes pending", probe: PiCodeGraphMCPProbeResult{}, probeErr: fmt.Errorf("MCP initialize: %w", io.EOF), wantPending: true},
+		{name: "non-EOF error containing EOF string remains fatal", probe: PiCodeGraphMCPProbeResult{}, probeErr: fmt.Errorf("failed to parse EOF_CONFIG"), wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			previous := piCodeGraphEffectiveMCPProbe
