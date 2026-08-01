@@ -199,8 +199,8 @@ func declaredLensTools(t *testing.T, path string) (tools []string, readOnlyAsser
 }
 
 // TestLensAgentPromptsStateWhereTheirInputComesFrom is the input-side twin of
-// the envelope guard. Every runtime receives the same provider-owned immutable
-// inspection contract and must never substitute mutable workspace files.
+// the envelope guard. Provider-managed runtimes receive immutable inspection
+// context and must never substitute mutable workspace files.
 func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 	envelope := reviewtransaction.NewReviewerResultEnvelope()
 
@@ -214,6 +214,9 @@ func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 
 	for _, paths := range lensAgentAssetPaths(t, envelope.LensAgentNames) {
 		for _, path := range paths {
+			if strings.HasPrefix(path, "claude/agents/") {
+				continue // Claude's separate prompt transport is pinned in bounded_review_contract_test.go.
+			}
 			prompt := strings.ToLower(renderBoundedReviewAsset(path))
 			for claim, why := range map[string]string{
 				"artifact_subject":      "does not name the bound artifact subject",
