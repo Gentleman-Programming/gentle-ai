@@ -93,9 +93,9 @@ const reviewtransactionEscalationCauseSample = "budget_exceeded"
 // statement names the outcome in domain terms plus the single decision or
 // command, per spec "Three-Tier Narration Contract"; commands and flags are
 // backtick-quoted so TestNarrationTierAAndCBanInternalVocabulary's code-span
-// exemption applies to them. corrected_candidate_unavailable and
-// staged_workspace_overlay_recovery_unavailable carry the exact content
-// organic-dx tasks.md 3b.10 already recorded as Phase 4 registry input.
+// exemption applies to them. staged_workspace_overlay_recovery_unavailable
+// carries the exact content organic-dx tasks.md 3b.10 recorded as a Phase 4
+// registry input.
 var reviewStopReasonNarration = map[string]string{
 	"captured_verification_evidence_invalid": "The captured verification record or its immutable bytes failed integrity checks. " +
 		"Ask a maintainer to inspect the review record before trusting that evidence.",
@@ -103,12 +103,6 @@ var reviewStopReasonNarration = map[string]string{
 		"Ask a maintainer to inspect the review record directly.",
 	"captured_result_selection_unavailable": "This run reached a state that should never happen: every review result it expected was already present. " +
 		"This is a defect; there is nothing more to do from here.",
-	"corrected_candidate_unavailable": "Change the candidate content so it differs from the frozen original, then re-run " +
-		"`gentle-ai review status --next-transition` (or `review finalize`). " +
-		"That is the right path when the review found real defects. If instead the reviewers were given the wrong input " +
-		"and their findings describe content that was never the candidate, a maintainer can quarantine those results and " +
-		"reopen their lenses over the same frozen content: run `gentle-ai review reopen-results --prepare --quarantine-lens <lens>` " +
-		"(repeat `--quarantine-lens` per affected lens) and follow its output.",
 	"correction_repository_verification_failed": "Repository verification failed for this correction candidate. Change the candidate within the open correction, then re-run " +
 		"`gentle-ai review status --next-transition` to capture evidence for the new candidate.",
 	"corrupted_or_unverifiable_authority": "This review's stored record cannot be trusted as-is, and it cannot be repaired automatically. " +

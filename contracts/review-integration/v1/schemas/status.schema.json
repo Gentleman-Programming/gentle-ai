@@ -89,7 +89,23 @@
         { "if": { "properties": { "kind": { "const": "execute" } }, "required": ["kind"] }, "then": { "required": ["execute"], "not": { "required": ["collect"] } } },
         { "if": { "properties": { "kind": { "const": "collect" } }, "required": ["kind"] }, "then": { "required": ["collect"], "not": { "required": ["execute"] } } },
         { "if": { "properties": { "kind": { "const": "stop" } }, "required": ["kind"] }, "then": { "not": { "anyOf": [{ "required": ["execute"] }, { "required": ["collect"] }] } } },
-        { "if": { "properties": { "reason_code": { "enum": ["correction_plan_required", "corrected_candidate_unavailable"] } }, "required": ["reason_code"] }, "then": { "required": ["correction_request"] }, "else": { "not": { "required": ["correction_request"] } } }
+        { "if": { "properties": { "reason_code": { "enum": ["correction_plan_required", "correction_candidate_required"] } }, "required": ["reason_code"] }, "then": { "required": ["correction_request"] }, "else": { "not": { "required": ["correction_request"] } } },
+        {
+          "if": { "properties": { "reason_code": { "const": "correction_candidate_required" } }, "required": ["reason_code"] },
+          "then": {
+            "properties": {
+              "kind": { "const": "collect" },
+              "collect": {
+                "properties": {
+                  "inputs": {
+                    "minItems": 1, "maxItems": 1,
+                    "items": { "properties": { "capture_operation": { "const": "external.apply_correction" } } }
+                  }
+                }
+              }
+            }
+          }
+        }
       ]
     },
     "transition_argument": {
@@ -142,6 +158,24 @@
           "if": { "properties": { "capture_operation": { "const": "external.run_targeted_validation" } }, "required": ["capture_operation"] },
           "then": { "required": ["validation_request"], "properties": { "schema": { "const": "gentle-ai.review-targeted-validation-request/v1" } } },
           "else": { "not": { "required": ["validation_request"] } }
+        },
+        {
+          "if": { "properties": { "capture_operation": { "const": "external.apply_correction" } }, "required": ["capture_operation"] },
+          "then": {
+            "properties": {
+              "name": { "const": "correction_candidate" },
+              "schema": { "const": "gentle-ai.review-correction-plan-request/v1" },
+              "arguments": {
+                "type": "array", "minItems": 3, "maxItems": 3,
+                "prefixItems": [
+                  { "allOf": [{ "$ref": "#/$defs/transition_argument" }], "properties": { "name": { "const": "lineage" }, "value": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" } } },
+                  { "allOf": [{ "$ref": "#/$defs/transition_argument" }], "properties": { "name": { "const": "expected-revision" }, "value": { "$ref": "#/$defs/sha256" } } },
+                  { "allOf": [{ "$ref": "#/$defs/transition_argument" }], "properties": { "name": { "const": "target" }, "value": { "$ref": "#/$defs/sha256" } } }
+                ],
+                "items": false
+              }
+            }
+          }
         }
       ]
     },

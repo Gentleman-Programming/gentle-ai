@@ -186,11 +186,11 @@ func TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree(t *testing.T) {
 	})
 
 	for _, test := range []struct {
-		name              string
-		mutate            func(*testing.T, string)
-		wantUnchangedStop bool
+		name                    string
+		mutate                  func(*testing.T, string)
+		wantUnchangedCollection bool
 	}{
-		{name: "rejects unchanged candidate", wantUnchangedStop: true, mutate: func(t *testing.T, repo string) { writeBinaryCandidate(t, repo, "wrong") }},
+		{name: "rejects unchanged candidate", wantUnchangedCollection: true, mutate: func(t *testing.T, repo string) { writeBinaryCandidate(t, repo, "wrong") }},
 		{name: "rejects path expansion", mutate: func(t *testing.T, repo string) {
 			writeBinaryCandidate(t, repo, "fixed")
 			if err := os.WriteFile(filepath.Join(repo, "expanded.txt"), []byte("outside frozen scope\n"), 0o644); err != nil {
@@ -201,11 +201,13 @@ func TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			repo, corrected, started := prepareBinaryCorrection(t, binary)
 			test.mutate(t, corrected)
-			if test.wantUnchangedStop {
+			if test.wantUnchangedCollection {
 				status := binaryReviewStatus(t, binary, corrected, started.LineageID, "--next-transition")
 				if status.Action != reviewtransaction.TargetStatusActionFinalize || status.NextTransition == nil ||
-					status.NextTransition.Kind != reviewNextTransitionStop || status.NextTransition.ReasonCode != "corrected_candidate_unavailable" ||
-					status.NextTransition.Collect != nil || status.ValidationRequest != nil {
+					status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "correction_candidate_required" ||
+					status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 ||
+					status.NextTransition.Collect.Inputs[0].CaptureOperation != "external.apply_correction" ||
+					status.NextTransition.CorrectionRequest == nil || status.ValidationRequest != nil {
 					t.Fatalf("unchanged candidate status = %#v", status)
 				}
 				if status.Authority == nil || status.Authority.State != reviewtransaction.StateCorrectionRequired || status.Receipt.Status != ReviewReceiptExpectedMissing {
