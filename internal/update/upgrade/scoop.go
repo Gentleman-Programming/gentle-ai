@@ -14,7 +14,10 @@ import (
 
 var scoopGentleAIOwned = defaultScoopGentleAIOwned
 
-const scoopCleanupTimeout = 5 * time.Second
+const (
+	scoopCleanupTimeout    = 5 * time.Second
+	scoopRootLookupTimeout = 5 * time.Second
+)
 
 func defaultScoopGentleAIOwned() bool {
 	if runtime.GOOS != "windows" {
@@ -26,8 +29,10 @@ func defaultScoopGentleAIOwned() bool {
 		return false
 	}
 
+	rootCtx, cancel := context.WithTimeout(context.Background(), scoopRootLookupTimeout)
+	defer cancel()
 	root := scoopRootWith(os.Getenv, os.UserHomeDir, func(args ...string) ([]byte, error) {
-		return scoopCommand(context.Background(), args...)
+		return scoopCommand(rootCtx, args...)
 	})
 	if root == "" {
 		return false
