@@ -38,7 +38,7 @@ const (
 	rddModeOverrideInherit = "inherit"
 
 	// rddConsentSchema identifies the one-shot latch recording that the user has
-	// already been asked whether review-driven development may run.
+	// already been asked whether receipt-driven development may run.
 	rddConsentSchema = "gentle-ai.rdd-consent-asked/v1"
 	// rddConsentName never matches the gen-%010d.json generation pattern, so the
 	// override head scan ignores it instead of mistaking it for a generation.
@@ -46,9 +46,11 @@ const (
 )
 
 var (
-	// ErrRDDDisabled reports that the user kill switch keeps review-driven
+	// ErrRDDDisabled reports that the user kill switch keeps receipt-driven
 	// development off. It is a stop, never a fallback signal.
-	ErrRDDDisabled = errors.New("review-driven development is disabled")
+	//
+	// refusal:by-design human-authority: a sentinel, not a user-facing message. Callers wrap it with the deciding scope and the exact `gentle-ai review mode enable` invocation; naming a command here would offer to undo a choice only the operator may reverse.
+	ErrRDDDisabled = errors.New("receipt-driven development is disabled")
 
 	// ErrRDDModeUnknown reports an unrecognised mode value. Callers that ignore
 	// it still receive a disabled projection.
@@ -61,7 +63,7 @@ var (
 	ErrRDDModeRevisionMismatch = errors.New("clone-local review mode revision mismatch")
 
 	// ErrRDDModeRepositoryForcedOn reports an attempt to make a repository
-	// impose review-driven development on every clone that checks it out.
+	// impose receipt-driven development on every clone that checks it out.
 	ErrRDDModeRepositoryForcedOn = errors.New("clone-local review mode override may only disable")
 
 	// ErrRDDConsentCorrupt reports an unreadable one-shot consent latch.
@@ -73,15 +75,15 @@ var (
 	rddConsentPayload = []byte(`{"schema":"` + rddConsentSchema + `"}` + "\n")
 )
 
-// RDDMode is the review-driven-development kill-switch value.
+// RDDMode is the receipt-driven-development kill-switch value.
 type RDDMode string
 
 const (
 	// RDDModeUnset means the source expressed no opinion.
 	RDDModeUnset RDDMode = ""
-	// RDDModeOn means the source permits review-driven development.
+	// RDDModeOn means the source permits receipt-driven development.
 	RDDModeOn RDDMode = "on"
-	// RDDModeOff means the source disables review-driven development.
+	// RDDModeOff means the source disables receipt-driven development.
 	RDDModeOff RDDMode = "off"
 )
 
@@ -124,6 +126,10 @@ const (
 	RDDDeliveryDisabledUnmanaged RDDDelivery = "disabled/unmanaged"
 	// RDDDeliveryUnmanaged is delivery with the switch on but no receipt yet.
 	RDDDeliveryUnmanaged RDDDelivery = "unmanaged"
+	// RDDDeliveryCandidateDeclinedUnmanaged is delivery the operator explicitly
+	// chose to leave outside RDD for one exact candidate. It is not a receipt,
+	// approval, or global mode change.
+	RDDDeliveryCandidateDeclinedUnmanaged RDDDelivery = "candidate_declined/unmanaged"
 )
 
 // RDDGlobalMode is the raw global user mode read from uncommitted user state.
@@ -149,7 +155,7 @@ type RDDModeStatus struct {
 	Revision   string        `json:"revision,omitempty"`
 }
 
-// Enabled reports whether new review-driven development may start.
+// Enabled reports whether new receipt-driven development may start.
 func (status RDDModeStatus) Enabled() bool { return status.Effective == RDDModeOn }
 
 // RDDDisabledError is the typed rejection returned while the kill switch is
@@ -340,7 +346,8 @@ func AuthorizeRDDOperation(
 		}
 		return status, nil
 	default:
-		return failedClosedRDDModeStatus(status.Source), fmt.Errorf("unknown review-driven development operation %q", operation)
+		// refusal:by-design world-action: the operation set is a compile-time constant of this package, so an unknown value is a caller bug and the exit is a code fix, not a command the operator could run.
+		return failedClosedRDDModeStatus(status.Source), fmt.Errorf("unknown receipt-driven development operation %q", operation)
 	}
 }
 
@@ -349,7 +356,7 @@ func AuthorizeRDDOperation(
 // same typed start stop as any other, and once it is back on the candidate is
 // reviewable whatever its authorship time.
 //
-// Authorship time is deliberately not a gate. Review-driven development is
+// Authorship time is deliberately not a gate. Receipt-driven development is
 // post-candidate by design: the review freezes a snapshot at review time,
 // inspects exactly those bytes, and issues a receipt content-bound to them, so
 // reviewing pre-existing bytes is the normal case rather than an exception.
@@ -502,7 +509,7 @@ func cloneLocalRDDOverrideValue(mode RDDMode) (string, error) {
 	case RDDModeUnset:
 		return rddModeOverrideInherit, nil
 	case RDDModeOn:
-		return "", fmt.Errorf("%w: a repository may disable review-driven development but never require it", ErrRDDModeRepositoryForcedOn)
+		return "", fmt.Errorf("%w: a repository may disable receipt-driven development but never require it", ErrRDDModeRepositoryForcedOn)
 	default:
 		return "", fmt.Errorf("%w: %q", ErrRDDModeUnknown, mode)
 	}

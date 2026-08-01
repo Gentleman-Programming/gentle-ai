@@ -373,7 +373,7 @@ func TestOrganicReviewLifecycleErrorTyping(t *testing.T) {
 	t.Run("issue-1832", func(t *testing.T) {
 		// A disposable repository with no remote and no branch upstream: no
 		// publication boundary to derive at all. That is not authority
-		// damage, and while review-driven development is off it is not
+		// damage, and while receipt-driven development is off it is not
 		// something pre-push should block on.
 		harness := newOrganicHarness(t)
 		harness.git("remote", "remove", "origin")

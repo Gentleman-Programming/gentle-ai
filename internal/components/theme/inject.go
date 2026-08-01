@@ -16,7 +16,7 @@ type InjectionResult struct {
 	Files   []string
 }
 
-var themeOverlayJSON = []byte("{\n  \"theme\": \"gentleman-kanagawa\"\n}\n")
+var themeOverlayJSON = []byte("{\n  \"theme\": \"gentleman\"\n}\n")
 
 type claudeTheme struct {
 	Name      string            `json:"name"`
@@ -25,7 +25,7 @@ type claudeTheme struct {
 }
 
 var gentlemanClaudeTheme = claudeTheme{
-	Name: "Gentleman",
+	Name: "gentleman",
 	Base: "dark",
 	Overrides: map[string]string{
 		"diffAdded":                 "#3F4A2D",

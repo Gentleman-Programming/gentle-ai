@@ -111,3 +111,21 @@ SDD must protect reviewer cognitive load, not only generate tasks.
 - In a Feature Branch Chain, PR #1 targets the feature/tracker branch and later child PRs target the immediate previous PR branch; if GitHub shows previous slices in a child diff, retarget/rebase until the diff is clean.
 
 This guard exists to reduce reviewer burnout and keep implementation delivery safe. Do not treat it as optional process noise.
+
+## F. Key Learnings Closing
+
+Close your **final report message** (the return envelope) with a `## Key Learnings` section to enable engram passive capture.
+
+**Format**: numbered list with 1–5 items. Each item is a standalone factual sentence that is ≥20 characters and ≥4 words.
+
+**Example**:
+
+```markdown
+## Key Learnings
+
+1. Async validation in the apply phase caught a race condition in concurrent writes.
+2. Golden test regeneration for system prompts requires the `-update` flag before re-run.
+3. Bounded review contracts must stay consistent across `sdd-phase-common.md` and `engram/protocol.md`.
+```
+
+This applies to your final text response to the orchestrator, not intermediate tool outputs or artifact content. Engram will automatically extract and persist these learnings.

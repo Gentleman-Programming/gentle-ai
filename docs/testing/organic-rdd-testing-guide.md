@@ -68,7 +68,7 @@ The binaries are on the pre-release page: **https://github.com/Gentleman-Program
 4. [ ] `gentle-ai review start --cwd $HOME/demo` → **Expected**: refused, naming that reviews are turned off **and naming the command that turns them back on**, scoped to the source that actually decided:
 
 ```
-review-driven development is disabled: start is rejected because the global mode source
+receipt-driven development is disabled: start is rejected because the global mode source
 keeps it off; turn it back on with gentle-ai review mode enable --scope=global
 ```
 

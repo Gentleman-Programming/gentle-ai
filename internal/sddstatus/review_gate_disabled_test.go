@@ -1,6 +1,8 @@
 package sddstatus
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,7 +12,7 @@ import (
 
 // The maintainer's rule for this file is the same one RuntimeStore.ReviewDisabled
 // already applies to the runtime ledger: while the kill switch is off,
-// review-driven development does not exist, so it must have no implications.
+// receipt-driven development does not exist, so it must have no implications.
 //
 // The deadlock it removes is real and closed. An SDD cycle reaches its archive
 // decision, the archive gate demands a terminal review receipt, and `review
@@ -87,7 +89,7 @@ func TestArchiveGateEnforcesForACallerThatNeverResolvesTheSwitch(t *testing.T) {
 }
 
 // TestArchiveGateDoesNotBlockArchiveWhileReviewIsDisabled is the fix: the same
-// fixture, with the switch off, carries on as if review-driven development had
+// fixture, with the switch off, carries on as if receipt-driven development had
 // never been part of the cycle.
 func TestArchiveGateDoesNotBlockArchiveWhileReviewIsDisabled(t *testing.T) {
 	root := t.TempDir()
@@ -128,7 +130,7 @@ func TestDisabledArchiveGateStillRecordsThatNoReviewGovernedTheChange(t *testing
 	if status.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
 		t.Fatalf("disabled ReviewGate.Delivery = %q, want %q", status.ReviewGate.Delivery, reviewtransaction.RDDDeliveryDisabledUnmanaged)
 	}
-	if !strings.Contains(status.ReviewGate.Reason, "review-driven development is disabled") {
+	if !strings.Contains(status.ReviewGate.Reason, "receipt-driven development is disabled") {
 		t.Fatalf("disabled ReviewGate.Reason = %q, want it to name the situation", status.ReviewGate.Reason)
 	}
 	// The mechanism that could not govern stays discoverable behind the
@@ -177,7 +179,7 @@ func TestDisabledArchiveGateNeverReadsAsAnApproval(t *testing.T) {
 // TestDisabledArchiveGateStillValidatesAnExplicitReviewReceipt holds the line
 // the RuntimeStore.ReviewDisabled doc comment draws: the switch removes the
 // IMPLICIT demand, never the checks on an explicit request. A change that
-// carries a review receipt asked for review-driven development to act, so its
+// carries a review receipt asked for receipt-driven development to act, so its
 // receipt is still validated in full and a broken one still blocks.
 func TestDisabledArchiveGateStillValidatesAnExplicitReviewReceipt(t *testing.T) {
 	root := t.TempDir()
@@ -197,6 +199,99 @@ func TestDisabledArchiveGateStillValidatesAnExplicitReviewReceipt(t *testing.T) 
 	if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-review" {
 		t.Fatalf("explicit receipt while disabled archive=%q next=%q, want blocked/resolve-review",
 			status.Dependencies.Archive, status.NextRecommended)
+	}
+}
+
+func TestDiscoveredTerminalBlockerRespectsReviewModeProvenance(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     reviewtransaction.GateResult
+		wantReason string
+	}{
+		{name: "invalidated", result: reviewtransaction.GateInvalidated, wantReason: "review receipt was invalidated"},
+		{name: "escalated", result: reviewtransaction.GateEscalated, wantReason: "escalated the receipt"},
+	}
+
+	original := evaluateNativeReviewGate
+	t.Cleanup(func() { evaluateNativeReviewGate = original })
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			changeRoot := seedBoundedReadyChange(t, root)
+			writeApprovedReviewArtifacts(t, changeRoot)
+			receiptPath := filepath.Join(changeRoot, "reviews", "receipt.json")
+			receipt, err := os.ReadFile(receiptPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(receiptPath); err != nil {
+				t.Fatal(err)
+			}
+			store, err := reviewtransaction.AuthoritativeStore(context.Background(), root, "thin-lineage")
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := store.LoadChain()
+			if err != nil {
+				t.Fatal(err)
+			}
+			evaluateNativeReviewGate = func(context.Context, string, reviewtransaction.Receipt, reviewtransaction.GateRequest) reviewtransaction.NativeGateEvaluation {
+				return reviewtransaction.NativeGateEvaluation{Result: tt.result}
+			}
+
+			assertBlocked := func(label string, status Status) {
+				t.Helper()
+				if status.ReviewGate == nil || status.ReviewGate.Result != tt.result || status.ReviewGate.Delivery != "" {
+					t.Fatalf("%s gate = %#v, want %q without delivery", label, status.ReviewGate, tt.result)
+				}
+				if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-review" {
+					t.Fatalf("%s archive=%q next=%q, want blocked/resolve-review", label, status.Dependencies.Archive, status.NextRecommended)
+				}
+			}
+
+			enabled, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertBlocked("enabled discovered", enabled)
+
+			disabled, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if disabled.ReviewGate == nil || disabled.ReviewGate.Result != tt.result || disabled.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
+				t.Fatalf("disabled discovered gate = %#v, want %q disabled/unmanaged", disabled.ReviewGate, tt.result)
+			}
+			if disabled.Dependencies.Archive == DependencyBlocked || disabled.NextRecommended == "resolve-review" {
+				t.Fatalf("disabled discovered archive=%q next=%q, want unmanaged archive route", disabled.Dependencies.Archive, disabled.NextRecommended)
+			}
+			if !strings.Contains(disabled.ReviewGate.Reason, tt.wantReason) {
+				t.Fatalf("disabled discovered reason = %q, want underlying %q", disabled.ReviewGate.Reason, tt.wantReason)
+			}
+
+			reenabled, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertBlocked("re-enabled discovered", reenabled)
+
+			if err := os.WriteFile(receiptPath, receipt, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			explicit, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertBlocked("disabled explicit", explicit)
+
+			after, err := store.LoadChain()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.HeadRevision != before.HeadRevision {
+				t.Fatalf("authority revision changed from %q to %q", before.HeadRevision, after.HeadRevision)
+			}
+		})
 	}
 }
 
@@ -230,7 +325,7 @@ func TestDisabledArchiveGateStillHonoursAnApprovedReceipt(t *testing.T) {
 
 // TestDisabledSwitchDoesNotUnblockArchiveForNonReviewReasons keeps the scope
 // honest. Blocking archive because the tasks are unfinished has nothing to do
-// with review-driven development, so the kill switch must not touch it.
+// with receipt-driven development, so the kill switch must not touch it.
 func TestDisabledSwitchDoesNotUnblockArchiveForNonReviewReasons(t *testing.T) {
 	root := t.TempDir()
 	seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n- [ ] 1.2 Unfinished\n")
@@ -256,5 +351,39 @@ func TestDisabledSwitchDoesNotUnblockArchiveForNonReviewReasons(t *testing.T) {
 	}
 	if status.ReviewGate != nil {
 		t.Fatalf("archive gating never ran, so there is no gate to report: %#v", status.ReviewGate)
+	}
+}
+
+// TestDisabledReviewModeDoesNotBlockPreVerifyRouting is the regression guard for
+// issue-1932: when review mode is disabled, completing apply must leave verify
+// ready without forcing an implicit review/start obligation before independent
+// verification can run.
+func TestDisabledReviewModeDoesNotBlockPreVerifyRouting(t *testing.T) {
+	root := t.TempDir()
+	seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
+	// verifyReport is deliberately absent: apply is complete, verify is not run yet.
+	runSDDStatusGit(t, root, "init", "-q")
+	runSDDStatusGit(t, root, "config", "user.email", "status@example.com")
+	runSDDStatusGit(t, root, "config", "user.name", "Status Test")
+	runSDDStatusGit(t, root, "add", ".")
+	runSDDStatusGit(t, root, "commit", "-qm", "base")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.ApplyState != ApplyAllDone {
+		t.Fatalf("fixture ApplyState = %q, want %q", status.ApplyState, ApplyAllDone)
+	}
+	if status.Dependencies.Verify != DependencyReady {
+		t.Fatalf("disabled Verify = %q, want ready", status.Dependencies.Verify)
+	}
+	if status.NextRecommended != "verify" {
+		t.Fatalf("disabled NextRecommended = %q, want verify", status.NextRecommended)
+	}
+	for _, reason := range status.BlockedReasons {
+		if strings.Contains(reason, "explicit bounded review/start(target) is required") {
+			t.Fatalf("disabled BlockedReasons contains review/start requirement: %v", status.BlockedReasons)
+		}
 	}
 }

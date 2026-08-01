@@ -312,7 +312,7 @@ func TestReviewConsentNeverAskAgainIsNoLongerAnOfferedAnswer(t *testing.T) {
 	}
 	status := decodeReviewModeResult(t, modeOutput.Bytes()).Status
 	if status.Effective != reviewtransaction.RDDModeOn || status.CloneLocal != reviewtransaction.RDDModeUnset {
-		t.Fatalf("an unoffered answer disabled review-driven development: %#v", status)
+		t.Fatalf("an unoffered answer disabled receipt-driven development: %#v", status)
 	}
 	if !strings.Contains(console.String(), "did not recognize") {
 		t.Fatalf("an unoffered answer was not reported to the user:\n%s", console.String())

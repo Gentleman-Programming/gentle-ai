@@ -76,7 +76,9 @@ This hierarchy governs how the archive REPORTS facts. It does not weaken gates: 
 
 ### Native Review Receipt Gate
 
-Before any task reconciliation, spec sync, or archive move, require structured status with `reviewGate.result: allow`. Read the exact transaction, frozen ledger, approved terminal receipt, and post-apply gate context referenced by status. Missing, pending, malformed, `scope-changed`, `invalidated`, or `escalated` review state blocks archive with no override and no automatic reviewer launch. The receipt must match final candidate tree, paths digest, policy, ledger, fix delta, current independent verification evidence, mode counters, and base relationship.
+Before any task reconciliation, spec sync, or archive move, require structured status with `reviewGate.result: allow`, or with `reviewGate.delivery: disabled/unmanaged` when the kill switch is off and no review governs this change. Read the exact transaction, frozen ledger, approved terminal receipt, and post-apply gate context referenced by status. Missing, pending, malformed, `scope-changed`, `invalidated`, or `escalated` review state blocks archive with no override and no automatic reviewer launch. The receipt must match final candidate tree, paths digest, policy, ledger, fix delta, current independent verification evidence, mode counters, and base relationship.
+
+`disabled/unmanaged` is the only relaxation, and the native gate is what decides it: while the kill switch is off, demanding a terminal receipt would demand one `review start` is refused from producing, which is a deadlock rather than a safeguard. It removes only the implicit demand. An explicit review artifact that failed validation still blocks, the gate never manufactures `allow`, and re-enabling revalidates from the current state.
 
 ### Task Completion Gate
 

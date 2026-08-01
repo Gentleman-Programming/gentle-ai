@@ -62,14 +62,14 @@ func RenderRouting(agent model.AgentID) (string, error) {
 	// assets, for the same reason routing itself is unconditional: it is
 	// installed for every configured agent. A switch the agent cannot name does
 	// not exist for the user, who would otherwise ask to stop using
-	// review-driven development and be argued with instead of obeyed.
-	output.WriteString("\n### Review-driven development is user-owned\n\n")
-	output.WriteString("The user controls review-driven development with a kill switch: `gentle-ai review mode enable|disable|status`.\n\n")
+	// receipt-driven development and be argued with instead of obeyed.
+	output.WriteString("\n### Receipt-driven development is user-owned\n\n")
+	output.WriteString("The user controls receipt-driven development with a kill switch: `gentle-ai review mode enable|disable|status`.\n\n")
 	output.WriteString("- `status` is read-only. It reports the deciding source and the effective mode, and changes nothing.\n")
-	output.WriteString("- When the user asks to stop using review-driven development, run `disable`. Do not argue, do not work around it, and do not propose alternatives first.\n")
+	output.WriteString("- When the user asks to stop using receipt-driven development, run `disable`. Do not argue, do not work around it, and do not propose alternatives first.\n")
 	output.WriteString("- While it is disabled, keep implementing organically through direct inline, delegated direct, or optional SDD: do not start reviews, do not retry, do not reactivate it, and do not fall back to any retired path.\n")
 	output.WriteString("- Delivery under a disabled switch follows ordinary repository policy and reports `disabled/unmanaged`, never a fabricated approval.\n")
-	output.WriteString("- Never enable review-driven development on the user's behalf unless the user explicitly asks for it.\n")
+	output.WriteString("- Never enable receipt-driven development on the user's behalf unless the user explicitly asks for it.\n")
 
 	return output.String(), nil
 }

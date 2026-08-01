@@ -8,7 +8,7 @@ import (
 
 // TestRuntimeFinishDoesNotDemandAReviewSuccessorWhileReviewIsDisabled is the
 // second instance the reporter raised, and it is the same principle as the
-// gate: with review-driven development switched off, review-driven development
+// gate: with receipt-driven development switched off, receipt-driven development
 // does not exist, so it must have no implications.
 //
 // The deadlock it removes is real and closed. A clone earns a review binding,
@@ -84,7 +84,7 @@ func TestRuntimeFinishStillDemandsAReviewSuccessorWhileReviewIsEnabled(t *testin
 // TestRuntimeFinishStillValidatesAnExplicitSuccessorWhileReviewIsDisabled holds
 // the other edge: the switch removes the IMPLICIT demand, never the checks on
 // an explicit request. An operator who deliberately passes a remediation
-// successor while reviews are off asked for review-driven development to act,
+// successor while reviews are off asked for receipt-driven development to act,
 // so it still validates that successor rather than trusting it.
 func TestRuntimeFinishStillValidatesAnExplicitSuccessorWhileReviewIsDisabled(t *testing.T) {
 	fixture := newRuntimeRemediationFixture(t, true)

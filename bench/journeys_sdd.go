@@ -1166,43 +1166,77 @@ func sddJourneys() []Journey {
 		// -------------------------------------------------- kill switch and SDD
 		{
 			ID:     "j41-kill-switch-versus-sdd-pre-verify",
-			Title:  "Reviews off: SDD still routes to review before verification, and only re-enabling gets past it",
-			Source: "shape 5 (the kill switch and the pre-verify router disagreeing) + documented known-open limitation",
-			// This journey exists to turn a believed-open limitation into a
-			// measured one. The claim under test is that the SDD pre-verify status
-			// path still requires a review while reviews are switched off.
+			Title:  "Reviews off at the pre-verify decision: the router steps aside instead of naming a command the operator cannot run",
+			Source: "shape 5 (the kill switch and the pre-verify router disagreeing) + a limitation this corpus measured closed",
+			// This journey was written to turn a believed-open limitation into a
+			// measured one: the claim was that the SDD pre-verify router still
+			// demanded a bounded review while reviews were switched off, which
+			// would name `review start` as the next action and then refuse it — a
+			// dead end whose only exit is undoing the operator's own decision.
 			//
-			// Expected if the claim holds: with the switch off, `sdd-status`
-			// reports nextRecommended `review` and both verify and archive blocked,
-			// naming a bounded review the operator is not allowed to start; and
-			// `review start` then refuses. That refusal is in_band — it names
-			// `gentle-ai review mode enable --scope=global` — but the only exit it
-			// names is undoing the decision the operator just made, which is the
-			// finding, not the absence of one.
+			// The claim is FALSE as of the run that failed this journey's old
+			// assertions, and the failure is how the corpus found out. The
+			// assertions below now pin the behavior that replaced it, in both
+			// positions, because one half alone proves nothing:
 			//
-			// If the claim has been closed, the assertions below fail the journey
-			// loudly and the corpus says so. Either way the number, not memory,
-			// decides.
+			//   reviews ON  — nextRecommended `review`, verify blocked, and a
+			//                 blocked reason that says why. The gate is real.
+			//   reviews OFF — nextRecommended `verify`, verify ready, and NO
+			//                 blocked reasons at all. The router steps aside
+			//                 rather than pointing at a refusal.
+			//
+			// Then the switch goes back on and the gate returns, because a kill
+			// switch that cannot be un-flipped would be a different defect wearing
+			// this journey's pass. Nothing here blocks: the product is correct on
+			// this shape, and the row's zeros are the finding.
+			//
+			// `review start` while off is deliberately NOT run here. With the
+			// switch off the router never names it, so running it would measure an
+			// off-path refusal — and j03 already owns that measurement.
 			Steps: []Step{
 				{Name: "fixture: change with planning complete and no verification yet", Fixture: sddPlanningArtifacts("")},
-				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
-				{Name: "sdd-status with reviews off", Requires: sddStatusCapability,
+				{Name: "sdd-status with reviews on", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
-					After: sddStatusAssertion("pre-verify routing with reviews off", func(status sddStatusV1) error {
+					After: sddStatusAssertion("pre-verify routing with reviews on", func(status sddStatusV1) error {
 						if status.NextRecommended != "review" {
 							return fmt.Errorf("nextRecommended = %q, want review", status.NextRecommended)
 						}
 						if status.Dependencies.Verify != "blocked" {
 							return fmt.Errorf("dependencies.verify = %q, want blocked", status.Dependencies.Verify)
 						}
+						if len(status.BlockedReasons) == 0 {
+							return errors.New("verify is blocked and no blocked reason says why")
+						}
 						return nil
 					})},
-				{Name: "review start, which is what the status just named", Requires: startCapability,
-					Args: productArgs("review", "start")},
-				{Name: "mode enable, the only exit the refusal names", Requires: modeCapability,
-					Args: productArgs("review", "mode", "enable", "--json")},
-				{Name: "review start with reviews back on", Requires: startCapability,
-					Args: productArgs("review", "start"), After: rememberLineage},
+				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
+				{Name: "sdd-status with reviews off", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"),
+					After: sddStatusAssertion("pre-verify routing with reviews off", func(status sddStatusV1) error {
+						if status.NextRecommended != "verify" {
+							return fmt.Errorf("nextRecommended = %q, want verify: the router still steers at a review the operator is not allowed to start", status.NextRecommended)
+						}
+						if status.Dependencies.Verify != "ready" {
+							return fmt.Errorf("dependencies.verify = %q, want ready; blocked reasons = %v",
+								status.Dependencies.Verify, status.BlockedReasons)
+						}
+						if len(status.BlockedReasons) != 0 {
+							return fmt.Errorf("reviews are off and the router still reports blocked reasons: %v", status.BlockedReasons)
+						}
+						return nil
+					})},
+				{Name: "mode enable", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
+				{Name: "sdd-status with reviews back on", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"),
+					After: sddStatusAssertion("the gate returns when the switch does", func(status sddStatusV1) error {
+						if status.NextRecommended != "review" {
+							return fmt.Errorf("nextRecommended = %q, want review: the switch went back on and the gate did not return", status.NextRecommended)
+						}
+						if status.Dependencies.Verify != "blocked" {
+							return fmt.Errorf("dependencies.verify = %q, want blocked", status.Dependencies.Verify)
+						}
+						return nil
+					})},
 			},
 		},
 		{
