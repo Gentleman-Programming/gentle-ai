@@ -79,6 +79,14 @@ func TestEngramDownloadToFileDurabilityJourney(t *testing.T) {
 			wantCloses: 1,
 		},
 		{
+			name:       "write and close failures both propagate",
+			writeErr:   errors.New("injected write failure"),
+			closeErr:   errors.New("injected close failure"),
+			wantError:  "write",
+			wantSyncs:  0,
+			wantCloses: 1,
+		},
+		{
 			name:       "sync failure removes incomplete archive",
 			syncErr:    errors.New("injected sync failure"),
 			wantError:  "sync download file",
