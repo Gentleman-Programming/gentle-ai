@@ -284,6 +284,7 @@ The full delegation decision table lives in `~/.hermes/skills/hermes-ephemeral-d
 - **Detection**: gentle-ai reports the `hermes` binary on `PATH` and the config root at `~/.hermes` independently; the config directory drives install detection (the binary can be absent and Hermes is still detected as configured).
 - **Install**: detect-only — gentle-ai cannot install Hermes. Install Hermes manually first, then run `gentle-ai install --agent hermes`.
 - **Config path**: `~/.hermes/` (config.yaml, SOUL.md, skills/)
+- **Architecture**: Knowledge-layer agent. Hermes's `StrategyMergeIntoYAML` is the reference implementation adapter pattern for non-coding agents that merge MCP server blocks into YAML rather than JSON.
 - **MCP config**: Engram and Context7 are injected as YAML blocks under `mcp_servers:` in `~/.hermes/config.yaml` (`StrategyMergeIntoYAML`). Pre-existing top-level keys (e.g. `model:`) are preserved verbatim.
 - **System prompt**: SDD orchestrator and persona are written to `~/.hermes/SOUL.md` via markdown section markers (`<!-- gentle-ai:sdd-orchestrator -->`, `<!-- gentle-ai:persona -->`).
 - **Skills**: `~/.hermes/skills/` — gentle-ai writes SDD phase skills; the skill registry also scans this path.
