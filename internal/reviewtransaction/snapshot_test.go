@@ -1024,6 +1024,20 @@ func TestSnapshotBuilderExactRevisionRejectsRepositoryLocalGrafts(t *testing.T) 
 			if reflect.DeepEqual(graftedPaths, baseline.Paths) {
 				t.Fatalf("local graft would not alter path derivation: grafted=%v ungrafted=%v", graftedPaths, baseline.Paths)
 			}
+			rawParents, err := (SnapshotBuilder{Repo: repo}).rawCommitParents(context.Background(), candidate)
+			if err != nil {
+				t.Fatalf("rawCommitParents() error = %v", err)
+			}
+			if !reflect.DeepEqual(rawParents, []string{base}) {
+				t.Fatalf("raw commit parents = %v, want original parent %q", rawParents, base)
+			}
+			rawBaseTree, err := (SnapshotBuilder{Repo: repo}).resolveTree(context.Background(), rawParents[0])
+			if err != nil {
+				t.Fatalf("resolveTree(raw parent) error = %v", err)
+			}
+			if rawBaseTree != baseline.BaseTree {
+				t.Fatalf("raw parent base tree = %q, want ungrafted base tree %q", rawBaseTree, baseline.BaseTree)
+			}
 			if _, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target); err == nil || !strings.Contains(err.Error(), "refuses repository-local Git grafts") {
 				t.Fatalf("Build(with local graft) error = %v, want graft refusal", err)
 			}
