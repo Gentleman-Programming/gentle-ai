@@ -709,6 +709,86 @@ func TestInjectAntigravityConvergesToSelectedPlugin(t *testing.T) {
 	}
 }
 
+func TestInjectAntigravityAcceptsBlankGlobalConfig(t *testing.T) {
+	tests := []struct {
+		name, content string
+	}{
+		{name: "zero-byte"},
+		{name: "whitespace-only", content: " \t\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			global := filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json")
+			writeFile(t, global, tt.content)
+
+			first, err := Inject(home, antigravityAdapter())
+			if err != nil {
+				t.Fatalf("first Inject() error = %v", err)
+			}
+			if !first.Changed {
+				t.Fatal("first Inject() changed = false")
+			}
+			if got, err := os.ReadFile(global); err != nil || string(got) != tt.content {
+				t.Fatalf("global config = %q, %v; want unchanged %q", got, err, tt.content)
+			}
+
+			plugin := filepath.Join(filepath.Dir(global), "plugins", "gentle-ai-engram", "plugin.json")
+			if _, err := os.Stat(plugin); err != nil {
+				t.Fatalf("Stat(%q) error = %v", plugin, err)
+			}
+			second, err := Inject(home, antigravityAdapter())
+			if err != nil {
+				t.Fatalf("second Inject() error = %v", err)
+			}
+			if second.Changed {
+				t.Fatal("second Inject() changed = true")
+			}
+		})
+	}
+}
+
+func TestInjectAntigravityRejectsInvalidGlobalConfigWithoutMutation(t *testing.T) {
+	tests := []struct {
+		name, content string
+		directory     bool
+	}{
+		{name: "malformed", content: `{"mcpServers":`},
+		{name: "null", content: "null"},
+		{name: "non-object", content: "[]"},
+		{name: "unreadable", directory: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			global := filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json")
+			if tt.directory {
+				if err := os.MkdirAll(global, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				writeFile(t, global, tt.content)
+			}
+
+			if _, err := Inject(home, antigravityAdapter()); err == nil {
+				t.Fatal("Inject() error = nil")
+			}
+			if tt.directory {
+				if info, err := os.Stat(global); err != nil || !info.IsDir() {
+					t.Fatalf("global config directory changed: info=%v, err=%v", info, err)
+				}
+			} else if got, err := os.ReadFile(global); err != nil || string(got) != tt.content {
+				t.Fatalf("global config = %q, %v; want unchanged %q", got, err, tt.content)
+			}
+
+			pluginDir := filepath.Join(filepath.Dir(global), "plugins", "gentle-ai-engram")
+			if _, err := os.Stat(pluginDir); !os.IsNotExist(err) {
+				t.Fatalf("plugin directory was written: stat err = %v", err)
+			}
+		})
+	}
+}
+
 func TestInjectAntigravityUsesMainGeneratedCommand(t *testing.T) {
 	home := t.TempDir()
 	command := "/home/user/.local/bin/engram"

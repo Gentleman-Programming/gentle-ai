@@ -302,8 +302,12 @@ func antigravityConfigs(globalPath string) (fileImage, string, bool, error) {
 	if err != nil {
 		return global, "", false, fmt.Errorf("read Antigravity global config %q: %w", globalPath, err)
 	}
+	globalData := global.data
+	if global.exists && len(bytes.TrimSpace(globalData)) == 0 {
+		globalData = []byte("{}")
+	}
 	root := map[string]json.RawMessage{}
-	if global.exists && json.Unmarshal(global.data, &root) != nil {
+	if global.exists && json.Unmarshal(globalData, &root) != nil {
 		return global, "", false, fmt.Errorf("parse Antigravity global config %q", globalPath)
 	}
 	if global.exists && root == nil {
