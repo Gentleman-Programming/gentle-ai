@@ -441,6 +441,20 @@ func TestReviewModeRejectsUnknownSubcommandAndScope(t *testing.T) {
 	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "worktree", "--json"}, &output); err != nil {
 		t.Fatalf("--scope worktree must be accepted: %v", err)
 	}
+	// On the main checkout the worktree scope has no distinct storage, so the
+	// write targets the shared clone-local record and must report clone_local
+	// with no worktree revision, and a following status must agree.
+	result := decodeReviewModeResult(t, output.Bytes())
+	if result.Status.Source != reviewtransaction.RDDModeSourceCloneLocal || result.Status.WorktreeRevision != "" {
+		t.Fatalf("main-checkout worktree-scope write reported %#v; want clone_local and no worktree revision", result.Status)
+	}
+	output.Reset()
+	if err := RunReviewMode([]string{"status", "--cwd", repo, "--json"}, &output); err != nil {
+		t.Fatalf("status after main-checkout worktree-scope write: %v", err)
+	}
+	if status := decodeReviewModeResult(t, output.Bytes()); status.Status.Source != reviewtransaction.RDDModeSourceCloneLocal {
+		t.Fatalf("status after main-checkout worktree-scope write = %#v; want clone_local", status.Status)
+	}
 }
 
 // TestReviewModeWorktreeScopeDisablesOnlyThisWorktree locks issue #1973 from
@@ -520,6 +534,22 @@ func TestReviewModeStatusAnnouncesCloneBlastRadius(t *testing.T) {
 		if result.Status.Source != reviewtransaction.RDDModeSourceCloneLocal || result.BlastRadius != 1 {
 			t.Fatalf("%s status = %#v, blast radius = %d; want clone_local and 1", name, result.Status, result.BlastRadius)
 		}
+	}
+
+	// A worktree-local off shadowing the shared clone-local off must still
+	// announce the clone-local blast radius: the announcement keys on the
+	// clone-local state, not on which source decided.
+	output.Reset()
+	if err := RunReviewMode([]string{"disable", "--cwd", linked, "--scope", "worktree", "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(disable worktree) error = %v", err)
+	}
+	output.Reset()
+	if err := RunReviewMode([]string{"status", "--cwd", linked, "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(status shadowed) error = %v", err)
+	}
+	shadowed := decodeReviewModeResult(t, output.Bytes())
+	if shadowed.Status.Source != reviewtransaction.RDDModeSourceWorktreeLocal || shadowed.BlastRadius != 1 {
+		t.Fatalf("shadowed status = %#v, blast radius = %d; want worktree_local and 1", shadowed.Status, shadowed.BlastRadius)
 	}
 }
 

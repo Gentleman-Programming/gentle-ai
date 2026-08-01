@@ -51,7 +51,7 @@ type ReviewModeResult struct {
 func RunReviewMode(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone|worktree>] [--expected-revision <revision>] [--json]")
-		_, _ = fmt.Fprintln(stdout, "User-owned switch. Receipt-driven development is off until you enable it: run 'gentle-ai review mode enable --scope global' to opt in. Any off wins: a repository may disable it for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Enabling applies to future candidates only.")
+		_, _ = fmt.Fprintln(stdout, "User-owned switch. Receipt-driven development is off until you enable it: run 'gentle-ai review mode enable --scope global' to opt in. Any off wins: a repository may disable it for this clone but can never require it, and no other clone inherits the override. status is read-only and reports the effective mode plus all three sources (global, clone-local, worktree-local); the worktree scope isolates exactly one linked worktree. Re-enabling applies to future candidates only.")
 		return nil
 	}
 	operation := args[0]
@@ -94,10 +94,13 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 	if operation == "status" {
 		result.Scope = reviewModeScopeBoth
 		result.Status, err = reviewModeStatus(ctx, *cwd)
-		if err == nil && result.Status.Source == reviewtransaction.RDDModeSourceCloneLocal {
+		if err == nil && result.Status.CloneLocal == reviewtransaction.RDDModeOff {
 			// A clone-local override lives under the shared Git common
 			// directory, so it may also govern every linked worktree. The
-			// announcement is informational and never changes the mode.
+			// announcement is keyed on the clone-local state rather than the
+			// deciding source, so a worktree-local off shadowing the shared
+			// record still announces it. It is informational and never changes
+			// the mode.
 			if shared, radiusErr := reviewtransaction.LinkedWorktreeBlastRadius(ctx, *cwd); radiusErr == nil && shared > 0 {
 				result.BlastRadius = shared
 			}
@@ -352,31 +355,28 @@ func applyReviewMode(
 		// alone, so it is read with an unset global. Repairing this scope must
 		// not depend on the other source being readable, or a switch whose two
 		// records are both unreadable would have no repair command at all.
-		current, resolveErr := reviewtransaction.ResolveRDDMode(ctx, repo, reviewtransaction.RDDGlobalMode{})
+		var token string
+		var tokenErr error
+		if scope == reviewModeScopeWorktree {
+			// The worktree scope targets whatever storage the package resolves
+			// for this checkout: the worktree-local head on a linked worktree,
+			// and the clone-local head on the main checkout. Asking the package
+			// keeps the storage-distinctness rule in one place.
+			token, tokenErr = reviewtransaction.WorktreeLocalRevision(ctx, repo)
+		} else {
+			var current reviewtransaction.RDDModeStatus
+			current, tokenErr = reviewtransaction.ResolveRDDMode(ctx, repo, reviewtransaction.RDDGlobalMode{})
+			token = current.Revision
+		}
 		switch {
-		case resolveErr == nil:
-			expectedRevision = current.Revision
-			if scope == reviewModeScopeWorktree {
-				// On a linked worktree the write targets the private
-				// worktree-local head, whose token is WorktreeRevision. On the
-				// main checkout there is no distinct worktree-local storage, so
-				// the write targets the clone-local record and must carry its
-				// token.
-				lease, leaseErr := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
-				if leaseErr != nil {
-					return disabled, reviewModeUnreadable(ctx, repo, global, leaseErr)
-				}
-				identity := lease.Identity()
-				if identity.GitDir != identity.GitCommonDir {
-					expectedRevision = current.WorktreeRevision
-				}
-			}
-		case errors.Is(resolveErr, reviewtransaction.ErrRDDModeCorrupt):
+		case tokenErr == nil:
+			expectedRevision = token
+		case errors.Is(tokenErr, reviewtransaction.ErrRDDModeCorrupt):
 			// An unreadable head carries no revision to compare against, and
 			// replacing it is the whole point of this command.
 			expectedRevision = ""
 		default:
-			return disabled, reviewModeUnreadable(ctx, repo, global, resolveErr)
+			return disabled, reviewModeUnreadable(ctx, repo, global, tokenErr)
 		}
 	}
 	if scope == reviewModeScopeWorktree {

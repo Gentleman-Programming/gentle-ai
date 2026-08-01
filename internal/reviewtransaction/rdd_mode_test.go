@@ -769,8 +769,12 @@ func TestWorktreeLocalRDDOverrideWinsOverSharedCloneLocal(t *testing.T) {
 	if _, err := SetCloneLocalRDDMode(ctx, linked, RDDModeOff, status.WorktreeRevision, global); !errors.Is(err, ErrRDDModeRevisionMismatch) {
 		t.Fatalf("clone-scope write with the worktree token error = %v, want ErrRDDModeRevisionMismatch", err)
 	}
-	if _, err := SetCloneLocalRDDMode(ctx, linked, RDDModeOff, mainStatus.Revision, global); err != nil {
+	shadowed, err := SetCloneLocalRDDMode(ctx, linked, RDDModeOff, mainStatus.Revision, global)
+	if err != nil {
 		t.Fatalf("SetCloneLocalRDDMode(off) inside linked worktree error = %v", err)
+	}
+	if shadowed.Effective != RDDModeOff || shadowed.Source != RDDModeSourceWorktreeLocal {
+		t.Fatalf("clone-scope write shadowed by the worktree-local off reported %#v; want worktree_local", shadowed)
 	}
 	reShared, err := ResolveRDDMode(ctx, repo, global)
 	if err != nil {
@@ -791,3 +795,30 @@ func TestWorktreeLocalRDDOverrideWinsOverSharedCloneLocal(t *testing.T) {
 	}
 }
 
+// TestWorktreeScopeOnMainCheckoutSharesCloneLocalStorage pins that a
+// worktree-scope write issued on the main checkout (GitDir == GitCommonDir)
+// targets the shared clone-local storage and reports clone_local, never
+// worktree_local, both in the write-time status and in a later resolve.
+func TestWorktreeScopeOnMainCheckoutSharesCloneLocalStorage(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	ctx := context.Background()
+	global := RDDGlobalMode{Value: "on"}
+	written, err := SetWorktreeLocalRDDMode(ctx, repo, RDDModeOff, "", global)
+	if err != nil {
+		t.Fatalf("SetWorktreeLocalRDDMode(off) on the main checkout error = %v", err)
+	}
+	if written.Effective != RDDModeOff || written.Source != RDDModeSourceCloneLocal ||
+		written.WorktreeLocal != RDDModeUnset || written.WorktreeRevision != "" {
+		t.Fatalf("main-checkout worktree write reported %#v; want clone_local off with no worktree revision", written)
+	}
+	if written.Revision == "" {
+		t.Fatalf("main-checkout worktree write carried no clone-local revision: %#v", written)
+	}
+	resolved, err := ResolveRDDMode(ctx, repo, global)
+	if err != nil {
+		t.Fatalf("ResolveRDDMode error = %v", err)
+	}
+	if resolved.Source != RDDModeSourceCloneLocal || resolved.Revision != written.Revision {
+		t.Fatalf("write-time and subsequent status disagree: write=%#v resolve=%#v", written, resolved)
+	}
+}
