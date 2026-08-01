@@ -943,3 +943,82 @@ func assertNoDuplicatePaths(t *testing.T, label string, paths []string) {
 		seen[path] = struct{}{}
 	}
 }
+
+// TestComponentPathsSDDCodexIncludesNestedSkillAssetsAndHooksJSON covers issue
+// #2067: a Codex install with ComponentSDD must enumerate every file the
+// sdd.Inject pass actually writes under ~/.codex/skills/ and the
+// Codex skill-registry hooks file. Previously the path list was a static
+// hardcoded enumeration that missed _shared/SKILL.md, every
+// <phase>/references/*.md doc, sdd-onboard, judgment-day, and
+// hooks.json — leaving those files outside the pre-sync backup snapshot
+// and producing spurious "files changed" reports on repeat syncs.
+//
+// Asserting the exact paths from the issue (plus a handful of
+// representative companions) locks in the fix and prevents the
+// enumeration from regressing if the static list is reintroduced.
+func TestComponentPathsSDDCodexIncludesNestedSkillAssetsAndHooksJSON(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentCodex})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
+
+	want := []string{
+		// _shared/ files (was missing _shared/SKILL.md before the fix).
+		filepath.Join(home, ".codex", "skills", "_shared", "SKILL.md"),
+		filepath.Join(home, ".codex", "skills", "_shared", "persistence-contract.md"),
+		filepath.Join(home, ".codex", "skills", "_shared", "sdd-phase-common.md"),
+
+		// Phase skill dirs that were missed by the hardcoded list.
+		filepath.Join(home, ".codex", "skills", "sdd-onboard", "SKILL.md"),
+		filepath.Join(home, ".codex", "skills", "judgment-day", "SKILL.md"),
+
+		// Nested files that only fs.WalkDir over each phase dir can pick up.
+		filepath.Join(home, ".codex", "skills", "sdd-init", "references", "init-details.md"),
+		filepath.Join(home, ".codex", "skills", "sdd-design", "references", "threat-matrix.md"),
+		filepath.Join(home, ".codex", "skills", "sdd-apply", "strict-tdd.md"),
+		filepath.Join(home, ".codex", "skills", "sdd-verify", "references", "report-format.md"),
+		filepath.Join(home, ".codex", "skills", "sdd-verify", "strict-tdd-verify.md"),
+		filepath.Join(home, ".codex", "skills", "judgment-day", "references", "prompts-and-formats.md"),
+
+		// Codex skill-registry automation writes ~/.codex/hooks.json.
+		filepath.Join(home, ".codex", "hooks.json"),
+	}
+	for _, path := range want {
+		if !containsPath(paths, path) {
+			t.Fatalf("componentPaths(sdd,codex) missing %q\npaths=%v", path, paths)
+		}
+	}
+}
+
+// TestBackupTargetsSDDCodexIncludesNestedSkillAssetsAndHooksJSON verifies the
+// pre-sync backup snapshot (which feeds backupTargets → prepareBackupStep)
+// includes the same nested assets the post-apply verification covers. If
+// the backup snapshot omits any path the injector writes, a future sync
+// that damages that path has no rollback target — the safety-relevant
+// half of issue #2067.
+func TestBackupTargetsSDDCodexIncludesNestedSkillAssetsAndHooksJSON(t *testing.T) {
+	home := t.TempDir()
+	agentIDs := []model.AgentID{model.AgentCodex}
+	selection := model.Selection{
+		Agents:     agentIDs,
+		Components: []model.ComponentID{model.ComponentSDD},
+	}
+	resolved := planner.ResolvedPlan{Agents: agentIDs, OrderedComponents: selection.Components}
+
+	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+
+	want := []string{
+		filepath.Join(home, ".codex", "skills", "_shared", "SKILL.md"),
+		filepath.Join(home, ".codex", "skills", "sdd-init", "references", "init-details.md"),
+		filepath.Join(home, ".codex", "skills", "sdd-apply", "strict-tdd.md"),
+		filepath.Join(home, ".codex", "skills", "sdd-verify", "strict-tdd-verify.md"),
+		filepath.Join(home, ".codex", "skills", "sdd-onboard", "SKILL.md"),
+		filepath.Join(home, ".codex", "skills", "judgment-day", "references", "prompts-and-formats.md"),
+		filepath.Join(home, ".codex", "hooks.json"),
+	}
+	for _, path := range want {
+		if !containsPath(targets, path) {
+			t.Fatalf("backupTargets(sdd,codex) missing %q\ntargets=%v", path, targets)
+		}
+	}
+}

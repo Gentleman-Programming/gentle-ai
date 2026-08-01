@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -1837,25 +1838,36 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			if adapter.SupportsSkills() {
 				skillDir := adapter.SkillsDir(targetDir)
 				if skillDir != "" {
-					paths = append(paths,
-						filepath.Join(skillDir, "_shared", "persistence-contract.md"),
-						filepath.Join(skillDir, "_shared", "engram-convention.md"),
-						filepath.Join(skillDir, "_shared", "openspec-convention.md"),
-						filepath.Join(skillDir, "_shared", "sdd-phase-common.md"),
-						filepath.Join(skillDir, "_shared", "sdd-status-contract.md"),
-						filepath.Join(skillDir, "_shared", "skill-resolver.md"),
-						filepath.Join(skillDir, "sdd-init", "SKILL.md"),
-						filepath.Join(skillDir, "sdd-explore", "SKILL.md"),
-						filepath.Join(skillDir, "sdd-propose", "SKILL.md"),
-						filepath.Join(skillDir, "sdd-spec", "SKILL.md"),
-						filepath.Join(skillDir, "sdd-design", "SKILL.md"),
-						filepath.Join(skillDir, "sdd-tasks", "SKILL.md"),
-						filepath.Join(skillDir, "sdd-apply", "SKILL.md"),
-						filepath.Join(skillDir, "sdd-verify", "SKILL.md"),
-						filepath.Join(skillDir, "sdd-archive", "SKILL.md"),
-					)
+					// Path enumeration must mirror what sdd.Inject actually
+					// writes. sdd.Inject writes an explicit set of
+					// _shared/ files plus every file in each SDD phase
+					// skill dir via skills.InjectWithCapability. A
+					// hardcoded list here drifts the moment a phase
+					// adds a references/ doc or a strict-tdd variant,
+					// leaving the file outside the pre-sync backup
+					// snapshot and producing spurious "files changed"
+					// reports on repeat syncs (issue #2067). Derive the
+					// per-phase list from the same embedded FS that
+					// ships in the binary so it stays in sync; keep
+					// the _shared/ list explicit so we don't enumerate
+					// files the injector never ships (e.g. review-ledger
+					// -contract.md).
+					for _, fileName := range sharedSDDFiles() {
+						paths = append(paths, filepath.Join(skillDir, "_shared", fileName))
+					}
+					for _, id := range sddPhaseSkillIDs() {
+						paths = append(paths, walkEmbeddedAssetDir("skills/"+string(id), skillDir)...)
+					}
 					if adapter.Agent() == model.AgentClaudeCode {
 						paths = append(paths, filepath.Join(skillDir, "_shared", "sdd-orchestrator-workflow.md"))
+					}
+					if adapter.Agent() == model.AgentCodex {
+						// installSkillRegistryAutomation writes
+						// ~/.codex/hooks.json for the skill-registry
+						// startup refresh hook. Must be in the path
+						// enumeration or the pre-sync backup gap leaves
+						// it without a rollback target (issue #2067).
+						paths = append(paths, filepath.Join(adapter.GlobalConfigDir(targetDir), "hooks.json"))
 					}
 				}
 			}
@@ -2079,6 +2091,79 @@ func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
 	}
 
 	return paths
+}
+
+// walkEmbeddedAssetDir walks the embedded assets FS under embedDir and
+// returns the destination paths under targetDir for every regular file,
+// preserving embedDir's leaf component so the path matches what
+// sdd.Inject actually writes. For example, walking embedDir
+// "skills/sdd-init" with targetDir "~/.claude/skills" yields
+// "~/.claude/skills/sdd-init/SKILL.md" and
+// "~/.claude/skills/sdd-init/references/init-details.md".
+//
+// Directories are skipped. Returns nil if embedDir is missing or
+// unreadable — embedded assets are baked at build time and a missing
+// dir would be a build bug, not a runtime concern for path enumeration
+// (used by post-apply verification and pre-sync backup manifests).
+//
+// Mirrors the walk that skills.InjectWithCapability performs at write
+// time so the path enumeration cannot drift from the actual write set.
+func walkEmbeddedAssetDir(embedDir, targetDir string) []string {
+	var paths []string
+	err := fs.WalkDir(assets.FS, embedDir, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, relErr := filepath.Rel(filepath.FromSlash(embedDir), filepath.FromSlash(p))
+		if relErr != nil {
+			return relErr
+		}
+		// rel is the path inside embedDir. Prepend embedDir's leaf
+		// component so the destination matches the on-disk layout
+		// (e.g. skillDir/sdd-init/SKILL.md, not skillDir/SKILL.md).
+		leaf := filepath.Base(embedDir)
+		if rel == "." {
+			rel = ""
+		}
+		paths = append(paths, filepath.Join(targetDir, leaf, rel))
+		return nil
+	})
+	if err != nil {
+		return nil
+	}
+	return paths
+}
+
+// sddPhaseSkillIDs returns the embedded SDD phase skill directories whose
+// files sdd.Inject writes via skills.InjectWithCapability. Keep in sync
+// with the sddSkillIDs slice in internal/components/sdd/inject.go — any
+// new phase added there must be added here too.
+func sddPhaseSkillIDs() []model.SkillID {
+	return []model.SkillID{
+		"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
+		"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
+		"sdd-onboard", "judgment-day",
+	}
+}
+
+// sharedSDDFiles returns the _shared/ files sdd.Inject writes. Mirrors
+// the sharedFiles slice in internal/components/sdd/inject.go — keep in
+// sync. Not every embedded file under skills/_shared/ is shipped; for
+// example review-ledger-contract.md lives there as source but is
+// rendered into agent assets elsewhere, not copied as-is by Inject.
+func sharedSDDFiles() []string {
+	return []string{
+		"SKILL.md",
+		"persistence-contract.md",
+		"engram-convention.md",
+		"openspec-convention.md",
+		"sdd-phase-common.md",
+		"sdd-status-contract.md",
+		"skill-resolver.md",
+	}
 }
 
 func openCodeSDDPluginPaths(targetDir string) []string {
