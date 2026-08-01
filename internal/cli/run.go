@@ -1628,6 +1628,7 @@ func runCommandSequence(commands [][]string) error {
 
 func executeCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
+	cmd.Dir = system.SanitizeWorkingDir(cmd.Dir)
 
 	if streamCommandOutput {
 		cmd.Stdout = os.Stdout

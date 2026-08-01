@@ -152,3 +152,25 @@ func TestPrioritizeProcessPathMovesExistingEntryToFront(t *testing.T) {
 		t.Fatalf("PATH should preserve non-target order after target move, got %v", entries)
 	}
 }
+
+func TestSanitizeWorkingDir(t *testing.T) {
+	validDir := t.TempDir()
+	fallbackDir := t.TempDir()
+	nonExistentDir := filepath.Join(validDir, "does-not-exist")
+
+	// 1. Valid target directory is returned as-is
+	if got := SanitizeWorkingDir(validDir); got != validDir {
+		t.Errorf("SanitizeWorkingDir(valid) = %q, want %q", got, validDir)
+	}
+
+	// 2. Non-existent target directory falls back to valid fallback
+	if got := SanitizeWorkingDir(nonExistentDir, fallbackDir); got != fallbackDir {
+		t.Errorf("SanitizeWorkingDir(non-existent, fallback) = %q, want %q", got, fallbackDir)
+	}
+
+	// 3. Non-existent target directory with empty/invalid fallbacks returns valid fallback home/cwd/temp
+	got := SanitizeWorkingDir(nonExistentDir, nonExistentDir)
+	if info, err := os.Stat(got); err != nil || !info.IsDir() {
+		t.Errorf("SanitizeWorkingDir(invalid fallbacks) = %q, expected existing directory", got)
+	}
+}

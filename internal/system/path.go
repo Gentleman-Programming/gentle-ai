@@ -157,3 +157,31 @@ func prioritizeProcessPath(dir string) error {
 	}
 	return os.Setenv("PATH", strings.Join(entries, string(os.PathListSeparator)))
 }
+
+// SanitizeWorkingDir validates that targetDir exists and is a valid directory.
+// If targetDir does not exist or is empty (e.g. deleted working directory),
+// it falls back to the current process working directory (if valid), provided fallbacks,
+// user home directory, or temp directory to prevent Node.js uv_cwd ENOENT crashes.
+func SanitizeWorkingDir(targetDir string, fallbacks ...string) string {
+	if targetDir != "" {
+		if info, err := os.Stat(targetDir); err == nil && info.IsDir() {
+			return targetDir
+		}
+	}
+	for _, fb := range fallbacks {
+		if fb != "" {
+			if info, err := os.Stat(fb); err == nil && info.IsDir() {
+				return fb
+			}
+		}
+	}
+	if current, err := os.Getwd(); err == nil && current != "" {
+		if info, err := os.Stat(current); err == nil && info.IsDir() {
+			return current
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	return os.TempDir()
+}
