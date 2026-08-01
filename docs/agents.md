@@ -107,6 +107,11 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - Multi-mode prerequisite: connect your AI providers first, then run `opencode models --refresh`
 - Gentle AI sets OpenCode SDD agent sharing to `disabled` by default for privacy; existing user-managed `share` values such as `manual` or `auto` are preserved.
 - OpenCode Desktop SDD commands resolve the project with `git rev-parse --show-toplevel || pwd` before acting, avoiding Electron current-working-directory drift.
+- Windows Terminal delegation recipe: Windows users without tmux or zellij can route delegated tasks into a persistent, identifiable window or tab using native `wt.exe`:
+  ```cmd
+  wt -w orquestador-gentleman new-tab --title "OpenCode" opencode run --agent gentle-orchestrator "<task>"
+  ```
+  `wt -w <name>` reuses an existing named window or creates it if needed, giving Windows users a scriptable delegation path.
 
 ### Kilo Code
 
