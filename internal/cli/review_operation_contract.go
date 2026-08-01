@@ -533,6 +533,16 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		case errors.Is(runErr, context.DeadlineExceeded):
 			failure.Code = "operation_timeout"
 			failure.Message = "The negotiated review operation timed out after review authority committed a native transition."
+		default:
+			// The classification above is deliberate and stays: 1861 requires a
+			// failure arriving after a committed native transition to keep
+			// reporting an unknown outcome, because retrying a maybe-committed
+			// mutation can double-apply it. Only the reason was being dropped.
+			// This branch returns before the general default assigns Cause, so
+			// without this the caller reads "failed without authoritative
+			// mutation evidence" with nothing to act on or report, for a state
+			// whose native reason the tool already holds.
+			failure.Cause = reviewIntegrationFailureCause(runErr)
 		}
 		return failure
 	}
