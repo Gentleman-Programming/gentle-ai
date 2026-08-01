@@ -1455,3 +1455,182 @@ func TestSHA256ChecksumContract(t *testing.T) {
 	t.Logf("SHA256 contract: Go produces %q format (64 lowercase hex chars)", goDigest)
 	t.Logf("PowerShell fallback must produce identical format using .NET SHA256")
 }
+
+// fakeFile satisfies writeCloseSyncer for regression testing of engramDownloadToFile.
+type fakeFile struct {
+	writeErr error // returned by Write
+	syncErr  error // returned by Sync
+	closeErr error // returned by Close
+	written  []byte
+}
+
+func (f *fakeFile) Write(p []byte) (int, error) {
+	if f.writeErr != nil {
+		return 0, f.writeErr
+	}
+	f.written = append(f.written, p...)
+	return len(p), nil
+}
+func (f *fakeFile) Sync() error  { return f.syncErr }
+func (f *fakeFile) Close() error { return f.closeErr }
+
+// --- TestEngramDownloadToFile_SyncFailureReturnsErrorAndRemovesPartial ---
+
+func TestEngramDownloadToFile_SyncFailureReturnsErrorAndRemovesPartial(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("test content"))
+	}))
+	defer server.Close()
+
+	origCreate := engramCreateFile
+	t.Cleanup(func() { engramCreateFile = origCreate })
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "out")
+
+	engramCreateFile = func(path string) (writeCloseSyncer, error) {
+		return &fakeFile{syncErr: errors.New("sync failed")}, nil
+	}
+
+	_, err := engramDownloadToFile(context.Background(), server.URL, outPath)
+	if err == nil {
+		t.Fatal("expected non-nil error, got nil")
+	}
+	if !strings.Contains(err.Error(), "sync failed") {
+		t.Errorf("error = %v, want to contain 'sync failed'", err)
+	}
+	if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+		t.Errorf("outPath stat = %v, want os.IsNotExist", statErr)
+	}
+}
+
+// --- TestEngramDownloadToFile_CloseFailureReturnsErrorAndRemovesPartial ---
+
+func TestEngramDownloadToFile_CloseFailureReturnsErrorAndRemovesPartial(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("test content"))
+	}))
+	defer server.Close()
+
+	origCreate := engramCreateFile
+	t.Cleanup(func() { engramCreateFile = origCreate })
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "out")
+
+	engramCreateFile = func(path string) (writeCloseSyncer, error) {
+		return &fakeFile{closeErr: errors.New("close failed")}, nil
+	}
+
+	_, err := engramDownloadToFile(context.Background(), server.URL, outPath)
+	if err == nil {
+		t.Fatal("expected non-nil error, got nil")
+	}
+	if !strings.Contains(err.Error(), "close failed") {
+		t.Errorf("error = %v, want to contain 'close failed'", err)
+	}
+	if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+		t.Errorf("outPath stat = %v, want os.IsNotExist", statErr)
+	}
+}
+
+// --- TestEngramDownloadToFile_BothErrorsPropagatedNotDiscarded ---
+
+func TestEngramDownloadToFile_BothErrorsPropagatedNotDiscarded(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("test content"))
+	}))
+	defer server.Close()
+
+	origCreate := engramCreateFile
+	t.Cleanup(func() { engramCreateFile = origCreate })
+
+	// Variant 1: Sync fails first → Sync error is propagated (Close is shadowed by non-nil err).
+	t.Run("Sync error shadows Close error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		outPath := filepath.Join(tmpDir, "out")
+		engramCreateFile = func(path string) (writeCloseSyncer, error) {
+			return &fakeFile{syncErr: errors.New("sync broken"), closeErr: errors.New("close broken")}, nil
+		}
+		_, err := engramDownloadToFile(context.Background(), server.URL, outPath)
+		if err == nil {
+			t.Fatal("expected non-nil error, got nil")
+		}
+		if !strings.Contains(err.Error(), "sync broken") {
+			t.Errorf("error = %v, want to contain 'sync broken'", err)
+		}
+		if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+			t.Errorf("outPath stat = %v, want os.IsNotExist", statErr)
+		}
+	})
+
+	// Variant 2: Sync succeeds, Close fails → Close error is propagated.
+	t.Run("Close error after successful Sync", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		outPath := filepath.Join(tmpDir, "out")
+		engramCreateFile = func(path string) (writeCloseSyncer, error) {
+			return &fakeFile{closeErr: errors.New("close broken")}, nil
+		}
+		_, err := engramDownloadToFile(context.Background(), server.URL, outPath)
+		if err == nil {
+			t.Fatal("expected non-nil error, got nil")
+		}
+		if !strings.Contains(err.Error(), "close broken") {
+			t.Errorf("error = %v, want to contain 'close broken'", err)
+		}
+		if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+			t.Errorf("outPath stat = %v, want os.IsNotExist", statErr)
+		}
+	})
+}
+
+// --- TestEngramDownloadToFile_SuccessPathPersistsBytesAndDigest ---
+
+func TestEngramDownloadToFile_SuccessPathPersistsBytesAndDigest(t *testing.T) {
+	const content = "hello world from engram download test"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(content))
+	}))
+	defer server.Close()
+
+	origCreate := engramCreateFile
+	t.Cleanup(func() { engramCreateFile = origCreate })
+
+	// Use the real os.Create via the default seam.
+	engramCreateFile = func(path string) (writeCloseSyncer, error) {
+		return os.Create(path)
+	}
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "out")
+
+	digest, err := engramDownloadToFile(context.Background(), server.URL, outPath)
+	if err != nil {
+		t.Fatalf("engramDownloadToFile() error = %v", err)
+	}
+
+	// Digest must match sha256 of the content.
+	wantDigest := sha256Hex([]byte(content))
+	if digest != wantDigest {
+		t.Errorf("digest = %q, want %q", digest, wantDigest)
+	}
+
+	// On-disk file must contain the same bytes.
+	onDisk, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", outPath, err)
+	}
+	if string(onDisk) != content {
+		t.Errorf("on-disk content = %q, want %q", string(onDisk), content)
+	}
+
+	// On-disk sha256 must match the returned digest.
+	onDiskDigest := sha256Hex(onDisk)
+	if onDiskDigest != digest {
+		t.Errorf("on-disk digest = %q, returned digest = %q (mismatch means Sync/Close wrote different bytes)", onDiskDigest, digest)
+	}
+}
