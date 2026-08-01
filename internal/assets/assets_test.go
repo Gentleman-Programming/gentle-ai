@@ -346,6 +346,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/skill-improver/SKILL.md",
 		"skills/skill-improver/references/skill-style-guide.md",
 		"skills/chained-pr/references/chaining-details.md",
+		"skills/rdd-defect-workflow/SKILL.md",
 	}
 
 	for _, path := range expectedFiles {
@@ -1601,9 +1602,9 @@ func TestEmbeddedAssetCount(t *testing.T) {
 		}
 	}
 
-	// We expect 23 skill directories (10 SDD + judgment-day + 6 foundation + 4 sustainable-review + hermes-ephemeral-delegation + _shared).
-	if skillDirs != 23 {
-		t.Fatalf("expected 23 skill directories, got %d", skillDirs)
+	// We expect 24 skill directories (10 SDD + judgment-day + 6 foundation + 5 sustainable-review + hermes-ephemeral-delegation + _shared).
+	if skillDirs != 24 {
+		t.Fatalf("expected 24 skill directories, got %d", skillDirs)
 	}
 
 	// Verify each skill directory has a SKILL.md.
