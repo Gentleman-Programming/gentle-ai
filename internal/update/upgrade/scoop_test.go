@@ -45,7 +45,7 @@ func TestScoopOwnsExecutableWith(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			owned := scoopOwnsExecutableWith(active, root, func(path string) (string, error) {
+			resolve := func(path string) (string, error) {
 				if tc.resolveErr != nil {
 					return "", tc.resolveErr
 				}
@@ -58,9 +58,10 @@ func TestScoopOwnsExecutableWith(t *testing.T) {
 					t.Fatalf("resolved unexpected path %q", path)
 					return "", nil
 				}
-			})
+			}
+			owned := scoopOwnsExecutableWithResolvers(active, root, resolve, resolve)
 			if owned != tc.want {
-				t.Errorf("scoopOwnsExecutableWith() = %t, want %t", owned, tc.want)
+				t.Errorf("scoopOwnsExecutableWithResolvers() = %t, want %t", owned, tc.want)
 			}
 		})
 	}
