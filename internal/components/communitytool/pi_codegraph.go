@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,7 +113,7 @@ func PreservePiCodeGraphPending(result PiCodeGraphResult, err error) (PiCodeGrap
 }
 
 func isExclusivePiCodeGraphPending(err error) bool {
-	if err == ErrPiCodeGraphAdapterHealthUnavailable {
+	if errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
 		return true
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
@@ -486,6 +487,9 @@ func verifyPiMCPWithProbe(mcpPath string, probe PiCodeGraphEffectiveMCPProbe) (P
 	}
 	result, err := probe(mcpPath)
 	if err != nil && !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
+		if isPiCodeGraphMCPTransportEOF(err) {
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", errors.Join(err, ErrPiCodeGraphAdapterHealthUnavailable))
+		}
 		return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", err)
 	}
 	if !result.AdapterAvailable || !result.Initialized {
@@ -499,6 +503,13 @@ func verifyPiMCPWithProbe(mcpPath string, probe PiCodeGraphEffectiveMCPProbe) (P
 		return verification, ErrPiCodeGraphAdapterHealthUnavailable
 	}
 	return verification, nil
+}
+
+func isPiCodeGraphMCPTransportEOF(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, io.EOF) || strings.Contains(err.Error(), "EOF")
 }
 
 func probePiCodeGraphMCP(mcpPath string) (PiCodeGraphMCPProbeResult, error) {
