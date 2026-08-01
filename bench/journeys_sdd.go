@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -695,19 +696,25 @@ func sddDuplicateSelectedAuthority(sandbox *Sandbox) error {
 	if _, err := record.save(); err != nil {
 		return err
 	}
-	var receipt map[string]any
-	if err := json.Unmarshal(receiptPayload, &receipt); err != nil {
-		return err
-	}
-	if _, ok := receipt["lineage_id"]; !ok {
-		return errors.New("compact receipt carries no lineage_id")
-	}
-	receipt["lineage_id"] = sddAmbiguousLastLineage
-	receiptPayload, err = json.Marshal(receipt)
+	receipt, err := decodeOrderedJSON(receiptPayload)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(directory, "review-receipt.json"), receiptPayload, 0o644); err != nil {
+	if lineage, ok := orderedString(receipt, "lineage_id"); !ok || lineage == "" {
+		return errors.New("compact receipt carries no lineage_id")
+	}
+	if !setOrderedMember(receipt, "lineage_id", sddAmbiguousLastLineage) {
+		return errors.New("compact receipt carries no lineage_id")
+	}
+	var compact bytes.Buffer
+	if err := encodeOrderedJSON(receipt, &compact); err != nil {
+		return err
+	}
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, compact.Bytes(), "", "  "); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(directory, "review-receipt.json"), append(indented.Bytes(), '\n'), 0o644); err != nil {
 		return err
 	}
 	head, err := proveAuthorities(sandbox)
