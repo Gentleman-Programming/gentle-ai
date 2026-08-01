@@ -17,6 +17,8 @@ const (
 	retrySuccessorLineage    = "wave-one-final-verification-successor"
 	stagedRecoveryLineage    = "wave-one-staged-recovery-source"
 	stagedSuccessorLineage   = "wave-one-staged-recovery-successor"
+	fullScopeLineage         = "wave-one-full-scope-source"
+	fullScopeSuccessor       = "wave-one-full-scope-successor"
 )
 
 var startNamedCapability = &Capability{Verb: []string{"review", "start"}, Flags: []string{"--cwd", "--lineage"}}
@@ -52,14 +54,17 @@ type waveCorrectionStatus struct {
 	Action            string `json:"action"`
 	ActionDisposition string `json:"action_disposition"`
 	Projection        struct {
-		Kind                    string `json:"kind"`
-		InitialSnapshotIdentity string `json:"initial_snapshot_identity"`
-		CurrentSnapshotIdentity string `json:"current_snapshot_identity"`
-		CurrentCandidateTree    string `json:"current_candidate_tree"`
+		Kind                    string   `json:"kind"`
+		InitialSnapshotIdentity string   `json:"initial_snapshot_identity"`
+		CurrentSnapshotIdentity string   `json:"current_snapshot_identity"`
+		CurrentCandidateTree    string   `json:"current_candidate_tree"`
+		PathsDigest             string   `json:"paths_digest"`
+		Paths                   []string `json:"paths"`
 	} `json:"projection"`
 	ValidationRequest *struct {
 		RequestHash              string `json:"request_hash"`
 		CorrectionTargetIdentity string `json:"correction_target_identity"`
+		CorrectionPathsDigest    string `json:"correction_paths_digest"`
 	} `json:"validation_request"`
 	NextTransition *struct {
 		Kind       string `json:"kind"`
@@ -112,6 +117,10 @@ type waveGateResult struct {
 	Context struct {
 		LineageID             string `json:"lineage_id"`
 		BaseRelationshipValid bool   `json:"base_relationship_valid"`
+		Denial                *struct {
+			Stage string `json:"stage"`
+			Code  string `json:"code"`
+		} `json:"denial"`
 	} `json:"context"`
 }
 
@@ -196,6 +205,23 @@ func stageWaveCandidate(sandbox *Sandbox) error {
 	}
 	if paths != "candidate.go" || staged+"\n" != candidate {
 		return fmt.Errorf("fixture did not stage only the exact candidate: paths %q, content %q", paths, staged)
+	}
+	return nil
+}
+
+func stageFullScopeCandidate(sandbox *Sandbox) error {
+	if err := stageWaveCandidate(sandbox); err != nil {
+		return err
+	}
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "companion.txt"), "reviewed companion\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "companion.txt"); err != nil {
+		return err
+	}
+	paths, err := gitOut(sandbox, sandbox.Repo, "diff", "--cached", "--name-only")
+	if err != nil || paths != "candidate.go\ncompanion.txt" {
+		return fmt.Errorf("full-scope fixture paths = %q, %v", paths, err)
 	}
 	return nil
 }
@@ -347,13 +373,21 @@ func writeCorrectedCandidate(sandbox *Sandbox) error {
 }
 
 func readCorrectionStatus(r *journeyRun) (waveCorrectionStatus, error) {
-	observation := r.run(productArgsFor(r, "review", "status", "--contract", reviewContract, "--next-transition", "--lineage", correctedDeliveryLineage), false)
+	return readCorrectionStatusFor(r, correctedDeliveryLineage)
+}
+
+func readCorrectionStatusFor(r *journeyRun, lineage string) (waveCorrectionStatus, error) {
+	observation := r.run(productArgsFor(r, "review", "status", "--contract", reviewContract, "--next-transition", "--lineage", lineage), false)
 	var status waveCorrectionStatus
 	return status, decodeWaveObservation(observation, &status, "corrected review status")
 }
 
 func capturePassedCorrectionEvidence(r *journeyRun) error {
-	status, err := readCorrectionStatus(r)
+	return capturePassedCorrectionEvidenceFor(r, correctedDeliveryLineage)
+}
+
+func capturePassedCorrectionEvidenceFor(r *journeyRun, lineage string) error {
+	status, err := readCorrectionStatusFor(r, lineage)
 	if err != nil {
 		return err
 	}
@@ -373,11 +407,16 @@ func capturePassedCorrectionEvidence(r *journeyRun) error {
 	}
 	r.sandbox.Scratch["validation-request"] = status.ValidationRequest.RequestHash
 	r.sandbox.Scratch["correction-target"] = status.ValidationRequest.CorrectionTargetIdentity
+	r.sandbox.Scratch["correction-paths"] = status.ValidationRequest.CorrectionPathsDigest
 	return nil
 }
 
 func completeCorrectedReview(r *journeyRun) error {
-	status, err := readCorrectionStatus(r)
+	return completeCorrectedReviewFor(r, correctedDeliveryLineage)
+}
+
+func completeCorrectedReviewFor(r *journeyRun, lineage string) error {
+	status, err := readCorrectionStatusFor(r, lineage)
 	if err != nil {
 		return err
 	}
@@ -400,13 +439,13 @@ func completeCorrectedReview(r *journeyRun) error {
 	if err != nil {
 		return err
 	}
-	observation := r.run(productArgsFor(r, "review", "finalize", "--lineage", correctedDeliveryLineage,
+	observation := r.run(productArgsFor(r, "review", "finalize", "--lineage", lineage,
 		"--validation", path, "--captured-evidence=true"), false)
 	result, err := decodeWaveOperation(observation, "corrected review finalize")
 	if err != nil {
 		return err
 	}
-	if result.State != "approved" || result.LineageID != correctedDeliveryLineage {
+	if result.State != "approved" || result.LineageID != lineage {
 		return fmt.Errorf("corrected review finalized as %+v", result)
 	}
 	return nil
@@ -437,6 +476,85 @@ func stageCorrectedTree(sandbox *Sandbox) error {
 	}
 	if tree != sandbox.Scratch["corrected-tree"] {
 		return fmt.Errorf("staged corrected tree %s does not match receipt tree %s", tree, sandbox.Scratch["corrected-tree"])
+	}
+	return nil
+}
+
+func stageFullCorrectedTree(sandbox *Sandbox) error {
+	if err := sandbox.git(sandbox.Repo, "add", "candidate.go"); err != nil {
+		return err
+	}
+	tree, err := gitOut(sandbox, sandbox.Repo, "write-tree")
+	if err == nil {
+		sandbox.Scratch["full-scope-tree"] = tree
+	}
+	return err
+}
+
+func proveFullScopeStatus(lineage, treeKey string) func(*Sandbox, Observation) error {
+	return func(sandbox *Sandbox, observation Observation) error {
+		var status waveCorrectionStatus
+		if err := decodeWaveObservation(observation, &status, "full-scope status"); err != nil {
+			return err
+		}
+		if status.Authority == nil || status.Authority.LineageID != lineage || status.Authority.State != "approved" ||
+			status.Receipt.Status != "present" || status.Projection.CurrentCandidateTree != sandbox.Scratch[treeKey] ||
+			strings.Join(status.Projection.Paths, "\x00") != "candidate.go\x00companion.txt" || status.Projection.PathsDigest == "" ||
+			status.Projection.PathsDigest == sandbox.Scratch["correction-paths"] {
+			return fmt.Errorf("full-scope authority was narrowed: %+v", status)
+		}
+		return nil
+	}
+}
+
+func driftFullScopeCandidate(sandbox *Sandbox) error {
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "companion.txt"), "reviewed companion after recovery\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "companion.txt"); err != nil {
+		return err
+	}
+	tree, err := gitOut(sandbox, sandbox.Repo, "write-tree")
+	if err == nil {
+		sandbox.Scratch["recovered-tree"] = tree
+	}
+	return err
+}
+
+func recoverFullScopeCandidate(r *journeyRun) error {
+	observation := r.run(productArgsFor(r, "review", "validate", "--lineage", fullScopeLineage, "--gate", "pre-commit"), false)
+	var denial gateDenial
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &denial); err != nil {
+		return fmt.Errorf("parse full-scope denial: %w", err)
+	}
+	change := denial.Context.ScopeChange
+	if denial.Result != "scope-changed" || change.PredecessorLineageID != fullScopeLineage || change.PredecessorRevision == "" {
+		return fmt.Errorf("full-scope drift did not negotiate recovery: %+v", denial)
+	}
+	result, err := decodeWaveOperation(r.run(productArgsFor(r, "review", "recover",
+		"--predecessor-lineage", change.PredecessorLineageID, "--expected-predecessor-revision", change.PredecessorRevision,
+		"--successor-lineage", fullScopeSuccessor, "--disposition", "scope_changed"), false), "full-scope recovery")
+	if err != nil || result.LineageID != fullScopeSuccessor || result.State != "reviewing" {
+		return fmt.Errorf("full-scope successor = %+v, %v", result, err)
+	}
+	return nil
+}
+
+func addFullScopePathDrift(sandbox *Sandbox) error {
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "outside.txt"), "outside reviewed scope\n"); err != nil {
+		return err
+	}
+	return sandbox.git(sandbox.Repo, "add", "outside.txt")
+}
+
+func requireFullScopeDrift(_ *Sandbox, observation Observation) error {
+	var gate waveGateResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &gate); err != nil {
+		return fmt.Errorf("parse full-scope path drift: %w", err)
+	}
+	if gate.Allowed || gate.Result != "scope-changed" || gate.Context.Denial == nil ||
+		gate.Context.Denial.Stage != "receipt-binding" || gate.Context.Denial.Code != "candidate-or-paths-mismatch" {
+		return fmt.Errorf("path drift did not fail closed: %+v", gate)
 	}
 	return nil
 }
@@ -844,6 +962,39 @@ func waveOneJourneys() []Journey {
 				{Name: "disabled explicit invalid receipt still blocks", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"), After: requireExplicitInvalidArchiveStatus},
 				{Name: "authority remained approved at its original revision", Fixture: proveArchiveAuthorityUnchanged},
+			},
+		},
+		{
+			ID:     "j48-recovered-workspace-preserves-full-candidate-scope",
+			Title:  "Recovered workspace correction: terminal authorities preserve the complete candidate scope",
+			Source: "issue #2090",
+			Steps: []Step{
+				{Name: "fixture: repository", Fixture: baseRepo},
+				{Name: "fixture: two-path candidate staged", Fixture: stageFullScopeCandidate},
+				{Name: "start two-path review", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", fullScopeLineage)},
+				{Name: "capture blocker and complete lenses", Requires: captureResultCapability, Composite: captureCorrectableFinding},
+				{Name: "enter correction-required", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", fullScopeLineage, "--captured-results=true")},
+				{Name: "forecast strict-subset correction", Requires: finalizeCorrectionCapability, Args: productArgs("review", "finalize", "--lineage", fullScopeLineage, "--correction-lines", "2")},
+				{Name: "fixture: correction touches only candidate.go", Fixture: writeCorrectedCandidate},
+				{Name: "capture correction-local repository evidence", Requires: captureOutcomeEvidenceCapability, Composite: func(r *journeyRun) error { return capturePassedCorrectionEvidenceFor(r, fullScopeLineage) }},
+				{Name: "approve corrected full candidate", Requires: finalizeValidationCapability, Composite: func(r *journeyRun) error { return completeCorrectedReviewFor(r, fullScopeLineage) }},
+				{Name: "fixture: stage exact corrected candidate", Fixture: stageFullCorrectedTree},
+				{Name: "corrected authority preserves full tree and paths", Requires: statusCapability, Args: productArgs("review", "status", "--contract", reviewContract, "--lineage", fullScopeLineage), After: proveFullScopeStatus(fullScopeLineage, "full-scope-tree")},
+				{Name: "immediate corrected pre-commit allows", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", fullScopeLineage, "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
+					return requireGateForLineage(observation, fullScopeLineage, false)
+				}},
+				{Name: "fixture: reviewed companion bytes drift", Fixture: driftFullScopeCandidate},
+				{Name: "follow scope denial into recovered successor", Requires: recoverCapability, Composite: recoverFullScopeCandidate},
+				{Name: "complete successor lenses", Requires: captureResultCapability, Composite: func(r *journeyRun) error { return captureAllLensesFor(r, "--lineage", fullScopeSuccessor) }},
+				{Name: "finish successor review", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", fullScopeSuccessor, "--captured-results=true")},
+				{Name: "capture successor verification", Requires: captureOutcomeEvidenceCapability, Composite: func(r *journeyRun) error { return captureFinalEvidenceFor(r, "--lineage", fullScopeSuccessor) }},
+				{Name: "approve recovered successor", Requires: finalizeEvidenceCapability, Args: productArgs("review", "finalize", "--lineage", fullScopeSuccessor, "--captured-evidence=true")},
+				{Name: "successor preserves full tree and paths", Requires: statusCapability, Args: productArgs("review", "status", "--contract", reviewContract, "--lineage", fullScopeSuccessor), After: proveFullScopeStatus(fullScopeSuccessor, "recovered-tree")},
+				{Name: "immediate successor pre-commit allows", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", fullScopeSuccessor, "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
+					return requireGateForLineage(observation, fullScopeSuccessor, false)
+				}},
+				{Name: "fixture: add path outside recovered scope", Fixture: addFullScopePathDrift},
+				{Name: "path drift still fails closed", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", fullScopeSuccessor, "--gate", "pre-commit"), After: requireFullScopeDrift},
 			},
 		},
 	}

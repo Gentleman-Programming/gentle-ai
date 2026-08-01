@@ -1788,7 +1788,7 @@ func validateCompactRepositoryEvidence(ctx context.Context, repo string, current
 			return errors.New("compact risk inputs do not match repository evidence")
 		}
 	}
-	if operation == "review/complete-fix" {
+	if operation == "review/complete-fix" || operation == "review/complete-correction-verification" {
 		attempt := next.CorrectionAttempts[len(next.CorrectionAttempts)-1]
 		if err := builder.ValidateEvidence(ctx, attempt.Snapshot); err != nil {
 			return errors.New("compact correction snapshot is not repository-derived")
@@ -1796,6 +1796,11 @@ func validateCompactRepositoryEvidence(ctx context.Context, repo string, current
 		lines, err := builder.ChangedLines(ctx, attempt.Snapshot)
 		if err != nil || lines != attempt.ActualLines {
 			return errors.New("compact correction size does not match repository evidence")
+		}
+		if !snapshotsEqual(next.CurrentSnapshot, attempt.Snapshot) {
+			if err := builder.ValidateEvidence(ctx, next.CurrentSnapshot); err != nil {
+				return errors.New("complete corrected candidate is not repository-derived") // refusal:by-design world-action: repository drift requires rebuilding the candidate-bound finalize request
+			}
 		}
 	}
 	if operation == "review/complete-review" {
@@ -1887,7 +1892,7 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		}
 		if previous.State != StateCorrectionRequired || previous.ProposedCorrectionLines == nil || next.State != StateApproved ||
 			len(next.CorrectionAttempts) != len(previous.CorrectionAttempts)+1 || next.EvidenceOutcome != VerificationOutcomePassed ||
-			next.EvidenceAuthorityRevision != previousRevision || next.EvidenceTargetIdentity != next.CurrentSnapshot.Identity {
+			next.EvidenceAuthorityRevision != previousRevision || next.EvidenceTargetIdentity != next.CorrectionAttempts[len(next.CorrectionAttempts)-1].Snapshot.Identity {
 			return fmt.Errorf("%w: invalid atomic compact correction verification", ErrInvalidSuccessor)
 		}
 		if len(previous.CorrectionAttempts) > 0 && !reflect.DeepEqual(previous.CorrectionAttempts, next.CorrectionAttempts[:len(previous.CorrectionAttempts)]) {

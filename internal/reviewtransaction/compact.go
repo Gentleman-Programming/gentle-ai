@@ -507,6 +507,8 @@ func validateCompactVerificationEvidence(state CompactState) error {
 	expectedTarget := state.CurrentSnapshot.Identity
 	if state.CorrectionVerificationTarget != nil {
 		expectedTarget = state.CorrectionVerificationTarget.Identity
+	} else if len(state.CorrectionAttempts) > 0 {
+		expectedTarget = state.CorrectionAttempts[len(state.CorrectionAttempts)-1].Snapshot.Identity
 	}
 	if !validSHA256(state.EvidenceHash) || !validSHA256(state.EvidenceRecordDigest) ||
 		!validSHA256(state.EvidenceTargetIdentity) || !validSHA256(state.EvidenceAuthorityRevision) ||
@@ -714,6 +716,7 @@ func validateCompactCorrection(state CompactState) error {
 		for _, attempt := range state.CorrectionAttempts {
 			if attempt.ProposedLines <= 0 || attempt.ActualLines < 0 || attempt.Snapshot.Kind != TargetFixDiff || attempt.Snapshot.Projection != state.InitialSnapshot.Projection || attempt.Snapshot.BaseTree != base ||
 				!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(attempt.Snapshot.Paths, state.GenesisPaths) != nil ||
+				validateCompactSnapshot(attempt.Snapshot) != nil || validateCompactSnapshotMetadata(attempt.Snapshot) != nil ||
 				attempt.FixDeltaHash != FixDeltaHashForSnapshot(attempt.Snapshot) {
 				return errors.New("compact correction attempt is outside frozen scope")
 			}
@@ -729,7 +732,9 @@ func validateCompactCorrection(state CompactState) error {
 			}
 			base, cumulative = attempt.Snapshot.CandidateTree, cumulative+attempt.ActualLines
 		}
-		if cumulative != state.CumulativeCorrectionLines || cumulative > state.CorrectionBudget && state.State != StateEscalated || !snapshotsEqual(state.CurrentSnapshot, state.CorrectionAttempts[len(state.CorrectionAttempts)-1].Snapshot) {
+		last := state.CorrectionAttempts[len(state.CorrectionAttempts)-1].Snapshot
+		if cumulative != state.CumulativeCorrectionLines || cumulative > state.CorrectionBudget && state.State != StateEscalated ||
+			!snapshotsEqual(state.CurrentSnapshot, last) && validateCompactCorrectedCandidate(state, last) != nil {
 			return errors.New("compact cumulative correction accounting is invalid")
 		}
 		if state.State == StateCorrectionRequired {
@@ -790,12 +795,16 @@ func validateCompactCorrection(state CompactState) error {
 	if state.ProposedCorrectionLines == nil || *state.ProposedCorrectionLines > state.CorrectionBudget || state.ActualCorrectionLines == nil {
 		return errors.New("completed compact correction requires in-budget forecast and actual size")
 	}
-	if state.CurrentSnapshot.Kind != TargetFixDiff || len(state.CorrectionAttempts) == 0 && state.CurrentSnapshot.BaseTree != state.InitialSnapshot.CandidateTree ||
-		!equalStrings(state.CurrentSnapshot.LedgerIDs, state.FixFindingIDs) ||
-		!equalStrings(state.CurrentSnapshot.IntendedUntracked, state.InitialSnapshot.IntendedUntracked) {
+	correction := state.CurrentSnapshot
+	if len(state.CorrectionAttempts) > 0 {
+		correction = state.CorrectionAttempts[len(state.CorrectionAttempts)-1].Snapshot
+	}
+	if correction.Kind != TargetFixDiff || len(state.CorrectionAttempts) == 0 && correction.BaseTree != state.InitialSnapshot.CandidateTree ||
+		!equalStrings(correction.LedgerIDs, state.FixFindingIDs) ||
+		!equalStrings(correction.IntendedUntracked, state.InitialSnapshot.IntendedUntracked) {
 		return errors.New("completed compact correction snapshot is not bound to the original candidate and causal findings")
 	}
-	if state.FixDeltaHash != FixDeltaHashForSnapshot(state.CurrentSnapshot) {
+	if state.FixDeltaHash != FixDeltaHashForSnapshot(correction) {
 		return errors.New("compact fix delta hash does not match the correction snapshot")
 	}
 	if state.OriginalCriteria == nil || state.CorrectionRegression == nil {
@@ -817,6 +826,18 @@ func validateCompactCorrection(state CompactState) error {
 	}
 	if (state.State == StateValidating || state.State == StateApproved) && (!state.OriginalCriteria.Passed || !state.CorrectionRegression.Passed) {
 		return errors.New("compact correction checks must both pass before validation or approval")
+	}
+	return nil
+}
+
+func validateCompactCorrectedCandidate(state CompactState, correction Snapshot) error {
+	current, initial := state.CurrentSnapshot, state.InitialSnapshot
+	if current.Kind != initial.Kind || current.Projection != initial.Projection || current.UnbornHead != correction.UnbornHead ||
+		current.BaseTree != initial.BaseTree || current.CandidateTree != correction.CandidateTree ||
+		current.IntendedUntrackedProof != correction.IntendedUntrackedProof ||
+		!equalStrings(current.IntendedUntracked, initial.IntendedUntracked) || !equalStrings(current.LedgerIDs, initial.LedgerIDs) ||
+		pathsAreSubset(current.Paths, state.GenesisPaths) != nil {
+		return errors.New("terminal correction authority does not preserve the complete reviewed candidate") // refusal:by-design world-action: contradictory persisted authority requires code or storage repair
 	}
 	return nil
 }
@@ -1320,7 +1341,10 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 // CompleteCorrectionVerification crosses the correction and repository
 // verification boundary in one state value. No correction accounting becomes
 // authoritative unless both candidate-bound checks pass.
-func (state *CompactState) CompleteCorrectionVerification(snapshot Snapshot, actual int, validation ScopedValidationResult, record VerificationEvidenceRecord, payload []byte) error {
+func (state *CompactState) CompleteCorrectionVerification(snapshot Snapshot, actual int, validation ScopedValidationResult, record VerificationEvidenceRecord, payload []byte, complete ...Snapshot) error {
+	if len(complete) > 1 {
+		return errors.New("compact correction accepts at most one complete candidate snapshot") // refusal:by-design world-action: provider code must submit one exact terminal authority
+	}
 	if record.Outcome != VerificationOutcomePassed {
 		return errors.New("compact correction repository verification must pass before acceptance") // refusal:by-design operator-knowledge: the caller must retain the open correction and submit only a passed candidate-bound verification bundle
 	}
@@ -1342,6 +1366,12 @@ func (state *CompactState) CompleteCorrectionVerification(snapshot Snapshot, act
 	}
 	if err := next.CompleteVerificationRecord(record, payload); err != nil {
 		return err
+	}
+	if len(complete) == 1 {
+		next.CurrentSnapshot = complete[0]
+		if err := next.Validate(); err != nil {
+			return err
+		}
 	}
 	*state = next
 	return nil
@@ -1501,11 +1531,15 @@ func (state CompactState) Receipt() (CompactReceipt, error) {
 	if evidence == "" {
 		evidence = EmptyFixDeltaHash
 	}
+	pathsDigest := state.CurrentSnapshot.PathsDigest
+	if state.CurrentSnapshot.Kind == TargetFixDiff {
+		pathsDigest = state.InitialSnapshot.PathsDigest
+	}
 	receipt := CompactReceipt{
 		Schema: CompactReceiptSchema, LineageID: state.LineageID, Generation: state.Generation,
 		Projection: state.InitialSnapshot.Projection,
 		BaseTree:   state.InitialSnapshot.BaseTree, InitialReviewTree: state.InitialSnapshot.CandidateTree,
-		FinalCandidateTree: state.CurrentSnapshot.CandidateTree, PathsDigest: state.InitialSnapshot.PathsDigest,
+		FinalCandidateTree: state.CurrentSnapshot.CandidateTree, PathsDigest: pathsDigest,
 		FixDeltaHash: state.FixDeltaHash, PolicyHash: state.PolicyHash, EvidenceHash: evidence,
 		EvidenceRecordDigest: state.EvidenceRecordDigest, EvidenceOutcome: state.EvidenceOutcome,
 		EvidenceTargetIdentity: state.EvidenceTargetIdentity, EvidenceAuthorityRevision: state.EvidenceAuthorityRevision,

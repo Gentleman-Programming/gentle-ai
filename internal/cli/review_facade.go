@@ -2526,14 +2526,18 @@ func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state
 		if err != nil {
 			return plan, err
 		}
+		complete, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).BuildCorrectedCandidate(ctx, state.InitialSnapshot, fix)
+		if err != nil {
+			return plan, err
+		}
 		native, err := validation.compact(reviewtransaction.FixDeltaHashForSnapshot(fix), state.FixFindingIDs, request)
 		if err != nil {
 			return plan, err
 		}
-		if err := state.CompleteCorrectionVerification(fix, actual, native, captured.Record, captured.Payload); err != nil {
+		if err := state.CompleteCorrectionVerification(fix, actual, native, captured.Record, captured.Payload, complete); err != nil {
 			return plan, err
 		}
-		plan.Candidate = fix
+		plan.Candidate = complete
 		appendState("review/complete-correction-verification")
 	}
 	if state.State == reviewtransaction.StateValidating {
