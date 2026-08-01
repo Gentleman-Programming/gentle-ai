@@ -521,8 +521,17 @@ func ReviewPhases() []string {
 	return append(phases, ReviewRefuterAgent)
 }
 
+// NativeFallbackPhases returns the built-in fallback agents (general and explore).
+func NativeFallbackPhases() []string {
+	return []string{
+		"general",
+		"explore",
+	}
+}
+
 // ConfigurableAgentPhases returns all agent names that support per-agent
-// model configuration. This includes SDD, Judgment Day, and review agents.
+// model configuration. This includes SDD, Judgment Day, review agents,
+// and native fallback agents.
 // Used by the inject model assignment table builder and the configurable agent set
 // in ReadCurrentModelAssignments. The TUI uses each role family separately
 // for row layout control.
@@ -530,5 +539,6 @@ func ConfigurableAgentPhases() []string {
 	phases := SDDPhases()
 	phases = append(phases, JDPhases()...)
 	phases = append(phases, ReviewPhases()...)
+	phases = append(phases, NativeFallbackPhases()...)
 	return phases
 }
