@@ -737,6 +737,32 @@ func TestResolvePrefersExactApprovedCompactAuthorityOverStaleSamePathLineage(t *
 	}
 }
 
+func TestDiscoverCompactPreVerifyAuthorityFailsClosedWhenAuthorityDriftsDuringDiscovery(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "compact-thin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := afterCompactPreVerifyAuthorityInitialRead
+	afterCompactPreVerifyAuthorityInitialRead = func() {
+		payload, readErr := os.ReadFile(store.ReceiptPath())
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if writeErr := os.WriteFile(store.ReceiptPath(), append(payload, '\n'), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+	t.Cleanup(func() { afterCompactPreVerifyAuthorityInitialRead = original })
+
+	bridge := discoverCompactPreVerifyAuthority(context.Background(), root, "thin", "")
+	if !bridge.Relevant || bridge.Reason != "compact authority changed during discovery" {
+		t.Fatalf("bridge = %#v, want discovery drift denial", bridge)
+	}
+}
+
 const emptyOutputHash = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 func TestAuthorityOnlyFailedReportRequiresStructuredFailClosedEvidence(t *testing.T) {
@@ -1545,12 +1571,7 @@ func writeApprovedCompactAuthorityForChangeWithTasks(t *testing.T, repo, changeR
 	if err != nil {
 		t.Fatal(err)
 	}
-	lenses := []string{}
-	if risk == reviewtransaction.RiskMedium {
-		lenses = []string{reviewtransaction.LensReliability}
-	} else if risk == reviewtransaction.RiskHigh {
-		lenses = []string{reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability}
-	}
+	lenses := compactStatusLenses(risk)
 	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1, Snapshot: snapshot, PolicyHash: shaID("c"), RiskLevel: risk, SelectedLenses: lenses, OriginalChangedLines: &lines})
 	if err != nil {
 		t.Fatal(err)

@@ -95,7 +95,11 @@ var captureEvidenceCapability = &Capability{
 // readStatus issues one `review status --next-transition`. The invocation is
 // counted: an agent driving this flow really does have to spend it.
 func readStatus(r *journeyRun) (statusEnvelope, error) {
-	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}, false)
+	args := []string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}
+	if r.sandbox.Lineage != "" {
+		args = append(args, "--lineage", r.sandbox.Lineage)
+	}
+	observation := r.run(args, false)
 	var envelope statusEnvelope
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &envelope); err != nil {
 		return envelope, fmt.Errorf("parse review status: %w (stderr: %s)", err, firstLine(observation.Stderr))

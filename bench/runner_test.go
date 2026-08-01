@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -101,4 +102,59 @@ func TestReadBackBlanksGitTrace(t *testing.T) {
 	if counted.Stdout == "GIT_TRACE=[]\n" {
 		t.Fatal("a counted invocation lost GIT_TRACE, so git_subprocesses would stop being observable")
 	}
+}
+
+func TestSandboxEnvIncludesBenchReceiptMutationPath(t *testing.T) {
+	sandbox, err := newSandbox("gentle-ai", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox.BenchReceiptMutationPath = filepath.Join(sandbox.Root, "receipt.json")
+	for _, entry := range sandbox.env() {
+		if entry == "GENTLE_AI_BENCH_MUTATE_RECEIPT="+sandbox.BenchReceiptMutationPath {
+			return
+		}
+	}
+	t.Fatal("sandbox environment has no benchmark receipt mutation path")
+}
+
+func TestSandboxEnvKeepsTempFilesInsideTheSandbox(t *testing.T) {
+	sandbox, err := newSandbox("gentle-ai", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(sandbox.Root, "tmp")
+	found := map[string]bool{}
+	for _, entry := range sandbox.env() {
+		if entry == "TMP="+want {
+			found["TMP"] = true
+			continue
+		}
+		if entry == "TEMP="+want {
+			found["TEMP"] = true
+			continue
+		}
+		if strings.HasPrefix(entry, "TMP=") || strings.HasPrefix(entry, "TEMP=") {
+			t.Fatalf("temporary directory = %q, want %q", entry, want)
+		}
+	}
+	if info, err := os.Stat(want); err != nil || !info.IsDir() {
+		t.Fatalf("sandbox temp directory %q: %v", want, err)
+	}
+	if !found["TMP"] || !found["TEMP"] {
+		t.Fatalf("sandbox temp variables = %v, want TMP and TEMP", found)
+	}
+}
+
+func TestSandboxEnvKeepsWindowsHomeInsideTheSandbox(t *testing.T) {
+	sandbox, err := newSandbox("gentle-ai", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range sandbox.env() {
+		if entry == "USERPROFILE="+sandbox.Home {
+			return
+		}
+	}
+	t.Fatalf("sandbox environment has no USERPROFILE=%q", sandbox.Home)
 }
