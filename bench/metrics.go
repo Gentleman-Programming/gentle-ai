@@ -166,12 +166,14 @@ type Results struct {
 	CoreJourneys int          `json:"core_journeys,omitempty"`
 	Axes         []AxisRecord `json:"axes,omitempty"`
 	Notes        []string     `json:"notes,omitempty"`
+	// Identity carries the full v2 release-evidence identity tuple.
+	Identity Identity `json:"identity,omitempty"`
 }
 
 const (
 	ModeDriven    = "driven"
 	ModeObserved  = "observed"
-	ResultsSchema = "gentle-ai-bench.results/v1"
+	ResultsSchema = "gentle-ai-bench.results/v2"
 )
 
 // accumulator builds a MetricSet from a stream of observations. It is the one
