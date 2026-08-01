@@ -252,16 +252,21 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	if predecessor.Revision != request.ExpectedPredecessorRevision {
 		return CompactRecord{}, fmt.Errorf("%w: expected predecessor revision %q, current %q", ErrConcurrentUpdate, request.ExpectedPredecessorRevision, predecessor.Revision)
 	}
-	stagedScopeRecovery := request.Disposition == RecoveryScopeChanged &&
+	approvedStagedScopeRecovery := request.Disposition == RecoveryScopeChanged &&
 		compactApprovedStagedScopeRecoveryShape(predecessor.State, request.Successor.InitialSnapshot)
+	correctionStagedScopeRecovery := request.Disposition == RecoveryScopeChanged &&
+		compactCorrectionRequiredStagedScopeRecoveryShape(predecessor.State, request.Successor.InitialSnapshot)
+	stagedScopeRecovery := approvedStagedScopeRecovery || correctionStagedScopeRecovery
 	var predecessorReceipt compactTargetReceiptObservation
 	if stagedScopeRecovery {
 		if request.MaintainerAuthorization != compactApprovedStagedScopeRecoveryAuthorizationBinding(
 			request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity,
 			request.Successor.LineageID, request.Actor, request.Reason,
 		) {
-			return CompactRecord{}, errors.New("approved staged scope recovery requires an exact successor-bound maintainer authorization")
+			return CompactRecord{}, errors.New("staged scope recovery requires an exact successor-bound maintainer authorization") // refusal:by-design human-authority: only a maintainer can authorize this exact successor edge
 		}
+	}
+	if approvedStagedScopeRecovery {
 		predecessorReceipt, err = inspectCompactTargetReceipt(predecessorStore, predecessor.State)
 		if err != nil || !predecessorReceipt.published ||
 			!bytes.Equal(predecessorReceipt.artifact.content, predecessorReceipt.artifact.canonical) {
@@ -275,7 +280,18 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 			return CompactRecord{}, errors.New("approved staged scope recovery is not a complete same-base index expansion")
 		}
 	}
-	if predecessor.State.State == StateCorrectionRequired && request.Disposition != RecoveryEscalated && request.MaintainerAuthorization != compactRecoveryAuthorizationBinding(request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason) {
+	correctionLines := 0
+	if correctionStagedScopeRecovery {
+		var eligible bool
+		correctionLines, eligible, err = compactCorrectionRequiredStagedScopeRecovery(ctx, successorStore.repo, predecessor.State, request.Successor.InitialSnapshot)
+		if err != nil {
+			return CompactRecord{}, err
+		}
+		if !eligible {
+			return CompactRecord{}, errors.New("correction-required staged scope recovery is not a complete same-base index expansion") // refusal:by-design world-action: the operator must restage the exact same-base correction scope before retrying
+		}
+	}
+	if predecessor.State.State == StateCorrectionRequired && request.Disposition != RecoveryEscalated && !correctionStagedScopeRecovery && request.MaintainerAuthorization != compactRecoveryAuthorizationBinding(request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason) {
 		return CompactRecord{}, errors.New("correction-required scope recovery requires an exact maintainer authorization binding")
 	}
 	if !sameRecoveryProjection(predecessor.State.InitialSnapshot.Projection, request.Successor.InitialSnapshot.Projection) &&
@@ -312,6 +328,11 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 		PredecessorLineageID: request.PredecessorLineageID, PredecessorRevision: predecessor.Revision,
 		Disposition: request.Disposition, Reason: strings.TrimSpace(request.Reason), Actor: strings.TrimSpace(request.Actor),
 		RecoveredAt: request.RecoveredAt.UTC(), MaintainerAuthorization: strings.TrimSpace(request.MaintainerAuthorization),
+	}
+	if correctionStagedScopeRecovery {
+		request.Successor.CorrectionBudget = predecessor.State.CorrectionBudget
+		request.Successor.Recovery.ConsumedCorrectionAttempts = MaxCompactCorrectionAttempts
+		request.Successor.Recovery.ConsumedCorrectionLines = correctionLines
 	}
 	if request.Disposition == RecoveryEscalated {
 		evidence, eligible, evidenceErr := deriveCompactRecoveredEvidence(ctx, successorStore.repo, predecessorStore, predecessor, request.Successor)
@@ -371,7 +392,7 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	if err := validateCompactRepositoryEvidence(ctx, successorStore.repo, nil, request.Successor, "review/start"); err != nil {
 		return CompactRecord{}, fmt.Errorf("%w: %v", ErrInvalidSuccessor, err)
 	}
-	if stagedScopeRecovery {
+	if approvedStagedScopeRecovery {
 		currentReceipt, receiptErr := inspectCompactTargetReceipt(predecessorStore, predecessor.State)
 		if receiptErr != nil || currentReceipt.published != predecessorReceipt.published ||
 			!compactTargetArtifactObservationsEqual(currentReceipt.artifact, predecessorReceipt.artifact) {
@@ -412,12 +433,21 @@ func compactRecoveryScopeChanged(previous, next Snapshot) bool {
 }
 
 func compactApprovedStagedScopeRecoveryShape(predecessor CompactState, next Snapshot) bool {
+	return predecessor.State == StateApproved && compactStagedScopeRecoverySnapshotShape(predecessor, next)
+}
+
+func compactCorrectionRequiredStagedScopeRecoveryShape(predecessor CompactState, next Snapshot) bool {
+	return predecessor.State == StateCorrectionRequired && predecessor.ProposedCorrectionLines != nil &&
+		!predecessor.CorrectionAttemptConsumed() && compactStagedScopeRecoverySnapshotShape(predecessor, next)
+}
+
+func compactStagedScopeRecoverySnapshotShape(predecessor CompactState, next Snapshot) bool {
 	initial := predecessor.InitialSnapshot
 	initialProjection := initial.Projection
 	if initialProjection == "" {
 		initialProjection = ProjectionWorkspace
 	}
-	return predecessor.State == StateApproved && initial.Kind == TargetBaseDiff &&
+	return initial.Kind == TargetBaseDiff &&
 		initialProjection == ProjectionWorkspace && next.Kind == TargetBaseWorkspaceOverlay &&
 		next.Projection == ProjectionStaged && next.BaseTree == initial.BaseTree &&
 		len(initial.IntendedUntracked) == 0 && len(initial.LedgerIDs) == 0 &&
@@ -431,6 +461,35 @@ func compactApprovedStagedScopeRecovery(ctx context.Context, repo string, predec
 	if !compactApprovedStagedScopeRecoveryShape(predecessor, next) {
 		return false, nil
 	}
+	return compactStagedScopeRecovery(ctx, repo, predecessor, next)
+}
+
+func compactCorrectionRequiredStagedScopeRecovery(ctx context.Context, repo string, predecessor CompactState, next Snapshot) (int, bool, error) {
+	if !compactCorrectionRequiredStagedScopeRecoveryShape(predecessor, next) {
+		return 0, false, nil
+	}
+	eligible, err := compactStagedScopeRecovery(ctx, repo, predecessor, next)
+	if err != nil || !eligible {
+		return 0, eligible, err
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	paths, err := builder.changedPaths(ctx, predecessor.CurrentSnapshot.CandidateTree, next.CandidateTree)
+	if err != nil {
+		return 0, false, err
+	}
+	lines, err := builder.ChangedLines(ctx, Snapshot{
+		BaseTree: predecessor.CurrentSnapshot.CandidateTree, CandidateTree: next.CandidateTree, Paths: paths,
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	if lines > predecessor.CorrectionBudget {
+		return 0, false, fmt.Errorf("staged correction is %d changed lines, exceeding the frozen budget of %d", lines, predecessor.CorrectionBudget) // refusal:by-design world-action: the staged correction must be reduced or receive a separate maintainer decision
+	}
+	return lines, true, nil
+}
+
+func compactStagedScopeRecovery(ctx context.Context, repo string, predecessor CompactState, next Snapshot) (bool, error) {
 	committed, err := (SnapshotBuilder{Repo: repo}).Build(ctx, Target{
 		Kind: TargetBaseDiff, Projection: ProjectionStaged,
 		BaseRef: predecessor.InitialSnapshot.BaseTree, IntendedUntracked: []string{},
@@ -483,8 +542,14 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 	if successor.Generation != predecessor.State.Generation+1 {
 		return errors.New("recovery successor generation must follow predecessor")
 	}
-	stagedScopeRecovery := recovery.Disposition == RecoveryScopeChanged &&
+	approvedStagedScopeRecovery := recovery.Disposition == RecoveryScopeChanged &&
 		compactApprovedStagedScopeRecoveryShape(predecessor.State, successor.InitialSnapshot)
+	correctionStagedScopeRecovery := recovery.Disposition == RecoveryScopeChanged &&
+		compactCorrectionRequiredStagedScopeRecoveryShape(predecessor.State, successor.InitialSnapshot)
+	stagedScopeRecovery := approvedStagedScopeRecovery || correctionStagedScopeRecovery
+	if recovery.ConsumedCorrectionAttempts > 0 && !correctionStagedScopeRecovery {
+		return errors.New("only correction-required staged recovery may preserve consumed correction accounting") // refusal:by-design world-action: forged cross-edge accounting cannot be rebound to a different recovery shape
+	}
 	if !sameRecoveryProjection(predecessor.State.InitialSnapshot.Projection, successor.InitialSnapshot.Projection) &&
 		recovery.Disposition != RecoveryEscalated && !stagedScopeRecovery {
 		return errors.New("recovery successor must retain the predecessor projection")
@@ -516,6 +581,18 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 		case StateCorrectionRequired:
 			if strings.TrimSpace(recovery.MaintainerAuthorization) == "" {
 				return errors.New("correction-required scope recovery requires explicit maintainer authorization")
+			}
+			if correctionStagedScopeRecovery {
+				if recovery.MaintainerAuthorization != compactApprovedStagedScopeRecoveryAuthorizationBinding(
+					predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity,
+					successor.LineageID, recovery.Actor, recovery.Reason,
+				) {
+					return errors.New("correction-required staged scope recovery authorization is not successor-bound") // refusal:by-design human-authority: only a maintainer can issue the exact successor-bound authorization
+				}
+				if successor.CorrectionBudget != predecessor.State.CorrectionBudget ||
+					recovery.ConsumedCorrectionAttempts != MaxCompactCorrectionAttempts {
+					return errors.New("correction-required staged scope recovery did not preserve correction accounting") // refusal:by-design world-action: provider-built authority contradicted its predecessor and requires a code fix
+				}
 			}
 			if forgedSchemaAuthorization() {
 				return compactRecoveryAuthorizationError(successor.InitialSnapshot)

@@ -95,7 +95,12 @@ var captureEvidenceCapability = &Capability{
 // readStatus issues one `review status --next-transition`. The invocation is
 // counted: an agent driving this flow really does have to spend it.
 func readStatus(r *journeyRun) (statusEnvelope, error) {
-	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}, false)
+	return readStatusFor(r)
+}
+
+func readStatusFor(r *journeyRun, selectors ...string) (statusEnvelope, error) {
+	args := append([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}, selectors...)
+	observation := r.run(args, false)
 	var envelope statusEnvelope
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &envelope); err != nil {
 		return envelope, fmt.Errorf("parse review status: %w (stderr: %s)", err, firstLine(observation.Stderr))
@@ -138,8 +143,12 @@ func writeScratch(sandbox *Sandbox, name string, content []byte) (string, error)
 // the next transition, synthesize the reviewer result it asks for, capture it,
 // repeat. Each capture counts as one model run.
 func captureAllLenses(r *journeyRun) error {
+	return captureAllLensesFor(r)
+}
+
+func captureAllLensesFor(r *journeyRun, selectors ...string) error {
 	for round := 0; round < 8; round++ {
-		envelope, err := readStatus(r)
+		envelope, err := readStatusFor(r, selectors...)
 		if err != nil {
 			return err
 		}
@@ -173,7 +182,11 @@ func captureAllLenses(r *journeyRun) error {
 
 // captureFinalEvidence answers the verification-evidence collect step.
 func captureFinalEvidence(r *journeyRun) error {
-	envelope, err := readStatus(r)
+	return captureFinalEvidenceFor(r)
+}
+
+func captureFinalEvidenceFor(r *journeyRun, selectors ...string) error {
+	envelope, err := readStatusFor(r, selectors...)
 	if err != nil {
 		return err
 	}

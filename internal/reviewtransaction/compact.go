@@ -229,15 +229,17 @@ const (
 )
 
 type CompactRecoveryProvenance struct {
-	PredecessorLineageID    string                              `json:"predecessor_lineage_id"`
-	PredecessorRevision     string                              `json:"predecessor_revision"`
-	Disposition             RecoveryDisposition                 `json:"disposition"`
-	Reason                  string                              `json:"reason"`
-	Actor                   string                              `json:"actor"`
-	RecoveredAt             time.Time                           `json:"recovered_at"`
-	MaintainerAuthorization string                              `json:"maintainer_authorization,omitempty"`
-	Evidence                *CompactRecoveredEvidence           `json:"evidence,omitempty"`
-	FinalVerificationRetry  *CompactFinalVerificationRetryProof `json:"final_verification_retry,omitempty"`
+	PredecessorLineageID       string                              `json:"predecessor_lineage_id"`
+	PredecessorRevision        string                              `json:"predecessor_revision"`
+	Disposition                RecoveryDisposition                 `json:"disposition"`
+	Reason                     string                              `json:"reason"`
+	Actor                      string                              `json:"actor"`
+	RecoveredAt                time.Time                           `json:"recovered_at"`
+	MaintainerAuthorization    string                              `json:"maintainer_authorization,omitempty"`
+	ConsumedCorrectionAttempts int                                 `json:"consumed_correction_attempts,omitempty"`
+	ConsumedCorrectionLines    int                                 `json:"consumed_correction_lines,omitempty"`
+	Evidence                   *CompactRecoveredEvidence           `json:"evidence,omitempty"`
+	FinalVerificationRetry     *CompactFinalVerificationRetryProof `json:"final_verification_retry,omitempty"`
 }
 
 // CompactRecoveredEvidence is the self-contained provenance for the only
@@ -362,6 +364,14 @@ func (state CompactState) Validate() error {
 		if recovery.FinalVerificationRetry != nil && recovery.Disposition != RecoveryFinalVerificationRetry {
 			return errors.New("only final-verification retry recovery may carry final-verification source proof")
 		}
+		if recovery.ConsumedCorrectionAttempts < 0 || recovery.ConsumedCorrectionAttempts > MaxCompactCorrectionAttempts ||
+			recovery.ConsumedCorrectionLines < 0 || recovery.ConsumedCorrectionLines > state.CorrectionBudget ||
+			recovery.ConsumedCorrectionAttempts == 0 && recovery.ConsumedCorrectionLines != 0 {
+			return errors.New("compact recovery correction accounting is invalid") // refusal:by-design world-action: malformed persisted accounting cannot be repaired without replacing its provider-owned authority
+		}
+		if recovery.ConsumedCorrectionAttempts > 0 && recovery.Disposition != RecoveryScopeChanged {
+			return errors.New("only scope-changed recovery may preserve consumed correction accounting") // refusal:by-design world-action: contradictory persisted recovery provenance requires code or storage repair
+		}
 	}
 	if err := validateCompactResultDispositions(state); err != nil {
 		return err
@@ -421,7 +431,8 @@ func (state CompactState) Validate() error {
 		return errors.New("compact selected lenses are invalid")
 	}
 	wantBudget, err := CorrectionBudget(state.OriginalChangedLines)
-	if err != nil || state.CorrectionBudget != wantBudget {
+	preservedRecoveryBudget := state.Recovery != nil && state.Recovery.ConsumedCorrectionAttempts > 0
+	if err != nil || state.CorrectionBudget != wantBudget && !preservedRecoveryBudget {
 		return errors.New("compact correction budget does not match original changed lines")
 	}
 	if state.LensResults == nil || state.Findings == nil || state.Classifications == nil || state.Outcomes == nil || state.FixFindingIDs == nil || state.FollowUps == nil {
@@ -1234,7 +1245,11 @@ func compactPristineReviewing(state CompactState) bool {
 // ordinary correction append. Historical records may remain readable without
 // regaining permission to mutate their predecessor authority.
 func (state CompactState) CorrectionAttemptConsumed() bool {
-	return len(state.CorrectionAttempts) >= MaxCompactCorrectionAttempts
+	consumed := len(state.CorrectionAttempts)
+	if state.Recovery != nil {
+		consumed += state.Recovery.ConsumedCorrectionAttempts
+	}
+	return consumed >= MaxCompactCorrectionAttempts
 }
 
 func (state *CompactState) BeginCorrection(proposed int) error {
@@ -1398,6 +1413,9 @@ type CompactEscalationAccounting struct {
 // Validate() invariant is required.
 func (state CompactState) EscalationAccounting() CompactEscalationAccounting {
 	spent := state.CumulativeCorrectionLines
+	if state.Recovery != nil {
+		spent += state.Recovery.ConsumedCorrectionLines
+	}
 	// A correction forecast that never ran still crossed the budget:
 	// BeginCorrection escalates on CumulativeCorrectionLines+proposed and
 	// leaves ActualCorrectionLines nil, so for that shape the lines that

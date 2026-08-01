@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -13,6 +14,8 @@ const (
 	correctedDeliveryLineage = "wave-one-corrected-delivery"
 	retrySourceLineage       = "wave-one-final-verification-source"
 	retrySuccessorLineage    = "wave-one-final-verification-successor"
+	stagedRecoveryLineage    = "wave-one-staged-recovery-source"
+	stagedSuccessorLineage   = "wave-one-staged-recovery-successor"
 )
 
 var startNamedCapability = &Capability{Verb: []string{"review", "start"}, Flags: []string{"--cwd", "--lineage"}}
@@ -35,7 +38,8 @@ type waveOperationResult struct {
 }
 
 type waveCorrectionStatus struct {
-	Authority *struct {
+	TargetIdentity string `json:"target_identity"`
+	Authority      *struct {
 		LineageID string `json:"lineage_id"`
 		State     string `json:"state"`
 		Revision  string `json:"revision"`
@@ -44,7 +48,9 @@ type waveCorrectionStatus struct {
 		Status   string `json:"status"`
 		Identity string `json:"identity"`
 	} `json:"receipt"`
-	Projection struct {
+	Action            string `json:"action"`
+	ActionDisposition string `json:"action_disposition"`
+	Projection        struct {
 		Kind                    string `json:"kind"`
 		InitialSnapshotIdentity string `json:"initial_snapshot_identity"`
 		CurrentSnapshotIdentity string `json:"current_snapshot_identity"`
@@ -193,8 +199,100 @@ func stageWaveCandidate(sandbox *Sandbox) error {
 	return nil
 }
 
+func commitStagedRecoveryCandidate(sandbox *Sandbox) error {
+	base, err := gitOut(sandbox, sandbox.Repo, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	sandbox.Scratch["staged-recovery-base"] = base
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\n\nfunc value() int {\n\treturn 1\n}\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "candidate.go"); err != nil {
+		return err
+	}
+	return sandbox.git(sandbox.Repo, "commit", "-qm", "feat: add reviewed candidate")
+}
+func stagedPredecessorSelectors(sandbox *Sandbox) []string {
+	return []string{"--lineage", stagedRecoveryLineage, "--base-ref", sandbox.Scratch["staged-recovery-base"]}
+}
+func stagedRecoverySelectors(sandbox *Sandbox) []string {
+	return []string{"--lineage", stagedSuccessorLineage, "--base-ref", sandbox.Scratch["staged-recovery-base"], "--projection", "staged", "--workspace-overlay"}
+}
+func stageExpandedCorrection(sandbox *Sandbox) error {
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\n\nfunc value() int {\n\treturn 2\n}\n"); err != nil {
+		return err
+	}
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "migration.sql"), "CREATE TABLE recovered (id INTEGER);\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "candidate.go", "migration.sql"); err != nil {
+		return err
+	}
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "README.md"), "# unstaged noise\n"); err != nil {
+		return err
+	}
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "scratch.txt"), "untracked noise\n"); err != nil {
+		return err
+	}
+	tree, err := gitOut(sandbox, sandbox.Repo, "write-tree")
+	sandbox.Scratch["staged-recovery-tree"] = tree
+	return err
+}
+
+func recoverStagedCorrection(r *journeyRun) error {
+	selectors := stagedRecoverySelectors(r.sandbox)
+	selectors[1] = stagedRecoveryLineage
+	probeObservation := r.run(productArgsFor(r, append([]string{"review", "status", "--contract", reviewContract, "--next-transition", "--action-eligibility"}, selectors...)...), false)
+	var probe waveCorrectionStatus
+	if err := decodeWaveObservation(probeObservation, &probe, "staged recovery probe"); err != nil {
+		return err
+	}
+	if probe.Authority == nil || probe.Action != "recover" || probe.ActionDisposition != "scope_changed" || probe.NextTransition == nil || probe.NextTransition.Kind != "collect" {
+		return fmt.Errorf("staged recovery was not negotiated: %+v", probe)
+	}
+	const actor, reason = "bench-maintainer", "authorize staged correction scope expansion"
+	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + stagedRecoveryLineage +
+		"\npredecessor_revision=" + probe.Authority.Revision + "\ntarget_identity=" + probe.TargetIdentity +
+		"\nsuccessor_lineage=" + stagedSuccessorLineage + "\nactor=" + actor + "\nreason=" + reason
+	authorized := append(selectors, "--recovery-successor-lineage", stagedSuccessorLineage, "--recovery-reason", reason,
+		"--recovery-actor", actor, "--recovery-authorization", authorization)
+	envelope, err := readStatusFor(r, authorized...)
+	if err != nil || envelope.NextTransition.Kind != "execute" || envelope.NextTransition.Execute.Operation != "review.recover" {
+		return fmt.Errorf("authorized staged recovery is not executable: %+v, %v", envelope.NextTransition, err)
+	}
+	args := []string{"review", "recover", "--cwd", r.sandbox.Repo}
+	for _, argument := range envelope.NextTransition.Execute.Arguments {
+		args = append(args, argument.Token)
+	}
+	result, err := decodeWaveOperation(r.run(args, false), "staged correction recovery")
+	if err != nil || result.LineageID != stagedSuccessorLineage || result.State != "reviewing" {
+		return fmt.Errorf("staged correction successor = %+v, %v", result, err)
+	}
+	fresh, err := readStatusFor(r, stagedRecoverySelectors(r.sandbox)...)
+	if err != nil || fresh.Authority.LineageID != stagedSuccessorLineage || fresh.Authority.State != "reviewing" ||
+		fresh.NextTransition.Kind != "collect" || strings.Join(fresh.paths(), "\x00") != "candidate.go\x00migration.sql" {
+		return fmt.Errorf("successor did not start a fresh exact-overlay review: %+v, %v", fresh, err)
+	}
+	return nil
+}
+
+func commitRecoveredStagedOverlay(sandbox *Sandbox) error {
+	if err := sandbox.git(sandbox.Repo, "commit", "-qm", "fix: deliver staged recovery"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "restore", "README.md"); err != nil {
+		return err
+	}
+	return os.Remove(filepath.Join(sandbox.Repo, "scratch.txt"))
+}
+
 func captureCorrectableFinding(r *journeyRun) error {
-	envelope, err := readStatus(r)
+	return captureCorrectableFindingFor(r)
+}
+
+func captureCorrectableFindingFor(r *journeyRun, selectors ...string) error {
+	envelope, err := readStatusFor(r, selectors...)
 	if err != nil {
 		return err
 	}
@@ -229,7 +327,7 @@ func captureCorrectableFinding(r *journeyRun) error {
 	if observation.ExitCode != 0 {
 		return fmt.Errorf("capture blocking reviewer result: %s", firstLine(observation.Stderr))
 	}
-	return captureAllLenses(r)
+	return captureAllLensesFor(r, selectors...)
 }
 
 func writeCorrectedCandidate(sandbox *Sandbox) error {
@@ -381,6 +479,9 @@ func requireGateForLineage(observation Observation, lineage string, baseRelation
 		return fmt.Errorf("gate did not allow lineage %q with the required binding: %+v", lineage, gate)
 	}
 	return nil
+}
+func requireStagedSuccessorGate(_ *Sandbox, observation Observation) error {
+	return requireGateForLineage(observation, stagedSuccessorLineage, false)
 }
 
 func proveCorrectedPrePush(sandbox *Sandbox, observation Observation) error {
@@ -604,6 +705,33 @@ func waveOneJourneys() []Journey {
 					After: func(_ *Sandbox, observation Observation) error {
 						return requireGateForLineage(observation, retrySuccessorLineage, false)
 					}},
+			},
+		},
+		{
+			ID:     "j46-correction-required-staged-recovery",
+			Title:  "Correction-required base diff: negotiated staged recovery receives a fresh review and delivers",
+			Source: "issue #1921",
+			Steps: []Step{
+				{Name: "fixture: linked worktree and remote", Fixture: linkedWorktreeWithRemote},
+				{Name: "fixture: commit base-diff candidate", Fixture: commitStagedRecoveryCandidate},
+				{Name: "start workspace-projected base-diff review", Requires: startNamedCapability, Args: func(s *Sandbox) ([]string, error) {
+					return append([]string{"review", "start", "--lineage", stagedRecoveryLineage, "--base-ref", s.Scratch["staged-recovery-base"], "--committed-only"}, "--cwd", s.Repo), nil
+				}},
+				{Name: "capture blocker on predecessor", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return captureCorrectableFindingFor(r, stagedPredecessorSelectors(r.sandbox)...)
+				}},
+				{Name: "enter correction-required", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", stagedRecoveryLineage, "--captured-results=true")},
+				{Name: "forecast correction", Requires: finalizeCorrectionCapability, Args: productArgs("review", "finalize", "--lineage", stagedRecoveryLineage, "--correction-lines", "3")},
+				{Name: "fixture: exact correction and migration staged with noise outside index", Fixture: stageExpandedCorrection},
+				{Name: "negotiate and execute staged recovery", Requires: recoverCapability, Composite: recoverStagedCorrection},
+				{Name: "fresh successor reviewer pass", Requires: captureResultCapability, Composite: func(r *journeyRun) error { return captureAllLensesFor(r, stagedRecoverySelectors(r.sandbox)...) }},
+				{Name: "finish successor review", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", stagedSuccessorLineage, "--captured-results=true")},
+				{Name: "capture successor verification", Requires: captureOutcomeEvidenceCapability, Composite: func(r *journeyRun) error { return captureFinalEvidenceFor(r, stagedRecoverySelectors(r.sandbox)...) }},
+				{Name: "approve fresh successor", Requires: finalizeEvidenceCapability, Args: productArgs("review", "finalize", "--lineage", stagedSuccessorLineage, "--captured-evidence=true")},
+				{Name: "gate exact staged candidate at pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", stagedSuccessorLineage, "--gate", "pre-commit"), After: requireStagedSuccessorGate},
+				{Name: "fixture: commit reviewed overlay and remove unstaged noise", Fixture: commitRecoveredStagedOverlay},
+				{Name: "gate recovered delivery at pre-push", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", stagedSuccessorLineage, "--gate", "pre-push"), After: requireStagedSuccessorGate},
+				{Name: "gate recovered delivery at pre-pr", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", stagedSuccessorLineage, "--gate", "pre-pr", "--base-ref", "origin/feature"), After: requireStagedSuccessorGate},
 			},
 		},
 	}

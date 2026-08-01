@@ -863,7 +863,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 						}
 						stagedScopeRecovery := result.Action == reviewtransaction.TargetStatusActionRecover &&
 							result.ActionDisposition == reviewtransaction.RecoveryScopeChanged &&
-							record.State.State == reviewtransaction.StateApproved &&
+							(record.State.State == reviewtransaction.StateApproved || record.State.State == reviewtransaction.StateCorrectionRequired) &&
 							record.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff &&
 							target.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
 							selector.Projection == reviewtransaction.ProjectionStaged && selector.WorkspaceOverlay
@@ -1125,7 +1125,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		*actor = reviewAuditActor(context.Background(), root)
 		*reason = reviewSelfRecoveryReason(shape)
 		successorForBinding := ""
-		if stagedScopeOverlay && predecessorRecord.State.State == reviewtransaction.StateApproved {
+		if stagedScopeOverlay && (predecessorRecord.State.State == reviewtransaction.StateApproved || predecessorRecord.State.State == reviewtransaction.StateCorrectionRequired) {
 			successorForBinding = *successor
 		}
 		*authorization = reviewTransitionRecoveryAuthorization(ReviewTransitionBinding{LineageID: *predecessor, Revision: *expected, TargetIdentity: snapshot.Identity}, successorForBinding, *actor, *reason)
