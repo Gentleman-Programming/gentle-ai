@@ -260,6 +260,23 @@ command = "engram"
 command = "engram"
 `,
 		},
+		{
+			name: "multiline array value",
+			input: `model = [
+  "old-top-level-model",
+]
+other = "preserved"
+
+[mcp_servers.engram]
+command = "engram"
+`,
+			want: `other = "preserved"
+
+model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
 	}
 
 	for _, tt := range tests {

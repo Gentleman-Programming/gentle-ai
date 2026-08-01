@@ -338,14 +338,15 @@ func UpsertTopLevelTOMLString(content, key, value string) string {
 	rootArrayDepth := 0
 	var multilineQuote byte
 	var removingMultilineQuote byte
+	removingArrayDepth := 0
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if removingMultilineQuote != 0 {
-			removingMultilineQuote = updateTOMLMultilineString(line, removingMultilineQuote, nil)
+		if removingMultilineQuote != 0 || removingArrayDepth != 0 {
+			removingMultilineQuote = updateTOMLMultilineString(line, removingMultilineQuote, &removingArrayDepth)
 			continue
 		}
 		if inTopLevel && rootArrayDepth == 0 && multilineQuote == 0 && isTOMLKeyAssignment(trimmed, key) {
-			removingMultilineQuote = updateTOMLMultilineString(line, 0, nil)
+			removingMultilineQuote = updateTOMLMultilineString(line, 0, &removingArrayDepth)
 			continue
 		}
 		cleaned = append(cleaned, line)
