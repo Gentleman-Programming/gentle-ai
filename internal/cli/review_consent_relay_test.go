@@ -424,6 +424,10 @@ func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reviewModeHome(t)
 			repo := initReviewCLIRepo(t)
+			root, err := resolveReviewMutationRoot(context.Background(), repo)
+			if err != nil {
+				t.Fatalf("resolve fixture repository root: %v", err)
+			}
 			stubReviewConsole(t, false, "")
 			writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
 
@@ -435,7 +439,11 @@ func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
 			if err := question.Validate(); err != nil {
 				t.Fatal(err)
 			}
-			normalized := bytes.ReplaceAll(output.Bytes(), []byte(repo), []byte("/repo"))
+			encodedRoot, err := json.Marshal(root)
+			if err != nil {
+				t.Fatalf("encode fixture repository root: %v", err)
+			}
+			normalized := bytes.ReplaceAll(output.Bytes(), encodedRoot[1:len(encodedRoot)-1], []byte("/repo"))
 			fixturePath := filepath.Join("..", "..", "contracts", "review-integration", tt.version, "fixtures", "consent.fixture.json")
 			if os.Getenv("GENTLE_AI_CONSENT_FIXTURE_UPDATE") == "1" {
 				if err := os.WriteFile(fixturePath, normalized, 0o644); err != nil {
