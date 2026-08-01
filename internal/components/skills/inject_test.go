@@ -8,9 +8,12 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
@@ -192,6 +195,62 @@ func TestInjectSkipsUnknownSkillGracefully(t *testing.T) {
 
 	if result.Skipped[0] != "nonexistent-skill" {
 		t.Fatalf("Inject() skipped[0] = %q, want nonexistent-skill", result.Skipped[0])
+	}
+}
+
+func TestInjectFiltersSkillsByRequiredCapabilities(t *testing.T) {
+	tests := []struct {
+		name         string
+		adapter      agents.Adapter
+		requirements capabilitymanifest.AgentFeatureClaims
+		wantSkipped  bool
+	}{
+		{
+			name:         "annotated compatible runtime installs",
+			adapter:      claude.NewAdapter(),
+			requirements: capabilitymanifest.AgentFeatureClaims{FileSubAgents: true},
+		},
+		{
+			name:         "annotated incompatible runtime skips",
+			adapter:      antigravity.NewAdapter(),
+			requirements: capabilitymanifest.AgentFeatureClaims{FileSubAgents: true},
+			wantSkipped:  true,
+		},
+		{
+			name:    "unannotated skill fails open",
+			adapter: antigravity.NewAdapter(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			available := []catalog.Skill{{
+				ID:                   model.SkillCreator,
+				Name:                 "skill-creator",
+				RequiredCapabilities: tt.requirements,
+			}}
+			result, err := injectWithCatalog(home, tt.adapter, []model.SkillID{model.SkillCreator}, "", available)
+			if err != nil {
+				t.Fatalf("injectWithCatalog() error = %v", err)
+			}
+
+			path := SkillPathForAgent(home, tt.adapter, model.SkillCreator)
+			if tt.wantSkipped {
+				if len(result.Skipped) != 1 || result.Skipped[0] != model.SkillCreator {
+					t.Fatalf("injectWithCatalog() skipped = %v, want [%s]", result.Skipped, model.SkillCreator)
+				}
+				if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+					t.Fatalf("incompatible skill path stat error = %v, want not exist", statErr)
+				}
+				return
+			}
+
+			if len(result.Skipped) != 0 {
+				t.Fatalf("injectWithCatalog() skipped = %v, want none", result.Skipped)
+			}
+			assertNonEmptyFile(t, path)
+		})
 	}
 }
 

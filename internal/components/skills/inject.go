@@ -9,6 +9,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
@@ -29,6 +30,10 @@ type InjectionResult struct {
 // InjectWithCapability writes skill files like Inject, but for SDD skills
 // it extracts only the section matching the given capability.
 func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID, capability string) (InjectionResult, error) {
+	return injectWithCatalog(homeDir, adapter, skillIDs, capability, catalog.MVPSkills())
+}
+
+func injectWithCatalog(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID, capability string, availableSkills []catalog.Skill) (InjectionResult, error) {
 	if !adapter.SupportsSkills() {
 		return InjectionResult{Skipped: skillIDs}, nil
 	}
@@ -41,12 +46,33 @@ func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []mod
 	paths := make([]string, 0, len(skillIDs))
 	skipped := make([]model.SkillID, 0)
 	changed := false
+	skillsByID := make(map[model.SkillID]catalog.Skill, len(availableSkills))
+	for _, skill := range availableSkills {
+		skillsByID[skill.ID] = skill
+	}
 
 	for _, id := range skillIDs {
 		// SDD skills are written by the SDD component — skip to avoid conflicts
 		// unless a capability was specified (model-section extraction requested).
 		if IsSDDSkill(id) && capability == "" {
 			continue
+		}
+
+		skill, ok := skillsByID[id]
+		if !ok {
+			log.Printf("skills: skipping %q — skill is not in the catalog", id)
+			skipped = append(skipped, id)
+			continue
+		}
+		if skill.RequiredCapabilities != (agents.AgentFeatureClaims{}) {
+			manifest, manifestErr := agents.ResolveCapabilityManifest(adapter)
+			if manifestErr != nil {
+				return InjectionResult{}, fmt.Errorf("resolve capabilities for agent %q: %w", adapter.Agent(), manifestErr)
+			}
+			if !isCompatible(skill.RequiredCapabilities, manifest.Features) {
+				skipped = append(skipped, id)
+				continue
+			}
 		}
 
 		embedDir := "skills/" + string(id)
@@ -103,6 +129,18 @@ func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []mod
 	}
 
 	return InjectionResult{Changed: changed, Files: paths, Skipped: skipped}, nil
+}
+
+// isCompatible reports whether every required capability is provided.
+func isCompatible(required, provided agents.AgentFeatureClaims) bool {
+	return (!required.AutoInstall || provided.AutoInstall) &&
+		(!required.OutputStyles || provided.OutputStyles) &&
+		(!required.SlashCommands || provided.SlashCommands) &&
+		(!required.FileSubAgents || provided.FileSubAgents) &&
+		(!required.Skills || provided.Skills) &&
+		(!required.SystemPrompt || provided.SystemPrompt) &&
+		(!required.MCP || provided.MCP) &&
+		(!required.Workflows || provided.Workflows)
 }
 
 // Inject writes the embedded SKILL.md files for each requested skill

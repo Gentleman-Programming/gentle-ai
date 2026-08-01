@@ -1,12 +1,16 @@
 package catalog
 
-import "github.com/gentleman-programming/gentle-ai/v2/internal/model"
+import (
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+)
 
 type Skill struct {
-	ID       model.SkillID
-	Name     string
-	Category string
-	Priority string
+	ID                   model.SkillID
+	Name                 string
+	Category             string
+	Priority             string
+	RequiredCapabilities capabilitymanifest.AgentFeatureClaims
 }
 
 var mvpSkills = []Skill{
