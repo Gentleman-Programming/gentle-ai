@@ -178,6 +178,27 @@ func TestAdapterSystemPromptFile_UsesUppercaseAGENTSmd(t *testing.T) {
 	}
 }
 
+func TestAdapterSystemPromptFile_WorkspaceVsGlobalScope(t *testing.T) {
+	a := NewAdapter()
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		// Global home directory scope returns ~/.codex/AGENTS.md
+		gotGlobal := a.SystemPromptFile(home)
+		wantGlobal := filepath.Join(home, ".codex", "AGENTS.md")
+		if gotGlobal != wantGlobal {
+			t.Errorf("SystemPromptFile(home) = %q, want %q", gotGlobal, wantGlobal)
+		}
+	}
+
+	// Workspace scope returns root AGENTS.md
+	workspace := t.TempDir()
+	gotWorkspace := a.SystemPromptFile(workspace)
+	wantWorkspace := filepath.Join(workspace, "AGENTS.md")
+	if gotWorkspace != wantWorkspace {
+		t.Errorf("SystemPromptFile(workspace) = %q, want %q", gotWorkspace, wantWorkspace)
+	}
+}
+
 // TestAdapterSubAgentsStayFalse is a REGRESSION GUARD.
 //
 // Codex multi-agent delegation is config+asset driven (features.multi_agent in

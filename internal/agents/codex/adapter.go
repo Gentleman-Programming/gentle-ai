@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -86,12 +87,43 @@ func (a *Adapter) GlobalConfigDir(homeDir string) string {
 	return filepath.Join(homeDir, ".codex")
 }
 
-func (a *Adapter) SystemPromptDir(homeDir string) string {
-	return filepath.Join(homeDir, ".codex")
+func (a *Adapter) SystemPromptDir(targetDir string) string {
+	if isCodexGlobalTargetDir(targetDir) {
+		if filepath.Base(filepath.Clean(targetDir)) == ".codex" {
+			return targetDir
+		}
+		return filepath.Join(targetDir, ".codex")
+	}
+	return targetDir
 }
 
-func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(homeDir, ".codex", "AGENTS.md")
+func (a *Adapter) SystemPromptFile(targetDir string) string {
+	if isCodexGlobalTargetDir(targetDir) {
+		if filepath.Base(filepath.Clean(targetDir)) == ".codex" {
+			return filepath.Join(targetDir, "AGENTS.md")
+		}
+		return filepath.Join(targetDir, ".codex", "AGENTS.md")
+	}
+	return filepath.Join(targetDir, "AGENTS.md")
+}
+
+func isCodexGlobalTargetDir(targetDir string) bool {
+	if targetDir == "" {
+		return true
+	}
+	clean := filepath.Clean(targetDir)
+	if filepath.Base(clean) == ".codex" {
+		return true
+	}
+	userHome, err := os.UserHomeDir()
+	if err == nil && userHome != "" && clean == filepath.Clean(userHome) {
+		return true
+	}
+	base := strings.ToLower(filepath.Base(clean))
+	if base == "home" || strings.HasPrefix(base, "home-") || strings.HasPrefix(base, "home_") {
+		return true
+	}
+	return false
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {
