@@ -158,3 +158,32 @@ func TestSandboxEnvKeepsWindowsHomeInsideTheSandbox(t *testing.T) {
 	}
 	t.Fatalf("sandbox environment has no USERPROFILE=%q", sandbox.Home)
 }
+
+func TestCaptureHelpersSelectTheSandboxLineage(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*journeyRun) error
+	}{
+		{name: "results", run: captureAllLenses},
+		{name: "evidence", run: captureFinalEvidence},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sandbox := fakeBinary(t, `printf '%s\n' '{"next_transition":{"kind":"complete"}}'`)
+			sandbox.Lineage = "review-sdd-newer"
+			run := &journeyRun{sandbox: sandbox, accumulator: newAccumulator(), step: tt.name}
+
+			if err := tt.run(run); err != nil {
+				t.Fatalf("capture helper: %v", err)
+			}
+			if len(run.accumulator.records) != 1 {
+				t.Fatalf("invocations = %d, want 1", len(run.accumulator.records))
+			}
+			args := run.accumulator.records[0].Args
+			if len(args) < 2 || args[len(args)-2] != "--lineage" || args[len(args)-1] != sandbox.Lineage {
+				t.Fatalf("status args = %q, want selected lineage %q", args, sandbox.Lineage)
+			}
+		})
+	}
+}
