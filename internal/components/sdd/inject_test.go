@@ -65,6 +65,20 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 			if got := sddOrchestratorAsset(tc.agent); got != tc.want {
 				t.Fatalf("sddOrchestratorAsset(%q) = %q, want %q", tc.agent, got, tc.want)
 			}
+			for _, required := range []string{
+				"Only after explicit consent and that final privacy scan",
+				"search open and closed issues",
+				"confirms a newly-created issue identity/URL",
+				"Only a completed duplicate lookup with a definitive result may branch to a write",
+				"Do not create, comment, update, or label any issue",
+				"do not add, remove, or change any labels on it",
+				"label application fails or has an ambiguous outcome",
+				"re-resolve that exact created issue identity",
+			} {
+				if !strings.Contains(renderSDDOrchestratorAsset(tc.agent), required) {
+					t.Fatalf("rendered %s orchestrator missing provider-defect handoff clause %q", tc.agent, required)
+				}
+			}
 		})
 	}
 }
