@@ -1854,6 +1854,12 @@ func mustWriteFile(t *testing.T, path string, data []byte) {
 	}
 }
 
+func mustSyncNoError(t *testing.T, err error) {
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // ─── Phase 4: RunSync integration tests ───────────────────────────────────
 
 func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
@@ -4453,18 +4459,14 @@ func runSyncInjectionSteps(t *testing.T, home string, selection model.Selection)
 	}
 	plan := rt.stagePlan()
 	before, err := snapshotSyncFiles(rt.managedPaths)
-	if err != nil {
-		t.Fatalf("snapshotSyncFiles() error = %v", err)
-	}
+	mustSyncNoError(t, err)
 	for _, step := range plan.Apply {
 		if err := step.Run(); err != nil {
 			t.Fatalf("Run(%s) error = %v", step.ID(), err)
 		}
 	}
 	changed, err := changedSyncFiles(rt.changedFiles, before)
-	if err != nil {
-		t.Fatalf("changedSyncFiles() error = %v", err)
-	}
+	mustSyncNoError(t, err)
 	return changed
 }
 
@@ -4624,67 +4626,34 @@ func TestSyncBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *test
 }
 
 func TestSyncRollbackRestoresOpenCodeDefaultOwnershipSidecar(t *testing.T) {
-	tests := []struct {
-		name   string
-		before []byte
-	}{
-		{name: "removes newly created sidecar"},
-		{name: "restores preexisting sidecar bytes", before: []byte("original ownership")},
+	snapshotOwnership := func(t *testing.T, before []byte) (string, map[string]syncFileSnapshot) {
+		home := t.TempDir()
+		path := opencodedefault.OwnershipPath(filepath.Join(home, ".config", "opencode", "opencode.json"))
+		if before != nil {
+			mustWriteFile(t, path, before)
+		}
+		snapshots, err := snapshotSyncFiles(syncBackupTargets(home, "", model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentSDD}, SDDMode: model.SDDModeSingle}, resolveAdapters([]model.AgentID{model.AgentOpenCode})))
+		if _, ok := snapshots[path]; err != nil || !ok {
+			t.Fatalf("sync snapshot missing ownership sidecar %q: %v", path, err)
+		}
+		return path, snapshots
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			home := t.TempDir()
-			selection := model.Selection{
-				Agents:     []model.AgentID{model.AgentOpenCode},
-				Components: []model.ComponentID{model.ComponentSDD},
-				SDDMode:    model.SDDModeSingle,
-			}
-			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
-			ownershipPath := opencodedefault.OwnershipPath(settingsPath)
-
-			if tt.before != nil {
-				if err := os.MkdirAll(filepath.Dir(ownershipPath), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(ownershipPath, tt.before, 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-
-			targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
-			snapshots, err := snapshotSyncFiles(targets)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, ok := snapshots[ownershipPath]; !ok {
-				t.Fatalf("sync snapshot missing ownership sidecar %q", ownershipPath)
-			}
-			if err := os.MkdirAll(filepath.Dir(ownershipPath), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(ownershipPath, []byte("mutated ownership"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if err := restoreSyncFiles(snapshots); err != nil {
-				t.Fatal(err)
-			}
-
-			if tt.before == nil {
-				if _, err := os.Stat(ownershipPath); !os.IsNotExist(err) {
-					t.Fatalf("ownership sidecar survives rollback: %v", err)
-				}
-				return
-			}
-			got, err := os.ReadFile(ownershipPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(got, tt.before) {
-				t.Fatalf("restored ownership sidecar = %q, want %q", got, tt.before)
-			}
-		})
-	}
+	t.Run("removes newly created sidecar", func(t *testing.T) {
+		path, snapshots := snapshotOwnership(t, nil)
+		mustWriteFile(t, path, []byte("mutated ownership"))
+		mustSyncNoError(t, restoreSyncFiles(snapshots))
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("ownership sidecar survives rollback: %v", err)
+		}
+	})
+	t.Run("restores preexisting sidecar bytes", func(t *testing.T) {
+		path, snapshots := snapshotOwnership(t, []byte("original ownership"))
+		mustWriteFile(t, path, []byte("mutated ownership"))
+		mustSyncNoError(t, restoreSyncFiles(snapshots))
+		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, []byte("original ownership")) {
+			t.Fatalf("restored ownership sidecar = %q, %v; want original ownership", got, err)
+		}
+	})
 }
 
 func TestSyncBackupTargetsContainNoDuplicatePaths(t *testing.T) {
