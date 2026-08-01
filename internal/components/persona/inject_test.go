@@ -2929,3 +2929,30 @@ func TestHermesPersonaAssetsContainIdentitySection(t *testing.T) {
 		})
 	}
 }
+
+func TestInjectCodexPersonaWrapsInManagedMarkerSection(t *testing.T) {
+	home := t.TempDir()
+	adapter, err := agents.NewAdapter(model.AgentCodex)
+	if err != nil {
+		t.Fatalf("NewAdapter(AgentCodex) error = %v", err)
+	}
+
+	result, err := Inject(home, adapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() result.Changed = false, want true")
+	}
+
+	promptFile := adapter.SystemPromptFile(home)
+	data, err := os.ReadFile(promptFile)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", promptFile, err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "<!-- gentle-ai:persona -->") || !strings.Contains(content, "<!-- /gentle-ai:persona -->") {
+		t.Fatalf("Codex prompt file %q does not contain gentle-ai:persona markers:\n%s", promptFile, content)
+	}
+}

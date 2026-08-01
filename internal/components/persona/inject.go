@@ -117,7 +117,7 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 	case model.StrategyFileReplace:
 		promptPath := adapter.SystemPromptFile(homeDir)
 
-		if adapter.Agent() == model.AgentOpenCode {
+		if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentCodex {
 			existing, err := readFileOrEmpty(promptPath)
 			if err != nil {
 				return InjectionResult{}, err
