@@ -134,15 +134,19 @@ func TestSandboxEnvKeepsTempFilesInsideTheSandbox(t *testing.T) {
 			found["TEMP"] = true
 			continue
 		}
-		if strings.HasPrefix(entry, "TMP=") || strings.HasPrefix(entry, "TEMP=") {
+		if entry == "TMPDIR="+want {
+			found["TMPDIR"] = true
+			continue
+		}
+		if strings.HasPrefix(entry, "TMP=") || strings.HasPrefix(entry, "TEMP=") || strings.HasPrefix(entry, "TMPDIR=") {
 			t.Fatalf("temporary directory = %q, want %q", entry, want)
 		}
 	}
 	if info, err := os.Stat(want); err != nil || !info.IsDir() {
 		t.Fatalf("sandbox temp directory %q: %v", want, err)
 	}
-	if !found["TMP"] || !found["TEMP"] {
-		t.Fatalf("sandbox temp variables = %v, want TMP and TEMP", found)
+	if !found["TMP"] || !found["TEMP"] || !found["TMPDIR"] {
+		t.Fatalf("sandbox temp variables = %v, want TMP, TEMP and TMPDIR", found)
 	}
 }
 
@@ -159,13 +163,13 @@ func TestSandboxEnvKeepsWindowsHomeInsideTheSandbox(t *testing.T) {
 	t.Fatalf("sandbox environment has no USERPROFILE=%q", sandbox.Home)
 }
 
-func TestCaptureHelpersSelectTheSandboxLineage(t *testing.T) {
+func TestSelectedAuthorityCaptureHelpersSelectTheSandboxLineage(t *testing.T) {
 	tests := []struct {
 		name string
 		run  func(*journeyRun) error
 	}{
-		{name: "results", run: captureAllLenses},
-		{name: "evidence", run: captureFinalEvidence},
+		{name: "results", run: sddCaptureSelectedAuthorityLenses},
+		{name: "evidence", run: sddCaptureSelectedAuthorityEvidence},
 	}
 
 	for _, tt := range tests {

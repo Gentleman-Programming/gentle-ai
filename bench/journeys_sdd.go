@@ -613,6 +613,22 @@ func sddProveSelectedApproval(r *journeyRun) error {
 	return fmt.Errorf("fixture claims approved lineage %q but review status reports %+v", r.sandbox.Lineage, head.Entries)
 }
 
+// The authority controls intentionally drive the lineage their fixtures chose.
+// Generic journeys must instead follow the product's active authority.
+func sddCaptureSelectedAuthorityLenses(r *journeyRun) error {
+	if r.sandbox.Lineage == "" {
+		return errors.New("no selected authority lineage")
+	}
+	return captureAllLensesFor(r, "--lineage", r.sandbox.Lineage)
+}
+
+func sddCaptureSelectedAuthorityEvidence(r *journeyRun) error {
+	if r.sandbox.Lineage == "" {
+		return errors.New("no selected authority lineage")
+	}
+	return captureFinalEvidenceFor(r, "--lineage", r.sandbox.Lineage)
+}
+
 func sddSelectLineage(lineage string) func(*Sandbox) error {
 	return func(sandbox *Sandbox) error {
 		head, err := proveAuthorities(sandbox)
@@ -1328,10 +1344,10 @@ func sddStatusFailsClosed(reason string) func(*Sandbox, Observation) error {
 func sddApprovedAuthoritySteps(fixture func(*Sandbox) error) []Step {
 	return []Step{
 		{Name: "fixture: valid compact authority", Fixture: fixture},
-		{Name: "capture every lens for the selected authority", Requires: captureResultCapability, Composite: captureAllLenses},
+		{Name: "capture every lens for the selected authority", Requires: captureResultCapability, Composite: sddCaptureSelectedAuthorityLenses},
 		{Name: "finalize selected authority results", Requires: selectedFinalizeResultsCapability,
 			Args: selectedReviewArgs("review", "finalize", "--captured-results=true")},
-		{Name: "capture final evidence for the selected authority", Requires: captureEvidenceCapability, Composite: captureFinalEvidence},
+		{Name: "capture final evidence for the selected authority", Requires: captureEvidenceCapability, Composite: sddCaptureSelectedAuthorityEvidence},
 		{Name: "approve the selected authority", Requires: selectedFinalizeEvidenceCapability,
 			Args: selectedReviewArgs("review", "finalize", "--captured-evidence=true")},
 		{Name: "prove selected authority approval", Composite: sddProveSelectedApproval},
@@ -1651,9 +1667,9 @@ func sddJourneys() []Journey {
 			Source: "issue #1893: stale compact authority must not shadow an exact approved candidate",
 			Steps: []Step{
 				{Name: "fixture: stale and newer same-path review lineages", Fixture: sddStaleAuthorityFixture},
-				{Name: "capture every lens for the newer candidate", Requires: captureResultCapability, Composite: captureAllLenses},
+				{Name: "capture every lens for the newer candidate", Requires: captureResultCapability, Composite: sddCaptureSelectedAuthorityLenses},
 				{Name: "finalize the newer candidate results", Requires: selectedFinalizeResultsCapability, Args: selectedReviewArgs("review", "finalize", "--captured-results=true"), After: rememberLineage},
-				{Name: "capture final evidence for the newer candidate", Requires: captureEvidenceCapability, Composite: captureFinalEvidence},
+				{Name: "capture final evidence for the newer candidate", Requires: captureEvidenceCapability, Composite: sddCaptureSelectedAuthorityEvidence},
 				{Name: "approve the newer candidate", Requires: selectedFinalizeEvidenceCapability, Args: selectedReviewArgs("review", "finalize", "--captured-evidence=true"), After: rememberLineage},
 				{Name: "sdd-status selects the approved candidate", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),

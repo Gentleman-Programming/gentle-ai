@@ -102,11 +102,7 @@ var captureEvidenceCapability = &Capability{
 // readStatus issues one `review status --next-transition`. The invocation is
 // counted: an agent driving this flow really does have to spend it.
 func readStatus(r *journeyRun) (statusEnvelope, error) {
-	selectors := []string{}
-	if r.sandbox.Lineage != "" {
-		selectors = append(selectors, "--lineage", r.sandbox.Lineage)
-	}
-	return readStatusFor(r, selectors...)
+	return readStatusFor(r)
 }
 
 func readStatusFor(r *journeyRun, selectors ...string) (statusEnvelope, error) {
@@ -154,9 +150,6 @@ func writeScratch(sandbox *Sandbox, name string, content []byte) (string, error)
 // the next transition, synthesize the reviewer result it asks for, capture it,
 // repeat. Each capture counts as one model run.
 func captureAllLenses(r *journeyRun) error {
-	if r.sandbox.Lineage != "" {
-		return captureAllLensesFor(r, "--lineage", r.sandbox.Lineage)
-	}
 	return captureAllLensesFor(r)
 }
 
@@ -196,9 +189,6 @@ func captureAllLensesFor(r *journeyRun, selectors ...string) error {
 
 // captureFinalEvidence answers the verification-evidence collect step.
 func captureFinalEvidence(r *journeyRun) error {
-	if r.sandbox.Lineage != "" {
-		return captureFinalEvidenceFor(r, "--lineage", r.sandbox.Lineage)
-	}
 	return captureFinalEvidenceFor(r)
 }
 

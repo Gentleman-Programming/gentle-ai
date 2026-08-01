@@ -27,7 +27,7 @@ type compactPreVerifyInspection struct {
 	receipt []byte
 }
 
-var afterCompactPreVerifyAuthorityInitialRead = func() {}
+var afterCompactPreVerifyAuthorityInitialRead = func() error { return nil }
 
 func discoverCompactPreVerifyAuthority(ctx context.Context, repo, changeName, observedRevision string) compactPreVerifyBridge {
 	stores, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
@@ -97,7 +97,9 @@ func discoverCompactPreVerifyAuthority(ctx context.Context, repo, changeName, ob
 			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority is not approved"}
 		}
 	}
-	afterCompactPreVerifyAuthorityInitialRead()
+	if err := afterCompactPreVerifyAuthorityInitialRead(); err != nil {
+		return compactPreVerifyBridge{Relevant: true, Reason: fmt.Sprintf("compact authority mutation hook failed: %v", err)}
+	}
 	for _, inspection := range append(approved, nonApproved...) {
 		finalRecord, finalErr := inspection.store.Load()
 		if finalErr != nil || finalRecord.Revision != inspection.record.Revision {

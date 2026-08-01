@@ -33,6 +33,14 @@ go vet ./...
 go test ./...
 ```
 
+The `j57` receipt-drift control also needs the product binary to include its
+bench-only seam. Build that binary from the repository root, then pass it to
+the bench as usual:
+
+```sh
+go build -tags bench_fixture -o /path/to/gentle-ai ./cmd/gentle-ai
+```
+
 The measured binary is passed in with `--binary`, so the tool never depends on
 the sources next to it. That is what lets it measure an old release and the
 current build with identical code.

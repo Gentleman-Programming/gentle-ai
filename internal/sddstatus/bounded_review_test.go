@@ -746,20 +746,36 @@ func TestDiscoverCompactPreVerifyAuthorityFailsClosedWhenAuthorityDriftsDuringDi
 		t.Fatal(err)
 	}
 	original := afterCompactPreVerifyAuthorityInitialRead
-	afterCompactPreVerifyAuthorityInitialRead = func() {
+	afterCompactPreVerifyAuthorityInitialRead = func() error {
 		payload, readErr := os.ReadFile(store.ReceiptPath())
 		if readErr != nil {
-			t.Fatal(readErr)
+			return readErr
 		}
 		if writeErr := os.WriteFile(store.ReceiptPath(), append(payload, '\n'), 0o644); writeErr != nil {
-			t.Fatal(writeErr)
+			return writeErr
 		}
+		return nil
 	}
 	t.Cleanup(func() { afterCompactPreVerifyAuthorityInitialRead = original })
 
 	bridge := discoverCompactPreVerifyAuthority(context.Background(), root, "thin", "")
 	if !bridge.Relevant || bridge.Reason != "compact authority changed during discovery" {
 		t.Fatalf("bridge = %#v, want discovery drift denial", bridge)
+	}
+}
+
+func TestDiscoverCompactPreVerifyAuthorityReportsMutationHookFailure(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
+
+	original := afterCompactPreVerifyAuthorityInitialRead
+	afterCompactPreVerifyAuthorityInitialRead = func() error { return fmt.Errorf("forced mutation failure") }
+	t.Cleanup(func() { afterCompactPreVerifyAuthorityInitialRead = original })
+
+	bridge := discoverCompactPreVerifyAuthority(context.Background(), root, "thin", "")
+	if !bridge.Relevant || bridge.Reason != "compact authority mutation hook failed: forced mutation failure" {
+		t.Fatalf("bridge = %#v, want mutation hook failure", bridge)
 	}
 }
 

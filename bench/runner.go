@@ -63,6 +63,7 @@ func (s *Sandbox) env() []string {
 		"XDG_STATE_HOME=" + filepath.Join(s.Home, ".local", "state"),
 		"TMP=" + filepath.Join(s.Root, "tmp"),
 		"TEMP=" + filepath.Join(s.Root, "tmp"),
+		"TMPDIR=" + filepath.Join(s.Root, "tmp"),
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_TRACE=" + s.TracePath,

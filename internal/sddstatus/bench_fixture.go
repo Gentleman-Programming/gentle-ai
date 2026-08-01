@@ -2,18 +2,24 @@
 
 package sddstatus
 
-import "os"
+import (
+	"fmt"
+	"os"
+)
 
 func init() {
-	afterCompactPreVerifyAuthorityInitialRead = func() {
+	afterCompactPreVerifyAuthorityInitialRead = func() error {
 		path := os.Getenv("GENTLE_AI_BENCH_MUTATE_RECEIPT")
 		if path == "" {
-			return
+			return nil
 		}
 		payload, err := os.ReadFile(path)
 		if err != nil {
-			return
+			return fmt.Errorf("read receipt %q: %w", path, err)
 		}
-		_ = os.WriteFile(path, append(payload, '\n'), 0o644)
+		if err := os.WriteFile(path, append(payload, '\n'), 0o644); err != nil {
+			return fmt.Errorf("write receipt %q: %w", path, err)
+		}
+		return nil
 	}
 }
