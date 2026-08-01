@@ -16,9 +16,10 @@ import (
 )
 
 type compactAttemptOutput struct {
-	State  string `json:"state"`
-	Reason string `json:"reason,omitempty"`
-	Token  string `json:"token,omitempty"`
+	State      string `json:"state"`
+	Reason     string `json:"reason,omitempty"`
+	Token      string `json:"token,omitempty"`
+	Diagnostic string `json:"diagnostic,omitempty"`
 }
 
 func TestRunSDDAttemptCompactOutputStaysBoundedAcrossHistory(t *testing.T) {
@@ -156,9 +157,18 @@ func TestRunSDDAttemptCompactBlocksWithoutMutation(t *testing.T) {
 			if !reflect.DeepEqual(before, after) {
 				t.Fatalf("blocked operation mutated authority\nbefore=%v\nafter=%v", before, after)
 			}
+			// active_attempt and maintainer_decision carry actionable recovery
+			// guidance (issue-2122); the other reasons stay bare.
+			wantDiagnostic := wantReason == "active_attempt" || wantReason == "maintainer_decision"
 			keys := []string{"state", "reason"}
 			if wantToken != "" {
 				keys = append(keys, "token")
+			}
+			if wantDiagnostic {
+				keys = append(keys, "diagnostic")
+			}
+			if wantDiagnostic == (result.Diagnostic == "") {
+				t.Fatalf("blocked result diagnostic = %q, want present=%v", result.Diagnostic, wantDiagnostic)
 			}
 			assertCompactPayloadKeys(t, payload, keys...)
 		})
@@ -181,7 +191,7 @@ func TestRunSDDAttemptCompactPreservesTokenCASAndIdempotentReplay(t *testing.T) 
 	}
 	beforeWrongToken := snapshotRuntimeAuthorityFiles(t, store.Dir)
 	wrong, _ := runCompactSDDAttempt(t, compactSettleArgs(repo, change, cliAttemptHash('f'), "wrong-token", "passed"))
-	if wrong.State != "blocked" || wrong.Reason != "active_attempt" || wrong.Token != first.Token {
+	if wrong.State != "blocked" || wrong.Reason != "active_attempt" || wrong.Token != first.Token || wrong.Diagnostic == "" {
 		t.Fatalf("wrong-token settle = %#v", wrong)
 	}
 	if after := snapshotRuntimeAuthorityFiles(t, store.Dir); !reflect.DeepEqual(beforeWrongToken, after) {

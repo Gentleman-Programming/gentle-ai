@@ -3,6 +3,8 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 )
 
 type CompactAttemptState string
@@ -26,9 +28,10 @@ const (
 // CompactAttemptResult is the bounded orchestration projection. RuntimeStatus
 // remains available through the legacy diagnostic operations only.
 type CompactAttemptResult struct {
-	State  CompactAttemptState `json:"state"`
-	Reason CompactBlockReason  `json:"reason,omitempty"`
-	Token  string              `json:"token,omitempty"`
+	State      CompactAttemptState `json:"state"`
+	Reason     CompactBlockReason  `json:"reason,omitempty"`
+	Token      string              `json:"token,omitempty"`
+	Diagnostic string              `json:"diagnostic,omitempty"`
 }
 
 type CompactAcquireRequest struct {
@@ -66,23 +69,23 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 
 	replay, err := store.load()
 	if err != nil {
-		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+		return compactBlocked(CompactBlockCorruptAuthority, "", ""), nil
 	}
 	if receipt, exists := replay.Requests[begin.RequestID]; exists {
 		record, loadErr := store.loadRecord(receipt.Revision)
 		if loadErr != nil {
-			return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+			return compactBlocked(CompactBlockCorruptAuthority, "", ""), nil
 		}
 		begin.ExpectedRevision = record.PreviousRevision
 		if !compactAcquireMatches(record, begin) {
-			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+			return compactBlocked(CompactBlockInvalidContinuation, "", ""), nil
 		}
 		if _, err := store.Begin(ctx, begin); err != nil {
 			return store.compactMutationFailure(err, false), nil
 		}
 		current, loadErr := store.load()
 		if loadErr != nil {
-			return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+			return compactBlocked(CompactBlockCorruptAuthority, "", ""), nil
 		}
 		return compactAcquireResult(current, receipt.Revision), nil
 	}
@@ -108,16 +111,16 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 	}
 	replay, err := store.load()
 	if err != nil {
-		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+		return compactBlocked(CompactBlockCorruptAuthority, "", ""), nil
 	}
 	if receipt, exists := replay.Requests[request.RequestID]; exists {
 		record, loadErr := store.loadRecord(receipt.Revision)
 		if loadErr != nil {
-			return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+			return compactBlocked(CompactBlockCorruptAuthority, "", ""), nil
 		}
 		finish, ok := compactSettleReplayRequest(replay, record, request)
 		if !ok {
-			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+			return compactBlocked(CompactBlockInvalidContinuation, "", ""), nil
 		}
 		if _, err := store.Finish(ctx, finish); err != nil {
 			return store.compactMutationFailure(err, true), nil
@@ -130,14 +133,14 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		return CompactAttemptResult{State: CompactStateComplete}, nil
 	}
 	if status.DecisionRequired {
-		return compactBlocked(CompactBlockMaintainerDecision, ""), nil
+		return compactBlocked(CompactBlockMaintainerDecision, "", compactMaintainerDecisionDiagnostic(status)), nil
 	}
 	if status.ActiveAttempt == nil {
-		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+		return compactBlocked(CompactBlockInvalidContinuation, "", ""), nil
 	}
 	activeToken := replay.AttemptTokens[status.ActiveAttempt.Ordinal]
 	if request.Token != activeToken {
-		return compactBlocked(CompactBlockActiveAttempt, activeToken), nil
+		return compactBlocked(CompactBlockActiveAttempt, activeToken, compactSettleTokenMismatchDiagnostic(activeToken)), nil
 	}
 
 	finish := FinishAttemptRequest{
@@ -152,7 +155,7 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		failedEvidence = request.RemediatesEvidenceRevision
 	}
 	if request.RemediatesEvidenceRevision != "" && failedEvidence != request.RemediatesEvidenceRevision {
-		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+		return compactBlocked(CompactBlockInvalidContinuation, "", ""), nil
 	}
 	if request.Outcome == AttemptPassed && status.Binding != nil && failedEvidence != "" && (!store.ReviewDisabled || explicitSuccessor || request.RemediatesEvidenceRevision != "") {
 		finish.ExpectedBindingRevision = status.Binding.Revision
@@ -162,7 +165,7 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		}
 		finish.RemediatesEvidenceRevision = failedEvidence
 	} else if explicitSuccessor || request.RemediatesEvidenceRevision != "" {
-		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+		return compactBlocked(CompactBlockInvalidContinuation, "", ""), nil
 	}
 	if _, err := store.Finish(ctx, finish); err != nil {
 		return store.compactMutationFailure(err, true), nil
@@ -234,9 +237,10 @@ func compactAcquireBlock(replay runtimeReplay) (CompactAttemptResult, bool) {
 	case status.Complete:
 		return CompactAttemptResult{State: CompactStateComplete}, true
 	case status.DecisionRequired:
-		return compactBlocked(CompactBlockMaintainerDecision, ""), true
+		return compactBlocked(CompactBlockMaintainerDecision, "", compactMaintainerDecisionDiagnostic(status)), true
 	case status.ActiveAttempt != nil:
-		return compactBlocked(CompactBlockActiveAttempt, replay.AttemptTokens[status.ActiveAttempt.Ordinal]), true
+		token := replay.AttemptTokens[status.ActiveAttempt.Ordinal]
+		return compactBlocked(CompactBlockActiveAttempt, token, compactActiveAttemptDiagnostic(token)), true
 	default:
 		return CompactAttemptResult{}, false
 	}
@@ -249,25 +253,26 @@ func compactAcquireResult(replay runtimeReplay, ownedToken string) CompactAttemp
 		}
 		return result
 	}
-	return compactBlocked(CompactBlockInvalidContinuation, "")
+	return compactBlocked(CompactBlockInvalidContinuation, "", "")
 }
 
 func (store RuntimeStore) compactSettleResult(expected ...string) (CompactAttemptResult, error) {
 	replay, err := store.load()
 	if err != nil {
-		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+		return compactBlocked(CompactBlockCorruptAuthority, "", ""), nil
 	}
 	status := replay.Status
 	if len(expected) == 1 && status.Revision != expected[0] {
-		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+		return compactBlocked(CompactBlockCorruptAuthority, "", ""), nil
 	}
 	switch {
 	case status.Complete:
 		return CompactAttemptResult{State: CompactStateComplete}, nil
 	case status.DecisionRequired:
-		return compactBlocked(CompactBlockMaintainerDecision, ""), nil
+		return compactBlocked(CompactBlockMaintainerDecision, "", compactMaintainerDecisionDiagnostic(status)), nil
 	case status.ActiveAttempt != nil:
-		return compactBlocked(CompactBlockActiveAttempt, replay.AttemptTokens[status.ActiveAttempt.Ordinal]), nil
+		token := replay.AttemptTokens[status.ActiveAttempt.Ordinal]
+		return compactBlocked(CompactBlockActiveAttempt, token, compactActiveAttemptDiagnostic(token)), nil
 	default:
 		return CompactAttemptResult{State: CompactStateProceed}, nil
 	}
@@ -282,7 +287,7 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool) Compact
 		}
 		replay, loadErr := store.load()
 		if loadErr != nil {
-			return compactBlocked(CompactBlockCorruptAuthority, "")
+			return compactBlocked(CompactBlockCorruptAuthority, "", "")
 		}
 		return compactAcquireResult(replay, publication.Revision)
 	}
@@ -290,17 +295,77 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool) Compact
 	case errors.Is(err, ErrRuntimeObjectiveDone):
 		return CompactAttemptResult{State: CompactStateComplete}
 	case errors.Is(err, ErrRuntimeBudgetExhausted), errors.Is(err, ErrRuntimeObjectiveChange):
-		return compactBlocked(CompactBlockMaintainerDecision, "")
+		if replay, loadErr := store.load(); loadErr == nil {
+			return compactBlocked(CompactBlockMaintainerDecision, "", compactMaintainerDecisionDiagnostic(replay.Status))
+		}
+		return compactBlocked(CompactBlockMaintainerDecision, "", "")
 	case errors.Is(err, ErrRuntimeAttemptActive):
-		return compactBlocked(CompactBlockActiveAttempt, "")
+		if replay, loadErr := store.load(); loadErr == nil && replay.Status.ActiveAttempt != nil {
+			token := replay.AttemptTokens[replay.Status.ActiveAttempt.Ordinal]
+			return compactBlocked(CompactBlockActiveAttempt, token, compactActiveAttemptDiagnostic(token))
+		}
+		return compactBlocked(CompactBlockActiveAttempt, "", "")
 	case errors.Is(err, ErrRuntimeRevisionConflict), errors.Is(err, ErrRuntimeConcurrentUpdate),
 		errors.Is(err, ErrRuntimeRequestConflict), errors.Is(err, ErrRuntimeNoActiveAttempt):
-		return compactBlocked(CompactBlockInvalidContinuation, "")
+		return compactBlocked(CompactBlockInvalidContinuation, "", "")
 	default:
-		return compactBlocked(CompactBlockAuthorityFailure, "")
+		return compactBlocked(CompactBlockAuthorityFailure, "", "")
 	}
 }
 
-func compactBlocked(reason CompactBlockReason, token string) CompactAttemptResult {
-	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Token: token}
+func compactBlocked(reason CompactBlockReason, token, diagnostic string) CompactAttemptResult {
+	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Token: token, Diagnostic: diagnostic}
+}
+
+// compactActiveAttemptDiagnostic explains that an unsettled attempt already
+// owns the change and names the exact token that will close it, since the
+// compact envelope otherwise gives no way to recover a lost or never-seen
+// settle token (community reports on issue-2122).
+func compactActiveAttemptDiagnostic(token string) string {
+	return fmt.Sprintf(
+		"an unsettled attempt is already active for this change; run `gentle-ai sdd-attempt settle --token %s ...` with this token to close it before acquiring another attempt",
+		token,
+	)
+}
+
+// compactSettleTokenMismatchDiagnostic explains that the supplied --token
+// does not match the active attempt's minted token, and names the correct
+// one echoed back in this same response.
+func compactSettleTokenMismatchDiagnostic(token string) string {
+	return fmt.Sprintf(
+		"the supplied --token does not match the active attempt; retry `gentle-ai sdd-attempt settle` with --token %s, the value returned in this response",
+		token,
+	)
+}
+
+// compactMaintainerDecisionDiagnostic reconstructs why DecisionRequired
+// tripped from the persisted cumulative counters and the most recently
+// settled attempt, since the flag itself does not retain its trigger.
+func compactMaintainerDecisionDiagnostic(status RuntimeStatus) string {
+	var reasons []string
+	if status.Objective != nil {
+		if status.CumulativeChangedLines >= status.Objective.MaxChangedLines {
+			reasons = append(reasons, fmt.Sprintf(
+				"cumulative changed lines (%d) reached the objective budget (%d)",
+				status.CumulativeChangedLines, status.Objective.MaxChangedLines,
+			))
+		}
+		if status.CumulativeAttempts >= status.Objective.MaxAttempts {
+			reasons = append(reasons, fmt.Sprintf(
+				"cumulative attempts (%d) reached the objective budget (%d)",
+				status.CumulativeAttempts, status.Objective.MaxAttempts,
+			))
+		}
+	}
+	if n := len(status.Attempts); n > 0 && status.Attempts[n-1].ChangedLineBudgetExceeded {
+		reasons = append(reasons, "the most recently settled attempt's changed lines exceeded the objective budget")
+	}
+	why := "the objective budget was exhausted"
+	if len(reasons) > 0 {
+		why = strings.Join(reasons, "; ")
+	}
+	return fmt.Sprintf(
+		"maintainer decision required: %s; no further acquire or settle proceeds until `gentle-ai sdd-attempt reset --request-id <unique-request-id> --reason <maintainer-reason> --actor <maintainer>` runs with explicit maintainer authorization",
+		why,
+	)
 }
