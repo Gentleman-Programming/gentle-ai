@@ -3,10 +3,12 @@ package upgrade
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
@@ -61,6 +63,61 @@ func TestScoopOwnsExecutableWith(t *testing.T) {
 				t.Errorf("scoopOwnsExecutableWith() = %t, want %t", owned, tc.want)
 			}
 		})
+	}
+}
+
+func TestScoopCommandCancelsRunningProcess(t *testing.T) {
+	originalExecCommand := execCommand
+	t.Cleanup(func() { execCommand = originalExecCommand })
+
+	readyPath := filepath.Join(t.TempDir(), "scoop-command-started")
+	t.Setenv("GENTLE_AI_SCOOP_COMMAND_HELPER", "1")
+	t.Setenv("GENTLE_AI_SCOOP_COMMAND_READY", readyPath)
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name != "scoop" || !sameStrings(args, []string{"update", "gentle-ai"}) {
+			t.Fatalf("command = %q %v, want scoop update gentle-ai", name, args)
+		}
+		return exec.Command(os.Args[0], "-test.run=^TestScoopCommandCancellationHelper$", "--")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := scoopCommand(ctx, "update", "gentle-ai")
+		result <- err
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(readyPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Scoop command did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("scoopCommand() error = nil, want canceled command failure")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scoopCommand() did not return after context cancellation")
+	}
+}
+
+func TestScoopCommandCancellationHelper(t *testing.T) {
+	if os.Getenv("GENTLE_AI_SCOOP_COMMAND_HELPER") != "1" {
+		return
+	}
+	if err := os.WriteFile(os.Getenv("GENTLE_AI_SCOOP_COMMAND_READY"), []byte("started"), 0o600); err != nil {
+		os.Exit(2)
+	}
+	for {
+		time.Sleep(time.Second)
 	}
 }
 

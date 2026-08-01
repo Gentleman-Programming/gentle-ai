@@ -1,6 +1,7 @@
 package upgrade
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -32,7 +33,7 @@ func defaultScoopGentleAIOwned() bool {
 		return false
 	}
 
-	return scoopOwnsExecutableWith(executable, root, filepath.EvalSymlinks)
+	return scoopOwnsExecutableWithResolvers(executable, root, scoopResolvePath, scoopResolvePath)
 }
 
 func scoopRootWith(getenv func(string) string, userHome func() (string, error), run func(...string) ([]byte, error)) string {
@@ -56,13 +57,17 @@ func scoopRootWith(getenv func(string) string, userHome func() (string, error), 
 // scoopOwnsExecutableWith verifies that the running executable resolves under
 // Scoop's current Gentle AI package, not merely that Scoop is installed.
 func scoopOwnsExecutableWith(executable, root string, resolve func(string) (string, error)) bool {
-	resolvedExecutable, err := resolve(executable)
+	return scoopOwnsExecutableWithResolvers(executable, root, resolve, resolve)
+}
+
+func scoopOwnsExecutableWithResolvers(executable, root string, resolveExecutable, resolveCurrent func(string) (string, error)) bool {
+	resolvedExecutable, err := resolveExecutable(executable)
 	if err != nil {
 		return false
 	}
 
 	current := filepath.Join(root, "apps", "gentle-ai", "current")
-	resolvedCurrent, err := resolve(current)
+	resolvedCurrent, err := resolveCurrent(current)
 	if err != nil {
 		return false
 	}
@@ -111,7 +116,26 @@ func scoopCommand(ctx context.Context, args ...string) ([]byte, error) {
 
 	cmd := execCommand("scoop", args...)
 	cmd.Stdin = nil
-	out, err := cmd.CombinedOutput()
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		out := output.Bytes()
+		return out, fmt.Errorf("scoop %s: %w (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+
+	process := cmd.Process
+	killDone := make(chan struct{})
+	stopKill := context.AfterFunc(ctx, func() {
+		defer close(killDone)
+		_ = process.Kill()
+	})
+	err := cmd.Wait()
+	if !stopKill() {
+		<-killDone
+	}
+
+	out := output.Bytes()
 	if err != nil {
 		return out, fmt.Errorf("scoop %s: %w (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
