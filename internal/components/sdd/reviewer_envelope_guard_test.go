@@ -199,13 +199,13 @@ func declaredLensTools(t *testing.T, path string) (tools []string, readOnlyAsser
 }
 
 // TestLensAgentPromptsStateWhereTheirInputComesFrom is the input-side twin of
-// the envelope guard. Every runtime receives the same immutable Git reference
-// contract and must never substitute mutable workspace files.
+// the envelope guard. Provider-managed runtimes receive immutable inspection
+// context and must never substitute mutable workspace files.
 func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 	envelope := reviewtransaction.NewReviewerResultEnvelope()
 
-	// The orchestrator contract is the source for the one native-Git
-	// inspection recipe every managed runtime must give reviewers.
+	// The orchestrator contract is the source for the one native inspection
+	// recipe every managed runtime must give reviewers.
 	contract := assets.MustRead(boundedReviewContractAsset)
 	if !strings.Contains(contract, "injects only the provider's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered manifest") ||
 		!strings.Contains(contract, "read-only native Git commands") {
@@ -214,15 +214,19 @@ func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 
 	for _, paths := range lensAgentAssetPaths(t, envelope.LensAgentNames) {
 		for _, path := range paths {
+			if strings.HasPrefix(path, "claude/agents/") {
+				continue // Claude's separate prompt transport is pinned in bounded_review_contract_test.go.
+			}
 			prompt := strings.ToLower(renderBoundedReviewAsset(path))
 			for claim, why := range map[string]string{
 				"artifact_subject":      "does not name the bound artifact subject",
 				"changed_path_manifest": "does not name the ordered manifest",
 				"base_tree":             "does not name the immutable base tree",
 				"candidate_tree":        "does not name the immutable candidate tree",
-				":(literal)":            "does not require literal pathspec selection",
-				"--numstat":             "does not require compact numstat discovery",
-				"session cwd":           "does not run the recipe checkout-independently",
+				"inspect-candidate":     "does not require provider-owned native inspection",
+				"--operation numstat":   "does not require compact numstat discovery",
+				"--path-index":          "does not select paths by canonical manifest index",
+				"provider binding":      "does not resolve trees from the provider binding",
 				"never read the live":   "does not prohibit mutable workspace inspection",
 			} {
 				if !strings.Contains(prompt, claim) {

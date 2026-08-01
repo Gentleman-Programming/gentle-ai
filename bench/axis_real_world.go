@@ -56,7 +56,7 @@ import (
 // command runs; every measurement crosses the process boundary. These
 // journeys are portable across builds the same way the core is.
 //
-// It is an axis anyway, for two reasons. First, "43 journeys" is a number
+// It is an axis anyway, for two reasons. First, "45 journeys" is a number
 // people compare across time, and growing it silently would make every old
 // results file read as a regression. Second, this axis carries a standing
 // rule the core does not: community-reported shapes become journeys — the
@@ -74,7 +74,7 @@ func init() {
 		BlackBox: true,
 		Properties: []string{
 			"Black-box, unlike damaged-store: every fixture is built with git, the filesystem and the product's own CLI, every state is proven through git or the product before a counted command runs, and nothing product-owned is read or written. These journeys stay portable across builds the way the core does.",
-			"Opt-in anyway, because it is a different population: the core's repositories are sterile and its sequences contiguous; these repositories carry tool residue and accumulated review state, and their lifecycles are interleaved with rebase, amend and pull. \"43 core journeys\" and \"43 plus real-world\" must never look alike.",
+			"Opt-in anyway, because it is a different population: the core's repositories are sterile and its sequences contiguous; these repositories carry tool residue and accumulated review state, and their lifecycles are interleaved with rebase, amend and pull. \"45 core journeys\" and \"45 plus real-world\" must never look alike.",
 			"Community-reported shapes become journeys: the reporter's fixture is the finding. rw01 is issue #1881 verbatim (nested worktree, not gitignored); rw08 and rw09 are the two elements of the same reporter's production composite the corpus could not have built. A product fix for #1881 is in flight, so rw01 may block today and clear tomorrow; the axis records the truth either way.",
 			"rw03 asserts what the emitted bytes QUOTE: a sentinel secret value in an untracked .env must not appear in any counted command's stdout or stderr, and rw09 asserts the same for an ignored binary's path. The journey FAILS, naming the echo, if it ever does. This proves absence from the driven surfaces only — not that the product never read the file, which no black-box harness can see.",
 			"rw02 writes a node_modules-scale tree (3,000 files) and rw09 writes a 15MB binary on every run; the cost of surviving them is part of what is measured (`git_subprocesses`, bytes).",

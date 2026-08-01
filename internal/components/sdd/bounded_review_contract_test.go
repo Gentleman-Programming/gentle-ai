@@ -15,7 +15,11 @@ var boundedReviewRequiredClauses = []string{
 	"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition",
 	"route only from the returned `next_transition`",
 	"exact operation and ordered argument tokens unchanged",
-	"exact `review.capture-result` collection input once in the foreground",
+	"exact `review.capture-result` collection input once per provider-returned collection attempt",
+	"After empty, malformed, schema-invalid, access/provider failure, or incomplete inspection, query negotiated STATUS again",
+	"fresh `next_transition` reoffers the exact same bound slot",
+	"If STATUS discovers a committed capture, continue without relaunching",
+	"Never infer a retry from transcript or error text alone",
 	"exact literal prefix `GENTLE_AI_REVIEW_BINDING `",
 	"including the trailing space and never `=`",
 	"These are the prompt's first bytes",
@@ -77,7 +81,7 @@ func TestBoundedReviewConsentLocalizationPreservesMachineDomain(t *testing.T) {
 	}
 }
 
-func TestBoundedReviewContractRequiresProviderOwnedReviewerContext(t *testing.T) {
+func TestBoundedReviewContractRequiresRuntimeBoundReviewerContext(t *testing.T) {
 	content := boundedReviewContract()
 	for _, want := range []string{
 		"Never hand candidate bytes through `/tmp`",
@@ -87,13 +91,17 @@ func TestBoundedReviewContractRequiresProviderOwnedReviewerContext(t *testing.T)
 		"OpenCode preflights the opaque binding, discards the caller-authored task body",
 		"injects only the provider's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered manifest",
 		"broad deny precedes narrow allows",
-		"Runtimes that cannot enforce a per-command shell boundary expose no shell and stop incomplete",
+		"Claude Code carries immutable candidate evidence directly in the reviewer task prompt",
+		"path evidence for every manifest index in exact order",
+		"gentle-ai review inspect-candidate --repository-context <repository_context> --expected-revision <revision> --lineage <lineage> --target <target> --lens <lens> --order <order> --operation <operation>",
+		"Claude lens agents expose no shell and inspect only their prompt-carried context",
+		"Other runtimes that cannot enforce either transport expose no shell and stop incomplete",
 		"read-only native Git commands against those exact immutable trees",
 		"compact `--name-status`/`--numstat` discovery",
 		"replacement objects, external diff and textconv, forces `--text`",
 		"literal pathspecs",
 		"Never pass `--binary`",
-		"Never add `candidate_diff`",
+		"OpenCode never adds `candidate_diff`",
 		"read live worktree/index/HEAD",
 	} {
 		if !strings.Contains(content, want) {
@@ -231,9 +239,27 @@ func TestRenderedReviewersAreReadOnlyAndSingleResult(t *testing.T) {
 			path := family + "/agents/review-" + lens + ".md"
 			t.Run(family+"/"+lens, func(t *testing.T) {
 				content := renderBoundedReviewAsset(path)
-				for _, want := range []string{"Review once", "GENTLE_AI_REVIEW_CONTEXT", "sole source of artifact_subject", "changed_path_manifest", "base_tree", "candidate_tree", "env -i", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_ATTR_NOSYSTEM=1", "--no-replace-objects", "diff --name-status --text --no-ext-diff --no-textconv --no-renames", "diff --numstat --text --no-ext-diff --no-textconv --no-renames", "diff --patch --text --full-index --no-color --no-renames --no-ext-diff --no-textconv --diff-algorithm=myers --no-indent-heuristic --unified=3", "cat-file -p '<tree>:<path>'", ":(literal)<path>", "never pass --binary", "attributes must never suppress a hunk", "incomplete inspection", "Never read the live worktree", "## Candidate-Causal Admission", "Return one JSON object and no prose", `"subject_hash":"<artifact_subject.subject_hash>"`, "GENTLE_AI_REVIEW_BINDING.subject_hash", `"inspection":{"status":"completed","paths":["<every changed_path_manifest.path in exact order>"]}`, "lens triage", "Emit no unknown fields"} {
+				for _, want := range []string{"Review once", "changed_path_manifest", "base_tree", "candidate_tree", "incomplete inspection", "Never read the live worktree", "## Candidate-Causal Admission", "Return one JSON object and no prose", `"subject_hash":"<artifact_subject.subject_hash>"`, "GENTLE_AI_REVIEW_BINDING.subject_hash", `"inspection":{"status":"completed","paths":["<every changed_path_manifest.path in exact order>"]}`, "lens triage", "Emit no unknown fields"} {
 					if !strings.Contains(content, want) {
 						t.Errorf("%s missing %q", path, want)
+					}
+				}
+				if family == "claude" {
+					for _, want := range []string{"GENTLE_AI_CLAUDE_REVIEW_CONTEXT", "prompt-carried immutable context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
+						if !strings.Contains(content, want) {
+							t.Errorf("%s missing Claude transport clause %q", path, want)
+						}
+					}
+					for _, forbidden := range []string{"OpenCode tasks begin", "gentle-ai review inspect-candidate"} {
+						if strings.Contains(content, forbidden) {
+							t.Errorf("%s retains provider-only instruction %q", path, forbidden)
+						}
+					}
+					return
+				}
+				for _, want := range []string{"GENTLE_AI_REVIEW_CONTEXT", "sole source of artifact_subject", "gentle-ai review inspect-candidate", "--operation name-status", "--operation numstat", "--operation stat --path-index", "--operation patch --path-index", "--operation object --path-index", "--side base", "--side candidate", "provider binding", "zero-based changed_path_manifest index", "never pass --binary"} {
+					if !strings.Contains(content, want) {
+						t.Errorf("%s missing provider transport clause %q", path, want)
 					}
 				}
 			})

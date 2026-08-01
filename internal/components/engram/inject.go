@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -201,14 +202,20 @@ type InjectOptions struct {
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	return injectWithOptions(homeDir, homeDir, adapter, InjectOptions{})
+	return injectWithOptions(homeDir, homeDir, adapter, InjectOptions{}, true)
 }
 
 // InjectWithOptions is like Inject but accepts additional options such as the
 // Codex multi-agent opt-in flag. Use this when the caller has a model.Selection
 // and needs to forward user-chosen configuration into the injection pass.
 func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
-	return injectWithOptions(homeDir, homeDir, adapter, opts)
+	return injectWithOptions(homeDir, homeDir, adapter, opts, true)
+}
+
+// InjectWorkspaceWithOptions preserves the existing workspace-scoped delivery.
+// Claude's user registry migration is intentionally limited to user scope.
+func InjectWorkspaceWithOptions(workspaceDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
+	return injectWithOptions(workspaceDir, workspaceDir, adapter, opts, false)
 }
 
 // InjectWithPromptDir writes Engram's MCP configuration using configHomeDir and
@@ -216,7 +223,7 @@ func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOption
 // as OpenClaw where MCP is loaded from the global config but instructions are
 // read from an active workspace.
 func InjectWithPromptDir(configHomeDir, promptDir string, adapter agents.Adapter) (InjectionResult, error) {
-	return injectWithOptions(configHomeDir, promptDir, adapter, InjectOptions{})
+	return injectWithOptions(configHomeDir, promptDir, adapter, InjectOptions{}, true)
 }
 
 const antigravityEngramPluginJSON = `{
@@ -435,7 +442,7 @@ func installAntigravityEngramPlugin(homeDir string, adapter agents.Adapter) (boo
 	return false, nil, errors.Join(primary, rollbackErr, fmt.Errorf("unknown state at global %q and manifest %q; manual recovery required", globalPath, manifestPath))
 }
 
-func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
+func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions, userScope bool) (InjectionResult, error) {
 	if provisioner, ok := adapter.(piEngramProvisioner); ok {
 		changed, files, err := provisioner.ProvisionEngramMCP(configHomeDir)
 		if err != nil {
@@ -457,6 +464,15 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 	// 1. Write MCP server config using the adapter's strategy.
 	switch adapter.MCPStrategy() {
 	case model.StrategySeparateMCPFiles:
+		if adapter.Agent() == model.AgentClaudeCode && userScope {
+			result, err := injectClaudeUserConfig(configHomeDir, adapter)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || result.Changed
+			files = append(files, result.Files...)
+			break
+		}
 		// Engram v1.10.3+ writes an absolute path for the command field when
 		// `engram setup <agent>` is invoked. gentle-ai's Inject() runs after
 		// engram setup, so we must preserve any absolute command path already
@@ -681,6 +697,39 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	legacyPath := adapter.MCPConfigPath(homeDir, "engram")
+	command := stableEngramCommandForMergedConfig(claude.UserConfigPath(homeDir), model.AgentClaudeCode)
+	legacyManaged := false
+	if raw, err := os.ReadFile(legacyPath); err == nil {
+		if legacyCommand, ok := managedLegacyClaudeEngramCommand(raw); ok {
+			command = stableEngramCommandForExisting(legacyCommand, model.AgentClaudeCode)
+			legacyManaged = true
+		}
+	} else if !os.IsNotExist(err) {
+		return InjectionResult{}, fmt.Errorf("read legacy Claude Engram config %q: %w", legacyPath, err)
+	}
+
+	writeResult, registryPath, err := claude.MergeUserConfig(homeDir, engramOverlayJSON(model.AgentClaudeCode, command))
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	result := InjectionResult{Changed: writeResult.Changed, Files: []string{registryPath}}
+	if !legacyManaged {
+		return result, nil
+	}
+	removed, err := RemoveManagedLegacyClaudeConfig(legacyPath)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	if !removed {
+		return result, nil
+	}
+	result.Changed = true
+	result.Files = append(result.Files, legacyPath)
+	return result, nil
 }
 
 func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
@@ -960,6 +1009,96 @@ func buildSeparateMCPContent(mcpPath string, defaultContent []byte) []byte {
 		return defaultContent
 	}
 	return append(encoded, '\n')
+}
+
+func managedLegacyClaudeEngramCommand(content []byte) (string, bool) {
+	var server map[string]any
+	if err := json.Unmarshal(content, &server); err != nil || len(server) != 2 {
+		return "", false
+	}
+	command, ok := server["command"].(string)
+	if !ok || !isEngramCommand(command) {
+		return "", false
+	}
+	args, ok := server["args"].([]any)
+	if !ok || len(args) != 2 || args[0] != "mcp" || args[1] != "--tools=agent" {
+		return "", false
+	}
+	return command, true
+}
+
+// IsManagedLegacyClaudeConfig reports whether content has the exact legacy
+// standalone Engram server shape emitted by Gentle AI.
+func IsManagedLegacyClaudeConfig(content []byte) bool {
+	_, ok := managedLegacyClaudeEngramCommand(content)
+	return ok
+}
+
+// RemoveManagedLegacyClaudeConfig removes only the exact standalone shape
+// emitted by Gentle AI. Its parent is removed only when the same real directory
+// remains empty after that managed file is deleted; symlinks are never unlinked.
+func RemoveManagedLegacyClaudeConfig(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect managed legacy Claude Engram config %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read managed legacy Claude Engram config %q: %w", path, err)
+	}
+	if !IsManagedLegacyClaudeConfig(content) {
+		return false, nil
+	}
+	if err := os.Remove(path); err != nil {
+		return false, fmt.Errorf("remove managed legacy Claude Engram config %q: %w", path, err)
+	}
+	if err := removeManagedLegacyClaudeParent(filepath.Dir(path)); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func removeManagedLegacyClaudeParent(parent string) error {
+	info, err := os.Lstat(parent)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("inspect managed legacy Claude directory %q: %w", parent, err)
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return fmt.Errorf("read managed legacy Claude directory %q: %w", parent, err)
+	}
+	if len(entries) != 0 {
+		return nil
+	}
+	current, err := os.Lstat(parent)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("reinspect managed legacy Claude directory %q: %w", parent, err)
+	}
+	if !current.IsDir() || !os.SameFile(info, current) {
+		return nil
+	}
+	if err := os.Remove(parent); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove empty managed legacy Claude directory %q: %w", parent, err)
+	}
+	return nil
 }
 
 // isEngramCommand reports whether cmd is either a relative "engram" command
