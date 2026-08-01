@@ -1524,6 +1524,16 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
 			errors.New("review start target does not match the freshly built snapshot"))
 	}
+	// A negotiated TargetCurrentChanges candidate with zero changed paths
+	// (a clean, fully-committed worktree) would otherwise freeze as an empty
+	// candidate, pass risk assessment and consent, and only fail late and
+	// misleadingly at pre-push. Refuse it here, before any authority is
+	// created, and name --base-ref as the way to review committed work
+	// instead of silently deriving one.
+	if negotiated && snapshot.Kind == reviewtransaction.TargetCurrentChanges && len(snapshot.Paths) == 0 {
+		return reviewPreflightRefusal(reviewPreflightEmptyCandidateReason,
+			errors.New(reviewStartEmptyCandidateHint))
+	}
 	assessment, err := (reviewtransaction.SnapshotBuilder{Repo: root}).AssessSnapshotRisk(ctx, snapshot)
 	if err != nil {
 		return fmt.Errorf("classify facade review target: %w", err)
