@@ -473,6 +473,12 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 	}
 	for _, want := range []string{
 		`spawn("gentle-ai"`,
+		`"review", "status", "--cwd", cwd, "--contract", REVIEW_STATUS_CONTRACT, "--next-transition"`,
+		`class ReviewBindingIntegrationError extends Error`,
+		`review_binding_unavailable:`,
+		`const REVIEW_CAPTURE_OPERATION = "review.capture-result"`,
+		"argument.token !== `--${name}=${argument.value}`",
+		`const matching = inputs.filter`,
 		`"review", "capture-result"`,
 		`"review", "preserve-result"`,
 		`"--repository-context", binding.repository_context`,
@@ -545,6 +551,9 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("review-result-artifacts.ts still transports obsolete candidate context %q", forbidden)
 		}
+	}
+	if strings.Contains(source, "injectReviewerContext(prompt") || strings.Contains(source, "parseBinding(prompt, lens)\n  const preflight") {
+		t.Fatal("review-result-artifacts.ts must derive managed bindings from native STATUS, not caller prompt text")
 	}
 	// Pin the split: the previously conflated empty/nested-envelope message
 	// must never regress back into one indistinguishable free-text throw.

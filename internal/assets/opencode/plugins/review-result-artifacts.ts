@@ -5,6 +5,8 @@ const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-reada
 const BINDING = /^GENTLE_AI_REVIEW_BINDING (\{[^\n]+\})(?:\n|$)/
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
+const REVIEW_STATUS_CONTRACT = "gentle-ai.review-integration/v2"
+const REVIEW_CAPTURE_OPERATION = "review.capture-result"
 
 type ReviewBinding = {
   lineage: string
@@ -14,6 +16,16 @@ type ReviewBinding = {
   revision?: string
   repository_context?: string
   subject_hash?: string
+}
+
+class ReviewBindingIntegrationError extends Error {
+  constructor(reason: string) {
+    super(
+      `review_binding_unavailable: ${reason}. Refresh native STATUS before relaunching the reviewer; ` +
+      "the reviewer was not launched, so its exactly-once invocation is preserved.",
+    )
+    this.name = "ReviewBindingIntegrationError"
+  }
 }
 
 interface ReviewArtifactSubject {
@@ -82,6 +94,98 @@ function parseBinding(prompt: unknown, lens: string): ReviewBinding {
     throw new Error("review task binding does not match the selected lens")
   }
   return value as ReviewBinding
+}
+
+function providerBindingUnavailable(reason: string): ReviewBindingIntegrationError {
+  return new ReviewBindingIntegrationError(reason)
+}
+
+function providerRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+
+function providerBinding(response: string, lens: string): ReviewBinding {
+  let status: unknown
+  try {
+    status = JSON.parse(response)
+  } catch {
+    throw providerBindingUnavailable("native STATUS returned malformed JSON")
+  }
+  const transition = providerRecord(providerRecord(status)?.next_transition)
+  const collection = providerRecord(transition?.collect)
+  const inputs = collection?.inputs
+  if (!transition || transition.kind !== "collect" || !Array.isArray(inputs)) {
+    throw providerBindingUnavailable(`native STATUS did not offer a collect transition for lens ${lens}`)
+  }
+
+  const matching = inputs.filter((input) => {
+    const value = providerRecord(input)
+    if (value?.capture_operation !== REVIEW_CAPTURE_OPERATION || !Array.isArray(value.arguments)) return false
+    const lenses = value.arguments.filter((argument) => providerRecord(argument)?.name === "lens")
+    return lenses.length === 1 && providerRecord(lenses[0])?.value === lens
+  })
+  if (matching.length !== 1) {
+    throw providerBindingUnavailable(`native STATUS offered ${matching.length === 0 ? "no" : "ambiguous"} capture binding for lens ${lens}`)
+  }
+
+  const input = providerRecord(matching[0])
+  if (!input || input.name !== "reviewer_result" || input.capture_operation !== REVIEW_CAPTURE_OPERATION || !Array.isArray(input.arguments)) {
+    throw providerBindingUnavailable(`native STATUS capture input is malformed for lens ${lens}`)
+  }
+  const names = input.arguments.map((argument) => providerRecord(argument)?.name)
+  const withContext = ["lineage", "expected-revision", "target", "repository-context", "lens", "order", "subject-hash"]
+  const withoutContext = ["lineage", "expected-revision", "target", "lens", "order", "subject-hash"]
+  const expected = names.join(",") === withContext.join(",") ? withContext :
+    names.join(",") === withoutContext.join(",") ? withoutContext : undefined
+  if (!expected) throw providerBindingUnavailable(`native STATUS capture arguments are malformed for lens ${lens}`)
+
+  const values: Record<string, string> = {}
+  for (let index = 0; index < expected.length; index++) {
+    const argument = providerRecord(input.arguments[index])
+    const name = expected[index]
+    if (!argument || argument.name !== name || typeof argument.value !== "string" ||
+        argument.token !== `--${name}=${argument.value}`) {
+      throw providerBindingUnavailable(`native STATUS capture argument ${name} is malformed for lens ${lens}`)
+    }
+    values[name] = argument.value
+  }
+  if (!/^(0|[1-9][0-9]*)$/.test(values.order)) {
+    throw providerBindingUnavailable(`native STATUS capture order is malformed for lens ${lens}`)
+  }
+  const order = Number(values.order)
+  const binding: ReviewBinding = {
+    lineage: values.lineage,
+    target: values.target,
+    lens: values.lens,
+    order,
+    revision: values["expected-revision"],
+    subject_hash: values["subject-hash"],
+  }
+  if (values["repository-context"] !== undefined) binding.repository_context = values["repository-context"]
+  const subject = providerRecord(input.artifact_subject)
+  if (!subject || subject.schema !== "gentle-ai.review-artifact-subject/v2" ||
+      subject.subject_hash !== binding.subject_hash || subject.lineage_id !== binding.lineage ||
+      subject.target_identity !== binding.target || subject.authority_revision !== binding.revision ||
+      subject.lens !== binding.lens || subject.selected_order !== binding.order) {
+    throw providerBindingUnavailable(`native STATUS artifact subject does not match lens ${lens}`)
+  }
+  try {
+    return parseBinding(`GENTLE_AI_REVIEW_BINDING ${JSON.stringify(binding)}\n`, lens)
+  } catch {
+    throw providerBindingUnavailable(`native STATUS binding is malformed or mismatched for lens ${lens}`)
+  }
+}
+
+async function freshProviderBinding(cwd: string, lens: string): Promise<ReviewBinding> {
+  try {
+    const response = await runNative(cwd, [
+      "review", "status", "--cwd", cwd, "--contract", REVIEW_STATUS_CONTRACT, "--next-transition",
+    ], "")
+    return providerBinding(response, lens)
+  } catch (cause) {
+    if (cause instanceof ReviewBindingIntegrationError) throw cause
+    throw providerBindingUnavailable(`native STATUS is unavailable for lens ${lens}`)
+  }
 }
 
 function reviewerResult(output: unknown): string {
@@ -228,8 +332,8 @@ function validManifestEntry(entry: unknown): entry is ChangedPathManifestEntry {
     typeof value.mode_only === "boolean" && typeof value.intended_untracked === "boolean"
 }
 
-async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<string> {
-  const binding = parseBinding(prompt, lens)
+async function injectReviewerContext(lens: string, cwd: string): Promise<string> {
+  const binding = await freshProviderBinding(cwd, lens)
   const preflight = await preflightCapture(cwd, binding)
   const injectedBinding = { ...binding, subject_hash: preflight.artifact_subject.subject_hash }
   return `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(injectedBinding)}\n` +
@@ -460,14 +564,10 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
   "tool.execute.before": async (input, output) => {
     if (input.tool !== "task" || typeof output.args?.subagent_type !== "string" ||
         !REVIEW_AGENTS.has(output.args.subagent_type)) return
-    if (typeof output.args.prompt !== "string") {
-      throw new Error("review task is missing GENTLE_AI_REVIEW_BINDING")
-    }
     if (output.args.background === true) {
       throw new Error("bound review tasks must run in the foreground for native result capture")
     }
     output.args.prompt = await injectReviewerContext(
-      output.args.prompt,
       output.args.subagent_type,
       captureCwd(worktree, directory),
     )

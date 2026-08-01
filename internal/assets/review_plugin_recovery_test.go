@@ -29,7 +29,7 @@ const opaque = {
 const legacy = { lens: "review-risk", lineage: "trust-check", order: 0, target: "sha256:" + "d".repeat(64) }
 const binding = scenario.endsWith("legacy") ? legacy : opaque
 let prompt = ` + "`" + `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(binding)}\nreview the frozen candidate\n` + "`" + `
-if (scenario === "before-substitute") prompt += ` + "`" + `base_tree=${"9".repeat(40)} candidate_tree=${"8".repeat(40)} changed_path_manifest=[{"path":"caller.txt"}]\n` + "`" + `
+if (scenario === "before-substitute") prompt += ` + "`" + `GENTLE_AI_REVIEW_CONTEXT {"authority":"caller-authority","path":"caller.txt"}\nbase_tree=${"9".repeat(40)} candidate_tree=${"8".repeat(40)} changed_path_manifest=[{"path":"caller.txt"}]\n` + "`" + `
 if (scenario === "before-missing") prompt = "review the frozen candidate\n"
 if (scenario === "before-equals") prompt = ` + "`" + `GENTLE_AI_REVIEW_BINDING=${JSON.stringify(binding)}\nreview the frozen candidate\n` + "`" + `
 if (scenario === "before-malformed") prompt = "GENTLE_AI_REVIEW_BINDING {not-json}\nreview the frozen candidate\n"
@@ -50,7 +50,7 @@ try {
   if (scenario.startsWith("before")) {
     const output = { args: { subagent_type: "review-risk", prompt } }
     await hooks["tool.execute.before"]({ tool: "task", sessionID: "session-a", callID: "call-before" }, output)
-    console.log(scenario === "before-valid" || scenario === "before-substitute" ? output.args.prompt : "NO_ERROR")
+    console.log(output.args.prompt)
   } else if (scenario === "after-state") {
     const outcomes = [
       await capture(hooks, "session-a", "first"), await capture(hooks, "session-b", "other-session"),
@@ -118,6 +118,10 @@ func runReviewPluginScenarioWithNative(t *testing.T, scenario, nativeStdout, nat
 }
 
 func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, nativeStdout, nativeStderr, preserveStdout string) string {
+	return runReviewPluginScenarioWithStatus(t, scenario, reviewPluginStatus(), nativeStdout, nativeStderr, preserveStdout)
+}
+
+func runReviewPluginScenarioWithStatus(t *testing.T, scenario, statusStdout, nativeStdout, nativeStderr, preserveStdout string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the stub native binary requires a POSIX shell")
@@ -139,6 +143,7 @@ func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, na
 		}
 	}
 	stub := "#!/bin/sh\npayload=$(cat)\n" +
+		"if [ \"$2\" = \"status\" ]; then if [ -n \"$GENTLE_AI_STUB_STATUS_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_STATUS_STDOUT\"; exit 0; fi; printf '%s\\n' \"$GENTLE_AI_STUB_STDERR\" >&2; exit 1; fi\n" +
 		"if [ \"$2\" = \"capture-result\" ]; then case \"$payload\" in *capture-success*) printf '%s\\n' 'CAPTURED'; exit 0;; esac; fi\n" +
 		"if [ \"$2\" = \"preserve-result\" ] && [ -n \"$GENTLE_AI_STUB_PRESERVE_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_PRESERVE_STDOUT\"; exit 0; fi\n" +
 		"if [ -n \"$GENTLE_AI_STUB_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_STDOUT\"; exit 0; fi\n" +
@@ -156,6 +161,7 @@ func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, na
 	command.Dir = root
 	command.Env = append(os.Environ(),
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GENTLE_AI_STUB_STATUS_STDOUT="+statusStdout,
 		"GENTLE_AI_STUB_STDOUT="+nativeStdout,
 		"GENTLE_AI_STUB_STDERR="+nativeStderr,
 		"GENTLE_AI_STUB_PRESERVE_STDOUT="+preserveStdout,
@@ -168,20 +174,32 @@ func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, na
 	return strings.TrimSpace(string(output))
 }
 
-func TestReviewPluginRejectsInvalidBindingBeforeReviewerLaunch(t *testing.T) {
+func TestReviewPluginIgnoresCallerBindingsBeforeReviewerLaunch(t *testing.T) {
+	for _, scenario := range []string{"before-missing", "before-equals", "before-malformed"} {
+		t.Run(scenario, func(t *testing.T) {
+			prompt := runReviewPluginScenarioWithNative(t, scenario, reviewPluginPreflight(strings.Repeat("1", 40), strings.Repeat("2", 40)), "")
+			if !strings.HasPrefix(prompt, "GENTLE_AI_REVIEW_BINDING {") || strings.Contains(prompt, "review the frozen candidate") {
+				t.Fatalf("caller binding was not replaced by provider binding: %q", prompt)
+			}
+		})
+	}
+}
+
+func TestReviewPluginRejectsUnavailableProviderBindingBeforeReviewerLaunch(t *testing.T) {
 	tests := []struct {
-		name    string
-		wantErr string
+		name, status, stderr string
 	}{
-		{name: "missing", wantErr: "review task is missing GENTLE_AI_REVIEW_BINDING"},
-		{name: "equals", wantErr: "review task is missing GENTLE_AI_REVIEW_BINDING"},
-		{name: "malformed", wantErr: "review task binding is malformed"},
+		{name: "unavailable", stderr: "STATUS unavailable"},
+		{name: "malformed", status: "{"},
+		{name: "ambiguous", status: reviewPluginStatusWithInputs(reviewPluginStatusInput(), reviewPluginStatusInput())},
+		{name: "duplicate lens argument", status: strings.Replace(reviewPluginStatus(), `"arguments":[`, `"arguments":[{"name":"lens","value":"review-risk","token":"--lens=review-risk"},`, 1)},
+		{name: "lens order mismatch", status: strings.Replace(reviewPluginStatus(), `"selected_order":0`, `"selected_order":1`, 1)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			message := runReviewPluginScenarioWithNative(t, "before-"+tt.name, `{"unexpected":"native call"}`, "")
-			if message != tt.wantErr {
-				t.Fatalf("invalid binding result = %q, want %q", message, tt.wantErr)
+			message := runReviewPluginScenarioWithStatus(t, "before-missing", tt.status, "", tt.stderr, "")
+			if !strings.Contains(message, "review_binding_unavailable") || !strings.Contains(message, "reviewer was not launched") {
+				t.Fatalf("provider binding failure did not fail closed: %q", message)
 			}
 		})
 	}
@@ -225,7 +243,7 @@ func TestReviewPluginReplacesCallerAuthoredCandidateContext(t *testing.T) {
 	baseTree := strings.Repeat("1", 40)
 	candidateTree := strings.Repeat("2", 40)
 	prompt := runReviewPluginScenarioWithNative(t, "before-substitute", reviewPluginPreflight(baseTree, candidateTree), "")
-	for _, callerValue := range []string{strings.Repeat("9", 40), strings.Repeat("8", 40), "caller.txt", "review the frozen candidate"} {
+	for _, callerValue := range []string{strings.Repeat("9", 40), strings.Repeat("8", 40), "caller.txt", "caller-authority", "review the frozen candidate"} {
 		if strings.Contains(prompt, callerValue) {
 			t.Fatalf("provider injection retained caller-authored context %q: %q", callerValue, prompt)
 		}
@@ -235,6 +253,34 @@ func TestReviewPluginReplacesCallerAuthoredCandidateContext(t *testing.T) {
 			t.Fatalf("provider injection omitted preflight context %q: %q", providerValue, prompt)
 		}
 	}
+}
+
+func reviewPluginStatus() string {
+	return reviewPluginStatusWithInputs(reviewPluginStatusInput())
+}
+
+func reviewPluginStatusWithInputs(inputs ...string) string {
+	return `{"next_transition":{"kind":"collect","collect":{"inputs":[` + strings.Join(inputs, ",") + `]}}}`
+}
+
+func reviewPluginStatusInput() string {
+	argument := func(name, value string) string {
+		return `{"name":"` + name + `","value":"` + value + `","token":"--` + name + `=` + value + `"}`
+	}
+	lineage := "trust-check"
+	revision := "sha256:" + strings.Repeat("b", 64)
+	target := "sha256:" + strings.Repeat("d", 64)
+	subjectHash := "sha256:" + strings.Repeat("c", 64)
+	context := "rctx1_" + strings.Repeat("a", 64)
+	arguments := []string{
+		argument("lineage", lineage), argument("expected-revision", revision), argument("target", target),
+		argument("repository-context", context), argument("lens", "review-risk"), argument("order", "0"),
+		argument("subject-hash", subjectHash),
+	}
+	return `{"name":"reviewer_result","capture_operation":"review.capture-result","arguments":[` +
+		strings.Join(arguments, ",") + `],"artifact_subject":{"schema":"gentle-ai.review-artifact-subject/v2","subject_hash":"` + subjectHash +
+		`","lineage_id":"` + lineage + `","authority_revision":"` + revision + `","target_identity":"` + target +
+		`","lens":"review-risk","selected_order":0}}`
 }
 
 func reviewPluginPreflight(baseTree, candidateTree string) string {
