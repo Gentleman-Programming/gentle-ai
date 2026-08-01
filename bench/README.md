@@ -388,7 +388,7 @@ invents a metric is worse than one that admits a gap.
     (cluttered repositories, interleaved lifecycles) governed by a different
     growth rule: community-reported shapes become journeys, so its size tracks
     community reports, not releases, and folding it into the core would make
-    "49 journeys" a moving claim. Two of its numbers need careful reading.
+    "50 journeys" a moving claim. Two of its numbers need careful reading.
     `rw01` pins issue #1881 while a product fix is in flight: a block there is
     the truth about today's build, not a permanent verdict, and the journey is
     kept precisely so the fix has a permanent pin. And the no-echo assertions
@@ -431,7 +431,7 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 
 Those numbers are the **14-journey** corpus against the binary named above,
 kept as-is because they belong to that named build. The corpus has since grown
-to 49 journeys; re-run `run` against your own binary rather than reading the
+to 50 journeys; re-run `run` against your own binary rather than reading the
 block above as current totals. The row labels moved too: `by_design` did not
 exist when this was recorded and is now printed as `4d`, next to the number it
 carves out of, with `dead_end` at `4e`.
@@ -565,7 +565,7 @@ cannot silently decay into the already-covered corrupt-record case.
 
 ### Wave 1 integration regressions (`journeys_wave1.go`)
 
-Journeys 44 to 49 pin fixes that internal tests already covered below the user
+Journeys 44 to 50 pin fixes that internal tests already covered below the user
 boundary. All remain core black-box journeys: fixtures create repository inputs,
 and every native authority state is reached through the measured binary.
 
@@ -577,6 +577,7 @@ and every native authority state is reached through the measured binary.
 | `j47-disabled-mode-archives-discovered-invalidated-receipt` | enabled discovered invalidation, disabled/unmanaged archive without allow, explicit invalid receipt control, and re-enabled enforcement | issue #2128 |
 | `j48-recovered-workspace-preserves-full-candidate-scope` | two-path workspace candidate, strict-subset correction, complete terminal and recovered scope, immediate pre-commit allow, byte/path drift controls | issue #2090 |
 | `j49-status-without-cwd-honors-kill-switch` | clone-local mode disabled, explicit-CWD control, omitted-CWD status using the same repository identity, disabled/unmanaged archive without approval | issue #2129 |
+| `j50-candidate-decline-preserves-frozen-delivery-identity` | status-derived v2 consent relay and decline, exact non-authorizing delivery identity, clean authority inventory, release and byte/path drift controls | issue #2045 |
 
 `j44` proves the linked checkout/common-dir topology and remote baseline before
 review starts, then proves the staged delivery tree equals the corrected receipt
@@ -593,7 +594,10 @@ governance steps aside and an explicit invalid receipt remains fail-closed.
 authority retain the complete two-path tree and manifest; exact pre-commit
 targets allow, while later byte and path drift still fail closed. `j49` proves
 that explicit and omitted CWD status calls reach the same clone-local switch and
-the same archive-ready change without fabricating review authority.
+the same archive-ready change without fabricating review authority. `j50`
+executes only provider-emitted START and decline invocations, then proves the
+unchanged staged candidate retains its base/tree/path identity without review
+authority while release, byte drift, and path drift cannot inherit the decline.
 
 ## Opt-in axes
 
@@ -615,7 +619,7 @@ its own declaration.
 
 - **Nothing runs unless you name it.** Default is the core alone. `--axis all`
   takes everything registered. An unknown name is a hard error, because
-  "49 journeys" and "49 journeys plus an axis" are different measurements and a
+  "50 journeys" and "50 journeys plus an axis" are different measurements and a
   typo must never silently produce the first.
 - **The core does not depend on any axis.** `rm bench/axis_damaged_store*.go`
   leaves the corpus compiling, testing and reporting exactly the numbers it

@@ -36,6 +36,12 @@ func TestCandidateDeclineAuthorizationIsReplayableAndFailsClosed(t *testing.T) {
 	if err != nil || !found || resolved.Snapshot.Identity != snapshot.Identity {
 		t.Fatalf("exact staged delivery decline = %#v, found=%v, err=%v", resolved, found, err)
 	}
+	if resolved.Snapshot.BaseTree != snapshot.BaseTree ||
+		resolved.Snapshot.CandidateTree != snapshot.CandidateTree ||
+		resolved.Snapshot.PathsDigest != snapshot.PathsDigest ||
+		!equalStrings(resolved.Snapshot.Paths, snapshot.Paths) {
+		t.Fatalf("resolved decline lost frozen candidate identity:\nresolved=%#v\nwant=%#v", resolved.Snapshot, snapshot)
+	}
 
 	root, _, err := candidateDeclineRoot(ctx, repo, false)
 	if err != nil {

@@ -3850,8 +3850,11 @@ func emitCandidateDeclinedUnmanagedDelivery(stdout io.Writer, gate reviewtransac
 		Reason:   "review is unmanaged by candidate choice; ordinary repository policy governs this exact declined candidate",
 		Delivery: reviewtransaction.RDDDeliveryCandidateDeclinedUnmanaged,
 		Context: reviewtransaction.GateContext{
-			Gate:   gate,
-			Denial: &reviewtransaction.GateDenial{Stage: "candidate-decline", Code: "exact_candidate"},
+			Gate:          gate,
+			BaseTree:      decline.Snapshot.BaseTree,
+			CandidateTree: decline.Snapshot.CandidateTree,
+			PathsDigest:   decline.Snapshot.PathsDigest,
+			Denial:        &reviewtransaction.GateDenial{Stage: "candidate-decline", Code: "exact_candidate"},
 		},
 	}
 	// Keep the derived authorization live in this boundary: this guards against a

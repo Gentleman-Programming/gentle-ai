@@ -23,6 +23,12 @@ type statusEnvelope struct {
 		Revision  string `json:"revision"`
 	} `json:"authority"`
 	TargetIdentity string `json:"target_identity"`
+	Projection     struct {
+		BaseTree             string   `json:"base_tree"`
+		CurrentCandidateTree string   `json:"current_candidate_tree"`
+		PathsDigest          string   `json:"paths_digest"`
+		Paths                []string `json:"paths"`
+	} `json:"projection"`
 	NextTransition struct {
 		Kind    string `json:"kind"`
 		Collect struct {
@@ -44,6 +50,7 @@ type statusEnvelope struct {
 		} `json:"collect"`
 		Execute struct {
 			Operation string `json:"operation"`
+			Command   string `json:"command"`
 			Arguments []struct {
 				Name  string `json:"name"`
 				Value string `json:"value"`
