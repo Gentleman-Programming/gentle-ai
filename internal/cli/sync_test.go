@@ -50,6 +50,32 @@ func TestParseSyncFlagsDefaults(t *testing.T) {
 	if flags.SDDMode != "" {
 		t.Errorf("SDDMode = %q, want empty", flags.SDDMode)
 	}
+	if flags.Scope != "global" {
+		t.Errorf("Scope = %q, want %q", flags.Scope, "global")
+	}
+}
+
+func TestParseSyncFlagsScope(t *testing.T) {
+	flags, err := ParseSyncFlags([]string{"--scope", "workspace"})
+	if err != nil {
+		t.Fatalf("ParseSyncFlags() error = %v", err)
+	}
+	if flags.Scope != "workspace" {
+		t.Errorf("Scope = %q, want %q", flags.Scope, "workspace")
+	}
+
+	scope, err := ResolveInstallScope(flags.Scope)
+	if err != nil {
+		t.Fatalf("ResolveInstallScope() error = %v", err)
+	}
+	if scope != ScopeWorkspace {
+		t.Errorf("scope = %q, want %q", scope, ScopeWorkspace)
+	}
+
+	_, err = ParseSyncFlags([]string{"--scope", "invalid-scope"})
+	if err == nil {
+		t.Fatalf("expected error for invalid scope, got nil")
+	}
 }
 
 func TestParseSyncFlagsAgentsCSV(t *testing.T) {
@@ -2631,6 +2657,35 @@ func TestRunSyncWithSelection_NoAgentsIsNoOp(t *testing.T) {
 	}
 	if !result.NoOp {
 		t.Errorf("RunSyncWithSelection() with no agents: NoOp = false, want true")
+	}
+}
+
+func TestRunSyncWithScopeWorkspace(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	restoreDir, _ := os.Getwd()
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir workspace: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(restoreDir) })
+
+	restoreHome := osUserHomeDir
+	osUserHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { osUserHomeDir = restoreHome })
+
+	result, err := RunSync([]string{"--agent", "claude-code", "--scope", "workspace"})
+	if err != nil {
+		t.Fatalf("RunSync --scope=workspace error = %v", err)
+	}
+
+	if result.FilesChanged == 0 {
+		t.Fatalf("expected workspace files to be created/changed, got 0")
+	}
+
+	claudeWorkspace := filepath.Join(workspace, ".claude", "CLAUDE.md")
+	if _, err := os.Stat(claudeWorkspace); err != nil {
+		t.Errorf("expected workspace CLAUDE.md at %s, err = %v", claudeWorkspace, err)
 	}
 }
 
